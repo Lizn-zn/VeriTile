@@ -1,0 +1,11 @@
+# Lake build artifacts and downloaded packages
+/.lake/
+
+# macOS
+.DS_Store
+
+# Editor / tooling
+/.claude/
+*.olean
+*.ilean
+*.hash
