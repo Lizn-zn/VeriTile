@@ -54,6 +54,7 @@ inductive Op : Type where
   | mul       : Op → Op → Op
   | div       : Op → Op → Op
   | exp       : Op → Op
+  | log       : Op → Op
   | max2      : Op → Op → Op
   | reduceMax : Op → Op
   | reduceSum : Op → Op

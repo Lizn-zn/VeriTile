@@ -55,6 +55,7 @@ syntax "(" tritonExpr ")" : tritonExpr
 syntax "tl.program_id(" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ")" : tritonExpr
 syntax "tl.exp(" tritonExpr ")" : tritonExpr
+syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ")" : tritonExpr
 syntax "tl.sum(" tritonExpr ")" : tritonExpr
 syntax "tl.load(" ident ", " tritonExpr ")" : tritonExpr
@@ -98,6 +99,9 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
   | `(tritonExpr| tl.exp($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.exp $e')
+  | `(tritonExpr| tl.log($e:tritonExpr)) => do
+      let e' ← expandExpr e
+      `(Op.log $e')
   | `(tritonExpr| tl.max($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.reduceMax $e')

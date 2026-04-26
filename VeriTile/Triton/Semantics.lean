@@ -20,6 +20,7 @@ P1 work will land. Each is annotated with `-- TODO(P1):`.
 
 import Mathlib.Data.Real.Basic
 import Mathlib.Analysis.SpecialFunctions.Exp
+import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import Mathlib.Algebra.Order.Floor.Defs
 import Mathlib.Algebra.Order.Floor.Semifield
 import VeriTile.Triton.Core
@@ -242,6 +243,10 @@ noncomputable def evalOp : Op → BlockState → Option Value
   | .exp a, s =>
       match evalOp a s with
       | some va => some (va.uop Real.exp)
+      | none => none
+  | .log a, s =>
+      match evalOp a s with
+      | some va => some (va.uop Real.log)
       | none => none
   | .max2 a b, s =>
       match evalOp a s, evalOp b s with
