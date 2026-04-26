@@ -10,9 +10,9 @@ This document is the program-level plan agreed in the brainstorm of 2026-04-26. 
 
 **Primary** — submit a paper to PLDI (or OOPSLA-spring as fallback) with the central claim:
 
-> 8 main correctness theorems for production Triton kernels — including FlashAttention forward ≡ standard attention denotation and FA-2 forward ≡ standard attention denotation, yielding the headline corollary FA-1 ↔ FA-2 — formally verified in Lean 4 against an embedded Triton operational semantics, with LLM-assisted proof drafting and a non-formal differential-testing artifact showing the embedded algorithms correspond to runnable GPU code.
+> 8 main correctness theorems for production Triton kernels — including FlashAttention forward ≡ standard attention denotation and FA-2 forward ≡ standard attention denotation, yielding the headline corollary FA-1 ↔ FA-2 — formally verified in Lean 4 against an embedded Triton operational semantics, with proof drafting accelerated by the community `lean4` Claude Code plugin (`/lean4:autoprove`) and a non-formal differential-testing artifact showing the embedded algorithms correspond to runnable GPU code.
 
-**Secondary** — toolchain (operational semantics, embedded `triton { ... }` DSL, LLM-assisted proof harness, hand-written Python counterparts for differential testing) usable internally and openable to external contributors.
+**Secondary** — toolchain (operational semantics, embedded `triton { ... }` DSL, a thin `scripts/prove.sh` wrapper around `/lean4:autoprove` for benchmark eval, hand-written Python counterparts for differential testing) usable internally and openable to external contributors.
 
 ## Scope: 8 main correctness theorems + helpers + corollary
 
@@ -55,12 +55,12 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 
 ## Phase structure (~28–42 weeks total)
 
-### Phase A — Tier 1 + LLM tool MVP + T3 scouting (~6–8 wk)
+### Phase A — Tier 1 + `scripts/prove.sh` + T3 scouting (~6–8 wk)
 
 **Deliverables:**
 - 3 Tier 1 kernel-pair theorems closed (#1 already done; close #2 and #3)
 - 1 math-only lemma (`welford_eq_two_pass`)
-- LLM proof tool MVP: ~200-line Python script, `prove.py file_path theorem_name` interface, prompt → API → write back → `lake env lean` verify → retry-on-error loop, N=5 retries
+- `scripts/prove.sh`: ~80-line bash wrapper around `claude -p "/lean4:autoprove <file> --commit=never --planning=off --review-source=none --max-cycles=N"`; captures JSON stream output to `Logs/`; parses success/fail from the result message; exit code 0 on success / 1 on fail (for benchmark close-rate counting). The `lean4` Claude Code plugin (already installed at `~/.claude/plugins/cache/lean4-skills/`) provides LSP integration via `lean_multi_attempt`, multi-cycle iteration with stuck detection, deep-mode escalation, tactic cascade with 2–3 candidates per sorry, and repair mode for build errors — we wrap rather than reimplement.
 - T3 scouting document `Notes/T3_scouting.md` (~10–15 pages):
   - FA forward pseudocode + invariant sketch
   - lemma needs for B/C/D semantics extensions
@@ -68,7 +68,7 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
   - feasibility judgment: T3-B in window or fall back to T3-A only?
 
 **Validation:**
-- Create a held-out evaluation directory `bench/llm_eval/` separate from the main library; in it, replicate `softmax_naive_correct` with the proof body replaced by `sorry`. The main library copy stays intact and proven; the held-out copy is the LLM benchmark target. LLM MVP must close this held-out copy at close rate ≥ 1/3 across N=5 independent runs (see §LLM benchmark protocol).
+- Create a held-out evaluation directory `bench/llm_eval/` separate from the main library; in it, replicate `softmax_naive_correct` with the proof body replaced by `sorry`. The main library copy stays intact and proven; the held-out copy is the benchmark target. `scripts/prove.sh` (wrapping `/lean4:autoprove`) must close this held-out copy at close rate ≥ 1/3 across N=5 independent runs (see §LLM benchmark protocol).
 - All P1 + Tier 1 builds clean
 
 **Exit gate (`v0.1-tier1`):** all deliverables met; `lake build` clean.
@@ -97,10 +97,7 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 - 3 Tier 2 kernel-pair theorems (#4, #5, #6)
 - The Tier 2 #5 (online softmax recurrence) proof is expected to be ~80–120 lines Lean; this is the paper's central technical contribution.
 
-*LLM tool v0.2:*
-- Lemma retrieval: vector / BM25 search over Mathlib + project lemmas; top-k injected into prompt
-- Smarter retry: track failed-strategy set, exclude in subsequent prompts
-- Structured output parsing: model outputs JSON `{tactic_block, reasoning}`; tactic block syntax-validated before file write
+*LLM tool: no work needed beyond Phase A's `scripts/prove.sh`.* The `lean4` plugin's existing capabilities (LSP search, tactic cascade, deep mode escalation, repair mode) cover what we'd otherwise build at this Phase. Our Phase B "tool work" is just running the wrapper on Tier 2 held-out lemmas and recording numbers.
 
 *Differential testing artifact (non-gating, see §Differential testing):*
 - Establish `tools/diff_test/` directory and the side-by-side correspondence convention
@@ -108,7 +105,7 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 - The remaining Tier 1+2 kernels do not require diff-test artifacts; their correctness rests entirely on the Lean proof
 
 **Validation (gating):**
-- LLM v0.2 close rate ≥ 50% on the Phase B held-out set (per §LLM benchmark protocol)
+- `scripts/prove.sh` close rate ≥ 50% on the Phase B held-out set (per §LLM benchmark protocol). If close rate is lower, that's still publishable data — it just shifts the paper narrative from "LLM proves these for free" to "human-LLM collaboration with documented limits".
 
 **Validation (artifact, non-gating):**
 - Differential test artifact in place for the 1–2 selected representative Tier 1+2 kernels (see §Differential testing)
@@ -157,9 +154,7 @@ Phase A scouting evaluates both for FA pseudocode and recommends one; Phase C im
 
 - **Estimate revised upward**: ~400–600 lines Lean total (semantics extensions ~150 lines, kernel theorem proof ~300 lines, masking-related lemmas ~50–150 lines depending on mask option). The earlier 200–300 line estimate did not account for comparison / broadcast / 2D-layout / causal-indexing semantics.
 
-*LLM tool v0.3:*
-- Proof-state interaction: capture intermediate Lean proof state (via Lean MCP server or direct `lean --server` interface), feed back to model on retry, enable step-wise tactic generation
-- Required for ~200-line proofs (one-shot mode of v0.2 won't scale)
+*LLM tool: still no work needed beyond Phase A's wrapper.* The `lean4` plugin's `/lean4:autoprove` already does step-wise tactic generation via LSP (`lean_multi_attempt`, `lean_diagnostic_messages`) — what we'd otherwise build as "v0.3 proof-state interaction" is already there. For Tier 3-A's ~400–600 line proofs, the plugin's deep mode (`--deep=stuck`) handles long sub-goal chains; if it can't close the whole theorem, it closes individual sub-goals which we compose by hand. Any human-LLM split is recorded in the benchmark report so the paper can describe what the tool did vs. what the human did.
 
 *Differential testing artifact (non-gating, see §Differential testing):*
 - Add **FA forward** (Phase C's selected representative kernel) to the diff-test set
@@ -167,7 +162,7 @@ Phase A scouting evaluates both for FA pseudocode and recommends one; Phase C im
 - This is a credibility artifact, not a phase gate. Failure would prompt investigation but does not block a Phase C exit if the formal proof is closed
 
 **Validation (gating):**
-- LLM v0.3 close rate ≥ 30% on the Phase C held-out set (per §LLM benchmark protocol; held-out lemmas are sub-steps of `fa_forward_correct`)
+- `scripts/prove.sh` close rate ≥ 30% on the Phase C held-out set (per §LLM benchmark protocol; held-out lemmas are sub-steps of `fa_forward_correct`). Lower close rates are expected at this Phase as proofs grow longer; the benchmark report documents the trajectory.
 
 **Validation (artifact, non-gating):**
 - FA forward diff-test artifact in place (see §Differential testing)
@@ -192,12 +187,10 @@ Phase A scouting evaluates both for FA pseudocode and recommends one; Phase C im
   - **Estimate revised upward**: ~250–400 new lines Lean (initial 150–200 estimate did not account for multi-block stride / layout reasoning); large reuse of Phase C single-program invariant tooling
 - **Headline corollary `fa1_eq_fa2`** by spec transitivity (~30 lines): both #7 and #8 prove their kernel ≡ `standardAttentionMath`, so the kernels' outputs agree. **This is the paper's headline sentence but not a separately-proved theorem.**
 
-*LLM tool v0.4 (release-ready):*
-- Benchmark suite: all theorems from Tiers 1+2+3 packaged as evaluation set; auto-runs measure close rate, retry count, wall-clock, API cost
-- Parallel sampling: multiple candidate tactics generated concurrently, first verified one wins
-- Cost tracking: aggregate API tokens / cost / time over the entire experiment, report in paper
-- CLI polish: `prove --theorem foo --max-retries 5 --strategy retrieval+stepwise` style interface
-- Released as standalone package (`lean-llm-prover` PyPI, naming subject to availability check)
+*Benchmark report (the only "tool work" here):*
+- Run `scripts/prove.sh` over the full benchmark set (all held-out theorems from Tiers 1+2+3 collected from each Phase's eval) with N=5 trials per theorem
+- Aggregate close rate, retry count, wall-clock, API cost across the entire experiment
+- Produce `bench/llm_eval/results/full_report.md` with the table — this is what gets cited in the paper's §LLM-assisted proof tooling section
 
 *Differential testing finalises (artifact, non-gating, see §Differential testing):*
 - Add **FA-2 forward** to the diff-test set; perform a one-time **FA-1 vs FA-2 cross-check** (same input, observe identical output to tolerance) as a sanity-check supplement to the formal `fa1_eq_fa2` corollary
@@ -214,13 +207,13 @@ Outline (10 sections):
 5. **Online softmax recurrence** (Phase B centerpiece)
 6. **FA forward correctness** (Phase C)
 7. **FA-1 ↔ FA-2 verified rewrite** (Phase D core)
-8. LLM-assisted proof tooling (Phase A→D evolution + benchmark numbers)
+8. LLM-assisted proof drafting via the `lean4` Claude Code plugin: an evaluation of `/lean4:autoprove` on the VeriTile benchmark, with close rate per Tier, deep-mode escalation rate, and total wall-clock / API cost. Honestly framed as an evaluation of an existing community tool, not a tool we built.
 9. Differential testing evaluation
 10. Related work + Conclusion
 
 **Validation (gating):**
 - All theorems closed, `lake build` clean
-- LLM v0.4 benchmark numbers reproducible
+- Full benchmark report (`bench/llm_eval/results/full_report.md`) reproducible: re-running `scripts/prove.sh` produces close rates within ±10% of the reported numbers
 - Paper draft complete and submitted
 
 **Validation (artifact, non-gating):**
@@ -235,12 +228,13 @@ Outline (10 sections):
 | Risk | Phase | Detection | Mitigation |
 |---|---|---|---|
 | `forLoop_inv` interface design fails to support nested loops cleanly | B | Phase A scouting flags it during invariant sketches | Fall back to `Nat.iterate` form (less direct, equivalent semantics) |
-| Online softmax recurrence Lean formalization stalls | B | ≥ 2 weeks no progress | Engage LLM tool intensively; if still stuck, simplify to stripped version (drop masking from this proof, reintroduce in Phase C) |
+| Online softmax recurrence Lean formalization stalls | B | ≥ 2 weeks no progress | Run `scripts/prove.sh --max-cycles=20 --deep=stuck` on the proof; if still stuck, simplify to stripped version (drop masking from this proof, reintroduce in Phase C) |
 | `tl.dot` on `Value.tile2D` has poor `simp` behavior | C | `fa_forward` proof stuck on `simp` | Custom `simp` lemmas (P1 already required this for `Value.bop` on equal-length tiles); switch to `unfold + induction` style if simp won't cooperate |
 | Mask sentinel-vs-real-zero gap (`Real.exp(-1e38) ≠ 0`) blocks naive mask formalization | A scouting / C | Phase A pseudocode pass flags it | Choose Option α (extended reals: `WithBot ℝ` / `EReal`) or Option β (mask-predicate denotation); commit during Phase A |
 | 2D stride / layout formal model harder than expected | D | When drafting `multiBlockExec` invariants | Restrict to "row-major contiguous per program_id"; document the restriction in paper as an assumed layout |
 | FA-2 multi-block abstraction unexpectedly complex | D | Phase C-end draft of `multiBlockExec` exposes hidden complexity | T3-D → T3-A only; downgrade target venue to OOPSLA |
-| LLM tool can't handle ~200-line proofs | C | Phase B-end retained-lemma close rate < 30% | Honest report: LLM works on short proofs only; don't force on long ones; tool becomes a "proof-segment helper" rather than "full-proof generator" |
+| `/lean4:autoprove` can't handle long proofs (Tier 3 ~200–600 lines) | C | Phase B-end held-out close rate < 30% on long lemmas | Honest report: split long proofs into sub-lemmas the plugin can close + a human-written composition; describe the human-LLM split in the benchmark report |
+| Upstream `lean4` plugin breaks / changes API mid-program | A–D | `/lean4:autoprove` returns errors or different output format | Pin a specific plugin version in repo (record commit / version in CONTRIBUTING.md); fall back to running an older cached version |
 | Differential test numerical gap exceeds tolerance for a representative kernel | B–D | GPU output vs reference | Yellow flag, not gating — diagnose: IEEE-754 intrinsic difference (acceptable, document), `.py` implementation bug (fix), or correspondence assertion off (re-check side-by-side). Formal proof remains valid; diff-test artifact updated or its scope noted |
 | Miss PLDI deadline (~Month 11) | D | Phase C-end timing review | Submit OOPSLA-spring (~Month 14) or ICSE-empirical |
 
@@ -297,7 +291,7 @@ To make close-rate metrics reproducible:
 - Each release includes release notes (new theorems, new semantics, benchmark numbers)
 - README maintained bilingually (English + 中文)
 - `CONTRIBUTING.md` with tutorial for adding a new kernel-pair equivalence (using Tier 1 log-sum-exp as worked example)
-- LLM tool released as standalone PyPI package at Phase D end
+- `scripts/prove.sh` lives in the repo (no separate package); benchmark eval results published with the project. The underlying `lean4` Claude Code plugin is upstream and not vendored — `CONTRIBUTING.md` records the pinned version
 
 ### Out of scope (P3+, explicit non-goals)
 
@@ -319,7 +313,8 @@ Phase A           [====]
 Phase B               [========]
 Phase C                        [========]
 Phase D                                 [======]
-LLM tool dev      [=============================]
+scripts/prove.sh  [=]
+Benchmark runs       [=]    [=]    [=]    [=]
 Diff-test (selected) [==] [=]   [==]   [==]
 Paper writing                               [====]
 
@@ -327,7 +322,7 @@ PLDI deadline (primary)                                ▲ (~Month 11)
 OOPSLA-spring (fallback)                                  ▲ (~Month 14)
 ```
 
-Diff-test work is intermittent (one representative kernel per phase, ~1 week each), not continuous infra.
+`scripts/prove.sh` is a one-time ~1 day deliverable in Phase A. Benchmark runs at each Phase end (~1 day each). Diff-test work is intermittent (one representative kernel per phase, ~1 week each).
 
 ## Decision log
 
@@ -337,7 +332,7 @@ Key decisions made during the brainstorm of 2026-04-26:
 2. **Family selection** — Mix α (Attention-headlined) over β (norm-fusion-heavy), γ (matmul-tiling). Reason: FlashAttention's online recurrence has genuine mathematical depth that differentiates from ATL/KaTen/TVM compiler-rewrite verification.
 3. **Tier 3 framing** — T3-D (both T3-A and T3-B) over A-only / B-only / stripped-only. Reason: user committed to ambitious scope; resources flexible; T3-A serves as Phase C exit, T3-B as Phase D capstone, with descoping rules per Gate C → D.
 4. **Sequencing** — Approach 2 (vertical slice) over 1 (bottom-up) and 3 (tracer bullet). Reason: every phase produces a publishable artifact; T3 scouting in Phase A absorbs the tracer-bullet benefit (early hard-problem engagement) without abandoning Tier 1's warmup value.
-5. **LLM tool integration** — explicit deliverable across all phases (MVP → harness), not optional. Reason: user committed to using LLMs for proof drafting; tool is engineered for evolution and becomes a paper-secondary contribution by Phase D.
+5. **LLM tool — wrap, not build** — chose to wrap the existing `lean4` Claude Code plugin (`/lean4:autoprove`) via a thin `scripts/prove.sh` rather than build a custom Python proof-drafting tool. Rescoped from a 200-line Python project + multi-phase upgrade roadmap (v0.2 retrieval, v0.3 proof-state interaction, v0.4 benchmark harness) to an ~80-line bash wrapper. Reason: the plugin already provides LSP integration via `lean_multi_attempt`, multi-cycle iteration with stuck detection, deep-mode escalation, tactic cascade, and repair mode — building these from scratch was unnecessary investment. Trade-off: the paper's "LLM tooling" section becomes an evaluation of an existing community tool, not a tool we built. Honest, less novel, but accurate. Decision made 2026-04-26 mid-Phase A after discovering the plugin in the user's installed Claude Code skills.
 6. **Differential testing** — *non-formal validation artifact*, not a phase gate, not part of the trusted proof chain. Maintained for selected representative kernels (~3–4 total across the program) as a credibility supplement. Reason: reviewers will ask "is this a real kernel?"; we answer with the side-by-side correspondence appendix supported by GPU evidence on representatives. Demoted from earlier draft after recognising that exhaustive diff-testing was over-investing for what it actually delivers (it cannot validate the AST↔`.py` correspondence — only a Python lifter could, and that's P3+).
 7. **Out-of-scope decisions** — backward pass, IEEE-754 fidelity, Python lifter, atomics, autotune all deferred. Reason: each is potentially its own follow-up paper; bundling them creates an unfocused contribution.
 
