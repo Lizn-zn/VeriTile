@@ -49,6 +49,19 @@ def stableLSEKernel (N : Nat) : Kernel := triton {
     Closed by Phase A Task 1.1.B. -/
 theorem log_sum_exp_shift_invariant {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) (m : ℝ) :
     Real.log (∑ i, Real.exp (x i)) = m + Real.log (∑ i, Real.exp (x i - m)) := by
-  sorry
+  have h_factor : ∀ i : Fin n, Real.exp (x i) = Real.exp m * Real.exp (x i - m) := by
+    intro i
+    rw [← Real.exp_add]
+    ring_nf
+  rw [show (∑ i, Real.exp (x i)) = ∑ i, Real.exp m * Real.exp (x i - m) from
+        Finset.sum_congr rfl (fun i _ => h_factor i)]
+  rw [← Finset.mul_sum]
+  have h_em_pos : 0 < Real.exp m := Real.exp_pos m
+  have h_sum_pos : 0 < ∑ i, Real.exp (x i - m) := by
+    apply Finset.sum_pos
+    · intro i _; exact Real.exp_pos _
+    · exact ⟨⟨0, hn⟩, Finset.mem_univ _⟩
+  rw [Real.log_mul (ne_of_gt h_em_pos) (ne_of_gt h_sum_pos)]
+  rw [Real.log_exp]
 
 end VeriTile.Examples
