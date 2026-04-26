@@ -199,8 +199,11 @@ Phase A scouting evaluates both for FA pseudocode and recommends one; Phase C im
 - Released as standalone package (`lean-llm-prover` PyPI, naming subject to availability check)
 
 *Differential testing finalises:*
-- Full 7-pair table (excluding the math-only `welford_eq_two_pass`): each kernel pair tested against PyTorch reference + cross-comparison
-- FA-1 vs FA-2 cross-check: same input, observe identical output (to tolerance)
+- Full differential testing table:
+  - 6 Tier 1+2 kernel-pair tests, each kernel ↔ kernel pair tested against PyTorch reference + cross-comparison between the two kernels in the pair
+  - FA-1 forward vs `flash_attn_func` / PyTorch reference
+  - FA-2 forward vs `flash_attn_func` / PyTorch reference
+  - FA-1 vs FA-2 cross-check: same input, observe identical output (to tolerance)
 
 *Paper draft:*
 
@@ -220,7 +223,7 @@ Outline (10 sections):
 **Validation:**
 - All theorems closed, `lake build` clean
 - LLM v0.4 benchmark numbers reproducible
-- Full 7-pair differential testing passes
+- Full differential testing table passes (6 Tier 1+2 kernel pairs + FA-1 + FA-2 + FA-1 vs FA-2)
 - Paper draft complete and submitted
 
 **Exit gate (`v1.0-pldi`):** paper submitted; tag and release.
@@ -254,7 +257,7 @@ To make close-rate metrics reproducible:
 
 ### Phase gate decision rules
 
-**Gate A → B** — scouting must show T3-B feasible in the window. If NO, drop to T3-A only, expand Tier 2 by 1–2 pairs (candidates: scan reordering, RoPE rearrangement), recalibrate timeline. Total kernel pair count stays 7–8.
+**Gate A → B** — scouting must show T3-B feasible in the window. If NO, drop to T3-A only (lose #8), expand Tier 2 by 1–2 pairs (candidates: scan reordering, RoPE rearrangement), recalibrate timeline. Total main theorem count becomes 8–9 (3 + 4-or-5 + 1).
 
 **Gate B → C** — online softmax recurrence proof must reach paper-quality. If NO, freeze at `v0.2-tier2`, submit CGO/CC with Tier 1+2, then resume Phase C post-submission as a new project arc.
 

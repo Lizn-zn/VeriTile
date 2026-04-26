@@ -199,8 +199,11 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 - 独立发布为 PyPI 包(`lean-llm-prover`,具体名字看可用性)
 
 *Differential testing 收尾:*
-- 完整 7 对表(不计入 math-only `welford_eq_two_pass`):每对 kernel 对 PyTorch reference + 互相比较
-- FA-1 vs FA-2 互查:相同输入,输出在容差内一致
+- 完整 differential testing 表:
+  - 6 个 Tier 1+2 kernel-pair 测试,每对 kernel ↔ kernel 对 PyTorch reference + 两 kernel 互相比较
+  - FA-1 forward vs `flash_attn_func` / PyTorch reference
+  - FA-2 forward vs `flash_attn_func` / PyTorch reference
+  - FA-1 vs FA-2 互查:相同输入,输出在容差内一致
 
 *论文 draft:*
 
@@ -220,7 +223,7 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 **验证:**
 - 全部定理闭合,`lake build` 干净
 - LLM v0.4 benchmark 数据可重现
-- 完整 7 对 differential testing 通过
+- 完整 differential testing 表通过(6 个 Tier 1+2 kernel pair + FA-1 + FA-2 + FA-1 vs FA-2)
 - 论文 draft 完成并提交
 
 **Exit gate(`v1.0-pldi`):** 论文提交;打 tag 发布
@@ -254,7 +257,7 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 
 ### Phase 间 gate 决策规则
 
-**Gate A → B** —— scouting 必须显示 T3-B 在窗口内可行。NO → 缩到 T3-A only,Tier 2 扩 1–2 对(候选:scan reordering、RoPE 重排),重校时间。Kernel 对总数仍 7–8
+**Gate A → B** —— scouting 必须显示 T3-B 在窗口内可行。NO → 缩到 T3-A only(失去 #8),Tier 2 扩 1–2 对(候选:scan reordering、RoPE 重排),重校时间。主定理总数变成 8–9 个(3 + 4-或-5 + 1)
 
 **Gate B → C** —— online softmax recurrence 证明必须达 paper 质量。NO → 冻结于 `v0.2-tier2`,以 Tier 1+2 投 CGO/CC,投稿后再启动新一轮 Phase C
 
