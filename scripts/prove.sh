@@ -87,13 +87,31 @@ else
   RESULT_TEXT=""
 fi
 
-# Heuristic success detection: clean exit AND result subtype isn't error AND
-# the result text doesn't say "fail/stuck/unable to close/sorry remains".
+# Ground-truth success detection: re-run `lake env lean` on the modified
+# file. /lean4:autoprove edits the file in-place to fill sorries; success
+# means the file now compiles without sorry warnings. This is the truth
+# oracle and avoids the v0.1 regex-heuristic false negatives (e.g., the
+# autoprove summary's "Stuck cycles | 0" metric label trips a `stuck`
+# regex).
+SCRIPT_PROJECT_ROOT="${PROJECT_ROOT}"
+LEAN_CHECK_OUT=$(mktemp)
+set +e
+( cd "${SCRIPT_PROJECT_ROOT}" && \
+  PATH="${HOME}/.elan/bin:${PATH}" lake env lean "${LEAN_FILE_ABS}" \
+  > "${LEAN_CHECK_OUT}" 2>&1 )
+LEAN_CHECK_EXIT=$?
+set -e
+
 if [ "${EXIT}" -eq 0 ] && [ "${SUBTYPE}" != "error" ] && \
-   ! printf '%s' "${RESULT_TEXT}" | grep -qiE 'fail|stuck|unable to close|sorry remains'; then
+   [ "${LEAN_CHECK_EXIT}" -eq 0 ] && \
+   ! grep -qiE 'sorry|error' "${LEAN_CHECK_OUT}"; then
+  rm -f "${LEAN_CHECK_OUT}"
   echo "[SUCCESS] ${LEAN_FILE} (${DURATION}s, log: ${OUT_JSON})"
   exit 0
 else
-  echo "[FAIL] ${LEAN_FILE} (exit=${EXIT}, subtype=${SUBTYPE}, ${DURATION}s, log: ${OUT_JSON})"
+  # Preserve the lean check output for debugging.
+  LEAN_CHECK_KEEP="${LOGS_DIR}/${BASE}_${TIMESTAMP}_leancheck.txt"
+  mv "${LEAN_CHECK_OUT}" "${LEAN_CHECK_KEEP}"
+  echo "[FAIL] ${LEAN_FILE} (claude exit=${EXIT}, subtype=${SUBTYPE}, lean exit=${LEAN_CHECK_EXIT}, ${DURATION}s, log: ${OUT_JSON}, lean: ${LEAN_CHECK_KEEP})"
   exit 1
 fi
