@@ -108,7 +108,7 @@ theorem naive_eq_stable {n : Nat} (x : Fin n → ℝ) (m : ℝ) :
   have hm : Real.exp m ≠ 0 := Real.exp_ne_zero m
   field_simp
 
-/-! ## (d) ARM-style kernel refinement
+/-! ## (d) kernel refinement
 
 The refinement pattern from arm-in-lean's `tnum_const_refinement`:
 
@@ -174,7 +174,31 @@ theorem softmax_naive_correct
     ∀ i : Fin N,
       observeY (exec (naiveSoftmaxKernel N) s) N s.pid i
         = some (naiveSpec xs i) := by
-  sorry
+  intro i
+  -- Helper: the offset arithmetic at runtime collapses through `realToNat`.
+  have hcast :
+      ∀ k : Fin N,
+        realToNat ((↑s.pid : ℝ) * (↑N : ℝ) + (↑(↑k : ℕ) : ℝ)) = s.pid * N + k.val := by
+    intro k
+    unfold realToNat
+    have heq :
+        ((↑s.pid : ℝ) * (↑N : ℝ) + (↑(↑k : ℕ) : ℝ)) = ((s.pid * N + k.val : ℕ) : ℝ) := by
+      push_cast; ring
+    rw [heq]; exact Nat.floor_natCast _
+  -- The output offsets `s.pid * N + k.val` are injective in `k`.
+  have h_inj : Function.Injective (fun k : Fin N => s.pid * N + k.val) := by
+    intro a b hab
+    exact Fin.ext (Nat.add_left_cancel hab)
+  -- Reduce the kernel via the operational semantics. `writeMem` is left unfolded
+  -- (no `[simp]` attribute on it) so the resulting `foldl` matches the shape
+  -- required by `scatter_readback`.
+  simp [observeY, exec, naiveSoftmaxKernel, stepStmts, stepStmt, evalOp, Value.bop,
+        Value.uop, Value.reduceSum, BlockState.setReg, BlockState.readMem, naiveSpec]
+  -- Collapse the `realToNat` casts and substitute the loaded `X` cells with `xs`.
+  unfold InputLoaded at _h_x
+  simp_rw [hcast, _h_x]
+  -- The remaining goal is exactly the readback of an injective scatter store.
+  exact BlockState.scatter_readback _ _ _ h_inj i
 
 /-- **Stable softmax kernel correctness.** Same scheme as above with the
     max-shift formula as the closed form. P2 polish. -/
@@ -184,7 +208,39 @@ theorem softmax_stable_correct
     ∀ i : Fin N,
       observeY (exec (stableSoftmaxKernel N) s) N s.pid i
         = some (stableSpec xs (tileMax hN xs) i) := by
-  sorry
+  -- Case-split `N = n + 1` so that `Value.reduceMax` and `tileMax` reduce.
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+  intro i
+  -- Helper: the offset arithmetic at runtime collapses through `realToNat`.
+  have hcast :
+      ∀ k : Fin (n + 1),
+        realToNat ((↑s.pid : ℝ) * (↑(n + 1) : ℝ) + (↑(↑k : ℕ) : ℝ))
+          = s.pid * (n + 1) + k.val := by
+    intro k
+    unfold realToNat
+    have heq :
+        ((↑s.pid : ℝ) * (↑(n + 1) : ℝ) + (↑(↑k : ℕ) : ℝ))
+          = ((s.pid * (n + 1) + k.val : ℕ) : ℝ) := by
+      push_cast; ring
+    rw [heq]; exact Nat.floor_natCast _
+  -- The output offsets `s.pid * (n+1) + k.val` are injective in `k`.
+  have h_inj : Function.Injective (fun k : Fin (n + 1) => s.pid * (n + 1) + k.val) := by
+    intro a b hab
+    exact Fin.ext (Nat.add_left_cancel hab)
+  -- Reduce the kernel via the operational semantics. `writeMem` is left unfolded
+  -- (no `[simp]` attribute on it) so the resulting `foldl` matches the shape
+  -- required by `scatter_readback`.
+  simp [observeY, exec, stableSoftmaxKernel, stepStmts, stepStmt, evalOp, Value.bop,
+        Value.uop, Value.reduceSum, Value.reduceMax, BlockState.setReg, BlockState.readMem,
+        stableSpec, tileMax]
+  -- Normalize `(↑n + 1 : ℝ)` to `(↑(n + 1) : ℝ)` so `hcast` (which carries the
+  -- latter shape) can rewrite the runtime offsets.
+  simp only [show ((n : ℝ) + 1) = ((n + 1 : ℕ) : ℝ) by push_cast; ring]
+  -- Collapse the `realToNat` casts and substitute the loaded `X` cells with `xs`.
+  unfold InputLoaded at _h_x
+  simp_rw [hcast, _h_x]
+  -- The remaining goal is exactly the readback of an injective scatter store.
+  exact BlockState.scatter_readback _ _ _ h_inj i
 
 /-- **Refinement: `naiveSoftmaxKernel` and `stableSoftmaxKernel` produce the
     same `Y`-region memory.**
@@ -208,7 +264,7 @@ theorem softmax_kernels_refinement
   congr 1
   unfold naiveSpec stableSpec
   have h := naive_eq_stable xs (tileMax hN xs)
-  simp only [naiveSoftmaxMath, stableSoftmaxMath] at h
+  simp only [] at h
   exact congrFun h i
 
 end VeriTile.Examples

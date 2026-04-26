@@ -87,28 +87,59 @@ def writeMem (s : BlockState) (region : RegionName) (offset : Nat) (v : ℝ) : B
 @[inline] def readMem (s : BlockState) (region : RegionName) (offset : Nat) : ℝ :=
   s.mem region offset
 
+/-- A `foldl` of `writeMem` writes preserves any cell whose offset is missed by
+    every step. The workhorse lemma behind `scatter_readback`. -/
+private theorem foldl_writeMem_preserves {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (o : Nat) (l : List α) :
+    ∀ (s : BlockState), (∀ k ∈ l, offsetFn k ≠ o) →
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        region o)
+      = s.mem region o := by
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s h
+    have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self)
+    have htl : ∀ k ∈ tl, offsetFn k ≠ o :=
+      fun k hk => h k (List.mem_cons_of_mem hd hk)
+    rw [List.foldl_cons, ih _ htl]
+    show (if region = region ∧ o = offsetFn hd then valueFn hd else s.mem region o)
+        = s.mem region o
+    rw [if_neg]
+    rintro ⟨_, h_eq⟩
+    exact hhd h_eq.symm
+
 /-- After writing `valueFn k` to address `offsetFn k` for each `k ∈ Fin n`,
     reading at `offsetFn i` returns `valueFn i`, provided the offset function
     is injective (so writes don't shadow each other). The "readback" property
     of the scatter store.
 
-    Proof sketch (P2 polish, no math content): induction on `List.finRange n`
-    with two cases:
-    * `i = head`: the first write puts `valueFn i` at `offsetFn i`. Subsequent
-      writes are at offsets `offsetFn k` for `k ∈ tail`, all distinct from
-      `offsetFn i` (by injectivity + `Pairwise (· ≠ ·)` on the list). A side
-      lemma `foldl_writeMem_preserves` shows these writes preserve the cell.
-    * `i ∈ tail`: the head write is at `offsetFn hd ≠ offsetFn i`, so it
-      doesn't touch `offsetFn i`. Recurse with the inductive hypothesis on
-      the tail. -/
+    Proof: split `List.finRange n = l₁ ++ i :: l₂` (since `i ∈ List.finRange n`).
+    The head-of-tail write puts `valueFn i` at `offsetFn i`. Subsequent writes
+    in `l₂` have offsets `offsetFn k` with `k ≠ i` (because `Nodup` forces
+    `i ∉ l₂`), so by injectivity `offsetFn k ≠ offsetFn i`, and
+    `foldl_writeMem_preserves` shows they leave the cell alone. -/
 theorem scatter_readback {region : RegionName} {n : Nat}
     (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
-    (_h_inj : Function.Injective offsetFn) (i : Fin n) :
+    (h_inj : Function.Injective offsetFn) (i : Fin n) :
     ((List.finRange n).foldl
        (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
         region (offsetFn i)
     = valueFn i := by
-  sorry
+  have h_nodup : (List.finRange n).Nodup := List.nodup_finRange n
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (List.mem_finRange i)
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
+  rw [hl, List.foldl_append, List.foldl_cons]
+  have h_not_in : ∀ k ∈ l₂, offsetFn k ≠ offsetFn i := fun k hk heq => by
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  rw [foldl_writeMem_preserves offsetFn valueFn (offsetFn i) l₂ _ h_not_in]
+  show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _)
+      = valueFn i
+  exact if_pos ⟨rfl, rfl⟩
 
 end BlockState
 

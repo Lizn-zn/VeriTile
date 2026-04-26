@@ -59,27 +59,27 @@ is isolated in `naive_eq_stable`; the operational walk-through reduces
 
 ```
 softmax_kernels_refinement              ✓ FULL PROOF
-  ├─ softmax_naive_correct              ⚠ sorry  (operational walk-through)
-  ├─ softmax_stable_correct             ⚠ sorry  (operational walk-through)
+  ├─ softmax_naive_correct              ✓ FULL PROOF (operational walk-through)
+  ├─ softmax_stable_correct             ✓ FULL PROOF (operational walk-through)
   └─ naive_eq_stable                    ✓ FULL PROOF (math; 6-line tactic)
                                             uses Real.exp_sub, Finset.sum_div,
                                             Real.exp_ne_zero, field_simp
 
 Operational support:
-  scatter_readback                      ⚠ sorry  (List.foldl induction)
+  scatter_readback                      ✓ FULL PROOF (List.foldl induction over
+                                            distinct offsets, via Nodup +
+                                            injectivity of offsetFn)
 ```
 
-The mathematical content (`naive_eq_stable`) is fully proved by the Lean
-kernel. The remaining sorries are **operational simp / induction
-engineering, no math content**:
-
-* `softmax_*_correct` reduce `exec kernel s` to its closed-form output via
-  simp on `exec / stepStmts / stepStmt / evalOp / Value.bop / writeMem`.
-  Closing them requires custom simp lemmas for `Value.bop` on tile-tile
-  values (Lean does not auto-reduce the `Fin.cast rfl` on equal-length
-  tiles), and several Mathlib API path adjustments.
-* `scatter_readback` is a pure `List.foldl` induction over distinct
-  offsets. P2 polish.
+P1 is sorry-free. The math content is isolated in `naive_eq_stable`; the
+two `softmax_*_correct` lemmas are pure operational walk-throughs that
+reduce `exec kernel s` to its closed-form output via simp on
+`exec / stepStmts / stepStmt / evalOp / Value.bop / writeMem`, then
+delegate to `scatter_readback` for the final readback step.
+`scatter_readback` itself is a `List.foldl` induction: split
+`List.finRange n = l₁ ++ i :: l₂`, use `Nodup` + injectivity to show no
+later write touches the target cell, and read off the value written at
+position `i`.
 
 ## Layout
 
@@ -113,8 +113,7 @@ PATH="$HOME/.elan/bin:$PATH" lake update     # ~5–15 min, downloads Mathlib
 PATH="$HOME/.elan/bin:$PATH" lake build
 ```
 
-Expected: clean build, three `declaration uses sorry` warnings (one per
-sorry above).
+Expected: clean build, no warnings, no sorries.
 
 ## Triton subset (P1 scope)
 
@@ -166,11 +165,10 @@ the tradeoffs.
 - [x] `triton { ... }` macro.
 - [x] Two-kernel softmax example via the macro.
 - [x] Math equivalence (`naive_eq_stable`): full proof.
-- [x] Refinement theorem (`softmax_kernels_refinement`): full proof from
-      sorry'd correctness lemmas.
-- [ ] Close `scatter_readback` (P2 simp / induction polish).
-- [ ] Close `softmax_naive_correct`, `softmax_stable_correct` (P2 simp on
-      operational walk-through).
+- [x] Refinement theorem (`softmax_kernels_refinement`): full proof.
+- [x] `scatter_readback`: full proof (`List.foldl` induction).
+- [x] `softmax_naive_correct`, `softmax_stable_correct`: full proof
+      (operational walk-through + `scatter_readback`).
 
 **P2 (operational polish):**
 - [ ] `forLoop` operational semantics (mutual recursion + `termination_by`).
