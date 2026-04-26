@@ -10,9 +10,9 @@ This document is the program-level plan agreed in the brainstorm of 2026-04-26. 
 
 **Primary** — submit a paper to PLDI (or OOPSLA-spring as fallback) with the central claim:
 
-> 8 main correctness theorems for production Triton kernels — including FlashAttention forward ≡ standard attention denotation and FA-2 forward ≡ standard attention denotation, yielding the headline corollary FA-1 ↔ FA-2 — formally verified in Lean 4 against an embedded Triton operational semantics, using LLM-assisted proof drafting and GPU differential testing for credibility.
+> 8 main correctness theorems for production Triton kernels — including FlashAttention forward ≡ standard attention denotation and FA-2 forward ≡ standard attention denotation, yielding the headline corollary FA-1 ↔ FA-2 — formally verified in Lean 4 against an embedded Triton operational semantics, with LLM-assisted proof drafting and a non-formal differential-testing artifact showing the embedded algorithms correspond to runnable GPU code.
 
-**Secondary** — toolchain (operational semantics, embedded `triton { ... }` DSL, LLM-assisted proof harness, differential testing) usable internally and openable to external contributors.
+**Secondary** — toolchain (operational semantics, embedded `triton { ... }` DSL, LLM-assisted proof harness, hand-written Python counterparts for differential testing) usable internally and openable to external contributors.
 
 ## Scope: 8 main correctness theorems + helpers + corollary
 
@@ -102,15 +102,16 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 - Smarter retry: track failed-strategy set, exclude in subsequent prompts
 - Structured output parsing: model outputs JSON `{tactic_block, reasoning}`; tactic block syntax-validated before file write
 
-*Differential testing harness:*
-- `tools/diff_test/` directory
-- For each Tier 1 + Tier 2 kernel, produce a `.py` Triton implementation (sourced from open implementations such as unsloth, vllm, or hand-written following Triton tutorials)
-- Compare both `.py` kernels' outputs to PyTorch reference on random inputs; compare to each other
-- Tolerance: max element-wise absolute diff ≤ 1e-5
+*Differential testing artifact (non-gating, see §Differential testing):*
+- Establish `tools/diff_test/` directory and the side-by-side correspondence convention
+- For 1–2 *selected representative* Tier 1+2 kernels, produce a hand-written `.py` Triton implementation and run a one-time comparison against PyTorch reference (max element-wise abs diff ≤ 1e-5)
+- The remaining Tier 1+2 kernels do not require diff-test artifacts; their correctness rests entirely on the Lean proof
 
-**Validation:**
+**Validation (gating):**
 - LLM v0.2 close rate ≥ 50% on the Phase B held-out set (per §LLM benchmark protocol)
-- Differential testing passes for all 6 Tier 1+2 kernels
+
+**Validation (artifact, non-gating):**
+- Differential test artifact in place for the 1–2 selected representative Tier 1+2 kernels (see §Differential testing)
 
 **Exit gate (`v0.2-tier2`):** all deliverables met; can submit to CGO/CC if Phase C is delayed.
 
@@ -160,16 +161,16 @@ Phase A scouting evaluates both for FA pseudocode and recommends one; Phase C im
 - Proof-state interaction: capture intermediate Lean proof state (via Lean MCP server or direct `lean --server` interface), feed back to model on retry, enable step-wise tactic generation
 - Required for ~200-line proofs (one-shot mode of v0.2 won't scale)
 
-*Differential testing extends:*
-- For each kernel embedded as `triton { ... }`, **maintain a hand-written corresponding Python Triton kernel** in `tools/diff_test/python/`. The two are *not* auto-generated from each other — correspondence is asserted by the human author and reviewed (a future Python lifter is P3+ work; see Out-of-scope).
-- Run the hand-written Python kernel on GPU; compare its output to `flash_attn_func` from the `flash-attn` package
-- Causal and non-causal both
-- Tolerance ≤ 1e-3 (FA reference implementations have roughly this gap to PyTorch reference)
-- **Correspondence claim** (must be made explicit in paper): side-by-side appendix table mapping each Lean AST instruction to its Python counterpart, plus a CI check that they share kernel signatures and shapes. Reviewers will ask "is the formal proof about the kernel you actually ran?" — the table + CI is the answer.
+*Differential testing artifact (non-gating, see §Differential testing):*
+- Add **FA forward** (Phase C's selected representative kernel) to the diff-test set
+- Hand-write the corresponding Python Triton kernel in `tools/diff_test/python/`; run on GPU; compare to `flash_attn_func` from the `flash-attn` package, causal and non-causal, tolerance ≤ 1e-3
+- This is a credibility artifact, not a phase gate. Failure would prompt investigation but does not block a Phase C exit if the formal proof is closed
 
-**Validation:**
+**Validation (gating):**
 - LLM v0.3 close rate ≥ 30% on the Phase C held-out set (per §LLM benchmark protocol; held-out lemmas are sub-steps of `fa_forward_correct`)
-- Differential testing FA forward ↔ `flash_attn_func` passes
+
+**Validation (artifact, non-gating):**
+- FA forward diff-test artifact in place (see §Differential testing)
 
 **Exit gate (`v0.3-tier3a`):** all deliverables met; can submit to OOPSLA if Phase D is delayed or descoped.
 
@@ -198,12 +199,9 @@ Phase A scouting evaluates both for FA pseudocode and recommends one; Phase C im
 - CLI polish: `prove --theorem foo --max-retries 5 --strategy retrieval+stepwise` style interface
 - Released as standalone package (`lean-llm-prover` PyPI, naming subject to availability check)
 
-*Differential testing finalises:*
-- Full differential testing table:
-  - 6 Tier 1+2 kernel-pair tests, each kernel ↔ kernel pair tested against PyTorch reference + cross-comparison between the two kernels in the pair
-  - FA-1 forward vs `flash_attn_func` / PyTorch reference
-  - FA-2 forward vs `flash_attn_func` / PyTorch reference
-  - FA-1 vs FA-2 cross-check: same input, observe identical output (to tolerance)
+*Differential testing finalises (artifact, non-gating, see §Differential testing):*
+- Add **FA-2 forward** to the diff-test set; perform a one-time **FA-1 vs FA-2 cross-check** (same input, observe identical output to tolerance) as a sanity-check supplement to the formal `fa1_eq_fa2` corollary
+- Final state of `tools/diff_test/`: 1–2 Tier 1+2 representatives + FA-1 + FA-2 + FA-1↔FA-2 cross-check. Tier 1+2 kernels not in the representative set remain proof-only
 
 *Paper draft:*
 
@@ -220,11 +218,13 @@ Outline (10 sections):
 9. Differential testing evaluation
 10. Related work + Conclusion
 
-**Validation:**
+**Validation (gating):**
 - All theorems closed, `lake build` clean
 - LLM v0.4 benchmark numbers reproducible
-- Full differential testing table passes (6 Tier 1+2 kernel pairs + FA-1 + FA-2 + FA-1 vs FA-2)
 - Paper draft complete and submitted
+
+**Validation (artifact, non-gating):**
+- Differential test artifact set complete: 1–2 Tier 1+2 representatives + FA-1 + FA-2 + FA-1↔FA-2 cross-check, all numerically agreeing within their respective tolerances
 
 **Exit gate (`v1.0-pldi`):** paper submitted; tag and release.
 
@@ -241,8 +241,30 @@ Outline (10 sections):
 | 2D stride / layout formal model harder than expected | D | When drafting `multiBlockExec` invariants | Restrict to "row-major contiguous per program_id"; document the restriction in paper as an assumed layout |
 | FA-2 multi-block abstraction unexpectedly complex | D | Phase C-end draft of `multiBlockExec` exposes hidden complexity | T3-D → T3-A only; downgrade target venue to OOPSLA |
 | LLM tool can't handle ~200-line proofs | C | Phase B-end retained-lemma close rate < 30% | Honest report: LLM works on short proofs only; don't force on long ones; tool becomes a "proof-segment helper" rather than "full-proof generator" |
-| Differential testing numerical gap > 1e-3 even after kernel implementation tightening | B–D | GPU output vs reference exceeds tolerance | Investigate three causes: IEEE-754 intrinsic difference (acceptable, document); kernel implementation bug (fix); our embedded semantics bug (fix and re-verify proofs) |
+| Differential test numerical gap exceeds tolerance for a representative kernel | B–D | GPU output vs reference | Yellow flag, not gating — diagnose: IEEE-754 intrinsic difference (acceptable, document), `.py` implementation bug (fix), or correspondence assertion off (re-check side-by-side). Formal proof remains valid; diff-test artifact updated or its scope noted |
 | Miss PLDI deadline (~Month 11) | D | Phase C-end timing review | Submit OOPSLA-spring (~Month 14) or ICSE-empirical |
+
+### Differential testing
+
+Differential testing is a **non-formal validation artifact, not part of the trusted proof chain**. For *selected representative* kernels we maintain hand-written Python Triton counterparts and compare against PyTorch / `flash-attn` references to show the embedded algorithms correspond to runnable GPU code.
+
+**What it is** — a credibility artifact that helps the reader trust that the embedded `triton { ... }` AST corresponds to a real, runnable Triton kernel. Reviewers may (reasonably) ask: "is the formal proof about a kernel anyone actually runs?" The diff-test artifact, plus a side-by-side correspondence appendix in the paper, is the answer.
+
+**What it is not** — it is not a phase gate. The trusted proof chain is the Lean theorem statement against the embedded operational semantics; correctness rests on that, not on numerical agreement.
+
+**What it does not solve** — diff testing on a hand-written `.py` does not validate the embedded operational semantics itself, nor does it close the gap between the embedded AST and a real `.py` (the AST↔`.py` correspondence is a human assertion, supported by the paper appendix; a Python lifter would close this gap formally — that's P3+ work).
+
+**Selected representatives** (the diff-test set across the whole program, ~3–4 kernels total):
+- 1–2 Tier 1+2 kernels (e.g., `naiveSoftmaxKernel` for the simplest case; one Tier 2 streaming kernel)
+- FA forward (Phase C)
+- FA-2 forward (Phase D)
+- FA-1↔FA-2 cross-check (Phase D)
+
+Tier 1+2 kernels not in the representative set remain proof-only — adding them is straightforward but engineering load grows linearly, and additional samples buy little marginal credibility once the representatives pass.
+
+**Tolerances**: Tier 1+2 representatives ≤ 1e-5 element-wise abs diff vs PyTorch reference; FA forward and FA-2 forward ≤ 1e-3 vs `flash_attn_func` (the FA reference itself has roughly this gap to PyTorch).
+
+**Failure handling**: a diff-test failure is a yellow flag for investigation — possible causes are IEEE-754 difference (acceptable, document), `.py` implementation bug (fix), or correspondence asserted incorrectly (re-check side-by-side). It does *not* invalidate the formal proof; the proof remains valid against the embedded semantics regardless.
 
 ### LLM benchmark protocol
 
@@ -265,7 +287,7 @@ To make close-rate metrics reproducible:
 
 "Stripped" definition: kernels with the algorithmic core preserved (online softmax, `tl.dot`, output accumulator) but engineering details elided (no causal mask, no block-skip optimization, single-block-grid).
 
-**Gate D → submit** — all theorems closed; LLM benchmark data complete; full diff-testing pass; paper draft complete. Submit. Tag `v1.0-pldi`.
+**Gate D → submit** — all theorems closed; LLM benchmark data complete; paper draft complete; diff-test artifacts on representative kernels in place (non-gating but referenced from paper appendix). Submit. Tag `v1.0-pldi`.
 
 ### Open-source cadence
 
@@ -292,18 +314,20 @@ To prevent scope creep and reviewer expectation mismatch:
 ### Timeline (rough Gantt)
 
 ```
-Month            1   2   3   4   5   6   7   8   9   10
-Phase A        [====]
-Phase B            [========]
-Phase C                     [========]
-Phase D                              [======]
-LLM tool dev   [=============================]
-DiffTest infra     [=========================]
-Paper writing                            [====]
+Month               1   2   3   4   5   6   7   8   9   10
+Phase A           [====]
+Phase B               [========]
+Phase C                        [========]
+Phase D                                 [======]
+LLM tool dev      [=============================]
+Diff-test (selected) [==] [=]   [==]   [==]
+Paper writing                               [====]
 
-PLDI deadline (primary)                            ▲ (~Month 11)
-OOPSLA-spring (fallback)                              ▲ (~Month 14)
+PLDI deadline (primary)                                ▲ (~Month 11)
+OOPSLA-spring (fallback)                                  ▲ (~Month 14)
 ```
+
+Diff-test work is intermittent (one representative kernel per phase, ~1 week each), not continuous infra.
 
 ## Decision log
 
@@ -314,7 +338,7 @@ Key decisions made during the brainstorm of 2026-04-26:
 3. **Tier 3 framing** — T3-D (both T3-A and T3-B) over A-only / B-only / stripped-only. Reason: user committed to ambitious scope; resources flexible; T3-A serves as Phase C exit, T3-B as Phase D capstone, with descoping rules per Gate C → D.
 4. **Sequencing** — Approach 2 (vertical slice) over 1 (bottom-up) and 3 (tracer bullet). Reason: every phase produces a publishable artifact; T3 scouting in Phase A absorbs the tracer-bullet benefit (early hard-problem engagement) without abandoning Tier 1's warmup value.
 5. **LLM tool integration** — explicit deliverable across all phases (MVP → harness), not optional. Reason: user committed to using LLMs for proof drafting; tool is engineered for evolution and becomes a paper-secondary contribution by Phase D.
-6. **Differential testing** — required across all phases as credibility infrastructure, but separated from formal proof. Reason: reviewers will ask "is this a real kernel?"; we answer by showing GPU outputs match references, while formal proof remains in `ℝ`.
+6. **Differential testing** — *non-formal validation artifact*, not a phase gate, not part of the trusted proof chain. Maintained for selected representative kernels (~3–4 total across the program) as a credibility supplement. Reason: reviewers will ask "is this a real kernel?"; we answer with the side-by-side correspondence appendix supported by GPU evidence on representatives. Demoted from earlier draft after recognising that exhaustive diff-testing was over-investing for what it actually delivers (it cannot validate the AST↔`.py` correspondence — only a Python lifter could, and that's P3+).
 7. **Out-of-scope decisions** — backward pass, IEEE-754 fidelity, Python lifter, atomics, autotune all deferred. Reason: each is potentially its own follow-up paper; bundling them creates an unfocused contribution.
 
 ## Per-phase implementation plans

@@ -10,9 +10,9 @@
 
 **主目标** —— 投稿 PLDI(fallback OOPSLA-spring),核心 claim:
 
-> 8 个生产 Triton kernel 主正确性定理(包括 FA-1 forward ≡ standard attention denotation 与 FA-2 forward ≡ standard attention denotation,推出 headline corollary FA-1 ↔ FA-2)在 Lean 4 中针对嵌入式 Triton 操作语义形式化证明,辅以 LLM 证明起草工具与 GPU 上的 differential testing 作为可信度支撑。
+> 8 个生产 Triton kernel 主正确性定理(包括 FA-1 forward ≡ standard attention denotation 与 FA-2 forward ≡ standard attention denotation,推出 headline corollary FA-1 ↔ FA-2)在 Lean 4 中针对嵌入式 Triton 操作语义形式化证明,辅以 LLM 证明起草工具,并以一个非形式 differential-testing 工件展示嵌入算法对应可在 GPU 上运行的代码。
 
-**副目标** —— 工具链(操作语义、嵌入式 `triton { ... }` DSL、LLM 证明 harness、differential testing)做扎实,可内部使用、可开源接收外部贡献。
+**副目标** —— 工具链(操作语义、嵌入式 `triton { ... }` DSL、LLM 证明 harness、为 differential testing 而手写的 Python 对应件)做扎实,可内部使用、可开源接收外部贡献。
 
 ## 范围:8 个主正确性定理 + helpers + corollary
 
@@ -102,15 +102,16 @@
 - Smarter retry:维护"已失败策略"集合,prompt 时显式排除
 - Structured output:模型输出 JSON `{tactic_block, reasoning}`,先做语法验证再写回文件
 
-*Differential testing harness:*
-- `tools/diff_test/` 目录
-- 每个 Tier 1 + Tier 2 kernel 配 `.py` Triton 实现(从开源工程如 unsloth、vllm 抄,或参照 Triton tutorial 自写)
-- 两个 `.py` kernel 的输出对 PyTorch reference 比较;两个互相比较
-- 容差:逐元素绝对差最大值 ≤ 1e-5
+*Differential testing 工件(非 gating,见 §Differential testing):*
+- 建立 `tools/diff_test/` 目录与 side-by-side 对应关系的约定
+- 在 1–2 个 *选定的代表性* Tier 1+2 kernel 上,手写对应的 `.py` Triton 实现并一次性对 PyTorch reference 比较(逐元素绝对差最大值 ≤ 1e-5)
+- 其余 Tier 1+2 kernel 不做 diff-test 工件;它们的正确性完全由 Lean 证明承担
 
-**验证:**
+**验证(gating):**
 - LLM v0.2 在 Phase B held-out 集上 close rate ≥ 50%(见 §LLM benchmark protocol)
-- Differential testing 6 个 Tier 1+2 kernel 全部通过
+
+**验证(工件,非 gating):**
+- 1–2 个选定代表性 Tier 1+2 kernel 的 diff-test 工件已就位(见 §Differential testing)
 
 **Exit gate(`v0.2-tier2`):** 全部交付物达成;Phase C 推迟时可投 CGO/CC
 
@@ -160,16 +161,16 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 - Proof-state interaction:抓取 Lean 中间证明状态(经 Lean MCP server 或直接 `lean --server`),失败时把当前 goal 喂回模型,实现 step-wise tactic 生成
 - 对 ~200 行长证明是必需的(v0.2 的一次性模式不够 scale)
 
-*Differential testing 扩展:*
-- 每个嵌入式 `triton { ... }` kernel **配一个手写的对应 Python Triton kernel**,放 `tools/diff_test/python/`。两边**不是**自动互生 —— 对应关系由人工作者声明并审阅(Python lifter 是 P3+ 工作;见 §未纳入范围)
-- 跑手写 Python kernel,GPU 上对 `flash-attn` 包的 `flash_attn_func` 比较
-- 因果 / 非因果两种
-- 容差 ≤ 1e-3(FA 参考实现 vs PyTorch reference 大致就是这个量级)
-- **对应关系声明**(论文中必须显式表述):附录给出 Lean AST 指令到 Python 对应的 side-by-side 表 + CI 检查两边 kernel signature / shape 一致。Reviewer 会问"形式证明的是不是你跑的那个 kernel" —— 这张表 + CI 是答案
+*Differential testing 工件(非 gating,见 §Differential testing):*
+- 把 **FA forward**(Phase C 的选定代表性 kernel)加入 diff-test 集
+- 在 `tools/diff_test/python/` 手写对应的 Python Triton kernel,GPU 上跑,与 `flash-attn` 的 `flash_attn_func` 比较,因果 / 非因果两种,容差 ≤ 1e-3
+- 这是 credibility 工件,不是 phase gate。失败会触发调查,但只要形式证明闭合就不阻塞 Phase C 退出
 
-**验证:**
+**验证(gating):**
 - LLM v0.3 在 Phase C held-out 集上 close rate ≥ 30%(见 §LLM benchmark protocol;held-out 引理是 `fa_forward_correct` 的子步骤)
-- Differential testing FA forward ↔ `flash_attn_func` 通过
+
+**验证(工件,非 gating):**
+- FA forward 的 diff-test 工件已就位(见 §Differential testing)
 
 **Exit gate(`v0.3-tier3a`):** 全部交付物达成;Phase D 推迟或缩水时可投 OOPSLA
 
@@ -198,12 +199,9 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 - CLI polish:`prove --theorem foo --max-retries 5 --strategy retrieval+stepwise` 风格接口
 - 独立发布为 PyPI 包(`lean-llm-prover`,具体名字看可用性)
 
-*Differential testing 收尾:*
-- 完整 differential testing 表:
-  - 6 个 Tier 1+2 kernel-pair 测试,每对 kernel ↔ kernel 对 PyTorch reference + 两 kernel 互相比较
-  - FA-1 forward vs `flash_attn_func` / PyTorch reference
-  - FA-2 forward vs `flash_attn_func` / PyTorch reference
-  - FA-1 vs FA-2 互查:相同输入,输出在容差内一致
+*Differential testing 收尾(工件,非 gating,见 §Differential testing):*
+- 把 **FA-2 forward** 加入 diff-test 集;一次性 **FA-1 vs FA-2 互查**(相同输入,输出在容差内一致),作为 `fa1_eq_fa2` corollary 的非形式 sanity-check 补充
+- `tools/diff_test/` 最终状态:1–2 个 Tier 1+2 代表 + FA-1 + FA-2 + FA-1↔FA-2 互查。代表集之外的 Tier 1+2 kernel 仅靠证明保证
 
 *论文 draft:*
 
@@ -220,11 +218,13 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 9. Differential testing evaluation
 10. Related work + Conclusion
 
-**验证:**
+**验证(gating):**
 - 全部定理闭合,`lake build` 干净
 - LLM v0.4 benchmark 数据可重现
-- 完整 differential testing 表通过(6 个 Tier 1+2 kernel pair + FA-1 + FA-2 + FA-1 vs FA-2)
 - 论文 draft 完成并提交
+
+**验证(工件,非 gating):**
+- Diff-test 工件集完整:1–2 个 Tier 1+2 代表 + FA-1 + FA-2 + FA-1↔FA-2 互查,各自在容差内一致
 
 **Exit gate(`v1.0-pldi`):** 论文提交;打 tag 发布
 
@@ -241,8 +241,30 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 | 2D stride / layout 形式模型超预期复杂 | D | 起草 `multiBlockExec` 不变量时 | 限定为"每 program_id 行优先连续";论文中作为 assumed layout 文档化 |
 | FA-2 multi-block 抽象超预期复杂 | D | Phase C 末草拟 `multiBlockExec` 时暴露隐藏复杂度 | T3-D → T3-A only;论文目标降档 OOPSLA |
 | LLM 工具无法处理 ~200 行长证明 | C | Phase B 末保留引理 close rate < 30% | 诚实报告:LLM 只在短证明上有效;不强用于长证明;工具定位变为"证明片段助手"而非"完整证明生成器" |
-| Differential testing 数值差 > 1e-3 即使收紧 kernel 实现 | B–D | GPU 输出 vs reference 超容差 | 三种排查:IEEE-754 内禀差异(可接受,文档标注);kernel 实现 bug(修);我方嵌入语义 bug(修并重证) |
+| Diff-test 数值差超容差(代表性 kernel) | B–D | GPU 输出 vs reference | 黄旗,非 gate —— 排查:IEEE-754 内禀差异(可接受,文档化)、`.py` 实现 bug(修)、对应断言不准(对照重检)。形式证明仍然有效;diff-test 工件更新或文档化其范围 |
 | 错过 PLDI deadline(~Month 11) | D | Phase C 末时间评估 | 投 OOPSLA-spring(~Month 14)或 ICSE-empirical |
+
+### Differential testing
+
+Differential testing 是**非形式 validation 工件,不属于可信证明链**。在 *选定的代表性* kernel 上,我们维护手写的 Python Triton 对应件,与 PyTorch / `flash-attn` reference 比较,以展示嵌入式算法对应可在 GPU 上运行的代码。
+
+**它是什么** —— 一个 credibility 工件,帮助读者相信嵌入式 `triton { ... }` AST 对应一个真实的、可运行的 Triton kernel。Reviewer 可能(合理地)问:"形式证明的是不是真有人在跑的 kernel?" diff-test 工件 + 论文附录的 side-by-side correspondence 表,就是答案。
+
+**它不是什么** —— 它**不是** phase gate。可信证明链是 Lean 定理对嵌入式操作语义的命题;正确性靠这个,不靠数值一致。
+
+**它解决不了什么** —— 对手写 `.py` 跑 diff testing **不能**验证嵌入式操作语义本身,**也不能**关闭嵌入式 AST 与真实 `.py` 之间的 gap(AST↔`.py` 对应是人工断言,论文附录支撑;只有 Python lifter 才能形式化关闭 —— 那是 P3+ 工作)
+
+**选定代表性集合**(整个 program 的 diff-test 集,共 ~3–4 个 kernel):
+- 1–2 个 Tier 1+2 kernel(如最简单的 `naiveSoftmaxKernel`;一个 Tier 2 streaming kernel)
+- FA forward(Phase C)
+- FA-2 forward(Phase D)
+- FA-1↔FA-2 互查(Phase D)
+
+代表集之外的 Tier 1+2 kernel 仅靠证明保证 —— 加上去工程上线性增长,但额外样本对 credibility 的边际收益很小,只要代表通过就够。
+
+**容差**:Tier 1+2 代表 vs PyTorch reference ≤ 1e-5 元素绝对差;FA forward 与 FA-2 forward vs `flash_attn_func` ≤ 1e-3(FA 参考自身 vs PyTorch 大致就是这个量级)
+
+**失败处理**:diff-test 失败是黄旗,不是 gate —— 排查:IEEE-754 内禀差异(可接受,文档化)、`.py` 实现 bug(修)、对应断言不准(对照重检)。它**不**让形式证明失效;证明对嵌入式语义的命题仍然成立
 
 ### LLM benchmark protocol
 
@@ -268,7 +290,7 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 
 "Stripped" 定义:保留算法核心(online softmax、`tl.dot`、输出累加器)但省略工程细节(无因果 mask、无 block-skip 优化、单 block grid)
 
-**Gate D → 投稿** —— 全定理闭合 + LLM benchmark 数据齐 + 完整 diff-testing 通过 + paper draft 完成。投稿。打 tag `v1.0-pldi`
+**Gate D → 投稿** —— 全定理闭合 + LLM benchmark 数据齐 + paper draft 完成 + 代表性 kernel 的 diff-test 工件已就位(非 gating,但论文附录引用)。投稿。打 tag `v1.0-pldi`
 
 ### Open-source 节奏
 
@@ -295,18 +317,20 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 ### 时间分布(粗略 Gantt)
 
 ```
-Month            1   2   3   4   5   6   7   8   9   10
-Phase A        [====]
-Phase B            [========]
-Phase C                     [========]
-Phase D                              [======]
-LLM tool dev   [=============================]
-DiffTest infra     [=========================]
-Paper writing                            [====]
+Month               1   2   3   4   5   6   7   8   9   10
+Phase A           [====]
+Phase B               [========]
+Phase C                        [========]
+Phase D                                 [======]
+LLM tool dev      [=============================]
+Diff-test (代表) [==] [=]   [==]   [==]
+Paper writing                               [====]
 
-PLDI deadline (主)                                  ▲ (~Month 11)
-OOPSLA-spring (fallback)                              ▲ (~Month 14)
+PLDI deadline (主)                                     ▲ (~Month 11)
+OOPSLA-spring (fallback)                                  ▲ (~Month 14)
 ```
+
+Diff-test 是断续工作(每 phase 一个代表性 kernel,~1 周),不是持续基础设施
 
 ## 决策日志
 
@@ -317,7 +341,7 @@ OOPSLA-spring (fallback)                              ▲ (~Month 14)
 3. **Tier 3 框架** —— T3-D(T3-A + T3-B 都做)而非 A-only / B-only / 仅 stripped。理由:用户承诺 ambitious scope,资源弹性;T3-A 作 Phase C 出口、T3-B 作 Phase D capstone,Gate C → D 设有缩水规则
 4. **Sequencing** —— Approach 2(垂直切片)而非 1(自底向上)、3(tracer bullet)。理由:每个 phase 都有可投 artifact;Phase A 的 T3 scouting 把 tracer-bullet 的优势(早接触硬问题)吸收进来,同时不放弃 Tier 1 warmup 的价值
 5. **LLM 工具集成** —— 显式贯穿全 phase 的交付物(MVP → harness),非可选。理由:用户明确"肯定用 LLM 写证明";工具按 phase 演化,在 Phase D 时成为论文 secondary contribution
-6. **Differential testing** —— 全 phase 必备的 credibility 基础设施,与形式证明分离。理由:reviewer 必问"这是真 kernel 吗";我们用 GPU 输出对 reference 一致来回答,而形式证明留在 `ℝ` 上
+6. **Differential testing** —— *非形式 validation 工件*,不是 phase gate,不属于可信证明链。仅在选定代表性 kernel 上维护(全 program 共 ~3–4 个),作为 credibility 补充。理由:reviewer 必问"这是真 kernel 吗";我们用论文附录的 side-by-side correspondence + GPU 代表性证据回答。从早期草稿降级,因为意识到全量 diff-testing 是过度投资 —— 它不能验证 AST↔`.py` 对应,只有 Python lifter 能(P3+)
 7. **Out-of-scope 决策** —— backward pass、IEEE-754 保真、Python lifter、原子操作、autotune 全部推迟。理由:每个潜在地都是另一篇 follow-up;捆绑会让本论文贡献失焦
 
 ## 各 phase 的 implementation plan
