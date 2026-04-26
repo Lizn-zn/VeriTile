@@ -178,7 +178,7 @@ the tradeoffs.
 - [ ] Custom simp lemmas for `Value.bop` on tile-tile of equal length.
 - [ ] Auto-derive `Kernel.inputs` / `Kernel.outputs` from the macro body.
 
-**P3+ (research direction — see `proposal.md`):**
+**P3+ (research direction — see `Notes/proposal.md` and `PLAN.md`):**
 - [ ] Python lifter (real `.py` Triton → embedded `triton { ... }` term).
 - [ ] LLM-driven proof drafting harness (Vero-style).
 - [ ] More equivalence examples: Welford variance, log-sum-exp, scan

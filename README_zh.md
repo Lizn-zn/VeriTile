@@ -171,7 +171,7 @@ lower 到我们的 `Op` / `Stmt` / `Kernel` AST。
 - [ ] 等长 tile-tile 上 `Value.bop` 的自定义 simp 引理。
 - [ ] 从宏 body 自动推导 `Kernel.inputs` / `Kernel.outputs`。
 
-**P3+(研究方向 —— 见 `proposal.md`):**
+**P3+(研究方向 —— 见 `Notes/proposal.md` 与 `PLAN.md`):**
 - [ ] Python lifter(真实 `.py` Triton → 嵌入式 `triton { ... }` term)。
 - [ ] LLM 驱动的证明起草框架(Vero 风格)。
 - [ ] 更多等价示例:Welford 方差、log-sum-exp、scan 重排。
