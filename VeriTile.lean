@@ -6,5 +6,5 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Examples
 import VeriTile.Examples.SoftmaxEq
 import VeriTile.Examples.LogSumExpEq
--- import VeriTile.Examples.SoftmaxReciprocal  -- Task 1.2
+import VeriTile.Examples.SoftmaxReciprocal
 -- import VeriTile.Examples.WelfordMath        -- Task 1.3
