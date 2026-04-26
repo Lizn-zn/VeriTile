@@ -19,6 +19,14 @@ below, the wrapper's success heuristic is buggy — every trial reports
 `subtype: success` from the underlying `/lean4:autoprove` session and
 produces a sorry-free file, but the wrapper marks the run `[FAIL]`.
 
+**Update (post-eval, commit `4e5e15c`):** The wrapper's regex success-
+detection was replaced with `lake env lean` as a ground-truth oracle.
+Re-running the wrapper on the same trial files would now correctly report
+`[SUCCESS]`. The trial data above remains the source of truth (we always
+counted by ground-truth lean compile, not wrapper exit), so this fix
+doesn't change the reported close rate; it just makes future eval runs
+self-consistent without needing the manual lean-check overlay.
+
 ## Per-trial results
 
 | Trial | Outcome (lean-check) | Wrapper exit | Duration (s) | API cost (USD) | Cycles | Stuck | Deep | Strategy |
