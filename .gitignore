@@ -9,3 +9,6 @@
 *.olean
 *.ilean
 *.hash
+
+# scripts/prove.sh log output
+/Logs/
