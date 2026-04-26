@@ -2,7 +2,7 @@
 
 **English** | [中文](PLAN_zh.md)
 
-A 7–10 month research program to deliver a "Verified kernel rewrites" paper through algorithmic equivalence proofs of 8 production-relevant Triton kernel theorems, including FlashAttention forward correctness and FA-1 ↔ FA-2 verified rewrite.
+A 7–10 month research program to deliver a "Verified kernel rewrites" paper through 8 main correctness theorems for production Triton kernels — including FlashAttention forward correctness — and the headline corollary `fa1_eq_fa2`.
 
 This document is the program-level plan agreed in the brainstorm of 2026-04-26. Each phase below has a separate implementation plan (to be written via the `writing-plans` flow when the phase begins).
 
@@ -10,13 +10,26 @@ This document is the program-level plan agreed in the brainstorm of 2026-04-26. 
 
 **Primary** — submit a paper to PLDI (or OOPSLA-spring as fallback) with the central claim:
 
-> Algorithmic equivalence of 8 production-relevant Triton kernel theorems — including FlashAttention forward ≡ standard attention denotation and FlashAttention-1 ↔ FlashAttention-2 — formally verified in Lean 4 against an embedded Triton operational semantics, using LLM-assisted proof drafting and GPU differential testing for credibility.
+> 8 main correctness theorems for production Triton kernels — including FlashAttention forward ≡ standard attention denotation and FA-2 forward ≡ standard attention denotation, yielding the headline corollary FA-1 ↔ FA-2 — formally verified in Lean 4 against an embedded Triton operational semantics, using LLM-assisted proof drafting and GPU differential testing for credibility.
 
 **Secondary** — toolchain (operational semantics, embedded `triton { ... }` DSL, LLM-assisted proof harness, differential testing) usable internally and openable to external contributors.
 
-## Scope: kernel pair set (8 theorems)
+## Scope: 8 main correctness theorems + helpers + corollary
 
-Distribution: Tier 1 (3) + Tier 2 (3) + Tier 3 (2). Of these, 7 are kernel ↔ kernel equivalence theorems and 1 (Tier 3-A) is a kernel ↔ math-spec correctness theorem.
+| Tier | Phase | Main theorems | Type |
+|---|---|---|---|
+| 1 | A | (#1) `softmax_kernels_refinement` (DONE) · (#2) `log_sum_exp_refinement` · (#3) `softmax_reciprocal_refinement` | kernel ↔ kernel × 3 |
+| 2 | B | (#4) `welford_kernels_refinement` · (#5) `online_softmax_recurrence_eq_batch` · (#6) `layernorm_kernels_refinement` | kernel ↔ kernel × 3 |
+| 3 | C, D | (#7) `fa_forward_correct` (T3-A, Phase C) · (#8) `fa_2_forward_correct` (T3-B, Phase D) | kernel ↔ math × 2 |
+
+**Plus helpers** (not counted as main theorems):
+- Math-only lemma `welford_eq_two_pass` (Phase A, prep for #4)
+- Operational helper `forLoop_inv` (Phase B, used by every loop kernel proof)
+- Mask-handling helper (`Phase C`; form depends on Phase A scouting outcome — see §Phase C)
+- `delayed_rescale_eq` helper (Phase D, used inside #8)
+
+**Plus headline corollary** (derived, not a 9th main theorem):
+- **`fa1_eq_fa2 : Y_fa1 = Y_fa2`** — by spec transitivity through `standardAttentionMath` from #7 and #8 (~30 lines). **This is the sentence the paper foregrounds**, but it is *not* a separately-proved theorem; its content is fully discharged by #7 and #8.
 
 ### Tier 1 — Loop-free (Phase A, 3 pairs)
 
@@ -32,10 +45,13 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 5. **Online softmax recurrence ≡ batch softmax** — *the FlashAttention algorithmic core, paper centerpiece.* Proves that the streaming `(m_new, l_new) = (max(m_old, max(x_block)), exp(m_old − m_new) · l_old + Σ exp(x_block − m_new))` recurrence produces the same `(m, l)` as the one-shot batch form, by induction over blocks.
 6. **Fused single-pass LayerNorm ≡ two-pass LayerNorm** — composes the Welford lemma with the affine `(x − μ)/√(var + ε) · γ + β` transform. Demonstrates lemma reuse across kernel pairs.
 
-### Tier 3 — Production attention (Phases C+D, 2 theorems)
+### Tier 3 — Production attention (Phases C+D)
 
-7. **`fa_forward_correct`** (T3-A, Phase C) — FlashAttention forward kernel ≡ `standardAttentionMath Q K V causal` denotation. Single-block reasoning: each program_id processes one Q-block × full KV loop. Extends Phase B's `(m, l)` invariant to `(m, l, O)` for the running output accumulator.
-8. **`fa1_eq_fa2`** (T3-B, Phase D) — FA-1 ↔ FA-2 verified rewrite, via spec transitivity through `standardAttentionMath`. Requires multi-block grid execution semantics (FA-2 parallelizes over sequence-length).
+7. **`fa_forward_correct`** (T3-A, Phase C) — FlashAttention-1 forward kernel ≡ `standardAttentionMath Q K V causal` denotation. Single-block reasoning: each program_id processes one Q-block × full KV loop. Extends Phase B's `(m, l)` invariant to `(m, l, O)` for the running output accumulator. Output is per-element `(i, d)` of the (S × D) output matrix, *not* a scalar (`observeY2D` reads at `(i, d)`).
+
+8. **`fa_2_forward_correct`** (T3-B, Phase D) — FlashAttention-2 forward kernel ≡ `standardAttentionMath` denotation. Same shape as #7 with three engineering differences: (a) sequence-length parallelism (FA-2 grid is 3D: `batch × heads × Q-blocks`), (b) delayed rescaling of `O`, (c) fully-masked-block skipping. Largely reuses Phase C's `(m, l, O)` invariant tooling on the single-program-id portion; the multi-block coordination is new in Phase D.
+
+**Headline corollary** (derived, not a 9th theorem): `fa1_eq_fa2 : Y_fa1 = Y_fa2`, by spec transitivity through `standardAttentionMath` from #7 and #8 (~30 lines).
 
 ## Phase structure (~28–42 weeks total)
 
@@ -52,7 +68,7 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
   - feasibility judgment: T3-B in window or fall back to T3-A only?
 
 **Validation:**
-- LLM MVP must close `softmax_naive_correct` (sorry-ed for the test) at close rate ≥ 1/3 across repeated runs
+- Create a held-out evaluation directory `bench/llm_eval/` separate from the main library; in it, replicate `softmax_naive_correct` with the proof body replaced by `sorry`. The main library copy stays intact and proven; the held-out copy is the LLM benchmark target. LLM MVP must close this held-out copy at close rate ≥ 1/3 across N=5 independent runs (see §LLM benchmark protocol).
 - All P1 + Tier 1 builds clean
 
 **Exit gate (`v0.1-tier1`):** all deliverables met; `lake build` clean.
@@ -64,14 +80,18 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 *Operational semantics:*
 - Convert `stepStmt` and `stepStmts` to a `mutual` block to support nested loops
 - `forLoop` operational semantics with explicit `termination_by (sizeOf body + 1, n − i)` lex measure
-- `forLoop_inv` lemma (the workhorse for all Phase B/C/D loop proofs):
+- `forLoop_inv` lemma (the workhorse for all Phase B/C/D loop proofs); each iteration binds the loop counter to the index register `idx` *before* stepping the body, so body code that reads `idx` sees the current iteration:
 
   ```
-  ∀ (P : Nat → BlockState → Prop),
+  ∀ (idx : RegName) (n : Nat) (body : List Stmt) (P : Nat → BlockState → Prop),
     P 0 s_init →
-    (∀ i s, P i s → ∃ s', stepStmts body s = some s' ∧ P (i+1) s') →
-    ∃ s_final, exec_forLoop body n s_init = some s_final ∧ P n s_final
+    (∀ i s, P i s →
+      ∃ s', stepStmts body (s.setReg idx (Value.scalar (i : ℝ))) = some s'
+            ∧ P (i+1) s') →
+    ∃ s_final, exec_forLoop idx n body s_init = some s_final ∧ P n s_final
   ```
+
+  The index binding is essential: Welford / online-softmax / FA bodies all reference `idx` as a register (e.g., to compute `offs := pid * BLOCK + idx * STRIDE`). Without binding `idx` before each `stepStmts body` call, the body's data dependency on `i` cannot be expressed in `BlockState`.
 
 *Theorems:*
 - 3 Tier 2 kernel-pair theorems (#4, #5, #6)
@@ -89,7 +109,7 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 - Tolerance: max element-wise absolute diff ≤ 1e-5
 
 **Validation:**
-- LLM v0.2 close rate ≥ 50% on a held-out Tier 2 lemma (e.g., a sub-step of LayerNorm fusion)
+- LLM v0.2 close rate ≥ 50% on the Phase B held-out set (per §LLM benchmark protocol)
 - Differential testing passes for all 6 Tier 1+2 kernels
 
 **Exit gate (`v0.2-tier2`):** all deliverables met; can submit to CGO/CC if Phase C is delayed.
@@ -98,39 +118,57 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 
 **Deliverables:**
 
-*Semantics extensions:*
-- `Value.tile2D : (m n : Nat) → (Fin m → Fin n → ℝ) → Value` constructor
-- `Op.dot a b` semantics: `(A · B)[i,k] = Σⱼ A[i,j] · B[j,k]` via Mathlib `Finset.sum`
-- `Op.where(cond, a, b)` for masking
-- Lemma `softmax_neg_inf_zero`: positions with `score = −∞` (or finite stand-in like `-1e38`) contribute 0 to softmax weights
-- Single-block reasoning sufficient (FA-1 forward and FA-2 forward both have one program_id processing one (batch, head) or (batch, head, Q-block); intra-program proof covers the algorithmic content)
+*Semantics extensions (broader than initially scoped — see Phase A scouting outcome):*
+- `Value.tile2D : (m n : Nat) → (Fin m → Fin n → ℝ) → Value` constructor for 2D matrix tiles
+- `Op.dot a b`: `(A · B)[i,k] = Σⱼ A[i,j] · B[j,k]` via Mathlib `Finset.sum`
+- Comparison ops `Op.lt`, `Op.le` (returning `Value.tile` of 0-1 `ℝ` or boolean tile)
+- `Op.where(cond, a, b)` for element-wise mask: branches on a predicate tile, *not* on a sentinel value
+- Multi-axis broadcast `Op.broadcastTo`: promote a 1D tile to a 2D shape (e.g., a Q row promoted to a (Q-block × K-block) score tile)
+- Causal indexing helpers: index arithmetic for "current Q-block start", "current KV-block start", with proven equivalences to `Fin` arithmetic
+- 2D output addressing: `observeY2D : Option BlockState → Fin S → Fin D → Option ℝ` reads at `(s.pid_to_address (i, d))` (1D `observeY` was Tier 1+2 only)
+- Single-block reasoning is sufficient for the *algorithmic* content here — multi-program-id grid coordination is Phase D
+
+*Mask handling — open design choice (resolved by Phase A scouting):*
+
+The naive claim "scores set to `-1e38` contribute 0 to softmax weights" is **false in `ℝ`** because `Real.exp(-1e38) ≠ 0`. Two viable resolutions; the choice between them is a Phase A scouting deliverable and the implementation lands in Phase C:
+
+* **Option α — extended reals.** Score values use `WithBot ℝ` (or `EReal`); `Real.exp` extended so `⊥ ↦ 0`. Masked positions in the kernel produce `⊥` *semantically* (the float-level `-1e38` is a *concretization* relevant only to differential testing, not to the formal proof). Mathematically clean; engineering cost is non-trivial because `Op.dot`, `Op.where`, etc. now compose on extended reals.
+* **Option β — mask-predicate denotation.** Spec uses `maskedSoftmax (x : Fin n → ℝ) (mask : Fin n → Bool)` directly: `maskedSoftmax x mask i = if mask i then 0 else exp(x i) / Σⱼ if mask j then 0 else exp(x j)`. The kernel embedding must thread an explicit Boolean mask register through `Op.where`, *not* a sentinel float. Avoids extended reals; requires the kernel embedding to expose mask predicates at the AST level.
+
+Phase A scouting evaluates both for FA pseudocode and recommends one; Phase C implements it.
 
 *Theorem:*
 - `fa_forward_correct` — full Lean proof, no sorry
-- Statement (sketch):
+- Statement (sketch; assumes mask resolution from Phase A scouting):
 
   ```
   theorem fa_forward_correct
       (Q K V : Matrix (Fin S) (Fin D) ℝ) (causal : Bool)
       (s : BlockState) (h_inputs : InputsLoaded s Q K V) :
-      ∀ (i : Fin S),
-        observeY (exec FAForwardKernel s) S s.pid i
-          = some (standardAttentionMath Q K V causal i)
+      ∀ (i : Fin S) (d : Fin D),
+        observeY2D (exec FAForwardKernel s) i d
+          = some ((standardAttentionMath Q K V causal) i d)
   ```
 
-- Proof strategy: forLoop_inv per Q block with invariant `(m_k, l_k, O_k)` extending Phase B's `(m, l)` recurrence. Estimated ~200–300 lines Lean (including semantics extensions).
+  where `standardAttentionMath Q K V causal : Matrix (Fin S) (Fin D) ℝ` is the math-level attention output (S × D matrix), and `observeY2D` reads cell `(i, d)` of the kernel's `Y` region. The theorem is per-element; row-level / matrix-level forms are corollaries.
+
+- Proof strategy: `forLoop_inv` per Q block with invariant `(m_k, l_k, O_k)` extending Phase B's `(m, l)` recurrence to also track the running output `O_k : Fin D → ℝ`. Per-element correctness derives from `O_k / l_k` at the final iteration.
+
+- **Estimate revised upward**: ~400–600 lines Lean total (semantics extensions ~150 lines, kernel theorem proof ~300 lines, masking-related lemmas ~50–150 lines depending on mask option). The earlier 200–300 line estimate did not account for comparison / broadcast / 2D-layout / causal-indexing semantics.
 
 *LLM tool v0.3:*
 - Proof-state interaction: capture intermediate Lean proof state (via Lean MCP server or direct `lean --server` interface), feed back to model on retry, enable step-wise tactic generation
 - Required for ~200-line proofs (one-shot mode of v0.2 won't scale)
 
 *Differential testing extends:*
-- Embed FA forward kernel as `triton { ... }`, transpile to runnable `.py`, compare to `flash_attn_func` from `flash-attn` package on real GPU
+- For each kernel embedded as `triton { ... }`, **maintain a hand-written corresponding Python Triton kernel** in `tools/diff_test/python/`. The two are *not* auto-generated from each other — correspondence is asserted by the human author and reviewed (a future Python lifter is P3+ work; see Out-of-scope).
+- Run the hand-written Python kernel on GPU; compare its output to `flash_attn_func` from the `flash-attn` package
 - Causal and non-causal both
-- Tolerance ≤ 1e-3 (FA reference implementation has roughly this gap to PyTorch reference)
+- Tolerance ≤ 1e-3 (FA reference implementations have roughly this gap to PyTorch reference)
+- **Correspondence claim** (must be made explicit in paper): side-by-side appendix table mapping each Lean AST instruction to its Python counterpart, plus a CI check that they share kernel signatures and shapes. Reviewers will ask "is the formal proof about the kernel you actually ran?" — the table + CI is the answer.
 
 **Validation:**
-- LLM v0.3 close rate ≥ 30% on a held-out Tier 3-A sub-lemma
+- LLM v0.3 close rate ≥ 30% on the Phase C held-out set (per §LLM benchmark protocol; held-out lemmas are sub-steps of `fa_forward_correct`)
 - Differential testing FA forward ↔ `flash_attn_func` passes
 
 **Exit gate (`v0.3-tier3a`):** all deliverables met; can submit to OOPSLA if Phase D is delayed or descoped.
@@ -140,17 +178,18 @@ Plus one math-only lemma `welford_eq_two_pass` (preparation for Phase B's Welfor
 **Deliverables:**
 
 *Semantics extensions:*
-- `multiBlockExec : Kernel → InitMem → Grid → FinalMem` model: run all program_ids, combine writes
-- Disjoint-writes lemma: pure forward kernels (no atomics) with non-overlapping output regions per program_id can be analysed program-locally and composed
-- ~80 lines of semantics extension; deliberately avoids concurrency / atomics (out of scope for this paper)
+- `multiBlockExec : Kernel → InitMem → Grid → FinalMem` model — runs all program_ids over a (possibly multi-axis) grid (3D for FA-2: `batch × heads × Q-blocks`), combining the per-program writes
+- Stride / layout model — minimal extension to express FA-2's per-`(batch, head, Q-block)` output region (row-major contiguous per program_id; full general layout system is out of scope)
+- Disjoint-writes lemma: pure forward kernels (no atomics) with non-overlapping output regions per program_id can be analysed program-locally then composed
+- **Estimate revised upward**: ~200–300 lines of semantics extension. The earlier 80-line estimate covered only the bare `multiBlockExec` definition; the disjoint-write proof + multi-axis program_id semantics + 3D-grid region-disjointness invariants are the real engineering. Deliberately avoids concurrency / atomics.
 
 *Kernels and theorems:*
-- FA-2 kernel embedded via `triton { ... }` macro
-- `fa_2_forward_correct` — analogous to Phase C's `fa_forward_correct` but for FA-2's (a) sequence-length parallelism, (b) delayed rescaling, (c) fully-masked-block skipping
-  - Delayed-rescale equivalence: `O_final / l_final` is the same whether intermediate `O` values are rescaled per-step or only at the end (small independent lemma)
-  - Block-skipping correctness: contribution of `−∞`-masked blocks is 0 (reuses `softmax_neg_inf_zero`)
-  - Estimated ~150–200 new lines Lean; large reuse of Phase C invariant tooling
-- `fa1_eq_fa2` corollary by spec transitivity (~20 lines)
+- FA-2 kernel embedded via `triton { ... }` macro (with multi-axis program_id, delayed rescale path, mask-skip path)
+- **Main theorem #8 — `fa_2_forward_correct`** — analogous to Phase C's #7 but for FA-2's (a) sequence-length parallelism, (b) delayed rescaling, (c) fully-masked-block skipping:
+  - Delayed-rescale equivalence: `O_final / l_final` is the same whether intermediate `O` values are rescaled per-step or only at the end (`delayed_rescale_eq` helper lemma)
+  - Block-skipping correctness: fully-masked blocks contribute 0 to the recurrence (uses Phase C's mask-handling lemmas)
+  - **Estimate revised upward**: ~250–400 new lines Lean (initial 150–200 estimate did not account for multi-block stride / layout reasoning); large reuse of Phase C single-program invariant tooling
+- **Headline corollary `fa1_eq_fa2`** by spec transitivity (~30 lines): both #7 and #8 prove their kernel ≡ `standardAttentionMath`, so the kernels' outputs agree. **This is the paper's headline sentence but not a separately-proved theorem.**
 
 *LLM tool v0.4 (release-ready):*
 - Benchmark suite: all theorems from Tiers 1+2+3 packaged as evaluation set; auto-runs measure close rate, retry count, wall-clock, API cost
@@ -195,10 +234,23 @@ Outline (10 sections):
 | `forLoop_inv` interface design fails to support nested loops cleanly | B | Phase A scouting flags it during invariant sketches | Fall back to `Nat.iterate` form (less direct, equivalent semantics) |
 | Online softmax recurrence Lean formalization stalls | B | ≥ 2 weeks no progress | Engage LLM tool intensively; if still stuck, simplify to stripped version (drop masking from this proof, reintroduce in Phase C) |
 | `tl.dot` on `Value.tile2D` has poor `simp` behavior | C | `fa_forward` proof stuck on `simp` | Custom `simp` lemmas (P1 already required this for `Value.bop` on equal-length tiles); switch to `unfold + induction` style if simp won't cooperate |
+| Mask sentinel-vs-real-zero gap (`Real.exp(-1e38) ≠ 0`) blocks naive mask formalization | A scouting / C | Phase A pseudocode pass flags it | Choose Option α (extended reals: `WithBot ℝ` / `EReal`) or Option β (mask-predicate denotation); commit during Phase A |
+| 2D stride / layout formal model harder than expected | D | When drafting `multiBlockExec` invariants | Restrict to "row-major contiguous per program_id"; document the restriction in paper as an assumed layout |
 | FA-2 multi-block abstraction unexpectedly complex | D | Phase C-end draft of `multiBlockExec` exposes hidden complexity | T3-D → T3-A only; downgrade target venue to OOPSLA |
 | LLM tool can't handle ~200-line proofs | C | Phase B-end retained-lemma close rate < 30% | Honest report: LLM works on short proofs only; don't force on long ones; tool becomes a "proof-segment helper" rather than "full-proof generator" |
 | Differential testing numerical gap > 1e-3 even after kernel implementation tightening | B–D | GPU output vs reference exceeds tolerance | Investigate three causes: IEEE-754 intrinsic difference (acceptable, document); kernel implementation bug (fix); our embedded semantics bug (fix and re-verify proofs) |
 | Miss PLDI deadline (~Month 11) | D | Phase C-end timing review | Submit OOPSLA-spring (~Month 14) or ICSE-empirical |
+
+### LLM benchmark protocol
+
+To make close-rate metrics reproducible:
+
+- **Held-out evaluation set**: 5–10 lemmas tagged in advance per Phase, committed to `bench/llm_eval/<phase>/` in a separate file structure; the main library does not depend on the held-out files. **Tagging happens at the *start* of each Phase, before any LLM-tool tuning for that Phase** — this prevents tool-tuning-on-the-eval. The Phase A held-out set is the `softmax_naive_correct` copy (above). Phase B and Phase C sets are picked by the engineer at the start of those Phases from sub-lemmas of #4–#6 and #7 respectively.
+- **Allowed context** for the LLM, per held-out theorem: the held-out file's imports + every theorem already proven *in that file* before the held-out one + Mathlib lemma name lookups + retrieval over Mathlib if the tool implements it. The model sees the theorem statement, the section context, and any explicitly retrieved lemmas. **Not** allowed: the rest of the project library beyond imports, the proof of the held-out lemma, or any human hint specific to the held-out lemma.
+- **Disallowed during eval**: manual prompt iteration, manual lemma-name hints, fine-tuning on held-out lemmas, any human edit to the LLM output before re-running. Eval is hands-off: tool runs end-to-end, succeeds or fails, that's the data point.
+- **Trials**: N=5 independent runs per held-out lemma with random seeds varied. Close rate = (successful runs across all `(lemma, seed)` pairs) / (5 × |held-out set|).
+- **Cost reporting**: total API calls, tokens, wall-clock, dollar cost — reported per Phase. Includes failed retries.
+- **Allowed prompt iteration between Phases**: the prompt template can be revised after a Phase's eval; the v0.X+1 tool with revised prompts is then evaluated on a *fresh* held-out set tagged at the start of Phase X+1.
 
 ### Phase gate decision rules
 
@@ -227,7 +279,7 @@ Outline (10 sections):
 To prevent scope creep and reviewer expectation mismatch:
 
 - **Python lifter** (`.py` Triton → embedded `triton { ... }`): kernels are hand-embedded for this paper. Lifter is a follow-up empirical paper.
-- **IEEE-754 fidelity**: floating-point modelled in `ℝ`. Differential testing is approximate, not bit-level.
+- **IEEE-754 fidelity**: floating-point modelled in `ℝ`. Differential testing is approximate, not bit-level. The kernel-level use of finite mask sentinels (e.g., `-1e38`) is a *concretization* relevant only to the runnable Python kernel; the formal proof uses extended reals or mask-predicate denotation per the Phase A choice.
 - **Multi-stream / async copy**: not needed for FA-1/FA-2 forward.
 - **Backward pass (FA-backward)**: forward only in this paper. FA-1 vs FA-2 backward is a follow-up.
 - **Triton autotune configurations**: orthogonal to algorithmic equivalence.

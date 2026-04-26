@@ -4,7 +4,7 @@
 
 Translation validation of Triton GPU kernels via LLM-assisted Lean 4 proofs.
 
-Full proposal in `proposal.md` (English) / `proposal_zh.md` (Chinese).
+Full proposal in `Notes/proposal.md` (English) / `Notes/proposal_zh.md` (Chinese). Program plan in `PLAN.md` / `PLAN_zh.md`.
 
 ## What this repo demonstrates
 
@@ -86,8 +86,8 @@ position `i`.
 ## Layout
 
 ```
-proposal.md / proposal_zh.md     Project proposal
-README.md                        This file
+README.md / README_zh.md         This file (English / 中文)
+PLAN.md / PLAN_zh.md             Program plan (English / 中文)
 lakefile.toml, lean-toolchain    Lake build (Lean 4 v4.15.0; works on v4.29.0)
 VeriTile.lean                    Top-level library entry
 
@@ -102,6 +102,7 @@ VeriTile/Examples/
   SoftmaxEq.lean                 Naive vs stable softmax + refinement theorem
 
 Notes/
+  proposal.md / proposal_zh.md   Project proposal (English / 中文)
   MacroOptions.md                Tech investigation: macro implementation tradeoffs
 ```
 

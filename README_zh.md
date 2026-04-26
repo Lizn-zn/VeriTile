@@ -4,7 +4,7 @@
 
 基于 LLM 辅助 Lean 4 证明的 Triton GPU kernel 翻译验证 (translation validation)。
 
-完整 proposal 见 `proposal.md`(英文)/ `proposal_zh.md`(中文)。
+完整 proposal 见 `Notes/proposal.md`(英文)/ `Notes/proposal_zh.md`(中文)。Program plan 见 `PLAN.md` / `PLAN_zh.md`。
 
 ## 这个仓库展示了什么
 
@@ -82,8 +82,8 @@ P1 已经无 sorry。数学内容被隔离在 `naive_eq_stable` 中;两个
 ## 文件布局
 
 ```
-proposal.md / proposal_zh.md     项目 proposal
 README.md / README_zh.md         本文件(英 / 中)
+PLAN.md / PLAN_zh.md             Program plan(英 / 中)
 lakefile.toml, lean-toolchain    Lake 构建(Lean 4 v4.15.0;在 v4.29.0 上也可用)
 VeriTile.lean                    顶层库入口
 
@@ -98,6 +98,7 @@ VeriTile/Examples/
   SoftmaxEq.lean                 Naive vs stable softmax + refinement 定理
 
 Notes/
+  proposal.md / proposal_zh.md   项目 proposal(英 / 中)
   MacroOptions.md                技术调研:宏实现的几种取舍
 ```
 
