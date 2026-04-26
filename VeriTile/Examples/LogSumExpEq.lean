@@ -30,7 +30,7 @@ def directLSEKernel (N : Nat) : Kernel := triton {
   e    := tl.exp(x)
   s    := tl.sum(e)
   y    := tl.log(s)
-  tl.store(Y, offs, y)
+  tl.store(Y, pid, y)
 }
 
 /-- Shift-trick LSE kernel: y = m + log(Σ exp(x - m)) where m = max(x). -/
@@ -42,7 +42,7 @@ def stableLSEKernel (N : Nat) : Kernel := triton {
   e    := tl.exp(x - m)
   s    := tl.sum(e)
   y    := m + tl.log(s)
-  tl.store(Y, offs, y)
+  tl.store(Y, pid, y)
 }
 
 /-- The load-bearing math identity for `log_sum_exp_refinement`.
