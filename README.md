@@ -1,5 +1,7 @@
 # VeriTile
 
+**English** | [中文](README_zh.md)
+
 Translation validation of Triton GPU kernels via LLM-assisted Lean 4 proofs.
 
 Full proposal in `proposal.md` (English) / `proposal_zh.md` (Chinese).
