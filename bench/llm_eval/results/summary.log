@@ -1,0 +1,35 @@
+=== W5 Task 5.1 Eval ===
+Date: 2026-04-26 16:58:48
+Wrapper: scripts/prove.sh @ ba8eeb5
+Plugin: ~/.claude/plugins/cache/lean4-skills/lean4/4.4.9/
+
+--- Trial 1 ---
+Trial file: /tmp/heldout_1777193940_1.lean
+trial 1: exit=1, duration=0s, file=/tmp/heldout_1777193940_1.lean
+Note: Re-running trial 1; first attempt was a wrapper invocation error (--max-cycles=5 vs --max-cycles 5), no API spend.
+Trial file: /tmp/heldout_1777193957_1.lean
+trial 1: exit=1, duration=96s, file=/tmp/heldout_1777193957_1.lean
+--- Trial 2 ---
+Trial file: /tmp/heldout_1777194111_2.lean
+trial 2: exit=1, duration=145s, file=/tmp/heldout_1777194111_2.lean
+  lean-check: exit=0
+--- Trial 3 ---
+Trial file: /tmp/heldout_1777194331_3.lean
+trial 3: exit=1, duration=132s, file=/tmp/heldout_1777194331_3.lean
+  lean-check: exit=0
+--- Trial 4 ---
+Trial file: /tmp/heldout_1777194557_4.lean
+trial 4: exit=1, duration=106s, file=/tmp/heldout_1777194557_4.lean
+  lean-check: exit=0
+--- Trial 5 ---
+Trial file: /tmp/heldout_1777194707_5.lean
+trial 5: exit=1, duration=114s, file=/tmp/heldout_1777194707_5.lean
+  lean-check: exit=0
+
+(retro) Trial 1 lean-check: exit=0
+
+=== Aggregate ===
+Wrapper exit=0: 0/5 (all FAILed wrapper heuristic — see report)
+Lean-compile exit=0: 5/5 (ground truth: every trial closed the proof)
+Total wall-clock (5 trials): 593s (~9.9 min)
+Total API cost: $4.3834
