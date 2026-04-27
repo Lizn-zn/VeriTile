@@ -223,6 +223,18 @@ Resolved 2026-04-27. ~30 lines of `expandExpr` / `expandStmt` /
 `exprRegions` / `stmtRegions` extension; no semantic edits; all 8
 correctness/refinement theorems closed without proof-body changes.
 
+**Refactor 2026-04-27 (later):** Extracted `tritonPtr` as its own
+`declare_syntax_cat`, with two productions (`$(R)` and `$(R) + offs`).
+The `tl.load` / `tl.store` rules each collapse from two hardcoded shapes
+to a single `tl.load(tritonPtr)` / `tl.store(tritonPtr, value)`. The
+internal AST is unchanged — the `expandPtr` helper still lowers a
+`tritonPtr` to a `(region, offset)` pair feeding `Op.load` /
+`Stmt.store`. This is the surface-syntax cleanup tracked as GH issue
+\#1; the motivation is that future pointer forms (masked load with
+`mask=`/`other=`, 2D pointers in Phase C) extend `tritonPtr` rather
+than adding new productions to `tritonExpr` / `tritonStmt`. RP1 (γ)
+rejection still holds.
+
 ## 6. Comparable work
 
 Similar verification projects targeting GPU / array kernels have
@@ -301,6 +313,10 @@ Patterns NOT covered (would need (γ)):
   planned: `tl.load($(R) + offs)` / `tl.store($(R) + offs, v)` and
   scalar-pointer sugar `tl.load($(R))` / `tl.store($(R), v)`. Pure
   macro-time desugaring; no semantic change; (γ) still rejected.
+- **2026-04-27 (later)** — surface-syntax cleanup: extracted `tritonPtr`
+  as its own syntax category, collapsing four hardcoded `tl.load` /
+  `tl.store` rules to two. Resolves GH issue #1; AST unchanged; sets
+  the extension point for Phase C masked / 2D pointer forms.
 
 ---
 

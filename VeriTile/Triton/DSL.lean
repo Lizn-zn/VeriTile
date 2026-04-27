@@ -20,17 +20,19 @@ Conventions:
   * Bare identifiers in expression position → register references
     (`pid`, `x`, `e`, etc. become `Op.ref "pid"`, `Op.ref "x"`, ...).
   * Memory accesses use a Triton-like pointer-plus-offset surface syntax:
-    `tl.load($(xReg) + offs)` and `tl.store($(yReg) + offs, y)`.
-    The base region is a Lean `RegionName` term written via `$(...)`;
-    the offset is a DSL expression. The macro lowers this to the internal
-    `(region, offset)` memory model. Scalar pointer sugar
-    `tl.load($(xReg))` / `tl.store($(yReg), y)` lowers to offset `0`.
+    `tl.load($(xReg) + offs)` and `tl.store($(yReg) + offs, y)`. The pointer
+    sits in its own syntax category `tritonPtr` (see RP1 / GH issue #1),
+    so future pointer forms (masked load, 2D pointer) extend `tritonPtr`
+    without touching `tl.load` / `tl.store` themselves. The pointer lowers
+    to the internal `(region : RegionName, offset : Op)` pair feeding
+    `Op.load` / `Stmt.store`. Scalar pointer sugar `tl.load($(xReg))` /
+    `tl.store($(yReg), y)` lowers to offset `0`.
   * `$(<lean-term>)` antiquotes a Lean-level value; in numeric context it
-    becomes `Op.const (·: ℝ)`, inside `tl.arange(...)` it is fed
-    directly as the `Nat` length, and as the base pointer term in
-    `tl.load($(REGION) + offset)` / `tl.store($(REGION) + offset, value)`
-    or scalar-pointer `tl.load($(REGION))` / `tl.store($(REGION), value)`
-    it is used as a `RegionName`.
+    becomes `Op.constNat`, inside `tl.arange(...)` it is fed directly as
+    the `Nat` length, and as the base pointer term in `tl.load($(REGION)
+    + offset)` / `tl.store($(REGION) + offset, value)` or scalar-pointer
+    `tl.load($(REGION))` / `tl.store($(REGION), value)` it is used as a
+    `RegionName`.
   * Numeric literals become `Op.const`.
   * Statements are separated by newlines (no explicit terminator).
 
@@ -69,6 +71,15 @@ namespace VeriTile.Triton.DSL
 
 declare_syntax_cat tritonExpr
 declare_syntax_cat tritonStmt
+declare_syntax_cat tritonPtr
+
+-- Pointer expressions (used by `tl.load` / `tl.store`).
+-- Splitting the pointer surface syntax into its own category gives a single
+-- extension point for future pointer forms (masked load, 2D pointer, etc.;
+-- see Phase C). The internal AST is unchanged: `tritonPtr` lowers to a
+-- `(RegionName, offset : Op)` pair, which feeds `Op.load` / `Stmt.store`.
+syntax "$(" term ")" : tritonPtr
+syntax "$(" term ")" " + " tritonExpr : tritonPtr
 
 -- Expressions
 syntax num : tritonExpr
@@ -83,8 +94,7 @@ syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ")" : tritonExpr
 syntax "tl.sum(" tritonExpr ")" : tritonExpr
-syntax "tl.load($(" term ")" ")" : tritonExpr
-syntax "tl.load($(" term ")" " + " tritonExpr ")" : tritonExpr
+syntax "tl.load(" tritonPtr ")" : tritonExpr
 syntax:60 tritonExpr:60 " + " tritonExpr:61 : tritonExpr
 syntax:60 tritonExpr:60 " - " tritonExpr:61 : tritonExpr
 syntax:70 tritonExpr:70 " * " tritonExpr:71 : tritonExpr
@@ -92,8 +102,7 @@ syntax:70 tritonExpr:70 " / " tritonExpr:71 : tritonExpr
 
 -- Statements
 syntax ident " := " tritonExpr : tritonStmt
-syntax "tl.store($(" term ")" ", " tritonExpr ")" : tritonStmt
-syntax "tl.store($(" term ")" " + " tritonExpr ", " tritonExpr ")" : tritonStmt
+syntax "tl.store(" tritonPtr ", " tritonExpr ")" : tritonStmt
 
 -- Block (the user-facing entry point)
 syntax (name := tritonBlock) "triton " "{" tritonStmt* "}" : term
@@ -102,6 +111,21 @@ syntax (name := tritonBlock) "triton " "{" tritonStmt* "}" : term
 
 private def identAsStr (i : TSyntax `ident) : MacroM (TSyntax `term) :=
   pure (Syntax.mkStrLit i.getId.toString)
+
+mutual
+
+/-- Lower a `tritonPtr` to its `(region, offset)` pair. -/
+partial def expandPtr (stx : TSyntax `tritonPtr) :
+    MacroM (TSyntax `term × TSyntax `term) := do
+  match stx with
+  | `(tritonPtr| $($r:term)) =>
+      -- Scalar pointer sugar: `$(R)` reads `R + 0`.
+      let zero : TSyntax `term ← `(Op.constNat 0)
+      pure (r, zero)
+  | `(tritonPtr| $($r:term) + $o:tritonExpr) => do
+      let o' ← expandExpr o
+      pure (r, o')
+  | _ => Macro.throwUnsupported
 
 partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := do
   match stx with
@@ -163,14 +187,11 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
   | `(tritonExpr| tl.sum($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.reduceSum $e')
-  | `(tritonExpr| tl.load($($r:term))) =>
-      -- Scalar pointer sugar: `tl.load(ptr)` reads `ptr + 0`.
-      `(Op.load $r (Op.constNat 0))
-  | `(tritonExpr| tl.load($($r:term) + $o:tritonExpr)) => do
+  | `(tritonExpr| tl.load($p:tritonPtr)) => do
       -- Region is a Lean term of type RegionName (kernel parameter or value).
       -- The pointer-like surface syntax lowers to the internal region+offset AST.
-      let o' ← expandExpr o
-      `(Op.load $r $o')
+      let (r, off) ← expandPtr p
+      `(Op.load $r $off)
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
       let a' ← expandExpr a; let b' ← expandExpr b
       `(Op.add $a' $b')
@@ -185,35 +206,30 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
       `(Op.div $a' $b')
   | _ => Macro.throwUnsupported
 
+end
+
 partial def expandStmt (stx : TSyntax `tritonStmt) : MacroM (TSyntax `term) := do
   match stx with
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
       let nameLit ← identAsStr i
       let e' ← expandExpr e
       `(Stmt.assign $nameLit $e')
-  | `(tritonStmt| tl.store($($r:term), $v:tritonExpr)) => do
-      -- Scalar pointer sugar: `tl.store(ptr, value)` writes `ptr + 0`.
+  | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr)) => do
       let v' ← expandExpr v
-      `(Stmt.store $r (Op.constNat 0) $v')
-  | `(tritonStmt| tl.store($($r:term) + $o:tritonExpr, $v:tritonExpr)) => do
-      -- Region is a Lean term of type RegionName (kernel parameter or value).
-      -- The pointer-like surface syntax lowers to the internal region+offset AST.
-      let o' ← expandExpr o
-      let v' ← expandExpr v
-      `(Stmt.store $r $o' $v')
+      let (r, off) ← expandPtr p
+      `(Stmt.store $r $off $v')
   | _ => Macro.throwUnsupported
 
 /-! ## Region collection (for auto-populating Kernel.inputs / Kernel.outputs) -/
 
+mutual
+
 /-- Collect all region terms reachable from a `tritonExpr`. Returns `term`
-    syntax — each element is the Lean term inside a `tl.load($(R) + …)`
-    base-region antiquote in this expression (or recursively in subexpressions). -/
+    syntax — each element is the Lean term inside a `tl.load(...)`
+    pointer (recursively in subexpressions). -/
 private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
   match stx with
-  | `(tritonExpr| tl.load($($r:term))) =>
-      [r]
-  | `(tritonExpr| tl.load($($r:term) + $o:tritonExpr)) =>
-      r :: exprRegions o
+  | `(tritonExpr| tl.load($p:tritonPtr))         => ptrRegions p
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
@@ -230,16 +246,40 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| $a:tritonExpr / $b:tritonExpr) => exprRegions a ++ exprRegions b
   | _ => []  -- num, ident, $(...) — no regions to collect
 
+/-- All region terms appearing in a `tritonPtr`: the base region plus any
+    regions referenced inside the offset expression. -/
+private partial def ptrRegions : TSyntax `tritonPtr → List (TSyntax `term) := fun stx =>
+  match stx with
+  | `(tritonPtr| $($r:term))                  => [r]
+  | `(tritonPtr| $($r:term) + $o:tritonExpr)  => r :: exprRegions o
+  | _ => []
+
+end
+
+/-- Just the base region of a `tritonPtr` (used as the *output* region for
+    `tl.store(...)`, distinct from regions that appear *inside* the offset). -/
+private def ptrBaseRegion : TSyntax `tritonPtr → List (TSyntax `term) := fun stx =>
+  match stx with
+  | `(tritonPtr| $($r:term))                  => [r]
+  | `(tritonPtr| $($r:term) + $_:tritonExpr)  => [r]
+  | _ => []
+
+/-- Just the regions referenced inside the offset expression of a `tritonPtr`
+    (excluding the base). For `tl.store(p, v)` these still count as inputs. -/
+private def ptrOffsetRegions : TSyntax `tritonPtr → List (TSyntax `term) := fun stx =>
+  match stx with
+  | `(tritonPtr| $($_:term))                  => []
+  | `(tritonPtr| $($_:term) + $o:tritonExpr)  => exprRegions o
+  | _ => []
+
 /-- Per-statement region split: `(input regions, output regions)`. -/
 private def stmtRegions :
     TSyntax `tritonStmt → List (TSyntax `term) × List (TSyntax `term) := fun stx =>
   match stx with
   | `(tritonStmt| $_:ident := $e:tritonExpr) =>
       (exprRegions e, [])
-  | `(tritonStmt| tl.store($($r:term), $v:tritonExpr)) =>
-      (exprRegions v, [r])
-  | `(tritonStmt| tl.store($($r:term) + $o:tritonExpr, $v:tritonExpr)) =>
-      (exprRegions o ++ exprRegions v, [r])
+  | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr)) =>
+      (ptrOffsetRegions p ++ exprRegions v, ptrBaseRegion p)
   | _ => ([], [])
 
 /-! ## Block macro -/
