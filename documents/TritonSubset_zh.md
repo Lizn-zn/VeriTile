@@ -14,7 +14,7 @@
 - `tl.broadcast`, `tl.full`
 - 标量 `ℝ` 常量(数字字面量)与 `Nat` 地址常量(`$(...)` 反引用);
   `ℝ` / `Nat` 双通道见 [RP2](../Notes/research_problem_address_typing.md).
-- `tl.exp`, `tl.log`, `tl.maximum`
+- `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.maximum`
 - 算术: `+`, `-`, `*`, `/`(按载体类型 dispatch —— 仅允许
   `ℝ × ℝ` 与 `Nat × Nat`,混型表达式属于 `evalOp` 错误)
 - reduction: `tl.max`, `tl.sum`(仅作用于 `ℝ` tile)

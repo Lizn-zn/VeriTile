@@ -62,6 +62,7 @@ inductive Op : Type where
   | div       : Op → Op → Op
   | exp       : Op → Op
   | log       : Op → Op
+  | sigmoid   : Op → Op
   | max2      : Op → Op → Op
   | reduceMax : Op → Op
   | reduceSum : Op → Op

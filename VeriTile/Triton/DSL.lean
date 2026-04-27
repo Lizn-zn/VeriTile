@@ -35,9 +35,10 @@ Conventions:
   * Statements are separated by newlines (no explicit terminator).
 
 Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
-`tl.arange(start, end)`, `tl.exp(_)`, `tl.log(_)`, `tl.max(_)`, `tl.sum(_)`,
-`tl.load($(REGION) + offset)`, binary `+ - * /`, parens, identifiers,
-numerals, antiquotation. `tl.load($(REGION))` is sugar for offset `0`.
+`tl.arange(start, end)`, `tl.exp(_)`, `tl.log(_)`, `tl.sigmoid(_)`,
+`tl.max(_)`, `tl.sum(_)`, `tl.load($(REGION) + offset)`, binary `+ - * /`,
+parens, identifiers, numerals, antiquotation. `tl.load($(REGION))` is
+sugar for offset `0`.
 
 The two-argument `tl.arange(start, end)` lowers to `start + tl.arange(end - start)`
 at macro time (no new AST constructor). The literal-0 special case
@@ -79,6 +80,7 @@ syntax "tl.arange(" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
+syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ")" : tritonExpr
 syntax "tl.sum(" tritonExpr ")" : tritonExpr
 syntax "tl.load($(" term ")" ")" : tritonExpr
@@ -152,6 +154,9 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
   | `(tritonExpr| tl.log($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.log $e')
+  | `(tritonExpr| tl.sigmoid($e:tritonExpr)) => do
+      let e' ← expandExpr e
+      `(Op.sigmoid $e')
   | `(tritonExpr| tl.max($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.reduceMax $e')
@@ -211,6 +216,7 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
       r :: exprRegions o
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.max($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sum($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| ($e:tritonExpr))               => exprRegions e

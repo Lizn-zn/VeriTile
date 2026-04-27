@@ -16,7 +16,7 @@ as well as the parts that are not supported yet.
 - scalar `ℝ` constants (numeric literals) and `Nat` address constants (`$(...)`
   antiquote); see [RP2](../Notes/research_problem_address_typing.md) for the
   `ℝ` / `Nat` channel split.
-- `tl.exp`, `tl.log`, `tl.maximum`
+- `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.maximum`
 - arithmetic: `+`, `-`, `*`, `/` (dispatched by carrier type — `ℝ × ℝ` and
   `Nat × Nat` only; mixed-type expressions are an `evalOp` error)
 - reductions: `tl.max`, `tl.sum` (over `ℝ` tiles only)
