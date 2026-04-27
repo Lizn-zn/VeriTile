@@ -136,8 +136,8 @@ noncomputable def execUnfusedSiLU
 
 /-- Elementwise spec: `out[i] = residuals[i] + (xs[i] * gates[i]) *
     sigmoid(xs[i] * gates[i])`. Both fused and unfused kernels match this. -/
-noncomputable def fusedSiLUSpec {N : Nat}
-    (xs gates residuals : Fin N → ℝ) (i : Fin N) : ℝ :=
+noncomputable def fusedSiLUSpec {blockSize : Nat}
+    (xs gates residuals : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
   residuals i + (xs i * gates i) * Real.sigmoid (xs i * gates i)
 
 /-! ## (c) Per-kernel correctness -/
@@ -169,13 +169,12 @@ theorem fused_silu_correct
 
 /-- **`execUnfusedSiLU` correctness against `fusedSiLUSpec`.**
 
-    TODO: needs a per-step post-state lemma threading `pid`/`mem`
-    properties across `Option.bind` boundaries. The frame piece
-    relies on `BlockState.scatter_preserves_other_region` (already in
-    `Semantics.lean`); the existence/value pieces rely on
-    `BlockState.scatter_readback`. The challenge is Lean's existential
-    elaboration: `∃ s', exec ... = some s' ∧ P(s')` with `P` mentioning
-    `s'` doesn't cooperate with `simp`-based witness synthesis. -/
+    The proof reduces each of the three kernels to an explicit post-state
+    (`s1`, `s2`, `s3`), then stitches the `Option`-valued execution chain
+    together. `scatter_readback` proves that each step's written region has
+    the intended values; `scatter_preserves_other_region` proves that scratch
+    writes do not disturb `residualReg`, under the stated disjointness
+    assumptions. -/
 theorem unfused_silu_correct
     (xReg gateReg residualReg zReg siluReg outReg : RegionName)
     (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState)

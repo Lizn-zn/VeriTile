@@ -68,9 +68,9 @@ Region names are kernel parameters; both kernels share the input region
 `xReg` (read-only) and output region `yReg`. -/
 
 /-- Naive softmax: `y = exp(x) / sum(exp(x))`. -/
-def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
+def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
-  offs := pid * $(N) + tl.arange($(N))
+  offs := pid * $(blockSize) + tl.arange($(blockSize))
   x    := tl.load($(xReg) + offs)
   e    := tl.exp(x)
   s    := tl.sum(e)
@@ -79,9 +79,9 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
 }
 
 /-- Stable softmax: subtract the max before exponentiating. -/
-def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
+def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
-  offs := pid * $(N) + tl.arange($(N))
+  offs := pid * $(blockSize) + tl.arange($(blockSize))
   x    := tl.load($(xReg) + offs)
   m    := tl.max(x)
   e    := tl.exp(x - m)
@@ -138,22 +138,22 @@ We mirror it for Triton:
 * the refinement theorem composes them via `naive_eq_stable`.
 -/
 
-/-- What `naiveSoftmaxKernel` writes at the output region's `[pid*N + i]` cell. -/
-noncomputable def naiveSpec {N : Nat} (xs : Fin N → ℝ) (i : Fin N) : ℝ :=
+/-- What `naiveSoftmaxKernel` writes at the output region's `[pid*blockSize + i]` cell. -/
+noncomputable def naiveSpec {blockSize : Nat} (xs : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
   Real.exp (xs i) / ∑ j, Real.exp (xs j)
 
-/-- What `stableSoftmaxKernel` writes at the output region's `[pid*N + i]` cell. -/
-noncomputable def stableSpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) (i : Fin N) : ℝ :=
+/-- What `stableSoftmaxKernel` writes at the output region's `[pid*blockSize + i]` cell. -/
+noncomputable def stableSpec {blockSize : Nat} (xs : Fin blockSize → ℝ) (m : ℝ) (i : Fin blockSize) : ℝ :=
   Real.exp (xs i - m) / ∑ j, Real.exp (xs j - m)
 
 /-- Max of a non-empty tile, in `Value.reduceMax`'s form. -/
-noncomputable def tileMax {N : Nat} (h : 0 < N) (xs : Fin N → ℝ) : ℝ :=
-  match N, h, xs with
+noncomputable def tileMax {blockSize : Nat} (h : 0 < blockSize) (xs : Fin blockSize → ℝ) : ℝ :=
+  match blockSize, h, xs with
   | _ + 1, _, xs => Finset.univ.sup' Finset.univ_nonempty xs
 
 /-- **Naive softmax kernel correctness.**
 
-After running `naiveSoftmaxKernel N` on a state with input properly loaded
+After running `naiveSoftmaxKernel blockSize` on a state with input properly loaded
 in region `"X"`, the `Y` region at observable offsets equals the naive softmax
 of the input.
 
@@ -164,14 +164,14 @@ Proof outline (P2 work to discharge the `sorry`): the kernel has 7 statements
 **Math content here: zero** — that's all isolated in `naive_eq_stable`. -/
 theorem softmax_naive_correct
     (xReg yReg : RegionName)
-    (N : Nat) (_hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (_h_x : InputLoadedAt s xReg N xs) :
-    ∀ i : Fin N,
-      observeAt (exec (naiveSoftmaxKernel xReg yReg N) s) yReg N s.pid i
+    (blockSize : Nat) (_hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
+    (_h_x : InputLoadedAt s xReg blockSize xs) :
+    ∀ i : Fin blockSize,
+      observeAt (exec (naiveSoftmaxKernel xReg yReg blockSize) s) yReg blockSize s.pid i
         = some (naiveSpec xs i) := by
   intro i
-  -- The output offsets `s.pid * N + k.val` are injective in `k`.
-  have h_inj : Function.Injective (fun k : Fin N => s.pid * N + k.val) := by
+  -- The output offsets `s.pid * blockSize + k.val` are injective in `k`.
+  have h_inj : Function.Injective (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
     intro a b hab
     exact Fin.ext (Nat.add_left_cancel hab)
   -- Reduce the kernel via the operational semantics. `writeMem` is left
@@ -190,12 +190,12 @@ theorem softmax_naive_correct
     max-shift formula as the closed form. P2 polish. -/
 theorem softmax_stable_correct
     (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (_h_x : InputLoadedAt s xReg N xs) :
-    ∀ i : Fin N,
-      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
+    (_h_x : InputLoadedAt s xReg blockSize xs) :
+    ∀ i : Fin blockSize,
+      observeAt (exec (stableSoftmaxKernel xReg yReg blockSize) s) yReg blockSize s.pid i
         = some (stableSpec xs (tileMax hN xs) i) := by
-  -- Case-split `N = n + 1` so that `Value.reduceMax` and `tileMax` reduce.
+  -- Case-split `blockSize = n + 1` so that `Value.reduceMax` and `tileMax` reduce.
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   intro i
   -- The output offsets `s.pid * (n+1) + k.val` are injective in `k`.
@@ -223,15 +223,15 @@ The proof composes the two correctness lemmas with `naive_eq_stable`, exactly
 mirroring `tnum_const_refinement`'s `obtain ... + simp + trivial`. -/
 theorem softmax_kernels_refinement
     (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : InputLoadedAt s xReg N xs) :
-    ∀ i : Fin N,
-      observeAt (exec (naiveSoftmaxKernel  xReg yReg N) s) yReg N s.pid i =
-      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i := by
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : InputLoadedAt s xReg blockSize xs) :
+    ∀ i : Fin blockSize,
+      observeAt (exec (naiveSoftmaxKernel  xReg yReg blockSize) s) yReg blockSize s.pid i =
+      observeAt (exec (stableSoftmaxKernel xReg yReg blockSize) s) yReg blockSize s.pid i := by
   intro i
   -- Discharge each side via its correctness lemma (the ARM-style obtain).
-  rw [softmax_naive_correct  xReg yReg N hN s xs h_x i,
-      softmax_stable_correct xReg yReg N hN s xs h_x i]
+  rw [softmax_naive_correct  xReg yReg blockSize hN s xs h_x i,
+      softmax_stable_correct xReg yReg blockSize hN s xs h_x i]
   -- Now: `some (naiveSpec xs i) = some (stableSpec xs (tileMax hN xs) i)`.
   -- Reduce to the math identity and apply `naive_eq_stable`.
   congr 1
