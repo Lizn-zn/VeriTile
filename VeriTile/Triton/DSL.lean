@@ -9,34 +9,35 @@ Example:
   def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
     pid  := tl.program_id(0)
     offs := pid * $(N) + tl.arange($(N))
-    x    := tl.load($(xReg), offs)
+    x    := tl.load($(xReg) + offs)
     e    := tl.exp(x)
     s    := tl.sum(e)
     y    := e / s
-    tl.store($(yReg), offs, y)
+    tl.store($(yReg) + offs, y)
   }
 
 Conventions:
   * Bare identifiers in expression position → register references
     (`pid`, `x`, `e`, etc. become `Op.ref "pid"`, `Op.ref "x"`, ...).
-  * Region names in `tl.load(...)` and `tl.store(...)` are *always*
-    Lean terms, written via the `$(...)` antiquote. Kernels take their
-    buffer regions as explicit `RegionName` parameters, threaded through
-    these antiquotes. There is no bare-ident shortcut — `tl.load(X, …)`
-    will not parse. Rationale: keeps the DSL's "what's a register vs
-    what's a buffer" boundary explicit, and ensures every kernel can
-    be instantiated with arbitrary buffer names.
+  * Memory accesses use a Triton-like pointer-plus-offset surface syntax:
+    `tl.load($(xReg) + offs)` and `tl.store($(yReg) + offs, y)`.
+    The base region is a Lean `RegionName` term written via `$(...)`;
+    the offset is a DSL expression. The macro lowers this to the internal
+    `(region, offset)` memory model. Scalar pointer sugar
+    `tl.load($(xReg))` / `tl.store($(yReg), y)` lowers to offset `0`.
   * `$(<lean-term>)` antiquotes a Lean-level value; in numeric context it
     becomes `Op.const (·: ℝ)`, inside `tl.arange(...)` it is fed
-    directly as the `Nat` length, and inside `tl.load(...)` /
-    `tl.store(...)` region position it is used as a `RegionName`.
+    directly as the `Nat` length, and as the base pointer term in
+    `tl.load($(REGION) + offset)` / `tl.store($(REGION) + offset, value)`
+    or scalar-pointer `tl.load($(REGION))` / `tl.store($(REGION), value)`
+    it is used as a `RegionName`.
   * Numeric literals become `Op.const`.
   * Statements are separated by newlines (no explicit terminator).
 
 Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
 `tl.arange(start, end)`, `tl.exp(_)`, `tl.log(_)`, `tl.max(_)`, `tl.sum(_)`,
-`tl.load($(REGION), offset)`, binary `+ - * /`, parens, identifiers,
-numerals, antiquotation.
+`tl.load($(REGION) + offset)`, binary `+ - * /`, parens, identifiers,
+numerals, antiquotation. `tl.load($(REGION))` is sugar for offset `0`.
 
 The two-argument `tl.arange(start, end)` lowers to `start + tl.arange(end - start)`
 at macro time (no new AST constructor). The literal-0 special case
@@ -45,7 +46,8 @@ single-argument form so existing proofs (e.g. via `scatter_readback`) remain
 applicable verbatim.
 
 Currently supported statements: assignment (`name := expr`),
-`tl.store($(REGION), offset, value)`.
+`tl.store($(REGION) + offset, value)`. `tl.store($(REGION), value)` is
+sugar for offset `0`.
 
 `Kernel.inputs` / `Kernel.outputs` are auto-populated by scanning the body for
 `tl.load(...)` (input regions) and `tl.store(...)` (output regions). Order
@@ -79,7 +81,8 @@ syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ")" : tritonExpr
 syntax "tl.sum(" tritonExpr ")" : tritonExpr
-syntax "tl.load($(" term ")" ", " tritonExpr ")" : tritonExpr
+syntax "tl.load($(" term ")" ")" : tritonExpr
+syntax "tl.load($(" term ")" " + " tritonExpr ")" : tritonExpr
 syntax:60 tritonExpr:60 " + " tritonExpr:61 : tritonExpr
 syntax:60 tritonExpr:60 " - " tritonExpr:61 : tritonExpr
 syntax:70 tritonExpr:70 " * " tritonExpr:71 : tritonExpr
@@ -87,7 +90,8 @@ syntax:70 tritonExpr:70 " / " tritonExpr:71 : tritonExpr
 
 -- Statements
 syntax ident " := " tritonExpr : tritonStmt
-syntax "tl.store($(" term ")" ", " tritonExpr ", " tritonExpr ")" : tritonStmt
+syntax "tl.store($(" term ")" ", " tritonExpr ")" : tritonStmt
+syntax "tl.store($(" term ")" " + " tritonExpr ", " tritonExpr ")" : tritonStmt
 
 -- Block (the user-facing entry point)
 syntax (name := tritonBlock) "triton " "{" tritonStmt* "}" : term
@@ -154,8 +158,12 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
   | `(tritonExpr| tl.sum($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.reduceSum $e')
-  | `(tritonExpr| tl.load($($r:term), $o:tritonExpr)) => do
+  | `(tritonExpr| tl.load($($r:term))) =>
+      -- Scalar pointer sugar: `tl.load(ptr)` reads `ptr + 0`.
+      `(Op.load $r (Op.constNat 0))
+  | `(tritonExpr| tl.load($($r:term) + $o:tritonExpr)) => do
       -- Region is a Lean term of type RegionName (kernel parameter or value).
+      -- The pointer-like surface syntax lowers to the internal region+offset AST.
       let o' ← expandExpr o
       `(Op.load $r $o')
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
@@ -178,8 +186,13 @@ partial def expandStmt (stx : TSyntax `tritonStmt) : MacroM (TSyntax `term) := d
       let nameLit ← identAsStr i
       let e' ← expandExpr e
       `(Stmt.assign $nameLit $e')
-  | `(tritonStmt| tl.store($($r:term), $o:tritonExpr, $v:tritonExpr)) => do
+  | `(tritonStmt| tl.store($($r:term), $v:tritonExpr)) => do
+      -- Scalar pointer sugar: `tl.store(ptr, value)` writes `ptr + 0`.
+      let v' ← expandExpr v
+      `(Stmt.store $r (Op.constNat 0) $v')
+  | `(tritonStmt| tl.store($($r:term) + $o:tritonExpr, $v:tritonExpr)) => do
       -- Region is a Lean term of type RegionName (kernel parameter or value).
+      -- The pointer-like surface syntax lowers to the internal region+offset AST.
       let o' ← expandExpr o
       let v' ← expandExpr v
       `(Stmt.store $r $o' $v')
@@ -188,11 +201,13 @@ partial def expandStmt (stx : TSyntax `tritonStmt) : MacroM (TSyntax `term) := d
 /-! ## Region collection (for auto-populating Kernel.inputs / Kernel.outputs) -/
 
 /-- Collect all region terms reachable from a `tritonExpr`. Returns `term`
-    syntax — each element is the Lean term inside a `tl.load($(R), …)` antiquote
-    in this expression (or recursively in subexpressions). -/
+    syntax — each element is the Lean term inside a `tl.load($(R) + …)`
+    base-region antiquote in this expression (or recursively in subexpressions). -/
 private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
   match stx with
-  | `(tritonExpr| tl.load($($r:term), $o:tritonExpr)) =>
+  | `(tritonExpr| tl.load($($r:term))) =>
+      [r]
+  | `(tritonExpr| tl.load($($r:term) + $o:tritonExpr)) =>
       r :: exprRegions o
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
@@ -215,7 +230,9 @@ private def stmtRegions :
   match stx with
   | `(tritonStmt| $_:ident := $e:tritonExpr) =>
       (exprRegions e, [])
-  | `(tritonStmt| tl.store($($r:term), $o:tritonExpr, $v:tritonExpr)) =>
+  | `(tritonStmt| tl.store($($r:term), $v:tritonExpr)) =>
+      (exprRegions v, [r])
+  | `(tritonStmt| tl.store($($r:term) + $o:tritonExpr, $v:tritonExpr)) =>
       (exprRegions o ++ exprRegions v, [r])
   | _ => ([], [])
 

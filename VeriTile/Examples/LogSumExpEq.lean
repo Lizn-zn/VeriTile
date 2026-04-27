@@ -24,26 +24,26 @@ namespace VeriTile.Examples
 open VeriTile.Triton
 
 /-- Direct log-sum-exp kernel: y = log(Σ exp(x)). -/
-def directLSEKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
+def directLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
-  offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load($(xReg), offs)
+  offs := pid * $(blockSize) + tl.arange($(blockSize))
+  x    := tl.load($(xReg) + offs)
   e    := tl.exp(x)
   s    := tl.sum(e)
   y    := tl.log(s)
-  tl.store($(yReg), pid, y)
+  tl.store($(yReg) + pid, y)
 }
 
 /-- Shift-trick LSE kernel: y = m + log(Σ exp(x - m)) where m = max(x). -/
 def stableLSEKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load($(xReg), offs)
+  x    := tl.load($(xReg) + offs)
   m    := tl.max(x)
   e    := tl.exp(x - m)
   s    := tl.sum(e)
   y    := m + tl.log(s)
-  tl.store($(yReg), pid, y)
+  tl.store($(yReg) + pid, y)
 }
 
 /-- The load-bearing math identity for `log_sum_exp_refinement`.

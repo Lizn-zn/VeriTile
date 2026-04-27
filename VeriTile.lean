@@ -7,4 +7,5 @@ import VeriTile.Triton.Examples
 import VeriTile.Examples.SoftmaxEq
 import VeriTile.Examples.LogSumExpEq
 import VeriTile.Examples.SoftmaxReciprocal
+import VeriTile.Examples.VectorAdd
 import VeriTile.Examples.WelfordMath

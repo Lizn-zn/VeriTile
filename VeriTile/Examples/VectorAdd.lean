@@ -48,8 +48,8 @@ open VeriTile.Triton
 /-! ## Embedded Triton AST
 
 Region names are kernel parameters (`xReg`, `yReg`, `outReg`), threaded
-through the DSL via the `$(term)` antiquote in `tl.load(...)` /
-`tl.store(...)` region position. The same kernel can be instantiated
+through the DSL via the `$(term) + offset` pointer-like syntax in
+`tl.load(...)` / `tl.store(...)`. The same kernel can be instantiated
 with any choice of buffer names. -/
 
 /-- Elementwise add of two `blockSize`-element tiles, single-block.
@@ -61,10 +61,10 @@ scatter to `outReg`, so the result is still `xs + ys`. -/
 def addKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load($(xReg), offs)
-  y    := tl.load($(yReg), offs)
+  x    := tl.load($(xReg) + offs)
+  y    := tl.load($(yReg) + offs)
   out  := x + y
-  tl.store($(outReg), offs, out)
+  tl.store($(outReg) + offs, out)
 }
 
 /-! ## Math denotation -/

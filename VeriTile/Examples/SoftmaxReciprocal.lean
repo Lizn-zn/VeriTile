@@ -25,13 +25,13 @@ open VeriTile.Triton
 def softmaxRecipKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(N) + tl.arange($(N))
-  x      := tl.load($(xReg), offs)
+  x      := tl.load($(xReg) + offs)
   m      := tl.max(x)
   e      := tl.exp(x - m)
   s      := tl.sum(e)
   inv_s  := 1 / s
   y      := e * inv_s
-  tl.store($(yReg), offs, y)
+  tl.store($(yReg) + offs, y)
 }
 
 /-- The load-bearing math identity: division equals multiplication by

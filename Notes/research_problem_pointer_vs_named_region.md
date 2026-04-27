@@ -191,29 +191,37 @@ implementation uses block pointers, but the offset-arithmetic rewrite is
 provably equivalent (the rewrite is exactly "make explicit what the block
 pointer was tracking implicitly") and is what we'll formalize in Phase D.
 
-## 5. The (β) cosmetic syntax decision
+## 5. The (β) cosmetic syntax decision — **landed**
 
 Independent from the (γ) question. The syntactic gap between Triton and
-VeriTile:
+VeriTile is now closed at the surface layer:
 
 ```python
 # Triton
 x = tl.load(x_ptr + offsets)
+tl.store(out_ptr + offsets, value)
 ```
 ```lean
--- VeriTile current
-x := tl.load(X, offsets)
+-- VeriTile (current)
+x := tl.load($(xReg) + offs)
+tl.store($(outReg) + offs, value)
 ```
 
-…is small. A reader of both forms understands the correspondence in
-seconds. Reviewers have accepted larger gaps in comparable work
-(Vero / ATL / KaTen — see §6). Bridging this gap with macro syntax
-(`tl.load(X_ptr + offs)` ↦ `Op.load "X" offs`) costs ~20 lines of
-`expandExpr` work and adds zero semantic content.
+The macro lowers `tl.load($(R) + offs)` to `Op.load R offs` and
+`tl.store($(R) + offs, v)` to `Stmt.store R offs v`. Scalar-pointer
+sugar `tl.load($(R))` / `tl.store($(R), v)` desugars to offset `0`.
 
-**Recommendation: defer to P3+.** Worth doing alongside `CONTRIBUTING.md`
-tutorial preparation or paper appendix work, when paste-in friendliness
-becomes a measurable concern. Not worth doing now.
+**Important:** the `+` is a **pure surface-syntax cue**. `$(xReg)` is
+still a `RegionName` (`String`), `offs` is still a `Nat`-valued offset
+expression, and there is no first-class pointer value being added —
+the macro destructures the surface form and emits the existing
+region+offset AST. From the operational semantics' point of view this
+is identical to the prior comma-separated form `tl.load($(xReg), offs)`;
+RP1's (γ)-rejection still holds.
+
+Resolved 2026-04-27. ~30 lines of `expandExpr` / `expandStmt` /
+`exprRegions` / `stmtRegions` extension; no semantic edits; all 8
+correctness/refinement theorems closed without proof-body changes.
 
 ## 6. Comparable work
 
@@ -269,9 +277,11 @@ Side-by-side mapping of the most common Triton patterns:
 | `tl.program_id(0)` | `tl.program_id(0)` | `Op.programId` |
 | `tl.arange(0, BLOCK)` | `tl.arange($(BLOCK))` or `tl.arange(0, $(BLOCK))` | `Op.arange BLOCK` |
 | `pid * BLOCK + tl.arange(0, BLOCK)` | `pid * $(BLOCK) + tl.arange(0, $(BLOCK))` | `Op.add (Op.mul ...) (Op.arange BLOCK)` |
-| `tl.load(x_ptr + offsets)` | `tl.load(X, offsets)` | `Op.load "X" (Op.ref "offsets")` |
-| `tl.store(out_ptr + offsets, value)` | `tl.store(Out, offsets, value)` | `Stmt.store "Out" ...` |
-| `x_ptr + i*M + j` (2D address) | `tl.load(X, $(i)*$(M) + $(j))` | `Op.load "X" (Op.add (Op.mul ...) ...)` |
+| `tl.load(x_ptr + offsets)` | `tl.load($(xReg) + offs)` | `Op.load xReg (Op.ref "offs")` |
+| `tl.load(x_ptr)` (single scalar) | `tl.load($(xReg))` (sugar) | `Op.load xReg (Op.constNat 0)` |
+| `tl.store(out_ptr + offsets, value)` | `tl.store($(outReg) + offs, value)` | `Stmt.store outReg (Op.ref "offs") ...` |
+| `tl.store(out_ptr, value)` (single scalar) | `tl.store($(outReg), value)` (sugar) | `Stmt.store outReg (Op.constNat 0) ...` |
+| `x_ptr + i*M + j` (2D address) | `tl.load($(xReg) + $(i)*$(M) + $(j))` | `Op.load xReg (Op.add (Op.mul ...) ...)` |
 
 Patterns NOT covered (would need (γ)):
 
@@ -285,8 +295,12 @@ Patterns NOT covered (would need (γ)):
 
 - **2026-04-27** — Discussion of pointer semantics surfaced during
   add\_kernel feasibility review. Confirmed: named-region model retained
-  through Phases A–D. (β) cosmetic syntax deferred to P3+. Recorded as
-  RP1.
+  through Phases A–D. (β) cosmetic syntax originally deferred to P3+.
+  Recorded as RP1.
+- **2026-04-27 (later)** — (β) cosmetic syntax landed earlier than
+  planned: `tl.load($(R) + offs)` / `tl.store($(R) + offs, v)` and
+  scalar-pointer sugar `tl.load($(R))` / `tl.store($(R), v)`. Pure
+  macro-time desugaring; no semantic change; (γ) still rejected.
 
 ---
 

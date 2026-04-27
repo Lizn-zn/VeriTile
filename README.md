@@ -52,11 +52,11 @@ Included in Phase A:
 ## Quick Start
 
 > **Note on the DSL:** Triton kernels in VeriTile are *region-polymorphic* — every
-> kernel takes its memory regions as `RegionName` parameters and threads them
-> through `tl.load($(...), …)` / `tl.store($(...), …, …)` antiquotes. This means
-> the same kernel can be instantiated with arbitrary buffer names, and the
-> correctness theorem applies uniformly to all instantiations. There is no
-> bare-ident shortcut (`tl.load(X, offs)` will not parse); see
+> kernel takes its memory regions as `RegionName` parameters and uses
+> Triton-like pointer-plus-offset syntax: `tl.load($(xReg) + offs)` /
+> `tl.store($(yReg) + offs, y)`. This means the same kernel can be instantiated
+> with arbitrary buffer names, and the correctness theorem applies uniformly to
+> all instantiations. There is no bare-ident shortcut (`tl.load(X + offs)` will not parse); see
 > [RP1](./Notes/research_problem_pointer_vs_named_region.md) for the rationale.
 
 #### 1. Start with an original Triton kernel. For example, naive softmax:
@@ -65,11 +65,11 @@ Included in Phase A:
 def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load($(xReg), offs)
+  x    := tl.load($(xReg) + offs)
   e    := tl.exp(x)
   s    := tl.sum(e)
   y    := e / s
-  tl.store($(yReg), offs, y)
+  tl.store($(yReg) + offs, y)
 }
 ```
 
@@ -79,12 +79,12 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
 def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load($(xReg), offs)
+  x    := tl.load($(xReg) + offs)
   m    := tl.max(x)
   e    := tl.exp(x - m)
   s    := tl.sum(e)
   y    := e / s
-  tl.store($(yReg), offs, y)
+  tl.store($(yReg) + offs, y)
 }
 ```
 

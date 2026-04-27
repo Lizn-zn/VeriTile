@@ -11,8 +11,16 @@ Eventually these are produced by the Python lifter; for now we hand-write them.
 
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.DSL
 
 namespace VeriTile.Triton.Examples
+
+/-- Smoke test for scalar-pointer load/store syntax:
+    `tl.load(ptr)` / `tl.store(ptr, value)` lower to offset `0`. -/
+def scalarCopyKernel (xReg yReg : RegionName) : Kernel := triton {
+  x := tl.load($(xReg))
+  tl.store($(yReg), x)
+}
 
 /--
 Naive softmax kernel. Triton source:
@@ -34,7 +42,7 @@ Notes on the embedding:
 * Tile-valued offsets (gather) are not a single `Op.load` constructor. We model
   the per-element load via a `forLoop` that fills a register named `"x"` cell
   by cell. This is verbose for hand-writing but mechanical for the lifter.
-* The `Op.const` argument here is `(N : ℝ)` to fit into the arithmetic chain.
+* Address arithmetic uses `Op.constNat` so it stays in the Nat offset channel.
 -/
 def naiveSoftmax (N : Nat) : Kernel where
   inputs  := ["X"]
@@ -45,7 +53,7 @@ def naiveSoftmax (N : Nat) : Kernel where
 
     -- offs = pid * N + tl.arange(0, N)
     .assign "offs"
-      (.add (.broadcast (.mul .programId (.const (N : ℝ))) N)
+      (.add (.broadcast (.mul .programId (.constNat N)) N)
             (.arange N)),
 
     -- x = tl.load(X + offs)  -- gather modeled by per-element scalar loads.
@@ -55,7 +63,7 @@ def naiveSoftmax (N : Nat) : Kernel where
     .assign "x" (.broadcast (.const 0) N),
     .forLoop "i" N [
       .assign "x_i" (.load "X"
-                      (.add (.mul .programId (.const (N : ℝ)))
+                      (.add (.mul .programId (.constNat N))
                             (.ref "i"))),
       -- TODO(P1): an `Op.tileSet` / `Stmt.tileSet` constructor to overwrite
       -- a single tile cell. Currently no such primitive; this `assign` will
@@ -77,7 +85,7 @@ def naiveSoftmax (N : Nat) : Kernel where
 
     -- tl.store(Y + offs, y)
     .store "Y"
-      (.add (.broadcast (.mul .programId (.const (N : ℝ))) N) (.arange N))
+      (.add (.broadcast (.mul .programId (.constNat N)) N) (.arange N))
       (.ref "y")
   ]
 

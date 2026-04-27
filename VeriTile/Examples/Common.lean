@@ -8,12 +8,12 @@ Shared helpers for the parameterized-region kernel correctness pattern:
 
 Both are parameterized by the region name (a `RegionName = String`),
 matching the DSL convention that kernels take their buffer regions as
-explicit `RegionName` parameters and thread them via `tl.load($(xReg), …)`
-/ `tl.store($(outReg), …, …)` antiquotes.
+explicit `RegionName` parameters and thread them via `tl.load($(xReg) + …)`
+/ `tl.store($(outReg) + …, …)` pointer-like syntax.
 
 These supersede the hardcoded `InputLoaded` ("X") / `observeY` ("Y") used
 during early Phase A, which were dropped when we banned the bare-ident
-form `tl.load(X, …)` from the DSL.
+form `tl.load(X + …)` from the DSL.
 -/
 
 import VeriTile.Triton.Core
