@@ -137,7 +137,7 @@ theorem softmax_kernels_refinement
 | [`VeriTile/Examples/LogSumExpEq.lean`](./VeriTile/Examples/LogSumExpEq.lean) | 直接 log-sum-exp vs shift-trick log-sum-exp |
 | [`VeriTile/Examples/SoftmaxReciprocal.lean`](./VeriTile/Examples/SoftmaxReciprocal.lean) | stable softmax 除法 vs 预计算倒数 |
 | [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | 逐元素加法(multi-buffer kernel ↔ math 正确性) |
-| [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | 融合 MLP block:`residual + (x*gate) * sigmoid(x*gate)` |
+| [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | 融合 sigmoid MLP block vs 手动展开 `1/(1+exp(-z))`(kernel-pair refinement)|
 | [`VeriTile/Examples/WelfordMath.lean`](./VeriTile/Examples/WelfordMath.lean) | Phase B 准备用的 Welford 恒等式 |
 
 ## 更多文档
