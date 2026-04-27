@@ -9,4 +9,7 @@ import VeriTile.Examples.LogSumExpEq
 import VeriTile.Examples.SoftmaxReciprocal
 import VeriTile.Examples.VectorAdd
 import VeriTile.Examples.FusedSiLU
+import VeriTile.Examples.ApproxGeLU
+import VeriTile.Examples.RowWiseSum
+import VeriTile.Examples.RowWiseMax
 import VeriTile.Examples.WelfordMath

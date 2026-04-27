@@ -35,4 +35,28 @@ noncomputable def observeAt
     (N : Nat) (basePid : Nat) (i : Fin N) : Option ℝ :=
   sf.map (·.readMem region (basePid * N + i.val))
 
+/-! ## Row-wise (2D-style) variants
+
+For kernels that gather one *row* of a row-major matrix (row stride
+`rowStride`, `blockSize` cells per row) and write a single scalar per
+program — the pattern shared by `RowWiseSum`, `RowWiseMax`, and
+forthcoming row-wise reductions. Generalizes the predicates above by
+separating the row stride (the leading dimension of the matrix in
+memory) from the block size (the number of cells gathered). When
+`rowStride = blockSize` they collapse to the 1D forms. -/
+
+/-- Region `region` holds the `blockSize`-cell tile `xs` at offsets
+    `[s.pid * rowStride, s.pid * rowStride + blockSize)`. -/
+def InputRowLoadedAt (s : BlockState) (region : RegionName)
+    (rowStride blockSize : Nat) (xs : Fin blockSize → ℝ) : Prop :=
+  ∀ i : Fin blockSize, s.mem region (s.pid * rowStride + i.val) = xs i
+
+/-- Read region `region` at the single cell `basePid` from the optional
+    final `BlockState` of an `exec` call. Models the
+    *single-scalar-per-block* output pattern (`tl.store($(yReg) + row, _)`)
+    distinct from the tile-scatter pattern observed by `observeAt`. -/
+noncomputable def observeRowAt
+    (sf : Option BlockState) (region : RegionName) (basePid : Nat) : Option ℝ :=
+  sf.map (·.readMem region basePid)
+
 end VeriTile.Examples
