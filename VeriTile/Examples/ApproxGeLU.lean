@@ -40,6 +40,8 @@ For example, `7978845608028654 / 10000000000000000` represents the usual
 
 import Mathlib.Analysis.SpecialFunctions.Sigmoid
 import Mathlib.Analysis.SpecialFunctions.Exp
+import Mathlib.Analysis.Complex.ExponentialBounds
+import Mathlib.Analysis.Real.Pi.Bounds
 import Mathlib.MeasureTheory.Integral.IntervalIntegral.Basic
 import VeriTile.Math.RealErf
 import VeriTile.Triton.Core
@@ -290,6 +292,197 @@ lemma abs_approxGeLUScalar_sub_exactGeLUScalar_tail_pos
           (x / Real.sqrt Real.pi) * Real.exp (-(x / Real.sqrt 2)) := by
             field_simp
 
+/-! ## Numeric closure for very-large `|x|`
+
+Combines `abs_approxGeLUScalar_sub_exactGeLUScalar_tail_pos` with a generic
+monotonicity helper for `x · exp(−a·x)` and a concrete numeric verification
+at `T = 20` to close `|approx − exact| ≤ 1/1000` whenever `|x| ≥ 20`. -/
+
+/-- For `a · T ≥ 1` and `T > 0`, the function `x ↦ x · exp(−a·x)` is bounded
+above by its value at `T` on the half-line `[T, ∞)`. The proof uses
+`Real.add_one_le_exp`. -/
+private lemma x_exp_neg_ax_mono {a T x : ℝ}
+    (haT : 1 ≤ a * T) (hT : 0 < T) (hx : T ≤ x) :
+    x * Real.exp (-(a * x)) ≤ T * Real.exp (-(a * T)) := by
+  have hxmT : 0 ≤ x - T := by linarith
+  have h_exp_lin : 1 + a * (x - T) ≤ Real.exp (a * (x - T)) := by
+    have := Real.add_one_le_exp (a * (x - T)); linarith
+  have h_aT_x : x - T ≤ a * T * (x - T) := by nlinarith
+  have key : x ≤ T * Real.exp (a * (x - T)) := by
+    have h1 : T * (1 + a * (x - T)) = T + a * T * (x - T) := by ring
+    have h2 : T + (x - T) ≤ T * (1 + a * (x - T)) := by
+      rw [h1]; linarith
+    have h3 : T + (x - T) = x := by ring
+    have h4 : T * (1 + a * (x - T)) ≤ T * Real.exp (a * (x - T)) :=
+      mul_le_mul_of_nonneg_left h_exp_lin hT.le
+    linarith
+  have h_exp_pos : 0 < Real.exp (-(a * x)) := Real.exp_pos _
+  have h_combine : Real.exp (a * (x - T)) * Real.exp (-(a * x)) =
+        Real.exp (-(a * T)) := by
+    rw [← Real.exp_add]; congr 1; ring
+  calc x * Real.exp (-(a * x))
+      ≤ T * Real.exp (a * (x - T)) * Real.exp (-(a * x)) :=
+        mul_le_mul_of_nonneg_right key h_exp_pos.le
+    _ = T * (Real.exp (a * (x - T)) * Real.exp (-(a * x))) := by ring
+    _ = T * Real.exp (-(a * T)) := by rw [h_combine]
+
+/-- Concrete verification at `T = 20`: the asymptotic tail bound evaluated at
+`20` is ≤ `1/1000`. The numeric chain uses `√π ≥ 3/2`, `√2 ≤ 10/7`,
+`c ≥ 7/10` (so `2c·20 ≥ 28`), and `exp(N) ≥ (27/10)^N` from
+`Real.exp_one_gt_d9`. -/
+private lemma gelu_tail_at_twenty :
+    20 * Real.exp (-(2 * (7978845608028654 / 10000000000000000 : ℝ) * 20)) +
+      (20 / Real.sqrt Real.pi) * Real.exp (-(20 / Real.sqrt 2)) ≤ 1 / 1000 := by
+  have hpi : (3/2 : ℝ) ≤ Real.sqrt Real.pi := by
+    rw [show (3/2:ℝ) = Real.sqrt ((3/2)^2) from (Real.sqrt_sq (by norm_num)).symm]
+    apply Real.sqrt_le_sqrt
+    have : ((3/2:ℝ))^2 = 9/4 := by norm_num
+    rw [this]; linarith [Real.pi_gt_three]
+  have hpi_pos : 0 < Real.sqrt Real.pi := Real.sqrt_pos.mpr Real.pi_pos
+  have hsqrt2 : Real.sqrt 2 ≤ 10/7 := by
+    rw [show (10/7:ℝ) = Real.sqrt ((10/7)^2) from (Real.sqrt_sq (by norm_num)).symm]
+    exact Real.sqrt_le_sqrt (by norm_num)
+  have hsqrt2_pos : 0 < Real.sqrt 2 := Real.sqrt_pos.mpr (by norm_num)
+  have h_ratio_pi : 20 / Real.sqrt Real.pi ≤ 40 / 3 := by
+    rw [div_le_div_iff₀ hpi_pos (by norm_num : (0:ℝ) < 3)]
+    nlinarith [hpi]
+  have h_ratio_2 : (14 : ℝ) ≤ 20 / Real.sqrt 2 := by
+    rw [le_div_iff₀ hsqrt2_pos]; nlinarith [hsqrt2]
+  have h_2c20 : (28 : ℝ) ≤
+        2 * (7978845608028654 / 10000000000000000 : ℝ) * 20 := by norm_num
+  have h_exp_2 : Real.exp (-(20 / Real.sqrt 2)) ≤ Real.exp (-(14 : ℝ)) :=
+    Real.exp_le_exp.mpr (by linarith)
+  have h_exp_c : Real.exp (-(2 * (7978845608028654 / 10000000000000000 : ℝ) * 20))
+        ≤ Real.exp (-(28 : ℝ)) := Real.exp_le_exp.mpr (by linarith)
+  have h27 : (2.7 : ℝ) ≤ Real.exp 1 := by linarith [Real.exp_one_gt_d9]
+  have h_exp_14 : Real.exp (-(14 : ℝ)) ≤ 1/1000000 := by
+    have h_e14 : Real.exp 14 = Real.exp 1 ^ 14 := by
+      rw [show (14 : ℝ) = ((14:ℕ) : ℝ) * 1 from by norm_num, Real.exp_nat_mul]
+    have h_e14_lower : (1000000 : ℝ) ≤ Real.exp 14 := by
+      rw [h_e14]
+      calc (1000000:ℝ) ≤ (2.7:ℝ)^14 := by norm_num
+        _ ≤ Real.exp 1 ^ 14 := pow_le_pow_left₀ (by norm_num) h27 14
+    rw [Real.exp_neg, le_div_iff₀ (by norm_num : (0:ℝ) < 1000000),
+        inv_mul_le_iff₀ (Real.exp_pos _)]; linarith
+  have h_exp_28 : Real.exp (-(28 : ℝ)) ≤ 1/1000000000000 := by
+    have h_e28 : Real.exp 28 = Real.exp 1 ^ 28 := by
+      rw [show (28 : ℝ) = ((28:ℕ) : ℝ) * 1 from by norm_num, Real.exp_nat_mul]
+    have h_e28_lower : (1000000000000 : ℝ) ≤ Real.exp 28 := by
+      rw [h_e28]
+      calc (1000000000000:ℝ) ≤ (2.7:ℝ)^28 := by norm_num
+        _ ≤ Real.exp 1 ^ 28 := pow_le_pow_left₀ (by norm_num) h27 28
+    rw [Real.exp_neg, le_div_iff₀ (by norm_num : (0:ℝ) < 1000000000000),
+        inv_mul_le_iff₀ (Real.exp_pos _)]; linarith
+  have h_term1 :
+      20 * Real.exp (-(2 * (7978845608028654 / 10000000000000000 : ℝ) * 20))
+        ≤ 20 * (1/1000000000000) := by
+    have : Real.exp (-(2 * (7978845608028654 / 10000000000000000 : ℝ) * 20))
+            ≤ 1/1000000000000 := h_exp_c.trans h_exp_28
+    linarith
+  have h_term2 : (20 / Real.sqrt Real.pi) * Real.exp (-(20 / Real.sqrt 2))
+        ≤ (40/3) * (1/1000000) :=
+    mul_le_mul h_ratio_pi (h_exp_2.trans h_exp_14)
+      (Real.exp_pos _).le (by norm_num)
+  have h_sum_bound :
+      20 * (1/1000000000000 : ℝ) + (40/3) * (1/1000000) ≤ 1/1000 := by norm_num
+  linarith
+
+/-- Closure of the very-large positive case: for `x ≥ 20` the gelu
+approximation error is at most `1/1000`. -/
+private theorem approx_gelu_error_bound_very_large_pos {x : ℝ} (hx : 20 ≤ x) :
+    |approxGeLUScalar x - exactGeLUScalar x| ≤ 1 / 1000 := by
+  have hsqrt2_le_20 : Real.sqrt 2 ≤ 20 := by
+    have : Real.sqrt 2 ≤ 10/7 := by
+      rw [show (10/7:ℝ) = Real.sqrt ((10/7)^2) from
+            (Real.sqrt_sq (by norm_num)).symm]
+      exact Real.sqrt_le_sqrt (by norm_num)
+    linarith
+  have hsqrt2_le_x : Real.sqrt 2 ≤ x := le_trans hsqrt2_le_20 hx
+  have h_tail := abs_approxGeLUScalar_sub_exactGeLUScalar_tail_pos hsqrt2_le_x
+  set c : ℝ := 7978845608028654 / 10000000000000000
+  -- Monotonicity for the c-tail: x·exp(-2c·x) ≤ 20·exp(-2c·20).
+  have h_2c20 : (1 : ℝ) ≤ (2 * c) * 20 := by
+    show (1 : ℝ) ≤ 2 * (7978845608028654 / 10000000000000000) * 20
+    norm_num
+  have h_mono_c : x * Real.exp (-(2 * c * x)) ≤ 20 * Real.exp (-(2 * c * 20)) :=
+    x_exp_neg_ax_mono h_2c20 (by norm_num) hx
+  -- Monotonicity for the erf-tail: write (x/√π)·exp(-x/√2) = (1/√π)·(x·exp(-(1/√2)·x))
+  -- and apply the helper with a = 1/√2.
+  have hsqrt2_pos : 0 < Real.sqrt 2 := Real.sqrt_pos.mpr (by norm_num)
+  have hpi_pos : 0 < Real.sqrt Real.pi := Real.sqrt_pos.mpr Real.pi_pos
+  have h_ratio_2 : (14 : ℝ) ≤ 20 / Real.sqrt 2 := by
+    rw [le_div_iff₀ hsqrt2_pos]
+    have hsqrt2_le : Real.sqrt 2 ≤ 10/7 := by
+      rw [show (10/7:ℝ) = Real.sqrt ((10/7)^2) from
+            (Real.sqrt_sq (by norm_num)).symm]
+      exact Real.sqrt_le_sqrt (by norm_num)
+    nlinarith
+  have h_inv_sqrt2_20 : (1 : ℝ) ≤ (1 / Real.sqrt 2) * 20 := by
+    rw [one_div]; rw [show (1:ℝ) = (Real.sqrt 2)⁻¹ * Real.sqrt 2 from by
+      rw [inv_mul_cancel₀ hsqrt2_pos.ne']]
+    exact mul_le_mul_of_nonneg_left
+      (by linarith : Real.sqrt 2 ≤ 20) (inv_nonneg.mpr hsqrt2_pos.le)
+  have h_mono_erf_unscaled :
+      x * Real.exp (-((1 / Real.sqrt 2) * x))
+        ≤ 20 * Real.exp (-((1 / Real.sqrt 2) * 20)) :=
+    x_exp_neg_ax_mono h_inv_sqrt2_20 (by norm_num) hx
+  have h_eq_form_x : x * Real.exp (-(x / Real.sqrt 2))
+        = x * Real.exp (-((1 / Real.sqrt 2) * x)) := by
+    congr 2; rw [div_eq_inv_mul, one_div]
+  have h_eq_form_20 : (20 : ℝ) * Real.exp (-(20 / Real.sqrt 2))
+        = 20 * Real.exp (-((1 / Real.sqrt 2) * 20)) := by
+    congr 2; rw [div_eq_inv_mul, one_div]
+  have h_mono_erf_xform : x * Real.exp (-(x / Real.sqrt 2))
+        ≤ 20 * Real.exp (-(20 / Real.sqrt 2)) := by
+    rw [h_eq_form_x, h_eq_form_20]; exact h_mono_erf_unscaled
+  -- Scale by 1/√π:
+  have h_mono_erf : (x / Real.sqrt Real.pi) * Real.exp (-(x / Real.sqrt 2))
+        ≤ (20 / Real.sqrt Real.pi) * Real.exp (-(20 / Real.sqrt 2)) := by
+    rw [div_eq_inv_mul (a := x), div_eq_inv_mul (a := 20)]
+    rw [mul_assoc, mul_assoc]
+    exact mul_le_mul_of_nonneg_left h_mono_erf_xform (inv_nonneg.mpr hpi_pos.le)
+  -- Combine
+  have h_combined :
+      x * Real.exp (-(2 * c * x)) +
+        (x / Real.sqrt Real.pi) * Real.exp (-(x / Real.sqrt 2))
+      ≤ 20 * Real.exp (-(2 * c * 20)) +
+          (20 / Real.sqrt Real.pi) * Real.exp (-(20 / Real.sqrt 2)) :=
+    add_le_add h_mono_c h_mono_erf
+  exact le_trans h_tail (le_trans h_combined gelu_tail_at_twenty)
+
+/-- Evenness of the gelu approximation error in the input variable. The
+gelu approximation error has the symmetry `f(−x) = f(x)` even though neither
+the approximate nor the exact function is itself even or odd; the evenness
+falls out of the algebraic decomposition once `tanh` and `realErf` are odd. -/
+private lemma approxSubExact_neg (x : ℝ) :
+    approxGeLUScalar (-x) - exactGeLUScalar (-x)
+      = approxGeLUScalar x - exactGeLUScalar x := by
+  rw [approxGeLUScalar_sub_exactGeLUScalar, approxGeLUScalar_sub_exactGeLUScalar]
+  have h_arg :
+      (7978845608028654 / 10000000000000000 : ℝ) *
+          (-x + (44715 / 1000000) * (-x * -x * -x))
+        = -((7978845608028654 / 10000000000000000) *
+              (x + (44715 / 1000000) * (x * x * x))) := by ring
+  rw [h_arg, Real.tanh_neg]
+  rw [show ((-x) / Real.sqrt 2 : ℝ) = -(x / Real.sqrt 2) from by ring]
+  rw [VeriTile.Math.realErf_neg]
+  ring
+
+/-- Closure for the very-large case (both signs): for `|x| ≥ 20` the gelu
+approximation error is at most `1/1000`. -/
+private theorem approx_gelu_error_bound_very_large {x : ℝ} (hx : 20 ≤ |x|) :
+    |approxGeLUScalar x - exactGeLUScalar x| ≤ 1 / 1000 := by
+  rcases le_or_gt 0 x with hxn | hxn
+  · -- Positive case: |x| = x, reduce to _pos.
+    rw [abs_of_nonneg hxn] at hx
+    exact approx_gelu_error_bound_very_large_pos hx
+  · -- Negative case: use evenness `f(−x) = f(x)` to flip.
+    rw [abs_of_neg hxn] at hx
+    have hxneg : 20 ≤ -x := hx
+    have h_pos := approx_gelu_error_bound_very_large_pos hxneg
+    -- |approx(-x) - exact(-x)| ≤ 1/1000, and `_neg` says it equals |approx x - exact x|.
+    rwa [approxSubExact_neg] at h_pos
+
 /-! ## Correctness and Approximation Statements -/
 
 /-- **`approxGeLUKernel` correctness against the approximate GeLU expression.**
@@ -320,25 +513,38 @@ theorem approx_gelu_kernel_correct
 /-- Target error tolerance for the standard tanh/sigmoid GeLU approximation. -/
 noncomputable def approxGeLUEps : ℝ := 1 / 1000
 
-/-- Quantitative gap remaining for the global `approxGeLUEps = 1e-3` bound.
+/-- Quantitative gap remaining for the global `approxGeLUEps = 1e-3` bound,
+restricted to the medium range `1/1000 < |x| < 20`.
 
-For inputs with `|xs i| > approxGeLUEps`, the algebraic decomposition reduces
-the global error bound to a quantitative bound on the gap between
-`tanh(c·(x + k·x³))` and `realErf(x / √2)`: specifically,
+The global `|x| > 1/1000` case splits into two pieces:
 
-    |x| / 2 · |tanh u − realErf(x / √2)|  ≤  1 / 1000.
-
-This is the unsolved analytic content of `approx_gelu_error_bound`. The bound
-is known to hold globally (the empirical max of the gelu approximation error
-is ≈ 4·10⁻⁴, well within `1e-3`), but a Lean-checked proof requires either
-certified interval arithmetic across a finite window plus tail bounds via
-`realErf_tendsto_atTop`/`atBot`, or a Taylor-with-remainder analysis using
-`realErf_hasDerivAt`. Both are out of scope for the current snapshot. -/
-theorem approx_gelu_error_bound_large {x : ℝ} (_hx : approxGeLUEps < |x|) :
+* **Very-large `|x| ≥ 20`** — closed by `approx_gelu_error_bound_very_large`,
+  which combines `abs_approxGeLUScalar_sub_exactGeLUScalar_tail_pos` with the
+  monotonicity helper `x_exp_neg_ax_mono` and the concrete numeric bound
+  `gelu_tail_at_twenty`.
+* **Medium `1/1000 < |x| < 20`** — the remaining open analytic content,
+  carried by this theorem. Closing it requires either certified interval
+  arithmetic across `[1/1000, 20]` or a Taylor-with-remainder analysis using
+  `realErf_hasDerivAt`. The asymptotic tail bounds are too loose on this
+  bounded window to give `≤ 1/1000`. Out of scope for the current snapshot. -/
+theorem approx_gelu_error_bound_medium {x : ℝ}
+    (_hxlow : approxGeLUEps < |x|) (_hxhigh : |x| < 20) :
     |approxGeLUScalar x - exactGeLUScalar x| ≤ approxGeLUEps := by
-  -- Open analytic content: the tanh-vs-erf gap times |x|/2 is bounded by 1e-3
-  -- whenever |x| > 1e-3. See module docstring above.
+  -- Medium range: the gap is at its empirical max here; tail bounds
+  -- are insufficient. Requires certified numerics or Taylor analysis.
   sorry
+
+/-- The `|x| > 1/1000` half of `approx_gelu_error_bound`. Dispatches via
+`approx_gelu_error_bound_very_large` for `|x| ≥ 20` and
+`approx_gelu_error_bound_medium` for `1/1000 < |x| < 20`. -/
+theorem approx_gelu_error_bound_large {x : ℝ} (hx : approxGeLUEps < |x|) :
+    |approxGeLUScalar x - exactGeLUScalar x| ≤ approxGeLUEps := by
+  rcases lt_or_ge (|x|) 20 with hmedium | hlarge
+  · exact approx_gelu_error_bound_medium hx hmedium
+  · -- `|x| ≥ 20`: discharge from the asymptotic tail bound.
+    have h := approx_gelu_error_bound_very_large hlarge
+    show |approxGeLUScalar x - exactGeLUScalar x| ≤ 1 / 1000
+    exact h
 
 /-- The analytic/numerical approximation claim we need:
     on this input tile, the tanh/sigmoid approximate GeLU differs from the
