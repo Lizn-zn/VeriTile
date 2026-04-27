@@ -136,6 +136,31 @@ theorem scatter_readback {region : RegionName} {n : Nat}
       = valueFn i
   exact if_pos ⟨rfl, rfl⟩
 
+/-- **Cross-region frame property.** A scatter store to `region` does not
+    touch any other named region. The named-region disjointness from RP1
+    makes this `rfl` after unfolding, but we package it here as a reusable
+    lemma for multi-kernel pipeline proofs. -/
+theorem scatter_preserves_other_region {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (R : RegionName) (h_ne : R ≠ region) (off : Nat) :
+    ∀ (l : List α) (s : BlockState),
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        R off)
+      = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s
+    rw [List.foldl_cons, ih]
+    show (s.writeMem region (offsetFn hd) (valueFn hd)).mem R off = s.mem R off
+    unfold writeMem
+    show (if R = region ∧ off = offsetFn hd then valueFn hd else s.mem R off)
+        = s.mem R off
+    rw [if_neg]
+    rintro ⟨h_R, _⟩
+    exact h_ne h_R
+
 end BlockState
 
 namespace Value
