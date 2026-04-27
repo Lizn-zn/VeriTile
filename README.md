@@ -138,6 +138,8 @@ See the full softmax example in
 | [`VeriTile/Examples/SoftmaxEq.lean`](./VeriTile/Examples/SoftmaxEq.lean) | Naive softmax vs numerically stable softmax |
 | [`VeriTile/Examples/LogSumExpEq.lean`](./VeriTile/Examples/LogSumExpEq.lean) | Direct log-sum-exp vs shift-trick log-sum-exp |
 | [`VeriTile/Examples/SoftmaxReciprocal.lean`](./VeriTile/Examples/SoftmaxReciprocal.lean) | Stable softmax division vs precomputed reciprocal |
+| [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | Elementwise add (multi-buffer kernel ↔ math correctness) |
+| [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | Fused MLP block: `residual + (x*gate) * sigmoid(x*gate)` |
 | [`VeriTile/Examples/WelfordMath.lean`](./VeriTile/Examples/WelfordMath.lean) | Welford identity used to prepare Phase B |
 
 ## More Documentation
