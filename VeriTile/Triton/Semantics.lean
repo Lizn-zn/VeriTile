@@ -21,36 +21,29 @@ P1 work will land. Each is annotated with `-- TODO(P1):`.
 import Mathlib.Data.Real.Basic
 import Mathlib.Analysis.SpecialFunctions.Exp
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
-import Mathlib.Algebra.Order.Floor.Defs
-import Mathlib.Algebra.Order.Floor.Semifield
 import VeriTile.Triton.Core
 
 namespace VeriTile.Triton
 
 /--
-Coerce a `ℝ` to `ℕ` by flooring; negative values become 0.
+A Triton runtime value, bifurcated into `ℝ` (data) and `Nat` (address)
+channels. Tile lengths are existential (packed in the constructor) for
+simplicity; type-level shape tracking is a later extension if needed.
 
-Used to model memory address arithmetic: Triton offsets are integer-valued at
-runtime, but our `Value.scalar` packs them as `ℝ`. This helper bridges. We
-expect the input to be a non-negative integer-valued `ℝ` in normal kernel
-operation; the floor is a defensive default.
+* `scalar`     — `ℝ` data scalar (e.g. an `exp`/`div` result, an accumulator).
+* `scalarNat`  — `Nat` address scalar (e.g. `pid`, a tile size, a stride).
+* `tile`       — `ℝ` data tile (e.g. `tl.exp(x)`, `tl.load(...)` from a data buffer).
+* `tileNat`    — `Nat` offset tile (e.g. `tl.arange(N)`, computed offsets).
 
-`noncomputable` because it depends on `Nat.floor` over `ℝ`.
-
-TODO(P1 polish): bifurcate `Value` into `.scalarReal` / `.scalarNat` to avoid
-this cast at the semantics level.
--/
-noncomputable def realToNat (c : ℝ) : Nat := ⌊c⌋₊
-
-/--
-A Triton runtime value. Either a scalar `ℝ`, or a tile of length `n`
-represented as `Fin n → ℝ`. Tile lengths are existential (packed in
-the constructor) for simplicity; type-level shape tracking is a later
-extension if needed.
+The bifurcation eliminates the prior `realToNat` round-trip cast and
+removes one class of permissive typing (`exp(pid)` no longer evaluates).
+See RP2 (`Notes/research_problem_address_typing.md`).
 -/
 inductive Value : Type where
-  | scalar : ℝ → Value
-  | tile   : (n : Nat) → (Fin n → ℝ) → Value
+  | scalar    : ℝ   → Value
+  | scalarNat : Nat → Value
+  | tile      : (n : Nat) → (Fin n → ℝ)   → Value
+  | tileNat   : (n : Nat) → (Fin n → Nat) → Value
 
 instance : Inhabited Value := ⟨.scalar 0⟩
 
@@ -146,51 +139,64 @@ end BlockState
 
 namespace Value
 
-/-- Coerce a Value to a scalar; fails (`none`) on tiles. -/
+/-- Coerce a Value to an `ℝ` scalar; fails (`none`) on tiles or `Nat` values. -/
 def asScalar : Value → Option ℝ
   | .scalar a => some a
   | _         => none
 
-/-- Pointwise lift of a binary scalar op to `Value`s.
-    Scalar/scalar -> scalar, scalar/tile -> tile (broadcasting), etc.
-    Tile/tile of mismatched lengths -> `none`. -/
-def bop (op : ℝ → ℝ → ℝ) : Value → Value → Option Value
-  | .scalar a, .scalar b => some (.scalar (op a b))
-  | .scalar a, .tile n f => some (.tile n (fun i => op a (f i)))
-  | .tile n f, .scalar b => some (.tile n (fun i => op (f i) b))
-  | .tile n f, .tile m g =>
+/-- Coerce a Value to a `Nat` scalar; fails (`none`) on tiles or `ℝ` values. -/
+def asScalarNat : Value → Option Nat
+  | .scalarNat n => some n
+  | _            => none
+
+/-- Pointwise lift of a binary scalar op, dispatched by carrier type.
+
+    * Two `ℝ` operands (any combination of `scalar`/`tile`) → `opR`
+    * Two `Nat` operands (any combination of `scalarNat`/`tileNat`) → `opN`
+    * Mixed `ℝ`/`Nat` operands → `none` (semantic error)
+
+    Tile/tile of mismatched lengths → `none`. -/
+def bop (opR : ℝ → ℝ → ℝ) (opN : Nat → Nat → Nat) :
+    Value → Value → Option Value
+  -- ℝ × ℝ
+  | .scalar a, .scalar b      => some (.scalar (opR a b))
+  | .scalar a, .tile n f      => some (.tile n (fun i => opR a (f i)))
+  | .tile n f, .scalar b      => some (.tile n (fun i => opR (f i) b))
+  | .tile n f, .tile m g      =>
       if h : n = m then
-        some (.tile n (fun i => op (f i) (g (Fin.cast h i))))
+        some (.tile n (fun i => opR (f i) (g (Fin.cast h i))))
       else none
+  -- Nat × Nat
+  | .scalarNat a, .scalarNat b   => some (.scalarNat (opN a b))
+  | .scalarNat a, .tileNat n f   => some (.tileNat n (fun i => opN a (f i)))
+  | .tileNat n f, .scalarNat b   => some (.tileNat n (fun i => opN (f i) b))
+  | .tileNat n f, .tileNat m g   =>
+      if h : n = m then
+        some (.tileNat n (fun i => opN (f i) (g (Fin.cast h i))))
+      else none
+  -- mixed ℝ / Nat → semantic error
+  | _, _ => none
 
-/-- Pointwise lift of a unary scalar op to a `Value`. -/
-def uop (op : ℝ → ℝ) : Value → Value
-  | .scalar a => .scalar (op a)
-  | .tile n f => .tile n (fun i => op (f i))
+/-- Pointwise lift of a unary `ℝ` op (e.g. `Real.exp`, `Real.log`) to a
+    `Value`. Returns `none` on `Nat` carriers — applying `exp`/`log` to an
+    address value is rejected at the semantics layer. -/
+def uop (op : ℝ → ℝ) : Value → Option Value
+  | .scalar a   => some (.scalar (op a))
+  | .tile n f   => some (.tile n (fun i => op (f i)))
+  | _           => none
 
-/-- Reduce a tile to a scalar with a binary op and identity element.
-    Reducing a `scalar` is undefined (returns `none`). Used for legacy /
-    diagnostic purposes; production reductions go through `reduceSum` and
-    `reduceMax` below, which use Mathlib `Finset` forms directly so that
-    proofs about them connect to standard math lemmas. -/
-def reduce (op : ℝ → ℝ → ℝ) (e : ℝ) : Value → Option Value
-  | .scalar _   => none
-  | .tile n f =>
-      let acc := (List.finRange n).foldl (fun a i => op a (f i)) e
-      some (.scalar acc)
-
-/-- `tl.sum(x, axis=0)` semantics: sum over the tile via Mathlib `Finset.sum`. -/
+/-- `tl.sum(x, axis=0)` semantics: sum over the tile via Mathlib `Finset.sum`.
+    Defined only on `ℝ` tiles; `Nat` tiles or scalars return `none`. -/
 noncomputable def reduceSum : Value → Option Value
-  | .scalar _ => none
   | .tile _ f => some (.scalar (∑ i, f i))
+  | _         => none
 
-/-- `tl.max(x, axis=0)` semantics: max over a non-empty tile via `Finset.sup'`.
-    Returns `none` on empty tiles (no well-defined max). -/
+/-- `tl.max(x, axis=0)` semantics: max over a non-empty `ℝ` tile via
+    `Finset.sup'`. Empty tiles, `Nat` tiles, and scalars all return `none`. -/
 noncomputable def reduceMax : Value → Option Value
-  | .scalar _ => none
-  | .tile 0 _ => none
   | .tile (n+1) f =>
       some (.scalar ((Finset.univ : Finset (Fin (n+1))).sup' Finset.univ_nonempty f))
+  | _ => none
 
 end Value
 
@@ -205,52 +211,51 @@ Lean accepts this as structural recursion on `Op`.
 -/
 noncomputable def evalOp : Op → BlockState → Option Value
   | .const c, _      => some (.scalar c)
+  | .constNat n, _   => some (.scalarNat n)
   | .negInf, _       =>
       -- TODO(P1): replace with a proper `⊥`/`-∞` sentinel that interacts
       -- correctly with `max`. -1e38 is a finite stand-in.
       some (.scalar (-1e38))
-  | .programId, s    => some (.scalar (s.pid : ℝ))
+  | .programId, s    => some (.scalarNat s.pid)
   | .ref name, s     => s.regs name
-  | .arange n, _     => some (.tile n (fun i => (i.val : ℝ)))
+  | .arange n, _     => some (.tileNat n (fun i => i.val))
   | .broadcast e n, s =>
       match evalOp e s with
-      | some v => match v.asScalar with
-                  | some c => some (.tile n (fun _ => c))
-                  | none   => none
-      | none => none
+      | some (.scalar c)    => some (.tile n (fun _ => c))
+      | some (.scalarNat c) => some (.tileNat n (fun _ => c))
+      | _ => none
   | .full n e, s =>
       match evalOp e s with
-      | some v => match v.asScalar with
-                  | some c => some (.tile n (fun _ => c))
-                  | none   => none
-      | none => none
+      | some (.scalar c)    => some (.tile n (fun _ => c))
+      | some (.scalarNat c) => some (.tileNat n (fun _ => c))
+      | _ => none
   | .add a b, s =>
       match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop (· + ·) vb
+      | some va, some vb => va.bop (· + ·) (· + ·) vb
       | _, _ => none
   | .sub a b, s =>
       match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop (· - ·) vb
+      | some va, some vb => va.bop (· - ·) (· - ·) vb
       | _, _ => none
   | .mul a b, s =>
       match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop (· * ·) vb
+      | some va, some vb => va.bop (· * ·) (· * ·) vb
       | _, _ => none
   | .div a b, s =>
       match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop (· / ·) vb
+      | some va, some vb => va.bop (· / ·) (· / ·) vb
       | _, _ => none
   | .exp a, s =>
       match evalOp a s with
-      | some va => some (va.uop Real.exp)
+      | some va => va.uop Real.exp
       | none => none
   | .log a, s =>
       match evalOp a s with
-      | some va => some (va.uop Real.log)
+      | some va => va.uop Real.log
       | none => none
   | .max2 a b, s =>
       match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop max vb
+      | some va, some vb => va.bop max max vb
       | _, _ => none
   | .reduceMax a, s =>
       match evalOp a s with
@@ -262,14 +267,14 @@ noncomputable def evalOp : Op → BlockState → Option Value
       | none => none
   | .load region off, s =>
       match evalOp off s with
-      | some (.scalar c) =>
-          -- Scalar offset: single-cell read.
-          some (.scalar (s.readMem region (realToNat c)))
-      | some (.tile n f) =>
+      | some (.scalarNat n) =>
+          -- Scalar offset: single-cell read at the given Nat address.
+          some (.scalar (s.readMem region n))
+      | some (.tileNat n f) =>
           -- Tile-valued offset: gather. Each output cell `i` reads the cell
-          -- at memory address `realToNat (f i)`.
-          some (.tile n (fun i => s.readMem region (realToNat (f i))))
-      | none => none
+          -- at memory address `f i`.
+          some (.tile n (fun i => s.readMem region (f i)))
+      | _ => none
 
 -- Execute one statement.
 --
@@ -288,30 +293,32 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       match evalOp off s, evalOp val s with
       | some voff, some vval =>
           match voff with
-          | .scalar coff =>
-              -- Scalar offset: contiguous store starting at `coff`.
+          | .scalarNat coff =>
+              -- Scalar offset (Nat): contiguous store starting at `coff`.
               match vval with
               | .scalar c =>
-                  some (s.writeMem region (realToNat coff) c)
+                  some (s.writeMem region coff c)
               | .tile n f =>
                   some ((List.finRange n).foldl
                           (fun acc i =>
-                            acc.writeMem region (realToNat coff + i.val) (f i))
+                            acc.writeMem region (coff + i.val) (f i))
                           s)
-          | .tile n offs =>
-              -- Tile-valued offset: scatter. Iteration `i` writes `vals i` to
-              -- address `realToNat (offs i)`. Requires the value tile to have
-              -- the same length as the offset tile.
+              | _ => none
+          | .tileNat n offs =>
+              -- Tile-valued offset (Nat): scatter. Iteration `i` writes
+              -- `vals i` to address `offs i`. Requires the value tile to
+              -- have the same length as the offset tile.
               match vval with
-              | .scalar _ => none
               | .tile m vals =>
                   if h : n = m then
                     some ((List.finRange n).foldl
                             (fun acc i =>
-                              acc.writeMem region (realToNat (offs i))
+                              acc.writeMem region (offs i)
                                           (vals (Fin.cast h i)))
                             s)
                   else none
+              | _ => none
+          | _ => none  -- ℝ-valued offset is rejected
       | _, _ => none
   | .forLoop _idx _n _body, _s =>
       -- TODO(P2): bounded-loop operational semantics. Plan: turn `Stmt` into
@@ -342,20 +349,35 @@ noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
 -- (definitions reduce, simp/norm_num apply, register-binding works)
 -- before we attempt anything substantive in P2.
 
--- Pure structural reduction: a constant op evaluates to its constant.
+-- Pure structural reduction: an `ℝ` constant evaluates to a `Value.scalar`.
 example : evalOp (.const 5) default = some (Value.scalar 5) := by
   unfold evalOp; rfl
 
--- `programId` reads `BlockState.pid`; default state has `pid = 0`.
-example : evalOp .programId default = some (Value.scalar 0) := by
-  unfold evalOp
-  show some (Value.scalar ((0 : Nat) : ℝ)) = some (Value.scalar 0)
-  norm_num
+-- A `Nat` constant evaluates to a `Value.scalarNat`.
+example : evalOp (.constNat 7) default = some (Value.scalarNat 7) := by
+  unfold evalOp; rfl
 
--- Trivial constant arithmetic: `(1 + 2 : ℝ) = 3` lifts through `evalOp`.
+-- `programId` reads `BlockState.pid` as a `Nat`; default state has `pid = 0`.
+example : evalOp .programId default = some (Value.scalarNat 0) := by
+  unfold evalOp; rfl
+
+-- Trivial `ℝ` arithmetic: `(1 + 2 : ℝ) = 3` lifts through `evalOp`.
 example : evalOp (.add (.const 1) (.const 2)) default = some (Value.scalar 3) := by
   show some (Value.scalar ((1 : ℝ) + 2)) = some (Value.scalar 3)
   norm_num
+
+-- Trivial `Nat` address arithmetic: `(2 + 3 : Nat) = 5` stays `Nat`.
+example : evalOp (.add (.constNat 2) (.constNat 3)) default
+            = some (Value.scalarNat 5) := by
+  unfold evalOp Value.bop; rfl
+
+-- Mixing ℝ and Nat in arithmetic is a semantic error.
+example : evalOp (.add (.const 1) (.constNat 2)) default = none := by
+  unfold evalOp Value.bop; rfl
+
+-- `exp` on a `Nat` value is rejected.
+example : evalOp (.exp .programId) default = none := by
+  unfold evalOp Value.uop; rfl
 
 -- `assign` writes to the register file.
 example (s : BlockState) :

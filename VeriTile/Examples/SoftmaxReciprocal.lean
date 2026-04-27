@@ -13,6 +13,7 @@ This file adds only the reciprocal-form kernel and the equivalence theorem.
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.DSL
+import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
 
 namespace VeriTile.Examples
@@ -21,16 +22,16 @@ open VeriTile.Triton
 
 /-- Stable softmax with precomputed reciprocal. Saves N-1 divisions vs
     the per-element-divide form (`stableSoftmaxKernel`). -/
-def softmaxRecipKernel (N : Nat) : Kernel := triton {
+def softmaxRecipKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(N) + tl.arange($(N))
-  x      := tl.load(X, offs)
+  x      := tl.load($(xReg), offs)
   m      := tl.max(x)
   e      := tl.exp(x - m)
   s      := tl.sum(e)
   inv_s  := 1 / s
   y      := e * inv_s
-  tl.store(Y, offs, y)
+  tl.store($(yReg), offs, y)
 }
 
 /-- The load-bearing math identity: division equals multiplication by
@@ -43,47 +44,39 @@ noncomputable def stableRecipSpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) (i : 
   Real.exp (xs i - m) * (1 / ∑ j, Real.exp (xs j - m))
 
 theorem softmax_recip_correct
+    (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (_h_x : InputLoaded s N xs) :
+    (_h_x : InputLoadedAt s xReg N xs) :
     ∀ i : Fin N,
-      observeY (exec (softmaxRecipKernel N) s) N s.pid i
+      observeAt (exec (softmaxRecipKernel xReg yReg N) s) yReg N s.pid i
         = some (stableRecipSpec xs (tileMax hN xs) i) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   intro i
-  have hcast :
-      ∀ k : Fin (n + 1),
-        realToNat ((↑s.pid : ℝ) * (↑(n + 1) : ℝ) + (↑(↑k : ℕ) : ℝ))
-          = s.pid * (n + 1) + k.val := by
-    intro k
-    unfold realToNat
-    have heq :
-        ((↑s.pid : ℝ) * (↑(n + 1) : ℝ) + (↑(↑k : ℕ) : ℝ))
-          = ((s.pid * (n + 1) + k.val : ℕ) : ℝ) := by
-      push_cast; ring
-    rw [heq]; exact Nat.floor_natCast _
+  -- The output offsets `s.pid * (n+1) + k.val` are injective in `k`.
   have h_inj : Function.Injective (fun k : Fin (n + 1) => s.pid * (n + 1) + k.val) := by
     intro a b hab
     exact Fin.ext (Nat.add_left_cancel hab)
-  simp [observeY, exec, softmaxRecipKernel, stepStmts, stepStmt, evalOp,
+  -- Post-RP2: address arithmetic stays in `Nat`, no `hcast` needed.
+  simp [observeAt, exec, softmaxRecipKernel, stepStmts, stepStmt, evalOp,
         Value.bop, Value.uop, Value.reduceSum, Value.reduceMax,
         BlockState.setReg, BlockState.readMem,
         stableRecipSpec, tileMax]
-  simp only [show ((n : ℝ) + 1) = ((n + 1 : ℕ) : ℝ) by push_cast; ring]
-  unfold InputLoaded at _h_x
-  simp_rw [hcast, _h_x]
+  unfold InputLoadedAt at _h_x
+  simp_rw [_h_x]
   exact BlockState.scatter_readback _ _ _ h_inj i
 
 /-- **Refinement: stable softmax with per-element division ≡ stable softmax
     with precomputed reciprocal.** Composes via `div_eq_mul_inv_real`. -/
 theorem softmax_reciprocal_refinement
+    (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : InputLoaded s N xs) :
+    (h_x : InputLoadedAt s xReg N xs) :
     ∀ i : Fin N,
-      observeY (exec (stableSoftmaxKernel N) s) N s.pid i =
-      observeY (exec (softmaxRecipKernel N) s) N s.pid i := by
+      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i =
+      observeAt (exec (softmaxRecipKernel  xReg yReg N) s) yReg N s.pid i := by
   intro i
-  rw [softmax_stable_correct N hN s xs h_x i,
-      softmax_recip_correct N hN s xs h_x i]
+  rw [softmax_stable_correct xReg yReg N hN s xs h_x i,
+      softmax_recip_correct  xReg yReg N hN s xs h_x i]
   congr 1
   -- Goal: stableSpec xs (tileMax hN xs) i = stableRecipSpec xs (tileMax hN xs) i
   -- These differ only by a / b vs a * (1/b).

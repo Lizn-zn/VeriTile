@@ -17,6 +17,7 @@ Triton kernel pair 的等价性.
 - [快速开始](#快速开始)
 - [其他示例](#其他示例)
 - [更多文档](#更多文档)
+- [研究问题](#研究问题)
 - [目录结构](#目录结构)
 - [路线图](#路线图)
 - [License](#license)
@@ -48,32 +49,39 @@ Phase A 包含:
 
 ## 快速开始
 
+> **关于 DSL 的约定:** VeriTile 里的 Triton kernel 是 *region-多态* 的——每个
+> kernel 都把 buffer region 作为 `RegionName` 参数,通过 `tl.load($(...), …)` /
+> `tl.store($(...), …, …)` 反引用注入。这意味着同一个 kernel 可以用任意 buffer
+> 名实例化,正确性定理对所有实例化都成立。**不允许** `tl.load(X, offs)` 这种
+> 裸标识符简写形式(会解析失败);设计动机见
+> [RP1](./Notes/research_problem_pointer_vs_named_region.md)。
+
 #### 1. 给定一个原始 Triton kernel. 例如 naive softmax:
 
 ```lean
-def naiveSoftmaxKernel (N : Nat) : Kernel := triton {
+def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load(X, offs)
+  x    := tl.load($(xReg), offs)
   e    := tl.exp(x)
   s    := tl.sum(e)
   y    := e / s
-  tl.store(Y, offs, y)
+  tl.store($(yReg), offs, y)
 }
 ```
 
 #### 2. 产生一个优化后的 Triton kernel. 这个优化可以由 Claude 生成, 也可以由人类专家提出. 例如数值稳定 softmax:
 
 ```lean
-def stableSoftmaxKernel (N : Nat) : Kernel := triton {
+def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load(X, offs)
+  x    := tl.load($(xReg), offs)
   m    := tl.max(x)
   e    := tl.exp(x - m)
   s    := tl.sum(e)
   y    := e / s
-  tl.store(Y, offs, y)
+  tl.store($(yReg), offs, y)
 }
 ```
 
@@ -81,11 +89,12 @@ def stableSoftmaxKernel (N : Nat) : Kernel := triton {
 
 ```lean
 theorem softmax_kernels_refinement
+    (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N -> Real)
-    (h_x : InputLoaded s N xs) :
+    (h_x : InputLoadedAt s xReg N xs) :
     forall i : Fin N,
-      observeY (exec (naiveSoftmaxKernel N) s) N s.pid i =
-      observeY (exec (stableSoftmaxKernel N) s) N s.pid i := by
+      observeAt (exec (naiveSoftmaxKernel  xReg yReg N) s) yReg N s.pid i =
+      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i := by
   sorry
 ```
 
@@ -99,14 +108,15 @@ scripts/prove.sh path/to/your_refinement_theorem.lean --max-cycles 5
 
 ```lean
 theorem softmax_kernels_refinement
+    (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N -> Real)
-    (h_x : InputLoaded s N xs) :
+    (h_x : InputLoadedAt s xReg N xs) :
     forall i : Fin N,
-      observeY (exec (naiveSoftmaxKernel N) s) N s.pid i =
-      observeY (exec (stableSoftmaxKernel N) s) N s.pid i := by
+      observeAt (exec (naiveSoftmaxKernel  xReg yReg N) s) yReg N s.pid i =
+      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i := by
   intro i
-  rw [softmax_naive_correct N hN s xs h_x i,
-      softmax_stable_correct N hN s xs h_x i]
+  rw [softmax_naive_correct  xReg yReg N hN s xs h_x i,
+      softmax_stable_correct xReg yReg N hN s xs h_x i]
   congr 1
   unfold naiveSpec stableSpec
   have h := naive_eq_stable xs (tileMax hN xs)
@@ -132,6 +142,25 @@ theorem softmax_kernels_refinement
 - [支持的 Triton 子集](./documents/TritonSubset_zh.md)
 - [LLM 证明 Wrapper](./scripts/README.md)
 - [LLM benchmark 协议](./bench/llm_eval/README.md)
+
+## 研究问题
+
+实施过程中需要权衡的设计决策记录在 research-problem notes 里。每条 note 说明
+问题、列举设计空间、给出推荐方案、并标注何时重新评估。本节是索引,完整讨论在
+[`Notes/`](./Notes) 下。
+
+- **RP1:指针 vs 命名 region** —— DSL 是否应该建模 first-class 指针(CUDA
+  风格 `x_ptr + offsets` 作为 value),还是用静态 region 名 + 动态 offset?
+  已决议:Phases A–D 全部使用命名 region。
+  → [research_problem_pointer_vs_named_region.md](./Notes/research_problem_pointer_vs_named_region.md)
+  (英文)
+
+- **RP2:地址类型 —— ℝ-统一 vs Nat-双化 `Value`** —— 运行时 `Value` 用
+  统一的 ℝ 装载并在访存边界用 `realToNat` 取整,还是把 ℝ(数据)与 Nat
+  (地址)分离成两个独立通道?已决议:双化;`realToNat` 删除;每个 kernel
+  证明里的 `hcast` boilerplate(全库 ~40 行)随之消失。
+  → [research_problem_address_typing.md](./Notes/research_problem_address_typing.md)
+  (英文)
 
 ## 目录结构
 

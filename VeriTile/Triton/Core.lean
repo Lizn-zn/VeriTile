@@ -31,18 +31,25 @@ Statement-level constructs (assignment, control flow, memory writes) live
 in `Stmt`.
 
 Notes on individual constructors:
+* `const c`     produces an `ℝ`-valued data scalar.
+* `constNat n`  produces a `Nat`-valued address/size scalar (used in
+                offset arithmetic, tile lengths, and program-id-derived
+                indices). See RP2 for the rationale behind separating the
+                `ℝ` and `Nat` channels.
 * `negInf` is a sentinel for `tl.full((), -inf)` used in `tl.full(... -float('inf'))`.
-* `programId` returns the current `tl.program_id(axis=0)` as a scalar.
-* `arange n` produces a length-`n` tile `[0, 1, ..., n-1]`.
+* `programId` returns the current `tl.program_id(axis=0)` as a `Nat` scalar.
+* `arange n` produces a length-`n` `Nat`-valued tile `[0, 1, ..., n-1]`.
 * `broadcast e n` lifts a scalar to a length-`n` tile.
 * `full n e` fills a length-`n` tile with the scalar value of `e`.
 * `reduceMax`/`reduceSum` are block-level `axis=0` reductions on a tile.
-* `load region offset` evaluates `offset` (must be a scalar after eval) and
-  reads the corresponding cell from `region`. Tile-valued offsets (gather)
-  are NOT modelled via this constructor; use a `forLoop` to fill a tile.
+* `load region offset` evaluates `offset` (a `Nat`-valued scalar or tile,
+  i.e. produced from `constNat` / `programId` / `arange` / `Nat`-arithmetic)
+  and reads from `region`. Scalar offset = single-cell read; tile offset
+  = gather.
 -/
 inductive Op : Type where
   | const     : ℝ → Op
+  | constNat  : Nat → Op
   | negInf    : Op
   | programId : Op
   | ref       : RegName → Op

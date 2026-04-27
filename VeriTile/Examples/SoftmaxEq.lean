@@ -28,6 +28,7 @@ import Mathlib.Tactic.FieldSimp
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.DSL
+import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
 
@@ -61,29 +62,32 @@ def stable_softmax(X, Y, N: tl.constexpr):
 ```
 -/
 
-/-! ## (b) Embedded Triton ASTs (using the `triton { ... }` macro) -/
+/-! ## (b) Embedded Triton ASTs (using the `triton { ... }` macro)
+
+Region names are kernel parameters; both kernels share the input region
+`xReg` (read-only) and output region `yReg`. -/
 
 /-- Naive softmax: `y = exp(x) / sum(exp(x))`. -/
-def naiveSoftmaxKernel (N : Nat) : Kernel := triton {
+def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load(X, offs)
+  x    := tl.load($(xReg), offs)
   e    := tl.exp(x)
   s    := tl.sum(e)
   y    := e / s
-  tl.store(Y, offs, y)
+  tl.store($(yReg), offs, y)
 }
 
 /-- Stable softmax: subtract the max before exponentiating. -/
-def stableSoftmaxKernel (N : Nat) : Kernel := triton {
+def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load(X, offs)
+  x    := tl.load($(xReg), offs)
   m    := tl.max(x)
   e    := tl.exp(x - m)
   s    := tl.sum(e)
   y    := e / s
-  tl.store(Y, offs, y)
+  tl.store($(yReg), offs, y)
 }
 
 /-! ## (c) Math denotation and equivalence -/
@@ -134,16 +138,11 @@ We mirror it for Triton:
 * the refinement theorem composes them via `naive_eq_stable`.
 -/
 
-/-- The `Y` region at offset `pid*N + i.val` after running a kernel from `s`. -/
-noncomputable def observeY
-    (sf : Option BlockState) (N : Nat) (basePid : Nat) (i : Fin N) : Option ℝ :=
-  sf.map (·.readMem "Y" (basePid * N + i.val))
-
-/-- What `naiveSoftmaxKernel` writes at `Y[pid*N + i]`. -/
+/-- What `naiveSoftmaxKernel` writes at the output region's `[pid*N + i]` cell. -/
 noncomputable def naiveSpec {N : Nat} (xs : Fin N → ℝ) (i : Fin N) : ℝ :=
   Real.exp (xs i) / ∑ j, Real.exp (xs j)
 
-/-- What `stableSoftmaxKernel` writes at `Y[pid*N + i]`. -/
+/-- What `stableSoftmaxKernel` writes at the output region's `[pid*N + i]` cell. -/
 noncomputable def stableSpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) (i : Fin N) : ℝ :=
   Real.exp (xs i - m) / ∑ j, Real.exp (xs j - m)
 
@@ -151,11 +150,6 @@ noncomputable def stableSpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) (i : Fin N
 noncomputable def tileMax {N : Nat} (h : 0 < N) (xs : Fin N → ℝ) : ℝ :=
   match N, h, xs with
   | _ + 1, _, xs => Finset.univ.sup' Finset.univ_nonempty xs
-
-/-- Pre-condition: the `X` region holds the input tile `xs` at the offsets
-    `[pid*N, pid*N + N - 1]` (which the kernel will gather). -/
-def InputLoaded (s : BlockState) (N : Nat) (xs : Fin N → ℝ) : Prop :=
-  ∀ i : Fin N, s.mem "X" (s.pid * N + i.val) = xs i
 
 /-- **Naive softmax kernel correctness.**
 
@@ -169,76 +163,54 @@ Proof outline (P2 work to discharge the `sorry`): the kernel has 7 statements
 `exec / stepStmts / stepStmt / evalOp / writeMem` yields the closed form.
 **Math content here: zero** — that's all isolated in `naive_eq_stable`. -/
 theorem softmax_naive_correct
+    (xReg yReg : RegionName)
     (N : Nat) (_hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (_h_x : InputLoaded s N xs) :
+    (_h_x : InputLoadedAt s xReg N xs) :
     ∀ i : Fin N,
-      observeY (exec (naiveSoftmaxKernel N) s) N s.pid i
+      observeAt (exec (naiveSoftmaxKernel xReg yReg N) s) yReg N s.pid i
         = some (naiveSpec xs i) := by
   intro i
-  -- Helper: the offset arithmetic at runtime collapses through `realToNat`.
-  have hcast :
-      ∀ k : Fin N,
-        realToNat ((↑s.pid : ℝ) * (↑N : ℝ) + (↑(↑k : ℕ) : ℝ)) = s.pid * N + k.val := by
-    intro k
-    unfold realToNat
-    have heq :
-        ((↑s.pid : ℝ) * (↑N : ℝ) + (↑(↑k : ℕ) : ℝ)) = ((s.pid * N + k.val : ℕ) : ℝ) := by
-      push_cast; ring
-    rw [heq]; exact Nat.floor_natCast _
   -- The output offsets `s.pid * N + k.val` are injective in `k`.
   have h_inj : Function.Injective (fun k : Fin N => s.pid * N + k.val) := by
     intro a b hab
     exact Fin.ext (Nat.add_left_cancel hab)
-  -- Reduce the kernel via the operational semantics. `writeMem` is left unfolded
-  -- (no `[simp]` attribute on it) so the resulting `foldl` matches the shape
-  -- required by `scatter_readback`.
-  simp [observeY, exec, naiveSoftmaxKernel, stepStmts, stepStmt, evalOp, Value.bop,
+  -- Reduce the kernel via the operational semantics. `writeMem` is left
+  -- unfolded so the resulting `foldl` matches the shape required by
+  -- `scatter_readback`. Post-RP2 the offset arithmetic stays in `Nat` end
+  -- to end, so no `hcast` lemma is needed.
+  simp [observeAt, exec, naiveSoftmaxKernel, stepStmts, stepStmt, evalOp, Value.bop,
         Value.uop, Value.reduceSum, BlockState.setReg, BlockState.readMem, naiveSpec]
-  -- Collapse the `realToNat` casts and substitute the loaded `X` cells with `xs`.
-  unfold InputLoaded at _h_x
-  simp_rw [hcast, _h_x]
+  -- Substitute the loaded input cells with `xs`.
+  unfold InputLoadedAt at _h_x
+  simp_rw [_h_x]
   -- The remaining goal is exactly the readback of an injective scatter store.
   exact BlockState.scatter_readback _ _ _ h_inj i
 
 /-- **Stable softmax kernel correctness.** Same scheme as above with the
     max-shift formula as the closed form. P2 polish. -/
 theorem softmax_stable_correct
+    (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (_h_x : InputLoaded s N xs) :
+    (_h_x : InputLoadedAt s xReg N xs) :
     ∀ i : Fin N,
-      observeY (exec (stableSoftmaxKernel N) s) N s.pid i
+      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i
         = some (stableSpec xs (tileMax hN xs) i) := by
   -- Case-split `N = n + 1` so that `Value.reduceMax` and `tileMax` reduce.
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   intro i
-  -- Helper: the offset arithmetic at runtime collapses through `realToNat`.
-  have hcast :
-      ∀ k : Fin (n + 1),
-        realToNat ((↑s.pid : ℝ) * (↑(n + 1) : ℝ) + (↑(↑k : ℕ) : ℝ))
-          = s.pid * (n + 1) + k.val := by
-    intro k
-    unfold realToNat
-    have heq :
-        ((↑s.pid : ℝ) * (↑(n + 1) : ℝ) + (↑(↑k : ℕ) : ℝ))
-          = ((s.pid * (n + 1) + k.val : ℕ) : ℝ) := by
-      push_cast; ring
-    rw [heq]; exact Nat.floor_natCast _
   -- The output offsets `s.pid * (n+1) + k.val` are injective in `k`.
   have h_inj : Function.Injective (fun k : Fin (n + 1) => s.pid * (n + 1) + k.val) := by
     intro a b hab
     exact Fin.ext (Nat.add_left_cancel hab)
-  -- Reduce the kernel via the operational semantics. `writeMem` is left unfolded
-  -- (no `[simp]` attribute on it) so the resulting `foldl` matches the shape
-  -- required by `scatter_readback`.
-  simp [observeY, exec, stableSoftmaxKernel, stepStmts, stepStmt, evalOp, Value.bop,
+  -- Reduce the kernel via the operational semantics. `writeMem` is left
+  -- unfolded so the resulting `foldl` matches the shape required by
+  -- `scatter_readback`. Post-RP2: address arithmetic in `Nat`, no `hcast`.
+  simp [observeAt, exec, stableSoftmaxKernel, stepStmts, stepStmt, evalOp, Value.bop,
         Value.uop, Value.reduceSum, Value.reduceMax, BlockState.setReg, BlockState.readMem,
         stableSpec, tileMax]
-  -- Normalize `(↑n + 1 : ℝ)` to `(↑(n + 1) : ℝ)` so `hcast` (which carries the
-  -- latter shape) can rewrite the runtime offsets.
-  simp only [show ((n : ℝ) + 1) = ((n + 1 : ℕ) : ℝ) by push_cast; ring]
-  -- Collapse the `realToNat` casts and substitute the loaded `X` cells with `xs`.
-  unfold InputLoaded at _h_x
-  simp_rw [hcast, _h_x]
+  -- Substitute the loaded input cells with `xs`.
+  unfold InputLoadedAt at _h_x
+  simp_rw [_h_x]
   -- The remaining goal is exactly the readback of an injective scatter store.
   exact BlockState.scatter_readback _ _ _ h_inj i
 
@@ -250,15 +222,16 @@ kernel's `exec`, read off the relevant `Y` cells, and assert pointwise equality.
 The proof composes the two correctness lemmas with `naive_eq_stable`, exactly
 mirroring `tnum_const_refinement`'s `obtain ... + simp + trivial`. -/
 theorem softmax_kernels_refinement
+    (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : InputLoaded s N xs) :
+    (h_x : InputLoadedAt s xReg N xs) :
     ∀ i : Fin N,
-      observeY (exec (naiveSoftmaxKernel N) s) N s.pid i =
-      observeY (exec (stableSoftmaxKernel N) s) N s.pid i := by
+      observeAt (exec (naiveSoftmaxKernel  xReg yReg N) s) yReg N s.pid i =
+      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i := by
   intro i
   -- Discharge each side via its correctness lemma (the ARM-style obtain).
-  rw [softmax_naive_correct  N hN s xs h_x i,
-      softmax_stable_correct N hN s xs h_x i]
+  rw [softmax_naive_correct  xReg yReg N hN s xs h_x i,
+      softmax_stable_correct xReg yReg N hN s xs h_x i]
   -- Now: `some (naiveSpec xs i) = some (stableSpec xs (tileMax hN xs) i)`.
   -- Reduce to the math identity and apply `naive_eq_stable`.
   congr 1

@@ -16,6 +16,7 @@ import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.DSL
+import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
 
 namespace VeriTile.Examples
@@ -23,26 +24,26 @@ namespace VeriTile.Examples
 open VeriTile.Triton
 
 /-- Direct log-sum-exp kernel: y = log(Σ exp(x)). -/
-def directLSEKernel (N : Nat) : Kernel := triton {
+def directLSEKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load(X, offs)
+  x    := tl.load($(xReg), offs)
   e    := tl.exp(x)
   s    := tl.sum(e)
   y    := tl.log(s)
-  tl.store(Y, pid, y)
+  tl.store($(yReg), pid, y)
 }
 
 /-- Shift-trick LSE kernel: y = m + log(Σ exp(x - m)) where m = max(x). -/
-def stableLSEKernel (N : Nat) : Kernel := triton {
+def stableLSEKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load(X, offs)
+  x    := tl.load($(xReg), offs)
   m    := tl.max(x)
   e    := tl.exp(x - m)
   s    := tl.sum(e)
   y    := m + tl.log(s)
-  tl.store(Y, pid, y)
+  tl.store($(yReg), pid, y)
 }
 
 /-- The load-bearing math identity for `log_sum_exp_refinement`.
@@ -66,12 +67,11 @@ theorem log_sum_exp_shift_invariant {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) (
 
 /-! ## Kernel-level refinement -/
 
-/-- The `Y` region at offset `basePid` after running an LSE kernel.
-    Unlike softmax, LSE writes a single scalar per program_id (at offset = pid),
-    so the observation reads one cell. -/
+/-- Read region `region` at offset `basePid` (single scalar per program_id).
+    Unlike softmax which writes a tile, LSE writes one cell per pid. -/
 noncomputable def observeLSE
-    (sf : Option BlockState) (basePid : Nat) : Option ℝ :=
-  sf.map (·.readMem "Y" basePid)
+    (sf : Option BlockState) (region : RegionName) (basePid : Nat) : Option ℝ :=
+  sf.map (·.readMem region basePid)
 
 /-- What `directLSEKernel` writes at `Y[pid]`. -/
 noncomputable def directLSESpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
@@ -83,71 +83,47 @@ noncomputable def stableLSESpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) : ℝ :
 
 /-- **Direct LSE kernel correctness.** Single-cell observation at Y[pid]. -/
 theorem direct_lse_correct
+    (xReg yReg : RegionName)
     (N : Nat) (_hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (_h_x : InputLoaded s N xs) :
-    observeLSE (exec (directLSEKernel N) s) s.pid
+    (_h_x : InputLoadedAt s xReg N xs) :
+    observeLSE (exec (directLSEKernel xReg yReg N) s) yReg s.pid
       = some (directLSESpec xs) := by
-  have hcast :
-      ∀ k : Fin N,
-        realToNat ((↑s.pid : ℝ) * (↑N : ℝ) + (↑(↑k : ℕ) : ℝ)) = s.pid * N + k.val := by
-    intro k
-    unfold realToNat
-    have heq :
-        ((↑s.pid : ℝ) * (↑N : ℝ) + (↑(↑k : ℕ) : ℝ)) = ((s.pid * N + k.val : ℕ) : ℝ) := by
-      push_cast; ring
-    rw [heq]; exact Nat.floor_natCast _
-  have hpid : realToNat ((↑s.pid : ℝ)) = s.pid := by
-    unfold realToNat
-    exact Nat.floor_natCast _
+  -- Post-RP2: address arithmetic stays in `Nat`, no `hcast` needed.
   simp [observeLSE, exec, directLSEKernel, stepStmts, stepStmt, evalOp,
         Value.bop, Value.uop, Value.reduceSum,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         directLSESpec]
-  unfold InputLoaded at _h_x
-  simp_rw [hcast, _h_x, hpid]
-  simp
+  unfold InputLoadedAt at _h_x
+  simp_rw [_h_x]
 
 /-- **Stable LSE kernel correctness.** Single-cell observation; closed form
     is `m + log(Σ exp(x - m))` where `m = tileMax xs`. -/
 theorem stable_lse_correct
+    (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (_h_x : InputLoaded s N xs) :
-    observeLSE (exec (stableLSEKernel N) s) s.pid
+    (_h_x : InputLoadedAt s xReg N xs) :
+    observeLSE (exec (stableLSEKernel xReg yReg N) s) yReg s.pid
       = some (stableLSESpec xs (tileMax hN xs)) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-  have hcast :
-      ∀ k : Fin (n + 1),
-        realToNat ((↑s.pid : ℝ) * (↑(n + 1) : ℝ) + (↑(↑k : ℕ) : ℝ))
-          = s.pid * (n + 1) + k.val := by
-    intro k
-    unfold realToNat
-    have heq :
-        ((↑s.pid : ℝ) * (↑(n + 1) : ℝ) + (↑(↑k : ℕ) : ℝ))
-          = ((s.pid * (n + 1) + k.val : ℕ) : ℝ) := by
-      push_cast; ring
-    rw [heq]; exact Nat.floor_natCast _
-  have hpid : realToNat ((↑s.pid : ℝ)) = s.pid := by
-    unfold realToNat
-    exact Nat.floor_natCast _
+  -- Post-RP2: address arithmetic stays in `Nat`, no `hcast` needed.
   simp [observeLSE, exec, stableLSEKernel, stepStmts, stepStmt, evalOp,
         Value.bop, Value.uop, Value.reduceSum, Value.reduceMax,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         stableLSESpec, tileMax]
-  simp only [show ((n : ℝ) + 1) = ((n + 1 : ℕ) : ℝ) by push_cast; ring]
-  unfold InputLoaded at _h_x
-  simp_rw [hcast, _h_x, hpid]
-  simp
+  unfold InputLoadedAt at _h_x
+  simp_rw [_h_x]
 
 /-- **Refinement: `directLSEKernel` and `stableLSEKernel` produce the same
     `Y[pid]` value.** Composes the two correctness lemmas via the math
     identity `log_sum_exp_shift_invariant`. -/
 theorem log_sum_exp_refinement
+    (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
-    (h_x : InputLoaded s N xs) :
-    observeLSE (exec (directLSEKernel N) s) s.pid =
-    observeLSE (exec (stableLSEKernel N) s) s.pid := by
-  rw [direct_lse_correct N hN s xs h_x,
-      stable_lse_correct N hN s xs h_x]
+    (h_x : InputLoadedAt s xReg N xs) :
+    observeLSE (exec (directLSEKernel xReg yReg N) s) yReg s.pid =
+    observeLSE (exec (stableLSEKernel xReg yReg N) s) yReg s.pid := by
+  rw [direct_lse_correct xReg yReg N hN s xs h_x,
+      stable_lse_correct xReg yReg N hN s xs h_x]
   congr 1
   unfold directLSESpec stableLSESpec
   exact log_sum_exp_shift_invariant hN xs (tileMax hN xs)
