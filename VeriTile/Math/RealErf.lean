@@ -323,6 +323,38 @@ theorem one_sub_realErf_le_exp_neg {z : ℝ} (hz : 1 ≤ z) :
   have h_tail := integral_gaussianKernel_Ioi_le_exp_neg hz
   exact mul_le_mul_of_nonneg_left h_tail hcoeff
 
+/-- Sharper Gaussian-tail bound for `realErf`: for `z ≥ 1`,
+`1 − realErf z ≤ (2 / √π) · exp (−z²) / z`.
+
+The proof compares `exp (−t²)` on `t ∈ (z, ∞)` with `exp (−z·t)` and then
+uses the closed form for the exponential half-line integral. -/
+theorem one_sub_realErf_le_exp_neg_sq_div {z : ℝ} (hz : 1 ≤ z) :
+    1 - realErf z ≤ (2 / Real.sqrt Real.pi) * (Real.exp (-(z * z)) / z) := by
+  rw [one_sub_realErf_eq (by linarith : (0:ℝ) ≤ z)]
+  have hz_pos : 0 < z := by linarith
+  have h_pointwise : ∀ t ∈ Ioi z, gaussianKernel t ≤ Real.exp ((-z) * t) := by
+    intro t ht
+    have hzt : z ≤ t := le_of_lt ht
+    have hz_nonneg : 0 ≤ z := hz_pos.le
+    have ht_nonneg : 0 ≤ t := by linarith
+    have hsq : z * t ≤ t * t := by nlinarith
+    unfold gaussianKernel
+    exact Real.exp_le_exp.mpr (by nlinarith)
+  have h_int_exp : IntegrableOn (fun t : ℝ => Real.exp ((-z) * t)) (Ioi z) :=
+    integrableOn_exp_mul_Ioi (by linarith : (-z : ℝ) < 0) z
+  have h_int_gauss : IntegrableOn gaussianKernel (Ioi z) :=
+    integrable_gaussianKernel.integrableOn
+  have h_tail :
+      ∫ t in Ioi z, gaussianKernel t ≤ Real.exp (-(z * z)) / z := by
+    calc ∫ t in Ioi z, gaussianKernel t
+        ≤ ∫ t in Ioi z, Real.exp ((-z) * t) := by
+            refine setIntegral_mono_on h_int_gauss h_int_exp measurableSet_Ioi ?_
+            exact h_pointwise
+      _ = -Real.exp ((-z) * z) / (-z) := by
+            exact integral_exp_mul_Ioi (by linarith : (-z : ℝ) < 0) z
+      _ = Real.exp (-(z * z)) / z := by ring_nf
+  exact mul_le_mul_of_nonneg_left h_tail two_div_sqrt_pi_pos.le
+
 /-- Symmetric tail bound: for `z ≤ -1`,
 `realErf z + 1 ≤ (2 / √π) · exp(z)`. Follows from oddness. -/
 theorem realErf_add_one_le_exp {z : ℝ} (hz : z ≤ -1) :
