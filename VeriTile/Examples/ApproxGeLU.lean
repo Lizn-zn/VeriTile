@@ -976,6 +976,140 @@ private lemma poly_diff_with_correction_bound {x : ℝ} (hx : |x| ≤ 1/2) :
         gcongr
     _ ≤ 1/3000 := by norm_num
 
+/-! ### Closure for `|x| ≤ 1/2` via the combined Taylor bound
+
+For `|x| ≤ 1/2`, all three pieces of `gelu_gap_taylor_decomposition` are
+explicitly bounded:
+* `|u|^7/7 ≤ 1/3500`  (since `|u| ≤ 41/100`),
+* the polynomial coefficient gap `≤ 1/3000`,
+* the realErf Taylor remainder `≤ 1/60000`.
+
+Then `|approx − exact| = (|x|/2)·|tanh u − realErf z| ≤ (1/4)·(1/3500 + 1/3000 + 1/60000) < 1/1000`. -/
+
+/-- For `|x| ≤ 1/2`, the inner argument `u = c·(x + k·x³)` of the tanh
+approximation satisfies `|u| ≤ 41/100`. -/
+private lemma u_bound_at_half {x : ℝ} (hx : |x| ≤ 1/2) :
+    |(7978845608028654 / 10000000000000000 : ℝ) *
+        (x + (44715 / 1000000) * (x * x * x))| ≤ 41 / 100 := by
+  rw [abs_mul]
+  have hc_pos : (0 : ℝ) < 7978845608028654 / 10000000000000000 := by norm_num
+  rw [abs_of_pos hc_pos]
+  have h_x3_le : |x|^3 ≤ (1/2)^3 := pow_le_pow_left₀ (abs_nonneg x) hx 3
+  have h_inner : |x + (44715 / 1000000 : ℝ) * (x * x * x)|
+        ≤ |x| + (44715 / 1000000) * |x|^3 := by
+    have hb := abs_add_le x ((44715 / 1000000 : ℝ) * (x * x * x))
+    have h_eq : |(44715 / 1000000 : ℝ) * (x * x * x)|
+          = (44715 / 1000000) * |x|^3 := by
+      rw [abs_mul, show |(44715 / 1000000 : ℝ)| = 44715 / 1000000 from by norm_num]
+      congr 1
+      rw [show x * x * x = x^3 from by ring, abs_pow]
+    linarith
+  calc (7978845608028654 / 10000000000000000 : ℝ) *
+            |x + (44715 / 1000000) * (x * x * x)|
+      ≤ (7978845608028654 / 10000000000000000) *
+          (|x| + (44715 / 1000000) * |x|^3) := by
+            apply mul_le_mul_of_nonneg_left h_inner hc_pos.le
+    _ ≤ (7978845608028654 / 10000000000000000) *
+          ((1/2) + (44715 / 1000000) * (1/2)^3) := by
+            apply mul_le_mul_of_nonneg_left _ hc_pos.le
+            have hk_pos : (0 : ℝ) ≤ 44715 / 1000000 := by norm_num
+            have h := mul_le_mul_of_nonneg_left h_x3_le hk_pos
+            linarith
+    _ ≤ 41/100 := by norm_num
+
+/-- For `|x| ≤ 1/2`, the tanh Taylor remainder satisfies `|u|^7/7 ≤ 1/3500`. -/
+private lemma tanh_residual_at_half {x : ℝ} (hx : |x| ≤ 1/2) :
+    |(7978845608028654 / 10000000000000000 : ℝ) *
+        (x + (44715 / 1000000) * (x * x * x))|^7 / 7
+      ≤ 1 / 3500 := by
+  have hu := u_bound_at_half hx
+  have hu_nn : (0 : ℝ) ≤ |(7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x))| := abs_nonneg _
+  have hu7 : |(7978845608028654 / 10000000000000000 : ℝ) *
+                (x + (44715 / 1000000) * (x * x * x))|^7
+              ≤ (41/100)^7 :=
+    pow_le_pow_left₀ hu_nn hu 7
+  calc |(7978845608028654 / 10000000000000000 : ℝ) *
+            (x + (44715 / 1000000) * (x * x * x))|^7 / 7
+      ≤ (41/100)^7 / 7 := by
+        exact div_le_div_of_nonneg_right hu7 (by norm_num)
+    _ ≤ 1/3500 := by norm_num
+
+/-- For `|x| ≤ 1/2`, `|x/√2| ≤ 1/2`. -/
+private lemma z_bound_at_half {x : ℝ} (hx : |x| ≤ 1/2) :
+    |x / Real.sqrt 2| ≤ 1/2 := by
+  have hsqrt2_pos : (0 : ℝ) < Real.sqrt 2 := Real.sqrt_pos.mpr (by norm_num)
+  have hsqrt2_ge_1 : (1 : ℝ) ≤ Real.sqrt 2 := by
+    rw [show (1:ℝ) = Real.sqrt 1 from Real.sqrt_one.symm]
+    exact Real.sqrt_le_sqrt (by norm_num)
+  rw [abs_div, abs_of_pos hsqrt2_pos]
+  rw [div_le_iff₀ hsqrt2_pos]
+  nlinarith [hx, hsqrt2_ge_1]
+
+/-- For `|x| ≤ 1/2`, the realErf Taylor remainder satisfies
+`(2/√π)·5·|z|^9/864 ≤ 1/60000`. -/
+private lemma erf_residual_at_half {x : ℝ} (hx : |x| ≤ 1/2) :
+    (2 / Real.sqrt Real.pi) * (5 * |x / Real.sqrt 2|^9 / 864) ≤ 1 / 60000 := by
+  have hpi_pos : (0 : ℝ) < Real.pi := Real.pi_pos
+  have hsqrt_pi_pos : (0 : ℝ) < Real.sqrt Real.pi := Real.sqrt_pos.mpr hpi_pos
+  -- 2/√π ≤ 4/3 since √π ≥ 3/2, i.e., π ≥ 9/4.
+  have hpi_ge : (3/2 : ℝ) ≤ Real.sqrt Real.pi := by
+    rw [show (3/2:ℝ) = Real.sqrt ((3/2)^2) from (Real.sqrt_sq (by norm_num)).symm]
+    apply Real.sqrt_le_sqrt
+    have : ((3/2:ℝ))^2 = 9/4 := by norm_num
+    rw [this]; linarith [Real.pi_gt_three]
+  have h_inv_pi : (2 : ℝ) / Real.sqrt Real.pi ≤ 4/3 := by
+    rw [div_le_div_iff₀ hsqrt_pi_pos (by norm_num : (0:ℝ) < 3)]
+    nlinarith [hpi_ge]
+  have hz := z_bound_at_half hx
+  have hz_nn : (0 : ℝ) ≤ |x / Real.sqrt 2| := abs_nonneg _
+  have hz9 : |x / Real.sqrt 2|^9 ≤ (1/2)^9 := pow_le_pow_left₀ hz_nn hz 9
+  calc (2 / Real.sqrt Real.pi) * (5 * |x / Real.sqrt 2|^9 / 864)
+      ≤ (4/3 : ℝ) * (5 * (1/2)^9 / 864) := by
+        apply mul_le_mul h_inv_pi
+        · apply div_le_div_of_nonneg_right
+          · exact mul_le_mul_of_nonneg_left hz9 (by norm_num)
+          · norm_num
+        · positivity
+        · norm_num
+    _ ≤ 1/60000 := by norm_num
+
+/-- Closure for `|x| ≤ 1/2`: gelu approximation error is at most `1/1000`. -/
+private theorem approx_gelu_error_bound_small {x : ℝ} (hx : |x| ≤ 1/2) :
+    |approxGeLUScalar x - exactGeLUScalar x| ≤ 1 / 1000 := by
+  rw [approxGeLUScalar_sub_exactGeLUScalar x]
+  have hx_le_one : |x| ≤ 1 := by linarith
+  have h_taylor := gelu_gap_taylor_decomposition hx_le_one
+  have h_tanh := tanh_residual_at_half hx
+  have h_poly := poly_diff_with_correction_bound hx
+  have h_erf := erf_residual_at_half hx
+  have h_gap_bound :
+      |Real.tanh ((7978845608028654 / 10000000000000000 : ℝ) *
+                    (x + (44715 / 1000000) * (x * x * x))) -
+          realErf (x / Real.sqrt 2)|
+        ≤ 1/3500 + 1/3000 + 1/60000 := by
+    calc |Real.tanh _ - realErf _|
+        ≤ |(7978845608028654 / 10000000000000000 : ℝ) *
+                (x + (44715 / 1000000) * (x * x * x))|^7 / 7
+          + |tanhTaylor5 _ - (2 / Real.sqrt Real.pi) * realErfTaylor7 _|
+          + (2 / Real.sqrt Real.pi) * (5 * |x / Real.sqrt 2|^9 / 864) :=
+            h_taylor
+      _ ≤ 1/3500 + 1/3000 + 1/60000 := by linarith
+  -- Now: |approx − exact| = |x/2| · |tanh u − realErf z| ≤ (1/4) · (1/3500+1/3000+1/60000) < 1/1000.
+  rw [abs_mul, abs_div, abs_two]
+  have hx2_le : |x| / 2 ≤ 1/4 := by linarith
+  have hx2_nn : 0 ≤ |x| / 2 := by positivity
+  have h_combined : 1/3500 + 1/3000 + (1/60000 : ℝ) ≤ 1/700 := by norm_num
+  calc |x| / 2 *
+          |Real.tanh _ - realErf _|
+      ≤ |x| / 2 * (1/3500 + 1/3000 + 1/60000) :=
+          mul_le_mul_of_nonneg_left h_gap_bound hx2_nn
+    _ ≤ |x| / 2 * (1/700) := by
+          exact mul_le_mul_of_nonneg_left h_combined hx2_nn
+    _ ≤ 1/4 * (1/700) := by
+          exact mul_le_mul_of_nonneg_right hx2_le (by norm_num)
+    _ ≤ 1/1000 := by norm_num
+
 /-! ## Correctness and Approximation Statements -/
 
 /-- **`approxGeLUKernel` correctness against the approximate GeLU expression.**
@@ -1006,26 +1140,29 @@ theorem approx_gelu_kernel_correct
 /-- Target error tolerance for the standard tanh/sigmoid GeLU approximation. -/
 noncomputable def approxGeLUEps : ℝ := 1 / 1000
 
-/-- Quantitative gap remaining for the global `approxGeLUEps = 1e-3` bound,
-restricted to the medium range `1/1000 < |x| < 20`.
+/-- Quantitative gap for the global `approxGeLUEps = 1e-3` bound, restricted
+to the medium range `1/1000 < |x| < 20`. The proof dispatches on whether
+`|x| ≤ 1/2`:
 
-The global `|x| > 1/1000` case splits into two pieces:
-
-* **Very-large `|x| ≥ 20`** — closed by `approx_gelu_error_bound_very_large`,
-  which combines `abs_approxGeLUScalar_sub_exactGeLUScalar_tail_pos` with the
-  monotonicity helper `x_exp_neg_ax_mono` and the concrete numeric bound
-  `gelu_tail_at_twenty`.
-* **Medium `1/1000 < |x| < 20`** — the remaining open analytic content,
-  carried by this theorem. Closing it requires either certified interval
-  arithmetic across `[1/1000, 20]` or a Taylor-with-remainder analysis using
-  `realErf_hasDerivAt`. The asymptotic tail bounds are too loose on this
-  bounded window to give `≤ 1/1000`. Out of scope for the current snapshot. -/
+* **Small `|x| ≤ 1/2`** — closed by `approx_gelu_error_bound_small`, which
+  applies the three-piece Taylor decomposition `gelu_gap_taylor_decomposition`
+  with explicit numerical bounds on each piece.
+* **Mid `1/2 < |x| < 20`** — the remaining open analytic content. The current
+  Taylor expansion (5th order tanh, 7th order erf) is too loose on this
+  range; closing it requires going to higher Taylor order or splitting the
+  range further with sub-case-specific bounds. Out of scope for the current
+  snapshot. -/
 theorem approx_gelu_error_bound_medium {x : ℝ}
-    (_hxlow : approxGeLUEps < |x|) (_hxhigh : |x| < 20) :
+    (_hxlow : approxGeLUEps < |x|) (hxhigh : |x| < 20) :
     |approxGeLUScalar x - exactGeLUScalar x| ≤ approxGeLUEps := by
-  -- Medium range: the gap is at its empirical max here; tail bounds
-  -- are insufficient. Requires certified numerics or Taylor analysis.
-  sorry
+  rcases le_or_gt (|x|) (1/2) with hsmall | hmid
+  · -- Small subcase: closed via the Taylor analysis.
+    show |approxGeLUScalar x - exactGeLUScalar x| ≤ 1 / 1000
+    exact approx_gelu_error_bound_small hsmall
+  · -- Mid subcase 1/2 < |x| < 20: still open; tail bounds too loose, lower-
+    -- order Taylor remainder dominates. Future work: higher-order Taylor or
+    -- subdivided bounds.
+    sorry
 
 /-- The `|x| > 1/1000` half of `approx_gelu_error_bound`. Dispatches via
 `approx_gelu_error_bound_very_large` for `|x| ≥ 20` and
