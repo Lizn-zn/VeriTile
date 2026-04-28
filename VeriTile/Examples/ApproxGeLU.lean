@@ -559,6 +559,87 @@ private theorem approx_gelu_error_bound_very_large {x : ℝ} (hx : 20 ≤ |x|) :
     -- |approx(-x) - exact(-x)| ≤ 1/1000, and `_neg` says it equals |approx x - exact x|.
     rwa [approxSubExact_neg] at h_pos
 
+/-! ## Structural Taylor decomposition of the gelu gap
+
+For `|x| ≤ 1`, the gap `|tanh u - realErf z|` (with `u = c·(x + k·x³)` and
+`z = x/√2`) splits via triangle inequality into three pieces:
+* the tanh Taylor remainder `|u|^7/7`,
+* the polynomial coefficient difference `|P_t(u) - (2/√π)·P_e(z)|`, and
+* the realErf Taylor remainder `(2/√π) · 5|z|^9/864`.
+
+The first and third pieces are already discharged by the wiring lemmas
+`abs_tanh_at_gelu_arg_sub_taylor5_le` and `abs_realErf_at_gelu_arg_sub_taylor7_le`.
+The middle piece is purely algebraic — it is a polynomial in `x` whose
+coefficients involve `c`, `k`, and the irrational constant `c_exact = √(2/π)`. -/
+
+/-- The two tanh Taylor coefficients sit naturally as `u - u³/3 + 2u⁵/15`. -/
+private noncomputable def tanhTaylor5 (u : ℝ) : ℝ := u - u^3/3 + 2 * u^5/15
+
+/-- The four realErf Taylor coefficients sit naturally as the polynomial
+`z - z³/3 + z⁵/10 - z⁷/42` (still to be multiplied by the `2/√π` prefactor). -/
+private noncomputable def realErfTaylor7 (z : ℝ) : ℝ :=
+  z - z^3/3 + z^5/10 - z^7/42
+
+/-- Three-piece triangle decomposition of the inner gelu gap. For `|x| ≤ 1`,
+the difference `|tanh u - realErf z|` is dominated by the sum of the two
+Taylor residual bounds plus the explicit polynomial coefficient difference
+`|tanhTaylor5(u) - (2/√π) · realErfTaylor7(z)|`. -/
+lemma gelu_gap_taylor_decomposition {x : ℝ} (hx : |x| ≤ 1) :
+    |Real.tanh ((7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x))) -
+        realErf (x / Real.sqrt 2)|
+      ≤ |(7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x))| ^ 7 / 7
+        + |tanhTaylor5
+              ((7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x)))
+            - (2 / Real.sqrt Real.pi) *
+                realErfTaylor7 (x / Real.sqrt 2)|
+        + (2 / Real.sqrt Real.pi) * (5 * |x / Real.sqrt 2| ^ 9 / 864) := by
+  set u : ℝ := (7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x)) with hu_def
+  set z : ℝ := x / Real.sqrt 2 with hz_def
+  have h_tanh_res : |Real.tanh u - tanhTaylor5 u| ≤ |u| ^ 7 / 7 := by
+    have h := abs_tanh_at_gelu_arg_sub_taylor5_le hx
+    show |Real.tanh u - (u - u^3/3 + 2 * u^5/15)| ≤ |u| ^ 7 / 7
+    convert h using 2
+  have h_erf_res :
+      |realErf z - (2 / Real.sqrt Real.pi) * realErfTaylor7 z|
+        ≤ (2 / Real.sqrt Real.pi) * (5 * |z| ^ 9 / 864) := by
+    have h := abs_realErf_at_gelu_arg_sub_taylor7_le hx
+    show |realErf z - (2 / Real.sqrt Real.pi) *
+            (z - z^3/3 + z^5/10 - z^7/42)|
+          ≤ (2 / Real.sqrt Real.pi) * (5 * |z| ^ 9 / 864)
+    convert h using 2
+  -- Triangle:  |tanh u − realErf z|
+  --         = |(tanh u − P_t(u)) + (P_t(u) − (2/√π)·P_e(z))
+  --                              + ((2/√π)·P_e(z) − realErf z)|
+  --        ≤ |tanh u − P_t(u)| + |P_t(u) − (2/√π)·P_e(z)|
+  --                            + |realErf z − (2/√π)·P_e(z)|
+  have h_split :
+      Real.tanh u - realErf z
+        = (Real.tanh u - tanhTaylor5 u)
+            + (tanhTaylor5 u - (2 / Real.sqrt Real.pi) * realErfTaylor7 z)
+            - (realErf z - (2 / Real.sqrt Real.pi) * realErfTaylor7 z) := by
+    ring
+  rw [h_split]
+  calc |(Real.tanh u - tanhTaylor5 u)
+          + (tanhTaylor5 u - (2 / Real.sqrt Real.pi) * realErfTaylor7 z)
+          - (realErf z - (2 / Real.sqrt Real.pi) * realErfTaylor7 z)|
+      ≤ |(Real.tanh u - tanhTaylor5 u)
+            + (tanhTaylor5 u - (2 / Real.sqrt Real.pi) * realErfTaylor7 z)|
+        + |realErf z - (2 / Real.sqrt Real.pi) * realErfTaylor7 z| :=
+            abs_sub _ _
+    _ ≤ (|Real.tanh u - tanhTaylor5 u|
+            + |tanhTaylor5 u - (2 / Real.sqrt Real.pi) * realErfTaylor7 z|)
+        + |realErf z - (2 / Real.sqrt Real.pi) * realErfTaylor7 z| := by
+            gcongr
+            exact abs_add_le _ _
+    _ ≤ (|u| ^ 7 / 7
+            + |tanhTaylor5 u - (2 / Real.sqrt Real.pi) * realErfTaylor7 z|)
+        + (2 / Real.sqrt Real.pi) * (5 * |z| ^ 9 / 864) := by
+            gcongr
+
 /-! ## Correctness and Approximation Statements -/
 
 /-- **`approxGeLUKernel` correctness against the approximate GeLU expression.**
