@@ -12,3 +12,7 @@
 
 # scripts/prove.sh log output
 /Logs/
+
+# Throwaway numerical scout scripts; verification scripts that need to be
+# preserved live as Lean comments next to the corresponding axiom or theorem.
+/scratch/
