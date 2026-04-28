@@ -412,4 +412,229 @@ theorem abs_tanh_sub_taylor5_le {z : ℝ} (hz : |z| ≤ 1) :
       exact mul_neg_of_neg_of_pos hz_neg h_z6_pos
     rw [h_z7]; linarith
 
+/-- Pointwise bound on the ninth-order Taylor remainder integrand:
+`|t² − tanh²(t) − 2t⁴/3 + 17t⁶/45| ≤ t⁸` for `|t| ≤ 1`. Derived by writing
+`tanh t = (t − t³/3 + 2t⁵/15) + ε(t)` with `|ε(t)| ≤ |t|⁷/7` (the septenary
+bound), expanding `tanh²(t)`, and bounding each error term using `|t| ≤ 1`.
+The numeric constant `1517/3675 < 1` gives the `≤ t⁸` envelope. -/
+private lemma tanh_ninth_integrand_bound {t : ℝ} (ht : |t| ≤ 1) :
+    |t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45| ≤ t ^ 8 := by
+  have h_septenary := abs_tanh_sub_taylor5_le ht
+  set ε : ℝ := Real.tanh t - (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) with hε_def
+  have h_ε_bound : |ε| ≤ |t| ^ 7 / 7 := by rw [hε_def]; exact h_septenary
+  have h_tanh : Real.tanh t = (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) + ε := by
+    rw [hε_def]; ring
+  have h_eq : t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45
+        = (4 * t ^ 8 / 45 - 4 * t ^ 10 / 225)
+            - 2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε - ε ^ 2 := by
+    rw [h_tanh]; ring
+  rw [h_eq]
+  -- Bound |poly5(t)| ≤ |t| on |t| ≤ 1.
+  have h_poly5_bound : |t - t ^ 3 / 3 + 2 * t ^ 5 / 15| ≤ |t| := by
+    rw [show t - t ^ 3 / 3 + 2 * t ^ 5 / 15 = t * (1 - t ^ 2 / 3 + 2 * t ^ 4 / 15)
+          from by ring, abs_mul]
+    have h_t2_le : t ^ 2 ≤ 1 := by
+      rw [show t ^ 2 = |t| ^ 2 from (sq_abs _).symm]
+      exact pow_le_one₀ (abs_nonneg _) ht
+    have h_t4_le : t ^ 4 ≤ 1 := by
+      rw [show t ^ 4 = (t ^ 2) ^ 2 from by ring]
+      exact pow_le_one₀ (sq_nonneg _) h_t2_le
+    have h_factor : |1 - t ^ 2 / 3 + 2 * t ^ 4 / 15| ≤ 1 := by
+      rw [abs_le]
+      constructor <;> nlinarith [sq_nonneg t, sq_nonneg (t ^ 2)]
+    nlinarith [abs_nonneg t, h_factor]
+  have h_t_eq_t8 : t ^ 8 = |t| ^ 8 := by
+    rw [show (8 : ℕ) = 2 * 4 from rfl, pow_mul, pow_mul, sq_abs]
+  have h_t10_le : |t| ^ 10 ≤ |t| ^ 8 := by
+    have h_t2_le : |t| ^ 2 ≤ 1 := pow_le_one₀ (abs_nonneg _) ht
+    nlinarith [sq_nonneg (|t| ^ 4), abs_nonneg t]
+  have h_t14_le : |t| ^ 14 ≤ |t| ^ 8 :=
+    pow_le_pow_of_le_one (abs_nonneg t) ht (by norm_num)
+  -- Now triangle inequality on the three-piece sum.
+  calc |(4 * t ^ 8 / 45 - 4 * t ^ 10 / 225)
+          - 2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε - ε ^ 2|
+      ≤ |4 * t ^ 8 / 45 - 4 * t ^ 10 / 225|
+          + |2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε| + |ε ^ 2| := by
+        have hr : (4 * t ^ 8 / 45 - 4 * t ^ 10 / 225)
+                  - 2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε - ε ^ 2
+                = ((4 * t ^ 8 / 45 - 4 * t ^ 10 / 225)
+                    + (-(2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε))) + (-(ε ^ 2)) := by
+          ring
+        rw [hr]
+        calc _ ≤ |((4 * t ^ 8 / 45 - 4 * t ^ 10 / 225)
+                    + (-(2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε)))| + |(-(ε ^ 2))| :=
+                abs_add_le _ _
+          _ ≤ (|(4 * t ^ 8 / 45 - 4 * t ^ 10 / 225)|
+                + |(-(2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε))|) + |(-(ε ^ 2))| := by
+              gcongr; exact abs_add_le _ _
+          _ = |4 * t ^ 8 / 45 - 4 * t ^ 10 / 225|
+              + |2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε| + |ε ^ 2| := by
+              rw [abs_neg, abs_neg]
+    _ ≤ 4 * |t| ^ 8 / 45 + 4 * |t| ^ 10 / 225
+          + 2 * |t| * (|t| ^ 7 / 7) + (|t| ^ 7 / 7) ^ 2 := by
+        have h_first : |4 * t ^ 8 / 45 - 4 * t ^ 10 / 225|
+              ≤ 4 * |t| ^ 8 / 45 + 4 * |t| ^ 10 / 225 := by
+          have hb := abs_sub (4 * t ^ 8 / 45) (4 * t ^ 10 / 225)
+          rw [abs_div, abs_div, abs_mul, abs_mul,
+              show |(4:ℝ)| = 4 from by norm_num,
+              show |(45:ℝ)| = 45 from by norm_num,
+              show |(225:ℝ)| = 225 from by norm_num,
+              show |t ^ 8| = |t| ^ 8 from abs_pow t 8,
+              show |t ^ 10| = |t| ^ 10 from abs_pow t 10] at hb
+          linarith
+        have h_mid : |2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε|
+              ≤ 2 * |t| * (|t| ^ 7 / 7) := by
+          rw [show 2 * (t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε
+                = 2 * ((t - t ^ 3 / 3 + 2 * t ^ 5 / 15) * ε) from by ring,
+              abs_mul, abs_mul,
+              show |(2 : ℝ)| = 2 from by norm_num]
+          have h := mul_le_mul h_poly5_bound h_ε_bound (abs_nonneg _) (abs_nonneg _)
+          linarith
+        have h_last : |ε ^ 2| ≤ (|t| ^ 7 / 7) ^ 2 := by
+          rw [show ε ^ 2 = |ε| ^ 2 from (sq_abs _).symm]
+          rw [show |(|ε| ^ 2)| = |ε| ^ 2 from abs_of_nonneg (sq_nonneg _)]
+          exact pow_le_pow_left₀ (abs_nonneg _) h_ε_bound 2
+        linarith
+    _ = |t| ^ 8 * (4 / 45 + 2 / 7) + 4 * |t| ^ 10 / 225 + |t| ^ 14 / 49 := by ring
+    _ ≤ |t| ^ 8 * (4 / 45 + 2 / 7) + 4 * |t| ^ 8 / 225 + |t| ^ 8 / 49 := by
+        have h1 : 4 * |t| ^ 10 / 225 ≤ 4 * |t| ^ 8 / 225 := by
+          have := h_t10_le
+          linarith
+        have h2 : |t| ^ 14 / 49 ≤ |t| ^ 8 / 49 := by
+          have := h_t14_le
+          linarith
+        linarith
+    _ = |t| ^ 8 * (1517 / 3675) := by ring
+    _ ≤ |t| ^ 8 := by
+        have hnn : 0 ≤ |t| ^ 8 := by positivity
+        nlinarith
+    _ = t ^ 8 := h_t_eq_t8.symm
+
+/-- Ninth-order bound: `|tanh z − (z − z³/3 + 2z⁵/15 − 17z⁷/315)| ≤ |z|⁹ / 9`
+for `|z| ≤ 1`.
+
+The fourth iterated-integral step in the Taylor tower for `tanh`. The proof
+mirrors `abs_tanh_sub_taylor5_le`: define
+`g(z) = tanh z − z + z³/3 − 2z⁵/15 + 17z⁷/315`; then
+`g'(z) = z² − tanh²(z) − 2z⁴/3 + 17z⁶/45` and `|g'(t)| ≤ t⁸` on `|t| ≤ 1` via
+`tanh_ninth_integrand_bound`. Integration gives
+`|g(z)| ≤ ∫_0^|z| t⁸ dt = |z|⁹/9`. -/
+theorem abs_tanh_sub_taylor7_le {z : ℝ} (hz : |z| ≤ 1) :
+    |Real.tanh z - (z - z ^ 3 / 3 + 2 * z ^ 5 / 15 - 17 * z ^ 7 / 315)|
+      ≤ |z| ^ 9 / 9 := by
+  have h_int_repr :
+      Real.tanh z - z + z ^ 3 / 3 - 2 * z ^ 5 / 15 + 17 * z ^ 7 / 315
+        = ∫ t in (0)..z,
+              (t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45) := by
+    have h_g_deriv : ∀ t : ℝ,
+        HasDerivAt
+          (fun u => Real.tanh u - u + u ^ 3 / 3 - 2 * u ^ 5 / 15 + 17 * u ^ 7 / 315)
+          (t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45) t := by
+      intro t
+      have h1 := tanh_hasDerivAt t
+      have h2 : HasDerivAt (fun u : ℝ => u) 1 t := hasDerivAt_id t
+      have h3 : HasDerivAt (fun u : ℝ => u ^ 3 / 3) (t ^ 2) t := by
+        have := (hasDerivAt_pow 3 t).div_const 3
+        convert this using 1; push_cast; ring
+      have h4 : HasDerivAt (fun u : ℝ => 2 * u ^ 5 / 15) (2 * t ^ 4 / 3) t := by
+        have h_div := ((hasDerivAt_pow 5 t).const_mul 2).div_const 15
+        convert h_div using 1; push_cast; ring
+      have h5 : HasDerivAt (fun u : ℝ => 17 * u ^ 7 / 315) (17 * t ^ 6 / 45) t := by
+        have h_div := ((hasDerivAt_pow 7 t).const_mul 17).div_const 315
+        convert h_div using 1; push_cast; ring
+      have h_combined := (((h1.sub h2).add h3).sub h4).add h5
+      convert h_combined using 1; ring
+    have h_FTC :
+        ∫ t in (0)..z,
+            (t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45)
+          = (Real.tanh z - z + z ^ 3 / 3 - 2 * z ^ 5 / 15 + 17 * z ^ 7 / 315)
+              - (Real.tanh 0 - 0 + 0 ^ 3 / 3 - 2 * 0 ^ 5 / 15 + 17 * 0 ^ 7 / 315) :=
+      intervalIntegral.integral_eq_sub_of_hasDerivAt (fun x _ => h_g_deriv x)
+        (((((continuous_id.pow 2).sub (continuous_tanh.pow 2)).sub
+            ((continuous_const.mul (continuous_id.pow 4)).div_const _)).add
+            ((continuous_const.mul (continuous_id.pow 6)).div_const _)).intervalIntegrable _ _)
+    rw [Real.tanh_zero] at h_FTC
+    linarith
+  rw [show Real.tanh z - (z - z ^ 3 / 3 + 2 * z ^ 5 / 15 - 17 * z ^ 7 / 315)
+        = Real.tanh z - z + z ^ 3 / 3 - 2 * z ^ 5 / 15 + 17 * z ^ 7 / 315 from by
+        ring, h_int_repr]
+  rcases le_or_gt 0 z with hz_nn | hz_neg
+  · rw [intervalIntegral.integral_of_le hz_nn]
+    have hz_eq : |z| = z := abs_of_nonneg hz_nn
+    have h_pointwise :
+        ∀ t ∈ Set.Ioc 0 z,
+          |t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45| ≤ t ^ 8 := by
+      intro t ht
+      apply tanh_ninth_integrand_bound
+      rw [abs_of_pos ht.1]
+      have : z ≤ 1 := by rw [← hz_eq]; exact hz
+      linarith [ht.2]
+    have h_step1 :
+        |∫ t in Set.Ioc 0 z,
+            (t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45)|
+          ≤ ∫ t in Set.Ioc 0 z,
+              |t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45| :=
+      MeasureTheory.abs_integral_le_integral_abs
+    have h_step2 :
+        ∫ t in Set.Ioc 0 z,
+            |t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45|
+          ≤ ∫ t in Set.Ioc 0 z, t ^ 8 := by
+      apply MeasureTheory.setIntegral_mono_on
+      · exact ((((continuous_id.pow 2).sub (continuous_tanh.pow 2)).sub
+            ((continuous_const.mul (continuous_id.pow 4)).div_const _)).add
+            ((continuous_const.mul (continuous_id.pow 6)).div_const _)).abs.integrableOn_Ioc
+      · exact (continuous_id.pow 8).integrableOn_Ioc
+      · exact measurableSet_Ioc
+      · exact h_pointwise
+    have h_step3 : ∫ t in Set.Ioc 0 z, t ^ 8 = z ^ 9 / 9 := by
+      rw [show ∫ t in Set.Ioc 0 z, t ^ 8 = ∫ t in (0)..z, t ^ 8 from
+            (intervalIntegral.integral_of_le hz_nn).symm]
+      rw [integral_pow]; ring
+    have h_z9 : |z| ^ 9 = z ^ 9 := by
+      rw [show |z| ^ 9 = |z ^ 9| from by rw [abs_pow]]
+      exact abs_of_nonneg (by positivity)
+    rw [h_z9]; linarith
+  · rw [intervalIntegral.integral_of_ge hz_neg.le, abs_neg]
+    have hz_eq : |z| = -z := abs_of_neg hz_neg
+    have h_pointwise :
+        ∀ t ∈ Set.Ioc z 0,
+          |t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45| ≤ t ^ 8 := by
+      intro t ht
+      apply tanh_ninth_integrand_bound
+      have h_neg_z : -z ≤ 1 := by rw [← hz_eq]; exact hz
+      rcases lt_or_eq_of_le ht.2 with h_t_neg | h_t_zero
+      · rw [abs_of_neg h_t_neg]; linarith [ht.1]
+      · rw [h_t_zero]; simp
+    have h_step1 :
+        |∫ t in Set.Ioc z 0,
+            (t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45)|
+          ≤ ∫ t in Set.Ioc z 0,
+              |t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45| :=
+      MeasureTheory.abs_integral_le_integral_abs
+    have h_step2 :
+        ∫ t in Set.Ioc z 0,
+            |t ^ 2 - Real.tanh t ^ 2 - 2 * t ^ 4 / 3 + 17 * t ^ 6 / 45|
+          ≤ ∫ t in Set.Ioc z 0, t ^ 8 := by
+      apply MeasureTheory.setIntegral_mono_on
+      · exact ((((continuous_id.pow 2).sub (continuous_tanh.pow 2)).sub
+            ((continuous_const.mul (continuous_id.pow 4)).div_const _)).add
+            ((continuous_const.mul (continuous_id.pow 6)).div_const _)).abs.integrableOn_Ioc
+      · exact (continuous_id.pow 8).integrableOn_Ioc
+      · exact measurableSet_Ioc
+      · exact h_pointwise
+    have h_step3 : ∫ t in Set.Ioc z 0, t ^ 8 = -z ^ 9 / 9 := by
+      rw [show ∫ t in Set.Ioc z 0, t ^ 8 = ∫ t in z..(0:ℝ), t ^ 8 from
+            (intervalIntegral.integral_of_le hz_neg.le).symm]
+      rw [integral_pow]; ring
+    have h_z9 : |z| ^ 9 = -z ^ 9 := by
+      rw [show |z| ^ 9 = |z ^ 9| from by rw [abs_pow]]
+      apply abs_of_neg
+      have : z ^ 9 = z * z ^ 8 := by ring
+      rw [this]
+      have h_z8_pos : 0 < z ^ 8 := by
+        have : z ≠ 0 := ne_of_lt hz_neg
+        positivity
+      exact mul_neg_of_neg_of_pos hz_neg h_z8_pos
+    rw [h_z9]; linarith
+
 end VeriTile.Math
