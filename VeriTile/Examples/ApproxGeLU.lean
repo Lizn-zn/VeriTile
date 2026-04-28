@@ -44,6 +44,7 @@ import Mathlib.Analysis.Complex.ExponentialBounds
 import Mathlib.Analysis.Real.Pi.Bounds
 import Mathlib.MeasureTheory.Integral.IntervalIntegral.Basic
 import VeriTile.Math.RealErf
+import VeriTile.Math.Tanh
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.DSL
@@ -291,6 +292,81 @@ lemma abs_approxGeLUScalar_sub_exactGeLUScalar_tail_pos
     _ = x * Real.exp (-(2 * c * x)) +
           (x / Real.sqrt Real.pi) * Real.exp (-(x / Real.sqrt 2)) := by
             field_simp
+
+/-! ## Taylor expansions of `tanh u` and `realErf z` at the gelu arguments
+
+For the medium range `1/1000 < |x| < 20`, the asymptotic tail bounds of
+`abs_approxGeLUScalar_sub_exactGeLUScalar_tail_pos` are too loose. The
+tighter route is via Taylor expansions of `tanh u` and `realErf z` with the
+specific substitutions `u = c·(x + k·x³)` and `z = x/√2`. These two lemmas
+discharge the prerequisite (`|u| ≤ 1`, `|z| ≤ 1`) for `|x| ≤ 1` and apply the
+septenary Taylor bounds from `VeriTile.Math.Tanh` and `VeriTile.Math.RealErf`. -/
+
+/-- For `|x| ≤ 1`, `|u| = |c·(x + k·x³)| ≤ c·(1 + k) < 1` (numerically
+≈ 0.834), so `abs_tanh_sub_taylor5_le` applies and gives the seventh-order
+Taylor remainder bound on `tanh u`. -/
+lemma abs_tanh_at_gelu_arg_sub_taylor5_le {x : ℝ} (hx : |x| ≤ 1) :
+    |Real.tanh ((7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x))) -
+        ((7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x)) -
+         ((7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x))) ^ 3 / 3 +
+         2 * ((7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x))) ^ 5 / 15)|
+      ≤ |(7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x))| ^ 7 / 7 := by
+  set u : ℝ := (7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x)) with hu_def
+  have hu_bound : |u| ≤ 1 := by
+    rw [hu_def, abs_mul]
+    have h_c_pos : 0 < (7978845608028654 / 10000000000000000 : ℝ) := by norm_num
+    rw [abs_of_pos h_c_pos]
+    have h_inner : |x + (44715 / 1000000 : ℝ) * (x * x * x)|
+        ≤ |x| + (44715 / 1000000) * |x| ^ 3 := by
+      have hb := abs_add_le x ((44715 / 1000000 : ℝ) * (x * x * x))
+      have h_eq : |(44715 / 1000000 : ℝ) * (x * x * x)|
+            = (44715 / 1000000) * |x| ^ 3 := by
+        rw [abs_mul, show |(44715 / 1000000 : ℝ)| = 44715 / 1000000 from by norm_num]
+        congr 1
+        rw [show x * x * x = x ^ 3 from by ring, abs_pow]
+      linarith
+    have h_x3_le : |x| ^ 3 ≤ |x| := by
+      nlinarith [sq_nonneg (|x| - 1), sq_nonneg (|x|), abs_nonneg x]
+    have h_inner_le : |x + (44715 / 1000000 : ℝ) * (x * x * x)|
+          ≤ |x| * (1 + 44715 / 1000000) := by
+      have h1 : |x| + (44715 / 1000000 : ℝ) * |x| ^ 3
+            ≤ |x| + (44715 / 1000000) * |x| := by
+        nlinarith
+      have h_factor : |x| + (44715 / 1000000 : ℝ) * |x| = |x| * (1 + 44715 / 1000000) := by ring
+      linarith
+    calc (7978845608028654 / 10000000000000000 : ℝ) *
+            |x + (44715 / 1000000) * (x * x * x)|
+        ≤ (7978845608028654 / 10000000000000000) * (|x| * (1 + 44715 / 1000000)) := by
+            apply mul_le_mul_of_nonneg_left h_inner_le (by norm_num)
+      _ ≤ (7978845608028654 / 10000000000000000) * (1 * (1 + 44715 / 1000000)) := by
+            apply mul_le_mul_of_nonneg_left
+            · exact mul_le_mul_of_nonneg_right hx (by norm_num)
+            · norm_num
+      _ ≤ 1 := by norm_num
+  exact abs_tanh_sub_taylor5_le hu_bound
+
+/-- For `|x| ≤ 1`, `|x/√2| ≤ 1/√2 ≤ 1`, so `abs_realErf_sub_taylor7_le`
+applies and gives the seventh-order Taylor remainder bound on `realErf z`. -/
+lemma abs_realErf_at_gelu_arg_sub_taylor7_le {x : ℝ} (hx : |x| ≤ 1) :
+    |realErf (x / Real.sqrt 2) -
+        (2 / Real.sqrt Real.pi) *
+          ((x / Real.sqrt 2) - (x / Real.sqrt 2) ^ 3 / 3 +
+           (x / Real.sqrt 2) ^ 5 / 10 - (x / Real.sqrt 2) ^ 7 / 42)|
+      ≤ (2 / Real.sqrt Real.pi) * (5 * |x / Real.sqrt 2| ^ 9 / 864) := by
+  have hsqrt2_pos : 0 < Real.sqrt 2 := Real.sqrt_pos.mpr (by norm_num)
+  have hsqrt2_ge_1 : 1 ≤ Real.sqrt 2 := by
+    rw [show (1:ℝ) = Real.sqrt 1 from Real.sqrt_one.symm]
+    exact Real.sqrt_le_sqrt (by norm_num)
+  have hz_bound : |x / Real.sqrt 2| ≤ 1 := by
+    rw [abs_div, abs_of_pos hsqrt2_pos, div_le_iff₀ hsqrt2_pos]
+    linarith
+  exact abs_realErf_sub_taylor7_le hz_bound
 
 /-! ## Numeric closure for very-large `|x|`
 
