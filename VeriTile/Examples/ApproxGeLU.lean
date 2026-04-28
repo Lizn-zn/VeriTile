@@ -887,6 +887,95 @@ lemma gelu_gap_taylor_decomposition {x : ℝ} (hx : |x| ≤ 1) :
         + (2 / Real.sqrt Real.pi) * (5 * |z| ^ 9 / 864) := by
             gcongr
 
+/-! ### Combined polynomial bound including the `c − √(2/π)` correction
+
+For `|x| ≤ 1/2`, the polynomial gap `|tanhTaylor5(c·v(x)) − (2/√π)·realErfTaylor7(x/√2)|`
+absorbs the `(c − √(2/π))·R(x)` correction (which is `O(10⁻¹⁵)`) into a clean
+`≤ 1/3000` bound. -/
+
+/-- Bound on `|R(x)| = |x − x³/6 + x⁵/40 − x⁷/336|` for `|x| ≤ 1`. The exact sup
+is ≈1.195; the looser bound `≤ 2` simplifies downstream arithmetic. -/
+private lemma R_bound_at_one {x : ℝ} (hx : |x| ≤ 1) :
+    |x - x^3/6 + x^5/40 - x^7/336| ≤ 2 := by
+  have hx3 : |x|^3 ≤ 1 := by
+    have := pow_le_pow_left₀ (abs_nonneg x) hx 3; simpa using this
+  have hx5 : |x|^5 ≤ 1 := by
+    have := pow_le_pow_left₀ (abs_nonneg x) hx 5; simpa using this
+  have hx7 : |x|^7 ≤ 1 := by
+    have := pow_le_pow_left₀ (abs_nonneg x) hx 7; simpa using this
+  have h_eq : x - x^3/6 + x^5/40 - x^7/336
+            = x + (-(x^3/6)) + x^5/40 + (-(x^7/336)) := by ring
+  rw [h_eq]
+  have h1 := abs_add_le (x + (-(x^3/6)) + x^5/40) (-(x^7/336))
+  have h2 := abs_add_le (x + (-(x^3/6))) (x^5/40)
+  have h3 := abs_add_le x (-(x^3/6))
+  have hxabs : |x| ≤ 1 := hx
+  have habs3 : |(-(x^3/6))| = |x|^3/6 := by
+    rw [abs_neg, abs_div, abs_pow,
+        show |(6:ℝ)| = 6 from by norm_num]
+  have habs5 : |x^5/40| = |x|^5/40 := by
+    rw [abs_div, abs_pow, show |(40:ℝ)| = 40 from by norm_num]
+  have habs7 : |(-(x^7/336))| = |x|^7/336 := by
+    rw [abs_neg, abs_div, abs_pow, show |(336:ℝ)| = 336 from by norm_num]
+  rw [habs3] at h3
+  rw [habs5] at h2
+  rw [habs7] at h1
+  have hb3 : |x|^3/6 ≤ 1/6 := by linarith
+  have hb5 : |x|^5/40 ≤ 1/40 := by linarith
+  have hb7 : |x|^7/336 ≤ 1/336 := by linarith
+  linarith
+
+/-- Combined polynomial bound including the `c − √(2/π)` correction.
+For `|x| ≤ 1/2`, `|tanhTaylor5(c·(x+k·x³)) − (2/√π)·realErfTaylor7(x/√2)| ≤ 1/3000`. -/
+private lemma poly_diff_with_correction_bound {x : ℝ} (hx : |x| ≤ 1/2) :
+    |tanhTaylor5 ((7978845608028654 / 10000000000000000 : ℝ) *
+                    (x + (44715 / 1000000) * (x * x * x))) -
+        (2 / Real.sqrt Real.pi) *
+            realErfTaylor7 (x / Real.sqrt 2)|
+      ≤ 1 / 3000 := by
+  -- Reshape the second term to √(2/π)·R(x) via the algebraic identity.
+  have h_rewrite : (2 / Real.sqrt Real.pi) *
+                       realErfTaylor7 (x / Real.sqrt 2)
+                = Real.sqrt (2 / Real.pi) * (x - x^3/6 + x^5/40 - x^7/336) := by
+    show (2 / Real.sqrt Real.pi) *
+            ((x / Real.sqrt 2) - (x / Real.sqrt 2)^3/3
+              + (x / Real.sqrt 2)^5/10 - (x / Real.sqrt 2)^7/42)
+          = Real.sqrt (2 / Real.pi) * (x - x^3/6 + x^5/40 - x^7/336)
+    exact two_div_sqrt_pi_realErfTaylor7_eq x
+  rw [h_rewrite]
+  -- Add ± c·R(x) to split.
+  have h_split :
+      tanhTaylor5 ((7978845608028654 / 10000000000000000 : ℝ) *
+                      (x + (44715 / 1000000) * (x * x * x))) -
+          Real.sqrt (2 / Real.pi) * (x - x^3/6 + x^5/40 - x^7/336)
+        = (tanhTaylor5 ((7978845608028654 / 10000000000000000 : ℝ) *
+                          (x + (44715 / 1000000) * (x * x * x))) -
+            (7978845608028654 / 10000000000000000 : ℝ) *
+                (x - x^3/6 + x^5/40 - x^7/336))
+          + ((7978845608028654 / 10000000000000000 : ℝ) -
+              Real.sqrt (2 / Real.pi)) *
+              (x - x^3/6 + x^5/40 - x^7/336) := by
+    ring
+  rw [h_split]
+  -- Triangle.
+  have hpoly := poly_diff_bound hx
+  have hcorr_sqrt := abs_c_sub_sqrt_two_div_pi_le
+  have hx_le_one : |x| ≤ 1 := by linarith
+  have hR := R_bound_at_one hx_le_one
+  calc |(tanhTaylor5 _ - _ * (x - x^3/6 + x^5/40 - x^7/336))
+            + ((7978845608028654 / 10000000000000000 : ℝ)
+                - Real.sqrt (2 / Real.pi)) *
+                (x - x^3/6 + x^5/40 - x^7/336)|
+      ≤ |tanhTaylor5 _ - _ * (x - x^3/6 + x^5/40 - x^7/336)|
+        + |((7978845608028654 / 10000000000000000 : ℝ)
+              - Real.sqrt (2 / Real.pi)) *
+                (x - x^3/6 + x^5/40 - x^7/336)| := abs_add_le _ _
+    _ ≤ 1/4000 + (1/10^15) * 2 := by
+        gcongr
+        rw [abs_mul]
+        gcongr
+    _ ≤ 1/3000 := by norm_num
+
 /-! ## Correctness and Approximation Statements -/
 
 /-- **`approxGeLUKernel` correctness against the approximate GeLU expression.**
