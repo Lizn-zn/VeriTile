@@ -901,4 +901,22 @@ theorem abs_tanh_sub_taylor9_le {z : ℝ} (hz : |z| ≤ 1) :
       exact mul_neg_of_neg_of_pos hz_neg h_z10_pos
     rw [h_z11]; linarith
 
+/-- Public corollary of the eleventh-order integrand bound, expressed as a
+direct bound on the derivative `d/du (tanh u − tanhTaylor9(u))`. For `|u| ≤ 1`,
+`|(1 − tanh²u) − (1 − u² + 2u⁴/3 − 17u⁶/45 + 62u⁸/315)| ≤ |u|¹⁰`. -/
+theorem abs_tanh_minus_taylor9_deriv_le {u : ℝ} (hu : |u| ≤ 1) :
+    |(1 - Real.tanh u ^ 2)
+      - (1 - u ^ 2 + 2 * u ^ 4 / 3 - 17 * u ^ 6 / 45 + 62 * u ^ 8 / 315)|
+      ≤ |u| ^ 10 := by
+  have h := tanh_eleventh_integrand_bound hu
+  have h_eq :
+      (1 - Real.tanh u ^ 2)
+        - (1 - u ^ 2 + 2 * u ^ 4 / 3 - 17 * u ^ 6 / 45 + 62 * u ^ 8 / 315)
+      = u ^ 2 - Real.tanh u ^ 2 - 2 * u ^ 4 / 3 + 17 * u ^ 6 / 45
+          - 62 * u ^ 8 / 315 := by ring
+  rw [h_eq]
+  rw [show u ^ 10 = |u| ^ 10 from by
+    rw [show (10 : ℕ) = 2 * 5 from rfl, pow_mul, pow_mul, sq_abs]] at h
+  exact h
+
 end VeriTile.Math
