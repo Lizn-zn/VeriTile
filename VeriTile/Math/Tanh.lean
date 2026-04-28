@@ -119,4 +119,127 @@ theorem abs_tanh_sub_self_le (z : ℝ) :
     rw [h_sq_int, abs_div, show |(3:ℝ)| = 3 from by norm_num, abs_pow]
   linarith [h_compare]
 
+/-- Quintic bound: `|tanh z − (z − z³/3)| ≤ 2|z|⁵ / 15`. Proved by writing
+`tanh z − z + z³/3 = ∫_0^z (t² − tanh²(t)) dt` (FTC + `tanh' = 1 − tanh²`)
+and bounding the integrand pointwise as
+`0 ≤ t² − tanh²(t) ≤ 2 · t⁴ / 3` using `|tanh t| ≤ |t|` and the cubic bound
+`|tanh t − t| ≤ |t|³/3`. -/
+theorem abs_tanh_sub_taylor3_le (z : ℝ) :
+    |Real.tanh z - (z - z ^ 3 / 3)| ≤ 2 * |z| ^ 5 / 15 := by
+  have h_int_repr :
+      Real.tanh z - z + z ^ 3 / 3
+        = ∫ t in (0)..z, (t ^ 2 - Real.tanh t ^ 2) := by
+    have h_g_deriv : ∀ t : ℝ,
+        HasDerivAt (fun u => Real.tanh u - u + u ^ 3 / 3)
+          (t ^ 2 - Real.tanh t ^ 2) t := by
+      intro t
+      have h1 := tanh_hasDerivAt t
+      have h2 : HasDerivAt (fun u : ℝ => u) 1 t := hasDerivAt_id t
+      have h3 : HasDerivAt (fun u : ℝ => u ^ 3 / 3) (t ^ 2) t := by
+        have := (hasDerivAt_pow 3 t).div_const 3
+        convert this using 1; push_cast; ring
+      have h_combined := (h1.sub h2).add h3
+      convert h_combined using 1; ring
+    have h_FTC : ∫ t in (0)..z, (t ^ 2 - Real.tanh t ^ 2)
+        = (Real.tanh z - z + z ^ 3 / 3) - (Real.tanh 0 - 0 + 0 ^ 3 / 3) :=
+      intervalIntegral.integral_eq_sub_of_hasDerivAt (fun x _ => h_g_deriv x)
+        (((continuous_id.pow 2).sub (continuous_tanh.pow 2)).intervalIntegrable _ _)
+    rw [Real.tanh_zero] at h_FTC
+    linarith
+  have h_lower : ∀ t : ℝ, 0 ≤ t ^ 2 - Real.tanh t ^ 2 := by
+    intro t
+    have h_abs := abs_tanh_le_abs t
+    rw [show Real.tanh t ^ 2 = |Real.tanh t| ^ 2 from (sq_abs _).symm,
+        show t ^ 2 = |t| ^ 2 from (sq_abs _).symm]
+    have := pow_le_pow_left₀ (abs_nonneg _) h_abs 2
+    linarith
+  have h_upper : ∀ t : ℝ, t ^ 2 - Real.tanh t ^ 2 ≤ 2 * t ^ 4 / 3 := by
+    intro t
+    have h_abs := abs_tanh_le_abs t
+    have h_cubic := abs_tanh_sub_self_le t
+    have h_factor :
+        t ^ 2 - Real.tanh t ^ 2 = (t - Real.tanh t) * (t + Real.tanh t) := by ring
+    rw [h_factor]
+    have h1 : |t - Real.tanh t| ≤ |t| ^ 3 / 3 := by
+      rw [show t - Real.tanh t = -(Real.tanh t - t) from by ring, abs_neg]
+      exact h_cubic
+    have h2 : |t + Real.tanh t| ≤ 2 * |t| := by
+      have := abs_add_le t (Real.tanh t); linarith
+    have h_prod : |(t - Real.tanh t) * (t + Real.tanh t)| ≤ 2 * |t| ^ 4 / 3 := by
+      rw [abs_mul]
+      have := mul_le_mul h1 h2 (abs_nonneg _)
+        (by positivity : (0 : ℝ) ≤ |t| ^ 3 / 3)
+      have h_eq : |t| ^ 3 / 3 * (2 * |t|) = 2 * |t| ^ 4 / 3 := by ring
+      linarith
+    have h_t4 : |t| ^ 4 = t ^ 4 := by
+      rw [show (4 : ℕ) = 2 * 2 from rfl, pow_mul, pow_mul, sq_abs]
+    rw [h_t4] at h_prod
+    exact (le_abs_self _).trans h_prod
+  rw [show Real.tanh z - (z - z ^ 3 / 3) = Real.tanh z - z + z ^ 3 / 3 from by ring,
+      h_int_repr]
+  rcases le_or_gt 0 z with hz | hz
+  · rw [intervalIntegral.integral_of_le hz]
+    have h_abs_eq : |∫ t in Set.Ioc 0 z, t ^ 2 - Real.tanh t ^ 2|
+        = ∫ t in Set.Ioc 0 z, t ^ 2 - Real.tanh t ^ 2 :=
+      abs_of_nonneg (MeasureTheory.setIntegral_nonneg measurableSet_Ioc
+        (fun t _ => h_lower t))
+    rw [h_abs_eq]
+    have h_compare :
+        ∫ t in Set.Ioc 0 z, (t ^ 2 - Real.tanh t ^ 2)
+          ≤ ∫ t in Set.Ioc 0 z, 2 * t ^ 4 / 3 :=
+      MeasureTheory.setIntegral_mono_on
+        ((continuous_id.pow 2).sub (continuous_tanh.pow 2)).integrableOn_Ioc
+        ((continuous_const.mul (continuous_id.pow 4)).div_const _).integrableOn_Ioc
+        measurableSet_Ioc (fun t _ => h_upper t)
+    have h_compute : ∫ t in Set.Ioc 0 z, 2 * t ^ 4 / 3 = 2 * z ^ 5 / 15 := by
+      have hrw : ∫ t in Set.Ioc 0 z, 2 * t ^ 4 / 3 = ∫ t in (0)..z, 2 * t ^ 4 / 3 := by
+        rw [intervalIntegral.integral_of_le hz]
+      rw [hrw]
+      have h_split :
+          ∫ t in (0)..z, 2 * t ^ 4 / 3 = (2/3) * ∫ t in (0)..z, t ^ 4 := by
+        have : ∫ t in (0)..z, 2 * t ^ 4 / 3 = ∫ t in (0)..z, (2/3) * t ^ 4 := by
+          apply intervalIntegral.integral_congr
+          intro t _; ring
+        rw [this, intervalIntegral.integral_const_mul]
+      rw [h_split, integral_pow]; ring
+    have h_z5 : |z| ^ 5 = z ^ 5 := by
+      rw [show |z| ^ 5 = |z ^ 5| from by rw [abs_pow]]
+      exact abs_of_nonneg (by positivity)
+    rw [h_z5]; linarith
+  · rw [intervalIntegral.integral_of_ge hz.le, abs_neg]
+    have h_abs_eq : |∫ t in Set.Ioc z 0, t ^ 2 - Real.tanh t ^ 2|
+        = ∫ t in Set.Ioc z 0, t ^ 2 - Real.tanh t ^ 2 :=
+      abs_of_nonneg (MeasureTheory.setIntegral_nonneg measurableSet_Ioc
+        (fun t _ => h_lower t))
+    rw [h_abs_eq]
+    have h_compare :
+        ∫ t in Set.Ioc z 0, (t ^ 2 - Real.tanh t ^ 2)
+          ≤ ∫ t in Set.Ioc z 0, 2 * t ^ 4 / 3 :=
+      MeasureTheory.setIntegral_mono_on
+        ((continuous_id.pow 2).sub (continuous_tanh.pow 2)).integrableOn_Ioc
+        ((continuous_const.mul (continuous_id.pow 4)).div_const _).integrableOn_Ioc
+        measurableSet_Ioc (fun t _ => h_upper t)
+    have h_compute : ∫ t in Set.Ioc z 0, 2 * t ^ 4 / 3 = -2 * z ^ 5 / 15 := by
+      have hrw : ∫ t in Set.Ioc z 0, 2 * t ^ 4 / 3 = ∫ t in z..0, 2 * t ^ 4 / 3 := by
+        rw [intervalIntegral.integral_of_le hz.le]
+      rw [hrw]
+      have h_split :
+          ∫ t in z..(0:ℝ), 2 * t ^ 4 / 3 = (2/3) * ∫ t in z..(0:ℝ), t ^ 4 := by
+        have : ∫ t in z..(0:ℝ), 2 * t ^ 4 / 3
+            = ∫ t in z..(0:ℝ), (2/3) * t ^ 4 := by
+          apply intervalIntegral.integral_congr
+          intro t _; ring
+        rw [this, intervalIntegral.integral_const_mul]
+      rw [h_split, integral_pow]; ring
+    have h_z5 : |z| ^ 5 = -z ^ 5 := by
+      rw [show |z| ^ 5 = |z ^ 5| from by rw [abs_pow]]
+      apply abs_of_neg
+      have : z ^ 5 = z * z ^ 4 := by ring
+      rw [this]
+      have h_z4_pos : 0 < z ^ 4 := by
+        have hz_ne : z ≠ 0 := ne_of_lt hz
+        positivity
+      exact mul_neg_of_neg_of_pos hz h_z4_pos
+    rw [h_z5]; linarith
+
 end VeriTile.Math
