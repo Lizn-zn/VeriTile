@@ -572,6 +572,103 @@ The first and third pieces are already discharged by the wiring lemmas
 The middle piece is purely algebraic — it is a polynomial in `x` whose
 coefficients involve `c`, `k`, and the irrational constant `c_exact = √(2/π)`. -/
 
+/-! ### `|c − √(2/π)|` is tiny
+
+The DSL's rational constant `c = 7978845608028654 / 10000000000000000` is
+the 16-decimal rounding of `√(2/π)`. Using `Real.pi_gt_d20` and
+`Real.pi_lt_d20` (20 decimals each), we show `c² ≥ 2/π` and
+`|c − √(2/π)| ≤ 10⁻¹⁵`. The leading coefficient gap of the polynomial
+difference `P_t(u) − (2/√π)·P_e(z)` is exactly this quantity. -/
+
+private lemma c_pos_real : (0 : ℝ) < 7978845608028654 / 10000000000000000 := by
+  norm_num
+
+/-- The rational constant `c² ≥ 2/π`, certified by `Real.pi_gt_d20`. -/
+private lemma c_sq_ge_two_div_pi :
+    (2 : ℝ) / Real.pi
+      ≤ (7978845608028654 / 10000000000000000 : ℝ)^2 := by
+  have hpi_lb : (3.14159265358979323846 : ℝ) < Real.pi := Real.pi_gt_d20
+  rw [div_le_iff₀ Real.pi_pos]
+  calc (2 : ℝ)
+      ≤ (7978845608028654 / 10000000000000000 : ℝ)^2 *
+            3.14159265358979323846 := by norm_num
+    _ ≤ (7978845608028654 / 10000000000000000 : ℝ)^2 * Real.pi := by
+          have h := hpi_lb.le
+          have h_sq_nn :
+              (0 : ℝ) ≤ (7978845608028654 / 10000000000000000 : ℝ)^2 := sq_nonneg _
+          exact mul_le_mul_of_nonneg_left h h_sq_nn
+
+/-- `c ≥ √(2/π)`, the rational rounding sits above the irrational true value. -/
+private lemma c_ge_sqrt_two_div_pi :
+    Real.sqrt (2 / Real.pi)
+      ≤ (7978845608028654 / 10000000000000000 : ℝ) := by
+  have hsq := c_sq_ge_two_div_pi
+  have h_c_nn : (0 : ℝ) ≤ (7978845608028654 / 10000000000000000 : ℝ) :=
+    c_pos_real.le
+  have h_2pi_nn : (0 : ℝ) ≤ 2 / Real.pi := div_nonneg (by norm_num) Real.pi_pos.le
+  have h := Real.sqrt_le_sqrt hsq
+  rwa [Real.sqrt_sq h_c_nn] at h
+
+/-- Tight upper bound on `c² − 2/π`. Numerically the true value is `≈ 7·10⁻¹⁷`;
+this proof uses the bound `≤ 10⁻¹⁶` certified by `Real.pi_lt_d20`. -/
+private lemma c_sq_sub_two_div_pi_le :
+    (7978845608028654 / 10000000000000000 : ℝ)^2 - 2 / Real.pi
+      ≤ (1 : ℝ) / 10^16 := by
+  have hpi_ub : Real.pi < 3.14159265358979323847 := Real.pi_lt_d20
+  have h_two_div_le : (2 : ℝ) / 3.14159265358979323847 ≤ 2 / Real.pi := by
+    apply div_le_div_of_nonneg_left (by norm_num) Real.pi_pos hpi_ub.le
+  have h_step : (7978845608028654 / 10000000000000000 : ℝ)^2 -
+        2 / 3.14159265358979323847 ≤ 1 / 10^16 := by norm_num
+  linarith
+
+/-- Tight upper bound: `c − √(2/π) ≤ 10⁻¹⁵`. The numerical truth is ~10⁻¹⁶,
+so this leaves an order-of-magnitude margin. -/
+private lemma c_sub_sqrt_two_div_pi_le :
+    (7978845608028654 / 10000000000000000 : ℝ) - Real.sqrt (2 / Real.pi)
+      ≤ (1 : ℝ) / 10^15 := by
+  set c : ℝ := 7978845608028654 / 10000000000000000 with hc_def
+  set s : ℝ := Real.sqrt (2 / Real.pi) with hs_def
+  have hc_pos : 0 < c := c_pos_real
+  have h_2pi_nn : (0 : ℝ) ≤ 2 / Real.pi := div_nonneg (by norm_num) Real.pi_pos.le
+  have hs_nn : 0 ≤ s := Real.sqrt_nonneg _
+  have hs2 : s^2 = 2 / Real.pi := Real.sq_sqrt h_2pi_nn
+  have hs_le_c : s ≤ c := c_ge_sqrt_two_div_pi
+  have hc_sub_s_nn : 0 ≤ c - s := sub_nonneg.mpr hs_le_c
+  have h_factor : (c - s) * (c + s) = c^2 - 2 / Real.pi := by
+    have h_diff : c^2 - s^2 = c^2 - 2 / Real.pi := by rw [hs2]
+    linarith [sq_sub_sq c s]
+  have hc_add_s_ge_c : c ≤ c + s := by linarith
+  have hc_sub_s_le : c - s ≤ (c^2 - 2 / Real.pi) / c := by
+    rw [le_div_iff₀ hc_pos]
+    calc (c - s) * c
+        ≤ (c - s) * (c + s) :=
+            mul_le_mul_of_nonneg_left hc_add_s_ge_c hc_sub_s_nn
+      _ = c^2 - 2 / Real.pi := h_factor
+  have h_sq_le : c^2 - 2 / Real.pi ≤ 1 / 10^16 := c_sq_sub_two_div_pi_le
+  have hc_ge_half : (1 : ℝ) / 2 ≤ c := by
+    show (1 : ℝ) / 2 ≤ 7978845608028654 / 10000000000000000
+    norm_num
+  have h_div_le : (c^2 - 2 / Real.pi) / c ≤ 1 / 10^16 / c :=
+    div_le_div_of_nonneg_right h_sq_le hc_pos.le
+  have h_div_bound : (1 : ℝ) / 10^16 / c ≤ 1 / 10^16 / (1/2) := by
+    apply div_le_div_of_nonneg_left (by norm_num) (by norm_num) hc_ge_half
+  calc c - s
+      ≤ (c^2 - 2 / Real.pi) / c := hc_sub_s_le
+    _ ≤ 1 / 10^16 / c := h_div_le
+    _ ≤ 1 / 10^16 / (1/2) := h_div_bound
+    _ = 2 / 10^16 := by norm_num
+    _ ≤ 1 / 10^15 := by norm_num
+
+/-- Combined: `|c − √(2/π)| ≤ 10⁻¹⁵`. Since `c ≥ √(2/π)`, the absolute value
+is just `c − √(2/π)`. -/
+private lemma abs_c_sub_sqrt_two_div_pi_le :
+    |(7978845608028654 / 10000000000000000 : ℝ) - Real.sqrt (2 / Real.pi)|
+      ≤ (1 : ℝ) / 10^15 := by
+  have h_le : Real.sqrt (2 / Real.pi)
+        ≤ (7978845608028654 / 10000000000000000 : ℝ) := c_ge_sqrt_two_div_pi
+  rw [abs_of_nonneg (by linarith)]
+  exact c_sub_sqrt_two_div_pi_le
+
 /-- The two tanh Taylor coefficients sit naturally as `u - u³/3 + 2u⁵/15`. -/
 private noncomputable def tanhTaylor5 (u : ℝ) : ℝ := u - u^3/3 + 2 * u^5/15
 
