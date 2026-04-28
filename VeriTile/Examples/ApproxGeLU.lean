@@ -669,6 +669,46 @@ private lemma abs_c_sub_sqrt_two_div_pi_le :
   rw [abs_of_nonneg (by linarith)]
   exact c_sub_sqrt_two_div_pi_le
 
+/-! ### Reduction of `(2/√π)·P_e(x/√2)` to a clean monic polynomial in `x`
+
+Using `2/√π = √(2/π)·√2` we eliminate one `√2` from each rescaled `(x/√2)^n`,
+leaving the explicit polynomial form `c_exact · (x − x³/6 + x⁵/40 − x⁷/336)`. -/
+
+/-- Algebraic identity: `2/√π = √(2/π) · √2`. -/
+private lemma two_div_sqrt_pi_eq :
+    (2 : ℝ) / Real.sqrt Real.pi = Real.sqrt (2 / Real.pi) * Real.sqrt 2 := by
+  have h_2_eq : (2 : ℝ) = Real.sqrt 4 := by
+    rw [show (4:ℝ) = (2:ℝ)^2 from by norm_num, Real.sqrt_sq (by norm_num : (0:ℝ) ≤ 2)]
+  conv_lhs => rw [h_2_eq, ← Real.sqrt_div (by norm_num : (0:ℝ) ≤ 4) Real.pi]
+  rw [show (4 : ℝ) / Real.pi = (2 / Real.pi) * 2 from by ring]
+  rw [Real.sqrt_mul (by positivity : (0 : ℝ) ≤ 2 / Real.pi)]
+
+/-- Algebraic identity: `(2/√π)·P_e(x/√2) = √(2/π) · (x − x³/6 + x⁵/40 − x⁷/336)`.
+The `1/√2` factors absorb into the irrational coefficient `2/√π`, leaving a
+polynomial in `x` with the single irrational `√(2/π)` prefactor. -/
+private lemma two_div_sqrt_pi_realErfTaylor7_eq (x : ℝ) :
+    (2 / Real.sqrt Real.pi) *
+        ((x / Real.sqrt 2) - (x / Real.sqrt 2)^3/3
+          + (x / Real.sqrt 2)^5/10 - (x / Real.sqrt 2)^7/42)
+      = Real.sqrt (2 / Real.pi) * (x - x^3/6 + x^5/40 - x^7/336) := by
+  set s : ℝ := Real.sqrt 2 with hs_def
+  have hs_pos : 0 < s := Real.sqrt_pos.mpr (by norm_num)
+  have hs_ne : s ≠ 0 := hs_pos.ne'
+  have hs2 : s^2 = 2 := Real.sq_sqrt (by norm_num : (0:ℝ) ≤ 2)
+  rw [two_div_sqrt_pi_eq]
+  -- Reduces to: √(2/π) · s · ((x/s) - (x/s)³/3 + (x/s)⁵/10 - (x/s)⁷/42)
+  --        = √(2/π) · (x - x³/6 + x⁵/40 - x⁷/336)
+  rw [mul_assoc]
+  congr 1
+  -- Inner identity, using s² = 2.
+  have h_inner : s * ((x / s) - (x / s)^3/3 + (x / s)^5/10 - (x / s)^7/42)
+              = x - x^3/6 + x^5/40 - x^7/336 := by
+    field_simp
+    linear_combination
+      60480 * (((280 * x^3 - 42 * x^5 + 5 * x^7) * s^4
+        + (-84 * x^5 + 10 * x^7) * s^2 + 20 * x^7) * hs2)
+  exact h_inner
+
 /-- The two tanh Taylor coefficients sit naturally as `u - u³/3 + 2u⁵/15`. -/
 private noncomputable def tanhTaylor5 (u : ℝ) : ℝ := u - u^3/3 + 2 * u^5/15
 
