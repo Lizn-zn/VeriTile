@@ -1110,6 +1110,253 @@ private theorem approx_gelu_error_bound_small {x : ℝ} (hx : |x| ≤ 1/2) :
           exact mul_le_mul_of_nonneg_right hx2_le (by norm_num)
     _ ≤ 1/1000 := by norm_num
 
+/-! ### Closure for `|x| ≤ 3/5` (extended)
+
+The same Taylor decomposition closes a wider window once the per-coefficient
+bounds are re-tuned for `(3/5)^n` instead of `(1/2)^n`. The bottleneck shifts
+from the polynomial gap to the tanh remainder `|u|⁷/7`, but the budget still
+clears `1/1000`. -/
+
+/-- Polynomial difference bound for `|x| ≤ 3/5`. Sum of seven per-coefficient
+bounds is `≈ 5.09·10⁻⁴`; the lemma asserts `≤ 1/1900`. -/
+private lemma poly_diff_bound_06 {x : ℝ} (hx : |x| ≤ 3/5) :
+    |tanhTaylor5 ((7978845608028654 / 10000000000000000 : ℝ) *
+                    (x + (44715 / 1000000) * (x * x * x))) -
+        (7978845608028654 / 10000000000000000 : ℝ) *
+            (x - x^3/6 + x^5/40 - x^7/336)|
+      ≤ 1 / 1900 := by
+  set c : ℝ := 7978845608028654 / 10000000000000000 with hc_def
+  set k : ℝ := 44715 / 1000000 with hk_def
+  rw [tanhTaylor5_sub_rationalErf_eq c k x]
+  have hx_nn : 0 ≤ |x| := abs_nonneg _
+  have hx3 : |x|^3 ≤ (3/5)^3 := pow_le_pow_left₀ hx_nn hx 3
+  have hx5 : |x|^5 ≤ (3/5)^5 := pow_le_pow_left₀ hx_nn hx 5
+  have hx7 : |x|^7 ≤ (3/5)^7 := pow_le_pow_left₀ hx_nn hx 7
+  have hx9 : |x|^9 ≤ (3/5)^9 := pow_le_pow_left₀ hx_nn hx 9
+  have hx11 : |x|^11 ≤ (3/5)^11 := pow_le_pow_left₀ hx_nn hx 11
+  have hx13 : |x|^13 ≤ (3/5)^13 := pow_le_pow_left₀ hx_nn hx 13
+  have hx15 : |x|^15 ≤ (3/5)^15 := pow_le_pow_left₀ hx_nn hx 15
+  set a3 := c*k - c^3/3 + c/6 with ha3
+  set a5 := -c^3*k + 2*c^5/15 - c/40 with ha5
+  set a7 := -c^3*k^2 + 2*c^5*k/3 + c/336 with ha7
+  set a9 := -c^3*k^3/3 + 4*c^5*k^2/3 with ha9
+  set a11 := 4*c^5*k^3/3 with ha11
+  set a13 := 2*c^5*k^4/3 with ha13
+  set a15 := 2*c^5*k^5/15 with ha15
+  have hb3 : |a3 * x^3| ≤ |a3| * (3/5)^3 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx3 (abs_nonneg _)
+  have hb5 : |a5 * x^5| ≤ |a5| * (3/5)^5 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx5 (abs_nonneg _)
+  have hb7 : |a7 * x^7| ≤ |a7| * (3/5)^7 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx7 (abs_nonneg _)
+  have hb9 : |a9 * x^9| ≤ |a9| * (3/5)^9 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx9 (abs_nonneg _)
+  have hb11 : |a11 * x^11| ≤ |a11| * (3/5)^11 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx11 (abs_nonneg _)
+  have hb13 : |a13 * x^13| ≤ |a13| * (3/5)^13 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx13 (abs_nonneg _)
+  have hb15 : |a15 * x^15| ≤ |a15| * (3/5)^15 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx15 (abs_nonneg _)
+  have hn3 : |a3| * (3/5)^3 ≤ 15 / 100000 := by
+    rw [ha3, hc_def, hk_def]; rw [abs_of_neg (by norm_num)]; norm_num
+  have hn5 : |a5| * (3/5)^5 ≤ 4 / 100000 := by
+    rw [ha5, hc_def, hk_def]; rw [abs_of_pos (by norm_num)]; norm_num
+  have hn7 : |a7| * (3/5)^7 ≤ 31 / 100000 := by
+    rw [ha7, hc_def, hk_def]; rw [abs_of_pos (by norm_num)]; norm_num
+  have hn9 : |a9| * (3/5)^9 ≤ 9 / 1000000 := by
+    rw [ha9, hc_def, hk_def]; rw [abs_of_pos (by norm_num)]; norm_num
+  have hn11 : |a11| * (3/5)^11 ≤ 2 / 10000000 := by
+    rw [ha11, hc_def, hk_def]; rw [abs_of_pos (by norm_num)]; norm_num
+  have hn13 : |a13| * (3/5)^13 ≤ 2 / 1000000000 := by
+    rw [ha13, hc_def, hk_def]; rw [abs_of_pos (by norm_num)]; norm_num
+  have hn15 : |a15| * (3/5)^15 ≤ 4 / 1000000000000 := by
+    rw [ha15, hc_def, hk_def]; rw [abs_of_pos (by norm_num)]; norm_num
+  calc |a3 * x^3 + a5 * x^5 + a7 * x^7 + a9 * x^9 + a11 * x^11 + a13 * x^13 + a15 * x^15|
+      ≤ |a3 * x^3| + |a5 * x^5| + |a7 * x^7| + |a9 * x^9| + |a11 * x^11|
+          + |a13 * x^13| + |a15 * x^15| := by
+        have h1 := abs_add_le (a3*x^3 + a5*x^5 + a7*x^7 + a9*x^9 + a11*x^11 + a13*x^13)
+                              (a15*x^15)
+        have h2 := abs_add_le (a3*x^3 + a5*x^5 + a7*x^7 + a9*x^9 + a11*x^11) (a13*x^13)
+        have h3 := abs_add_le (a3*x^3 + a5*x^5 + a7*x^7 + a9*x^9) (a11*x^11)
+        have h4 := abs_add_le (a3*x^3 + a5*x^5 + a7*x^7) (a9*x^9)
+        have h5 := abs_add_le (a3*x^3 + a5*x^5) (a7*x^7)
+        have h6 := abs_add_le (a3*x^3) (a5*x^5)
+        linarith
+    _ ≤ |a3| * (3/5)^3 + |a5| * (3/5)^5 + |a7| * (3/5)^7 + |a9| * (3/5)^9
+          + |a11| * (3/5)^11 + |a13| * (3/5)^13 + |a15| * (3/5)^15 := by
+        linarith [hb3, hb5, hb7, hb9, hb11, hb13, hb15]
+    _ ≤ 15/100000 + 4/100000 + 31/100000 + 9/1000000 + 2/10000000
+          + 2/1000000000 + 4/1000000000000 := by
+        linarith [hn3, hn5, hn7, hn9, hn11, hn13, hn15]
+    _ ≤ 1/1900 := by norm_num
+
+/-- Combined polynomial bound including the `c − √(2/π)` correction for `|x| ≤ 3/5`. -/
+private lemma poly_diff_with_correction_bound_06 {x : ℝ} (hx : |x| ≤ 3/5) :
+    |tanhTaylor5 ((7978845608028654 / 10000000000000000 : ℝ) *
+                    (x + (44715 / 1000000) * (x * x * x))) -
+        (2 / Real.sqrt Real.pi) *
+            realErfTaylor7 (x / Real.sqrt 2)|
+      ≤ 1 / 1500 := by
+  have h_rewrite : (2 / Real.sqrt Real.pi) *
+                       realErfTaylor7 (x / Real.sqrt 2)
+                = Real.sqrt (2 / Real.pi) * (x - x^3/6 + x^5/40 - x^7/336) := by
+    show (2 / Real.sqrt Real.pi) *
+            ((x / Real.sqrt 2) - (x / Real.sqrt 2)^3/3
+              + (x / Real.sqrt 2)^5/10 - (x / Real.sqrt 2)^7/42)
+          = Real.sqrt (2 / Real.pi) * (x - x^3/6 + x^5/40 - x^7/336)
+    exact two_div_sqrt_pi_realErfTaylor7_eq x
+  rw [h_rewrite]
+  have h_split :
+      tanhTaylor5 ((7978845608028654 / 10000000000000000 : ℝ) *
+                      (x + (44715 / 1000000) * (x * x * x))) -
+          Real.sqrt (2 / Real.pi) * (x - x^3/6 + x^5/40 - x^7/336)
+        = (tanhTaylor5 ((7978845608028654 / 10000000000000000 : ℝ) *
+                          (x + (44715 / 1000000) * (x * x * x))) -
+            (7978845608028654 / 10000000000000000 : ℝ) *
+                (x - x^3/6 + x^5/40 - x^7/336))
+          + ((7978845608028654 / 10000000000000000 : ℝ) -
+              Real.sqrt (2 / Real.pi)) *
+              (x - x^3/6 + x^5/40 - x^7/336) := by
+    ring
+  rw [h_split]
+  have hpoly := poly_diff_bound_06 hx
+  have hcorr_sqrt := abs_c_sub_sqrt_two_div_pi_le
+  have hx_le_one : |x| ≤ 1 := by linarith
+  have hR := R_bound_at_one hx_le_one
+  calc |(tanhTaylor5 _ - _ * (x - x^3/6 + x^5/40 - x^7/336))
+            + ((7978845608028654 / 10000000000000000 : ℝ)
+                - Real.sqrt (2 / Real.pi)) *
+                (x - x^3/6 + x^5/40 - x^7/336)|
+      ≤ |tanhTaylor5 _ - _ * (x - x^3/6 + x^5/40 - x^7/336)|
+        + |((7978845608028654 / 10000000000000000 : ℝ)
+              - Real.sqrt (2 / Real.pi)) *
+                (x - x^3/6 + x^5/40 - x^7/336)| := abs_add_le _ _
+    _ ≤ 1/1900 + (1/10^15) * 2 := by
+        gcongr
+        rw [abs_mul]
+        gcongr
+    _ ≤ 1/1500 := by norm_num
+
+/-- For `|x| ≤ 3/5`, `|u| ≤ 49/100`. -/
+private lemma u_bound_at_06 {x : ℝ} (hx : |x| ≤ 3/5) :
+    |(7978845608028654 / 10000000000000000 : ℝ) *
+        (x + (44715 / 1000000) * (x * x * x))| ≤ 49 / 100 := by
+  rw [abs_mul]
+  have hc_pos : (0 : ℝ) < 7978845608028654 / 10000000000000000 := by norm_num
+  rw [abs_of_pos hc_pos]
+  have h_x3_le : |x|^3 ≤ (3/5)^3 := pow_le_pow_left₀ (abs_nonneg x) hx 3
+  have h_inner : |x + (44715 / 1000000 : ℝ) * (x * x * x)|
+        ≤ |x| + (44715 / 1000000) * |x|^3 := by
+    have hb := abs_add_le x ((44715 / 1000000 : ℝ) * (x * x * x))
+    have h_eq : |(44715 / 1000000 : ℝ) * (x * x * x)|
+          = (44715 / 1000000) * |x|^3 := by
+      rw [abs_mul, show |(44715 / 1000000 : ℝ)| = 44715 / 1000000 from by norm_num]
+      congr 1
+      rw [show x * x * x = x^3 from by ring, abs_pow]
+    linarith
+  calc (7978845608028654 / 10000000000000000 : ℝ) *
+            |x + (44715 / 1000000) * (x * x * x)|
+      ≤ (7978845608028654 / 10000000000000000) *
+          (|x| + (44715 / 1000000) * |x|^3) := by
+            apply mul_le_mul_of_nonneg_left h_inner hc_pos.le
+    _ ≤ (7978845608028654 / 10000000000000000) *
+          ((3/5) + (44715 / 1000000) * (3/5)^3) := by
+            apply mul_le_mul_of_nonneg_left _ hc_pos.le
+            have hk_pos : (0 : ℝ) ≤ 44715 / 1000000 := by norm_num
+            have h := mul_le_mul_of_nonneg_left h_x3_le hk_pos
+            linarith
+    _ ≤ 49/100 := by norm_num
+
+/-- For `|x| ≤ 3/5`, `|u|⁷/7 ≤ 1/1000`. -/
+private lemma tanh_residual_at_06 {x : ℝ} (hx : |x| ≤ 3/5) :
+    |(7978845608028654 / 10000000000000000 : ℝ) *
+        (x + (44715 / 1000000) * (x * x * x))|^7 / 7
+      ≤ 1 / 1000 := by
+  have hu := u_bound_at_06 hx
+  have hu_nn : (0 : ℝ) ≤ |(7978845608028654 / 10000000000000000 : ℝ) *
+                  (x + (44715 / 1000000) * (x * x * x))| := abs_nonneg _
+  have hu7 : |(7978845608028654 / 10000000000000000 : ℝ) *
+                (x + (44715 / 1000000) * (x * x * x))|^7
+              ≤ (49/100)^7 :=
+    pow_le_pow_left₀ hu_nn hu 7
+  calc |(7978845608028654 / 10000000000000000 : ℝ) *
+            (x + (44715 / 1000000) * (x * x * x))|^7 / 7
+      ≤ (49/100)^7 / 7 :=
+        div_le_div_of_nonneg_right hu7 (by norm_num)
+    _ ≤ 1/1000 := by norm_num
+
+/-- For `|x| ≤ 3/5`, `|x/√2| ≤ 3/5`. -/
+private lemma z_bound_at_06 {x : ℝ} (hx : |x| ≤ 3/5) :
+    |x / Real.sqrt 2| ≤ 3/5 := by
+  have hsqrt2_pos : (0 : ℝ) < Real.sqrt 2 := Real.sqrt_pos.mpr (by norm_num)
+  have hsqrt2_ge_1 : (1 : ℝ) ≤ Real.sqrt 2 := by
+    rw [show (1:ℝ) = Real.sqrt 1 from Real.sqrt_one.symm]
+    exact Real.sqrt_le_sqrt (by norm_num)
+  rw [abs_div, abs_of_pos hsqrt2_pos, div_le_iff₀ hsqrt2_pos]
+  nlinarith [hx, hsqrt2_ge_1]
+
+/-- For `|x| ≤ 3/5`, the realErf Taylor remainder satisfies
+`(2/√π)·5·|z|^9/864 ≤ 1/12000`. -/
+private lemma erf_residual_at_06 {x : ℝ} (hx : |x| ≤ 3/5) :
+    (2 / Real.sqrt Real.pi) * (5 * |x / Real.sqrt 2|^9 / 864) ≤ 1 / 12000 := by
+  have hpi_pos : (0 : ℝ) < Real.pi := Real.pi_pos
+  have hsqrt_pi_pos : (0 : ℝ) < Real.sqrt Real.pi := Real.sqrt_pos.mpr hpi_pos
+  have hpi_ge : (3/2 : ℝ) ≤ Real.sqrt Real.pi := by
+    rw [show (3/2:ℝ) = Real.sqrt ((3/2)^2) from (Real.sqrt_sq (by norm_num)).symm]
+    apply Real.sqrt_le_sqrt
+    have : ((3/2:ℝ))^2 = 9/4 := by norm_num
+    rw [this]; linarith [Real.pi_gt_three]
+  have h_inv_pi : (2 : ℝ) / Real.sqrt Real.pi ≤ 4/3 := by
+    rw [div_le_div_iff₀ hsqrt_pi_pos (by norm_num : (0:ℝ) < 3)]
+    nlinarith [hpi_ge]
+  have hz := z_bound_at_06 hx
+  have hz_nn : (0 : ℝ) ≤ |x / Real.sqrt 2| := abs_nonneg _
+  have hz9 : |x / Real.sqrt 2|^9 ≤ (3/5)^9 := pow_le_pow_left₀ hz_nn hz 9
+  calc (2 / Real.sqrt Real.pi) * (5 * |x / Real.sqrt 2|^9 / 864)
+      ≤ (4/3 : ℝ) * (5 * (3/5)^9 / 864) := by
+        apply mul_le_mul h_inv_pi
+        · apply div_le_div_of_nonneg_right
+          · exact mul_le_mul_of_nonneg_left hz9 (by norm_num)
+          · norm_num
+        · positivity
+        · norm_num
+    _ ≤ 1/12000 := by norm_num
+
+/-- Closure for `|x| ≤ 3/5`: gelu approximation error is at most `1/1000`. -/
+private theorem approx_gelu_error_bound_06 {x : ℝ} (hx : |x| ≤ 3/5) :
+    |approxGeLUScalar x - exactGeLUScalar x| ≤ 1 / 1000 := by
+  rw [approxGeLUScalar_sub_exactGeLUScalar x]
+  have hx_le_one : |x| ≤ 1 := by linarith
+  have h_taylor := gelu_gap_taylor_decomposition hx_le_one
+  have h_tanh := tanh_residual_at_06 hx
+  have h_poly := poly_diff_with_correction_bound_06 hx
+  have h_erf := erf_residual_at_06 hx
+  have h_gap_bound :
+      |Real.tanh ((7978845608028654 / 10000000000000000 : ℝ) *
+                    (x + (44715 / 1000000) * (x * x * x))) -
+          realErf (x / Real.sqrt 2)|
+        ≤ 1/1000 + 1/1500 + 1/12000 := by
+    calc |Real.tanh _ - realErf _|
+        ≤ |(7978845608028654 / 10000000000000000 : ℝ) *
+                (x + (44715 / 1000000) * (x * x * x))|^7 / 7
+          + |tanhTaylor5 _ - (2 / Real.sqrt Real.pi) * realErfTaylor7 _|
+          + (2 / Real.sqrt Real.pi) * (5 * |x / Real.sqrt 2|^9 / 864) :=
+            h_taylor
+      _ ≤ 1/1000 + 1/1500 + 1/12000 := by linarith
+  rw [abs_mul, abs_div, abs_two]
+  have hx2_le : |x| / 2 ≤ 3/10 := by linarith
+  have hx2_nn : 0 ≤ |x| / 2 := by positivity
+  have h_combined : 1/1000 + 1/1500 + (1/12000 : ℝ) ≤ 1/300 := by norm_num
+  calc |x| / 2 *
+          |Real.tanh _ - realErf _|
+      ≤ |x| / 2 * (1/1000 + 1/1500 + 1/12000) :=
+          mul_le_mul_of_nonneg_left h_gap_bound hx2_nn
+    _ ≤ |x| / 2 * (1/300) :=
+          mul_le_mul_of_nonneg_left h_combined hx2_nn
+    _ ≤ 3/10 * (1/300) :=
+          mul_le_mul_of_nonneg_right hx2_le (by norm_num)
+    _ ≤ 1/1000 := by norm_num
+
 /-! ## Correctness and Approximation Statements -/
 
 /-- **`approxGeLUKernel` correctness against the approximate GeLU expression.**
@@ -1142,26 +1389,27 @@ noncomputable def approxGeLUEps : ℝ := 1 / 1000
 
 /-- Quantitative gap for the global `approxGeLUEps = 1e-3` bound, restricted
 to the medium range `1/1000 < |x| < 20`. The proof dispatches on whether
-`|x| ≤ 1/2`:
+`|x| ≤ 3/5`:
 
-* **Small `|x| ≤ 1/2`** — closed by `approx_gelu_error_bound_small`, which
-  applies the three-piece Taylor decomposition `gelu_gap_taylor_decomposition`
-  with explicit numerical bounds on each piece.
-* **Mid `1/2 < |x| < 20`** — the remaining open analytic content. The current
-  Taylor expansion (5th order tanh, 7th order erf) is too loose on this
-  range; closing it requires going to higher Taylor order or splitting the
-  range further with sub-case-specific bounds. Out of scope for the current
-  snapshot. -/
+* **`|x| ≤ 3/5`** — closed by `approx_gelu_error_bound_06`, which applies
+  the three-piece Taylor decomposition `gelu_gap_taylor_decomposition`
+  with explicit numerical bounds on each piece (and re-tuned per-coefficient
+  bounds compared to the tighter `approx_gelu_error_bound_small`).
+* **Mid `3/5 < |x| < 20`** — the remaining open analytic content. The
+  current Taylor expansion (5th order tanh, 7th order erf) is too loose on
+  this range; closing it requires going to higher Taylor order or splitting
+  the range further with sub-case-specific bounds. Out of scope for the
+  current snapshot. -/
 theorem approx_gelu_error_bound_medium {x : ℝ}
     (_hxlow : approxGeLUEps < |x|) (hxhigh : |x| < 20) :
     |approxGeLUScalar x - exactGeLUScalar x| ≤ approxGeLUEps := by
-  rcases le_or_gt (|x|) (1/2) with hsmall | hmid
-  · -- Small subcase: closed via the Taylor analysis.
+  rcases le_or_gt (|x|) (3/5) with h06 | hmid
+  · -- |x| ≤ 3/5: closed via the Taylor analysis.
     show |approxGeLUScalar x - exactGeLUScalar x| ≤ 1 / 1000
-    exact approx_gelu_error_bound_small hsmall
-  · -- Mid subcase 1/2 < |x| < 20: still open; tail bounds too loose, lower-
-    -- order Taylor remainder dominates. Future work: higher-order Taylor or
-    -- subdivided bounds.
+    exact approx_gelu_error_bound_06 h06
+  · -- 3/5 < |x| < 20: still open; tail bounds too loose, the |u|^7/7
+    -- residual dominates beyond ~0.65. Future work: higher-order Taylor
+    -- or subdivided bounds.
     sorry
 
 /-- The `|x| > 1/1000` half of `approx_gelu_error_bound`. Dispatches via
