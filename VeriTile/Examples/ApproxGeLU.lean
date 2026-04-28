@@ -717,6 +717,116 @@ private noncomputable def tanhTaylor5 (u : ℝ) : ℝ := u - u^3/3 + 2 * u^5/15
 private noncomputable def realErfTaylor7 (z : ℝ) : ℝ :=
   z - z^3/3 + z^5/10 - z^7/42
 
+/-! ### Polynomial coefficient bound for the medium-low subcase `|x| ≤ 1/2`
+
+Expanding `tanhTaylor5(c·(x + k·x³)) − c·(x − x³/6 + x⁵/40 − x⁷/336)` as a
+polynomial in `x` (rational coefficients, since `c` and `k` are rational) and
+applying triangle inequality gives a `≤ 1/5000` bound for `|x| ≤ 1/2`. The
+remaining `(c − √(2/π))·(...)` correction is `O(10⁻¹⁵)` and folded in below. -/
+
+/-- Polynomial expansion identity: the difference of `tanhTaylor5` at the gelu
+argument and the rational version `c·(x − x³/6 + x⁵/40 − x⁷/336)` factors as
+an odd polynomial in `x³…x¹⁵` whose coefficients are explicit rationals in
+`c, k`. -/
+private lemma tanhTaylor5_sub_rationalErf_eq (c k x : ℝ) :
+    tanhTaylor5 (c * (x + k * (x*x*x))) -
+        c * (x - x^3/6 + x^5/40 - x^7/336)
+      = (c*k - c^3/3 + c/6) * x^3
+          + (-c^3*k + 2*c^5/15 - c/40) * x^5
+          + (-c^3*k^2 + 2*c^5*k/3 + c/336) * x^7
+          + (-c^3*k^3/3 + 4*c^5*k^2/3) * x^9
+          + (4*c^5*k^3/3) * x^11
+          + (2*c^5*k^4/3) * x^13
+          + (2*c^5*k^5/15) * x^15 := by
+  unfold tanhTaylor5
+  ring
+
+/-- Polynomial difference bound for `|x| ≤ 1/2`: the rational-version gap
+`|tanhTaylor5(c·(x + k·x³)) − c·(x − x³/6 + x⁵/40 − x⁷/336)| ≤ 1/4000`. The
+true sup is ~1.84·10⁻⁴ so the constant is just over the truth. -/
+private lemma poly_diff_bound {x : ℝ} (hx : |x| ≤ 1/2) :
+    |tanhTaylor5 ((7978845608028654 / 10000000000000000 : ℝ) *
+                    (x + (44715 / 1000000) * (x * x * x))) -
+        (7978845608028654 / 10000000000000000 : ℝ) *
+            (x - x^3/6 + x^5/40 - x^7/336)|
+      ≤ 1 / 4000 := by
+  set c : ℝ := 7978845608028654 / 10000000000000000 with hc_def
+  set k : ℝ := 44715 / 1000000 with hk_def
+  rw [tanhTaylor5_sub_rationalErf_eq c k x]
+  -- Bound each `|coef|·|x|^n` ≤ |coef|·(1/2)^n.
+  have hx_nn : 0 ≤ |x| := abs_nonneg _
+  have hx3 : |x|^3 ≤ (1/2)^3 := pow_le_pow_left₀ hx_nn hx 3
+  have hx5 : |x|^5 ≤ (1/2)^5 := pow_le_pow_left₀ hx_nn hx 5
+  have hx7 : |x|^7 ≤ (1/2)^7 := pow_le_pow_left₀ hx_nn hx 7
+  have hx9 : |x|^9 ≤ (1/2)^9 := pow_le_pow_left₀ hx_nn hx 9
+  have hx11 : |x|^11 ≤ (1/2)^11 := pow_le_pow_left₀ hx_nn hx 11
+  have hx13 : |x|^13 ≤ (1/2)^13 := pow_le_pow_left₀ hx_nn hx 13
+  have hx15 : |x|^15 ≤ (1/2)^15 := pow_le_pow_left₀ hx_nn hx 15
+  -- Shape: |∑ᵢ cᵢ·x^iⁿ| ≤ ∑ᵢ |cᵢ|·|x|^n ≤ ∑ᵢ |cᵢ|·(1/2)^n
+  set a3 := c*k - c^3/3 + c/6 with ha3
+  set a5 := -c^3*k + 2*c^5/15 - c/40 with ha5
+  set a7 := -c^3*k^2 + 2*c^5*k/3 + c/336 with ha7
+  set a9 := -c^3*k^3/3 + 4*c^5*k^2/3 with ha9
+  set a11 := 4*c^5*k^3/3 with ha11
+  set a13 := 2*c^5*k^4/3 with ha13
+  set a15 := 2*c^5*k^5/15 with ha15
+  -- Bound each term `|aᵢ · x^i|` by `|aᵢ| · (1/2)^i`.
+  have hb3 : |a3 * x^3| ≤ |a3| * (1/2)^3 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx3 (abs_nonneg _)
+  have hb5 : |a5 * x^5| ≤ |a5| * (1/2)^5 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx5 (abs_nonneg _)
+  have hb7 : |a7 * x^7| ≤ |a7| * (1/2)^7 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx7 (abs_nonneg _)
+  have hb9 : |a9 * x^9| ≤ |a9| * (1/2)^9 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx9 (abs_nonneg _)
+  have hb11 : |a11 * x^11| ≤ |a11| * (1/2)^11 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx11 (abs_nonneg _)
+  have hb13 : |a13 * x^13| ≤ |a13| * (1/2)^13 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx13 (abs_nonneg _)
+  have hb15 : |a15 * x^15| ≤ |a15| * (1/2)^15 := by
+    rw [abs_mul, abs_pow]; exact mul_le_mul_of_nonneg_left hx15 (abs_nonneg _)
+  -- Numeric bounds on each `|aᵢ| · (1/2)^i`.
+  have hn3 : |a3| * (1/2)^3 ≤ 9 / 100000 := by
+    rw [ha3, hc_def, hk_def]
+    rw [abs_of_neg (by norm_num)]; norm_num
+  have hn5 : |a5| * (1/2)^5 ≤ 2 / 100000 := by
+    rw [ha5, hc_def, hk_def]
+    rw [abs_of_pos (by norm_num)]; norm_num
+  have hn7 : |a7| * (1/2)^7 ≤ 9 / 100000 := by
+    rw [ha7, hc_def, hk_def]
+    rw [abs_of_pos (by norm_num)]; norm_num
+  have hn9 : |a9| * (1/2)^9 ≤ 1 / 500000 := by
+    rw [ha9, hc_def, hk_def]
+    rw [abs_of_pos (by norm_num)]; norm_num
+  have hn11 : |a11| * (1/2)^11 ≤ 1 / 50000000 := by
+    rw [ha11, hc_def, hk_def]
+    rw [abs_of_pos (by norm_num)]; norm_num
+  have hn13 : |a13| * (1/2)^13 ≤ 1 / 5000000000 := by
+    rw [ha13, hc_def, hk_def]
+    rw [abs_of_pos (by norm_num)]; norm_num
+  have hn15 : |a15| * (1/2)^15 ≤ 1 / 1000000000000 := by
+    rw [ha15, hc_def, hk_def]
+    rw [abs_of_pos (by norm_num)]; norm_num
+  -- Sum the bounds.
+  calc |a3 * x^3 + a5 * x^5 + a7 * x^7 + a9 * x^9 + a11 * x^11 + a13 * x^13 + a15 * x^15|
+      ≤ |a3 * x^3| + |a5 * x^5| + |a7 * x^7| + |a9 * x^9| + |a11 * x^11|
+          + |a13 * x^13| + |a15 * x^15| := by
+        have h1 := abs_add_le (a3*x^3 + a5*x^5 + a7*x^7 + a9*x^9 + a11*x^11 + a13*x^13)
+                              (a15*x^15)
+        have h2 := abs_add_le (a3*x^3 + a5*x^5 + a7*x^7 + a9*x^9 + a11*x^11) (a13*x^13)
+        have h3 := abs_add_le (a3*x^3 + a5*x^5 + a7*x^7 + a9*x^9) (a11*x^11)
+        have h4 := abs_add_le (a3*x^3 + a5*x^5 + a7*x^7) (a9*x^9)
+        have h5 := abs_add_le (a3*x^3 + a5*x^5) (a7*x^7)
+        have h6 := abs_add_le (a3*x^3) (a5*x^5)
+        linarith
+    _ ≤ |a3| * (1/2)^3 + |a5| * (1/2)^5 + |a7| * (1/2)^7 + |a9| * (1/2)^9
+          + |a11| * (1/2)^11 + |a13| * (1/2)^13 + |a15| * (1/2)^15 := by
+        linarith [hb3, hb5, hb7, hb9, hb11, hb13, hb15]
+    _ ≤ 9/100000 + 2/100000 + 9/100000 + 1/500000 + 1/50000000
+          + 1/5000000000 + 1/1000000000000 := by
+        linarith [hn3, hn5, hn7, hn9, hn11, hn13, hn15]
+    _ ≤ 1/4000 := by norm_num
+
 /-- Three-piece triangle decomposition of the inner gelu gap. For `|x| ≤ 1`,
 the difference `|tanh u - realErf z|` is dominated by the sum of the two
 Taylor residual bounds plus the explicit polynomial coefficient difference
