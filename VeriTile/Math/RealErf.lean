@@ -334,4 +334,175 @@ theorem realErf_add_one_le_exp {z : ℝ} (hz : z ≤ -1) :
   rw [hexp] at h
   linarith
 
+/-! ## Taylor remainder for `realErf` on the unit ball
+
+For `|z| ≤ 1`, the integrand `exp(-(t·t))` admits the Taylor expansion
+`1 − t² + t⁴/2 − t⁶/6` with explicit remainder `5·t⁸/96` (from
+mathlib's `Real.exp_bound` applied at `x = -(t·t)`). Integrating
+term-by-term gives a 7th-order Taylor bound for `realErf z` with a
+9th-order remainder. -/
+
+/-- Pointwise Taylor remainder for the Gaussian kernel on `|t| ≤ 1`:
+`|exp(-(t·t)) − (1 − t² + t⁴/2 − t⁶/6)| ≤ 5 · t⁸ / 96`. Direct
+application of `Real.exp_bound` with `x = -(t·t)` and `n = 4`. -/
+private lemma gaussianKernel_taylor3_bound {t : ℝ} (ht : |t| ≤ 1) :
+    |gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)| ≤ 5 * t ^ 8 / 96 := by
+  unfold gaussianKernel
+  have h_x_bound : |(-(t * t))| ≤ 1 := by
+    rw [abs_neg, abs_mul]
+    nlinarith [abs_nonneg t]
+  have h := Real.exp_bound h_x_bound (by norm_num : 0 < 4)
+  have h_sum : ∑ m ∈ Finset.range 4, (-(t * t))^m / (m.factorial : ℝ)
+        = 1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6 := by
+    simp [Finset.sum_range_succ, Nat.factorial]; ring
+  rw [h_sum] at h
+  have h_x_pow : |(-(t * t))| ^ 4 = t ^ 8 := by
+    rw [abs_neg, show t * t = t ^ 2 from by ring, abs_pow, sq_abs]; ring
+  rw [h_x_pow] at h
+  have h_const : ((Nat.succ 4 : ℕ) : ℝ) / ((Nat.factorial 4 : ℕ) * (4 : ℕ) : ℝ) = 5 / 96 := by
+    norm_num [Nat.factorial]
+  rw [h_const] at h
+  linarith
+
+/-- Antiderivative computation via FTC: the polynomial
+`F(z) = z − z³/3 + z⁵/10 − z⁷/42` is an antiderivative of
+`1 − z² + z⁴/2 − z⁶/6`, so the integral on `[0, z]` evaluates to `F(z)`. -/
+private lemma integral_gaussianKernel_taylor_poly (z : ℝ) :
+    ∫ t in (0)..z, (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)
+      = z - z ^ 3 / 3 + z ^ 5 / 10 - z ^ 7 / 42 := by
+  have h_deriv : ∀ t : ℝ, HasDerivAt
+      (fun u => u - u ^ 3 / 3 + u ^ 5 / 10 - u ^ 7 / 42)
+      (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6) t := by
+    intro t
+    have h1 : HasDerivAt (fun u : ℝ => u) 1 t := hasDerivAt_id t
+    have h2 : HasDerivAt (fun u : ℝ => u ^ 3 / 3) (t ^ 2) t := by
+      have := (hasDerivAt_pow 3 t).div_const 3
+      convert this using 1; push_cast; ring
+    have h3 : HasDerivAt (fun u : ℝ => u ^ 5 / 10) (t ^ 4 / 2) t := by
+      have := (hasDerivAt_pow 5 t).div_const 10
+      convert this using 1; push_cast; ring
+    have h4 : HasDerivAt (fun u : ℝ => u ^ 7 / 42) (t ^ 6 / 6) t := by
+      have := (hasDerivAt_pow 7 t).div_const 42
+      convert this using 1; push_cast; ring
+    have h_combined := ((h1.sub h2).add h3).sub h4
+    convert h_combined using 1
+  have h_FTC :
+      ∫ t in (0)..z, (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)
+        = (z - z ^ 3 / 3 + z ^ 5 / 10 - z ^ 7 / 42)
+            - (0 - 0 ^ 3 / 3 + 0 ^ 5 / 10 - 0 ^ 7 / 42) := by
+    apply intervalIntegral.integral_eq_sub_of_hasDerivAt (fun x _ => h_deriv x)
+    have h_cont : Continuous (fun t : ℝ => 1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6) := by
+      fun_prop
+    exact h_cont.intervalIntegrable _ _
+  linarith [h_FTC]
+
+/-- Integral form of the Taylor bound: for `|z| ≤ 1`, the inner integral
+satisfies `|∫_0^z gaussianKernel − (z − z³/3 + z⁵/10 − z⁷/42)| ≤ 5·|z|⁹/864`.
+Follows from `gaussianKernel_taylor3_bound` integrated pointwise. -/
+private lemma integral_gaussianKernel_taylor_bound {z : ℝ} (hz : |z| ≤ 1) :
+    |(∫ t in (0)..z, gaussianKernel t) - (z - z ^ 3 / 3 + z ^ 5 / 10 - z ^ 7 / 42)|
+      ≤ 5 * |z| ^ 9 / 864 := by
+  have h_split :
+      (∫ t in (0)..z, gaussianKernel t) - (z - z ^ 3 / 3 + z ^ 5 / 10 - z ^ 7 / 42)
+        = ∫ t in (0)..z, (gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)) := by
+    rw [intervalIntegral.integral_sub
+        (continuous_gaussianKernel.intervalIntegrable _ _)
+        (Continuous.intervalIntegrable (by fun_prop) _ _)]
+    rw [integral_gaussianKernel_taylor_poly]
+  rw [h_split]
+  -- Pointwise bound: for t ∈ uIoc 0 z, |gaussianKernel t - poly3(t)| ≤ 5*t⁸/96
+  rcases le_or_gt 0 z with hz_nn | hz_neg
+  · rw [intervalIntegral.integral_of_le hz_nn]
+    have hz_eq : |z| = z := abs_of_nonneg hz_nn
+    have h_pointwise :
+        ∀ t ∈ Set.Ioc 0 z,
+          |gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)| ≤ 5 * t ^ 8 / 96 := by
+      intro t ht
+      apply gaussianKernel_taylor3_bound
+      rw [abs_of_pos ht.1]; linarith [ht.2, hz, hz_eq.symm.le]
+    have h_step1 :
+        |∫ t in Set.Ioc 0 z,
+          gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)|
+          ≤ ∫ t in Set.Ioc 0 z,
+              |gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)| :=
+      MeasureTheory.abs_integral_le_integral_abs
+    have h_step2 : ∫ t in Set.Ioc 0 z,
+            |gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)|
+          ≤ ∫ t in Set.Ioc 0 z, 5 * t ^ 8 / 96 := by
+      apply MeasureTheory.setIntegral_mono_on
+      · exact (continuous_gaussianKernel.sub (by fun_prop)).abs.integrableOn_Ioc
+      · exact (continuous_const.mul (continuous_id.pow 8) |>.div_const _).integrableOn_Ioc
+      · exact measurableSet_Ioc
+      · exact h_pointwise
+    have h_step3 : ∫ t in Set.Ioc 0 z, 5 * t ^ 8 / 96 = 5 * z ^ 9 / 864 := by
+      rw [show ∫ t in Set.Ioc 0 z, 5 * t ^ 8 / 96 = ∫ t in (0)..z, 5 * t ^ 8 / 96 from
+            (intervalIntegral.integral_of_le hz_nn).symm]
+      have : ∫ t in (0)..z, 5 * t ^ 8 / 96 = ∫ t in (0)..z, (5/96) * t ^ 8 := by
+        apply intervalIntegral.integral_congr; intro t _; ring
+      rw [this, intervalIntegral.integral_const_mul, integral_pow]; ring
+    have h_z9 : |z| ^ 9 = z ^ 9 := by
+      rw [show |z| ^ 9 = |z ^ 9| from by rw [abs_pow]]
+      exact abs_of_nonneg (by positivity)
+    rw [h_z9]; linarith
+  · rw [intervalIntegral.integral_of_ge hz_neg.le, abs_neg]
+    have hz_eq : |z| = -z := abs_of_neg hz_neg
+    have h_pointwise :
+        ∀ t ∈ Set.Ioc z 0,
+          |gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)| ≤ 5 * t ^ 8 / 96 := by
+      intro t ht
+      apply gaussianKernel_taylor3_bound
+      have h_neg_z_le : -z ≤ 1 := by rw [← hz_eq]; exact hz
+      rcases lt_or_eq_of_le ht.2 with h_t_neg | h_t_zero
+      · rw [abs_of_neg h_t_neg]; linarith [ht.1]
+      · rw [h_t_zero]; simp
+    have h_step1 :
+        |∫ t in Set.Ioc z 0,
+          gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)|
+          ≤ ∫ t in Set.Ioc z 0,
+              |gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)| :=
+      MeasureTheory.abs_integral_le_integral_abs
+    have h_step2 : ∫ t in Set.Ioc z 0,
+            |gaussianKernel t - (1 - t ^ 2 + t ^ 4 / 2 - t ^ 6 / 6)|
+          ≤ ∫ t in Set.Ioc z 0, 5 * t ^ 8 / 96 := by
+      apply MeasureTheory.setIntegral_mono_on
+      · exact (continuous_gaussianKernel.sub (by fun_prop)).abs.integrableOn_Ioc
+      · exact (continuous_const.mul (continuous_id.pow 8) |>.div_const _).integrableOn_Ioc
+      · exact measurableSet_Ioc
+      · exact h_pointwise
+    have h_step3 : ∫ t in Set.Ioc z 0, 5 * t ^ 8 / 96 = -5 * z ^ 9 / 864 := by
+      rw [show ∫ t in Set.Ioc z 0, 5 * t ^ 8 / 96 = ∫ t in z..(0:ℝ), 5 * t ^ 8 / 96 from
+            (intervalIntegral.integral_of_le hz_neg.le).symm]
+      have : ∫ t in z..(0:ℝ), 5 * t ^ 8 / 96 = ∫ t in z..(0:ℝ), (5/96) * t ^ 8 := by
+        apply intervalIntegral.integral_congr; intro t _; ring
+      rw [this, intervalIntegral.integral_const_mul, integral_pow]; ring
+    have h_z9 : |z| ^ 9 = -z ^ 9 := by
+      rw [show |z| ^ 9 = |z ^ 9| from by rw [abs_pow]]
+      apply abs_of_neg
+      have h_z8_pos : 0 < z ^ 8 := by
+        have hne : z ≠ 0 := ne_of_lt hz_neg
+        positivity
+      have : z ^ 9 = z * z ^ 8 := by ring
+      rw [this]; exact mul_neg_of_neg_of_pos hz_neg h_z8_pos
+    rw [h_z9]; linarith
+
+/-- Septenary Taylor bound for `realErf` on the unit ball:
+`|realErf z − (2/√π)·(z − z³/3 + z⁵/10 − z⁷/42)| ≤ (2/√π)·5·|z|⁹/864`
+for `|z| ≤ 1`. -/
+theorem abs_realErf_sub_taylor7_le {z : ℝ} (hz : |z| ≤ 1) :
+    |realErf z - (2 / Real.sqrt Real.pi) *
+        (z - z ^ 3 / 3 + z ^ 5 / 10 - z ^ 7 / 42)|
+      ≤ (2 / Real.sqrt Real.pi) * (5 * |z| ^ 9 / 864) := by
+  have h_factor :
+      realErf z - (2 / Real.sqrt Real.pi) *
+          (z - z ^ 3 / 3 + z ^ 5 / 10 - z ^ 7 / 42)
+        = (2 / Real.sqrt Real.pi) *
+            ((∫ t in (0)..z, gaussianKernel t)
+              - (z - z ^ 3 / 3 + z ^ 5 / 10 - z ^ 7 / 42)) := by
+    unfold realErf; ring
+  rw [h_factor, abs_mul,
+      show |2 / Real.sqrt Real.pi| = 2 / Real.sqrt Real.pi from
+        abs_of_pos two_div_sqrt_pi_pos]
+  exact mul_le_mul_of_nonneg_left
+    (integral_gaussianKernel_taylor_bound hz) two_div_sqrt_pi_pos.le
+
 end VeriTile.Math
