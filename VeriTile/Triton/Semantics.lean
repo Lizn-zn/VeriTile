@@ -305,6 +305,12 @@ noncomputable def evalOp : Op → BlockState → Option Value
           -- at memory address `f i`.
           some (.tile n (fun i => s.readMem region (f i)))
       | _ => none
+  | .natToReal a, s =>
+      -- Lift a `Nat`-channel value into the `ℝ` channel pointwise.
+      match evalOp a s with
+      | some (.scalarNat n) => some (.scalar (n : ℝ))
+      | some (.tileNat n f) => some (.tile n (fun i => (f i : ℝ)))
+      | _ => none
 
 mutual
 

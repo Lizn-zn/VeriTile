@@ -46,6 +46,9 @@ Notes on individual constructors:
   i.e. produced from `constNat` / `programId` / `arange` / `Nat`-arithmetic)
   and reads from `region`. Scalar offset = single-cell read; tile offset
   = gather.
+* `natToReal` lifts a `Nat`-channel value (`scalarNat` / `tileNat`) into
+  the `ℝ` channel. Used by kernels that mix loop counters / sizes with
+  ℝ data (e.g. Welford's `delta / (i + 1)`, division by block size).
 -/
 inductive Op : Type where
   | const     : ℝ → Op
@@ -67,6 +70,7 @@ inductive Op : Type where
   | reduceMax : Op → Op
   | reduceSum : Op → Op
   | load      : (region : RegionName) → (offset : Op) → Op
+  | natToReal : Op → Op
   deriving Inhabited
 
 /--
