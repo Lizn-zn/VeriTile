@@ -248,10 +248,12 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
       `(Op.negInf)
   | `(tritonExpr| tl.load($p:tritonPtr $[, $kwargs:tritonKwarg]*)) => do
       -- Pointer surface syntax lowers to the internal `(region, offset)` AST.
-      -- Optional `mask=` / `other=` kwargs lower to Op.load's 4th/5th args
-      -- (Slice 1 of mask extension). Per Issue #16: any other kwarg name is
-      -- a parse error. Per Triton convention: missing `other` defaults to
-      -- `Op.const 0`; `other` without `mask` is rejected.
+      -- Optional `mask=` / `other=` kwargs lower to Op.load's 4th/5th args.
+      -- Per Issue #16: any other kwarg name is a parse error. Per Triton spec
+      -- ("If `other` is None, the masked-out value is undefined"): missing
+      -- `other` lowers to AST `(some mask, none)`, which evalOp evaluates by
+      -- filling masked-off lanes from `BlockState.undef`. `other` without
+      -- `mask` is rejected (no Triton equivalent).
       let (r, off) ← expandPtr p
       let mut maskTerm : Option (TSyntax `term) := none
       let mut otherTerm : Option (TSyntax `term) := none
@@ -272,8 +274,9 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
       | none, none =>
           `(Op.load $r $off none none)
       | some m, none =>
-          -- Triton default: missing `other` is 0.0 (ℝ scalar).
-          `(Op.load $r $off (some $m) (some (Op.const 0)))
+          -- No `other=`: masked-off lanes are undef (filled from
+          -- BlockState.undef). Faithful to Triton's spec.
+          `(Op.load $r $off (some $m) none)
       | some m, some o =>
           `(Op.load $r $off (some $m) (some $o))
       | none, some _ =>

@@ -221,7 +221,8 @@ theorem unfused_silu_correct
             else if n = "offsets" then
                   some (Value.tileNat blockSize (fun i => s.pid * blockSize + i.val))
             else if n = "pid" then some (Value.scalarNat s.pid) else s.regs n,
-          pid := s.pid } with hs1_def
+          pid := s.pid,
+          undef := s.undef } with hs1_def
   have h1 : exec (siluStepGate xReg gateReg zReg blockSize) s = some s1 := by
     simp [exec, siluStepGate, stepStmts, stepStmt, evalOp, Value.bop,
           BlockState.setReg, BlockState.readMem]
@@ -252,7 +253,8 @@ theorem unfused_silu_correct
             else if n = "offsets" then
                   some (Value.tileNat blockSize (fun i => s1.pid * blockSize + i.val))
             else if n = "pid" then some (Value.scalarNat s1.pid) else s1.regs n,
-          pid := s1.pid } with hs2_def
+          pid := s1.pid,
+          undef := s1.undef } with hs2_def
   have h2 : exec (siluStepSilu zReg siluReg blockSize) s1 = some s2 := by
     simp [exec, siluStepSilu, stepStmts, stepStmt, evalOp, Value.bop, Value.uop,
           BlockState.setReg, BlockState.readMem]
@@ -295,7 +297,8 @@ theorem unfused_silu_correct
             else if n = "offsets" then
                   some (Value.tileNat blockSize (fun i => s2.pid * blockSize + i.val))
             else if n = "pid" then some (Value.scalarNat s2.pid) else s2.regs n,
-          pid := s2.pid } with hs3_def
+          pid := s2.pid,
+          undef := s2.undef } with hs3_def
   have h3 : exec (siluStepResidual siluReg residualReg outReg blockSize) s2 = some s3 := by
     simp [exec, siluStepResidual, stepStmts, stepStmt, evalOp, Value.bop,
           BlockState.setReg, BlockState.readMem]

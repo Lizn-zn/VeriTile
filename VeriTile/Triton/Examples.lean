@@ -160,4 +160,37 @@ example : Op := show Op from
   | some (.assign _ op) => op
   | _ => .const 0
 
+/-! ## Slice 4 sanity: `tl.load(p, mask=m)` (no `other=`) uses `s.undef`
+
+These verify the Triton-faithful semantic where masked-off lanes get
+the per-state `undef` value, not a hardcoded 0. The same load on two
+states with different `undef` produces different results — this is the
+non-determinism captured in our model. -/
+
+/-- Direct-AST smoke: `evalOp` on a masked load with no `other` returns
+    `s.undef` for the masked-off lane. -/
+example : evalOp (.load "X" (.constNat 0)
+                    (some (.lt (.constNat 0) (.constNat 0)))  -- mask = 0 < 0 = false
+                    none)
+          { mem := fun _ _ => 100, regs := fun _ => none
+          , pid := 0, undef := fun _ _ => 42 }
+          = some (Value.scalar 42) := by
+  show some (Value.scalar 42) = some (Value.scalar 42)
+  rfl
+
+/-- Non-determinism: two states with same `mem` but different `undef`
+    produce different results from a masked-off load. -/
+example :
+    let s1 : BlockState :=
+      { mem := fun _ _ => 0, regs := fun _ => none
+      , pid := 0, undef := fun _ _ => 42 }
+    let s2 : BlockState :=
+      { mem := fun _ _ => 0, regs := fun _ => none
+      , pid := 0, undef := fun _ _ => 99 }
+    let mask_false : Op := .lt (.constNat 0) (.constNat 0)
+    evalOp (.load "X" (.constNat 0) (some mask_false) none) s1
+      ≠ evalOp (.load "X" (.constNat 0) (some mask_false) none) s2 := by
+  show some (Value.scalar 42) ≠ some (Value.scalar 99)
+  intro h; injection h with h; injection h with h; norm_num at h
+
 end VeriTile.Triton.Examples

@@ -70,16 +70,40 @@ A block-level execution state.
 * `regs` is the named register file. `none` means the register is
   not currently defined.
 * `pid` is the value of `tl.program_id(0)` for this block.
+* `undef` models the **undefined-behavior values for masked-off load
+  lanes** when `tl.load(..., mask=m)` is called without an `other=`
+  kwarg. Per Triton's spec ("If `other` is None, the masked-out value
+  is undefined"), the masked-off lane gets some implementation-defined
+  ℝ. We model this as `undef : RegionName → Nat → ℝ`: each load
+  whose mask is `false` at lane `i` returns `undef region (offset i)`.
+
+  Correctness theorems quantify `∀ s : BlockState`, which implicitly
+  quantifies over all `undef` configurations. A kernel that doesn't
+  observe its masked-off lanes (e.g., follows the load with a store
+  using the same mask) verifies for any `undef` choice.
+
+  This is a sound under-approximation of real Triton: real hardware
+  can produce different garbage values for repeated loads at the same
+  `(region, offset)`, while our model gives consistent values. For
+  kernels where each masked-off `(region, offset)` is touched by at
+  most one load instance (the typical case), the approximation is
+  faithful.
+
+  Default: `fun _ _ => 0` so legacy `BlockState` literals don't need
+  updating. The interesting case (non-zero `undef`) is reached by
+  universal quantification, not by literal construction.
 -/
 structure BlockState where
   mem  : RegionName → Nat → ℝ
   regs : RegName → Option Value
   pid  : Nat
+  undef : RegionName → Nat → ℝ := fun _ _ => 0
 
 instance : Inhabited BlockState :=
   ⟨{ mem  := fun _ _ => 0
    , regs := fun _ => none
-   , pid  := 0 }⟩
+   , pid  := 0
+   , undef := fun _ _ => 0 }⟩
 
 namespace BlockState
 
@@ -489,9 +513,9 @@ noncomputable def evalOp : Op → BlockState → Option Value
               some (.tile n (fun i => s.readMem region (f i)))
           | _ => none
       | some m, some o =>
-          -- Masked load: dispatch on (offset shape × mask shape × other shape).
-          -- Per Triton: scalarBool mask broadcasts to per-lane; tileBool must
-          -- length-match the offset tile.
+          -- Masked load with explicit `other`: dispatch on (offset shape ×
+          -- mask shape × other shape). Per Triton: scalarBool mask broadcasts
+          -- to per-lane; tileBool must length-match the offset tile.
           match evalOp off s, evalOp m s, evalOp o s with
           -- scalar offset + scalar mask + scalar other
           | some (.scalarNat n), some (.scalarBool b), some (.scalar oval) =>
@@ -522,7 +546,31 @@ noncomputable def evalOp : Op → BlockState → Option Value
               some (.tile n (fun i =>
                 if b then s.readMem region (f i) else oval))
           | _, _, _ => none
-      | _, _ => none  -- mask without other (or vice versa): semantic error
+      | some m, none =>
+          -- Masked load without `other`: per Triton, masked-off lanes get
+          -- *undefined* values. We model this with `s.undef region (addr)` —
+          -- correctness theorems must hold for any value of `s.undef`.
+          match evalOp off s, evalOp m s with
+          -- scalar offset + scalar mask: read or undef-scalar at that addr
+          | some (.scalarNat n), some (.scalarBool b) =>
+              some (.scalar (if b then s.readMem region n else s.undef region n))
+          -- tile offset + tile mask (length match): per-lane masked load
+          | some (.tileNat n f), some (.tileBool nm mf) =>
+              if h : n = nm then
+                some (.tile n (fun i =>
+                  if mf (Fin.cast h i) then s.readMem region (f i)
+                  else s.undef region (f i)))
+              else none
+          -- tile offset + scalar mask: broadcast mask, undef per addr
+          | some (.tileNat n f), some (.scalarBool b) =>
+              some (.tile n (fun i =>
+                if b then s.readMem region (f i) else s.undef region (f i)))
+          | _, _ => none
+      | none, some _ =>
+          -- `other=` without `mask=`: semantic error (rejected at DSL parse
+          -- time with helpful message; this branch handles direct AST
+          -- construction).
+          none
   | .natToReal a, s =>
       -- Lift a `Nat`-channel value into the `ℝ` channel pointwise.
       match evalOp a s with
