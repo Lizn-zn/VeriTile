@@ -306,22 +306,15 @@ noncomputable def evalOp : Op → BlockState → Option Value
           some (.tile n (fun i => s.readMem region (f i)))
       | _ => none
 
--- Execute one statement.
---
--- `assign` evaluates RHS and stores the value in the named register.
--- `store` writes a scalar or contiguous tile to memory.
--- `forLoop` is a known gap in P1: bounded-loop operational semantics requires
--- mutual recursion with `stepStmts` and a non-trivial termination measure
--- combining list size and the loop counter. We leave it as `sorry` for P1
--- skeleton and complete it as the first piece of P2 work.
 mutual
 
--- Execute one statement.
---
--- `assign` evaluates RHS and stores the value in the named register.
--- `store` writes a scalar or contiguous tile to memory.
--- `forLoop` is implemented in Task 1.2; for now keep the `none` placeholder
--- so this refactor is semantics-preserving.
+/-- Execute one statement.
+
+    `assign` evaluates RHS and stores the value in the named register.
+    `store` writes a scalar or contiguous tile to memory.
+    `forLoop` delegates to `stepForLoopAux`, which iterates the body
+    `n` times, binding the loop counter (as a `Nat`-channel value) into
+    register `idx` before each iteration. -/
 noncomputable def stepStmt : Stmt → BlockState → Option BlockState
   | .assign name e, s =>
       match evalOp e s with
@@ -352,10 +345,18 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
                             s)
                   else none
               | _ => none
-          | _ => none
+          | _ => none  -- ℝ-valued offset is rejected
       | _, _ => none
-  | .forLoop _idx _n _body, _s =>
-      none  -- Task 1.2 will implement this.
+  | .forLoop idx n body, s =>
+      stepForLoopAux idx 0 n body s
+termination_by st _ => (sizeOf st, 0)
+decreasing_by
+  simp_wf
+  -- Goal: sizeOf body + 1 < 1 + sizeOf idx + n + sizeOf body.
+  -- Suffices: 0 < sizeOf idx, since sizeOf idx ≥ 1 for any String.
+  have h : 0 < sizeOf idx := by
+    cases idx; simp
+  omega
 
 /-- Sequence a list of statements, threading state. -/
 noncomputable def stepStmts : List Stmt → BlockState → Option BlockState
@@ -364,6 +365,23 @@ noncomputable def stepStmts : List Stmt → BlockState → Option BlockState
       match stepStmt st s with
       | some s' => stepStmts rest s'
       | none    => none
+termination_by l _ => (sizeOf l, 0)
+decreasing_by all_goals (simp_wf; omega)
+
+/-- The bounded-for-loop driver. Iterates `i` from `start` up to `n`,
+    binding the loop counter to register `idx` (as a `Nat` value) before each
+    body run. Returns `none` if any body iteration returns `none`. -/
+noncomputable def stepForLoopAux
+    (idx : RegName) (start n : Nat) (body : List Stmt) :
+    BlockState → Option BlockState
+  | s =>
+      if start < n then
+        match stepStmts body (s.setReg idx (Value.scalarNat start)) with
+        | some s' => stepForLoopAux idx (start + 1) n body s'
+        | none    => none
+      else some s
+termination_by _ => (sizeOf body + 1, n - start)
+decreasing_by all_goals omega
 
 end
 
