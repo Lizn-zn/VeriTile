@@ -18,6 +18,7 @@ Triton kernel pair 的等价性.
 - [其他示例](#其他示例)
 - [更多文档](#更多文档)
 - [研究问题](#研究问题)
+- [架构](#架构)
 - [目录结构](#目录结构)
 - [路线图](#路线图)
 - [License](#license)
@@ -164,6 +165,84 @@ theorem softmax_kernels_refinement
   证明里的 `hcast` boilerplate(全库 ~40 行)随之消失。
   → [research_problem_address_typing.md](./Notes/research_problem_address_typing.md)
   (英文)
+
+## 架构
+
+类型系统是 VeriTile 正确性保证的骨架。从 DSL 宏到运行时求值，全链路 typed —— 没有
+任何动态 tag union 或 existential wrapper。
+
+```text
+TileDType              TileShape                TileIndex
+(.real/.nat/.bool)     (.scalar/.vec n/.mat m n) (PUnit / Fin n / Fin m × Fin n)
+       │                       │                          │
+   TileCarrier                 │                          │
+   (ℝ / Nat / Bool)            │                          │
+       │                       │                          │
+       ▼                       ▼                          ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │  structure Tile (dtype : TileDType) (shape : TileShape)  │
+  │    data : TileIndex shape → TileCarrier dtype            │
+  │  ────────────────────────────────────────────────────── │
+  │  构造子: Tile.scalar x, Tile.vec f, Tile.mat f           │
+  └──────────────────────────────────────────────────────────┘
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+      Tile.bop        Tile.uop        Tile.cop
+   (add/sub/mul/div)  (exp/log/σ/√)  (lt/le/eq/gt/ge/ne)
+   NumericDType dtype                  → Tile .bool out
+   Broadcast a b out
+
+  ══════════════════ AST 层 ══════════════════
+
+  inductive Op : TileDType → TileShape → Type    ← 以 dtype 和 shape 为索引
+    .const ℝ           : Op .real .scalar
+    .constNat Nat      : Op .nat  .scalar
+    .arange n          : Op .nat  (.vec n)
+    .add NumDType Broadcast Op Op  : Op dtype out
+    .lt  CmpDType Broadcast Op Op  : Op .bool out
+    .load region (Op .nat shape)   : Op .real shape
+    ...
+
+  inductive Stmt : Type                           ← 存在量化边界
+    .assign (dtype) (shape) RegName (Op dtype shape)
+    .store  region  (shape) (Op .nat shape) (Op .real shape)
+    .forLoop idx n (List Stmt)
+
+  ══════════════════ 运行时层 ══════════════════
+
+  abbrev RegFile :=
+    (dtype : TileDType) → (shape : TileShape) → RegName
+      → Option (Tile dtype shape)           ← typed 查询，无 tag dispatch
+
+  structure BlockState
+    mem   : RegionName → Nat → ℝ            ← 扁平内存（仅 ℝ）
+    regs  : RegFile                          ← typed 寄存器文件
+    pid   : Nat                              ← program_id
+    undef : RegionName → Nat → ℝ            ← masked-load oracle (other=None)
+
+  evalOp    : Op dtype shape → BlockState → Option (Tile dtype shape)
+  stepStmt  : Stmt → BlockState → Option BlockState     ┐
+  stepStmts : List Stmt → ...                            │ mutual
+  stepForLoopAux : ...                                   ┘
+  exec      : Kernel → BlockState → Option BlockState
+
+  ══════════════════ DSL 层 ══════════════════
+
+  triton { ... }  宏
+    │  将 tritonExpr / tritonStmt 语法展开
+    │  为 typed Op / Stmt / Kernel 项
+    │  kwargs: mask=, other=, axis=, keep_dims=
+    ▼
+  Kernel { inputs, outputs, body : List Stmt }
+```
+
+**数据流。** DSL 宏把 Triton 风格的 surface syntax 展开为 typed `Op dtype shape`
+项。`evalOp` 在 `BlockState` 上求值 `Op`，返回 `Option (Tile dtype shape)` ——
+类型索引全程穿透。`stepStmt` 对 `Stmt` 做 pattern match（`Stmt` 的每个构造子
+内部存在量化了 `dtype` 和 `shape`），立即恢复具体的索引，再调用 `evalOp`。结果
+存入 `RegFile`——一个以 `(dtype, shape, name)` 为索引的依赖类型函数。
+**全链路没有任何 erase-and-recover 环节。**
 
 ## 目录结构
 

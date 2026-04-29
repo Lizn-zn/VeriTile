@@ -20,6 +20,7 @@ Agent.
 - [Other Examples](#other-examples)
 - [More Documentation](#more-documentation)
 - [Research Problems](#research-problems)
+- [Architecture](#architecture)
 - [Repository Layout](#repository-layout)
 - [Roadmap](#roadmap)
 - [License](#license)
@@ -166,6 +167,87 @@ recommendation, and notes when to revisit. Index here; full discussion in
   (address) channels? Resolved: bifurcated; `realToNat` deleted; ~40 lines
   of `hcast` boilerplate dropped from kernel proofs.
   → [research_problem_address_typing.md](./Notes/research_problem_address_typing.md)
+
+## Architecture
+
+The type system is the backbone of VeriTile's soundness guarantee. Every layer
+is fully typed end-to-end — there is no dynamically-tagged runtime value or
+existential wrapper anywhere in the pipeline.
+
+```text
+TileDType              TileShape                TileIndex
+(.real/.nat/.bool)     (.scalar/.vec n/.mat m n) (PUnit / Fin n / Fin m × Fin n)
+       │                       │                          │
+   TileCarrier                 │                          │
+   (ℝ / Nat / Bool)            │                          │
+       │                       │                          │
+       ▼                       ▼                          ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │  structure Tile (dtype : TileDType) (shape : TileShape)  │
+  │    data : TileIndex shape → TileCarrier dtype            │
+  │  ────────────────────────────────────────────────────── │
+  │  smart ctors: Tile.scalar x, Tile.vec f, Tile.mat f      │
+  └──────────────────────────────────────────────────────────┘
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+      Tile.bop        Tile.uop        Tile.cop
+   (add/sub/mul/div)  (exp/log/σ/√)  (lt/le/eq/gt/ge/ne)
+   NumericDType dtype                  → Tile .bool out
+   Broadcast a b out
+
+  ══════════════════ AST layer ══════════════════
+
+  inductive Op : TileDType → TileShape → Type    ← indexed by dtype & shape
+    .const ℝ           : Op .real .scalar
+    .constNat Nat      : Op .nat  .scalar
+    .arange n          : Op .nat  (.vec n)
+    .add NumDType Broadcast Op Op  : Op dtype out
+    .lt  CmpDType Broadcast Op Op  : Op .bool out
+    .load region (Op .nat shape)   : Op .real shape
+    ...
+
+  inductive Stmt : Type                           ← existential boundary
+    .assign (dtype) (shape) RegName (Op dtype shape)
+    .store  region  (shape) (Op .nat shape) (Op .real shape)
+    .forLoop idx n (List Stmt)
+
+  ══════════════════ Runtime layer ══════════════════
+
+  abbrev RegFile :=
+    (dtype : TileDType) → (shape : TileShape) → RegName
+      → Option (Tile dtype shape)           ← typed lookup, no tag dispatch
+
+  structure BlockState
+    mem   : RegionName → Nat → ℝ            ← flat memory (ℝ only)
+    regs  : RegFile                          ← typed register file
+    pid   : Nat                              ← program_id
+    undef : RegionName → Nat → ℝ            ← masked-load oracle (other=None)
+
+  evalOp    : Op dtype shape → BlockState → Option (Tile dtype shape)
+  stepStmt  : Stmt → BlockState → Option BlockState     ┐
+  stepStmts : List Stmt → ...                            │ mutual
+  stepForLoopAux : ...                                   ┘
+  exec      : Kernel → BlockState → Option BlockState
+
+  ══════════════════ DSL layer ══════════════════
+
+  triton { ... }  macro
+    │  expands tritonExpr / tritonStmt syntax
+    │  into typed Op / Stmt / Kernel terms
+    │  kwargs: mask=, other=, axis=, keep_dims=
+    ▼
+  Kernel { inputs, outputs, body : List Stmt }
+```
+
+**Data-flow summary.** The DSL macro elaborates Triton-like surface syntax into
+typed `Op dtype shape` terms. `evalOp` evaluates an `Op` against a
+`BlockState` and returns `Option (Tile dtype shape)` — the same type indices
+flow through. `stepStmt` pattern-matches `Stmt` (which existentially quantifies
+`dtype` and `shape` in each constructor), immediately recovers the concrete
+indices, and calls `evalOp`. The result is stored in `RegFile`, a
+dependently-typed function indexed by `(dtype, shape, name)`. No erase-and-recover
+step is needed anywhere.
 
 ## Repository Layout
 
