@@ -50,7 +50,7 @@ noncomputable def welfordS {n : Nat} (x : Fin n → ℝ) : Nat → ℝ
       else welfordS x k
 
 /-- Cast `Fin k` to `Fin n` when `k ≤ n`. -/
-private def castFin {n k : Nat} (h : k ≤ n) (i : Fin k) : Fin n :=
+def castFin {n k : Nat} (h : k ≤ n) (i : Fin k) : Fin n :=
   ⟨i.val, lt_of_lt_of_le i.isLt h⟩
 
 /-- Helper: for any prefix length k ≤ n, the running Welford mean times k
