@@ -70,13 +70,30 @@ noncomputable def welfordVarSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
 theorem twopass_welford_correct
     (xReg meanReg varReg : RegionName) (blockSize : Nat) (_hN : 0 < blockSize)
     (s : BlockState) (xs : Fin blockSize → ℝ)
-    (_h_x : InputLoadedAt s xReg blockSize xs) :
+    (h_x : InputLoadedAt s xReg blockSize xs)
+    (h_mv : meanReg ≠ varReg) :
     let final := exec (twopassWelfordKernel xReg meanReg varReg blockSize) s
     final.bind (fun s' => some (s'.readMem meanReg 0))
         = some (welfordMeanSpec xs)
     ∧ final.bind (fun s' => some (s'.readMem varReg 0))
         = some (welfordVarSpec xs) := by
-  sorry
+  -- Operational walk-through: simp through `exec → stepStmts → stepStmt`
+  -- collapses the 10 statements to a closed form; `h_x` substitutes the
+  -- loaded inputs; `h_mv` resolves the `meanReg = varReg` conditional left
+  -- behind by `BlockState.writeMem`.
+  simp [exec, twopassWelfordKernel, stepStmts, stepStmt, evalOp,
+        Value.bop, Value.reduceSum,
+        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
+        welfordMeanSpec, welfordVarSpec, twoPassMean, twoPassS]
+  unfold InputLoadedAt at h_x
+  simp_rw [h_x, if_neg h_mv]
+  -- Remaining goal: variance side must rewrite `(x - μ) * (x - μ)` to
+  -- `(x - μ)^2` term-wise inside the sum.
+  refine ⟨trivial, ?_⟩
+  congr 1
+  apply Finset.sum_congr rfl
+  intro i _
+  ring
 
 theorem online_welford_correct
     (xReg meanReg varReg : RegionName) (blockSize : Nat) (_hN : 0 < blockSize)
