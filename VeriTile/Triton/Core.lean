@@ -49,6 +49,8 @@ Notes on individual constructors:
 * `natToReal` lifts a `Nat`-channel value (`scalarNat` / `tileNat`) into
   the `ℝ` channel. Used by kernels that mix loop counters / sizes with
   ℝ data (e.g. Welford's `delta / (i + 1)`, division by block size).
+* `sqrt` applies `Real.sqrt` pointwise on the `ℝ` channel. Used by
+  LayerNorm's `1 / √(var + ε)` and similar normalization kernels.
 -/
 inductive Op : Type where
   | const     : ℝ → Op
@@ -66,6 +68,7 @@ inductive Op : Type where
   | exp       : Op → Op
   | log       : Op → Op
   | sigmoid   : Op → Op
+  | sqrt      : Op → Op
   | max2      : Op → Op → Op
   | reduceMax : Op → Op
   | reduceSum : Op → Op

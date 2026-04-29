@@ -33,14 +33,21 @@ Conventions:
     + offset)` / `tl.store($(REGION) + offset, value)` or scalar-pointer
     `tl.load($(REGION))` / `tl.store($(REGION), value)` it is used as a
     `RegionName`.
+  * `$ℝ(<lean-term>)` antiquotes a Lean-level `ℝ` value into `Op.const`.
+    Symmetric with `$(t)` (which always lowers to `Op.constNat`). Used
+    when a kernel parameter has type `ℝ` (e.g. LayerNorm's `ε : ℝ`) and
+    must appear in the kernel body. Bare numeric literals (`0`, `1`,
+    `2.5`) still go to `Op.const` directly; this form is only needed
+    for non-literal `ℝ` terms.
   * Numeric literals become `Op.const`.
   * Statements are separated by newlines (no explicit terminator).
 
 Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
 `tl.arange(start, end)`, `tl.exp(_)`, `tl.log(_)`, `tl.sigmoid(_)`,
-`tl.max(_)`, `tl.sum(_)`, `tl.load($(REGION) + offset)`, binary `+ - * /`,
-parens, identifiers, numerals, antiquotation. `tl.load($(REGION))` is
-sugar for offset `0`.
+`tl.sqrt(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load($(REGION) + offset)`,
+binary `+ - * /`, parens, identifiers, numerals, antiquotation
+(`$(t)` for `Nat`, `$ℝ(t)` for `ℝ`). `tl.load($(REGION))` is sugar for
+offset `0`.
 
 The two-argument `tl.arange(start, end)` lowers to `start + tl.arange(end - start)`
 at macro time (no new AST constructor). The literal-0 special case
@@ -85,6 +92,7 @@ syntax "$(" term ")" " + " tritonExpr : tritonPtr
 syntax num : tritonExpr
 syntax ident : tritonExpr
 syntax "$(" term ")" : tritonExpr
+syntax "$ℝ(" term ")" : tritonExpr
 syntax "(" tritonExpr ")" : tritonExpr
 syntax "tl.program_id(" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ")" : tritonExpr
@@ -92,6 +100,7 @@ syntax "tl.arange(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
+syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.sum(" tritonExpr ")" : tritonExpr
@@ -146,6 +155,11 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
   | `(tritonExpr| $($t:term)) =>
       -- `$(...)` antiquote is the address/size channel: `Nat`.
       `(Op.constNat $t)
+  | `(tritonExpr| $ℝ($t:term)) =>
+      -- `$ℝ(...)` antiquote is the data channel: `ℝ`. Symmetric with the
+      -- `$(t) → Op.constNat` form, used for non-literal ℝ kernel params
+      -- (e.g. LayerNorm's `ε`).
+      `(Op.const $t)
   | `(tritonExpr| ($e:tritonExpr)) =>
       expandExpr e
   | `(tritonExpr| tl.program_id($_)) =>
@@ -189,6 +203,9 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
   | `(tritonExpr| tl.sigmoid($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.sigmoid $e')
+  | `(tritonExpr| tl.sqrt($e:tritonExpr)) => do
+      let e' ← expandExpr e
+      `(Op.sqrt $e')
   | `(tritonExpr| tl.max($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.reduceMax $e')
@@ -258,6 +275,7 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
+  | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.max($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
       exprRegions a ++ exprRegions b

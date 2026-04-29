@@ -19,6 +19,7 @@ P1 work will land. Each is annotated with `-- TODO(P1):`.
 -/
 
 import Mathlib.Data.Real.Basic
+import Mathlib.Data.Real.Sqrt
 import Mathlib.Analysis.SpecialFunctions.Exp
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import Mathlib.Analysis.SpecialFunctions.Sigmoid
@@ -282,6 +283,10 @@ noncomputable def evalOp : Op → BlockState → Option Value
   | .sigmoid a, s =>
       match evalOp a s with
       | some va => va.uop Real.sigmoid
+      | none => none
+  | .sqrt a, s =>
+      match evalOp a s with
+      | some va => va.uop Real.sqrt
       | none => none
   | .max2 a b, s =>
       match evalOp a s, evalOp b s with
