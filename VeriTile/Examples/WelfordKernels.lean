@@ -401,15 +401,20 @@ theorem online_welford_correct
           welfordVarSpec, hSEq]
 
 theorem welford_kernels_refinement
-    (xReg meanReg varReg : RegionName) (blockSize : Nat) (_hN : 0 < blockSize)
+    (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
     (s : BlockState) (xs : Fin blockSize → ℝ)
-    (_h_x : InputLoadedAt s xReg blockSize xs) :
+    (h_x : InputLoadedAt s xReg blockSize xs)
+    (h_mv : meanReg ≠ varReg) :
     let final_2p := exec (twopassWelfordKernel xReg meanReg varReg blockSize) s
     let final_on := exec (onlineWelfordKernel xReg meanReg varReg blockSize) s
     final_2p.bind (fun s' => some (s'.readMem meanReg 0))
         = final_on.bind (fun s' => some (s'.readMem meanReg 0))
     ∧ final_2p.bind (fun s' => some (s'.readMem varReg 0))
         = final_on.bind (fun s' => some (s'.readMem varReg 0)) := by
-  sorry
+  obtain ⟨h_2p_mean, h_2p_var⟩ :=
+    twopass_welford_correct xReg meanReg varReg blockSize hN s xs h_x h_mv
+  obtain ⟨h_on_mean, h_on_var⟩ :=
+    online_welford_correct xReg meanReg varReg blockSize hN s xs h_x h_mv
+  exact ⟨h_2p_mean.trans h_on_mean.symm, h_2p_var.trans h_on_var.symm⟩
 
 end VeriTile.Examples
