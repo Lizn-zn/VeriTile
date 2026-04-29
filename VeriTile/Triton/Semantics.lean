@@ -354,6 +354,10 @@ decreasing_by
   simp_wf
   -- Goal: sizeOf body + 1 < 1 + sizeOf idx + n + sizeOf body.
   -- Suffices: 0 < sizeOf idx, since sizeOf idx ≥ 1 for any String.
+  -- WARNING: this proof depends on `RegName = String` (Core.lean:24).
+  -- If RegName ever becomes a different type, re-prove `0 < sizeOf idx`,
+  -- or bump `stepStmt`'s lex component (e.g. `(sizeOf st + 1, 0)`) to
+  -- remove the dependency on `sizeOf idx` entirely.
   have h : 0 < sizeOf idx := by
     cases idx; simp
   omega
