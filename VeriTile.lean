@@ -15,3 +15,4 @@ import VeriTile.Examples.RowWiseSum
 import VeriTile.Examples.RowWiseMax
 import VeriTile.Examples.WelfordMath
 import VeriTile.Examples.WelfordKernels
+import VeriTile.Examples.OnlineSoftmax

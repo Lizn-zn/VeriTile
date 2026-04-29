@@ -93,8 +93,10 @@ syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ")" : tritonExpr
+syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.sum(" tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
+syntax "-inf" : tritonExpr
 syntax "tl.load(" tritonPtr ")" : tritonExpr
 syntax:60 tritonExpr:60 " + " tritonExpr:61 : tritonExpr
 syntax:60 tritonExpr:60 " - " tritonExpr:61 : tritonExpr
@@ -190,12 +192,18 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
   | `(tritonExpr| tl.max($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.reduceMax $e')
+  | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr a
+      let b' ← expandExpr b
+      `(Op.max2 $a' $b')
   | `(tritonExpr| tl.sum($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.reduceSum $e')
   | `(tritonExpr| tl.toReal($e:tritonExpr)) => do
       let e' ← expandExpr e
       `(Op.natToReal $e')
+  | `(tritonExpr| -inf) =>
+      `(Op.negInf)
   | `(tritonExpr| tl.load($p:tritonPtr)) => do
       -- Region is a Lean term of type RegionName (kernel parameter or value).
       -- The pointer-like surface syntax lowers to the internal region+offset AST.
@@ -251,6 +259,8 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.max($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
+      exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.sum($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.toReal($e:tritonExpr))      => exprRegions e
   | `(tritonExpr| ($e:tritonExpr))               => exprRegions e
