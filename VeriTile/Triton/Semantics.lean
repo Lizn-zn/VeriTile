@@ -314,6 +314,14 @@ noncomputable def evalOp : Op → BlockState → Option Value
 -- mutual recursion with `stepStmts` and a non-trivial termination measure
 -- combining list size and the loop counter. We leave it as `sorry` for P1
 -- skeleton and complete it as the first piece of P2 work.
+mutual
+
+-- Execute one statement.
+--
+-- `assign` evaluates RHS and stores the value in the named register.
+-- `store` writes a scalar or contiguous tile to memory.
+-- `forLoop` is implemented in Task 1.2; for now keep the `none` placeholder
+-- so this refactor is semantics-preserving.
 noncomputable def stepStmt : Stmt → BlockState → Option BlockState
   | .assign name e, s =>
       match evalOp e s with
@@ -324,7 +332,6 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       | some voff, some vval =>
           match voff with
           | .scalarNat coff =>
-              -- Scalar offset (Nat): contiguous store starting at `coff`.
               match vval with
               | .scalar c =>
                   some (s.writeMem region coff c)
@@ -335,9 +342,6 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
                           s)
               | _ => none
           | .tileNat n offs =>
-              -- Tile-valued offset (Nat): scatter. Iteration `i` writes
-              -- `vals i` to address `offs i`. Requires the value tile to
-              -- have the same length as the offset tile.
               match vval with
               | .tile m vals =>
                   if h : n = m then
@@ -348,27 +352,20 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
                             s)
                   else none
               | _ => none
-          | _ => none  -- ℝ-valued offset is rejected
+          | _ => none
       | _, _ => none
   | .forLoop _idx _n _body, _s =>
-      -- TODO(P2): bounded-loop operational semantics. Plan: turn `Stmt` into
-      -- a `mutual` block with `stepStmts : List Stmt → ...` and
-      -- `stepForLoopAux : ... → Nat → ... → Option BlockState`, with explicit
-      -- lex `termination_by` measure `(sizeOf body + 1, n - i)`. See
-      -- Notes/MacroOptions.md for the worked-out measure.
-      -- For now we return `none` ("this case is not supported yet") rather
-      -- than `sorry` so the operational semantics remains a total function
-      -- and downstream proofs about non-loop kernels do not transitively
-      -- inherit a `sorry` dependency.
-      none
+      none  -- Task 1.2 will implement this.
 
-/-- Sequence a list of statements, threading state. Structural on `List`. -/
+/-- Sequence a list of statements, threading state. -/
 noncomputable def stepStmts : List Stmt → BlockState → Option BlockState
   | [], s => some s
   | st :: rest, s =>
       match stepStmt st s with
       | some s' => stepStmts rest s'
       | none    => none
+
+end
 
 /-- Execute a kernel from an initial state to a final state (or `none` on error). -/
 noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
