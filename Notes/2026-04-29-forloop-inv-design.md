@@ -23,8 +23,19 @@ Tier 3-A kernel-pair proof can close its loop by:
 4. Concluding `P n s_final` for some `s_final` that the operational semantics
    produces.
 
-The lemma must compose under nested `forLoop` (FA-1 forward has Q-block ×
-KV-block, so Phase C exercises 2-deep nesting).
+In our embedding the kernels exercised in Phase B and Phase C all use a
+**single** `forLoop` with a *multi-statement inner body* — Welford / online
+softmax / layernorm have one `forLoop` over the input tile; FA-1 forward has
+one `forLoop` over the KV blocks (the Q-block dimension is handled at the grid
+level via `pid`, not via an inner `forLoop`; see `Notes/T3_scouting.md` §R2 and
+§Q-block strategy). FA-2 in Phase D is also single-`forLoop` per program-id.
+
+The lemma must therefore compose under (a) a multi-statement body and (b)
+sequentially-following statements after the loop. *Defensively*, the design
+also accommodates future kernels with `forLoop` nested inside `forLoop`
+(needed by some FA variants and any block-tiled kernel we add post-paper),
+hence the `mutual` block change to `stepStmt` / `stepStmts` rather than
+defining `stepForLoopAux` outside the structural recursion.
 
 ## 2. Carrier choice (decided)
 
@@ -32,9 +43,13 @@ KV-block, so Phase C exercises 2-deep nesting).
 
 The invariant talks about the *whole* `BlockState`, not an abstract logical
 state `S`. Down-stream users obtain register values from `BlockState` via
-`s.regs name` plus `Value.asScalar` / `Value.tile` projections, and any
-boilerplate that arises is absorbed by simp lemmas, not by introducing a
-parallel abstraction layer.
+`s.regs name` plus pattern matching on the `Value` constructors (`Value.scalar`,
+`Value.tile`, `Value.scalarNat`, `Value.tileNat`); the existing `Value.asScalar`
+/ `Value.asScalarNat` helpers cover the scalar cases. Tile readout is by direct
+pattern match — no `Value.asTile` exists today and we don't add one in this
+spec (introducing it preemptively complicates `simp` configuration; add only
+if a concrete kernel proof asks for it). Any boilerplate that arises is
+absorbed by simp lemmas, not by introducing a parallel abstraction layer.
 
 Rationale: matches the existing P1 style (`BlockState.scatter_readback` is also
 `BlockState`-level + simp-driven), avoids the need to maintain abstraction /
@@ -91,7 +106,7 @@ prescribes.)
 | Decision | Value | Note |
 |---|---|---|
 | `idx` value channel | `Value.scalarNat i` | Not `Value.scalar (i : ℝ)` as `PLAN.md:88` sketched. The body's offset arithmetic (`pid * BLOCK + idx * STRIDE`) is in the `Nat` channel, so `scalarNat` is the only consistent choice. |
-| `idx` post-loop visibility | retained at last-iteration value | Python-like. No scope/shadow mechanism; user is responsible for not aliasing register names across nested loops. |
+| `idx` post-loop visibility | not restored to its pre-loop value | The last write to register `idx` survives. If `body` itself does *not* write `idx`, the surviving value is the last-iteration binding `n − 1` (or `none` if `n = 0` and `idx` was unset entering the loop). If `body` writes `idx`, the surviving value is whatever `body` last wrote. No scope/shadow mechanism; user is responsible for not aliasing register names across nested loops. |
 | `n = 0` behaviour | identity (`stepForLoopAux idx 0 0 body s = some s`) | Natural base case of the `if i < n` guard. |
 | Termination measure | `(sizeOf body + 1, n − i)` lex | Per `PLAN.md`. |
 | Nested loop name collision | user-guaranteed disjoint `RegName`s | Outer loop `"i"`, inner loop `"j"` etc. — explicitly *not* a scope mechanism. |
@@ -121,7 +136,9 @@ theorem forLoop_inv
 
 Proof outline:
 
-- Generalize to `forLoopAux_inv : ∀ i ≤ n, P i s → ∃ s_final, stepForLoopAux idx i n body s = some s_final ∧ P n s_final`.
+- Generalize to a state-quantified auxiliary form: for all `i ≤ n` and all
+  `s` with `P i s`, there exists `s_final` with
+  `stepForLoopAux idx i n body s = some s_final` and `P n s_final`.
 - Strong induction on `n − i` (or equivalently `Nat.le_induction` from `i = n`).
 - Base `i = n`: `stepForLoopAux idx n n body s = some s` directly.
 - Step `i < n`: invoke `h_step i s` to get `s'` with `stepStmts body (s.setReg idx ...) = some s'` and `P (i+1) s'`; combine with the inductive hypothesis at `i+1`.
@@ -211,9 +228,15 @@ defined; only its semantics was a placeholder).
 - The existing P1 `simp` walkthroughs in `Examples/SoftmaxEq.lean`,
   `LogSumExpEq.lean`, etc. continue to typecheck (no regressions from the
   `mutual` block changing reduction behaviour).
-- A small `example` block in `LoopInvariant.lean` that exercises a 1-line body
-  forLoop (e.g. accumulator `acc := acc + idx`) and closes with `forLoop_inv`
-  using `P k s := s.regs "acc" = some (.scalar (∑ i ∈ Finset.range k, (i:ℝ)))`.
+- A small `example` block in `LoopInvariant.lean` that exercises a 1-stmt body
+  forLoop and closes with `forLoop_inv`. Concretely: a *Nat-channel* counter
+  `cnt := cnt + 1` (because `idx` is `Value.scalarNat` and mixing `ℝ` and `Nat`
+  through `Value.bop` returns `none` — so the example body cannot be
+  `acc := acc + idx` with `acc : Value.scalar`). The invariant is
+  `P k s := s.regs "cnt" = some (.scalarNat k)` and the readout corollary
+  invocation is `forLoop_readout` for the (deferred) `Nat` variant — or, until
+  `forLoop_readout_nat` exists, the master `forLoop_inv` with manual
+  `obtain`. This validates the master lemma + the basic mutual elaboration.
 
 ## 7. Risks (carried from `PLAN.md` Phase B risk register)
 
