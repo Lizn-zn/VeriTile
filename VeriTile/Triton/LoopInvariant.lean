@@ -53,7 +53,30 @@ theorem forLoopAux_inv
         rw [h_body]
         simpa using h_aux
   exact key (n - i) i rfl hi s hPs
--- TODO: forLoop_inv (Task 2.3)
+/-- **Master loop-induction lemma.** For any `forLoop` of body length `n`
+    over register `idx`, given an entry invariant `P 0 s_init` and a step
+    obligation showing each iteration preserves `P` (and does not error),
+    the final state satisfies `P n`.
+
+    Spec: `Notes/2026-04-29-forloop-inv-design.md` §4.1 (Form 1). -/
+theorem forLoop_inv
+    {idx : RegName} {n : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    (h_init : P 0 s_init)
+    (h_step :
+      ∀ i s, i < n → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx (Value.scalarNat i)) = some s' ∧
+          P (i + 1) s') :
+    ∃ s_final,
+      stepStmt (.forLoop idx n body) s_init = some s_final ∧
+      P n s_final := by
+  obtain ⟨s_final, h_aux, hP⟩ :=
+    forLoopAux_inv (P := P) h_step 0 (Nat.zero_le _) s_init h_init
+  refine ⟨s_final, ?_, hP⟩
+  -- stepStmt (forLoop ...) = stepForLoopAux ... 0 n body s_init by definition.
+  simpa [stepForLoopAux.forLoop_unfold] using h_aux
+
 -- TODO: forLoop_readout_scalar (Task 2.4)
 -- TODO: forLoop_readout_tile (Task 2.4)
 -- TODO: sanity example (Task 2.5)
