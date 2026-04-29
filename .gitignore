@@ -16,3 +16,9 @@
 # Throwaway numerical scout scripts; verification scripts that need to be
 # preserved live as Lean comments next to the corresponding axiom or theorem.
 /scratch/
+
+# Personal review checklist (working notes, not for version control)
+/VeriTile/Examples/Readme.md
+
+# Private dev script for switching API providers
+/scripts/claude-miromind.sh
