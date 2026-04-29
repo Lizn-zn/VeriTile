@@ -111,20 +111,96 @@ theorem add_kernel_correct
   -- The remaining goal is exactly the readback of an injective scatter store.
   exact BlockState.scatter_readback _ _ _ h_inj i
 
-/-! ## TODO: Mask version (TBD in Phase 3) -/
--- def stableAddKernel (x_ptr y_ptr output_ptr n_elements block_size: Nat) : Kernel := triton {
-    -- pid := tl.program_id(0)
+/-! ## Masked variant (boundary mask)
 
-    -- offsets := pid * $(block_size) + tl.arange(0, $(block_size))
-    -- mask = offsets < n_elements
+The aligned `addKernel` above only handles `n_elements = block_size`. The
+masked variant handles arbitrary `n_elements` by computing
+`mask = offsets < n_elements` and threading it through the load and store,
+exactly mirroring the canonical Triton tutorial:
 
-    -- x = tl.load(x_ptr + offsets, mask=mask)
-    -- y = tl.load(y_ptr + offsets, mask=mask)
+```python
+@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
 
-    -- output = x + y
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
 
-    -- tl.store(out_ptr + offsets, output, mask=mask)
--- }
+    x = tl.load(x_ptr + offsets, mask=mask)
+    y = tl.load(y_ptr + offsets, mask=mask)
 
+    output = x + y
+
+    tl.store(out_ptr + offsets, output, mask=mask)
+```
+
+-/
+
+/-- Masked elementwise add. Lanes where `pid * blockSize + i < nElements` are
+    loaded, summed, and stored; lanes outside the bound use `other = 0`
+    on the loads and skip the store entirely (Triton convention). -/
+def addKernelMasked (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) : Kernel := triton {
+  pid     := tl.program_id(0)
+  offsets := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  mask    := offsets < $(nElements)
+  x       := tl.load($(xReg) + offsets, mask=mask)
+  y       := tl.load($(yReg) + offsets, mask=mask)
+  output  := x + y
+  tl.store($(outReg) + offsets, output, mask=mask)
+}
+
+/-- **`addKernelMasked` correctness.**
+
+For each lane `i ∈ Fin blockSize`:
+* In-bounds (`pid * blockSize + i < nElements`): the output region holds
+  `xs i + ys i` at `pid * blockSize + i`.
+* Out-of-bounds: the output region's value at `pid * blockSize + i` is
+  preserved from the initial state (mask=false → no store).
+
+The hypothesis `InputLoadedAt` constrains memory at every lane in the
+`blockSize`-length tile (including out-of-bounds lanes where the data
+is "garbage" semantically — we still know what's there). This matches
+Triton's actual behavior: masked-off loads use `other=0` and don't
+read memory.
+
+No region-disjointness hypothesis: the kernel reads `x` and `y` into
+local registers BEFORE the scatter to `outReg`, so even if `outReg`
+aliases `xReg` or `yReg`, the result is correct. -/
+theorem add_kernel_masked_correct
+    (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) (_hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : InputLoadedAt s xReg blockSize xs)
+    (h_y : InputLoadedAt s yReg blockSize ys) :
+    ∀ i : Fin blockSize,
+      let addr := s.pid * blockSize + i.val
+      observeAt (exec (addKernelMasked xReg yReg outReg blockSize nElements) s)
+                outReg blockSize s.pid i
+        = some (if addr < nElements then xs i + ys i
+                else s.readMem outReg addr) := by
+  intro i
+  have h_inj : Function.Injective
+      (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
+    intro a b hab
+    exact Fin.ext (Nat.add_left_cancel hab)
+  -- Reduce the kernel via the operational semantics. The key step: the masked
+  -- load case `tile offset + tile mask + scalar other (broadcast)` reduces
+  -- the loaded register to a per-lane conditional (read-or-other).
+  simp [observeAt, exec, addKernelMasked, stepStmts, stepStmt, evalOp,
+        Value.bop, Value.cop, BlockState.setReg, BlockState.readMem]
+  -- Substitute the loaded X/Y cells (in-bounds lanes only — out-of-bounds use other=0).
+  unfold InputLoadedAt at h_x h_y
+  simp_rw [h_x, h_y]
+  -- Apply the Prop-flavored masked-scatter readback (after simp normalized
+  -- the Bool mask to its underlying Prop predicate).
+  rw [BlockState.scatter_readback_prop_masked _ _ _ _ h_inj i]
+  -- Goal: `if .. < nElements then valueFn i else s.mem outReg ...
+  --       = if .. < nElements then xs i + ys i else s.mem outReg ...`
+  -- where valueFn i = (if .. then xs i else 0) + (if .. then ys i else 0).
+  -- Both conditionals share the same predicate — collapse by case split.
+  by_cases hi : s.pid * blockSize + i.val < nElements
+  · simp [hi]
+  · simp [hi]
 
 end VeriTile.Examples

@@ -150,6 +150,109 @@ theorem scatter_readback {region : RegionName} {n : Nat}
       = valueFn i
   exact if_pos ⟨rfl, rfl⟩
 
+/-- Masked variant of `foldl_writeMem_preserves`: a `foldl` of conditional
+    `writeMem` writes preserves any cell whose offset is missed by every
+    write that *actually fires* (i.e., where the mask is `true`). Lanes
+    where `mask = false` are no-ops on the accumulator. -/
+private theorem foldl_writeMem_masked_preserves {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α) :
+    ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
+      ((l.foldl
+          (fun acc k =>
+            if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region o)
+      = s.mem region o := by
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s h
+    rw [List.foldl_cons]
+    have htl : ∀ k ∈ tl, mask k = true → offsetFn k ≠ o :=
+      fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
+    by_cases hmaskhd : mask hd = true
+    · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
+      simp only [hmaskhd, if_true]
+      rw [ih _ htl]
+      show (if region = region ∧ o = offsetFn hd then valueFn hd else s.mem region o)
+          = s.mem region o
+      rw [if_neg]
+      rintro ⟨_, h_eq⟩
+      exact hhd h_eq.symm
+    · have hmaskhd' : mask hd = false := by
+        rcases hmaskFalse : mask hd
+        · rfl
+        · exact absurd hmaskFalse hmaskhd
+      simp only [hmaskhd', if_false, Bool.false_eq_true]
+      exact ih _ htl
+
+/-- **Masked scatter readback.** A masked-scatter store writes
+    `valueFn k` at `offsetFn k` only when `mask k = true`. Reading the
+    cell at `offsetFn i` after the foldl returns either `valueFn i`
+    (mask on) or the original `s.mem region (offsetFn i)` (mask off).
+    Generalizes `scatter_readback`; the unmasked version is the case
+    where `mask` is constant `true`.
+
+    Phase B+ extension: this is the workhorse for proving correctness
+    of any kernel that uses Triton's `tl.store(..., mask=...)` form. -/
+theorem scatter_readback_masked {region : RegionName} {n : Nat}
+    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
+    (mask : Fin n → Bool)
+    (h_inj : Function.Injective offsetFn) (i : Fin n) :
+    ((List.finRange n).foldl
+       (fun acc k =>
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if mask i then valueFn i else s.mem region (offsetFn i) := by
+  have h_nodup : (List.finRange n).Nodup := List.nodup_finRange n
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (List.mem_finRange i)
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  rw [hl, List.foldl_append, List.foldl_cons]
+  have h_l1_not_in : ∀ k ∈ l₁, mask k = true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    rw [hki] at hk
+    -- hl1_disj : ∀ a ∈ l₁, ∀ b ∈ (i :: l₂), a ≠ b. With a = i, b = i (head of
+    -- the cons), we get i ≠ i, contradicted by rfl.
+    exact (hl1_disj i hk i (List.mem_cons_self)) rfl
+  have h_l2_not_in : ∀ k ∈ l₂, mask k = true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  rw [foldl_writeMem_masked_preserves offsetFn valueFn mask (offsetFn i) l₂ _ h_l2_not_in]
+  by_cases hmi : mask i = true
+  · simp only [hmi, if_true]
+    show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _)
+        = valueFn i
+    exact if_pos ⟨rfl, rfl⟩
+  · have hmi' : mask i = false := by
+      rcases hmiFalse : mask i
+      · rfl
+      · exact absurd hmiFalse hmi
+    simp only [hmi', if_false, Bool.false_eq_true]
+    rw [foldl_writeMem_masked_preserves offsetFn valueFn mask (offsetFn i) l₁ _ h_l1_not_in]
+
+/-- Prop-flavored variant of `scatter_readback_masked`. After
+    operational-semantics `simp` normalizes Bool masks to their underlying
+    Prop predicate (via `decide_eq_true_eq`), the goal's foldl body has
+    `if (P k : Prop) then ... else ...` rather than `if (b : Bool) then ...`.
+    This corollary takes a Prop predicate directly so the rewrite fires
+    cleanly in kernel correctness proofs. -/
+theorem scatter_readback_prop_masked {region : RegionName} {n : Nat}
+    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
+    (P : Fin n → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : Fin n) :
+    ((List.finRange n).foldl
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if P i then valueFn i else s.mem region (offsetFn i) := by
+  have h := scatter_readback_masked (region := region) s offsetFn valueFn
+              (fun k => decide (P k)) h_inj i
+  simp only [decide_eq_true_eq] at h
+  exact h
+
 /-- **Cross-region frame property.** A scatter store to `region` does not
     touch any other named region. The named-region disjointness from RP1
     makes this `rfl` after unfolding, but we package it here as a reusable
