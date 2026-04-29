@@ -103,6 +103,11 @@ syntax:70 tritonExpr:70 " / " tritonExpr:71 : tritonExpr
 -- Statements
 syntax ident " := " tritonExpr : tritonStmt
 syntax "tl.store(" tritonPtr ", " tritonExpr ")" : tritonStmt
+-- `tl.for i in $(n) { stmt* }` — bounded loop over `n` iterations,
+-- binding the iteration index to register `i` (Nat-channel).
+syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
+-- Convenience form with a numeric literal in place of the antiquoted term.
+syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt
 
 -- Block (the user-facing entry point)
 syntax (name := tritonBlock) "triton " "{" tritonStmt* "}" : term
@@ -218,6 +223,14 @@ partial def expandStmt (stx : TSyntax `tritonStmt) : MacroM (TSyntax `term) := d
       let v' ← expandExpr v
       let (r, off) ← expandPtr p
       `(Stmt.store $r $off $v')
+  | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let body ← stmts.mapM expandStmt
+      `(Stmt.forLoop $nameLit $n [$body,*])
+  | `(tritonStmt| tl.for $i:ident in $n:num { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let body ← stmts.mapM expandStmt
+      `(Stmt.forLoop $nameLit $n [$body,*])
   | _ => Macro.throwUnsupported
 
 /-! ## Region collection (for auto-populating Kernel.inputs / Kernel.outputs) -/
@@ -273,13 +286,23 @@ private def ptrOffsetRegions : TSyntax `tritonPtr → List (TSyntax `term) := fu
   | _ => []
 
 /-- Per-statement region split: `(input regions, output regions)`. -/
-private def stmtRegions :
+private partial def stmtRegions :
     TSyntax `tritonStmt → List (TSyntax `term) × List (TSyntax `term) := fun stx =>
   match stx with
   | `(tritonStmt| $_:ident := $e:tritonExpr) =>
       (exprRegions e, [])
   | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr)) =>
       (ptrOffsetRegions p ++ exprRegions v, ptrBaseRegion p)
+  | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      stmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+  | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
+      stmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) ([], [])
   | _ => ([], [])
 
 /-! ## Block macro -/
