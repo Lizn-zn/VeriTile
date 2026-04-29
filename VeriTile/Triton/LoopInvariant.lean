@@ -77,8 +77,48 @@ theorem forLoop_inv
   -- stepStmt (forLoop ...) = stepForLoopAux ... 0 n body s_init by definition.
   simpa [stepForLoopAux.forLoop_unfold] using h_aux
 
--- TODO: forLoop_readout_scalar (Task 2.4)
--- TODO: forLoop_readout_tile (Task 2.4)
+/-- **Scalar-register readout corollary.** Combines `forLoop_inv` with a
+    proof that some output register holds a target scalar value when `P n`
+    holds; the conclusion is the standard "kernel correctness reads
+    register `outReg` and finds `f n`" form used throughout Tier 2 / 3-A. -/
+theorem forLoop_readout_scalar
+    {idx outReg : RegName} {n : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    {f : Nat → ℝ}
+    (h_init : P 0 s_init)
+    (h_step :
+      ∀ i s, i < n → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx (Value.scalarNat i)) = some s' ∧
+          P (i + 1) s')
+    (h_readout :
+      ∀ s, P n s → s.regs outReg = some (Value.scalar (f n))) :
+    ∃ s_final,
+      stepStmt (.forLoop idx n body) s_init = some s_final ∧
+      s_final.regs outReg = some (Value.scalar (f n)) := by
+  obtain ⟨s_final, h_eq, hP⟩ := forLoop_inv h_init h_step
+  exact ⟨s_final, h_eq, h_readout _ hP⟩
+
+/-- **Tile-register readout corollary.** Same as `forLoop_readout_scalar` but
+    for an output register containing a `Value.tile len`; used by FA-1
+    forward (`O` register) and any kernel writing a tile-valued accumulator. -/
+theorem forLoop_readout_tile
+    {idx outReg : RegName} {n : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    {len : Nat} {f : Nat → Fin len → ℝ}
+    (h_init : P 0 s_init)
+    (h_step :
+      ∀ i s, i < n → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx (Value.scalarNat i)) = some s' ∧
+          P (i + 1) s')
+    (h_readout :
+      ∀ s, P n s → s.regs outReg = some (Value.tile len (f n))) :
+    ∃ s_final,
+      stepStmt (.forLoop idx n body) s_init = some s_final ∧
+      s_final.regs outReg = some (Value.tile len (f n)) := by
+  obtain ⟨s_final, h_eq, hP⟩ := forLoop_inv h_init h_step
+  exact ⟨s_final, h_eq, h_readout _ hP⟩
 -- TODO: sanity example (Task 2.5)
 
 end VeriTile.Triton
