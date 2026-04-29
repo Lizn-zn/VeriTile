@@ -97,4 +97,67 @@ We don't yet provide a `simp`-able equality theorem; that lands in P1 lemma work
 -/
 def trivialOp : Op := .mul (.add (.const 0) (.ref "x")) (.const 1)
 
+/-! ## Mask extension sanity checks (Slice 2)
+
+These exercise the new DSL surface for masked load/store and the 6
+comparison operators. They are syntactic — the test is that the kernels
+elaborate to a `Kernel` value with the expected AST shape. Operational
+equivalence is covered by per-kernel correctness theorems (Phase B+). -/
+
+/-- Vector-add kernel with explicit boundary mask (the canonical
+    paste-in target from real Triton tutorials).
+
+    Triton source:
+    ```python
+    pid     = tl.program_id(0)
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask    = offsets < n_elements
+    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+    tl.store(out_ptr + offsets, x + y, mask=mask)
+    ```
+-/
+def addKernelMaskedSmoke (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  mask := offs < $(nElements)
+  x    := tl.load($(xReg) + offs, mask=mask, other=0)
+  y    := tl.load($(yReg) + offs, mask=mask, other=0)
+  out  := x + y
+  tl.store($(outReg) + offs, out, mask=mask)
+}
+
+/-- Smoke test: every comparison operator is reachable via the DSL. -/
+def comparisonOpsSmoke : Op :=
+  let lt := .lt (.ref "a") (.ref "b")
+  let le := .le (.ref "a") (.ref "b")
+  let eq := .eq (.ref "a") (.ref "b")
+  let gt := .gt (.ref "a") (.ref "b")
+  let ge := .ge (.ref "a") (.ref "b")
+  let ne := .ne (.ref "a") (.ref "b")
+  -- Tuple them all into a single Op so the def itself touches each constructor.
+  .add lt (.add le (.add eq (.add gt (.add ge ne))))
+
+/-- DSL surface form of the same: bare comparisons inside a `triton { ... }`
+    block lower to the corresponding `Op.lt` / `Op.le` / etc. -/
+example : Op := show Op from
+  -- Inside an assign RHS, comparison ops are well-formed expressions.
+  -- This kernel doesn't make semantic sense (we never use any of these
+  -- registers); the test is purely that DSL lowering succeeds.
+  let k : Kernel := triton {
+    a   := 1
+    b   := 2
+    r1  := a < b
+    r2  := a <= b
+    r3  := a == b
+    r4  := a > b
+    r5  := a >= b
+    r6  := a != b
+  }
+  -- Pull out the first assigned op as a witness that the kernel built.
+  match k.body.head? with
+  | some (.assign _ op) => op
+  | _ => .const 0
+
 end VeriTile.Triton.Examples

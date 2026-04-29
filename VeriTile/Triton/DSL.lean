@@ -79,6 +79,7 @@ namespace VeriTile.Triton.DSL
 declare_syntax_cat tritonExpr
 declare_syntax_cat tritonStmt
 declare_syntax_cat tritonPtr
+declare_syntax_cat tritonKwarg
 
 -- Pointer expressions (used by `tl.load` / `tl.store`).
 -- Splitting the pointer surface syntax into its own category gives a single
@@ -106,7 +107,28 @@ syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.sum(" tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "-inf" : tritonExpr
-syntax "tl.load(" tritonPtr ")" : tritonExpr
+
+-- kwarg: `name = expr`. Used for `mask=` / `other=` in tl.load / tl.store.
+-- Per Issue #16: only `mask` and `other` are recognized; other names error.
+syntax ident " = " tritonExpr : tritonKwarg
+
+-- `tl.load(ptr [, kwarg]*)` — kwargs are optional. With zero kwargs this is
+-- the legacy unmasked form; with `mask=` / `other=` it lowers to the masked
+-- AST (Slice 1 of mask extension). Other kwargs raise a parse error per
+-- Issue #16 / `feedback_triton_user_first_class.md`.
+syntax "tl.load(" tritonPtr ("," tritonKwarg)* ")" : tritonExpr
+
+-- Comparison operators (priority 50 — below arithmetic 60/70 — non-associative).
+-- Both ℝ × ℝ and Nat × Nat carriers, dispatched via Value.cop. Returns Bool
+-- channel (scalarBool / tileBool). Triton-faithful: no chained comparisons
+-- (a < b < c is a syntax error, not Python's "a < b and b < c").
+syntax:50 tritonExpr:51 " < "  tritonExpr:51 : tritonExpr
+syntax:50 tritonExpr:51 " <= " tritonExpr:51 : tritonExpr
+syntax:50 tritonExpr:51 " == " tritonExpr:51 : tritonExpr
+syntax:50 tritonExpr:51 " > "  tritonExpr:51 : tritonExpr
+syntax:50 tritonExpr:51 " >= " tritonExpr:51 : tritonExpr
+syntax:50 tritonExpr:51 " != " tritonExpr:51 : tritonExpr
+
 syntax:60 tritonExpr:60 " + " tritonExpr:61 : tritonExpr
 syntax:60 tritonExpr:60 " - " tritonExpr:61 : tritonExpr
 syntax:70 tritonExpr:70 " * " tritonExpr:71 : tritonExpr
@@ -114,7 +136,10 @@ syntax:70 tritonExpr:70 " / " tritonExpr:71 : tritonExpr
 
 -- Statements
 syntax ident " := " tritonExpr : tritonStmt
-syntax "tl.store(" tritonPtr ", " tritonExpr ")" : tritonStmt
+-- `tl.store(ptr, value [, kwarg]*)` — kwargs are optional. Only `mask=` is
+-- recognized (Triton's `tl.store` has no `other`). Per Issue #16: unknown
+-- kwarg → parse error.
+syntax "tl.store(" tritonPtr ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
 -- `tl.for i in $(n) { stmt* }` — bounded loop over `n` iterations,
 -- binding the iteration index to register `i` (Nat-channel).
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
@@ -221,13 +246,57 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
       `(Op.natToReal $e')
   | `(tritonExpr| -inf) =>
       `(Op.negInf)
-  | `(tritonExpr| tl.load($p:tritonPtr)) => do
-      -- Region is a Lean term of type RegionName (kernel parameter or value).
-      -- The pointer-like surface syntax lowers to the internal region+offset AST.
-      -- The unmasked DSL form passes `none none` for `(mask, other)`; the
-      -- masked DSL form (with `mask=`/`other=` kwargs) is added in Slice 2.
+  | `(tritonExpr| tl.load($p:tritonPtr $[, $kwargs:tritonKwarg]*)) => do
+      -- Pointer surface syntax lowers to the internal `(region, offset)` AST.
+      -- Optional `mask=` / `other=` kwargs lower to Op.load's 4th/5th args
+      -- (Slice 1 of mask extension). Per Issue #16: any other kwarg name is
+      -- a parse error. Per Triton convention: missing `other` defaults to
+      -- `Op.const 0`; `other` without `mask` is rejected.
       let (r, off) ← expandPtr p
-      `(Op.load $r $off none none)
+      let mut maskTerm : Option (TSyntax `term) := none
+      let mut otherTerm : Option (TSyntax `term) := none
+      for kw in kwargs do
+        match kw with
+        | `(tritonKwarg| $name:ident = $val:tritonExpr) =>
+            let val' ← expandExpr val
+            match name.getId.toString with
+            | "mask"  => maskTerm  := some val'
+            | "other" => otherTerm := some val'
+            | unknown =>
+                let msg : String :=
+                  "tl.load: unknown kwarg `" ++ unknown ++
+                  "`. Only `mask` and `other` are recognized (see GitHub issue #16)."
+                Macro.throwError msg
+        | _ => Macro.throwUnsupported
+      match maskTerm, otherTerm with
+      | none, none =>
+          `(Op.load $r $off none none)
+      | some m, none =>
+          -- Triton default: missing `other` is 0.0 (ℝ scalar).
+          `(Op.load $r $off (some $m) (some (Op.const 0)))
+      | some m, some o =>
+          `(Op.load $r $off (some $m) (some $o))
+      | none, some _ =>
+          Macro.throwError
+            "tl.load: `other=` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"
+  | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => do
+      let a' ← expandExpr a; let b' ← expandExpr b
+      `(Op.lt $a' $b')
+  | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => do
+      let a' ← expandExpr a; let b' ← expandExpr b
+      `(Op.le $a' $b')
+  | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => do
+      let a' ← expandExpr a; let b' ← expandExpr b
+      `(Op.eq $a' $b')
+  | `(tritonExpr| $a:tritonExpr > $b:tritonExpr) => do
+      let a' ← expandExpr a; let b' ← expandExpr b
+      `(Op.gt $a' $b')
+  | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => do
+      let a' ← expandExpr a; let b' ← expandExpr b
+      `(Op.ge $a' $b')
+  | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => do
+      let a' ← expandExpr a; let b' ← expandExpr b
+      `(Op.ne $a' $b')
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
       let a' ← expandExpr a; let b' ← expandExpr b
       `(Op.add $a' $b')
@@ -250,12 +319,28 @@ partial def expandStmt (stx : TSyntax `tritonStmt) : MacroM (TSyntax `term) := d
       let nameLit ← identAsStr i
       let e' ← expandExpr e
       `(Stmt.assign $nameLit $e')
-  | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr)) => do
-      -- Unmasked DSL form passes `none` for `mask`; masked form (Slice 2)
-      -- will route to the same `Stmt.store` constructor with `some m`.
+  | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) => do
+      -- Optional kwargs: only `mask=` is recognized for store (Triton's
+      -- `tl.store` has no `other`). Per Issue #16: any other kwarg name
+      -- (including `other=`) is a parse error.
       let v' ← expandExpr v
       let (r, off) ← expandPtr p
-      `(Stmt.store $r $off $v' none)
+      let mut maskTerm : Option (TSyntax `term) := none
+      for kw in kwargs do
+        match kw with
+        | `(tritonKwarg| $name:ident = $kval:tritonExpr) =>
+            let kval' ← expandExpr kval
+            match name.getId.toString with
+            | "mask"  => maskTerm := some kval'
+            | unknown =>
+                let msg : String :=
+                  "tl.store: unknown kwarg `" ++ unknown ++
+                  "`. Only `mask` is recognized (Triton's tl.store has no `other`; see issue #16)."
+                Macro.throwError msg
+        | _ => Macro.throwUnsupported
+      match maskTerm with
+      | none   => `(Stmt.store $r $off $v' none)
+      | some m => `(Stmt.store $r $off $v' (some $m))
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let body ← stmts.mapM expandStmt
@@ -275,7 +360,14 @@ mutual
     pointer (recursively in subexpressions). -/
 private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
   match stx with
-  | `(tritonExpr| tl.load($p:tritonPtr))         => ptrRegions p
+  | `(tritonExpr| tl.load($p:tritonPtr $[, $kwargs:tritonKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
+            match kw with
+            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      ptrRegions p ++ kwargRegions
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
@@ -290,10 +382,16 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.arange($e:tritonExpr))      => exprRegions e
   | `(tritonExpr| tl.arange($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr / $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr <  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr >  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | _ => []  -- num, ident, $(...) — no regions to collect
 
 /-- All region terms appearing in a `tritonPtr`: the base region plus any
@@ -328,8 +426,14 @@ private partial def stmtRegions :
   match stx with
   | `(tritonStmt| $_:ident := $e:tritonExpr) =>
       (exprRegions e, [])
-  | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr)) =>
-      (ptrOffsetRegions p ++ exprRegions v, ptrBaseRegion p)
+  | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
+            match kw with
+            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      (ptrOffsetRegions p ++ exprRegions v ++ kwargRegions, ptrBaseRegion p)
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       stmts.toList.foldl
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
