@@ -391,20 +391,45 @@ end
 
 namespace stepForLoopAux  -- group under a namespace for discoverability
 
-@[simp] theorem step_eq_self {idx} {n} {body} (s) :
-    stepForLoopAux idx n n body s = some s := by
+/-- Terminator case: when the loop counter has reached the bound, the loop
+    is finished and the state is returned unchanged. Subsumes the special
+    case `start = n`. -/
+@[simp] theorem step_ge {idx} {start n} {body} {s} (h : n ≤ start) :
+    stepForLoopAux idx start n body s = some s := by
   unfold stepForLoopAux
-  simp
+  simp [Nat.not_lt.mpr h]
 
+/-- Terminator special case: when `start = n`. Kept as a named lemma so callers
+    that reduce to `stepForLoopAux idx n n …` (without an explicit `n ≤ start`
+    hypothesis in scope) still get a one-step `simp` close. -/
+@[simp] theorem step_eq_self {idx} {n} {body} (s) :
+    stepForLoopAux idx n n body s = some s :=
+  step_ge (le_refl n)
+
+/-- Step case: under `h : start < n`, unfold one iteration into a `bind` over
+    the body's resulting state. Conditional `@[simp]` — fires only when
+    `start < n` is discharged from the local context. -/
 @[simp] theorem step_lt {idx} {start n} {body} {s} (h : start < n) :
     stepForLoopAux idx start n body s
       = (stepStmts body (s.setReg idx (Value.scalarNat start))).bind
           (stepForLoopAux idx (start + 1) n body) := by
+  -- `unfold stepForLoopAux` (without `conv_lhs`) is too eager — it also
+  -- unfolds the recursive call on the RHS, leaving `simp [h]` unable to close.
+  -- Localize to the LHS only.
   conv_lhs => unfold stepForLoopAux
   simp [h]
   -- The body is a `match`; rewrite into `Option.bind` form.
   cases hbody : stepStmts body (s.setReg idx (Value.scalarNat start)) <;> rfl
 
+/-- Bridge: `stepStmt`'s `.forLoop` arm delegates to the auxiliary driver.
+    Lets `simp` reduce `stepStmt (.forLoop ...)` directly into
+    `stepForLoopAux` form, where `step_ge`/`step_eq_self`/`step_lt` then take
+    over.
+
+    NOTE: this rewrite is one-directional. If a future `@[simp]` lemma folds
+    `stepForLoopAux idx 0 n body s` back to `stepStmt (.forLoop ...)`, the
+    rewrite system will loop. Add such a lemma only with explicit `simp only`
+    discipline. -/
 @[simp] theorem forLoop_unfold {idx} {n} {body} {s} :
     stepStmt (.forLoop idx n body) s
       = stepForLoopAux idx 0 n body s := by
