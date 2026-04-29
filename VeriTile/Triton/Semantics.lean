@@ -389,6 +389,30 @@ decreasing_by all_goals omega
 
 end
 
+namespace stepForLoopAux  -- group under a namespace for discoverability
+
+@[simp] theorem step_eq_self {idx} {n} {body} (s) :
+    stepForLoopAux idx n n body s = some s := by
+  unfold stepForLoopAux
+  simp
+
+@[simp] theorem step_lt {idx} {start n} {body} {s} (h : start < n) :
+    stepForLoopAux idx start n body s
+      = (stepStmts body (s.setReg idx (Value.scalarNat start))).bind
+          (stepForLoopAux idx (start + 1) n body) := by
+  conv_lhs => unfold stepForLoopAux
+  simp [h]
+  -- The body is a `match`; rewrite into `Option.bind` form.
+  cases hbody : stepStmts body (s.setReg idx (Value.scalarNat start)) <;> rfl
+
+@[simp] theorem forLoop_unfold {idx} {n} {body} {s} :
+    stepStmt (.forLoop idx n body) s
+      = stepForLoopAux idx 0 n body s := by
+  unfold stepStmt
+  rfl
+
+end stepForLoopAux
+
 /-- Execute a kernel from an initial state to a final state (or `none` on error). -/
 noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
   stepStmts k.body s
