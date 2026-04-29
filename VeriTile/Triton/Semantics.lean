@@ -32,20 +32,33 @@ A Triton runtime value, bifurcated into `ℝ` (data) and `Nat` (address)
 channels. Tile lengths are existential (packed in the constructor) for
 simplicity; type-level shape tracking is a later extension if needed.
 
-* `scalar`     — `ℝ` data scalar (e.g. an `exp`/`div` result, an accumulator).
-* `scalarNat`  — `Nat` address scalar (e.g. `pid`, a tile size, a stride).
-* `tile`       — `ℝ` data tile (e.g. `tl.exp(x)`, `tl.load(...)` from a data buffer).
-* `tileNat`    — `Nat` offset tile (e.g. `tl.arange(N)`, computed offsets).
+* `scalar`      — `ℝ` data scalar (e.g. an `exp`/`div` result, an accumulator).
+* `scalarNat`   — `Nat` address scalar (e.g. `pid`, a tile size, a stride).
+* `scalarBool`  — `Bool` predicate scalar (e.g. `pid < n_elements`). Consumed
+                  as the `mask=` kwarg of `tl.load`/`tl.store` (broadcasts
+                  over per-lane offsets) or future `tl.where` ternary.
+* `tile`        — `ℝ` data tile (e.g. `tl.exp(x)`, `tl.load(...)` from a data buffer).
+* `tileNat`     — `Nat` offset tile (e.g. `tl.arange(N)`, computed offsets).
+* `tileBool`    — `Bool` per-lane mask tile (e.g. `offsets < n_elements`).
+                  Consumed as the `mask=` kwarg in masked load/store.
 
-The bifurcation eliminates the prior `realToNat` round-trip cast and
-removes one class of permissive typing (`exp(pid)` no longer evaluates).
-See RP2 (`Notes/research_problem_address_typing.md`).
+The trifurcation (data ℝ / address Nat / predicate Bool) eliminates the
+prior `realToNat` round-trip cast and removes one class of permissive
+typing — `exp(pid)`, `pid + (offs < n)` no longer evaluate. Comparison
+ops (`Op.lt`, etc.) live exclusively on the Bool channel; they don't
+flow back into ℝ/Nat arithmetic. Shape semantics follow Triton's
+broadcast rules: `()×()→()`, `(n)×()→(n)`, `()×(n)→(n)`, `(n)×(n)→(n)`.
+
+See RP2 (`Notes/research_problem_address_typing.md`) and Issue #16/#17
+for the design discussion.
 -/
 inductive Value : Type where
-  | scalar    : ℝ   → Value
-  | scalarNat : Nat → Value
-  | tile      : (n : Nat) → (Fin n → ℝ)   → Value
-  | tileNat   : (n : Nat) → (Fin n → Nat) → Value
+  | scalar     : ℝ   → Value
+  | scalarNat  : Nat → Value
+  | scalarBool : Bool → Value
+  | tile       : (n : Nat) → (Fin n → ℝ)   → Value
+  | tileNat    : (n : Nat) → (Fin n → Nat) → Value
+  | tileBool   : (n : Nat) → (Fin n → Bool) → Value
 
 instance : Inhabited Value := ⟨.scalar 0⟩
 
@@ -204,6 +217,42 @@ def bop (opR : ℝ → ℝ → ℝ) (opN : Nat → Nat → Nat) :
   -- mixed ℝ / Nat → semantic error
   | _, _ => none
 
+/-- Pointwise lift of a binary comparison op, dispatched by carrier type.
+    Returns a value in the **Bool channel** (`scalarBool` / `tileBool`).
+
+    * Two `ℝ` operands (any combination of `scalar`/`tile`) → `opR`
+    * Two `Nat` operands (any combination of `scalarNat`/`tileNat`) → `opN`
+    * Mixed ℝ/Nat or Bool input → `none` (semantic error)
+
+    Shape semantics follow Triton's broadcast rules:
+    `()×() → ()`, `(n)×() → (n)`, `()×(n) → (n)`, `(n)×(n) → (n)`
+    (length match required for tile×tile). The two scalar operands case
+    produces a `scalarBool` (NOT a `tileBool 1` — `shape ()` ≠ `shape (1)`
+    per Triton).
+
+    `noncomputable` because `ℝ`-comparison is classically decidable but
+    not constructively so. -/
+noncomputable def cop (opR : ℝ → ℝ → Bool) (opN : Nat → Nat → Bool) :
+    Value → Value → Option Value
+  -- ℝ × ℝ → Bool channel
+  | .scalar a, .scalar b      => some (.scalarBool (opR a b))
+  | .scalar a, .tile n f      => some (.tileBool n (fun i => opR a (f i)))
+  | .tile n f, .scalar b      => some (.tileBool n (fun i => opR (f i) b))
+  | .tile n f, .tile m g      =>
+      if h : n = m then
+        some (.tileBool n (fun i => opR (f i) (g (Fin.cast h i))))
+      else none
+  -- Nat × Nat → Bool channel
+  | .scalarNat a, .scalarNat b   => some (.scalarBool (opN a b))
+  | .scalarNat a, .tileNat n f   => some (.tileBool n (fun i => opN a (f i)))
+  | .tileNat n f, .scalarNat b   => some (.tileBool n (fun i => opN (f i) b))
+  | .tileNat n f, .tileNat m g   =>
+      if h : n = m then
+        some (.tileBool n (fun i => opN (f i) (g (Fin.cast h i))))
+      else none
+  -- mixed ℝ / Nat or Bool input → semantic error
+  | _, _ => none
+
 /-- Pointwise lift of a unary `ℝ` op (e.g. `Real.exp`, `Real.log`) to a
     `Value`. Returns `none` on `Nat` carriers — applying `exp`/`log` to an
     address value is rejected at the semantics layer. -/
@@ -288,6 +337,30 @@ noncomputable def evalOp : Op → BlockState → Option Value
       match evalOp a s with
       | some va => va.uop Real.sqrt
       | none => none
+  | .lt a b, s =>
+      match evalOp a s, evalOp b s with
+      | some va, some vb => va.cop (fun x y => decide (x < y)) (fun x y => decide (x < y)) vb
+      | _, _ => none
+  | .le a b, s =>
+      match evalOp a s, evalOp b s with
+      | some va, some vb => va.cop (fun x y => decide (x ≤ y)) (fun x y => decide (x ≤ y)) vb
+      | _, _ => none
+  | .eq a b, s =>
+      match evalOp a s, evalOp b s with
+      | some va, some vb => va.cop (fun x y => decide (x = y)) (fun x y => decide (x = y)) vb
+      | _, _ => none
+  | .gt a b, s =>
+      match evalOp a s, evalOp b s with
+      | some va, some vb => va.cop (fun x y => decide (x > y)) (fun x y => decide (x > y)) vb
+      | _, _ => none
+  | .ge a b, s =>
+      match evalOp a s, evalOp b s with
+      | some va, some vb => va.cop (fun x y => decide (x ≥ y)) (fun x y => decide (x ≥ y)) vb
+      | _, _ => none
+  | .ne a b, s =>
+      match evalOp a s, evalOp b s with
+      | some va, some vb => va.cop (fun x y => decide (x ≠ y)) (fun x y => decide (x ≠ y)) vb
+      | _, _ => none
   | .max2 a b, s =>
       match evalOp a s, evalOp b s with
       | some va, some vb => va.bop max max vb
@@ -300,16 +373,53 @@ noncomputable def evalOp : Op → BlockState → Option Value
       match evalOp a s with
       | some va => va.reduceSum
       | none => none
-  | .load region off, s =>
-      match evalOp off s with
-      | some (.scalarNat n) =>
-          -- Scalar offset: single-cell read at the given Nat address.
-          some (.scalar (s.readMem region n))
-      | some (.tileNat n f) =>
-          -- Tile-valued offset: gather. Each output cell `i` reads the cell
-          -- at memory address `f i`.
-          some (.tile n (fun i => s.readMem region (f i)))
-      | _ => none
+  | .load region off mask other, s =>
+      match mask, other with
+      | none, none =>
+          -- Unmasked load (D-b path: legacy form, untouched semantics).
+          match evalOp off s with
+          | some (.scalarNat n) =>
+              -- Scalar offset: single-cell read at the given Nat address.
+              some (.scalar (s.readMem region n))
+          | some (.tileNat n f) =>
+              -- Tile-valued offset: gather.
+              some (.tile n (fun i => s.readMem region (f i)))
+          | _ => none
+      | some m, some o =>
+          -- Masked load: dispatch on (offset shape × mask shape × other shape).
+          -- Per Triton: scalarBool mask broadcasts to per-lane; tileBool must
+          -- length-match the offset tile.
+          match evalOp off s, evalOp m s, evalOp o s with
+          -- scalar offset + scalar mask + scalar other
+          | some (.scalarNat n), some (.scalarBool b), some (.scalar oval) =>
+              some (.scalar (if b then s.readMem region n else oval))
+          -- tile offset + tile mask (length match) + tile other (length match)
+          | some (.tileNat n f), some (.tileBool nm mf), some (.tile no fo) =>
+              if h₁ : n = nm then
+                if h₂ : n = no then
+                  some (.tile n (fun i =>
+                    if mf (Fin.cast h₁ i) then s.readMem region (f i)
+                    else fo (Fin.cast h₂ i)))
+                else none
+              else none
+          -- tile offset + tile mask + scalar other (broadcast other to dead lanes)
+          | some (.tileNat n f), some (.tileBool nm mf), some (.scalar oval) =>
+              if h : n = nm then
+                some (.tile n (fun i =>
+                  if mf (Fin.cast h i) then s.readMem region (f i) else oval))
+              else none
+          -- tile offset + scalar mask (broadcast) + tile other (length match)
+          | some (.tileNat n f), some (.scalarBool b), some (.tile no fo) =>
+              if h : n = no then
+                some (.tile n (fun i =>
+                  if b then s.readMem region (f i) else fo (Fin.cast h i)))
+              else none
+          -- tile offset + scalar mask + scalar other (broadcast both)
+          | some (.tileNat n f), some (.scalarBool b), some (.scalar oval) =>
+              some (.tile n (fun i =>
+                if b then s.readMem region (f i) else oval))
+          | _, _, _ => none
+      | _, _ => none  -- mask without other (or vice versa): semantic error
   | .natToReal a, s =>
       -- Lift a `Nat`-channel value into the `ℝ` channel pointwise.
       match evalOp a s with
@@ -331,33 +441,83 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       match evalOp e s with
       | some v => some (s.setReg name v)
       | none   => none
-  | .store region off val, s =>
-      match evalOp off s, evalOp val s with
-      | some voff, some vval =>
-          match voff with
-          | .scalarNat coff =>
-              match vval with
-              | .scalar c =>
-                  some (s.writeMem region coff c)
-              | .tile n f =>
+  | .store region off val mask, s =>
+      match mask with
+      | none =>
+          -- Unmasked store (D-b path: legacy form, untouched semantics).
+          match evalOp off s, evalOp val s with
+          | some voff, some vval =>
+              match voff with
+              | .scalarNat coff =>
+                  match vval with
+                  | .scalar c =>
+                      some (s.writeMem region coff c)
+                  | .tile n f =>
+                      some ((List.finRange n).foldl
+                              (fun acc i =>
+                                acc.writeMem region (coff + i.val) (f i))
+                              s)
+                  | _ => none
+              | .tileNat n offs =>
+                  match vval with
+                  | .tile m vals =>
+                      if h : n = m then
+                        some ((List.finRange n).foldl
+                                (fun acc i =>
+                                  acc.writeMem region (offs i)
+                                              (vals (Fin.cast h i)))
+                                s)
+                      else none
+                  | _ => none
+              | _ => none  -- ℝ-valued offset is rejected
+          | _, _ => none
+      | some m =>
+          -- Masked store: lanes where mask=false are LEFT UNTOUCHED. No `other`
+          -- parameter on store side (Triton convention).
+          match evalOp off s, evalOp val s, evalOp m s with
+          -- scalar offset + scalar val + scalar mask
+          | some (.scalarNat coff), some (.scalar c), some (.scalarBool b) =>
+              if b then some (s.writeMem region coff c) else some s
+          -- scalar offset + tile val + tile mask (length match)
+          | some (.scalarNat coff), some (.tile n f), some (.tileBool nm mf) =>
+              if h : n = nm then
+                some ((List.finRange n).foldl
+                        (fun acc i =>
+                          if mf (Fin.cast h i) then
+                            acc.writeMem region (coff + i.val) (f i)
+                          else acc)
+                        s)
+              else none
+          -- scalar offset + tile val + scalar mask (broadcast)
+          | some (.scalarNat coff), some (.tile n f), some (.scalarBool b) =>
+              if b then
+                some ((List.finRange n).foldl
+                        (fun acc i => acc.writeMem region (coff + i.val) (f i))
+                        s)
+              else some s
+          -- tile offset + tile val + tile mask (lengths must all match)
+          | some (.tileNat n offs), some (.tile m vals), some (.tileBool k mf) =>
+              if h₁ : n = m then
+                if h₂ : n = k then
                   some ((List.finRange n).foldl
                           (fun acc i =>
-                            acc.writeMem region (coff + i.val) (f i))
+                            if mf (Fin.cast h₂ i) then
+                              acc.writeMem region (offs i) (vals (Fin.cast h₁ i))
+                            else acc)
                           s)
-              | _ => none
-          | .tileNat n offs =>
-              match vval with
-              | .tile m vals =>
-                  if h : n = m then
-                    some ((List.finRange n).foldl
-                            (fun acc i =>
-                              acc.writeMem region (offs i)
-                                          (vals (Fin.cast h i)))
-                            s)
-                  else none
-              | _ => none
-          | _ => none  -- ℝ-valued offset is rejected
-      | _, _ => none
+                else none
+              else none
+          -- tile offset + tile val + scalar mask (broadcast)
+          | some (.tileNat n offs), some (.tile m vals), some (.scalarBool b) =>
+              if h : n = m then
+                if b then
+                  some ((List.finRange n).foldl
+                          (fun acc i =>
+                            acc.writeMem region (offs i) (vals (Fin.cast h i)))
+                          s)
+                else some s
+              else none
+          | _, _, _ => none
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
 termination_by st _ => (sizeOf st, 0)

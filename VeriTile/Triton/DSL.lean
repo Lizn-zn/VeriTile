@@ -224,8 +224,10 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
   | `(tritonExpr| tl.load($p:tritonPtr)) => do
       -- Region is a Lean term of type RegionName (kernel parameter or value).
       -- The pointer-like surface syntax lowers to the internal region+offset AST.
+      -- The unmasked DSL form passes `none none` for `(mask, other)`; the
+      -- masked DSL form (with `mask=`/`other=` kwargs) is added in Slice 2.
       let (r, off) ← expandPtr p
-      `(Op.load $r $off)
+      `(Op.load $r $off none none)
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
       let a' ← expandExpr a; let b' ← expandExpr b
       `(Op.add $a' $b')
@@ -249,9 +251,11 @@ partial def expandStmt (stx : TSyntax `tritonStmt) : MacroM (TSyntax `term) := d
       let e' ← expandExpr e
       `(Stmt.assign $nameLit $e')
   | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr)) => do
+      -- Unmasked DSL form passes `none` for `mask`; masked form (Slice 2)
+      -- will route to the same `Stmt.store` constructor with `some m`.
       let v' ← expandExpr v
       let (r, off) ← expandPtr p
-      `(Stmt.store $r $off $v')
+      `(Stmt.store $r $off $v' none)
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let body ← stmts.mapM expandStmt

@@ -64,7 +64,8 @@ def naiveSoftmax (N : Nat) : Kernel where
     .forLoop "i" N [
       .assign "x_i" (.load "X"
                       (.add (.mul .programId (.constNat N))
-                            (.ref "i"))),
+                            (.ref "i"))
+                      none none),
       -- TODO(P1): an `Op.tileSet` / `Stmt.tileSet` constructor to overwrite
       -- a single tile cell. Currently no such primitive; this `assign` will
       -- not compose into the tile correctly. Marked as a known gap.
@@ -87,6 +88,7 @@ def naiveSoftmax (N : Nat) : Kernel where
     .store "Y"
       (.add (.broadcast (.mul .programId (.constNat N)) N) (.arange N))
       (.ref "y")
+      none
   ]
 
 /--

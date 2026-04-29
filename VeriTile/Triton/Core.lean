@@ -51,6 +51,22 @@ Notes on individual constructors:
   ℝ data (e.g. Welford's `delta / (i + 1)`, division by block size).
 * `sqrt` applies `Real.sqrt` pointwise on the `ℝ` channel. Used by
   LayerNorm's `1 / √(var + ε)` and similar normalization kernels.
+* `lt`/`le`/`eq`/`gt`/`ge`/`ne` are pointwise comparison operators
+  producing values in the **Bool channel** (`scalarBool` / `tileBool`).
+  Both `Nat × Nat → Bool` and `ℝ × ℝ → Bool` carriers are supported via
+  internal dispatch (`Value.cop`); mixed-channel comparison rejects.
+  Shape semantics follow Triton: `()×()→()`, `(n)×()→(n)`, `()×(n)→(n)`,
+  `(n)×(n)→(n)` (length match required for tile×tile).
+* `load region offset mask other` reads from `region`. Per RP1, region is
+  a kernel-level name. Per the mask extension (Issue #16/#17):
+  - `mask = none, other = none`: classic unmasked load. Result shape
+    follows `offset` shape (scalarNat → scalar; tileNat → tile gather).
+  - `mask = some m, other = some o`: masked load. `m` evaluates to a
+    `scalarBool` (broadcasts) or `tileBool` (per-lane, length-matching).
+    For each lane where `m` is `true`, read from memory; where `false`,
+    use `o`. Result still follows `offset` shape.
+  - `(some, none)` or `(none, some)`: `none` (semantic error). Mask and
+    other go together.
 -/
 inductive Op : Type where
   | const     : ℝ → Op
@@ -69,10 +85,17 @@ inductive Op : Type where
   | log       : Op → Op
   | sigmoid   : Op → Op
   | sqrt      : Op → Op
+  | lt        : Op → Op → Op
+  | le        : Op → Op → Op
+  | eq        : Op → Op → Op
+  | gt        : Op → Op → Op
+  | ge        : Op → Op → Op
+  | ne        : Op → Op → Op
   | max2      : Op → Op → Op
   | reduceMax : Op → Op
   | reduceSum : Op → Op
-  | load      : (region : RegionName) → (offset : Op) → Op
+  | load      : (region : RegionName) → (offset : Op) →
+                (mask : Option Op) → (other : Option Op) → Op
   | natToReal : Op → Op
   deriving Inhabited
 
@@ -80,15 +103,18 @@ inductive Op : Type where
 P1 Triton statements (mutating constructs).
 
 * `assign name e` defines or updates the register `name` to the value of `e`.
-* `store region offset value` writes `value` to `region` at `offset`. If
+* `store region offset value mask` writes `value` to `region` at `offset`. If
   `value` is a tile and `offset` is a scalar, the tile is written contiguously
-  starting at `offset`.
+  starting at `offset`. With `mask = none`, every lane is written. With
+  `mask = some m`, lanes where `m` evaluates `false` are **left untouched**
+  (Triton `tl.store` semantics — no `other` parameter on store side).
 * `forLoop i n body` runs `body` `n` times, with the scalar register `i` bound
   to the iteration index.
 -/
 inductive Stmt : Type where
   | assign  : RegName → Op → Stmt
-  | store   : (region : RegionName) → (offset : Op) → (value : Op) → Stmt
+  | store   : (region : RegionName) → (offset : Op) → (value : Op) →
+              (mask : Option Op) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   deriving Inhabited
 

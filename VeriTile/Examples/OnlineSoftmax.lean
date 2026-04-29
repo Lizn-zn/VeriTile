@@ -213,7 +213,7 @@ private theorem online_softmax_step
         stepStmts
           [ .assign "xi"    (.load xReg (.add (.mul (.ref "pid")
                                                     (.constNat N))
-                                              (.ref "i")))
+                                              (.ref "i")) none none)
           , .assign "m_new" (.max2 (.ref "m") (.ref "xi"))
           , .assign "l"     (.add (.mul (.exp (.sub (.ref "m") (.ref "m_new")))
                                         (.ref "l"))
@@ -260,7 +260,7 @@ private theorem online_softmax_step
     have hstep1 : stepStmt
         (.assign "xi" (.load xReg (.add (.mul (.ref "pid")
                                               (.constNat N))
-                                        (.ref "i"))))
+                                        (.ref "i")) none none))
         s_after_i = some s1 := by
       simp [stepStmt, evalOp, hpid', hi_reg, Value.bop, hs1_def,
             BlockState.readMem, hload_at]
@@ -403,7 +403,7 @@ theorem online_softmax_correct
         , .forLoop "i" N
             [ .assign "xi" (.load xReg (.add (.mul (.ref "pid")
                                                     (.constNat N))
-                                              (.ref "i")))
+                                              (.ref "i")) none none)
             , .assign "m_new" (.max2 (.ref "m") (.ref "xi"))
             , .assign "l" (.add (.mul (.exp (.sub (.ref "m") (.ref "m_new")))
                                       (.ref "l"))

@@ -118,7 +118,7 @@ private theorem online_welford_step
         stepStmts
           [ .assign "xi"     (.load xReg (.add (.mul (.ref "pid")
                                                     (.constNat blockSize))
-                                              (.ref "i")))
+                                              (.ref "i")) none none)
           , .assign "delta"  (.sub (.ref "xi") (.ref "M"))
           , .assign "M"      (.add (.ref "M")
                                   (.div (.ref "delta")
@@ -168,7 +168,7 @@ private theorem online_welford_step
     have hstep1 : stepStmt
         (.assign "xi" (.load xReg (.add (.mul (.ref "pid")
                                               (.constNat blockSize))
-                                        (.ref "i"))))
+                                        (.ref "i")) none none))
         s_after_i = some s1 := by
       simp [stepStmt, evalOp, hpid', hi_reg, Value.bop, hs1_def,
             BlockState.readMem, hload_at]
@@ -305,7 +305,7 @@ theorem online_welford_correct
   -- Step 2: the post-loop stores. After the loop ends in `s_final`, the
   -- two stores write to meanReg/varReg offset 0.
   have h_store1 : stepStmt
-        (.store meanReg (.constNat 0) (.ref "M")) s_final
+        (.store meanReg (.constNat 0) (.ref "M") none) s_final
         = some (s_final.writeMem meanReg 0 (welfordMean xs blockSize)) := by
     simp [stepStmt, evalOp, hMfin]
   -- The mean store changes meanReg's value but leaves S register intact.
@@ -317,7 +317,7 @@ theorem online_welford_correct
     exact hSfin
   have h_store2 : stepStmt
         (.store varReg (.constNat 0)
-              (.div (.ref "S") (.natToReal (.constNat blockSize))))
+              (.div (.ref "S") (.natToReal (.constNat blockSize))) none)
         s_after_meanstore
         = some (s_after_meanstore.writeMem varReg 0
                   (welfordS xs blockSize / blockSize)) := by
@@ -361,7 +361,7 @@ theorem online_welford_correct
         , .forLoop "i" blockSize
             [ .assign "xi" (.load xReg (.add (.mul (.ref "pid")
                                                    (.constNat blockSize))
-                                              (.ref "i")))
+                                              (.ref "i")) none none)
             , .assign "delta" (.sub (.ref "xi") (.ref "M"))
             , .assign "M" (.add (.ref "M")
                                 (.div (.ref "delta")
@@ -371,9 +371,9 @@ theorem online_welford_correct
             , .assign "S" (.add (.ref "S")
                                 (.mul (.ref "delta") (.ref "delta2")))
             ]
-        , .store meanReg (.constNat 0) (.ref "M")
+        , .store meanReg (.constNat 0) (.ref "M") none
         , .store varReg (.constNat 0)
-            (.div (.ref "S") (.natToReal (.constNat blockSize)))
+            (.div (.ref "S") (.natToReal (.constNat blockSize))) none
         ] s = some s_final2
     rw [stmts_cons _ _ _ _ h_pid]
     rw [stmts_cons _ _ _ _ h_M0]
