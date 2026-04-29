@@ -190,6 +190,151 @@ theorem online_softmax_recurrence_eq_batch
   simp_rw [hcastFin_id]
   rfl
 
+/-- Loop invariant for `onlineSoftmaxKernel`: after `k` body iterations,
+    register `m` holds `onlineSoftmaxM xs k`, register `l` holds
+    `onlineSoftmaxL xs k`, register `pid` holds the original program-id
+    (which is also `s.pid`), and the input region `xReg` still holds the
+    input tile `xs`. -/
+private def P_online_softmax {N : Nat} (xs : Fin N → ℝ) (xReg : RegionName)
+    (orig_pid : Nat) (k : Nat) (s : BlockState) : Prop :=
+  s.regs "m" = some (Value.scalar (onlineSoftmaxM xs k))
+  ∧ s.regs "l" = some (Value.scalar (onlineSoftmaxL xs k))
+  ∧ s.regs "pid" = some (Value.scalarNat orig_pid)
+  ∧ s.pid = orig_pid
+  ∧ InputLoadedAt s xReg N xs
+
+/-- One online-softmax-loop iteration preserves the invariant: given a state
+    at depth `k` with the index register `i` rebound to `Value.scalarNat k`,
+    executing the body produces a state at depth `k+1`. -/
+private theorem online_softmax_step
+    (xReg : RegionName) (N : Nat) (xs : Fin N → ℝ) (orig_pid : Nat) :
+    ∀ k s, k < N → P_online_softmax xs xReg orig_pid k s →
+      ∃ s',
+        stepStmts
+          [ .assign "xi"    (.load xReg (.add (.mul (.ref "pid")
+                                                    (.constNat N))
+                                              (.ref "i")))
+          , .assign "m_new" (.max2 (.ref "m") (.ref "xi"))
+          , .assign "l"     (.add (.mul (.exp (.sub (.ref "m") (.ref "m_new")))
+                                        (.ref "l"))
+                                  (.exp (.sub (.ref "xi") (.ref "m_new"))))
+          , .assign "m"     (.ref "m_new")
+          ]
+          (s.setReg "i" (Value.scalarNat k)) = some s'
+        ∧ P_online_softmax xs xReg orig_pid (k + 1) s' := by
+  intro k s hk hP
+  obtain ⟨hM, hL, hpid_reg, hpid_eq, hmem⟩ := hP
+  -- Bind shorthand for the iteration's input value and recurrence values.
+  set xk : ℝ := xs ⟨k, hk⟩ with hxk_def
+  set Mk : ℝ := onlineSoftmaxM xs k with hMk_def
+  set Lk : ℝ := onlineSoftmaxL xs k with hLk_def
+  set Mk1 : ℝ := max Mk xk with hMk1_def
+  set Lk1 : ℝ :=
+    Real.exp (Mk - Mk1) * Lk + Real.exp (xk - Mk1) with hLk1_def
+  -- The explicit final state: chain of 4 setRegs on `s.setReg "i" ...`.
+  set s_after_i : BlockState := s.setReg "i" (Value.scalarNat k) with hsi_def
+  set s1 : BlockState := s_after_i.setReg "xi" (Value.scalar xk) with hs1_def
+  set s2 : BlockState := s1.setReg "m_new" (Value.scalar Mk1) with hs2_def
+  set s3 : BlockState := s2.setReg "l" (Value.scalar Lk1) with hs3_def
+  set s4 : BlockState := s3.setReg "m" (Value.scalar Mk1) with hs4_def
+  -- Pre-step: registers / memory / pid in `s_after_i`.
+  have hM' : s_after_i.regs "m" = some (Value.scalar Mk) := by
+    simp [hsi_def, BlockState.setReg, hM]
+  have hL' : s_after_i.regs "l" = some (Value.scalar Lk) := by
+    simp [hsi_def, BlockState.setReg, hL]
+  have hpid' : s_after_i.regs "pid" = some (Value.scalarNat orig_pid) := by
+    simp [hsi_def, BlockState.setReg, hpid_reg]
+  have hi_reg : s_after_i.regs "i" = some (Value.scalarNat k) := by
+    simp [hsi_def, BlockState.setReg]
+  have hpid_after : s_after_i.pid = orig_pid := by
+    simpa [hsi_def, BlockState.setReg] using hpid_eq
+  have hload_at : s_after_i.mem xReg (orig_pid * N + k) = xk := by
+    have := hmem ⟨k, hk⟩
+    show s.mem xReg (orig_pid * N + k) = xk
+    rw [← hpid_eq]
+    simpa [hxk_def] using this
+  -- Provide the witness `s4` and split the conjunction.
+  refine ⟨s4, ?_, ?_⟩
+  · -- 1. Body reduces to s4.
+    -- Step 1: assign "xi" := load(...)
+    have hstep1 : stepStmt
+        (.assign "xi" (.load xReg (.add (.mul (.ref "pid")
+                                              (.constNat N))
+                                        (.ref "i"))))
+        s_after_i = some s1 := by
+      simp [stepStmt, evalOp, hpid', hi_reg, Value.bop, hs1_def,
+            BlockState.readMem, hload_at]
+    -- Step 2: assign "m_new" := max(m, xi)
+    have hxi1 : s1.regs "xi" = some (Value.scalar xk) := by
+      simp [hs1_def, BlockState.setReg]
+    have hM1 : s1.regs "m" = some (Value.scalar Mk) := by
+      simp [hs1_def, BlockState.setReg, hM']
+    have hstep2 : stepStmt (.assign "m_new" (.max2 (.ref "m") (.ref "xi"))) s1
+                  = some s2 := by
+      simp [stepStmt, evalOp, hM1, hxi1, Value.bop, hs2_def, hMk1_def]
+    -- Step 3: assign "l" := exp(m - m_new) * l + exp(xi - m_new)
+    have hM2 : s2.regs "m" = some (Value.scalar Mk) := by
+      simp [hs2_def, BlockState.setReg, hM1]
+    have hMnew2 : s2.regs "m_new" = some (Value.scalar Mk1) := by
+      simp [hs2_def, BlockState.setReg]
+    have hxi2 : s2.regs "xi" = some (Value.scalar xk) := by
+      simp [hs2_def, BlockState.setReg, hxi1]
+    have hL2 : s2.regs "l" = some (Value.scalar Lk) := by
+      simp [hs2_def, BlockState.setReg, hs1_def, BlockState.setReg, hL']
+    have hstep3 : stepStmt
+        (.assign "l" (.add (.mul (.exp (.sub (.ref "m") (.ref "m_new")))
+                                 (.ref "l"))
+                           (.exp (.sub (.ref "xi") (.ref "m_new")))))
+        s2 = some s3 := by
+      simp [stepStmt, evalOp, hM2, hMnew2, hxi2, hL2, Value.bop, Value.uop,
+            hs3_def, hLk1_def]
+    -- Step 4: assign "m" := m_new
+    have hMnew3 : s3.regs "m_new" = some (Value.scalar Mk1) := by
+      simp [hs3_def, BlockState.setReg, hMnew2]
+    have hstep4 : stepStmt (.assign "m" (.ref "m_new")) s3 = some s4 := by
+      simp [stepStmt, evalOp, hMnew3, hs4_def]
+    -- Chain the 4 steps via stepStmts.
+    show stepStmts _ s_after_i = some s4
+    simp [stepStmts, hstep1, hstep2, hstep3, hstep4]
+  · -- 2. P_online_softmax xs xReg orig_pid (k+1) s4.
+    -- Compute the recurrences at depth (k+1):
+    have hM_rec : onlineSoftmaxM xs (k + 1) = Mk1 := by
+      show (if h : k < N then max (onlineSoftmaxM xs k) (xs ⟨k, h⟩)
+            else onlineSoftmaxM xs k) = Mk1
+      simp [hk, hMk_def, hxk_def, hMk1_def]
+    have hL_rec : onlineSoftmaxL xs (k + 1) = Lk1 := by
+      have : onlineSoftmaxL xs (k + 1) =
+          Real.exp (onlineSoftmaxM xs k - onlineSoftmaxM xs (k+1)) *
+            onlineSoftmaxL xs k
+          + Real.exp (xs ⟨k, hk⟩ - onlineSoftmaxM xs (k+1)) := by
+        show (if h : k < N then
+          Real.exp (onlineSoftmaxM xs k - onlineSoftmaxM xs (k+1)) *
+            onlineSoftmaxL xs k
+          + Real.exp (xs ⟨k, h⟩ - onlineSoftmaxM xs (k+1))
+            else onlineSoftmaxL xs k) = _
+        simp [hk]
+      rw [this, hM_rec, hLk1_def, hMk_def, hxk_def, hLk_def]
+    refine ⟨?_, ?_, ?_, ?_, ?_⟩
+    · -- s4.regs "m" = onlineSoftmaxM xs (k+1)
+      simp [hs4_def, BlockState.setReg, hM_rec]
+    · -- s4.regs "l" = onlineSoftmaxL xs (k+1)
+      simp [hs4_def, BlockState.setReg, hs3_def, BlockState.setReg, hL_rec]
+    · -- s4.regs "pid" preserved.
+      simp [hs4_def, hs3_def, hs2_def, hs1_def, BlockState.setReg, hpid']
+    · -- s4.pid = orig_pid (setReg never touches pid).
+      simpa [hs4_def, hs3_def, hs2_def, hs1_def, BlockState.setReg]
+        using hpid_after
+    · -- InputLoadedAt s4: memory unchanged across all setRegs.
+      intro i
+      have hi := hmem i
+      have hpidS4 : s4.pid = orig_pid := by
+        simpa [hs4_def, hs3_def, hs2_def, hs1_def, BlockState.setReg]
+          using hpid_after
+      show s4.mem xReg (s4.pid * N + i.val) = xs i
+      rw [hpidS4, ← hpid_eq]
+      simpa [hs4_def, hs3_def, hs2_def, hs1_def, BlockState.setReg]
+        using hi
+
 /-- Operational correctness: the online softmax kernel computes (m, l)
     matching `onlineSoftmaxM xs N` and `onlineSoftmaxL xs N`. -/
 theorem online_softmax_correct
@@ -201,6 +346,86 @@ theorem online_softmax_correct
         = some (onlineSoftmaxM xs N)
     ∧ final.bind (fun s' => s'.regs "l" >>= Value.asScalar)
         = some (onlineSoftmaxL xs N) := by
-  sorry
+  -- The kernel is: 3 pre-loop assigns, 1 forLoop, no post-loop stmts.
+  -- Reduce the prefix manually, apply forLoop_inv, then conclude.
+  -- Pre-loop state: pid := s.pid, m := -1e38, l := 0.
+  set s0 : BlockState :=
+    ((s.setReg "pid" (Value.scalarNat s.pid)).setReg "m"
+      (Value.scalar (-1e38))).setReg "l" (Value.scalar 0) with hs0_def
+  -- s0 satisfies P_online_softmax at depth 0.
+  have hP0 : P_online_softmax xs xReg s.pid 0 s0 := by
+    refine ⟨?_, ?_, ?_, ?_, ?_⟩
+    · simp [hs0_def, BlockState.setReg, onlineSoftmaxM]
+    · simp [hs0_def, BlockState.setReg, onlineSoftmaxL]
+    · simp [hs0_def, BlockState.setReg]
+    · simp [hs0_def, BlockState.setReg]
+    · intro i
+      have := h_x i
+      simpa [hs0_def, BlockState.setReg] using this
+  -- Apply forLoop_inv to obtain a final state s_final after the loop.
+  obtain ⟨s_final, h_loop_eq, hPn⟩ :=
+    forLoop_inv (P := P_online_softmax xs xReg s.pid) (s_init := s0) hP0
+      (fun k s' h_lt hP' =>
+        online_softmax_step xReg N xs s.pid k s' h_lt hP')
+  obtain ⟨hMfin, hLfin, _, _, _⟩ := hPn
+  -- Reduce the full kernel exec by composing prefix → s0 → forLoop → s_final.
+  have stmts_cons : ∀ (st : Stmt) (rest : List Stmt) (s s' : BlockState),
+      stepStmt st s = some s' →
+      stepStmts (st :: rest) s = stepStmts rest s' := by
+    intro st rest s s' h
+    conv_lhs => unfold stepStmts
+    rw [h]
+  have stmts_nil : ∀ (s : BlockState), stepStmts [] s = some s := by
+    intro s
+    conv_lhs => unfold stepStmts
+  -- Statement-level reductions for the 3 pre-loop statements.
+  have h_pid : stepStmt (.assign "pid" Op.programId) s
+                = some (s.setReg "pid" (Value.scalarNat s.pid)) := by
+    simp [stepStmt, evalOp]
+  have h_m0 : stepStmt (.assign "m" Op.negInf)
+              (s.setReg "pid" (Value.scalarNat s.pid))
+            = some ((s.setReg "pid" (Value.scalarNat s.pid)).setReg "m"
+                    (Value.scalar (-1e38))) := by
+    simp [stepStmt, evalOp]
+  have h_l0 : stepStmt (.assign "l" (Op.const 0))
+              ((s.setReg "pid" (Value.scalarNat s.pid)).setReg "m"
+                (Value.scalar (-1e38))) = some s0 := by
+    simp [stepStmt, evalOp, hs0_def]
+  -- The full stepStmts evaluation, threaded through all 4 statements.
+  have h_kernel : stepStmts
+        (onlineSoftmaxKernel xReg yReg N).body s
+      = some s_final := by
+    -- Unfold the kernel so the body is an explicit cons-list.
+    show stepStmts
+        [ .assign "pid" .programId
+        , .assign "m" .negInf
+        , .assign "l" (.const 0)
+        , .forLoop "i" N
+            [ .assign "xi" (.load xReg (.add (.mul (.ref "pid")
+                                                    (.constNat N))
+                                              (.ref "i")))
+            , .assign "m_new" (.max2 (.ref "m") (.ref "xi"))
+            , .assign "l" (.add (.mul (.exp (.sub (.ref "m") (.ref "m_new")))
+                                      (.ref "l"))
+                                (.exp (.sub (.ref "xi") (.ref "m_new"))))
+            , .assign "m" (.ref "m_new")
+            ]
+        ] s = some s_final
+    rw [stmts_cons _ _ _ _ h_pid]
+    rw [stmts_cons _ _ _ _ h_m0]
+    rw [stmts_cons _ _ _ _ h_l0]
+    rw [stmts_cons _ _ _ _ h_loop_eq]
+    exact stmts_nil _
+  -- Plug into the conclusion.
+  simp only [exec, h_kernel, Option.bind_some]
+  refine ⟨?_, ?_⟩
+  · -- m readback.
+    show (s_final.regs "m" >>= Value.asScalar) = some (onlineSoftmaxM xs N)
+    rw [hMfin]
+    rfl
+  · -- l readback.
+    show (s_final.regs "l" >>= Value.asScalar) = some (onlineSoftmaxL xs N)
+    rw [hLfin]
+    rfl
 
 end VeriTile.Examples
