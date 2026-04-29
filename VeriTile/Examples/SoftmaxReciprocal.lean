@@ -52,18 +52,17 @@ theorem softmax_recip_correct
         = some (stableRecipSpec xs (tileMax hN xs) i) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   intro i
-  -- The output offsets `s.pid * (n+1) + k.val` are injective in `k`.
   have h_inj : Function.Injective (fun k : Fin (n + 1) => s.pid * (n + 1) + k.val) := by
     intro a b hab
     exact Fin.ext (Nat.add_left_cancel hab)
-  -- Post-RP2: address arithmetic stays in `Nat`, no `hcast` needed.
   simp [observeAt, exec, softmaxRecipKernel, stepStmts, stepStmt, evalOp,
-        Value.bop, Value.uop, Value.reduceSum, Value.reduceMax,
-        BlockState.setReg, BlockState.readMem,
-        stableRecipSpec, tileMax]
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceMax,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        BlockState.setReg, BlockState.readMem, stableRecipSpec, tileMax]
+  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
-  simp_rw [_h_x]
-  exact BlockState.scatter_readback _ _ _ h_inj i
+  rw [BlockState.scatter_readback _ _ _ h_inj i]
+  simp [_h_x]
 
 /-- **Refinement: stable softmax with per-element division ≡ stable softmax
     with precomputed reciprocal.** Composes via `div_eq_mul_inv_real`. -/

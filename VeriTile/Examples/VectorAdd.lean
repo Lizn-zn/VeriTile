@@ -11,7 +11,7 @@ It exercises:
 * Multi-buffer DSL (auto-populated `Kernel.inputs`/`outputs` — see
   `Triton/DSL.lean`): three regions `X`, `Y`, `Out`.
 * Two-argument `tl.arange(0, N)` form.
-* Tile-tile `Op.add` via `Value.bop`.
+* Tile-tile `Op.add` via `Tile.bop`.
 * `BlockState.scatter_readback` for the gather/scatter store readback.
 
 Per RP1 (`Notes/research_problem_pointer_vs_named_region.md`), the
@@ -85,7 +85,7 @@ some of the regions alias.
 
 Proof structure mirrors `softmax_naive_correct` but is mechanically
 shorter — no reduction ops (`reduceMax` / `reduceSum`), no unary lift
-(`Value.uop` for `exp`), only `Value.bop (·+·)` and tile-tile
+(`Tile.uop` for `exp`), only `Tile.bop (·+·)` and tile-tile
 gather/scatter. -/
 theorem add_kernel_correct
     (xReg yReg outReg : RegionName)
@@ -97,19 +97,15 @@ theorem add_kernel_correct
       observeAt (exec (addKernel xReg yReg outReg blockSize) s) outReg blockSize s.pid i
         = some (addSpec xs ys i) := by
   intro i
-  -- The output offsets `s.pid * blockSize + k.val` are injective in `k`.
   have h_inj : Function.Injective (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
     intro a b hab
     exact Fin.ext (Nat.add_left_cancel hab)
-  -- Reduce the kernel via the operational semantics. Post-RP2 the offset
-  -- arithmetic stays in `Nat` end to end, so no `hcast` lemma is needed.
-  simp [observeAt, exec, addKernel, stepStmts, stepStmt, evalOp, Value.bop,
-        BlockState.setReg, BlockState.readMem, addSpec]
-  -- Substitute the loaded X/Y cells.
+  simp [observeAt, exec, addKernel, stepStmts, stepStmt, evalOp, Tile.bop,
+        NumericDType.add, BlockState.setReg, BlockState.readMem, addSpec]
+  simp [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul]
   unfold InputLoadedAt at _h_x _h_y
-  simp_rw [_h_x, _h_y]
-  -- The remaining goal is exactly the readback of an injective scatter store.
-  exact BlockState.scatter_readback _ _ _ h_inj i
+  rw [BlockState.scatter_readback _ _ _ h_inj i]
+  simp [_h_x, _h_y]
 
 /-! ## Masked variant (boundary mask)
 
@@ -137,8 +133,9 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 -/
 
 /-- Masked elementwise add. Lanes where `pid * blockSize + i < nElements` are
-    loaded, summed, and stored; lanes outside the bound use `other = 0`
-    on the loads and skip the store entirely (Triton convention). -/
+    loaded, summed, and stored. Lanes outside the bound get Triton's
+    `other=None` undefined load value, but the store mask skips those lanes,
+    so the undefined values are not observed. -/
 def addKernelMasked (xReg yReg outReg : RegionName)
     (blockSize nElements : Nat) : Kernel := triton {
   pid     := tl.program_id(0)
@@ -160,9 +157,10 @@ For each lane `i ∈ Fin blockSize`:
 
 The hypothesis `InputLoadedAt` constrains memory at every lane in the
 `blockSize`-length tile (including out-of-bounds lanes where the data
-is "garbage" semantically — we still know what's there). This matches
-Triton's actual behavior: masked-off loads use `other=0` and don't
-read memory.
+is irrelevant semantically). This matches Triton's actual behavior:
+masked-off loads without `other=` do not read memory and produce
+undefined lane values; the matching masked store prevents those values
+from reaching memory.
 
 No region-disjointness hypothesis: the kernel reads `x` and `y` into
 local registers BEFORE the scatter to `outReg`, so even if `outReg`
@@ -184,23 +182,14 @@ theorem add_kernel_masked_correct
       (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
     intro a b hab
     exact Fin.ext (Nat.add_left_cancel hab)
-  -- Reduce the kernel via the operational semantics. The key step: the masked
-  -- load case `tile offset + tile mask + scalar other (broadcast)` reduces
-  -- the loaded register to a per-lane conditional (read-or-other).
   simp [observeAt, exec, addKernelMasked, stepStmts, stepStmt, evalOp,
-        Value.bop, Value.cop, BlockState.setReg, BlockState.readMem]
-  -- Substitute the loaded X/Y cells (in-bounds lanes only — out-of-bounds use other=0).
+        Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, BlockState.setReg, BlockState.readMem]
+  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at h_x h_y
-  simp_rw [h_x, h_y]
-  -- Apply the Prop-flavored masked-scatter readback (after simp normalized
-  -- the Bool mask to its underlying Prop predicate).
   rw [BlockState.scatter_readback_prop_masked _ _ _ _ h_inj i]
-  -- Goal: `if .. < nElements then valueFn i else s.mem outReg ...
-  --       = if .. < nElements then xs i + ys i else s.mem outReg ...`
-  -- where valueFn i = (if .. then xs i else 0) + (if .. then ys i else 0).
-  -- Both conditionals share the same predicate — collapse by case split.
   by_cases hi : s.pid * blockSize + i.val < nElements
-  · simp [hi]
+  · simp [hi, h_x, h_y]
   · simp [hi]
 
 end VeriTile.Examples

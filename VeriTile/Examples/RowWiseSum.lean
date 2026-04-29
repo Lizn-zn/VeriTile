@@ -10,7 +10,7 @@ starting at `xReg + row * nCol`, sums them, stores the scalar result at
 This is the simplest *2D-style* gather kernel expressible without 2D tile
 infra (issue #4) — the offsets are computed by 1D arithmetic
 `row * nCol + cols` but the result is still a 1D tile, so we only need
-the existing `Value.tile` carrier and the existing `Op.reduceSum`. Once
+the existing 1D `Tile.vec` carrier and the existing `Op.reduceSum`. Once
 2D tiles land we will revisit this kernel as a sanity check that the new
 infra is backward-compatible.
 
@@ -105,15 +105,11 @@ theorem rowWiseSum_correct
     (h_x : InputRowLoadedAt s xReg nCol blockSize xs) :
     observeRowAt (exec (rowWiseSumKernel xReg yReg nCol blockSize) s) yReg s.pid
       = some (rowWiseSumSpec xs) := by
-  -- The 5-statement body reduces via `simp` on the operational semantics.
-  -- The final `Stmt.store yReg (Op.ref "row") (Op.ref "result")` is a
-  -- *scalar* store (offset is `scalarNat s.pid`, value is `scalar (∑ ...)`),
-  -- so it lands in the `writeMem` branch — readback is direct, no
-  -- `scatter_readback` over a `foldl` needed.
   simp [observeRowAt, exec, rowWiseSumKernel, stepStmts, stepStmt, evalOp,
-        Value.bop, Value.reduceSum, BlockState.setReg, BlockState.readMem,
-        BlockState.writeMem, rowWiseSumSpec]
-  -- Substitute the loaded input cells with `xs` via `InputRowLoadedAt`.
+        Tile.bop, Tile.reduceSum, NumericDType.mul, NumericDType.add,
+        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
+        rowWiseSumSpec]
+  simp [Broadcast.rightIndex]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
 

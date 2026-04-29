@@ -43,6 +43,7 @@ import Mathlib.Analysis.SpecialFunctions.Exp
 import Mathlib.Analysis.Complex.ExponentialBounds
 import Mathlib.Analysis.Real.Pi.Bounds
 import Mathlib.MeasureTheory.Integral.IntervalIntegral.Basic
+import VeriTile.Math.GeluTaylor20Cert
 import VeriTile.Math.RealErf
 import VeriTile.Math.Tanh
 import VeriTile.Triton.Core
@@ -3074,19 +3075,20 @@ private theorem approx_gelu_error_bound_083 {x : ℝ} (hx : |x| ≤ 83/100) :
           mul_le_mul_of_nonneg_right hx2_le (by norm_num)
     _ ≤ 1/1000 := by norm_num
 
-/-! ### Axiomatized Taylor-20 midrange certificate
+/-! ### External Taylor-20 midrange certificate
 
 This experimental certificate expands the combined error
 `geluError = approxGeLUScalar - exactGeLUScalar` at the midpoint
-`463/200 = 2.315` to degree 20. The axiom is deliberately limited to the two
-numeric facts an external CAS/Taylor checker is expected to certify on
+`463/200 = 2.315` to degree 20. The standalone certificate theorem is
+deliberately limited to the two numeric facts an external CAS/Taylor checker
+is expected to certify on
 `[83/100, 19/5]`: a remainder bound and a polynomial bound.
 
 External numerical verification (mpmath, 60-digit precision) results:
 * `|geluError(x) − poly20(x)|`  worst case ≈ `1.78·10⁻⁷` at `x = 0.83`
-  (axiom claims ≤ `1·10⁻⁵`, slack ≈ 98%).
+  (certificate claims ≤ `1·10⁻⁵`, slack ≈ 98%).
 * `|poly20(x)|`                 worst case ≈ `4.7324·10⁻⁴` at
-  `x* ≈ 2.6989413864` (a stationary point), axiom claims ≤ `5·10⁻⁴`,
+  `x* ≈ 2.6989413864` (a stationary point), certificate claims ≤ `5·10⁻⁴`,
   slack ≈ 5.4%.
 
 Combined: `|geluError(x)| ≤ 1·10⁻⁵ + 5·10⁻⁴ = 51/100000 < 1/1000`. ✓
@@ -3192,10 +3194,18 @@ private noncomputable def geluError_mid_taylor20 (x : ℝ) : ℝ :=
     + (-(15956207/139052182026179153)) * t^19
     + (-(30752279/251067520891536832)) * t^20
 
-axiom geluError_mid_taylor20_cert :
+private theorem geluError_mid_taylor20_cert :
     ∀ x ∈ Set.Icc (83/100 : ℝ) (19/5),
       |geluError x - geluError_mid_taylor20 x| ≤ 1/100000 ∧
-      |geluError_mid_taylor20 x| ≤ 50/100000
+      |geluError_mid_taylor20 x| ≤ 50/100000 := by
+  intro x hx
+  simpa [geluError, geluError_mid_taylor20,
+    VeriTile.Math.geluErrorForCert,
+    VeriTile.Math.approxGeLUScalarForCert,
+    VeriTile.Math.exactGeLUScalarForCert,
+    VeriTile.Math.geluError_mid_taylor20_forCert,
+    approxGeLUScalar, exactGeLUScalar]
+    using VeriTile.Math.geluError_mid_taylor20_cert_standalone x hx
 
 private theorem approx_gelu_error_bound_midrange_taylor20 {x : ℝ}
     (hx : x ∈ Set.Icc (83/100 : ℝ) (19/5)) :
@@ -3236,16 +3246,17 @@ theorem approx_gelu_kernel_correct
           outReg blockSize s.pid i
         = some (approxGeLUSpec xs i) := by
   intro i
-  have h_inj :
-      Function.Injective (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
+  have h_inj : Function.Injective (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
     intro a b hab
     exact Fin.ext (Nat.add_left_cancel hab)
   simp [observeAt, exec, approxGeLUKernel, stepStmts, stepStmt, evalOp,
-        Value.bop, Value.uop, BlockState.setReg, BlockState.readMem,
-        approxGeLUSpec, approxGeLUScalar]
+        Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, NumericDType.div, BlockState.setReg,
+        BlockState.readMem, approxGeLUSpec, approxGeLUScalar]
+  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
-  simp_rw [_h_x]
-  exact BlockState.scatter_readback _ _ _ h_inj i
+  rw [BlockState.scatter_readback _ _ _ h_inj i]
+  simp [_h_x]
 
 /-- Target error tolerance for the standard tanh/sigmoid GeLU approximation. -/
 noncomputable def approxGeLUEps : ℝ := 1 / 1000
@@ -3257,8 +3268,8 @@ to the medium range `1/1000 < |x| < 19/5`. The proof dispatches on whether
 * **`|x| ≤ 83/100`** — closed by `approx_gelu_error_bound_083`, which applies
   the 9th-order tanh Taylor decomposition `gelu_gap_taylor9_decomposition`
   with explicit numerical bounds on each piece.
-* **Mid `83/100 < |x| < 19/5`** — closed by the axiomatized degree-20 Taylor
-  certificate `geluError_mid_taylor20_cert` at midpoint `463/200`. -/
+* **Mid `83/100 < |x| < 19/5`** — closed by the standalone degree-20 Taylor
+  certificate from `VeriTile.Math.GeluTaylor20Cert` at midpoint `463/200`. -/
 theorem approx_gelu_error_bound_medium {x : ℝ}
     (_hxlow : approxGeLUEps < |x|) (hxhigh : |x| < 19/5) :
     |approxGeLUScalar x - exactGeLUScalar x| ≤ approxGeLUEps := by

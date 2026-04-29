@@ -24,6 +24,98 @@ abbrev RegionName := String
 abbrev RegName := String
 
 /--
+Triton block-local value type.
+
+VeriTile uses "tile" rather than "tensor" for Triton program values: a scalar
+is a rank-0 tile, `tl.arange` produces a 1D tile, and future block-pointer /
+FlashAttention work will introduce 2D tiles. This avoids conflating Triton
+block-local values with framework-level tensors.
+-/
+inductive TileDType where
+  | real
+  | nat
+  | bool
+  deriving DecidableEq, Repr
+
+/-- Lean carrier for each VeriTile tile dtype. -/
+abbrev TileCarrier : TileDType → Type
+  | .real => ℝ
+  | .nat  => Nat
+  | .bool => Bool
+
+/--
+Shape of a Triton block-local tile.
+
+`scalar` is shape `()`, distinct from `vec 1`; this matches Triton's
+broadcasting behavior. `mat` is the planned 2D extension for block-pointer and
+attention kernels. A fully variadic shape can replace this once 2D support has
+settled.
+-/
+inductive TileShape where
+  | scalar
+  | vec : Nat → TileShape
+  | mat : Nat → Nat → TileShape
+  deriving DecidableEq, Repr
+
+/-- Index type for a tile shape. -/
+abbrev TileIndex : TileShape → Type
+  | .scalar  => PUnit
+  | .vec n   => Fin n
+  | .mat m n => Fin m × Fin n
+
+/-- A shaped, typed Triton tile. -/
+structure Tile (dtype : TileDType) (shape : TileShape) where
+  data : TileIndex shape → TileCarrier dtype
+
+namespace Tile
+
+/-- Rank-0 tile constructor. -/
+def scalar {dtype : TileDType} (x : TileCarrier dtype) : Tile dtype .scalar :=
+  ⟨fun _ => x⟩
+
+/-- 1D tile constructor. -/
+def vec {dtype : TileDType} {n : Nat}
+    (f : Fin n → TileCarrier dtype) : Tile dtype (.vec n) :=
+  ⟨f⟩
+
+/-- 2D tile constructor. -/
+def mat {dtype : TileDType} {m n : Nat}
+    (f : Fin m → Fin n → TileCarrier dtype) : Tile dtype (.mat m n) :=
+  ⟨fun i => f i.1 i.2⟩
+
+end Tile
+
+/-- Binary broadcasting cases supported by Triton elementwise operators. -/
+inductive Broadcast : TileShape → TileShape → TileShape → Type where
+  | same   : Broadcast shape shape shape
+  | left   : Broadcast .scalar shape shape
+  | right  : Broadcast shape .scalar shape
+
+/-- Evaluate the output index back into each input index for a broadcast. -/
+def Broadcast.leftIndex {a b out : TileShape} :
+    Broadcast a b out → TileIndex out → TileIndex a
+  | .same, i => i
+  | .left, _ => PUnit.unit
+  | .right, i => i
+
+/-- Evaluate the output index back into each input index for a broadcast. -/
+def Broadcast.rightIndex {a b out : TileShape} :
+    Broadcast a b out → TileIndex out → TileIndex b
+  | .same, i => i
+  | .left, i => i
+  | .right, _ => PUnit.unit
+
+/-- DTypes that support Triton's arithmetic operators in the current model. -/
+inductive NumericDType : TileDType → Type where
+  | real : NumericDType .real
+  | nat  : NumericDType .nat
+
+/-- DTypes that support Triton's comparison operators in the current model. -/
+inductive ComparableDType : TileDType → Type where
+  | real : ComparableDType .real
+  | nat  : ComparableDType .nat
+
+/--
 P1 Triton expressions.
 
 Each constructor models one Triton expression or block-level reduction.
@@ -54,50 +146,55 @@ Notes on individual constructors:
 * `lt`/`le`/`eq`/`gt`/`ge`/`ne` are pointwise comparison operators
   producing values in the **Bool channel** (`scalarBool` / `tileBool`).
   Both `Nat × Nat → Bool` and `ℝ × ℝ → Bool` carriers are supported via
-  internal dispatch (`Value.cop`); mixed-channel comparison rejects.
+  typed constructors; mixed-channel comparison rejects at elaboration time.
   Shape semantics follow Triton: `()×()→()`, `(n)×()→(n)`, `()×(n)→(n)`,
   `(n)×(n)→(n)` (length match required for tile×tile).
-* `load region offset mask other` reads from `region`. Per RP1, region is
+* `load region offset opts` reads from `region`. Per RP1, region is
   a kernel-level name. Per the mask extension (Issue #16/#17):
-  - `mask = none, other = none`: classic unmasked load. Result shape
+  - `opts.mask = none, opts.other = none`: classic unmasked load. Result shape
     follows `offset` shape (scalarNat → scalar; tileNat → tile gather).
-  - `mask = some m, other = some o`: masked load. `m` evaluates to a
+  - `opts.mask = some m, opts.other = some o`: masked load. `m` evaluates to a
     `scalarBool` (broadcasts) or `tileBool` (per-lane, length-matching).
     For each lane where `m` is `true`, read from memory; where `false`,
     use `o`. Result still follows `offset` shape.
-  - `(some, none)` or `(none, some)`: `none` (semantic error). Mask and
-    other go together.
+  - `opts.mask = some m, opts.other = none`: Triton leaves masked-off values
+    undefined. The operational semantics models this with the state's
+    `undef` oracle.
+  - `opts.mask = none, opts.other = some o`: `none` (semantic error).
 -/
-inductive Op : Type where
-  | const     : ℝ → Op
-  | constNat  : Nat → Op
-  | negInf    : Op
-  | programId : Op
-  | ref       : RegName → Op
-  | arange    : Nat → Op
-  | broadcast : Op → Nat → Op
-  | full      : Nat → Op → Op
-  | add       : Op → Op → Op
-  | sub       : Op → Op → Op
-  | mul       : Op → Op → Op
-  | div       : Op → Op → Op
-  | exp       : Op → Op
-  | log       : Op → Op
-  | sigmoid   : Op → Op
-  | sqrt      : Op → Op
-  | lt        : Op → Op → Op
-  | le        : Op → Op → Op
-  | eq        : Op → Op → Op
-  | gt        : Op → Op → Op
-  | ge        : Op → Op → Op
-  | ne        : Op → Op → Op
-  | max2      : Op → Op → Op
-  | reduceMax : Op → Op
-  | reduceSum : Op → Op
-  | load      : (region : RegionName) → (offset : Op) →
-                (mask : Option Op) → (other : Option Op) → Op
-  | natToReal : Op → Op
-  deriving Inhabited
+inductive Op : TileDType → TileShape → Type where
+  | const     : ℝ → Op .real .scalar
+  | constNat  : Nat → Op .nat .scalar
+  | constBool : Bool → Op .bool .scalar
+  | negInf    : Op .real .scalar
+  | programId : Op .nat .scalar
+  | ref       : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape
+  | arange    : (n : Nat) → Op .nat (.vec n)
+  | broadcast : Op dtype .scalar → (shape : TileShape) → Op dtype shape
+  | full      : (shape : TileShape) → Op dtype .scalar → Op dtype shape
+  | add       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
+  | sub       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
+  | mul       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
+  | div       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
+  | exp       : Op .real shape → Op .real shape
+  | log       : Op .real shape → Op .real shape
+  | sigmoid   : Op .real shape → Op .real shape
+  | sqrt      : Op .real shape → Op .real shape
+  | lt        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
+  | le        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
+  | eq        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
+  | gt        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
+  | ge        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
+  | ne        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
+  | max2      : Broadcast a b out → Op .real a → Op .real b → Op .real out
+  | reduceMax : Op .real (.vec n) → Op .real .scalar
+  | reduceSum : Op .real (.vec n) → Op .real .scalar
+  | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
+  | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
+                (mask : Op .bool shape) → Op .real shape
+  | loadMaskOther : (region : RegionName) → (offset : Op .nat shape) →
+                (mask : Op .bool shape) → (other : Op .real shape) → Op .real shape
+  | natToReal : Op .nat shape → Op .real shape
 
 /--
 P1 Triton statements (mutating constructs).
@@ -112,11 +209,16 @@ P1 Triton statements (mutating constructs).
   to the iteration index.
 -/
 inductive Stmt : Type where
-  | assign  : RegName → Op → Stmt
-  | store   : (region : RegionName) → (offset : Op) → (value : Op) →
-              (mask : Option Op) → Stmt
+  | assign  : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape → Stmt
+  | store   : (region : RegionName) → (shape : TileShape) →
+              (offset : Op .nat shape) → (value : Op .real shape) → Stmt
+  | storeMask : (region : RegionName) → (shape : TileShape) →
+              (offset : Op .nat shape) → (value : Op .real shape) →
+              (mask : Op .bool shape) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
-  deriving Inhabited
+
+instance : Inhabited Stmt :=
+  ⟨.assign .real .scalar "" (.const 0)⟩
 
 /--
 A complete Triton kernel.

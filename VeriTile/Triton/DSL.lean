@@ -80,6 +80,7 @@ declare_syntax_cat tritonExpr
 declare_syntax_cat tritonStmt
 declare_syntax_cat tritonPtr
 declare_syntax_cat tritonKwarg
+declare_syntax_cat tritonReduceKwarg
 
 -- Pointer expressions (used by `tl.load` / `tl.store`).
 -- Splitting the pointer surface syntax into its own category gives a single
@@ -104,13 +105,22 @@ syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
-syntax "tl.sum(" tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "-inf" : tritonExpr
 
 -- kwarg: `name = expr`. Used for `mask=` / `other=` in tl.load / tl.store.
 -- Per Issue #16: only `mask` and `other` are recognized; other names error.
 syntax ident " = " tritonExpr : tritonKwarg
+
+-- Reduction kwargs. Current VeriTile has only 1D tiles, so `axis=0` and
+-- `keep_dims=false` are the only Triton-compatible options that preserve the
+-- existing `Op.reduceSum : tile n -> scalar` semantics. Other values error.
+syntax "axis" "=" num : tritonReduceKwarg
+syntax "keep_dims" "=" "false" : tritonReduceKwarg
+syntax "keep_dims" "=" "true" : tritonReduceKwarg
+syntax ident "=" tritonExpr : tritonReduceKwarg
+
+syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 
 -- `tl.load(ptr [, kwarg]*)` — kwargs are optional. With zero kwargs this is
 -- the legacy unmasked form; with `mask=` / `other=` it lowers to the masked
@@ -119,7 +129,7 @@ syntax ident " = " tritonExpr : tritonKwarg
 syntax "tl.load(" tritonPtr ("," tritonKwarg)* ")" : tritonExpr
 
 -- Comparison operators (priority 50 — below arithmetic 60/70 — non-associative).
--- Both ℝ × ℝ and Nat × Nat carriers, dispatched via Value.cop. Returns Bool
+-- Both ℝ × ℝ and Nat × Nat carriers are supported by typed `Op` constructors.
 -- channel (scalarBool / tileBool). Triton-faithful: no chained comparisons
 -- (a < b < c is a syntax error, not Python's "a < b and b < c").
 syntax:50 tritonExpr:51 " < "  tritonExpr:51 : tritonExpr
@@ -154,46 +164,131 @@ syntax (name := tritonBlock) "triton " "{" tritonStmt* "}" : term
 private def identAsStr (i : TSyntax `ident) : MacroM (TSyntax `term) :=
   pure (Syntax.mkStrLit i.getId.toString)
 
+private inductive DInfo where
+  | real
+  | nat
+  | bool
+  deriving BEq, Inhabited
+
+private inductive SInfo where
+  | scalar
+  | vec : TSyntax `term → SInfo
+  deriving Inhabited
+
+private abbrev Env := List (String × DInfo × SInfo)
+
+private def termKey (t : TSyntax `term) : String :=
+  toString t.raw
+
+private def SInfo.eq : SInfo → SInfo → Bool
+  | .scalar, .scalar => Bool.true
+  | .vec a, .vec b => termKey a == termKey b
+  | _, _ => Bool.false
+
+private def DInfo.term : DInfo → MacroM (TSyntax `term)
+  | .real => `(TileDType.real)
+  | .nat => `(TileDType.nat)
+  | .bool => `(TileDType.bool)
+
+private def SInfo.term : SInfo → MacroM (TSyntax `term)
+  | .scalar => `(TileShape.scalar)
+  | .vec n => `(TileShape.vec $n)
+
+private def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
+  | .real => `(NumericDType.real)
+  | .nat => `(NumericDType.nat)
+  | .bool => Macro.throwError "arithmetic on Bool values is not supported"
+
+private def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
+  | .real => `(ComparableDType.real)
+  | .nat => `(ComparableDType.nat)
+  | .bool => Macro.throwError "comparison on Bool values is not supported"
+
+private def lookupEnv (env : Env) (name : String) : MacroM (DInfo × SInfo) := do
+  match env.find? (fun entry => entry.1 == name) with
+  | some (_, dtype, shape) => pure (dtype, shape)
+  | none => Macro.throwError ("unknown Triton identifier `" ++ name ++ "`")
+
+private def ensureDType (expected actual : DInfo) (ctx : String) : MacroM Unit := do
+  unless expected == actual do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+
+private def ensureShape (expected actual : SInfo) (ctx : String) : MacroM Unit := do
+  unless expected.eq actual do
+    Macro.throwError (ctx ++ ": shape mismatch")
+
+private def broadcastTerm (a b : SInfo) (ctx : String) :
+    MacroM (TSyntax `term × SInfo) := do
+  if a.eq b then
+    pure (← `(Broadcast.same), a)
+  else
+    match a, b with
+    | .scalar, _ => pure (← `(Broadcast.left), b)
+    | _, .scalar => pure (← `(Broadcast.right), a)
+    | _, _ => Macro.throwError (ctx ++ ": incompatible shapes")
+
+private def coerceShape (e : TSyntax `term) (src target : SInfo) (ctx : String) :
+    MacroM (TSyntax `term) := do
+  if src.eq target then
+    pure e
+  else
+    match src with
+    | .scalar =>
+        let st ← target.term
+        `(Op.broadcast $e $st)
+    | _ => Macro.throwError (ctx ++ ": cannot broadcast non-scalar to target shape")
+
+private structure EOut where
+  term : TSyntax `term
+  dtype : DInfo
+  shape : SInfo
+  deriving Inhabited
+
 mutual
 
-/-- Lower a `tritonPtr` to its `(region, offset)` pair. -/
-partial def expandPtr (stx : TSyntax `tritonPtr) :
-    MacroM (TSyntax `term × TSyntax `term) := do
+/-- Lower a `tritonPtr` to its `(region, offset, offset-shape)` triple. -/
+partial def expandPtr (env : Env) (stx : TSyntax `tritonPtr) :
+    MacroM (TSyntax `term × TSyntax `term × SInfo) := do
   match stx with
   | `(tritonPtr| $($r:term)) =>
       -- Scalar pointer sugar: `$(R)` reads `R + 0`.
       let zero : TSyntax `term ← `(Op.constNat 0)
-      pure (r, zero)
+      pure (r, zero, .scalar)
   | `(tritonPtr| $($r:term) + $o:tritonExpr) => do
-      let o' ← expandExpr o
-      pure (r, o')
+      let o' ← expandExpr env o
+      ensureDType .nat o'.dtype "pointer offset"
+      pure (r, o'.term, o'.shape)
   | _ => Macro.throwUnsupported
 
-partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := do
+partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
   match stx with
   | `(tritonExpr| $n:num) =>
       -- Bare numeric literals are `ℝ` data constants (e.g. `1` in `1 / s`).
-      `(Op.const $n)
+      pure ⟨← `(Op.const $n), .real, .scalar⟩
   | `(tritonExpr| $i:ident) =>
+      let name := i.getId.toString
+      let (dtype, shape) ← lookupEnv env name
       let s ← identAsStr i
-      `(Op.ref $s)
+      let dt ← dtype.term
+      let sh ← shape.term
+      pure ⟨← `(Op.ref $dt $sh $s), dtype, shape⟩
   | `(tritonExpr| $($t:term)) =>
       -- `$(...)` antiquote is the address/size channel: `Nat`.
-      `(Op.constNat $t)
+      pure ⟨← `(Op.constNat $t), .nat, .scalar⟩
   | `(tritonExpr| $ℝ($t:term)) =>
       -- `$ℝ(...)` antiquote is the data channel: `ℝ`. Symmetric with the
       -- `$(t) → Op.constNat` form, used for non-literal ℝ kernel params
       -- (e.g. LayerNorm's `ε`).
-      `(Op.const $t)
+      pure ⟨← `(Op.const $t), .real, .scalar⟩
   | `(tritonExpr| ($e:tritonExpr)) =>
-      expandExpr e
+      expandExpr env e
   | `(tritonExpr| tl.program_id($_)) =>
-      `(Op.programId)
+      pure ⟨← `(Op.programId), .nat, .scalar⟩
   | `(tritonExpr| tl.arange($e:tritonExpr)) =>
       -- arange takes a Nat; recognize $(t) and bare numerals specially
       match e with
-      | `(tritonExpr| $($t:term)) => `(Op.arange $t)
-      | `(tritonExpr| $n:num)     => `(Op.arange $n)
+      | `(tritonExpr| $($t:term)) => pure ⟨← `(Op.arange $t), .nat, .vec t⟩
+      | `(tritonExpr| $n:num)     => pure ⟨← `(Op.arange $n), .nat, .vec (← `(($n : Nat)))⟩
       | _ => Macro.throwError
               "tl.arange(...) expects a Lean Nat: either a numeric literal or $(N)"
   | `(tritonExpr| tl.arange($s:tritonExpr, $e:tritonExpr)) => do
@@ -214,56 +309,103 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
       match s with
       | `(tritonExpr| $n:num) =>
           if n.getNat = 0 then
-            `(Op.arange $eTerm)
+            pure ⟨← `(Op.arange $eTerm), .nat, .vec eTerm⟩
           else
-            `(Op.add (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm)))
+            pure ⟨← `(Op.add NumericDType.nat Broadcast.left (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
+              .nat, .vec (← `($eTerm - $sTerm))⟩
       | _ =>
-          `(Op.add (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm)))
+          pure ⟨← `(Op.add NumericDType.nat Broadcast.left (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
+            .nat, .vec (← `($eTerm - $sTerm))⟩
   | `(tritonExpr| tl.exp($e:tritonExpr)) => do
-      let e' ← expandExpr e
-      `(Op.exp $e')
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.exp"
+      pure ⟨← `(Op.exp $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.log($e:tritonExpr)) => do
-      let e' ← expandExpr e
-      `(Op.log $e')
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.log"
+      pure ⟨← `(Op.log $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.sigmoid($e:tritonExpr)) => do
-      let e' ← expandExpr e
-      `(Op.sigmoid $e')
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.sigmoid"
+      pure ⟨← `(Op.sigmoid $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.sqrt($e:tritonExpr)) => do
-      let e' ← expandExpr e
-      `(Op.sqrt $e')
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.sqrt"
+      pure ⟨← `(Op.sqrt $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.max($e:tritonExpr)) => do
-      let e' ← expandExpr e
-      `(Op.reduceMax $e')
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.max"
+      match e'.shape with
+      | .vec _ => pure ⟨← `(Op.reduceMax $e'.term), .real, .scalar⟩
+      | .scalar => Macro.throwError "tl.max: reduction expects a tile, got scalar"
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
-      let a' ← expandExpr a
-      let b' ← expandExpr b
-      `(Op.max2 $a' $b')
-  | `(tritonExpr| tl.sum($e:tritonExpr)) => do
-      let e' ← expandExpr e
-      `(Op.reduceSum $e')
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      ensureDType .real a'.dtype "tl.max"
+      ensureDType .real b'.dtype "tl.max"
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "tl.max"
+      pure ⟨← `(Op.max2 $bc $a'.term $b'.term), .real, outShape⟩
+  | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      let mut seenAxis : Bool := Bool.false
+      let mut seenKeepDims : Bool := Bool.false
+      for kw in kwargs do
+        match kw with
+        | `(tritonReduceKwarg| axis = $n:num) =>
+            if seenAxis then
+              Macro.throwError "tl.sum: duplicate `axis=` kwarg"
+            seenAxis := Bool.true
+            if n.getNat != 0 then
+              Macro.throwError "tl.sum: only `axis=0` is supported for 1D tiles"
+        | `(tritonReduceKwarg| keep_dims = false) =>
+            if seenKeepDims then
+              Macro.throwError "tl.sum: duplicate `keep_dims=` kwarg"
+            seenKeepDims := Bool.true
+        | `(tritonReduceKwarg| keep_dims = true) =>
+            Macro.throwError "tl.sum: `keep_dims=true` is not supported yet"
+        | `(tritonReduceKwarg| $name:ident = $_:tritonExpr) =>
+            match name.getId.toString with
+            | "axis" =>
+                Macro.throwError "tl.sum: `axis` must be the literal `0`"
+            | "keep_dims" =>
+                Macro.throwError "tl.sum: `keep_dims` must be the literal `false`"
+            | unknown =>
+                Macro.throwError
+                  ("tl.sum: unknown kwarg `" ++ unknown ++
+                   "`. Only `axis=0` and `keep_dims=false` are supported.")
+        | _ => Macro.throwUnsupported
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.sum"
+      match e'.shape with
+      | .vec _ => pure ⟨← `(Op.reduceSum $e'.term), .real, .scalar⟩
+      | .scalar => Macro.throwError "tl.sum: reduction expects a tile, got scalar"
   | `(tritonExpr| tl.toReal($e:tritonExpr)) => do
-      let e' ← expandExpr e
-      `(Op.natToReal $e')
+      let e' ← expandExpr env e
+      ensureDType .nat e'.dtype "tl.toReal"
+      pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape⟩
   | `(tritonExpr| -inf) =>
-      `(Op.negInf)
+      pure ⟨← `(Op.negInf), .real, .scalar⟩
   | `(tritonExpr| tl.load($p:tritonPtr $[, $kwargs:tritonKwarg]*)) => do
       -- Pointer surface syntax lowers to the internal `(region, offset)` AST.
-      -- Optional `mask=` / `other=` kwargs lower to Op.load's 4th/5th args.
+      -- Optional `mask=` / `other=` kwargs lower to `LoadOptions`.
       -- Per Issue #16: any other kwarg name is a parse error. Per Triton spec
       -- ("If `other` is None, the masked-out value is undefined"): missing
-      -- `other` lowers to AST `(some mask, none)`, which evalOp evaluates by
-      -- filling masked-off lanes from `BlockState.undef`. `other` without
-      -- `mask` is rejected (no Triton equivalent).
-      let (r, off) ← expandPtr p
-      let mut maskTerm : Option (TSyntax `term) := none
-      let mut otherTerm : Option (TSyntax `term) := none
+      -- `other` lowers to `mask := some ..., other := none`; evalOp then
+      -- uses `BlockState.undef` for masked-off lanes. `other` without `mask`
+      -- is rejected (no Triton equivalent).
+      let (r, off, offShape) ← expandPtr env p
+      let mut maskTerm : Option (TSyntax `term × SInfo) := none
+      let mut otherTerm : Option (TSyntax `term × SInfo) := none
       for kw in kwargs do
         match kw with
         | `(tritonKwarg| $name:ident = $val:tritonExpr) =>
-            let val' ← expandExpr val
+            let val' ← expandExpr env val
             match name.getId.toString with
-            | "mask"  => maskTerm  := some val'
-            | "other" => otherTerm := some val'
+            | "mask"  =>
+                ensureDType .bool val'.dtype "tl.load mask"
+                maskTerm := some (val'.term, val'.shape)
+            | "other" =>
+                ensureDType .real val'.dtype "tl.load other"
+                otherTerm := some (val'.term, val'.shape)
             | unknown =>
                 let msg : String :=
                   "tl.load: unknown kwarg `" ++ unknown ++
@@ -272,69 +414,92 @@ partial def expandExpr (stx : TSyntax `tritonExpr) : MacroM (TSyntax `term) := d
         | _ => Macro.throwUnsupported
       match maskTerm, otherTerm with
       | none, none =>
-          `(Op.load $r $off none none)
-      | some m, none =>
-          -- No `other=`: masked-off lanes are undef (filled from
-          -- BlockState.undef). Faithful to Triton's spec.
-          `(Op.load $r $off (some $m) none)
-      | some m, some o =>
-          `(Op.load $r $off (some $m) (some $o))
+          pure ⟨← `(Op.load $r $off), .real, offShape⟩
+      | some (m, mShape), none =>
+          -- No `other=`: masked-off lanes are undef in Triton. Keep that
+          -- distinction in the AST; do not silently choose 0.
+          let m' ← coerceShape m mShape offShape "tl.load mask"
+          pure ⟨← `(Op.loadMask $r $off $m'), .real, offShape⟩
+      | some (m, mShape), some (o, oShape) =>
+          let m' ← coerceShape m mShape offShape "tl.load mask"
+          let o' ← coerceShape o oShape offShape "tl.load other"
+          pure ⟨← `(Op.loadMaskOther $r $off $m' $o'), .real, offShape⟩
       | none, some _ =>
           Macro.throwError
             "tl.load: `other=` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"
   | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.lt $a' $b')
+      expandCmp env "comparison" (← `(Op.lt)) a b
   | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.le $a' $b')
+      expandCmp env "comparison" (← `(Op.le)) a b
   | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.eq $a' $b')
+      expandCmp env "comparison" (← `(Op.eq)) a b
   | `(tritonExpr| $a:tritonExpr > $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.gt $a' $b')
+      expandCmp env "comparison" (← `(Op.gt)) a b
   | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.ge $a' $b')
+      expandCmp env "comparison" (← `(Op.ge)) a b
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.ne $a' $b')
+      expandCmp env "comparison" (← `(Op.ne)) a b
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.add $a' $b')
+      expandArith env "arithmetic" (← `(Op.add)) a b
   | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.sub $a' $b')
+      expandArith env "arithmetic" (← `(Op.sub)) a b
   | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.mul $a' $b')
+      expandArith env "arithmetic" (← `(Op.mul)) a b
   | `(tritonExpr| $a:tritonExpr / $b:tritonExpr) => do
-      let a' ← expandExpr a; let b' ← expandExpr b
-      `(Op.div $a' $b')
+      expandArith env "arithmetic" (← `(Op.div)) a b
   | _ => Macro.throwUnsupported
+
+partial def expandArith (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let np ← a'.dtype.numericProof
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $np $bc $a'.term $b'.term), a'.dtype, outShape⟩
+
+partial def expandCmp (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let cp ← a'.dtype.comparableProof
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $cp $bc $a'.term $b'.term), .bool, outShape⟩
 
 end
 
-partial def expandStmt (stx : TSyntax `tritonStmt) : MacroM (TSyntax `term) := do
+mutual
+
+partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
+    MacroM (TSyntax `term × Env) := do
   match stx with
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
       let nameLit ← identAsStr i
-      let e' ← expandExpr e
-      `(Stmt.assign $nameLit $e')
+      let e' ← expandExpr env e
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        (i.getId.toString, e'.dtype, e'.shape) :: env)
   | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) => do
       -- Optional kwargs: only `mask=` is recognized for store (Triton's
       -- `tl.store` has no `other`). Per Issue #16: any other kwarg name
       -- (including `other=`) is a parse error.
-      let v' ← expandExpr v
-      let (r, off) ← expandPtr p
-      let mut maskTerm : Option (TSyntax `term) := none
+      let v' ← expandExpr env v
+      ensureDType .real v'.dtype "tl.store value"
+      let (r, off, offShape) ← expandPtr env p
+      let vTerm ← coerceShape v'.term v'.shape offShape "tl.store value"
+      let mut maskTerm : Option (TSyntax `term × SInfo) := none
       for kw in kwargs do
         match kw with
         | `(tritonKwarg| $name:ident = $kval:tritonExpr) =>
-            let kval' ← expandExpr kval
+            let kval' ← expandExpr env kval
             match name.getId.toString with
-            | "mask"  => maskTerm := some kval'
+            | "mask"  =>
+                ensureDType .bool kval'.dtype "tl.store mask"
+                maskTerm := some (kval'.term, kval'.shape)
             | unknown =>
                 let msg : String :=
                   "tl.store: unknown kwarg `" ++ unknown ++
@@ -342,17 +507,36 @@ partial def expandStmt (stx : TSyntax `tritonStmt) : MacroM (TSyntax `term) := d
                 Macro.throwError msg
         | _ => Macro.throwUnsupported
       match maskTerm with
-      | none   => `(Stmt.store $r $off $v' none)
-      | some m => `(Stmt.store $r $off $v' (some $m))
+      | none =>
+          let sh ← offShape.term
+          pure (← `(Stmt.store $r $sh $off $vTerm), env)
+      | some (m, mShape) =>
+          let m' ← coerceShape m mShape offShape "tl.store mask"
+          let sh ← offShape.term
+          pure (← `(Stmt.storeMask $r $sh $off $vTerm $m'), env)
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
-      let body ← stmts.mapM expandStmt
-      `(Stmt.forLoop $nameLit $n [$body,*])
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
+      let (body, _) ← expandStmts bodyEnv stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$body,*]), env)
   | `(tritonStmt| tl.for $i:ident in $n:num { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
-      let body ← stmts.mapM expandStmt
-      `(Stmt.forLoop $nameLit $n [$body,*])
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
+      let (body, _) ← expandStmts bodyEnv stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$body,*]), env)
   | _ => Macro.throwUnsupported
+
+partial def expandStmts (env : Env) (stmts : List (TSyntax `tritonStmt)) :
+    MacroM (Array (TSyntax `term) × Env) := do
+  let mut out : Array (TSyntax `term) := #[]
+  let mut env' := env
+  for st in stmts do
+    let (term, nextEnv) ← expandStmt env' st
+    out := out.push term
+    env' := nextEnv
+  pure (out, env')
+
+end
 
 /-! ## Region collection (for auto-populating Kernel.inputs / Kernel.outputs) -/
 
@@ -378,7 +562,14 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.max($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
       exprRegions a ++ exprRegions b
-  | `(tritonExpr| tl.sum($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions e ++ kwargRegions
   | `(tritonExpr| tl.toReal($e:tritonExpr))      => exprRegions e
   | `(tritonExpr| ($e:tritonExpr))               => exprRegions e
   | `(tritonExpr| tl.program_id($e:tritonExpr))  => exprRegions e
@@ -453,7 +644,7 @@ private partial def stmtRegions :
 
 macro_rules
   | `(triton { $stmts:tritonStmt* }) => do
-      let stmtTerms ← stmts.mapM expandStmt
+      let (stmtTerms, _) ← expandStmts [] stmts.toList
       -- Auto-scan body: collect every region appearing in `tl.load(...)` (inputs)
       -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
       -- dedup (a mix of literals and Lean terms can't be statically deduped, and

@@ -20,7 +20,7 @@ theorem forLoopAux_inv
     (h_step :
       ∀ i s, i < n → P i s →
         ∃ s',
-          stepStmts body (s.setReg idx (Value.scalarNat i)) = some s' ∧
+          stepStmts body (s.setReg idx .nat .scalar (Tile.scalar i)) = some s' ∧
           P (i + 1) s') :
     ∀ i, i ≤ n → ∀ s, P i s →
       ∃ s_final,
@@ -66,7 +66,7 @@ theorem forLoop_inv
     (h_step :
       ∀ i s, i < n → P i s →
         ∃ s',
-          stepStmts body (s.setReg idx (Value.scalarNat i)) = some s' ∧
+          stepStmts body (s.setReg idx .nat .scalar (Tile.scalar i)) = some s' ∧
           P (i + 1) s') :
     ∃ s_final,
       stepStmt (.forLoop idx n body) s_init = some s_final ∧
@@ -89,18 +89,18 @@ theorem forLoop_readout_scalar
     (h_step :
       ∀ i s, i < n → P i s →
         ∃ s',
-          stepStmts body (s.setReg idx (Value.scalarNat i)) = some s' ∧
+          stepStmts body (s.setReg idx .nat .scalar (Tile.scalar i)) = some s' ∧
           P (i + 1) s')
     (h_readout :
-      ∀ s, P n s → s.regs outReg = some (Value.scalar (f n))) :
+      ∀ s, P n s → s.regs .real .scalar outReg = some (Tile.scalar (f n))) :
     ∃ s_final,
       stepStmt (.forLoop idx n body) s_init = some s_final ∧
-      s_final.regs outReg = some (Value.scalar (f n)) := by
+      s_final.regs .real .scalar outReg = some (Tile.scalar (f n)) := by
   obtain ⟨s_final, h_eq, hP⟩ := forLoop_inv h_init h_step
   exact ⟨s_final, h_eq, h_readout _ hP⟩
 
 /-- **Tile-register readout corollary.** Same as `forLoop_readout_scalar` but
-    for an output register containing a `Value.tile len`; used by FA-1
+    for an output register containing a real vector tile; used by FA-1
     forward (`O` register) and any kernel writing a tile-valued accumulator. -/
 theorem forLoop_readout_tile
     {idx outReg : RegName} {n : Nat} {body : List Stmt}
@@ -110,50 +110,53 @@ theorem forLoop_readout_tile
     (h_step :
       ∀ i s, i < n → P i s →
         ∃ s',
-          stepStmts body (s.setReg idx (Value.scalarNat i)) = some s' ∧
+          stepStmts body (s.setReg idx .nat .scalar (Tile.scalar i)) = some s' ∧
           P (i + 1) s')
     (h_readout :
-      ∀ s, P n s → s.regs outReg = some (Value.tile len (f n))) :
+      ∀ s, P n s → s.regs .real (.vec len) outReg = some (Tile.vec (f n))) :
     ∃ s_final,
       stepStmt (.forLoop idx n body) s_init = some s_final ∧
-      s_final.regs outReg = some (Value.tile len (f n)) := by
+      s_final.regs .real (.vec len) outReg = some (Tile.vec (f n)) := by
   obtain ⟨s_final, h_eq, hP⟩ := forLoop_inv h_init h_step
   exact ⟨s_final, h_eq, h_readout _ hP⟩
 /-! ### Sanity check
 
 A trivial 1-statement-body forLoop counter. We use `Nat`-channel arithmetic
-because the loop index `idx` is `Value.scalarNat` and `Value.bop` rejects
-mixing `ℝ` and `Nat` (per `Notes/2026-04-29-forloop-inv-design.md` §6). -/
+because the loop index `idx` is a typed Nat scalar. -/
 
 private def counterBody : List Stmt :=
-  [.assign "cnt" (.add (.ref "cnt") (.constNat 1))]
+  [.assign .nat .scalar "cnt"
+    (.add NumericDType.nat Broadcast.same
+      (.ref .nat .scalar "cnt") (.constNat 1))]
 
 private theorem counter_invariant_step
     (i : Nat) (s : BlockState)
     (_h_lt : i < 5)
-    (hP : s.regs "cnt" = some (Value.scalarNat i)) :
-    ∃ s', stepStmts counterBody (s.setReg "i" (Value.scalarNat i)) = some s'
-        ∧ s'.regs "cnt" = some (Value.scalarNat (i + 1)) := by
+    (hP : s.regs .nat .scalar "cnt" = some (Tile.scalar i)) :
+    ∃ s', stepStmts counterBody (s.setReg "i" .nat .scalar (Tile.scalar i)) = some s'
+        ∧ s'.regs .nat .scalar "cnt" = some (Tile.scalar (i + 1)) := by
   -- Body is a single assign; step it manually. The resulting state writes
-  -- "cnt" := Value.scalarNat (i + 1) on top of `s.setReg "i" ...`.
-  refine ⟨((s.setReg "i" (Value.scalarNat i)).setReg "cnt"
-              (Value.scalarNat (i + 1))), ?_, ?_⟩
+  -- "cnt" := Nat scalar (i + 1) on top of `s.setReg "i" ...`.
+  refine ⟨((s.setReg "i" .nat .scalar (Tile.scalar i)).setReg "cnt" .nat .scalar
+      (Tile.bop (NumericDType.add NumericDType.nat) Broadcast.same
+        (Tile.scalar i) (Tile.scalar 1))), ?_, ?_⟩
   · simp [stepStmts, stepStmt, evalOp, counterBody, BlockState.setReg, hP,
-          Value.bop]
-  · simp [BlockState.setReg]
+          Tile.bop, NumericDType.add]
+  · rw [BlockState.setReg_same]
+    rfl
 
 example
     (s_init : BlockState)
-    (h_cnt0 : s_init.regs "cnt" = some (Value.scalarNat 0)) :
+    (h_cnt0 : s_init.regs .nat .scalar "cnt" = some (Tile.scalar 0)) :
     ∃ s_final,
       stepStmt (.forLoop "i" 5 counterBody) s_init = some s_final ∧
-      s_final.regs "cnt" = some (Value.scalarNat 5) := by
+      s_final.regs .nat .scalar "cnt" = some (Tile.scalar 5) := by
   -- Note: the `i` register is unset in s_init; that's fine — `setReg "i"`
   -- in stepForLoopAux defines it on first use. The invariant talks about
   -- "cnt" only.
-  have h_init : s_init.regs "cnt" = some (Value.scalarNat 0) := h_cnt0
+  have h_init : s_init.regs .nat .scalar "cnt" = some (Tile.scalar 0) := h_cnt0
   obtain ⟨s_final, h_eq, hP⟩ :=
-    forLoop_inv (P := fun k s => s.regs "cnt" = some (Value.scalarNat k))
+    forLoop_inv (P := fun k s => s.regs .nat .scalar "cnt" = some (Tile.scalar k))
       h_init
       (fun i s h_lt hP => counter_invariant_step i s h_lt hP)
   exact ⟨s_final, h_eq, hP⟩

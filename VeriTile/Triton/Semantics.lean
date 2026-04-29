@@ -1,21 +1,10 @@
 /-
 VeriTile.Triton.Semantics
 
-Operational semantics for the P1 Triton subset.
+Typed operational semantics for the Triton subset.
 
-We give a small-step state-threaded interpreter:
-* `evalOp : Op → BlockState → Option Value` -- pure expression evaluation.
-* `stepStmt : Stmt → BlockState → Option BlockState` -- statement execution.
-* `exec : Kernel → BlockState → Option BlockState` -- full kernel run.
-
-The `Option` is for runtime errors (undefined ref, shape mismatch, etc.).
-
-Floating-point is modelled in `ℝ`. This is a deliberate simplification;
-IEEE-754 fidelity is out of scope for VeriTile (covered by differential
-testing in P5+).
-
-Several helpers below carry explicit `sorry` to indicate where future
-P1 work will land. Each is annotated with `-- TODO(P1):`.
+The runtime value layer is intentionally absent: expression types carry their
+dtype and shape, and evaluation returns `Tile dtype shape` directly.
 -/
 
 import Mathlib.Data.Real.Basic
@@ -23,105 +12,198 @@ import Mathlib.Data.Real.Sqrt
 import Mathlib.Analysis.SpecialFunctions.Exp
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import Mathlib.Analysis.SpecialFunctions.Sigmoid
+import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Core
 
 namespace VeriTile.Triton
 
-/--
-A Triton runtime value, bifurcated into `ℝ` (data) and `Nat` (address)
-channels. Tile lengths are existential (packed in the constructor) for
-simplicity; type-level shape tracking is a later extension if needed.
+namespace Tile
 
-* `scalar`      — `ℝ` data scalar (e.g. an `exp`/`div` result, an accumulator).
-* `scalarNat`   — `Nat` address scalar (e.g. `pid`, a tile size, a stride).
-* `scalarBool`  — `Bool` predicate scalar (e.g. `pid < n_elements`). Consumed
-                  as the `mask=` kwarg of `tl.load`/`tl.store` (broadcasts
-                  over per-lane offsets) or future `tl.where` ternary.
-* `tile`        — `ℝ` data tile (e.g. `tl.exp(x)`, `tl.load(...)` from a data buffer).
-* `tileNat`     — `Nat` offset tile (e.g. `tl.arange(N)`, computed offsets).
-* `tileBool`    — `Bool` per-lane mask tile (e.g. `offsets < n_elements`).
-                  Consumed as the `mask=` kwarg in masked load/store.
+@[simp] theorem scalar_data {dtype : TileDType} (x : TileCarrier dtype) :
+    (Tile.scalar x).data PUnit.unit = x := rfl
 
-The trifurcation (data ℝ / address Nat / predicate Bool) eliminates the
-prior `realToNat` round-trip cast and removes one class of permissive
-typing — `exp(pid)`, `pid + (offs < n)` no longer evaluate. Comparison
-ops (`Op.lt`, etc.) live exclusively on the Bool channel; they don't
-flow back into ℝ/Nat arithmetic. Shape semantics follow Triton's
-broadcast rules: `()×()→()`, `(n)×()→(n)`, `()×(n)→(n)`, `(n)×(n)→(n)`.
+@[simp] theorem scalar_data_index {dtype : TileDType}
+    (x : TileCarrier dtype) (i : TileIndex .scalar) :
+    (Tile.scalar x).data i = x := by
+  cases i
+  rfl
 
-See RP2 (`Notes/research_problem_address_typing.md`) and Issue #16/#17
-for the design discussion.
--/
-inductive Value : Type where
-  | scalar     : ℝ   → Value
-  | scalarNat  : Nat → Value
-  | scalarBool : Bool → Value
-  | tile       : (n : Nat) → (Fin n → ℝ)   → Value
-  | tileNat    : (n : Nat) → (Fin n → Nat) → Value
-  | tileBool   : (n : Nat) → (Fin n → Bool) → Value
+@[simp] theorem scalar_eta {dtype : TileDType} (x : TileCarrier dtype) :
+    ({ data := fun _ : TileIndex .scalar => x } : Tile dtype .scalar) =
+      Tile.scalar x := rfl
 
-instance : Inhabited Value := ⟨.scalar 0⟩
+@[simp] theorem vec_data {dtype : TileDType} {n : Nat}
+    (f : Fin n → TileCarrier dtype) (i : Fin n) :
+    (Tile.vec f).data i = f i := rfl
+
+end Tile
+
+namespace NumericDType
+
+def add : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
+  | .real, x, y => x + y
+  | .nat, x, y => x + y
+
+def sub : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
+  | .real, x, y => x - y
+  | .nat, x, y => x - y
+
+def mul : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
+  | .real, x, y => x * y
+  | .nat, x, y => x * y
+
+noncomputable def div : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
+  | .real, x, y => x / y
+  | .nat, x, y => x / y
+
+end NumericDType
+
+namespace ComparableDType
+
+noncomputable def lt :
+    ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
+  | .real, x, y => decide (x < y)
+  | .nat, x, y => decide (x < y)
+
+noncomputable def le :
+    ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
+  | .real, x, y => decide (x ≤ y)
+  | .nat, x, y => decide (x ≤ y)
+
+noncomputable def eq :
+    ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
+  | .real, x, y => decide (x = y)
+  | .nat, x, y => decide (x = y)
+
+noncomputable def gt :
+    ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
+  | .real, x, y => decide (x > y)
+  | .nat, x, y => decide (x > y)
+
+noncomputable def ge :
+    ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
+  | .real, x, y => decide (x ≥ y)
+  | .nat, x, y => decide (x ≥ y)
+
+noncomputable def ne :
+    ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
+  | .real, x, y => decide (x ≠ y)
+  | .nat, x, y => decide (x ≠ y)
+
+end ComparableDType
+
+/-- Cast a typed tile across definitional dtype/shape equalities. -/
+def castTile {dtype shape dtype' shape'}
+    (hd : dtype = dtype') (hs : shape = shape')
+    (v : Tile dtype' shape') : Tile dtype shape := by
+  subst dtype'
+  subst shape'
+  exact v
+
+@[simp] theorem castTile_self {dtype shape}
+    (hd : dtype = dtype) (hs : shape = shape) (v : Tile dtype shape) :
+    castTile hd hs v = v := by
+  cases hd
+  cases hs
+  rfl
+
+/-- A typed register file. The same register name can only be observed at the
+    dtype/shape requested by the typed AST node that references it. -/
+abbrev RegFile :=
+  (dtype : TileDType) → (shape : TileShape) → RegName → Option (Tile dtype shape)
 
 /--
 A block-level execution state.
 
-* `mem` is the memory abstraction: each region (`String`) has an
-  offset-indexed (`Nat`) map to `ℝ`. Regions are disjoint by name.
-* `regs` is the named register file. `none` means the register is
-  not currently defined.
-* `pid` is the value of `tl.program_id(0)` for this block.
-* `undef` models the **undefined-behavior values for masked-off load
-  lanes** when `tl.load(..., mask=m)` is called without an `other=`
-  kwarg. Per Triton's spec ("If `other` is None, the masked-out value
-  is undefined"), the masked-off lane gets some implementation-defined
-  ℝ. We model this as `undef : RegionName → Nat → ℝ`: each load
-  whose mask is `false` at lane `i` returns `undef region (offset i)`.
-
-  Correctness theorems quantify `∀ s : BlockState`, which implicitly
-  quantifies over all `undef` configurations. A kernel that doesn't
-  observe its masked-off lanes (e.g., follows the load with a store
-  using the same mask) verifies for any `undef` choice.
-
-  This is a sound under-approximation of real Triton: real hardware
-  can produce different garbage values for repeated loads at the same
-  `(region, offset)`, while our model gives consistent values. For
-  kernels where each masked-off `(region, offset)` is touched by at
-  most one load instance (the typical case), the approximation is
-  faithful.
-
-  Default: `fun _ _ => 0` so legacy `BlockState` literals don't need
-  updating. The interesting case (non-zero `undef`) is reached by
-  universal quantification, not by literal construction.
+`regs` is typed directly; there is no dynamically tagged runtime value.
+`undef` models Triton's masked load with `other=None`.
 -/
 structure BlockState where
-  mem  : RegionName → Nat → ℝ
-  regs : RegName → Option Value
-  pid  : Nat
+  mem   : RegionName → Nat → ℝ
+  regs  : RegFile
+  pid   : Nat
   undef : RegionName → Nat → ℝ := fun _ _ => 0
 
 instance : Inhabited BlockState :=
-  ⟨{ mem  := fun _ _ => 0
-   , regs := fun _ => none
-   , pid  := 0
+  ⟨{ mem := fun _ _ => 0
+   , regs := fun _ _ _ => none
+   , pid := 0
    , undef := fun _ _ => 0 }⟩
 
 namespace BlockState
 
-/-- Update a single register. -/
-def setReg (s : BlockState) (name : RegName) (v : Value) : BlockState :=
-  { s with regs := fun n => if n = name then some v else s.regs n }
+/-- Update a single typed register. -/
+def setReg (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) : BlockState :=
+  { s with regs := fun dtype' shape' name' =>
+      if hd : dtype' = dtype then
+        if hs : shape' = shape then
+          if name' = name then some (castTile hd hs v) else s.regs dtype' shape' name'
+        else s.regs dtype' shape' name'
+      else s.regs dtype' shape' name' }
+
+@[simp] theorem setReg_same (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
+    (s.setReg name dtype shape v).regs dtype shape name = some v := by
+  simp [setReg]
+
+@[simp] theorem setReg_ne_name (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (h : name' ≠ name) :
+    (s.setReg name dtype shape v).regs dtype' shape' name' =
+      s.regs dtype' shape' name' := by
+  simp [setReg, h]
+
+@[simp] theorem setReg_ne_dtype (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (h : dtype' ≠ dtype) :
+    (s.setReg name dtype shape v).regs dtype' shape' name' =
+      s.regs dtype' shape' name' := by
+  simp [setReg, h]
+
+@[simp] theorem setReg_ne_shape (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (h : shape' ≠ shape) :
+    (s.setReg name dtype shape v).regs dtype' shape' name' =
+      s.regs dtype' shape' name' := by
+  simp [setReg, h]
+
+@[simp] theorem setReg_mem (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape)
+    (region : RegionName) (offset : Nat) :
+    (s.setReg name dtype shape v).mem region offset = s.mem region offset := rfl
+
+@[simp] theorem setReg_pid (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
+    (s.setReg name dtype shape v).pid = s.pid := rfl
+
+@[simp] theorem setReg_undef (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape)
+    (region : RegionName) (offset : Nat) :
+    (s.setReg name dtype shape v).undef region offset = s.undef region offset := rfl
 
 /-- Write a single scalar to memory. -/
 def writeMem (s : BlockState) (region : RegionName) (offset : Nat) (v : ℝ) : BlockState :=
   { s with mem := fun r o =>
       if r = region ∧ o = offset then v else s.mem r o }
 
+@[simp] theorem writeMem_regs (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) (dtype : TileDType) (shape : TileShape)
+    (name : RegName) :
+    (s.writeMem region offset v).regs dtype shape name = s.regs dtype shape name := rfl
+
+@[simp] theorem writeMem_pid (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) :
+    (s.writeMem region offset v).pid = s.pid := rfl
+
+@[simp] theorem writeMem_undef (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) :
+    (s.writeMem region offset v).undef r o = s.undef r o := rfl
+
 /-- Read a single scalar from memory. -/
 @[inline] def readMem (s : BlockState) (region : RegionName) (offset : Nat) : ℝ :=
   s.mem region offset
 
-/-- A `foldl` of `writeMem` writes preserves any cell whose offset is missed by
-    every step. The workhorse lemma behind `scatter_readback`. -/
 private theorem foldl_writeMem_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → ℝ) (o : Nat) (l : List α) :
     ∀ (s : BlockState), (∀ k ∈ l, offsetFn k ≠ o) →
@@ -142,16 +224,6 @@ private theorem foldl_writeMem_preserves {α : Type} {region : RegionName}
     rintro ⟨_, h_eq⟩
     exact hhd h_eq.symm
 
-/-- After writing `valueFn k` to address `offsetFn k` for each `k ∈ Fin n`,
-    reading at `offsetFn i` returns `valueFn i`, provided the offset function
-    is injective (so writes don't shadow each other). The "readback" property
-    of the scatter store.
-
-    Proof: split `List.finRange n = l₁ ++ i :: l₂` (since `i ∈ List.finRange n`).
-    The head-of-tail write puts `valueFn i` at `offsetFn i`. Subsequent writes
-    in `l₂` have offsets `offsetFn k` with `k ≠ i` (because `Nodup` forces
-    `i ∉ l₂`), so by injectivity `offsetFn k ≠ offsetFn i`, and
-    `foldl_writeMem_preserves` shows they leave the cell alone. -/
 theorem scatter_readback {region : RegionName} {n : Nat}
     (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
     (h_inj : Function.Injective offsetFn) (i : Fin n) :
@@ -174,10 +246,6 @@ theorem scatter_readback {region : RegionName} {n : Nat}
       = valueFn i
   exact if_pos ⟨rfl, rfl⟩
 
-/-- Masked variant of `foldl_writeMem_preserves`: a `foldl` of conditional
-    `writeMem` writes preserves any cell whose offset is missed by every
-    write that *actually fires* (i.e., where the mask is `true`). Lanes
-    where `mask = false` are no-ops on the accumulator. -/
 private theorem foldl_writeMem_masked_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α) :
     ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
@@ -209,15 +277,6 @@ private theorem foldl_writeMem_masked_preserves {α : Type} {region : RegionName
       simp only [hmaskhd', if_false, Bool.false_eq_true]
       exact ih _ htl
 
-/-- **Masked scatter readback.** A masked-scatter store writes
-    `valueFn k` at `offsetFn k` only when `mask k = true`. Reading the
-    cell at `offsetFn i` after the foldl returns either `valueFn i`
-    (mask on) or the original `s.mem region (offsetFn i)` (mask off).
-    Generalizes `scatter_readback`; the unmasked version is the case
-    where `mask` is constant `true`.
-
-    Phase B+ extension: this is the workhorse for proving correctness
-    of any kernel that uses Triton's `tl.store(..., mask=...)` form. -/
 theorem scatter_readback_masked {region : RegionName} {n : Nat}
     (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
     (mask : Fin n → Bool)
@@ -237,8 +296,6 @@ theorem scatter_readback_masked {region : RegionName} {n : Nat}
     intro k hk _hmk heq
     have hki : k = i := h_inj heq
     rw [hki] at hk
-    -- hl1_disj : ∀ a ∈ l₁, ∀ b ∈ (i :: l₂), a ≠ b. With a = i, b = i (head of
-    -- the cons), we get i ≠ i, contradicted by rfl.
     exact (hl1_disj i hk i (List.mem_cons_self)) rfl
   have h_l2_not_in : ∀ k ∈ l₂, mask k = true → offsetFn k ≠ offsetFn i := by
     intro k hk _hmk heq
@@ -258,12 +315,6 @@ theorem scatter_readback_masked {region : RegionName} {n : Nat}
     simp only [hmi', if_false, Bool.false_eq_true]
     rw [foldl_writeMem_masked_preserves offsetFn valueFn mask (offsetFn i) l₁ _ h_l1_not_in]
 
-/-- Prop-flavored variant of `scatter_readback_masked`. After
-    operational-semantics `simp` normalizes Bool masks to their underlying
-    Prop predicate (via `decide_eq_true_eq`), the goal's foldl body has
-    `if (P k : Prop) then ... else ...` rather than `if (b : Bool) then ...`.
-    This corollary takes a Prop predicate directly so the rewrite fires
-    cleanly in kernel correctness proofs. -/
 theorem scatter_readback_prop_masked {region : RegionName} {n : Nat}
     (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
     (P : Fin n → Prop) [DecidablePred P]
@@ -277,10 +328,6 @@ theorem scatter_readback_prop_masked {region : RegionName} {n : Nat}
   simp only [decide_eq_true_eq] at h
   exact h
 
-/-- **Cross-region frame property.** A scatter store to `region` does not
-    touch any other named region. The named-region disjointness from RP1
-    makes this `rfl` after unfolding, but we package it here as a reusable
-    lemma for multi-kernel pipeline proofs. -/
 theorem scatter_preserves_other_region {α : Type}
     (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
     (R : RegionName) (h_ne : R ≠ region) (off : Nat) :
@@ -302,456 +349,230 @@ theorem scatter_preserves_other_region {α : Type}
     rintro ⟨h_R, _⟩
     exact h_ne h_R
 
+theorem foldl_writeMem_pid {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (l : List α) (s : BlockState) :
+    ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).pid)
+      = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      simp
+
+theorem foldl_writeMem_masked_pid {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (mask : α → Bool) (l : List α) (s : BlockState) :
+    ((l.foldl
+        (fun acc k =>
+          if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).pid)
+      = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hmask : mask hd
+      · simp [hmask]
+      · simp [hmask]
+
 end BlockState
 
-namespace Value
+def Tile.bop {dtype a b out}
+    (op : TileCarrier dtype → TileCarrier dtype → TileCarrier dtype)
+    (bc : Broadcast a b out) (x : Tile dtype a) (y : Tile dtype b) :
+    Tile dtype out :=
+  ⟨fun i => op (x.data (bc.leftIndex i)) (y.data (bc.rightIndex i))⟩
 
-/-- Coerce a Value to an `ℝ` scalar; fails (`none`) on tiles or `Nat` values. -/
-def asScalar : Value → Option ℝ
-  | .scalar a => some a
-  | _         => none
+def Tile.cop {dtype a b out}
+    (op : TileCarrier dtype → TileCarrier dtype → Bool)
+    (bc : Broadcast a b out) (x : Tile dtype a) (y : Tile dtype b) :
+    Tile .bool out :=
+  ⟨fun i => op (x.data (bc.leftIndex i)) (y.data (bc.rightIndex i))⟩
 
-/-- Coerce a Value to a `Nat` scalar; fails (`none`) on tiles or `ℝ` values. -/
-def asScalarNat : Value → Option Nat
-  | .scalarNat n => some n
-  | _            => none
+def Tile.uop {shape} (op : ℝ → ℝ) (x : Tile .real shape) : Tile .real shape :=
+  ⟨fun i => op (x.data i)⟩
 
-/-- Pointwise lift of a binary scalar op, dispatched by carrier type.
+noncomputable def Tile.reduceSum {n} (x : Tile .real (.vec n)) : Tile .real .scalar :=
+  Tile.scalar (∑ i, x.data i)
 
-    * Two `ℝ` operands (any combination of `scalar`/`tile`) → `opR`
-    * Two `Nat` operands (any combination of `scalarNat`/`tileNat`) → `opN`
-    * Mixed `ℝ`/`Nat` operands → `none` (semantic error)
+noncomputable def Tile.reduceMax {n} (x : Tile .real (.vec n)) : Option (Tile .real .scalar) :=
+  match n with
+  | 0 => none
+  | n' + 1 =>
+      some (Tile.scalar
+        ((Finset.univ : Finset (Fin (n' + 1))).sup' Finset.univ_nonempty
+          (fun i => x.data i)))
 
-    Tile/tile of mismatched lengths → `none`. -/
-def bop (opR : ℝ → ℝ → ℝ) (opN : Nat → Nat → Nat) :
-    Value → Value → Option Value
-  -- ℝ × ℝ
-  | .scalar a, .scalar b      => some (.scalar (opR a b))
-  | .scalar a, .tile n f      => some (.tile n (fun i => opR a (f i)))
-  | .tile n f, .scalar b      => some (.tile n (fun i => opR (f i) b))
-  | .tile n f, .tile m g      =>
-      if h : n = m then
-        some (.tile n (fun i => opR (f i) (g (Fin.cast h i))))
-      else none
-  -- Nat × Nat
-  | .scalarNat a, .scalarNat b   => some (.scalarNat (opN a b))
-  | .scalarNat a, .tileNat n f   => some (.tileNat n (fun i => opN a (f i)))
-  | .tileNat n f, .scalarNat b   => some (.tileNat n (fun i => opN (f i) b))
-  | .tileNat n f, .tileNat m g   =>
-      if h : n = m then
-        some (.tileNat n (fun i => opN (f i) (g (Fin.cast h i))))
-      else none
-  -- mixed ℝ / Nat → semantic error
-  | _, _ => none
+def Tile.natToReal {shape} (x : Tile .nat shape) : Tile .real shape :=
+  ⟨fun i => (x.data i : ℝ)⟩
 
-/-- Pointwise lift of a binary comparison op, dispatched by carrier type.
-    Returns a value in the **Bool channel** (`scalarBool` / `tileBool`).
-
-    * Two `ℝ` operands (any combination of `scalar`/`tile`) → `opR`
-    * Two `Nat` operands (any combination of `scalarNat`/`tileNat`) → `opN`
-    * Mixed ℝ/Nat or Bool input → `none` (semantic error)
-
-    Shape semantics follow Triton's broadcast rules:
-    `()×() → ()`, `(n)×() → (n)`, `()×(n) → (n)`, `(n)×(n) → (n)`
-    (length match required for tile×tile). The two scalar operands case
-    produces a `scalarBool` (NOT a `tileBool 1` — `shape ()` ≠ `shape (1)`
-    per Triton).
-
-    `noncomputable` because `ℝ`-comparison is classically decidable but
-    not constructively so. -/
-noncomputable def cop (opR : ℝ → ℝ → Bool) (opN : Nat → Nat → Bool) :
-    Value → Value → Option Value
-  -- ℝ × ℝ → Bool channel
-  | .scalar a, .scalar b      => some (.scalarBool (opR a b))
-  | .scalar a, .tile n f      => some (.tileBool n (fun i => opR a (f i)))
-  | .tile n f, .scalar b      => some (.tileBool n (fun i => opR (f i) b))
-  | .tile n f, .tile m g      =>
-      if h : n = m then
-        some (.tileBool n (fun i => opR (f i) (g (Fin.cast h i))))
-      else none
-  -- Nat × Nat → Bool channel
-  | .scalarNat a, .scalarNat b   => some (.scalarBool (opN a b))
-  | .scalarNat a, .tileNat n f   => some (.tileBool n (fun i => opN a (f i)))
-  | .tileNat n f, .scalarNat b   => some (.tileBool n (fun i => opN (f i) b))
-  | .tileNat n f, .tileNat m g   =>
-      if h : n = m then
-        some (.tileBool n (fun i => opN (f i) (g (Fin.cast h i))))
-      else none
-  -- mixed ℝ / Nat or Bool input → semantic error
-  | _, _ => none
-
-/-- Pointwise lift of a unary `ℝ` op (e.g. `Real.exp`, `Real.log`) to a
-    `Value`. Returns `none` on `Nat` carriers — applying `exp`/`log` to an
-    address value is rejected at the semantics layer. -/
-def uop (op : ℝ → ℝ) : Value → Option Value
-  | .scalar a   => some (.scalar (op a))
-  | .tile n f   => some (.tile n (fun i => op (f i)))
-  | _           => none
-
-/-- `tl.sum(x, axis=0)` semantics: sum over the tile via Mathlib `Finset.sum`.
-    Defined only on `ℝ` tiles; `Nat` tiles or scalars return `none`. -/
-noncomputable def reduceSum : Value → Option Value
-  | .tile _ f => some (.scalar (∑ i, f i))
-  | _         => none
-
-/-- `tl.max(x, axis=0)` semantics: max over a non-empty `ℝ` tile via
-    `Finset.sup'`. Empty tiles, `Nat` tiles, and scalars all return `none`. -/
-noncomputable def reduceMax : Value → Option Value
-  | .tile (n+1) f =>
-      some (.scalar ((Finset.univ : Finset (Fin (n+1))).sup' Finset.univ_nonempty f))
-  | _ => none
-
-end Value
-
-/--
-Evaluate an `Op` against a `BlockState`.
-
-Returns `none` on type / shape errors (e.g. dividing tiles of different
-lengths, dereferencing an undefined register). Returns `some v` otherwise.
-
-`noncomputable` because `Real` arithmetic (`/`, `Real.exp`) is noncomputable.
-Lean accepts this as structural recursion on `Op`.
--/
-noncomputable def evalOp : Op → BlockState → Option Value
-  | .const c, _      => some (.scalar c)
-  | .constNat n, _   => some (.scalarNat n)
-  | .negInf, _       =>
-      -- TODO(P1): replace with a proper `⊥`/`-∞` sentinel that interacts
-      -- correctly with `max`. -1e38 is a finite stand-in.
-      some (.scalar (-1e38))
-  | .programId, s    => some (.scalarNat s.pid)
-  | .ref name, s     => s.regs name
-  | .arange n, _     => some (.tileNat n (fun i => i.val))
-  | .broadcast e n, s =>
-      match evalOp e s with
-      | some (.scalar c)    => some (.tile n (fun _ => c))
-      | some (.scalarNat c) => some (.tileNat n (fun _ => c))
-      | _ => none
-  | .full n e, s =>
-      match evalOp e s with
-      | some (.scalar c)    => some (.tile n (fun _ => c))
-      | some (.scalarNat c) => some (.tileNat n (fun _ => c))
-      | _ => none
-  | .add a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop (· + ·) (· + ·) vb
-      | _, _ => none
-  | .sub a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop (· - ·) (· - ·) vb
-      | _, _ => none
-  | .mul a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop (· * ·) (· * ·) vb
-      | _, _ => none
-  | .div a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop (· / ·) (· / ·) vb
-      | _, _ => none
-  | .exp a, s =>
-      match evalOp a s with
-      | some va => va.uop Real.exp
-      | none => none
-  | .log a, s =>
-      match evalOp a s with
-      | some va => va.uop Real.log
-      | none => none
-  | .sigmoid a, s =>
-      match evalOp a s with
-      | some va => va.uop Real.sigmoid
-      | none => none
-  | .sqrt a, s =>
-      match evalOp a s with
-      | some va => va.uop Real.sqrt
-      | none => none
-  | .lt a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.cop (fun x y => decide (x < y)) (fun x y => decide (x < y)) vb
-      | _, _ => none
-  | .le a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.cop (fun x y => decide (x ≤ y)) (fun x y => decide (x ≤ y)) vb
-      | _, _ => none
-  | .eq a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.cop (fun x y => decide (x = y)) (fun x y => decide (x = y)) vb
-      | _, _ => none
-  | .gt a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.cop (fun x y => decide (x > y)) (fun x y => decide (x > y)) vb
-      | _, _ => none
-  | .ge a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.cop (fun x y => decide (x ≥ y)) (fun x y => decide (x ≥ y)) vb
-      | _, _ => none
-  | .ne a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.cop (fun x y => decide (x ≠ y)) (fun x y => decide (x ≠ y)) vb
-      | _, _ => none
-  | .max2 a b, s =>
-      match evalOp a s, evalOp b s with
-      | some va, some vb => va.bop max max vb
-      | _, _ => none
-  | .reduceMax a, s =>
-      match evalOp a s with
-      | some va => va.reduceMax
-      | none => none
-  | .reduceSum a, s =>
-      match evalOp a s with
-      | some va => va.reduceSum
-      | none => none
-  | .load region off mask other, s =>
-      match mask, other with
-      | none, none =>
-          -- Unmasked load (D-b path: legacy form, untouched semantics).
-          match evalOp off s with
-          | some (.scalarNat n) =>
-              -- Scalar offset: single-cell read at the given Nat address.
-              some (.scalar (s.readMem region n))
-          | some (.tileNat n f) =>
-              -- Tile-valued offset: gather.
-              some (.tile n (fun i => s.readMem region (f i)))
-          | _ => none
-      | some m, some o =>
-          -- Masked load with explicit `other`: dispatch on (offset shape ×
-          -- mask shape × other shape). Per Triton: scalarBool mask broadcasts
-          -- to per-lane; tileBool must length-match the offset tile.
-          match evalOp off s, evalOp m s, evalOp o s with
-          -- scalar offset + scalar mask + scalar other
-          | some (.scalarNat n), some (.scalarBool b), some (.scalar oval) =>
-              some (.scalar (if b then s.readMem region n else oval))
-          -- tile offset + tile mask (length match) + tile other (length match)
-          | some (.tileNat n f), some (.tileBool nm mf), some (.tile no fo) =>
-              if h₁ : n = nm then
-                if h₂ : n = no then
-                  some (.tile n (fun i =>
-                    if mf (Fin.cast h₁ i) then s.readMem region (f i)
-                    else fo (Fin.cast h₂ i)))
-                else none
-              else none
-          -- tile offset + tile mask + scalar other (broadcast other to dead lanes)
-          | some (.tileNat n f), some (.tileBool nm mf), some (.scalar oval) =>
-              if h : n = nm then
-                some (.tile n (fun i =>
-                  if mf (Fin.cast h i) then s.readMem region (f i) else oval))
-              else none
-          -- tile offset + scalar mask (broadcast) + tile other (length match)
-          | some (.tileNat n f), some (.scalarBool b), some (.tile no fo) =>
-              if h : n = no then
-                some (.tile n (fun i =>
-                  if b then s.readMem region (f i) else fo (Fin.cast h i)))
-              else none
-          -- tile offset + scalar mask + scalar other (broadcast both)
-          | some (.tileNat n f), some (.scalarBool b), some (.scalar oval) =>
-              some (.tile n (fun i =>
-                if b then s.readMem region (f i) else oval))
-          | _, _, _ => none
-      | some m, none =>
-          -- Masked load without `other`: per Triton, masked-off lanes get
-          -- *undefined* values. We model this with `s.undef region (addr)` —
-          -- correctness theorems must hold for any value of `s.undef`.
-          match evalOp off s, evalOp m s with
-          -- scalar offset + scalar mask: read or undef-scalar at that addr
-          | some (.scalarNat n), some (.scalarBool b) =>
-              some (.scalar (if b then s.readMem region n else s.undef region n))
-          -- tile offset + tile mask (length match): per-lane masked load
-          | some (.tileNat n f), some (.tileBool nm mf) =>
-              if h : n = nm then
-                some (.tile n (fun i =>
-                  if mf (Fin.cast h i) then s.readMem region (f i)
-                  else s.undef region (f i)))
-              else none
-          -- tile offset + scalar mask: broadcast mask, undef per addr
-          | some (.tileNat n f), some (.scalarBool b) =>
-              some (.tile n (fun i =>
-                if b then s.readMem region (f i) else s.undef region (f i)))
-          | _, _ => none
-      | none, some _ =>
-          -- `other=` without `mask=`: semantic error (rejected at DSL parse
-          -- time with helpful message; this branch handles direct AST
-          -- construction).
-          none
-  | .natToReal a, s =>
-      -- Lift a `Nat`-channel value into the `ℝ` channel pointwise.
-      match evalOp a s with
-      | some (.scalarNat n) => some (.scalar (n : ℝ))
-      | some (.tileNat n f) => some (.tile n (fun i => (f i : ℝ)))
-      | _ => none
+noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)
+  | .const c, _ => some (Tile.scalar c)
+  | .constNat n, _ => some (Tile.scalar n)
+  | .constBool b, _ => some (Tile.scalar b)
+  | .negInf, _ => some (Tile.scalar (-1e38))
+  | .programId, s => some (Tile.scalar s.pid)
+  | .ref dtype shape name, s => s.regs dtype shape name
+  | .arange n, _ => some (Tile.vec (fun i => i.val))
+  | .broadcast e shape, s => do
+      let v ← evalOp e s
+      some ⟨fun _ => v.data PUnit.unit⟩
+  | .full shape e, s => do
+      let v ← evalOp e s
+      some ⟨fun _ => v.data PUnit.unit⟩
+  | .add h bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop h.add bc va vb)
+  | .sub h bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop h.sub bc va vb)
+  | .mul h bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop h.mul bc va vb)
+  | .div h bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop h.div bc va vb)
+  | .exp a, s => return Tile.uop Real.exp (← evalOp a s)
+  | .log a, s => return Tile.uop Real.log (← evalOp a s)
+  | .sigmoid a, s => return Tile.uop Real.sigmoid (← evalOp a s)
+  | .sqrt a, s => return Tile.uop Real.sqrt (← evalOp a s)
+  | .lt h bc a b, s => return Tile.cop h.lt bc (← evalOp a s) (← evalOp b s)
+  | .le h bc a b, s => return Tile.cop h.le bc (← evalOp a s) (← evalOp b s)
+  | .eq h bc a b, s => return Tile.cop h.eq bc (← evalOp a s) (← evalOp b s)
+  | .gt h bc a b, s => return Tile.cop h.gt bc (← evalOp a s) (← evalOp b s)
+  | .ge h bc a b, s => return Tile.cop h.ge bc (← evalOp a s) (← evalOp b s)
+  | .ne h bc a b, s => return Tile.cop h.ne bc (← evalOp a s) (← evalOp b s)
+  | .max2 bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop max bc va vb)
+  | .reduceMax a, s => do
+      let va ← evalOp a s
+      va.reduceMax
+  | .reduceSum a, s => return Tile.reduceSum (← evalOp a s)
+  | .load region off, s => do
+      let offsets ← evalOp off s
+      some ⟨fun i => s.readMem region (offsets.data i)⟩
+  | .loadMask region off mask, s => do
+      let offsets ← evalOp off s
+      let masks ← evalOp mask s
+      some ⟨fun i =>
+        let addr := offsets.data i
+        if masks.data i then s.readMem region addr else s.undef region addr⟩
+  | .loadMaskOther region off mask other, s => do
+      let offsets ← evalOp off s
+      let masks ← evalOp mask s
+      let others ← evalOp other s
+      some ⟨fun i =>
+        let addr := offsets.data i
+        if masks.data i then s.readMem region addr else others.data i⟩
+  | .natToReal a, s => return Tile.natToReal (← evalOp a s)
 
 mutual
 
-/-- Execute one statement.
-
-    `assign` evaluates RHS and stores the value in the named register.
-    `store` writes a scalar or contiguous tile to memory.
-    `forLoop` delegates to `stepForLoopAux`, which iterates the body
-    `n` times, binding the loop counter (as a `Nat`-channel value) into
-    register `idx` before each iteration. -/
 noncomputable def stepStmt : Stmt → BlockState → Option BlockState
-  | .assign name e, s =>
-      match evalOp e s with
-      | some v => some (s.setReg name v)
-      | none   => none
-  | .store region off val mask, s =>
-      match mask with
-      | none =>
-          -- Unmasked store (D-b path: legacy form, untouched semantics).
-          match evalOp off s, evalOp val s with
-          | some voff, some vval =>
-              match voff with
-              | .scalarNat coff =>
-                  match vval with
-                  | .scalar c =>
-                      some (s.writeMem region coff c)
-                  | .tile n f =>
-                      some ((List.finRange n).foldl
-                              (fun acc i =>
-                                acc.writeMem region (coff + i.val) (f i))
-                              s)
-                  | _ => none
-              | .tileNat n offs =>
-                  match vval with
-                  | .tile m vals =>
-                      if h : n = m then
-                        some ((List.finRange n).foldl
-                                (fun acc i =>
-                                  acc.writeMem region (offs i)
-                                              (vals (Fin.cast h i)))
-                                s)
-                      else none
-                  | _ => none
-              | _ => none  -- ℝ-valued offset is rejected
-          | _, _ => none
-      | some m =>
-          -- Masked store: lanes where mask=false are LEFT UNTOUCHED. No `other`
-          -- parameter on store side (Triton convention).
-          match evalOp off s, evalOp val s, evalOp m s with
-          -- scalar offset + scalar val + scalar mask
-          | some (.scalarNat coff), some (.scalar c), some (.scalarBool b) =>
-              if b then some (s.writeMem region coff c) else some s
-          -- scalar offset + tile val + tile mask (length match)
-          | some (.scalarNat coff), some (.tile n f), some (.tileBool nm mf) =>
-              if h : n = nm then
-                some ((List.finRange n).foldl
-                        (fun acc i =>
-                          if mf (Fin.cast h i) then
-                            acc.writeMem region (coff + i.val) (f i)
-                          else acc)
-                        s)
-              else none
-          -- scalar offset + tile val + scalar mask (broadcast)
-          | some (.scalarNat coff), some (.tile n f), some (.scalarBool b) =>
-              if b then
-                some ((List.finRange n).foldl
-                        (fun acc i => acc.writeMem region (coff + i.val) (f i))
-                        s)
-              else some s
-          -- tile offset + tile val + tile mask (lengths must all match)
-          | some (.tileNat n offs), some (.tile m vals), some (.tileBool k mf) =>
-              if h₁ : n = m then
-                if h₂ : n = k then
-                  some ((List.finRange n).foldl
-                          (fun acc i =>
-                            if mf (Fin.cast h₂ i) then
-                              acc.writeMem region (offs i) (vals (Fin.cast h₁ i))
-                            else acc)
-                          s)
-                else none
-              else none
-          -- tile offset + tile val + scalar mask (broadcast)
-          | some (.tileNat n offs), some (.tile m vals), some (.scalarBool b) =>
-              if h : n = m then
-                if b then
-                  some ((List.finRange n).foldl
-                          (fun acc i =>
-                            acc.writeMem region (offs i) (vals (Fin.cast h i)))
-                          s)
-                else some s
-              else none
-          | _, _, _ => none
+  | .assign dtype shape name e, s => do
+      let v ← evalOp e s
+      some (s.setReg name dtype shape v)
+  | .store region shape off val, s => do
+      let offsets ← evalOp off s
+      let values ← evalOp val s
+      match shape with
+      | .scalar =>
+          some (s.writeMem region (offsets.data PUnit.unit) (values.data PUnit.unit))
+      | .vec n =>
+          some ((List.finRange n).foldl
+            (fun acc i => acc.writeMem region (offsets.data i) (values.data i)) s)
+      | .mat m n =>
+          let idxs : List (Fin m × Fin n) :=
+            (List.finRange m).flatMap (fun i => (List.finRange n).map (fun j => (i, j)))
+          some (idxs.foldl
+            (fun acc i => acc.writeMem region (offsets.data i) (values.data i)) s)
+  | .storeMask region shape off val mask, s => do
+      let offsets ← evalOp off s
+      let values ← evalOp val s
+      let masks ← evalOp mask s
+      match shape with
+      | .scalar =>
+          some (if masks.data PUnit.unit then
+            s.writeMem region (offsets.data PUnit.unit) (values.data PUnit.unit)
+          else s)
+      | .vec n =>
+          some ((List.finRange n).foldl
+            (fun acc i =>
+              if masks.data i then acc.writeMem region (offsets.data i) (values.data i)
+              else acc) s)
+      | .mat m n =>
+          let idxs : List (Fin m × Fin n) :=
+            (List.finRange m).flatMap (fun i => (List.finRange n).map (fun j => (i, j)))
+          some (idxs.foldl
+            (fun acc i =>
+              if masks.data i then acc.writeMem region (offsets.data i) (values.data i)
+              else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
 termination_by st _ => (sizeOf st, 0)
 decreasing_by
   simp_wf
-  -- Goal: sizeOf body + 1 < 1 + sizeOf idx + n + sizeOf body.
-  -- Suffices: 0 < sizeOf idx, since sizeOf idx ≥ 1 for any String.
-  -- WARNING: this proof depends on `RegName = String` (Core.lean:24).
-  -- If RegName ever becomes a different type, re-prove `0 < sizeOf idx`,
-  -- or bump `stepStmt`'s lex component (e.g. `(sizeOf st + 1, 0)`) to
-  -- remove the dependency on `sizeOf idx` entirely.
   have h : 0 < sizeOf idx := by
     cases idx; simp
   omega
 
-/-- Sequence a list of statements, threading state. -/
 noncomputable def stepStmts : List Stmt → BlockState → Option BlockState
   | [], s => some s
   | st :: rest, s =>
       match stepStmt st s with
       | some s' => stepStmts rest s'
-      | none    => none
+      | none => none
 termination_by l _ => (sizeOf l, 0)
 decreasing_by all_goals (simp_wf; omega)
 
-/-- The bounded-for-loop driver. Iterates `i` from `start` up to `n`,
-    binding the loop counter to register `idx` (as a `Nat` value) before each
-    body run. Returns `none` if any body iteration returns `none`. -/
 noncomputable def stepForLoopAux
     (idx : RegName) (start n : Nat) (body : List Stmt) :
     BlockState → Option BlockState
   | s =>
       if start < n then
-        match stepStmts body (s.setReg idx (Value.scalarNat start)) with
+        match stepStmts body (s.setReg idx .nat .scalar (Tile.scalar start)) with
         | some s' => stepForLoopAux idx (start + 1) n body s'
-        | none    => none
+        | none => none
       else some s
 termination_by _ => (sizeOf body + 1, n - start)
 decreasing_by all_goals omega
 
 end
 
-namespace stepForLoopAux  -- group under a namespace for discoverability
+namespace stepStmts
 
-/-- Terminator case: when the loop counter has reached the bound, the loop
-    is finished and the state is returned unchanged. Subsumes the special
-    case `start = n`. -/
+@[simp] theorem nil {s : BlockState} :
+    stepStmts [] s = some s := by
+  unfold stepStmts
+  rfl
+
+end stepStmts
+
+namespace stepForLoopAux
+
 @[simp] theorem step_ge {idx} {start n} {body} {s} (h : n ≤ start) :
     stepForLoopAux idx start n body s = some s := by
   unfold stepForLoopAux
   simp [Nat.not_lt.mpr h]
 
-/-- Terminator special case: when `start = n`. Kept as a named lemma so callers
-    that reduce to `stepForLoopAux idx n n …` (without an explicit `n ≤ start`
-    hypothesis in scope) still get a one-step `simp` close. -/
 @[simp] theorem step_eq_self {idx} {n} {body} (s) :
     stepForLoopAux idx n n body s = some s :=
   step_ge (le_refl n)
 
-/-- Step case: under `h : start < n`, unfold one iteration into a `bind` over
-    the body's resulting state. Conditional `@[simp]` — fires only when
-    `start < n` is discharged from the local context. -/
 @[simp] theorem step_lt {idx} {start n} {body} {s} (h : start < n) :
     stepForLoopAux idx start n body s
-      = (stepStmts body (s.setReg idx (Value.scalarNat start))).bind
+      = (stepStmts body (s.setReg idx .nat .scalar (Tile.scalar start))).bind
           (stepForLoopAux idx (start + 1) n body) := by
-  -- `unfold stepForLoopAux` (without `conv_lhs`) is too eager — it also
-  -- unfolds the recursive call on the RHS, leaving `simp [h]` unable to close.
-  -- Localize to the LHS only.
   conv_lhs => unfold stepForLoopAux
   simp [h]
-  -- The body is a `match`; rewrite into `Option.bind` form.
-  cases hbody : stepStmts body (s.setReg idx (Value.scalarNat start)) <;> rfl
+  cases hbody : stepStmts body (s.setReg idx .nat .scalar (Tile.scalar start)) <;> rfl
 
-/-- Bridge: `stepStmt`'s `.forLoop` arm delegates to the auxiliary driver.
-    Lets `simp` reduce `stepStmt (.forLoop ...)` directly into
-    `stepForLoopAux` form, where `step_ge`/`step_eq_self`/`step_lt` then take
-    over.
-
-    NOTE: this rewrite is one-directional. If a future `@[simp]` lemma folds
-    `stepForLoopAux idx 0 n body s` back to `stepStmt (.forLoop ...)`, the
-    rewrite system will loop. Add such a lemma only with explicit `simp only`
-    discipline. -/
 @[simp] theorem forLoop_unfold {idx} {n} {body} {s} :
     stepStmt (.forLoop idx n body) s
       = stepForLoopAux idx 0 n body s := by
@@ -760,49 +581,111 @@ namespace stepForLoopAux  -- group under a namespace for discoverability
 
 end stepForLoopAux
 
-/-- Execute a kernel from an initial state to a final state (or `none` on error). -/
 noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
   stepStmts k.body s
 
--- ────────────── Sanity checks ──────────────
--- These are intentionally tiny: they confirm the framework is alive
--- (definitions reduce, simp/norm_num apply, register-binding works)
--- before we attempt anything substantive in P2.
+mutual
 
--- Pure structural reduction: an `ℝ` constant evaluates to a `Value.scalar`.
-example : evalOp (.const 5) default = some (Value.scalar 5) := by
-  unfold evalOp; rfl
+theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
+    (h : stepStmt st s = some s') :
+    s'.pid = s.pid := by
+  cases st
+  case assign dtype shape name e =>
+    cases hv : evalOp e s with
+    | none =>
+        simp [stepStmt, hv] at h
+    | some v =>
+        simp [stepStmt, hv] at h
+        cases h
+        rfl
+  case store region shape off val =>
+    cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
+    rename_i offsets
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases shape <;> simp at h
+    · cases h
+      simp
+    · cases h
+      simp [BlockState.foldl_writeMem_pid]
+    · cases h
+      simp [BlockState.foldl_writeMem_pid]
+  case storeMask region shape off val mask =>
+    cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
+    rename_i offsets
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases hmask : evalOp mask s <;> simp [hmask] at h
+    rename_i masks
+    cases shape <;> simp at h
+    · split at h
+      · cases h
+        simp
+      · cases h
+        rfl
+    · cases h
+      simp [BlockState.foldl_writeMem_masked_pid]
+    · cases h
+      simp [BlockState.foldl_writeMem_masked_pid]
+  case forLoop idx n body =>
+    simp at h
+    exact stepForLoopAux_pid h
 
--- A `Nat` constant evaluates to a `Value.scalarNat`.
-example : evalOp (.constNat 7) default = some (Value.scalarNat 7) := by
-  unfold evalOp; rfl
+theorem stepStmts_pid {body : List Stmt} {s s' : BlockState}
+    (h : stepStmts body s = some s') :
+    s'.pid = s.pid := by
+  cases body with
+  | nil =>
+      simp at h
+      simp_all
+  | cons st rest =>
+      unfold stepStmts at h
+      cases hst : stepStmt st s <;> simp [hst] at h
+      rename_i mid
+      exact (stepStmts_pid h).trans (stepStmt_pid hst)
 
--- `programId` reads `BlockState.pid` as a `Nat`; default state has `pid = 0`.
-example : evalOp .programId default = some (Value.scalarNat 0) := by
-  unfold evalOp; rfl
+theorem stepForLoopAux_pid {idx : RegName} {start n : Nat}
+    {body : List Stmt} {s s' : BlockState}
+    (h : stepForLoopAux idx start n body s = some s') :
+    s'.pid = s.pid := by
+  by_cases hlt : start < n
+  · rw [stepForLoopAux.step_lt hlt] at h
+    cases hbody : stepStmts body (s.setReg idx .nat .scalar (Tile.scalar start)) <;>
+      simp [hbody] at h
+    rename_i mid
+    exact (stepForLoopAux_pid h).trans
+      ((stepStmts_pid hbody).trans (BlockState.setReg_pid s idx .nat .scalar (Tile.scalar start)))
+  · have hge : n ≤ start := Nat.le_of_not_gt hlt
+    rw [stepForLoopAux.step_ge hge] at h
+    simp_all
 
--- Trivial `ℝ` arithmetic: `(1 + 2 : ℝ) = 3` lifts through `evalOp`.
-example : evalOp (.add (.const 1) (.const 2)) default = some (Value.scalar 3) := by
-  show some (Value.scalar ((1 : ℝ) + 2)) = some (Value.scalar 3)
+end
+
+theorem exec_pid {k : Kernel} {s s' : BlockState}
+    (h : exec k s = some s') :
+    s'.pid = s.pid := by
+  exact stepStmts_pid h
+
+example : evalOp (.const 5) default = some (Tile.scalar 5) := by
+  unfold evalOp
+  rfl
+
+example : evalOp (.constNat 7) default = some (Tile.scalar 7) := by
+  unfold evalOp
+  rfl
+
+example : evalOp .programId default = some (Tile.scalar 0) := by
+  unfold evalOp
+  rfl
+
+example : evalOp (.add .real .same (.const 1) (.const 2)) default
+    = some (Tile.scalar 3) := by
+  show some (Tile.scalar ((1 : ℝ) + 2)) = some (Tile.scalar 3)
   norm_num
 
--- Trivial `Nat` address arithmetic: `(2 + 3 : Nat) = 5` stays `Nat`.
-example : evalOp (.add (.constNat 2) (.constNat 3)) default
-            = some (Value.scalarNat 5) := by
-  unfold evalOp Value.bop; rfl
-
--- Mixing ℝ and Nat in arithmetic is a semantic error.
-example : evalOp (.add (.const 1) (.constNat 2)) default = none := by
-  unfold evalOp Value.bop; rfl
-
--- `exp` on a `Nat` value is rejected.
-example : evalOp (.exp .programId) default = none := by
-  unfold evalOp Value.uop; rfl
-
--- `assign` writes to the register file.
-example (s : BlockState) :
-    stepStmt (.assign "x" (.const 7)) s
-      = some (s.setReg "x" (Value.scalar 7)) := by
-  unfold stepStmt evalOp; rfl
+example : evalOp (.add .nat .same (.constNat 2) (.constNat 3)) default
+    = some (Tile.scalar 5) := by
+  unfold evalOp Tile.bop NumericDType.add
+  rfl
 
 end VeriTile.Triton

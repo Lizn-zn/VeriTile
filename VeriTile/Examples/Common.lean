@@ -28,6 +28,14 @@ def InputLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=
   ∀ i : Fin N, s.mem region (s.pid * N + i.val) = xs i
 
+/-- Region `region` holds a feature vector at offsets `[0, N)`.
+    Used for per-column parameters such as LayerNorm `γ` and `β`, which are
+    shared across rows and are loaded with `tl.arange(0, N)`, not
+    `pid * N + tl.arange(0, N)`. -/
+def InputFeatureLoadedAt (s : BlockState) (region : RegionName)
+    (N : Nat) (xs : Fin N → ℝ) : Prop :=
+  ∀ i : Fin N, s.mem region i.val = xs i
+
 /-- Read region `region` at the cell `pid*N + i.val` from the optional
     final `BlockState` of an `exec` call. -/
 noncomputable def observeAt

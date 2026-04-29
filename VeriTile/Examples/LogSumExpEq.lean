@@ -6,8 +6,8 @@ log-sum-exp kernel. The math identity `log_sum_exp_shift_invariant` is the
 load-bearing fact; the kernel-level theorem composes operational walk-throughs
 of both kernels with this identity.
 
-Status (Phase A Task 1.1.A): infrastructure laid; math lemma and kernel
-theorems sorry'd, to be closed by subsequent subagents (1.1.B, 1.1.C).
+Status: math identity and kernel-level refinement are closed over the typed
+tile semantics.
 -/
 
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
@@ -88,11 +88,11 @@ theorem direct_lse_correct
     (_h_x : InputLoadedAt s xReg N xs) :
     observeLSE (exec (directLSEKernel xReg yReg N) s) yReg s.pid
       = some (directLSESpec xs) := by
-  -- Post-RP2: address arithmetic stays in `Nat`, no `hcast` needed.
   simp [observeLSE, exec, directLSEKernel, stepStmts, stepStmt, evalOp,
-        Value.bop, Value.uop, Value.reduceSum,
-        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
-        directLSESpec]
+        Tile.bop, Tile.uop, Tile.reduceSum, NumericDType.add,
+        NumericDType.mul, BlockState.setReg, BlockState.readMem,
+        BlockState.writeMem, directLSESpec]
+  simp [Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
 
@@ -105,11 +105,12 @@ theorem stable_lse_correct
     observeLSE (exec (stableLSEKernel xReg yReg N) s) yReg s.pid
       = some (stableLSESpec xs (tileMax hN xs)) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-  -- Post-RP2: address arithmetic stays in `Nat`, no `hcast` needed.
   simp [observeLSE, exec, stableLSEKernel, stepStmts, stepStmt, evalOp,
-        Value.bop, Value.uop, Value.reduceSum, Value.reduceMax,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceMax,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         stableLSESpec, tileMax]
+  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
 

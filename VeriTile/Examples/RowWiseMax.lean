@@ -11,7 +11,7 @@ at `yReg + row`. Companion to `RowWiseSum.lean` — same skeleton, with
 The proof is closed: it follows the same `simp` + `simp_rw [h_x]`
 pattern as `rowWiseSum_correct`, with one extra prelude step
 (`obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'`) so
-`Value.reduceMax` reduces — `Value.reduceMax` is only defined on
+`Tile.reduceMax` reduces — `Tile.reduceMax` is only defined on
 `tile (n+1)` because `Finset.sup'` requires a non-empty index set.
 -/
 
@@ -63,7 +63,7 @@ def rowWiseMaxKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : Kernel :=
 
 /-- Mathematical row-wise max via Mathlib's `Finset.sup'` (needs the tile
     to be non-empty, hence the `0 < N` hypothesis). The dependent pattern
-    match on `N` mirrors `Value.reduceMax`'s shape and `tileMax` from
+    match on `N` mirrors `Tile.reduceMax`'s shape and `tileMax` from
     `SoftmaxEq.lean`, so the closed-form output of the kernel reduces
     cleanly to this spec under `simp`. -/
 noncomputable def rowWiseMaxSpec {N : Nat} (h : 0 < N) (xs : Fin N → ℝ) : ℝ :=
@@ -73,7 +73,7 @@ noncomputable def rowWiseMaxSpec {N : Nat} (h : 0 < N) (xs : Fin N → ℝ) : �
 /-! ## (d) Kernel correctness
 
 Mirrors `rowWiseSum_correct` exactly, with one extra prelude step to
-case-split `blockSize = n + 1` so `Value.reduceMax` (defined only on
+case-split `blockSize = n + 1` so `Tile.reduceMax` (defined only on
 non-empty tiles) reduces. The store is still scalar — single
 `writeMem`, no `scatter_readback` over a `foldl`. -/
 
@@ -86,7 +86,7 @@ where row `s.pid` of `xReg` (rows striding by `nCol`) holds the tile
 Proof structure:
 
 1. `obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'` to expose
-   `blockSize = n + 1`, so `Value.reduceMax` matches.
+   `blockSize = n + 1`, so `Tile.reduceMax` matches.
 2. `simp` reduces the 5-statement body via the operational semantics.
 3. `simp_rw [h_x]` substitutes the loaded input cells with `xs`.
 
@@ -97,12 +97,12 @@ theorem rowWiseMax_correct
     (h_x : InputRowLoadedAt s xReg nCol blockSize xs) :
     observeRowAt (exec (rowWiseMaxKernel xReg yReg nCol blockSize) s) yReg s.pid
       = some (rowWiseMaxSpec hN xs) := by
-  -- Case-split `blockSize = n + 1` so `Value.reduceMax` reduces.
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   simp [observeRowAt, exec, rowWiseMaxKernel, stepStmts, stepStmt, evalOp,
-        Value.bop, Value.reduceMax, BlockState.setReg, BlockState.readMem,
-        BlockState.writeMem, rowWiseMaxSpec]
-  -- Substitute the loaded input cells with `xs` via `InputRowLoadedAt`.
+        Tile.bop, Tile.reduceMax, NumericDType.mul, NumericDType.add,
+        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
+        rowWiseMaxSpec]
+  simp [Broadcast.rightIndex]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
 
