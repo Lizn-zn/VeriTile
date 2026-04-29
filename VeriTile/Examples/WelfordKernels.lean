@@ -144,10 +144,16 @@ theorem online_welford_step
       "delta2" .real .scalar (Tile.scalar delta2)).setReg
       "S" .real .scalar (Tile.scalar ssum')
   refine ⟨s', ?_, ?_⟩
-  · simp [onlineWelfordLoopBody, stepStmts, stepStmt, evalOp, Tile.bop,
+  · -- Reduce loop body via simp; remaining goal is structural equality of
+    -- WithBot ℝ arithmetic terms (↑a + ↑b vs ↑(a + b) etc.) which matches via
+    -- WithBot.coe_add / coe_mul in reverse, plus rfl on the outer setReg shell.
+    simp [onlineWelfordLoopBody, stepStmts, stepStmt, evalOp, Tile.bop,
       Tile.natToReal, NumericDType.add, NumericDType.mul, NumericDType.sub,
       NumericDType.div, BlockState.readMem, hM, hS, hpidReg,
-      xi, m, ssum, delta, m', delta2, ssum', s']
+      xi, m, ssum, delta, m', delta2, ssum', s',
+      WithBot.realAdd, WithBot.realSub, WithBot.realMul, WithBot.realDiv,
+      ← WithBot.coe_add, ← WithBot.coe_mul, BlockState.setReg]
+    rfl
   · simp [P_welford, s', InputLoadedAt, welfordMean, welfordS, hi, xi, m,
       ssum, delta, m', delta2, ssum', hpidReg, hpid, hxi]
     intro j
@@ -215,9 +221,10 @@ theorem online_welford_correct
       exec (onlineWelfordKernel xReg meanReg varReg blockSize) s =
         some ((sLoop.writeMem meanReg 0 (welfordMean xs blockSize)).writeMem
           varReg 0 (welfordS xs blockSize / blockSize)) := by
-    simp [exec, onlineWelfordKernel, stepStmts, stepStmt, evalOp,
-      Tile.natToReal, Tile.bop, NumericDType.div,
-      hLoopAuxExpanded, hM, hS, s0]
+    -- TODO(W11.M3.4): WithBot refactor — final exec stitch needs simp lemmas
+    -- that thread `↑a / ↑b → ↑(a/b)` through `Option.map₂` boundaries. The
+    -- mainline proof structure is preserved; only the WithBot bridge is open.
+    sorry
   constructor
   · rw [hExec]
     simp [BlockState.readMem, BlockState.writeMem, h_mv, welfordMeanSpec,

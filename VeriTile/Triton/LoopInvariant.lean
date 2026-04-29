@@ -101,11 +101,14 @@ theorem forLoop_readout_scalar
 
 /-- **Tile-register readout corollary.** Same as `forLoop_readout_scalar` but
     for an output register containing a real vector tile; used by FA-1
-    forward (`O` register) and any kernel writing a tile-valued accumulator. -/
+    forward (`O` register) and any kernel writing a tile-valued accumulator.
+
+    The readout is in `WithBot ℝ` to match `TileCarrier .real`. Callers whose
+    `f` is `ℝ`-valued can compose with `some` at the call site. -/
 theorem forLoop_readout_tile
     {idx outReg : RegName} {n : Nat} {body : List Stmt}
     {P : Nat → BlockState → Prop} {s_init : BlockState}
-    {len : Nat} {f : Nat → Fin len → ℝ}
+    {len : Nat} {f : Nat → Fin len → WithBot ℝ}
     (h_init : P 0 s_init)
     (h_step :
       ∀ i s, i < n → P i s →

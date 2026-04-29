@@ -180,7 +180,7 @@ theorem softmax_naive_correct
   simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
   rw [BlockState.scatter_readback _ _ _ h_inj i]
-  simp [_h_x]
+  simp [_h_x, WithBot.realDiv, Option.map₂]
 
 /-- **Stable softmax kernel correctness.** Same scheme as above with the
     max-shift formula as the closed form. P2 polish. -/

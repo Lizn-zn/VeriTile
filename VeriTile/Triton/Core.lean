@@ -14,6 +14,7 @@ Operational semantics live in `VeriTile.Triton.Semantics`.
 -/
 
 import Mathlib.Data.Real.Basic
+import Mathlib.Order.WithBot
 
 namespace VeriTile.Triton
 
@@ -37,9 +38,25 @@ inductive TileDType where
   | bool
   deriving DecidableEq, Repr
 
-/-- Lean carrier for each VeriTile tile dtype. -/
+/-- Lean carrier for each VeriTile tile dtype.
+
+`.real` is `WithBot ℝ` rather than `ℝ` so we can faithfully model `tl.full((),
+-float('inf'))` as the bottom element. Triton attention kernels rely on `-inf`
+as the seed of the running-max accumulator; using a finite stand-in like
+`-1e38` would either be wrong (when input data goes below `-1e38`) or require
+range preconditions on every theorem. With `WithBot ℝ`:
+
+* `Op.negInf` evaluates to `⊥ : WithBot ℝ` — true `-∞`
+* `max ⊥ x = x` for all `x` (Mathlib LinearOrder), so the seed is consumed by
+  the first iteration and `⊥` does not escape into normal arithmetic
+* arithmetic (`+`, `-`, `*`, `/`) propagates `⊥` (Mathlib WithBot instances)
+* `exp ⊥ := 0` and `sigmoid ⊥ := 0` mirror IEEE behavior of `exp(-∞)`/
+  `sigmoid(-∞)`; see `WithBot.realExp` / `WithBot.realSigmoid` in Semantics
+
+`tl.load` lifts `mem : RegionName → Nat → ℝ` to `some _ : WithBot ℝ`.
+`tl.store` demotes via `unbot' 0` — well-formed kernels never store `⊥`. -/
 abbrev TileCarrier : TileDType → Type
-  | .real => ℝ
+  | .real => WithBot ℝ
   | .nat  => Nat
   | .bool => Bool
 

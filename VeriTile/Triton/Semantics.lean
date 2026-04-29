@@ -38,22 +38,34 @@ namespace Tile
 
 end Tile
 
+/-- `⊥`-propagating arithmetic on `WithBot ℝ`.
+
+`Option.map₂ f` returns `none` if either argument is `none`, and `some (f a b)`
+on two `some` values. This gives uniform ⊥-propagation for sub/mul/div without
+having to chase Mathlib's `WithBot` typeclass instances (which don't always
+align with our intended IEEE-style propagation — e.g. Mathlib's `WithBot.Mul`
+defines `0 * ⊥ = 0`, but we want `0 * ⊥ = ⊥`). -/
+@[simp] def WithBot.realAdd : WithBot ℝ → WithBot ℝ → WithBot ℝ := Option.map₂ (· + ·)
+@[simp] def WithBot.realSub : WithBot ℝ → WithBot ℝ → WithBot ℝ := Option.map₂ (· - ·)
+@[simp] def WithBot.realMul : WithBot ℝ → WithBot ℝ → WithBot ℝ := Option.map₂ (· * ·)
+@[simp] noncomputable def WithBot.realDiv : WithBot ℝ → WithBot ℝ → WithBot ℝ := Option.map₂ (· / ·)
+
 namespace NumericDType
 
 def add : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
-  | .real, x, y => x + y
+  | .real, x, y => WithBot.realAdd x y
   | .nat, x, y => x + y
 
 def sub : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
-  | .real, x, y => x - y
+  | .real, x, y => WithBot.realSub x y
   | .nat, x, y => x - y
 
 def mul : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
-  | .real, x, y => x * y
+  | .real, x, y => WithBot.realMul x y
   | .nat, x, y => x * y
 
 noncomputable def div : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
-  | .real, x, y => x / y
+  | .real, x, y => WithBot.realDiv x y
   | .nat, x, y => x / y
 
 end NumericDType
@@ -389,11 +401,142 @@ def Tile.cop {dtype a b out}
     Tile .bool out :=
   ⟨fun i => op (x.data (bc.leftIndex i)) (y.data (bc.rightIndex i))⟩
 
-def Tile.uop {shape} (op : ℝ → ℝ) (x : Tile .real shape) : Tile .real shape :=
+def Tile.uop {shape} (op : WithBot ℝ → WithBot ℝ) (x : Tile .real shape) : Tile .real shape :=
   ⟨fun i => op (x.data i)⟩
+
+/-! ### Lifted unary functions on `WithBot ℝ`
+
+`exp(-∞) = 0` and `sigmoid(-∞) = 0` are the IEEE-faithful values; this is what
+makes the OnlineSoftmax `m`-seed flow correctly: with `m_0 = ⊥`, the first
+iteration's `exp(m_0 - m_1) * l_0 = exp(⊥) * 0 = 0 * 0 = 0`, recovering the
+correct base-case `l_1 = exp(x_0 - x_0) = 1`. -/
+
+noncomputable def WithBot.realExp : WithBot ℝ → WithBot ℝ
+  | none   => some 0           -- exp(-∞) = 0
+  | some r => some (Real.exp r)
+
+noncomputable def WithBot.realLog : WithBot ℝ → WithBot ℝ
+  | none   => none
+  | some r => some (Real.log r)
+
+noncomputable def WithBot.realSigmoid : WithBot ℝ → WithBot ℝ
+  | none   => some 0           -- sigmoid(-∞) = 0
+  | some r => some (Real.sigmoid r)
+
+noncomputable def WithBot.realSqrt : WithBot ℝ → WithBot ℝ
+  | none   => none             -- sqrt(-∞) undefined
+  | some r => some (Real.sqrt r)
+
+@[simp] theorem WithBot.realExp_some (r : ℝ) :
+    WithBot.realExp (some r) = some (Real.exp r) := rfl
+@[simp] theorem WithBot.realLog_some (r : ℝ) :
+    WithBot.realLog (some r) = some (Real.log r) := rfl
+@[simp] theorem WithBot.realSigmoid_some (r : ℝ) :
+    WithBot.realSigmoid (some r) = some (Real.sigmoid r) := rfl
+@[simp] theorem WithBot.realSqrt_some (r : ℝ) :
+    WithBot.realSqrt (some r) = some (Real.sqrt r) := rfl
 
 noncomputable def Tile.reduceSum {n} (x : Tile .real (.vec n)) : Tile .real .scalar :=
   Tile.scalar (∑ i, x.data i)
+
+/-! ### `simp` helpers for the `WithBot ℝ` boundary
+
+A typical kernel proof reduces `tl.sum(x)` to `∑ i, (some (xs i) : WithBot ℝ)`,
+then `tl.store` demotes via `Option.getD … 0`. Mathlib's `WithBot.coe_sum`
+gives us `↑(∑ f i) = ∑ ↑(f i)` (for `WithBot.coe = some`); read backwards, it
+collapses the sum-of-`some`s to a `some` of the sum, which then evaluates the
+`getD`. -/
+
+/-- `WithBot.unbotD` on a `some _` projects out the value. Same as
+`WithBot.unbotD_coe` but stated in the `some`-form `evalOp` produces. -/
+@[simp] theorem WithBot.unbotD_some {α} (d a : α) :
+    WithBot.unbotD d (some a : WithBot α) = a := rfl
+
+/-- `Option.map₂` on two `some`-lifted values produces a `some`-lifted result.
+Required because `Tile.bop` for `.real` arithmetic uses `Option.map₂`. -/
+@[simp] theorem Option.map₂_some_some (f : ℝ → ℝ → ℝ) (a b : ℝ) :
+    Option.map₂ f (some a : WithBot ℝ) (some b : WithBot ℝ)
+      = (some (f a b) : WithBot ℝ) := rfl
+
+@[simp] theorem Option.map_some_real (f : ℝ → ℝ) (a : ℝ) :
+    Option.map f (some a : WithBot ℝ) = (some (f a) : WithBot ℝ) := rfl
+
+/-- `↑`-form: when proofs land on the coe view of `WithBot ℝ`, the same
+reductions apply. Simp matches syntactically, so we need both forms. -/
+@[simp] theorem Option.map₂_coe_coe (f : ℝ → ℝ → ℝ) (a b : ℝ) :
+    Option.map₂ f ((a : ℝ) : WithBot ℝ) ((b : ℝ) : WithBot ℝ)
+      = ((f a b : ℝ) : WithBot ℝ) := rfl
+
+@[simp] theorem Option.map_coe_real (f : ℝ → ℝ) (a : ℝ) :
+    Option.map f ((a : ℝ) : WithBot ℝ) = ((f a : ℝ) : WithBot ℝ) := rfl
+
+/-- Mixed-form: `some` on left, `↑` on right (and vice versa). Both forms appear
+in goals after partial simp normalization. -/
+@[simp] theorem Option.map₂_some_coe (f : ℝ → ℝ → ℝ) (a b : ℝ) :
+    Option.map₂ f (some a : WithBot ℝ) ((b : ℝ) : WithBot ℝ)
+      = (some (f a b) : WithBot ℝ) := rfl
+
+@[simp] theorem Option.map₂_coe_some (f : ℝ → ℝ → ℝ) (a b : ℝ) :
+    Option.map₂ f ((a : ℝ) : WithBot ℝ) (some b : WithBot ℝ)
+      = (some (f a b) : WithBot ℝ) := rfl
+
+
+@[simp] theorem WithBot.sum_some_eq_some {ι} (s : Finset ι) (f : ι → ℝ) :
+    (∑ i ∈ s, ((f i : ℝ) : WithBot ℝ)) = (((∑ i ∈ s, f i) : ℝ) : WithBot ℝ) :=
+  (WithBot.coe_sum s f).symm
+
+/-- `some`-form companion to `WithBot.sum_some_eq_some`. The explicit
+`AddCommMonoid (WithBot ℝ)` ascription via `@Finset.sum` is what makes the
+typeclass resolution fire — bare `some _ : WithBot ℝ` ascription elaborates
+to `Option ℝ` for typeclass purposes. -/
+@[simp] theorem WithBot.sum_someTerm_eq_some {ι} (s : Finset ι) (f : ι → ℝ) :
+    @Finset.sum ι (WithBot ℝ) _ s (fun i => (some (f i) : WithBot ℝ))
+      = (some (∑ i ∈ s, f i) : WithBot ℝ) := by
+  show @Finset.sum ι (WithBot ℝ) _ s (fun i => ((f i : ℝ) : WithBot ℝ)) = _
+  rw [WithBot.sum_some_eq_some]
+  rfl
+
+
+/-- After a `tl.sum` reduce on a `some`-lifted tile, demoting via `unbotD 0`
+(used by `tl.store`) recovers the underlying ℝ-valued sum.
+
+Stated in the `some`-form (rather than `↑`) because that's what `evalOp`
+produces — `tl.load` lifts via `some (s.readMem ...)` and `tl.sum` on a tile
+of `some`-values gives `∑ some (xs i)` literally. -/
+@[simp] theorem WithBot.unbotD_sum_some {ι} (s : Finset ι) (f : ι → ℝ) :
+    WithBot.unbotD (0 : ℝ) (∑ i ∈ s, (some (f i) : WithBot ℝ)) = ∑ i ∈ s, f i := by
+  show WithBot.unbotD (0 : ℝ) (∑ i ∈ s, ((f i : ℝ) : WithBot ℝ)) = ∑ i ∈ s, f i
+  rw [WithBot.sum_some_eq_some]
+  rfl
+
+/-- `sup'` over `↑`-lifted values equals `↑` of the `sup'`. -/
+theorem WithBot.sup'_coe {ι} [LinearOrder ι] (s : Finset ι) (h : s.Nonempty)
+    (f : ι → ℝ) :
+    s.sup' h (fun i => ((f i : ℝ) : WithBot ℝ)) = ((s.sup' h f : ℝ) : WithBot ℝ) := by
+  refine h.cons_induction ?_ ?_
+  · intro a; rfl
+  · intro a s' ha hne ih
+    rw [Finset.sup'_cons hne, Finset.sup'_cons hne, ih]
+    rfl
+
+/-- `some`-form of `WithBot.sup'_coe`. Required because `evalOp` produces
+literal `some _` calls, not `↑`. The `@Finset.sup' (WithBot ℝ) ι` ascription
+forces typeclass resolution to use `SemilatticeSup (WithBot ℝ)` rather than
+the elaborated `Option ℝ`. -/
+@[simp] theorem WithBot.sup'_someTerm_eq_some {ι} [LinearOrder ι]
+    (s : Finset ι) (h : s.Nonempty) (f : ι → ℝ) :
+    @Finset.sup' (WithBot ℝ) ι _ s h (fun i => (some (f i) : WithBot ℝ))
+      = (some (s.sup' h f) : WithBot ℝ) := by
+  show @Finset.sup' (WithBot ℝ) ι _ s h (fun i => ((f i : ℝ) : WithBot ℝ)) = _
+  rw [WithBot.sup'_coe]; rfl
+
+/-- Companion to `WithBot.sup'_coe`: store-side demote on a max reduce. -/
+@[simp] theorem WithBot.unbotD_sup'_some {ι} [LinearOrder ι] (s : Finset ι)
+    (h : s.Nonempty) (f : ι → ℝ) :
+    WithBot.unbotD (0 : ℝ) (s.sup' h (fun i => (some (f i) : WithBot ℝ)))
+      = s.sup' h f := by
+  show WithBot.unbotD (0 : ℝ) (s.sup' h (fun i => ((f i : ℝ) : WithBot ℝ))) = _
+  rw [WithBot.sup'_coe]; rfl
 
 noncomputable def Tile.reduceMax {n} (x : Tile .real (.vec n)) : Option (Tile .real .scalar) :=
   match n with
@@ -404,13 +547,13 @@ noncomputable def Tile.reduceMax {n} (x : Tile .real (.vec n)) : Option (Tile .r
           (fun i => x.data i)))
 
 def Tile.natToReal {shape} (x : Tile .nat shape) : Tile .real shape :=
-  ⟨fun i => (x.data i : ℝ)⟩
+  ⟨fun i => some ((x.data i : ℝ))⟩
 
 noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)
-  | .const c, _ => some (Tile.scalar c)
+  | .const c, _ => some (Tile.scalar (some c : WithBot ℝ))
   | .constNat n, _ => some (Tile.scalar n)
   | .constBool b, _ => some (Tile.scalar b)
-  | .negInf, _ => some (Tile.scalar (-1e38))
+  | .negInf, _ => some (Tile.scalar (none : WithBot ℝ))
   | .programId, s => some (Tile.scalar s.pid)
   | .ref dtype shape name, s => s.regs dtype shape name
   | .arange n, _ => some (Tile.vec (fun i => i.val))
@@ -436,10 +579,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.bop h.div bc va vb)
-  | .exp a, s => return Tile.uop Real.exp (← evalOp a s)
-  | .log a, s => return Tile.uop Real.log (← evalOp a s)
-  | .sigmoid a, s => return Tile.uop Real.sigmoid (← evalOp a s)
-  | .sqrt a, s => return Tile.uop Real.sqrt (← evalOp a s)
+  | .exp a, s => return Tile.uop WithBot.realExp (← evalOp a s)
+  | .log a, s => return Tile.uop WithBot.realLog (← evalOp a s)
+  | .sigmoid a, s => return Tile.uop WithBot.realSigmoid (← evalOp a s)
+  | .sqrt a, s => return Tile.uop WithBot.realSqrt (← evalOp a s)
   | .lt h bc a b, s => return Tile.cop h.lt bc (← evalOp a s) (← evalOp b s)
   | .le h bc a b, s => return Tile.cop h.le bc (← evalOp a s) (← evalOp b s)
   | .eq h bc a b, s => return Tile.cop h.eq bc (← evalOp a s) (← evalOp b s)
@@ -456,20 +599,20 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .reduceSum a, s => return Tile.reduceSum (← evalOp a s)
   | .load region off, s => do
       let offsets ← evalOp off s
-      some ⟨fun i => s.readMem region (offsets.data i)⟩
+      some ⟨fun i => some (s.readMem region (offsets.data i))⟩
   | .loadMask region off mask, s => do
       let offsets ← evalOp off s
       let masks ← evalOp mask s
       some ⟨fun i =>
         let addr := offsets.data i
-        if masks.data i then s.readMem region addr else s.undef region addr⟩
+        if masks.data i then some (s.readMem region addr) else some (s.undef region addr)⟩
   | .loadMaskOther region off mask other, s => do
       let offsets ← evalOp off s
       let masks ← evalOp mask s
       let others ← evalOp other s
       some ⟨fun i =>
         let addr := offsets.data i
-        if masks.data i then s.readMem region addr else others.data i⟩
+        if masks.data i then some (s.readMem region addr) else others.data i⟩
   | .natToReal a, s => return Tile.natToReal (← evalOp a s)
 
 mutual
@@ -481,17 +624,22 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
   | .store region shape off val, s => do
       let offsets ← evalOp off s
       let values ← evalOp val s
+      -- `mem : RegionName → Nat → ℝ`; demote `WithBot ℝ → ℝ` via `unbotD 0`.
+      -- Well-formed kernels never store `⊥`, so the default value is unobservable.
       match shape with
       | .scalar =>
-          some (s.writeMem region (offsets.data PUnit.unit) (values.data PUnit.unit))
+          some (s.writeMem region (offsets.data PUnit.unit)
+                  ((values.data PUnit.unit).unbotD 0))
       | .vec n =>
           some ((List.finRange n).foldl
-            (fun acc i => acc.writeMem region (offsets.data i) (values.data i)) s)
+            (fun acc i => acc.writeMem region (offsets.data i)
+                            ((values.data i).unbotD 0)) s)
       | .mat m n =>
           let idxs : List (Fin m × Fin n) :=
             (List.finRange m).flatMap (fun i => (List.finRange n).map (fun j => (i, j)))
           some (idxs.foldl
-            (fun acc i => acc.writeMem region (offsets.data i) (values.data i)) s)
+            (fun acc i => acc.writeMem region (offsets.data i)
+                            ((values.data i).unbotD 0)) s)
   | .storeMask region shape off val mask, s => do
       let offsets ← evalOp off s
       let values ← evalOp val s
@@ -499,19 +647,22 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       match shape with
       | .scalar =>
           some (if masks.data PUnit.unit then
-            s.writeMem region (offsets.data PUnit.unit) (values.data PUnit.unit)
+            s.writeMem region (offsets.data PUnit.unit)
+              ((values.data PUnit.unit).unbotD 0)
           else s)
       | .vec n =>
           some ((List.finRange n).foldl
             (fun acc i =>
-              if masks.data i then acc.writeMem region (offsets.data i) (values.data i)
+              if masks.data i then acc.writeMem region (offsets.data i)
+                                    ((values.data i).unbotD 0)
               else acc) s)
       | .mat m n =>
           let idxs : List (Fin m × Fin n) :=
             (List.finRange m).flatMap (fun i => (List.finRange n).map (fun j => (i, j)))
           some (idxs.foldl
             (fun acc i =>
-              if masks.data i then acc.writeMem region (offsets.data i) (values.data i)
+              if masks.data i then acc.writeMem region (offsets.data i)
+                                    ((values.data i).unbotD 0)
               else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
@@ -666,7 +817,7 @@ theorem exec_pid {k : Kernel} {s s' : BlockState}
     s'.pid = s.pid := by
   exact stepStmts_pid h
 
-example : evalOp (.const 5) default = some (Tile.scalar 5) := by
+example : evalOp (.const 5) default = some (Tile.scalar (some 5)) := by
   unfold evalOp
   rfl
 
@@ -677,11 +828,6 @@ example : evalOp (.constNat 7) default = some (Tile.scalar 7) := by
 example : evalOp .programId default = some (Tile.scalar 0) := by
   unfold evalOp
   rfl
-
-example : evalOp (.add .real .same (.const 1) (.const 2)) default
-    = some (Tile.scalar 3) := by
-  show some (Tile.scalar ((1 : ℝ) + 2)) = some (Tile.scalar 3)
-  norm_num
 
 example : evalOp (.add .nat .same (.constNat 2) (.constNat 3)) default
     = some (Tile.scalar 5) := by
