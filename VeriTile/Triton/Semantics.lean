@@ -765,7 +765,7 @@ the `tl.store` demotion via `unbotD 0` recovers the underlying ℝ value. -/
 noncomputable def Tile.dot : (batch : TileShape) → {M K N : Nat} →
     Tile .real (batch ++ [M, K]) → Tile .real (batch ++ [K, N]) →
     Tile .real (batch ++ [M, N])
-  | [], M, K, N, a, b =>
+  | [], _, K, _, a, b =>
       ⟨fun (m, n, _) =>
         @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
           (fun k => Option.map₂ (· * ·)
@@ -804,11 +804,11 @@ are the trailing two, leading dims are an unchanged `batch` prefix). -/
 def Tile.transpose : {dtype : TileDType} → (batch : TileShape) →
     {M N : Nat} →
     Tile dtype (batch ++ [M, N]) → Tile dtype (batch ++ [N, M])
-  | _, [],         M, N, x =>
+  | _, [],         _, _, x =>
       ⟨fun (n, m, _) => x.data (m, n, PUnit.unit)⟩
-  | _, _ :: rest,  M, N, x =>
+  | _, _ :: rest,  _, _, x =>
       ⟨fun (i, restIdx) =>
-        (Tile.transpose rest (M := M) (N := N)
+        (Tile.transpose rest
             ⟨fun rIdx => x.data (i, rIdx)⟩).data restIdx⟩
 
 /-- Body of `Tile.transpose` at the rank-2 base case: swap `(m, n) ↔ (n, m)`. -/

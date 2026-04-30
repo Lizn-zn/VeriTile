@@ -493,8 +493,8 @@ inductive Op : TileDType → TileShape → Type where
   Arbitrary axis permutations (e.g. swapping leading axes or cyclic
   reorderings) are *not* expressible by this constructor alone. They
   can be composed from multiple `transpose`s in some — but not all —
-  cases; a fully general `Op.permuteAxes` is left as a follow-up
-  (issue #36). -/
+  cases; a fully general `Op.permuteAxes` is left as a future
+  follow-up issue. -/
   | transpose : {dtype : TileDType} → {batch : TileShape} → {M N : Nat} →
                 Op dtype (batch ++ [M, N]) →
                 Op dtype (batch ++ [N, M])
