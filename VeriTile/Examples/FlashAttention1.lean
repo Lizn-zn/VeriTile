@@ -627,21 +627,22 @@ theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
     oFree Q K V scale N (le_refl N) idx /
         lFree Q K scale N (le_refl N) idx.1
       = attentionReal Q K V scale idx := by
-  -- Strategy: flat-form both sides, then unfold `attentionReal` through
-  -- `Tile.dot` / `softmaxRow` / `Tile.transpose`. After the chain the
-  -- numerator becomes `Σ_j exp(scaledScore i j) * V j d` and the
-  -- denominator `Σ_j' exp(scaledScore i j')` (matching the flat-form
-  -- of oFree / lFree) — the equality is then immediate.
+  -- Flat-form both sides via the proven `*_eq_flat` bridges, then
+  -- expand `attentionReal` to its `softmaxRow` + `Tile.dot` form.
+  rw [oFree_eq_flat, lFree_eq_flat]
+  -- Goal: (Σ_j exp(s i j) · V (j, d, _)) / (Σ_j exp(s i j))
+  --     = ((attention (Tile.ofReal Q) ...).data idx).unbotD 0
+  -- The remaining content: unfold `attention` / `softmaxRow` /
+  -- `Tile.dot []` / `Tile.transpose []` / `Tile.ofReal` to compute the
+  -- RHS in real-arithmetic terms; show it equals the LHS via
+  -- `Finset.sum_div` (factor out the constant denominator from the
+  -- per-lane softmax weights).
   --
-  -- The chain: Tile.dot_nil_data + Tile.transpose_nil_data +
-  -- Tile.ofReal_data + softmaxRow + Option.map₂ + WithBot Σ unfolding.
-  -- WithBot Σ of all-some is some(real Σ); softmaxRow's denominator
-  -- factors out via Finset.sum_div. The Σ_n (exp/denom)·V[n,d] form
-  -- equals (Σ_n exp·V[n,d]) / denom by Finset.sum_div.
-  --
-  -- This unfolding is mechanical but spans many simp/rewrite steps
-  -- through layered definitions; deferred as the next math obligation
-  -- of issue #38.
+  -- The unfolding chain spans the `WithBot ℝ` Σ semantics
+  -- (`AddMonoidHom.map_sum (WithBot.coeRingHom)` for the all-`some`
+  -- case) and the `softmaxRow` definition's `unbotD 0` projection.
+  -- Mechanical but lengthy; deferred as the last math obligation of
+  -- issue #38.
   sorry
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
