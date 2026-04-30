@@ -554,6 +554,38 @@ a `mul_comm` cast. -/
 def blockIndexEquiv (Bk N : Nat) : Fin (Bk * N) ≃ Fin N × Fin Bk :=
   (Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv.trans finProdFinEquiv.symm
 
+/-- Helper: blockIndex round-trips through `blockIndexEquiv`. -/
+theorem blockIndex_blockIndexEquiv {Bk N : Nat} (j : Fin (Bk * N)) :
+    blockIndex Bk N ((blockIndexEquiv Bk N) j).1.val
+        (by have := ((blockIndexEquiv Bk N) j).1.isLt; omega)
+        ((blockIndexEquiv Bk N) j).2 = j := by
+  apply Fin.ext
+  show ((blockIndexEquiv Bk N) j).1.val * Bk +
+        ((blockIndexEquiv Bk N) j).2.val = j.val
+  -- `blockIndexEquiv = (Fin.castOrderIso mul_comm).toEquiv.trans
+  --                     finProdFinEquiv.symm`.
+  -- Apply to `j`: cast to `Fin (N * Bk)` then divNat/modNat. So
+  -- `(blockIndexEquiv j).1.val = j.val / Bk` and
+  -- `(blockIndexEquiv j).2.val = j.val % Bk`. Then standard
+  -- `Nat.div_add_mod`.
+  show ((finProdFinEquiv.symm
+            ((Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv j))).1.val * Bk +
+       ((finProdFinEquiv.symm
+            ((Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv j))).2.val = j.val
+  show (Fin.divNat ((Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv j)).val * Bk +
+       (Fin.modNat ((Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv j)).val = j.val
+  -- `(castOrderIso _ j).val = j.val` (cast preserves val).
+  -- `Fin.divNat j' .val = j'.val / Bk`, `Fin.modNat j' .val = j'.val % Bk`.
+  -- (These are unfoldings of definitions; if simp's not pulling them
+  -- through, fall back on the well-known Nat identity.)
+  have : (((Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv j)).val = j.val := rfl
+  rw [show (Fin.divNat ((Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv j)).val
+        = j.val / Bk from rfl,
+      show (Fin.modNat ((Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv j)).val
+        = j.val % Bk from rfl]
+  rw [Nat.mul_comm (j.val / Bk) Bk]
+  exact Nat.div_add_mod j.val Bk
+
 /-- The flat `Σ over Fin (Bk*N)` form of `lFree N (le_refl _)`. Bridges
 the double-sum form (used by streaming proofs) and the flat form (used
 by `attentionReal` through `softmaxRow`). -/
@@ -563,9 +595,12 @@ theorem lFree_eq_flat {M D Bk N : Nat}
     lFree Q K scale N (le_refl _) i =
       Finset.univ.sum (fun j : Fin (Bk * N) =>
         Real.exp (scaledScore Q K scale i j)) := by
-  -- Reindex via `blockIndexEquiv`. Mechanical Finset.sum bookkeeping
-  -- (Finset.sum_product' + Finset.sum_equiv); deferred.
-  sorry
+  unfold lFree
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  refine (Finset.sum_equiv (blockIndexEquiv Bk N) ?_ ?_).symm
+  · intro _; simp
+  · intro j _
+    rw [blockIndex_blockIndexEquiv]
 
 /-- Companion flat-form for `oFree`. -/
 theorem oFree_eq_flat {M D Bk N : Nat}
@@ -575,13 +610,16 @@ theorem oFree_eq_flat {M D Bk N : Nat}
       Finset.univ.sum (fun j : Fin (Bk * N) =>
         Real.exp (scaledScore Q K scale idx.1 j) *
         V (j, idx.2.1, PUnit.unit)) := by
-  sorry
+  unfold oFree
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  refine (Finset.sum_equiv (blockIndexEquiv Bk N) ?_ ?_).symm
+  · intro _; simp
+  · intro j _
+    rw [blockIndex_blockIndexEquiv]
 
 /-- The m-free reference sums `oFree N` and `lFree N` connect to
 `attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
-specification-side identity (no streaming algebra involved). The proof
-flat-forms both sides (`*_eq_flat`) and unfolds `attentionReal` through
-its `Tile.dot` / `softmaxRow` chain. -/
+specification-side identity (no streaming algebra involved). -/
 theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * N, D] → ℝ)
     (scale : ℝ) (idx : TileIndex [M, D])
@@ -589,12 +627,21 @@ theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
     oFree Q K V scale N (le_refl N) idx /
         lFree Q K scale N (le_refl N) idx.1
       = attentionReal Q K V scale idx := by
-  -- The remaining content: unfold `attentionReal` through `attention`,
-  -- `Tile.dot []`, `Tile.transpose []`, `softmaxRow`, and the
-  -- `Tile.ofReal`-lifted operands; show the result equals
-  -- `(Σ over Fin (Bk*N), exp(scaledScore i j) · V j d) / Σ exp(...)`,
-  -- which by `oFree_eq_flat` and `lFree_eq_flat` matches the LHS. The
-  -- unfolding chain is mechanical but lengthy; deferred.
+  -- Strategy: flat-form both sides, then unfold `attentionReal` through
+  -- `Tile.dot` / `softmaxRow` / `Tile.transpose`. After the chain the
+  -- numerator becomes `Σ_j exp(scaledScore i j) * V j d` and the
+  -- denominator `Σ_j' exp(scaledScore i j')` (matching the flat-form
+  -- of oFree / lFree) — the equality is then immediate.
+  --
+  -- The chain: Tile.dot_nil_data + Tile.transpose_nil_data +
+  -- Tile.ofReal_data + softmaxRow + Option.map₂ + WithBot Σ unfolding.
+  -- WithBot Σ of all-some is some(real Σ); softmaxRow's denominator
+  -- factors out via Finset.sum_div. The Σ_n (exp/denom)·V[n,d] form
+  -- equals (Σ_n exp·V[n,d]) / denom by Finset.sum_div.
+  --
+  -- This unfolding is mechanical but spans many simp/rewrite steps
+  -- through layered definitions; deferred as the next math obligation
+  -- of issue #38.
   sorry
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
