@@ -381,23 +381,87 @@ theorem lPartial_eq_mShifted {M D Bk : Nat} (_hBk : 0 < Bk)
     rw [lFree_zero]
     ring
   | succ k ih =>
-    -- LHS:  lPartial (k+1) i = αₖ · lPartial k i + Σ_jL exp(scaledScore - m_{k+1})
-    -- RHS:  exp(-m_{k+1}) · lFree (k+1) hk i
-    --     = exp(-m_{k+1}) · (lFree k _ i + Σ_jL exp(scaledScore))   (lFree_succ)
-    --     = exp(-m_{k+1}) · lFree k _ i + exp(-m_{k+1}) · Σ_jL exp(scaledScore)
-    -- Match the two sums:
-    --   (a) αₖ · lPartial k i = exp(-m_{k+1}) · lFree k _ i
-    --       ↳ apply IH to lPartial k, then cancel αₖ · exp(-mₖ) = exp(-m_{k+1})
-    --         (degenerate at k = 0 where both sides are 0 since lFree 0 = 0).
-    --   (b) Σ_jL exp(scaledScore - m_{k+1}) = exp(-m_{k+1}) · Σ_jL exp(scaledScore)
-    --       ↳ Real.exp_sub + Finset.mul_sum.
-    -- The α-cancellation requires a case split on `k = 0 ∨ k > 0`; for `k ≥ 1`,
-    -- `mPartial_succ_ne_bot` shows mₖ is some real, and the identity
-    -- `αₖ · exp(-mₖ) = exp(-m_{k+1})` follows from `Real.exp_sub` /
-    -- `Real.exp_neg`. Deferred — this is the primary remaining math content
-    -- of issue #38.
-    let _ := ih  -- silence unused-variable warning while the proof is sketched
-    sorry
+    have hk' : k ≤ numKVBlocks := Nat.le_of_succ_le hk
+    -- Unfold LHS: αₖ * lPartial k + Σ exp(scaledScore - m_{k+1}).
+    unfold lPartial
+    simp only [hk, ↓reduceDIte]
+    -- Apply IH on the lPartial k subterm.
+    rw [ih hk']
+    -- Expand RHS via lFree_succ.
+    rw [lFree_succ Q K scale k hk i, mul_add]
+    -- Goal:
+    --   αₖ * (exp(-mₖ) * lFree k _) + Σ_jL exp(scaledScore - m_{k+1})
+    --   = exp(-m_{k+1}) * lFree k _ + exp(-m_{k+1}) * Σ_jL exp(scaledScore)
+    -- Match each term separately.
+    have hExpSub : ∀ s : ℝ,
+        Real.exp (s - (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0) =
+          Real.exp (-(mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0) *
+            Real.exp s := by
+      intro s
+      rw [show s - (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
+            = -(mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0 + s by ring,
+          Real.exp_add]
+    -- Term (b): Σ_jL exp(s - m_{k+1}) = exp(-m_{k+1}) * Σ_jL exp(s).
+    have hSumB :
+        Finset.univ.sum (fun jL : Fin Bk =>
+          Real.exp (scaledScore Q K scale i (blockIndex Bk numKVBlocks k hk jL)
+            - (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0))
+        = Real.exp (-(mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0) *
+            Finset.univ.sum (fun jL : Fin Bk =>
+              Real.exp (scaledScore Q K scale i
+                (blockIndex Bk numKVBlocks k hk jL))) := by
+      rw [Finset.mul_sum]
+      apply Finset.sum_congr rfl
+      intro jL _
+      exact hExpSub _
+    -- Term (a): αₖ * (exp(-mₖ) * lFree k) = exp(-m_{k+1}) * lFree k.
+    -- Case split on k.
+    have hSumA :
+        alphaPartial Q numKVBlocks K scale k i *
+          (Real.exp (-(mPartial Bk Q numKVBlocks K scale k i).unbotD 0) *
+            lFree Q K scale k hk' i)
+        = Real.exp (-(mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0) *
+            lFree Q K scale k hk' i := by
+      rcases Nat.eq_zero_or_pos k with hkz | hkpos
+      · -- k = 0: lFree 0 _ = 0, so both sides are zero.
+        subst hkz
+        rw [lFree_zero]
+        ring
+      · -- k ≥ 1: mPartial k is some real, so αₖ = exp(mₖ - m_{k+1}) and
+        -- αₖ · exp(-mₖ) = exp(-m_{k+1}).
+        -- Get the underlying reals.
+        obtain ⟨k', rfl⟩ := Nat.exists_eq_succ_of_ne_zero (Nat.pos_iff_ne_zero.mp hkpos)
+        -- Now `k = k' + 1`. Have hk : k' + 1 + 1 ≤ numKVBlocks ⇒ k' + 1 ≤ numKVBlocks.
+        have hk_succ : k' + 1 ≤ numKVBlocks := Nat.le_of_succ_le hk
+        have hmk_ne : mPartial Bk Q numKVBlocks K scale (k' + 1) i ≠ ⊥ :=
+          mPartial_succ_ne_bot _hBk Q numKVBlocks K scale k' hk_succ i
+        have hmk1_ne :
+            mPartial Bk Q numKVBlocks K scale (k' + 1 + 1) i ≠ ⊥ :=
+          mPartial_succ_ne_bot _hBk Q numKVBlocks K scale (k' + 1) hk i
+        -- Extract real values.
+        obtain ⟨rk, hrk⟩ := WithBot.ne_bot_iff_exists.mp hmk_ne
+        obtain ⟨rk1, hrk1⟩ := WithBot.ne_bot_iff_exists.mp hmk1_ne
+        -- Compute αₖ.
+        have hAlpha :
+            alphaPartial Q numKVBlocks K scale (k' + 1) i =
+              Real.exp (rk - rk1) := by
+          unfold alphaPartial
+          rw [← hrk, ← hrk1]
+          simp [WithBot.realSub]
+        rw [hAlpha, ← hrk, ← hrk1]
+        simp only [WithBot.unbotD_coe]
+        -- Goal: exp(rk - rk1) * (exp(-rk) * lFree k' k _) = exp(-rk1) * lFree k' k _
+        rw [show Real.exp (rk - rk1) = Real.exp (-rk1) * Real.exp rk by
+              rw [show rk - rk1 = -rk1 + rk by ring, Real.exp_add]]
+        rw [show Real.exp (-rk1) * Real.exp rk *
+                  (Real.exp (-rk) * lFree Q K scale (k' + 1) hk' i)
+              = Real.exp (-rk1) *
+                  (Real.exp rk * Real.exp (-rk) * lFree Q K scale (k' + 1) hk' i) by ring]
+        rw [show Real.exp rk * Real.exp (-rk) = 1 by
+              rw [← Real.exp_add, add_neg_cancel, Real.exp_zero]]
+        ring
+    -- Combine.
+    linarith [hSumA, hSumB]
 
 /-- Companion identity for `oPartial`: `exp(-m_k) · oFree k i d`. Same
 shape as `lPartial_eq_mShifted` plus `· V[j, d]` on each summand. -/
@@ -415,9 +479,74 @@ theorem oPartial_eq_mShifted {M D Bk : Nat} (_hBk : 0 < Bk)
         oFree Q K V scale 0 hk idx
     rw [oFree_zero]
     ring
-  | succ k _ih =>
-    -- Same shape as `lPartial_eq_mShifted`'s succ step plus `· V[j, d]`.
-    sorry
+  | succ k ih =>
+    have hk' : k ≤ numKVBlocks := Nat.le_of_succ_le hk
+    unfold oPartial
+    simp only [hk, ↓reduceDIte]
+    rw [ih hk']
+    rw [oFree_succ Q K V scale k hk idx, mul_add]
+    -- Match the two terms; identical shape to `lPartial_eq_mShifted` plus `· V`.
+    have hExpSub : ∀ s : ℝ,
+        Real.exp (s - (mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0) =
+          Real.exp (-(mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0) *
+            Real.exp s := by
+      intro s
+      rw [show s - (mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0
+            = -(mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0 + s by ring,
+          Real.exp_add]
+    have hSumB :
+        Finset.univ.sum (fun jL : Fin Bk =>
+          Real.exp (scaledScore Q K scale idx.1
+              (blockIndex Bk numKVBlocks k hk jL)
+            - (mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0) *
+          V (blockIndex Bk numKVBlocks k hk jL, idx.2.1, PUnit.unit))
+        = Real.exp (-(mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0) *
+            Finset.univ.sum (fun jL : Fin Bk =>
+              Real.exp (scaledScore Q K scale idx.1
+                  (blockIndex Bk numKVBlocks k hk jL)) *
+              V (blockIndex Bk numKVBlocks k hk jL, idx.2.1, PUnit.unit)) := by
+      rw [Finset.mul_sum]
+      apply Finset.sum_congr rfl
+      intro jL _
+      rw [hExpSub]
+      ring
+    have hSumA :
+        alphaPartial Q numKVBlocks K scale k idx.1 *
+          (Real.exp (-(mPartial Bk Q numKVBlocks K scale k idx.1).unbotD 0) *
+            oFree Q K V scale k hk' idx)
+        = Real.exp (-(mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0) *
+            oFree Q K V scale k hk' idx := by
+      rcases Nat.eq_zero_or_pos k with hkz | hkpos
+      · subst hkz
+        rw [oFree_zero]
+        ring
+      · obtain ⟨k', rfl⟩ := Nat.exists_eq_succ_of_ne_zero (Nat.pos_iff_ne_zero.mp hkpos)
+        have hk_succ : k' + 1 ≤ numKVBlocks := Nat.le_of_succ_le hk
+        have hmk_ne : mPartial Bk Q numKVBlocks K scale (k' + 1) idx.1 ≠ ⊥ :=
+          mPartial_succ_ne_bot _hBk Q numKVBlocks K scale k' hk_succ idx.1
+        have hmk1_ne :
+            mPartial Bk Q numKVBlocks K scale (k' + 1 + 1) idx.1 ≠ ⊥ :=
+          mPartial_succ_ne_bot _hBk Q numKVBlocks K scale (k' + 1) hk idx.1
+        obtain ⟨rk, hrk⟩ := WithBot.ne_bot_iff_exists.mp hmk_ne
+        obtain ⟨rk1, hrk1⟩ := WithBot.ne_bot_iff_exists.mp hmk1_ne
+        have hAlpha :
+            alphaPartial Q numKVBlocks K scale (k' + 1) idx.1 =
+              Real.exp (rk - rk1) := by
+          unfold alphaPartial
+          rw [← hrk, ← hrk1]
+          simp [WithBot.realSub]
+        rw [hAlpha, ← hrk, ← hrk1]
+        simp only [WithBot.unbotD_coe]
+        rw [show Real.exp (rk - rk1) = Real.exp (-rk1) * Real.exp rk by
+              rw [show rk - rk1 = -rk1 + rk by ring, Real.exp_add]]
+        rw [show Real.exp (-rk1) * Real.exp rk *
+                  (Real.exp (-rk) * oFree Q K V scale (k' + 1) hk' idx)
+              = Real.exp (-rk1) *
+                  (Real.exp rk * Real.exp (-rk) * oFree Q K V scale (k' + 1) hk' idx) by ring]
+        rw [show Real.exp rk * Real.exp (-rk) = 1 by
+              rw [← Real.exp_add, add_neg_cancel, Real.exp_zero]]
+        ring
+    linarith [hSumA, hSumB]
 
 /-- The m-free reference sums `oFree N` and `lFree N` connect to
 `attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
