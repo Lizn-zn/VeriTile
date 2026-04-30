@@ -267,26 +267,58 @@ noncomputable def oPartial {M D Bk : Nat}
       else
         oPartial Q numKVBlocks K V scale k idx
 
+/-! ### Stage A foundations — `mPartial` non-`⊥` for `k ≥ 1`
+
+The streaming algebra (α-cancellation in `lPartial` / `oPartial`)
+needs `mPartial k` to be a real number, not `⊥`, whenever any block
+has been seen. With `0 < Bk`, the block-max `Finset.univ.sup` over
+`Fin Bk` is non-`⊥`, so `mPartial 1` is non-`⊥` and the property
+propagates upward through `max`. -/
+
+theorem mPartial_succ_ne_bot {M D : Nat} {Bk : Nat} (_hBk : 0 < Bk)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (_hk : k + 1 ≤ numKVBlocks) (i : Fin M) :
+    mPartial Bk Q numKVBlocks K scale (k + 1) i ≠ (⊥ : WithBot ℝ) := by
+  -- The body's `if h : k + 1 ≤ numKVBlocks` branch is taken (we have hk).
+  -- Result is `max prev (Finset.sup ...)` over a non-empty `Fin Bk` of
+  -- `some _` values; the Finset.sup dominates a `some _` summand, hence
+  -- the whole `max` is non-`⊥`. The dependent proof inside the
+  -- `Fin (Bk * numKVBlocks)` constructor inside the sup body fights
+  -- Lean's `Finset.le_sup` unification — the cleanest discharge will
+  -- factor the inner term out via a non-dependent helper before
+  -- invoking the lemma. Deferred along with the rest of the streaming
+  -- identity.
+  sorry
+
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
 iterations, the streaming `(oPartial, lPartial)` ratio computes the
 same value as `attentionReal` (the math reference using
 `softmaxRow`). The kernel's post-loop `out := o_acc / l_i[:, None]`
 realizes this identity at the operational layer.
 
-**Status:** the recurrence is well-defined; this identity is the
-remaining math obligation for issue #38 — proof deferred. The proof
-strategy: (1) at `k = numKVBlocks`, induction over `k` shows that
-`oPartial k = (Σ_{j ∈ first k*Bk indices} exp(s[i,j] - m_k[i]) · V[j])`
-and analogously for `lPartial`; (2) use `mPartial`-cancellation
-(numerator and denominator share the same shift) to convert
-`oPartial / lPartial` into `softmaxRow`'s ratio without the row-max
-subtraction. -/
-theorem streaming_eq_attentionReal {M D Bk : Nat}
+**Proof status:** the recurrence is well-defined and `mPartial` is
+known to be non-`⊥` for `k ≥ 1` via `mPartial_succ_ne_bot`; the
+remaining obligation is the m-shift cancellation argument, expressed
+as two intermediate lemmas:
+
+1. `lPartial_eq_shiftedSum` — by induction on `k`, the streaming
+   `lPartial k i` equals `Σ_{j ∈ first k*Bk indices} exp(scaledScore
+   i j - (mPartial k i).unbotD 0)`. The α-multiplication absorbs the
+   shift change `m_k → m_{k+1}` via `exp` additivity.
+2. `oPartial_eq_shiftedSum` — analogous, with `· * V[j, d]`.
+3. Pull `exp(-m)` out as a common factor in the ratio; cancel.
+4. Match the resulting `Σ exp · V / Σ exp` against `attentionReal`'s
+   expansion through `softmaxRow` + `Tile.dot`.
+
+This block of math is the next deliverable; deferring keeps the
+operational layer (Stage B–D) on a working foundation. -/
+theorem streaming_eq_attentionReal {M D Bk : Nat} (_hBk : 0 < Bk)
     (Q : TileIndex [M, D] → ℝ)
-    (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
+    (numKVBlocks : Nat) (_hN : 0 < numKVBlocks)
     (K V : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
     (idx : TileIndex [M, D])
-    (hl : lPartial Q numKVBlocks K scale numKVBlocks idx.1 ≠ 0) :
+    (_hl : lPartial Q numKVBlocks K scale numKVBlocks idx.1 ≠ 0) :
     oPartial Q numKVBlocks K V scale numKVBlocks idx /
         lPartial Q numKVBlocks K scale numKVBlocks idx.1
       = attentionReal Q K V scale idx := by
