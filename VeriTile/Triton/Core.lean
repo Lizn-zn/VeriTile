@@ -157,50 +157,6 @@ inductive Broadcast : TileShape → TileShape → TileShape → Type where
 
 namespace Broadcast
 
-/-- Polymorphic same-shape broadcast witness, ND-recursive.
-
-For `shape = []` reduces to `.nil`; for `n :: rest` it is `.consSame (same rest)`.
-Lets handwritten ASTs use `Broadcast.same` regardless of the shape's rank,
-mirroring the natural elementwise meaning ("both operands have shape `s`,
-result has shape `s`"). The `shape` is implicit so the term-level use
-`Op.add NumericDType.real Broadcast.same a b` works as before. -/
-def same : {shape : TileShape} → Broadcast shape shape shape
-  | []     => .nil
-  | _ :: _ => .consSame same
-
-/-- Polymorphic scalar-on-left witness; for any non-scalar `shape` reduces to
-`.scalarL`, and for `shape = []` reduces to `.nil`. -/
-def left : {shape : TileShape} → Broadcast [] shape shape
-  | []     => .nil
-  | _ :: _ => .scalarL
-
-/-- Polymorphic scalar-on-right witness; for any non-scalar `shape` reduces to
-`.scalarR`, and for `shape = []` reduces to `.nil`. -/
-def right : {shape : TileShape} → Broadcast shape [] shape
-  | []     => .nil
-  | _ :: _ => .scalarR
-
-/-! ### `simp` unfolding for `same`/`left`/`right`
-
-These reduce the polymorphic broadcast aliases to the concrete constructor on
-each shape, so the constructor-level `leftIndex_*` / `rightIndex_*` simp lemmas
-below can fire. -/
-
-@[simp] theorem same_nil : (same : Broadcast [] [] []) = .nil := rfl
-
-@[simp] theorem same_cons (n : Nat) (rest : TileShape) :
-    (same : Broadcast (n :: rest) (n :: rest) (n :: rest)) = .consSame same := rfl
-
-@[simp] theorem left_nil : (left : Broadcast [] [] []) = .nil := rfl
-
-@[simp] theorem left_cons (n : Nat) (rest : TileShape) :
-    (left : Broadcast [] (n :: rest) (n :: rest)) = .scalarL := rfl
-
-@[simp] theorem right_nil : (right : Broadcast [] [] []) = .nil := rfl
-
-@[simp] theorem right_cons (n : Nat) (rest : TileShape) :
-    (right : Broadcast (n :: rest) [] (n :: rest)) = .scalarR := rfl
-
 /-- Evaluate the output index back into each input index for a broadcast. -/
 def leftIndex {a b out : TileShape} :
     Broadcast a b out → TileIndex out → TileIndex a

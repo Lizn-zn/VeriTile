@@ -78,17 +78,17 @@ def layerNormAffineTailKernel
           (.div .real .nil (.const 1)
             (.sqrt (.add .real .nil (.ref .real [] "v") (.const ε))))
       , .assign .nat [N] "offs"
-          (.add .nat .left
+          (.add .nat .scalarL
             (.mul .nat .nil (.ref .nat [] "pid") (.constNat N))
             (.arange N))
       , .assign .real [N] "x" (.load xReg (.ref .nat [N] "offs"))
       , .assign .real [N] "γ" (.load γReg (.arange N))
       , .assign .real [N] "β" (.load βReg (.arange N))
       , .assign .real [N] "y"
-          (.add .real .same
-            (.mul .real .same
-              (.mul .real .right
-                (.sub .real .right (.ref .real [N] "x") (.ref .real [] "μ"))
+          (.add .real (.consSame .nil)
+            (.mul .real (.consSame .nil)
+              (.mul .real .scalarR
+                (.sub .real .scalarR (.ref .real [N] "x") (.ref .real [] "μ"))
                 (.ref .real [] "σ_inv"))
               (.ref .real [N] "γ"))
             (.ref .real [N] "β"))
