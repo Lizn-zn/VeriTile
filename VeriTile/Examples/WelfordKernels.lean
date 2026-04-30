@@ -221,10 +221,65 @@ theorem online_welford_correct
       exec (onlineWelfordKernel xReg meanReg varReg blockSize) s =
         some ((sLoop.writeMem meanReg 0 (welfordMean xs blockSize)).writeMem
           varReg 0 (welfordS xs blockSize / blockSize)) := by
-    -- TODO(W11.M3.4): WithBot refactor — final exec stitch needs simp lemmas
-    -- that thread `↑a / ↑b → ↑(a/b)` through `Option.map₂` boundaries. The
-    -- mainline proof structure is preserved; only the WithBot bridge is open.
-    sorry
+    -- Walk through pre-loop assigns, forLoop, post-loop stores explicitly.
+    have stmts_cons : ∀ (st : Stmt) (rest : List Stmt) (s s' : BlockState),
+        stepStmt st s = some s' →
+        stepStmts (st :: rest) s = stepStmts rest s' := by
+      intro st rest s s' h
+      conv_lhs => unfold stepStmts
+      rw [h]
+    have stmts_nil : ∀ (s : BlockState), stepStmts [] s = some s := by
+      intro s; conv_lhs => unfold stepStmts
+    have hpid : stepStmt (.assign .nat .scalar "pid" .programId) s
+                  = some (s.setReg "pid" .nat .scalar (Tile.scalar s.pid)) := by
+      simp [stepStmt, evalOp]
+    have hM0 : stepStmt (.assign .real .scalar "M" (.const 0))
+                  (s.setReg "pid" .nat .scalar (Tile.scalar s.pid))
+                = some ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
+                    "M" .real .scalar (Tile.scalar 0)) := by
+      simp [stepStmt, evalOp]
+      rfl
+    have hS0 : stepStmt (.assign .real .scalar "S" (.const 0))
+                  ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
+                    "M" .real .scalar (Tile.scalar 0))
+                = some s0 := by
+      simp [stepStmt, evalOp, s0]
+      rfl
+    have hMeanStore : stepStmt
+        (.store meanReg .scalar (.constNat 0) (.ref .real .scalar "M")) sLoop
+        = some (sLoop.writeMem meanReg 0 (welfordMean xs blockSize)) := by
+      simp [stepStmt, evalOp, hM]
+    set sMean : BlockState := sLoop.writeMem meanReg 0 (welfordMean xs blockSize)
+    have hSat_S : sMean.regs .real .scalar "S"
+                  = some (Tile.scalar (welfordS xs blockSize)) := by
+      show sLoop.regs .real .scalar "S" = _
+      exact hS
+    have hVarStore : stepStmt
+        (.store varReg .scalar (.constNat 0)
+            (.div .real .same (.ref .real .scalar "S")
+              (.natToReal (.constNat blockSize)))) sMean
+        = some (sMean.writeMem varReg 0 (welfordS xs blockSize / blockSize)) := by
+      simp [stepStmt, evalOp, hSat_S, Tile.bop, NumericDType.div, Tile.natToReal,
+            WithBot.realDiv]
+    -- Chain: 3 assigns → s0; forLoop → sLoop; 2 stores → sMean.writeMem ...
+    show stepStmts (onlineWelfordKernel xReg meanReg varReg blockSize).body s = _
+    show stepStmts
+        [ .assign .nat .scalar "pid" .programId
+        , .assign .real .scalar "M" (.const 0)
+        , .assign .real .scalar "S" (.const 0)
+        , .forLoop "i" blockSize (onlineWelfordLoopBody xReg blockSize)
+        , .store meanReg .scalar (.constNat 0) (.ref .real .scalar "M")
+        , .store varReg .scalar (.constNat 0)
+            (.div .real .same (.ref .real .scalar "S")
+              (.natToReal (.constNat blockSize)))
+        ] s = _
+    rw [stmts_cons _ _ _ _ hpid]
+    rw [stmts_cons _ _ _ _ hM0]
+    rw [stmts_cons _ _ _ _ hS0]
+    rw [stmts_cons _ _ _ _ hLoop]
+    rw [stmts_cons _ _ _ _ hMeanStore]
+    rw [stmts_cons _ _ _ _ hVarStore]
+    exact stmts_nil _
   constructor
   · rw [hExec]
     simp [BlockState.readMem, BlockState.writeMem, h_mv, welfordMeanSpec,

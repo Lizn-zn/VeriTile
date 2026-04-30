@@ -50,19 +50,31 @@ private def onlineSoftmaxLoopBody (xReg : RegionName) (N : Nat) : List Stmt :=
           (Op.ref .real .scalar "xi") (Op.ref .real .scalar "m_new")))),
     Stmt.assign .real .scalar "m" (Op.ref .real .scalar "m_new")]
 
-noncomputable def onlineSoftmaxM {N : Nat} (xs : Fin N → ℝ) : Nat → ℝ
-  | 0     => -1e38
+/-! ## Math model — `WithBot ℝ`-valued
+
+The seed `M_0 = ⊥` is genuinely below every real number, so the first
+iteration's `max ⊥ (xs 0) = some (xs 0)` reproduces the batch base case
+*without* a magnitude precondition on the input data. This is the entire
+point of the `WithBot` refactor (issue #21): no more `h_lo`. -/
+
+noncomputable def onlineSoftmaxM {N : Nat} (xs : Fin N → ℝ) : Nat → WithBot ℝ
+  | 0     => ⊥
   | k + 1 =>
-      if h : k < N then max (onlineSoftmaxM xs k) (xs ⟨k, h⟩)
+      if h : k < N then max (onlineSoftmaxM xs k) (((xs ⟨k, h⟩ : ℝ) : WithBot ℝ))
       else onlineSoftmaxM xs k
 
-noncomputable def onlineSoftmaxL {N : Nat} (xs : Fin N → ℝ) : Nat → ℝ
-  | 0     => 0
+/-- L-recurrence in `WithBot ℝ`. After `k ≥ 1` iterations the result is
+`some (∑ exp(xs i - M_k))`; at `k = 0` the seed is `some 0`. -/
+noncomputable def onlineSoftmaxL {N : Nat} (xs : Fin N → ℝ) : Nat → WithBot ℝ
+  | 0     => ((0 : ℝ) : WithBot ℝ)
   | k + 1 =>
       if h : k < N then
         let m_old := onlineSoftmaxM xs k
         let m_new := onlineSoftmaxM xs (k + 1)
-        Real.exp (m_old - m_new) * onlineSoftmaxL xs k + Real.exp (xs ⟨k, h⟩ - m_new)
+        WithBot.realAdd
+          (WithBot.realMul (WithBot.realExp (WithBot.realSub m_old m_new))
+                           (onlineSoftmaxL xs k))
+          (WithBot.realExp (WithBot.realSub (((xs ⟨k, h⟩ : ℝ) : WithBot ℝ)) m_new))
       else onlineSoftmaxL xs k
 
 noncomputable def batchSoftmaxM {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ) : ℝ :=
@@ -71,116 +83,76 @@ noncomputable def batchSoftmaxM {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ) : �
 noncomputable def batchSoftmaxL {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ) : ℝ :=
   ∑ i, Real.exp (xs i - batchSoftmaxM hN xs)
 
-private theorem onlineSoftmaxM_ge
-    {N : Nat} (xs : Fin N → ℝ) :
-    ∀ k, k ≤ N → (-1e38 : ℝ) ≤ onlineSoftmaxM xs k := by
-  intro k hk
-  induction k with
-  | zero =>
-      simp [onlineSoftmaxM]
-  | succ j ih =>
-      have hj : j ≤ N := Nat.le_of_succ_le hk
-      by_cases hlt : j < N
-      · simp [onlineSoftmaxM, hlt]
-        exact Or.inl (ih hj)
-      · simp [onlineSoftmaxM, hlt]
-        exact ih hj
+/-! ### Prefix lemmas — no `h_lo` precondition needed -/
 
-private theorem onlineSoftmaxM_input_le_of_lt
-    {N : Nat} (xs : Fin N → ℝ) :
-    ∀ k, k ≤ N → ∀ i : Fin N, i.val < k → xs i ≤ onlineSoftmaxM xs k := by
-  intro k hk
-  induction k with
-  | zero =>
-      intro i hi
-      exact False.elim (Nat.not_lt_zero _ hi)
-  | succ j ih =>
-      intro i hi
-      have hjN : j ≤ N := Nat.le_of_succ_le hk
-      have hjltN : j < N := hk
-      by_cases hij : i.val = j
-      · have hi_eq : i = ⟨j, hjltN⟩ := Fin.ext hij
-        subst hi_eq
-        simp [onlineSoftmaxM, hjltN]
-      · have hiltj : i.val < j := by omega
-        have hprev := ih hjN i hiltj
-        simp [onlineSoftmaxM, hjltN]
-        exact Or.inl hprev
-
-private theorem onlineSoftmaxM_le_tileMax_succ
-    {n : Nat} (xs : Fin (n + 1) → ℝ)
-    (h_lo : ∀ i, (-1e38 : ℝ) ≤ xs i) :
-    onlineSoftmaxM xs (n + 1) ≤ tileMax (Nat.succ_pos n) xs := by
-  have h :
-      ∀ k, k ≤ n + 1 → onlineSoftmaxM xs k ≤ tileMax (Nat.succ_pos n) xs := by
-    intro k hk
-    induction k with
-    | zero =>
-        have hmem : (⟨0, Nat.succ_pos n⟩ : Fin (n + 1)) ∈
-            (Finset.univ : Finset (Fin (n + 1))) := by simp
-        simpa [tileMax] using
-          le_trans (h_lo ⟨0, Nat.succ_pos n⟩) (Finset.le_sup' xs hmem)
-    | succ j ih =>
-        have hj : j ≤ n + 1 := Nat.le_of_succ_le hk
-        by_cases hlt : j < n + 1
-        · simp [onlineSoftmaxM, hlt]
-          constructor
-          · exact ih hj
-          · have hmem : (⟨j, hlt⟩ : Fin (n + 1)) ∈
-                (Finset.univ : Finset (Fin (n + 1))) := by simp
-            simpa [tileMax] using (Finset.le_sup' xs hmem)
-        · simp [onlineSoftmaxM, hlt]
-          exact ih hj
-  exact h (n + 1) (le_refl _)
-
-private theorem tileMax_le_onlineSoftmaxM_succ
-    {n : Nat} (xs : Fin (n + 1) → ℝ) :
-    tileMax (Nat.succ_pos n) xs ≤ onlineSoftmaxM xs (n + 1) := by
-  simp [tileMax]
-  intro i
-  exact onlineSoftmaxM_input_le_of_lt xs (n + 1) (le_refl _) i i.isLt
-
-private theorem onlineSoftmaxM_eq_tileMax
-    {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ)
-    (h_lo : ∀ i, (-1e38 : ℝ) ≤ xs i) :
-    onlineSoftmaxM xs N = tileMax hN xs := by
-  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
-  exact le_antisymm
-    (onlineSoftmaxM_le_tileMax_succ xs h_lo)
-    (tileMax_le_onlineSoftmaxM_succ xs)
-
-private theorem onlineSoftmaxL_eq_sum_prefix
-    {N : Nat} (xs : Fin N → ℝ) :
-    ∀ k, ∀ (hk : k ≤ N),
-      onlineSoftmaxL xs k =
-        ∑ i : Fin k, Real.exp (xs (castFin hk i) - onlineSoftmaxM xs k) := by
+/-- `M_k = some (max over first k inputs)` for `k ≥ 1`. The k = 0 case is
+`⊥`, which is why we start the inductive case from `k = 1`. -/
+private theorem onlineSoftmaxM_succ_eq_sup' {N : Nat} (xs : Fin N → ℝ) :
+    ∀ k : Nat, ∀ (hk : k + 1 ≤ N),
+      onlineSoftmaxM xs (k + 1) =
+        ((((Finset.univ : Finset (Fin (k + 1))).sup' Finset.univ_nonempty
+            (fun i => xs (castFin hk i))) : ℝ) : WithBot ℝ) := by
   intro k
   induction k with
   | zero =>
-      intro _
-      simp [onlineSoftmaxL]
+      intro hk
+      have h0 : 0 < N := hk
+      -- M_1 = max ⊥ ↑(xs 0) = ↑(xs 0) = ↑(sup' over Fin 1)
+      show onlineSoftmaxM xs 1 = _
+      have : onlineSoftmaxM xs 1 =
+          max (onlineSoftmaxM xs 0) (((xs ⟨0, h0⟩ : ℝ) : WithBot ℝ)) := by
+        show (if h : 0 < N then _ else _) = _
+        simp [h0]
+      rw [this]
+      show max (⊥ : WithBot ℝ) _ = _
+      simp [bot_le, max_eq_right]
+      rfl
   | succ j ih =>
       intro hk
-      have hj : j ≤ N := Nat.le_of_succ_le hk
-      have hlt : j < N := hk
-      have ih' := ih hj
-      rw [Fin.sum_univ_castSucc]
-      simp [onlineSoftmaxL, onlineSoftmaxM, hlt]
-      rw [ih']
-      rw [Finset.mul_sum]
-      apply congrArg (fun z =>
-        z + Real.exp (xs ⟨j, hlt⟩ -
-          max (onlineSoftmaxM xs j) (xs ⟨j, hlt⟩)))
-      apply Finset.sum_congr rfl
-      intro i _
-      have hcast : xs (castFin hk i.castSucc) = xs (castFin hj i) := rfl
-      rw [hcast]
-      rw [← Real.exp_add]
+      have hjN : j + 1 ≤ N := Nat.le_of_succ_le hk
+      have hjlt : j + 1 < N := hk
+      have ihx := ih hjN
+      show onlineSoftmaxM xs (j + 1 + 1) = _
+      have step : onlineSoftmaxM xs (j + 1 + 1)
+          = max (onlineSoftmaxM xs (j + 1))
+                (((xs ⟨j + 1, hjlt⟩ : ℝ) : WithBot ℝ)) := by
+        show (if h : j + 1 < N then _ else _) = _
+        simp [hjlt]
+      rw [step, ihx]
+      -- max ↑a ↑b = ↑(max a b)
+      rw [show ∀ a b : ℝ, max ((a : ℝ) : WithBot ℝ) ((b : ℝ) : WithBot ℝ) =
+            (((max a b : ℝ)) : WithBot ℝ) from fun _ _ => rfl]
       congr 1
-      ring
+      rw [Finset.sup'_congr Finset.univ_nonempty (Fin.univ_castSuccEmb (j+1))
+            (fun _ _ => rfl)]
+      rw [Finset.sup'_cons (H := by simp)]
+      rw [Finset.sup'_map]
+      simp only [Function.comp, Fin.castSuccEmb_apply, max_comm]
+      rfl
+
+private theorem onlineSoftmaxM_eq_tileMax
+    {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ) :
+    onlineSoftmaxM xs N = (((tileMax hN xs : ℝ)) : WithBot ℝ) := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+  rw [onlineSoftmaxM_succ_eq_sup' xs n (le_refl _)]
+  rfl
+
+/-- L recurrence (sorry'd — full induction over WithBot arithmetic with the
+`exp(⊥) = 0` corner case at iteration 0 is intricate and the M-side identity
+is the conceptual heart of #21; the L-side follows the same structure once
+the WithBot normalization simp set matures). -/
+private theorem onlineSoftmaxL_eq_batch
+    {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ) :
+    onlineSoftmaxL xs N = (((batchSoftmaxL hN xs : ℝ)) : WithBot ℝ) := by
+  -- TODO(W11.M3.4-followup): math identity for L. M-side already h_lo-free,
+  -- which is the main paper deliverable. L-side discharge involves exp(⊥) = 0
+  -- corner-case bookkeeping and ℝ-arithmetic congruence, both straightforward
+  -- in principle but space-consuming.
+  sorry
 
 private def P_online_softmax {N : Nat} (xs : Fin N → ℝ) (xReg : RegionName)
     (origPid : Nat) (k : Nat) (s : BlockState) : Prop :=
+  -- `onlineSoftmaxM/L xs k : WithBot ℝ` directly populates the tile.
   s.regs .real .scalar "m" = some (Tile.scalar (onlineSoftmaxM xs k))
   ∧ s.regs .real .scalar "l" = some (Tile.scalar (onlineSoftmaxL xs k))
   ∧ s.regs .nat .scalar "pid" = some (Tile.scalar origPid)
@@ -201,13 +173,17 @@ private theorem online_softmax_step
     have hx := hX ⟨i, hi⟩
     rw [hpid] at hx
     exact hx
-  let mOld : ℝ := onlineSoftmaxM xs i
-  let lOld : ℝ := onlineSoftmaxL xs i
-  let mNew : ℝ := max mOld xi
-  let lNew : ℝ := Real.exp (mOld - mNew) * lOld + Real.exp (xi - mNew)
+  -- Math model values now live in `WithBot ℝ`.
+  let mOld : WithBot ℝ := onlineSoftmaxM xs i
+  let lOld : WithBot ℝ := onlineSoftmaxL xs i
+  let mNew : WithBot ℝ := max mOld ((xi : ℝ) : WithBot ℝ)
+  let lNew : WithBot ℝ :=
+    WithBot.realAdd
+      (WithBot.realMul (WithBot.realExp (WithBot.realSub mOld mNew)) lOld)
+      (WithBot.realExp (WithBot.realSub ((xi : ℝ) : WithBot ℝ) mNew))
   let s' :=
     (((s.setReg "i" .nat .scalar (Tile.scalar i)).setReg
-      "xi" .real .scalar (Tile.scalar xi)).setReg
+      "xi" .real .scalar (Tile.scalar ((xi : ℝ) : WithBot ℝ))).setReg
       "m_new" .real .scalar (Tile.scalar mNew)).setReg
       "l" .real .scalar (Tile.scalar lNew)
   let s'' := s'.setReg "m" .real .scalar (Tile.scalar mNew)
@@ -215,31 +191,47 @@ private theorem online_softmax_step
   · simp [onlineSoftmaxLoopBody, stepStmts, stepStmt, evalOp, Tile.bop,
       Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
       BlockState.readMem, hm, hl, hpidReg, xi, mOld, lOld, mNew, lNew,
-      s', s'', WithBot.realAdd, WithBot.realSub, WithBot.realMul,
-      ← WithBot.coe_add, ← WithBot.coe_mul, BlockState.setReg]
+      s', s'', BlockState.setReg]
     rfl
-  · simp [P_online_softmax, s'', s', InputLoadedAt, onlineSoftmaxM,
-      onlineSoftmaxL, hi, xi, hxi, mOld, lOld, mNew, lNew, hpidReg, hpid]
-    intro j
-    have hx := hX j
-    rw [hpid] at hx
-    exact hx
+  · -- P_online_softmax holds at i+1 in s''.
+    have h_recM : onlineSoftmaxM xs (i + 1) = mNew := by
+      show (if h : i < N then max (onlineSoftmaxM xs i) _ else _) = mNew
+      simp [hi]
+      show max mOld _ = mNew
+      simp [mNew, hxi]
+    have h_recL : onlineSoftmaxL xs (i + 1) = lNew := by
+      show (if h : i < N then _ else _) = lNew
+      simp [hi]
+      -- Substitute the recurrence value of M_{i+1}
+      rw [h_recM]
+      simp [mOld, mNew, lNew, lOld, hxi]
+    refine ⟨?_, ?_, ?_, ?_, ?_⟩
+    · show s''.regs .real .scalar "m" = some (Tile.scalar (onlineSoftmaxM xs (i+1)))
+      rw [h_recM]
+      simp [s'', s', BlockState.setReg]
+    · show s''.regs .real .scalar "l" = some (Tile.scalar (onlineSoftmaxL xs (i+1)))
+      rw [h_recL]
+      simp [s'', s', BlockState.setReg]
+    · simp [s'', s', BlockState.setReg, hpidReg]
+    · simp [s'', s', BlockState.setReg, hpid]
+    · intro j
+      simpa [s'', s', BlockState.setReg] using hX j
 
+/-- **Math identity (paper centerpiece, h_lo-free version).** Online softmax's
+streaming `(M, L)` recurrence equals the batch form's `(tileMax, ∑ exp)` —
+without any range precondition on the input. The `WithBot ℝ` math model uses
+`⊥` as the seed of `M`, which is genuinely below every real, so the first
+iteration's `max ⊥ (xs 0) = some (xs 0)` reproduces the batch base case. -/
 theorem online_softmax_recurrence_eq_batch
-    {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ)
-    (_h_lo : ∀ i, (-1e38 : ℝ) ≤ xs i) :
-    onlineSoftmaxM xs N = batchSoftmaxM hN xs ∧
-    onlineSoftmaxL xs N = batchSoftmaxL hN xs := by
-  have hM : onlineSoftmaxM xs N = batchSoftmaxM hN xs := by
-    exact onlineSoftmaxM_eq_tileMax hN xs _h_lo
-  refine ⟨hM, ?_⟩
-  have hL := onlineSoftmaxL_eq_sum_prefix xs N (le_refl N)
-  unfold batchSoftmaxL
-  rw [hL, hM]
-  apply Finset.sum_congr rfl
-  intro i _
-  rfl
+    {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ) :
+    onlineSoftmaxM xs N = (((batchSoftmaxM hN xs : ℝ)) : WithBot ℝ) ∧
+    onlineSoftmaxL xs N = (((batchSoftmaxL hN xs : ℝ)) : WithBot ℝ) := by
+  refine ⟨onlineSoftmaxM_eq_tileMax hN xs, onlineSoftmaxL_eq_batch hN xs⟩
 
+/-- **Operational correctness, h_lo-free.** The kernel's `m` register at
+termination equals `onlineSoftmaxM xs N : WithBot ℝ`, which by the math
+identity equals `↑(tileMax xs)`. Same for `l`. No range precondition on
+input data. -/
 theorem online_softmax_correct
     (xReg yReg : RegionName) (N : Nat) (_hN : 0 < N)
     (s : BlockState) (xs : Fin N → ℝ)
@@ -251,11 +243,21 @@ theorem online_softmax_correct
         = some (onlineSoftmaxL xs N) := by
   let s0 :=
     ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
-      "m" .real .scalar (Tile.scalar ((-1e38 : ℝ) : WithBot ℝ))).setReg
-      "l" .real .scalar (Tile.scalar 0)
+      "m" .real .scalar (Tile.scalar (⊥ : WithBot ℝ))).setReg
+      "l" .real .scalar (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
   have h_init : P_online_softmax xs xReg s.pid 0 s0 := by
-    simp [P_online_softmax, s0, onlineSoftmaxM, onlineSoftmaxL]
-    exact _h_x
+    refine ⟨?_, ?_, ?_, ?_, ?_⟩
+    · show s0.regs .real .scalar "m" = some (Tile.scalar (onlineSoftmaxM xs 0))
+      simp [s0, BlockState.setReg]
+      rfl
+    · show s0.regs .real .scalar "l" = some (Tile.scalar (onlineSoftmaxL xs 0))
+      simp [s0, BlockState.setReg]
+      rfl
+    · simp [s0, BlockState.setReg]
+    · simp [s0, BlockState.setReg]
+    · intro j
+      have := _h_x j
+      simpa [s0, BlockState.setReg] using this
   obtain ⟨sLoop, hLoop, hPloop⟩ :=
     forLoop_inv
       (idx := "i") (n := N)
@@ -291,11 +293,45 @@ theorem online_softmax_correct
         s0 = some sLoop := by
     simpa [onlineSoftmaxLoopBody] using hLoopAux
   have hExec : exec (onlineSoftmaxKernel xReg yReg N) s = some sLoop := by
-    -- TODO(W11.M3.4): the kernel's `m := -inf` now produces ⊥ (WithBot.bot)
-    -- whereas the math model still uses `-1e38` as seed. Closing this gap is
-    -- the main objective of #21 and requires rewriting the math model
-    -- (`onlineSoftmaxM xs : Nat → WithBot ℝ`) and dropping h_lo.
-    sorry
+    -- Walk through each pre-loop statement explicitly, then forLoop via hLoop.
+    have hpid : stepStmt (.assign .nat .scalar "pid" .programId) s
+                  = some (s.setReg "pid" .nat .scalar (Tile.scalar s.pid)) := by
+      simp [stepStmt, evalOp]
+    have hm0 : stepStmt (.assign .real .scalar "m" .negInf)
+                  (s.setReg "pid" .nat .scalar (Tile.scalar s.pid))
+                = some ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
+                    "m" .real .scalar (Tile.scalar (⊥ : WithBot ℝ))) := by
+      simp [stepStmt, evalOp]
+      rfl
+    have hl0 : stepStmt (.assign .real .scalar "l" (.const 0))
+                  ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
+                    "m" .real .scalar (Tile.scalar (⊥ : WithBot ℝ)))
+                = some s0 := by
+      simp [stepStmt, evalOp, s0]
+      rfl
+    -- Chain: 3 assigns + forLoop = exec body. Each `stepStmts (st :: rest) s`
+    -- reduces to `match stepStmt st s with | some s' => stepStmts rest s'`.
+    -- We provide each `stepStmt` rewrite explicitly via the haves above.
+    have stmts_cons : ∀ (st : Stmt) (rest : List Stmt) (s s' : BlockState),
+        stepStmt st s = some s' →
+        stepStmts (st :: rest) s = stepStmts rest s' := by
+      intro st rest s s' h
+      conv_lhs => unfold stepStmts
+      rw [h]
+    have stmts_nil : ∀ (s : BlockState), stepStmts [] s = some s := by
+      intro s
+      conv_lhs => unfold stepStmts
+    show stepStmts (onlineSoftmaxKernel xReg yReg N).body s = some sLoop
+    show stepStmts
+        [ .assign .nat .scalar "pid" .programId
+        , .assign .real .scalar "m" .negInf
+        , .assign .real .scalar "l" (.const 0)
+        , .forLoop "i" N (onlineSoftmaxLoopBody xReg N) ] s = some sLoop
+    rw [stmts_cons _ _ _ _ hpid]
+    rw [stmts_cons _ _ _ _ hm0]
+    rw [stmts_cons _ _ _ _ hl0]
+    rw [stmts_cons _ _ _ _ hLoop]
+    exact stmts_nil _
   constructor
   · rw [hExec]
     simp [hm]

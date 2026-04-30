@@ -273,8 +273,48 @@ theorem fused_layernorm_correct
   have h_exec_tail :
       exec (fusedLayerNormKernel xReg γReg βReg yReg N ε) s =
         exec (layerNormAffineTailKernel xReg γReg βReg yReg N ε) sLoop := by
-    -- TODO(W11.M3.4): same WithBot bridge issue as Welford's final stitch.
-    sorry
+    -- The fused kernel's body is `[pid; M:=0; S:=0; forLoop body; tail...]`.
+    -- The affine tail kernel's body is the same `tail...`. Therefore:
+    -- exec fused s = stepStmts (tail) sLoop = exec affineTail sLoop.
+    have stmts_cons : ∀ (st : Stmt) (rest : List Stmt) (s s' : BlockState),
+        stepStmt st s = some s' →
+        stepStmts (st :: rest) s = stepStmts rest s' := by
+      intro st rest s s' h
+      conv_lhs => unfold stepStmts
+      rw [h]
+    have hpid : stepStmt (.assign .nat .scalar "pid" .programId) s
+                  = some (s.setReg "pid" .nat .scalar (Tile.scalar s.pid)) := by
+      simp [stepStmt, evalOp]
+    have hM0 : stepStmt (.assign .real .scalar "M" (.const 0))
+                  (s.setReg "pid" .nat .scalar (Tile.scalar s.pid))
+                = some ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
+                    "M" .real .scalar (Tile.scalar 0)) := by
+      simp [stepStmt, evalOp]
+      rfl
+    have hS0 : stepStmt (.assign .real .scalar "S" (.const 0))
+                  ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
+                    "M" .real .scalar (Tile.scalar 0))
+                = some s0 := by
+      simp [stepStmt, evalOp, s0]
+      rfl
+    show stepStmts (fusedLayerNormKernel xReg γReg βReg yReg N ε).body s
+        = stepStmts (layerNormAffineTailKernel xReg γReg βReg yReg N ε).body sLoop
+    -- Unfold kernel body literals so stmts_cons can match `:: pattern`
+    simp only [show (fusedLayerNormKernel xReg γReg βReg yReg N ε).body =
+        ([ .assign .nat .scalar "pid" .programId
+         , .assign .real .scalar "M" (.const 0)
+         , .assign .real .scalar "S" (.const 0)
+         , .forLoop "i" N (onlineWelfordLoopBody xReg N)
+         ] ++ (layerNormAffineTailKernel xReg γReg βReg yReg N ε).body) from rfl]
+    show stepStmts ([_, _, _, _] ++ _) s = _
+    -- Reduce stepStmts on append: stepStmts (l ++ rest) s steps through l first
+    rw [show ∀ (a b c d : Stmt) (rest : List Stmt) (s : BlockState),
+        stepStmts ([a, b, c, d] ++ rest) s
+          = stepStmts (a :: b :: c :: d :: rest) s from fun _ _ _ _ _ _ => rfl]
+    rw [stmts_cons _ _ _ _ hpid]
+    rw [stmts_cons _ _ _ _ hM0]
+    rw [stmts_cons _ _ _ _ hS0]
+    rw [stmts_cons _ _ _ _ hLoop]
   rw [h_exec_tail]
   have hpidLoop : sLoop.pid = s.pid := by
     exact hPloop.2.2.2.1
