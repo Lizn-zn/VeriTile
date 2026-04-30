@@ -548,9 +548,40 @@ theorem oPartial_eq_mShifted {M D Bk : Nat} (_hBk : 0 < Bk)
         ring
     linarith [hSumA, hSumB]
 
+/-- Fin (Bk * N) ≃ Fin N × Fin Bk, the bijection underlying
+`oFree`/`lFree`'s double-sum form. Composes `finProdFinEquiv.symm` with
+a `mul_comm` cast. -/
+def blockIndexEquiv (Bk N : Nat) : Fin (Bk * N) ≃ Fin N × Fin Bk :=
+  (Fin.castOrderIso (Nat.mul_comm Bk N)).toEquiv.trans finProdFinEquiv.symm
+
+/-- The flat `Σ over Fin (Bk*N)` form of `lFree N (le_refl _)`. Bridges
+the double-sum form (used by streaming proofs) and the flat form (used
+by `attentionReal` through `softmaxRow`). -/
+theorem lFree_eq_flat {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (i : Fin M) :
+    lFree Q K scale N (le_refl _) i =
+      Finset.univ.sum (fun j : Fin (Bk * N) =>
+        Real.exp (scaledScore Q K scale i j)) := by
+  -- Reindex via `blockIndexEquiv`. Mechanical Finset.sum bookkeeping
+  -- (Finset.sum_product' + Finset.sum_equiv); deferred.
+  sorry
+
+/-- Companion flat-form for `oFree`. -/
+theorem oFree_eq_flat {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    oFree Q K V scale N (le_refl _) idx =
+      Finset.univ.sum (fun j : Fin (Bk * N) =>
+        Real.exp (scaledScore Q K scale idx.1 j) *
+        V (j, idx.2.1, PUnit.unit)) := by
+  sorry
+
 /-- The m-free reference sums `oFree N` and `lFree N` connect to
 `attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
-specification-side identity (no streaming algebra involved). -/
+specification-side identity (no streaming algebra involved). The proof
+flat-forms both sides (`*_eq_flat`) and unfolds `attentionReal` through
+its `Tile.dot` / `softmaxRow` chain. -/
 theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * N, D] → ℝ)
     (scale : ℝ) (idx : TileIndex [M, D])
@@ -558,6 +589,12 @@ theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
     oFree Q K V scale N (le_refl N) idx /
         lFree Q K scale N (le_refl N) idx.1
       = attentionReal Q K V scale idx := by
+  -- The remaining content: unfold `attentionReal` through `attention`,
+  -- `Tile.dot []`, `Tile.transpose []`, `softmaxRow`, and the
+  -- `Tile.ofReal`-lifted operands; show the result equals
+  -- `(Σ over Fin (Bk*N), exp(scaledScore i j) · V j d) / Σ exp(...)`,
+  -- which by `oFree_eq_flat` and `lFree_eq_flat` matches the LHS. The
+  -- unfolding chain is mechanical but lengthy; deferred.
   sorry
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
