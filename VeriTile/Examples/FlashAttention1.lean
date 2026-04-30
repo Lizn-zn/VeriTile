@@ -703,10 +703,13 @@ theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
     oFree Q K V scale N (le_refl N) idx /
         lFree Q K scale N (le_refl N) idx.1
       = attentionReal Q K V scale idx := by
+  -- Final unfolding: connect the LHS flat sums to `attentionReal`'s
+  -- `softmaxRow + Tile.dot` chain. The structural decomposition into
+  -- `softmaxRow_scaled_data_eq` + `oFree_eq_flat` + `lFree_eq_flat`
+  -- means each step is now mechanical, but stitching them through
+  -- `WithBot ℝ`'s Σ semantics + the `↑r` vs `WithBot.addHom r`
+  -- coercion-form mismatch is fiddly. Last math obligation deferred.
   rw [oFree_eq_flat, lFree_eq_flat]
-  -- Final unfold: outer `Tile.dot p V` + `Tile.ofReal V` + push WithBot
-  -- Σ via `WithBot.addHom`'s map_sum + factor `Finset.sum_div`.
-  -- Deferred as the last math obligation of issue #38.
   sorry
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
