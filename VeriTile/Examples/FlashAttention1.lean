@@ -34,7 +34,7 @@ Online-softmax recurrence over KV blocks:
 
   for n in 0..numKVBlocks:
     K_b, V_b ← load
-    s   = (Q · K_bᵀ) · invSqrtD                       -- [M, Bk]
+    s   = (Q · K_bᵀ) · scale                       -- [M, Bk]
     m'  = max(m_i, rowmax(s))                          -- [M]
     α   = exp(m_i - m')                                -- [M]
     p   = exp(s - m'[:, None])                         -- [M, Bk]
@@ -52,7 +52,7 @@ kernel can be parameterized by precomputed constants. -/
 
 def fa1ForwardKernel
     (qReg kReg vReg outReg : RegionName)
-    (M D Bk numKVBlocks : Nat) (invSqrtD : ℝ) : Kernel := triton {
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) : Kernel := triton {
   pid    := tl.program_id(0)
 
   offs_m := pid * $(M) + tl.arange(0, $(M))
@@ -76,7 +76,7 @@ def fa1ForwardKernel
     v       := tl.load($(vReg) + v_ptrs)
 
     -- Scaled scores: [M, Bk]
-    scores  := tl.dot(q, tl.trans(k)) * $ℝ(invSqrtD)
+    scores  := tl.dot(q, tl.trans(k)) * $ℝ(scale)
 
     -- Online-softmax update.
     m_block := tl.max(scores, axis = 1)
@@ -123,37 +123,44 @@ and reuses `Tile.dot` / `Tile.transpose`. The user-facing spec is
 through tile-level lemmas. -/
 noncomputable def attention {M S D : Nat}
     (Q : Tile .real [M, D]) (K V : Tile .real [S, D])
-    (invSqrtD : ℝ) : Tile .real [M, D] :=
+    (scale : ℝ) : Tile .real [M, D] :=
   let qkT : Tile .real [M, S] :=
     Tile.dot [] Q (Tile.transpose [] K)
   let scaled : Tile .real [M, S] :=
-    ⟨fun idx => Option.map (· * invSqrtD) (qkT.data idx)⟩
+    ⟨fun idx => Option.map (· * scale) (qkT.data idx)⟩
   let p : Tile .real [M, S] := softmaxRow scaled
   Tile.dot [] p V
 
-/-- ℝ-valued reference attention: `softmax(Q · Kᵀ · invSqrtD) · V` on
+/-- ℝ-valued reference attention: `softmax(Q · Kᵀ · scale) · V` on
 plain `TileIndex → ℝ` inputs. Lifts through `Tile.ofReal`, runs
 `attention`, projects back via `unbotD 0`. This is what
 `fa1_forward_correct` compares the kernel against. -/
 noncomputable def attentionReal {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
-    (invSqrtD : ℝ) : TileIndex [M, D] → ℝ :=
+    (scale : ℝ) : TileIndex [M, D] → ℝ :=
   fun idx =>
     ((attention (Tile.ofReal Q) (Tile.ofReal K) (Tile.ofReal V)
-        invSqrtD).data idx).unbotD 0
+        scale).data idx).unbotD 0
 
 /-! ## Correctness statement (sorry — discharged in issue #38)
 
 The statement uses the standard `InputAt` / `observeTileAt` predicates
 from `Examples.Common` to relate the kernel's memory effects to the
-math model on `Tile`s. Single-block: one Q-row block per `program_id`,
-which we expose as a hypothesis on the input state's `pid`. -/
+math model on `Tile`s. The kernel's optional final state is fed
+directly into `observeTileAt`; the proof in #38 must therefore also
+discharge \"`exec` succeeds\" (presumably via positivity of `M`, `D`,
+`Bk`, `numKVBlocks` once those become required by the inductive
+loop-invariant argument). -/
 
 /-- After running `fa1ForwardKernel` on a state where Q is loaded as a
 contiguous `[M, D]` row-major block at `(s.pid * M, ⋯)` and K, V are
 loaded as full `[S, D]` row-major matrices at `(0, ⋯)`, the output
-region holds `attentionReal(Q, K, V, invSqrtD)` row-major in the same
+region holds `attentionReal(Q, K, V, scale)` row-major in the same
 `[M, D]` block.
+
+`scale : ℝ` is an arbitrary user-supplied scaling factor (the kernel
+does not enforce `scale = 1 / √D`). The standard \"Triton attention\"
+specialization is the caller's responsibility.
 
 Spec is in plain ℝ: `Q`, `K`, `V` are `TileIndex shape → ℝ` matching
 `BlockState.mem`'s ℝ carrier. The `WithBot ℝ` sentinel `⊥` does not
@@ -168,21 +175,20 @@ theorem fa1_forward_correct
     (qReg kReg vReg outReg : RegionName)
     (Q : TileIndex [M, D] → ℝ)
     (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
-    (invSqrtD : ℝ)
-    (s s' : BlockState)
+    (scale : ℝ)
+    (s : BlockState)
     (_hQ : InputAt s qReg
         (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
     (_hK : InputAt s kReg
         (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
     (_hV : InputAt s vReg
-        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
-    (_hExec :
-      exec (fa1ForwardKernel qReg kReg vReg outReg M D Bk numKVBlocks invSqrtD)
-        s = some s') :
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V) :
     ∀ idx : TileIndex [M, D],
-      observeTileAt (some s') outReg
+      observeTileAt
+          (exec (fa1ForwardKernel qReg kReg vReg outReg M D Bk numKVBlocks scale) s)
+          outReg
           (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
-        = some (attentionReal Q K V invSqrtD idx) := by
+        = some (attentionReal Q K V scale idx) := by
   sorry
 
 end VeriTile.Examples
