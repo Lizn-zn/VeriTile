@@ -173,6 +173,19 @@ noncomputable def scaledScore {M S D : Nat}
   scale * Finset.univ.sum (fun d : Fin D =>
     Q (i, d, PUnit.unit) * K (j, d, PUnit.unit))
 
+/-- Flat KV index of the `jLocal`-th lane of the `k`-th block. Factored
+out as a non-dependent helper so `Finset.le_sup`-style lemmas can
+unify on it without tripping over the inline proof. -/
+def blockIndex (Bk numKVBlocks k : Nat) (h : k + 1 ≤ numKVBlocks)
+    (jLocal : Fin Bk) : Fin (Bk * numKVBlocks) :=
+  ⟨k * Bk + jLocal.val, by
+    have hk : k < numKVBlocks := by omega
+    calc k * Bk + jLocal.val
+        < k * Bk + Bk := by omega
+      _ = (k + 1) * Bk := by ring
+      _ ≤ numKVBlocks * Bk := Nat.mul_le_mul_right Bk (by omega)
+      _ = Bk * numKVBlocks := by ring⟩
+
 /-- Running per-row max of scaled scores over the first `k` KV blocks.
 Seeded at `⊥` so the `max` is right at `k = 0` (no scores seen).
 Closely mirrors `onlineSoftmaxM` from `Examples/OnlineSoftmax.lean`. -/
@@ -183,19 +196,10 @@ noncomputable def mPartial {M D : Nat} (Bk : Nat)
   | 0,     _ => (⊥ : WithBot ℝ)
   | k + 1, i =>
       if h : k + 1 ≤ numKVBlocks then
-        let prev := mPartial Bk Q numKVBlocks K scale k i
-        let blockMax : WithBot ℝ :=
-          Finset.univ.sup (fun jLocal : Fin Bk =>
-            ((scaledScore Q K scale i
-                ⟨k * Bk + jLocal.val, by
-                  have : k < numKVBlocks := by omega
-                  calc k * Bk + jLocal.val
-                      < k * Bk + Bk := by omega
-                    _ = (k + 1) * Bk := by ring
-                    _ ≤ numKVBlocks * Bk := Nat.mul_le_mul_right Bk (by omega)
-                    _ = Bk * numKVBlocks := by ring⟩
-              : ℝ) : WithBot ℝ))
-        max prev blockMax
+        max (mPartial Bk Q numKVBlocks K scale k i)
+          (Finset.univ.sup (fun jLocal : Fin Bk =>
+            ((scaledScore Q K scale i (blockIndex Bk numKVBlocks k h jLocal)
+              : ℝ) : WithBot ℝ)))
       else
         mPartial Bk Q numKVBlocks K scale k i
 
@@ -222,19 +226,11 @@ noncomputable def lPartial {M D Bk : Nat}
   | k + 1, i =>
       if h : k + 1 ≤ numKVBlocks then
         let mNew : ℝ := (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
-        let sumBlock : ℝ :=
+        alphaPartial Q numKVBlocks K scale k i *
+          lPartial Q numKVBlocks K scale k i +
           Finset.univ.sum (fun jLocal : Fin Bk =>
             Real.exp (scaledScore Q K scale i
-                ⟨k * Bk + jLocal.val, by
-                  have : k < numKVBlocks := by omega
-                  calc k * Bk + jLocal.val
-                      < k * Bk + Bk := by omega
-                    _ = (k + 1) * Bk := by ring
-                    _ ≤ numKVBlocks * Bk := Nat.mul_le_mul_right Bk (by omega)
-                    _ = Bk * numKVBlocks := by ring⟩
-              - mNew))
-        alphaPartial Q numKVBlocks K scale k i *
-          lPartial Q numKVBlocks K scale k i + sumBlock
+                (blockIndex Bk numKVBlocks k h jLocal) - mNew))
       else
         lPartial Q numKVBlocks K scale k i
 
@@ -250,22 +246,47 @@ noncomputable def oPartial {M D Bk : Nat}
       let d := idx.2.1
       if h : k + 1 ≤ numKVBlocks then
         let mNew : ℝ := (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
-        let sumBlock : ℝ :=
-          Finset.univ.sum (fun jLocal : Fin Bk =>
-            let jFlat : Fin (Bk * numKVBlocks) :=
-              ⟨k * Bk + jLocal.val, by
-                have : k < numKVBlocks := by omega
-                calc k * Bk + jLocal.val
-                    < k * Bk + Bk := by omega
-                  _ = (k + 1) * Bk := by ring
-                  _ ≤ numKVBlocks * Bk := Nat.mul_le_mul_right Bk (by omega)
-                  _ = Bk * numKVBlocks := by ring⟩
-            Real.exp (scaledScore Q K scale i jFlat - mNew) *
-              V (jFlat, d, PUnit.unit))
         alphaPartial Q numKVBlocks K scale k i *
-          oPartial Q numKVBlocks K V scale k idx + sumBlock
+          oPartial Q numKVBlocks K V scale k idx +
+          Finset.univ.sum (fun jLocal : Fin Bk =>
+            Real.exp (scaledScore Q K scale i
+                (blockIndex Bk numKVBlocks k h jLocal) - mNew) *
+              V (blockIndex Bk numKVBlocks k h jLocal, d, PUnit.unit))
       else
         oPartial Q numKVBlocks K V scale k idx
+
+/-! ### Stage A — m-free reference sums (`lFree`, `oFree`)
+
+Reference sums *without* the `m` shift, used to bridge the streaming
+form (which subtracts `m_k` for numerical stability) to `attentionReal`
+(which doesn't). The key identity:
+
+```text
+lPartial k i = exp(-m_k) · lFree k i        (m-shift factors out)
+oPartial k i d = exp(-m_k) · oFree k i d
+```
+
+so the ratio `oPartial / lPartial = oFree / lFree`, which matches
+`attentionReal` directly. -/
+
+/-- Σ over the first `k` KV blocks of `exp(scaledScore)`, no `m`-shift. -/
+noncomputable def lFree {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ N) (i : Fin M) : ℝ :=
+  Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
+    Real.exp (scaledScore Q K scale i
+      (blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL))))
+
+/-- Σ over the first `k` KV blocks of `exp(scaledScore) · V`, no `m`-shift. -/
+noncomputable def oFree {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ N) (idx : TileIndex [M, D]) : ℝ :=
+  let i := idx.1
+  let d := idx.2.1
+  Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
+    Real.exp (scaledScore Q K scale i
+      (blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL)) *
+    V (blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL, d, PUnit.unit)))
 
 /-! ### Stage A foundations — `mPartial` non-`⊥` for `k ≥ 1`
 
@@ -275,54 +296,94 @@ has been seen. With `0 < Bk`, the block-max `Finset.univ.sup` over
 `Fin Bk` is non-`⊥`, so `mPartial 1` is non-`⊥` and the property
 propagates upward through `max`. -/
 
-theorem mPartial_succ_ne_bot {M D : Nat} {Bk : Nat} (_hBk : 0 < Bk)
+theorem mPartial_succ_ne_bot {M D : Nat} {Bk : Nat} (hBk : 0 < Bk)
     (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
     (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
-    (k : Nat) (_hk : k + 1 ≤ numKVBlocks) (i : Fin M) :
+    (k : Nat) (hk : k + 1 ≤ numKVBlocks) (i : Fin M) :
     mPartial Bk Q numKVBlocks K scale (k + 1) i ≠ (⊥ : WithBot ℝ) := by
-  -- The body's `if h : k + 1 ≤ numKVBlocks` branch is taken (we have hk).
-  -- Result is `max prev (Finset.sup ...)` over a non-empty `Fin Bk` of
-  -- `some _` values; the Finset.sup dominates a `some _` summand, hence
-  -- the whole `max` is non-`⊥`. The dependent proof inside the
-  -- `Fin (Bk * numKVBlocks)` constructor inside the sup body fights
-  -- Lean's `Finset.le_sup` unification — the cleanest discharge will
-  -- factor the inner term out via a non-dependent helper before
-  -- invoking the lemma. Deferred along with the rest of the streaming
-  -- identity.
+  unfold mPartial
+  simp only [hk, ↓reduceDIte]
+  -- Result is `max prev (Finset.sup f)` where `f j = some (scaledScore _)`.
+  -- Pick j₀ = ⟨0, hBk⟩; sup ≥ f j₀ = some _, so sup ≠ ⊥, so max ≠ ⊥.
+  set f : Fin Bk → WithBot ℝ := fun jLocal =>
+    ((scaledScore Q K scale i (blockIndex Bk numKVBlocks k hk jLocal) : ℝ)
+      : WithBot ℝ)
+  have hSup : f ⟨0, hBk⟩ ≤ Finset.univ.sup f :=
+    Finset.le_sup (Finset.mem_univ _)
+  intro hMaxBot
+  have hSupBot : Finset.univ.sup f ≤ (⊥ : WithBot ℝ) := hMaxBot ▸ le_max_right _ _
+  have : f ⟨0, hBk⟩ = ⊥ :=
+    le_antisymm (le_trans hSup hSupBot) (OrderBot.bot_le _)
+  exact WithBot.coe_ne_bot this
+
+/-- The streaming `lPartial k i` equals `exp(-m_k) · lFree k i`, where
+`m_k = (mPartial k i).unbotD 0`. By induction on `k`: the α-factor
+`exp(m_k - m_{k+1})` absorbs the shift difference at each step. -/
+theorem lPartial_eq_mShifted {M D Bk : Nat} (_hBk : 0 < Bk)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (i : Fin M) :
+    lPartial Q numKVBlocks K scale k i =
+      Real.exp (-(mPartial Bk Q numKVBlocks K scale k i).unbotD 0) *
+        lFree Q K scale k hk i := by
+  sorry
+
+/-- Companion identity for `oPartial`: `exp(-m_k) · oFree k i d`. Same
+shape as `lPartial_eq_mShifted` plus `· V[j, d]` on each summand. -/
+theorem oPartial_eq_mShifted {M D Bk : Nat} (_hBk : 0 < Bk)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, D]) :
+    oPartial Q numKVBlocks K V scale k idx =
+      Real.exp (-(mPartial Bk Q numKVBlocks K scale k idx.1).unbotD 0) *
+        oFree Q K V scale k hk idx := by
+  sorry
+
+/-- The m-free reference sums `oFree N` and `lFree N` connect to
+`attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
+specification-side identity (no streaming algebra involved). -/
+theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D])
+    (_hlFree : lFree Q K scale N (le_refl N) idx.1 ≠ 0) :
+    oFree Q K V scale N (le_refl N) idx /
+        lFree Q K scale N (le_refl N) idx.1
+      = attentionReal Q K V scale idx := by
   sorry
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
 iterations, the streaming `(oPartial, lPartial)` ratio computes the
-same value as `attentionReal` (the math reference using
-`softmaxRow`). The kernel's post-loop `out := o_acc / l_i[:, None]`
-realizes this identity at the operational layer.
-
-**Proof status:** the recurrence is well-defined and `mPartial` is
-known to be non-`⊥` for `k ≥ 1` via `mPartial_succ_ne_bot`; the
-remaining obligation is the m-shift cancellation argument, expressed
-as two intermediate lemmas:
-
-1. `lPartial_eq_shiftedSum` — by induction on `k`, the streaming
-   `lPartial k i` equals `Σ_{j ∈ first k*Bk indices} exp(scaledScore
-   i j - (mPartial k i).unbotD 0)`. The α-multiplication absorbs the
-   shift change `m_k → m_{k+1}` via `exp` additivity.
-2. `oPartial_eq_shiftedSum` — analogous, with `· * V[j, d]`.
-3. Pull `exp(-m)` out as a common factor in the ratio; cancel.
-4. Match the resulting `Σ exp · V / Σ exp` against `attentionReal`'s
-   expansion through `softmaxRow` + `Tile.dot`.
-
-This block of math is the next deliverable; deferring keeps the
-operational layer (Stage B–D) on a working foundation. -/
-theorem streaming_eq_attentionReal {M D Bk : Nat} (_hBk : 0 < Bk)
+same value as `attentionReal`. The proof factors `exp(-m_N)` out of
+both numerator and denominator (via `lPartial_eq_mShifted` and
+`oPartial_eq_mShifted`), cancels it, and matches the residual
+`oFree / lFree` against `attentionReal`. -/
+theorem streaming_eq_attentionReal {M D Bk : Nat} (hBk : 0 < Bk)
     (Q : TileIndex [M, D] → ℝ)
     (numKVBlocks : Nat) (_hN : 0 < numKVBlocks)
     (K V : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
     (idx : TileIndex [M, D])
-    (_hl : lPartial Q numKVBlocks K scale numKVBlocks idx.1 ≠ 0) :
+    (hl : lPartial Q numKVBlocks K scale numKVBlocks idx.1 ≠ 0) :
     oPartial Q numKVBlocks K V scale numKVBlocks idx /
         lPartial Q numKVBlocks K scale numKVBlocks idx.1
       = attentionReal Q K V scale idx := by
-  sorry
+  -- Factor exp(-m_N) out of both sides, then cancel.
+  rw [oPartial_eq_mShifted hBk Q numKVBlocks K V scale numKVBlocks
+        (le_refl _) idx,
+      lPartial_eq_mShifted hBk Q numKVBlocks K scale numKVBlocks
+        (le_refl _) idx.1]
+  -- After rewriting:
+  --   (exp(-m) · oFree) / (exp(-m) · lFree) = attentionReal
+  -- Use `mul_div_mul_left` to cancel exp(-m), which is non-zero.
+  rw [mul_div_mul_left _ _ (Real.exp_ne_zero _)]
+  -- Now goal: oFree N idx / lFree N idx.1 = attentionReal idx.
+  -- We need lFree ≠ 0 to invoke the spec-side identity. Derive from `hl`:
+  -- `lPartial = exp(-m) · lFree` and `lPartial ≠ 0` ⇒ `lFree ≠ 0`.
+  have hlFree : lFree Q K scale numKVBlocks (le_refl _) idx.1 ≠ 0 := by
+    intro h
+    apply hl
+    rw [lPartial_eq_mShifted hBk Q numKVBlocks K scale numKVBlocks
+        (le_refl _) idx.1, h, mul_zero]
+  exact oFree_div_lFree_eq_attentionReal Q K V scale idx hlFree
 
 end FA1Math
 
