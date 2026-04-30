@@ -142,6 +142,158 @@ noncomputable def attentionReal {M S D : Nat}
     ((attention (Tile.ofReal Q) (Tile.ofReal K) (Tile.ofReal V)
         scale).data idx).unbotD 0
 
+/-! ## Streaming math model (FA-1 online softmax recurrence)
+
+Mirrors what `fa1ForwardKernel` computes block by block. Three running
+quantities, each parameterized by the number of completed KV blocks
+`k ∈ [0, numKVBlocks]`:
+
+* `mPartial` — running per-row max of scaled scores. Uses `WithBot ℝ`
+  (with seed `⊥` at `k = 0`) so the streaming `max` matches the
+  kernel's `m_i := tl.full([M], -inf)` initialization exactly.
+* `lPartial` — running per-row normalizer (sum of `exp(score - m)`).
+  Real-valued (seed `0` at `k = 0`).
+* `oPartial` — running unnormalized output (`Σ exp(score - m) · V`).
+  Real-valued (seed `0` at `k = 0`).
+
+The final theorem `streaming_eq_attentionReal` (math identity, no
+kernel) proves that
+`oPartial numKVBlocks idx / lPartial numKVBlocks i = attentionReal idx`,
+which the kernel's post-loop `out := o_acc / l_i[:, None]` realizes. -/
+
+namespace FA1Math
+
+/-- Scaled score `(Q · Kᵀ · scale)[i, j]` at a flat KV index `j ∈ [0, S)`.
+The streaming form indexes K/V by `k * Bk + jLocal` for the k-th block;
+this helper normalizes that to a single `j` so the recurrence can sum
+over the whole input length uniformly. -/
+noncomputable def scaledScore {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (j : Fin S) : ℝ :=
+  scale * Finset.univ.sum (fun d : Fin D =>
+    Q (i, d, PUnit.unit) * K (j, d, PUnit.unit))
+
+/-- Running per-row max of scaled scores over the first `k` KV blocks.
+Seeded at `⊥` so the `max` is right at `k = 0` (no scores seen).
+Closely mirrors `onlineSoftmaxM` from `Examples/OnlineSoftmax.lean`. -/
+noncomputable def mPartial {M D : Nat} (Bk : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) :
+    Nat → Fin M → WithBot ℝ
+  | 0,     _ => (⊥ : WithBot ℝ)
+  | k + 1, i =>
+      if h : k + 1 ≤ numKVBlocks then
+        let prev := mPartial Bk Q numKVBlocks K scale k i
+        let blockMax : WithBot ℝ :=
+          Finset.univ.sup (fun jLocal : Fin Bk =>
+            ((scaledScore Q K scale i
+                ⟨k * Bk + jLocal.val, by
+                  have : k < numKVBlocks := by omega
+                  calc k * Bk + jLocal.val
+                      < k * Bk + Bk := by omega
+                    _ = (k + 1) * Bk := by ring
+                    _ ≤ numKVBlocks * Bk := Nat.mul_le_mul_right Bk (by omega)
+                    _ = Bk * numKVBlocks := by ring⟩
+              : ℝ) : WithBot ℝ))
+        max prev blockMax
+      else
+        mPartial Bk Q numKVBlocks K scale k i
+
+/-- The α multiplier `exp(m_k - m_{k+1})` produced by FA-1's online
+softmax. At `k = 0` this collapses to `0` (since `m_0 = ⊥` and
+`exp ⊥ = 0`), zeroing out the first iteration's contribution from the
+empty seed. -/
+noncomputable def alphaPartial {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (i : Fin M) : ℝ :=
+  ((WithBot.realExp
+      (WithBot.realSub
+        (mPartial Bk Q numKVBlocks K scale k i)
+        (mPartial Bk Q numKVBlocks K scale (k + 1) i)))).unbotD 0
+
+/-- Running per-row normalizer `Σ exp(score - m)` over the first `k`
+KV blocks. -/
+noncomputable def lPartial {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) :
+    Nat → Fin M → ℝ
+  | 0,     _ => 0
+  | k + 1, i =>
+      if h : k + 1 ≤ numKVBlocks then
+        let mNew : ℝ := (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
+        let sumBlock : ℝ :=
+          Finset.univ.sum (fun jLocal : Fin Bk =>
+            Real.exp (scaledScore Q K scale i
+                ⟨k * Bk + jLocal.val, by
+                  have : k < numKVBlocks := by omega
+                  calc k * Bk + jLocal.val
+                      < k * Bk + Bk := by omega
+                    _ = (k + 1) * Bk := by ring
+                    _ ≤ numKVBlocks * Bk := Nat.mul_le_mul_right Bk (by omega)
+                    _ = Bk * numKVBlocks := by ring⟩
+              - mNew))
+        alphaPartial Q numKVBlocks K scale k i *
+          lPartial Q numKVBlocks K scale k i + sumBlock
+      else
+        lPartial Q numKVBlocks K scale k i
+
+/-- Running unnormalized per-row output `Σ exp(score - m) · V` over
+the first `k` KV blocks. -/
+noncomputable def oPartial {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) :
+    Nat → TileIndex [M, D] → ℝ
+  | 0,     _ => 0
+  | k + 1, idx =>
+      let i := idx.1
+      let d := idx.2.1
+      if h : k + 1 ≤ numKVBlocks then
+        let mNew : ℝ := (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
+        let sumBlock : ℝ :=
+          Finset.univ.sum (fun jLocal : Fin Bk =>
+            let jFlat : Fin (Bk * numKVBlocks) :=
+              ⟨k * Bk + jLocal.val, by
+                have : k < numKVBlocks := by omega
+                calc k * Bk + jLocal.val
+                    < k * Bk + Bk := by omega
+                  _ = (k + 1) * Bk := by ring
+                  _ ≤ numKVBlocks * Bk := Nat.mul_le_mul_right Bk (by omega)
+                  _ = Bk * numKVBlocks := by ring⟩
+            Real.exp (scaledScore Q K scale i jFlat - mNew) *
+              V (jFlat, d, PUnit.unit))
+        alphaPartial Q numKVBlocks K scale k i *
+          oPartial Q numKVBlocks K V scale k idx + sumBlock
+      else
+        oPartial Q numKVBlocks K V scale k idx
+
+/-- **Math identity (paper centerpiece).** After all `numKVBlocks`
+iterations, the streaming `(oPartial, lPartial)` ratio computes the
+same value as `attentionReal` (the math reference using
+`softmaxRow`). The kernel's post-loop `out := o_acc / l_i[:, None]`
+realizes this identity at the operational layer.
+
+**Status:** the recurrence is well-defined; this identity is the
+remaining math obligation for issue #38 — proof deferred. The proof
+strategy: (1) at `k = numKVBlocks`, induction over `k` shows that
+`oPartial k = (Σ_{j ∈ first k*Bk indices} exp(s[i,j] - m_k[i]) · V[j])`
+and analogously for `lPartial`; (2) use `mPartial`-cancellation
+(numerator and denominator share the same shift) to convert
+`oPartial / lPartial` into `softmaxRow`'s ratio without the row-max
+subtraction. -/
+theorem streaming_eq_attentionReal {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (numKVBlocks : Nat) (hN : 0 < numKVBlocks)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D])
+    (hl : lPartial Q numKVBlocks K scale numKVBlocks idx.1 ≠ 0) :
+    oPartial Q numKVBlocks K V scale numKVBlocks idx /
+        lPartial Q numKVBlocks K scale numKVBlocks idx.1
+      = attentionReal Q K V scale idx := by
+  sorry
+
+end FA1Math
+
 /-! ## Correctness statement (sorry — discharged in issue #38)
 
 The statement uses the standard `InputAt` / `observeTileAt` predicates
