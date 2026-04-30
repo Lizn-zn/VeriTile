@@ -617,6 +617,28 @@ theorem oFree_eq_flat {M D Bk N : Nat}
   · intro j _
     rw [blockIndex_blockIndexEquiv]
 
+/-- Auxiliary: the WithBot ℝ-valued `qkT` tile data computes the real
+`scaledScore`-related dot product (no scale yet). All-`some` because
+all operands are lifted via `Tile.ofReal`. -/
+theorem qkT_data_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (i : Fin M) (j : Fin (Bk * N)) :
+    (Tile.dot [] (Tile.ofReal Q) (Tile.transpose [] (Tile.ofReal K))).data
+        (i, j, PUnit.unit)
+      = ((Finset.univ.sum (fun d : Fin D =>
+            Q (i, d, PUnit.unit) * K (j, d, PUnit.unit)) : ℝ) : WithBot ℝ) := by
+  rw [Tile.dot_nil_data]
+  have hPush : ∑ d : Fin D, (((Q (i, d, PUnit.unit) * K (j, d, PUnit.unit)
+                : ℝ) : WithBot ℝ)) =
+      (((∑ d : Fin D, Q (i, d, PUnit.unit) * K (j, d, PUnit.unit)
+          : ℝ) : WithBot ℝ)) :=
+    (map_sum (WithBot.addHom : ℝ →+ WithBot ℝ) _ _).symm
+  rw [← hPush]
+  apply Finset.sum_congr rfl
+  intro k _
+  rw [Tile.transpose_nil_data, Tile.ofReal_data, Tile.ofReal_data]
+  rfl
+
 /-- The m-free reference sums `oFree N` and `lFree N` connect to
 `attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
 specification-side identity (no streaming algebra involved). -/
@@ -627,22 +649,13 @@ theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
     oFree Q K V scale N (le_refl N) idx /
         lFree Q K scale N (le_refl N) idx.1
       = attentionReal Q K V scale idx := by
-  -- Flat-form both sides via the proven `*_eq_flat` bridges, then
-  -- expand `attentionReal` to its `softmaxRow` + `Tile.dot` form.
   rw [oFree_eq_flat, lFree_eq_flat]
   -- Goal: (Σ_j exp(s i j) · V (j, d, _)) / (Σ_j exp(s i j))
   --     = ((attention (Tile.ofReal Q) ...).data idx).unbotD 0
-  -- The remaining content: unfold `attention` / `softmaxRow` /
-  -- `Tile.dot []` / `Tile.transpose []` / `Tile.ofReal` to compute the
-  -- RHS in real-arithmetic terms; show it equals the LHS via
-  -- `Finset.sum_div` (factor out the constant denominator from the
-  -- per-lane softmax weights).
-  --
-  -- The unfolding chain spans the `WithBot ℝ` Σ semantics
-  -- (`AddMonoidHom.map_sum (WithBot.coeRingHom)` for the all-`some`
-  -- case) and the `softmaxRow` definition's `unbotD 0` projection.
-  -- Mechanical but lengthy; deferred as the last math obligation of
-  -- issue #38.
+  -- Remaining: unfold `attentionReal` / `attention` / `softmaxRow` /
+  -- `Tile.dot []` chain, push `WithBot ℝ` Σ through `Tile.ofReal`-lifted
+  -- inputs, factor out the softmax denominator via `Finset.sum_div`.
+  -- Deferred as the last math obligation of issue #38.
   sorry
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
