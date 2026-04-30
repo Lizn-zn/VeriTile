@@ -118,8 +118,10 @@ syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax ident " = " tritonExpr : tritonKwarg
 
 -- Reduction kwargs. Per Triton semantics:
---   - `axis = K` selects which axis to reduce. If omitted, VeriTile reduces
---     the user's last axis for compatibility with the original DSL examples.
+--   - `axis = K` selects a single axis to reduce. If omitted (`axis = None`
+--     in Python), the reduction is over **all** dimensions; the result is a
+--     scalar (`keep_dims = false`) or an all-ones-shaped tile of the input
+--     rank (`keep_dims = true`).
 --   - `keep_dims = true | false` preserves vs strips the reduced rank dim;
 --     defaults to `false` to match Triton.
 syntax "axis" "=" num : tritonReduceKwarg
@@ -574,10 +576,16 @@ partial def expandReduce (env : Env) (ctx : String) (op : TSyntax `term)
             .real, SInfo.dims outDims⟩
   | none =>
       -- `axis = None` (Triton default): reduce over all dimensions.
-      -- Emit `dims.length` nested `axis = 0, keep_dims = keepDims` calls.
+      -- Two regimes, because `keep_dims` changes how the rank evolves:
+      --   * `keep_dims = false`: each call drops the front axis; emit
+      --     `dims.length` nested calls with `axis = 0`.
+      --   * `keep_dims = true`: rank is preserved; emit calls with
+      --     `axis = 0, 1, …, dims.length - 1` so every axis is reduced.
       let mut term := e'.term
-      for _ in [:dims.length] do
-        term ← `($op (⟨0, by simp⟩) $kdLit $term)
+      for j in [:dims.length] do
+        let axisIdx := if keepDims then j else 0
+        let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+        term ← `($op (⟨$axisLit, by simp⟩) $kdLit $term)
       let outDims : List (TSyntax `term) ←
         if keepDims then
           let oneLit : TSyntax `term ← `((1 : Nat))
