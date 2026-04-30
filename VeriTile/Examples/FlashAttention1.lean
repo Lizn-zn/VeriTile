@@ -2055,11 +2055,89 @@ theorem fa1_step
       ext idx
       exact hmNewData idx.1
     · rw [← FA1Math.block_lNew_tile_eq Q K scale k hk]
-      simp [s', s13, s12, s11]
-      sorry
+      simp [s11]
+      ext idx
+      simp only [Tile.bop, Tile.ofReal, Tile.uop, Tile.ofReal_data,
+        Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        WithBot.realAdd, WithBot.realMul]
+      congr 1
+      · -- LHS: Option.map (· * lPartial k) (WithBot.realExp (Option.map₂ - mPartial(k) (max ...)))
+        -- RHS: Option.map₂ * (some alphaPartial) (some lPartial k)
+        rw [show (Option.map₂ (· * ·) (some (FA1Math.alphaPartial Q numKVBlocks K scale k idx.1))
+              (some (FA1Math.lPartial Q numKVBlocks K scale k idx.1)) :
+              WithBot ℝ) =
+            Option.map (· * FA1Math.lPartial Q numKVBlocks K scale k idx.1)
+              (some (FA1Math.alphaPartial Q numKVBlocks K scale k idx.1)) from rfl]
+        congr 1
+        -- Goal: WithBot.realExp (Option.map₂ - mPartial(k) (max mPartial(k) (some sup'))) =
+        --       some alphaPartial.
+        -- hAlphaData idx.1 says it's WithBot.realExp (Option.map₂ - mPartial(k) mPartial(k+1)).
+        -- We bridge via congrArg.
+        refine Eq.trans ?_ (hAlphaData idx.1)
+        congr 2
+        exact hmNewData idx.1
+      · -- LHS: ∑ x, WithBot.realExp (Option.map (... - max ...) ...)
+        -- RHS: some (∑ j, Real.exp (...))
+        -- Step 1: replace each summand by `some (Real.exp ...)` via the same
+        -- congr-2 / hmNewData / hPData pattern used in the alpha branch.
+        -- Step 2: collapse `∑ some _ = some (∑ _)` via `WithBot.sum_someTerm_eq_some`.
+        refine Eq.trans
+          (@Finset.sum_congr (Fin Bk) (WithBot ℝ) _ _ _ _ _ rfl
+            (fun j _ => ?_))
+          (WithBot.sum_someTerm_eq_some _ _)
+        refine Eq.trans ?_ (hPData idx.1 j)
+        congr 2
+        exact hmNewData idx.1
     · rw [← FA1Math.block_oAcc_tile_eq Q K V scale k hk]
-      simp [s', s13, s12]
-      sorry
+      simp [s12]
+      ext idx
+      simp only [Tile.bop, Tile.ofReal, Tile.uop, Tile.expandDim,
+        Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex]
+      congr 1
+      · -- LHS: Option.map (· * oPartial k (idx)) (WithBot.realExp (Option.map₂ - mPartial(k) (max ...)))
+        -- RHS: Option.map₂ * (some alphaPartial) (some (oPartial k idx))
+        rw [show (Option.map₂ (· * ·)
+              (some (FA1Math.alphaPartial Q numKVBlocks K scale k idx.1))
+              (some (FA1Math.oPartial Q numKVBlocks K V scale k
+                (idx.1, idx.2.1, PUnit.unit))) :
+              WithBot ℝ) =
+            Option.map (· * FA1Math.oPartial Q numKVBlocks K V scale k
+                (idx.1, idx.2.1, PUnit.unit))
+              (some (FA1Math.alphaPartial Q numKVBlocks K scale k idx.1)) from rfl]
+        congr 1
+        refine Eq.trans ?_ (hAlphaData idx.1)
+        congr 2
+        exact hmNewData idx.1
+      · -- LHS: ∑ x, Option.map (· * V (...)) (WithBot.realExp (Option.map (... - max ...)))
+        -- RHS: some (∑ j, Real.exp (...) * V (...))
+        refine Eq.trans
+          (@Finset.sum_congr (Fin Bk) (WithBot ℝ) _ _ _ _ _ rfl
+            (fun j _ => ?_))
+          (WithBot.sum_someTerm_eq_some _ _)
+        -- Goal at j: Option.map (· * V (...)) (WithBot.realExp (Option.map (...) (max ...)))
+        --           = some (Real.exp (...) * V (...))
+        -- Strategy: descend through Option.map (·*V) and WithBot.realExp via `congr 1`s
+        -- (the `· * V` factor on the outside aligns with the `· * V` factor in the RHS),
+        -- then use the same congr-2 + hmNewData + hPData pattern as the alpha branch.
+        -- We can't use `congr 1` directly because LHS has `Option.map` head, RHS has
+        -- `some` head. So we first reshape RHS to match: `some y = Option.map (·*V) (some r)`
+        -- where `r * V = y`, holds by `rfl`.
+        change Option.map _ _ =
+            Option.map (fun a : ℝ => a *
+              V (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j, idx.2.1, PUnit.unit))
+              (some (Real.exp (FA1Math.scaledScore Q K scale idx.1
+                (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j) -
+                  WithBot.unbotD 0
+                    (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1))))
+        congr 1
+        refine Eq.trans ?_ (hPData idx.1 j)
+        congr 2
+        exact hmNewData idx.1
     · intro idx
       simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hQ idx
     · intro idx
