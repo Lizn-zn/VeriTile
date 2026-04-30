@@ -92,7 +92,9 @@ syntax "$(" term ")" " + " tritonExpr : tritonPtr
 
 -- Expressions
 syntax num : tritonExpr
-syntax ident : tritonExpr
+-- `:max` so trailing parsers (e.g. the slicer postfix `e[:, None]`) chain
+-- on bare register identifiers without the user wrapping them in parens.
+syntax:max ident : tritonExpr
 syntax "$(" term ")" : tritonExpr
 syntax "$ℝ(" term ")" : tritonExpr
 syntax "(" tritonExpr ")" : tritonExpr
@@ -137,6 +139,14 @@ syntax "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 -- AST (Slice 1 of mask extension). Other kwargs raise a parse error per
 -- Issue #16 / `feedback_triton_user_first_class.md`.
 syntax "tl.load(" tritonPtr ("," tritonKwarg)* ")" : tritonExpr
+
+-- Unit-axis insertion (Triton `e[:, None]` / `e[None, :]`). First stage
+-- only accepts these two literal slicer forms on rank-1 inputs; lowers
+-- to `Op.expandDim` with `axis = 1` / `axis = 0` respectively. The `noWs`
+-- before `[` matches Triton's no-whitespace convention (`x[:, None]`,
+-- not `x [:, None]`) and lets Lean register the trailing parser cleanly.
+syntax:max tritonExpr:max noWs "[" ":" "," "None" "]" : tritonExpr
+syntax:max tritonExpr:max noWs "[" "None" "," ":" "]" : tritonExpr
 
 -- Comparison operators (priority 50 — below arithmetic 60/70 — non-associative).
 -- Both ℝ × ℝ and Nat × Nat carriers are supported by typed `Op` constructors.
@@ -487,6 +497,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandArith env "arithmetic" (← `(Op.mul)) a b
   | `(tritonExpr| $a:tritonExpr / $b:tritonExpr) => do
       expandArith env "arithmetic" (← `(Op.div)) a b
+  | `(tritonExpr| $e:tritonExpr[ : , None ]) => do
+      -- `e[:, None]` — insert a unit axis at position 1: `[N] → [N, 1]`.
+      expandSlicerNone env e (axisIdx := 1)
+  | `(tritonExpr| $e:tritonExpr[ None , : ]) => do
+      -- `e[None, :]` — insert a unit axis at position 0: `[N] → [1, N]`.
+      expandSlicerNone env e (axisIdx := 0)
   | _ => Macro.throwUnsupported
 
 partial def expandArith (env : Env) (ctx : String) (op : TSyntax `term)
@@ -631,6 +647,28 @@ partial def expandDot (env : Env)
       ("tl.dot: inner dim mismatch — LHS innermost `" ++ termKey aK ++
        "` ≠ RHS outer-trailing `" ++ termKey bK ++ "`")
   pure ⟨← `(Op.dot $a'.term $b'.term), .real, .dims (aBatch ++ [aM, bN])⟩
+
+/-- Lower `e[:, None]` / `e[None, :]` to `Op.expandDim` with the appropriate
+axis. First-stage restriction: input must be rank-1; higher ranks raise a
+macro error so the user knows to wait for fully ND surface slicers. -/
+partial def expandSlicerNone (env : Env)
+    (e : TSyntax `tritonExpr) (axisIdx : Nat) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.length != 1 then
+    Macro.throwError
+      ("[:, None] / [None, :]: rank-1 input required, got rank " ++
+       toString dims.length ++
+       ". Higher-rank tiles will be supported in a follow-up; for now write `tl.expand_dims` once added.")
+  let n := dims.head!
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  let outDims : List (TSyntax `term) ←
+    if axisIdx = 0 then
+      pure [← `((1 : Nat)), n]
+    else
+      pure [n, ← `((1 : Nat))]
+  pure ⟨← `(Op.expandDim (⟨$axisLit, by simp⟩) $e'.term),
+        e'.dtype, .dims outDims⟩
 
 end
 

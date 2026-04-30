@@ -799,6 +799,20 @@ each operand at outer index `i` and recurses on the remaining batch. -/
           ⟨fun rIdx => a.data (i, rIdx)⟩
           ⟨fun rIdx => b'.data (i, rIdx)⟩).data restIdx := rfl
 
+/-- Insert a unit-size axis at position `axis`. The output index is
+projected back to the input by `dropInsertedIndex`, which throws away
+the inserted slot's `Fin 1` coordinate. -/
+def Tile.expandDim {dtype : TileDType} {shape : TileShape}
+    (axis : Fin (shape.length + 1)) (x : Tile dtype shape) :
+    Tile dtype (TileShape.insertAxis shape axis 1) :=
+  ⟨fun idx => x.data (TileShape.dropInsertedIndex shape axis 1 idx)⟩
+
+@[simp] theorem Tile.expandDim_data {dtype : TileDType} {shape : TileShape}
+    (axis : Fin (shape.length + 1)) (x : Tile dtype shape)
+    (idx : TileIndex (TileShape.insertAxis shape axis 1)) :
+    (Tile.expandDim axis x).data idx =
+      x.data (TileShape.dropInsertedIndex shape axis 1 idx) := rfl
+
 noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)
   | .const c, _ => some (Tile.scalar (some c : WithBot ℝ))
   | .constNat n, _ => some (Tile.scalar n)
@@ -851,6 +865,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.dot batch va vb)
+  | .expandDim axis a, s => return Tile.expandDim axis (← evalOp a s)
   | .load region off, s => do
       let offsets ← evalOp off s
       some ⟨fun i => some (s.readMem region (offsets.data i))⟩

@@ -149,6 +149,66 @@ def replaceAxisIndex :
     (outIdx : TileIndex (1 :: rest)) (k : Fin d) :
     replaceAxisIndex (d :: rest) ⟨0, Nat.succ_pos _⟩ outIdx k = (k, outIdx.2) := rfl
 
+/-- Insert a new axis of size `n` at position `axis` of `shape`. The axis
+position ranges over `Fin (shape.length + 1)` (one slot more than the
+original rank — past the existing axes). Used by `Op.expandDim` to encode
+Triton's `e[:, None]` / `e[None, :]` / `tl.expand_dims` shape change.
+
+Matches on `shape` first (then `axis`) so the empty-shape case picks up
+the only `Fin 1` value at the function level — this keeps each constructor
+clause `rfl`-reducible to a concrete `List Nat` when `shape` is a literal
+in user code. -/
+def insertAxis : (shape : TileShape) → Fin (shape.length + 1) → Nat → TileShape
+  | [],         _,          n => [n]
+  | d :: rest,  ⟨0, _⟩,     n => n :: d :: rest
+  | d :: rest,  ⟨k + 1, h⟩, n =>
+      d :: insertAxis rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ n
+
+/-- Project an output index of `insertAxis shape axis n` back to an input
+index of `shape` by dropping the inserted-axis component. The dropped
+component lives in `Fin n`; semantics that need to use it (e.g. broadcast
+arguments other than `n = 1`) read it before calling.
+
+Matches `shape` then `axis` to mirror `insertAxis`. -/
+def dropInsertedIndex :
+    (shape : TileShape) → (axis : Fin (shape.length + 1)) → (n : Nat) →
+    TileIndex (insertAxis shape axis n) → TileIndex shape
+  | [],         _,         _, _   => PUnit.unit
+  | _ :: _,     ⟨0, _⟩,    _, idx => idx.2
+  | _ :: rest,  ⟨k + 1, h⟩, n, idx =>
+      (idx.1, dropInsertedIndex rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ n idx.2)
+
+@[simp] theorem insertAxis_zero_nil (n : Nat) :
+    insertAxis [] ⟨0, Nat.succ_pos _⟩ n = [n] := rfl
+
+@[simp] theorem insertAxis_zero_cons (d : Nat) (rest : TileShape) (n : Nat) :
+    insertAxis (d :: rest) ⟨0, Nat.succ_pos _⟩ n = n :: d :: rest := rfl
+
+@[simp] theorem insertAxis_succ {d : Nat} {rest : TileShape}
+    {k : Nat} {h : k + 1 < rest.length + 2} {n : Nat} :
+    insertAxis (d :: rest) ⟨k + 1, h⟩ n =
+      d :: insertAxis rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ n := rfl
+
+/-- Generic head-case rewrite, useful when `shape` is abstract (the
+per-cons simp lemmas above already fire when `shape` is a concrete
+list). -/
+theorem insertAxis_head (shape : TileShape) (n : Nat) :
+    insertAxis shape ⟨0, Nat.succ_pos _⟩ n = n :: shape := by
+  cases shape <;> rfl
+
+@[simp] theorem dropInsertedIndex_nil (n : Nat) (idx : TileIndex [n]) :
+    dropInsertedIndex [] ⟨0, Nat.succ_pos _⟩ n idx = PUnit.unit := rfl
+
+@[simp] theorem dropInsertedIndex_zero_cons {d : Nat} {rest : TileShape} {n : Nat}
+    (idx : TileIndex (n :: d :: rest)) :
+    dropInsertedIndex (d :: rest) ⟨0, Nat.succ_pos _⟩ n idx = idx.2 := rfl
+
+@[simp] theorem dropInsertedIndex_succ {d : Nat} {rest : TileShape}
+    {k : Nat} {h : k + 1 < rest.length + 2} {n : Nat}
+    (idx : TileIndex (insertAxis (d :: rest) ⟨k + 1, h⟩ n)) :
+    dropInsertedIndex (d :: rest) ⟨k + 1, h⟩ n idx =
+      (idx.1, dropInsertedIndex rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ n idx.2) := rfl
+
 /-- Enumerate all indices of a shape, in row-major / outer-to-inner order. -/
 def allIndices : (shape : TileShape) → List (TileIndex shape)
   | [] => [PUnit.unit]
@@ -415,6 +475,15 @@ inductive Op : TileDType → TileShape → Type where
   | dot       : {batch : TileShape} → {M K N : Nat} →
                 Op .real (batch ++ [M, K]) → Op .real (batch ++ [K, N]) →
                 Op .real (batch ++ [M, N])
+  /--
+  Insert a unit-size axis at position `axis` of `shape`. Models Triton's
+  `tl.expand_dims(e, axis = K)` and the slicer surface forms `e[:, None]`
+  / `e[None, :]`. Fully ND: `axis` ranges over `Fin (shape.length + 1)`,
+  one slot more than the input rank. -/
+  | expandDim : {dtype : TileDType} → {shape : TileShape} →
+                (axis : Fin (shape.length + 1)) →
+                Op dtype shape →
+                Op dtype (TileShape.insertAxis shape axis 1)
   | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
   | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
                 (mask : Op .bool shape) → Op .real shape

@@ -91,4 +91,46 @@ example : (B M K N : Nat) → Op .real [B, M, N] := fun B M K N =>
     (Op.ref .real [B, M, K] "a")
     (Op.ref .real [B, K, N] "b")
 
+/-! ### `tl.expand_dims` surface forms
+
+Two literal slicer postfixes are accepted in this stage:
+
+* `e[:, None]` — `[N] → [N, 1]`, axis 1
+* `e[None, :]` — `[N] → [1, N]`, axis 0
+
+Both lower to `Op.expandDim` with the appropriate `Fin (rank + 1)` axis.
+Higher-rank inputs raise a macro error. -/
+
+/-- `[:, None]` produces a `[N, 1]` tile. -/
+def colExpandSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(N) + tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  xc   := x[:, None]
+}
+
+/-- `[None, :]` produces a `[1, N]` tile. -/
+def rowExpandSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(N) + tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  xr   := x[None, :]
+}
+
+/-- `Tile.expandDim` semantics on a literal rank-1 tile: `[3] → [1, 3]`. -/
+example :
+    let v : Tile .real [3] := Tile.vec (fun i => some (i.val : ℝ))
+    let v' := Tile.expandDim ⟨0, by simp⟩ v
+    v'.data (⟨0, by decide⟩, ⟨2, by decide⟩, PUnit.unit) =
+      v.data (⟨2, by decide⟩, PUnit.unit) := by
+  simp [Tile.expandDim, TileShape.dropInsertedIndex]
+
+/-- `Tile.expandDim` axis-1 case: `[3] → [3, 1]`. -/
+example :
+    let v : Tile .real [3] := Tile.vec (fun i => some (i.val : ℝ))
+    let v' := Tile.expandDim ⟨1, by simp⟩ v
+    v'.data (⟨1, by decide⟩, ⟨0, by decide⟩, PUnit.unit) =
+      v.data (⟨1, by decide⟩, PUnit.unit) := by
+  simp [Tile.expandDim, TileShape.dropInsertedIndex]
+
 end VeriTile.Triton.Examples
