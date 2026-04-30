@@ -654,6 +654,45 @@ theorem scaled_data_eq {M D Bk N : Nat}
   congr 1
   ring
 
+/-- `softmaxRow` of `scaled` evaluates per-cell as
+`some(exp(scaledScore) / Σ_j' exp(scaledScore))`. -/
+theorem softmaxRow_scaled_data_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (i : Fin M) (n : Fin (Bk * N)) :
+    let scaled : Tile .real [M, Bk * N] :=
+      ⟨fun idx => Option.map (· * scale)
+        ((Tile.dot [] (Tile.ofReal Q)
+          (Tile.transpose [] (Tile.ofReal K))).data idx)⟩
+    (softmaxRow scaled).data (i, n, PUnit.unit) =
+      ((Real.exp (scaledScore Q K scale i n) /
+        Finset.univ.sum (fun j' : Fin (Bk * N) =>
+          Real.exp (scaledScore Q K scale i j')) : ℝ) : WithBot ℝ) := by
+  -- Unfold softmaxRow; the row function evaluates to scaledScore via
+  -- `scaled_data_eq` + `WithBot.unbotD_coe`.
+  unfold softmaxRow
+  show some _ = some _
+  congr 1
+  -- Goal: exp(row n) / Σ exp(row j) = exp(scaledScore i n) / Σ exp(scaledScore i j)
+  -- where row j = (scaled.data (i, j, _)).unbotD 0
+  have hRow : ∀ j' : Fin (Bk * N),
+      ((⟨fun idx => Option.map (· * scale)
+          ((Tile.dot [] (Tile.ofReal Q)
+            (Tile.transpose [] (Tile.ofReal K))).data idx)⟩ : Tile .real _).data
+        (i, j', PUnit.unit)).unbotD 0
+        = scaledScore Q K scale i j' := by
+    intro j'
+    show WithBot.unbotD 0 (Option.map (· * scale)
+        ((Tile.dot [] (Tile.ofReal Q)
+          (Tile.transpose [] (Tile.ofReal K))).data (i, j', PUnit.unit)))
+        = scaledScore Q K scale i j'
+    rw [scaled_data_eq]
+    rfl
+  congr 1
+  · exact congrArg Real.exp (hRow n)
+  · apply Finset.sum_congr rfl
+    intro j _
+    exact congrArg Real.exp (hRow j)
+
 /-- The m-free reference sums `oFree N` and `lFree N` connect to
 `attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
 specification-side identity (no streaming algebra involved). -/
@@ -665,14 +704,9 @@ theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
         lFree Q K scale N (le_refl N) idx.1
       = attentionReal Q K V scale idx := by
   rw [oFree_eq_flat, lFree_eq_flat]
-  -- Goal: (Σ_j exp(s i j) · V (j, d, _)) / (Σ_j exp(s i j))
-  --     = ((attention (Tile.ofReal Q) ...).data idx).unbotD 0
-  -- Remaining: unfold `attentionReal` / `attention` / `softmaxRow` /
-  -- outer `Tile.dot` (with V'), push the WithBot ℝ Σ through
-  -- `Tile.ofReal`-lifted operands (analogous to `qkT_data_eq` /
-  -- `scaled_data_eq`), and factor out the softmax denominator
-  -- (`Finset.sum_div`). Deferred as the last math obligation of
-  -- issue #38.
+  -- Final unfold: outer `Tile.dot p V` + `Tile.ofReal V` + push WithBot
+  -- Σ via `WithBot.addHom`'s map_sum + factor `Finset.sum_div`.
+  -- Deferred as the last math obligation of issue #38.
   sorry
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
