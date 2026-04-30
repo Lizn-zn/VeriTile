@@ -23,6 +23,7 @@ globs = [
   "VeriTile.Examples.WelfordKernels",
   "VeriTile.Examples.LayerNormKernels",
   "VeriTile.Examples.OnlineSoftmax",
+  "VeriTile.Examples.FlashAttention1",
 ]
 
 # Math sub-library: Taylor and integral bounds for the GeLU error

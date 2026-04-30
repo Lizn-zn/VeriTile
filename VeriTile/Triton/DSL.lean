@@ -160,6 +160,14 @@ syntax:max tritonExpr:max noWs "[" "None" "," ":" "]" : tritonExpr
 -- parser, so we keep the function-call surface as primary.)
 syntax "tl.trans(" tritonExpr ")" : tritonExpr
 
+-- Tile initialization. `tl.full([d₀, d₁, ...], value)` lowers to
+-- `Op.full [d₀, d₁, ...] value`; the shape list is ND-general (any
+-- rank including `[]` for a scalar). `tl.zeros([dims*])` is sugar for
+-- `tl.full([dims*], 0)`. Matches Triton's `tl.full(shape, value)` /
+-- `tl.zeros(shape)` API.
+syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ")" : tritonExpr
+syntax "tl.zeros(" "[" tritonExpr,* "]" ")" : tritonExpr
+
 -- Comparison operators (priority 50 — below arithmetic 60/70 — non-associative).
 -- Both ℝ × ℝ and Nat × Nat carriers are supported by typed `Op` constructors.
 -- channel (scalarBool / tileBool). Triton-faithful: no chained comparisons
@@ -548,6 +556,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.trans($e:tritonExpr)) => do
       -- `tl.trans(e)` — transpose the trailing two axes (`Op.transpose`).
       expandTranspose env e
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr)) => do
+      expandFull env dims.getElems v
+  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*])) => do
+      -- `tl.zeros([dims])` ≡ `tl.full([dims], 0)`.
+      let zero ← `(tritonExpr| 0)
+      expandFull env dims.getElems zero
   | _ => Macro.throwUnsupported
 
 partial def expandArith (env : Env) (ctx : String) (op : TSyntax `term)
@@ -691,7 +705,58 @@ partial def expandDot (env : Env)
     Macro.throwError
       ("tl.dot: inner dim mismatch — LHS innermost `" ++ termKey aK ++
        "` ≠ RHS outer-trailing `" ++ termKey bK ++ "`")
-  pure ⟨← `(Op.dot $a'.term $b'.term), .real, .dims (aBatch ++ [aM, bN])⟩
+  -- Pin the implicit `batch` / `M` / `K` / `N` arguments via named
+  -- positions; the unification `batch ++ [M, K] = ...` is not
+  -- invertible automatically through `List.append`.
+  let rec batchTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : TileShape))
+    | d :: rest => do
+        let tail ← batchTerm rest
+        `($d :: $tail)
+  let batchT ← batchTerm aBatch
+  pure ⟨← `(Op.dot (batch := $batchT) (M := $aM) (K := $aK) (N := $bN)
+              $a'.term $b'.term),
+        .real, .dims (aBatch ++ [aM, bN])⟩
+
+/-- Lower `tl.full([dims*], value)` to `Op.full`. The DSL value is
+restricted to a real / nat scalar (its dtype propagates to the resulting
+tile). The shape list may be any rank including empty (which degenerates
+to the scalar value itself, matching `Op.full shape (Op.const v) = v`
+for `shape = []`). -/
+partial def expandFull (env : Env)
+    (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr) :
+    MacroM EOut := do
+  let v' ← expandExpr env v
+  -- Value must be a scalar; tile-shaped values aren't broadcast here.
+  match v'.shape with
+  | .dims [] => pure ()
+  | _ => Macro.throwError "tl.full: value must be a scalar (rank-0)"
+  -- Each dim is a tritonExpr; its surface form may be `$(t)` (a Lean
+  -- `Nat` antiquote) or a numeral. We extract a plain `term` per dim
+  -- without going through `expandExpr` (which would promote the dim to
+  -- an `Op`). The user is responsible for keeping dims consistent with
+  -- the surrounding code; the macro just stitches them into the
+  -- `TileShape` literal that types the result.
+  let mut dimTerms : Array (TSyntax `term) := #[]
+  -- Wrap every dim in `(_ : Nat)` so its `termKey` matches what
+  -- `tl.arange(0, end)` emits (which also wraps); without this,
+  -- `tl.full([\$(M)], …)` would not broadcast against `[M]`-shaped
+  -- tiles produced by arange.
+  for d in dims do
+    match d with
+    | `(tritonExpr| $($t:term)) =>
+        dimTerms := dimTerms.push (← `(($t : Nat)))
+    | `(tritonExpr| $n:num) =>
+        dimTerms := dimTerms.push (← `(($n : Nat)))
+    | _ =>
+        Macro.throwError "tl.full: each dim must be a numeric literal or `$(t)` antiquote"
+  let rec shapeTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : TileShape))
+    | d :: rest => do
+        let tail ← shapeTerm rest
+        `($d :: $tail)
+  let shape ← shapeTerm dimTerms.toList
+  pure ⟨← `(Op.full $shape $v'.term), v'.dtype, .dims dimTerms.toList⟩
 
 /-- Lower `tl.trans(e)` to `Op.transpose`. Rank-≥ 2 required; the
 trailing two dims are swapped, any leading dims pass through as the
@@ -876,6 +941,8 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions e
   | `(tritonExpr| $e:tritonExpr[ None , : ])     => exprRegions e
   | `(tritonExpr| tl.trans($e:tritonExpr))       => exprRegions e
+  | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr)) => exprRegions v
+  | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*])) => []
   | _ => []  -- num, ident, $(...) — no regions to collect
 
 /-- All region terms appearing in a `tritonPtr`: the base region plus any
