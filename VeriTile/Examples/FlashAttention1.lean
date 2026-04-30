@@ -372,7 +372,22 @@ theorem lPartial_eq_mShifted {M D Bk : Nat} (_hBk : 0 < Bk)
     lPartial Q numKVBlocks K scale k i =
       Real.exp (-(mPartial Bk Q numKVBlocks K scale k i).unbotD 0) *
         lFree Q K scale k hk i := by
-  sorry
+  induction k with
+  | zero =>
+    -- LHS: lPartial 0 i = 0; RHS: exp(-((⊥).unbotD 0)) · lFree 0 = 1 · 0 = 0.
+    show (0 : ℝ) =
+      Real.exp (-((⊥ : WithBot ℝ).unbotD 0)) *
+        lFree Q K scale 0 hk i
+    rw [lFree_zero]
+    ring
+  | succ k _ih =>
+    -- Inductive step: exp(α-cancellation) absorbs the m-shift difference;
+    -- the k = 0 sub-case zeros out via `lFree 0 = 0`. Full proof requires
+    -- a case split on `k = 0 ∨ k > 0` plus the algebraic identity
+    -- `αₖ · exp(-mₖ) = exp(-m_{k+1})` for `k ≥ 1` (uses
+    -- `mPartial_succ_ne_bot` to know `mₖ` is a real, then `Real.exp_sub`
+    -- and `Real.exp_neg`). Deferred along with `oPartial_eq_mShifted`.
+    sorry
 
 /-- Companion identity for `oPartial`: `exp(-m_k) · oFree k i d`. Same
 shape as `lPartial_eq_mShifted` plus `· V[j, d]` on each summand. -/
@@ -383,7 +398,16 @@ theorem oPartial_eq_mShifted {M D Bk : Nat} (_hBk : 0 < Bk)
     oPartial Q numKVBlocks K V scale k idx =
       Real.exp (-(mPartial Bk Q numKVBlocks K scale k idx.1).unbotD 0) *
         oFree Q K V scale k hk idx := by
-  sorry
+  induction k with
+  | zero =>
+    show (0 : ℝ) =
+      Real.exp (-((⊥ : WithBot ℝ).unbotD 0)) *
+        oFree Q K V scale 0 hk idx
+    rw [oFree_zero]
+    ring
+  | succ k _ih =>
+    -- Same shape as `lPartial_eq_mShifted`'s succ step plus `· V[j, d]`.
+    sorry
 
 /-- The m-free reference sums `oFree N` and `lFree N` connect to
 `attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
