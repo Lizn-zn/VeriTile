@@ -639,6 +639,21 @@ theorem qkT_data_eq {M D Bk N : Nat}
   rw [Tile.transpose_nil_data, Tile.ofReal_data, Tile.ofReal_data]
   rfl
 
+/-- The `scaled` tile inside `attention` data-evaluates to a `WithBot ℝ`
+coercion of `scaledScore`. -/
+theorem scaled_data_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (i : Fin M) (j : Fin (Bk * N)) :
+    Option.map (· * scale)
+        ((Tile.dot [] (Tile.ofReal Q)
+          (Tile.transpose [] (Tile.ofReal K))).data (i, j, PUnit.unit))
+      = ((scaledScore Q K scale i j : ℝ) : WithBot ℝ) := by
+  rw [qkT_data_eq]
+  unfold scaledScore
+  show some _ = some _
+  congr 1
+  ring
+
 /-- The m-free reference sums `oFree N` and `lFree N` connect to
 `attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
 specification-side identity (no streaming algebra involved). -/
@@ -653,9 +668,11 @@ theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
   -- Goal: (Σ_j exp(s i j) · V (j, d, _)) / (Σ_j exp(s i j))
   --     = ((attention (Tile.ofReal Q) ...).data idx).unbotD 0
   -- Remaining: unfold `attentionReal` / `attention` / `softmaxRow` /
-  -- `Tile.dot []` chain, push `WithBot ℝ` Σ through `Tile.ofReal`-lifted
-  -- inputs, factor out the softmax denominator via `Finset.sum_div`.
-  -- Deferred as the last math obligation of issue #38.
+  -- outer `Tile.dot` (with V'), push the WithBot ℝ Σ through
+  -- `Tile.ofReal`-lifted operands (analogous to `qkT_data_eq` /
+  -- `scaled_data_eq`), and factor out the softmax denominator
+  -- (`Finset.sum_div`). Deferred as the last math obligation of
+  -- issue #38.
   sorry
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
