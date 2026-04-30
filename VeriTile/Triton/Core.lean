@@ -345,6 +345,15 @@ inductive Op : TileDType → TileShape → Type where
   | reduceSum : (keepDims : Bool) → {rest : TileShape} → {axisDim : Nat} →
                 Op .real (rest ++ [axisDim]) →
                 Op .real (if keepDims then rest ++ [1] else rest)
+  /--
+  Block-level matrix multiply (`tl.dot` in Triton): `c[m, n] = ∑_k a[m, k] * b[k, n]`.
+
+  The shape constraint is fully load-bearing: the inner dim `K` must match
+  between the LHS (rows of `a`) and RHS (cols of `b`). The accumulator form
+  `tl.dot(a, b, acc)` desugars at the DSL level to `acc + tl.dot(a, b)`, so
+  the AST has only the binary node. -/
+  | dot       : {M K N : Nat} →
+                Op .real [M, K] → Op .real [K, N] → Op .real [M, N]
   | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
   | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
                 (mask : Op .bool shape) → Op .real shape

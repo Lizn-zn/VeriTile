@@ -790,6 +790,31 @@ noncomputable def Tile.reduceMax {rest : TileShape} {axisDim : Nat}
 def Tile.natToReal {shape} (x : Tile .nat shape) : Tile .real shape :=
   ⟨fun i => some ((x.data i : ℝ))⟩
 
+/-- Block-level matrix multiply (Triton's `tl.dot`):
+`c[m, n] = ∑_k a[m, k] * b[k, n]`.
+
+`⊥`-propagating: if any factor in any pair is `⊥` the corresponding
+summand is `⊥`, and `Finset.sum` over `WithBot ℝ` propagates `⊥` through
+the whole entry. Well-formed kernels load real (non-`⊥`) values into the
+operands, so the dot product collapses to a regular `↑(∑ a*b)` term and
+the `tl.store` demotion via `unbotD 0` recovers the underlying ℝ value. -/
+noncomputable def Tile.dot {M K N : Nat}
+    (a : Tile .real [M, K]) (b : Tile .real [K, N]) : Tile .real [M, N] :=
+  ⟨fun (m, n, _) =>
+    @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+      (fun k => Option.map₂ (· * ·)
+                  (a.data (m, k, PUnit.unit))
+                  (b.data (k, n, PUnit.unit)))⟩
+
+@[simp] theorem Tile.dot_data {M K N : Nat}
+    (a : Tile .real [M, K]) (b : Tile .real [K, N])
+    (m : Fin M) (n : Fin N) (rest : TileIndex []) :
+    (Tile.dot a b).data (m, n, rest) =
+      @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun k => Option.map₂ (· * ·)
+                    (a.data (m, k, PUnit.unit))
+                    (b.data (k, n, PUnit.unit))) := rfl
+
 noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)
   | .const c, _ => some (Tile.scalar (some c : WithBot ℝ))
   | .constNat n, _ => some (Tile.scalar n)
@@ -838,6 +863,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       Tile.reduceMax keepDims va
   | .reduceSum keepDims a, s => return Tile.reduceSum keepDims (← evalOp a s)
+  | .dot a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.dot va vb)
   | .load region off, s => do
       let offsets ← evalOp off s
       some ⟨fun i => some (s.readMem region (offsets.data i))⟩

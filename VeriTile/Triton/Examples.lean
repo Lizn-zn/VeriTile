@@ -67,4 +67,20 @@ example :
   have hv := congrArg (fun t : Tile .real [] => t.data PUnit.unit) ht
   norm_num at hv
 
+/-! ### `tl.dot` typed-AST smoke tests
+
+These verify that `Op.dot` type-checks at the AST layer (the `K` constraint
+forces the inner dim of the LHS to match the outer dim of the RHS). The
+DSL macro `tl.dot(a, b)` and its fused-accumulator form
+`tl.dot(a, b, acc)` lower into these AST nodes; they will be exercised
+end-to-end once 2D load / pointer arithmetic land for FA-1 forward. -/
+
+example : (M K N : Nat) → Op .real [M, N] := fun M K N =>
+  .dot (Op.ref .real [M, K] "a") (Op.ref .real [K, N] "b")
+
+example : (M K N : Nat) → Op .real [M, N] := fun M K N =>
+  .add NumericDType.real (.consSame (.consSame .nil))
+    (.dot (Op.ref .real [M, K] "p") (Op.ref .real [K, N] "v"))
+    (Op.ref .real [M, N] "acc")
+
 end VeriTile.Triton.Examples

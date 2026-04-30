@@ -107,6 +107,12 @@ syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "-inf" : tritonExpr
 
+-- Block-level matrix multiply. Two-arg form `tl.dot(a, b)` produces `a @ b`;
+-- three-arg form `tl.dot(a, b, acc)` is the fused-accumulator pattern (the
+-- standard FA inner-loop shape) and desugars to `acc + tl.dot(a, b)`.
+syntax "tl.dot(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
+
 -- kwarg: `name = expr`. Used for `mask=` / `other=` in tl.load / tl.store.
 -- Per Issue #16: only `mask` and `other` are recognized; other names error.
 syntax ident " = " tritonExpr : tritonKwarg
@@ -392,6 +398,19 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape⟩
   | `(tritonExpr| -inf) =>
       pure ⟨← `(Op.negInf), .real, SInfo.scalar⟩
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) => do
+      expandDot env a b
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $acc:tritonExpr)) => do
+      -- Fused accumulator form: `tl.dot(a, b, acc) ≡ acc + tl.dot(a, b)`.
+      -- Both `tl.dot(a, b)` and `acc` have shape `[M, N]`; their `+` uses
+      -- the standard same-shape broadcast.
+      let dot ← expandDot env a b
+      let acc' ← expandExpr env acc
+      ensureDType .real acc'.dtype "tl.dot accumulator"
+      ensureShape dot.shape acc'.shape "tl.dot accumulator"
+      let (bc, outShape) ← broadcastTerm dot.shape acc'.shape "tl.dot accumulator"
+      pure ⟨← `(Op.add NumericDType.real $bc $dot.term $acc'.term),
+            .real, outShape⟩
   | `(tritonExpr| tl.load($p:tritonPtr $[, $kwargs:tritonKwarg]*)) => do
       -- Pointer surface syntax lowers to the internal `(region, offset)` AST.
       -- Optional `mask=` / `other=` kwargs lower to `LoadOptions`.
@@ -539,6 +558,27 @@ partial def expandReduce (env : Env) (ctx : String) (op : TSyntax `term)
   let kdLit : TSyntax `term ← if keepDims then `(Bool.true) else `(Bool.false)
   pure ⟨← `($op $kdLit $e'.term), .real, outShape⟩
 
+/-- Lower a `tl.dot(a, b)` to `Op.dot a b`. Both operands must be rank-2
+real tiles whose inner dim agrees syntactically (same dim term). The
+result shape is `[outerDim a, innerDim b]`. -/
+partial def expandDot (env : Env)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .real a'.dtype "tl.dot"
+  ensureDType .real b'.dtype "tl.dot"
+  match a'.shape, b'.shape with
+  | .dims [aM, aK], .dims [bK, bN] =>
+      unless termKey aK == termKey bK do
+        Macro.throwError
+          ("tl.dot: inner dim mismatch — LHS has shape `[..., "
+            ++ termKey aK ++ "]` but RHS has shape `[" ++ termKey bK
+            ++ ", ...]`")
+      pure ⟨← `(Op.dot $a'.term $b'.term), .real, .dims [aM, bN]⟩
+  | _, _ =>
+      Macro.throwError
+        "tl.dot: both operands must be rank-2 (2D matrices)"
+
 end
 
 mutual
@@ -648,6 +688,10 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
             | _ => acc) []
       exprRegions e ++ kwargRegions
   | `(tritonExpr| tl.toReal($e:tritonExpr))      => exprRegions e
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $c:tritonExpr)) =>
+      exprRegions a ++ exprRegions b ++ exprRegions c
   | `(tritonExpr| ($e:tritonExpr))               => exprRegions e
   | `(tritonExpr| tl.program_id($e:tritonExpr))  => exprRegions e
   | `(tritonExpr| tl.arange($e:tritonExpr))      => exprRegions e
