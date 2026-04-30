@@ -799,6 +799,34 @@ each operand at outer index `i` and recurses on the remaining batch. -/
           ⟨fun rIdx => a.data (i, rIdx)⟩
           ⟨fun rIdx => b'.data (i, rIdx)⟩).data restIdx := rfl
 
+/-- Trailing-two-axes transpose (`Tile.dot`-style framework: matrix dims
+are the trailing two, leading dims are an unchanged `batch` prefix). -/
+def Tile.transpose : {dtype : TileDType} → (batch : TileShape) →
+    {M N : Nat} →
+    Tile dtype (batch ++ [M, N]) → Tile dtype (batch ++ [N, M])
+  | _, [],         M, N, x =>
+      ⟨fun (n, m, _) => x.data (m, n, PUnit.unit)⟩
+  | _, _ :: rest,  M, N, x =>
+      ⟨fun (i, restIdx) =>
+        (Tile.transpose rest (M := M) (N := N)
+            ⟨fun rIdx => x.data (i, rIdx)⟩).data restIdx⟩
+
+/-- Body of `Tile.transpose` at the rank-2 base case: swap `(m, n) ↔ (n, m)`. -/
+@[simp] theorem Tile.transpose_nil_data {dtype : TileDType} {M N : Nat}
+    (x : Tile dtype [M, N]) (n : Fin N) (m : Fin M) (rest : TileIndex []) :
+    (Tile.transpose [] x).data (n, m, rest) =
+      x.data (m, n, PUnit.unit) := rfl
+
+/-- Recursive step: `(Tile.transpose (b :: rest) x).data (i, restIdx)`
+slices at outer index `i` and recurses on the remaining batch. -/
+@[simp] theorem Tile.transpose_cons_data {dtype : TileDType}
+    {b : Nat} {rest : TileShape} {M N : Nat}
+    (x : Tile dtype ((b :: rest) ++ [M, N]))
+    (i : Fin b) (restIdx : TileIndex (rest ++ [N, M])) :
+    (Tile.transpose (b :: rest) x).data (i, restIdx) =
+      (Tile.transpose rest (M := M) (N := N)
+          ⟨fun rIdx => x.data (i, rIdx)⟩).data restIdx := rfl
+
 /-- Insert a unit-size axis at position `axis`. The output index is
 projected back to the input by `dropInsertedIndex`, which throws away
 the inserted slot's `Fin 1` coordinate. -/
@@ -885,6 +913,9 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.select vc va vb)
+  | .transpose (batch := batch) a, s => do
+      let va ← evalOp a s
+      some (Tile.transpose batch va)
   | .load region off, s => do
       let offsets ← evalOp off s
       some ⟨fun i => some (s.readMem region (offsets.data i))⟩

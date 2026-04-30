@@ -485,6 +485,20 @@ inductive Op : TileDType → TileShape → Type where
                 Op .real (batch ++ [M, K]) → Op .real (batch ++ [K, N]) →
                 Op .real (batch ++ [M, N])
   /--
+  Trailing-two-axes transpose (`x.T` in Triton, mirrors how `Op.dot`
+  treats the trailing two dims as the matrix and any leading dims as a
+  passthrough `batch` prefix). For 2D this is the standard `.T`; for
+  rank ≥ 3 it transposes the inner matrix at every batch coordinate.
+
+  Arbitrary axis permutations (e.g. swapping leading axes or cyclic
+  reorderings) are *not* expressible by this constructor alone. They
+  can be composed from multiple `transpose`s in some — but not all —
+  cases; a fully general `Op.permuteAxes` is left as a follow-up
+  (issue #36). -/
+  | transpose : {dtype : TileDType} → {batch : TileShape} → {M N : Nat} →
+                Op dtype (batch ++ [M, N]) →
+                Op dtype (batch ++ [N, M])
+  /--
   Insert a unit-size axis at position `axis` of `shape`. Models Triton's
   `tl.expand_dims(e, axis = K)` and the slicer surface forms `e[:, None]`
   / `e[None, :]`. Fully ND: `axis` ranges over `Fin (shape.length + 1)`,

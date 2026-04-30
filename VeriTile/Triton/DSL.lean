@@ -153,6 +153,13 @@ syntax "tl.load(" tritonPtr ("," tritonKwarg)* ")" : tritonExpr
 syntax:max tritonExpr:max noWs "[" ":" "," "None" "]" : tritonExpr
 syntax:max tritonExpr:max noWs "[" "None" "," ":" "]" : tritonExpr
 
+-- Trailing-two-axes transpose. Surfaced as `tl.trans(e)` matching the
+-- Triton Python API; rank-≥ 2 input required, lowers to `Op.transpose`.
+-- (The NumPy-style `e.T` postfix sugar is a candidate follow-up — its
+-- syntax-quote pattern interacts poorly with Lean's antiquotation
+-- parser, so we keep the function-call surface as primary.)
+syntax "tl.trans(" tritonExpr ")" : tritonExpr
+
 -- Comparison operators (priority 50 — below arithmetic 60/70 — non-associative).
 -- Both ℝ × ℝ and Nat × Nat carriers are supported by typed `Op` constructors.
 -- channel (scalarBool / tileBool). Triton-faithful: no chained comparisons
@@ -538,6 +545,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $e:tritonExpr[ None , : ]) => do
       -- `e[None, :]` — insert a unit axis at position 0: `[N] → [1, N]`.
       expandSlicerNone env e (axisIdx := 0)
+  | `(tritonExpr| tl.trans($e:tritonExpr)) => do
+      -- `tl.trans(e)` — transpose the trailing two axes (`Op.transpose`).
+      expandTranspose env e
   | _ => Macro.throwUnsupported
 
 partial def expandArith (env : Env) (ctx : String) (op : TSyntax `term)
@@ -682,6 +692,34 @@ partial def expandDot (env : Env)
       ("tl.dot: inner dim mismatch — LHS innermost `" ++ termKey aK ++
        "` ≠ RHS outer-trailing `" ++ termKey bK ++ "`")
   pure ⟨← `(Op.dot $a'.term $b'.term), .real, .dims (aBatch ++ [aM, bN])⟩
+
+/-- Lower `tl.trans(e)` to `Op.transpose`. Rank-≥ 2 required; the
+trailing two dims are swapped, any leading dims pass through as the
+`batch` prefix. The input shape's `SInfo.dims` already lists
+outermost-first, so picking off the last two and rebuilding
+`batch ++ [N, M]` is straightforward. -/
+partial def expandTranspose (env : Env)
+    (e : TSyntax `tritonExpr) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.length < 2 then
+    Macro.throwError
+      ("tl.trans: rank-≥ 2 input required, got rank " ++ toString dims.length ++
+       ". (Triton `.T` / `tl.trans` swaps the trailing two axes; on a rank-1 tile use `tl.expand_dims` first.)")
+  let batch := dims.dropLast.dropLast
+  let M := dims[dims.length - 2]!
+  let N := dims[dims.length - 1]!
+  -- Build a `TileShape` term for `batch` so the elaborator pins the
+  -- implicit `batch` argument (the unification `batch ++ [M, N] = ...`
+  -- is not invertible automatically through `List.append`).
+  let rec batchTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : TileShape))
+    | d :: rest => do
+        let tail ← batchTerm rest
+        `($d :: $tail)
+  let batchT ← batchTerm batch
+  pure ⟨← `(Op.transpose (batch := $batchT) (M := $M) (N := $N) $e'.term),
+        e'.dtype, .dims (batch ++ [N, M])⟩
 
 /-- Lower `e[:, None]` / `e[None, :]` to `Op.expandDim` with the appropriate
 axis. First-stage restriction: input must be rank-1; higher ranks raise a
@@ -837,6 +875,7 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
       exprRegions c ++ exprRegions a ++ exprRegions b
   | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions e
   | `(tritonExpr| $e:tritonExpr[ None , : ])     => exprRegions e
+  | `(tritonExpr| tl.trans($e:tritonExpr))       => exprRegions e
   | _ => []  -- num, ident, $(...) — no regions to collect
 
 /-- All region terms appearing in a `tritonPtr`: the base region plus any

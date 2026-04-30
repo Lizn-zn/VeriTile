@@ -197,4 +197,62 @@ example :
     r.data (⟨1, by decide⟩, PUnit.unit) = some (2 : ℝ) := by
   refine ⟨?_, ?_⟩ <;> simp [Tile.select, Tile.vec]
 
+/-! ### `tl.trans` / transpose (issue #36)
+
+Trailing-two-axes transpose: rank-2 case is the standard `.T`; rank-≥ 3
+transposes the inner matrix at every batch coordinate. The DSL surface
+is `tl.trans(e)` (matching the Triton Python API; the `e.T` postfix is
+a possible follow-up). -/
+
+/-- DSL kernel exercising `tl.trans` at rank-2: load a `[Bk, D]` K-block,
+transpose to `[D, Bk]`, store back. The shape change is observable in
+the macro-recorded `SInfo` and the typed AST. -/
+def transposeSmoke (kReg outReg : RegionName) (Bk D : Nat) :
+    Kernel := triton {
+  pid    := tl.program_id(0)
+  offs_n := pid * $(Bk) + tl.arange(0, $(Bk))
+  offs_d := tl.arange(0, $(D))
+  ptrs_in  := offs_n[:, None] * $(D) + offs_d[None, :]
+  ptrs_out := offs_d[:, None] * $(Bk) + offs_n[None, :]
+  k        := tl.load($(kReg) + ptrs_in)
+  kt       := tl.trans(k)
+  tl.store($(outReg) + ptrs_out, kt)
+}
+
+/-- `tl.dot(Q, tl.trans(K))` lands at the FA-1 score-block shape:
+`Q : [M, D]`, `K : [Bk, D]`, `K.T : [D, Bk]`, `Q @ K.T : [M, Bk]`. -/
+def dotKTSmoke (qReg kReg sReg : RegionName) (M Bk D : Nat) :
+    Kernel := triton {
+  pid       := tl.program_id(0)
+  offs_m    := pid * $(M) + tl.arange(0, $(M))
+  offs_n    := tl.arange(0, $(Bk))
+  offs_d    := tl.arange(0, $(D))
+  ptrs_q    := offs_m[:, None] * $(D)  + offs_d[None, :]
+  ptrs_k    := offs_n[:, None] * $(D)  + offs_d[None, :]
+  ptrs_s    := offs_m[:, None] * $(Bk) + offs_n[None, :]
+  q         := tl.load($(qReg) + ptrs_q)
+  k         := tl.load($(kReg) + ptrs_k)
+  scores    := tl.dot(q, tl.trans(k))
+  tl.store($(sReg) + ptrs_s, scores)
+}
+
+/-- Type-level: `Op.transpose` on a `[M, N]` real tile lands at `[N, M]`. -/
+example (M N : Nat) :
+    Op .real [N, M] :=
+  Op.transpose (batch := []) (Op.ref .real [M, N] "x")
+
+/-- Batched: `[B, M, N] → [B, N, M]`. -/
+example (B M N : Nat) :
+    Op .real [B, N, M] :=
+  Op.transpose (batch := [B]) (Op.ref .real [B, M, N] "x")
+
+/-- `Tile.transpose` semantics on a literal `[2, 3]` matrix lands at
+`[3, 2]` with swapped indexing. -/
+example :
+    let m : Tile .real [2, 3] :=
+      Tile.mat (fun i j => some ((i.val * 3 + j.val : Nat) : ℝ))
+    let mT := Tile.transpose [] m
+    mT.data (⟨2, by decide⟩, ⟨1, by decide⟩, PUnit.unit) =
+      m.data (⟨1, by decide⟩, ⟨2, by decide⟩, PUnit.unit) := rfl
+
 end VeriTile.Triton.Examples
