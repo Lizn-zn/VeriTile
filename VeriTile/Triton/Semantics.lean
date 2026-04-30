@@ -841,6 +841,20 @@ def Tile.expandDim {dtype : TileDType} {shape : TileShape}
     (Tile.expandDim axis x).data idx =
       x.data (TileShape.dropInsertedIndex shape axis 1 idx) := rfl
 
+/-- Lift a plain ℝ-valued tile-shaped function into a `Tile .real`. Useful
+at the spec / boundary layer: `BlockState.mem` reads ℝ, never `⊥`, so a
+`tl.load`-fed kernel input is naturally a `TileIndex shape → ℝ`. The
+`⊥` sentinel of `WithBot ℝ` is reserved for `-inf` / masked-off /
+`tl.full(_, -inf)` values introduced *inside* a kernel; spec-level
+inputs and outputs should round-trip through `ofReal` / `unbotD 0`. -/
+def Tile.ofReal {shape : TileShape} (x : TileIndex shape → ℝ) :
+    Tile .real shape :=
+  ⟨fun i => some (x i)⟩
+
+@[simp] theorem Tile.ofReal_data {shape : TileShape}
+    (x : TileIndex shape → ℝ) (i : TileIndex shape) :
+    (Tile.ofReal x).data i = some (x i) := rfl
+
 /-- Element-wise select (`tl.where(cond, a, b)`): per-cell, pick from `a`
 when `cond` is `true`, else from `b`. Same-shape; broadcast lifting is
 done at the DSL layer. Named `select` to avoid the Lean `where` keyword
