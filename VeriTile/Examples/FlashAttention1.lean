@@ -408,8 +408,32 @@ appear at the input boundary; it's an internal sentinel for things
 like `tl.full(_, -inf)` / masked-off lanes / `-inf` introduced by the
 kernel.
 
-**Proof status: v0 leaves this as `sorry` — see issue #38 for the
-online-softmax invariant + `forLoop_inv` discharge.** -/
+**Proof skeleton (see issue #38).** The proof follows the same shape
+as `online_softmax_correct` in `Examples/OnlineSoftmax.lean`, scaled
+to FA-1's bigger statement:
+
+```text
+1. Stage B init — exec walks through the 8 pre-loop statements
+   (program_id, two aranges, Q-load, three tile-init fulls), each
+   matched by an explicit `stepStmt` rewrite. Resulting state
+   satisfies `P_fa1 0`.
+
+2. Stage C step — invoke `forLoop_inv` with `P := P_fa1 …` and the
+   per-iteration body. The body's 13 statements need their
+   evalOp / Tile.dot / Tile.transpose / Tile.expandDim semantics
+   threaded through; the math-side recurrence (mPartial / lPartial /
+   oPartial at k → k+1) closes the inductive step.
+
+3. Stage D readout — given `P_fa1 numKVBlocks s_final`, the
+   post-loop assigns `out := o_acc / l_i[:, None]` and
+   `tl.store(outReg + ptrs, out)` realize
+   `streaming_eq_attentionReal` at the operational layer; the
+   `observeTileAt … = some (attentionReal …)` follows.
+```
+
+Each Stage above is itself a multi-hundred-line proof (mirroring
+OnlineSoftmax's scale × the rank-2 / batched / multi-stage
+complexity of FA-1). v0 leaves the body as `sorry`. -/
 theorem fa1_forward_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg outReg : RegionName)
@@ -429,6 +453,9 @@ theorem fa1_forward_correct
           outReg
           (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
         = some (attentionReal Q K V scale idx) := by
+  -- See doc above for the proof skeleton (Stages B / C / D); each
+  -- step is multi-hundred lines and depends on the streaming math
+  -- identity (`streaming_eq_attentionReal`) being proved first.
   sorry
 
 end VeriTile.Examples
