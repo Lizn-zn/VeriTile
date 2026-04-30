@@ -27,16 +27,27 @@ Agent.
 
 ## Status
 
-Phase A is complete. See release
-[`v0.1-tier1`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.1-tier1).
+Phase B is complete. See release
+[`v0.2-tier2`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.2-tier2)
+(prior milestone: [`v0.1-tier1`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.1-tier1)).
 
-Included in Phase A:
+Included through Phase B:
 
-- 3 closed Tier 1 kernel-pair refinement theorems.
-- A `triton { ... }` Lean macro for the current Triton subset.
-- Operational semantics for gather/scatter tile loads and stores.
-- A held-out LLM proof-evaluation harness.
-- A FlashAttention forward feasibility study.
+- 6 closed kernel-pair refinement theorems (Tier 1 × 3 + Tier 2 × 3).
+- `forLoop` operational semantics + `forLoop_inv` master induction lemma.
+- Online softmax recurrence ≡ batch softmax (paper centerpiece, no input
+  range precondition).
+- Welford online recurrence ≡ two-pass mean/variance.
+- LayerNorm fused single-pass kernel ≡ two-pass kernel.
+- Typed `Op : TileDType → TileShape → Type` with end-to-end typed
+  `evalOp`/`stepStmt` and a typed register file.
+- `WithBot ℝ` carrier: `tl.full((), -inf)` lowers to true `⊥`, so kernels
+  using `-inf` as a max-accumulator seed need no input-range hypothesis.
+- Triton-faithful mask semantics: `tl.load(p, mask=m, other=o)` lowers to
+  separate AST forms; `other=None` is modeled non-deterministically via
+  a per-state `undef` oracle.
+- 6 comparison operators (`<`, `<=`, `==`, `>`, `>=`, `!=`) over the
+  `.real`/`.nat` channels, producing the `.bool` channel.
 
 ## Environment
 

@@ -25,16 +25,25 @@ Triton kernel pair 的等价性.
 
 ## 当前状态
 
-Phase A 已完成. 见 release
-[`v0.1-tier1`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.1-tier1).
+Phase B 已完成。见 release
+[`v0.2-tier2`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.2-tier2)
+(前一里程碑:[`v0.1-tier1`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.1-tier1))。
 
-Phase A 包含:
+Phase B 截止包含:
 
-- 3 个已闭合的 Tier 1 kernel-pair refinement 定理.
-- 当前 Triton 子集的 `triton { ... }` Lean 宏.
-- gather/scatter tile load/store 的操作语义.
-- held-out LLM 证明评测 harness.
-- FlashAttention forward 可行性研究.
+- 6 个已闭合 kernel-pair refinement 定理(Tier 1 × 3 + Tier 2 × 3)。
+- `forLoop` 操作语义 + `forLoop_inv` 归纳引理。
+- Online softmax recurrence ≡ batch softmax(论文核心,无输入范围前提)。
+- Welford online recurrence ≡ two-pass mean/variance。
+- LayerNorm fused 单 pass ≡ two-pass。
+- Typed `Op : TileDType → TileShape → Type`,全链路 typed `evalOp`/`stepStmt`
+  与 typed 寄存器文件。
+- `WithBot ℝ` 载体:`tl.full((), -inf)` 降为真正的 `⊥`,使用 `-inf` 作 max
+  累加器种子的 kernel 不再需要输入范围假设。
+- Triton 忠实的 mask 语义:`tl.load(p, mask=m, other=o)` 降为独立 AST 形式;
+  `other=None` 通过 per-state `undef` oracle 非确定性建模。
+- 6 个比较算子(`<`、`<=`、`==`、`>`、`>=`、`!=`)在 `.real`/`.nat` 通道上,
+  产生 `.bool` 通道。
 
 ## 环境配置
 

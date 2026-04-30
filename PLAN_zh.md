@@ -18,8 +18,8 @@
 
 | Tier | Phase | 主定理 | 类型 |
 |---|---|---|---|
-| 1 | A | (#1) `softmax_kernels_refinement`(已完成)·(#2) `log_sum_exp_refinement`·(#3) `softmax_reciprocal_refinement` | kernel ↔ kernel × 3 |
-| 2 | B | (#4) `welford_kernels_refinement`·(#5) `online_softmax_recurrence_eq_batch`·(#6) `layernorm_kernels_refinement` | kernel ↔ kernel × 3 |
+| 1 | A | (#1) `softmax_kernels_refinement`(已完成)·(#2) `log_sum_exp_refinement`(已完成)·(#3) `softmax_reciprocal_refinement`(已完成) | kernel ↔ kernel × 3 |
+| 2 | B | (#4) `welford_kernels_refinement`(已完成)·(#5) `online_softmax_recurrence_eq_batch`(已完成)·(#6) `layernorm_kernels_refinement`(已完成) | kernel ↔ kernel × 3 |
 | 3 | C, D | (#7) `fa_forward_correct`(T3-A,Phase C)·(#8) `fa_2_forward_correct`(T3-B,Phase D) | kernel ↔ math × 2 |
 
 **外加 helpers**(不计入主定理):
@@ -73,7 +73,7 @@
 
 **Exit gate(`v0.1-tier1`):** 全部交付物达成;`lake build` 干净
 
-### Phase B — forLoop 语义 + Tier 2(~8–12 wk)
+### Phase B — forLoop 语义 + Tier 2(~8–12 wk)—— **已完成**(`v0.2-tier2`)
 
 **交付物:**
 
@@ -105,12 +105,17 @@
 - 其余 Tier 1+2 kernel 不做 diff-test 工件;它们的正确性完全由 Lean 证明承担
 
 **验证(gating):**
-- `scripts/prove.sh` 在 Phase B held-out 集上 close rate ≥ 50%(见 §LLM benchmark protocol)。即使 close rate 更低也仍是可发表数据 —— 论文叙事从"LLM 免费帮我们证完"变成"人机协作并诚实记录边界"
+- ~~`scripts/prove.sh` 在 Phase B held-out 集上 close rate ≥ 50%~~ —— **gate 时缩水。** LLM 评测推迟到后续 milestone;Phase B 仅以已闭合 Lean 定理交付
 
 **验证(工件,非 gating):**
-- 1–2 个选定代表性 Tier 1+2 kernel 的 diff-test 工件已就位(见 §Differential testing)
+- ~~1–2 个 Tier 1+2 kernel 的 diff-test 工件~~ —— **gate 时缩水。** Diff-test infra 推迟;Tier 1+2 正确性完全由形式 Lean 证明对 embedded 操作语义承担
 
-**Exit gate(`v0.2-tier2`):** 全部交付物达成;Phase C 推迟时可投 CGO/CC
+**额外交付物(超出 Phase B 原定 scope):**
+- Mask + Bool channel 扩展(Slices 1–4):masked load/store、`tl.load(p, mask=m, other=o)` DSL 表面、6 个比较算子、通过 `BlockState.undef` oracle 实现 `other=None` 的非确定性
+- Typed Tile 重构:`Op : TileDType → TileShape → Type` 全链路 typed `evalOp`/`stepStmt`;`RegFile` 由 `(dtype, shape, name)` 索引 —— 消除动态 tagged `Value` union
+- `WithBot ℝ` 作为 `.real` 通道载体:`Op.negInf` 求值为真正的 `⊥` 而非 `-1e38` stand-in,从 OnlineSoftmax 定理中删除 `h_lo` 前提,扫除 Phase C FlashAttention 的前提扩散障碍
+
+**Exit gate(`v0.2-tier2`):** ✅ 已达成。3 个 Tier 2 kernel-pair 定理闭合;全库 0 sorry;`lake build` 干净(2729 jobs)
 
 ### Phase C — `tl.dot` + masking + Tier 3-A(~8–12 wk)
 
