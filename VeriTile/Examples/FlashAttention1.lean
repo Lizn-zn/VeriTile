@@ -294,6 +294,62 @@ theorem streaming_eq_attentionReal {M D Bk : Nat}
 
 end FA1Math
 
+/-! ## Operational layer — `P_fa1` invariant + proof skeleton (issue #38)
+
+Carries Stage A's streaming functions through the kernel as a
+`forLoop_inv` invariant, the way `Examples/OnlineSoftmax.lean` does
+for `onlineSoftmaxM` / `onlineSoftmaxL`. Proofs at this layer remain
+`sorry` while we land the structural scaffold; they reduce to:
+
+* `P_fa1_init` — the post-pre-loop state satisfies `P_fa1 0`.
+* `P_fa1_step` — the loop body preserves `P_fa1` under `n → n+1`.
+* `P_fa1_readout` — given `P_fa1 numKVBlocks s`, the post-store
+  memory at `outReg` equals `attentionReal Q K V scale idx`,
+  bridging through `streaming_eq_attentionReal`.
+
+These three combine via `forLoop_inv` and explicit `stmts_cons`
+walks to discharge `fa1_forward_correct`. -/
+
+/-- Loop-carried predicate: at iteration count `k ∈ [0, numKVBlocks]`,
+the kernel state holds the streaming math values `mPartial k`,
+`lPartial k`, `oPartial k` in the corresponding registers, plus the
+preset Q-block and book-keeping registers. K, V remain loaded. -/
+def P_fa1
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (s : BlockState) : Prop :=
+  -- `pid` register and value preserved.
+  s.regs .nat [] "pid" = some (Tile.scalar origPid) ∧
+  s.pid = origPid ∧
+  -- Q-row-block index vector (set pre-loop, reused post-loop for the
+  -- final `tl.store` ptrs).
+  s.regs .nat [M] "offs_m" = some
+      (Tile.vec (fun i : Fin M => origPid * M + i.val)) ∧
+  -- D-axis index vector.
+  s.regs .nat [D] "offs_d" = some
+      (Tile.vec (fun d : Fin D => d.val)) ∧
+  -- Loaded Q-row-block.
+  s.regs .real [M, D] "q" = some (Tile.ofReal Q) ∧
+  -- Streaming accumulators at iteration `k`.
+  s.regs .real [M] "m_i" = some
+      ⟨fun idx : TileIndex [M] => FA1Math.mPartial Bk Q numKVBlocks K scale k idx.1⟩ ∧
+  s.regs .real [M] "l_i" = some
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        FA1Math.lPartial Q numKVBlocks K scale k idx.1) ∧
+  s.regs .real [M, D] "o_acc" = some
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        FA1Math.oPartial Q numKVBlocks K V scale k idx) ∧
+  -- Input regions still loaded as the user's hypothesis says.
+  InputAt s qReg
+      (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) Q ∧
+  InputAt s kReg
+      (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K ∧
+  InputAt s vReg
+      (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V
+
 /-! ## Correctness statement (sorry — discharged in issue #38)
 
 The statement uses the standard `InputAt` / `observeTileAt` predicates
