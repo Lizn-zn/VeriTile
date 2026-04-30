@@ -133,4 +133,36 @@ example :
       v.data (⟨1, by decide⟩, PUnit.unit) := by
   simp [Tile.expandDim, TileShape.dropInsertedIndex]
 
+/-! ### 2D pointer arithmetic (FA-1 Q-block load shape, issue #35)
+
+The classic FA-1 forward Q-load addresses a `[M, D]` tile via the
+broadcast sum
+
+  Q + offs_m[:, None] * stride_qm + offs_d[None, :]
+
+Each piece — `[:, None]` / `[None, :]` (#34), ND broadcast, ND
+`Op.load` — is already in place; the smoke tests below verify the
+composite still type-checks at shape `[M, D]` end-to-end. -/
+
+/-- FA-1-style Q-block load: rank-2 `[M, D]` tile addressed via ND
+pointer arithmetic. -/
+def fa1QLoadSmoke (qReg outReg : RegionName) (M D stride_qm : Nat) :
+    Kernel := triton {
+  pid    := tl.program_id(0)
+  offs_m := pid * $(M) + tl.arange(0, $(M))
+  offs_d := tl.arange(0, $(D))
+  ptrs   := offs_m[:, None] * $(stride_qm) + offs_d[None, :]
+  qs     := tl.load($(qReg) + ptrs)
+  tl.store($(outReg) + ptrs, qs)
+}
+
+/-- Type-level assertion that an isolated rank-2 broadcast pointer
+expression `[M, 1] + [1, D]` lands at shape `[M, D]`. The full
+FA-1-style pipeline above already type-checks; this just pins the
+broadcast result independently for documentation. -/
+example (M D : Nat) : Op .nat [M, D] :=
+  Op.add NumericDType.nat (.consR (.consL .nil))
+    (Op.expandDim (shape := [M]) ⟨1, by simp⟩ (Op.arange M))
+    (Op.expandDim (shape := [D]) ⟨0, by simp⟩ (Op.arange D))
+
 end VeriTile.Triton.Examples
