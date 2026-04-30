@@ -380,13 +380,23 @@ theorem lPartial_eq_mShifted {M D Bk : Nat} (_hBk : 0 < Bk)
         lFree Q K scale 0 hk i
     rw [lFree_zero]
     ring
-  | succ k _ih =>
-    -- Inductive step: exp(α-cancellation) absorbs the m-shift difference;
-    -- the k = 0 sub-case zeros out via `lFree 0 = 0`. Full proof requires
-    -- a case split on `k = 0 ∨ k > 0` plus the algebraic identity
-    -- `αₖ · exp(-mₖ) = exp(-m_{k+1})` for `k ≥ 1` (uses
-    -- `mPartial_succ_ne_bot` to know `mₖ` is a real, then `Real.exp_sub`
-    -- and `Real.exp_neg`). Deferred along with `oPartial_eq_mShifted`.
+  | succ k ih =>
+    -- LHS:  lPartial (k+1) i = αₖ · lPartial k i + Σ_jL exp(scaledScore - m_{k+1})
+    -- RHS:  exp(-m_{k+1}) · lFree (k+1) hk i
+    --     = exp(-m_{k+1}) · (lFree k _ i + Σ_jL exp(scaledScore))   (lFree_succ)
+    --     = exp(-m_{k+1}) · lFree k _ i + exp(-m_{k+1}) · Σ_jL exp(scaledScore)
+    -- Match the two sums:
+    --   (a) αₖ · lPartial k i = exp(-m_{k+1}) · lFree k _ i
+    --       ↳ apply IH to lPartial k, then cancel αₖ · exp(-mₖ) = exp(-m_{k+1})
+    --         (degenerate at k = 0 where both sides are 0 since lFree 0 = 0).
+    --   (b) Σ_jL exp(scaledScore - m_{k+1}) = exp(-m_{k+1}) · Σ_jL exp(scaledScore)
+    --       ↳ Real.exp_sub + Finset.mul_sum.
+    -- The α-cancellation requires a case split on `k = 0 ∨ k > 0`; for `k ≥ 1`,
+    -- `mPartial_succ_ne_bot` shows mₖ is some real, and the identity
+    -- `αₖ · exp(-mₖ) = exp(-m_{k+1})` follows from `Real.exp_sub` /
+    -- `Real.exp_neg`. Deferred — this is the primary remaining math content
+    -- of issue #38.
+    let _ := ih  -- silence unused-variable warning while the proof is sketched
     sorry
 
 /-- Companion identity for `oPartial`: `exp(-m_k) · oFree k i d`. Same
