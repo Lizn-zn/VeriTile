@@ -288,6 +288,52 @@ noncomputable def oFree {M D Bk N : Nat}
       (blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL)) *
     V (blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL, d, PUnit.unit)))
 
+/-- Recurrence: `lFree (k+1)` adds the next block's sum on top of `lFree k`.
+Uses `Fin.sum_univ_castSucc` to peel the last index off the outer sum;
+the remaining `Fin k` sum matches `lFree k` modulo proof irrelevance in
+the `blockIndex` proof argument, and the peeled-off term reduces via
+`Fin.val_last`. -/
+theorem lFree_succ {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k + 1 ≤ N) (i : Fin M) :
+    lFree Q K scale (k + 1) hk i =
+      lFree Q K scale k (Nat.le_of_succ_le hk) i +
+      Finset.univ.sum (fun jL : Fin Bk =>
+        Real.exp (scaledScore Q K scale i (blockIndex Bk N k hk jL))) := by
+  unfold lFree
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+/-- Recurrence companion: `oFree (k+1)` adds the next block's `exp · V` sum
+on top of `oFree k`. -/
+theorem oFree_succ {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k + 1 ≤ N) (idx : TileIndex [M, D]) :
+    oFree Q K V scale (k + 1) hk idx =
+      oFree Q K V scale k (Nat.le_of_succ_le hk) idx +
+      Finset.univ.sum (fun jL : Fin Bk =>
+        Real.exp (scaledScore Q K scale idx.1 (blockIndex Bk N k hk jL)) *
+        V (blockIndex Bk N k hk jL, idx.2.1, PUnit.unit)) := by
+  unfold oFree
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+/-- `lFree 0 = 0` (empty sum). -/
+@[simp] theorem lFree_zero {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (i : Fin M) :
+    lFree Q K scale 0 (Nat.zero_le _) i = 0 := by
+  unfold lFree
+  simp
+
+/-- `oFree 0 = 0` (empty sum). -/
+@[simp] theorem oFree_zero {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    oFree Q K V scale 0 (Nat.zero_le _) idx = 0 := by
+  unfold oFree
+  simp
+
 /-! ### Stage A foundations — `mPartial` non-`⊥` for `k ≥ 1`
 
 The streaming algebra (α-cancellation in `lPartial` / `oPartial`)
