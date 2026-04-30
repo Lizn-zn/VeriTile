@@ -71,9 +71,9 @@ example :
 
 These verify that `Op.dot` type-checks at the AST layer (the `K` constraint
 forces the inner dim of the LHS to match the outer dim of the RHS). The
-DSL macro `tl.dot(a, b)` and its fused-accumulator form
-`tl.dot(a, b, acc)` lower into these AST nodes; they will be exercised
-end-to-end once 2D load / pointer arithmetic land for FA-1 forward. -/
+DSL macro `tl.dot(a, b)` and its fused-accumulator form `tl.dot(a, b, acc)`
+lower into these AST nodes. End-to-end exercise via 2D pointer arithmetic
+in `tl.load` is now available (see `fa1QLoadSmoke` below and #34/#35). -/
 
 /-- Rank-2 (FA-1 forward shape): `(M, K) @ (K, N) = (M, N)`. -/
 example : (M K N : Nat) → Op .real [M, N] := fun M K N =>
