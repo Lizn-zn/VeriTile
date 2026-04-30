@@ -8,7 +8,7 @@ Scope decisions for P1:
 * Rank-polymorphic tile shapes in the core; individual operators may still
   expose only the ranks currently modeled by the DSL / semantics.
 * Floating-point arithmetic modelled in `ℝ` (Mathlib `Real`).
-* Excluded: `tl.atomic_*`, `tl.dot`, async copy, multi-block coordination,
+* Excluded: `tl.atomic_*`, async copy, multi-block coordination,
   Hopper/Blackwell-specific ops (TMA, WGMMA).
 
 Operational semantics live in `VeriTile.Triton.Semantics`.
