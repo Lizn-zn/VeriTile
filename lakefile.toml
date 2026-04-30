@@ -6,5 +6,34 @@ name = "mathlib"
 git = "https://github.com/leanprover-community/mathlib4.git"
 rev = "v4.29.0"
 
+# Lite target: Triton subset + worked examples without the GeLU error
+# certificate. Routine kernel-verification work uses this; it skips the
+# `VeriTile.Math.*` chain and ApproxGeLU's analysis-heavy proofs.
 [[lean_lib]]
 name = "VeriTile"
+globs = [
+  "VeriTile.Triton.+",
+  "VeriTile.Examples.Common",
+  "VeriTile.Examples.SoftmaxEq",
+  "VeriTile.Examples.LogSumExpEq",
+  "VeriTile.Examples.SoftmaxReciprocal",
+  "VeriTile.Examples.VectorAdd",
+  "VeriTile.Examples.FusedSiLU",
+  "VeriTile.Examples.RowWise",
+  "VeriTile.Examples.WelfordKernels",
+  "VeriTile.Examples.LayerNormKernels",
+  "VeriTile.Examples.OnlineSoftmax",
+]
+
+# Math sub-library: Taylor and integral bounds for the GeLU error
+# certificate. Pulls in heavy Mathlib analysis (`MeasureTheory`,
+# `Analysis.Calculus.MeanValue`, …).
+[[lean_lib]]
+name = "VeriTileMath"
+globs = ["VeriTile.Math.+"]
+
+# Full target: Lite + Math + ApproxGeLU. Build this when working on the
+# GeLU error bound or before any release tagging.
+[[lean_lib]]
+name = "VeriTileFull"
+globs = ["VeriTile.Examples.ApproxGeLU"]

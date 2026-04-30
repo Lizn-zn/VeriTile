@@ -1,5 +1,10 @@
--- VeriTile: top-level entry point.
--- Imports the public surface of the embedded Triton subset and worked examples.
+-- VeriTile: default (lite) target — Triton + worked examples without the
+-- analysis-heavy ApproxGeLU certificate.
+--
+-- ApproxGeLU and the `VeriTile.Math.*` chain (Taylor + integral bounds for
+-- the GeLU error certificate) live in the separate `VeriTileMath` library
+-- and are pulled in by `VeriTileFull`. Routine kernel work builds against
+-- this lite root, skipping the heavy Mathlib analysis chain.
 
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
@@ -10,9 +15,7 @@ import VeriTile.Examples.LogSumExpEq
 import VeriTile.Examples.SoftmaxReciprocal
 import VeriTile.Examples.VectorAdd
 import VeriTile.Examples.FusedSiLU
-import VeriTile.Examples.ApproxGeLU
 import VeriTile.Examples.RowWise
-import VeriTile.Examples.WelfordMath
 import VeriTile.Examples.WelfordKernels
 import VeriTile.Examples.LayerNormKernels
 import VeriTile.Examples.OnlineSoftmax
