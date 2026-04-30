@@ -262,6 +262,17 @@ structure Tile (dtype : TileDType) (shape : TileShape) where
 
 namespace Tile
 
+/-- Extensionality for tiles: tiles are equal when their data functions agree
+pointwise. This keeps ND kernel proofs from expanding the `Tile` structure
+manually every time they compare loaded/computed tiles. -/
+@[ext] theorem ext {dtype : TileDType} {shape : TileShape}
+    {x y : Tile dtype shape} (h : ∀ i, x.data i = y.data i) : x = y := by
+  cases x
+  cases y
+  simp only at h
+  congr
+  exact funext h
+
 /-- Rank-0 tile constructor. -/
 def scalar {dtype : TileDType} (x : TileCarrier dtype) : Tile dtype [] :=
   ⟨fun _ => x⟩

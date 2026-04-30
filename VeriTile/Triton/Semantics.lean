@@ -148,6 +148,21 @@ instance : Inhabited BlockState :=
 
 namespace BlockState
 
+@[ext] theorem ext {s t : BlockState}
+    (hmem : ∀ region offset, s.mem region offset = t.mem region offset)
+    (hregs : ∀ dtype shape name, s.regs dtype shape name = t.regs dtype shape name)
+    (hpid : s.pid = t.pid)
+    (hundef : ∀ region offset, s.undef region offset = t.undef region offset) :
+    s = t := by
+  cases s
+  cases t
+  simp only at hmem hregs hpid hundef
+  subst_vars
+  congr
+  · exact funext fun region => funext fun offset => hmem region offset
+  · exact funext fun dtype => funext fun shape => funext fun name => hregs dtype shape name
+  · exact funext fun region => funext fun offset => hundef region offset
+
 /-- Update a single typed register. -/
 def setReg (s : BlockState) (name : RegName)
     (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) : BlockState :=

@@ -214,7 +214,30 @@ noncomputable def alphaPartial {M D Bk : Nat}
   ((WithBot.realExp
       (WithBot.realSub
         (mPartial Bk Q numKVBlocks K scale k i)
-        (mPartial Bk Q numKVBlocks K scale (k + 1) i)))).unbotD 0
+      (mPartial Bk Q numKVBlocks K scale (k + 1) i)))).unbotD 0
+
+/-- `alphaPartial` is exactly the real payload of the operational
+`exp(m_i - m_new)` expression. The result is always a real `some`: when the
+subtraction sees `⊥`, `WithBot.realExp ⊥ = 0`. -/
+theorem alphaPartial_toWithBot {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (i : Fin M) :
+    WithBot.realExp
+      (WithBot.realSub
+        (mPartial Bk Q numKVBlocks K scale k i)
+        (mPartial Bk Q numKVBlocks K scale (k + 1) i))
+      =
+      ((alphaPartial Q numKVBlocks K scale k i : ℝ) : WithBot ℝ) := by
+  unfold alphaPartial
+  cases h :
+      WithBot.realSub
+        (mPartial Bk Q numKVBlocks K scale k i)
+        (mPartial Bk Q numKVBlocks K scale (k + 1) i) with
+  | bot =>
+      simp
+  | coe a =>
+      simp
 
 /-- Running per-row normalizer `Σ exp(score - m)` over the first `k`
 KV blocks. -/
@@ -361,6 +384,77 @@ theorem mPartial_succ_ne_bot {M D : Nat} {Bk : Nat} (hBk : 0 < Bk)
   have : f ⟨0, hBk⟩ = ⊥ :=
     le_antisymm (le_trans hSup hSupBot) (OrderBot.bot_le _)
   exact WithBot.coe_ne_bot this
+
+/-- In-bounds recurrence form of `mPartial`; avoids repeatedly unfolding the
+guarded definition and discharging `k + 1 ≤ numKVBlocks`. -/
+theorem mPartial_succ_of_lt {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    mPartial Bk Q numKVBlocks K scale (k + 1) i =
+      max (mPartial Bk Q numKVBlocks K scale k i)
+        (Finset.univ.sup (fun jLocal : Fin Bk =>
+          ((scaledScore Q K scale i
+            (blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal)
+            : ℝ) : WithBot ℝ))) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      max (mPartial Bk Q numKVBlocks K scale k i)
+        (Finset.univ.sup (fun jLocal : Fin Bk =>
+          ((scaledScore Q K scale i
+            (blockIndex Bk numKVBlocks k h jLocal) : ℝ) : WithBot ℝ)))
+    else mPartial Bk Q numKVBlocks K scale k i) = _
+  simp [Nat.succ_le_iff.mpr hk]
+
+/-- In-bounds recurrence form of `lPartial`. -/
+theorem lPartial_succ_of_lt {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    lPartial Q numKVBlocks K scale (k + 1) i =
+      let mNew : ℝ := (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
+      alphaPartial Q numKVBlocks K scale k i *
+        lPartial Q numKVBlocks K scale k i +
+        Finset.univ.sum (fun jLocal : Fin Bk =>
+          Real.exp (scaledScore Q K scale i
+              (blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal) - mNew)) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      (let mNew : ℝ := (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
+       alphaPartial Q numKVBlocks K scale k i *
+          lPartial Q numKVBlocks K scale k i +
+        Finset.univ.sum (fun jLocal : Fin Bk =>
+          Real.exp (scaledScore Q K scale i
+              (blockIndex Bk numKVBlocks k h jLocal) - mNew)))
+    else lPartial Q numKVBlocks K scale k i) = _
+  simp [Nat.succ_le_iff.mpr hk]
+
+/-- In-bounds recurrence form of `oPartial`. -/
+theorem oPartial_succ_of_lt {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (idx : TileIndex [M, D]) :
+    oPartial Q numKVBlocks K V scale (k + 1) idx =
+      let i := idx.1
+      let d := idx.2.1
+      let mNew : ℝ := (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
+      alphaPartial Q numKVBlocks K scale k i *
+        oPartial Q numKVBlocks K V scale k idx +
+        Finset.univ.sum (fun jLocal : Fin Bk =>
+          Real.exp (scaledScore Q K scale i
+              (blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal) - mNew) *
+            V (blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal,
+              d, PUnit.unit)) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      (let i := idx.1
+       let d := idx.2.1
+       let mNew : ℝ := (mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0
+       alphaPartial Q numKVBlocks K scale k i *
+          oPartial Q numKVBlocks K V scale k idx +
+        Finset.univ.sum (fun jLocal : Fin Bk =>
+          Real.exp (scaledScore Q K scale i
+              (blockIndex Bk numKVBlocks k h jLocal) - mNew) *
+            V (blockIndex Bk numKVBlocks k h jLocal, d, PUnit.unit)))
+    else oPartial Q numKVBlocks K V scale k idx) = _
+  simp [Nat.succ_le_iff.mpr hk]
 
 /-- The streaming `lPartial k i` equals `exp(-m_k) · lFree k i`, where
 `m_k = (mPartial k i).unbotD 0`. By induction on `k`: the α-factor
@@ -693,6 +787,280 @@ theorem softmaxRow_scaled_data_eq {M D Bk N : Nat}
     intro j _
     exact congrArg Real.exp (hRow j)
 
+/-- Dot product against the `n`-th KV block computes the corresponding
+flat-index score before scaling. This is the block-local companion to
+`qkT_data_eq`, used by the operational loop proof. -/
+theorem block_qkT_data_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (n : Nat) (hn : n < N)
+    (i : Fin M) (j : Fin Bk) :
+    (Tile.dot [] (Tile.ofReal Q)
+      (Tile.transpose [] (Tile.ofReal
+        (fun idx : TileIndex [Bk, D] =>
+          K (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.1,
+            idx.2.1, PUnit.unit))))).data (i, j, PUnit.unit)
+      =
+        ((Finset.univ.sum (fun d : Fin D =>
+          Q (i, d, PUnit.unit) *
+          K (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j,
+            d, PUnit.unit)) : ℝ) : WithBot ℝ) := by
+  rw [Tile.dot_nil_data]
+  have hPush : ∑ d : Fin D,
+        (((Q (i, d, PUnit.unit) *
+            K (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j,
+              d, PUnit.unit) : ℝ) : WithBot ℝ)) =
+      (((∑ d : Fin D,
+          Q (i, d, PUnit.unit) *
+            K (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j,
+              d, PUnit.unit) : ℝ) : WithBot ℝ)) :=
+    (map_sum (WithBot.addHom : ℝ →+ WithBot ℝ) _ _).symm
+  rw [← hPush]
+  apply Finset.sum_congr rfl
+  intro d _
+  rw [Tile.transpose_nil_data, Tile.ofReal_data, Tile.ofReal_data]
+  rfl
+
+/-- Scaled block score data: the exact value assigned to the loop-local
+`scores[i,j]`. The AST multiplies the dot product by a scalar on the right;
+`scaledScore` writes the scale on the left, so the proof finishes by
+commutativity of real multiplication. -/
+theorem block_scaled_data_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (n : Nat) (hn : n < N)
+    (i : Fin M) (j : Fin Bk) :
+    WithBot.realMul
+      ((Tile.dot [] (Tile.ofReal Q)
+        (Tile.transpose [] (Tile.ofReal
+          (fun idx : TileIndex [Bk, D] =>
+            K (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.1,
+              idx.2.1, PUnit.unit))))).data (i, j, PUnit.unit))
+      ((scale : ℝ) : WithBot ℝ)
+      = ((scaledScore Q K scale i
+          (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) : ℝ) : WithBot ℝ) := by
+  rw [block_qkT_data_eq Q K n hn i j]
+  unfold scaledScore
+  let S : ℝ := Finset.univ.sum (fun d : Fin D =>
+    Q (i, d, PUnit.unit) *
+      K (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j, d, PUnit.unit))
+  change WithBot.realMul ((S : ℝ) : WithBot ℝ) ((scale : ℝ) : WithBot ℝ) =
+      ((scale * S : ℝ) : WithBot ℝ)
+  simp [WithBot.realMul]
+  rw [mul_comm]
+
+/-- Row-max of the current score block, matching the second argument of
+`mPartial_succ_of_lt`. -/
+theorem block_mBlock_data_eq {M D Bk N : Nat} (hBk : 0 < Bk)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (n : Nat) (hn : n < N) :
+    (Tile.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
+      (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+        scaledScore Q K scale idx.1
+          (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)))
+      =
+        some ⟨fun idx : TileIndex [M] =>
+          (Finset.univ : Finset (Fin Bk)).sup
+            (fun j => ((scaledScore Q K scale idx.1
+              (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) : ℝ) :
+                WithBot ℝ))⟩ := by
+  unfold Tile.reduceMax
+  simp [Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, hBk, Tile.ofReal]
+  funext idx
+  change (((Finset.univ : Finset (Fin Bk)).sup'
+      (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+      (fun j => scaledScore Q K scale idx.1
+        (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j)) : ℝ) : WithBot ℝ) =
+    (Finset.univ : Finset (Fin Bk)).sup
+      (fun j => ((scaledScore Q K scale idx.1
+        (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) : ℝ) : WithBot ℝ))
+  rw [← WithBot.sup'_coe]
+  rw [Finset.sup'_eq_sup]
+
+/-- Data form of the loop-local unnormalized probabilities
+`p = exp(scores - m_new[:, None])`. -/
+theorem block_p_data_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (n : Nat) (hn : n < N)
+    (mNew : Fin M → WithBot ℝ) (i : Fin M) (j : Fin Bk) :
+    WithBot.realExp
+      (WithBot.realSub
+        ((scaledScore Q K scale i
+          (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) : ℝ) : WithBot ℝ)
+        (mNew i))
+      =
+      WithBot.realExp
+        (WithBot.realSub
+          ((scaledScore Q K scale i
+            (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) : ℝ) : WithBot ℝ)
+          (mNew i)) := rfl
+
+/-- The operational `p` entry is a real value once `mPartial (k+1)` is known
+not to be `⊥` (true for non-empty KV blocks). -/
+theorem block_p_toWithBot {M D Bk N : Nat} (hBk : 0 < Bk)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) (i : Fin M) (j : Fin Bk) :
+    WithBot.realExp
+      (WithBot.realSub
+        ((scaledScore Q K scale i
+          (blockIndex Bk N k (Nat.succ_le_iff.mpr hk) j) : ℝ) : WithBot ℝ)
+        (mPartial Bk Q N K scale (k + 1) i))
+      =
+      ((Real.exp (scaledScore Q K scale i
+          (blockIndex Bk N k (Nat.succ_le_iff.mpr hk) j) -
+        (mPartial Bk Q N K scale (k + 1) i).unbotD 0) : ℝ) :
+          WithBot ℝ) := by
+  have hm : mPartial Bk Q N K scale (k + 1) i ≠ ⊥ :=
+    mPartial_succ_ne_bot hBk Q N K scale k (Nat.succ_le_iff.mpr hk) i
+  obtain ⟨m, hm_eq⟩ := WithBot.ne_bot_iff_exists.mp hm
+  rw [← hm_eq]
+  simp [WithBot.realSub]
+
+/-- Row-sum of the current `p` block in the non-`⊥` case where `m_new` is
+known to be real-valued. This is the additive block contribution in
+`lPartial_succ_of_lt`. -/
+theorem block_p_rowSum_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (n : Nat) (hn : n < N)
+    (mNew : Fin M → ℝ) :
+    (Tile.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
+      (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+        Real.exp (scaledScore Q K scale idx.1
+          (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1) - mNew idx.1)))
+      =
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          Finset.univ.sum (fun j : Fin Bk =>
+            Real.exp (scaledScore Q K scale idx.1
+              (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) - mNew idx.1))) := by
+  ext idx
+  unfold Tile.reduceSum
+  simp [Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, Tile.ofReal]
+  rfl
+
+/-- Dotting the current probability block with the current V block gives the
+block contribution used by `oPartial_succ_of_lt`. -/
+theorem block_pv_data_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (n : Nat) (hn : n < N) (mNew : Fin M → ℝ)
+    (i : Fin M) (d : Fin D) :
+    (Tile.dot [] (M := M) (K := Bk) (N := D)
+      (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+        Real.exp (scaledScore Q K scale idx.1
+          (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1) - mNew idx.1))
+      (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        V (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.1,
+          idx.2.1, PUnit.unit))).data (i, d, PUnit.unit)
+      =
+        ((Finset.univ.sum (fun j : Fin Bk =>
+          Real.exp (scaledScore Q K scale i
+              (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) - mNew i) *
+            V (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j,
+              d, PUnit.unit)) : ℝ) : WithBot ℝ) := by
+  rw [Tile.dot_nil_data]
+  have hPush : ∑ j : Fin Bk,
+        (((Real.exp (scaledScore Q K scale i
+              (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) - mNew i) *
+            V (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j,
+              d, PUnit.unit) : ℝ) : WithBot ℝ)) =
+      (((∑ j : Fin Bk,
+          Real.exp (scaledScore Q K scale i
+              (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j) - mNew i) *
+            V (blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j,
+              d, PUnit.unit) : ℝ) : WithBot ℝ)) :=
+    (map_sum (WithBot.addHom : ℝ →+ WithBot ℝ) _ _).symm
+  rw [← hPush]
+  apply Finset.sum_congr rfl
+  intro j _
+  rw [Tile.ofReal_data, Tile.ofReal_data]
+  rfl
+
+/-- The loop-local `m_new = max(m_i, m_block)` realizes the streaming
+`mPartial` recurrence at `k + 1`. -/
+theorem block_mNew_tile_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.bop max (Broadcast.consSame Broadcast.nil)
+      (⟨fun idx : TileIndex [M] => mPartial Bk Q N K scale k idx.1⟩ : Tile .real [M])
+      (⟨fun idx : TileIndex [M] =>
+        (Finset.univ : Finset (Fin Bk)).sup
+          (fun j => ((scaledScore Q K scale idx.1
+            (blockIndex Bk N k (Nat.succ_le_iff.mpr hk) j) : ℝ) :
+              WithBot ℝ))⟩ : Tile .real [M])
+      =
+      ⟨fun idx : TileIndex [M] => mPartial Bk Q N K scale (k + 1) idx.1⟩ := by
+  ext idx
+  simp [Tile.bop]
+  rw [mPartial_succ_of_lt Q N K scale k hk idx.1]
+
+/-- Bridge between `Option ℝ`'s `Max` instance (used by `Tile.bop max bc`
+when the carrier is the raw `Option ℝ`) and `WithBot ℝ`'s `Max` instance
+(coming from `SemilatticeSup.toMax`). The two are propositionally — but not
+definitionally — equal, so we materialize the equality as a rewrite lemma
+that `simp_rw` can fire inside the `fa1_step` proof. -/
+theorem option_max_eq_withbot_max (a b : WithBot ℝ) :
+    @max (Option ℝ) Option.instMax a b = max a b := by
+  cases a <;> cases b <;> rfl
+
+/-- Proof irrelevance for `Finset.sup'`: any two `Nonempty` witnesses give the
+same value. Used in the `fa1_step` proof to align `Finset.univ.sup'` proof
+arguments coming from `Tile.bop` elaboration with proof arguments coming from
+the helper hypotheses (`hAlphaDataMaxOf` etc.). -/
+theorem sup'_proof_irrel {α ι : Type*} [SemilatticeSup α] {s : Finset ι}
+    (h₁ h₂ : s.Nonempty) (f : ι → α) : s.sup' h₁ f = s.sup' h₂ f := rfl
+
+/-- The loop-local `l_new` expression realizes the streaming `lPartial`
+recurrence at `k + 1`. -/
+theorem block_lNew_tile_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame Broadcast.nil)
+      (Tile.bop WithBot.realMul (Broadcast.consSame Broadcast.nil)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          alphaPartial Q N K scale k idx.1)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          lPartial Q N K scale k idx.1))
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        Finset.univ.sum (fun j : Fin Bk =>
+          Real.exp (scaledScore Q K scale idx.1
+            (blockIndex Bk N k (Nat.succ_le_iff.mpr hk) j) -
+              (mPartial Bk Q N K scale (k + 1) idx.1).unbotD 0)))
+      =
+      Tile.ofReal (fun idx : TileIndex [M] =>
+        lPartial Q N K scale (k + 1) idx.1) := by
+  ext idx
+  simp [Tile.bop, Tile.ofReal]
+  rw [lPartial_succ_of_lt Q N K scale k hk idx.1]
+
+/-- The loop-local `o_acc` update realizes the streaming `oPartial`
+recurrence at `k + 1`. -/
+theorem block_oAcc_tile_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < N) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Tile.bop WithBot.realMul (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.ofReal fun idx : TileIndex [M] =>
+            alphaPartial Q N K scale k idx.1))
+        (Tile.ofReal fun idx : TileIndex [M, D] =>
+          oPartial Q N K V scale k idx))
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        Finset.univ.sum (fun j : Fin Bk =>
+          Real.exp (scaledScore Q K scale idx.1
+              (blockIndex Bk N k (Nat.succ_le_iff.mpr hk) j) -
+                (mPartial Bk Q N K scale (k + 1) idx.1).unbotD 0) *
+            V (blockIndex Bk N k (Nat.succ_le_iff.mpr hk) j,
+              idx.2.1, PUnit.unit)))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, D] =>
+        oPartial Q N K V scale (k + 1) idx) := by
+  ext idx
+  rcases idx with ⟨i, d, u⟩
+  cases u
+  simp [Tile.bop, Tile.expandDim, Tile.ofReal, TileShape.dropInsertedIndex]
+  rw [oPartial_succ_of_lt Q N K V scale k hk (i, d, PUnit.unit)]
+
 /-- The m-free reference sums `oFree N` and `lFree N` connect to
 `attentionReal` directly through `Tile.dot` / `softmaxRow`. This is the
 specification-side identity (no streaming algebra involved). -/
@@ -703,14 +1071,46 @@ theorem oFree_div_lFree_eq_attentionReal {M D Bk N : Nat}
     oFree Q K V scale N (le_refl N) idx /
         lFree Q K scale N (le_refl N) idx.1
       = attentionReal Q K V scale idx := by
-  -- Final unfolding: connect the LHS flat sums to `attentionReal`'s
-  -- `softmaxRow + Tile.dot` chain. The structural decomposition into
-  -- `softmaxRow_scaled_data_eq` + `oFree_eq_flat` + `lFree_eq_flat`
-  -- means each step is now mechanical, but stitching them through
-  -- `WithBot ℝ`'s Σ semantics + the `↑r` vs `WithBot.addHom r`
-  -- coercion-form mismatch is fiddly. Last math obligation deferred.
   rw [oFree_eq_flat, lFree_eq_flat]
-  sorry
+  unfold attentionReal attention
+  rw [Tile.dot_nil_data]
+  -- Match the WithBot Σ to a coerced real Σ via Finset.sum_congr +
+  -- softmaxRow_scaled_data_eq, then push the coercion out via map_sum,
+  -- unbotD it, and factor the constant denominator with Finset.sum_div.
+  rw [Finset.sum_congr rfl (g := fun k : Fin (Bk * N) =>
+        (((Real.exp (scaledScore Q K scale idx.1 k) /
+          Finset.univ.sum (fun j' : Fin (Bk * N) =>
+            Real.exp (scaledScore Q K scale idx.1 j')) *
+          V (k, idx.2.1, PUnit.unit)) : ℝ) : WithBot ℝ))
+    (by
+      intro k _
+      let scaled : Tile .real [M, Bk * N] :=
+        { data := fun idx =>
+            Option.map (fun x => x * scale)
+              ((Tile.dot [] (Tile.ofReal Q)
+                (Tile.transpose [] (Tile.ofReal K))).data idx) }
+      change
+        Option.map₂ (fun x1 x2 => x1 * x2)
+          ((softmaxRow scaled).data (idx.1, k, PUnit.unit))
+          (some (V (k, idx.2.1, PUnit.unit))) =
+        (((Real.exp (scaledScore Q K scale idx.1 k) /
+            Finset.univ.sum (fun j' : Fin (Bk * N) =>
+              Real.exp (scaledScore Q K scale idx.1 j')) *
+            V (k, idx.2.1, PUnit.unit)) : ℝ) : WithBot ℝ)
+      have hsoft := softmaxRow_scaled_data_eq Q K scale idx.1 k
+      change
+        (softmaxRow scaled).data (idx.1, k, PUnit.unit) =
+          ((Real.exp (scaledScore Q K scale idx.1 k) /
+            Finset.univ.sum (fun j' : Fin (Bk * N) =>
+              Real.exp (scaledScore Q K scale idx.1 j')) : ℝ) : WithBot ℝ) at hsoft
+      rw [hsoft]
+      rfl)]
+  rw [WithBot.sum_some_eq_some]
+  rw [WithBot.unbotD_coe]
+  rw [Finset.sum_div]
+  apply Finset.sum_congr rfl
+  intro k _
+  ring
 
 /-- **Math identity (paper centerpiece).** After all `numKVBlocks`
 iterations, the streaming `(oPartial, lPartial)` ratio computes the
@@ -745,6 +1145,31 @@ theorem streaming_eq_attentionReal {M D Bk : Nat} (hBk : 0 < Bk)
     rw [lPartial_eq_mShifted hBk Q numKVBlocks K scale numKVBlocks
         (le_refl _) idx.1, h, mul_zero]
   exact oFree_div_lFree_eq_attentionReal Q K V scale idx hlFree
+
+/-- The final unshifted softmax normalizer is strictly positive when the
+KV domain is non-empty. -/
+theorem lFree_final_pos {M D Bk N : Nat} (hBk : 0 < Bk) (hN : 0 < N)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (i : Fin M) :
+    0 < lFree Q K scale N (le_refl N) i := by
+  rw [lFree_eq_flat]
+  apply Finset.sum_pos
+  · intro j _
+    exact Real.exp_pos _
+  · exact ⟨⟨0, Nat.mul_pos hBk hN⟩, Finset.mem_univ _⟩
+
+/-- The final streaming normalizer is non-zero under FA-1's non-empty KV
+scope. This is the denominator fact needed by the readout stage. -/
+theorem lPartial_final_ne_zero {M D Bk : Nat} (hBk : 0 < Bk)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (hN : 0 < numKVBlocks)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (i : Fin M) :
+    lPartial Q numKVBlocks K scale numKVBlocks i ≠ 0 := by
+  rw [lPartial_eq_mShifted hBk Q numKVBlocks K scale numKVBlocks
+      (le_refl _) i]
+  exact mul_ne_zero (Real.exp_ne_zero _)
+    (ne_of_gt (lFree_final_pos hBk hN Q K scale i))
 
 end FA1Math
 
@@ -804,6 +1229,844 @@ def P_fa1
   InputAt s vReg
       (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V
 
+/-- Statements before the KV-block loop: pid/offset setup, Q-block load,
+and accumulator initialization. -/
+private def fa1PreLoop (qReg : RegionName) (M D : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "pid" Op.programId
+  , Stmt.assign .nat [M] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid")
+          (Op.constNat M))
+        (Op.arange M))
+  , Stmt.assign .nat [D] "offs_d" (Op.arange D)
+  , Stmt.assign .nat [M, D] "q_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+          (Op.constNat D))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+  , Stmt.assign .real [M, D] "q"
+      (Op.load qReg (Op.ref .nat [M, D] "q_ptrs"))
+  , Stmt.assign .real [M] "m_i"
+      (Op.full [M] Op.negInf)
+  , Stmt.assign .real [M] "l_i"
+      (Op.full [M] (Op.const 0))
+  , Stmt.assign .real [M, D] "o_acc"
+      (Op.full [M, D] (Op.const 0))
+  ]
+
+/-- Body of the inner KV-block loop in `fa1ForwardKernel`, factored out so
+the loop invariant proof can name the operational step directly. -/
+private def fa1LoopBody (kReg vReg : RegionName)
+    (M D Bk : Nat) (scale : ℝ) : List Stmt :=
+  [ Stmt.assign .nat [Bk] "offs_n"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "n")
+          (Op.constNat Bk))
+        (Op.arange Bk))
+  , Stmt.assign .nat [Bk, D] "k_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+          (Op.constNat D))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+  , Stmt.assign .nat [Bk, D] "v_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+          (Op.constNat D))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+  , Stmt.assign .real [Bk, D] "k"
+      (Op.load kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+  , Stmt.assign .real [Bk, D] "v"
+      (Op.load vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+  , Stmt.assign .real [M, Bk] "scores"
+      (Op.mul .real Broadcast.scalarR
+        (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+          (Op.ref .real [M, D] "q")
+          (Op.transpose (batch := []) (M := Bk) (N := D)
+            (Op.ref .real [Bk, D] "k")))
+        (Op.const scale))
+  , Stmt.assign .real [M] "m_block"
+      (Op.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
+        (Op.ref .real [M, Bk] "scores"))
+  , Stmt.assign .real [M] "m_new"
+      (Op.max2 (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [M] "m_i")
+        (Op.ref .real [M] "m_block"))
+  , Stmt.assign .real [M] "alpha"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [M] "m_i")
+          (Op.ref .real [M] "m_new")))
+  , Stmt.assign .real [M, Bk] "p"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Op.ref .real [M, Bk] "scores")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "m_new"))))
+  , Stmt.assign .real [M] "l_new"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [M] "alpha")
+          (Op.ref .real [M] "l_i"))
+        (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
+          (Op.ref .real [M, Bk] "p")))
+  , Stmt.assign .real [M, D] "o_acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+          (Op.ref .real [M, D] "o_acc"))
+        (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+          (Op.ref .real [M, Bk] "p")
+          (Op.ref .real [Bk, D] "v")))
+  , Stmt.assign .real [M] "m_i"
+      (Op.ref .real [M] "m_new")
+  , Stmt.assign .real [M] "l_i"
+      (Op.ref .real [M] "l_new")
+  ]
+
+/-- Initialization stage: the pre-loop statements establish `P_fa1 0`. -/
+theorem fa1_preLoop_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V) :
+    ∃ s0,
+      stepStmts (fa1PreLoop qReg M D) s = some s0 ∧
+      P_fa1 qReg kReg vReg s.pid Q K V scale 0 s0 := by
+  let qPtrs : Tile .nat [M, D] :=
+    ⟨fun idx => (s.pid * M + idx.1.val) * D + idx.2.1.val⟩
+  let qLoaded : Tile .real [M, D] :=
+    ⟨fun idx => some (s.readMem qReg ((s.pid * M + idx.1.val) * D + idx.2.1.val))⟩
+  let s0 :=
+    ((((((((s.setReg "pid" .nat [] (Tile.scalar s.pid))
+      ).setReg "offs_m" .nat [M] (Tile.vec fun i : Fin M => s.pid * M + i.val)
+      ).setReg "offs_d" .nat [D] (Tile.vec fun d : Fin D => d.val)
+      ).setReg "q_ptrs" .nat [M, D] qPtrs
+      ).setReg "q" .real [M, D] qLoaded
+      ).setReg "m_i" .real [M] ⟨fun _ => (⊥ : WithBot ℝ)⟩
+      ).setReg "l_i" .real [M] (Tile.ofReal fun _ => 0)
+      ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
+  have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
+    ext idx
+    simp [qLoaded, Tile.ofReal, BlockState.readMem]
+    rw [show (s.pid * M + idx.1.val) * D + idx.2.1.val =
+        Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D idx by
+          simp [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
+            Nat.add_assoc]]
+    exact congrArg some (hQ idx)
+  refine ⟨s0, ?_, ?_⟩
+  · simp [fa1PreLoop, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
+      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex,
+      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qLoaded, s0]
+    rfl
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0, hQ_loaded_eq]
+    · simp [s0, FA1Math.mPartial]
+    · simp [s0, FA1Math.lPartial, Tile.ofReal]
+    · simp [s0, FA1Math.oPartial, Tile.ofReal]
+    · intro idx
+      simpa [s0] using hQ idx
+    · intro idx
+      simpa [s0] using hK idx
+    · intro idx
+      simpa [s0] using hV idx
+
+/-- The three statements after the FA-1 KV-block loop: normalize the
+accumulator, rebuild output pointers, and store the `[M, D]` tile. Factored
+out so the readout proof can be checked independently of the loop proof. -/
+private def fa1PostLoop (outReg : RegionName) (M D : Nat) : List Stmt :=
+  [ Stmt.assign .real [M, D] "out"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [M, D] "o_acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i")))
+  , Stmt.assign .nat [M, D] "o_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+          (Op.constNat D))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+  , Stmt.store outReg [M, D]
+      (Op.ref .nat [M, D] "o_ptrs")
+      (Op.ref .real [M, D] "out")
+  ]
+
+/-- Readout stage: once the loop invariant holds at `numKVBlocks`, the
+post-loop normalization and store produce the ℝ-level attention spec. -/
+theorem fa1_postLoop_correct
+    {M D Bk numKVBlocks : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (qReg kReg vReg outReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (sLoop : BlockState)
+    (hP : P_fa1 qReg kReg vReg origPid Q K V scale numKVBlocks sLoop) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (stepStmts (fa1PostLoop outReg M D) sLoop)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) idx
+        = some (attentionReal Q K V scale idx) := by
+  intro idx
+  rcases hP with
+    ⟨_hpidReg, _hpid, hoffs_m, hoffs_d, _hq, _hm, hl, ho, _hQ, _hK, _hV⟩
+  have h_inj :
+      Function.Injective
+        (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) :=
+    Offset.rowMajor2D_inj (base := origPid * M * D) (rowStride := D) (le_refl D)
+  have h_inj_store :
+      Function.Injective
+        (fun i : TileIndex [M, D] => (origPid * M + i.1.val) * D + i.2.1.val) := by
+    intro a b h
+    apply h_inj
+    simpa [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
+      Nat.add_assoc] using h
+  simp [observeTileAt, fa1PostLoop, stepStmts, stepStmt, evalOp,
+        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
+        Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+        NumericDType.div, Offset.rowMajor2D, Offset.strided, Option.bind,
+        TileShape.dropInsertedIndex]
+  rw [show origPid * M * D + idx.1.val * D + idx.2.1.val =
+      (origPid * M + idx.1.val) * D + idx.2.1.val by
+        rw [Nat.add_mul]]
+  simp only [BlockState.readMem]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
+  simp [FA1Math.streaming_eq_attentionReal hBk Q numKVBlocks hNumKVBlocks K V scale idx
+        (FA1Math.lPartial_final_ne_zero hBk Q numKVBlocks hNumKVBlocks K scale idx.1)]
+
+/-- The DSL-expanded kernel body is exactly the factored operational shape:
+pre-loop setup, one `forLoop`, then post-loop readout. -/
+@[simp] theorem fa1ForwardKernel_body_eq
+    (qReg kReg vReg outReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) :
+    (fa1ForwardKernel qReg kReg vReg outReg M D Bk numKVBlocks scale).body =
+      fa1PreLoop qReg M D ++
+      [Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)] ++
+      fa1PostLoop outReg M D := by
+  rfl
+
+/-- Reading the `n`-th KV block through the row-major address expression
+used by the loop gives the corresponding `blockIndex` cell of a full
+`[Bk * numKVBlocks, D]` input. -/
+theorem fa1_block_read
+    {D Bk numKVBlocks : Nat}
+    (region : RegionName) (s : BlockState)
+    (X : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (hX : InputAt s region
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) X)
+    (n : Nat) (hn : n < numKVBlocks)
+    (j : Fin Bk) (d : Fin D) :
+    s.readMem region ((n * Bk + j.val) * D + d.val) =
+      X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
+        d, PUnit.unit) := by
+  rw [BlockState.readMem]
+  have haddr :
+      (n * Bk + j.val) * D + d.val =
+        Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D
+          (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
+            d, PUnit.unit) := by
+    simp [Offset.rowMajor2D, Offset.strided, FA1Math.blockIndex]
+  rw [haddr]
+  exact hX _
+
+/-- Tile-level version of `fa1_block_read`: the loop-local block load is the
+`Tile.ofReal` view of the corresponding full K/V matrix block. -/
+theorem fa1_block_load_tile_eq
+    {D Bk numKVBlocks : Nat}
+    (region : RegionName) (s : BlockState)
+    (X : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (hX : InputAt s region
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) X)
+    (n : Nat) (hn : n < numKVBlocks) :
+    (⟨fun idx : TileIndex [Bk, D] =>
+        some (s.readMem region ((n * Bk + idx.1.val) * D + idx.2.1.val))⟩
+      : Tile .real [Bk, D])
+      =
+      Tile.ofReal (fun idx : TileIndex [Bk, D] =>
+        X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
+          idx.2.1, PUnit.unit)) := by
+  ext idx
+  rw [Tile.ofReal_data]
+  exact congrArg some (fa1_block_read region s X hX n hn idx.1 idx.2.1)
+
+set_option maxHeartbeats 800000 in
+/-- One FA-1 KV-block iteration preserves the loop invariant. -/
+theorem fa1_step
+    {M D Bk numKVBlocks : Nat} (hBk : 0 < Bk)
+    (qReg kReg vReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (origPid k : Nat) (s : BlockState)
+    (hk : k < numKVBlocks)
+    (hP : P_fa1 qReg kReg vReg origPid Q K V scale k s) :
+    ∃ s',
+      stepStmts (fa1LoopBody kReg vReg M D Bk scale)
+        (s.setReg "n" .nat [] (Tile.scalar k)) = some s' ∧
+      P_fa1 qReg kReg vReg origPid Q K V scale (k + 1) s' := by
+  rcases hP with
+    ⟨hpidReg, hpid, hoffs_m, hoffs_d, hq, hm, hl, ho, hQ, hK, hV⟩
+  let offsN : Tile .nat [Bk] :=
+    Tile.vec fun j : Fin Bk => k * Bk + j.val
+  let ptrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] => (k * Bk + idx.1.val) * D + idx.2.1.val⟩
+  let kTile : Tile .real [Bk, D] :=
+    Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      K (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.1,
+        idx.2.1, PUnit.unit)
+  let vTile : Tile .real [Bk, D] :=
+    Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      V (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.1,
+        idx.2.1, PUnit.unit)
+  let scores : Tile .real [M, Bk] :=
+    Tile.ofReal fun idx : TileIndex [M, Bk] =>
+      FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1)
+  let mBlock : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      (Finset.univ : Finset (Fin Bk)).sup
+        (fun j => ((FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
+          : ℝ) : WithBot ℝ))⟩
+  let mNew : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1⟩
+  let alpha : Tile .real [M] :=
+    Tile.ofReal fun idx : TileIndex [M] =>
+      FA1Math.alphaPartial Q numKVBlocks K scale k idx.1
+  let p : Tile .real [M, Bk] :=
+    Tile.ofReal fun idx : TileIndex [M, Bk] =>
+      Real.exp (FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0)
+  let lNew : Tile .real [M] :=
+    Tile.ofReal fun idx : TileIndex [M] =>
+      FA1Math.lPartial Q numKVBlocks K scale (k + 1) idx.1
+  let oNew : Tile .real [M, D] :=
+    Tile.ofReal fun idx : TileIndex [M, D] =>
+      FA1Math.oPartial Q numKVBlocks K V scale (k + 1) idx
+  let s0 := s.setReg "n" .nat [] (Tile.scalar k)
+  let s1 := s0.setReg "offs_n" .nat [Bk] offsN
+  let s2 := s1.setReg "k_ptrs" .nat [Bk, D] ptrs
+  let s3 := s2.setReg "v_ptrs" .nat [Bk, D] ptrs
+  let s4 := s3.setReg "k" .real [Bk, D] kTile
+  let s5 := s4.setReg "v" .real [Bk, D] vTile
+  let s6 := s5.setReg "scores" .real [M, Bk] scores
+  let s7 := s6.setReg "m_block" .real [M] mBlock
+  let s8 := s7.setReg "m_new" .real [M] mNew
+  let s9 := s8.setReg "alpha" .real [M] alpha
+  let s10 := s9.setReg "p" .real [M, Bk] p
+  let s11 := s10.setReg "l_new" .real [M] lNew
+  let s12 := s11.setReg "o_acc" .real [M, D] oNew
+  let s13 := s12.setReg "m_i" .real [M] mNew
+  let s' := s13.setReg "l_i" .real [M] lNew
+  apply Exists.intro
+  constructor
+  · simp [fa1LoopBody, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
+      Tile.transpose, Tile.dot, Tile.reduceMax, Tile.reduceMaxDrop,
+      Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+      TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      BlockState.readMem, Option.bind, hBk, hpidReg, hoffs_d, hq, hm, hl, ho,
+      offsN, ptrs, kTile, vTile, scores, mBlock, mNew, alpha, p, lNew, oNew,
+      s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+    have hKmem : ∀ (j : Fin Bk) (d : Fin D),
+        s.mem kReg ((k * Bk + j.val) * D + d.val) =
+          K (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
+      fa1_block_read kReg s K hK k hk
+    have hVmem : ∀ (j : Fin Bk) (d : Fin D),
+        s.mem vReg ((k * Bk + j.val) * D + d.val) =
+          V (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
+      fa1_block_read vReg s V hV k hk
+    simp_rw [hKmem, hVmem]
+    rfl
+  · have hmNewData : ∀ i : Fin M,
+        max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+          (some ((Finset.univ : Finset (Fin Bk)).sup'
+            (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+            (fun j =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) =
+          FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+      intro i
+      rw [FA1Math.mPartial_succ_of_lt Q numKVBlocks K scale k hk i]
+      congr 1
+      change ((((Finset.univ : Finset (Fin Bk)).sup'
+          (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+          (fun j => (Finset.univ.sum (fun d : Fin D =>
+            Q (i, d, PUnit.unit) *
+              K (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)) : ℝ) : WithBot ℝ) =
+        (Finset.univ : Finset (Fin Bk)).sup (fun j =>
+          ((FA1Math.scaledScore Q K scale i
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) j) : ℝ) : WithBot ℝ))
+      rw [← WithBot.sup'_coe]
+      rw [Finset.sup'_eq_sup]
+      apply Finset.sup_congr rfl
+      intro j _
+      simp [FA1Math.scaledScore, mul_comm]
+    have hmNewDataOf : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        (FA1Math.mPartial Bk Q numKVBlocks K scale k i) ⊔
+          (some ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) =
+          FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+      intro i H
+      rw [FA1Math.mPartial_succ_of_lt Q numKVBlocks K scale k hk i]
+      congr 1
+      change ((((Finset.univ : Finset (Fin Bk)).sup' H
+          (fun j => (Finset.univ.sum (fun d : Fin D =>
+            Q (i, d, PUnit.unit) *
+              K (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)) : ℝ) : WithBot ℝ) =
+        (Finset.univ : Finset (Fin Bk)).sup (fun j =>
+          ((FA1Math.scaledScore Q K scale i
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) j) : ℝ) : WithBot ℝ))
+      rw [← WithBot.sup'_coe]
+      rw [Finset.sup'_eq_sup]
+      apply Finset.sup_congr rfl
+      intro j _
+      simp [FA1Math.scaledScore, mul_comm]
+    have hmNewDataComm : ∀ i : Fin M,
+        max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+          (some ((Finset.univ : Finset (Fin Bk)).sup'
+            (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+            (fun j =>
+              scale * (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit)))))) =
+          FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+      intro i
+      rw [← hmNewData i]
+      congr 2
+      apply Finset.sup'_congr (H := by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩) rfl
+      intro j _
+      rw [mul_comm]
+    have hAlphaData : ∀ i : Fin M,
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i
+      simpa [WithBot.realSub] using
+        FA1Math.alphaPartial_toWithBot Q numKVBlocks K scale k i
+    have hPData : ∀ (i : Fin M) (j : Fin Bk),
+        WithBot.realExp
+          (Option.map
+            (fun b =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i))
+          =
+          some (Real.exp (FA1Math.scaledScore Q K scale i
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) j) -
+            (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j
+      have hm : FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i ≠ ⊥ :=
+        FA1Math.mPartial_succ_ne_bot hBk Q numKVBlocks K scale k
+          (Nat.succ_le_iff.mpr hk) i
+      obtain ⟨m, hm_eq⟩ := WithBot.ne_bot_iff_exists.mp hm
+      rw [← hm_eq]
+      simp [FA1Math.scaledScore, mul_comm]
+    have hAlphaDataOf : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      change WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i)
+      have hM :
+          @max (Option ℝ) Option.instMax
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+            (some ((Finset.univ : Finset (Fin Bk)).sup' H
+              (fun j =>
+                (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) =
+            FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+        have hOptionMax :
+            @max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))
+            =
+            max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) := by
+          cases FA1Math.mPartial Bk Q numKVBlocks K scale k i <;> rfl
+        rw [hOptionMax]
+        exact hmNewDataOf i H
+      exact (congrArg
+        (fun z => WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i) z)) hM).trans
+        (hAlphaData i)
+    have hPDataOf : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b)
+            (@max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      change WithBot.realExp
+          (Option.map
+            (fun b =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+          =
+          some (Real.exp (FA1Math.scaledScore Q K scale i
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) j) -
+            (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0))
+      have hM :
+          @max (Option ℝ) Option.instMax
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+            (some ((Finset.univ : Finset (Fin Bk)).sup' H
+              (fun j =>
+                (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) =
+            FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+        have hOptionMax :
+            @max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))
+            =
+            max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) := by
+          cases FA1Math.mPartial Bk Q numKVBlocks K scale k i <;> rfl
+        rw [hOptionMax]
+        exact hmNewDataOf i H
+      exact (congrArg
+        (fun z => WithBot.realExp
+          (Option.map
+            (fun b =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b) z)) hM).trans
+          (hPData i j)
+    have hAlphaDataComm : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    scale * (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      have hSup :
+          ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              scale * (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))) =
+          ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)) := by
+        apply Finset.sup'_congr (H := H) rfl
+        intro j _
+        rw [mul_comm]
+      rw [hSup]
+      exact hAlphaDataOf i H
+    have hPDataComm : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            scale * (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) - b)
+            (@max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  scale * (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      have hSup :
+          ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              scale * (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))) =
+          ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)) := by
+        apply Finset.sup'_congr (H := H) rfl
+        intro j _
+        rw [mul_comm]
+      rw [hSup]
+      simpa [mul_comm] using hPDataOf i j H
+    have hAlphaDataMaxComm : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    scale * (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      exact hAlphaDataComm i H
+    have hPDataMaxComm : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            scale * (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) - b)
+            (@max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  scale * (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      exact hPDataComm i j H
+    have hAlphaDataMaxComm' : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    scale * (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      exact hAlphaDataComm i H
+    have hPDataMaxComm' : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            scale * (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) - b)
+            (max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  scale * (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      exact hPDataComm i j H
+    have hAlphaDataMaxOf : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      exact hAlphaDataOf i H
+    have hPDataMaxOf : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b)
+            (max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      exact hPDataOf i j H
+    have max_eq_sup : ∀ (a b : WithBot ℝ), max a b = a ⊔ b := by
+      intro a b
+      rfl
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+          hpidReg]
+    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+          hpid]
+    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+          hoffs_m]
+    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+          hoffs_d]
+    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+          hq]
+    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+      ext idx
+      exact hmNewData idx.1
+    · rw [← FA1Math.block_lNew_tile_eq Q K scale k hk]
+      simp [s', s13, s12, s11]
+      sorry
+    · rw [← FA1Math.block_oAcc_tile_eq Q K V scale k hk]
+      simp [s', s13, s12]
+      sorry
+    · intro idx
+      simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hQ idx
+    · intro idx
+      simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hK idx
+    · intro idx
+      simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hV idx
+
 /-! ## Correctness statement (sorry — discharged in issue #38)
 
 The statement uses the standard `InputAt` / `observeTileAt` predicates
@@ -853,11 +2116,17 @@ to FA-1's bigger statement:
    `observeTileAt … = some (attentionReal …)` follows.
 ```
 
+The non-empty hypotheses `0 < Bk` and `0 < numKVBlocks` are semantic, not
+proof-only: `tl.max(scores, axis = 1)` is undefined on an empty KV block in
+the current operational model, and attention over zero KV blocks is outside
+the intended FA-1 v0 scope.
+
 Each Stage above is itself a multi-hundred-line proof (mirroring
 OnlineSoftmax's scale × the rank-2 / batched / multi-stage
 complexity of FA-1). v0 leaves the body as `sorry`. -/
 theorem fa1_forward_correct
     {M D Bk numKVBlocks : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
     (qReg kReg vReg outReg : RegionName)
     (Q : TileIndex [M, D] → ℝ)
     (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
@@ -878,6 +2147,12 @@ theorem fa1_forward_correct
   -- See doc above for the proof skeleton (Stages B / C / D); each
   -- step is multi-hundred lines and depends on the streaming math
   -- identity (`streaming_eq_attentionReal`) being proved first.
+  have _hMath := FA1Math.streaming_eq_attentionReal
+    (M := M) (D := D) (Bk := Bk) hBk Q numKVBlocks hNumKVBlocks K V scale
+  have _hDenom : ∀ idx : TileIndex [M, D],
+      FA1Math.lPartial Q numKVBlocks K scale numKVBlocks idx.1 ≠ 0 := by
+    intro idx
+    exact FA1Math.lPartial_final_ne_zero hBk Q numKVBlocks hNumKVBlocks K scale idx.1
   sorry
 
 end VeriTile.Examples
