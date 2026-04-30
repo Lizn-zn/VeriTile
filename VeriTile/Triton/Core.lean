@@ -70,10 +70,8 @@ a user shape `(M, N)` (M rows, N cols) is stored as `[M, N]`. The head of
 the list is the outermost dim, the last element is the innermost dim.
 User axis `K` corresponds directly to list index `K`.
 
-Reductions along the user's last axis (the typical Triton pattern,
-`tl.sum(scores, axis=last)`) collapse the **last** element of the shape;
-the typed `Op.reduceMax / .reduceSum` constructors below match the input
-shape against the pattern `rest ++ [axisDim]` to make this structural.
+Reduction axes use Triton / NumPy convention directly: user axis `K` is list
+index `K`.
 -/
 abbrev TileShape := List Nat
 
@@ -83,6 +81,73 @@ abbrev TileIndex : TileShape → Type
   | n :: rest => Fin n × TileIndex rest
 
 namespace TileShape
+
+/-- Dimension at an axis. -/
+def axisDim : (shape : TileShape) → Fin shape.length → Nat
+  | [], axis => nomatch axis
+  | d :: _, ⟨0, _⟩ => d
+  | _ :: rest, ⟨k + 1, h⟩ => axisDim rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩
+
+/-- Remove an axis from a shape (`keep_dims = false` reduction shape). -/
+def eraseAxis : (shape : TileShape) → Fin shape.length → TileShape
+  | [], axis => nomatch axis
+  | _ :: rest, ⟨0, _⟩ => rest
+  | d :: rest, ⟨k + 1, h⟩ => d :: eraseAxis rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩
+
+/-- Replace an axis by dimension `1` (`keep_dims = true` reduction shape). -/
+def setAxisOne : (shape : TileShape) → Fin shape.length → TileShape
+  | [], axis => nomatch axis
+  | _ :: rest, ⟨0, _⟩ => 1 :: rest
+  | d :: rest, ⟨k + 1, h⟩ => d :: setAxisOne rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩
+
+/-- Output shape of a reduction over `axis`. -/
+def reduceShape (shape : TileShape) (axis : Fin shape.length) (keepDims : Bool) :
+    TileShape :=
+  if keepDims then setAxisOne shape axis else eraseAxis shape axis
+
+/-- Insert the reduced-axis coordinate into a `keep_dims = false` output index. -/
+def insertAxisIndex :
+    (shape : TileShape) → (axis : Fin shape.length) →
+    TileIndex (eraseAxis shape axis) → Fin (axisDim shape axis) → TileIndex shape
+  | [], axis, _, _ => nomatch axis
+  | _ :: _, ⟨0, _⟩, outIdx, k => (k, outIdx)
+  | _ :: rest, ⟨k + 1, h⟩, outIdx, r =>
+      (outIdx.1,
+       insertAxisIndex rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ outIdx.2 r)
+
+/-- Replace the unit reduced-axis coordinate of a `keep_dims = true` output
+index with the concrete reduced-axis coordinate. -/
+def replaceAxisIndex :
+    (shape : TileShape) → (axis : Fin shape.length) →
+    TileIndex (setAxisOne shape axis) → Fin (axisDim shape axis) → TileIndex shape
+  | [], axis, _, _ => nomatch axis
+  | _ :: _, ⟨0, _⟩, outIdx, k => (k, outIdx.2)
+  | _ :: rest, ⟨k + 1, h⟩, outIdx, r =>
+      (outIdx.1,
+       replaceAxisIndex rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ outIdx.2 r)
+
+@[simp] theorem axisDim_head (d : Nat) (rest : TileShape) :
+    axisDim (d :: rest) ⟨0, Nat.succ_pos _⟩ = d := rfl
+
+@[simp] theorem eraseAxis_head (d : Nat) (rest : TileShape) :
+    eraseAxis (d :: rest) ⟨0, Nat.succ_pos _⟩ = rest := rfl
+
+@[simp] theorem setAxisOne_head (d : Nat) (rest : TileShape) :
+    setAxisOne (d :: rest) ⟨0, Nat.succ_pos _⟩ = 1 :: rest := rfl
+
+@[simp] theorem reduceShape_false (shape : TileShape) (axis : Fin shape.length) :
+    reduceShape shape axis false = eraseAxis shape axis := rfl
+
+@[simp] theorem reduceShape_true (shape : TileShape) (axis : Fin shape.length) :
+    reduceShape shape axis true = setAxisOne shape axis := rfl
+
+@[simp] theorem insertAxisIndex_head {d : Nat} {rest : TileShape}
+    (outIdx : TileIndex rest) (k : Fin d) :
+    insertAxisIndex (d :: rest) ⟨0, Nat.succ_pos _⟩ outIdx k = (k, outIdx) := rfl
+
+@[simp] theorem replaceAxisIndex_head {d : Nat} {rest : TileShape}
+    (outIdx : TileIndex (1 :: rest)) (k : Fin d) :
+    replaceAxisIndex (d :: rest) ⟨0, Nat.succ_pos _⟩ outIdx k = (k, outIdx.2) := rfl
 
 /-- Enumerate all indices of a shape, in row-major / outer-to-inner order. -/
 def allIndices : (shape : TileShape) → List (TileIndex shape)
@@ -270,11 +335,10 @@ Notes on individual constructors:
 * `arange n` produces a length-`n` `Nat`-valued tile `[0, 1, ..., n-1]`.
 * `broadcast e n` lifts a scalar to a length-`n` tile.
 * `full n e` fills a length-`n` tile with the scalar value of `e`.
-* `reduceMax`/`reduceSum` are block-level reductions along the **innermost
-  axis** (the user's `axis = shape.length - 1`, the trailing dim of the
-  outermost-first shape list). The `keepDims` flag controls whether the
-  reduced rank dim is stripped (`false`) or collapsed to `1` (`true`),
-  matching Triton's `tl.sum / tl.max` `keep_dims=` kwarg.
+* `reduceMax`/`reduceSum` are block-level reductions along an arbitrary
+  Triton axis. The `keepDims` flag controls whether the reduced rank dim is
+  stripped (`false`) or collapsed to `1` (`true`), matching Triton's
+  `tl.sum / tl.max` `keep_dims=` kwarg.
 * `load region offset` evaluates `offset` (a `Nat`-valued scalar or tile,
   i.e. produced from `constNat` / `programId` / `arange` / `Nat`-arithmetic)
   and reads from `region`. Scalar offset = single-cell read; tile offset
@@ -328,32 +392,29 @@ inductive Op : TileDType → TileShape → Type where
   | ge        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | ne        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | max2      : Broadcast a b out → Op .real a → Op .real b → Op .real out
+  /-- Block-level reduce-max along an arbitrary axis. -/
+  | reduceMax : (axis : Fin shape.length) → (keepDims : Bool) →
+                Op .real shape →
+                Op .real (TileShape.reduceShape shape axis keepDims)
+  /-- Block-level reduce-sum along an arbitrary axis. -/
+  | reduceSum : (axis : Fin shape.length) → (keepDims : Bool) →
+                Op .real shape →
+                Op .real (TileShape.reduceShape shape axis keepDims)
   /--
-  Block-level reduce-max along the **innermost axis** (last element of the
-  outermost-first shape list, matching the user's `axis = shape.length - 1`).
-  `keepDims = false` shrinks rank by 1; `keepDims = true` keeps the rank but
-  collapses the reduced dim to 1, matching Triton's `keep_dims=True`.
+  Block-level (possibly batched) matrix multiply (`tl.dot` in Triton):
+  `c[…, m, n] = ∑_k a[…, m, k] * b[…, k, n]`.
 
-  The shape pattern `rest ++ [axisDim]` factors the input so the reduction
-  is over the trailing dim. Other axes (interior / outermost) require an
-  explicit transpose; the DSL rejects them with a clear error. -/
-  | reduceMax : (keepDims : Bool) → {rest : TileShape} → {axisDim : Nat} →
-                Op .real (rest ++ [axisDim]) →
-                Op .real (if keepDims then rest ++ [1] else rest)
-  /-- Block-level reduce-sum along the innermost axis. See `reduceMax` for
-  the `keepDims` semantics. -/
-  | reduceSum : (keepDims : Bool) → {rest : TileShape} → {axisDim : Nat} →
-                Op .real (rest ++ [axisDim]) →
-                Op .real (if keepDims then rest ++ [1] else rest)
-  /--
-  Block-level matrix multiply (`tl.dot` in Triton): `c[m, n] = ∑_k a[m, k] * b[k, n]`.
+  Operates on the **last two dims** of each operand; any leading batch
+  prefix (`batch : TileShape`) is broadcast pointwise. Two-arg
+  `tl.dot(a, b)` is the rank-2 case `batch = []`; FA-2 / grouped-GEMM
+  kernels use a non-empty batch prefix.
 
-  The shape constraint is fully load-bearing: the inner dim `K` must match
-  between the LHS (rows of `a`) and RHS (cols of `b`). The accumulator form
-  `tl.dot(a, b, acc)` desugars at the DSL level to `acc + tl.dot(a, b)`, so
-  the AST has only the binary node. -/
-  | dot       : {M K N : Nat} →
-                Op .real [M, K] → Op .real [K, N] → Op .real [M, N]
+  Both operands must agree on the batch prefix and on the shared inner
+  dim `K`. The accumulator form `tl.dot(a, b, acc)` desugars at the DSL
+  level to `acc + tl.dot(a, b)`, so the AST has only the binary node. -/
+  | dot       : {batch : TileShape} → {M K N : Nat} →
+                Op .real (batch ++ [M, K]) → Op .real (batch ++ [K, N]) →
+                Op .real (batch ++ [M, N])
   | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
   | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
                 (mask : Op .bool shape) → Op .real shape

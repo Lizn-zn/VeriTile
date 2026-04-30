@@ -1,20 +1,58 @@
 /-
 VeriTile.Examples.WelfordKernels
 
-Welford kernels over the typed Triton core.
+Welford math identities and kernels over the typed Triton core.
 -/
 
+import Mathlib.Data.Real.Basic
+import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+import Mathlib.Algebra.BigOperators.Field
+import Mathlib.Algebra.BigOperators.Fin
+import Mathlib.Tactic.FieldSimp
+import Mathlib.Tactic.Ring
+import Mathlib.Tactic.Linarith
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.Common
-import VeriTile.Examples.WelfordMath
 
 namespace VeriTile.Examples
 
 open VeriTile.Triton
 
+/-! ## Kernels -/
+
+/-- Two-pass mean/variance kernel.
+
+For each program id, this kernel loads one aligned `blockSize`-element row,
+computes the mean with one `tl.sum`, then computes the population variance
+with a second `tl.sum` over squared deviations. It writes one scalar mean and
+one scalar variance for the row. In the current named-region model those
+outputs are observed at offset `0`; the theorem below is for one fixed
+`BlockState.pid`.
+
+Source Triton (`.py` reference, aligned single-block flavour; assumes
+`BLOCK_SIZE` equals the row length and uses no boundary mask):
+
+```python
+@triton.jit
+def twopass_welford_kernel(x_ptr, mean_ptr, var_ptr,
+                           BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+
+    x = tl.load(x_ptr + offs)
+    s_x = tl.sum(x, axis=0)
+    mu = s_x / BLOCK_SIZE
+    d = x - mu
+    s_d2 = tl.sum(d * d, axis=0)
+    v = s_d2 / BLOCK_SIZE
+
+    tl.store(mean_ptr, mu)
+    tl.store(var_ptr, v)
+```
+-/
 def twopassWelfordKernel (xReg meanReg varReg : RegionName)
     (blockSize : Nat) : Kernel := triton {
   pid    := tl.program_id(0)
@@ -29,6 +67,40 @@ def twopassWelfordKernel (xReg meanReg varReg : RegionName)
   tl.store($(varReg), v)
 }
 
+/-- Online Welford mean/variance kernel.
+
+This kernel computes the same population mean/variance as
+`twopassWelfordKernel`, but uses Welford's one-pass recurrence inside a
+Triton `for` loop. The loop maintains scalar registers:
+
+* `M`: running mean after the processed prefix
+* `S`: running sum of squared deviations
+
+After all `blockSize` elements, it writes `M` and `S / blockSize`. As above,
+this is the aligned single-block version used by the proof; no boundary mask
+is modeled in this example.
+
+Source Triton (`.py` reference):
+
+```python
+@triton.jit
+def online_welford_kernel(x_ptr, mean_ptr, var_ptr,
+                          BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)
+    M = 0.0
+    S = 0.0
+
+    for i in range(0, BLOCK_SIZE):
+        xi = tl.load(x_ptr + (pid * BLOCK_SIZE + i))
+        delta = xi - M
+        M = M + delta / (i + 1)
+        delta2 = xi - M
+        S = S + delta * delta2
+
+    tl.store(mean_ptr, M)
+    tl.store(var_ptr, S / BLOCK_SIZE)
+```
+-/
 def onlineWelfordKernel (xReg meanReg varReg : RegionName)
     (blockSize : Nat) : Kernel := triton {
   pid := tl.program_id(0)
@@ -44,6 +116,173 @@ def onlineWelfordKernel (xReg meanReg varReg : RegionName)
   tl.store($(meanReg), M)
   tl.store($(varReg), S / tl.toReal($(blockSize)))
 }
+
+/-! ## Pure Welford Math -/
+
+/-- Two-pass mean: μ = (∑ xᵢ) / n. -/
+noncomputable def twoPassMean {n : Nat} (x : Fin n → ℝ) : ℝ :=
+  (∑ i, x i) / n
+
+/-- Two-pass sum-of-squared-deviations: S = ∑ (xᵢ − μ)². -/
+noncomputable def twoPassS {n : Nat} (x : Fin n → ℝ) : ℝ :=
+  ∑ i, (x i - twoPassMean x) ^ 2
+
+/-- Welford recurrence: running mean M_k after processing x[0..k-1].
+    M_0 = 0, M_{k+1} = M_k + (x_k − M_k) / (k+1).
+    Returns 0 if k > n (out-of-range). -/
+noncomputable def welfordMean {n : Nat} (x : Fin n → ℝ) : Nat → ℝ
+  | 0     => 0
+  | k + 1 =>
+      if h : k < n then
+        let prev := welfordMean x k
+        prev + (x ⟨k, h⟩ - prev) / (k + 1)
+      else welfordMean x k
+
+/-- Welford recurrence: running sum-of-squared-deviations S_k.
+    S_0 = 0, S_{k+1} = S_k + (x_k − M_k) · (x_k − M_{k+1}). -/
+noncomputable def welfordS {n : Nat} (x : Fin n → ℝ) : Nat → ℝ
+  | 0     => 0
+  | k + 1 =>
+      if h : k < n then
+        let prevM := welfordMean x k
+        let curM  := welfordMean x (k + 1)
+        welfordS x k + (x ⟨k, h⟩ - prevM) * (x ⟨k, h⟩ - curM)
+      else welfordS x k
+
+/-- Helper: for any prefix length k ≤ n, the running Welford mean times k
+    equals the sum of the first k inputs. Used to derive the final
+    `welfordMean x n = twoPassMean x` claim. -/
+private theorem welford_mean_mul_eq_sum {n : Nat} (x : Fin n → ℝ) :
+    ∀ k : Nat, ∀ (h : k ≤ n),
+      welfordMean x k * k = ∑ i : Fin k, x (castFin h i) := by
+  intro k
+  induction k with
+  | zero =>
+    intro _
+    simp [welfordMean]
+  | succ j ih =>
+    intro hk
+    have hj : j ≤ n := Nat.le_of_succ_le hk
+    have hj_lt : j < n := hk
+    have ih' := ih hj
+    have hwm : welfordMean x (j + 1) =
+        welfordMean x j + (x ⟨j, hj_lt⟩ - welfordMean x j) / (j + 1) := by
+      simp [welfordMean, hj_lt]
+    rw [hwm]
+    have hjp1_ne : ((j : ℝ) + 1) ≠ 0 := by
+      have : (0 : ℝ) ≤ j := Nat.cast_nonneg j
+      linarith
+    have hcast : ((j + 1 : Nat) : ℝ) = (j : ℝ) + 1 := by push_cast; ring
+    rw [hcast]
+    have hlhs : (welfordMean x j + (x ⟨j, hj_lt⟩ - welfordMean x j) / ((j : ℝ) + 1))
+                  * ((j : ℝ) + 1) = welfordMean x j * j + x ⟨j, hj_lt⟩ := by
+      field_simp
+      ring
+    rw [hlhs]
+    rw [Fin.sum_univ_castSucc]
+    have h_last : x (castFin hk (Fin.last j)) = x ⟨j, hj_lt⟩ := by
+      rfl
+    have h_cs : ∀ i : Fin j, x (castFin hk i.castSucc) = x (castFin hj i) := by
+      intro i; rfl
+    simp only [h_cs, h_last]
+    rw [ih']
+
+/-- Welford's variance identity. For any prefix length k ≤ n,
+    the running Welford S_k equals the sum-of-squared-deviations from M_k. -/
+private theorem welford_S_eq_sum_sq_dev {n : Nat} (x : Fin n → ℝ) :
+    ∀ k : Nat, ∀ (hk : k ≤ n),
+      welfordS x k = ∑ i : Fin k, (x (castFin hk i) - welfordMean x k) ^ 2 := by
+  intro k
+  induction k with
+  | zero =>
+    intro _
+    simp [welfordS]
+  | succ j ih =>
+    intro hk
+    have hj : j ≤ n := Nat.le_of_succ_le hk
+    have hj_lt : j < n := hk
+    have ih' := ih hj
+    set M := welfordMean x j with hMdef
+    set M' := welfordMean x (j + 1) with hM'def
+    set xj := x ⟨j, hj_lt⟩ with hxjdef
+    have hM' : M' = M + (xj - M) / ((j : ℝ) + 1) := by
+      simp [hM'def, welfordMean, hj_lt, hMdef, hxjdef]
+    have hS' : welfordS x (j + 1) = welfordS x j + (xj - M) * (xj - M') := by
+      simp [welfordS, hj_lt, hMdef, hM'def, hxjdef]
+    have hjp1_pos : (0 : ℝ) < (j : ℝ) + 1 := by
+      have : (0 : ℝ) ≤ j := Nat.cast_nonneg j
+      linarith
+    have hjp1_ne : ((j : ℝ) + 1) ≠ 0 := ne_of_gt hjp1_pos
+    have hMean := welford_mean_mul_eq_sum x j hj
+    have hMM' : ((j : ℝ) + 1) * (M' - M) = xj - M := by
+      rw [hM']; field_simp; ring
+    have hxj_M' : xj - M' = (j : ℝ) * (M' - M) := by
+      have : xj - M' = (xj - M) - (M' - M) := by ring
+      rw [this, ← hMM']; ring
+    have hxj_M : xj - M = ((j : ℝ) + 1) * (M' - M) := hMM'.symm
+    rw [hS', ih']
+    rw [Fin.sum_univ_castSucc]
+    have h_last : x (castFin hk (Fin.last j)) = xj := rfl
+    have h_cs : ∀ i : Fin j, x (castFin hk i.castSucc) = x (castFin hj i) := by
+      intro i; rfl
+    simp only [h_cs, h_last]
+    have key :
+        (∑ i : Fin j, (x (castFin hj i) - M') ^ 2) -
+          (∑ i : Fin j, (x (castFin hj i) - M) ^ 2)
+        = (j : ℝ) * (M - M') ^ 2 := by
+      rw [← Finset.sum_sub_distrib]
+      have h_per : ∀ i : Fin j,
+          (x (castFin hj i) - M') ^ 2 - (x (castFin hj i) - M) ^ 2 =
+          (M - M') * (2 * x (castFin hj i) - M - M') := by
+        intro i; ring
+      simp_rw [h_per]
+      rw [← Finset.mul_sum]
+      have h_sum_split : ∀ i : Fin j,
+          2 * x (castFin hj i) - M - M' =
+            2 * x (castFin hj i) + (- M - M') := by
+        intro i; ring
+      simp_rw [h_sum_split]
+      rw [Finset.sum_add_distrib, ← Finset.mul_sum]
+      rw [Finset.sum_const]
+      simp only [Finset.card_univ, Fintype.card_fin, nsmul_eq_mul]
+      have hSumX : ∑ i : Fin j, x (castFin hj i) = M * j := hMean.symm
+      rw [hSumX]
+      ring
+    have lhs_alg : (xj - M) * (xj - M') - (xj - M') ^ 2
+                 = (j : ℝ) * (M - M') ^ 2 := by
+      rw [hxj_M, hxj_M']
+      ring
+    linarith [key, lhs_alg]
+
+/-- The load-bearing identity for Welford kernel refinement: after processing
+all `n` inputs, Welford's running `(M, S)` equals the two-pass `(μ, S)`. -/
+theorem welford_eq_two_pass {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) :
+    welfordMean x n = twoPassMean x ∧ welfordS x n = twoPassS x := by
+  refine ⟨?_, ?_⟩
+  · have hMul := welford_mean_mul_eq_sum x n (le_refl n)
+    have hn_pos : (0 : ℝ) < n := by exact_mod_cast hn
+    have hn_ne : (n : ℝ) ≠ 0 := ne_of_gt hn_pos
+    unfold twoPassMean
+    rw [eq_div_iff hn_ne, hMul]
+    apply Finset.sum_congr rfl
+    intro i _
+    rfl
+  · have hS := welford_S_eq_sum_sq_dev x n (le_refl n)
+    have hM : welfordMean x n = twoPassMean x := by
+      have hMul := welford_mean_mul_eq_sum x n (le_refl n)
+      have hn_pos : (0 : ℝ) < n := by exact_mod_cast hn
+      have hn_ne : (n : ℝ) ≠ 0 := ne_of_gt hn_pos
+      unfold twoPassMean
+      rw [eq_div_iff hn_ne, hMul]
+      apply Finset.sum_congr rfl
+      intro i _; rfl
+    rw [hS, hM]
+    unfold twoPassS
+    apply Finset.sum_congr rfl
+    intro i _
+    rfl
+
+
 
 def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
   [Stmt.assign .real [] "xi"
@@ -86,21 +325,27 @@ theorem twopass_welford_correct
         = some (welfordVarSpec xs) := by
   constructor
   · simp [exec, twopassWelfordKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.reduceSum, Tile.natToReal, NumericDType.add,
+        Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        Tile.natToReal, NumericDType.add,
         NumericDType.mul, NumericDType.sub, NumericDType.div,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         welfordMeanSpec, twoPassMean]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
     simp [_h_mv]
+    rfl
   · simp [exec, twopassWelfordKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.reduceSum, Tile.natToReal, NumericDType.add,
+        Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        Tile.natToReal, NumericDType.add,
         NumericDType.mul, NumericDType.sub, NumericDType.div,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         welfordVarSpec, twoPassS, twoPassMean]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
     simp [pow_two]
+    rfl
 
 /-- Loop invariant for `onlineWelfordKernel`: after `k` body iterations,
     register `M` holds `welfordMean xs k`, register `S` holds `welfordS xs k`,

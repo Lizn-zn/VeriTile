@@ -15,7 +15,6 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.Common
 import VeriTile.Examples.WelfordKernels
-import VeriTile.Examples.WelfordMath
 
 namespace VeriTile.Examples
 
@@ -226,7 +225,9 @@ theorem twopass_layernorm_correct
       (fun idx : TileIndex [N] => s.pid * N + idx.1.val) :=
     injective_offset_singleton (s.pid * N)
   simp [observeAt, exec, twoPassLayerNormKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.uop, Tile.reduceSum, Tile.natToReal,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        Tile.natToReal,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
         BlockState.setReg, BlockState.readMem, layerNormSpec, twoPassMean,
         twoPassS]
@@ -234,6 +235,7 @@ theorem twopass_layernorm_correct
   unfold InputFeatureLoadedAt at _h_γ _h_β
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_γ, _h_β, pow_two, div_eq_mul_inv]
+  exact Or.inl rfl
 
 theorem fused_layernorm_correct
     (xReg γReg βReg yReg : RegionName) (N : Nat) (_hN : 0 < N) (ε : ℝ)

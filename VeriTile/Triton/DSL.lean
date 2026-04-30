@@ -118,9 +118,8 @@ syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax ident " = " tritonExpr : tritonKwarg
 
 -- Reduction kwargs. Per Triton semantics:
---   - `axis = K` selects which axis to reduce. VeriTile currently only supports
---     `K = shape.length - 1` (the user's "last axis", i.e. innermost in
---     outermost-first storage). Other axes require an explicit transpose.
+--   - `axis = K` selects which axis to reduce. If omitted, VeriTile reduces
+--     the user's last axis for compatibility with the original DSL examples.
 --   - `keep_dims = true | false` preserves vs strips the reduced rank dim;
 --     defaults to `false` to match Triton.
 syntax "axis" "=" num : tritonReduceKwarg
@@ -203,6 +202,18 @@ private def termListEq : List (TSyntax `term) → List (TSyntax `term) → Bool
 
 private def SInfo.eq : SInfo → SInfo → Bool
   | SInfo.dims a, SInfo.dims b => termListEq a b
+
+private def eraseNth {α : Type} : List α → Nat → MacroM (List α)
+  | [], _ => Macro.throwError "internal error: eraseNth index out of bounds"
+  | _ :: xs, 0 => pure xs
+  | x :: xs, n + 1 => return x :: (← eraseNth xs n)
+
+private def setNthOne : List (TSyntax `term) → Nat → MacroM (List (TSyntax `term))
+  | [], _ => Macro.throwError "internal error: setNthOne index out of bounds"
+  | _ :: xs, 0 => do
+      let oneLit : TSyntax `term ← `((1 : Nat))
+      pure (oneLit :: xs)
+  | x :: xs, n + 1 => return x :: (← setNthOne xs n)
 
 private def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .real => `(TileDType.real)
@@ -498,12 +509,17 @@ partial def expandCmp (env : Env) (ctx : String) (op : TSyntax `term)
 
 /-- Lower a `tl.sum(...)` / `tl.max(...)` expression with optional reduction
 kwargs (`axis = K`, `keep_dims = true|false`) into the corresponding
-`Op.reduceSum / .reduceMax` AST node.
+`Op.reduceSum / .reduceMax` AST nodes.
 
-Validation: `axis` must be the user's last axis (`shape.length - 1`); we
-currently only support innermost-axis reduction. `keep_dims` defaults to
-`false` (Triton default). The output `SInfo` reflects the rank change:
-`keep_dims = false` strips the trailing dim, `keep_dims = true` collapses
+Triton spec for omitted `axis` is `axis = None` → **reduce over all
+dimensions**, not "reduce the last axis". We honor that: omitted-axis on a
+rank-`N` tile lowers to `N` nested `axis = 0, keep_dims = keepDims` calls,
+collapsing the tile to a scalar (`keep_dims = false`) or to all-`1`s
+(`keep_dims = true`). For rank-1 tiles this degenerates to a single call,
+so existing 1D `tl.sum(x)` / `tl.max(x)` kernels are unaffected. With an
+explicit `axis = K` we lower to a single call against that axis.
+
+`keep_dims = false` erases the reduced dim; `keep_dims = true` collapses
 it to `1`. -/
 partial def expandReduce (env : Env) (ctx : String) (op : TSyntax `term)
     (e : TSyntax `tritonExpr)
@@ -513,22 +529,21 @@ partial def expandReduce (env : Env) (ctx : String) (op : TSyntax `term)
   let dims := match e'.shape with | .dims ds => ds
   if dims.isEmpty then
     Macro.throwError (ctx ++ ": reduction expects a tile, got scalar")
-  let userLastAxis : Nat := dims.length - 1
   let mut seenAxis : Bool := Bool.false
   let mut seenKeepDims : Bool := Bool.false
   let mut keepDims : Bool := Bool.false
+  let mut axis? : Option Nat := none
   for kw in kwargs do
     match kw with
     | `(tritonReduceKwarg| axis = $n:num) =>
         if seenAxis then
           Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
         seenAxis := Bool.true
-        if n.getNat != userLastAxis then
+        if n.getNat ≥ dims.length then
           Macro.throwError
-            (ctx ++ ": only `axis=" ++ toString userLastAxis ++ "` " ++
-             "(the user-side last / innermost axis) is supported; got `axis=" ++
-             toString n.getNat ++ "`. Reductions over interior or outermost " ++
-             "axes require an explicit transpose (issue #26).")
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axis? := some n.getNat
     | `(tritonReduceKwarg| keep_dims = false) =>
         if seenKeepDims then
           Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
@@ -548,15 +563,28 @@ partial def expandReduce (env : Env) (ctx : String) (op : TSyntax `term)
             (ctx ++ ": unknown kwarg `" ++ nm ++
              "`. Only `axis = N` and `keep_dims = true|false` are supported.")
     | _ => Macro.throwUnsupported
-  -- Compute output shape:
-  -- keep_dims = false: dims = init ++ [last]  →  init
-  -- keep_dims = true:  dims = init ++ [last]  →  init ++ [1]
-  let initDims := dims.dropLast
-  let oneLit : TSyntax `term ← `((1 : Nat))
-  let outShape : SInfo :=
-    if keepDims then SInfo.dims (initDims ++ [oneLit]) else SInfo.dims initDims
   let kdLit : TSyntax `term ← if keepDims then `(Bool.true) else `(Bool.false)
-  pure ⟨← `($op $kdLit $e'.term), .real, outShape⟩
+  match axis? with
+  | some axisIdx =>
+      -- Single-axis reduction with explicit `axis = K`.
+      let outDims ←
+        if keepDims then setNthOne dims axisIdx else eraseNth dims axisIdx
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+      pure ⟨← `($op (⟨$axisLit, by simp⟩) $kdLit $e'.term),
+            .real, SInfo.dims outDims⟩
+  | none =>
+      -- `axis = None` (Triton default): reduce over all dimensions.
+      -- Emit `dims.length` nested `axis = 0, keep_dims = keepDims` calls.
+      let mut term := e'.term
+      for _ in [:dims.length] do
+        term ← `($op (⟨0, by simp⟩) $kdLit $term)
+      let outDims : List (TSyntax `term) ←
+        if keepDims then
+          let oneLit : TSyntax `term ← `((1 : Nat))
+          pure (List.replicate dims.length oneLit)
+        else
+          pure []
+      pure ⟨term, .real, SInfo.dims outDims⟩
 
 /-- Lower a `tl.dot(a, b)` to `Op.dot a b`. Both operands must be rank-2
 real tiles whose inner dim agrees syntactically (same dim term). The
@@ -567,17 +595,34 @@ partial def expandDot (env : Env)
   let b' ← expandExpr env b
   ensureDType .real a'.dtype "tl.dot"
   ensureDType .real b'.dtype "tl.dot"
-  match a'.shape, b'.shape with
-  | .dims [aM, aK], .dims [bK, bN] =>
-      unless termKey aK == termKey bK do
-        Macro.throwError
-          ("tl.dot: inner dim mismatch — LHS has shape `[..., "
-            ++ termKey aK ++ "]` but RHS has shape `[" ++ termKey bK
-            ++ ", ...]`")
-      pure ⟨← `(Op.dot $a'.term $b'.term), .real, .dims [aM, bN]⟩
-  | _, _ =>
-      Macro.throwError
-        "tl.dot: both operands must be rank-2 (2D matrices)"
+  -- Both operands must be rank ≥ 2 (the trailing two dims are the matmul);
+  -- any leading dims form a shared `batch` prefix that must agree
+  -- syntactically. The inner dim `K` is the last of `a` / first-of-trailing
+  -- of `b` and must match.
+  let aDims := match a'.shape with | .dims ds => ds
+  let bDims := match b'.shape with | .dims ds => ds
+  if aDims.length < 2 then
+    Macro.throwError "tl.dot: LHS must have rank ≥ 2"
+  if bDims.length < 2 then
+    Macro.throwError "tl.dot: RHS must have rank ≥ 2"
+  if aDims.length != bDims.length then
+    Macro.throwError
+      ("tl.dot: rank mismatch — LHS rank " ++ toString aDims.length ++
+       ", RHS rank " ++ toString bDims.length)
+  let aBatch := aDims.dropLast.dropLast
+  let bBatch := bDims.dropLast.dropLast
+  unless termListEq aBatch bBatch do
+    Macro.throwError "tl.dot: batch prefix mismatch"
+  -- aDims = batch ++ [aM, aK], bDims = batch ++ [bK, bN]
+  let aM := aDims[aDims.length - 2]!
+  let aK := aDims[aDims.length - 1]!
+  let bK := bDims[bDims.length - 2]!
+  let bN := bDims[bDims.length - 1]!
+  unless termKey aK == termKey bK do
+    Macro.throwError
+      ("tl.dot: inner dim mismatch — LHS innermost `" ++ termKey aK ++
+       "` ≠ RHS outer-trailing `" ++ termKey bK ++ "`")
+  pure ⟨← `(Op.dot $a'.term $b'.term), .real, .dims (aBatch ++ [aM, bN])⟩
 
 end
 

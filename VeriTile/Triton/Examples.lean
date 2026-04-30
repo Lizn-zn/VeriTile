@@ -75,12 +75,20 @@ DSL macro `tl.dot(a, b)` and its fused-accumulator form
 `tl.dot(a, b, acc)` lower into these AST nodes; they will be exercised
 end-to-end once 2D load / pointer arithmetic land for FA-1 forward. -/
 
+/-- Rank-2 (FA-1 forward shape): `(M, K) @ (K, N) = (M, N)`. -/
 example : (M K N : Nat) → Op .real [M, N] := fun M K N =>
-  .dot (Op.ref .real [M, K] "a") (Op.ref .real [K, N] "b")
+  .dot (batch := []) (Op.ref .real [M, K] "a") (Op.ref .real [K, N] "b")
 
+/-- Fused accumulator form, rank-2: `acc + a @ b`. -/
 example : (M K N : Nat) → Op .real [M, N] := fun M K N =>
   .add NumericDType.real (.consSame (.consSame .nil))
-    (.dot (Op.ref .real [M, K] "p") (Op.ref .real [K, N] "v"))
+    (.dot (batch := []) (Op.ref .real [M, K] "p") (Op.ref .real [K, N] "v"))
     (Op.ref .real [M, N] "acc")
+
+/-- Batched (FA-2 / grouped-GEMM shape): `(B, M, K) @ (B, K, N) = (B, M, N)`. -/
+example : (B M K N : Nat) → Op .real [B, M, N] := fun B M K N =>
+  .dot (batch := [B])
+    (Op.ref .real [B, M, K] "a")
+    (Op.ref .real [B, K, N] "b")
 
 end VeriTile.Triton.Examples

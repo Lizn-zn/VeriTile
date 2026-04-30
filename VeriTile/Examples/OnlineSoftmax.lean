@@ -10,7 +10,6 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
-import VeriTile.Examples.WelfordMath
 
 namespace VeriTile.Examples
 

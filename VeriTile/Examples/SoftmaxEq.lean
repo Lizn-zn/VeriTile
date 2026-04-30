@@ -70,10 +70,10 @@ Region names are kernel parameters; both kernels share the input region
 /-- Naive softmax: `y = exp(x) / sum(exp(x))`. -/
 def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
-  offs := pid * $(blockSize) + tl.arange($(blockSize))
+  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
   e    := tl.exp(x)
-  s    := tl.sum(e)
+  s    := tl.sum(e, axis=0)
   y    := e / s
   tl.store($(yReg) + offs, y)
 }
@@ -81,11 +81,11 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := tr
 /-- Stable softmax: subtract the max before exponentiating. -/
 def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
-  offs := pid * $(blockSize) + tl.arange($(blockSize))
+  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
-  m    := tl.max(x)
+  m    := tl.max(x, axis=0)
   e    := tl.exp(x - m)
-  s    := tl.sum(e)
+  s    := tl.sum(e, axis=0)
   y    := e / s
   tl.store($(yReg) + offs, y)
 }
@@ -176,12 +176,14 @@ theorem softmax_naive_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [observeAt, exec, naiveSoftmaxKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.uop, Tile.reduceSum, NumericDType.add,
-        NumericDType.mul, NumericDType.div, BlockState.setReg,
-        BlockState.readMem, naiveSpec]
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.div,
+        BlockState.setReg, BlockState.readMem, naiveSpec]
   unfold InputLoadedAt at _h_x
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]
+  rfl
 
 /-- **Stable softmax kernel correctness.** Same scheme as above with the
     max-shift formula as the closed form. P2 polish. -/
@@ -200,12 +202,15 @@ theorem softmax_stable_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [observeAt, exec, stableSoftmaxKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceMax,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
         BlockState.setReg, BlockState.readMem, stableSpec, tileMax]
   unfold InputLoadedAt at _h_x
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]
+  rfl
 
 /-- **Refinement: `naiveSoftmaxKernel` and `stableSoftmaxKernel` produce the
     same `Y`-region memory.**

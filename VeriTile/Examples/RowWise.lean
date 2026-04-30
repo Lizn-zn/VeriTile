@@ -99,11 +99,14 @@ theorem rowWiseSum_correct
     observeRowAt (exec (rowWiseSumKernel xReg yReg nCol blockSize) s) yReg s.pid
       = some (rowWiseSumSpec xs) := by
   simp [observeRowAt, exec, rowWiseSumKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.reduceSum, NumericDType.mul, NumericDType.add,
+        Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.mul, NumericDType.add,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         rowWiseSumSpec]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
+  rfl
 
 /-- **Row-wise max kernel correctness.**
 
@@ -118,10 +121,13 @@ theorem rowWiseMax_correct
       = some (rowWiseMaxSpec hN xs) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   simp [observeRowAt, exec, rowWiseMaxKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.reduceMax, NumericDType.mul, NumericDType.add,
+        Tile.bop, Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.mul, NumericDType.add,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         rowWiseMaxSpec]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
+  rfl
 
 end VeriTile.Examples

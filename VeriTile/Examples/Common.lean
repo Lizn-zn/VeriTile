@@ -108,29 +108,63 @@ appear. -/
 
 namespace Offset
 
-/-- 1D linear offset `base + i.val`, the canonical `pid * N + arange(N)`
-addressing pattern. -/
-def linear1D {n : Nat} (base : Nat) : TileIndex [n] → Nat
-  | (i, _) => base + i.val
+/-- ND strided offset: `base + Σⱼ idxⱼ * stridesⱼ`. The `strides` list aligns
+positionally with `shape`; surplus shape dims (when `strides` is shorter) are
+treated as having stride `0`, which is malformed but kept structurally total
+so the function is well-defined for any input. Concrete kernels supply
+matching-length strides. -/
+def strided : (shape : TileShape) → (strides : List Nat) → (base : Nat) →
+    TileIndex shape → Nat
+  | [],          _,        base, _              => base
+  | _ :: _,      [],        base, _              => base
+  | _ :: rest,  s :: ss,   base, (i, idxRest)  =>
+      strided rest ss (base + i.val * s) idxRest
+
+/-- Canonical contiguous (row-major, innermost-stride-1) strides derived from
+a shape: `[shape[1] * shape[2] * …, shape[2] * …, …, shape[k], 1]`. -/
+def contigStrides : TileShape → List Nat
+  | []        => []
+  | _ :: rest => (rest.foldr (· * ·) 1) :: contigStrides rest
+
+/-- Fully-contiguous ND row-major offset: every byte of the tile lives in a
+single contiguous block starting at `base`. The strides come from
+`contigStrides`. -/
+def contig (shape : TileShape) (base : Nat) : TileIndex shape → Nat :=
+  strided shape (contigStrides shape) base
+
+/-- 1D linear offset `base + i.val` — the canonical `pid * N + arange(N)`
+addressing pattern. Defined as `Offset.strided [n] [1] base` so it
+participates in the same general ND-strided framework. -/
+def linear1D {n : Nat} (base : Nat) : TileIndex [n] → Nat :=
+  strided [n] [1] base
+
+/-- 2D row-major offset with an explicit leading-dimension row stride:
+`base + i.val * rowStride + j.val`. When `rowStride = cols` the tile is
+fully contiguous (matches `Offset.contig [rows, cols]`); with
+`rowStride > cols` the layout has padding between rows, matching strided
+`tl.load(... + offs_m[:, None] * stride_m + offs_d[None, :])` patterns. -/
+def rowMajor2D {rows cols : Nat} (base rowStride : Nat) :
+    TileIndex [rows, cols] → Nat :=
+  strided [rows, cols] [rowStride, 1] base
+
+/-! ### Injectivity theorems
+
+`linear1D_inj` (1D) and `rowMajor2D_inj` (2D) are the two patterns FA-1
+forward + Tier 1/2 kernels actually use; the general `strided_inj` under a
+suitable "non-overlapping strides" hypothesis can be added when an ND
+kernel needs it. -/
 
 theorem linear1D_inj {n : Nat} (base : Nat) :
     Function.Injective (linear1D (n := n) base) := by
   rintro ⟨a, _⟩ ⟨b, _⟩ hab
-  obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+  have h : base + a.val * 1 + 0 = base + b.val * 1 + 0 := by
+    simpa [linear1D, strided] using hab
+  obtain rfl : a = b := Fin.ext (by omega)
   rfl
 
-/-- 2D row-major offset `base + i.val * rowStride + j.val` with explicit
-row stride (the "leading dimension" of the host matrix). When
-`rowStride = cols` the tile is fully contiguous; with `rowStride > cols`
-the layout has padding between rows, matching strided `tl.load(... +
-offs_m[:, None] * stride_m + offs_d[None, :])` patterns. -/
-def rowMajor2D {rows cols : Nat} (base rowStride : Nat) :
-    TileIndex [rows, cols] → Nat
-  | (i, j, _) => base + i.val * rowStride + j.val
-
 /-- Injectivity of the 2D row-major offset map. Requires `cols ≤ rowStride`
-so distinct rows do not overlap; the proof recovers `(i, j)` from the
-offset via integer division/modulo by `rowStride`. -/
+so distinct rows do not overlap; recovers `(i, j)` from the offset via
+integer division/modulo by `rowStride`. -/
 theorem rowMajor2D_inj {rows cols : Nat} (base rowStride : Nat)
     (h : cols ≤ rowStride) :
     Function.Injective (rowMajor2D (rows := rows) (cols := cols) base rowStride) := by
@@ -140,7 +174,7 @@ theorem rowMajor2D_inj {rows cols : Nat} (base rowStride : Nat)
   have hSpos : 0 < rowStride := lt_of_le_of_lt (Nat.zero_le _) ha₂
   have hsum : a₁.val * rowStride + a₂.val = b₁.val * rowStride + b₂.val := by
     have h := hab
-    simp only [rowMajor2D] at h
+    simp only [rowMajor2D, strided] at h
     omega
   have h_a₂ : a₂.val = b₂.val := by
     have h_mod : (a₁.val * rowStride + a₂.val) % rowStride
@@ -172,7 +206,9 @@ Used by every 1D kernel proof feeding `scatter_readback_nd` /
 `Offset.linear1D_inj`; kept as a separate name for the existing call
 sites. -/
 theorem injective_offset_singleton {n : Nat} (base : Nat) :
-    Function.Injective (fun idx : TileIndex [n] => base + idx.1.val) :=
-  Offset.linear1D_inj (n := n) base
+    Function.Injective (fun idx : TileIndex [n] => base + idx.1.val) := by
+  rintro ⟨a, _⟩ ⟨b, _⟩ hab
+  obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+  rfl
 
 end VeriTile.Examples
