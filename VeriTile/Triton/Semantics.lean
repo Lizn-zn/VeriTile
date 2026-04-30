@@ -554,8 +554,58 @@ theorem WithBot.coe_add_coe_eq (a b : ℝ) :
 @[simp] theorem WithBot.coe_map_coe_eq {α} (f : ℝ → α) (a : ℝ) :
     Option.map f ((a : ℝ) : WithBot ℝ) = some (f a) := rfl
 
-noncomputable def Tile.reduceSum {n} (x : Tile .real [n]) : Tile .real [] :=
-  Tile.scalar (∑ i, x.data (i, PUnit.unit))
+/-- Reduce-sum along the innermost axis (the last element of the
+outermost-first shape list, equivalently the user's `axis = length - 1`).
+`keepDims = false` strips the trailing dim; `keepDims = true` keeps it
+collapsed to `1`. -/
+noncomputable def Tile.reduceSumDropLast :
+    (rest : TileShape) → (axisDim : Nat) →
+    Tile .real (rest ++ [axisDim]) → Tile .real rest
+  | [],          n, x =>
+      Tile.scalar (@Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ
+        (fun i => x.data (i, PUnit.unit)))
+  | _ :: rest', n, x =>
+      ⟨fun (i, restOutIdx) =>
+        (Tile.reduceSumDropLast rest' n
+          ⟨fun rIdx => x.data (i, rIdx)⟩).data restOutIdx⟩
+
+noncomputable def Tile.reduceSumKeepLast :
+    (rest : TileShape) → (axisDim : Nat) →
+    Tile .real (rest ++ [axisDim]) → Tile .real (rest ++ [1])
+  | [],          n, x =>
+      ⟨fun _ => @Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ
+        (fun i => x.data (i, PUnit.unit))⟩
+  | _ :: rest', n, x =>
+      ⟨fun (i, restOutIdx) =>
+        (Tile.reduceSumKeepLast rest' n
+          ⟨fun rIdx => x.data (i, rIdx)⟩).data restOutIdx⟩
+
+noncomputable def Tile.reduceSum {rest : TileShape} {axisDim : Nat}
+    (keepDims : Bool) (x : Tile .real (rest ++ [axisDim])) :
+    Tile .real (if keepDims then rest ++ [1] else rest) :=
+  match keepDims with
+  | true  => Tile.reduceSumKeepLast rest axisDim x
+  | false => Tile.reduceSumDropLast rest axisDim x
+
+/-! ### `simp` lemmas for the structural cases of reduceSum -/
+
+@[simp] theorem Tile.reduceSumDropLast_nil (n : Nat) (x : Tile .real [n]) :
+    Tile.reduceSumDropLast [] n x =
+      Tile.scalar (@Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ
+        (fun i => x.data (i, PUnit.unit))) := rfl
+
+@[simp] theorem Tile.reduceSumKeepLast_nil (n : Nat) (x : Tile .real [n]) :
+    Tile.reduceSumKeepLast [] n x =
+      ⟨fun _ => @Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ
+        (fun i => x.data (i, PUnit.unit))⟩ := rfl
+
+@[simp] theorem Tile.reduceSum_false {rest : TileShape} {n : Nat}
+    (x : Tile .real (rest ++ [n])) :
+    Tile.reduceSum false x = Tile.reduceSumDropLast rest n x := rfl
+
+@[simp] theorem Tile.reduceSum_true {rest : TileShape} {n : Nat}
+    (x : Tile .real (rest ++ [n])) :
+    Tile.reduceSum true x = Tile.reduceSumKeepLast rest n x := rfl
 
 /-! ### `simp` helpers for the `WithBot ℝ` boundary
 
@@ -656,13 +706,86 @@ the elaborated `Option ℝ`. -/
   show WithBot.unbotD (0 : ℝ) (s.sup' h (fun i => ((f i : ℝ) : WithBot ℝ))) = _
   rw [WithBot.sup'_coe]; rfl
 
-noncomputable def Tile.reduceMax {n} (x : Tile .real [n]) : Option (Tile .real []) :=
-  match n with
-  | 0 => none
-  | n' + 1 =>
-      some (Tile.scalar
+/-! ### Reduce-max along the innermost (trailing) axis
+
+Returns `none` only when the reduced dim is `0` (empty `sup'` undefined).
+Internally we split into a non-`Option` "positive" helper for the
+`axisDim = n' + 1 > 0` case, and a thin `Option` wrapper. -/
+
+noncomputable def Tile.reduceMaxDropLast_pos :
+    (rest : TileShape) → (n' : Nat) →
+    Tile .real (rest ++ [n' + 1]) → Tile .real rest
+  | [],          n', x =>
+      Tile.scalar
         ((Finset.univ : Finset (Fin (n' + 1))).sup' Finset.univ_nonempty
-          (fun i => x.data (i, PUnit.unit))))
+          (fun i => x.data (i, PUnit.unit)))
+  | _ :: rest', n', x =>
+      ⟨fun (i, restOutIdx) =>
+        (Tile.reduceMaxDropLast_pos rest' n'
+          ⟨fun rIdx => x.data (i, rIdx)⟩).data restOutIdx⟩
+
+noncomputable def Tile.reduceMaxKeepLast_pos :
+    (rest : TileShape) → (n' : Nat) →
+    Tile .real (rest ++ [n' + 1]) → Tile .real (rest ++ [1])
+  | [],          n', x =>
+      ⟨fun _ =>
+        (Finset.univ : Finset (Fin (n' + 1))).sup' Finset.univ_nonempty
+          (fun i => x.data (i, PUnit.unit))⟩
+  | _ :: rest', n', x =>
+      ⟨fun (i, restOutIdx) =>
+        (Tile.reduceMaxKeepLast_pos rest' n'
+          ⟨fun rIdx => x.data (i, rIdx)⟩).data restOutIdx⟩
+
+noncomputable def Tile.reduceMaxDropLast :
+    (rest : TileShape) → (axisDim : Nat) →
+    Tile .real (rest ++ [axisDim]) → Option (Tile .real rest)
+  | _,    0,      _ => none
+  | rest, n' + 1, x => some (Tile.reduceMaxDropLast_pos rest n' x)
+
+noncomputable def Tile.reduceMaxKeepLast :
+    (rest : TileShape) → (axisDim : Nat) →
+    Tile .real (rest ++ [axisDim]) → Option (Tile .real (rest ++ [1]))
+  | _,    0,      _ => none
+  | rest, n' + 1, x => some (Tile.reduceMaxKeepLast_pos rest n' x)
+
+noncomputable def Tile.reduceMax {rest : TileShape} {axisDim : Nat}
+    (keepDims : Bool) (x : Tile .real (rest ++ [axisDim])) :
+    Option (Tile .real (if keepDims then rest ++ [1] else rest)) :=
+  match keepDims with
+  | true  => Tile.reduceMaxKeepLast rest axisDim x
+  | false => Tile.reduceMaxDropLast rest axisDim x
+
+/-! ### `simp` lemmas for the structural cases of reduceMax -/
+
+@[simp] theorem Tile.reduceMaxDropLast_pos_nil (n' : Nat) (x : Tile .real [n' + 1]) :
+    Tile.reduceMaxDropLast_pos [] n' x =
+      Tile.scalar
+        ((Finset.univ : Finset (Fin (n' + 1))).sup' Finset.univ_nonempty
+          (fun i => x.data (i, PUnit.unit))) := rfl
+
+@[simp] theorem Tile.reduceMaxKeepLast_pos_nil (n' : Nat) (x : Tile .real [n' + 1]) :
+    Tile.reduceMaxKeepLast_pos [] n' x =
+      ⟨fun _ =>
+        (Finset.univ : Finset (Fin (n' + 1))).sup' Finset.univ_nonempty
+          (fun i => x.data (i, PUnit.unit))⟩ := rfl
+
+@[simp] theorem Tile.reduceMaxDropLast_succ {rest : TileShape} (n' : Nat)
+    (x : Tile .real (rest ++ [n' + 1])) :
+    Tile.reduceMaxDropLast rest (n' + 1) x =
+      some (Tile.reduceMaxDropLast_pos rest n' x) := rfl
+
+@[simp] theorem Tile.reduceMaxKeepLast_succ {rest : TileShape} (n' : Nat)
+    (x : Tile .real (rest ++ [n' + 1])) :
+    Tile.reduceMaxKeepLast rest (n' + 1) x =
+      some (Tile.reduceMaxKeepLast_pos rest n' x) := rfl
+
+@[simp] theorem Tile.reduceMax_false {rest : TileShape} {n : Nat}
+    (x : Tile .real (rest ++ [n])) :
+    Tile.reduceMax false x = Tile.reduceMaxDropLast rest n x := rfl
+
+@[simp] theorem Tile.reduceMax_true {rest : TileShape} {n : Nat}
+    (x : Tile .real (rest ++ [n])) :
+    Tile.reduceMax true x = Tile.reduceMaxKeepLast rest n x := rfl
 
 def Tile.natToReal {shape} (x : Tile .nat shape) : Tile .real shape :=
   ⟨fun i => some ((x.data i : ℝ))⟩
@@ -711,10 +834,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.bop max bc va vb)
-  | .reduceMax a, s => do
+  | .reduceMax keepDims a, s => do
       let va ← evalOp a s
-      va.reduceMax
-  | .reduceSum a, s => return Tile.reduceSum (← evalOp a s)
+      Tile.reduceMax keepDims va
+  | .reduceSum keepDims a, s => return Tile.reduceSum keepDims (← evalOp a s)
   | .load region off, s => do
       let offsets ← evalOp off s
       some ⟨fun i => some (s.readMem region (offsets.data i))⟩

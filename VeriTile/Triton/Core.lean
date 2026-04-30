@@ -65,8 +65,15 @@ abbrev TileCarrier : TileDType → Type
 /--
 Shape of a Triton block-local tile.
 
-Shapes are represented outermost-first: user shape `(M, N)` is `[M, N]`,
-and its index type is `Fin M × Fin N × PUnit`.
+Shapes are represented **outermost-first**, matching Triton / NumPy / PyTorch:
+a user shape `(M, N)` (M rows, N cols) is stored as `[M, N]`. The head of
+the list is the outermost dim, the last element is the innermost dim.
+User axis `K` corresponds directly to list index `K`.
+
+Reductions along the user's last axis (the typical Triton pattern,
+`tl.sum(scores, axis=last)`) collapse the **last** element of the shape;
+the typed `Op.reduceMax / .reduceSum` constructors below match the input
+shape against the pattern `rest ++ [axisDim]` to make this structural.
 -/
 abbrev TileShape := List Nat
 
@@ -139,10 +146,11 @@ def vec {dtype : TileDType} {n : Nat}
     (f : Fin n → TileCarrier dtype) : Tile dtype [n] :=
   ⟨fun i => f i.1⟩
 
-/-- 2D tile constructor. -/
-def mat {dtype : TileDType} {m n : Nat}
-    (f : Fin m → Fin n → TileCarrier dtype) : Tile dtype [m, n] :=
-  ⟨fun i => f i.1 i.2.1⟩
+/-- 2D tile constructor (outermost-first storage: a `(rows × cols)` matrix
+has shape `[rows, cols]`, indexed as `(row, col, _)`). -/
+def mat {dtype : TileDType} {rows cols : Nat}
+    (f : Fin rows → Fin cols → TileCarrier dtype) : Tile dtype [rows, cols] :=
+  ⟨fun (row, col, _) => f row col⟩
 
 end Tile
 
@@ -262,7 +270,11 @@ Notes on individual constructors:
 * `arange n` produces a length-`n` `Nat`-valued tile `[0, 1, ..., n-1]`.
 * `broadcast e n` lifts a scalar to a length-`n` tile.
 * `full n e` fills a length-`n` tile with the scalar value of `e`.
-* `reduceMax`/`reduceSum` are block-level `axis=0` reductions on a tile.
+* `reduceMax`/`reduceSum` are block-level reductions along the **innermost
+  axis** (the user's `axis = shape.length - 1`, the trailing dim of the
+  outermost-first shape list). The `keepDims` flag controls whether the
+  reduced rank dim is stripped (`false`) or collapsed to `1` (`true`),
+  matching Triton's `tl.sum / tl.max` `keep_dims=` kwarg.
 * `load region offset` evaluates `offset` (a `Nat`-valued scalar or tile,
   i.e. produced from `constNat` / `programId` / `arange` / `Nat`-arithmetic)
   and reads from `region`. Scalar offset = single-cell read; tile offset
@@ -316,8 +328,23 @@ inductive Op : TileDType → TileShape → Type where
   | ge        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | ne        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | max2      : Broadcast a b out → Op .real a → Op .real b → Op .real out
-  | reduceMax : Op .real [n] → Op .real []
-  | reduceSum : Op .real [n] → Op .real []
+  /--
+  Block-level reduce-max along the **innermost axis** (last element of the
+  outermost-first shape list, matching the user's `axis = shape.length - 1`).
+  `keepDims = false` shrinks rank by 1; `keepDims = true` keeps the rank but
+  collapses the reduced dim to 1, matching Triton's `keep_dims=True`.
+
+  The shape pattern `rest ++ [axisDim]` factors the input so the reduction
+  is over the trailing dim. Other axes (interior / outermost) require an
+  explicit transpose; the DSL rejects them with a clear error. -/
+  | reduceMax : (keepDims : Bool) → {rest : TileShape} → {axisDim : Nat} →
+                Op .real (rest ++ [axisDim]) →
+                Op .real (if keepDims then rest ++ [1] else rest)
+  /-- Block-level reduce-sum along the innermost axis. See `reduceMax` for
+  the `keepDims` semantics. -/
+  | reduceSum : (keepDims : Bool) → {rest : TileShape} → {axisDim : Nat} →
+                Op .real (rest ++ [axisDim]) →
+                Op .real (if keepDims then rest ++ [1] else rest)
   | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
   | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
                 (mask : Op .bool shape) → Op .real shape

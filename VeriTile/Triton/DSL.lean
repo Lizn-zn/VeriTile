@@ -103,7 +103,6 @@ syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
-syntax "tl.max(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "-inf" : tritonExpr
@@ -112,15 +111,19 @@ syntax "-inf" : tritonExpr
 -- Per Issue #16: only `mask` and `other` are recognized; other names error.
 syntax ident " = " tritonExpr : tritonKwarg
 
--- Reduction kwargs. Current VeriTile has only 1D tiles, so `axis=0` and
--- `keep_dims=false` are the only Triton-compatible options that preserve the
--- existing `Op.reduceSum : tile n -> scalar` semantics. Other values error.
+-- Reduction kwargs. Per Triton semantics:
+--   - `axis = K` selects which axis to reduce. VeriTile currently only supports
+--     `K = shape.length - 1` (the user's "last axis", i.e. innermost in
+--     outermost-first storage). Other axes require an explicit transpose.
+--   - `keep_dims = true | false` preserves vs strips the reduced rank dim;
+--     defaults to `false` to match Triton.
 syntax "axis" "=" num : tritonReduceKwarg
 syntax "keep_dims" "=" "false" : tritonReduceKwarg
 syntax "keep_dims" "=" "true" : tritonReduceKwarg
 syntax ident "=" tritonExpr : tritonReduceKwarg
 
 syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 
 -- `tl.load(ptr [, kwarg]*)` — kwargs are optional. With zero kwargs this is
 -- the legacy unmasked form; with `mask=` / `other=` it lowers to the masked
@@ -232,6 +235,21 @@ private def ensureShape (expected actual : SInfo) (ctx : String) : MacroM Unit :
   unless expected.eq actual do
     Macro.throwError (ctx ++ ": shape mismatch")
 
+/-- Recognize a dim term as the literal `1`, tolerating common syntactic
+wrappings (`1`, `(1)`, `(1 : Nat)`, `((1 : Nat))`, …) so that unit-dim
+broadcasts fire regardless of how the dim was emitted.
+
+`tl.arange(1)` and `tl.max(..., keep_dims=true)` etc. emit slightly different
+syntactic forms for the literal `1`; without this normalization the
+`broadcastTerm` head check would miss `keep_dims=true` outputs and break
+`(M, 1) + (M, N)` style broadcasts. -/
+private partial def termIsOne (t : TSyntax `term) : Bool :=
+  match t with
+  | `($n:num) => n.getNat == 1
+  | `(($e:term)) => termIsOne e
+  | `(($e:term : $_:term)) => termIsOne e
+  | _ => Bool.false
+
 private def broadcastTerm (a b : SInfo) (ctx : String) :
     MacroM (TSyntax `term × SInfo) := do
   match a, b with
@@ -243,10 +261,10 @@ private def broadcastTerm (a b : SInfo) (ctx : String) :
       if termKey ad == termKey bd then
         match subShape with
         | SInfo.dims outRest => pure (← `(Broadcast.consSame $subBc), SInfo.dims (ad :: outRest))
-      else if termKey ad == "1" then
+      else if termIsOne ad then
         match subShape with
         | SInfo.dims outRest => pure (← `(Broadcast.consL $subBc), SInfo.dims (bd :: outRest))
-      else if termKey bd == "1" then
+      else if termIsOne bd then
         match subShape with
         | SInfo.dims outRest => pure (← `(Broadcast.consR $subBc), SInfo.dims (ad :: outRest))
       else
@@ -357,13 +375,6 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.sqrt"
       pure ⟨← `(Op.sqrt $e'.term), .real, e'.shape⟩
-  | `(tritonExpr| tl.max($e:tritonExpr)) => do
-      let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.max"
-      match e'.shape with
-      | .dims [_] => pure ⟨← `(Op.reduceMax $e'.term), .real, SInfo.scalar⟩
-      | .dims [] => Macro.throwError "tl.max: reduction expects a tile, got scalar"
-      | .dims _ => Macro.throwError "tl.max: only rank-1 reductions are supported yet"
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
       let a' ← expandExpr env a
       let b' ← expandExpr env b
@@ -372,39 +383,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let (bc, outShape) ← broadcastTerm a'.shape b'.shape "tl.max"
       pure ⟨← `(Op.max2 $bc $a'.term $b'.term), .real, outShape⟩
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
-      let mut seenAxis : Bool := Bool.false
-      let mut seenKeepDims : Bool := Bool.false
-      for kw in kwargs do
-        match kw with
-        | `(tritonReduceKwarg| axis = $n:num) =>
-            if seenAxis then
-              Macro.throwError "tl.sum: duplicate `axis=` kwarg"
-            seenAxis := Bool.true
-            if n.getNat != 0 then
-              Macro.throwError "tl.sum: only `axis=0` is supported for 1D tiles"
-        | `(tritonReduceKwarg| keep_dims = false) =>
-            if seenKeepDims then
-              Macro.throwError "tl.sum: duplicate `keep_dims=` kwarg"
-            seenKeepDims := Bool.true
-        | `(tritonReduceKwarg| keep_dims = true) =>
-            Macro.throwError "tl.sum: `keep_dims=true` is not supported yet"
-        | `(tritonReduceKwarg| $name:ident = $_:tritonExpr) =>
-            match name.getId.toString with
-            | "axis" =>
-                Macro.throwError "tl.sum: `axis` must be the literal `0`"
-            | "keep_dims" =>
-                Macro.throwError "tl.sum: `keep_dims` must be the literal `false`"
-            | unknown =>
-                Macro.throwError
-                  ("tl.sum: unknown kwarg `" ++ unknown ++
-                   "`. Only `axis=0` and `keep_dims=false` are supported.")
-        | _ => Macro.throwUnsupported
-      let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.sum"
-      match e'.shape with
-      | .dims [_] => pure ⟨← `(Op.reduceSum $e'.term), .real, SInfo.scalar⟩
-      | .dims [] => Macro.throwError "tl.sum: reduction expects a tile, got scalar"
-      | .dims _ => Macro.throwError "tl.sum: only rank-1 reductions are supported yet"
+      expandReduce env "tl.sum" (← `(Op.reduceSum)) e kwargs
+  | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandReduce env "tl.max" (← `(Op.reduceMax)) e kwargs
   | `(tritonExpr| tl.toReal($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .nat e'.dtype "tl.toReal"
@@ -496,6 +477,68 @@ partial def expandCmp (env : Env) (ctx : String) (op : TSyntax `term)
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
   pure ⟨← `($op $cp $bc $a'.term $b'.term), .bool, outShape⟩
 
+/-- Lower a `tl.sum(...)` / `tl.max(...)` expression with optional reduction
+kwargs (`axis = K`, `keep_dims = true|false`) into the corresponding
+`Op.reduceSum / .reduceMax` AST node.
+
+Validation: `axis` must be the user's last axis (`shape.length - 1`); we
+currently only support innermost-axis reduction. `keep_dims` defaults to
+`false` (Triton default). The output `SInfo` reflects the rank change:
+`keep_dims = false` strips the trailing dim, `keep_dims = true` collapses
+it to `1`. -/
+partial def expandReduce (env : Env) (ctx : String) (op : TSyntax `term)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  ensureDType .real e'.dtype ctx
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.isEmpty then
+    Macro.throwError (ctx ++ ": reduction expects a tile, got scalar")
+  let userLastAxis : Nat := dims.length - 1
+  let mut seenAxis : Bool := Bool.false
+  let mut seenKeepDims : Bool := Bool.false
+  let mut keepDims : Bool := Bool.false
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat != userLastAxis then
+          Macro.throwError
+            (ctx ++ ": only `axis=" ++ toString userLastAxis ++ "` " ++
+             "(the user-side last / innermost axis) is supported; got `axis=" ++
+             toString n.getNat ++ "`. Reductions over interior or outermost " ++
+             "axes require an explicit transpose (issue #26).")
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        if seenKeepDims then
+          Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
+        seenKeepDims := Bool.true
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        if seenKeepDims then
+          Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
+        seenKeepDims := Bool.true
+        keepDims := Bool.true
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        let nm := name.getId.toString
+        if nm == "axis" || nm == "keep_dims" then
+          Macro.throwError
+            (ctx ++ ": `" ++ nm ++ "=` value is not a recognized literal")
+        else
+          Macro.throwError
+            (ctx ++ ": unknown kwarg `" ++ nm ++
+             "`. Only `axis = N` and `keep_dims = true|false` are supported.")
+    | _ => Macro.throwUnsupported
+  -- Compute output shape:
+  -- keep_dims = false: dims = init ++ [last]  →  init
+  -- keep_dims = true:  dims = init ++ [last]  →  init ++ [1]
+  let initDims := dims.dropLast
+  let oneLit : TSyntax `term ← `((1 : Nat))
+  let outShape : SInfo :=
+    if keepDims then SInfo.dims (initDims ++ [oneLit]) else SInfo.dims initDims
+  let kdLit : TSyntax `term ← if keepDims then `(Bool.true) else `(Bool.false)
+  pure ⟨← `($op $kdLit $e'.term), .real, outShape⟩
+
 end
 
 mutual
@@ -586,10 +629,17 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.max($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions e ++ kwargRegions
+  | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>

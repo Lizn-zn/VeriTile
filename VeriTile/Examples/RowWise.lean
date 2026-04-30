@@ -54,7 +54,7 @@ def rowWiseSumKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : Kernel :=
     row    := tl.program_id(0)
     cols   := tl.arange(0, $(blockSize))
     values := tl.load($(xReg) + row * $(nCol) + cols)
-    result := tl.sum(values)
+    result := tl.sum(values, axis=0)
     tl.store($(yReg) + row, result)
   }
 
@@ -67,7 +67,7 @@ def rowWiseMaxKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : Kernel :=
     row    := tl.program_id(0)
     cols   := tl.arange(0, $(blockSize))
     values := tl.load($(xReg) + row * $(nCol) + cols)
-    result := tl.max(values)
+    result := tl.max(values, axis=0)
     tl.store($(yReg) + row, result)
   }
 
