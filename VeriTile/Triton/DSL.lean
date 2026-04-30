@@ -171,8 +171,7 @@ private inductive DInfo where
   deriving BEq, Inhabited
 
 private inductive SInfo where
-  | scalar
-  | vec : TSyntax `term → SInfo
+  | dims : List (TSyntax `term) → SInfo
   deriving Inhabited
 
 private abbrev Env := List (String × DInfo × SInfo)
@@ -180,10 +179,21 @@ private abbrev Env := List (String × DInfo × SInfo)
 private def termKey (t : TSyntax `term) : String :=
   toString t.raw
 
-private def SInfo.eq : SInfo → SInfo → Bool
-  | .scalar, .scalar => Bool.true
-  | .vec a, .vec b => termKey a == termKey b
+namespace SInfo
+
+private def scalar : SInfo := .dims []
+
+private def vec (n : TSyntax `term) : SInfo := .dims [n]
+
+end SInfo
+
+private def termListEq : List (TSyntax `term) → List (TSyntax `term) → Bool
+  | [], [] => Bool.true
+  | a :: as, b :: bs => (termKey a == termKey b) && termListEq as bs
   | _, _ => Bool.false
+
+private def SInfo.eq : SInfo → SInfo → Bool
+  | SInfo.dims a, SInfo.dims b => termListEq a b
 
 private def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .real => `(TileDType.real)
@@ -191,8 +201,13 @@ private def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .bool => `(TileDType.bool)
 
 private def SInfo.term : SInfo → MacroM (TSyntax `term)
-  | .scalar => `(TileShape.scalar)
-  | .vec n => `(TileShape.vec $n)
+  | SInfo.dims ds => do
+      let rec go : List (TSyntax `term) → MacroM (TSyntax `term)
+        | [] => `(([] : TileShape))
+        | d :: rest => do
+            let tail ← go rest
+            `($d :: $tail)
+      go ds
 
 private def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
   | .real => `(NumericDType.real)
@@ -219,13 +234,23 @@ private def ensureShape (expected actual : SInfo) (ctx : String) : MacroM Unit :
 
 private def broadcastTerm (a b : SInfo) (ctx : String) :
     MacroM (TSyntax `term × SInfo) := do
-  if a.eq b then
-    pure (← `(Broadcast.same), a)
-  else
-    match a, b with
-    | .scalar, _ => pure (← `(Broadcast.left), b)
-    | _, .scalar => pure (← `(Broadcast.right), a)
-    | _, _ => Macro.throwError (ctx ++ ": incompatible shapes")
+  match a, b with
+  | SInfo.dims [], SInfo.dims [] => pure (← `(Broadcast.nil), SInfo.dims [])
+  | SInfo.dims [], SInfo.dims (_ :: _) => pure (← `(Broadcast.scalarL), b)
+  | SInfo.dims (_ :: _), SInfo.dims [] => pure (← `(Broadcast.scalarR), a)
+  | SInfo.dims (ad :: ads), SInfo.dims (bd :: bds) =>
+      let (subBc, subShape) ← broadcastTerm (SInfo.dims ads) (SInfo.dims bds) ctx
+      if termKey ad == termKey bd then
+        match subShape with
+        | SInfo.dims outRest => pure (← `(Broadcast.consSame $subBc), SInfo.dims (ad :: outRest))
+      else if termKey ad == "1" then
+        match subShape with
+        | SInfo.dims outRest => pure (← `(Broadcast.consL $subBc), SInfo.dims (bd :: outRest))
+      else if termKey bd == "1" then
+        match subShape with
+        | SInfo.dims outRest => pure (← `(Broadcast.consR $subBc), SInfo.dims (ad :: outRest))
+      else
+        Macro.throwError (ctx ++ ": incompatible shapes")
 
 private def coerceShape (e : TSyntax `term) (src target : SInfo) (ctx : String) :
     MacroM (TSyntax `term) := do
@@ -233,7 +258,7 @@ private def coerceShape (e : TSyntax `term) (src target : SInfo) (ctx : String) 
     pure e
   else
     match src with
-    | .scalar =>
+    | SInfo.dims [] =>
         let st ← target.term
         `(Op.broadcast $e $st)
     | _ => Macro.throwError (ctx ++ ": cannot broadcast non-scalar to target shape")
@@ -253,7 +278,7 @@ partial def expandPtr (env : Env) (stx : TSyntax `tritonPtr) :
   | `(tritonPtr| $($r:term)) =>
       -- Scalar pointer sugar: `$(R)` reads `R + 0`.
       let zero : TSyntax `term ← `(Op.constNat 0)
-      pure (r, zero, .scalar)
+      pure (r, zero, SInfo.scalar)
   | `(tritonPtr| $($r:term) + $o:tritonExpr) => do
       let o' ← expandExpr env o
       ensureDType .nat o'.dtype "pointer offset"
@@ -264,7 +289,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   match stx with
   | `(tritonExpr| $n:num) =>
       -- Bare numeric literals are `ℝ` data constants (e.g. `1` in `1 / s`).
-      pure ⟨← `(Op.const $n), .real, .scalar⟩
+      pure ⟨← `(Op.const $n), .real, SInfo.scalar⟩
   | `(tritonExpr| $i:ident) =>
       let name := i.getId.toString
       let (dtype, shape) ← lookupEnv env name
@@ -274,21 +299,21 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.ref $dt $sh $s), dtype, shape⟩
   | `(tritonExpr| $($t:term)) =>
       -- `$(...)` antiquote is the address/size channel: `Nat`.
-      pure ⟨← `(Op.constNat $t), .nat, .scalar⟩
+      pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar⟩
   | `(tritonExpr| $ℝ($t:term)) =>
       -- `$ℝ(...)` antiquote is the data channel: `ℝ`. Symmetric with the
       -- `$(t) → Op.constNat` form, used for non-literal ℝ kernel params
       -- (e.g. LayerNorm's `ε`).
-      pure ⟨← `(Op.const $t), .real, .scalar⟩
+      pure ⟨← `(Op.const $t), .real, SInfo.scalar⟩
   | `(tritonExpr| ($e:tritonExpr)) =>
       expandExpr env e
   | `(tritonExpr| tl.program_id($_)) =>
-      pure ⟨← `(Op.programId), .nat, .scalar⟩
+      pure ⟨← `(Op.programId), .nat, SInfo.scalar⟩
   | `(tritonExpr| tl.arange($e:tritonExpr)) =>
       -- arange takes a Nat; recognize $(t) and bare numerals specially
       match e with
-      | `(tritonExpr| $($t:term)) => pure ⟨← `(Op.arange $t), .nat, .vec t⟩
-      | `(tritonExpr| $n:num)     => pure ⟨← `(Op.arange $n), .nat, .vec (← `(($n : Nat)))⟩
+      | `(tritonExpr| $($t:term)) => pure ⟨← `(Op.arange $t), .nat, SInfo.vec t⟩
+      | `(tritonExpr| $n:num)     => pure ⟨← `(Op.arange $n), .nat, SInfo.vec (← `(($n : Nat)))⟩
       | _ => Macro.throwError
               "tl.arange(...) expects a Lean Nat: either a numeric literal or $(N)"
   | `(tritonExpr| tl.arange($s:tritonExpr, $e:tritonExpr)) => do
@@ -309,13 +334,13 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       match s with
       | `(tritonExpr| $n:num) =>
           if n.getNat = 0 then
-            pure ⟨← `(Op.arange $eTerm), .nat, .vec eTerm⟩
+            pure ⟨← `(Op.arange $eTerm), .nat, SInfo.vec eTerm⟩
           else
-            pure ⟨← `(Op.add NumericDType.nat Broadcast.left (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
-              .nat, .vec (← `($eTerm - $sTerm))⟩
+            pure ⟨← `(Op.add NumericDType.nat Broadcast.scalarL (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
+              .nat, SInfo.vec (← `($eTerm - $sTerm))⟩
       | _ =>
-          pure ⟨← `(Op.add NumericDType.nat Broadcast.left (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
-            .nat, .vec (← `($eTerm - $sTerm))⟩
+          pure ⟨← `(Op.add NumericDType.nat Broadcast.scalarL (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
+            .nat, SInfo.vec (← `($eTerm - $sTerm))⟩
   | `(tritonExpr| tl.exp($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.exp"
@@ -336,8 +361,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.max"
       match e'.shape with
-      | .vec _ => pure ⟨← `(Op.reduceMax $e'.term), .real, .scalar⟩
-      | .scalar => Macro.throwError "tl.max: reduction expects a tile, got scalar"
+      | .dims [_] => pure ⟨← `(Op.reduceMax $e'.term), .real, SInfo.scalar⟩
+      | .dims [] => Macro.throwError "tl.max: reduction expects a tile, got scalar"
+      | .dims _ => Macro.throwError "tl.max: only rank-1 reductions are supported yet"
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
       let a' ← expandExpr env a
       let b' ← expandExpr env b
@@ -376,14 +402,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.sum"
       match e'.shape with
-      | .vec _ => pure ⟨← `(Op.reduceSum $e'.term), .real, .scalar⟩
-      | .scalar => Macro.throwError "tl.sum: reduction expects a tile, got scalar"
+      | .dims [_] => pure ⟨← `(Op.reduceSum $e'.term), .real, SInfo.scalar⟩
+      | .dims [] => Macro.throwError "tl.sum: reduction expects a tile, got scalar"
+      | .dims _ => Macro.throwError "tl.sum: only rank-1 reductions are supported yet"
   | `(tritonExpr| tl.toReal($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .nat e'.dtype "tl.toReal"
       pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape⟩
   | `(tritonExpr| -inf) =>
-      pure ⟨← `(Op.negInf), .real, .scalar⟩
+      pure ⟨← `(Op.negInf), .real, SInfo.scalar⟩
   | `(tritonExpr| tl.load($p:tritonPtr $[, $kwargs:tritonKwarg]*)) => do
       -- Pointer surface syntax lowers to the internal `(region, offset)` AST.
       -- Optional `mask=` / `other=` kwargs lower to `LoadOptions`.

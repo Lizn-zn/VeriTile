@@ -5,7 +5,8 @@ Data types for the embedded Triton subset (Phase 1 scope).
 
 Scope decisions for P1:
 * Single-block, single program_id, deterministic execution.
-* 1-D tiles only (vectors).
+* Rank-polymorphic tile shapes in the core; individual operators may still
+  expose only the ranks currently modeled by the DSL / semantics.
 * Floating-point arithmetic modelled in `ℝ` (Mathlib `Real`).
 * Excluded: `tl.atomic_*`, `tl.dot`, async copy, multi-block coordination,
   Hopper/Blackwell-specific ops (TMA, WGMMA).
@@ -14,6 +15,7 @@ Operational semantics live in `VeriTile.Triton.Semantics`.
 -/
 
 import Mathlib.Data.Real.Basic
+import Mathlib.Data.List.Nodup
 import Mathlib.Order.WithBot
 
 namespace VeriTile.Triton
@@ -63,22 +65,64 @@ abbrev TileCarrier : TileDType → Type
 /--
 Shape of a Triton block-local tile.
 
-`scalar` is shape `()`, distinct from `vec 1`; this matches Triton's
-broadcasting behavior. `mat` is the planned 2D extension for block-pointer and
-attention kernels. A fully variadic shape can replace this once 2D support has
-settled.
+Shapes are represented outermost-first: user shape `(M, N)` is `[M, N]`,
+and its index type is `Fin M × Fin N × PUnit`.
 -/
-inductive TileShape where
-  | scalar
-  | vec : Nat → TileShape
-  | mat : Nat → Nat → TileShape
-  deriving DecidableEq, Repr
+abbrev TileShape := List Nat
 
 /-- Index type for a tile shape. -/
 abbrev TileIndex : TileShape → Type
-  | .scalar  => PUnit
-  | .vec n   => Fin n
-  | .mat m n => Fin m × Fin n
+  | [] => PUnit
+  | n :: rest => Fin n × TileIndex rest
+
+namespace TileShape
+
+/-- Enumerate all indices of a shape, in row-major / outer-to-inner order. -/
+def allIndices : (shape : TileShape) → List (TileIndex shape)
+  | [] => [PUnit.unit]
+  | n :: rest =>
+      (List.finRange n).flatMap fun i =>
+        (allIndices rest).map fun is => (i, is)
+
+@[simp] theorem allIndices_nil :
+    TileShape.allIndices ([] : TileShape) = [PUnit.unit] := rfl
+
+/-- `allIndices_cons` is NOT marked `@[simp]` on purpose: keeping
+`(TileShape.allIndices (n :: rest)).foldl ...` opaque under `simp` lets
+`scatter_readback_nd` fire by pattern-matching on the head form. Use
+`unfold TileShape.allIndices` (or `simp [TileShape.allIndices]`) explicitly
+when you need the inductive step. -/
+theorem allIndices_cons (n : Nat) (rest : TileShape) :
+    TileShape.allIndices (n :: rest) =
+      (List.finRange n).flatMap fun i =>
+        (TileShape.allIndices rest).map fun is => (i, is) := rfl
+
+@[simp] theorem mem_allIndices : ∀ (shape : TileShape) (i : TileIndex shape),
+    i ∈ allIndices shape
+  | [], i => by
+      cases i
+      simp [allIndices]
+  | _ :: rest, i => by
+      rcases i with ⟨hd, tl⟩
+      simp [allIndices, mem_allIndices rest tl]
+
+@[simp] theorem allIndices_nodup : ∀ (shape : TileShape), (allIndices shape).Nodup
+  | [] => by simp [allIndices]
+  | n :: rest => by
+      rw [allIndices, List.nodup_flatMap]
+      constructor
+      · intro _ _
+        exact (allIndices_nodup rest).map (fun _ _ h => by cases h; rfl)
+      · exact (List.nodup_finRange n).imp (fun hdis => by
+          unfold Function.onFun
+          rw [List.disjoint_left]
+          intro z hz1 hz2
+          rcases List.mem_map.1 hz1 with ⟨_, _, rfl⟩
+          rcases List.mem_map.1 hz2 with ⟨_, _, hzb⟩
+          injection hzb with hxy _
+          exact hdis hxy.symm)
+
+end TileShape
 
 /-- A shaped, typed Triton tile. -/
 structure Tile (dtype : TileDType) (shape : TileShape) where
@@ -87,40 +131,152 @@ structure Tile (dtype : TileDType) (shape : TileShape) where
 namespace Tile
 
 /-- Rank-0 tile constructor. -/
-def scalar {dtype : TileDType} (x : TileCarrier dtype) : Tile dtype .scalar :=
+def scalar {dtype : TileDType} (x : TileCarrier dtype) : Tile dtype [] :=
   ⟨fun _ => x⟩
 
 /-- 1D tile constructor. -/
 def vec {dtype : TileDType} {n : Nat}
-    (f : Fin n → TileCarrier dtype) : Tile dtype (.vec n) :=
-  ⟨f⟩
+    (f : Fin n → TileCarrier dtype) : Tile dtype [n] :=
+  ⟨fun i => f i.1⟩
 
 /-- 2D tile constructor. -/
 def mat {dtype : TileDType} {m n : Nat}
-    (f : Fin m → Fin n → TileCarrier dtype) : Tile dtype (.mat m n) :=
-  ⟨fun i => f i.1 i.2⟩
+    (f : Fin m → Fin n → TileCarrier dtype) : Tile dtype [m, n] :=
+  ⟨fun i => f i.1 i.2.1⟩
 
 end Tile
 
 /-- Binary broadcasting cases supported by Triton elementwise operators. -/
 inductive Broadcast : TileShape → TileShape → TileShape → Type where
-  | same   : Broadcast shape shape shape
-  | left   : Broadcast .scalar shape shape
-  | right  : Broadcast shape .scalar shape
+  | nil      : Broadcast [] [] []
+  | scalarL  : Broadcast [] (n :: r) (n :: r)
+  | scalarR  : Broadcast (n :: r) [] (n :: r)
+  | consSame : Broadcast a b c → Broadcast (n :: a) (n :: b) (n :: c)
+  | consL    : Broadcast a b c → Broadcast (1 :: a) (n :: b) (n :: c)
+  | consR    : Broadcast a b c → Broadcast (n :: a) (1 :: b) (n :: c)
+
+namespace Broadcast
+
+/-- Polymorphic same-shape broadcast witness, ND-recursive.
+
+For `shape = []` reduces to `.nil`; for `n :: rest` it is `.consSame (same rest)`.
+Lets handwritten ASTs use `Broadcast.same` regardless of the shape's rank,
+mirroring the natural elementwise meaning ("both operands have shape `s`,
+result has shape `s`"). The `shape` is implicit so the term-level use
+`Op.add NumericDType.real Broadcast.same a b` works as before. -/
+def same : {shape : TileShape} → Broadcast shape shape shape
+  | []     => .nil
+  | _ :: _ => .consSame same
+
+/-- Polymorphic scalar-on-left witness; for any non-scalar `shape` reduces to
+`.scalarL`, and for `shape = []` reduces to `.nil`. -/
+def left : {shape : TileShape} → Broadcast [] shape shape
+  | []     => .nil
+  | _ :: _ => .scalarL
+
+/-- Polymorphic scalar-on-right witness; for any non-scalar `shape` reduces to
+`.scalarR`, and for `shape = []` reduces to `.nil`. -/
+def right : {shape : TileShape} → Broadcast shape [] shape
+  | []     => .nil
+  | _ :: _ => .scalarR
+
+/-! ### `simp` unfolding for `same`/`left`/`right`
+
+These reduce the polymorphic broadcast aliases to the concrete constructor on
+each shape, so the constructor-level `leftIndex_*` / `rightIndex_*` simp lemmas
+below can fire. -/
+
+@[simp] theorem same_nil : (same : Broadcast [] [] []) = .nil := rfl
+
+@[simp] theorem same_cons (n : Nat) (rest : TileShape) :
+    (same : Broadcast (n :: rest) (n :: rest) (n :: rest)) = .consSame same := rfl
+
+@[simp] theorem left_nil : (left : Broadcast [] [] []) = .nil := rfl
+
+@[simp] theorem left_cons (n : Nat) (rest : TileShape) :
+    (left : Broadcast [] (n :: rest) (n :: rest)) = .scalarL := rfl
+
+@[simp] theorem right_nil : (right : Broadcast [] [] []) = .nil := rfl
+
+@[simp] theorem right_cons (n : Nat) (rest : TileShape) :
+    (right : Broadcast (n :: rest) [] (n :: rest)) = .scalarR := rfl
 
 /-- Evaluate the output index back into each input index for a broadcast. -/
-def Broadcast.leftIndex {a b out : TileShape} :
+def leftIndex {a b out : TileShape} :
     Broadcast a b out → TileIndex out → TileIndex a
-  | .same, i => i
-  | .left, _ => PUnit.unit
-  | .right, i => i
+  | .nil, _ => PUnit.unit
+  | .scalarL, _ => PUnit.unit
+  | .scalarR, i => i
+  | .consSame bc, i => (i.1, leftIndex bc i.2)
+  | .consL bc, i => (⟨0, Nat.succ_pos 0⟩, leftIndex bc i.2)
+  | .consR bc, i => (i.1, leftIndex bc i.2)
 
 /-- Evaluate the output index back into each input index for a broadcast. -/
-def Broadcast.rightIndex {a b out : TileShape} :
+def rightIndex {a b out : TileShape} :
     Broadcast a b out → TileIndex out → TileIndex b
-  | .same, i => i
-  | .left, i => i
-  | .right, _ => PUnit.unit
+  | .nil, _ => PUnit.unit
+  | .scalarL, i => i
+  | .scalarR, _ => PUnit.unit
+  | .consSame bc, i => (i.1, rightIndex bc i.2)
+  | .consL bc, i => (i.1, rightIndex bc i.2)
+  | .consR bc, i => (⟨0, Nat.succ_pos 0⟩, rightIndex bc i.2)
+
+/-! ### `simp` equation lemmas for `leftIndex` / `rightIndex`
+
+`def`s with pattern matching on dependent inductives sometimes don't unfold under
+`simp [Broadcast.leftIndex]` directly (Lean's simp normaliser leaves the head
+applied). These per-constructor equation lemmas plug that gap so 1D and 2D
+kernel proofs uniformly reduce broadcast indexing one cons-case at a time. -/
+
+@[simp] theorem leftIndex_nil (i : TileIndex []) :
+    leftIndex (.nil : Broadcast [] [] []) i = PUnit.unit := rfl
+
+@[simp] theorem leftIndex_scalarL (i : TileIndex (n :: r)) :
+    leftIndex (.scalarL : Broadcast [] (n :: r) (n :: r)) i = PUnit.unit := rfl
+
+@[simp] theorem leftIndex_scalarR (i : TileIndex (n :: r)) :
+    leftIndex (.scalarR : Broadcast (n :: r) [] (n :: r)) i = i := rfl
+
+@[simp] theorem leftIndex_consSame {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    leftIndex (.consSame bc : Broadcast (n :: a) (n :: b) (n :: c)) i =
+      (i.1, leftIndex bc i.2) := rfl
+
+@[simp] theorem leftIndex_consL {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    leftIndex (.consL bc : Broadcast (1 :: a) (n :: b) (n :: c)) i =
+      (⟨0, Nat.succ_pos 0⟩, leftIndex bc i.2) := rfl
+
+@[simp] theorem leftIndex_consR {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    leftIndex (.consR bc : Broadcast (n :: a) (1 :: b) (n :: c)) i =
+      (i.1, leftIndex bc i.2) := rfl
+
+@[simp] theorem rightIndex_nil (i : TileIndex []) :
+    rightIndex (.nil : Broadcast [] [] []) i = PUnit.unit := rfl
+
+@[simp] theorem rightIndex_scalarL (i : TileIndex (n :: r)) :
+    rightIndex (.scalarL : Broadcast [] (n :: r) (n :: r)) i = i := rfl
+
+@[simp] theorem rightIndex_scalarR (i : TileIndex (n :: r)) :
+    rightIndex (.scalarR : Broadcast (n :: r) [] (n :: r)) i = PUnit.unit := rfl
+
+@[simp] theorem rightIndex_consSame {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    rightIndex (.consSame bc : Broadcast (n :: a) (n :: b) (n :: c)) i =
+      (i.1, rightIndex bc i.2) := rfl
+
+@[simp] theorem rightIndex_consL {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    rightIndex (.consL bc : Broadcast (1 :: a) (n :: b) (n :: c)) i =
+      (i.1, rightIndex bc i.2) := rfl
+
+@[simp] theorem rightIndex_consR {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    rightIndex (.consR bc : Broadcast (n :: a) (1 :: b) (n :: c)) i =
+      (⟨0, Nat.succ_pos 0⟩, rightIndex bc i.2) := rfl
+
+end Broadcast
 
 /-- DTypes that support Triton's arithmetic operators in the current model. -/
 inductive NumericDType : TileDType → Type where
@@ -180,15 +336,15 @@ Notes on individual constructors:
   - `opts.mask = none, opts.other = some o`: `none` (semantic error).
 -/
 inductive Op : TileDType → TileShape → Type where
-  | const     : ℝ → Op .real .scalar
-  | constNat  : Nat → Op .nat .scalar
-  | constBool : Bool → Op .bool .scalar
-  | negInf    : Op .real .scalar
-  | programId : Op .nat .scalar
+  | const     : ℝ → Op .real []
+  | constNat  : Nat → Op .nat []
+  | constBool : Bool → Op .bool []
+  | negInf    : Op .real []
+  | programId : Op .nat []
   | ref       : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape
-  | arange    : (n : Nat) → Op .nat (.vec n)
-  | broadcast : Op dtype .scalar → (shape : TileShape) → Op dtype shape
-  | full      : (shape : TileShape) → Op dtype .scalar → Op dtype shape
+  | arange    : (n : Nat) → Op .nat [n]
+  | broadcast : Op dtype [] → (shape : TileShape) → Op dtype shape
+  | full      : (shape : TileShape) → Op dtype [] → Op dtype shape
   | add       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | sub       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | mul       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
@@ -204,8 +360,8 @@ inductive Op : TileDType → TileShape → Type where
   | ge        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | ne        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | max2      : Broadcast a b out → Op .real a → Op .real b → Op .real out
-  | reduceMax : Op .real (.vec n) → Op .real .scalar
-  | reduceSum : Op .real (.vec n) → Op .real .scalar
+  | reduceMax : Op .real [n] → Op .real []
+  | reduceSum : Op .real [n] → Op .real []
   | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
   | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
                 (mask : Op .bool shape) → Op .real shape
@@ -235,7 +391,7 @@ inductive Stmt : Type where
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
 
 instance : Inhabited Stmt :=
-  ⟨.assign .real .scalar "" (.const 0)⟩
+  ⟨.assign .real [] "" (.const 0)⟩
 
 /--
 A complete Triton kernel.

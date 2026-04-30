@@ -32,23 +32,23 @@ def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : Kernel := triton {
 }
 
 private def onlineSoftmaxLoopBody (xReg : RegionName) (N : Nat) : List Stmt :=
-  [Stmt.assign .real .scalar "xi"
+  [Stmt.assign .real [] "xi"
       (Op.load xReg
-        (Op.add .nat .same
-          (Op.mul .nat .same (Op.ref .nat .scalar "pid")
+        (Op.add .nat .nil
+          (Op.mul .nat .nil (Op.ref .nat [] "pid")
             (Op.constNat N))
-          (Op.ref .nat .scalar "i"))),
-    Stmt.assign .real .scalar "m_new"
-      (Op.max2 .same (Op.ref .real .scalar "m") (Op.ref .real .scalar "xi")),
-    Stmt.assign .real .scalar "l"
-      (Op.add .real .same
-        (Op.mul .real .same
-          (Op.exp (Op.sub .real .same
-            (Op.ref .real .scalar "m") (Op.ref .real .scalar "m_new")))
-          (Op.ref .real .scalar "l"))
-        (Op.exp (Op.sub .real .same
-          (Op.ref .real .scalar "xi") (Op.ref .real .scalar "m_new")))),
-    Stmt.assign .real .scalar "m" (Op.ref .real .scalar "m_new")]
+          (Op.ref .nat [] "i"))),
+    Stmt.assign .real [] "m_new"
+      (Op.max2 .nil (Op.ref .real [] "m") (Op.ref .real [] "xi")),
+    Stmt.assign .real [] "l"
+      (Op.add .real .nil
+        (Op.mul .real .nil
+          (Op.exp (Op.sub .real .nil
+            (Op.ref .real [] "m") (Op.ref .real [] "m_new")))
+          (Op.ref .real [] "l"))
+        (Op.exp (Op.sub .real .nil
+          (Op.ref .real [] "xi") (Op.ref .real [] "m_new")))),
+    Stmt.assign .real [] "m" (Op.ref .real [] "m_new")]
 
 /-! ## Math model — `WithBot ℝ`-valued
 
@@ -105,7 +105,7 @@ private theorem onlineSoftmaxM_succ_eq_sup' {N : Nat} (xs : Fin N → ℝ) :
         simp [h0]
       rw [this]
       show max (⊥ : WithBot ℝ) _ = _
-      simp [bot_le, max_eq_right]
+      simp [bot_le]
       rfl
   | succ j ih =>
       intro hk
@@ -221,9 +221,9 @@ private theorem onlineSoftmaxL_eq_batch
 private def P_online_softmax {N : Nat} (xs : Fin N → ℝ) (xReg : RegionName)
     (origPid : Nat) (k : Nat) (s : BlockState) : Prop :=
   -- `onlineSoftmaxM/L xs k : WithBot ℝ` directly populates the tile.
-  s.regs .real .scalar "m" = some (Tile.scalar (onlineSoftmaxM xs k))
-  ∧ s.regs .real .scalar "l" = some (Tile.scalar (onlineSoftmaxL xs k))
-  ∧ s.regs .nat .scalar "pid" = some (Tile.scalar origPid)
+  s.regs .real [] "m" = some (Tile.scalar (onlineSoftmaxM xs k))
+  ∧ s.regs .real [] "l" = some (Tile.scalar (onlineSoftmaxL xs k))
+  ∧ s.regs .nat [] "pid" = some (Tile.scalar origPid)
   ∧ s.pid = origPid
   ∧ InputLoadedAt s xReg N xs
 
@@ -233,7 +233,7 @@ private theorem online_softmax_step
     (hP : P_online_softmax xs xReg origPid i s) :
     ∃ s',
       stepStmts (onlineSoftmaxLoopBody xReg N)
-        (s.setReg "i" .nat .scalar (Tile.scalar i)) = some s' ∧
+        (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
       P_online_softmax xs xReg origPid (i + 1) s' := by
   rcases hP with ⟨hm, hl, hpidReg, hpid, hX⟩
   let xi : ℝ := s.mem xReg (origPid * N + i)
@@ -250,11 +250,11 @@ private theorem online_softmax_step
       (WithBot.realMul (WithBot.realExp (WithBot.realSub mOld mNew)) lOld)
       (WithBot.realExp (WithBot.realSub ((xi : ℝ) : WithBot ℝ) mNew))
   let s' :=
-    (((s.setReg "i" .nat .scalar (Tile.scalar i)).setReg
-      "xi" .real .scalar (Tile.scalar ((xi : ℝ) : WithBot ℝ))).setReg
-      "m_new" .real .scalar (Tile.scalar mNew)).setReg
-      "l" .real .scalar (Tile.scalar lNew)
-  let s'' := s'.setReg "m" .real .scalar (Tile.scalar mNew)
+    (((s.setReg "i" .nat [] (Tile.scalar i)).setReg
+      "xi" .real [] (Tile.scalar ((xi : ℝ) : WithBot ℝ))).setReg
+      "m_new" .real [] (Tile.scalar mNew)).setReg
+      "l" .real [] (Tile.scalar lNew)
+  let s'' := s'.setReg "m" .real [] (Tile.scalar mNew)
   refine ⟨s'', ?_, ?_⟩
   · simp [onlineSoftmaxLoopBody, stepStmts, stepStmt, evalOp, Tile.bop,
       Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
@@ -274,10 +274,10 @@ private theorem online_softmax_step
       rw [h_recM]
       simp [mOld, mNew, lNew, lOld, hxi]
     refine ⟨?_, ?_, ?_, ?_, ?_⟩
-    · show s''.regs .real .scalar "m" = some (Tile.scalar (onlineSoftmaxM xs (i+1)))
+    · show s''.regs .real [] "m" = some (Tile.scalar (onlineSoftmaxM xs (i+1)))
       rw [h_recM]
       simp [s'', s', BlockState.setReg]
-    · show s''.regs .real .scalar "l" = some (Tile.scalar (onlineSoftmaxL xs (i+1)))
+    · show s''.regs .real [] "l" = some (Tile.scalar (onlineSoftmaxL xs (i+1)))
       rw [h_recL]
       simp [s'', s', BlockState.setReg]
     · simp [s'', s', BlockState.setReg, hpidReg]
@@ -305,20 +305,20 @@ theorem online_softmax_correct
     (s : BlockState) (xs : Fin N → ℝ)
     (_h_x : InputLoadedAt s xReg N xs) :
     let final := exec (onlineSoftmaxKernel xReg yReg N) s
-    final.bind (fun s' => (s'.regs .real .scalar "m").map (fun t => t.data PUnit.unit))
+    final.bind (fun s' => (s'.regs .real [] "m").map (fun t => t.data PUnit.unit))
         = some (onlineSoftmaxM xs N)
-    ∧ final.bind (fun s' => (s'.regs .real .scalar "l").map (fun t => t.data PUnit.unit))
+    ∧ final.bind (fun s' => (s'.regs .real [] "l").map (fun t => t.data PUnit.unit))
         = some (onlineSoftmaxL xs N) := by
   let s0 :=
-    ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
-      "m" .real .scalar (Tile.scalar (⊥ : WithBot ℝ))).setReg
-      "l" .real .scalar (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+    ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+      "m" .real [] (Tile.scalar (⊥ : WithBot ℝ))).setReg
+      "l" .real [] (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
   have h_init : P_online_softmax xs xReg s.pid 0 s0 := by
     refine ⟨?_, ?_, ?_, ?_, ?_⟩
-    · show s0.regs .real .scalar "m" = some (Tile.scalar (onlineSoftmaxM xs 0))
+    · show s0.regs .real [] "m" = some (Tile.scalar (onlineSoftmaxM xs 0))
       simp [s0, BlockState.setReg]
       rfl
-    · show s0.regs .real .scalar "l" = some (Tile.scalar (onlineSoftmaxL xs 0))
+    · show s0.regs .real [] "l" = some (Tile.scalar (onlineSoftmaxL xs 0))
       simp [s0, BlockState.setReg]
       rfl
     · simp [s0, BlockState.setReg]
@@ -341,39 +341,39 @@ theorem online_softmax_correct
     simpa [stepForLoopAux.forLoop_unfold] using hLoop
   have hLoopAuxExpanded :
       stepForLoopAux "i" 0 N
-        [Stmt.assign .real .scalar "xi"
+        [Stmt.assign .real [] "xi"
             (Op.load xReg
-              (Op.add .nat .same
-                (Op.mul .nat .same (Op.ref .nat .scalar "pid")
+              (Op.add .nat .nil
+                (Op.mul .nat .nil (Op.ref .nat [] "pid")
                   (Op.constNat N))
-                (Op.ref .nat .scalar "i"))),
-          Stmt.assign .real .scalar "m_new"
-            (Op.max2 .same (Op.ref .real .scalar "m") (Op.ref .real .scalar "xi")),
-          Stmt.assign .real .scalar "l"
-            (Op.add .real .same
-              (Op.mul .real .same
-                (Op.exp (Op.sub .real .same
-                  (Op.ref .real .scalar "m") (Op.ref .real .scalar "m_new")))
-                (Op.ref .real .scalar "l"))
-              (Op.exp (Op.sub .real .same
-                (Op.ref .real .scalar "xi") (Op.ref .real .scalar "m_new")))),
-          Stmt.assign .real .scalar "m" (Op.ref .real .scalar "m_new")]
+                (Op.ref .nat [] "i"))),
+          Stmt.assign .real [] "m_new"
+            (Op.max2 .nil (Op.ref .real [] "m") (Op.ref .real [] "xi")),
+          Stmt.assign .real [] "l"
+            (Op.add .real .nil
+              (Op.mul .real .nil
+                (Op.exp (Op.sub .real .nil
+                  (Op.ref .real [] "m") (Op.ref .real [] "m_new")))
+                (Op.ref .real [] "l"))
+              (Op.exp (Op.sub .real .nil
+                (Op.ref .real [] "xi") (Op.ref .real [] "m_new")))),
+          Stmt.assign .real [] "m" (Op.ref .real [] "m_new")]
         s0 = some sLoop := by
     simpa [onlineSoftmaxLoopBody] using hLoopAux
   have hExec : exec (onlineSoftmaxKernel xReg yReg N) s = some sLoop := by
     -- Walk through each pre-loop statement explicitly, then forLoop via hLoop.
-    have hpid : stepStmt (.assign .nat .scalar "pid" .programId) s
-                  = some (s.setReg "pid" .nat .scalar (Tile.scalar s.pid)) := by
+    have hpid : stepStmt (.assign .nat [] "pid" .programId) s
+                  = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
       simp [stepStmt, evalOp]
-    have hm0 : stepStmt (.assign .real .scalar "m" .negInf)
-                  (s.setReg "pid" .nat .scalar (Tile.scalar s.pid))
-                = some ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
-                    "m" .real .scalar (Tile.scalar (⊥ : WithBot ℝ))) := by
+    have hm0 : stepStmt (.assign .real [] "m" .negInf)
+                  (s.setReg "pid" .nat [] (Tile.scalar s.pid))
+                = some ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+                    "m" .real [] (Tile.scalar (⊥ : WithBot ℝ))) := by
       simp [stepStmt, evalOp]
       rfl
-    have hl0 : stepStmt (.assign .real .scalar "l" (.const 0))
-                  ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
-                    "m" .real .scalar (Tile.scalar (⊥ : WithBot ℝ)))
+    have hl0 : stepStmt (.assign .real [] "l" (.const 0))
+                  ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+                    "m" .real [] (Tile.scalar (⊥ : WithBot ℝ)))
                 = some s0 := by
       simp [stepStmt, evalOp, s0]
       rfl
@@ -391,9 +391,9 @@ theorem online_softmax_correct
       conv_lhs => unfold stepStmts
     show stepStmts (onlineSoftmaxKernel xReg yReg N).body s = some sLoop
     show stepStmts
-        [ .assign .nat .scalar "pid" .programId
-        , .assign .real .scalar "m" .negInf
-        , .assign .real .scalar "l" (.const 0)
+        [ .assign .nat [] "pid" .programId
+        , .assign .real [] "m" .negInf
+        , .assign .real [] "l" (.const 0)
         , .forLoop "i" N (onlineSoftmaxLoopBody xReg N) ] s = some sLoop
     rw [stmts_cons _ _ _ _ hpid]
     rw [stmts_cons _ _ _ _ hm0]

@@ -11,8 +11,7 @@ import VeriTile.Examples.SoftmaxReciprocal
 import VeriTile.Examples.VectorAdd
 import VeriTile.Examples.FusedSiLU
 import VeriTile.Examples.ApproxGeLU
-import VeriTile.Examples.RowWiseSum
-import VeriTile.Examples.RowWiseMax
+import VeriTile.Examples.RowWise
 import VeriTile.Examples.WelfordMath
 import VeriTile.Examples.WelfordKernels
 import VeriTile.Examples.LayerNormKernels

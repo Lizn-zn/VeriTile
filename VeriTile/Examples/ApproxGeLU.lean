@@ -3246,16 +3246,15 @@ theorem approx_gelu_kernel_correct
           outReg blockSize s.pid i
         = some (approxGeLUSpec xs i) := by
   intro i
-  have h_inj : Function.Injective (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
-    intro a b hab
-    exact Fin.ext (Nat.add_left_cancel hab)
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) :=
+    injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, approxGeLUKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
         NumericDType.sub, NumericDType.div, BlockState.setReg,
         BlockState.readMem, approxGeLUSpec, approxGeLUScalar]
-  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
-  rw [BlockState.scatter_readback _ _ _ h_inj i]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]
 
 /-- Target error tolerance for the standard tanh/sigmoid GeLU approximation. -/

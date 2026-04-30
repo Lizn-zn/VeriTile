@@ -92,7 +92,6 @@ theorem direct_lse_correct
         Tile.bop, Tile.uop, Tile.reduceSum, NumericDType.add,
         NumericDType.mul, BlockState.setReg, BlockState.readMem,
         BlockState.writeMem, directLSESpec]
-  simp [Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
 
@@ -110,7 +109,6 @@ theorem stable_lse_correct
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         stableLSESpec, tileMax]
-  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
 

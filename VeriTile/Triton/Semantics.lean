@@ -23,18 +23,22 @@ namespace Tile
     (Tile.scalar x).data PUnit.unit = x := rfl
 
 @[simp] theorem scalar_data_index {dtype : TileDType}
-    (x : TileCarrier dtype) (i : TileIndex .scalar) :
+    (x : TileCarrier dtype) (i : TileIndex []) :
     (Tile.scalar x).data i = x := by
   cases i
   rfl
 
 @[simp] theorem scalar_eta {dtype : TileDType} (x : TileCarrier dtype) :
-    ({ data := fun _ : TileIndex .scalar => x } : Tile dtype .scalar) =
+    ({ data := fun _ : TileIndex [] => x } : Tile dtype []) =
       Tile.scalar x := rfl
 
 @[simp] theorem vec_data {dtype : TileDType} {n : Nat}
+    (f : Fin n → TileCarrier dtype) (i : TileIndex [n]) :
+    (Tile.vec f).data i = f i.1 := rfl
+
+@[simp] theorem vec_data_fin {dtype : TileDType} {n : Nat}
     (f : Fin n → TileCarrier dtype) (i : Fin n) :
-    (Tile.vec f).data i = f i := rfl
+    (Tile.vec f).data (i, PUnit.unit) = f i := rfl
 
 end Tile
 
@@ -236,15 +240,15 @@ private theorem foldl_writeMem_preserves {α : Type} {region : RegionName}
     rintro ⟨_, h_eq⟩
     exact hhd h_eq.symm
 
-theorem scatter_readback {region : RegionName} {n : Nat}
-    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
-    (h_inj : Function.Injective offsetFn) (i : Fin n) :
-    ((List.finRange n).foldl
+theorem scatter_readback_list {α : Type} {region : RegionName}
+    (l : List α) (s : BlockState) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (i : α) (h_nodup : l.Nodup) (h_mem : i ∈ l)
+    (h_inj : Function.Injective offsetFn) :
+    (l.foldl
        (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
         region (offsetFn i)
     = valueFn i := by
-  have h_nodup : (List.finRange n).Nodup := List.nodup_finRange n
-  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (List.mem_finRange i)
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
   rw [hl] at h_nodup
   rw [List.nodup_append, List.nodup_cons] at h_nodup
   obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
@@ -257,6 +261,27 @@ theorem scatter_readback {region : RegionName} {n : Nat}
   show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _)
       = valueFn i
   exact if_pos ⟨rfl, rfl⟩
+
+theorem scatter_readback {region : RegionName} {n : Nat}
+    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
+    (h_inj : Function.Injective offsetFn) (i : Fin n) :
+    ((List.finRange n).foldl
+       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        region (offsetFn i)
+      = valueFn i := by
+  exact scatter_readback_list (List.finRange n) s offsetFn valueFn
+    i (List.nodup_finRange n) (List.mem_finRange i) h_inj
+
+theorem scatter_readback_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ)
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        region (offsetFn i)
+    = valueFn i :=
+  scatter_readback_list (TileShape.allIndices shape) s offsetFn valueFn
+    i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) h_inj
 
 private theorem foldl_writeMem_masked_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α) :
@@ -289,17 +314,17 @@ private theorem foldl_writeMem_masked_preserves {α : Type} {region : RegionName
       simp only [hmaskhd', if_false, Bool.false_eq_true]
       exact ih _ htl
 
-theorem scatter_readback_masked {region : RegionName} {n : Nat}
-    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
-    (mask : Fin n → Bool)
-    (h_inj : Function.Injective offsetFn) (i : Fin n) :
-    ((List.finRange n).foldl
+theorem scatter_readback_masked_list {α : Type} {region : RegionName}
+    (l : List α) (s : BlockState)
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool)
+    (i : α) (h_nodup : l.Nodup) (h_mem : i ∈ l)
+    (h_inj : Function.Injective offsetFn) :
+    (l.foldl
        (fun acc k =>
          if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
         region (offsetFn i)
     = if mask i then valueFn i else s.mem region (offsetFn i) := by
-  have h_nodup : (List.finRange n).Nodup := List.nodup_finRange n
-  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (List.mem_finRange i)
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
   rw [hl] at h_nodup
   rw [List.nodup_append, List.nodup_cons] at h_nodup
   obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
@@ -327,6 +352,30 @@ theorem scatter_readback_masked {region : RegionName} {n : Nat}
     simp only [hmi', if_false, Bool.false_eq_true]
     rw [foldl_writeMem_masked_preserves offsetFn valueFn mask (offsetFn i) l₁ _ h_l1_not_in]
 
+theorem scatter_readback_masked {region : RegionName} {n : Nat}
+    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
+    (mask : Fin n → Bool)
+    (h_inj : Function.Injective offsetFn) (i : Fin n) :
+    ((List.finRange n).foldl
+       (fun acc k =>
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if mask i then valueFn i else s.mem region (offsetFn i) :=
+  scatter_readback_masked_list (List.finRange n) s offsetFn valueFn mask
+    i (List.nodup_finRange n) (List.mem_finRange i) h_inj
+
+theorem scatter_readback_masked_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ) (mask : TileIndex shape → Bool)
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if mask i then valueFn i else s.mem region (offsetFn i) :=
+  scatter_readback_masked_list (TileShape.allIndices shape) s offsetFn valueFn mask
+    i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) h_inj
+
 theorem scatter_readback_prop_masked {region : RegionName} {n : Nat}
     (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
     (P : Fin n → Prop) [DecidablePred P]
@@ -336,6 +385,19 @@ theorem scatter_readback_prop_masked {region : RegionName} {n : Nat}
         region (offsetFn i)
     = if P i then valueFn i else s.mem region (offsetFn i) := by
   have h := scatter_readback_masked (region := region) s offsetFn valueFn
+              (fun k => decide (P k)) h_inj i
+  simp only [decide_eq_true_eq] at h
+  exact h
+
+theorem scatter_readback_prop_masked_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ) (P : TileIndex shape → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if P i then valueFn i else s.mem region (offsetFn i) := by
+  have h := scatter_readback_masked_nd (region := region) s offsetFn valueFn
               (fun k => decide (P k)) h_inj i
   simp only [decide_eq_true_eq] at h
   exact h
@@ -492,8 +554,8 @@ theorem WithBot.coe_add_coe_eq (a b : ℝ) :
 @[simp] theorem WithBot.coe_map_coe_eq {α} (f : ℝ → α) (a : ℝ) :
     Option.map f ((a : ℝ) : WithBot ℝ) = some (f a) := rfl
 
-noncomputable def Tile.reduceSum {n} (x : Tile .real (.vec n)) : Tile .real .scalar :=
-  Tile.scalar (∑ i, x.data i)
+noncomputable def Tile.reduceSum {n} (x : Tile .real [n]) : Tile .real [] :=
+  Tile.scalar (∑ i, x.data (i, PUnit.unit))
 
 /-! ### `simp` helpers for the `WithBot ℝ` boundary
 
@@ -594,13 +656,13 @@ the elaborated `Option ℝ`. -/
   show WithBot.unbotD (0 : ℝ) (s.sup' h (fun i => ((f i : ℝ) : WithBot ℝ))) = _
   rw [WithBot.sup'_coe]; rfl
 
-noncomputable def Tile.reduceMax {n} (x : Tile .real (.vec n)) : Option (Tile .real .scalar) :=
+noncomputable def Tile.reduceMax {n} (x : Tile .real [n]) : Option (Tile .real []) :=
   match n with
   | 0 => none
   | n' + 1 =>
       some (Tile.scalar
         ((Finset.univ : Finset (Fin (n' + 1))).sup' Finset.univ_nonempty
-          (fun i => x.data i)))
+          (fun i => x.data (i, PUnit.unit))))
 
 def Tile.natToReal {shape} (x : Tile .nat shape) : Tile .real shape :=
   ⟨fun i => some ((x.data i : ℝ))⟩
@@ -682,44 +744,18 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       let values ← evalOp val s
       -- `mem : RegionName → Nat → ℝ`; demote `WithBot ℝ → ℝ` via `unbotD 0`.
       -- Well-formed kernels never store `⊥`, so the default value is unobservable.
-      match shape with
-      | .scalar =>
-          some (s.writeMem region (offsets.data PUnit.unit)
-                  ((values.data PUnit.unit).unbotD 0))
-      | .vec n =>
-          some ((List.finRange n).foldl
-            (fun acc i => acc.writeMem region (offsets.data i)
-                            ((values.data i).unbotD 0)) s)
-      | .mat m n =>
-          let idxs : List (Fin m × Fin n) :=
-            (List.finRange m).flatMap (fun i => (List.finRange n).map (fun j => (i, j)))
-          some (idxs.foldl
-            (fun acc i => acc.writeMem region (offsets.data i)
-                            ((values.data i).unbotD 0)) s)
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i => acc.writeMem region (offsets.data i)
+                        ((values.data i).unbotD 0)) s)
   | .storeMask region shape off val mask, s => do
       let offsets ← evalOp off s
       let values ← evalOp val s
       let masks ← evalOp mask s
-      match shape with
-      | .scalar =>
-          some (if masks.data PUnit.unit then
-            s.writeMem region (offsets.data PUnit.unit)
-              ((values.data PUnit.unit).unbotD 0)
-          else s)
-      | .vec n =>
-          some ((List.finRange n).foldl
-            (fun acc i =>
-              if masks.data i then acc.writeMem region (offsets.data i)
-                                    ((values.data i).unbotD 0)
-              else acc) s)
-      | .mat m n =>
-          let idxs : List (Fin m × Fin n) :=
-            (List.finRange m).flatMap (fun i => (List.finRange n).map (fun j => (i, j)))
-          some (idxs.foldl
-            (fun acc i =>
-              if masks.data i then acc.writeMem region (offsets.data i)
-                                    ((values.data i).unbotD 0)
-              else acc) s)
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i =>
+          if masks.data i then acc.writeMem region (offsets.data i)
+                                ((values.data i).unbotD 0)
+          else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
 termination_by st _ => (sizeOf st, 0)
@@ -743,7 +779,7 @@ noncomputable def stepForLoopAux
     BlockState → Option BlockState
   | s =>
       if start < n then
-        match stepStmts body (s.setReg idx .nat .scalar (Tile.scalar start)) with
+        match stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) with
         | some s' => stepForLoopAux idx (start + 1) n body s'
         | none => none
       else some s
@@ -774,11 +810,11 @@ namespace stepForLoopAux
 
 @[simp] theorem step_lt {idx} {start n} {body} {s} (h : start < n) :
     stepForLoopAux idx start n body s
-      = (stepStmts body (s.setReg idx .nat .scalar (Tile.scalar start))).bind
+      = (stepStmts body (s.setReg idx .nat [] (Tile.scalar start))).bind
           (stepForLoopAux idx (start + 1) n body) := by
   conv_lhs => unfold stepForLoopAux
   simp [h]
-  cases hbody : stepStmts body (s.setReg idx .nat .scalar (Tile.scalar start)) <;> rfl
+  cases hbody : stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) <;> rfl
 
 @[simp] theorem forLoop_unfold {idx} {n} {body} {s} :
     stepStmt (.forLoop idx n body) s
@@ -810,13 +846,8 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
     rename_i offsets
     cases hval : evalOp val s <;> simp [hval] at h
     rename_i values
-    cases shape <;> simp at h
-    · cases h
-      simp
-    · cases h
-      simp [BlockState.foldl_writeMem_pid]
-    · cases h
-      simp [BlockState.foldl_writeMem_pid]
+    cases h
+    simp [BlockState.foldl_writeMem_pid]
   case storeMask region shape off val mask =>
     cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
     rename_i offsets
@@ -824,16 +855,8 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
     rename_i values
     cases hmask : evalOp mask s <;> simp [hmask] at h
     rename_i masks
-    cases shape <;> simp at h
-    · split at h
-      · cases h
-        simp
-      · cases h
-        rfl
-    · cases h
-      simp [BlockState.foldl_writeMem_masked_pid]
-    · cases h
-      simp [BlockState.foldl_writeMem_masked_pid]
+    cases h
+    simp [BlockState.foldl_writeMem_masked_pid]
   case forLoop idx n body =>
     simp at h
     exact stepForLoopAux_pid h
@@ -857,11 +880,11 @@ theorem stepForLoopAux_pid {idx : RegName} {start n : Nat}
     s'.pid = s.pid := by
   by_cases hlt : start < n
   · rw [stepForLoopAux.step_lt hlt] at h
-    cases hbody : stepStmts body (s.setReg idx .nat .scalar (Tile.scalar start)) <;>
+    cases hbody : stepStmts body (s.setReg idx .nat [] (Tile.scalar start)) <;>
       simp [hbody] at h
     rename_i mid
     exact (stepForLoopAux_pid h).trans
-      ((stepStmts_pid hbody).trans (BlockState.setReg_pid s idx .nat .scalar (Tile.scalar start)))
+      ((stepStmts_pid hbody).trans (BlockState.setReg_pid s idx .nat [] (Tile.scalar start)))
   · have hge : n ≤ start := Nat.le_of_not_gt hlt
     rw [stepForLoopAux.step_ge hge] at h
     simp_all
@@ -885,7 +908,7 @@ example : evalOp .programId default = some (Tile.scalar 0) := by
   unfold evalOp
   rfl
 
-example : evalOp (.add .nat .same (.constNat 2) (.constNat 3)) default
+example : evalOp (.add .nat .nil (.constNat 2) (.constNat 3)) default
     = some (Tile.scalar 5) := by
   unfold evalOp Tile.bop NumericDType.add
   rfl

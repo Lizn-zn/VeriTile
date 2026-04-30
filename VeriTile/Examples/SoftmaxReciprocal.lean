@@ -52,16 +52,15 @@ theorem softmax_recip_correct
         = some (stableRecipSpec xs (tileMax hN xs) i) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   intro i
-  have h_inj : Function.Injective (fun k : Fin (n + 1) => s.pid * (n + 1) + k.val) := by
-    intro a b hab
-    exact Fin.ext (Nat.add_left_cancel hab)
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [n + 1] => s.pid * (n + 1) + idx.1.val) :=
+    injective_offset_singleton (s.pid * (n + 1))
   simp [observeAt, exec, softmaxRecipKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceMax,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
         BlockState.setReg, BlockState.readMem, stableRecipSpec, tileMax]
-  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
-  rw [BlockState.scatter_readback _ _ _ h_inj i]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]
 
 /-- **Refinement: stable softmax with per-element division ≡ stable softmax

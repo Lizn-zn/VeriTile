@@ -43,7 +43,7 @@ def comparisonOpsSmoke : Kernel := triton {
 /-- `tl.load(p, mask=m)` with no `other=` uses `s.undef` for masked-off lanes. -/
 example : evalOp
     (Op.loadMask "X" (Op.constNat 0)
-      (Op.lt ComparableDType.nat Broadcast.same (Op.constNat 0) (Op.constNat 0)))
+      (Op.lt ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)))
     { mem := fun _ _ => 100, regs := fun _ _ _ => none
     , pid := 0, undef := fun _ _ => 42 }
     = some (Tile.scalar 42) := by
@@ -57,14 +57,14 @@ example :
     let s2 : BlockState :=
       { mem := fun _ _ => 0, regs := fun _ _ _ => none
       , pid := 0, undef := fun _ _ => 99 }
-    let maskFalse : Op .bool .scalar :=
-      Op.lt ComparableDType.nat Broadcast.same (Op.constNat 0) (Op.constNat 0)
+    let maskFalse : Op .bool [] :=
+      Op.lt ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)
     evalOp (Op.loadMask "X" (Op.constNat 0) maskFalse) s1
       ≠ evalOp (Op.loadMask "X" (Op.constNat 0) maskFalse) s2 := by
   change some (Tile.scalar 42) ≠ some (Tile.scalar 99)
   intro h
   injection h with ht
-  have hv := congrArg (fun t : Tile .real .scalar => t.data PUnit.unit) ht
+  have hv := congrArg (fun t : Tile .real [] => t.data PUnit.unit) ht
   norm_num at hv
 
 end VeriTile.Triton.Examples

@@ -170,17 +170,18 @@ theorem softmax_naive_correct
       observeAt (exec (naiveSoftmaxKernel xReg yReg blockSize) s) yReg blockSize s.pid i
         = some (naiveSpec xs i) := by
   intro i
-  have h_inj : Function.Injective (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
-    intro a b hab
-    exact Fin.ext (Nat.add_left_cancel hab)
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
   simp [observeAt, exec, naiveSoftmaxKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.reduceSum, NumericDType.add,
         NumericDType.mul, NumericDType.div, BlockState.setReg,
         BlockState.readMem, naiveSpec]
-  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
-  rw [BlockState.scatter_readback _ _ _ h_inj i]
-  simp [_h_x, WithBot.realDiv, Option.map₂]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
+  simp [_h_x]
 
 /-- **Stable softmax kernel correctness.** Same scheme as above with the
     max-shift formula as the closed form. P2 polish. -/
@@ -193,16 +194,17 @@ theorem softmax_stable_correct
         = some (stableSpec xs (tileMax hN xs) i) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   intro i
-  have h_inj : Function.Injective (fun k : Fin (n + 1) => s.pid * (n + 1) + k.val) := by
-    intro a b hab
-    exact Fin.ext (Nat.add_left_cancel hab)
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [n + 1] => s.pid * (n + 1) + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
   simp [observeAt, exec, stableSoftmaxKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceMax,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
         BlockState.setReg, BlockState.readMem, stableSpec, tileMax]
-  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at _h_x
-  rw [BlockState.scatter_readback _ _ _ h_inj i]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]
 
 /-- **Refinement: `naiveSoftmaxKernel` and `stableSoftmaxKernel` produce the

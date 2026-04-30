@@ -47,7 +47,7 @@ noncomputable def observeAt
 
 For kernels that gather one *row* of a row-major matrix (row stride
 `rowStride`, `blockSize` cells per row) and write a single scalar per
-program — the pattern shared by `RowWiseSum`, `RowWiseMax`, and
+program — the pattern shared by row-wise reductions and
 forthcoming row-wise reductions. Generalizes the predicates above by
 separating the row stride (the leading dimension of the matrix in
 memory) from the block size (the number of cells gathered). When
@@ -66,5 +66,20 @@ def InputRowLoadedAt (s : BlockState) (region : RegionName)
 noncomputable def observeRowAt
     (sf : Option BlockState) (region : RegionName) (basePid : Nat) : Option ℝ :=
   sf.map (·.readMem region basePid)
+
+/-! ## ND-shape injectivity helpers -/
+
+/-- Stride injectivity for the canonical 1D scatter offset
+`fun idx : TileIndex [n] => base + idx.1.val`.
+
+Used by every 1D kernel proof feeding `scatter_readback_nd` /
+`scatter_readback_prop_masked_nd` after the ND switch. The `TileIndex [n] =
+Fin n × PUnit` carries a `PUnit` second component that is collapsed by
+`Subsingleton.elim`. -/
+theorem injective_offset_singleton {n : Nat} (base : Nat) :
+    Function.Injective (fun idx : TileIndex [n] => base + idx.1.val) := by
+  rintro ⟨a, _⟩ ⟨b, _⟩ hab
+  obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+  rfl
 
 end VeriTile.Examples

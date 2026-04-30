@@ -46,27 +46,27 @@ def onlineWelfordKernel (xReg meanReg varReg : RegionName)
 }
 
 def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
-  [Stmt.assign .real .scalar "xi"
+  [Stmt.assign .real [] "xi"
       (Op.load xReg
-        (Op.add .nat .same
-          (Op.mul .nat .same (Op.ref .nat .scalar "pid")
+        (Op.add .nat .nil
+          (Op.mul .nat .nil (Op.ref .nat [] "pid")
             (Op.constNat blockSize))
-          (Op.ref .nat .scalar "i"))),
-    Stmt.assign .real .scalar "delta"
-      (Op.sub .real .same (Op.ref .real .scalar "xi")
-        (Op.ref .real .scalar "M")),
-    Stmt.assign .real .scalar "M"
-      (Op.add .real .same (Op.ref .real .scalar "M")
-        (Op.div .real .same (Op.ref .real .scalar "delta")
-          (Op.add .real .same (Op.ref .nat .scalar "i").natToReal
+          (Op.ref .nat [] "i"))),
+    Stmt.assign .real [] "delta"
+      (Op.sub .real .nil (Op.ref .real [] "xi")
+        (Op.ref .real [] "M")),
+    Stmt.assign .real [] "M"
+      (Op.add .real .nil (Op.ref .real [] "M")
+        (Op.div .real .nil (Op.ref .real [] "delta")
+          (Op.add .real .nil (Op.ref .nat [] "i").natToReal
             (Op.const 1)))),
-    Stmt.assign .real .scalar "delta2"
-      (Op.sub .real .same (Op.ref .real .scalar "xi")
-        (Op.ref .real .scalar "M")),
-    Stmt.assign .real .scalar "S"
-      (Op.add .real .same (Op.ref .real .scalar "S")
-        (Op.mul .real .same (Op.ref .real .scalar "delta")
-          (Op.ref .real .scalar "delta2")))]
+    Stmt.assign .real [] "delta2"
+      (Op.sub .real .nil (Op.ref .real [] "xi")
+        (Op.ref .real [] "M")),
+    Stmt.assign .real [] "S"
+      (Op.add .real .nil (Op.ref .real [] "S")
+        (Op.mul .real .nil (Op.ref .real [] "delta")
+          (Op.ref .real [] "delta2")))]
 
 noncomputable def welfordMeanSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
   twoPassMean xs
@@ -90,7 +90,6 @@ theorem twopass_welford_correct
         NumericDType.mul, NumericDType.sub, NumericDType.div,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         welfordMeanSpec, twoPassMean]
-    simp [Broadcast.leftIndex, Broadcast.rightIndex]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
     simp [_h_mv]
@@ -99,7 +98,6 @@ theorem twopass_welford_correct
         NumericDType.mul, NumericDType.sub, NumericDType.div,
         BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         welfordVarSpec, twoPassS, twoPassMean]
-    simp [Broadcast.leftIndex, Broadcast.rightIndex]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
     simp [pow_two]
@@ -110,9 +108,9 @@ theorem twopass_welford_correct
     unchanged. -/
 def P_welford {N : Nat} (xs : Fin N → ℝ) (xReg : RegionName)
     (origPid : Nat) (k : Nat) (s : BlockState) : Prop :=
-  s.regs .real .scalar "M" = some (Tile.scalar (welfordMean xs k))
-  ∧ s.regs .real .scalar "S" = some (Tile.scalar (welfordS xs k))
-  ∧ s.regs .nat .scalar "pid" = some (Tile.scalar origPid)
+  s.regs .real [] "M" = some (Tile.scalar (welfordMean xs k))
+  ∧ s.regs .real [] "S" = some (Tile.scalar (welfordS xs k))
+  ∧ s.regs .nat [] "pid" = some (Tile.scalar origPid)
   ∧ s.pid = origPid
   ∧ InputLoadedAt s xReg N xs
 
@@ -122,7 +120,7 @@ theorem online_welford_step
     (hP : P_welford xs xReg origPid i s) :
     ∃ s',
       stepStmts (onlineWelfordLoopBody xReg N)
-        (s.setReg "i" .nat .scalar (Tile.scalar i)) = some s' ∧
+        (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
       P_welford xs xReg origPid (i + 1) s' := by
   rcases hP with ⟨hM, hS, hpidReg, hpid, hX⟩
   let xi : ℝ := s.mem xReg (origPid * N + i)
@@ -137,12 +135,12 @@ theorem online_welford_step
   let delta2 : ℝ := xi - m'
   let ssum' : ℝ := ssum + delta * delta2
   let s' :=
-    (((((s.setReg "i" .nat .scalar (Tile.scalar i)).setReg
-      "xi" .real .scalar (Tile.scalar xi)).setReg
-      "delta" .real .scalar (Tile.scalar delta)).setReg
-      "M" .real .scalar (Tile.scalar m')).setReg
-      "delta2" .real .scalar (Tile.scalar delta2)).setReg
-      "S" .real .scalar (Tile.scalar ssum')
+    (((((s.setReg "i" .nat [] (Tile.scalar i)).setReg
+      "xi" .real [] (Tile.scalar xi)).setReg
+      "delta" .real [] (Tile.scalar delta)).setReg
+      "M" .real [] (Tile.scalar m')).setReg
+      "delta2" .real [] (Tile.scalar delta2)).setReg
+      "S" .real [] (Tile.scalar ssum')
   refine ⟨s', ?_, ?_⟩
   · -- Reduce loop body via simp; remaining goal is structural equality of
     -- WithBot ℝ arithmetic terms (↑a + ↑b vs ↑(a + b) etc.) which matches via
@@ -152,7 +150,7 @@ theorem online_welford_step
       NumericDType.div, BlockState.readMem, hM, hS, hpidReg,
       xi, m, ssum, delta, m', delta2, ssum', s',
       WithBot.realAdd, WithBot.realSub, WithBot.realMul, WithBot.realDiv,
-      ← WithBot.coe_add, ← WithBot.coe_mul, BlockState.setReg]
+      BlockState.setReg]
     rfl
   · simp [P_welford, s', InputLoadedAt, welfordMean, welfordS, hi, xi, m,
       ssum, delta, m', delta2, ssum', hpidReg, hpid, hxi]
@@ -172,9 +170,9 @@ theorem online_welford_correct
     ∧ final.bind (fun s' => some (s'.readMem varReg 0))
         = some (welfordVarSpec xs) := by
   let s0 :=
-    ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
-      "M" .real .scalar (Tile.scalar 0)).setReg
-      "S" .real .scalar (Tile.scalar 0)
+    ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+      "M" .real [] (Tile.scalar 0)).setReg
+      "S" .real [] (Tile.scalar 0)
   have h_init : P_welford xs xReg s.pid 0 s0 := by
     simp [P_welford, s0, welfordMean, welfordS]
     exact h_x
@@ -194,27 +192,27 @@ theorem online_welford_correct
     simpa [stepForLoopAux.forLoop_unfold] using hLoop
   have hLoopAuxExpanded :
       stepForLoopAux "i" 0 blockSize
-        [Stmt.assign .real .scalar "xi"
+        [Stmt.assign .real [] "xi"
             (Op.load xReg
-              (Op.add .nat .same
-                (Op.mul .nat .same (Op.ref .nat .scalar "pid")
+              (Op.add .nat .nil
+                (Op.mul .nat .nil (Op.ref .nat [] "pid")
                   (Op.constNat blockSize))
-                (Op.ref .nat .scalar "i"))),
-          Stmt.assign .real .scalar "delta"
-            (Op.sub .real .same (Op.ref .real .scalar "xi")
-              (Op.ref .real .scalar "M")),
-          Stmt.assign .real .scalar "M"
-            (Op.add .real .same (Op.ref .real .scalar "M")
-              (Op.div .real .same (Op.ref .real .scalar "delta")
-                (Op.add .real .same (Op.ref .nat .scalar "i").natToReal
+                (Op.ref .nat [] "i"))),
+          Stmt.assign .real [] "delta"
+            (Op.sub .real .nil (Op.ref .real [] "xi")
+              (Op.ref .real [] "M")),
+          Stmt.assign .real [] "M"
+            (Op.add .real .nil (Op.ref .real [] "M")
+              (Op.div .real .nil (Op.ref .real [] "delta")
+                (Op.add .real .nil (Op.ref .nat [] "i").natToReal
                   (Op.const 1)))),
-          Stmt.assign .real .scalar "delta2"
-            (Op.sub .real .same (Op.ref .real .scalar "xi")
-              (Op.ref .real .scalar "M")),
-          Stmt.assign .real .scalar "S"
-            (Op.add .real .same (Op.ref .real .scalar "S")
-              (Op.mul .real .same (Op.ref .real .scalar "delta")
-                (Op.ref .real .scalar "delta2")))]
+          Stmt.assign .real [] "delta2"
+            (Op.sub .real .nil (Op.ref .real [] "xi")
+              (Op.ref .real [] "M")),
+          Stmt.assign .real [] "S"
+            (Op.add .real .nil (Op.ref .real [] "S")
+              (Op.mul .real .nil (Op.ref .real [] "delta")
+                (Op.ref .real [] "delta2")))]
         s0 = some sLoop := by
     simpa [onlineWelfordLoopBody] using hLoopAux
   have hExec :
@@ -230,33 +228,33 @@ theorem online_welford_correct
       rw [h]
     have stmts_nil : ∀ (s : BlockState), stepStmts [] s = some s := by
       intro s; conv_lhs => unfold stepStmts
-    have hpid : stepStmt (.assign .nat .scalar "pid" .programId) s
-                  = some (s.setReg "pid" .nat .scalar (Tile.scalar s.pid)) := by
+    have hpid : stepStmt (.assign .nat [] "pid" .programId) s
+                  = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
       simp [stepStmt, evalOp]
-    have hM0 : stepStmt (.assign .real .scalar "M" (.const 0))
-                  (s.setReg "pid" .nat .scalar (Tile.scalar s.pid))
-                = some ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
-                    "M" .real .scalar (Tile.scalar 0)) := by
+    have hM0 : stepStmt (.assign .real [] "M" (.const 0))
+                  (s.setReg "pid" .nat [] (Tile.scalar s.pid))
+                = some ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+                    "M" .real [] (Tile.scalar 0)) := by
       simp [stepStmt, evalOp]
       rfl
-    have hS0 : stepStmt (.assign .real .scalar "S" (.const 0))
-                  ((s.setReg "pid" .nat .scalar (Tile.scalar s.pid)).setReg
-                    "M" .real .scalar (Tile.scalar 0))
+    have hS0 : stepStmt (.assign .real [] "S" (.const 0))
+                  ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
+                    "M" .real [] (Tile.scalar 0))
                 = some s0 := by
       simp [stepStmt, evalOp, s0]
       rfl
     have hMeanStore : stepStmt
-        (.store meanReg .scalar (.constNat 0) (.ref .real .scalar "M")) sLoop
+        (.store meanReg [] (.constNat 0) (.ref .real [] "M")) sLoop
         = some (sLoop.writeMem meanReg 0 (welfordMean xs blockSize)) := by
       simp [stepStmt, evalOp, hM]
     set sMean : BlockState := sLoop.writeMem meanReg 0 (welfordMean xs blockSize)
-    have hSat_S : sMean.regs .real .scalar "S"
+    have hSat_S : sMean.regs .real [] "S"
                   = some (Tile.scalar (welfordS xs blockSize)) := by
-      show sLoop.regs .real .scalar "S" = _
+      show sLoop.regs .real [] "S" = _
       exact hS
     have hVarStore : stepStmt
-        (.store varReg .scalar (.constNat 0)
-            (.div .real .same (.ref .real .scalar "S")
+        (.store varReg [] (.constNat 0)
+            (.div .real .nil (.ref .real [] "S")
               (.natToReal (.constNat blockSize)))) sMean
         = some (sMean.writeMem varReg 0 (welfordS xs blockSize / blockSize)) := by
       simp [stepStmt, evalOp, hSat_S, Tile.bop, NumericDType.div, Tile.natToReal,
@@ -264,13 +262,13 @@ theorem online_welford_correct
     -- Chain: 3 assigns → s0; forLoop → sLoop; 2 stores → sMean.writeMem ...
     show stepStmts (onlineWelfordKernel xReg meanReg varReg blockSize).body s = _
     show stepStmts
-        [ .assign .nat .scalar "pid" .programId
-        , .assign .real .scalar "M" (.const 0)
-        , .assign .real .scalar "S" (.const 0)
+        [ .assign .nat [] "pid" .programId
+        , .assign .real [] "M" (.const 0)
+        , .assign .real [] "S" (.const 0)
         , .forLoop "i" blockSize (onlineWelfordLoopBody xReg blockSize)
-        , .store meanReg .scalar (.constNat 0) (.ref .real .scalar "M")
-        , .store varReg .scalar (.constNat 0)
-            (.div .real .same (.ref .real .scalar "S")
+        , .store meanReg [] (.constNat 0) (.ref .real [] "M")
+        , .store varReg [] (.constNat 0)
+            (.div .real .nil (.ref .real [] "S")
               (.natToReal (.constNat blockSize)))
         ] s = _
     rw [stmts_cons _ _ _ _ hpid]

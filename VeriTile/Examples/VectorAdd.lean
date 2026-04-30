@@ -97,14 +97,16 @@ theorem add_kernel_correct
       observeAt (exec (addKernel xReg yReg outReg blockSize) s) outReg blockSize s.pid i
         = some (addSpec xs ys i) := by
   intro i
-  have h_inj : Function.Injective (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
-    intro a b hab
-    exact Fin.ext (Nat.add_left_cancel hab)
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
   simp [observeAt, exec, addKernel, stepStmts, stepStmt, evalOp, Tile.bop,
-        NumericDType.add, BlockState.setReg, BlockState.readMem, addSpec]
-  simp [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul]
+        NumericDType.add, NumericDType.mul, BlockState.setReg,
+        BlockState.readMem, addSpec]
   unfold InputLoadedAt at _h_x _h_y
-  rw [BlockState.scatter_readback _ _ _ h_inj i]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_y]
 
 /-! ## Masked variant (boundary mask)
@@ -179,15 +181,15 @@ theorem add_kernel_masked_correct
                 else s.readMem outReg addr) := by
   intro i
   have h_inj : Function.Injective
-      (fun k : Fin blockSize => s.pid * blockSize + k.val) := by
-    intro a b hab
-    exact Fin.ext (Nat.add_left_cancel hab)
+      (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
   simp [observeAt, exec, addKernelMasked, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, BlockState.setReg, BlockState.readMem]
-  simp [Broadcast.leftIndex, Broadcast.rightIndex]
   unfold InputLoadedAt at h_x h_y
-  rw [BlockState.scatter_readback_prop_masked _ _ _ _ h_inj i]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
   by_cases hi : s.pid * blockSize + i.val < nElements
   · simp [hi, h_x, h_y]
   · simp [hi]
