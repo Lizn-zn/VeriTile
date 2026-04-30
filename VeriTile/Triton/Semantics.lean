@@ -436,6 +436,62 @@ noncomputable def WithBot.realSqrt : WithBot ℝ → WithBot ℝ
 @[simp] theorem WithBot.realSqrt_some (r : ℝ) :
     WithBot.realSqrt (some r) = some (Real.sqrt r) := rfl
 
+@[simp] theorem WithBot.realExp_bot :
+    WithBot.realExp (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realSigmoid_bot :
+    WithBot.realSigmoid (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realExp_coe (r : ℝ) :
+    WithBot.realExp ((r : ℝ) : WithBot ℝ) = (((Real.exp r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realLog_coe (r : ℝ) :
+    WithBot.realLog ((r : ℝ) : WithBot ℝ) = (((Real.log r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realSigmoid_coe (r : ℝ) :
+    WithBot.realSigmoid ((r : ℝ) : WithBot ℝ) = (((Real.sigmoid r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realSqrt_coe (r : ℝ) :
+    WithBot.realSqrt ((r : ℝ) : WithBot ℝ) = (((Real.sqrt r : ℝ)) : WithBot ℝ) := rfl
+
+/-! ### Algebraic simp lemmas on `WithBot ℝ` arithmetic helpers -/
+
+@[simp] theorem WithBot.realAdd_coe_coe (a b : ℝ) :
+    WithBot.realAdd ((a : ℝ) : WithBot ℝ) ((b : ℝ) : WithBot ℝ)
+      = (((a + b : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realSub_coe_coe (a b : ℝ) :
+    WithBot.realSub ((a : ℝ) : WithBot ℝ) ((b : ℝ) : WithBot ℝ)
+      = (((a - b : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realMul_coe_coe (a b : ℝ) :
+    WithBot.realMul ((a : ℝ) : WithBot ℝ) ((b : ℝ) : WithBot ℝ)
+      = (((a * b : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realDiv_coe_coe (a b : ℝ) :
+    WithBot.realDiv ((a : ℝ) : WithBot ℝ) ((b : ℝ) : WithBot ℝ)
+      = (((a / b : ℝ)) : WithBot ℝ) := rfl
+
+/-- `realSub ⊥ x = ⊥` (and symmetrically). The corresponding `realAdd` and
+`realMul` propagate `⊥` for the same reason — but only `Sub` is needed for the
+OnlineSoftmax L proof at iter 0 (`exp(M_0 - M_1) = exp(⊥ - ↑x₀) = exp(⊥) = 0`). -/
+@[simp] theorem WithBot.realSub_bot_left (x : WithBot ℝ) :
+    WithBot.realSub (⊥ : WithBot ℝ) x = (⊥ : WithBot ℝ) := by
+  cases x <;> rfl
+@[simp] theorem WithBot.realSub_bot_right (x : WithBot ℝ) :
+    WithBot.realSub x (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := by
+  cases x <;> rfl
+
+@[simp] theorem WithBot.realMul_coe_zero (a : ℝ) :
+    WithBot.realMul ((a : ℝ) : WithBot ℝ) (((0 : ℝ)) : WithBot ℝ)
+      = (((0 : ℝ)) : WithBot ℝ) := by
+  show ((a * 0 : ℝ) : WithBot ℝ) = _
+  simp
+
+/-- `↑a + ↑b = ↑(a + b)` for `WithBot ℝ`. Reverse of Mathlib's `WithBot.coe_add`.
+NOT marked `@[simp]` to avoid loop with the forward direction; use as `←` rewrite
+where consolidating coe outward is desired. -/
+theorem WithBot.coe_add_coe_eq (a b : ℝ) :
+    ((a : ℝ) : WithBot ℝ) + ((b : ℝ) : WithBot ℝ) = (((a + b : ℝ)) : WithBot ℝ) :=
+  (WithBot.coe_add a b).symm
+
+/-- `Option.map f ↑x = ↑(f x)` for `WithBot ℝ`. -/
+@[simp] theorem WithBot.coe_map_coe_eq {α} (f : ℝ → α) (a : ℝ) :
+    Option.map f ((a : ℝ) : WithBot ℝ) = some (f a) := rfl
+
 noncomputable def Tile.reduceSum {n} (x : Tile .real (.vec n)) : Tile .real .scalar :=
   Tile.scalar (∑ i, x.data i)
 

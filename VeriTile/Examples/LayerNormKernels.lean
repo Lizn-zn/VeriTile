@@ -192,9 +192,23 @@ private theorem layernorm_affine_tail_correct
       observeAt (exec (layerNormAffineTailKernel xReg γReg βReg yReg N ε) s)
                 yReg N s.pid i
         = some (layerNormSpec xs γs βs ε i) := by
-  -- TODO(W11.M3.4): WithBot refactor — full LayerNorm tail proof needs the
-  -- coe-bridge simp set tuned for `√(var + ε)` and `(x - μ) * γ + β` patterns.
-  sorry
+  intro i
+  rcases hP with ⟨hM, hS, hpidReg, _hpid, hX, hγ, hβ⟩
+  have hMean := (welford_eq_two_pass hN xs).1
+  have hSEq := (welford_eq_two_pass hN xs).2
+  have h_inj : Function.Injective (fun k : Fin N => s.pid * N + k.val) := by
+    intro a b hab
+    exact Fin.ext (Nat.add_left_cancel hab)
+  simp [observeAt, exec, layerNormAffineTailKernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.uop, Tile.natToReal,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        BlockState.setReg, BlockState.readMem, layerNormSpec,
+        hM, hS, hpidReg, hMean, hSEq]
+  simp [Broadcast.leftIndex, Broadcast.rightIndex]
+  unfold InputLoadedAt at hX
+  unfold InputFeatureLoadedAt at hγ hβ
+  rw [BlockState.scatter_readback _ _ _ h_inj i]
+  simp [hX, hγ, hβ, div_eq_mul_inv]
 
 set_option maxHeartbeats 800000 in
 theorem twopass_layernorm_correct

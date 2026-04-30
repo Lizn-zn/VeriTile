@@ -137,18 +137,86 @@ private theorem onlineSoftmaxM_eq_tileMax
   rw [onlineSoftmaxM_succ_eq_sup' xs n (le_refl _)]
   rfl
 
-/-- L recurrence (sorry'd — full induction over WithBot arithmetic with the
-`exp(⊥) = 0` corner case at iteration 0 is intricate and the M-side identity
-is the conceptual heart of #21; the L-side follows the same structure once
-the WithBot normalization simp set matures). -/
+/-- For `k+1 ≤ N`, the running L equals the prefix-sum form (in `WithBot ℝ`,
+which after `M` is no longer ⊥ collapses to `↑(real sum)`). -/
+private theorem onlineSoftmaxL_succ_eq_sum {N : Nat} (xs : Fin N → ℝ) :
+    ∀ k : Nat, ∀ (hk : k + 1 ≤ N),
+      onlineSoftmaxL xs (k + 1) =
+        (((∑ i : Fin (k + 1), Real.exp (xs (castFin hk i) -
+            (Finset.univ : Finset (Fin (k + 1))).sup' Finset.univ_nonempty
+              (fun i => xs (castFin hk i)))) : ℝ) : WithBot ℝ) := by
+  intro k
+  induction k with
+  | zero =>
+      intro hk
+      have h0 : 0 < N := hk
+      have hL : onlineSoftmaxL xs 1 = WithBot.realAdd
+          (WithBot.realMul
+            (WithBot.realExp (WithBot.realSub
+              (onlineSoftmaxM xs 0) (onlineSoftmaxM xs 1)))
+            (onlineSoftmaxL xs 0))
+          (WithBot.realExp (WithBot.realSub
+            (((xs ⟨0, h0⟩ : ℝ) : WithBot ℝ)) (onlineSoftmaxM xs 1))) := by
+        show (if h : 0 < N then _ else _) = _
+        simp [h0]
+      have hM0 : onlineSoftmaxM xs 0 = (⊥ : WithBot ℝ) := rfl
+      have hL0 : onlineSoftmaxL xs 0 = ((0 : ℝ) : WithBot ℝ) := rfl
+      have hM1 := onlineSoftmaxM_succ_eq_sup' xs 0 hk
+      rw [hL, hM0, hL0, hM1]
+      simp only [WithBot.realSub_bot_left, WithBot.realExp_bot,
+        WithBot.realMul_coe_zero, WithBot.realSub_coe_coe,
+        WithBot.realExp_coe, WithBot.realAdd_coe_coe]
+      congr 1
+      -- Goal: 0 + exp(xs ⟨0, h0⟩ - sup'_Fin1 _) = ∑_{i ∈ Fin 1} exp(xs (castFin hk i) - sup')
+      -- Both sides use the same sup' and reduce to `1 = exp 0`.
+      have sup_eq : (Finset.univ : Finset (Fin 1)).sup' Finset.univ_nonempty
+            (fun i => xs (castFin hk i)) = xs ⟨0, h0⟩ := by
+        show xs (castFin hk _) = xs ⟨0, h0⟩
+        rfl
+      rw [sup_eq]
+      rw [Fin.sum_univ_one]
+      show 0 + Real.exp (xs ⟨0, h0⟩ - xs ⟨0, h0⟩) = Real.exp (xs ⟨0, h0⟩ - xs ⟨0, h0⟩)
+      rw [zero_add]
+  | succ j ih =>
+      intro hk
+      have hj : j + 1 ≤ N := Nat.le_of_succ_le hk
+      have hjlt : j + 1 < N := hk
+      have ih' := ih hj
+      have hM := onlineSoftmaxM_succ_eq_sup' xs j hj
+      have hM_next := onlineSoftmaxM_succ_eq_sup' xs (j + 1) hk
+      have hL : onlineSoftmaxL xs (j + 1 + 1) = WithBot.realAdd
+          (WithBot.realMul
+            (WithBot.realExp (WithBot.realSub
+              (onlineSoftmaxM xs (j + 1)) (onlineSoftmaxM xs (j + 1 + 1))))
+            (onlineSoftmaxL xs (j + 1)))
+          (WithBot.realExp (WithBot.realSub
+            (((xs ⟨j + 1, hjlt⟩ : ℝ) : WithBot ℝ))
+            (onlineSoftmaxM xs (j + 1 + 1)))) := by
+        show (if h : j + 1 < N then _ else _) = _
+        simp [hjlt]
+      rw [hL, hM, hM_next, ih']
+      simp only [WithBot.realSub_coe_coe, WithBot.realExp_coe,
+        WithBot.realMul_coe_coe, WithBot.realAdd_coe_coe]
+      congr 1
+      -- Expand only the RHS outer sum
+      conv_rhs => rw [Fin.sum_univ_castSucc]
+      rw [Finset.mul_sum]
+      have hxs_castSucc : ∀ i : Fin (j + 1),
+          xs (castFin hk i.castSucc) = xs (castFin hj i) := fun _ => rfl
+      have hxs_last : xs (castFin hk (Fin.last (j + 1))) = xs ⟨j + 1, hjlt⟩ := rfl
+      simp_rw [hxs_castSucc, hxs_last]
+      congr 1
+      apply Finset.sum_congr rfl
+      intros i _
+      rw [← Real.exp_add]
+      ring_nf
+
 private theorem onlineSoftmaxL_eq_batch
     {N : Nat} (hN : 0 < N) (xs : Fin N → ℝ) :
     onlineSoftmaxL xs N = (((batchSoftmaxL hN xs : ℝ)) : WithBot ℝ) := by
-  -- TODO(W11.M3.4-followup): math identity for L. M-side already h_lo-free,
-  -- which is the main paper deliverable. L-side discharge involves exp(⊥) = 0
-  -- corner-case bookkeeping and ℝ-arithmetic congruence, both straightforward
-  -- in principle but space-consuming.
-  sorry
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+  rw [onlineSoftmaxL_succ_eq_sum xs n (le_refl _)]
+  rfl
 
 private def P_online_softmax {N : Nat} (xs : Fin N → ℝ) (xReg : RegionName)
     (origPid : Nat) (k : Nat) (s : BlockState) : Prop :=
