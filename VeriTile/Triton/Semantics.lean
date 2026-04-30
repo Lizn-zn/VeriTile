@@ -813,6 +813,20 @@ def Tile.expandDim {dtype : TileDType} {shape : TileShape}
     (Tile.expandDim axis x).data idx =
       x.data (TileShape.dropInsertedIndex shape axis 1 idx) := rfl
 
+/-- Element-wise select (`tl.where(cond, a, b)`): per-cell, pick from `a`
+when `cond` is `true`, else from `b`. Same-shape; broadcast lifting is
+done at the DSL layer. Named `select` to avoid the Lean `where` keyword
+in definition position; the AST constructor `Op.where` and DSL surface
+`tl.where(...)` keep the user-facing Triton spelling. -/
+def Tile.select {dtype : TileDType} {shape : TileShape}
+    (c : Tile .bool shape) (a b : Tile dtype shape) :
+    Tile dtype shape :=
+  ⟨fun idx => if c.data idx then a.data idx else b.data idx⟩
+
+@[simp] theorem Tile.select_data {dtype : TileDType} {shape : TileShape}
+    (c : Tile .bool shape) (a b : Tile dtype shape) (idx : TileIndex shape) :
+    (Tile.select c a b).data idx = if c.data idx then a.data idx else b.data idx := rfl
+
 noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)
   | .const c, _ => some (Tile.scalar (some c : WithBot ℝ))
   | .constNat n, _ => some (Tile.scalar n)
@@ -866,6 +880,11 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let vb ← evalOp b s
       some (Tile.dot batch va vb)
   | .expandDim axis a, s => return Tile.expandDim axis (← evalOp a s)
+  | .where c a b, s => do
+      let vc ← evalOp c s
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.select vc va vb)
   | .load region off, s => do
       let offsets ← evalOp off s
       some ⟨fun i => some (s.readMem region (offsets.data i))⟩

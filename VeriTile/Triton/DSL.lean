@@ -106,6 +106,11 @@ syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
+-- Element-wise select. All three operands must broadcast to a common
+-- shape; the macro lifts scalars via `Op.broadcast`. Non-scalar shape
+-- mismatches (e.g. rank-1 cond against rank-2 values) raise a macro
+-- error in this stage — use `tl.expand_dims` first.
+syntax "tl.where(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "-inf" : tritonExpr
 
@@ -497,6 +502,36 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandArith env "arithmetic" (← `(Op.mul)) a b
   | `(tritonExpr| $a:tritonExpr / $b:tritonExpr) => do
       expandArith env "arithmetic" (← `(Op.div)) a b
+  | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) => do
+      -- All three must converge to a common shape. To stay aligned with
+      -- the same-shape `Op.where` AST node, we accept only scalar →
+      -- tile lifts here (via `coerceShape` / `Op.broadcast`). Non-scalar
+      -- rank/dim mismatches raise a macro error; the user can lift
+      -- through `tl.expand_dims` first.
+      let c' ← expandExpr env c
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      ensureDType .bool c'.dtype "tl.where condition"
+      unless a'.dtype == b'.dtype do
+        Macro.throwError "tl.where: branch dtype mismatch"
+      -- Pick target shape: the first non-scalar among the three; require
+      -- any other non-scalars to match.
+      let nonScalars : List SInfo :=
+        ([c'.shape, a'.shape, b'.shape]).filter (fun s =>
+          match s with | .dims [] => Bool.false | _ => Bool.true)
+      let target : SInfo ←
+        match nonScalars with
+        | [] => pure (SInfo.dims [])
+        | first :: rest =>
+            for s in rest do
+              unless first.eq s do
+                Macro.throwError
+                  "tl.where: non-scalar shape mismatch — all tile-shaped operands must agree (lift with tl.expand_dims if needed)"
+            pure first
+      let cTerm ← coerceShape c'.term c'.shape target "tl.where condition"
+      let aTerm ← coerceShape a'.term a'.shape target "tl.where then-branch"
+      let bTerm ← coerceShape b'.term b'.shape target "tl.where else-branch"
+      pure ⟨← `(Op.where $cTerm $aTerm $bTerm), a'.dtype, target⟩
   | `(tritonExpr| $e:tritonExpr[ : , None ]) => do
       -- `e[:, None]` — insert a unit axis at position 1: `[N] → [N, 1]`.
       expandSlicerNone env e (axisIdx := 1)
@@ -798,6 +833,10 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions c ++ exprRegions a ++ exprRegions b
+  | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions e
+  | `(tritonExpr| $e:tritonExpr[ None , : ])     => exprRegions e
   | _ => []  -- num, ident, $(...) — no regions to collect
 
 /-- All region terms appearing in a `tritonPtr`: the base region plus any

@@ -452,6 +452,15 @@ inductive Op : TileDType → TileShape → Type where
   | ge        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | ne        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | max2      : Broadcast a b out → Op .real a → Op .real b → Op .real out
+  /--
+  Element-wise select (`tl.where(cond, a, b)`): pick `a` where the bool
+  tile `cond` is `true`, else pick `b`. All three arguments share the
+  same shape; broadcasting (e.g., scalar `-inf`) is handled at the DSL
+  layer by lifting through `Op.broadcast` / `Op.full` before this node
+  is constructed. -/
+  | where     : {dtype : TileDType} → {shape : TileShape} →
+                Op .bool shape → Op dtype shape → Op dtype shape →
+                Op dtype shape
   /-- Block-level reduce-max along an arbitrary axis. -/
   | reduceMax : (axis : Fin shape.length) → (keepDims : Bool) →
                 Op .real shape →

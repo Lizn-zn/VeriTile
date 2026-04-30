@@ -165,4 +165,36 @@ example (M D : Nat) : Op .nat [M, D] :=
     (Op.expandDim (shape := [M]) ⟨1, by simp⟩ (Op.arange M))
     (Op.expandDim (shape := [D]) ⟨0, by simp⟩ (Op.arange D))
 
+/-! ### `tl.where` causal-mask shape (Phase C scope of issue #29)
+
+The FA-1 forward causal mask collapses to `tl.where(mask, scores, -inf)`
+at shape `[M, Bk]`. The DSL macro lifts the scalar `-inf` to the tile
+shape via `Op.broadcast`. -/
+
+/-- Causal-mask kernel skeleton: load Q-row block scores, mask out
+future positions with `-inf`, store back. Exercises ND `tl.where`
+end-to-end. -/
+def causalMaskSmoke (sReg outReg : RegionName) (M Bk : Nat) :
+    Kernel := triton {
+  pid    := tl.program_id(0)
+  offs_m := pid * $(M) + tl.arange(0, $(M))
+  offs_n := tl.arange(0, $(Bk))
+  ptrs   := offs_m[:, None] * $(Bk) + offs_n[None, :]
+  scores := tl.load($(sReg) + ptrs)
+  mask   := offs_m[:, None] >= offs_n[None, :]
+  masked := tl.where(mask, scores, -inf)
+  tl.store($(outReg) + ptrs, masked)
+}
+
+/-- `Tile.select` semantics on a literal boolean mask: where `c` is
+true, pick `a`; else pick `b`. -/
+example :
+    let c : Tile .bool [2] := Tile.vec (fun i => decide (i.val = 0))
+    let a : Tile .real [2] := Tile.vec (fun _ => some (1 : ℝ))
+    let b : Tile .real [2] := Tile.vec (fun _ => some (2 : ℝ))
+    let r := Tile.select c a b
+    r.data (⟨0, by decide⟩, PUnit.unit) = some (1 : ℝ) ∧
+    r.data (⟨1, by decide⟩, PUnit.unit) = some (2 : ℝ) := by
+  refine ⟨?_, ?_⟩ <;> simp [Tile.select, Tile.vec]
+
 end VeriTile.Triton.Examples
