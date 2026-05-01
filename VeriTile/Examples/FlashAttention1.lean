@@ -2665,6 +2665,651 @@ theorem fa1_step
     · intro idx
       simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hV idx
 
+set_option maxHeartbeats 800000 in
+/-- Strided variant of `fa1_step`. One iteration of the strided KV-block
+loop preserves `P_fa1_strided`. Same streaming-math content as
+`fa1_step`; the only operational differences are the `k_ptrs` / `v_ptrs`
+trees (assembled from `*_base_off` plus `offs_n[:, None] * stride_*N +
+offs_d[None, :] * stride_*D`) and the `*_base_off` / `pid_*` /
+`s.pids 0/1/2` registers being threaded through unchanged. -/
+theorem fa1_step_strided
+    {M D Bk numKVBlocks : Nat} (hBk : 0 < Bk)
+    (qReg kReg vReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (s : BlockState)
+    (hk : k < numKVBlocks)
+    (hP : P_fa1_strided qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale k s) :
+    ∃ s',
+      stepStmts (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)
+        (s.setReg "n" .nat [] (Tile.scalar k)) = some s' ∧
+      P_fa1_strided qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale (k + 1) s' := by
+  rcases hP with
+    ⟨hpids0, hpids1, hpids2,
+     hpid_qb, hpid_h, hpid_b,
+     hq_base, hk_base, hv_base, ho_base,
+     hoffs_m, hoffs_d, hq, hm, hl, ho, hQ, hK, hV⟩
+  let kBase : Nat := batch * sKB + headIdx * sKH
+  let vBase : Nat := batch * sVB + headIdx * sVH
+  let offsN : Tile .nat [Bk] :=
+    Tile.vec fun j : Fin Bk => k * Bk + j.val
+  let kPtrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      kBase + (k * Bk + idx.1.val) * sKN + idx.2.1.val * sKD⟩
+  let vPtrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      vBase + (k * Bk + idx.1.val) * sVN + idx.2.1.val * sVD⟩
+  let kTile : Tile .real [Bk, D] :=
+    Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      K (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.1,
+        idx.2.1, PUnit.unit)
+  let vTile : Tile .real [Bk, D] :=
+    Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      V (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.1,
+        idx.2.1, PUnit.unit)
+  let scores : Tile .real [M, Bk] :=
+    Tile.ofReal fun idx : TileIndex [M, Bk] =>
+      FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1)
+  let mBlock : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      (Finset.univ : Finset (Fin Bk)).sup
+        (fun j => ((FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
+          : ℝ) : WithBot ℝ))⟩
+  let mNew : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1⟩
+  let alpha : Tile .real [M] :=
+    Tile.ofReal fun idx : TileIndex [M] =>
+      FA1Math.alphaPartial Q numKVBlocks K scale k idx.1
+  let p : Tile .real [M, Bk] :=
+    Tile.ofReal fun idx : TileIndex [M, Bk] =>
+      Real.exp (FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1).unbotD 0)
+  let lNew : Tile .real [M] :=
+    Tile.ofReal fun idx : TileIndex [M] =>
+      FA1Math.lPartial Q numKVBlocks K scale (k + 1) idx.1
+  let oNew : Tile .real [M, D] :=
+    Tile.ofReal fun idx : TileIndex [M, D] =>
+      FA1Math.oPartial Q numKVBlocks K V scale (k + 1) idx
+  let s0 := s.setReg "n" .nat [] (Tile.scalar k)
+  let s1 := s0.setReg "offs_n" .nat [Bk] offsN
+  let s2 := s1.setReg "k_ptrs" .nat [Bk, D] kPtrs
+  let s3 := s2.setReg "v_ptrs" .nat [Bk, D] vPtrs
+  let s4 := s3.setReg "k" .real [Bk, D] kTile
+  let s5 := s4.setReg "v" .real [Bk, D] vTile
+  let s6 := s5.setReg "scores" .real [M, Bk] scores
+  let s7 := s6.setReg "m_block" .real [M] mBlock
+  let s8 := s7.setReg "m_new" .real [M] mNew
+  let s9 := s8.setReg "alpha" .real [M] alpha
+  let s10 := s9.setReg "p" .real [M, Bk] p
+  let s11 := s10.setReg "l_new" .real [M] lNew
+  let s12 := s11.setReg "o_acc" .real [M, D] oNew
+  let s13 := s12.setReg "m_i" .real [M] mNew
+  let s' := s13.setReg "l_i" .real [M] lNew
+  apply Exists.intro
+  constructor
+  · simp [fa1LoopBodyStrided, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
+      Tile.transpose, Tile.dot, Tile.reduceMax, Tile.reduceMaxDrop,
+      Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+      TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      BlockState.readMem, Option.bind, hBk, hoffs_d, hq, hm, hl, ho,
+      hk_base, hv_base]
+    have hKmem : ∀ (j : Fin Bk) (d : Fin D),
+        s.mem kReg (batch * sKB + headIdx * sKH
+            + (k * Bk + j.val) * sKN + d.val * sKD) =
+          K (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
+      fa1_block_read_strided kReg s
+        (batch * sKB + headIdx * sKH) sKN sKD K hK k hk
+    have hVmem : ∀ (j : Fin Bk) (d : Fin D),
+        s.mem vReg (batch * sVB + headIdx * sVH
+            + (k * Bk + j.val) * sVN + d.val * sVD) =
+          V (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
+      fa1_block_read_strided vReg s
+        (batch * sVB + headIdx * sVH) sVN sVD V hV k hk
+    simp_rw [hKmem, hVmem]
+    rfl
+  · have hmNewData : ∀ i : Fin M,
+        max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+          (some ((Finset.univ : Finset (Fin Bk)).sup'
+            (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+            (fun j =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) =
+          FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+      intro i
+      rw [FA1Math.mPartial_succ_of_lt Q numKVBlocks K scale k hk i]
+      congr 1
+      change ((((Finset.univ : Finset (Fin Bk)).sup'
+          (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+          (fun j => (Finset.univ.sum (fun d : Fin D =>
+            Q (i, d, PUnit.unit) *
+              K (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)) : ℝ) : WithBot ℝ) =
+        (Finset.univ : Finset (Fin Bk)).sup (fun j =>
+          ((FA1Math.scaledScore Q K scale i
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) j) : ℝ) : WithBot ℝ))
+      rw [← WithBot.sup'_coe]
+      rw [Finset.sup'_eq_sup]
+      apply Finset.sup_congr rfl
+      intro j _
+      simp [FA1Math.scaledScore, mul_comm]
+    have hmNewDataOf : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        (FA1Math.mPartial Bk Q numKVBlocks K scale k i) ⊔
+          (some ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) =
+          FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+      intro i H
+      rw [FA1Math.mPartial_succ_of_lt Q numKVBlocks K scale k hk i]
+      congr 1
+      change ((((Finset.univ : Finset (Fin Bk)).sup' H
+          (fun j => (Finset.univ.sum (fun d : Fin D =>
+            Q (i, d, PUnit.unit) *
+              K (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)) : ℝ) : WithBot ℝ) =
+        (Finset.univ : Finset (Fin Bk)).sup (fun j =>
+          ((FA1Math.scaledScore Q K scale i
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) j) : ℝ) : WithBot ℝ))
+      rw [← WithBot.sup'_coe]
+      rw [Finset.sup'_eq_sup]
+      apply Finset.sup_congr rfl
+      intro j _
+      simp [FA1Math.scaledScore, mul_comm]
+    have hmNewDataComm : ∀ i : Fin M,
+        max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+          (some ((Finset.univ : Finset (Fin Bk)).sup'
+            (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+            (fun j =>
+              scale * (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit)))))) =
+          FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+      intro i
+      rw [← hmNewData i]
+      congr 2
+      apply Finset.sup'_congr (H := by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩) rfl
+      intro j _
+      rw [mul_comm]
+    have hAlphaData : ∀ i : Fin M,
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i
+      simpa [WithBot.realSub] using
+        FA1Math.alphaPartial_toWithBot Q numKVBlocks K scale k i
+    have hPData : ∀ (i : Fin M) (j : Fin Bk),
+        WithBot.realExp
+          (Option.map
+            (fun b =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i))
+          =
+          some (Real.exp (FA1Math.scaledScore Q K scale i
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) j) -
+            (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j
+      have hm : FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i ≠ ⊥ :=
+        FA1Math.mPartial_succ_ne_bot hBk Q numKVBlocks K scale k
+          (Nat.succ_le_iff.mpr hk) i
+      obtain ⟨m, hm_eq⟩ := WithBot.ne_bot_iff_exists.mp hm
+      rw [← hm_eq]
+      simp [FA1Math.scaledScore, mul_comm]
+    have hAlphaDataOf : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      change WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i)
+      have hM :
+          @max (Option ℝ) Option.instMax
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+            (some ((Finset.univ : Finset (Fin Bk)).sup' H
+              (fun j =>
+                (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) =
+            FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+        have hOptionMax :
+            @max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))
+            =
+            max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) := by
+          cases FA1Math.mPartial Bk Q numKVBlocks K scale k i <;> rfl
+        rw [hOptionMax]
+        exact hmNewDataOf i H
+      exact (congrArg
+        (fun z => WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i) z)) hM).trans
+        (hAlphaData i)
+    have hPDataOf : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b)
+            (@max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      change WithBot.realExp
+          (Option.map
+            (fun b =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+          =
+          some (Real.exp (FA1Math.scaledScore Q K scale i
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) j) -
+            (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0))
+      have hM :
+          @max (Option ℝ) Option.instMax
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+            (some ((Finset.univ : Finset (Fin Bk)).sup' H
+              (fun j =>
+                (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) =
+            FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i := by
+        have hOptionMax :
+            @max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))
+            =
+            max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale))) := by
+          cases FA1Math.mPartial Bk Q numKVBlocks K scale k i <;> rfl
+        rw [hOptionMax]
+        exact hmNewDataOf i H
+      exact (congrArg
+        (fun z => WithBot.realExp
+          (Option.map
+            (fun b =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b) z)) hM).trans
+          (hPData i j)
+    have hAlphaDataComm : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    scale * (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      have hSup :
+          ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              scale * (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))) =
+          ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)) := by
+        apply Finset.sup'_congr (H := H) rfl
+        intro j _
+        rw [mul_comm]
+      rw [hSup]
+      exact hAlphaDataOf i H
+    have hPDataComm : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            scale * (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) - b)
+            (@max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  scale * (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      have hSup :
+          ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              scale * (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))) =
+          ((Finset.univ : Finset (Fin Bk)).sup' H
+            (fun j =>
+              (Finset.univ.sum (fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)) := by
+        apply Finset.sup'_congr (H := H) rfl
+        intro j _
+        rw [mul_comm]
+      rw [hSup]
+      simpa [mul_comm] using hPDataOf i j H
+    have hAlphaDataMaxComm : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (@max (Option ℝ) Option.instMax
+                (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    scale * (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      exact hAlphaDataComm i H
+    have hPDataMaxComm : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            scale * (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) - b)
+            (@max (Option ℝ) Option.instMax
+              (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  scale * (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      exact hPDataComm i j H
+    have hAlphaDataMaxComm' : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    scale * (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      exact hAlphaDataComm i H
+    have hPDataMaxComm' : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            scale * (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) - b)
+            (max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  scale * (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))))))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      exact hPDataComm i j H
+    have hAlphaDataMaxOf : ∀ (i : Fin M)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+        WithBot.realExp
+          (Option.map₂ (fun x1 x2 => x1 - x2)
+            (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+                (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                  (fun j =>
+                    (Finset.univ.sum (fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+          =
+          some (FA1Math.alphaPartial Q numKVBlocks K scale k i) := by
+      intro i H
+      exact hAlphaDataOf i H
+    have hPDataMaxOf : ∀ (i : Fin M) (j : Fin Bk)
+        (H : (Finset.univ : Finset (Fin Bk)).Nonempty),
+      WithBot.realExp
+        (Option.map
+          (fun b =>
+            (Finset.univ.sum (fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale - b)
+            (max (FA1Math.mPartial Bk Q numKVBlocks K scale k i)
+              (some ((Finset.univ : Finset (Fin Bk)).sup' H
+                (fun j =>
+                  (Finset.univ.sum (fun d : Fin D =>
+                  Q (i, d, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit))) * scale)))))
+        =
+        some (Real.exp (FA1Math.scaledScore Q K scale i
+          (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j) -
+          (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) i).unbotD 0)) := by
+      intro i j H
+      exact hPDataOf i j H
+    have max_eq_sup : ∀ (a b : WithBot ℝ), max a b = a ⊔ b := by
+      intro a b
+      rfl
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [hpids0]
+    · simp [hpids1]
+    · simp [hpids2]
+    · simp [hpid_qb]
+    · simp [hpid_h]
+    · simp [hpid_b]
+    · simp [hq_base]
+    · simp [hk_base]
+    · simp [hv_base]
+    · simp [ho_base]
+    · simp [hoffs_m]
+    · simp [hoffs_d]
+    · simp [hq]
+    · simp
+      ext idx
+      exact hmNewData idx.1
+    · rw [← FA1Math.block_lNew_tile_eq Q K scale k hk]
+      simp
+      ext idx
+      simp only [Tile.bop, Tile.ofReal, Tile.uop,
+        Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+      congr 1
+      · rw [show (Option.map₂ (· * ·) (some (FA1Math.alphaPartial Q numKVBlocks K scale k idx.1))
+              (some (FA1Math.lPartial Q numKVBlocks K scale k idx.1)) :
+              WithBot ℝ) =
+            Option.map (· * FA1Math.lPartial Q numKVBlocks K scale k idx.1)
+              (some (FA1Math.alphaPartial Q numKVBlocks K scale k idx.1)) from rfl]
+        congr 1
+        refine Eq.trans ?_ (hAlphaData idx.1)
+        congr 2
+        exact hmNewData idx.1
+      · refine Eq.trans
+          (@Finset.sum_congr (Fin Bk) (WithBot ℝ) _ _ _ _ _ rfl
+            (fun j _ => ?_))
+          (WithBot.sum_someTerm_eq_some _ _)
+        refine Eq.trans ?_ (hPData idx.1 j)
+        congr 2
+        exact hmNewData idx.1
+    · rw [← FA1Math.block_oAcc_tile_eq Q K V scale k hk]
+      simp
+      ext idx
+      simp only [Tile.bop, Tile.ofReal, Tile.uop, Tile.expandDim,
+        Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex]
+      congr 1
+      · rw [show (Option.map₂ (· * ·)
+              (some (FA1Math.alphaPartial Q numKVBlocks K scale k idx.1))
+              (some (FA1Math.oPartial Q numKVBlocks K V scale k
+                (idx.1, idx.2.1, PUnit.unit))) :
+              WithBot ℝ) =
+            Option.map (· * FA1Math.oPartial Q numKVBlocks K V scale k
+                (idx.1, idx.2.1, PUnit.unit))
+              (some (FA1Math.alphaPartial Q numKVBlocks K scale k idx.1)) from rfl]
+        congr 1
+        refine Eq.trans ?_ (hAlphaData idx.1)
+        congr 2
+        exact hmNewData idx.1
+      · refine Eq.trans
+          (@Finset.sum_congr (Fin Bk) (WithBot ℝ) _ _ _ _ _ rfl
+            (fun j _ => ?_))
+          (WithBot.sum_someTerm_eq_some _ _)
+        change Option.map _ _ =
+            Option.map (fun a : ℝ => a *
+              V (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j, idx.2.1, PUnit.unit))
+              (some (Real.exp (FA1Math.scaledScore Q K scale idx.1
+                (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j) -
+                  WithBot.unbotD 0
+                    (FA1Math.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1))))
+        congr 1
+        refine Eq.trans ?_ (hPData idx.1 j)
+        congr 2
+        exact hmNewData idx.1
+    · intro idx
+      simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hQ idx
+    · intro idx
+      simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hK idx
+    · intro idx
+      simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hV idx
+
 /-! ## Correctness statement + theorem
 
 The statement uses the standard `InputAt` / `observeTileAt` predicates
