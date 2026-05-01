@@ -261,6 +261,34 @@ lemma and then reuses `streaming_eq_attentionReal` unchanged. -/
       = attentionReal (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
           scale (i, d, PUnit.unit) := rfl
 
+/-- M-row slice of the `(b, h)` plane of a 4D tensor: pick `M`
+consecutive rows starting at `start * M`. The boundary
+`start * M + M ≤ S` ensures every row index fits.
+
+This is the natural Q-input view that FA-1's strided kernel sees:
+each program-instance `(b, h, qb)` reads the `M` rows
+`[qb*M, qb*M+1, ..., qb*M+M-1]` of `Q4D`'s `(b, h)` plane. -/
+def slice4DQRows {B H S D : Nat} (M : Nat)
+    (T : TileIndex [B, H, S, D] → ℝ) (b : Fin B) (h : Fin H)
+    (start : Nat) (hBnd : start * M + M ≤ S) : TileIndex [M, D] → ℝ :=
+  fun (i, d, _) =>
+    T (b, h, ⟨start * M + i.val, by
+      have := i.isLt
+      omega⟩, d, PUnit.unit)
+
+/-- Reinterpret the `(b, h)` plane of a 4D `[B, H, S, D]` tensor as a
+flat `[Bk * numKVBlocks, D]` view, given `Bk * numKVBlocks = S`. The K
+and V inputs of FA-1 take this form: the kernel iterates over
+`numKVBlocks` blocks of `Bk` rows each, covering all `S` rows of the
+`(b, h)` plane. -/
+def slice4DFlat {B H S D : Nat} (Bk numKVBlocks : Nat)
+    (T : TileIndex [B, H, S, D] → ℝ) (b : Fin B) (h : Fin H)
+    (hSk : Bk * numKVBlocks = S) : TileIndex [Bk * numKVBlocks, D] → ℝ :=
+  fun (j, d, _) =>
+    T (b, h, ⟨j.val, by
+      have := j.isLt
+      omega⟩, d, PUnit.unit)
+
 /-! ## Streaming math model (FA-1 online softmax recurrence)
 
 Mirrors what `fa1ForwardKernel` computes block by block. Three running
@@ -3633,5 +3661,153 @@ theorem fa1_forward_correct_strided
     show stepStmts [] sLoop = some sLoop
     unfold stepStmts
     rfl
+
+/-- 4D-aware corollary of `fa1_forward_correct_strided`. Given inputs
+laid out via `Offset.strided` over `[B, H, S, D]` (with valid strides
+producing a non-overlapping memory layout) and a Q-side boundary
+hypothesis ensuring the M-row block fits within `S_q`, the strided
+FA-1 kernel produces `attentionReal` of the per-`(b, h, q_block)`
+slice.
+
+Result is in slice form (`attentionReal` of `slice4DQRows` /
+`slice4DFlat`) rather than `attentionReal4D`. The two are mathematically
+equal (the row-correspondence bridge), but the slice form composes
+directly with the inner theorem and avoids a deep dive through
+`attentionReal`'s tile-level closed form; a follow-up may add a clean
+bridge to `attentionReal4D` once the row-correspondence lemma is
+factored out. -/
+theorem fa1_forward_correct_4D
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (hSk : Bk * numKVBlocks = S_k)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQBnd : s.pids 0 * M + M ≤ S_q)
+    (hQ4D : InputAt s qReg
+        (Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0) Q4D)
+    (hK4D : InputAt s kReg
+        (Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0) K4D)
+    (hV4D : InputAt s vReg
+        (Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0) V4D)
+    (hOValid : Offset.StridesValid [B, H, S_q, D] [sOB, sOH, sOM, sOD]) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec (fa1ForwardKernelStrided qReg kReg vReg outReg M D Bk numKVBlocks
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionReal
+                (slice4DQRows M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
+                  (s.pids 0) hQBnd)
+                (slice4DFlat Bk numKVBlocks K4D
+                  ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ hSk)
+                (slice4DFlat Bk numKVBlocks V4D
+                  ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ hSk)
+                scale idx) := by
+  intro idx
+  -- Convert hQ4D's 4D Offset.strided premise to inner-theorem tile-local form.
+  have hQ_inner : InputAt s qReg
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+          + idx.1.val * sQS + idx.2.1.val * sQD)
+      (slice4DQRows M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
+        (s.pids 0) hQBnd) := by
+    intro tileIdx
+    obtain ⟨i, d, _⟩ := tileIdx
+    have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+                    ⟨s.pids 0 * M + i.val, by have := i.isLt; omega⟩,
+                    d, PUnit.unit)
+    show s.mem qReg
+      (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+        + i.val * sQS + d.val * sQD) = _
+    rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + i.val * sQS + d.val * sQD =
+          Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + i.val, by have := i.isLt; omega⟩,
+             d, PUnit.unit) by
+        simp [Offset.strided, Nat.add_mul]
+        ring]
+    exact h
+  -- Convert hK4D similarly.
+  have hK_inner : InputAt s kReg
+      (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+        s.pids 2 * sKB + s.pids 1 * sKH
+          + idx.1.val * sKN + idx.2.1.val * sKD)
+      (slice4DFlat Bk numKVBlocks K4D
+        ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ hSk) := by
+    intro tileIdx
+    obtain ⟨j, d, _⟩ := tileIdx
+    have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+                    ⟨j.val, by have := j.isLt; omega⟩,
+                    d, PUnit.unit)
+    show s.mem kReg
+      (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
+    rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
+          Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨j.val, by have := j.isLt; omega⟩, d, PUnit.unit) by
+        simp [Offset.strided]]
+    exact h
+  -- Convert hV4D similarly.
+  have hV_inner : InputAt s vReg
+      (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+        s.pids 2 * sVB + s.pids 1 * sVH
+          + idx.1.val * sVN + idx.2.1.val * sVD)
+      (slice4DFlat Bk numKVBlocks V4D
+        ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ hSk) := by
+    intro tileIdx
+    obtain ⟨j, d, _⟩ := tileIdx
+    have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+                    ⟨j.val, by have := j.isLt; omega⟩,
+                    d, PUnit.unit)
+    show s.mem vReg
+      (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
+    rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
+          Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨j.val, by have := j.isLt; omega⟩, d, PUnit.unit) by
+        simp [Offset.strided]]
+    exact h
+  -- Output tile-local injectivity from `Offset.strided_inj`. The 4D
+  -- `StridesValid` decomposes into four nested ∧'s; the third clause
+  -- gives `(D-1)*sOD < sOM` and the fourth gives `0 < sOD`, which
+  -- together form `Offset.StridesValid [M, D] [sOM, sOD]`.
+  have hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD) := by
+    have hOValidLocal : Offset.StridesValid [M, D] [sOM, sOD] :=
+      ⟨hOValid.2.2.1, hOValid.2.2.2.1, trivial⟩
+    have hStrInj := Offset.strided_inj
+        (s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM)
+        hOValidLocal
+    intro a b hab
+    apply hStrInj
+    obtain ⟨a₁, a₂, _⟩ := a
+    obtain ⟨b₁, b₂, _⟩ := b
+    show Offset.strided [M, D] [sOM, sOD] _ _ =
+         Offset.strided [M, D] [sOM, sOD] _ _
+    simp only [Offset.strided]
+    have := hab
+    simp only at this
+    omega
+  exact fa1_forward_correct_strided hBk hNumKVBlocks
+    qReg kReg vReg outReg
+    sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+    sOB sOH sOM sOD
+    (slice4DQRows M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ (s.pids 0) hQBnd)
+    (slice4DFlat Bk numKVBlocks K4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ hSk)
+    (slice4DFlat Bk numKVBlocks V4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ hSk)
+    scale s
+    hQ_inner hK_inner hV_inner hInj idx
 
 end VeriTile.Examples
