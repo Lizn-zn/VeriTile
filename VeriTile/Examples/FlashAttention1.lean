@@ -1907,6 +1907,60 @@ theorem block_oAcc_tile_eq {M D Bk N : Nat}
   rw [oPartial_succ_of_lt qStart Q N K V scale k hk (i, d, PUnit.unit)]
   rfl
 
+/-- Per-row bridge: the `Finset.sup` of the kernel-side
+`if-then-some-else-none` lambda equals the `Finset.sup` of `maskedScore`.
+The mask predicate matches because `(blockIndex k j).val = k * Bk + j.val`,
+and the `some` payload matches because `scaledScore = scale * Σ Q*K`
+(differing from kernel's `(Σ Q*K) * scale` only by `mul_comm`). -/
+theorem kernelIfSup_eq_maskedScoreSup {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (qb : Nat) (k : Nat) (hk : k < N) (i : Fin M) :
+    ((Finset.univ : Finset (Fin Bk)).sup
+      (fun x : Fin Bk =>
+        (if k * Bk + ↑x ≤ qb * M + ↑i then
+          some
+            ((∑ x_1 : Fin D,
+              Q (i, x_1, PUnit.unit) *
+                K (FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x, x_1, PUnit.unit)) * scale)
+        else none : WithBot ℝ))) =
+    ((Finset.univ : Finset (Fin Bk)).sup
+      (fun x : Fin Bk =>
+        maskedScore (qb * M) Q K scale i
+          (FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x))) := by
+  apply Finset.sup_congr rfl
+  intro x _
+  by_cases h_mask : k * Bk + x.val ≤ qb * M + i.val
+  · rw [maskedScore_of_le (qb * M) Q K scale i _
+        (by simp [FA1Math.blockIndex]; exact h_mask)]
+    rw [if_pos h_mask]
+    unfold FA1Math.scaledScore
+    ring_nf
+    rfl
+  · rw [maskedScore_of_not_le (qb * M) Q K scale i _
+        (by simp [FA1Math.blockIndex]; omega)]
+    simp [h_mask]
+    rfl
+
+/-- Sup-form `mPartial(k+1)` recurrence over the kernel-side
+`if-then-some-else-none` lambda. The kernel's `Tile.reduceMaxDrop`
+produces `Finset.sup'`; after normalizing to `Finset.sup` via
+`Finset.sup'_eq_sup`, this lemma directly closes the m_new conjunct. -/
+theorem mPartial_succ_kernelForm {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (qb : Nat) (k : Nat) (hk : k < N) (i : Fin M) :
+    max (mPartial Bk (qb * M) Q N K scale k i)
+      ((Finset.univ : Finset (Fin Bk)).sup
+        (fun x : Fin Bk =>
+          (if k * Bk + ↑x ≤ qb * M + ↑i then
+            some
+              ((∑ x_1 : Fin D,
+                Q (i, x_1, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x, x_1, PUnit.unit)) * scale)
+          else none : WithBot ℝ))) =
+    mPartial Bk (qb * M) Q N K scale (k + 1) i := by
+  rw [kernelIfSup_eq_maskedScoreSup Q K scale qb k hk i,
+      ← mPartial_succ_of_lt (qb * M) Q N K scale k hk i]
+
 end FA1MathCausal
 
 /-! ## Operational layer — `P_fa1` invariant + four-stage proof
