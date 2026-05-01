@@ -1,20 +1,21 @@
 /-
 VeriTile.Examples.FlashAttention1
 
-FlashAttention-1 forward kernel — DSL definition + math model + correctness
-*statement* (proof = sorry, to be discharged in issue #38).
+FlashAttention-1 forward kernel — DSL definition + math model + full
+correctness theorem.
 
-v0 scope (issue #37):
+v0 scope:
   * One `program_id` ↔ one Q-row block of `[BLOCK_M, D]`.
   * K, V are full `[S, D]` matrices in memory (single-block-output).
   * Inner KV-block loop with the canonical online-softmax update
     (running `m_i`, `l_i`, `O`).
-  * `1/√D` scaling (Triton-faithful).
+  * Arbitrary user-supplied `scale : ℝ` (the standard `1/√D` Triton
+    specialization is the caller's responsibility).
   * **Non-causal** — causal masking (uses `tl.where`) is a follow-up.
 
-The proof of `fa1_forward_correct` is left as `sorry` here so the
-kernel definition + math model + statement can land independently of
-the proof effort.
+`fa1_forward_correct` is fully proven end-to-end via the four-stage
+decomposition (math identity + pre-loop init + loop step via
+`forLoop_inv` + post-loop readout) described above the theorem.
 -/
 
 import VeriTile.Triton.Core
@@ -1174,21 +1175,18 @@ theorem lPartial_final_ne_zero {M D Bk : Nat} (hBk : 0 < Bk)
 
 end FA1Math
 
-/-! ## Operational layer — `P_fa1` invariant + proof skeleton (issue #38)
+/-! ## Operational layer — `P_fa1` invariant + four-stage proof
 
 Carries Stage A's streaming functions through the kernel as a
 `forLoop_inv` invariant, the way `Examples/OnlineSoftmax.lean` does
-for `onlineSoftmaxM` / `onlineSoftmaxL`. Proofs at this layer remain
-`sorry` while we land the structural scaffold; they reduce to:
+for `onlineSoftmaxM` / `onlineSoftmaxL`. The three pieces that combine
+via `forLoop_inv` to discharge `fa1_forward_correct` are:
 
-* `P_fa1_init` — the post-pre-loop state satisfies `P_fa1 0`.
-* `P_fa1_step` — the loop body preserves `P_fa1` under `n → n+1`.
-* `P_fa1_readout` — given `P_fa1 numKVBlocks s`, the post-store
-  memory at `outReg` equals `attentionReal Q K V scale idx`,
-  bridging through `streaming_eq_attentionReal`.
-
-These three combine via `forLoop_inv` and explicit `stmts_cons`
-walks to discharge `fa1_forward_correct`. -/
+* `fa1_preLoop_correct` — the post-pre-loop state satisfies `P_fa1 0`.
+* `fa1_step` — the loop body preserves `P_fa1` under `n → n+1`.
+* `fa1_postLoop_correct` — given `P_fa1 numKVBlocks s`, the
+  post-store memory at `outReg` equals `attentionReal Q K V scale idx`,
+  bridging through `streaming_eq_attentionReal`. -/
 
 /-- Loop-carried predicate: at iteration count `k ∈ [0, numKVBlocks]`,
 the kernel state holds the streaming math values `mPartial k`,
@@ -1581,9 +1579,7 @@ theorem fa1_step
       Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
       TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
       NumericDType.add, NumericDType.mul, NumericDType.sub,
-      BlockState.readMem, Option.bind, hBk, hpidReg, hoffs_d, hq, hm, hl, ho,
-      offsN, ptrs, kTile, vTile, scores, mBlock, mNew, alpha, p, lNew, oNew,
-      s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+      BlockState.readMem, Option.bind, hBk, hoffs_d, hq, hm, hl, ho]
     have hKmem : ∀ (j : Fin Bk) (d : Fin D),
         s.mem kReg ((k * Bk + j.val) * D + d.val) =
           K (FA1Math.blockIndex Bk numKVBlocks k
@@ -2042,26 +2038,20 @@ theorem fa1_step
       intro a b
       rfl
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
-          hpidReg]
-    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
-          hpid]
-    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
-          hoffs_m]
-    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
-          hoffs_d]
-    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
-          hq]
-    · simp [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+    · simp [hpidReg]
+    · simp [hpid]
+    · simp [hoffs_m]
+    · simp [hoffs_d]
+    · simp [hq]
+    · simp
       ext idx
       exact hmNewData idx.1
     · rw [← FA1Math.block_lNew_tile_eq Q K scale k hk]
-      simp [s11]
+      simp
       ext idx
-      simp only [Tile.bop, Tile.ofReal, Tile.uop, Tile.ofReal_data,
+      simp only [Tile.bop, Tile.ofReal, Tile.uop,
         Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
-        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
-        WithBot.realAdd, WithBot.realMul]
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
       congr 1
       · -- LHS: Option.map (· * lPartial k) (WithBot.realExp (Option.map₂ - mPartial(k) (max ...)))
         -- RHS: Option.map₂ * (some alphaPartial) (some lPartial k)
@@ -2091,7 +2081,7 @@ theorem fa1_step
         congr 2
         exact hmNewData idx.1
     · rw [← FA1Math.block_oAcc_tile_eq Q K V scale k hk]
-      simp [s12]
+      simp
       ext idx
       simp only [Tile.bop, Tile.ofReal, Tile.uop, Tile.expandDim,
         Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
@@ -2146,15 +2136,14 @@ theorem fa1_step
     · intro idx
       simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hV idx
 
-/-! ## Correctness statement (sorry — discharged in issue #38)
+/-! ## Correctness statement + theorem
 
 The statement uses the standard `InputAt` / `observeTileAt` predicates
 from `Examples.Common` to relate the kernel's memory effects to the
 math model on `Tile`s. The kernel's optional final state is fed
-directly into `observeTileAt`; the proof in #38 must therefore also
-discharge \"`exec` succeeds\" (presumably via positivity of `M`, `D`,
-`Bk`, `numKVBlocks` once those become required by the inductive
-loop-invariant argument). -/
+directly into `observeTileAt`; the proof also discharges "`exec`
+succeeds" along the way, threading through the four-stage
+decomposition. -/
 
 /-- After running `fa1ForwardKernel` on a state where Q is loaded as a
 contiguous `[M, D]` row-major block at `(s.pid * M, ⋯)` and K, V are
@@ -2172,37 +2161,36 @@ appear at the input boundary; it's an internal sentinel for things
 like `tl.full(_, -inf)` / masked-off lanes / `-inf` introduced by the
 kernel.
 
-**Proof skeleton (see issue #38).** The proof follows the same shape
-as `online_softmax_correct` in `Examples/OnlineSoftmax.lean`, scaled
-to FA-1's bigger statement:
+**Proof structure.** Follows the same shape as `online_softmax_correct`
+in `Examples/OnlineSoftmax.lean`, scaled to FA-1's bigger statement:
 
 ```text
-1. Stage B init — exec walks through the 8 pre-loop statements
-   (program_id, two aranges, Q-load, three tile-init fulls), each
-   matched by an explicit `stepStmt` rewrite. Resulting state
-   satisfies `P_fa1 0`.
+1. Stage A math — `streaming_eq_attentionReal`: the streaming
+   `mPartial` / `lPartial` / `oPartial` recurrence over KV blocks
+   matches the closed-form `attentionReal` softmax-weighted average.
 
-2. Stage C step — invoke `forLoop_inv` with `P := P_fa1 …` and the
-   per-iteration body. The body's 13 statements need their
+2. Stage B init — `fa1_preLoop_correct`: exec walks through the 8
+   pre-loop statements (program_id, two aranges, Q-load, three
+   tile-init fulls), each matched by an explicit `stepStmt` rewrite.
+   Resulting state satisfies `P_fa1 0`.
+
+3. Stage C step — `fa1_step`: the loop body's 13 statements thread
    evalOp / Tile.dot / Tile.transpose / Tile.expandDim semantics
-   threaded through; the math-side recurrence (mPartial / lPartial /
-   oPartial at k → k+1) closes the inductive step.
+   through; the math-side recurrence (mPartial / lPartial / oPartial
+   at k → k+1) closes the inductive step. Combined with Stage B via
+   `forLoop_inv` to obtain `P_fa1 numKVBlocks` at the loop exit.
 
-3. Stage D readout — given `P_fa1 numKVBlocks s_final`, the
-   post-loop assigns `out := o_acc / l_i[:, None]` and
-   `tl.store(outReg + ptrs, out)` realize
-   `streaming_eq_attentionReal` at the operational layer; the
-   `observeTileAt … = some (attentionReal …)` follows.
+4. Stage D readout — `fa1_postLoop_correct`: given `P_fa1 numKVBlocks
+   s_final`, the post-loop assigns `out := o_acc / l_i[:, None]` and
+   `tl.store(outReg + ptrs, out)` realize `streaming_eq_attentionReal`
+   at the operational layer; `observeTileAt … = some (attentionReal …)`
+   follows.
 ```
 
-The non-empty hypotheses `0 < Bk` and `0 < numKVBlocks` are semantic, not
-proof-only: `tl.max(scores, axis = 1)` is undefined on an empty KV block in
-the current operational model, and attention over zero KV blocks is outside
-the intended FA-1 v0 scope.
-
-Each Stage above is itself a multi-hundred-line proof (mirroring
-OnlineSoftmax's scale × the rank-2 / batched / multi-stage
-complexity of FA-1). v0 leaves the body as `sorry`. -/
+The non-empty hypotheses `0 < Bk` and `0 < numKVBlocks` are semantic,
+not proof-only: `tl.max(scores, axis = 1)` is undefined on an empty KV
+block in the current operational model, and attention over zero KV
+blocks is outside the intended FA-1 v0 scope. -/
 theorem fa1_forward_correct
     {M D Bk numKVBlocks : Nat}
     (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
