@@ -170,6 +170,7 @@ theorem softmax_kernels_refinement_view
 ## 更多文档
 
 - [支持的 Triton 子集与语义 gap](./documents/TritonSubset_zh.md)
+- [FA-1 Step 2 boundary-mask 计划](./documents/FA1_Step2_BoundaryMasks.md)
 - [LLM 证明 Wrapper](./scripts/README.md)
 - [LLM benchmark 协议](./bench/llm_eval/README.md)
 
