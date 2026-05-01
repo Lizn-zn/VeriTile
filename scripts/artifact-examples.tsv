@@ -12,4 +12,4 @@ VeriTile/Examples/FusedSiLU.lean	silu_kernels_refinement	Fused SiLU refinement
 VeriTile/Examples/WelfordKernels.lean	welford_kernels_refinement	Welford refinement
 VeriTile/Examples/LayerNormKernels.lean	layernorm_kernels_refinement	LayerNorm refinement
 VeriTile/Examples/ApproxGeLU.lean	approx_gelu_kernel_correct	ApproxGeLU correctness
-VeriTile/Examples/FlashAttention1.lean	fa1_forward_correct_4D_causal_layout	FlashAttention-1 causal 4D correctness
+VeriTile/Examples/FlashAttention1.lean	fa1_forward_correct_4D_causal_views	FlashAttention-1 causal 4D correctness

@@ -541,6 +541,52 @@ def causalKernel (layout : FA1Layout4D B H S_q S_k D)
 
 end FA1Layout4D
 
+/-! ## View-level theorem surface
+
+`FA1Layout4D` removes the raw stride arguments, but still keeps the
+Q/K/V/O region names separate. `FA1Views4D` is the preferred public
+surface: it bundles the logical layout together with the concrete memory
+regions and exposes the four resulting `TensorView`s directly. -/
+
+/-- Full memory contract bundle for one FA-1 call over 4D
+`[B, H, S, D]` tensors. -/
+structure FA1Views4D (B H S_q S_k D : Nat) where
+  layout : FA1Layout4D B H S_q S_k D
+  qReg : RegionName
+  kReg : RegionName
+  vReg : RegionName
+  outReg : RegionName
+
+namespace FA1Views4D
+
+def qView (views : FA1Views4D B H S_q S_k D) : TensorView [B, H, S_q, D] :=
+  views.layout.qView views.qReg
+
+def kView (views : FA1Views4D B H S_q S_k D) : TensorView [B, H, S_k, D] :=
+  views.layout.kView views.kReg
+
+def vView (views : FA1Views4D B H S_q S_k D) : TensorView [B, H, S_k, D] :=
+  views.layout.vView views.vReg
+
+def oView (views : FA1Views4D B H S_q S_k D) : TensorView [B, H, S_q, D] :=
+  views.layout.oView views.outReg
+
+def outBlockOffset (views : FA1Views4D B H S_q S_k D)
+    (s : BlockState) (M : Nat) : TileIndex [M, D] → Nat :=
+  views.layout.outBlockOffset s M
+
+def kernel (views : FA1Views4D B H S_q S_k D)
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+  views.layout.kernel views.qReg views.kReg views.vReg views.outReg
+    M Bk numKVBlocks scale
+
+def causalKernel (views : FA1Views4D B H S_q S_k D)
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+  views.layout.causalKernel views.qReg views.kReg views.vReg views.outReg
+    M Bk numKVBlocks scale
+
+end FA1Views4D
+
 /-! ## Streaming math model (FA-1 online softmax recurrence)
 
 Mirrors what `fa1ForwardKernel` computes block by block. Three running
@@ -6423,5 +6469,71 @@ theorem fa1_forward_correct_4D_causal_layout
       layout.oB layout.oH layout.oS layout.oD
       Q4D K4D V4D scale s hPidB hPidH hQBnd
       hQ4D hK4D hV4D layout.hOValid idx
+
+/-! ## View-level theorem surface
+
+These are the preferred public FA-1 theorem statements. The caller supplies
+one `FA1Views4D` value, then states Q/K/V memory preconditions directly as
+`views.qView.loaded`, `views.kView.loaded`, and `views.vView.loaded`. -/
+
+/-- FA-1 forward correctness over bundled tensor views. -/
+theorem fa1_forward_correct_4D_views
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (hSk : Bk * numKVBlocks = S_k)
+    (views : FA1Views4D B H S_q S_k D)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQBnd : s.pids 0 * M + M ≤ S_q)
+    (hQ4D : TensorView.loaded s views.qView Q4D)
+    (hK4D : TensorView.loaded s views.kView K4D)
+    (hV4D : TensorView.loaded s views.vView V4D) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec (views.kernel M Bk numKVBlocks scale) s)
+          views.outReg (views.outBlockOffset s M) idx
+        = some (attentionReal4D Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx
+  simpa [FA1Views4D.kernel, FA1Views4D.outBlockOffset,
+         FA1Views4D.qView, FA1Views4D.kView, FA1Views4D.vView]
+    using fa1_forward_correct_4D_layout hBk hNumKVBlocks hSk views.layout
+      views.qReg views.kReg views.vReg views.outReg
+      Q4D K4D V4D scale s hPidB hPidH hQBnd
+      hQ4D hK4D hV4D idx
+
+/-- Causal FA-1 forward correctness over bundled tensor views. -/
+theorem fa1_forward_correct_4D_causal_views
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (hSk : Bk * numKVBlocks = S_k)
+    (views : FA1Views4D B H S_q S_k D)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQBnd : s.pids 0 * M + M ≤ S_q)
+    (hQ4D : TensorView.loaded s views.qView Q4D)
+    (hK4D : TensorView.loaded s views.kView K4D)
+    (hV4D : TensorView.loaded s views.vView V4D) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec (views.causalKernel M Bk numKVBlocks scale) s)
+          views.outReg (views.outBlockOffset s M) idx
+        = some (attentionReal4DCausal Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx
+  simpa [FA1Views4D.causalKernel, FA1Views4D.outBlockOffset,
+         FA1Views4D.qView, FA1Views4D.kView, FA1Views4D.vView]
+    using fa1_forward_correct_4D_causal_layout hBk hNumKVBlocks hSk views.layout
+      views.qReg views.kReg views.vReg views.outReg
+      Q4D K4D V4D scale s hPidB hPidH hQBnd
+      hQ4D hK4D hV4D idx
 
 end VeriTile.Examples
