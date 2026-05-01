@@ -1800,6 +1800,18 @@ def blockIndex? (S_k Bk k : Nat) (jLocal : Fin Bk) : Option (Fin S_k) :=
   else
     none
 
+@[simp] theorem blockIndex?_of_lt
+    (S_k Bk k : Nat) (jLocal : Fin Bk)
+    (h : k * Bk + jLocal.val < S_k) :
+    blockIndex? S_k Bk k jLocal = some ⟨k * Bk + jLocal.val, h⟩ := by
+  simp [blockIndex?, h]
+
+@[simp] theorem blockIndex?_of_not_lt
+    (S_k Bk k : Nat) (jLocal : Fin Bk)
+    (h : ¬ k * Bk + jLocal.val < S_k) :
+    blockIndex? S_k Bk k jLocal = none := by
+  simp [blockIndex?, h]
+
 /-- Boundary-masked score for a padded loop lane. Out-of-range KV lanes are
 `⊥`, so exponentiating them contributes zero mass. -/
 noncomputable def maskedScore {M S_k D : Nat}
@@ -1809,6 +1821,24 @@ noncomputable def maskedScore {M S_k D : Nat}
   match blockIndex? S_k Bk k jLocal with
   | some j => (FA1Math.scaledScore Q K scale i j : ℝ)
   | none   => ⊥
+
+@[simp] theorem maskedScore_of_lt {M S_k D : Nat}
+    (Bk k : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (jLocal : Fin Bk)
+    (h : k * Bk + jLocal.val < S_k) :
+    maskedScore Bk k Q K scale i jLocal =
+      ((FA1Math.scaledScore Q K scale i
+        ⟨k * Bk + jLocal.val, h⟩ : ℝ) : WithBot ℝ) := by
+  simp [maskedScore, h]
+
+@[simp] theorem maskedScore_of_not_lt {M S_k D : Nat}
+    (Bk k : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (jLocal : Fin Bk)
+    (h : ¬ k * Bk + jLocal.val < S_k) :
+    maskedScore Bk k Q K scale i jLocal = (⊥ : WithBot ℝ) := by
+  simp [maskedScore, h]
 
 /-- Running per-row max over the first `k` padded KV blocks, ignoring
 out-of-range lanes by treating them as `⊥`. -/
@@ -1876,6 +1906,79 @@ noncomputable def oPartial {M S_k D : Nat} (Bk : Nat)
             | none => 0)
       else
         oPartial Bk Q numKVBlocks K V scale k idx
+
+theorem mPartial_succ_of_lt {M S_k D : Nat} (Bk : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    mPartial Bk Q numKVBlocks K scale (k + 1) i =
+      max (mPartial Bk Q numKVBlocks K scale k i)
+        ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+          maskedScore Bk k Q K scale i jLocal) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      max (mPartial Bk Q numKVBlocks K scale k i)
+        ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+          maskedScore Bk k Q K scale i jLocal)
+    else mPartial Bk Q numKVBlocks K scale k i) = _
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+theorem lPartial_succ_of_lt {M S_k D : Nat} (Bk : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    lPartial Bk Q numKVBlocks K scale (k + 1) i =
+      let mNew := mPartial Bk Q numKVBlocks K scale (k + 1) i
+      alphaPartial Bk Q numKVBlocks K scale k i *
+        lPartial Bk Q numKVBlocks K scale k i +
+        (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          (WithBot.realExp
+            (WithBot.realSub
+              (maskedScore Bk k Q K scale i jLocal) mNew)).unbotD 0) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      (let mNew := mPartial Bk Q numKVBlocks K scale (k + 1) i
+       alphaPartial Bk Q numKVBlocks K scale k i *
+          lPartial Bk Q numKVBlocks K scale k i +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            (WithBot.realExp
+              (WithBot.realSub
+                (maskedScore Bk k Q K scale i jLocal) mNew)).unbotD 0))
+    else lPartial Bk Q numKVBlocks K scale k i) = _
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+theorem oPartial_succ_of_lt {M S_k D : Nat} (Bk : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (idx : TileIndex [M, D]) :
+    oPartial Bk Q numKVBlocks K V scale (k + 1) idx =
+      let i := idx.1
+      let d := idx.2.1
+      let mNew := mPartial Bk Q numKVBlocks K scale (k + 1) i
+      alphaPartial Bk Q numKVBlocks K scale k i *
+        oPartial Bk Q numKVBlocks K V scale k idx +
+        (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          match blockIndex? S_k Bk k jLocal with
+          | some j =>
+              (WithBot.realExp
+                (WithBot.realSub
+                  (maskedScore Bk k Q K scale i jLocal) mNew)).unbotD 0 *
+                V (j, d, PUnit.unit)
+          | none => 0) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      (let i := idx.1
+       let d := idx.2.1
+       let mNew := mPartial Bk Q numKVBlocks K scale (k + 1) i
+       alphaPartial Bk Q numKVBlocks K scale k i *
+          oPartial Bk Q numKVBlocks K V scale k idx +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            match blockIndex? S_k Bk k jLocal with
+            | some j =>
+                (WithBot.realExp
+                  (WithBot.realSub
+                    (maskedScore Bk k Q K scale i jLocal) mNew)).unbotD 0 *
+                  V (j, d, PUnit.unit)
+            | none => 0))
+    else oPartial Bk Q numKVBlocks K V scale k idx) = _
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
 
 end FA1MathBoundary
 
