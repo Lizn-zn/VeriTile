@@ -3511,4 +3511,127 @@ theorem fa1_forward_correct
     unfold stepStmts
     rfl
 
+/-- Strided / 4D-aware FA-1 forward correctness — single program-instance
+slice. Threads `fa1_preLoop_correct_strided`, `fa1_step_strided`, and
+`fa1_postLoop_correct_strided` through `forLoop_inv` exactly the way
+`fa1_forward_correct` does for the 2D kernel. The output equals
+`attentionReal` on the per-`(b, h, q_block)` slice; the 4D wrapper
+(issue #39 step (iv)) lifts this to `attentionReal4D` via
+`attentionReal4D_slice`.
+
+The boundary / non-overlap requirement that 4D Triton FA-1 lives or
+dies on (`qb*M + (M-1) < S_q`, plus `Σ (d-1)*s < next stride` along
+each axis of `[B, H, S_q, D]`) is folded entirely into the readout
+injectivity hypothesis `hInj` here — kept abstract so a 4D-wrapper
+caller can package it via `Offset.strided_inj` + `StridesValid`, and a
+2D-equivalent caller (B = H = 1, `sOB = sOH = 0`, `sOM = D`,
+`sOD = 1`) can discharge it directly. -/
+theorem fa1_forward_correct_strided
+    {M D Bk numKVBlocks : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQ : InputAt s qReg
+        (fun idx : TileIndex [M, D] =>
+          s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) Q)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD)) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec (fa1ForwardKernelStrided qReg kReg vReg outReg M D Bk numKVBlocks
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionReal Q K V scale idx) := by
+  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
+      stepStmt st sa = some sb →
+      stepStmts (st :: rest) sa = stepStmts rest sb := by
+    intro st rest sa sb h
+    conv_lhs => unfold stepStmts
+    rw [h]
+  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
+      stepStmts l1 sa = some sb →
+      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
+    intro l1
+    induction l1 with
+    | nil =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        injection h with h
+        rw [List.nil_append, ← h]
+    | cons st rest ih =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        cases hst : stepStmt st sa with
+        | none => rw [hst] at h; simp at h
+        | some sm =>
+            rw [hst] at h
+            simp at h
+            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
+            exact ih l2 sm sb h
+  -- Stage B: strided pre-loop establishes P_fa1_strided 0.
+  obtain ⟨s0, hPre, hP0⟩ :=
+    fa1_preLoop_correct_strided qReg kReg vReg
+      sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+      sOB sOH sOM sOD Q K V scale s hQ hK hV
+  -- Stage C: forLoop_inv chains fa1_step_strided.
+  obtain ⟨sLoop, hLoopStmt, hPLoop⟩ :=
+    forLoop_inv
+      (P := P_fa1_strided qReg kReg vReg
+        (s.pids 0) (s.pids 1) (s.pids 2)
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale) hP0
+      (fun i st hi hPi =>
+        fa1_step_strided hBk qReg kReg vReg
+          (s.pids 0) (s.pids 1) (s.pids 2)
+          sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+          sOB sOH sOM sOD Q K V scale i st hi hPi)
+  -- Stage D: strided post-loop readout.
+  intro idx
+  show observeTileAt (stepStmts _ s) outReg _ idx = _
+  rw [show (fa1ForwardKernelStrided qReg kReg vReg outReg M D Bk numKVBlocks
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD scale).body =
+        fa1PreLoopStrided qReg M D sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
+        [Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
+        fa1PostLoopStrided outReg M D sOM sOD from rfl]
+  rw [List.append_assoc,
+      stepStmts_append (fa1PreLoopStrided qReg M D
+          sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH)
+        ([Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
+          fa1PostLoopStrided outReg M D sOM sOD) s s0 hPre]
+  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)]
+        (fa1PostLoopStrided outReg M D sOM sOD) s0 sLoop ?_]
+  · exact fa1_postLoop_correct_strided hBk hNumKVBlocks
+      qReg kReg vReg outReg
+      (s.pids 0) (s.pids 1) (s.pids 2)
+      sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+      sOB sOH sOM sOD Q K V scale sLoop hPLoop hInj idx
+  · rw [stepStmts_cons _ [] _ _ hLoopStmt]
+    show stepStmts [] sLoop = some sLoop
+    unfold stepStmts
+    rfl
+
 end VeriTile.Examples
