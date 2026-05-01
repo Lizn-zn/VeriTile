@@ -1961,6 +1961,13 @@ theorem mPartial_succ_kernelForm {M D Bk N : Nat}
   rw [kernelIfSup_eq_maskedScoreSup Q K scale qb k hk i,
       ← mPartial_succ_of_lt (qb * M) Q N K scale k hk i]
 
+/-- `WithBot.realExp` is never bottom, so it is equal to its `unbotD`
+payload rewrapped as `some`. This bridges the kernel's optional value
+with the ℝ-clean streaming definitions. -/
+theorem realExp_eq_some_unbotD (x : WithBot ℝ) :
+    WithBot.realExp x = some ((WithBot.realExp x).unbotD 0) := by
+  cases x <;> rfl
+
 end FA1MathCausal
 
 /-! ## Operational layer — `P_fa1` invariant + four-stage proof
@@ -4237,6 +4244,352 @@ theorem fa1_step_strided
       simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hK idx
     · intro idx
       simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hV idx
+
+set_option maxHeartbeats 800000 in
+/-- Causal strided loop step. This is the causal analogue of
+`fa1_step_strided`: the operational body additionally constructs the
+causal mask and `tl.where`-masked scores before the same online-softmax
+update. -/
+theorem fa1_step_strided_causal
+    {M D Bk numKVBlocks : Nat} (hBk : 0 < Bk)
+    (qReg kReg vReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (s : BlockState)
+    (hk : k < numKVBlocks)
+    (hP : P_fa1_strided_causal qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale k s) :
+    ∃ s',
+      stepStmts (fa1LoopBodyStridedCausal kReg vReg M D Bk sKN sKD sVN sVD scale)
+        (s.setReg "n" .nat [] (Tile.scalar k)) = some s' ∧
+      P_fa1_strided_causal qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale (k + 1) s' := by
+  rcases hP with
+    ⟨hpids0, hpids1, hpids2,
+     hpid_qb, hpid_h, hpid_b,
+     hq_base, hk_base, hv_base, ho_base,
+     hoffs_m, hoffs_d, hq, hm, hl, ho, hQ, hK, hV⟩
+  let kBase : Nat := batch * sKB + headIdx * sKH
+  let vBase : Nat := batch * sVB + headIdx * sVH
+  let offsN : Tile .nat [Bk] :=
+    Tile.vec fun j : Fin Bk => k * Bk + j.val
+  let kPtrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      kBase + (k * Bk + idx.1.val) * sKN + idx.2.1.val * sKD⟩
+  let vPtrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      vBase + (k * Bk + idx.1.val) * sVN + idx.2.1.val * sVD⟩
+  let kTile : Tile .real [Bk, D] :=
+    Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      K (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.1,
+        idx.2.1, PUnit.unit)
+  let vTile : Tile .real [Bk, D] :=
+    Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      V (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.1,
+        idx.2.1, PUnit.unit)
+  let scoresRaw : Tile .real [M, Bk] :=
+    Tile.ofReal fun idx : TileIndex [M, Bk] =>
+      FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1)
+  let causal : Tile .bool [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      decide (k * Bk + idx.2.1.val ≤ qb * M + idx.1.val)⟩
+  let scores : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+        (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1)⟩
+  let mBlock : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      (Finset.univ : Finset (Fin Bk)).sup
+        (fun jLocal =>
+          FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+            (FA1Math.blockIndex Bk numKVBlocks k
+              (Nat.succ_le_iff.mpr hk) jLocal))⟩
+  let mNew : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1⟩
+  let alpha : Tile .real [M] :=
+    Tile.ofReal fun idx : TileIndex [M] =>
+      FA1MathCausal.alphaCausal (qb * M) Q numKVBlocks K scale k idx.1
+  let p : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      WithBot.realExp
+        (Option.map₂ (fun x y : ℝ => x - y)
+          (FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+            (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1))
+          (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1))⟩
+  let lNew : Tile .real [M] :=
+    Tile.ofReal fun idx : TileIndex [M] =>
+      FA1MathCausal.lPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1
+  let oNew : Tile .real [M, D] :=
+    Tile.ofReal fun idx : TileIndex [M, D] =>
+      FA1MathCausal.oPartial Bk (qb * M) Q numKVBlocks K V scale (k + 1) idx
+  let s0 := s.setReg "n" .nat [] (Tile.scalar k)
+  let s1 := s0.setReg "offs_n" .nat [Bk] offsN
+  let s2 := s1.setReg "k_ptrs" .nat [Bk, D] kPtrs
+  let s3 := s2.setReg "v_ptrs" .nat [Bk, D] vPtrs
+  let s4 := s3.setReg "k" .real [Bk, D] kTile
+  let s5 := s4.setReg "v" .real [Bk, D] vTile
+  let s6 := s5.setReg "scores_raw" .real [M, Bk] scoresRaw
+  let s7 := s6.setReg "causal" .bool [M, Bk] causal
+  let s8 := s7.setReg "scores" .real [M, Bk] scores
+  let s9 := s8.setReg "m_block" .real [M] mBlock
+  let s10 := s9.setReg "m_new" .real [M] mNew
+  let s11 := s10.setReg "alpha" .real [M] alpha
+  let s12 := s11.setReg "p" .real [M, Bk] p
+  let s13 := s12.setReg "l_new" .real [M] lNew
+  let s14 := s13.setReg "o_acc" .real [M, D] oNew
+  let s15 := s14.setReg "m_i" .real [M] mNew
+  let s' := s15.setReg "l_i" .real [M] lNew
+  apply Exists.intro
+  constructor
+  · simp [fa1LoopBodyStridedCausal, stepStmts, stepStmt, evalOp,
+      Tile.bop, Tile.cop, Tile.select, Tile.expandDim, Tile.transpose, Tile.dot,
+      Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
+      NumericDType.sub, ComparableDType.ge, BlockState.readMem, Option.bind,
+      hBk, hoffs_m, hoffs_d, hq, hm, hl, ho, hk_base, hv_base]
+    have hKmem : ∀ (j : Fin Bk) (d : Fin D),
+        s.mem kReg (batch * sKB + headIdx * sKH
+            + (k * Bk + j.val) * sKN + d.val * sKD) =
+          K (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
+      fa1_block_read_strided kReg s
+        (batch * sKB + headIdx * sKH) sKN sKD K hK k hk
+    have hVmem : ∀ (j : Fin Bk) (d : Fin D),
+        s.mem vReg (batch * sVB + headIdx * sVH
+            + (k * Bk + j.val) * sVN + d.val * sVD) =
+          V (FA1Math.blockIndex Bk numKVBlocks k
+            (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
+      fa1_block_read_strided vReg s
+        (batch * sVB + headIdx * sVH) sVN sVD V hV k hk
+    simp_rw [hKmem, hVmem]
+    rfl
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [hpids0]
+    · simp [hpids1]
+    · simp [hpids2]
+    · simp [hpid_qb]
+    · simp [hpid_h]
+    · simp [hpid_b]
+    · simp [hq_base]
+    · simp [hk_base]
+    · simp [hv_base]
+    · simp [ho_base]
+    · simp [hoffs_m]
+    · simp [hoffs_d]
+    · simp [hq]
+    · simp
+      funext idx
+      simp_rw [Finset.sup'_eq_sup]
+      exact FA1MathCausal.mPartial_succ_kernelForm Q K scale qb k hk idx.1
+    · rw [← FA1MathCausal.block_lNew_tile_eq (qb * M) Q K scale k hk]
+      simp [Tile.bop, Tile.uop, Tile.ofReal,
+        Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
+      funext idx
+      rw [show some
+            (FA1MathCausal.alphaCausal (qb * M) Q numKVBlocks K scale k idx.1 *
+                FA1MathCausal.lPartial Bk (qb * M) Q numKVBlocks K scale k idx.1 +
+              ∑ x : Fin Bk,
+                (WithBot.realExp
+                  (Option.map₂ (fun x y : ℝ => x - y)
+                    (FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+                      (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) x))
+                    (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+                      (k + 1) idx.1))).unbotD 0)
+            =
+            Option.map₂ (fun x y : ℝ => x + y)
+              (some
+                (FA1MathCausal.alphaCausal (qb * M) Q numKVBlocks K scale k idx.1 *
+                  FA1MathCausal.lPartial Bk (qb * M) Q numKVBlocks K scale k idx.1))
+              (some
+                (∑ x : Fin Bk,
+                  (WithBot.realExp
+                    (Option.map₂ (fun x y : ℝ => x - y)
+                      (FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+                        (FA1Math.blockIndex Bk numKVBlocks k
+                          (Nat.succ_le_iff.mpr hk) x))
+                      (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+                        (k + 1) idx.1))).unbotD 0)) from rfl]
+      congr 1
+      · change Option.map _ _ =
+            Option.map
+              (fun a : ℝ =>
+                a * FA1MathCausal.lPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+              (some (FA1MathCausal.alphaCausal (qb * M) Q numKVBlocks K scale k idx.1))
+        congr 1
+        unfold FA1MathCausal.alphaCausal
+        simp_rw [Finset.sup'_eq_sup]
+        rw [← FA1MathCausal.realExp_eq_some_unbotD
+          (Option.map₂ (fun x y : ℝ => x - y)
+            (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+            (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+              (k + 1) idx.1))]
+        apply congrArg WithBot.realExp
+        congr 2
+        exact FA1MathCausal.mPartial_succ_kernelForm Q K scale qb k hk idx.1
+      · refine Eq.trans
+          (@Finset.sum_congr (Fin Bk) (WithBot ℝ) _ _ _ _ _ rfl
+            (fun j _ => ?_))
+          (WithBot.sum_someTerm_eq_some _ _)
+        simp_rw [Finset.sup'_eq_sup]
+        have hscore :
+            (if k * Bk + ↑j ≤ qb * M + ↑idx.1 then
+              some
+                ((∑ x_1 : Fin D,
+                  Q (idx.1, x_1, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, x_1, PUnit.unit)) * scale)
+            else none : WithBot ℝ) =
+              FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+                (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j) := by
+          by_cases h_mask : k * Bk + ↑j ≤ qb * M + ↑idx.1
+          · rw [if_pos h_mask]
+            rw [FA1MathCausal.maskedScore_of_le (qb * M) Q K scale idx.1 _
+              (by simp [FA1Math.blockIndex]; exact h_mask)]
+            unfold FA1Math.scaledScore
+            ring_nf
+            rfl
+          · rw [if_neg h_mask]
+            rw [FA1MathCausal.maskedScore_of_not_le (qb * M) Q K scale idx.1 _
+              (by simp [FA1Math.blockIndex]; omega)]
+            rfl
+        rw [← FA1MathCausal.realExp_eq_some_unbotD
+          (Option.map₂ (fun x y : ℝ => x - y)
+            (FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+            (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j))
+            (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+              (k + 1) idx.1))]
+        apply congrArg WithBot.realExp
+        congr 2
+        · unfold FA1Math.scaledScore
+          ring_nf
+          rfl
+        · exact FA1MathCausal.mPartial_succ_kernelForm Q K scale qb k hk idx.1
+    · rw [← FA1MathCausal.block_oAcc_tile_eq (qb * M) Q K V scale k hk]
+      simp [Tile.bop, Tile.uop, Tile.ofReal, Tile.expandDim,
+        Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+        Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
+        Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
+        TileShape.dropInsertedIndex]
+      funext idx
+      rw [show some
+            (FA1MathCausal.alphaCausal (qb * M) Q numKVBlocks K scale k idx.1 *
+                FA1MathCausal.oPartial Bk (qb * M) Q numKVBlocks K V scale k
+                  (idx.1, idx.2.1, PUnit.unit) +
+              ∑ x : Fin Bk,
+                (WithBot.realExp
+                  (Option.map₂ (fun x y : ℝ => x - y)
+                    (FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+                      (FA1Math.blockIndex Bk numKVBlocks k
+                        (Nat.succ_le_iff.mpr hk) x))
+                    (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+                      (k + 1) idx.1))).unbotD 0 *
+                  V (FA1Math.blockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) x, idx.2.1, PUnit.unit))
+            =
+            Option.map₂ (fun x y : ℝ => x + y)
+              (some
+                (FA1MathCausal.alphaCausal (qb * M) Q numKVBlocks K scale k idx.1 *
+                  FA1MathCausal.oPartial Bk (qb * M) Q numKVBlocks K V scale k
+                    (idx.1, idx.2.1, PUnit.unit)))
+              (some
+                (∑ x : Fin Bk,
+                  (WithBot.realExp
+                    (Option.map₂ (fun x y : ℝ => x - y)
+                      (FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+                        (FA1Math.blockIndex Bk numKVBlocks k
+                          (Nat.succ_le_iff.mpr hk) x))
+                      (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+                        (k + 1) idx.1))).unbotD 0 *
+                    V (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) x, idx.2.1, PUnit.unit))) from rfl]
+      congr 1
+      · change Option.map _ _ =
+            Option.map
+              (fun a : ℝ =>
+                a * FA1MathCausal.oPartial Bk (qb * M) Q numKVBlocks K V scale k
+                  (idx.1, idx.2.1, PUnit.unit))
+              (some (FA1MathCausal.alphaCausal (qb * M) Q numKVBlocks K scale k idx.1))
+        congr 1
+        unfold FA1MathCausal.alphaCausal
+        simp_rw [Finset.sup'_eq_sup]
+        rw [← FA1MathCausal.realExp_eq_some_unbotD
+          (Option.map₂ (fun x y : ℝ => x - y)
+            (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+            (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+              (k + 1) idx.1))]
+        apply congrArg WithBot.realExp
+        congr 2
+        exact FA1MathCausal.mPartial_succ_kernelForm Q K scale qb k hk idx.1
+      · refine Eq.trans
+          (@Finset.sum_congr (Fin Bk) (WithBot ℝ) _ _ _ _ _ rfl
+            (fun j _ => ?_))
+          (WithBot.sum_someTerm_eq_some _ _)
+        change Option.map _ _ =
+            Option.map (fun a : ℝ => a *
+              V (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j, idx.2.1, PUnit.unit))
+              (some ((WithBot.realExp
+                (Option.map₂ (fun x y : ℝ => x - y)
+                  (FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+                    (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j))
+                  (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+                    (k + 1) idx.1))).unbotD 0))
+        congr 1
+        simp_rw [Finset.sup'_eq_sup]
+        have hscore :
+            (if k * Bk + ↑j ≤ qb * M + ↑idx.1 then
+              some
+                ((∑ x_1 : Fin D,
+                  Q (idx.1, x_1, PUnit.unit) *
+                    K (FA1Math.blockIndex Bk numKVBlocks k
+                      (Nat.succ_le_iff.mpr hk) j, x_1, PUnit.unit)) * scale)
+            else none : WithBot ℝ) =
+              FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+                (FA1Math.blockIndex Bk numKVBlocks k
+                  (Nat.succ_le_iff.mpr hk) j) := by
+          by_cases h_mask : k * Bk + ↑j ≤ qb * M + ↑idx.1
+          · rw [if_pos h_mask]
+            rw [FA1MathCausal.maskedScore_of_le (qb * M) Q K scale idx.1 _
+              (by simp [FA1Math.blockIndex]; exact h_mask)]
+            unfold FA1Math.scaledScore
+            ring_nf
+            rfl
+          · rw [if_neg h_mask]
+            rw [FA1MathCausal.maskedScore_of_not_le (qb * M) Q K scale idx.1 _
+              (by simp [FA1Math.blockIndex]; omega)]
+            rfl
+        rw [← FA1MathCausal.realExp_eq_some_unbotD
+          (Option.map₂ (fun x y : ℝ => x - y)
+            (FA1MathCausal.maskedScore (qb * M) Q K scale idx.1
+            (FA1Math.blockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) j))
+            (FA1MathCausal.mPartial Bk (qb * M) Q numKVBlocks K scale
+              (k + 1) idx.1))]
+        apply congrArg WithBot.realExp
+        congr 2
+        · unfold FA1Math.scaledScore
+          ring_nf
+          rfl
+        · exact FA1MathCausal.mPartial_succ_kernelForm Q K scale qb k hk idx.1
+    · intro idx
+      simpa [s', s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hQ idx
+    · intro idx
+      simpa [s', s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hK idx
+    · intro idx
+      simpa [s', s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hV idx
 
 /-- Strided readout stage: once `P_fa1_strided numKVBlocks` holds at the
 loop exit, the post-loop normalization (`out := o_acc / l_i[:, None]`)
