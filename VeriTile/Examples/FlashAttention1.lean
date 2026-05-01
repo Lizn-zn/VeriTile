@@ -144,6 +144,53 @@ noncomputable def attentionReal {M S D : Nat}
     ((attention (Tile.ofReal Q) (Tile.ofReal K) (Tile.ofReal V)
         scale).data idx).unbotD 0
 
+/-! ## 4D layout — `[B, H, S, D]` reference attention
+
+Step 1 of the FA-1 realism roadmap (issue #39) lifts Q/K/V/O to real
+Triton 4D layout `[B, H, S, D]`. The math spec stays simple: the per-
+`(batch, head)` slice computes ordinary 2D `attentionReal`, and the 4D
+spec is "do that on every slice". The kernel under verification only
+touches a single `(b, h, q_block)` slot per program instance, so the
+slice helper is also the natural pivot for the correctness proof. -/
+
+/-- Slice a 4D `[B, H, S, D]` tile-as-function at fixed `(batch, head)`,
+yielding a 2D `[S, D]` tile-as-function. Used to thread the 4D spec
+through the existing 2D `attentionReal`.
+
+Specialized to 2 leading axes (FA-1's batch + head). A general
+ND-prefix slicer (`TileIndex (prefix ++ rest) → ℝ → TileIndex rest → ℝ`)
+would require `TileIndex` append helpers; deferred until a kernel
+needs more than two leading axes (e.g. grouped attention with an
+extra group axis). -/
+def sliceBH {B H S D : Nat}
+    (T : TileIndex [B, H, S, D] → ℝ)
+    (b : Fin B) (h : Fin H) : TileIndex [S, D] → ℝ :=
+  fun (i, d, _) => T (b, h, i, d, PUnit.unit)
+
+/-- 4D ℝ-valued reference attention. Each `(batch, head)` slice is
+independent and computes the ordinary 2D `attentionReal`. The kernel
+spec for Step 1 will only assert this on the single `(b, h, q_block)`
+slot determined by the three `program_id` axes. -/
+noncomputable def attentionReal4D {B H S_q S_k D : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) : TileIndex [B, H, S_q, D] → ℝ :=
+  fun (b, h, i, d, _) =>
+    attentionReal (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+      scale (i, d, PUnit.unit)
+
+/-- `attentionReal4D` projects to `attentionReal` on each `(b, h)` slice.
+The natural bridge from the 4D spec to the existing 2D correctness
+machinery; the Step 1 correctness proof reduces 4D ↦ 2D via this
+lemma and then reuses `streaming_eq_attentionReal` unchanged. -/
+@[simp] theorem attentionReal4D_slice {B H S_q S_k D : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (b : Fin B) (h : Fin H) (i : Fin S_q) (d : Fin D) :
+    attentionReal4D Q K V scale (b, h, i, d, PUnit.unit)
+      = attentionReal (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+          scale (i, d, PUnit.unit) := rfl
+
 /-! ## Streaming math model (FA-1 online softmax recurrence)
 
 Mirrors what `fa1ForwardKernel` computes block by block. Three running
