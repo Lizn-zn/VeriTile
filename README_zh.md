@@ -50,9 +50,11 @@ Phase B 截止包含:
 - ND tile shape 与 ND broadcast,以及 typed `Op : TileDType → TileShape → Type`。
 - `tl.dot`、trailing-axis transpose、`tl.where`、`tl.sqrt`、reduction
   `axis` / `keep_dims`、multi-axis `tl.program_id`、strided-offset memory helper。
-- 4D strided Q/K/V/O tensor view 上的 FA-1 forward 证明:
+- 4D strided Q/K/V/O tensor view 上的 FA-1 v0/full-tile forward 证明:
   `fa1_forward_correct_4D_views` 与
   `fa1_forward_correct_4D_causal_views`。
+  Boundary-masked FA-1 v1 kernel 和 recurrence scaffold 已有,但最终 correctness
+  theorem 仍在推进中。
 - CI 中的 artifact gate:`scripts/check-artifact.sh`,检查 `lake build`、无
   `sorry`、axiom whitelist、关键 theorem surface、README/example 漂移。
 
@@ -165,7 +167,7 @@ theorem softmax_kernels_refinement_view
 | [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | 逐元素加法(multi-buffer kernel ↔ math 正确性) |
 | [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | 融合 sigmoid MLP block vs 手动展开 `1/(1+exp(-z))`(kernel-pair refinement)|
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
-| [`VeriTile/Examples/FlashAttention1.lean`](./VeriTile/Examples/FlashAttention1.lean) | 4D strided layout 上的 FA-1 forward correctness,含 non-causal 与 causal |
+| [`VeriTile/Examples/FlashAttention1.lean`](./VeriTile/Examples/FlashAttention1.lean) | FA-1 v0/full-tile forward correctness,4D strided layout,含 non-causal 与 causal |
 
 ## 更多文档
 

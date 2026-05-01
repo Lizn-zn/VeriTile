@@ -13,10 +13,17 @@ v0 scope:
     specialization is the caller's responsibility).
   * Non-causal and causal strided kernels are fully proved against
     their 4D reference specs.
+  * Full-tile assumptions remain explicit:
+    `Bk * numKVBlocks = S_k` and `q_block * M + M <= S_q`.
 
 `fa1_forward_correct_4D` and `fa1_forward_correct_4D_causal` are fully
 proven end-to-end via the four-stage decomposition (math identity +
 pre-loop init + loop step via `forLoop_inv` + post-loop readout).
+
+v1 / boundary-mask scope:
+  * Boundary-masked non-causal and causal kernels are defined.
+  * `FA1MathBoundary` contains the masked recurrence scaffold.
+  * Final boundary correctness theorems are still in progress.
 -/
 
 import VeriTile.Triton.Core
@@ -238,7 +245,7 @@ def fa1ForwardKernelStridedCausal
   tl.store($(outReg) + o_ptrs, out)
 }
 
-/-! ## Boundary-masked strided kernels
+/-! ## Boundary-masked strided kernels (FA-1 v1 scaffold)
 
 Step 2 of issue #39 removes the divisibility assumptions for the sequence
 axes. These kernels keep the tile sizes `M` and `Bk` fixed, but take logical
@@ -1782,7 +1789,7 @@ theorem lPartial_final_ne_zero {M D Bk : Nat} (hBk : 0 < Bk)
 
 end FA1Math
 
-/-! ## Boundary-masked streaming math model
+/-! ## Boundary-masked streaming math model (FA-1 v1 scaffold)
 
 The full-tile `FA1Math` recurrence indexes K/V by
 `Fin (Bk * numKVBlocks)`. Boundary-masked kernels instead iterate over a

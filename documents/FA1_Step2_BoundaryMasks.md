@@ -1,15 +1,21 @@
-# FA-1 Step 2 — Boundary Masks
+# FA-1 v1 / Step 2 — Boundary Masks
 
-Tracking note for issue #39 Step 2. Step 1 proved FA-1 over realistic 4D
-strided memory, but still assumed full tiles:
+Tracking note for issue #39 Step 2. The current artifact theorem surface is
+**FA-1 v0/full-tile**: it proves FA-1 over realistic 4D strided memory, but
+still assumes full tiles:
 
 ```lean
 hSk   : Bk * numKVBlocks = S_k
 hQBnd : s.pids 0 * M + M <= S_q
 ```
 
-Step 2 removes those sequence-axis divisibility assumptions by making Q-row
+FA-1 v1 removes those sequence-axis divisibility assumptions by making Q-row
 and KV-row boundary masks part of the kernel and proof surface.
+
+Status: kernels, public wrappers, boundary streaming recurrence definitions,
+and recurrence-unfold lemmas are present. The final
+`fa1_forward_correct_4D_boundary_views` /
+`fa1_forward_correct_4D_causal_boundary_views` theorems are not yet proved.
 
 ## Scope
 
@@ -46,6 +52,9 @@ FA1Layout4D.causalBoundaryKernel
 FA1Views4D.boundaryKernel
 FA1Views4D.causalBoundaryKernel
 ```
+
+These are intentionally not in the artifact theorem manifest yet; the manifest
+continues to expose the v0/full-tile theorems until the v1 proof closes.
 
 The masks mirror real Triton practice:
 

@@ -55,9 +55,11 @@ Core Phase C additions on `main`:
 - `tl.dot`, trailing-axis transpose, `tl.where`, `tl.sqrt`, reduction
   `axis` / `keep_dims`, multi-axis `tl.program_id`, and strided-offset
   memory helpers.
-- FA-1 forward proofs over 4D strided Q/K/V/O layouts:
+- FA-1 v0/full-tile forward proofs over 4D strided Q/K/V/O layouts:
   `fa1_forward_correct_4D_views` and
   `fa1_forward_correct_4D_causal_views`.
+  Boundary-masked FA-1 v1 kernels and recurrence scaffolding are present, but
+  their final correctness theorem is still in progress.
 - Artifact gate in CI via `scripts/check-artifact.sh`: `lake build`, no
   `sorry`, axiom whitelist, key theorem surface, and README/example drift
   checks.
@@ -173,7 +175,7 @@ See the full softmax example in
 | [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | Elementwise add (multi-buffer kernel ↔ math correctness) |
 | [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | Fused-sigmoid MLP block vs manually-expanded `1/(1+exp(-z))` (kernel-pair refinement) |
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
-| [`VeriTile/Examples/FlashAttention1.lean`](./VeriTile/Examples/FlashAttention1.lean) | FA-1 forward correctness, non-causal and causal, over 4D strided layouts |
+| [`VeriTile/Examples/FlashAttention1.lean`](./VeriTile/Examples/FlashAttention1.lean) | FA-1 v0/full-tile forward correctness, non-causal and causal, over 4D strided layouts |
 
 ## More Documentation
 
