@@ -82,6 +82,11 @@ probability mass is zero. The final theorem should compare the ratio against
 `attentionReal4D` / `attentionReal4DCausal` over the logical `[S_k]` domain,
 not the padded `[Bk * numKVBlocks]` domain.
 
+The first version of this layer is in
+`FA1MathBoundary.{mPartial,lPartial,oPartial}`. It deliberately uses
+`blockIndex? : Option (Fin S_k)` rather than manufacturing an out-of-bounds
+`Fin`; this keeps the logical K/V tensors shaped by the true `S_k`.
+
 The output theorem will observe only in-bounds Q rows:
 
 ```lean
@@ -91,4 +96,3 @@ s.pids 0 * M + idx.1.val < S_q
 Out-of-bounds rows are skipped by the store mask and should be stated as
 preserving memory, or kept out of the public correctness theorem by requiring
 an in-bounds lane hypothesis.
-

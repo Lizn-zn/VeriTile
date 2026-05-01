@@ -1782,6 +1782,103 @@ theorem lPartial_final_ne_zero {M D Bk : Nat} (hBk : 0 < Bk)
 
 end FA1Math
 
+/-! ## Boundary-masked streaming math model
+
+The full-tile `FA1Math` recurrence indexes K/V by
+`Fin (Bk * numKVBlocks)`. Boundary-masked kernels instead iterate over a
+padded block domain while the mathematical input has logical length `S_k`.
+Invalid local lanes (`k * Bk + jLocal >= S_k`) enter as `⊥`, exactly like
+the kernel's score-side `tl.where(score_mask, scores_raw, -inf)`.
+-/
+
+namespace FA1MathBoundary
+
+/-- Logical KV index for a padded loop lane, if it is in bounds. -/
+def blockIndex? (S_k Bk k : Nat) (jLocal : Fin Bk) : Option (Fin S_k) :=
+  if h : k * Bk + jLocal.val < S_k then
+    some ⟨k * Bk + jLocal.val, h⟩
+  else
+    none
+
+/-- Boundary-masked score for a padded loop lane. Out-of-range KV lanes are
+`⊥`, so exponentiating them contributes zero mass. -/
+noncomputable def maskedScore {M S_k D : Nat}
+    (Bk k : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (jLocal : Fin Bk) : WithBot ℝ :=
+  match blockIndex? S_k Bk k jLocal with
+  | some j => (FA1Math.scaledScore Q K scale i j : ℝ)
+  | none   => ⊥
+
+/-- Running per-row max over the first `k` padded KV blocks, ignoring
+out-of-range lanes by treating them as `⊥`. -/
+noncomputable def mPartial {M S_k D : Nat} (Bk : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ) :
+    Nat → Fin M → WithBot ℝ
+  | 0, _ => ⊥
+  | k + 1, i =>
+      if _h : k + 1 ≤ numKVBlocks then
+        max (mPartial Bk Q numKVBlocks K scale k i)
+          ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+            maskedScore Bk k Q K scale i jLocal)
+      else
+        mPartial Bk Q numKVBlocks K scale k i
+
+/-- Boundary-aware α multiplier `exp(m_k - m_{k+1})`. -/
+noncomputable def alphaPartial {M S_k D : Nat} (Bk : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (i : Fin M) : ℝ :=
+  (WithBot.realExp
+    (WithBot.realSub
+      (mPartial Bk Q numKVBlocks K scale k i)
+      (mPartial Bk Q numKVBlocks K scale (k + 1) i))).unbotD 0
+
+/-- Boundary-aware running normalizer. -/
+noncomputable def lPartial {M S_k D : Nat} (Bk : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ) :
+    Nat → Fin M → ℝ
+  | 0, _ => 0
+  | k + 1, i =>
+      if _h : k + 1 ≤ numKVBlocks then
+        let mNew := mPartial Bk Q numKVBlocks K scale (k + 1) i
+        alphaPartial Bk Q numKVBlocks K scale k i *
+          lPartial Bk Q numKVBlocks K scale k i +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            (WithBot.realExp
+              (WithBot.realSub
+                (maskedScore Bk k Q K scale i jLocal) mNew)).unbotD 0)
+      else
+        lPartial Bk Q numKVBlocks K scale k i
+
+/-- Boundary-aware running unnormalized output accumulator. -/
+noncomputable def oPartial {M S_k D : Nat} (Bk : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ) :
+    Nat → TileIndex [M, D] → ℝ
+  | 0, _ => 0
+  | k + 1, idx =>
+      if _h : k + 1 ≤ numKVBlocks then
+        let i := idx.1
+        let d := idx.2.1
+        let mNew := mPartial Bk Q numKVBlocks K scale (k + 1) i
+        alphaPartial Bk Q numKVBlocks K scale k i *
+          oPartial Bk Q numKVBlocks K V scale k idx +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            match blockIndex? S_k Bk k jLocal with
+            | some j =>
+                (WithBot.realExp
+                  (WithBot.realSub
+                    (maskedScore Bk k Q K scale i jLocal) mNew)).unbotD 0 *
+                  V (j, d, PUnit.unit)
+            | none => 0)
+      else
+        oPartial Bk Q numKVBlocks K V scale k idx
+
+end FA1MathBoundary
+
 /-! ## Causal streaming math model
 
 The causal loop is the same online-softmax recurrence, but each block
