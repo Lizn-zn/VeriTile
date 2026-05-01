@@ -6513,7 +6513,7 @@ theorem fa1_forward_correct_strided_boundary_raw_of_step
     unfold stepStmts
     rfl
 
-set_option maxHeartbeats 1000000 in
+set_option maxHeartbeats 4000000 in
 /-- Boundary strided loop step. One iteration of the v1 KV loop preserves
 `P_fa1_strided_boundary`: masked K/V loads read logical K/V cells for
 in-range lanes and zero for padded lanes; the score mask turns padded score
@@ -6540,7 +6540,430 @@ theorem fa1_step_strided_boundary
         qReg kReg vReg qb headIdx batch
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
         sOB sOH sOM sOD Q K V scale (k + 1) s' := by
-  sorry
+  rcases hP with
+    ⟨hpids0, hpids1, hpids2,
+     hpid_qb, hpid_h, hpid_b,
+     hq_base, hk_base, hv_base, ho_base,
+     hoffs_m, hoffs_d, hq, hm, hl, ho, hK, hV⟩
+  -- Kernel-form witnesses for K/V (matching `tl.load(..., mask, other=0)` exactly).
+  let kBase : Nat := batch * sKB + headIdx * sKH
+  let vBase : Nat := batch * sVB + headIdx * sVH
+  let offsN : Tile .nat [Bk] :=
+    Tile.vec fun j : Fin Bk => k * Bk + j.val
+  let kPtrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      kBase + (k * Bk + idx.1.val) * sKN + idx.2.1.val * sKD⟩
+  let vPtrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      vBase + (k * Bk + idx.1.val) * sVN + idx.2.1.val * sVD⟩
+  let kvMask : Tile .bool [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] => decide (k * Bk + idx.1.val < S_k)⟩
+  -- Kernel-form K/V tiles: `if h: in-bounds then some(readMem) else some 0`.
+  let kLoaded : Tile .real [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      if h : k * Bk + idx.1.val < S_k then
+        some (s.readMem kReg
+          (kBase + (k * Bk + idx.1.val) * sKN + idx.2.1.val * sKD))
+      else
+        some 0⟩
+  let vLoaded : Tile .real [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      if h : k * Bk + idx.1.val < S_k then
+        some (s.readMem vReg
+          (vBase + (k * Bk + idx.1.val) * sVN + idx.2.1.val * sVD))
+      else
+        some 0⟩
+  -- Bridges: kLoaded / vLoaded equal the canonical match-on-blockIndex? form
+  -- used by `block_scores_tile_eq` etc.
+  have hK_loaded_eq : kLoaded =
+      Tile.ofReal (fun idx : TileIndex [Bk, D] =>
+        match FA1MathBoundary.blockIndex? S_k Bk k idx.1 with
+        | some j => K (j, idx.2.1, PUnit.unit)
+        | none => 0) :=
+    fa1_block_load_tile_eq_strided_boundary kReg s kBase sKN sKD K hK k
+  have hV_loaded_eq : vLoaded =
+      Tile.ofReal (fun idx : TileIndex [Bk, D] =>
+        match FA1MathBoundary.blockIndex? S_k Bk k idx.1 with
+        | some j => V (j, idx.2.1, PUnit.unit)
+        | none => 0) :=
+    fa1_block_load_tile_eq_strided_boundary vReg s vBase sVN sVD V hV k
+  -- Kernel-form downstream tiles. Each one is exactly what `evalOp` produces
+  -- on the masked K/V load, so the operational first branch closes by `rfl`.
+  -- The bridge to canonical (`maskedScore` / `mPartial` / `lPartial` / `oPartial`)
+  -- happens in the invariant branch via the `FA1MathBoundary.block_*_tile_eq`
+  -- lemmas applied per P-clause.
+  let scoresRaw : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      Option.map (fun a => a * scale)
+        (@Finset.sum (Fin D) (WithBot ℝ) _ Finset.univ
+          (fun d : Fin D => Option.map (fun b => Q (idx.1, d, PUnit.unit) * b)
+            (kLoaded.data (idx.2.1, d, PUnit.unit))))⟩
+  let scoreMask : Tile .bool [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] => decide (k * Bk + idx.2.1.val < S_k)⟩
+  let scores : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      if k * Bk + idx.2.1.val < S_k then scoresRaw.data idx else (none : WithBot ℝ)⟩
+  let mBlock : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      (Finset.univ : Finset (Fin Bk)).sup'
+        (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+        (fun j : Fin Bk => scores.data (idx.1, j, PUnit.unit))⟩
+  let mNew : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      max (FA1MathBoundary.mPartial Bk Q numKVBlocks K scale k idx.1)
+        (mBlock.data idx)⟩
+  let alpha : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      WithBot.realExp
+        (Option.map₂ (· - ·)
+          (FA1MathBoundary.mPartial Bk Q numKVBlocks K scale k idx.1)
+          (mNew.data idx))⟩
+  let p : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      WithBot.realExp
+        (Option.map₂ (· - ·) (scores.data idx) (mNew.data (idx.1, PUnit.unit)))⟩
+  let lNew : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      Option.map₂ (· + ·)
+        (Option.map (· * FA1MathBoundary.lPartial Bk Q numKVBlocks K scale k idx.1)
+          (alpha.data idx))
+        (@Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ
+          (fun j : Fin Bk => p.data (idx.1, j, PUnit.unit)))⟩
+  let oNew : Tile .real [M, D] :=
+    ⟨fun idx : TileIndex [M, D] =>
+      Option.map₂ (· + ·)
+        (Option.map
+          (· * FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale k
+            (idx.1, idx.2.1, PUnit.unit))
+          (alpha.data (idx.1, PUnit.unit)))
+        (@Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ
+          (fun j : Fin Bk =>
+            Option.map₂ (· * ·)
+              (p.data (idx.1, j, PUnit.unit))
+              (vLoaded.data (j, idx.2.1, PUnit.unit))))⟩
+  let s0 := s.setReg "n" .nat [] (Tile.scalar k)
+  let s1 := s0.setReg "offs_n" .nat [Bk] offsN
+  let s2 := s1.setReg "k_ptrs" .nat [Bk, D] kPtrs
+  let s3 := s2.setReg "v_ptrs" .nat [Bk, D] vPtrs
+  let s4 := s3.setReg "kv_mask" .bool [Bk, D] kvMask
+  let s5 := s4.setReg "k" .real [Bk, D] kLoaded
+  let s6 := s5.setReg "v" .real [Bk, D] vLoaded
+  let s7 := s6.setReg "scores_raw" .real [M, Bk] scoresRaw
+  let s8 := s7.setReg "score_mask" .bool [M, Bk] scoreMask
+  let s9 := s8.setReg "scores" .real [M, Bk] scores
+  let s10 := s9.setReg "m_block" .real [M] mBlock
+  let s11 := s10.setReg "m_new" .real [M] mNew
+  let s12 := s11.setReg "alpha" .real [M] alpha
+  let s13 := s12.setReg "p" .real [M, Bk] p
+  let s14 := s13.setReg "l_new" .real [M] lNew
+  let s15 := s14.setReg "o_acc" .real [M, D] oNew
+  let s16 := s15.setReg "m_i" .real [M] mNew
+  let s' := s16.setReg "l_i" .real [M] lNew
+  refine ⟨s', ?_, ?_⟩
+  · simp [fa1LoopBodyStridedBoundary, stepStmts, stepStmt, evalOp,
+      Tile.bop, Tile.cop, Tile.select, Tile.expandDim,
+      Tile.transpose, Tile.dot, Tile.reduceMax, Tile.reduceMaxDrop,
+      Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+      TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      ComparableDType.lt, BlockState.readMem, Option.bind,
+      hBk, hoffs_m, hoffs_d, hq, hm, hl, ho, hk_base, hv_base]
+    rfl
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · show s.pids 0 = qb; exact hpids0
+    · show s.pids 1 = headIdx; exact hpids1
+    · show s.pids 2 = batch; exact hpids2
+    · show s.regs .nat [] "pid_qb" = some (Tile.scalar qb); exact hpid_qb
+    · show s.regs .nat [] "pid_h" = some (Tile.scalar headIdx); exact hpid_h
+    · show s.regs .nat [] "pid_b" = some (Tile.scalar batch); exact hpid_b
+    · show s.regs .nat [] "q_base_off" = some (Tile.scalar (batch * sQB + headIdx * sQH))
+      exact hq_base
+    · show s.regs .nat [] "k_base_off" = some (Tile.scalar (batch * sKB + headIdx * sKH))
+      exact hk_base
+    · show s.regs .nat [] "v_base_off" = some (Tile.scalar (batch * sVB + headIdx * sVH))
+      exact hv_base
+    · show s.regs .nat [] "o_base_off" = some (Tile.scalar (batch * sOB + headIdx * sOH))
+      exact ho_base
+    · -- offs_m
+      simp [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+        hoffs_m]
+    · -- offs_d
+      simp [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+        hoffs_d]
+    · -- q
+      simp [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+        hq]
+    · -- m_i
+      have h_regs_m_i : s'.regs .real [M] "m_i" = some mNew := by
+        simp [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+      rw [h_regs_m_i]
+      congr 1
+      ext idx
+      have h_score_per_j : ∀ j : Fin Bk,
+          scores.data (idx.1, j, PUnit.unit)
+            = FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j := by
+        intro j
+        by_cases h : k * Bk + j.val < S_k
+        · show (if k * Bk + ↑j < S_k then scoresRaw.data (idx.1, j, PUnit.unit)
+              else (none : WithBot ℝ)) = _
+          rw [if_pos h]
+          have hkLoaded : ∀ d : Fin D,
+              kLoaded.data (j, d, PUnit.unit)
+                = some (K (⟨k * Bk + j.val, h⟩, d, PUnit.unit)) := by
+            intro d
+            have := congrArg (fun t : Tile .real [Bk, D] => t.data (j, d, PUnit.unit))
+              hK_loaded_eq
+            simp [Tile.ofReal, FA1MathBoundary.blockIndex?_of_lt _ _ _ _ h] at this
+            exact this
+          rw [FA1MathBoundary.maskedScore_of_lt Bk k Q K scale idx.1 j h]
+          show Option.map (· * scale) _ = _
+          have h_sum :
+              (∑ x : Fin D, Option.map (fun b : ℝ => Q (idx.1, x, PUnit.unit) * b)
+                (kLoaded.data (j, x, PUnit.unit)) : WithBot ℝ)
+              = some (∑ x : Fin D,
+                  Q (idx.1, x, PUnit.unit) * K (⟨k * Bk + j.val, h⟩, x, PUnit.unit)) := by
+            rw [← WithBot.sum_someTerm_eq_some]
+            apply Finset.sum_congr rfl
+            intro x _
+            rw [hkLoaded x]
+            rfl
+          rw [h_sum]
+          show (some _ : WithBot ℝ) = some _
+          unfold FA1Math.scaledScore
+          congr 1
+          ring
+        · show (if k * Bk + ↑j < S_k then scoresRaw.data (idx.1, j, PUnit.unit)
+              else (none : WithBot ℝ)) = _
+          rw [if_neg h]
+          rw [FA1MathBoundary.maskedScore_of_not_lt Bk k Q K scale idx.1 j h]
+          rfl
+      show max (FA1MathBoundary.mPartial Bk Q numKVBlocks K scale k idx.1) (mBlock.data idx)
+        = FA1MathBoundary.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1
+      rw [FA1MathBoundary.mPartial_succ_of_lt Bk Q numKVBlocks K scale k hk idx.1]
+      congr 1
+      show Finset.univ.sup' ⟨⟨0, hBk⟩, Finset.mem_univ _⟩
+          (fun j => scores.data (idx.1, j, PUnit.unit))
+          = Finset.univ.sup
+              (fun j => FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j)
+      rw [Finset.sup'_eq_sup]
+      apply Finset.sup_congr rfl
+      intro j _
+      exact h_score_per_j j
+    · -- l_i
+      have h_regs_l_i : s'.regs .real [M] "l_i" = some lNew := by
+        simp [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+      rw [h_regs_l_i]
+      apply congrArg some
+      show lNew = Tile.ofReal (fun idx : TileIndex [M] =>
+          FA1MathBoundary.lPartial Bk Q numKVBlocks K scale (k + 1) idx.1)
+      apply Tile.ext
+      intro idx
+      have h_score_per_j : ∀ j : Fin Bk,
+          scores.data (idx.1, j, PUnit.unit)
+            = FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j := by
+        intro j
+        by_cases h : k * Bk + j.val < S_k
+        · show (if k * Bk + ↑j < S_k then scoresRaw.data (idx.1, j, PUnit.unit)
+              else (none : WithBot ℝ)) = _
+          rw [if_pos h]
+          have hkLoaded : ∀ d : Fin D,
+              kLoaded.data (j, d, PUnit.unit)
+                = some (K (⟨k * Bk + j.val, h⟩, d, PUnit.unit)) := by
+            intro d
+            have := congrArg (fun t : Tile .real [Bk, D] => t.data (j, d, PUnit.unit))
+              hK_loaded_eq
+            simp [Tile.ofReal, FA1MathBoundary.blockIndex?_of_lt _ _ _ _ h] at this
+            exact this
+          rw [FA1MathBoundary.maskedScore_of_lt Bk k Q K scale idx.1 j h]
+          show Option.map (· * scale) _ = _
+          have h_sum :
+              (∑ x : Fin D, Option.map (fun b : ℝ => Q (idx.1, x, PUnit.unit) * b)
+                (kLoaded.data (j, x, PUnit.unit)) : WithBot ℝ)
+              = some (∑ x : Fin D,
+                  Q (idx.1, x, PUnit.unit) * K (⟨k * Bk + j.val, h⟩, x, PUnit.unit)) := by
+            rw [← WithBot.sum_someTerm_eq_some]
+            apply Finset.sum_congr rfl
+            intro x _
+            rw [hkLoaded x]
+            rfl
+          rw [h_sum]
+          show (some _ : WithBot ℝ) = some _
+          unfold FA1Math.scaledScore
+          congr 1
+          ring
+        · show (if k * Bk + ↑j < S_k then scoresRaw.data (idx.1, j, PUnit.unit)
+              else (none : WithBot ℝ)) = _
+          rw [if_neg h, FA1MathBoundary.maskedScore_of_not_lt Bk k Q K scale idx.1 j h]
+          rfl
+      have h_mNew : mNew.data (idx.1, PUnit.unit)
+          = FA1MathBoundary.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1 := by
+        show max (FA1MathBoundary.mPartial Bk Q numKVBlocks K scale k idx.1)
+            (mBlock.data (idx.1, PUnit.unit)) = _
+        rw [FA1MathBoundary.mPartial_succ_of_lt Bk Q numKVBlocks K scale k hk idx.1]
+        congr 1
+        show Finset.univ.sup' ⟨⟨0, hBk⟩, Finset.mem_univ _⟩
+            (fun j => scores.data (idx.1, j, PUnit.unit))
+            = Finset.univ.sup
+                (fun j => FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j)
+        rw [Finset.sup'_eq_sup]
+        apply Finset.sup_congr rfl
+        intro j _
+        exact h_score_per_j j
+      have h_alpha : alpha.data idx
+          = some (FA1MathBoundary.alphaPartial Bk Q numKVBlocks K scale k idx.1) := by
+        show WithBot.realExp _ = _
+        rw [h_mNew]
+        unfold FA1MathBoundary.alphaPartial
+        exact FA1MathBoundary.realExp_eq_some_unbotD _
+      have h_p_sum : (∑ j : Fin Bk, p.data (idx.1, j, PUnit.unit) : WithBot ℝ)
+          = some (∑ j : Fin Bk,
+              (WithBot.realExp
+                (WithBot.realSub (FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j)
+                  (FA1MathBoundary.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1))
+              ).unbotD 0) := by
+        rw [← WithBot.sum_someTerm_eq_some]
+        apply Finset.sum_congr rfl
+        intro j _
+        show WithBot.realExp _ = _
+        rw [h_score_per_j j, h_mNew]
+        show WithBot.realExp _ = _
+        exact FA1MathBoundary.realExp_eq_some_unbotD _
+      show Option.map₂ (fun x1 x2 : ℝ => x1 + x2)
+          (Option.map (fun x : ℝ =>
+            x * FA1MathBoundary.lPartial Bk Q numKVBlocks K scale k idx.1)
+            (alpha.data idx))
+          (∑ j : Fin Bk, p.data (idx.1, j, PUnit.unit) : WithBot ℝ)
+          = some (FA1MathBoundary.lPartial Bk Q numKVBlocks K scale (k + 1) idx.1)
+      rw [h_alpha, h_p_sum,
+        FA1MathBoundary.lPartial_succ_of_lt Bk Q numKVBlocks K scale k hk idx.1]
+      rfl
+    · -- o_acc
+      have h_regs_o_acc : s'.regs .real [M, D] "o_acc" = some oNew := by
+        simp [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+      rw [h_regs_o_acc]
+      apply congrArg some
+      show oNew = Tile.ofReal (fun idx : TileIndex [M, D] =>
+          FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale (k + 1) idx)
+      apply Tile.ext
+      intro idx
+      have h_score_per_j : ∀ j : Fin Bk,
+          scores.data (idx.1, j, PUnit.unit)
+            = FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j := by
+        intro j
+        by_cases h : k * Bk + j.val < S_k
+        · show (if k * Bk + ↑j < S_k then scoresRaw.data (idx.1, j, PUnit.unit)
+              else (none : WithBot ℝ)) = _
+          rw [if_pos h]
+          have hkLoaded : ∀ d : Fin D,
+              kLoaded.data (j, d, PUnit.unit)
+                = some (K (⟨k * Bk + j.val, h⟩, d, PUnit.unit)) := by
+            intro d
+            have := congrArg (fun t : Tile .real [Bk, D] => t.data (j, d, PUnit.unit))
+              hK_loaded_eq
+            simp [Tile.ofReal, FA1MathBoundary.blockIndex?_of_lt _ _ _ _ h] at this
+            exact this
+          rw [FA1MathBoundary.maskedScore_of_lt Bk k Q K scale idx.1 j h]
+          show Option.map (· * scale) _ = _
+          have h_sum :
+              (∑ x : Fin D, Option.map (fun b : ℝ => Q (idx.1, x, PUnit.unit) * b)
+                (kLoaded.data (j, x, PUnit.unit)) : WithBot ℝ)
+              = some (∑ x : Fin D,
+                  Q (idx.1, x, PUnit.unit) * K (⟨k * Bk + j.val, h⟩, x, PUnit.unit)) := by
+            rw [← WithBot.sum_someTerm_eq_some]
+            apply Finset.sum_congr rfl
+            intro x _
+            rw [hkLoaded x]
+            rfl
+          rw [h_sum]
+          show (some _ : WithBot ℝ) = some _
+          unfold FA1Math.scaledScore
+          congr 1
+          ring
+        · show (if k * Bk + ↑j < S_k then scoresRaw.data (idx.1, j, PUnit.unit)
+              else (none : WithBot ℝ)) = _
+          rw [if_neg h, FA1MathBoundary.maskedScore_of_not_lt Bk k Q K scale idx.1 j h]
+          rfl
+      have h_mNew : mNew.data (idx.1, PUnit.unit)
+          = FA1MathBoundary.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1 := by
+        show max (FA1MathBoundary.mPartial Bk Q numKVBlocks K scale k idx.1)
+            (mBlock.data (idx.1, PUnit.unit)) = _
+        rw [FA1MathBoundary.mPartial_succ_of_lt Bk Q numKVBlocks K scale k hk idx.1]
+        congr 1
+        show Finset.univ.sup' ⟨⟨0, hBk⟩, Finset.mem_univ _⟩
+            (fun j => scores.data (idx.1, j, PUnit.unit))
+            = Finset.univ.sup
+                (fun j => FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j)
+        rw [Finset.sup'_eq_sup]
+        apply Finset.sup_congr rfl
+        intro j _
+        exact h_score_per_j j
+      have h_alpha : alpha.data (idx.1, PUnit.unit)
+          = some (FA1MathBoundary.alphaPartial Bk Q numKVBlocks K scale k idx.1) := by
+        show WithBot.realExp _ = _
+        rw [h_mNew]
+        unfold FA1MathBoundary.alphaPartial
+        exact FA1MathBoundary.realExp_eq_some_unbotD _
+      have h_vLoaded : ∀ j : Fin Bk,
+          vLoaded.data (j, idx.2.1, PUnit.unit)
+            = some (match FA1MathBoundary.blockIndex? S_k Bk k j with
+                    | some jGlobal => V (jGlobal, idx.2.1, PUnit.unit)
+                    | none => 0) := by
+        intro j
+        have := congrArg (fun t : Tile .real [Bk, D] => t.data (j, idx.2.1, PUnit.unit))
+          hV_loaded_eq
+        simp [Tile.ofReal] at this
+        exact this
+      have h_p_per_j : ∀ j : Fin Bk,
+          p.data (idx.1, j, PUnit.unit)
+            = some ((WithBot.realExp
+                (WithBot.realSub (FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j)
+                  (FA1MathBoundary.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1))
+              ).unbotD 0) := by
+        intro j
+        show WithBot.realExp _ = _
+        rw [h_score_per_j j, h_mNew]
+        show WithBot.realExp _ = _
+        exact FA1MathBoundary.realExp_eq_some_unbotD _
+      have h_pv_sum :
+          (∑ j : Fin Bk, Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+              (p.data (idx.1, j, PUnit.unit))
+              (vLoaded.data (j, idx.2.1, PUnit.unit)) : WithBot ℝ)
+            = some (∑ j : Fin Bk,
+                match FA1MathBoundary.blockIndex? S_k Bk k j with
+                | some jGlobal =>
+                    (WithBot.realExp
+                      (WithBot.realSub
+                        (FA1MathBoundary.maskedScore Bk k Q K scale idx.1 j)
+                        (FA1MathBoundary.mPartial Bk Q numKVBlocks K scale (k + 1) idx.1))
+                    ).unbotD 0 * V (jGlobal, idx.2.1, PUnit.unit)
+                | none => 0) := by
+        rw [← WithBot.sum_someTerm_eq_some]
+        apply Finset.sum_congr rfl
+        intro j _
+        rw [h_p_per_j j, h_vLoaded j]
+        by_cases h : k * Bk + j.val < S_k
+        · simp [FA1MathBoundary.blockIndex?_of_lt _ _ _ _ h]
+        · simp [FA1MathBoundary.blockIndex?_of_not_lt _ _ _ _ h]
+      show Option.map₂ (fun x1 x2 : ℝ => x1 + x2)
+          (Option.map (fun x : ℝ =>
+            x * FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale k
+              (idx.1, idx.2.1, PUnit.unit))
+            (alpha.data (idx.1, PUnit.unit)))
+          (∑ j : Fin Bk, Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+            (p.data (idx.1, j, PUnit.unit))
+            (vLoaded.data (j, idx.2.1, PUnit.unit)) : WithBot ℝ)
+          = some (FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale (k + 1) idx)
+      rw [h_alpha, h_pv_sum,
+        FA1MathBoundary.oPartial_succ_of_lt Bk Q numKVBlocks K V scale k hk idx]
+      rfl
+    · -- hK : InputAt s' kReg ...
+      intro idx
+      simpa [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+        using hK idx
+    · -- hV : InputAt s' vReg ...
+      intro idx
+      simpa [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+        using hV idx
 
 
 /-- After running `fa1ForwardKernel` on a state where Q is loaded as a
