@@ -1936,6 +1936,101 @@ theorem fa1_block_load_tile_eq_strided
   exact congrArg some
     (fa1_block_read_strided region s base sN sD X hX n hn idx.1 idx.2.1)
 
+/-- Strided initialization stage: the strided pre-loop block establishes
+`P_fa1_strided 0` from the strided / 4D-aware InputAt premises. The
+`(qb, headIdx, batch)` triple comes directly from `s.pids 0/1/2`. -/
+theorem fa1_preLoop_correct_strided
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hQ : InputAt s qReg
+        (fun idx : TileIndex [M, D] =>
+          s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) Q)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V) :
+    ∃ s0,
+      stepStmts (fa1PreLoopStrided qReg M D
+          sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH) s = some s0 ∧
+      P_fa1_strided qReg kReg vReg
+        (s.pids 0) (s.pids 1) (s.pids 2)
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD
+        Q K V scale 0 s0 := by
+  let qBase : Nat := s.pids 2 * sQB + s.pids 1 * sQH
+  let qPtrs : Tile .nat [M, D] :=
+    ⟨fun idx => qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD⟩
+  let qLoaded : Tile .real [M, D] :=
+    ⟨fun idx => some (s.readMem qReg
+      (qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD))⟩
+  let s0 :=
+    ((((((((((((((s.setReg "pid_qb" .nat [] (Tile.scalar (s.pids 0)))
+      ).setReg "pid_h" .nat [] (Tile.scalar (s.pids 1))
+      ).setReg "pid_b" .nat [] (Tile.scalar (s.pids 2))
+      ).setReg "q_base_off" .nat []
+        (Tile.scalar (s.pids 2 * sQB + s.pids 1 * sQH))
+      ).setReg "k_base_off" .nat []
+        (Tile.scalar (s.pids 2 * sKB + s.pids 1 * sKH))
+      ).setReg "v_base_off" .nat []
+        (Tile.scalar (s.pids 2 * sVB + s.pids 1 * sVH))
+      ).setReg "o_base_off" .nat []
+        (Tile.scalar (s.pids 2 * sOB + s.pids 1 * sOH))
+      ).setReg "offs_m" .nat [M]
+        (Tile.vec fun i : Fin M => s.pids 0 * M + i.val)
+      ).setReg "offs_d" .nat [D]
+        (Tile.vec fun d : Fin D => d.val)
+      ).setReg "q_ptrs" .nat [M, D] qPtrs
+      ).setReg "q" .real [M, D] qLoaded
+      ).setReg "m_i" .real [M] ⟨fun _ => (⊥ : WithBot ℝ)⟩
+      ).setReg "l_i" .real [M] (Tile.ofReal fun _ => 0)
+      ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
+  have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
+    ext idx
+    simp [qLoaded, qBase, Tile.ofReal, BlockState.readMem]
+    rw [show qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD =
+        s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+          + idx.1.val * sQS + idx.2.1.val * sQD by
+          simp [qBase, Nat.add_mul, Nat.mul_assoc, Nat.add_assoc]]
+    exact congrArg some (hQ idx)
+  refine ⟨s0, ?_, ?_⟩
+  · simp [fa1PreLoopStrided, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
+      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex,
+      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qLoaded, qBase, s0]
+    rfl
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0, hQ_loaded_eq]
+    · simp [s0, FA1Math.mPartial]
+    · simp [s0, FA1Math.lPartial, Tile.ofReal]
+    · simp [s0, FA1Math.oPartial, Tile.ofReal]
+    · intro idx
+      simpa [s0] using hQ idx
+    · intro idx
+      simpa [s0] using hK idx
+    · intro idx
+      simpa [s0] using hV idx
+
 set_option maxHeartbeats 800000 in
 /-- One FA-1 KV-block iteration preserves the loop invariant. -/
 theorem fa1_step
