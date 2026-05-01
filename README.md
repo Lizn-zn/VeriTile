@@ -152,7 +152,7 @@ See the full softmax example in
 | [`VeriTile/Examples/SoftmaxReciprocal.lean`](./VeriTile/Examples/SoftmaxReciprocal.lean) | Stable softmax division vs precomputed reciprocal |
 | [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | Elementwise add (multi-buffer kernel ↔ math correctness) |
 | [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | Fused-sigmoid MLP block vs manually-expanded `1/(1+exp(-z))` (kernel-pair refinement) |
-| [`VeriTile/Examples/WelfordMath.lean`](./VeriTile/Examples/WelfordMath.lean) | Welford identity used to prepare Phase B |
+| [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
 
 ## More Documentation
 
@@ -273,7 +273,8 @@ VeriTile/
     SoftmaxEq.lean
     LogSumExpEq.lean
     SoftmaxReciprocal.lean
-    WelfordMath.lean
+    WelfordKernels.lean
+    FlashAttention1.lean
 
 bench/llm_eval/        Held-out proof-evaluation harness
 scripts/               Proof wrapper scripts

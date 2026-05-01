@@ -1,0 +1,8 @@
+# Allowed Lean axioms for the current artifact.
+#
+# Format:
+#   path/to/file.lean:axiom_name
+#
+# Keep this list intentionally small. Adding an entry is a design decision:
+# the axiom becomes part of the trusted base of the artifact.
+VeriTile/Math/GeluTaylor20Cert.lean:geluError_mid_taylor20_approx

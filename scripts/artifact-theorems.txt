@@ -1,0 +1,18 @@
+# Key theorem surface expected to exist in this artifact.
+#
+# Format:
+#   path/to/file.lean:theorem_name
+VeriTile/Examples/SoftmaxEq.lean:softmax_kernels_refinement
+VeriTile/Examples/LogSumExpEq.lean:log_sum_exp_refinement
+VeriTile/Examples/SoftmaxReciprocal.lean:softmax_reciprocal_refinement
+VeriTile/Examples/VectorAdd.lean:add_kernel_correct
+VeriTile/Examples/VectorAdd.lean:add_kernel_masked_correct
+VeriTile/Examples/OnlineSoftmax.lean:online_softmax_correct
+VeriTile/Examples/RowWise.lean:rowWiseSum_correct
+VeriTile/Examples/RowWise.lean:rowWiseMax_correct
+VeriTile/Examples/FusedSiLU.lean:silu_kernels_refinement
+VeriTile/Examples/WelfordKernels.lean:welford_kernels_refinement
+VeriTile/Examples/LayerNormKernels.lean:layernorm_kernels_refinement
+VeriTile/Examples/ApproxGeLU.lean:approx_gelu_kernel_correct
+VeriTile/Examples/FlashAttention1.lean:fa1_forward_correct_4D
+VeriTile/Examples/FlashAttention1.lean:fa1_forward_correct_4D_causal

@@ -148,7 +148,7 @@ theorem softmax_kernels_refinement
 | [`VeriTile/Examples/SoftmaxReciprocal.lean`](./VeriTile/Examples/SoftmaxReciprocal.lean) | stable softmax 除法 vs 预计算倒数 |
 | [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | 逐元素加法(multi-buffer kernel ↔ math 正确性) |
 | [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | 融合 sigmoid MLP block vs 手动展开 `1/(1+exp(-z))`(kernel-pair refinement)|
-| [`VeriTile/Examples/WelfordMath.lean`](./VeriTile/Examples/WelfordMath.lean) | Phase B 准备用的 Welford 恒等式 |
+| [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
 
 ## 更多文档
 
@@ -266,10 +266,12 @@ VeriTile/
     SoftmaxEq.lean
     LogSumExpEq.lean
     SoftmaxReciprocal.lean
-    WelfordMath.lean
+    WelfordKernels.lean
+    FlashAttention1.lean
 
 bench/llm_eval/        Held-out 证明评测 harness
 scripts/               证明 wrapper 脚本
+documents/             项目文档
 Notes/                 Proposal, 实现笔记, 可行性研究
 PLAN_zh.md             项目路线图
 VeriTile.lean          Lean library 顶层入口

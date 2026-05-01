@@ -43,3 +43,15 @@ If results stop being reproducible, check the plugin version first.
 - Not Anthropic API directly — uses `claude -p` (Claude Code CLI) as the entry point
 
 See `PLAN.md` decision log entry 5 for why this is a wrapper rather than a custom Python tool.
+
+## Artifact checker
+
+`scripts/check-artifact.sh` is the local release/CI gate for the Lean artifact.
+It runs `lake build`, rejects Lean `sorry` warnings, checks declared axioms
+against `scripts/artifact-axiom-whitelist.txt`, verifies the key theorem surface
+listed in `scripts/artifact-theorems.txt`, and checks the examples manifest /
+README example links for drift.
+
+```bash
+scripts/check-artifact.sh
+```
