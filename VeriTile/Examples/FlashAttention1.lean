@@ -1345,6 +1345,78 @@ def P_fa1
   InputAt s vReg
       (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V
 
+/-- Loop-carried predicate for the strided FA-1 forward kernel
+(`fa1ForwardKernelStrided`). Same streaming math content as `P_fa1` —
+running `mPartial`/`lPartial`/`oPartial` in their register slots, plus
+the initial Q-block load and book-keeping — but the InputAt premises
+use the strided / 4D-aware addressing computed by the kernel from its
+16 stride parameters and three `program_id` axes.
+
+The static `(qb, headIdx, batch)` triple is the program_id values at
+proof entry; the invariant asserts they are preserved across loop
+iterations and exposes them as `Tile.scalar` registers.
+
+Tile-local offset perspective: Q is observed at addresses
+`qBase + i * sQS + d * sQD` where
+`qBase = batch * sQB + headIdx * sQH + qb * M * sQS`. Similarly for
+K/V/O. The 4D-wrapper corollary (issue #39 step (iv)) supplies these
+offsets via `Offset.strided` over `[B, H, S_q, D]` plus
+`Offset.strided_inj` for the readback injectivity. -/
+def P_fa1_strided
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    -- Static (qb, headIdx, batch) program-id context.
+    (qb headIdx batch : Nat)
+    -- 16 stride parameters (matching `fa1ForwardKernelStrided`):
+    (sQB sQH sQS sQD : Nat)
+    (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat)
+    (sOB sOH _sOM _sOD : Nat)
+    -- Math inputs:
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (s : BlockState) : Prop :=
+  -- Program-id values preserved.
+  s.pids 0 = qb ∧ s.pids 1 = headIdx ∧ s.pids 2 = batch ∧
+  -- pid_* registers (set by preLoop's three program_id reads).
+  s.regs .nat [] "pid_qb" = some (Tile.scalar qb) ∧
+  s.regs .nat [] "pid_h"  = some (Tile.scalar headIdx) ∧
+  s.regs .nat [] "pid_b"  = some (Tile.scalar batch) ∧
+  -- *_base_off registers (set by preLoop's four base-offset assigns).
+  s.regs .nat [] "q_base_off" = some (Tile.scalar (batch * sQB + headIdx * sQH)) ∧
+  s.regs .nat [] "k_base_off" = some (Tile.scalar (batch * sKB + headIdx * sKH)) ∧
+  s.regs .nat [] "v_base_off" = some (Tile.scalar (batch * sVB + headIdx * sVH)) ∧
+  s.regs .nat [] "o_base_off" = some (Tile.scalar (batch * sOB + headIdx * sOH)) ∧
+  -- Q-block row index vector and D-axis index vector.
+  s.regs .nat [M] "offs_m" = some
+      (Tile.vec (fun i : Fin M => qb * M + i.val)) ∧
+  s.regs .nat [D] "offs_d" = some
+      (Tile.vec (fun d : Fin D => d.val)) ∧
+  -- Loaded Q-row-block.
+  s.regs .real [M, D] "q" = some (Tile.ofReal Q) ∧
+  -- Streaming accumulators at iter k.
+  s.regs .real [M] "m_i" = some
+      ⟨fun idx : TileIndex [M] => FA1Math.mPartial Bk Q numKVBlocks K scale k idx.1⟩ ∧
+  s.regs .real [M] "l_i" = some
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        FA1Math.lPartial Q numKVBlocks K scale k idx.1) ∧
+  s.regs .real [M, D] "o_acc" = some
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        FA1Math.oPartial Q numKVBlocks K V scale k idx) ∧
+  -- Input regions still loaded under the strided addressing.
+  InputAt s qReg
+      (fun idx : TileIndex [M, D] =>
+        batch * sQB + headIdx * sQH + qb * M * sQS
+          + idx.1.val * sQS + idx.2.1.val * sQD) Q ∧
+  InputAt s kReg
+      (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+        batch * sKB + headIdx * sKH
+          + idx.1.val * sKN + idx.2.1.val * sKD) K ∧
+  InputAt s vReg
+      (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+        batch * sVB + headIdx * sVH
+          + idx.1.val * sVN + idx.2.1.val * sVD) V
+
 /-- Statements before the KV-block loop: pid/offset setup, Q-block load,
 and accumulator initialization. -/
 private def fa1PreLoop (qReg : RegionName) (M D : Nat) : List Stmt :=
