@@ -3310,6 +3310,73 @@ theorem fa1_step_strided
     · intro idx
       simpa [s', s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0] using hV idx
 
+/-- Strided readout stage: once `P_fa1_strided numKVBlocks` holds at the
+loop exit, the post-loop normalization (`out := o_acc / l_i[:, None]`)
+and strided store (`tl.store(outReg + oBase + offs_m * sOM + offs_d *
+sOD, out)`) realize the ℝ-level attention spec at the per-`(b, h,
+q_block)` slice.
+
+The injectivity hypothesis `hInj` is the standard tile-local
+non-overlap requirement on the `[M, D]` output tile. The 4D-wrapper
+corollary (issue #39 step (iv)) supplies it via `Offset.strided_inj`
+applied to the global `[B, H, S_q, D]` layout — i.e. once the global
+strided layout is non-overlapping, the per-instance tile-local view
+inherits injectivity for free. -/
+theorem fa1_postLoop_correct_strided
+    {M D Bk numKVBlocks : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (qReg kReg vReg outReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (sLoop : BlockState)
+    (hP : P_fa1_strided qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale numKVBlocks sLoop)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        batch * sOB + headIdx * sOH + qb * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD)) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (stepStmts (fa1PostLoopStrided outReg M D sOM sOD) sLoop)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            batch * sOB + headIdx * sOH + qb * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionReal Q K V scale idx) := by
+  intro idx
+  rcases hP with
+    ⟨_hpids0, _hpids1, _hpids2,
+     _hpid_qb, _hpid_h, _hpid_b,
+     _hq_base, _hk_base, _hv_base, ho_base,
+     hoffs_m, hoffs_d, _hq, _hm, hl, ho, _hQ, _hK, _hV⟩
+  have h_inj_store :
+      Function.Injective
+        (fun i : TileIndex [M, D] =>
+          batch * sOB + headIdx * sOH
+            + (qb * M + i.1.val) * sOM + i.2.1.val * sOD) := by
+    intro a b h
+    apply hInj
+    simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
+    exact h
+  simp [observeTileAt, fa1PostLoopStrided, stepStmts, stepStmt, evalOp,
+        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+        Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+        NumericDType.div, Option.bind,
+        TileShape.dropInsertedIndex]
+  rw [show batch * sOB + headIdx * sOH + qb * M * sOM
+        + idx.1.val * sOM + idx.2.1.val * sOD =
+      batch * sOB + headIdx * sOH
+        + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
+    simp [Nat.add_mul, Nat.add_assoc]]
+  simp only [BlockState.readMem]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
+  simp [FA1Math.streaming_eq_attentionReal hBk Q numKVBlocks hNumKVBlocks K V scale idx
+        (FA1Math.lPartial_final_ne_zero hBk Q numKVBlocks hNumKVBlocks K scale idx.1)]
+
 /-! ## Correctness statement + theorem
 
 The statement uses the standard `InputAt` / `observeTileAt` predicates
