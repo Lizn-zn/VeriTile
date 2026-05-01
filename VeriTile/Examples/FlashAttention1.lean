@@ -1820,6 +1820,80 @@ theorem block_mNew_tile_eq {M D Bk N : Nat}
   simp [Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex]
   rw [mPartial_succ_of_lt (qb * M) Q N K scale n hn i]
 
+/-- Causal `α` multiplier — the unbotted real payload of
+`exp(mPartial(k) - mPartial(k+1))`. Same role as
+`FA1Math.alphaPartial`, but for the causal streaming. -/
+private noncomputable def alphaCausal {M D Bk : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ)
+    (k : Nat) (i : Fin M) : ℝ :=
+  (WithBot.realExp
+      (Option.map₂ (fun x y : ℝ => x - y)
+        (mPartial Bk qStart Q numKVBlocks K scale k i)
+        (mPartial Bk qStart Q numKVBlocks K scale (k + 1) i))).unbotD 0
+
+/-- The causal `l_new = α * l_i + tl.sum(p, axis=1)` update at the
+simplified-input form realizes the causal streaming `lPartial(k+1)`.
+This is `lPartial_succ_of_lt` lifted to `Tile` level. -/
+theorem block_lNew_tile_eq {M D Bk N : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame Broadcast.nil)
+      (Tile.bop WithBot.realMul (Broadcast.consSame Broadcast.nil)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          alphaCausal qStart Q N K scale k idx.1)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          lPartial Bk qStart Q N K scale k idx.1))
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        Finset.univ.sum (fun jLocal : Fin Bk =>
+          (WithBot.realExp
+            (Option.map₂ (fun x y : ℝ => x - y)
+              (maskedScore qStart Q K scale idx.1
+                (FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) jLocal))
+              (mPartial Bk qStart Q N K scale (k + 1) idx.1))).unbotD 0))
+      =
+      Tile.ofReal (fun idx : TileIndex [M] =>
+        lPartial Bk qStart Q N K scale (k + 1) idx.1) := by
+  ext idx
+  simp [Tile.bop, Tile.ofReal]
+  rw [lPartial_succ_of_lt qStart Q N K scale k hk idx.1]
+  rfl
+
+/-- The causal `o_acc = α * o_acc + p @ V` update at the
+simplified-input form realizes the causal streaming `oPartial(k+1)`.
+This is `oPartial_succ_of_lt` lifted to `Tile` level. -/
+theorem block_oAcc_tile_eq {M D Bk N : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * N, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < N) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Tile.bop WithBot.realMul (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.ofReal fun idx : TileIndex [M] =>
+            alphaCausal qStart Q N K scale k idx.1))
+        (Tile.ofReal fun idx : TileIndex [M, D] =>
+          oPartial Bk qStart Q N K V scale k idx))
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        Finset.univ.sum (fun jLocal : Fin Bk =>
+          let j := FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) jLocal
+          (WithBot.realExp
+            (Option.map₂ (fun x y : ℝ => x - y)
+              (maskedScore qStart Q K scale idx.1 j)
+              (mPartial Bk qStart Q N K scale (k + 1) idx.1))).unbotD 0 *
+            V (j, idx.2.1, PUnit.unit)))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, D] =>
+        oPartial Bk qStart Q N K V scale (k + 1) idx) := by
+  ext idx
+  rcases idx with ⟨i, d, u⟩
+  cases u
+  simp [Tile.bop, Tile.expandDim, Tile.ofReal, TileShape.dropInsertedIndex]
+  rw [oPartial_succ_of_lt qStart Q N K V scale k hk (i, d, PUnit.unit)]
+  rfl
+
 end FA1MathCausal
 
 /-! ## Operational layer — `P_fa1` invariant + four-stage proof
