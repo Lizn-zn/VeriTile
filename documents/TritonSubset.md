@@ -29,6 +29,10 @@ values have shape `[]`; a matrix `[M, D]` has index shape
   The runtime state stores `pids : Nat → Nat`, so every axis is total.
 - `tl.for i in $(n) { ... }` and `tl.for i in N { ... }`.
   The loop is operationally modeled and proved through `forLoop_inv`.
+- `tl.if cond { ... }` for scalar boolean conditions (`Op .bool []`).
+  There is no `else`, `break`, or `continue`; Triton block-skipping patterns
+  should be written by negating the skip condition and wrapping the useful
+  body. Elementwise conditional selection remains `tl.where`.
 - Register assignment:
   `x := expr`.
 

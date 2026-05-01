@@ -195,6 +195,11 @@ syntax "tl.store(" tritonPtr ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 -- Convenience form with a numeric literal in place of the antiquoted term.
 syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt
+-- `tl.if cond { stmt* }` — VeriTile DSL-level scalar conditional. Runs
+-- `body` when scalar `cond` evaluates `true`, otherwise no-op. No `else`.
+-- The FA-2 block-skipping pattern `if cond: continue` rewrites to
+-- `tl.if not_cond { ... }`.
+syntax "tl.if " tritonExpr " { " tritonStmt* " }" : tritonStmt
 
 -- Block (the user-facing entry point)
 syntax (name := tritonBlock) "triton " "{" tritonStmt* "}" : term
@@ -869,6 +874,12 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
       let (body, _) ← expandStmts bodyEnv stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$body,*]), env)
+  | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) => do
+      let cond' ← expandExpr env cond
+      ensureDType .bool cond'.dtype "tl.if condition"
+      ensureShape SInfo.scalar cond'.shape "tl.if condition"
+      let (body, _) ← expandStmts env stmts.toList
+      pure (← `(Stmt.ifThen $cond'.term [$body,*]), env)
   | _ => Macro.throwUnsupported
 
 partial def expandStmts (env : Env) (stmts : List (TSyntax `tritonStmt)) :
@@ -1001,6 +1012,11 @@ private partial def stmtRegions :
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
           let (i, o) := stmtRegions st
           (acc.1 ++ i, acc.2 ++ o)) ([], [])
+  | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) =>
+      stmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) (exprRegions cond, [])
   | _ => ([], [])
 
 /-! ## Block macro -/

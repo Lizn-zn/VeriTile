@@ -1005,8 +1005,12 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
           else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
+  | .ifThen cond body, s => do
+      let c ← evalOp cond s
+      if c.data PUnit.unit then stepStmts body s else some s
 termination_by st _ => (sizeOf st, 0)
 decreasing_by
+  all_goals (try (simp_wf; omega))
   simp_wf
   have h : 0 < sizeOf idx := by
     cases idx; simp
@@ -1107,6 +1111,16 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
   case forLoop idx n body =>
     simp at h
     exact stepForLoopAux_pid h
+  case ifThen cond body =>
+    cases hcond : evalOp cond s with
+    | none => simp [stepStmt, hcond] at h
+    | some c =>
+        simp [stepStmt, hcond] at h
+        by_cases hc : c.data PUnit.unit
+        · simp [hc] at h
+          exact stepStmts_pid h
+        · simp [hc] at h
+          rw [← h]
 
 theorem stepStmts_pid {body : List Stmt} {s s' : BlockState}
     (h : stepStmts body s = some s') :

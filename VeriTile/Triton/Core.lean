@@ -538,6 +538,11 @@ P1 Triton statements (mutating constructs).
   (Triton `tl.store` semantics — no `other` parameter on store side).
 * `forLoop i n body` runs `body` `n` times, with the scalar register `i` bound
   to the iteration index.
+* `ifThen cond body` runs `body` when the scalar `cond` evaluates `true`, and
+  is a no-op when `false`. This is a VeriTile DSL-level scalar conditional
+  used to model Triton block-level control-flow patterns. It has no `else`;
+  the FA-2 block-skipping pattern `if start_n + BLOCK_N <= start_m: continue`
+  rewrites to `if not skippable { ...work... }`.
 -/
 inductive Stmt : Type where
   | assign  : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape → Stmt
@@ -547,6 +552,7 @@ inductive Stmt : Type where
               (offset : Op .nat shape) → (value : Op .real shape) →
               (mask : Op .bool shape) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
+  | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
 
 instance : Inhabited Stmt :=
   ⟨.assign .real [] "" (.const 0)⟩

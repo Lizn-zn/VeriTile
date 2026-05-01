@@ -26,6 +26,9 @@ Stmt : Type
   运行时状态保存 `pids : Nat → Nat`,所以任意 axis 都有定义。
 - `tl.for i in $(n) { ... }` 与 `tl.for i in N { ... }`。
   loop 有操作语义,证明通过 `forLoop_inv`。
+- `tl.if cond { ... }` 支持 scalar bool 条件(`Op .bool []`)。
+  当前没有 `else`、`break` 或 `continue`;Triton 的 block-skipping pattern
+  应该通过取反 skip 条件并包住有效 body 来表示。逐元素条件选择仍使用 `tl.where`。
 - 寄存器赋值:
   `x := expr`。
 
