@@ -3810,4 +3810,166 @@ theorem fa1_forward_correct_4D
     scale s
     hQ_inner hK_inner hV_inner hInj idx
 
+/-! ## attentionReal4D bridge
+
+The slice-form result of `fa1_forward_correct_4D` equals the
+user-facing `attentionReal4D` spec at the corresponding 4D index.
+The bridge factors through `attentionReal_row_eq` (`attentionReal`'s
+output at row `i` depends only on `Q`'s row at `i`), reusing the
+fact that K and V slices are byte-identical (modulo Fin proof
+irrelevance) under `Bk * numKVBlocks = S_k`.
+
+Three private helpers do the row-factoring through the `Tile.dot` /
+`softmaxRow` / `attention` layers; `attentionReal_row_eq` ties them
+together at the user-facing `Tile.ofReal`-lifted level. -/
+
+/-- `Tile.dot`'s output at row `i` of the first argument depends only
+on that row's data. -/
+private theorem dot_data_row_eq {M1 M2 K N : Nat}
+    (a1 : Tile .real [M1, K]) (a2 : Tile .real [M2, K])
+    (b : Tile .real [K, N])
+    (i1 : Fin M1) (i2 : Fin M2) (n : Fin N)
+    (hRow : ∀ k, a1.data (i1, k, PUnit.unit) = a2.data (i2, k, PUnit.unit)) :
+    (Tile.dot [] a1 b).data (i1, n, PUnit.unit) =
+    (Tile.dot [] a2 b).data (i2, n, PUnit.unit) := by
+  rw [Tile.dot_nil_data, Tile.dot_nil_data]
+  apply Finset.sum_congr rfl
+  intro k _
+  rw [hRow k]
+
+/-- `softmaxRow`'s output at row `i` depends only on that row's data. -/
+private theorem softmaxRow_data_row_eq {M1 M2 N : Nat}
+    (s1 : Tile .real [M1, N]) (s2 : Tile .real [M2, N])
+    (i1 : Fin M1) (i2 : Fin M2) (n : Fin N)
+    (hRow : ∀ n', s1.data (i1, n', PUnit.unit) = s2.data (i2, n', PUnit.unit)) :
+    (softmaxRow s1).data (i1, n, PUnit.unit) =
+    (softmaxRow s2).data (i2, n, PUnit.unit) := by
+  unfold softmaxRow
+  simp only []
+  show some _ = some _
+  congr 2
+  · rw [hRow n]
+  · apply Finset.sum_congr rfl
+    intro j _
+    rw [hRow j]
+
+/-- `attention`'s output at row `i` of `Q` depends only on that
+row's data (and on `K`, `V`, `scale`). -/
+private theorem attention_data_row_eq {M1 M2 S D : Nat}
+    (Q1 : Tile .real [M1, D]) (Q2 : Tile .real [M2, D])
+    (K V : Tile .real [S, D]) (scale : ℝ)
+    (i1 : Fin M1) (i2 : Fin M2) (d : Fin D)
+    (hRow : ∀ d' : Fin D, Q1.data (i1, d', PUnit.unit) = Q2.data (i2, d', PUnit.unit)) :
+    (attention Q1 K V scale).data (i1, d, PUnit.unit) =
+    (attention Q2 K V scale).data (i2, d, PUnit.unit) := by
+  unfold attention
+  simp only []
+  apply dot_data_row_eq
+  intro k
+  apply softmaxRow_data_row_eq
+  intro n'
+  show Option.map (· * scale) ((Tile.dot [] Q1 (Tile.transpose [] K)).data (i1, n', PUnit.unit)) =
+       Option.map (· * scale) ((Tile.dot [] Q2 (Tile.transpose [] K)).data (i2, n', PUnit.unit))
+  congr 1
+  exact dot_data_row_eq Q1 Q2 (Tile.transpose [] K) i1 i2 n' hRow
+
+/-- Row-invariance of `attentionReal`. Two `attentionReal` calls (with
+possibly different M dimensions on `Q`) produce the same value at
+indices `(i1, d)` and `(i2, d)` whenever `Q1`'s row at `i1` equals
+`Q2`'s row at `i2`. The K, V, scale arguments are the same. -/
+theorem attentionReal_row_eq {M1 M2 S D : Nat}
+    (Q1 : TileIndex [M1, D] → ℝ) (Q2 : TileIndex [M2, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ) (scale : ℝ)
+    (i1 : Fin M1) (i2 : Fin M2) (d : Fin D)
+    (hRow : ∀ d' : Fin D, Q1 (i1, d', PUnit.unit) = Q2 (i2, d', PUnit.unit)) :
+    attentionReal Q1 K V scale (i1, d, PUnit.unit)
+      = attentionReal Q2 K V scale (i2, d, PUnit.unit) := by
+  unfold attentionReal
+  congr 1
+  apply attention_data_row_eq
+  intro d'
+  simp only [Tile.ofReal_data, hRow d']
+
+/-- Bridge: the slice-form `attentionReal` produced by FA-1's strided
+kernel equals the `attentionReal4D` spec at the corresponding 4D
+index. The proof factors through `attentionReal_row_eq`: K, V slices
+become byte-identical to `sliceBH` after substituting `hSk`, so only
+the Q-row equality remains, and that is `rfl` by `slice4DQRows`'s
+definition. -/
+theorem attentionReal_slice_eq_attentionReal4D
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hSk : Bk * numKVBlocks = S_k)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ)
+    (b : Fin B) (h : Fin H) (qb : Nat)
+    (hQBnd : qb * M + M ≤ S_q)
+    (idx : TileIndex [M, D]) :
+    attentionReal
+        (slice4DQRows M Q4D b h qb hQBnd)
+        (slice4DFlat Bk numKVBlocks K4D b h hSk)
+        (slice4DFlat Bk numKVBlocks V4D b h hSk)
+        scale idx
+      = attentionReal4D Q4D K4D V4D scale
+          (b, h, ⟨qb * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+           idx.2.1, PUnit.unit) := by
+  obtain ⟨i, d, _⟩ := idx
+  rw [attentionReal4D_slice]
+  subst hSk
+  have hKeq : slice4DFlat Bk numKVBlocks K4D b h rfl = sliceBH K4D b h := by
+    funext idx; obtain ⟨j, d', _⟩ := idx; rfl
+  have hVeq : slice4DFlat Bk numKVBlocks V4D b h rfl = sliceBH V4D b h := by
+    funext idx; obtain ⟨j, d', _⟩ := idx; rfl
+  rw [hKeq, hVeq]
+  apply attentionReal_row_eq
+  intro d'
+  rfl
+
+/-- Strided FA-1 forward correctness, stated in user-facing
+`attentionReal4D` form. Bundle of `fa1_forward_correct_4D` +
+`attentionReal_slice_eq_attentionReal4D`: the same theorem,
+the result re-expressed at the per-`(b, h, q_block)` slot of
+`attentionReal4D Q4D K4D V4D scale`. -/
+theorem fa1_forward_correct_4D'
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (hSk : Bk * numKVBlocks = S_k)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQBnd : s.pids 0 * M + M ≤ S_q)
+    (hQ4D : InputAt s qReg
+        (Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0) Q4D)
+    (hK4D : InputAt s kReg
+        (Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0) K4D)
+    (hV4D : InputAt s vReg
+        (Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0) V4D)
+    (hOValid : Offset.StridesValid [B, H, S_q, D] [sOB, sOH, sOM, sOD]) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec (fa1ForwardKernelStrided qReg kReg vReg outReg M D Bk numKVBlocks
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionReal4D Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx
+  rw [fa1_forward_correct_4D hBk hNumKVBlocks hSk
+        qReg kReg vReg outReg
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD
+        Q4D K4D V4D scale s hPidB hPidH hQBnd hQ4D hK4D hV4D hOValid idx]
+  congr 1
+  exact attentionReal_slice_eq_attentionReal4D hSk Q4D K4D V4D scale
+    ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ (s.pids 0) hQBnd idx
+
 end VeriTile.Examples
