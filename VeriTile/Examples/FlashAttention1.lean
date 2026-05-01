@@ -1683,6 +1683,143 @@ theorem mPartial_succ_ne_bot {M D Bk : Nat} (hBk : 0 < Bk)
         rw [← hcontra]; exact le_max_left _ _
       exact ih hk' (le_bot_iff.mp h_left)
 
+/-! ### Tile-level block helpers — causal kernel body
+
+Each helper packages one statement of the causal loop body's Tile-level
+algebra into a single equation, used as a rewrite in
+`fa1_step_strided_causal`.
+
+The chain mirrors the kernel:
+
+```text
+scores_raw :=  q @ k.T * scale          -- block_scoresRaw_tile_eq
+causal     :=  offs_m[:, None] >= offs_n[None, :]   -- block_causal_mask_tile_eq
+scores     :=  tl.where(causal, scores_raw, -inf)   -- block_scores_tile_eq
+m_block    :=  tl.max(scores, axis=1)               -- block_mBlock_tile_eq
+m_new      :=  tl.max(m_i, m_block)                 -- block_mNew_tile_eq
+```
+
+These are the parts where the causal kernel diverges from the non-causal
+strided kernel; the `m_new`/`alpha`/`l_new`/`o_acc` lemmas (combining
+the mask-aware streaming math with the running accumulators) follow. -/
+
+/-- The kernel's `scores_raw = q @ k.T * scale` Tile expression at this
+program-instance evaluates to `Tile.ofReal` of the per-element
+`scaledScore`. Same structure as the non-causal kernel's `scores`
+register; reused here as the un-masked input to the causal mask. -/
+theorem block_scoresRaw_tile_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (n : Nat) (hn : n < N) :
+    Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.dot [] (Tile.ofReal Q)
+        (Tile.transpose [] (Tile.ofReal
+          (fun idx : TileIndex [Bk, D] =>
+            K (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.1,
+              idx.2.1, PUnit.unit)))))
+      (Tile.scalar ((scale : ℝ) : WithBot ℝ))
+    = Tile.ofReal (fun idx : TileIndex [M, Bk] =>
+        FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)) := by
+  ext idx
+  obtain ⟨i, j, _⟩ := idx
+  simp only [Tile.bop, Tile.scalar, Tile.ofReal_data,
+    Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul]
+  exact FA1Math.block_scaled_data_eq Q K scale n hn i j
+
+/-- The causal mask tile `offs_m[:, None] >= offs_n[None, :]` evaluates
+to the `decide` predicate `(n * Bk + j) ≤ (qb * M + i)` at position
+`(i, j)`. -/
+theorem block_causal_mask_tile_eq {M Bk : Nat} (qb n : Nat) :
+    (Tile.cop (ComparableDType.nat.ge)
+      (Broadcast.consR (Broadcast.consL Broadcast.nil))
+      (Tile.expandDim ⟨1, by simp⟩
+        (Tile.vec (fun i : Fin M => qb * M + i.val)))
+      (Tile.expandDim ⟨0, by simp⟩
+        (Tile.vec (fun j : Fin Bk => n * Bk + j.val))))
+      = ⟨fun idx : TileIndex [M, Bk] =>
+          decide ((n * Bk + idx.2.1.val) ≤ (qb * M + idx.1.val))⟩ := by
+  ext idx
+  obtain ⟨i, j, _⟩ := idx
+  simp [Tile.cop, ComparableDType.ge, Tile.expandDim, Tile.vec,
+    Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex]
+
+/-- Combining the causal mask with the raw scores via `tl.where(causal,
+scores_raw, -inf)` yields the `Tile` whose data is exactly
+`maskedScore`. Visible lanes carry the real `scaledScore`; masked lanes
+carry `⊥`. -/
+theorem block_scores_tile_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (n : Nat) (hn : n < N) (qb : Nat) :
+    Tile.select
+      (⟨fun idx : TileIndex [M, Bk] =>
+        decide ((n * Bk + idx.2.1.val) ≤ (qb * M + idx.1.val))⟩ : Tile .bool [M, Bk])
+      (Tile.ofReal (fun idx : TileIndex [M, Bk] =>
+        FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)))
+      (⟨fun _ : TileIndex [M, Bk] => (none : WithBot ℝ)⟩ : Tile .real [M, Bk])
+    = ⟨fun idx : TileIndex [M, Bk] =>
+        maskedScore (qb * M) Q K scale idx.1
+          (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)⟩ := by
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  simp only [Tile.select_data, Tile.ofReal_data]
+  have hIdx : (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j).val
+            = n * Bk + j.val := by simp [FA1Math.blockIndex]
+  by_cases h_mask : n * Bk + j.val ≤ qb * M + i.val
+  · rw [decide_eq_true h_mask]
+    simp only [if_true]
+    rw [maskedScore_of_le (qb * M) Q K scale i _ (by rw [hIdx]; exact h_mask)]
+    rfl
+  · rw [decide_eq_false h_mask]
+    show (none : WithBot ℝ) = maskedScore (qb * M) Q K scale i
+        (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j)
+    rw [maskedScore_of_not_le (qb * M) Q K scale i _ (by rw [hIdx]; exact h_mask)]
+    rfl
+
+/-- Row-max of the causal scores tile: `tl.max(scores, axis=1)` produces
+`Finset.univ.sup` of the per-row `maskedScore`. The reduce-max here uses
+`WithBot.sup'` internally; we collapse it to `Finset.sup` since the
+`WithBot` type already carries `⊥` as its bottom element. -/
+theorem block_mBlock_tile_eq {M D Bk N : Nat} (hBk : 0 < Bk)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (n : Nat) (hn : n < N) (qb : Nat) :
+    Tile.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
+      ⟨fun idx : TileIndex [M, Bk] =>
+        maskedScore (qb * M) Q K scale idx.1
+          (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)⟩
+    = some ⟨fun idx : TileIndex [M] =>
+        (Finset.univ : Finset (Fin Bk)).sup
+          (fun jLocal => maskedScore (qb * M) Q K scale idx.1
+            (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) jLocal))⟩ := by
+  unfold Tile.reduceMax
+  simp [Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, hBk]
+  funext idx
+  rw [Finset.sup'_eq_sup]
+  rfl
+
+/-- Combining the running max `m_i` with the per-block max `m_block`
+yields the next-iteration `mPartial`. This is `mPartial_succ_of_lt` at
+the `Tile` level. -/
+theorem block_mNew_tile_eq {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (n : Nat) (hn : n < N) (qb : Nat) :
+    Tile.bop max (Broadcast.consSame Broadcast.nil)
+      (⟨fun idx : TileIndex [M] =>
+        mPartial Bk (qb * M) Q N K scale n idx.1⟩ : Tile .real [M])
+      (⟨fun idx : TileIndex [M] =>
+        (Finset.univ : Finset (Fin Bk)).sup
+          (fun jLocal => maskedScore (qb * M) Q K scale idx.1
+            (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) jLocal))⟩ : Tile .real [M])
+    = ⟨fun idx : TileIndex [M] =>
+        mPartial Bk (qb * M) Q N K scale (n + 1) idx.1⟩ := by
+  ext idx
+  obtain ⟨i, _⟩ := idx
+  simp [Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex]
+  rw [mPartial_succ_of_lt (qb * M) Q N K scale n hn i]
+
 end FA1MathCausal
 
 /-! ## Operational layer — `P_fa1` invariant + four-stage proof
