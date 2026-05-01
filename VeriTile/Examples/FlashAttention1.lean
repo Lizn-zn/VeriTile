@@ -555,6 +555,32 @@ def slice4DQRows {B H S D : Nat} (M : Nat)
       have := i.isLt
       omega⟩, d, PUnit.unit)
 
+/-- Boundary-masked M-row Q block. In-bounds rows read the logical Q tensor;
+out-of-bounds rows are the `other=0` value supplied to `tl.load`. -/
+def slice4DQRowsBoundary {B H S D : Nat} (M : Nat)
+    (T : TileIndex [B, H, S, D] → ℝ) (b : Fin B) (h : Fin H)
+    (start : Nat) : TileIndex [M, D] → ℝ :=
+  fun (i, d, _) =>
+    if hIn : start * M + i.val < S then
+      T (b, h, ⟨start * M + i.val, hIn⟩, d, PUnit.unit)
+    else
+      0
+
+@[simp] theorem slice4DQRowsBoundary_of_lt {B H S D : Nat} (M : Nat)
+    (T : TileIndex [B, H, S, D] → ℝ) (b : Fin B) (h : Fin H)
+    (start : Nat) (i : Fin M) (d : Fin D)
+    (hIn : start * M + i.val < S) :
+    slice4DQRowsBoundary M T b h start (i, d, PUnit.unit) =
+      T (b, h, ⟨start * M + i.val, hIn⟩, d, PUnit.unit) := by
+  simp [slice4DQRowsBoundary, hIn]
+
+@[simp] theorem slice4DQRowsBoundary_of_not_lt {B H S D : Nat} (M : Nat)
+    (T : TileIndex [B, H, S, D] → ℝ) (b : Fin B) (h : Fin H)
+    (start : Nat) (i : Fin M) (d : Fin D)
+    (hOut : ¬ start * M + i.val < S) :
+    slice4DQRowsBoundary M T b h start (i, d, PUnit.unit) = 0 := by
+  simp [slice4DQRowsBoundary, hOut]
+
 /-- Reinterpret the `(b, h)` plane of a 4D `[B, H, S, D]` tensor as a
 flat `[Bk * numKVBlocks, D]` view, given `Bk * numKVBlocks = S`. The K
 and V inputs of FA-1 take this form: the kernel iterates over
@@ -3069,6 +3095,58 @@ def P_fa1_strided_causal
           + idx.1.val * sKN + idx.2.1.val * sKD) K ∧
   InputAt s vReg
       (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+        batch * sVB + headIdx * sVH
+          + idx.1.val * sVN + idx.2.1.val * sVD) V
+
+/-- Loop-carried predicate for FA-1 v1 / boundary-masked strided kernels.
+
+Compared with `P_fa1_strided`, K/V are logical `[S_k, D]` tensors rather
+than padded `[Bk * numKVBlocks, D]` tensors, and the running accumulators use
+`FA1MathBoundary`. The kernel still iterates over `numKVBlocks` padded
+blocks; out-of-range lanes are masked into `⊥` / zero by the recurrence. -/
+def P_fa1_strided_boundary
+    {M D Bk numKVBlocks S_k : Nat}
+    (qReg kReg vReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH sQS sQD : Nat)
+    (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat)
+    (sOB sOH _sOM _sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (s : BlockState) : Prop :=
+  s.pids 0 = qb ∧ s.pids 1 = headIdx ∧ s.pids 2 = batch ∧
+  s.regs .nat [] "pid_qb" = some (Tile.scalar qb) ∧
+  s.regs .nat [] "pid_h"  = some (Tile.scalar headIdx) ∧
+  s.regs .nat [] "pid_b"  = some (Tile.scalar batch) ∧
+  s.regs .nat [] "q_base_off" = some (Tile.scalar (batch * sQB + headIdx * sQH)) ∧
+  s.regs .nat [] "k_base_off" = some (Tile.scalar (batch * sKB + headIdx * sKH)) ∧
+  s.regs .nat [] "v_base_off" = some (Tile.scalar (batch * sVB + headIdx * sVH)) ∧
+  s.regs .nat [] "o_base_off" = some (Tile.scalar (batch * sOB + headIdx * sOH)) ∧
+  s.regs .nat [M] "offs_m" = some
+      (Tile.vec (fun i : Fin M => qb * M + i.val)) ∧
+  s.regs .nat [D] "offs_d" = some
+      (Tile.vec (fun d : Fin D => d.val)) ∧
+  s.regs .real [M, D] "q" = some (Tile.ofReal Q) ∧
+  s.regs .real [M] "m_i" = some
+      ⟨fun idx : TileIndex [M] =>
+        FA1MathBoundary.mPartial Bk Q numKVBlocks K scale k idx.1⟩ ∧
+  s.regs .real [M] "l_i" = some
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        FA1MathBoundary.lPartial Bk Q numKVBlocks K scale k idx.1) ∧
+  s.regs .real [M, D] "o_acc" = some
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale k idx) ∧
+  InputAt s qReg
+      (fun idx : TileIndex [M, D] =>
+        batch * sQB + headIdx * sQH + qb * M * sQS
+          + idx.1.val * sQS + idx.2.1.val * sQD) Q ∧
+  InputAt s kReg
+      (fun idx : TileIndex [S_k, D] =>
+        batch * sKB + headIdx * sKH
+          + idx.1.val * sKN + idx.2.1.val * sKD) K ∧
+  InputAt s vReg
+      (fun idx : TileIndex [S_k, D] =>
         batch * sVB + headIdx * sVH
           + idx.1.val * sVN + idx.2.1.val * sVD) V
 
