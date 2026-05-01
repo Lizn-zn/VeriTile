@@ -1826,6 +1826,12 @@ the kernel's score-side `tl.where(score_mask, scores_raw, -inf)`.
 
 namespace FA1MathBoundary
 
+/-- `WithBot.realExp` is never bottom, so it is equal to its `unbotD`
+payload rewrapped as `some`. -/
+theorem realExp_eq_some_unbotD (x : WithBot ℝ) :
+    WithBot.realExp x = some ((WithBot.realExp x).unbotD 0) := by
+  cases x <;> rfl
+
 /-- Logical KV index for a padded loop lane, if it is in bounds. -/
 def blockIndex? (S_k Bk k : Nat) (jLocal : Fin Bk) : Option (Fin S_k) :=
   if h : k * Bk + jLocal.val < S_k then
@@ -2012,6 +2018,225 @@ theorem oPartial_succ_of_lt {M S_k D : Nat} (Bk : Nat)
             | none => 0))
     else oPartial Bk Q numKVBlocks K V scale k idx) = _
   rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+/-- Boundary loop-local `m_new = max(m_i, m_block)` realizes the masked
+streaming `mPartial` recurrence. -/
+theorem block_mNew_tile_eq {M S_k D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.bop max (Broadcast.consSame Broadcast.nil)
+      (⟨fun idx : TileIndex [M] => mPartial Bk Q N K scale k idx.1⟩ : Tile .real [M])
+      (⟨fun idx : TileIndex [M] =>
+        (Finset.univ : Finset (Fin Bk)).sup
+          (fun j => maskedScore Bk k Q K scale idx.1 j)⟩ : Tile .real [M])
+      =
+      ⟨fun idx : TileIndex [M] => mPartial Bk Q N K scale (k + 1) idx.1⟩ := by
+  ext idx
+  simp [Tile.bop]
+  rw [mPartial_succ_of_lt Bk Q N K scale k hk idx.1]
+
+/-- Boundary loop-local `alpha = exp(m_i - m_new)` after folding
+`m_new = mPartial(k+1)`. -/
+theorem block_alpha_tile_eq {M S_k D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.uop WithBot.realExp
+      (Tile.bop WithBot.realSub (Broadcast.consSame Broadcast.nil)
+        (⟨fun idx : TileIndex [M] =>
+          mPartial Bk Q N K scale k idx.1⟩ : Tile .real [M])
+        (Tile.bop max (Broadcast.consSame Broadcast.nil)
+          (⟨fun idx : TileIndex [M] =>
+            mPartial Bk Q N K scale k idx.1⟩ : Tile .real [M])
+          (⟨fun idx : TileIndex [M] =>
+            (Finset.univ : Finset (Fin Bk)).sup
+              (fun j => maskedScore Bk k Q K scale idx.1 j)⟩ : Tile .real [M])))
+      =
+      Tile.ofReal (fun idx : TileIndex [M] =>
+        alphaPartial Bk Q N K scale k idx.1) := by
+  ext idx
+  have hmTile :
+      Tile.bop max (Broadcast.consSame Broadcast.nil)
+        (⟨fun idx : TileIndex [M] =>
+          mPartial Bk Q N K scale k idx.1⟩ : Tile .real [M])
+        (⟨fun idx : TileIndex [M] =>
+          (Finset.univ : Finset (Fin Bk)).sup
+            (fun j => maskedScore Bk k Q K scale idx.1 j)⟩ : Tile .real [M])
+      =
+      ⟨fun idx : TileIndex [M] => mPartial Bk Q N K scale (k + 1) idx.1⟩ :=
+    block_mNew_tile_eq (Bk := Bk) Q K scale k hk
+  have hm :=
+    congrArg (fun t : Tile .real [M] => t.data idx)
+      hmTile
+  simp [Tile.bop] at hm
+  simp [Tile.uop, Tile.bop, Tile.ofReal, alphaPartial]
+  rw [hm]
+  exact realExp_eq_some_unbotD _
+
+/-- Boundary loop-local probability tile `p = exp(scores - m_new[:,None])`
+after folding `m_new = mPartial(k+1)`. -/
+theorem block_p_tile_eq {M S_k D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.uop WithBot.realExp
+      (Tile.bop WithBot.realSub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (⟨fun idx : TileIndex [M, Bk] =>
+          maskedScore Bk k Q K scale idx.1 idx.2.1⟩ : Tile .real [M, Bk])
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.bop max (Broadcast.consSame Broadcast.nil)
+            (⟨fun idx : TileIndex [M] =>
+              mPartial Bk Q N K scale k idx.1⟩ : Tile .real [M])
+            (⟨fun idx : TileIndex [M] =>
+              (Finset.univ : Finset (Fin Bk)).sup
+                (fun j => maskedScore Bk k Q K scale idx.1 j)⟩ : Tile .real [M]))))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, Bk] =>
+        (WithBot.realExp
+          (WithBot.realSub
+            (maskedScore Bk k Q K scale idx.1 idx.2.1)
+            (mPartial Bk Q N K scale (k + 1) idx.1))).unbotD 0) := by
+  ext idx
+  have hmTile :
+      Tile.bop max (Broadcast.consSame Broadcast.nil)
+        (⟨fun idx : TileIndex [M] =>
+          mPartial Bk Q N K scale k idx.1⟩ : Tile .real [M])
+        (⟨fun idx : TileIndex [M] =>
+          (Finset.univ : Finset (Fin Bk)).sup
+            (fun j => maskedScore Bk k Q K scale idx.1 j)⟩ : Tile .real [M])
+      =
+      ⟨fun idx : TileIndex [M] => mPartial Bk Q N K scale (k + 1) idx.1⟩ :=
+    block_mNew_tile_eq (Bk := Bk) Q K scale k hk
+  have hm :=
+    congrArg (fun t : Tile .real [M] => t.data (idx.1, PUnit.unit))
+      hmTile
+  simp [Tile.bop] at hm
+  simp [Tile.uop, Tile.bop, Tile.expandDim, Tile.ofReal, TileShape.dropInsertedIndex]
+  rw [hm]
+  exact realExp_eq_some_unbotD _
+
+/-- Boundary score mask `offs_n < S_k` lifted to the `[M, Bk]` score tile. -/
+theorem block_score_mask_tile_eq {M Bk S_k : Nat} (k : Nat) :
+    (Tile.cop (ComparableDType.nat.lt)
+      Broadcast.scalarR
+      (Tile.bop NumericDType.nat.add (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Tile.bop NumericDType.nat.mul Broadcast.scalarR
+          (Tile.expandDim ⟨1, by simp⟩
+            (Tile.vec (fun i : Fin M => i.val)))
+          (Tile.scalar 0))
+        (Tile.expandDim ⟨0, by simp⟩
+          (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+      (Tile.scalar S_k))
+      = ⟨fun idx : TileIndex [M, Bk] =>
+          decide (k * Bk + idx.2.1.val < S_k)⟩ := by
+  ext idx
+  obtain ⟨i, j, _⟩ := idx
+  simp only [Tile.cop, Tile.bop, ComparableDType.lt, NumericDType.add,
+    NumericDType.mul, Tile.expandDim_data, Tile.vec_data, Tile.scalar_data_index,
+    Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex]
+  simp
+
+/-- Applying the boundary score mask to the raw score tile produces exactly
+`maskedScore`: valid KV lanes carry the real scaled score; padded lanes carry
+`⊥` through the explicit `-inf` branch. -/
+theorem block_scores_tile_eq {M S_k D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) :
+    Tile.select
+      (⟨fun idx : TileIndex [M, Bk] =>
+        decide (k * Bk + idx.2.1.val < S_k)⟩ : Tile .bool [M, Bk])
+      (Tile.ofReal (fun idx : TileIndex [M, Bk] =>
+        match blockIndex? S_k Bk k idx.2.1 with
+        | some j => FA1Math.scaledScore Q K scale idx.1 j
+        | none => 0))
+      (⟨fun _ : TileIndex [M, Bk] => (none : WithBot ℝ)⟩ : Tile .real [M, Bk])
+    = ⟨fun idx : TileIndex [M, Bk] =>
+        maskedScore Bk k Q K scale idx.1 idx.2.1⟩ := by
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  cases u
+  simp only [Tile.select_data, Tile.ofReal_data]
+  by_cases h : k * Bk + j.val < S_k
+  · rw [decide_eq_true h]
+    simp [h, maskedScore_of_lt, blockIndex?_of_lt]
+    rfl
+  · rw [decide_eq_false h]
+    simp [h, maskedScore_of_not_lt]
+    rfl
+
+/-- Row-max of the boundary-masked scores tile. -/
+theorem block_mBlock_tile_eq {M S_k D Bk : Nat} (hBk : 0 < Bk)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) :
+    Tile.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
+      ⟨fun idx : TileIndex [M, Bk] =>
+        maskedScore Bk k Q K scale idx.1 idx.2.1⟩
+    = some ⟨fun idx : TileIndex [M] =>
+        (Finset.univ : Finset (Fin Bk)).sup
+          (fun jLocal => maskedScore Bk k Q K scale idx.1 jLocal)⟩ := by
+  unfold Tile.reduceMax
+  simp [Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, hBk]
+  funext idx
+  rw [Finset.sup'_eq_sup]
+  rfl
+
+/-- Boundary loop-local `l_new` expression realizes the masked streaming
+`lPartial` recurrence. -/
+theorem block_lNew_tile_eq {M S_k D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame Broadcast.nil)
+      (Tile.bop WithBot.realMul (Broadcast.consSame Broadcast.nil)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          alphaPartial Bk Q N K scale k idx.1)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          lPartial Bk Q N K scale k idx.1))
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        Finset.univ.sum (fun j : Fin Bk =>
+          (WithBot.realExp
+            (WithBot.realSub
+              (maskedScore Bk k Q K scale idx.1 j)
+              (mPartial Bk Q N K scale (k + 1) idx.1))).unbotD 0))
+      =
+      Tile.ofReal (fun idx : TileIndex [M] =>
+        lPartial Bk Q N K scale (k + 1) idx.1) := by
+  ext idx
+  simp [Tile.bop, Tile.ofReal]
+  rw [lPartial_succ_of_lt Bk Q N K scale k hk idx.1]
+  simp [WithBot.realSub]
+
+/-- Boundary loop-local `o_acc` update realizes the masked streaming
+`oPartial` recurrence. -/
+theorem block_oAcc_tile_eq {M S_k D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < N) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Tile.bop WithBot.realMul (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.ofReal fun idx : TileIndex [M] =>
+            alphaPartial Bk Q N K scale k idx.1))
+        (Tile.ofReal fun idx : TileIndex [M, D] =>
+          oPartial Bk Q N K V scale k idx))
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        Finset.univ.sum (fun j : Fin Bk =>
+          match blockIndex? S_k Bk k j with
+          | some jGlobal =>
+              (WithBot.realExp
+                (WithBot.realSub
+                  (maskedScore Bk k Q K scale idx.1 j)
+                  (mPartial Bk Q N K scale (k + 1) idx.1))).unbotD 0 *
+                V (jGlobal, idx.2.1, PUnit.unit)
+          | none => 0))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, D] =>
+        oPartial Bk Q N K V scale (k + 1) idx) := by
+  ext idx
+  rcases idx with ⟨i, d, u⟩
+  cases u
+  simp [Tile.bop, Tile.expandDim, Tile.ofReal, TileShape.dropInsertedIndex]
+  rw [oPartial_succ_of_lt Bk Q N K V scale k hk (i, d, PUnit.unit)]
+  simp [WithBot.realSub]
 
 end FA1MathBoundary
 
@@ -3106,9 +3331,9 @@ than padded `[Bk * numKVBlocks, D]` tensors, and the running accumulators use
 blocks; out-of-range lanes are masked into `⊥` / zero by the recurrence. -/
 def P_fa1_strided_boundary
     {M D Bk numKVBlocks S_k : Nat}
-    (qReg kReg vReg : RegionName)
+    (_qReg kReg vReg : RegionName)
     (qb headIdx batch : Nat)
-    (sQB sQH sQS sQD : Nat)
+    (sQB sQH _sQS _sQD : Nat)
     (sKB sKH sKN sKD : Nat)
     (sVB sVH sVN sVD : Nat)
     (sOB sOH _sOM _sOD : Nat)
@@ -3137,10 +3362,6 @@ def P_fa1_strided_boundary
   s.regs .real [M, D] "o_acc" = some
       (Tile.ofReal fun idx : TileIndex [M, D] =>
         FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale k idx) ∧
-  InputAt s qReg
-      (fun idx : TileIndex [M, D] =>
-        batch * sQB + headIdx * sQH + qb * M * sQS
-          + idx.1.val * sQS + idx.2.1.val * sQD) Q ∧
   InputAt s kReg
       (fun idx : TileIndex [S_k, D] =>
         batch * sKB + headIdx * sKH
@@ -3683,6 +3904,232 @@ with `fa1LoopBodyStridedCausal` in the inner `forLoop`. -/
       fa1PostLoopStrided outReg M D sOM sOD := by
   rfl
 
+/-! ### Boundary strided helpers — pre-loop / loop body / post-loop
+
+These are the v1 / boundary-mask analogues of the strided helpers above.
+They deliberately expose the extra mask registers introduced by the DSL
+kernel (`q_mask`, `kv_mask`, `score_mask`, `o_mask`) so the operational
+proof can reason about masked loads, masked score lanes, and masked stores
+without unfolding the full kernel body every time. -/
+
+private def fa1PreLoopStridedBoundary (qReg : RegionName) (M D S_q : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH : Nat) (sVB sVH : Nat)
+    (sOB sOH : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "pid_qb" (Op.programId 0)
+  , Stmt.assign .nat [] "pid_h"  (Op.programId 1)
+  , Stmt.assign .nat [] "pid_b"  (Op.programId 2)
+  , Stmt.assign .nat [] "q_base_off"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_b") (Op.constNat sQB))
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_h") (Op.constNat sQH)))
+  , Stmt.assign .nat [] "k_base_off"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_b") (Op.constNat sKB))
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_h") (Op.constNat sKH)))
+  , Stmt.assign .nat [] "v_base_off"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_b") (Op.constNat sVB))
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_h") (Op.constNat sVH)))
+  , Stmt.assign .nat [] "o_base_off"
+      (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_b") (Op.constNat sOB))
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_h") (Op.constNat sOH)))
+  , Stmt.assign .nat [M] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid_qb")
+          (Op.constNat M))
+        (Op.arange M))
+  , Stmt.assign .nat [D] "offs_d" (Op.arange D)
+  , Stmt.assign .nat [M, D] "q_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.add .nat Broadcast.scalarL
+          (Op.ref .nat [] "q_base_off")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+            (Op.constNat sQS)))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat sQD)))
+  , Stmt.assign .bool [M, D] "q_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+            (Op.constNat 0)))
+        (Op.constNat S_q))
+  , Stmt.assign .real [M, D] "q"
+      (Op.loadMaskOther qReg
+        (Op.ref .nat [M, D] "q_ptrs")
+        (Op.ref .bool [M, D] "q_mask")
+        (Op.broadcast (Op.const 0) [M, D]))
+  , Stmt.assign .real [M] "m_i"
+      (Op.full [M] Op.negInf)
+  , Stmt.assign .real [M] "l_i"
+      (Op.full [M] (Op.const 0))
+  , Stmt.assign .real [M, D] "o_acc"
+      (Op.full [M, D] (Op.const 0))
+  ]
+
+private def fa1LoopBodyStridedBoundary (kReg vReg : RegionName)
+    (M D Bk S_k : Nat) (sKN sKD sVN sVD : Nat) (scale : ℝ) : List Stmt :=
+  [ Stmt.assign .nat [Bk] "offs_n"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "n")
+          (Op.constNat Bk))
+        (Op.arange Bk))
+  , Stmt.assign .nat [Bk, D] "k_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.add .nat Broadcast.scalarL
+          (Op.ref .nat [] "k_base_off")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+            (Op.constNat sKN)))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat sKD)))
+  , Stmt.assign .nat [Bk, D] "v_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.add .nat Broadcast.scalarL
+          (Op.ref .nat [] "v_base_off")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+            (Op.constNat sVN)))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat sVD)))
+  , Stmt.assign .bool [Bk, D] "kv_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+            (Op.constNat 0)))
+        (Op.constNat S_k))
+  , Stmt.assign .real [Bk, D] "k"
+      (Op.loadMaskOther kReg
+        (Op.ref .nat [Bk, D] "k_ptrs")
+        (Op.ref .bool [Bk, D] "kv_mask")
+        (Op.broadcast (Op.const 0) [Bk, D]))
+  , Stmt.assign .real [Bk, D] "v"
+      (Op.loadMaskOther vReg
+        (Op.ref .nat [Bk, D] "v_ptrs")
+        (Op.ref .bool [Bk, D] "kv_mask")
+        (Op.broadcast (Op.const 0) [Bk, D]))
+  , Stmt.assign .real [M, Bk] "scores_raw"
+      (Op.mul .real Broadcast.scalarR
+        (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+          (Op.ref .real [M, D] "q")
+          (Op.transpose (batch := []) (M := Bk) (N := D)
+            (Op.ref .real [Bk, D] "k")))
+        (Op.const scale))
+  , Stmt.assign .bool [M, Bk] "score_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+            (Op.constNat 0))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+        (Op.constNat S_k))
+  , Stmt.assign .real [M, Bk] "scores"
+      (Op.where
+        (Op.ref .bool [M, Bk] "score_mask")
+        (Op.ref .real [M, Bk] "scores_raw")
+        (Op.broadcast Op.negInf [M, Bk]))
+  , Stmt.assign .real [M] "m_block"
+      (Op.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
+        (Op.ref .real [M, Bk] "scores"))
+  , Stmt.assign .real [M] "m_new"
+      (Op.max2 (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [M] "m_i")
+        (Op.ref .real [M] "m_block"))
+  , Stmt.assign .real [M] "alpha"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [M] "m_i")
+          (Op.ref .real [M] "m_new")))
+  , Stmt.assign .real [M, Bk] "p"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Op.ref .real [M, Bk] "scores")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "m_new"))))
+  , Stmt.assign .real [M] "l_new"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [M] "alpha")
+          (Op.ref .real [M] "l_i"))
+        (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
+          (Op.ref .real [M, Bk] "p")))
+  , Stmt.assign .real [M, D] "o_acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+          (Op.ref .real [M, D] "o_acc"))
+        (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+          (Op.ref .real [M, Bk] "p")
+          (Op.ref .real [Bk, D] "v")))
+  , Stmt.assign .real [M] "m_i"
+      (Op.ref .real [M] "m_new")
+  , Stmt.assign .real [M] "l_i"
+      (Op.ref .real [M] "l_new")
+  ]
+
+private def fa1PostLoopStridedBoundary (outReg : RegionName) (M D S_q : Nat)
+    (sOM sOD : Nat) : List Stmt :=
+  [ Stmt.assign .real [M, D] "out"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [M, D] "o_acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i")))
+  , Stmt.assign .nat [M, D] "o_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.add .nat Broadcast.scalarL
+          (Op.ref .nat [] "o_base_off")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+            (Op.constNat sOM)))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat sOD)))
+  , Stmt.assign .bool [M, D] "o_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+            (Op.constNat 0)))
+        (Op.constNat S_q))
+  , Stmt.storeMask outReg [M, D]
+      (Op.ref .nat [M, D] "o_ptrs")
+      (Op.ref .real [M, D] "out")
+      (Op.ref .bool [M, D] "o_mask")
+  ]
+
+@[simp] theorem fa1ForwardKernelStridedBoundary_body_eq
+    (qReg kReg vReg outReg : RegionName)
+    (M D Bk numKVBlocks S_q S_k : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (scale : ℝ) :
+    (fa1ForwardKernelStridedBoundary qReg kReg vReg outReg M D Bk numKVBlocks S_q S_k
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD scale).body =
+      fa1PreLoopStridedBoundary qReg M D S_q
+        sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
+      [Stmt.forLoop "n" numKVBlocks
+        (fa1LoopBodyStridedBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)] ++
+      fa1PostLoopStridedBoundary outReg M D S_q sOM sOD := by
+  rfl
+
 /-- Reading the `n`-th KV block through the row-major address expression
 used by the loop gives the corresponding `blockIndex` cell of a full
 `[Bk * numKVBlocks, D]` input. -/
@@ -3778,6 +4225,154 @@ theorem fa1_block_load_tile_eq_strided
   rw [Tile.ofReal_data]
   exact congrArg some
     (fa1_block_read_strided region s base sN sD X hX n hn idx.1 idx.2.1)
+
+/-- Boundary-masked strided KV block load. Valid local lanes read the logical
+`[S_k, D]` tensor through `blockIndex?`; invalid padded lanes are exactly the
+explicit `other = 0` value from the Triton load. -/
+theorem fa1_block_load_tile_eq_strided_boundary
+    {D Bk S_k : Nat}
+    (region : RegionName) (s : BlockState)
+    (base sN sD : Nat)
+    (X : TileIndex [S_k, D] → ℝ)
+    (hX : InputAt s region
+        (fun idx : TileIndex [S_k, D] =>
+          base + idx.1.val * sN + idx.2.1.val * sD) X)
+    (n : Nat) :
+    (⟨fun idx : TileIndex [Bk, D] =>
+        if _h : n * Bk + idx.1.val < S_k then
+          some (s.readMem region
+            (base + (n * Bk + idx.1.val) * sN + idx.2.1.val * sD))
+        else
+          some 0⟩
+      : Tile .real [Bk, D])
+      =
+      Tile.ofReal (fun idx : TileIndex [Bk, D] =>
+        match FA1MathBoundary.blockIndex? S_k Bk n idx.1 with
+        | some j => X (j, idx.2.1, PUnit.unit)
+        | none => 0) := by
+  ext idx
+  rw [Tile.ofReal_data]
+  by_cases h : n * Bk + idx.1.val < S_k
+  · simp [h, FA1MathBoundary.blockIndex?_of_lt]
+    rw [BlockState.readMem]
+    have haddr :
+        base + (n * Bk + idx.1.val) * sN + idx.2.1.val * sD =
+          (fun idx : TileIndex [S_k, D] =>
+              base + idx.1.val * sN + idx.2.1.val * sD)
+            (⟨n * Bk + idx.1.val, h⟩, idx.2.1, PUnit.unit) := by
+      rfl
+    rw [haddr]
+    exact congrArg some (hX _)
+  · simp [h, FA1MathBoundary.blockIndex?_of_not_lt]
+
+/-- Boundary-masked strided initialization stage. The Q register is loaded
+with the same mask as the v1 kernel: in-bounds rows come from memory, while
+out-of-bounds rows are the explicit `other=0`. After that, the loop invariant
+only keeps the loaded Q tile and the K/V memory contracts. -/
+theorem fa1_preLoop_correct_strided_boundary
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (qReg kReg vReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hQIn : ∀ idx : TileIndex [M, D],
+        s.pids 0 * M + idx.1.val < S_q →
+        s.mem qReg
+          (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
+    (hQOut : ∀ idx : TileIndex [M, D],
+        ¬ s.pids 0 * M + idx.1.val < S_q → Q idx = 0)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V) :
+    ∃ s0,
+      stepStmts (fa1PreLoopStridedBoundary qReg M D S_q
+          sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH) s = some s0 ∧
+      P_fa1_strided_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg
+        (s.pids 0) (s.pids 1) (s.pids 2)
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD
+        Q K V scale 0 s0 := by
+  let qBase : Nat := s.pids 2 * sQB + s.pids 1 * sQH
+  let qPtrs : Tile .nat [M, D] :=
+    ⟨fun idx => qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD⟩
+  let qMask : Tile .bool [M, D] :=
+    ⟨fun idx => s.pids 0 * M + idx.1.val < S_q⟩
+  let qLoaded : Tile .real [M, D] :=
+    ⟨fun idx =>
+      if h : s.pids 0 * M + idx.1.val < S_q then
+        some (s.readMem qReg
+          (qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD))
+      else
+        some 0⟩
+  let s0 :=
+    (((((((((((((((s.setReg "pid_qb" .nat [] (Tile.scalar (s.pids 0)))
+      ).setReg "pid_h" .nat [] (Tile.scalar (s.pids 1))
+      ).setReg "pid_b" .nat [] (Tile.scalar (s.pids 2))
+      ).setReg "q_base_off" .nat []
+        (Tile.scalar (s.pids 2 * sQB + s.pids 1 * sQH))
+      ).setReg "k_base_off" .nat []
+        (Tile.scalar (s.pids 2 * sKB + s.pids 1 * sKH))
+      ).setReg "v_base_off" .nat []
+        (Tile.scalar (s.pids 2 * sVB + s.pids 1 * sVH))
+      ).setReg "o_base_off" .nat []
+        (Tile.scalar (s.pids 2 * sOB + s.pids 1 * sOH))
+      ).setReg "offs_m" .nat [M]
+        (Tile.vec fun i : Fin M => s.pids 0 * M + i.val)
+      ).setReg "offs_d" .nat [D]
+        (Tile.vec fun d : Fin D => d.val)
+      ).setReg "q_ptrs" .nat [M, D] qPtrs
+      ).setReg "q_mask" .bool [M, D] qMask
+      ).setReg "q" .real [M, D] qLoaded
+      ).setReg "m_i" .real [M] ⟨fun _ => (⊥ : WithBot ℝ)⟩
+      ).setReg "l_i" .real [M] (Tile.ofReal fun _ => 0)
+      ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
+  have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
+    ext idx
+    rw [Tile.ofReal_data]
+    by_cases h : s.pids 0 * M + idx.1.val < S_q
+    · simp [qLoaded, qBase, h, BlockState.readMem]
+      rw [show qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD =
+          s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD by
+          simp [qBase, Nat.add_mul, Nat.mul_assoc, Nat.add_assoc]]
+      exact congrArg some (hQIn idx h)
+    · simp [qLoaded, h, hQOut idx h]
+  refine ⟨s0, ?_, ?_⟩
+  · simp [fa1PreLoopStridedBoundary, stepStmts, stepStmt, evalOp,
+      Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex,
+      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qMask, qLoaded, qBase, s0]
+    rfl
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0, hQ_loaded_eq]
+    · simp [s0, FA1MathBoundary.mPartial]
+    · simp [s0, FA1MathBoundary.lPartial, Tile.ofReal]
+    · simp [s0, FA1MathBoundary.oPartial, Tile.ofReal]
+    · intro idx
+      simpa [s0] using hK idx
+    · intro idx
+      simpa [s0] using hV idx
 
 /-- Strided initialization stage: the strided pre-loop block establishes
 `P_fa1_strided 0` from the strided / 4D-aware InputAt premises. The
@@ -5723,14 +6318,230 @@ theorem fa1_postLoop_correct_strided_causal_raw
   simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
 
-/-! ## Correctness statement + theorem
+/-- Boundary strided readout stage, raw accumulator form. For in-bounds
+query rows (`qb*M + i < S_q`), the masked store writes the normalized
+boundary streaming accumulator. Out-of-bounds rows are intentionally outside
+this statement: Triton's `tl.store(..., mask=o_mask)` leaves them untouched. -/
+theorem fa1_postLoop_correct_strided_boundary_raw
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (sLoop : BlockState)
+    (hP : P_fa1_strided_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale numKVBlocks sLoop)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        batch * sOB + headIdx * sOH + qb * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD)) :
+    ∀ idx : TileIndex [M, D],
+      qb * M + idx.1.val < S_q →
+      observeTileAt
+          (stepStmts (fa1PostLoopStridedBoundary outReg M D S_q sOM sOD) sLoop)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            batch * sOB + headIdx * sOH + qb * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some
+            (FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale
+                numKVBlocks idx /
+              FA1MathBoundary.lPartial Bk Q numKVBlocks K scale
+                numKVBlocks idx.1) := by
+  intro idx hIdx
+  rcases hP with
+    ⟨_hpids0, _hpids1, _hpids2,
+     _hpid_qb, _hpid_h, _hpid_b,
+     _hq_base, _hk_base, _hv_base, ho_base,
+     hoffs_m, hoffs_d, _hq, _hm, hl, ho, _hK, _hV⟩
+  have h_inj_store :
+      Function.Injective
+        (fun i : TileIndex [M, D] =>
+          batch * sOB + headIdx * sOH
+            + (qb * M + i.1.val) * sOM + i.2.1.val * sOD) := by
+    intro a b h
+    apply hInj
+    simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
+    exact h
+  simp [observeTileAt, fa1PostLoopStridedBoundary, stepStmts, stepStmt, evalOp,
+        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+        Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, Option.bind,
+        TileShape.dropInsertedIndex]
+  rw [show batch * sOB + headIdx * sOH + qb * M * sOM
+        + idx.1.val * sOM + idx.2.1.val * sOD =
+      batch * sOB + headIdx * sOH
+        + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
+    simp [Nat.add_mul, Nat.add_assoc]]
+  simp only [BlockState.readMem]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj_store idx]
+  simp [hIdx]
 
-The statement uses the standard `InputAt` / `observeTileAt` predicates
-from `Examples.Common` to relate the kernel's memory effects to the
-math model on `Tile`s. The kernel's optional final state is fed
-directly into `observeTileAt`; the proof also discharges "`exec`
-succeeds" along the way, threading through the four-stage
-decomposition. -/
+/-- Boundary strided forward correctness in raw streaming form, parameterized
+by the boundary loop-step lemma. This is the v1 analogue of
+`fa1_forward_correct_strided_causal_raw_of_step`: pre-loop establishes the
+boundary invariant, `forLoop_inv` consumes the supplied step theorem, and the
+masked post-loop readout gives the raw `oPartial / lPartial` value for
+in-bounds query lanes. -/
+theorem fa1_forward_correct_strided_boundary_raw_of_step
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQIn : ∀ idx : TileIndex [M, D],
+        s.pids 0 * M + idx.1.val < S_q →
+        s.mem qReg
+          (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
+    (hQOut : ∀ idx : TileIndex [M, D],
+        ¬ s.pids 0 * M + idx.1.val < S_q → Q idx = 0)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD))
+    (hStep :
+      ∀ i st, i < numKVBlocks →
+        P_fa1_strided_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+          qReg kReg vReg
+          (s.pids 0) (s.pids 1) (s.pids 2)
+          sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+          sOB sOH sOM sOD Q K V scale i st →
+        ∃ st',
+          stepStmts (fa1LoopBodyStridedBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)
+            (st.setReg "n" .nat [] (Tile.scalar i)) = some st' ∧
+          P_fa1_strided_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+            qReg kReg vReg
+            (s.pids 0) (s.pids 1) (s.pids 2)
+            sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+            sOB sOH sOM sOD Q K V scale (i + 1) st') :
+    ∀ idx : TileIndex [M, D],
+      s.pids 0 * M + idx.1.val < S_q →
+      observeTileAt
+          (exec (fa1ForwardKernelStridedBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some
+            (FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale
+                numKVBlocks idx /
+              FA1MathBoundary.lPartial Bk Q numKVBlocks K scale
+                numKVBlocks idx.1) := by
+  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
+      stepStmt st sa = some sb →
+      stepStmts (st :: rest) sa = stepStmts rest sb := by
+    intro st rest sa sb h
+    conv_lhs => unfold stepStmts
+    rw [h]
+  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
+      stepStmts l1 sa = some sb →
+      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
+    intro l1
+    induction l1 with
+    | nil =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        injection h with h
+        rw [List.nil_append, ← h]
+    | cons st rest ih =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        cases hst : stepStmt st sa with
+        | none => rw [hst] at h; simp at h
+        | some sm =>
+            rw [hst] at h
+            simp at h
+            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
+            exact ih l2 sm sb h
+  obtain ⟨s0, hPre, hP0⟩ :=
+    fa1_preLoop_correct_strided_boundary qReg kReg vReg
+      sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+      sOB sOH sOM sOD Q K V scale s hQIn hQOut hK hV
+  obtain ⟨sLoop, hLoopStmt, hPLoop⟩ :=
+    forLoop_inv
+      (P := P_fa1_strided_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg
+        (s.pids 0) (s.pids 1) (s.pids 2)
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale) hP0 hStep
+  intro idx hIdx
+  show observeTileAt (stepStmts _ s) outReg _ idx = _
+  rw [show (fa1ForwardKernelStridedBoundary qReg kReg vReg outReg
+        M D Bk numKVBlocks S_q S_k
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD scale).body =
+        fa1PreLoopStridedBoundary qReg M D S_q
+          sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
+        [Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStridedBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)] ++
+        fa1PostLoopStridedBoundary outReg M D S_q sOM sOD from rfl]
+  rw [List.append_assoc,
+      stepStmts_append (fa1PreLoopStridedBoundary qReg M D S_q
+          sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH)
+        ([Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStridedBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)] ++
+          fa1PostLoopStridedBoundary outReg M D S_q sOM sOD) s s0 hPre]
+  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStridedBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)]
+        (fa1PostLoopStridedBoundary outReg M D S_q sOM sOD) s0 sLoop ?_]
+  · exact fa1_postLoop_correct_strided_boundary_raw
+      qReg kReg vReg outReg
+      (s.pids 0) (s.pids 1) (s.pids 2)
+      sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+      sOB sOH sOM sOD Q K V scale sLoop hPLoop hInj idx hIdx
+  · rw [stepStmts_cons _ [] _ _ hLoopStmt]
+    show stepStmts [] sLoop = some sLoop
+    unfold stepStmts
+    rfl
+
+set_option maxHeartbeats 1000000 in
+/-- Boundary strided loop step. One iteration of the v1 KV loop preserves
+`P_fa1_strided_boundary`: masked K/V loads read logical K/V cells for
+in-range lanes and zero for padded lanes; the score mask turns padded score
+lanes into `-inf`; the online-softmax update is discharged by the boundary
+block lemmas in `FA1MathBoundary`. -/
+theorem fa1_step_strided_boundary
+    {M D Bk numKVBlocks S_k : Nat} (hBk : 0 < Bk)
+    (qReg kReg vReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (s : BlockState)
+    (hk : k < numKVBlocks)
+    (hP : P_fa1_strided_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale k s) :
+    ∃ s',
+      stepStmts (fa1LoopBodyStridedBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)
+        (s.setReg "n" .nat [] (Tile.scalar k)) = some s' ∧
+      P_fa1_strided_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale (k + 1) s' := by
+  sorry
+
 
 /-- After running `fa1ForwardKernel` on a state where Q is loaded as a
 contiguous `[M, D]` row-major block at `(s.pid * M, ⋯)` and K, V are
