@@ -149,11 +149,13 @@ def rowMajor2D {rows cols : Nat} (base rowStride : Nat) :
 
 /-! ### Injectivity theorems
 
-`linear1D_inj` (1D) and `rowMajor2D_inj` (2D) are the standalone proofs
-for the patterns Tier 1/2 + FA-1 forward kernels currently use. The general
-ND `strided_inj` (below, parameterized by `StridesValid`) subsumes both;
-the specialized versions are kept for ergonomics at existing call sites.
-Step 1+ FA-1 4D layouts and beyond use `strided_inj` directly. -/
+`linear1D_inj` (1D) and `rowMajor2D_inj` (2D) are standalone proofs for
+the patterns Tier 1/2 + FA-1 forward kernels currently use, with their
+own bespoke div/mod recovery arguments. The general ND `strided_inj`
+(below, parameterized by `StridesValid`) covers the same patterns and
+beyond — Step 1+ FA-1 4D layouts feed it directly — but the 1D / 2D
+proofs remain independent rather than being rewritten as corollaries:
+no semantic dependency, just a documentation overlap. -/
 
 theorem linear1D_inj {n : Nat} (base : Nat) :
     Function.Injective (linear1D (n := n) base) := by
@@ -201,8 +203,10 @@ theorem rowMajor2D_inj {rows cols : Nat} (base rowStride : Nat)
 under a `StridesValid` hypothesis: each dimension's stride strictly
 dominates the maximum offset reachable through the inner dimensions.
 This is the standard "non-overlapping strides" condition for layout-aware
-addressing; it generalizes the `linear1D_inj` / `rowMajor2D_inj` patterns
-above. -/
+addressing — sufficient, but not the weakest possible (see `StridesValid`'s
+note on the `d = 0` edge case). Step 1+ FA-1 4D layouts and similar ND
+kernels feed this directly; `linear1D_inj` / `rowMajor2D_inj` above remain
+as independent proofs for their existing call sites. -/
 
 /-- Maximum offset (relative to `base`) reachable by `strided shape strides`,
 given by `Σⱼ (dⱼ - 1) * sⱼ`. Defined recursively in lockstep with
@@ -216,7 +220,16 @@ def maxOffset : TileShape → List Nat → Nat
 /-- Layout-validity: the strides positionally match the shape and define
 a non-overlapping addressing scheme. Each dimension's stride must
 strictly dominate the maximum offset reachable through the inner
-dimensions (equivalently, the inner block fits within one stride step). -/
+dimensions (equivalently, the inner block fits within one stride step).
+
+This is a *sufficient* condition for `strided_inj`, not the weakest one.
+With `Nat.sub` truncation, `d = 0` collapses `(d - 1) * s` to `0`, so
+the predicate happens to require positive strides for outer dimensions
+even when the inner domain is empty (and injectivity would hold
+vacuously). FA-1 and current Tier 2 kernels never hit this edge case
+because all dims are positive; if a future caller needs the weakest
+condition, refine the predicate to skip the constraint when any inner
+`d = 0`. -/
 def StridesValid : TileShape → List Nat → Prop
   | [], _              => True
   | _ :: _, []         => False
