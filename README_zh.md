@@ -51,7 +51,8 @@ Phase B 截止包含:
 - `tl.dot`、trailing-axis transpose、`tl.where`、`tl.sqrt`、reduction
   `axis` / `keep_dims`、multi-axis `tl.program_id`、strided-offset memory helper。
 - 4D strided Q/K/V/O layout 上的 FA-1 forward 证明:
-  `fa1_forward_correct_4D` 与 `fa1_forward_correct_4D_causal`。
+  `fa1_forward_correct_4D_layout` 与
+  `fa1_forward_correct_4D_causal_layout`。
 - CI 中的 artifact gate:`scripts/check-artifact.sh`,检查 `lake build`、无
   `sorry`、axiom whitelist、关键 theorem surface、README/example 漂移。
 

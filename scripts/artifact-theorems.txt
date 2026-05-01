@@ -16,3 +16,5 @@ VeriTile/Examples/LayerNormKernels.lean:layernorm_kernels_refinement
 VeriTile/Examples/ApproxGeLU.lean:approx_gelu_kernel_correct
 VeriTile/Examples/FlashAttention1.lean:fa1_forward_correct_4D
 VeriTile/Examples/FlashAttention1.lean:fa1_forward_correct_4D_causal
+VeriTile/Examples/FlashAttention1.lean:fa1_forward_correct_4D_layout
+VeriTile/Examples/FlashAttention1.lean:fa1_forward_correct_4D_causal_layout

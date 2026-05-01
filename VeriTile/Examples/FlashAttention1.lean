@@ -426,6 +426,99 @@ def slice4DFlat {B H S D : Nat} (Bk numKVBlocks : Nat)
       have := j.isLt
       omega⟩, d, PUnit.unit)
 
+/-! ## User-facing 4D layout wrapper
+
+The low-level strided FA-1 theorems expose every stride as a separate
+argument. That is useful for proof reuse, but awkward as a public theorem
+surface. `FA1Layout4D` bundles the Q/K/V/O strides for `[B, H, S, D]`
+style tensors, plus the output-layout validity proof needed to turn the
+output offset expression into an injective scatter/readback map.
+
+The wrapper theorems near the end of the file are thin corollaries over
+`fa1_forward_correct_4D` / `fa1_forward_correct_4D_causal`; they keep the
+same semantics while giving users one layout argument instead of sixteen
+stride arguments plus a separate `hOValid`. -/
+
+/-- Stride bundle for FA-1 over 4D `[B, H, S, D]` Q/K/V/O tensors.
+
+Fields `q*`, `k*`, `v*`, and `o*` are the batch/head/sequence-or-output-row
+/ feature-dimension strides for Q, K, V, and output respectively. -/
+structure FA1Layout4D (B H S_q S_k D : Nat) where
+  qB : Nat
+  qH : Nat
+  qS : Nat
+  qD : Nat
+  kB : Nat
+  kH : Nat
+  kS : Nat
+  kD : Nat
+  vB : Nat
+  vH : Nat
+  vS : Nat
+  vD : Nat
+  oB : Nat
+  oH : Nat
+  oS : Nat
+  oD : Nat
+  hOValid : Offset.StridesValid [B, H, S_q, D] [oB, oH, oS, oD]
+
+namespace FA1Layout4D
+
+def qStrides (layout : FA1Layout4D B H S_q S_k D) : List Nat :=
+  [layout.qB, layout.qH, layout.qS, layout.qD]
+
+def kStrides (layout : FA1Layout4D B H S_q S_k D) : List Nat :=
+  [layout.kB, layout.kH, layout.kS, layout.kD]
+
+def vStrides (layout : FA1Layout4D B H S_q S_k D) : List Nat :=
+  [layout.vB, layout.vH, layout.vS, layout.vD]
+
+def oStrides (layout : FA1Layout4D B H S_q S_k D) : List Nat :=
+  [layout.oB, layout.oH, layout.oS, layout.oD]
+
+/-- Full 4D Q offset for an input tensor. -/
+def qOffset (layout : FA1Layout4D B H S_q S_k D) :
+    TileIndex [B, H, S_q, D] → Nat :=
+  Offset.strided [B, H, S_q, D] layout.qStrides 0
+
+/-- Full 4D K offset for an input tensor. -/
+def kOffset (layout : FA1Layout4D B H S_q S_k D) :
+    TileIndex [B, H, S_k, D] → Nat :=
+  Offset.strided [B, H, S_k, D] layout.kStrides 0
+
+/-- Full 4D V offset for an input tensor. -/
+def vOffset (layout : FA1Layout4D B H S_q S_k D) :
+    TileIndex [B, H, S_k, D] → Nat :=
+  Offset.strided [B, H, S_k, D] layout.vStrides 0
+
+/-- Output offset for the local `[M, D]` tile written by the current
+`BlockState.pids` program instance. -/
+def outBlockOffset (layout : FA1Layout4D B H S_q S_k D)
+    (s : BlockState) (M : Nat) : TileIndex [M, D] → Nat :=
+  fun idx =>
+    s.pids 2 * layout.oB + s.pids 1 * layout.oH + s.pids 0 * M * layout.oS
+      + idx.1.val * layout.oS + idx.2.1.val * layout.oD
+
+def kernel (layout : FA1Layout4D B H S_q S_k D)
+    (qReg kReg vReg outReg : RegionName)
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+  fa1ForwardKernelStrided qReg kReg vReg outReg M D Bk numKVBlocks
+    layout.qB layout.qH layout.qS layout.qD
+    layout.kB layout.kH layout.kS layout.kD
+    layout.vB layout.vH layout.vS layout.vD
+    layout.oB layout.oH layout.oS layout.oD scale
+
+def causalKernel (layout : FA1Layout4D B H S_q S_k D)
+    (qReg kReg vReg outReg : RegionName)
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+  fa1ForwardKernelStridedCausal qReg kReg vReg outReg M D Bk numKVBlocks
+    layout.qB layout.qH layout.qS layout.qD
+    layout.kB layout.kH layout.kS layout.kD
+    layout.vB layout.vH layout.vS layout.vD
+    layout.oB layout.oH layout.oS layout.oD scale
+
+end FA1Layout4D
+
 /-! ## Streaming math model (FA-1 online softmax recurrence)
 
 Mirrors what `fa1ForwardKernel` computes block by block. Three running
@@ -6218,5 +6311,89 @@ theorem fa1_forward_correct_4D_causal
         scale idx]
   exact attentionRealCausalBlock_slice_eq_attentionReal4DCausal hSk Q4D K4D V4D scale
     ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ (s.pids 0) hQBnd idx
+
+/-! ## Layout-level theorem surface
+
+These are the user-facing wrappers over the final 4D theorems above. They
+bundle the sixteen Q/K/V/O stride arguments into `FA1Layout4D`, expose
+named offset helpers for the `InputAt` premises, and keep the conclusion in
+the same `attentionReal4D` / `attentionReal4DCausal` form. -/
+
+/-- FA-1 forward correctness over a bundled 4D layout. This is the same
+statement as `fa1_forward_correct_4D`, but with the stride plumbing hidden
+behind `FA1Layout4D`. -/
+theorem fa1_forward_correct_4D_layout
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (hSk : Bk * numKVBlocks = S_k)
+    (layout : FA1Layout4D B H S_q S_k D)
+    (qReg kReg vReg outReg : RegionName)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQBnd : s.pids 0 * M + M ≤ S_q)
+    (hQ4D : InputAt s qReg layout.qOffset Q4D)
+    (hK4D : InputAt s kReg layout.kOffset K4D)
+    (hV4D : InputAt s vReg layout.vOffset V4D) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec (layout.kernel qReg kReg vReg outReg M Bk numKVBlocks scale) s)
+          outReg (layout.outBlockOffset s M) idx
+        = some (attentionReal4D Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx
+  simpa [FA1Layout4D.kernel, FA1Layout4D.qOffset, FA1Layout4D.kOffset,
+         FA1Layout4D.vOffset, FA1Layout4D.outBlockOffset,
+         FA1Layout4D.qStrides, FA1Layout4D.kStrides,
+         FA1Layout4D.vStrides, FA1Layout4D.oStrides]
+    using fa1_forward_correct_4D hBk hNumKVBlocks hSk
+      qReg kReg vReg outReg
+      layout.qB layout.qH layout.qS layout.qD
+      layout.kB layout.kH layout.kS layout.kD
+      layout.vB layout.vH layout.vS layout.vD
+      layout.oB layout.oH layout.oS layout.oD
+      Q4D K4D V4D scale s hPidB hPidH hQBnd
+      hQ4D hK4D hV4D layout.hOValid idx
+
+/-- Causal FA-1 forward correctness over a bundled 4D layout. This is the
+layout-level version of `fa1_forward_correct_4D_causal`. -/
+theorem fa1_forward_correct_4D_causal_layout
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (hSk : Bk * numKVBlocks = S_k)
+    (layout : FA1Layout4D B H S_q S_k D)
+    (qReg kReg vReg outReg : RegionName)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQBnd : s.pids 0 * M + M ≤ S_q)
+    (hQ4D : InputAt s qReg layout.qOffset Q4D)
+    (hK4D : InputAt s kReg layout.kOffset K4D)
+    (hV4D : InputAt s vReg layout.vOffset V4D) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec (layout.causalKernel qReg kReg vReg outReg M Bk numKVBlocks scale) s)
+          outReg (layout.outBlockOffset s M) idx
+        = some (attentionReal4DCausal Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx
+  simpa [FA1Layout4D.causalKernel, FA1Layout4D.qOffset, FA1Layout4D.kOffset,
+         FA1Layout4D.vOffset, FA1Layout4D.outBlockOffset,
+         FA1Layout4D.qStrides, FA1Layout4D.kStrides,
+         FA1Layout4D.vStrides, FA1Layout4D.oStrides]
+    using fa1_forward_correct_4D_causal hBk hNumKVBlocks hSk
+      qReg kReg vReg outReg
+      layout.qB layout.qH layout.qS layout.qD
+      layout.kB layout.kH layout.kS layout.kD
+      layout.vB layout.vH layout.vS layout.vD
+      layout.oB layout.oH layout.oS layout.oD
+      Q4D K4D V4D scale s hPidB hPidH hQBnd
+      hQ4D hK4D hV4D layout.hOValid idx
 
 end VeriTile.Examples

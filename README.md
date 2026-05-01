@@ -56,7 +56,8 @@ Core Phase C additions on `main`:
   `axis` / `keep_dims`, multi-axis `tl.program_id`, and strided-offset
   memory helpers.
 - FA-1 forward proofs over 4D strided Q/K/V/O layouts:
-  `fa1_forward_correct_4D` and `fa1_forward_correct_4D_causal`.
+  `fa1_forward_correct_4D_layout` and
+  `fa1_forward_correct_4D_causal_layout`.
 - Artifact gate in CI via `scripts/check-artifact.sh`: `lake build`, no
   `sorry`, axiom whitelist, key theorem surface, and README/example drift
   checks.
