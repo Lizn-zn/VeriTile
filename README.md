@@ -286,6 +286,7 @@ VeriTile/
   Triton/
     Core.lean          Kernel AST
     Semantics.lean     Operational semantics
+    Memory.lean        Memory contracts, offsets, tensor views
     DSL.lean           `triton { ... }` macro
     Examples.lean      Constructor-form example
   Examples/

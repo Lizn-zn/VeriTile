@@ -437,7 +437,9 @@ output offset expression into an injective scatter/readback map.
 The wrapper theorems near the end of the file are thin corollaries over
 `fa1_forward_correct_4D` / `fa1_forward_correct_4D_causal`; they keep the
 same semantics while giving users one layout argument instead of sixteen
-stride arguments plus a separate `hOValid`. -/
+stride arguments plus a separate `hOValid`. The input memory contracts are
+exposed through `TensorView.loaded`, so theorem users can talk in tensor-view
+metadata rather than raw `InputAt` / `Offset.strided` terms. -/
 
 /-- Stride bundle for FA-1 over 4D `[B, H, S, D]` Q/K/V/O tensors.
 
@@ -475,6 +477,26 @@ def vStrides (layout : FA1Layout4D B H S_q S_k D) : List Nat :=
 
 def oStrides (layout : FA1Layout4D B H S_q S_k D) : List Nat :=
   [layout.oB, layout.oH, layout.oS, layout.oD]
+
+/-- Tensor view for Q under this FA-1 layout. -/
+def qView (layout : FA1Layout4D B H S_q S_k D)
+    (qReg : RegionName) : TensorView [B, H, S_q, D] :=
+  { region := qReg, base := 0, strides := layout.qStrides }
+
+/-- Tensor view for K under this FA-1 layout. -/
+def kView (layout : FA1Layout4D B H S_q S_k D)
+    (kReg : RegionName) : TensorView [B, H, S_k, D] :=
+  { region := kReg, base := 0, strides := layout.kStrides }
+
+/-- Tensor view for V under this FA-1 layout. -/
+def vView (layout : FA1Layout4D B H S_q S_k D)
+    (vReg : RegionName) : TensorView [B, H, S_k, D] :=
+  { region := vReg, base := 0, strides := layout.vStrides }
+
+/-- Tensor view for output under this FA-1 layout. -/
+def oView (layout : FA1Layout4D B H S_q S_k D)
+    (outReg : RegionName) : TensorView [B, H, S_q, D] :=
+  { region := outReg, base := 0, strides := layout.oStrides }
 
 /-- Full 4D Q offset for an input tensor. -/
 def qOffset (layout : FA1Layout4D B H S_q S_k D) :
@@ -6317,7 +6339,9 @@ theorem fa1_forward_correct_4D_causal
 These are the user-facing wrappers over the final 4D theorems above. They
 bundle the sixteen Q/K/V/O stride arguments into `FA1Layout4D`, expose
 named offset helpers for the `InputAt` premises, and keep the conclusion in
-the same `attentionReal4D` / `attentionReal4DCausal` form. -/
+the same `attentionReal4D` / `attentionReal4DCausal` form. The input
+premises are stated through `TensorView.loaded`, which is the memory-contract
+surface users should normally see. -/
 
 /-- FA-1 forward correctness over a bundled 4D layout. This is the same
 statement as `fa1_forward_correct_4D`, but with the stride plumbing hidden
@@ -6333,9 +6357,9 @@ theorem fa1_forward_correct_4D_layout
     (scale : ℝ) (s : BlockState)
     (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
     (hQBnd : s.pids 0 * M + M ≤ S_q)
-    (hQ4D : InputAt s qReg layout.qOffset Q4D)
-    (hK4D : InputAt s kReg layout.kOffset K4D)
-    (hV4D : InputAt s vReg layout.vOffset V4D) :
+    (hQ4D : TensorView.loaded s (layout.qView qReg) Q4D)
+    (hK4D : TensorView.loaded s (layout.kView kReg) K4D)
+    (hV4D : TensorView.loaded s (layout.vView vReg) V4D) :
     ∀ idx : TileIndex [M, D],
       observeTileAt
           (exec (layout.kernel qReg kReg vReg outReg M Bk numKVBlocks scale) s)
@@ -6347,6 +6371,8 @@ theorem fa1_forward_correct_4D_layout
   intro idx
   simpa [FA1Layout4D.kernel, FA1Layout4D.qOffset, FA1Layout4D.kOffset,
          FA1Layout4D.vOffset, FA1Layout4D.outBlockOffset,
+         FA1Layout4D.qView, FA1Layout4D.kView, FA1Layout4D.vView,
+         TensorView.loaded, TensorView.offset,
          FA1Layout4D.qStrides, FA1Layout4D.kStrides,
          FA1Layout4D.vStrides, FA1Layout4D.oStrides]
     using fa1_forward_correct_4D hBk hNumKVBlocks hSk
@@ -6371,9 +6397,9 @@ theorem fa1_forward_correct_4D_causal_layout
     (scale : ℝ) (s : BlockState)
     (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
     (hQBnd : s.pids 0 * M + M ≤ S_q)
-    (hQ4D : InputAt s qReg layout.qOffset Q4D)
-    (hK4D : InputAt s kReg layout.kOffset K4D)
-    (hV4D : InputAt s vReg layout.vOffset V4D) :
+    (hQ4D : TensorView.loaded s (layout.qView qReg) Q4D)
+    (hK4D : TensorView.loaded s (layout.kView kReg) K4D)
+    (hV4D : TensorView.loaded s (layout.vView vReg) V4D) :
     ∀ idx : TileIndex [M, D],
       observeTileAt
           (exec (layout.causalKernel qReg kReg vReg outReg M Bk numKVBlocks scale) s)
@@ -6385,6 +6411,8 @@ theorem fa1_forward_correct_4D_causal_layout
   intro idx
   simpa [FA1Layout4D.causalKernel, FA1Layout4D.qOffset, FA1Layout4D.kOffset,
          FA1Layout4D.vOffset, FA1Layout4D.outBlockOffset,
+         FA1Layout4D.qView, FA1Layout4D.kView, FA1Layout4D.vView,
+         TensorView.loaded, TensorView.offset,
          FA1Layout4D.qStrides, FA1Layout4D.kStrides,
          FA1Layout4D.vStrides, FA1Layout4D.oStrides]
     using fa1_forward_correct_4D_causal hBk hNumKVBlocks hSk

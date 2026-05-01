@@ -277,6 +277,7 @@ VeriTile/
   Triton/
     Core.lean          Kernel AST
     Semantics.lean     操作语义
+    Memory.lean        memory contract、offset、tensor view
     DSL.lean           `triton { ... }` 宏
     Examples.lean      直接构造子形式示例
   Examples/
