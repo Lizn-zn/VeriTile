@@ -1884,6 +1884,58 @@ theorem fa1_block_load_tile_eq
   rw [Tile.ofReal_data]
   exact congrArg some (fa1_block_read region s X hX n hn idx.1 idx.2.1)
 
+/-- Strided variant of `fa1_block_read`: reading the `n`-th KV block at
+the strided address `base + (n*Bk + j) * sN + d * sD` recovers the
+`blockIndex` cell of the full input. The strided InputAt premise
+matches the K / V branches of `P_fa1_strided` (with
+`base = batch * sKB + headIdx * sKH`, `sN = sKN`, `sD = sKD`, etc.). -/
+theorem fa1_block_read_strided
+    {D Bk numKVBlocks : Nat}
+    (region : RegionName) (s : BlockState)
+    (base sN sD : Nat)
+    (X : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (hX : InputAt s region
+        (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+          base + idx.1.val * sN + idx.2.1.val * sD) X)
+    (n : Nat) (hn : n < numKVBlocks)
+    (j : Fin Bk) (d : Fin D) :
+    s.readMem region (base + (n * Bk + j.val) * sN + d.val * sD) =
+      X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
+        d, PUnit.unit) := by
+  rw [BlockState.readMem]
+  have haddr :
+      base + (n * Bk + j.val) * sN + d.val * sD =
+        (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+            base + idx.1.val * sN + idx.2.1.val * sD)
+          (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
+            d, PUnit.unit) := by
+    simp [FA1Math.blockIndex]
+  rw [haddr]
+  exact hX _
+
+/-- Strided tile-level version of `fa1_block_load_tile_eq`. -/
+theorem fa1_block_load_tile_eq_strided
+    {D Bk numKVBlocks : Nat}
+    (region : RegionName) (s : BlockState)
+    (base sN sD : Nat)
+    (X : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (hX : InputAt s region
+        (fun idx : TileIndex [Bk * numKVBlocks, D] =>
+          base + idx.1.val * sN + idx.2.1.val * sD) X)
+    (n : Nat) (hn : n < numKVBlocks) :
+    (⟨fun idx : TileIndex [Bk, D] =>
+        some (s.readMem region
+          (base + (n * Bk + idx.1.val) * sN + idx.2.1.val * sD))⟩
+      : Tile .real [Bk, D])
+      =
+      Tile.ofReal (fun idx : TileIndex [Bk, D] =>
+        X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
+          idx.2.1, PUnit.unit)) := by
+  ext idx
+  rw [Tile.ofReal_data]
+  exact congrArg some
+    (fa1_block_read_strided region s base sN sD X hX n hn idx.1 idx.2.1)
+
 set_option maxHeartbeats 800000 in
 /-- One FA-1 KV-block iteration preserves the loop invariant. -/
 theorem fa1_step
