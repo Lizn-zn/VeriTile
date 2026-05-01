@@ -374,8 +374,14 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.const $t), .real, SInfo.scalar⟩
   | `(tritonExpr| ($e:tritonExpr)) =>
       expandExpr env e
-  | `(tritonExpr| tl.program_id($_)) =>
-      pure ⟨← `(Op.programId), .nat, SInfo.scalar⟩
+  | `(tritonExpr| tl.program_id($e:tritonExpr)) =>
+      -- axis must be a numeric literal or `$(t)` antiquote (Nat)
+      let axisTerm : TSyntax `term ← match e with
+        | `(tritonExpr| $($t:term)) => `(($t : Nat))
+        | `(tritonExpr| $n:num)     => `(($n : Nat))
+        | _ => Macro.throwError
+                "tl.program_id(axis): axis must be a numeric literal or $(N)"
+      pure ⟨← `(Op.programId $axisTerm), .nat, SInfo.scalar⟩
   | `(tritonExpr| tl.arange($e:tritonExpr)) =>
       -- arange takes a Nat; recognize $(t) and bare numerals specially
       match e with

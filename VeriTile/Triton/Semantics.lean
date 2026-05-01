@@ -137,30 +137,39 @@ A block-level execution state.
 structure BlockState where
   mem   : RegionName → Nat → ℝ
   regs  : RegFile
-  pid   : Nat
+  /-- Per-axis program IDs. `pids axis` is the value of
+  `tl.program_id(axis)`. Total over `Nat`; out-of-range axes default to `0`
+  (or whatever the launch model picks). FA-1's batch/head launch grid uses
+  axes 0/1/2 for `(q_block, head, batch)`. -/
+  pids  : Nat → Nat
   undef : RegionName → Nat → ℝ := fun _ _ => 0
 
 instance : Inhabited BlockState :=
   ⟨{ mem := fun _ _ => 0
    , regs := fun _ _ _ => none
-   , pid := 0
+   , pids := fun _ => 0
    , undef := fun _ _ => 0 }⟩
 
 namespace BlockState
 
+/-- Backward-compatible single-axis program id: equals `pids 0`. -/
+@[reducible] def pid (s : BlockState) : Nat := s.pids 0
+
+@[simp] theorem pid_eq (s : BlockState) : s.pid = s.pids 0 := rfl
+
 @[ext] theorem ext {s t : BlockState}
     (hmem : ∀ region offset, s.mem region offset = t.mem region offset)
     (hregs : ∀ dtype shape name, s.regs dtype shape name = t.regs dtype shape name)
-    (hpid : s.pid = t.pid)
+    (hpids : ∀ axis, s.pids axis = t.pids axis)
     (hundef : ∀ region offset, s.undef region offset = t.undef region offset) :
     s = t := by
   cases s
   cases t
-  simp only at hmem hregs hpid hundef
-  subst_vars
+  simp only at hmem hregs hpids hundef
   congr
   · exact funext fun region => funext fun offset => hmem region offset
   · exact funext fun dtype => funext fun shape => funext fun name => hregs dtype shape name
+  · exact funext hpids
   · exact funext fun region => funext fun offset => hundef region offset
 
 /-- Update a single typed register. -/
@@ -204,6 +213,10 @@ def setReg (s : BlockState) (name : RegName)
     (region : RegionName) (offset : Nat) :
     (s.setReg name dtype shape v).mem region offset = s.mem region offset := rfl
 
+@[simp] theorem setReg_pids (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
+    (s.setReg name dtype shape v).pids = s.pids := rfl
+
 @[simp] theorem setReg_pid (s : BlockState) (name : RegName)
     (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
     (s.setReg name dtype shape v).pid = s.pid := rfl
@@ -222,6 +235,10 @@ def writeMem (s : BlockState) (region : RegionName) (offset : Nat) (v : ℝ) : B
     (offset : Nat) (v : ℝ) (dtype : TileDType) (shape : TileShape)
     (name : RegName) :
     (s.writeMem region offset v).regs dtype shape name = s.regs dtype shape name := rfl
+
+@[simp] theorem writeMem_pids (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) :
+    (s.writeMem region offset v).pids = s.pids := rfl
 
 @[simp] theorem writeMem_pid (s : BlockState) (region : RegionName)
     (offset : Nat) (v : ℝ) :
@@ -889,7 +906,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .constNat n, _ => some (Tile.scalar n)
   | .constBool b, _ => some (Tile.scalar b)
   | .negInf, _ => some (Tile.scalar (none : WithBot ℝ))
-  | .programId, s => some (Tile.scalar s.pid)
+  | .programId axis, s => some (Tile.scalar (s.pids axis))
   | .ref dtype shape name, s => s.regs dtype shape name
   | .arange n, _ => some (Tile.vec (fun i => i.val))
   | .broadcast e shape, s => do
@@ -1134,7 +1151,7 @@ example : evalOp (.constNat 7) default = some (Tile.scalar 7) := by
   unfold evalOp
   rfl
 
-example : evalOp .programId default = some (Tile.scalar 0) := by
+example : evalOp (.programId 0) default = some (Tile.scalar 0) := by
   unfold evalOp
   rfl
 

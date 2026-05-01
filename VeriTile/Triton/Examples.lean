@@ -45,7 +45,7 @@ example : evalOp
     (Op.loadMask "X" (Op.constNat 0)
       (Op.lt ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)))
     { mem := fun _ _ => 100, regs := fun _ _ _ => none
-    , pid := 0, undef := fun _ _ => 42 }
+    , pids := fun _ => 0, undef := fun _ _ => 42 }
     = some (Tile.scalar 42) := by
   rfl
 
@@ -53,10 +53,10 @@ example : evalOp
 example :
     let s1 : BlockState :=
       { mem := fun _ _ => 0, regs := fun _ _ _ => none
-      , pid := 0, undef := fun _ _ => 42 }
+      , pids := fun _ => 0, undef := fun _ _ => 42 }
     let s2 : BlockState :=
       { mem := fun _ _ => 0, regs := fun _ _ _ => none
-      , pid := 0, undef := fun _ _ => 99 }
+      , pids := fun _ => 0, undef := fun _ _ => 99 }
     let maskFalse : Op .bool [] :=
       Op.lt ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)
     evalOp (Op.loadMask "X" (Op.constNat 0) maskFalse) s1

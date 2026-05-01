@@ -473,7 +473,7 @@ theorem online_welford_correct
       rw [h]
     have stmts_nil : ∀ (s : BlockState), stepStmts [] s = some s := by
       intro s; conv_lhs => unfold stepStmts
-    have hpid : stepStmt (.assign .nat [] "pid" .programId) s
+    have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
                   = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
       simp [stepStmt, evalOp]
     have hM0 : stepStmt (.assign .real [] "M" (.const 0))
@@ -507,7 +507,7 @@ theorem online_welford_correct
     -- Chain: 3 assigns → s0; forLoop → sLoop; 2 stores → sMean.writeMem ...
     show stepStmts (onlineWelfordKernel xReg meanReg varReg blockSize).body s = _
     show stepStmts
-        [ .assign .nat [] "pid" .programId
+        [ .assign .nat [] "pid" (.programId 0)
         , .assign .real [] "M" (.const 0)
         , .assign .real [] "S" (.const 0)
         , .forLoop "i" blockSize (onlineWelfordLoopBody xReg blockSize)

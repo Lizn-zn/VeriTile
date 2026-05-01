@@ -1231,7 +1231,7 @@ def P_fa1
 /-- Statements before the KV-block loop: pid/offset setup, Q-block load,
 and accumulator initialization. -/
 private def fa1PreLoop (qReg : RegionName) (M D : Nat) : List Stmt :=
-  [ Stmt.assign .nat [] "pid" Op.programId
+  [ Stmt.assign .nat [] "pid" (Op.programId 0)
   , Stmt.assign .nat [M] "offs_m"
       (Op.add .nat Broadcast.scalarL
         (Op.mul .nat Broadcast.nil

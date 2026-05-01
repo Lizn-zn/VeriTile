@@ -361,7 +361,7 @@ theorem online_softmax_correct
     simpa [onlineSoftmaxLoopBody] using hLoopAux
   have hExec : exec (onlineSoftmaxKernel xReg yReg N) s = some sLoop := by
     -- Walk through each pre-loop statement explicitly, then forLoop via hLoop.
-    have hpid : stepStmt (.assign .nat [] "pid" .programId) s
+    have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
                   = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
       simp [stepStmt, evalOp]
     have hm0 : stepStmt (.assign .real [] "m" .negInf)
@@ -390,7 +390,7 @@ theorem online_softmax_correct
       conv_lhs => unfold stepStmts
     show stepStmts (onlineSoftmaxKernel xReg yReg N).body s = some sLoop
     show stepStmts
-        [ .assign .nat [] "pid" .programId
+        [ .assign .nat [] "pid" (.programId 0)
         , .assign .real [] "m" .negInf
         , .assign .real [] "l" (.const 0)
         , .forLoop "i" N (onlineSoftmaxLoopBody xReg N) ] s = some sLoop

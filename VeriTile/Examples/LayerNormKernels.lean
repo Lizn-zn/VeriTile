@@ -296,7 +296,7 @@ theorem fused_layernorm_correct
       intro st rest s s' h
       conv_lhs => unfold stepStmts
       rw [h]
-    have hpid : stepStmt (.assign .nat [] "pid" .programId) s
+    have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
                   = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
       simp [stepStmt, evalOp]
     have hM0 : stepStmt (.assign .real [] "M" (.const 0))
@@ -315,7 +315,7 @@ theorem fused_layernorm_correct
         = stepStmts (layerNormAffineTailKernel xReg γReg βReg yReg N ε).body sLoop
     -- Unfold kernel body literals so stmts_cons can match `:: pattern`
     simp only [show (fusedLayerNormKernel xReg γReg βReg yReg N ε).body =
-        ([ .assign .nat [] "pid" .programId
+        ([ .assign .nat [] "pid" (.programId 0)
          , .assign .real [] "M" (.const 0)
          , .assign .real [] "S" (.const 0)
          , .forLoop "i" N (onlineWelfordLoopBody xReg N)

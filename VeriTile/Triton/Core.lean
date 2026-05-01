@@ -402,7 +402,9 @@ Notes on individual constructors:
                 indices). See RP2 for the rationale behind separating the
                 `ℝ` and `Nat` channels.
 * `negInf` is a sentinel for `tl.full((), -inf)` used in `tl.full(... -float('inf'))`.
-* `programId` returns the current `tl.program_id(axis=0)` as a `Nat` scalar.
+* `programId axis` returns the current `tl.program_id(axis)` as a `Nat`
+                    scalar. Out-of-range axes evaluate to `0` per the
+                    `BlockState.pids` total-function model.
 * `arange n` produces a length-`n` `Nat`-valued tile `[0, 1, ..., n-1]`.
 * `broadcast e n` lifts a scalar to a length-`n` tile.
 * `full n e` fills a length-`n` tile with the scalar value of `e`.
@@ -443,7 +445,7 @@ inductive Op : TileDType → TileShape → Type where
   | constNat  : Nat → Op .nat []
   | constBool : Bool → Op .bool []
   | negInf    : Op .real []
-  | programId : Op .nat []
+  | programId : (axis : Nat) → Op .nat []
   | ref       : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape
   | arange    : (n : Nat) → Op .nat [n]
   | broadcast : Op dtype [] → (shape : TileShape) → Op dtype shape
