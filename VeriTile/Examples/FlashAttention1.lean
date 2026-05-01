@@ -1861,6 +1861,19 @@ theorem block_lNew_tile_eq {M D Bk N : Nat}
   rw [lPartial_succ_of_lt qStart Q N K scale k hk idx.1]
   rfl
 
+/-- Bridge `if (decide P : Bool) then a else b ↔ if P then a else b`.
+The kernel's `Tile.select` unfolds via `Tile.select_data` to a Bool-`ite`
+(its `c.data idx : Bool`), while `maskedScore` and similar Prop-`if`
+definitions elaborate to a Prop-`ite`. Both are propositionally equal
+but not definitionally; this is the canonical simp bridge between them,
+used in `fa1_step_strided_causal`'s operational simp. -/
+@[simp] theorem ite_decide_bool {P : Prop} [Decidable P] {α : Sort _}
+    (a b : α) :
+    (if (decide P : Bool) then a else b) = if P then a else b := by
+  by_cases h : P
+  · simp [h]
+  · simp [h]
+
 /-- The causal `o_acc = α * o_acc + p @ V` update at the
 simplified-input form realizes the causal streaming `oPartial(k+1)`.
 This is `oPartial_succ_of_lt` lifted to `Tile` level. -/
