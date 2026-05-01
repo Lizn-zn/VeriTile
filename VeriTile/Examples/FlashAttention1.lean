@@ -6965,6 +6965,71 @@ theorem fa1_step_strided_boundary
       simpa [s', s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
         using hV idx
 
+/-- Boundary strided FA-1 forward correctness, raw form. Bundles
+`fa1_forward_correct_strided_boundary_raw_of_step` with the proven
+`fa1_step_strided_boundary` so callers no longer need to supply the
+loop-step lemma explicitly. The output is observed only on in-range
+Q rows (`s.pids 0 * M + idx.1.val < S_q`); out-of-range rows are
+masked off by the kernel's store mask and outside this theorem's
+guarantee. The conclusion is the raw streaming-accumulator ratio
+`oPartial / lPartial` at `numKVBlocks`; the canonical-form bridge
+to `attentionReal` over the logical `[S_k, D]` domain is left to
+follow-up. -/
+theorem fa1_forward_correct_strided_boundary_raw
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (hBk : 0 < Bk)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQIn : ∀ idx : TileIndex [M, D],
+        s.pids 0 * M + idx.1.val < S_q →
+        s.mem qReg
+          (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
+    (hQOut : ∀ idx : TileIndex [M, D],
+        ¬ s.pids 0 * M + idx.1.val < S_q → Q idx = 0)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD)) :
+    ∀ idx : TileIndex [M, D],
+      s.pids 0 * M + idx.1.val < S_q →
+      observeTileAt
+          (exec (fa1ForwardKernelStridedBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some
+            (FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale
+                numKVBlocks idx /
+              FA1MathBoundary.lPartial Bk Q numKVBlocks K scale
+                numKVBlocks idx.1) := by
+  exact fa1_forward_correct_strided_boundary_raw_of_step
+    qReg kReg vReg outReg
+    sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+    sOB sOH sOM sOD Q K V scale s hQIn hQOut hK hV hInj
+    (fun i st hi hPi =>
+      fa1_step_strided_boundary hBk qReg kReg vReg
+        (s.pids 0) (s.pids 1) (s.pids 2)
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale i st hi hPi)
+
 
 /-- After running `fa1ForwardKernel` on a state where Q is loaded as a
 contiguous `[M, D]` row-major block at `(s.pid * M, ⋯)` and K, V are
