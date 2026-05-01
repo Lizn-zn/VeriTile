@@ -25,7 +25,7 @@ Triton kernel pair 的等价性.
 
 ## 当前状态
 
-Phase B 已完成。见 release
+Phase B 已完成,核心 Phase C 栈也已经落到 `main`。见 release
 [`v0.2-tier2`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.2-tier2)
 (前一里程碑:[`v0.1-tier1`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.1-tier1))。
 
@@ -44,6 +44,21 @@ Phase B 截止包含:
   `other=None` 通过 per-state `undef` oracle 非确定性建模。
 - 6 个比较算子(`<`、`<=`、`==`、`>`、`>=`、`!=`)在 `.real`/`.nat` 通道上,
   产生 `.bool` 通道。
+
+`main` 上已有的核心 Phase C 增量:
+
+- ND tile shape 与 ND broadcast,以及 typed `Op : TileDType → TileShape → Type`。
+- `tl.dot`、trailing-axis transpose、`tl.where`、`tl.sqrt`、reduction
+  `axis` / `keep_dims`、multi-axis `tl.program_id`、strided-offset memory helper。
+- 4D strided Q/K/V/O layout 上的 FA-1 forward 证明:
+  `fa1_forward_correct_4D` 与 `fa1_forward_correct_4D_causal`。
+- CI 中的 artifact gate:`scripts/check-artifact.sh`,检查 `lake build`、无
+  `sorry`、axiom whitelist、关键 theorem surface、README/example 漂移。
+
+当前支持的 Triton 子集和已知语义 gap 见
+[`documents/TritonSubset_zh.md`](./documents/TritonSubset_zh.md)。重要未建模部分包括
+完整 IEEE-754 语义、block pointer、`boundary_check`、atomic、async copy 和 whole-grid
+launch semantics。
 
 ## 环境配置
 
@@ -149,10 +164,11 @@ theorem softmax_kernels_refinement
 | [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | 逐元素加法(multi-buffer kernel ↔ math 正确性) |
 | [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | 融合 sigmoid MLP block vs 手动展开 `1/(1+exp(-z))`(kernel-pair refinement)|
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
+| [`VeriTile/Examples/FlashAttention1.lean`](./VeriTile/Examples/FlashAttention1.lean) | 4D strided layout 上的 FA-1 forward correctness,含 non-causal 与 causal |
 
 ## 更多文档
 
-- [支持的 Triton 子集](./documents/TritonSubset_zh.md)
+- [支持的 Triton 子集与语义 gap](./documents/TritonSubset_zh.md)
 - [LLM 证明 Wrapper](./scripts/README.md)
 - [LLM benchmark 协议](./bench/llm_eval/README.md)
 
@@ -282,9 +298,11 @@ lean-toolchain         锁定的 Lean toolchain
 ## 路线图
 
 - **Phase A:** Tier 1 refinement 示例, LLM proof wrapper, T3 scouting. 已完成.
-- **Phase B:** `forLoop` 语义, Tier 2 kernel, differential testing.
-- **Phase C:** `tl.dot`, masking, 2D tile, FlashAttention forward 证明.
-- **Phase D:** multi-block 执行, FA-1 vs FA-2, 论文 artifact.
+- **Phase B:** `forLoop` 语义, Tier 2 kernel, differential testing. 已完成.
+- **Phase C:** ND tile、masking、`tl.dot`、strided memory、FA-1 forward
+  correctness。核心 non-causal / causal 4D theorem 已在 `main`。
+- **Phase D:** 收敛剩余语义 gap:block pointer、`boundary_check`、IEEE-754
+  保真、whole-grid launch semantics、FA-1 vs FA-2、论文 artifact packaging。
 
 完整计划见 [`PLAN_zh.md`](./PLAN_zh.md).
 
