@@ -20,6 +20,7 @@ the proof effort.
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
@@ -2222,15 +2223,63 @@ theorem fa1_forward_correct
           outReg
           (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
         = some (attentionReal Q K V scale idx) := by
-  -- See doc above for the proof skeleton (Stages B / C / D); each
-  -- step is multi-hundred lines and depends on the streaming math
-  -- identity (`streaming_eq_attentionReal`) being proved first.
-  have _hMath := FA1Math.streaming_eq_attentionReal
-    (M := M) (D := D) (Bk := Bk) hBk Q numKVBlocks hNumKVBlocks K V scale
-  have _hDenom : ∀ idx : TileIndex [M, D],
-      FA1Math.lPartial Q numKVBlocks K scale numKVBlocks idx.1 ≠ 0 := by
-    intro idx
-    exact FA1Math.lPartial_final_ne_zero hBk Q numKVBlocks hNumKVBlocks K scale idx.1
-  sorry
+  -- Helper: `stepStmts` distributes over list append.
+  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
+      stepStmt st sa = some sb →
+      stepStmts (st :: rest) sa = stepStmts rest sb := by
+    intro st rest sa sb h
+    conv_lhs => unfold stepStmts
+    rw [h]
+  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
+      stepStmts l1 sa = some sb →
+      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
+    intro l1
+    induction l1 with
+    | nil =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        injection h with h
+        rw [List.nil_append, ← h]
+    | cons st rest ih =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        cases hst : stepStmt st sa with
+        | none => rw [hst] at h; simp at h
+        | some sm =>
+            rw [hst] at h
+            simp at h
+            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
+            exact ih l2 sm sb h
+  -- Stage B: pre-loop establishes P_fa1 0.
+  obtain ⟨s0, hPre, hP0⟩ :=
+    fa1_preLoop_correct qReg kReg vReg Q K V scale s _hQ _hK _hV
+  -- Stage C: forLoop_inv chains fa1_step over numKVBlocks iterations.
+  obtain ⟨sLoop, hLoopStmt, hPLoop⟩ :=
+    forLoop_inv (P := P_fa1 qReg kReg vReg s.pid Q K V scale) hP0
+      (fun i st hi hPi => fa1_step hBk qReg kReg vReg Q K V scale s.pid i st hi hPi)
+  -- Stage D: post-loop readout matches `attentionReal`.
+  intro idx
+  -- Reshape `exec` through body = preLoop ++ [forLoop] ++ postLoop.
+  show observeTileAt (stepStmts _ s) outReg _ idx = _
+  rw [show (fa1ForwardKernel qReg kReg vReg outReg M D Bk numKVBlocks scale).body =
+        fa1PreLoop qReg M D ++
+        [Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)] ++
+        fa1PostLoop outReg M D from rfl]
+  -- Walk preLoop: stepStmts (preLoop ++ [forLoop] ++ postLoop) s
+  --             = stepStmts ([forLoop] ++ postLoop) s0
+  rw [List.append_assoc,
+      stepStmts_append (fa1PreLoop qReg M D)
+        ([Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)] ++
+          fa1PostLoop outReg M D) s s0 hPre]
+  -- Walk forLoop: stepStmts ([forLoop] ++ postLoop) s0 = stepStmts postLoop sLoop.
+  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)]
+        (fa1PostLoop outReg M D) s0 sLoop ?_]
+  · exact fa1_postLoop_correct hBk hNumKVBlocks qReg kReg vReg outReg s.pid Q K V scale
+      sLoop hPLoop idx
+  · -- stepStmts [forLoop] s0 = stepStmts [] sLoop = some sLoop
+    rw [stepStmts_cons _ [] _ _ hLoopStmt]
+    show stepStmts [] sLoop = some sLoop
+    unfold stepStmts
+    rfl
 
 end VeriTile.Examples
