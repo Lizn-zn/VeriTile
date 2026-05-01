@@ -89,4 +89,22 @@ theorem softmax_reciprocal_refinement
       exact ⟨⟨0, hN⟩, Finset.mem_univ _⟩
   exact div_eq_mul_inv_real _ _ (ne_of_gt h_sum_pos)
 
+/-- View-level surface for `softmax_reciprocal_refinement`. -/
+theorem softmax_reciprocal_refinement_view
+    (xReg yReg : RegionName)
+    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    ∀ idx : TileIndex [N],
+      TensorView.observe (exec (stableSoftmaxKernel xReg yReg N) s)
+          (programTileView s yReg N) idx =
+      TensorView.observe (exec (softmaxRecipKernel  xReg yReg N) s)
+          (programTileView s yReg N) idx := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := N) (xs := xs) h_x
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using softmax_reciprocal_refinement xReg yReg N hN s xs hx idx.1
+
 end VeriTile.Examples

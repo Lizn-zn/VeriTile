@@ -238,4 +238,22 @@ theorem softmax_kernels_refinement
   simp only [] at h
   exact congrFun h i
 
+/-- View-level surface for `softmax_kernels_refinement`. -/
+theorem softmax_kernels_refinement_view
+    (xReg yReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ∀ idx : TileIndex [blockSize],
+      TensorView.observe (exec (naiveSoftmaxKernel  xReg yReg blockSize) s)
+          (programTileView s yReg blockSize) idx =
+      TensorView.observe (exec (stableSoftmaxKernel xReg yReg blockSize) s)
+          (programTileView s yReg blockSize) idx := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using softmax_kernels_refinement xReg yReg blockSize hN s xs hx idx.1
+
 end VeriTile.Examples

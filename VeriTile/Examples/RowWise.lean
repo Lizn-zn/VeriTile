@@ -108,6 +108,21 @@ theorem rowWiseSum_correct
   simp_rw [h_x]
   rfl
 
+/-- View-level surface for `rowWiseSum_correct`. -/
+theorem rowWiseSum_correct_view
+    (xReg yReg : RegionName) (nCol blockSize : Nat)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    TensorView.observe (exec (rowWiseSumKernel xReg yReg nCol blockSize) s)
+        (scalarCellView yReg s.pid) PUnit.unit
+      = some (rowWiseSumSpec xs) := by
+  have hx := inputRowLoadedAt_of_rowTileView_loaded (s := s) (region := xReg)
+    (rowStride := nCol) (blockSize := blockSize) (xs := xs) h_x
+  simpa [TensorView.observe, observeTileAt, scalarCellView,
+         TensorView.offset, Offset.strided, observeRowAt, BlockState.readMem]
+    using rowWiseSum_correct xReg yReg nCol blockSize s xs hx
+
 /-- **Row-wise max kernel correctness.**
 
 After running `rowWiseMaxKernel xReg yReg nCol blockSize` on a state where
@@ -129,5 +144,20 @@ theorem rowWiseMax_correct
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
   rfl
+
+/-- View-level surface for `rowWiseMax_correct`. -/
+theorem rowWiseMax_correct_view
+    (xReg yReg : RegionName) (nCol blockSize : Nat) (hN : 0 < blockSize)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    TensorView.observe (exec (rowWiseMaxKernel xReg yReg nCol blockSize) s)
+        (scalarCellView yReg s.pid) PUnit.unit
+      = some (rowWiseMaxSpec hN xs) := by
+  have hx := inputRowLoadedAt_of_rowTileView_loaded (s := s) (region := xReg)
+    (rowStride := nCol) (blockSize := blockSize) (xs := xs) h_x
+  simpa [TensorView.observe, observeTileAt, scalarCellView,
+         TensorView.offset, Offset.strided, observeRowAt, BlockState.readMem]
+    using rowWiseMax_correct xReg yReg nCol blockSize hN s xs hx
 
 end VeriTile.Examples

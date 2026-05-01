@@ -115,13 +115,16 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
 #### 3. 在 Lean 中写出两个 kernel 的等价定理, 先把证明留给 LLM Agent:
 
 ```lean
-theorem softmax_kernels_refinement
+theorem softmax_kernels_refinement_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N -> Real)
-    (h_x : InputLoadedAt s xReg N xs) :
-    forall i : Fin N,
-      observeAt (exec (naiveSoftmaxKernel  xReg yReg N) s) yReg N s.pid i =
-      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i := by
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    forall idx : TileIndex [N],
+      TensorView.observe (exec (naiveSoftmaxKernel  xReg yReg N) s)
+          (programTileView s yReg N) idx =
+      TensorView.observe (exec (stableSoftmaxKernel xReg yReg N) s)
+          (programTileView s yReg N) idx := by
   sorry
 ```
 
@@ -134,20 +137,17 @@ scripts/prove.sh path/to/your_refinement_theorem.lean --max-cycles 5
 对 softmax refinement, 生成后的证明会把两边分别化简到各自的 specification, 再调用数学恒等式:
 
 ```lean
-theorem softmax_kernels_refinement
+theorem softmax_kernels_refinement_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N -> Real)
-    (h_x : InputLoadedAt s xReg N xs) :
-    forall i : Fin N,
-      observeAt (exec (naiveSoftmaxKernel  xReg yReg N) s) yReg N s.pid i =
-      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i := by
-  intro i
-  rw [softmax_naive_correct  xReg yReg N hN s xs h_x i,
-      softmax_stable_correct xReg yReg N hN s xs h_x i]
-  congr 1
-  unfold naiveSpec stableSpec
-  have h := naive_eq_stable xs (tileMax hN xs)
-  simp only [] at h
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    forall idx : TileIndex [N],
+      TensorView.observe (exec (naiveSoftmaxKernel  xReg yReg N) s)
+          (programTileView s yReg N) idx =
+      TensorView.observe (exec (stableSoftmaxKernel xReg yReg N) s)
+          (programTileView s yReg N) idx := by
+  exact softmax_kernels_refinement_view xReg yReg N hN s xs h_x
   exact congrFun h i
 ```
 

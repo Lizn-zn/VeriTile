@@ -158,10 +158,12 @@ user supplies strided offset formulas such as:
 b * stride_b + h * stride_h + i * stride_s + d * stride_d
 ```
 
-The examples use helper predicates such as `InputAt` and `Offset.strided` to
-connect those formulas to mathematical tensor slices. Aliasing is represented
-by choosing equal or distinct `RegionName`s; pointer values, pointer casts,
-pointer comparison, and block pointers are not modeled.
+Public theorem surfaces use `TensorView.loaded` / `TensorView.observe` to
+connect those formulas to mathematical tensor slices. Internally, proofs may
+still use the lower-level `InputAt` escape hatch for arbitrary offset maps and
+then package the result as a `TensorView`. Aliasing is represented by choosing
+equal or distinct `RegionName`s; pointer values, pointer casts, pointer
+comparison, and block pointers are not modeled.
 
 ## Floating-Point Model
 

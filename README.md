@@ -121,13 +121,16 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
 #### 3. State the Lean equivalence theorem, initially leaving the proof to the LLM Agent:
 
 ```lean
-theorem softmax_kernels_refinement
+theorem softmax_kernels_refinement_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N -> Real)
-    (h_x : InputLoadedAt s xReg N xs) :
-    forall i : Fin N,
-      observeAt (exec (naiveSoftmaxKernel  xReg yReg N) s) yReg N s.pid i =
-      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i := by
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    forall idx : TileIndex [N],
+      TensorView.observe (exec (naiveSoftmaxKernel  xReg yReg N) s)
+          (programTileView s yReg N) idx =
+      TensorView.observe (exec (stableSoftmaxKernel xReg yReg N) s)
+          (programTileView s yReg N) idx := by
   sorry
 ```
 
@@ -141,18 +144,17 @@ For the softmax refinement, the generated proof reduces both sides to their
 specifications and then applies the math identity:
 
 ```lean
-theorem softmax_kernels_refinement
+theorem softmax_kernels_refinement_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N -> Real)
-    (h_x : InputLoadedAt s xReg N xs) :
-    forall i : Fin N,
-      observeAt (exec (naiveSoftmaxKernel  xReg yReg N) s) yReg N s.pid i =
-      observeAt (exec (stableSoftmaxKernel xReg yReg N) s) yReg N s.pid i := by
-  intro i
-  rw [softmax_naive_correct  xReg yReg N hN s xs h_x i,
-      softmax_stable_correct xReg yReg N hN s xs h_x i]
-  congr 1
-  unfold naiveSpec stableSpec
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    forall idx : TileIndex [N],
+      TensorView.observe (exec (naiveSoftmaxKernel  xReg yReg N) s)
+          (programTileView s yReg N) idx =
+      TensorView.observe (exec (stableSoftmaxKernel xReg yReg N) s)
+          (programTileView s yReg N) idx := by
+  exact softmax_kernels_refinement_view xReg yReg N hN s xs h_x
   have h := naive_eq_stable xs (tileMax hN xs)
   simp only [] at h
   exact congrFun h i

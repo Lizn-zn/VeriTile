@@ -27,6 +27,39 @@ def InputLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=
   ∀ i : Fin N, s.mem region (s.pid * N + i.val) = xs i
 
+/-- Canonical 1D tensor view for the tile owned by the current
+`program_id(0)`: offsets `[s.pid * N, s.pid * N + N)`.
+
+This is the view-level counterpart of `InputLoadedAt`. It is intentionally an
+example helper; general kernels should expose their own `TensorView`s or
+layout bundles. -/
+def programTileView (s : BlockState) (region : RegionName) (N : Nat) :
+    TensorView [N] :=
+  { region := region, base := s.pid * N, strides := [1] }
+
+/-- Feature-vector view at offsets `[0, N)`. -/
+def featureView (region : RegionName) (N : Nat) : TensorView [N] :=
+  { region := region, base := 0, strides := [1] }
+
+/-- Row tile view at offsets `[s.pid * rowStride, s.pid * rowStride + N)`. -/
+def rowTileView (s : BlockState) (region : RegionName)
+    (rowStride N : Nat) : TensorView [N] :=
+  { region := region, base := s.pid * rowStride, strides := [1] }
+
+/-- Scalar cell view at a single memory offset. -/
+def scalarCellView (region : RegionName) (base : Nat) : TensorView [] :=
+  { region := region, base := base, strides := [] }
+
+theorem inputLoadedAt_of_programTileView_loaded
+    {s : BlockState} {region : RegionName} {N : Nat} {xs : Fin N → ℝ}
+    (h : TensorView.loaded s (programTileView s region N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    InputLoadedAt s region N xs := by
+  intro i
+  have hi := h (i, PUnit.unit)
+  simpa [TensorView.loaded, InputAt, TensorView.offset,
+         programTileView, Offset.strided] using hi
+
 /-- Region `region` holds a feature vector at offsets `[0, N)`.
     Used for per-column parameters such as LayerNorm `γ` and `β`, which are
     shared across rows and are loaded with `tl.arange(0, N)`, not
@@ -34,6 +67,16 @@ def InputLoadedAt (s : BlockState) (region : RegionName)
 def InputFeatureLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=
   ∀ i : Fin N, s.mem region i.val = xs i
+
+theorem inputFeatureLoadedAt_of_featureView_loaded
+    {s : BlockState} {region : RegionName} {N : Nat} {xs : Fin N → ℝ}
+    (h : TensorView.loaded s (featureView region N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    InputFeatureLoadedAt s region N xs := by
+  intro i
+  have hi := h (i, PUnit.unit)
+  simpa [TensorView.loaded, InputAt, TensorView.offset,
+         featureView, Offset.strided] using hi
 
 /-- Read region `region` at the cell `pid*N + i.val` from the optional
     final `BlockState` of an `exec` call. -/
@@ -49,6 +92,17 @@ noncomputable def observeAt
 def InputRowLoadedAt (s : BlockState) (region : RegionName)
     (rowStride blockSize : Nat) (xs : Fin blockSize → ℝ) : Prop :=
   ∀ i : Fin blockSize, s.mem region (s.pid * rowStride + i.val) = xs i
+
+theorem inputRowLoadedAt_of_rowTileView_loaded
+    {s : BlockState} {region : RegionName}
+    {rowStride blockSize : Nat} {xs : Fin blockSize → ℝ}
+    (h : TensorView.loaded s (rowTileView s region rowStride blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    InputRowLoadedAt s region rowStride blockSize xs := by
+  intro i
+  have hi := h (i, PUnit.unit)
+  simpa [TensorView.loaded, InputAt, TensorView.offset,
+         rowTileView, Offset.strided] using hi
 
 /-- Read region `region` at the single cell `basePid` from the optional
     final `BlockState` of an `exec` call. Models the

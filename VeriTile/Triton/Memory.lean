@@ -1,16 +1,70 @@
 /-
 VeriTile.Triton.Memory
 
-Memory-contract layer for VeriTile's Triton model.
+Memory-contract layer for VeriTile's Triton model — the reusable bridge
+between low-level named-region memory and high-level tensor-shaped
+mathematical objects.
 
-This module defines the reusable bridge between low-level named-region memory
-and high-level tensor-shaped mathematical objects:
+## Three-layer mental model
 
-* `InputAt` / `observeTileAt` for arbitrary offset maps.
+VeriTile's memory modeling sits in three layers, low → high:
+
+  Storage      `BlockState.mem : RegionName → Nat → ℝ`     -- raw bytes
+                ↕
+  Address map  `Offset.strided` / arbitrary `offsetFn`     -- "index → addr"
+                ↕
+  View         `TensorView { region, base, strides }`      -- typed fat pointer
+
+The Storage layer is ground truth — `tl.load` / `tl.store` ultimately read
+and write `s.mem region addr`. The View layer is what kernel correctness
+theorems quantify over; users name tensors, not byte addresses.
+
+## What `TensorView` is (and isn't)
+
+`TensorView` is **not** memory. It is a *lens* — typed metadata describing
+how a logical N-dim tensor maps to memory addresses, in the same spirit as
+NumPy `ndarray` (without the data buffer), PyTorch `Tensor.stride()`
+metadata, C++ `std::mdspan`, or Triton's own `tl.make_block_ptr`:
+
+  | piece    | role                                              |
+  | -------- | ------------------------------------------------- |
+  | shape    | type-level dimensions (`TileShape`)               |
+  | region   | which named buffer in `BlockState.mem`            |
+  | base     | starting offset within that region                |
+  | strides  | per-axis cell-count step (not byte step)          |
+
+`view.offset idx` computes an address; `view.loaded s xs` declares "memory
+at these addresses contains tensor `xs`"; `view.observe sf idx` reads back.
+None of this stores data — data lives in `BlockState.mem`.
+
+## Coverage and escape hatches
+
+`TensorView` covers the **strided-affine** address-map subset: every
+`view.offset idx` decomposes as `base + Σⱼ idxⱼ * strides[j]`. This handles
+the vast majority of production kernels (FA-1/2 forward and backward, GEMM,
+LayerNorm, Welford, RMSNorm, sliding-window attention, …).
+
+Non-affine addressing patterns need a different lens (still on top of the
+same `BlockState.mem`):
+
+  * Paged KV (issue #42, vLLM-style):
+      `addr = base + block_table[idx_block] * page_stride + …`
+      — data-dependent indirection; future `GatheredView` / `Op.gather`.
+  * Scatter / gather with arbitrary index tensors — same family.
+  * Atomic reduce — orthogonal (concurrency, not addressing; see issue #12).
+
+For these, `InputAt` (arbitrary `offsetFn`) is the present escape hatch;
+when they enter scope, expect a sibling structure to `TensorView`.
+
+## Module contents
+
+* `InputAt` / `observeTileAt` for arbitrary offset maps (low-level).
 * `Offset` families for linear, row-major, contiguous, and generic strided
-  layouts, with injectivity lemmas.
-* `TensorView`, the first-class metadata object for region/base/stride tensor
-  views.
+  layouts, with injectivity lemmas (`StridesValid` + `strided_inj`).
+* `TensorView`: typed fat-pointer metadata; preferred surface for kernel
+  pre/post-conditions.
+
+## API guidance
 
 The preferred public memory-contract surface is `TensorView.loaded`: new
 kernel correctness theorems should generally quantify over tensor views and
@@ -19,10 +73,11 @@ low-level escape hatch for proof internals and one-off address maps that are
 not yet packaged as tensor metadata.
 
 `TensorView.base` is the view's storage offset, mirroring a tensor metadata
-field. For tiled kernels, keep the view as the fixed logical tensor layout and
-put per-`program_id` block offsets in the kernel's address expression or in
-the theorem's local output-view helper. Constructing a fresh per-program view
-is allowed, but the main path is fixed view metadata plus dynamic offsets.
+field. For tiled kernels, keep the view as the fixed logical tensor layout
+and put per-`program_id` block offsets in the kernel's address expression or
+in the theorem's local output-view helper. Constructing a fresh per-program
+view is allowed, but the main path is fixed view metadata plus dynamic
+offsets.
 -/
 
 import VeriTile.Triton.Core

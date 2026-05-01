@@ -162,4 +162,20 @@ theorem log_sum_exp_refinement
   unfold directLSESpec stableLSESpec
   exact log_sum_exp_shift_invariant hN xs (tileMax hN xs)
 
+/-- View-level surface for `log_sum_exp_refinement`. -/
+theorem log_sum_exp_refinement_view
+    (xReg yReg : RegionName)
+    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    TensorView.observe (exec (directLSEKernel xReg yReg N) s)
+        (scalarCellView yReg s.pid) PUnit.unit =
+    TensorView.observe (exec (stableLSEKernel xReg yReg N) s)
+        (scalarCellView yReg s.pid) PUnit.unit := by
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := N) (xs := xs) h_x
+  simpa [TensorView.observe, observeTileAt, scalarCellView,
+         TensorView.offset, Offset.strided, observeLSE, BlockState.readMem]
+    using log_sum_exp_refinement xReg yReg N hN s xs hx
+
 end VeriTile.Examples

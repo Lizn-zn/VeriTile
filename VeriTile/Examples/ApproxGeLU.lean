@@ -3257,6 +3257,24 @@ theorem approx_gelu_kernel_correct
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]
 
+/-- View-level surface for `approx_gelu_kernel_correct`. -/
+theorem approx_gelu_kernel_correct_view
+    (xReg outReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
+    (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ∀ idx : TileIndex [blockSize],
+      TensorView.observe (exec (approxGeLUKernel xReg outReg blockSize) s)
+          (programTileView s outReg blockSize) idx
+        = some (approxGeLUSpec xs idx.1) := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using approx_gelu_kernel_correct xReg outReg blockSize hN s xs hx idx.1
+
 /-- Target error tolerance for the standard tanh/sigmoid GeLU approximation. -/
 noncomputable def approxGeLUEps : ℝ := 1 / 1000
 

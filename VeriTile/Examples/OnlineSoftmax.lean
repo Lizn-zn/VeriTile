@@ -405,4 +405,19 @@ theorem online_softmax_correct
   · rw [hExec]
     simp [hl]
 
+/-- View-level surface for `online_softmax_correct`. -/
+theorem online_softmax_correct_view
+    (xReg yReg : RegionName) (N : Nat) (hN : 0 < N)
+    (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    let final := exec (onlineSoftmaxKernel xReg yReg N) s
+    final.bind (fun s' => (s'.regs .real [] "m").map (fun t => t.data PUnit.unit))
+        = some (onlineSoftmaxM xs N)
+    ∧ final.bind (fun s' => (s'.regs .real [] "l").map (fun t => t.data PUnit.unit))
+        = some (onlineSoftmaxL xs N) := by
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := N) (xs := xs) h_x
+  exact online_softmax_correct xReg yReg N hN s xs hx
+
 end VeriTile.Examples

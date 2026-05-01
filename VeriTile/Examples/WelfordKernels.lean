@@ -547,4 +547,35 @@ theorem welford_kernels_refinement
     online_welford_correct xReg meanReg varReg blockSize hN s xs h_x h_mv
   exact ⟨h_2p_mean.trans h_on_mean.symm, h_2p_var.trans h_on_var.symm⟩
 
+/-- View-level surface for `welford_kernels_refinement`. -/
+theorem welford_kernels_refinement_view
+    (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_mv : meanReg ≠ varReg) :
+    let final_2p := exec (twopassWelfordKernel xReg meanReg varReg blockSize) s
+    let final_on := exec (onlineWelfordKernel xReg meanReg varReg blockSize) s
+    TensorView.observe final_2p (scalarCellView meanReg 0) PUnit.unit
+        = TensorView.observe final_on (scalarCellView meanReg 0) PUnit.unit
+    ∧ TensorView.observe final_2p (scalarCellView varReg 0) PUnit.unit
+        = TensorView.observe final_on (scalarCellView varReg 0) PUnit.unit := by
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  obtain ⟨hm, hv⟩ :=
+    welford_kernels_refinement xReg meanReg varReg blockSize hN s xs hx h_mv
+  constructor
+  · cases h2p : exec (twopassWelfordKernel xReg meanReg varReg blockSize) s <;>
+      cases hon : exec (onlineWelfordKernel xReg meanReg varReg blockSize) s <;>
+      simp [TensorView.observe, observeTileAt, scalarCellView,
+            TensorView.offset, Offset.strided, BlockState.readMem,
+            h2p, hon] at hm ⊢
+    exact hm
+  · cases h2p : exec (twopassWelfordKernel xReg meanReg varReg blockSize) s <;>
+      cases hon : exec (onlineWelfordKernel xReg meanReg varReg blockSize) s <;>
+      simp [TensorView.observe, observeTileAt, scalarCellView,
+            TensorView.offset, Offset.strided, BlockState.readMem,
+            h2p, hon] at hv ⊢
+    exact hv
+
 end VeriTile.Examples

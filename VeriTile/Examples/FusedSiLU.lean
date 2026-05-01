@@ -386,4 +386,36 @@ theorem silu_kernels_refinement
         xReg gateReg residualReg zReg siluReg outReg blockSize hN s xs gates residuals
         h_x h_g h_res h_zRes h_siluRes i]
 
+/-- View-level surface for `silu_kernels_refinement`. -/
+theorem silu_kernels_refinement_view
+    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
+    (xs gates residuals : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_g : TensorView.loaded s (programTileView s gateReg blockSize)
+      (fun idx : TileIndex [blockSize] => gates idx.1))
+    (h_res : TensorView.loaded s (programTileView s residualReg blockSize)
+      (fun idx : TileIndex [blockSize] => residuals idx.1))
+    (h_zRes : zReg ≠ residualReg)
+    (h_siluRes : siluReg ≠ residualReg) :
+    ∀ idx : TileIndex [blockSize],
+      TensorView.observe
+          (exec (fusedSiLUKernel xReg gateReg residualReg outReg blockSize) s)
+          (programTileView s outReg blockSize) idx =
+      TensorView.observe
+          (execUnfusedSiLU xReg gateReg residualReg zReg siluReg outReg blockSize s)
+          (programTileView s outReg blockSize) idx := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  have hg := inputLoadedAt_of_programTileView_loaded (s := s) (region := gateReg)
+    (N := blockSize) (xs := gates) h_g
+  have hres := inputLoadedAt_of_programTileView_loaded (s := s) (region := residualReg)
+    (N := blockSize) (xs := residuals) h_res
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using silu_kernels_refinement xReg gateReg residualReg zReg siluReg outReg
+      blockSize hN s xs gates residuals hx hg hres h_zRes h_siluRes idx.1
+
 end VeriTile.Examples

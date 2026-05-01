@@ -150,9 +150,11 @@ Offset 是显式 `.nat` 表达式。高维 tensor 通过用户写出的 strided 
 b * stride_b + h * stride_h + i * stride_s + d * stride_d
 ```
 
-examples 用 `InputAt` 和 `Offset.strided` 等 helper 把这些 offset 公式连接到数学
-tensor slice。aliasing 通过选择相同或不同的 `RegionName` 表示;pointer value、
-pointer cast、pointer comparison、block pointer 都还没有建模。
+公开 theorem surface 用 `TensorView.loaded` / `TensorView.observe` 把这些 offset
+公式连接到数学 tensor slice。证明内部仍可使用更底层的 `InputAt` escape hatch
+表示任意 offset map,再把结果封装成 `TensorView`。aliasing 通过选择相同或不同的
+`RegionName` 表示;pointer value、pointer cast、pointer comparison、block pointer
+都还没有建模。
 
 ## 浮点模型
 

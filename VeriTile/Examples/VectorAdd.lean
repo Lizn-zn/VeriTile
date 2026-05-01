@@ -109,6 +109,28 @@ theorem add_kernel_correct
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_y]
 
+/-- View-level surface for `add_kernel_correct`. -/
+theorem add_kernel_correct_view
+    (xReg yReg outReg : RegionName)
+    (blockSize : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_y : TensorView.loaded s (programTileView s yReg blockSize)
+      (fun idx : TileIndex [blockSize] => ys idx.1)) :
+    ∀ idx : TileIndex [blockSize],
+      TensorView.observe (exec (addKernel xReg yReg outReg blockSize) s)
+          (programTileView s outReg blockSize) idx
+        = some (addSpec xs ys idx.1) := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  have hy := inputLoadedAt_of_programTileView_loaded (s := s) (region := yReg)
+    (N := blockSize) (xs := ys) h_y
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using add_kernel_correct xReg yReg outReg blockSize hBlockSize s xs ys hx hy idx.1
+
 /-! ## Masked variant (boundary mask)
 
 The aligned `addKernel` above only handles `n_elements = block_size`. The
@@ -193,5 +215,30 @@ theorem add_kernel_masked_correct
   by_cases hi : s.pid * blockSize + i.val < nElements
   · simp [hi, h_x, h_y]
   · simp [hi]
+
+/-- View-level surface for `add_kernel_masked_correct`. -/
+theorem add_kernel_masked_correct_view
+    (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_y : TensorView.loaded s (programTileView s yReg blockSize)
+      (fun idx : TileIndex [blockSize] => ys idx.1)) :
+    ∀ idx : TileIndex [blockSize],
+      let addr := s.pid * blockSize + idx.1.val
+      TensorView.observe (exec (addKernelMasked xReg yReg outReg blockSize nElements) s)
+          (programTileView s outReg blockSize) idx
+        = some (if addr < nElements then xs idx.1 + ys idx.1
+                else s.readMem outReg addr) := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  have hy := inputLoadedAt_of_programTileView_loaded (s := s) (region := yReg)
+    (N := blockSize) (xs := ys) h_y
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt, addSpec]
+    using add_kernel_masked_correct xReg yReg outReg blockSize nElements
+      hBlockSize s xs ys hx hy idx.1
 
 end VeriTile.Examples

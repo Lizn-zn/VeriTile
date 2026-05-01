@@ -2,14 +2,14 @@
 #
 # Format:
 #   path/to/file.lean<TAB>representative_theorem<TAB>short label
-VeriTile/Examples/SoftmaxEq.lean	softmax_kernels_refinement	Naive softmax vs stable softmax
-VeriTile/Examples/LogSumExpEq.lean	log_sum_exp_refinement	Direct LSE vs shift-trick LSE
-VeriTile/Examples/SoftmaxReciprocal.lean	softmax_reciprocal_refinement	Stable softmax division vs reciprocal
-VeriTile/Examples/VectorAdd.lean	add_kernel_masked_correct	Vector add correctness
-VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct	Online softmax correctness
-VeriTile/Examples/RowWise.lean	rowWiseSum_correct	Row-wise reductions
-VeriTile/Examples/FusedSiLU.lean	silu_kernels_refinement	Fused SiLU refinement
-VeriTile/Examples/WelfordKernels.lean	welford_kernels_refinement	Welford refinement
-VeriTile/Examples/LayerNormKernels.lean	layernorm_kernels_refinement	LayerNorm refinement
-VeriTile/Examples/ApproxGeLU.lean	approx_gelu_kernel_correct	ApproxGeLU correctness
+VeriTile/Examples/SoftmaxEq.lean	softmax_kernels_refinement_view	Naive softmax vs stable softmax
+VeriTile/Examples/LogSumExpEq.lean	log_sum_exp_refinement_view	Direct LSE vs shift-trick LSE
+VeriTile/Examples/SoftmaxReciprocal.lean	softmax_reciprocal_refinement_view	Stable softmax division vs reciprocal
+VeriTile/Examples/VectorAdd.lean	add_kernel_masked_correct_view	Vector add correctness
+VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct_view	Online softmax correctness
+VeriTile/Examples/RowWise.lean	rowWiseSum_correct_view	Row-wise reductions
+VeriTile/Examples/FusedSiLU.lean	silu_kernels_refinement_view	Fused SiLU refinement
+VeriTile/Examples/WelfordKernels.lean	welford_kernels_refinement_view	Welford refinement
+VeriTile/Examples/LayerNormKernels.lean	layernorm_kernels_refinement_view	LayerNorm refinement
+VeriTile/Examples/ApproxGeLU.lean	approx_gelu_kernel_correct_view	ApproxGeLU correctness
 VeriTile/Examples/FlashAttention1.lean	fa1_forward_correct_4D_causal_views	FlashAttention-1 causal 4D correctness
