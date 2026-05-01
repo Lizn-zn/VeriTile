@@ -67,7 +67,7 @@ check_axioms() {
     if [[ "${text}" =~ ^[[:space:]]*axiom[[:space:]]+([^[:space:]:]+) ]]; then
       printf '%s:%s\n' "${file}" "${BASH_REMATCH[1]}"
     fi
-  done < <(rg -n "^[[:space:]]*axiom[[:space:]]+" VeriTile || true) | sort >"${actual}"
+  done < <(grep -RInE "^[[:space:]]*axiom[[:space:]]+" VeriTile --include='*.lean' || true) | sort >"${actual}"
 
   comm -23 "${actual}" "${expected}" >"${unexpected}"
   comm -13 "${actual}" "${expected}" >"${missing}"
@@ -89,6 +89,7 @@ check_axioms() {
 
 check_key_theorems() {
   local line file name
+  local before="${failures}"
   while IFS= read -r line || [[ -n "${line}" ]]; do
     is_comment_or_blank "${line}" && continue
     file="${line%%:*}"
@@ -100,7 +101,7 @@ check_key_theorems() {
     fi
   done < "${THEOREM_LIST}"
 
-  if [[ "${failures}" -eq 0 ]]; then
+  if [[ "${failures}" -eq "${before}" ]]; then
     ok "key theorem surface exists"
   fi
 }
