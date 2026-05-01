@@ -97,6 +97,76 @@ def fa1ForwardKernel
   tl.store($(outReg) + o_ptrs, out)
 }
 
+/-! ## Strided / 4D-aware kernel
+
+Real-Triton FA-1 kernels are launched on a 3D grid `(numQBlocks, H, B)`
+and use `tl.program_id(0/1/2)` plus per-tensor stride parameters for
+arbitrary `[B, H, S, D]` memory layouts. The strided kernel below
+mirrors that shape: 16 stride parameters (4 per Q/K/V/O), three
+`program_id` axes for `(q_block, head, batch)`. Body is otherwise
+identical to `fa1ForwardKernel` above — same online-softmax recurrence
+on the per-`(b, h, q_block)` slice.
+
+The Step 1 proof (issue #39) targets this kernel. The original
+`fa1ForwardKernel` is recovered by instantiating
+`stride_q*b = stride_q*h = 0`, `stride_qs = D`, `stride_qd = 1`, etc.
+Step 1 (i) lands the definition only — proofs come in subsequent
+commits. -/
+
+def fa1ForwardKernelStrided
+    (qReg kReg vReg outReg : RegionName)
+    (M D Bk numKVBlocks : Nat)
+    -- Q strides (axes [B, H, S_q, D]):
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    -- K strides (axes [B, H, S_k, D]):
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    -- V strides (axes [B, H, S_k, D]):
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    -- Output strides (axes [B, H, S_q, D]):
+    (stride_ob stride_oh stride_om stride_od : Nat)
+    (scale : ℝ) : Kernel := triton {
+  pid_qb := tl.program_id(0)
+  pid_h  := tl.program_id(1)
+  pid_b  := tl.program_id(2)
+
+  q_base_off := pid_b * $(stride_qb) + pid_h * $(stride_qh)
+  k_base_off := pid_b * $(stride_kb) + pid_h * $(stride_kh)
+  v_base_off := pid_b * $(stride_vb) + pid_h * $(stride_vh)
+  o_base_off := pid_b * $(stride_ob) + pid_h * $(stride_oh)
+
+  offs_m := pid_qb * $(M) + tl.arange(0, $(M))
+  offs_d := tl.arange(0, $(D))
+
+  q_ptrs := q_base_off + offs_m[:, None] * $(stride_qs) + offs_d[None, :] * $(stride_qd)
+  q      := tl.load($(qReg) + q_ptrs)
+
+  m_i    := tl.full([$(M)], -inf)
+  l_i    := tl.zeros([$(M)])
+  o_acc  := tl.zeros([$(M), $(D)])
+
+  tl.for n in $(numKVBlocks) {
+    offs_n  := n * $(Bk) + tl.arange(0, $(Bk))
+    k_ptrs  := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
+    v_ptrs  := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
+    k       := tl.load($(kReg) + k_ptrs)
+    v       := tl.load($(vReg) + v_ptrs)
+
+    scores  := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    m_block := tl.max(scores, axis = 1)
+    m_new   := tl.max(m_i, m_block)
+    alpha   := tl.exp(m_i - m_new)
+    p       := tl.exp(scores - m_new[:, None])
+    l_new   := alpha * l_i + tl.sum(p, axis = 1)
+    o_acc   := alpha[:, None] * o_acc + tl.dot(p, v)
+    m_i     := m_new
+    l_i     := l_new
+  }
+
+  out    := o_acc / l_i[:, None]
+  o_ptrs := o_base_off + offs_m[:, None] * $(stride_om) + offs_d[None, :] * $(stride_od)
+  tl.store($(outReg) + o_ptrs, out)
+}
+
 /-! ## Math model — softmax-attention
 
 Spec layer is ℝ-valued: `BlockState.mem` only reads ℝ, never `⊥`, so
