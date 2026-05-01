@@ -1,9 +1,10 @@
 /-
 VeriTile.Math.GeluTaylor20PolyDef
 
-Taylor-20 polynomial definition for the midrange approximate-GeLU certificate.
-This file intentionally avoids importing erf/sigmoid facts; the polynomial
-bound proofs only need real arithmetic.
+Taylor-20 polynomial definition for the midrange approximate-GeLU
+certificate (`GeluTaylor20Cert`). Kept axiom-free of erf/sigmoid so the
+polynomial-bound proofs in `GeluTaylor20PolyLowerCases` /
+`GeluTaylor20PolyUpperCases` only need real arithmetic.
 -/
 
 import Mathlib.Data.Real.Basic

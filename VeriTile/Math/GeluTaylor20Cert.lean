@@ -3,9 +3,19 @@ VeriTile.Math.GeluTaylor20Cert
 
 Standalone target for the midrange approximate-GeLU Taylor-20 certificate.
 
-This file intentionally avoids importing `VeriTile.Examples.ApproxGeLU`: the
-goal is to expose the former axiom as one small theorem statement, with only
-the mathematical definitions needed by an external prover.
+Two halves:
+  * `geluError_mid_taylor20_bound` — `|polynomial| ≤ 5e-4` on `[83/100, 19/5]`.
+    Proven internally via case-split + `nlinarith` in `GeluTaylor20PolyBound`
+    (driver) plus `GeluTaylor20PolyLowerCases` / `GeluTaylor20PolyUpperCases`
+    (4 cases, ~500K–700K heartbeats each).
+  * `geluError_mid_taylor20_approx` — `|geluError − polynomial| ≤ 1e-5` on the
+    same interval. Kept as an axiom (see its docstring).
+
+`geluError_mid_taylor20_cert_standalone` packages the two halves into the
+shape consumed by `Examples.ApproxGeLU`. This file intentionally avoids
+importing `VeriTile.Examples.ApproxGeLU` so the math content stays
+self-contained; `approxGeLUScalarForCert` mirrors the kernel-side
+`approxGeLUScalar` and must be kept in sync if the kernel formula changes.
 -/
 
 import Mathlib.Analysis.SpecialFunctions.Sigmoid
@@ -21,8 +31,9 @@ noncomputable def exactGeLUScalarForCert (x : ℝ) : ℝ :=
 
 /-- Tanh-style approximate GeLU scalar function used by the Triton kernel.
 
-The `tanh` is represented as `2 * sigmoid (2u) - 1`, matching the embedded
-kernel expression in `VeriTile.Examples.ApproxGeLU`.
+Mirror of `approxGeLUScalar` in `Examples.ApproxGeLU`. `tanh` is represented
+as `2 * sigmoid (2u) - 1`, matching the embedded kernel expression. Keep this
+in sync if the kernel-side formula or its constants change.
 -/
 noncomputable def approxGeLUScalarForCert (x : ℝ) : ℝ :=
   let x3 := x * x * x
@@ -35,19 +46,24 @@ noncomputable def approxGeLUScalarForCert (x : ℝ) : ℝ :=
 noncomputable def geluErrorForCert (x : ℝ) : ℝ :=
   approxGeLUScalarForCert x - exactGeLUScalarForCert x
 
-/-- Taylor-20 approximation remainder, kept as the external certificate
-boundary. Proving this internally requires verified high-order derivative
-bounds for the sigmoid/erf composition. -/
+/-- Taylor-20 approximation remainder — the external certificate boundary.
+
+On `[83/100, 19/5]`, the degree-20 Taylor expansion of `geluErrorForCert`
+at `463/200` matches `geluErrorForCert` within `1e-5`. Proving this
+internally would require either (a) Lagrange remainder over an explicit
+21st-derivative bound for the sigmoid / erf composition, or (b) interval
+arithmetic over a micro-partition of the domain. Both are out of scope;
+discharged externally for now. -/
 axiom geluError_mid_taylor20_approx :
     ∀ x ∈ Set.Icc (83 / 100 : ℝ) (19 / 5),
       |geluErrorForCert x - geluError_mid_taylor20_forCert x| ≤ 1 / 100000
 
-/-- Standalone version of the former `geluError_mid_taylor20_cert` axiom.
+/-- Math-side counterpart of `Examples.ApproxGeLU.geluError_mid_taylor20_cert`.
 
-This is the theorem intended for external certification:
-on `[83/100, 19/5]`, the Taylor-20 polynomial approximates the GeLU error
-within `1e-5`, and the polynomial itself is bounded by `5e-4`.
--/
+Conjoins `geluError_mid_taylor20_approx` (axiom — Taylor remainder) with
+`geluError_mid_taylor20_bound` (proven — polynomial bound). Together: on
+`[83/100, 19/5]`, the Taylor-20 polynomial approximates the GeLU error
+within `1e-5`, and the polynomial itself is bounded by `5e-4`. -/
 theorem geluError_mid_taylor20_cert_standalone :
     ∀ x ∈ Set.Icc (83 / 100 : ℝ) (19 / 5),
       |geluErrorForCert x - geluError_mid_taylor20_forCert x| ≤ 1 / 100000 ∧

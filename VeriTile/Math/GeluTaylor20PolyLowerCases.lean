@@ -1,7 +1,10 @@
 /-
 VeriTile.Math.GeluTaylor20PolyLowerCases
 
-Case lemmas for the lower half of the Taylor-20 polynomial bound.
+Case lemmas for the lower half (`-5e-4 ≤ poly`) of the Taylor-20 polynomial
+bound, split on `x ≤ 463/200`. Consumed by `GeluTaylor20PolyBound`.
+Each case is closed by a single `nlinarith` with an explicit power-nonneg
+witness list; raised heartbeats are required.
 -/
 
 import Mathlib.Tactic.Linarith

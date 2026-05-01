@@ -2,7 +2,9 @@
 VeriTile.Math.GeluTaylor20PolyBound
 
 Verified polynomial half of the midrange approximate-GeLU Taylor-20
-certificate.
+certificate (`GeluTaylor20Cert`). Driver file: dispatches on
+`x ≤ 463/200` and delegates to the four `nlinarith` case lemmas in
+`GeluTaylor20PolyLowerCases` / `GeluTaylor20PolyUpperCases`.
 -/
 
 import VeriTile.Math.GeluTaylor20PolyLowerCases
