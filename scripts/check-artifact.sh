@@ -8,6 +8,7 @@ cd "${PROJECT_ROOT}"
 AXIOM_WHITELIST="${SCRIPT_DIR}/artifact-axiom-whitelist.txt"
 THEOREM_LIST="${SCRIPT_DIR}/artifact-theorems.txt"
 EXAMPLE_LIST="${SCRIPT_DIR}/artifact-examples.tsv"
+DOC_TERMS="${SCRIPT_DIR}/artifact-doc-terms.tsv"
 
 failures=0
 
@@ -141,11 +142,30 @@ check_readme_example_links() {
   fi
 }
 
+check_documentation_terms() {
+  local line file term
+  local before="${failures}"
+  while IFS=$'\t' read -r file term || [[ -n "${file:-}" ]]; do
+    is_comment_or_blank "${file:-}" && continue
+    if [[ ! -f "${file}" ]]; then
+      fail "documentation term check missing file: ${file}"
+      continue
+    fi
+    if ! grep -Fq "${term}" "${file}"; then
+      fail "${file} is missing required documentation term: ${term}"
+    fi
+  done < "${DOC_TERMS}"
+  if [[ "${failures}" -eq "${before}" ]]; then
+    ok "Triton subset/gap docs mention required artifact terms"
+  fi
+}
+
 run_build_no_sorry
 check_axioms
 check_key_theorems
 check_examples_manifest
 check_readme_example_links
+check_documentation_terms
 
 if [[ "${failures}" -eq 0 ]]; then
   printf '[ok] artifact checks passed\n'
