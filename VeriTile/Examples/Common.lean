@@ -149,10 +149,11 @@ def rowMajor2D {rows cols : Nat} (base rowStride : Nat) :
 
 /-! ### Injectivity theorems
 
-`linear1D_inj` (1D) and `rowMajor2D_inj` (2D) are the two patterns FA-1
-forward + Tier 1/2 kernels actually use; the general `strided_inj` under a
-suitable "non-overlapping strides" hypothesis can be added when an ND
-kernel needs it. -/
+`linear1D_inj` (1D) and `rowMajor2D_inj` (2D) are the standalone proofs
+for the patterns Tier 1/2 + FA-1 forward kernels currently use. The general
+ND `strided_inj` (below, parameterized by `StridesValid`) subsumes both;
+the specialized versions are kept for ergonomics at existing call sites.
+Step 1+ FA-1 4D layouts and beyond use `strided_inj` directly. -/
 
 theorem linear1D_inj {n : Nat} (base : Nat) :
     Function.Injective (linear1D (n := n) base) := by
@@ -193,6 +194,109 @@ theorem rowMajor2D_inj {rows cols : Nat} (base rowStride : Nat)
   obtain rfl : a₁ = b₁ := Fin.ext h_a₁
   obtain rfl : a₂ = b₂ := Fin.ext h_a₂
   rfl
+
+/-! ### General ND strided injectivity
+
+`strided_inj` proves `Function.Injective (Offset.strided shape strides base)`
+under a `StridesValid` hypothesis: each dimension's stride strictly
+dominates the maximum offset reachable through the inner dimensions.
+This is the standard "non-overlapping strides" condition for layout-aware
+addressing; it generalizes the `linear1D_inj` / `rowMajor2D_inj` patterns
+above. -/
+
+/-- Maximum offset (relative to `base`) reachable by `strided shape strides`,
+given by `Σⱼ (dⱼ - 1) * sⱼ`. Defined recursively in lockstep with
+`strided`, so the trailing-no-strides case contributes `0` (matching
+`strided`'s constant-`base` fallback). -/
+def maxOffset : TileShape → List Nat → Nat
+  | [], _              => 0
+  | _ :: _, []         => 0
+  | d :: ds, s :: ss   => (d - 1) * s + maxOffset ds ss
+
+/-- Layout-validity: the strides positionally match the shape and define
+a non-overlapping addressing scheme. Each dimension's stride must
+strictly dominate the maximum offset reachable through the inner
+dimensions (equivalently, the inner block fits within one stride step). -/
+def StridesValid : TileShape → List Nat → Prop
+  | [], _              => True
+  | _ :: _, []         => False
+  | _ :: ds, s :: ss   => maxOffset ds ss < s ∧ StridesValid ds ss
+
+/-- Lower bound: `strided` always returns at least `base`. -/
+theorem base_le_strided : ∀ {shape : TileShape} (strides : List Nat)
+    (base : Nat) (idx : TileIndex shape),
+    base ≤ strided shape strides base idx
+  | [], _, base, _ => le_refl base
+  | _ :: _, [], base, _ => le_refl base
+  | _ :: ds, s :: ss, base, (i, idxRest) => by
+      simp only [strided]
+      have := base_le_strided ss (base + i.val * s) idxRest
+      omega
+
+/-- Upper bound: `strided` returns at most `base + maxOffset shape strides`.
+No layout-validity hypothesis required; follows from `i.val < d`. -/
+theorem strided_le_maxOffset : ∀ {shape : TileShape} (strides : List Nat)
+    (base : Nat) (idx : TileIndex shape),
+    strided shape strides base idx ≤ base + maxOffset shape strides
+  | [], _, base, _ => by simp [strided, maxOffset]
+  | _ :: _, [], base, _ => by simp [strided, maxOffset]
+  | d :: ds, s :: ss, base, (i, idxRest) => by
+      simp only [strided, maxOffset]
+      have hRec := strided_le_maxOffset ss (base + i.val * s) idxRest
+      have hi : i.val ≤ d - 1 := Nat.le_sub_one_of_lt i.isLt
+      have hStep : i.val * s ≤ (d - 1) * s := Nat.mul_le_mul_right s hi
+      omega
+
+/-- General ND injectivity for `Offset.strided` under `StridesValid`.
+The proof is by induction on `shape`, using `base_le_strided` and
+`strided_le_maxOffset` to argue that distinct outer indices land in
+disjoint windows of width `s`. -/
+theorem strided_inj : ∀ {shape : TileShape} {strides : List Nat} (base : Nat),
+    StridesValid shape strides →
+    Function.Injective (strided shape strides base) := by
+  intro shape
+  induction shape with
+  | nil =>
+      intros _strides _base _hValid a b _hEq
+      exact Subsingleton.elim a b
+  | cons d ds ih =>
+      intros strides base hValid
+      match strides, hValid with
+      | [], hValid => exact absurd hValid id
+      | s :: ss, ⟨hMax, hValidRec⟩ =>
+          rintro ⟨i, restA⟩ ⟨j, restB⟩ hEq
+          simp only [strided] at hEq
+          have hLowerA := base_le_strided ss (base + i.val * s) restA
+          have hRangeA := strided_le_maxOffset ss (base + i.val * s) restA
+          have hLowerB := base_le_strided ss (base + j.val * s) restB
+          have hRangeB := strided_le_maxOffset ss (base + j.val * s) restB
+          have hi_eq_j : i.val = j.val := by
+            rcases lt_trichotomy i.val j.val with hlt | heq | hgt
+            · exfalso
+              have h1 : base + j.val * s ≤ base + i.val * s + maxOffset ds ss :=
+                calc base + j.val * s
+                    ≤ strided ds ss (base + j.val * s) restB := hLowerB
+                  _ = strided ds ss (base + i.val * s) restA := hEq.symm
+                  _ ≤ base + i.val * s + maxOffset ds ss := hRangeA
+              have h2 : (i.val + 1) * s ≤ j.val * s := Nat.mul_le_mul_right s hlt
+              have h2' : i.val * s + s ≤ j.val * s := by
+                rw [Nat.add_mul, Nat.one_mul] at h2; exact h2
+              omega
+            · exact heq
+            · exfalso
+              have h1 : base + i.val * s ≤ base + j.val * s + maxOffset ds ss :=
+                calc base + i.val * s
+                    ≤ strided ds ss (base + i.val * s) restA := hLowerA
+                  _ = strided ds ss (base + j.val * s) restB := hEq
+                  _ ≤ base + j.val * s + maxOffset ds ss := hRangeB
+              have h2 : (j.val + 1) * s ≤ i.val * s := Nat.mul_le_mul_right s hgt
+              have h2' : j.val * s + s ≤ i.val * s := by
+                rw [Nat.add_mul, Nat.one_mul] at h2; exact h2
+              omega
+          have hij_fin : i = j := Fin.ext hi_eq_j
+          subst hij_fin
+          have hRest := ih (base + i.val * s) hValidRec hEq
+          exact Prod.ext rfl hRest
 
 end Offset
 
