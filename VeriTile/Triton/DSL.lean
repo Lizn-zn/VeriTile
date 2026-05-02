@@ -9,30 +9,23 @@ Example:
   def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
     pid  := tl.program_id(0)
     offs := pid * $(N) + tl.arange($(N))
-    x    := tl.load($(xReg) + offs)
+    x    := tl.load(tl.ptr($(xReg)) + offs)
     e    := tl.exp(x)
     s    := tl.sum(e)
     y    := e / s
-    tl.store($(yReg) + offs, y)
+    tl.store(tl.ptr($(yReg)) + offs, y)
   }
 
 Conventions:
   * Bare identifiers in expression position → register references
     (`pid`, `x`, `e`, etc. become `Op.ref "pid"`, `Op.ref "x"`, ...).
-  * Memory accesses use a Triton-like pointer-plus-offset surface syntax:
-    `tl.load($(xReg) + offs)` and `tl.store($(yReg) + offs, y)`. The pointer
-    sits in its own syntax category `tritonPtr` (see RP1 / GH issue #1),
-    so future pointer forms (masked load, 2D pointer) extend `tritonPtr`
-    without touching `tl.load` / `tl.store` themselves. The pointer lowers
-    to the internal `(region : RegionName, offset : Op)` pair feeding
-    `Op.load` / `Stmt.store`. Scalar pointer sugar `tl.load($(xReg))` /
-    `tl.store($(yReg), y)` lowers to offset `0`.
+  * Memory accesses use first-class pointer values:
+    `tl.ptr($(xReg)) + offs` builds a pointer tile, and `tl.load(ptr)` /
+    `tl.store(ptr, value)` consume pointer-valued expressions.
   * `$(<lean-term>)` antiquotes a Lean-level value; in numeric context it
     becomes `Op.constNat`, inside `tl.arange(...)` it is fed directly as
-    the `Nat` length, and as the base pointer term in `tl.load($(REGION)
-    + offset)` / `tl.store($(REGION) + offset, value)` or scalar-pointer
-    `tl.load($(REGION))` / `tl.store($(REGION), value)` it is used as a
-    `RegionName`.
+    the `Nat` length, and inside `tl.ptr($(REGION))` it is used as a
+    `RegionName` pointer base.
   * `$ℝ(<lean-term>)` antiquotes a Lean-level `ℝ` value into `Op.const`.
     Symmetric with `$(t)` (which always lowers to `Op.constNat`). Used
     when a kernel parameter has type `ℝ` (e.g. LayerNorm's `ε : ℝ`) and
@@ -44,10 +37,11 @@ Conventions:
 
 Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
 `tl.arange(start, end)`, `tl.exp(_)`, `tl.log(_)`, `tl.sigmoid(_)`,
-`tl.sqrt(_)`, `tl.tanh(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load($(REGION) + offset)`,
-binary `+ - * /`, parens, identifiers, numerals, antiquotation
-(`$(t)` for `Nat`, `$ℝ(t)` for `ℝ`). `tl.load($(REGION))` is sugar for
-offset `0`.
+`tl.sqrt(_)`, `tl.tanh(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.ptr($(REGION))`,
+`tl.load(ptrExpr)`, binary `+ - * /`, parens, identifiers, numerals,
+antiquotation (`$(t)` for `Nat`, `$ℝ(t)` for `ℝ`). Pointer arithmetic supports
+`ptr + nat` and `nat + ptr`; raw `tl.load($(REGION) + offset)` is intentionally
+not part of the DSL surface.
 
 The two-argument `tl.arange(start, end)` lowers to `start + tl.arange(end - start)`
 at macro time (no new AST constructor). The literal-0 special case
@@ -56,8 +50,7 @@ single-argument form so existing proofs (e.g. via `scatter_readback`) remain
 applicable verbatim.
 
 Currently supported statements: assignment (`name := expr`),
-`tl.store($(REGION) + offset, value)`. `tl.store($(REGION), value)` is
-sugar for offset `0`.
+`tl.store(ptrExpr, value)`.
 
 `Kernel.inputs` / `Kernel.outputs` are auto-populated by scanning the body for
 `tl.load(...)` (input regions) and `tl.store(...)` (output regions). Order
@@ -78,17 +71,8 @@ namespace VeriTile.Triton.DSL
 
 declare_syntax_cat tritonExpr
 declare_syntax_cat tritonStmt
-declare_syntax_cat tritonPtr
 declare_syntax_cat tritonKwarg
 declare_syntax_cat tritonReduceKwarg
-
--- Pointer expressions (used by `tl.load` / `tl.store`).
--- Splitting the pointer surface syntax into its own category gives a single
--- extension point for future pointer forms (masked load, 2D pointer, etc.;
--- see Phase C). The internal AST is unchanged: `tritonPtr` lowers to a
--- `(RegionName, offset : Op)` pair, which feeds `Op.load` / `Stmt.store`.
-syntax "$(" term ")" : tritonPtr
-syntax "$(" term ")" " + " tritonExpr : tritonPtr
 
 -- Expressions
 syntax num : tritonExpr
@@ -143,11 +127,10 @@ syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 
 -- `tl.load(ptr [, kwarg]*)` — kwargs are optional. With zero kwargs this is
--- the legacy unmasked form; with `mask=` / `other=` it lowers to the masked
+-- the unmasked pointer-load form; with `mask=` / `other=` it lowers to the masked
 -- AST (Slice 1 of mask extension). Other kwargs raise a parse error per
 -- Issue #16 / `feedback_triton_user_first_class.md`.
-syntax "tl.load(" tritonPtr ("," tritonKwarg)* ")" : tritonExpr
-syntax "tl.load(" ident ("," tritonKwarg)* ")" : tritonExpr
+syntax "tl.load(" tritonExpr ("," tritonKwarg)* ")" : tritonExpr
 
 -- Unit-axis insertion (Triton `e[:, None]` / `e[None, :]`). First stage
 -- only accepts these two literal slicer forms on rank-1 inputs; lowers
@@ -193,8 +176,7 @@ syntax ident " := " tritonExpr : tritonStmt
 -- `tl.store(ptr, value [, kwarg]*)` — kwargs are optional. Only `mask=` is
 -- recognized (Triton's `tl.store` has no `other`). Per Issue #16: unknown
 -- kwarg → parse error.
-syntax "tl.store(" tritonPtr ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
-syntax "tl.store(" ident ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
+syntax "tl.store(" tritonExpr ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
 -- `tl.for i in $(n) { stmt* }` — bounded loop over `n` iterations,
 -- binding the iteration index to register `i` (Nat-channel).
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
@@ -350,21 +332,50 @@ private structure EOut where
   shape : SInfo
   deriving Inhabited
 
+private structure StaticPtrOut where
+  region : TSyntax `term
+  offset : TSyntax `term
+  shape : SInfo
+  baseOnly : Bool
+
 mutual
 
-/-- Lower a `tritonPtr` to its `(region, offset, offset-shape)` triple. -/
-partial def expandPtr (env : Env) (stx : TSyntax `tritonPtr) :
-    MacroM (TSyntax `term × TSyntax `term × SInfo) := do
+partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
+    MacroM (Option StaticPtrOut) := do
   match stx with
-  | `(tritonPtr| $($r:term)) =>
-      -- Scalar pointer sugar: `$(R)` reads `R + 0`.
-      let zero : TSyntax `term ← `(Op.constNat 0)
-      pure (r, zero, SInfo.scalar)
-  | `(tritonPtr| $($r:term) + $o:tritonExpr) => do
-      let o' ← expandExpr env o
-      ensureDType .nat o'.dtype "pointer offset"
-      pure (r, o'.term, o'.shape)
-  | _ => Macro.throwUnsupported
+  | `(tritonExpr| tl.ptr($($r:term))) =>
+      let zero ← `(Op.constNat 0)
+      pure (some ⟨r, zero, SInfo.scalar, Bool.true⟩)
+  | `(tritonExpr| ($e:tritonExpr)) =>
+      expandStaticPtrExpr env e
+  | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
+      match ← expandStaticPtrExpr env a with
+      | some p =>
+          let b' ← expandExpr env b
+          ensureDType .nat b'.dtype "pointer offset"
+          if p.baseOnly then
+            pure (some ⟨p.region, b'.term, b'.shape, Bool.false⟩)
+          else
+            let (bc, outShape) ← broadcastTerm p.shape b'.shape "pointer offset"
+            let off := p.offset
+            let bTerm := b'.term
+            let nextOff ← `(Op.add NumericDType.nat $bc $off $bTerm)
+            pure (some ⟨p.region, nextOff, outShape, Bool.false⟩)
+      | none =>
+          match ← expandStaticPtrExpr env b with
+          | some p =>
+              let a' ← expandExpr env a
+              ensureDType .nat a'.dtype "pointer offset"
+              if p.baseOnly then
+                pure (some ⟨p.region, a'.term, a'.shape, Bool.false⟩)
+              else
+                let (bc, outShape) ← broadcastTerm p.shape a'.shape "pointer offset"
+                let off := p.offset
+                let aTerm := a'.term
+                let nextOff ← `(Op.add NumericDType.nat $bc $off $aTerm)
+                pure (some ⟨p.region, nextOff, outShape, Bool.false⟩)
+          | none => pure none
+  | _ => pure none
 
 partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
   match stx with
@@ -487,15 +498,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let (bc, outShape) ← broadcastTerm dot.shape acc'.shape "tl.dot accumulator"
       pure ⟨← `(Op.add NumericDType.real $bc $dot.term $acc'.term),
             .real, outShape⟩
-  | `(tritonExpr| tl.load($p:tritonPtr $[, $kwargs:tritonKwarg]*)) => do
-      -- Pointer surface syntax lowers to the internal `(region, offset)` AST.
-      -- Optional `mask=` / `other=` kwargs lower to `LoadOptions`.
-      -- Per Issue #16: any other kwarg name is a parse error. Per Triton spec
-      -- ("If `other` is None, the masked-out value is undefined"): missing
-      -- `other` lowers to `mask := some ..., other := none`; evalOp then
-      -- uses `BlockState.undef` for masked-off lanes. `other` without `mask`
-      -- is rejected (no Triton equivalent).
-      let (r, off, offShape) ← expandPtr env p
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonKwarg]*)) => do
       let mut maskTerm : Option (TSyntax `term × SInfo) := none
       let mut otherTerm : Option (TSyntax `term × SInfo) := none
       for kw in kwargs do
@@ -517,52 +520,41 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
         | _ => Macro.throwUnsupported
       match maskTerm, otherTerm with
       | none, none =>
-          pure ⟨← `(Op.load $r $off), .real, offShape⟩
+          match ← expandStaticPtrExpr env p with
+          | some sp =>
+              let r := sp.region
+              let off := sp.offset
+              pure ⟨← `(Op.load $r $off), .real, sp.shape⟩
+          | none =>
+              let p' ← expandExpr env p
+              ensureDType .ptr p'.dtype "tl.load pointer"
+              pure ⟨← `(Op.loadPtr $p'.term), .real, p'.shape⟩
       | some (m, mShape), none =>
-          -- No `other=`: masked-off lanes are undef in Triton. Keep that
-          -- distinction in the AST; do not silently choose 0.
-          let m' ← coerceShape m mShape offShape "tl.load mask"
-          pure ⟨← `(Op.loadMask $r $off $m'), .real, offShape⟩
+          match ← expandStaticPtrExpr env p with
+          | some sp =>
+              let r := sp.region
+              let off := sp.offset
+              let m' ← coerceShape m mShape sp.shape "tl.load mask"
+              pure ⟨← `(Op.loadMask $r $off $m'), .real, sp.shape⟩
+          | none =>
+              let p' ← expandExpr env p
+              ensureDType .ptr p'.dtype "tl.load pointer"
+              let m' ← coerceShape m mShape p'.shape "tl.load mask"
+              pure ⟨← `(Op.loadPtrMask $p'.term $m'), .real, p'.shape⟩
       | some (m, mShape), some (o, oShape) =>
-          let m' ← coerceShape m mShape offShape "tl.load mask"
-          let o' ← coerceShape o oShape offShape "tl.load other"
-          pure ⟨← `(Op.loadMaskOther $r $off $m' $o'), .real, offShape⟩
-      | none, some _ =>
-          Macro.throwError
-            "tl.load: `other=` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"
-  | `(tritonExpr| tl.load($p:ident $[, $kwargs:tritonKwarg]*)) => do
-      let pExpr : TSyntax `tritonExpr ← `(tritonExpr| $p:ident)
-      let p' ← expandExpr env pExpr
-      ensureDType .ptr p'.dtype "tl.load pointer"
-      let mut maskTerm : Option (TSyntax `term × SInfo) := none
-      let mut otherTerm : Option (TSyntax `term × SInfo) := none
-      for kw in kwargs do
-        match kw with
-        | `(tritonKwarg| $name:ident = $val:tritonExpr) =>
-            let val' ← expandExpr env val
-            match name.getId.toString with
-            | "mask"  =>
-                ensureDType .bool val'.dtype "tl.load mask"
-                maskTerm := some (val'.term, val'.shape)
-            | "other" =>
-                ensureDType .real val'.dtype "tl.load other"
-                otherTerm := some (val'.term, val'.shape)
-            | unknown =>
-                let msg : String :=
-                  "tl.load: unknown kwarg `" ++ unknown ++
-                  "`. Only `mask` and `other` are recognized (see GitHub issue #16)."
-                Macro.throwError msg
-        | _ => Macro.throwUnsupported
-      match maskTerm, otherTerm with
-      | none, none =>
-          pure ⟨← `(Op.loadPtr $p'.term), .real, p'.shape⟩
-      | some (m, mShape), none =>
-          let m' ← coerceShape m mShape p'.shape "tl.load mask"
-          pure ⟨← `(Op.loadPtrMask $p'.term $m'), .real, p'.shape⟩
-      | some (m, mShape), some (o, oShape) =>
-          let m' ← coerceShape m mShape p'.shape "tl.load mask"
-          let o' ← coerceShape o oShape p'.shape "tl.load other"
-          pure ⟨← `(Op.loadPtrMaskOther $p'.term $m' $o'), .real, p'.shape⟩
+          match ← expandStaticPtrExpr env p with
+          | some sp =>
+              let r := sp.region
+              let off := sp.offset
+              let m' ← coerceShape m mShape sp.shape "tl.load mask"
+              let o' ← coerceShape o oShape sp.shape "tl.load other"
+              pure ⟨← `(Op.loadMaskOther $r $off $m' $o'), .real, sp.shape⟩
+          | none =>
+              let p' ← expandExpr env p
+              ensureDType .ptr p'.dtype "tl.load pointer"
+              let m' ← coerceShape m mShape p'.shape "tl.load mask"
+              let o' ← coerceShape o oShape p'.shape "tl.load other"
+              pure ⟨← `(Op.loadPtrMaskOther $p'.term $m' $o'), .real, p'.shape⟩
       | none, some _ =>
           Macro.throwError
             "tl.load: `other=` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"
@@ -905,14 +897,7 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       let sh ← e'.shape.term
       pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
         (i.getId.toString, e'.dtype, e'.shape) :: env)
-  | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) => do
-      -- Optional kwargs: only `mask=` is recognized for store (Triton's
-      -- `tl.store` has no `other`). Per Issue #16: any other kwarg name
-      -- (including `other=`) is a parse error.
-      let v' ← expandExpr env v
-      ensureDType .real v'.dtype "tl.store value"
-      let (r, off, offShape) ← expandPtr env p
-      let vTerm ← coerceShape v'.term v'.shape offShape "tl.store value"
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) => do
       let mut maskTerm : Option (TSyntax `term × SInfo) := none
       for kw in kwargs do
         match kw with
@@ -930,42 +915,43 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
         | _ => Macro.throwUnsupported
       match maskTerm with
       | none =>
-          let sh ← offShape.term
-          pure (← `(Stmt.store $r $sh $off $vTerm), env)
+          match ← expandStaticPtrExpr env p with
+          | some sp =>
+              let v' ← expandExpr env v
+              ensureDType .real v'.dtype "tl.store value"
+              let vTerm ← coerceShape v'.term v'.shape sp.shape "tl.store value"
+              let r := sp.region
+              let off := sp.offset
+              let sh ← sp.shape.term
+              pure (← `(Stmt.store $r $sh $off $vTerm), env)
+          | none =>
+              let p' ← expandExpr env p
+              ensureDType .ptr p'.dtype "tl.store pointer"
+              let v' ← expandExpr env v
+              ensureDType .real v'.dtype "tl.store value"
+              let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
+              let sh ← p'.shape.term
+              pure (← `(Stmt.storePtr $sh $p'.term $vTerm), env)
       | some (m, mShape) =>
-          let m' ← coerceShape m mShape offShape "tl.store mask"
-          let sh ← offShape.term
-          pure (← `(Stmt.storeMask $r $sh $off $vTerm $m'), env)
-  | `(tritonStmt| tl.store($p:ident, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) => do
-      let pExpr : TSyntax `tritonExpr ← `(tritonExpr| $p:ident)
-      let p' ← expandExpr env pExpr
-      ensureDType .ptr p'.dtype "tl.store pointer"
-      let v' ← expandExpr env v
-      ensureDType .real v'.dtype "tl.store value"
-      let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
-      let mut maskTerm : Option (TSyntax `term × SInfo) := none
-      for kw in kwargs do
-        match kw with
-        | `(tritonKwarg| $name:ident = $kval:tritonExpr) =>
-            let kval' ← expandExpr env kval
-            match name.getId.toString with
-            | "mask"  =>
-                ensureDType .bool kval'.dtype "tl.store mask"
-                maskTerm := some (kval'.term, kval'.shape)
-            | unknown =>
-                let msg : String :=
-                  "tl.store: unknown kwarg `" ++ unknown ++
-                  "`. Only `mask` is recognized (Triton's tl.store has no `other`; see issue #16)."
-                Macro.throwError msg
-        | _ => Macro.throwUnsupported
-      match maskTerm with
-      | none =>
-          let sh ← p'.shape.term
-          pure (← `(Stmt.storePtr $sh $p'.term $vTerm), env)
-      | some (m, mShape) =>
-          let m' ← coerceShape m mShape p'.shape "tl.store mask"
-          let sh ← p'.shape.term
-          pure (← `(Stmt.storePtrMask $sh $p'.term $vTerm $m'), env)
+          match ← expandStaticPtrExpr env p with
+          | some sp =>
+              let v' ← expandExpr env v
+              ensureDType .real v'.dtype "tl.store value"
+              let vTerm ← coerceShape v'.term v'.shape sp.shape "tl.store value"
+              let m' ← coerceShape m mShape sp.shape "tl.store mask"
+              let r := sp.region
+              let off := sp.offset
+              let sh ← sp.shape.term
+              pure (← `(Stmt.storeMask $r $sh $off $vTerm $m'), env)
+          | none =>
+              let p' ← expandExpr env p
+              ensureDType .ptr p'.dtype "tl.store pointer"
+              let v' ← expandExpr env v
+              ensureDType .real v'.dtype "tl.store value"
+              let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
+              let m' ← coerceShape m mShape p'.shape "tl.store mask"
+              let sh ← p'.shape.term
+              pure (← `(Stmt.storePtrMask $sh $p'.term $vTerm $m'), env)
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
@@ -1005,22 +991,14 @@ mutual
     pointer (recursively in subexpressions). -/
 private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
   match stx with
-  | `(tritonExpr| tl.load($p:tritonPtr $[, $kwargs:tritonKwarg]*)) =>
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
             match kw with
             | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
-      ptrRegions p ++ kwargRegions
-  | `(tritonExpr| tl.load($_:ident $[, $kwargs:tritonKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
-            match kw with
-            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      kwargRegions
+      exprRegions p ++ kwargRegions
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
@@ -1075,32 +1053,7 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr)) => exprRegions v
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*])) => []
   | _ => []  -- num, ident, $(...) — no regions to collect
-
-/-- All region terms appearing in a `tritonPtr`: the base region plus any
-    regions referenced inside the offset expression. -/
-private partial def ptrRegions : TSyntax `tritonPtr → List (TSyntax `term) := fun stx =>
-  match stx with
-  | `(tritonPtr| $($r:term))                  => [r]
-  | `(tritonPtr| $($r:term) + $o:tritonExpr)  => r :: exprRegions o
-  | _ => []
-
 end
-
-/-- Just the base region of a `tritonPtr` (used as the *output* region for
-    `tl.store(...)`, distinct from regions that appear *inside* the offset). -/
-private def ptrBaseRegion : TSyntax `tritonPtr → List (TSyntax `term) := fun stx =>
-  match stx with
-  | `(tritonPtr| $($r:term))                  => [r]
-  | `(tritonPtr| $($r:term) + $_:tritonExpr)  => [r]
-  | _ => []
-
-/-- Just the regions referenced inside the offset expression of a `tritonPtr`
-    (excluding the base). For `tl.store(p, v)` these still count as inputs. -/
-private def ptrOffsetRegions : TSyntax `tritonPtr → List (TSyntax `term) := fun stx =>
-  match stx with
-  | `(tritonPtr| $($_:term))                  => []
-  | `(tritonPtr| $($_:term) + $o:tritonExpr)  => exprRegions o
-  | _ => []
 
 /-- Per-statement region split: `(input regions, output regions)`. -/
 private partial def stmtRegions :
@@ -1108,22 +1061,14 @@ private partial def stmtRegions :
   match stx with
   | `(tritonStmt| $_:ident := $e:tritonExpr) =>
       (exprRegions e, [])
-  | `(tritonStmt| tl.store($p:tritonPtr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
             match kw with
             | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
-      (ptrOffsetRegions p ++ exprRegions v ++ kwargRegions, ptrBaseRegion p)
-  | `(tritonStmt| tl.store($_:ident, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
-            match kw with
-            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, [])
+      (exprRegions v ++ kwargRegions, exprRegions p)
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       stmts.toList.foldl
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>

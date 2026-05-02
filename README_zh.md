@@ -80,11 +80,12 @@ launch semantics。
 ## 快速开始
 
 > **关于 DSL 的约定:** VeriTile 里的 Triton kernel 是 *region-多态* 的——每个
-> kernel 都把 buffer region 作为 `RegionName` 参数,并使用接近 Triton 的
-> pointer-plus-offset 语法: `tl.load($(xReg) + offs)` /
-> `tl.store($(yReg) + offs, y)`。这意味着同一个 kernel 可以用任意 buffer
-> 名实例化,正确性定理对所有实例化都成立。**不允许** `tl.load(X + offs)` 这种
-> 裸标识符简写形式(会解析失败);设计动机见
+> kernel 都把 buffer region 作为 `RegionName` 参数,并使用 first-class pointer
+> expression: `tl.load(tl.ptr($(xReg)) + offs)` /
+> `tl.store(tl.ptr($(yReg)) + offs, y)`。这意味着同一个 kernel 可以用任意 buffer
+> 名实例化,正确性定理对所有实例化都成立。memory base 必须用 `tl.ptr($(region))`
+> 创建,或者来自 pointer-valued register;裸 `RegionName` 不是 pointer expression。
+> 设计动机见
 > [RP1](./Notes/research_problem_pointer_vs_named_region.md)。
 
 #### 1. 给定一个原始 Triton kernel. 例如 naive softmax:
@@ -93,11 +94,11 @@ launch semantics。
 def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load($(xReg) + offs)
+  x    := tl.load(tl.ptr($(xReg)) + offs)
   e    := tl.exp(x)
   s    := tl.sum(e)
   y    := e / s
-  tl.store($(yReg) + offs, y)
+  tl.store(tl.ptr($(yReg)) + offs, y)
 }
 ```
 
@@ -107,12 +108,12 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
 def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load($(xReg) + offs)
+  x    := tl.load(tl.ptr($(xReg)) + offs)
   m    := tl.max(x)
   e    := tl.exp(x - m)
   s    := tl.sum(e)
   y    := e / s
-  tl.store($(yReg) + offs, y)
+  tl.store(tl.ptr($(yReg)) + offs, y)
 }
 ```
 

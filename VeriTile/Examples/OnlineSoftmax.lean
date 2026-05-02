@@ -23,7 +23,7 @@ def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : Kernel := triton {
   m   := -inf
   l   := 0
   tl.for i in $(N) {
-    xi    := tl.load($(xReg) + (pid * $(N) + i))
+    xi    := tl.load(tl.ptr($(xReg)) + (pid * $(N) + i))
     m_new := tl.max(m, xi)
     l     := tl.exp(m - m_new) * l + tl.exp(xi - m_new)
     m     := m_new

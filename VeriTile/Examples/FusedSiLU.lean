@@ -74,40 +74,40 @@ def fusedSiLUKernel (xReg gateReg residualReg outReg : RegionName)
     (blockSize : Nat) : Kernel := triton {
   pid      := tl.program_id(0)
   offsets  := pid * $(blockSize) + tl.arange($(blockSize))
-  x        := tl.load($(xReg) + offsets)
-  gate     := tl.load($(gateReg) + offsets)
-  residual := tl.load($(residualReg) + offsets)
+  x        := tl.load(tl.ptr($(xReg)) + offsets)
+  gate     := tl.load(tl.ptr($(gateReg)) + offsets)
+  residual := tl.load(tl.ptr($(residualReg)) + offsets)
   z        := x * gate
   silu     := z * tl.sigmoid(z)
   y        := residual + silu
-  tl.store($(outReg) + offsets, y)
+  tl.store(tl.ptr($(outReg)) + offsets, y)
 }
 
 def siluStepGate (xReg gateReg zReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid     := tl.program_id(0)
   offsets := pid * $(blockSize) + tl.arange($(blockSize))
-  x       := tl.load($(xReg) + offsets)
-  gate    := tl.load($(gateReg) + offsets)
+  x       := tl.load(tl.ptr($(xReg)) + offsets)
+  gate    := tl.load(tl.ptr($(gateReg)) + offsets)
   z       := x * gate
-  tl.store($(zReg) + offsets, z)
+  tl.store(tl.ptr($(zReg)) + offsets, z)
 }
 
 def siluStepSilu (zReg siluReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid     := tl.program_id(0)
   offsets := pid * $(blockSize) + tl.arange($(blockSize))
-  z       := tl.load($(zReg) + offsets)
+  z       := tl.load(tl.ptr($(zReg)) + offsets)
   silu    := z * tl.sigmoid(z)
-  tl.store($(siluReg) + offsets, silu)
+  tl.store(tl.ptr($(siluReg)) + offsets, silu)
 }
 
 def siluStepResidual (siluReg residualReg outReg : RegionName)
     (blockSize : Nat) : Kernel := triton {
   pid      := tl.program_id(0)
   offsets  := pid * $(blockSize) + tl.arange($(blockSize))
-  silu     := tl.load($(siluReg) + offsets)
-  residual := tl.load($(residualReg) + offsets)
+  silu     := tl.load(tl.ptr($(siluReg)) + offsets)
+  residual := tl.load(tl.ptr($(residualReg)) + offsets)
   y        := residual + silu
-  tl.store($(outReg) + offsets, y)
+  tl.store(tl.ptr($(outReg)) + offsets, y)
 }
 
 noncomputable def execUnfusedSiLU

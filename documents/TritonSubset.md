@@ -119,8 +119,8 @@ The current `tl.dot` model is mathematical real matrix multiplication over the
 
 Supported loads:
 
-- `tl.load($(region))`
-- `tl.load($(region) + offset)`
+- `tl.load(tl.ptr($(region)))`
+- `tl.load(tl.ptr($(region)) + offset)`
 - `ptrs := tl.ptr($(region)) + offset; tl.load(ptrs)`
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
@@ -128,8 +128,8 @@ Supported loads:
 
 Supported stores:
 
-- `tl.store($(region), value)`
-- `tl.store($(region) + offset, value)`
+- `tl.store(tl.ptr($(region)), value)`
+- `tl.store(tl.ptr($(region)) + offset, value)`
 - `ptrs := tl.ptr($(region)) + offset; tl.store(ptrs, value)`
 - `tl.store(ptr, value, mask=mask)`
 
@@ -162,14 +162,7 @@ The memory model remains:
 RegionName → Nat → ℝ
 ```
 
-Legacy region-plus-offset syntax is still accepted:
-
-```lean
-tl.load($(xReg) + offs)
-tl.store($(outReg) + offs, value)
-```
-
-and first-class pointer values can be assigned and reused:
+Pointer values can be used inline, assigned, and reused:
 
 ```lean
 ptrs := tl.ptr($(xReg)) + offs
@@ -238,8 +231,8 @@ current semantic contract.
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
-| Loads | Limited | Region-plus-offset load or pointer-register load, optional `mask`, optional `other` |
-| Stores | Limited | Region-plus-offset store or pointer-register store, optional `mask` |
+| Loads | Limited | Pointer-expression load, optional `mask`, optional `other` |
+| Stores | Limited | Pointer-expression store, optional `mask` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
 | Integer memory | Gap | Memory is `RegionName → Nat → ℝ`; no int/Nat tensor memory yet (#20) |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |

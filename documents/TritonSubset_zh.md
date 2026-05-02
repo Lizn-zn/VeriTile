@@ -110,8 +110,8 @@ bit-level / precision 语义。
 
 支持的 load:
 
-- `tl.load($(region))`
-- `tl.load($(region) + offset)`
+- `tl.load(tl.ptr($(region)))`
+- `tl.load(tl.ptr($(region)) + offset)`
 - `ptrs := tl.ptr($(region)) + offset; tl.load(ptrs)`
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
@@ -119,8 +119,8 @@ bit-level / precision 语义。
 
 支持的 store:
 
-- `tl.store($(region), value)`
-- `tl.store($(region) + offset, value)`
+- `tl.store(tl.ptr($(region)), value)`
+- `tl.store(tl.ptr($(region)) + offset, value)`
 - `ptrs := tl.ptr($(region)) + offset; tl.store(ptrs, value)`
 - `tl.store(ptr, value, mask=mask)`
 
@@ -153,14 +153,7 @@ RegionName × Nat
 RegionName → Nat → ℝ
 ```
 
-旧的 region-plus-offset syntax 仍然可用:
-
-```lean
-tl.load($(xReg) + offs)
-tl.store($(outReg) + offs, value)
-```
-
-同时 pointer value 可以赋值和复用:
+pointer value 可以 inline 使用、赋值和复用:
 
 ```lean
 ptrs := tl.ptr($(xReg)) + offs
@@ -220,8 +213,8 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]` |
 | transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
-| load | Limited | region-plus-offset 或 pointer-register load,可带 `mask` / `other` |
-| store | Limited | region-plus-offset 或 pointer-register store,可带 `mask` |
+| load | Limited | pointer-expression load,可带 `mask` / `other` |
+| store | Limited | pointer-expression store,可带 `mask` |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
 | integer memory | Gap | memory 是 `RegionName → Nat → ℝ`;还没有 int/Nat tensor memory (#20) |
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |

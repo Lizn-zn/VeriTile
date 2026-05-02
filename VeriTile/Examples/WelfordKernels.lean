@@ -57,14 +57,14 @@ def twopassWelfordKernel (xReg meanReg varReg : RegionName)
     (blockSize : Nat) : Kernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange($(blockSize))
-  x      := tl.load($(xReg) + offs)
+  x      := tl.load(tl.ptr($(xReg)) + offs)
   s_x    := tl.sum(x)
   μ      := s_x / tl.toReal($(blockSize))
   d      := x - μ
   s_d2   := tl.sum(d * d)
   v      := s_d2 / tl.toReal($(blockSize))
-  tl.store($(meanReg), μ)
-  tl.store($(varReg), v)
+  tl.store(tl.ptr($(meanReg)), μ)
+  tl.store(tl.ptr($(varReg)), v)
 }
 
 /-- Online Welford mean/variance kernel.
@@ -107,14 +107,14 @@ def onlineWelfordKernel (xReg meanReg varReg : RegionName)
   M   := 0
   S   := 0
   tl.for i in $(blockSize) {
-    xi     := tl.load($(xReg) + (pid * $(blockSize) + i))
+    xi     := tl.load(tl.ptr($(xReg)) + (pid * $(blockSize) + i))
     delta  := xi - M
     M      := M + delta / (tl.toReal(i) + 1)
     delta2 := xi - M
     S      := S + delta * delta2
   }
-  tl.store($(meanReg), M)
-  tl.store($(varReg), S / tl.toReal($(blockSize)))
+  tl.store(tl.ptr($(meanReg)), M)
+  tl.store(tl.ptr($(varReg)), S / tl.toReal($(blockSize)))
 }
 
 /-! ## Pure Welford Math -/

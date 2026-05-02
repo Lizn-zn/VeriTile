@@ -14,8 +14,8 @@ open VeriTile.Triton
 
 /-- Smoke test for scalar-pointer load/store syntax. -/
 def scalarCopyKernel (xReg yReg : RegionName) : Kernel := triton {
-  x := tl.load($(xReg))
-  tl.store($(yReg), x)
+  x := tl.load(tl.ptr($(xReg)))
+  tl.store(tl.ptr($(yReg)), x)
 }
 
 /-- Vector-add kernel with explicit boundary mask. -/
@@ -24,10 +24,10 @@ def addKernelMaskedSmoke (xReg yReg outReg : RegionName)
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   mask := offs < $(nElements)
-  x    := tl.load($(xReg) + offs, mask=mask, other=0)
-  y    := tl.load($(yReg) + offs, mask=mask, other=0)
+  x    := tl.load(tl.ptr($(xReg)) + offs, mask=mask, other=0)
+  y    := tl.load(tl.ptr($(yReg)) + offs, mask=mask, other=0)
   out  := x + y
-  tl.store($(outReg) + offs, out, mask=mask)
+  tl.store(tl.ptr($(outReg)) + offs, out, mask=mask)
 }
 
 /-- Every comparison operator is reachable via the DSL. -/
@@ -46,7 +46,7 @@ def comparisonOpsSmoke : Kernel := triton {
 def unaryMathOpsSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange(0, $(N))
-  x    := tl.load($(xReg) + offs)
+  x    := tl.load(tl.ptr($(xReg)) + offs)
   e    := tl.exp(x)
   l    := tl.log(e)
   s    := tl.sigmoid(x)
@@ -119,7 +119,7 @@ Higher-rank inputs raise a macro error. -/
 def colExpandSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange(0, $(N))
-  x    := tl.load($(xReg) + offs)
+  x    := tl.load(tl.ptr($(xReg)) + offs)
   xc   := x[:, None]
 }
 
@@ -127,7 +127,7 @@ def colExpandSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
 def rowExpandSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange(0, $(N))
-  x    := tl.load($(xReg) + offs)
+  x    := tl.load(tl.ptr($(xReg)) + offs)
   xr   := x[None, :]
 }
 
@@ -166,8 +166,8 @@ def fa1QLoadSmoke (qReg outReg : RegionName) (M D stride_qm : Nat) :
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
   ptrs   := offs_m[:, None] * $(stride_qm) + offs_d[None, :]
-  qs     := tl.load($(qReg) + ptrs)
-  tl.store($(outReg) + ptrs, qs)
+  qs     := tl.load(tl.ptr($(qReg)) + ptrs)
+  tl.store(tl.ptr($(outReg)) + ptrs, qs)
 }
 
 /-- Type-level assertion that an isolated rank-2 broadcast pointer
@@ -194,10 +194,10 @@ def causalMaskSmoke (sReg outReg : RegionName) (M Bk : Nat) :
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_n := tl.arange(0, $(Bk))
   ptrs   := offs_m[:, None] * $(Bk) + offs_n[None, :]
-  scores := tl.load($(sReg) + ptrs)
+  scores := tl.load(tl.ptr($(sReg)) + ptrs)
   mask   := offs_m[:, None] >= offs_n[None, :]
   masked := tl.where(mask, scores, -inf)
-  tl.store($(outReg) + ptrs, masked)
+  tl.store(tl.ptr($(outReg)) + ptrs, masked)
 }
 
 /-- `Tile.select` semantics on a literal boolean mask: where `c` is
@@ -225,8 +225,8 @@ def ifThenSmoke (xReg outReg : RegionName) (N P : Nat) :
   pid  := tl.program_id(0)
   tl.if pid < $(P) {
     offs := pid * $(N) + tl.arange(0, $(N))
-    x    := tl.load($(xReg) + offs)
-    tl.store($(outReg) + offs, x)
+    x    := tl.load(tl.ptr($(xReg)) + offs)
+    tl.store(tl.ptr($(outReg)) + offs, x)
   }
 }
 
@@ -270,9 +270,9 @@ def transposeSmoke (kReg outReg : RegionName) (Bk D : Nat) :
   offs_d := tl.arange(0, $(D))
   ptrs_in  := offs_n[:, None] * $(D) + offs_d[None, :]
   ptrs_out := offs_d[:, None] * $(Bk) + offs_n[None, :]
-  k        := tl.load($(kReg) + ptrs_in)
+  k        := tl.load(tl.ptr($(kReg)) + ptrs_in)
   kt       := tl.trans(k)
-  tl.store($(outReg) + ptrs_out, kt)
+  tl.store(tl.ptr($(outReg)) + ptrs_out, kt)
 }
 
 /-- `tl.dot(Q, tl.trans(K))` lands at the FA-1 score-block shape:
@@ -286,10 +286,10 @@ def dotKTSmoke (qReg kReg sReg : RegionName) (M Bk D : Nat) :
   ptrs_q    := offs_m[:, None] * $(D)  + offs_d[None, :]
   ptrs_k    := offs_n[:, None] * $(D)  + offs_d[None, :]
   ptrs_s    := offs_m[:, None] * $(Bk) + offs_n[None, :]
-  q         := tl.load($(qReg) + ptrs_q)
-  k         := tl.load($(kReg) + ptrs_k)
+  q         := tl.load(tl.ptr($(qReg)) + ptrs_q)
+  k         := tl.load(tl.ptr($(kReg)) + ptrs_k)
   scores    := tl.dot(q, tl.trans(k))
-  tl.store($(sReg) + ptrs_s, scores)
+  tl.store(tl.ptr($(sReg)) + ptrs_s, scores)
 }
 
 /-- Type-level: `Op.transpose` on a `[M, N]` real tile lands at `[N, M]`. -/
@@ -331,7 +331,7 @@ def pointerValueOffsetLoadSmoke (xReg : RegionName) (N : Nat) : Kernel := triton
 def pointerValueStoreSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   pid     := tl.program_id(0)
   offs    := pid * $(N) + tl.arange(0, $(N))
-  x       := tl.load($(xReg) + offs)
+  x       := tl.load(tl.ptr($(xReg)) + offs)
   outPtrs := tl.ptr($(outReg)) + offs
   tl.store(outPtrs, x)
 }

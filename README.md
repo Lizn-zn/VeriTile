@@ -87,11 +87,13 @@ async copy, and whole-grid launch semantics.
 
 > **Note on the DSL:** Triton kernels in VeriTile are *region-polymorphic* — every
 > kernel takes its memory regions as `RegionName` parameters and uses
-> Triton-like pointer-plus-offset syntax: `tl.load($(xReg) + offs)` /
-> `tl.store($(yReg) + offs, y)`. This means the same kernel can be instantiated
+> first-class pointer expressions: `tl.load(tl.ptr($(xReg)) + offs)` /
+> `tl.store(tl.ptr($(yReg)) + offs, y)`. This means the same kernel can be instantiated
 > with arbitrary buffer names, and the correctness theorem applies uniformly to
-> all instantiations. There is no bare-ident shortcut (`tl.load(X + offs)` will not parse); see
-> [RP1](./Notes/research_problem_pointer_vs_named_region.md) for the rationale.
+> all instantiations. A memory base must be created with `tl.ptr($(region))`
+> or come from a pointer-valued register; raw region names are not pointer
+> expressions. See [RP1](./Notes/research_problem_pointer_vs_named_region.md)
+> for the rationale.
 
 #### 1. Start with an original Triton kernel. For example, naive softmax:
 
@@ -99,11 +101,11 @@ async copy, and whole-grid launch semantics.
 def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load($(xReg) + offs)
+  x    := tl.load(tl.ptr($(xReg)) + offs)
   e    := tl.exp(x)
   s    := tl.sum(e)
   y    := e / s
-  tl.store($(yReg) + offs, y)
+  tl.store(tl.ptr($(yReg)) + offs, y)
 }
 ```
 
@@ -113,12 +115,12 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
 def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
-  x    := tl.load($(xReg) + offs)
+  x    := tl.load(tl.ptr($(xReg)) + offs)
   m    := tl.max(x)
   e    := tl.exp(x - m)
   s    := tl.sum(e)
   y    := e / s
-  tl.store($(yReg) + offs, y)
+  tl.store(tl.ptr($(yReg)) + offs, y)
 }
 ```
 
