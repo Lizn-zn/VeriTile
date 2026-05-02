@@ -171,7 +171,8 @@ theorem softmax_kernels_refinement_view
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
 | [`VeriTile/Examples/FlashAttention1/V0.lean`](./VeriTile/Examples/FlashAttention1/V0.lean) | FA-1 v0/full-tile forward correctness,4D strided layout,含 non-causal 与 causal |
 | [`VeriTile/Examples/FlashAttention1/V1Boundary.lean`](./VeriTile/Examples/FlashAttention1/V1Boundary.lean) | FA-1 v1 boundary-mask 与 D-tail correctness,覆盖 4D strided layout |
-| [`VeriTile/Examples/FlashAttention1/NaiveRefinement.lean`](./VeriTile/Examples/FlashAttention1/NaiveRefinement.lean) | FA-1 v1 boundary/D-tail 到 naive direct-attention reference 的 refinement |
+| [`VeriTile/Examples/FlashAttention1/NaiveKernel.lean`](./VeriTile/Examples/FlashAttention1/NaiveKernel.lean) | executable naive FA-1 boundary kernel、correctness 与 kernel-pair refinement |
+| [`VeriTile/Examples/FlashAttention1/NaiveRefinement.lean`](./VeriTile/Examples/FlashAttention1/NaiveRefinement.lean) | FA-1 v1 boundary/D-tail 到 naive direct-attention reference 的 refinement alias |
 
 ## 更多文档
 
