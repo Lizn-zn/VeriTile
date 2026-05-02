@@ -75,6 +75,62 @@ def addSpec {N : Nat} (xs ys : Fin N → ℝ) (i : Fin N) : ℝ :=
 
 /-! ## Correctness theorem -/
 
+/-- **`addKernel` correctness against `addSpec`.**
+
+For any choice of region names `xReg`, `yReg`, `outReg` and any state
+that has the inputs loaded, the kernel writes the elementwise sum to
+`outReg`. No disjointness assumption between the regions: kernel reads
+finish before the scatter to `outReg`, so the result is correct even if
+some of the regions alias.
+
+Proof structure mirrors `softmax_naive_correct` but is mechanically
+shorter — no reduction ops (`reduceMax` / `reduceSum`), no unary lift
+(`Tile.uop` for `exp`), only `Tile.bop (·+·)` and tile-tile
+gather/scatter. -/
+theorem add_kernel_correct
+    (xReg yReg outReg : RegionName)
+    (blockSize : Nat) (_hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (_h_x : InputLoadedAt s xReg blockSize xs)
+    (_h_y : InputLoadedAt s yReg blockSize ys) :
+    ∀ i : Fin blockSize,
+      observeAt (exec (addKernel xReg yReg outReg blockSize) s) outReg blockSize s.pid i
+        = some (addSpec xs ys i) := by
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [observeAt, exec, addKernel, stepStmts, stepStmt, evalOp, Tile.bop,
+        NumericDType.add, NumericDType.mul, BlockState.setReg,
+        BlockState.readMem, addSpec]
+  unfold InputLoadedAt at _h_x _h_y
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
+  simp [_h_x, _h_y]
+
+/-- View-level surface for `add_kernel_correct`. -/
+theorem add_kernel_correct_view
+    (xReg yReg outReg : RegionName)
+    (blockSize : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_y : TensorView.loaded s (programTileView s yReg blockSize)
+      (fun idx : TileIndex [blockSize] => ys idx.1)) :
+    ∀ idx : TileIndex [blockSize],
+      TensorView.observe (exec (addKernel xReg yReg outReg blockSize) s)
+          (programTileView s outReg blockSize) idx
+        = some (addSpec xs ys idx.1) := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  have hy := inputLoadedAt_of_programTileView_loaded (s := s) (region := yReg)
+    (N := blockSize) (xs := ys) h_y
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt]
+    using add_kernel_correct xReg yReg outReg blockSize hBlockSize s xs ys hx hy idx.1
+
 /-! ## Masked variant (boundary mask)
 
 The aligned `addKernel` above only handles `n_elements = block_size`. The
@@ -114,5 +170,75 @@ def addKernelMasked (xReg yReg outReg : RegionName)
   output  := x + y
   tl.store($(outReg) + offsets, output, mask=mask)
 }
+
+/-- **`addKernelMasked` correctness.**
+
+For each lane `i ∈ Fin blockSize`:
+* In-bounds (`pid * blockSize + i < nElements`): the output region holds
+  `xs i + ys i` at `pid * blockSize + i`.
+* Out-of-bounds: the output region's value at `pid * blockSize + i` is
+  preserved from the initial state (mask=false → no store).
+
+The hypothesis `InputLoadedAt` constrains memory at every lane in the
+`blockSize`-length tile (including out-of-bounds lanes where the data
+is irrelevant semantically). This matches Triton's actual behavior:
+masked-off loads without `other=` do not read memory and produce
+undefined lane values; the matching masked store prevents those values
+from reaching memory.
+
+No region-disjointness hypothesis: the kernel reads `x` and `y` into
+local registers BEFORE the scatter to `outReg`, so even if `outReg`
+aliases `xReg` or `yReg`, the result is correct. -/
+theorem add_kernel_masked_correct
+    (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) (_hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : InputLoadedAt s xReg blockSize xs)
+    (h_y : InputLoadedAt s yReg blockSize ys) :
+    ∀ i : Fin blockSize,
+      let addr := s.pid * blockSize + i.val
+      observeAt (exec (addKernelMasked xReg yReg outReg blockSize nElements) s)
+                outReg blockSize s.pid i
+        = some (if addr < nElements then xs i + ys i
+                else s.readMem outReg addr) := by
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [observeAt, exec, addKernelMasked, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, BlockState.setReg, BlockState.readMem]
+  unfold InputLoadedAt at h_x h_y
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  by_cases hi : s.pid * blockSize + i.val < nElements
+  · simp [hi, h_x, h_y]
+  · simp [hi]
+
+/-- View-level surface for `add_kernel_masked_correct`. -/
+theorem add_kernel_masked_correct_view
+    (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_y : TensorView.loaded s (programTileView s yReg blockSize)
+      (fun idx : TileIndex [blockSize] => ys idx.1)) :
+    ∀ idx : TileIndex [blockSize],
+      let addr := s.pid * blockSize + idx.1.val
+      TensorView.observe (exec (addKernelMasked xReg yReg outReg blockSize nElements) s)
+          (programTileView s outReg blockSize) idx
+        = some (if addr < nElements then xs idx.1 + ys idx.1
+                else s.readMem outReg addr) := by
+  intro idx
+  have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
+    (N := blockSize) (xs := xs) h_x
+  have hy := inputLoadedAt_of_programTileView_loaded (s := s) (region := yReg)
+    (N := blockSize) (xs := ys) h_y
+  simpa [TensorView.observe, observeTileAt, programTileView,
+         TensorView.offset, Offset.strided, observeAt, addSpec]
+    using add_kernel_masked_correct xReg yReg outReg blockSize nElements
+      hBlockSize s xs ys hx hy idx.1
 
 end VeriTile.Examples
