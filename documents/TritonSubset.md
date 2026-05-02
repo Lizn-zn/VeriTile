@@ -121,6 +121,7 @@ Supported loads:
 
 - `tl.load($(region))`
 - `tl.load($(region) + offset)`
+- `ptrs := tl.ptr($(region)) + offset; tl.load(ptrs)`
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
@@ -129,6 +130,7 @@ Supported stores:
 
 - `tl.store($(region), value)`
 - `tl.store($(region) + offset, value)`
+- `ptrs := tl.ptr($(region)) + offset; tl.store(ptrs, value)`
 - `tl.store(ptr, value, mask=mask)`
 
 Unknown kwargs are rejected. In particular, `tl.load(..., boundary_check=...)`
@@ -148,19 +150,37 @@ Masked store semantics:
 
 ## Memory Model
 
-VeriTile does not model first-class Triton/CUDA pointers. The surface syntax
-looks pointer-like:
+VeriTile models a limited first-class pointer value as:
+
+```lean
+RegionName × Nat
+```
+
+The memory model remains:
+
+```lean
+RegionName → Nat → ℝ
+```
+
+Legacy region-plus-offset syntax is still accepted:
 
 ```lean
 tl.load($(xReg) + offs)
 tl.store($(outReg) + offs, value)
 ```
 
-but `$(xReg)` is a Lean `RegionName`, not a pointer value. The memory model is:
+and first-class pointer values can be assigned and reused:
 
 ```lean
-RegionName → Nat → ℝ
+ptrs := tl.ptr($(xReg)) + offs
+x := tl.load(ptrs)
+ptrs2 := ptrs + stride
 ```
+
+This is intentionally narrower than CUDA/Triton pointers: VeriTile supports
+pointer base creation from a `RegionName`, pointer plus `.nat` offsets, and
+load/store through pointer-valued registers. It does not yet model pointer
+casts, pointer comparison, block pointers, or a typed address space.
 
 Offsets are explicit `.nat` expressions. For higher-dimensional tensors, the
 user supplies strided offset formulas such as:
@@ -173,8 +193,8 @@ Public theorem surfaces use `TensorView.loaded` / `TensorView.observe` to
 connect those formulas to mathematical tensor slices. Internally, proofs may
 still use the lower-level `InputAt` escape hatch for arbitrary offset maps and
 then package the result as a `TensorView`. Aliasing is represented by choosing
-equal or distinct `RegionName`s; pointer values, pointer casts, pointer
-comparison, and block pointers are not modeled. See
+equal or distinct `RegionName`s; arbitrary pointer alias analysis beyond those
+named regions is not modeled. See
 [`GpuMemoryModel.md`](./GpuMemoryModel.md) for the GPU memory hierarchy scope
 and the sequential-consistency assumptions.
 
@@ -208,7 +228,7 @@ current semantic contract.
 | Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; no whole-grid execution semantics |
 | Loops | Supported | Bounded `tl.for`, backed by `forLoop_inv` |
 | Conditionals | Limited | `tl.if cond { ... }` only; no `else`, `break`, or `continue` |
-| Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel `.real` or `.nat` operands |
+| Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel `.real` or `.nat` operands; `ptr + nat` for pointer offsets |
 | Comparisons | Supported | `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or `.nat` |
 | Boolean ops | Limited | `tl.logical_and`; no general boolean operator family |
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
@@ -218,8 +238,8 @@ current semantic contract.
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
-| Loads | Limited | Region-plus-offset load, optional `mask`, optional `other`; no first-class pointers |
-| Stores | Limited | Region-plus-offset store, optional `mask`; no first-class pointers |
+| Loads | Limited | Region-plus-offset load or pointer-register load, optional `mask`, optional `other` |
+| Stores | Limited | Region-plus-offset store or pointer-register store, optional `mask` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
 | Integer memory | Gap | Memory is `RegionName → Nat → ℝ`; no int/Nat tensor memory yet (#20) |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
@@ -233,7 +253,7 @@ current semantic contract.
 - Full IEEE-754 floating-point semantics.
 - Triton block pointers and block-pointer-only restrictions.
 - `boundary_check` / `padding_option`.
-- First-class pointers and pointer-valued expressions.
+- Full CUDA/Triton pointer semantics beyond `RegionName × Nat` pointer values.
 - Arbitrary pointer alias analysis beyond named-region equality.
 - General Python/Triton JIT semantics, decorators, meta-parameter execution,
   and Python control flow outside the embedded `triton { ... }` block.

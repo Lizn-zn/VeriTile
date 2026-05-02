@@ -106,6 +106,7 @@ syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.tanh(" tritonExpr ")" : tritonExpr
+syntax "tl.ptr(" "$(" term ")" ")" : tritonExpr
 syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 -- Element-wise select. All three operands must broadcast to a common
@@ -146,6 +147,7 @@ syntax "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 -- AST (Slice 1 of mask extension). Other kwargs raise a parse error per
 -- Issue #16 / `feedback_triton_user_first_class.md`.
 syntax "tl.load(" tritonPtr ("," tritonKwarg)* ")" : tritonExpr
+syntax "tl.load(" ident ("," tritonKwarg)* ")" : tritonExpr
 
 -- Unit-axis insertion (Triton `e[:, None]` / `e[None, :]`). First stage
 -- only accepts these two literal slicer forms on rank-1 inputs; lowers
@@ -192,6 +194,7 @@ syntax ident " := " tritonExpr : tritonStmt
 -- recognized (Triton's `tl.store` has no `other`). Per Issue #16: unknown
 -- kwarg → parse error.
 syntax "tl.store(" tritonPtr ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
+syntax "tl.store(" ident ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
 -- `tl.for i in $(n) { stmt* }` — bounded loop over `n` iterations,
 -- binding the iteration index to register `i` (Nat-channel).
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
@@ -215,6 +218,7 @@ private inductive DInfo where
   | real
   | nat
   | bool
+  | ptr
   deriving BEq, Inhabited
 
 private inductive SInfo where
@@ -258,6 +262,7 @@ private def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .real => `(TileDType.real)
   | .nat => `(TileDType.nat)
   | .bool => `(TileDType.bool)
+  | .ptr => `(TileDType.ptr)
 
 private def SInfo.term : SInfo → MacroM (TSyntax `term)
   | SInfo.dims ds => do
@@ -272,11 +277,13 @@ private def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
   | .real => `(NumericDType.real)
   | .nat => `(NumericDType.nat)
   | .bool => Macro.throwError "arithmetic on Bool values is not supported"
+  | .ptr => Macro.throwError "arithmetic on pointer values is not supported; use pointer + Nat offset"
 
 private def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
   | .real => `(ComparableDType.real)
   | .nat => `(ComparableDType.nat)
   | .bool => Macro.throwError "comparison on Bool values is not supported"
+  | .ptr => Macro.throwError "comparison on pointer values is not supported"
 
 private def lookupEnv (env : Env) (name : String) : MacroM (DInfo × SInfo) := do
   match env.find? (fun entry => entry.1 == name) with
@@ -441,6 +448,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.tanh"
       pure ⟨← `(Op.tanh $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.ptr($($r:term))) =>
+      pure ⟨← `(Op.ptrBase $r), .ptr, SInfo.scalar⟩
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) => do
       let a' ← expandExpr env a
       let b' ← expandExpr env b
@@ -521,6 +530,42 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       | none, some _ =>
           Macro.throwError
             "tl.load: `other=` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"
+  | `(tritonExpr| tl.load($p:ident $[, $kwargs:tritonKwarg]*)) => do
+      let pExpr : TSyntax `tritonExpr ← `(tritonExpr| $p:ident)
+      let p' ← expandExpr env pExpr
+      ensureDType .ptr p'.dtype "tl.load pointer"
+      let mut maskTerm : Option (TSyntax `term × SInfo) := none
+      let mut otherTerm : Option (TSyntax `term × SInfo) := none
+      for kw in kwargs do
+        match kw with
+        | `(tritonKwarg| $name:ident = $val:tritonExpr) =>
+            let val' ← expandExpr env val
+            match name.getId.toString with
+            | "mask"  =>
+                ensureDType .bool val'.dtype "tl.load mask"
+                maskTerm := some (val'.term, val'.shape)
+            | "other" =>
+                ensureDType .real val'.dtype "tl.load other"
+                otherTerm := some (val'.term, val'.shape)
+            | unknown =>
+                let msg : String :=
+                  "tl.load: unknown kwarg `" ++ unknown ++
+                  "`. Only `mask` and `other` are recognized (see GitHub issue #16)."
+                Macro.throwError msg
+        | _ => Macro.throwUnsupported
+      match maskTerm, otherTerm with
+      | none, none =>
+          pure ⟨← `(Op.loadPtr $p'.term), .real, p'.shape⟩
+      | some (m, mShape), none =>
+          let m' ← coerceShape m mShape p'.shape "tl.load mask"
+          pure ⟨← `(Op.loadPtrMask $p'.term $m'), .real, p'.shape⟩
+      | some (m, mShape), some (o, oShape) =>
+          let m' ← coerceShape m mShape p'.shape "tl.load mask"
+          let o' ← coerceShape o oShape p'.shape "tl.load other"
+          pure ⟨← `(Op.loadPtrMaskOther $p'.term $m' $o'), .real, p'.shape⟩
+      | none, some _ =>
+          Macro.throwError
+            "tl.load: `other=` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"
   | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => do
       expandCmp env "comparison" (← `(Op.lt)) a b
   | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => do
@@ -534,7 +579,21 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => do
       expandCmp env "comparison" (← `(Op.ne)) a b
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
-      expandArith env "arithmetic" (← `(Op.add)) a b
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      match a'.dtype, b'.dtype with
+      | .ptr, .nat =>
+          let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
+          pure ⟨← `(Op.ptrAdd $bc $a'.term $b'.term), .ptr, outShape⟩
+      | .nat, .ptr =>
+          let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
+          pure ⟨← `(Op.ptrAdd $bc $b'.term $a'.term), .ptr, outShape⟩
+      | _, _ =>
+          unless a'.dtype == b'.dtype do
+            Macro.throwError "arithmetic: dtype mismatch"
+          let np ← a'.dtype.numericProof
+          let (bc, outShape) ← broadcastTerm a'.shape b'.shape "arithmetic"
+          pure ⟨← `(Op.add $np $bc $a'.term $b'.term), a'.dtype, outShape⟩
   | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
       expandArith env "arithmetic" (← `(Op.sub)) a b
   | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => do
@@ -877,6 +936,36 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
           let m' ← coerceShape m mShape offShape "tl.store mask"
           let sh ← offShape.term
           pure (← `(Stmt.storeMask $r $sh $off $vTerm $m'), env)
+  | `(tritonStmt| tl.store($p:ident, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) => do
+      let pExpr : TSyntax `tritonExpr ← `(tritonExpr| $p:ident)
+      let p' ← expandExpr env pExpr
+      ensureDType .ptr p'.dtype "tl.store pointer"
+      let v' ← expandExpr env v
+      ensureDType .real v'.dtype "tl.store value"
+      let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
+      let mut maskTerm : Option (TSyntax `term × SInfo) := none
+      for kw in kwargs do
+        match kw with
+        | `(tritonKwarg| $name:ident = $kval:tritonExpr) =>
+            let kval' ← expandExpr env kval
+            match name.getId.toString with
+            | "mask"  =>
+                ensureDType .bool kval'.dtype "tl.store mask"
+                maskTerm := some (kval'.term, kval'.shape)
+            | unknown =>
+                let msg : String :=
+                  "tl.store: unknown kwarg `" ++ unknown ++
+                  "`. Only `mask` is recognized (Triton's tl.store has no `other`; see issue #16)."
+                Macro.throwError msg
+        | _ => Macro.throwUnsupported
+      match maskTerm with
+      | none =>
+          let sh ← p'.shape.term
+          pure (← `(Stmt.storePtr $sh $p'.term $vTerm), env)
+      | some (m, mShape) =>
+          let m' ← coerceShape m mShape p'.shape "tl.store mask"
+          let sh ← p'.shape.term
+          pure (← `(Stmt.storePtrMask $sh $p'.term $vTerm $m'), env)
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
@@ -924,11 +1013,20 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
             | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
       ptrRegions p ++ kwargRegions
+  | `(tritonExpr| tl.load($_:ident $[, $kwargs:tritonKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
+            match kw with
+            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      kwargRegions
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.ptr($($r:term)))            => [r]
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
@@ -1018,6 +1116,14 @@ private partial def stmtRegions :
             | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
       (ptrOffsetRegions p ++ exprRegions v ++ kwargRegions, ptrBaseRegion p)
+  | `(tritonStmt| tl.store($_:ident, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
+            match kw with
+            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      (exprRegions v ++ kwargRegions, [])
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       stmts.toList.foldl
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>

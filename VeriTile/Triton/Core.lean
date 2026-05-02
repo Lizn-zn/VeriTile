@@ -38,6 +38,7 @@ inductive TileDType where
   | real
   | nat
   | bool
+  | ptr
   deriving DecidableEq, Repr
 
 /-- Lean carrier for each VeriTile tile dtype.
@@ -61,6 +62,7 @@ abbrev TileCarrier : TileDType → Type
   | .real => WithBot ℝ
   | .nat  => Nat
   | .bool => Bool
+  | .ptr  => RegionName × Nat
 
 /--
 Shape of a Triton block-local tile.
@@ -522,11 +524,16 @@ inductive Op : TileDType → TileShape → Type where
                 (axis : Fin (shape.length + 1)) →
                 Op dtype shape →
                 Op dtype (TileShape.insertAxis shape axis 1)
+  | ptrBase   : (region : RegionName) → Op .ptr []
+  | ptrAdd    : Broadcast a b out → Op .ptr a → Op .nat b → Op .ptr out
   | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
   | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
                 (mask : Op .bool shape) → Op .real shape
   | loadMaskOther : (region : RegionName) → (offset : Op .nat shape) →
                 (mask : Op .bool shape) → (other : Op .real shape) → Op .real shape
+  | loadPtr   : Op .ptr shape → Op .real shape
+  | loadPtrMask : Op .ptr shape → Op .bool shape → Op .real shape
+  | loadPtrMaskOther : Op .ptr shape → Op .bool shape → Op .real shape → Op .real shape
   | natToReal : Op .nat shape → Op .real shape
 
 /--
@@ -552,6 +559,11 @@ inductive Stmt : Type where
               (offset : Op .nat shape) → (value : Op .real shape) → Stmt
   | storeMask : (region : RegionName) → (shape : TileShape) →
               (offset : Op .nat shape) → (value : Op .real shape) →
+              (mask : Op .bool shape) → Stmt
+  | storePtr : (shape : TileShape) →
+              (ptr : Op .ptr shape) → (value : Op .real shape) → Stmt
+  | storePtrMask : (shape : TileShape) →
+              (ptr : Op .ptr shape) → (value : Op .real shape) →
               (mask : Op .bool shape) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt

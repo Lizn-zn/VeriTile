@@ -311,4 +311,39 @@ example :
     mT.data (⟨2, by decide⟩, ⟨1, by decide⟩, PUnit.unit) =
       m.data (⟨1, by decide⟩, ⟨2, by decide⟩, PUnit.unit) := rfl
 
+/-! ### First-class pointer values (issue #44) -/
+
+def pointerValueLoadSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(N) + tl.arange(0, $(N))
+  ptrs := tl.ptr($(xReg)) + offs
+  x    := tl.load(ptrs)
+}
+
+def pointerValueOffsetLoadSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
+  pid   := tl.program_id(0)
+  offs  := pid * $(N) + tl.arange(0, $(N))
+  ptrs  := tl.ptr($(xReg)) + offs
+  ptrs2 := ptrs + $(N)
+  y     := tl.load(ptrs2)
+}
+
+def pointerValueStoreSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  pid     := tl.program_id(0)
+  offs    := pid * $(N) + tl.arange(0, $(N))
+  x       := tl.load($(xReg) + offs)
+  outPtrs := tl.ptr($(outReg)) + offs
+  tl.store(outPtrs, x)
+}
+
+def pointerValueMaskedStoreSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  pid     := tl.program_id(0)
+  offs    := pid * $(N) + tl.arange(0, $(N))
+  mask    := offs < $(N)
+  ptrs    := tl.ptr($(xReg)) + offs
+  x       := tl.load(ptrs, mask=mask, other=0)
+  outPtrs := tl.ptr($(outReg)) + offs
+  tl.store(outPtrs, x, mask=mask)
+}
+
 end VeriTile.Examples.TritonSmoke

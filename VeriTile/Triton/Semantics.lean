@@ -548,6 +548,32 @@ theorem foldl_writeMem_masked_pid {α : Type}
       · simp [hmask]
       · simp [hmask]
 
+theorem foldl_writeMemAt_pid {α : Type}
+    (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (l : List α) (s : BlockState) :
+    ((l.foldl (fun acc k => acc.writeMem (regionFn k) (offsetFn k) (valueFn k)) s).pid)
+      = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      simp
+
+theorem foldl_writeMemAt_masked_pid {α : Type}
+    (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (mask : α → Bool) (l : List α) (s : BlockState) :
+    ((l.foldl
+        (fun acc k =>
+          if mask k then acc.writeMem (regionFn k) (offsetFn k) (valueFn k) else acc) s).pid)
+      = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hmask : mask hd
+      · simp [hmask]
+      · simp [hmask]
+
 end BlockState
 
 def Tile.bop {dtype a b out}
@@ -561,6 +587,14 @@ def Tile.cop {dtype a b out}
     (bc : Broadcast a b out) (x : Tile dtype a) (y : Tile dtype b) :
     Tile .bool out :=
   ⟨fun i => op (x.data (bc.leftIndex i)) (y.data (bc.rightIndex i))⟩
+
+def Tile.ptrAdd {a b out}
+    (bc : Broadcast a b out) (ptrs : Tile .ptr a) (offs : Tile .nat b) :
+    Tile .ptr out :=
+  ⟨fun i =>
+    let p := ptrs.data (bc.leftIndex i)
+    let o := offs.data (bc.rightIndex i)
+    (p.1, p.2 + o)⟩
 
 def Tile.uop {shape} (op : WithBot ℝ → WithBot ℝ) (x : Tile .real shape) : Tile .real shape :=
   ⟨fun i => op (x.data i)⟩
@@ -1044,6 +1078,11 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .transpose (batch := batch) a, s => do
       let va ← evalOp a s
       some (Tile.transpose batch va)
+  | .ptrBase region, _ => some (Tile.scalar (region, 0))
+  | .ptrAdd bc ptr off, s => do
+      let ptrs ← evalOp ptr s
+      let offs ← evalOp off s
+      some (Tile.ptrAdd bc ptrs offs)
   | .load region off, s => do
       let offsets ← evalOp off s
       some ⟨fun i => some (s.readMem region (offsets.data i))⟩
@@ -1060,6 +1099,24 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       some ⟨fun i =>
         let addr := offsets.data i
         if masks.data i then some (s.readMem region addr) else others.data i⟩
+  | .loadPtr ptr, s => do
+      let ptrs ← evalOp ptr s
+      some ⟨fun i =>
+        let p := ptrs.data i
+        some (s.readMem p.1 p.2)⟩
+  | .loadPtrMask ptr mask, s => do
+      let ptrs ← evalOp ptr s
+      let masks ← evalOp mask s
+      some ⟨fun i =>
+        let p := ptrs.data i
+        if masks.data i then some (s.readMem p.1 p.2) else some (s.undef p.1 p.2)⟩
+  | .loadPtrMaskOther ptr mask other, s => do
+      let ptrs ← evalOp ptr s
+      let masks ← evalOp mask s
+      let others ← evalOp other s
+      some ⟨fun i =>
+        let p := ptrs.data i
+        if masks.data i then some (s.readMem p.1 p.2) else others.data i⟩
   | .natToReal a, s => return Tile.natToReal (← evalOp a s)
 
 mutual
@@ -1084,6 +1141,22 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
         (fun acc i =>
           if masks.data i then acc.writeMem region (offsets.data i)
                                 ((values.data i).unbotD 0)
+          else acc) s)
+  | .storePtr shape ptr val, s => do
+      let ptrs ← evalOp ptr s
+      let values ← evalOp val s
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i =>
+          let p := ptrs.data i
+          acc.writeMem p.1 p.2 ((values.data i).unbotD 0)) s)
+  | .storePtrMask shape ptr val mask, s => do
+      let ptrs ← evalOp ptr s
+      let values ← evalOp val s
+      let masks ← evalOp mask s
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i =>
+          let p := ptrs.data i
+          if masks.data i then acc.writeMem p.1 p.2 ((values.data i).unbotD 0)
           else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
@@ -1215,6 +1288,22 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
     rename_i masks
     cases h
     simp [BlockState.foldl_writeMem_masked_pid]
+  case storePtr shape ptr val =>
+    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
+    rename_i ptrs
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases h
+    simp [BlockState.foldl_writeMemAt_pid]
+  case storePtrMask shape ptr val mask =>
+    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
+    rename_i ptrs
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases hmask : evalOp mask s <;> simp [hmask] at h
+    rename_i masks
+    cases h
+    simp [BlockState.foldl_writeMemAt_masked_pid]
   case forLoop idx n body =>
     simp at h
     exact stepForLoopAux_pid h

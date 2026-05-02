@@ -112,6 +112,7 @@ bit-level / precision 语义。
 
 - `tl.load($(region))`
 - `tl.load($(region) + offset)`
+- `ptrs := tl.ptr($(region)) + offset; tl.load(ptrs)`
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
@@ -120,6 +121,7 @@ bit-level / precision 语义。
 
 - `tl.store($(region), value)`
 - `tl.store($(region) + offset, value)`
+- `ptrs := tl.ptr($(region)) + offset; tl.store(ptrs, value)`
 - `tl.store(ptr, value, mask=mask)`
 
 未知 kwarg 会报错。特别地,`tl.load(..., boundary_check=...)` 和
@@ -139,18 +141,36 @@ masked store 语义:
 
 ## Memory model
 
-VeriTile 不建模 first-class Triton/CUDA pointer。surface syntax 看起来像 pointer:
+VeriTile 用一个窄版 first-class pointer value 建模 pointer:
+
+```lean
+RegionName × Nat
+```
+
+整体内存模型仍然是:
+
+```lean
+RegionName → Nat → ℝ
+```
+
+旧的 region-plus-offset syntax 仍然可用:
 
 ```lean
 tl.load($(xReg) + offs)
 tl.store($(outReg) + offs, value)
 ```
 
-但 `$(xReg)` 是 Lean `RegionName`,不是 pointer value。内存模型是:
+同时 pointer value 可以赋值和复用:
 
 ```lean
-RegionName → Nat → ℝ
+ptrs := tl.ptr($(xReg)) + offs
+x := tl.load(ptrs)
+ptrs2 := ptrs + stride
 ```
+
+这个模型故意比 CUDA/Triton pointer 窄:目前支持从 `RegionName` 创建 pointer base、
+pointer 加 `.nat` offset、以及通过 pointer-valued register 做 load/store。pointer
+cast、pointer comparison、block pointer、typed address space 都还没有建模。
 
 Offset 是显式 `.nat` 表达式。高维 tensor 通过用户写出的 strided offset 公式表示,
 例如:
@@ -162,8 +182,7 @@ b * stride_b + h * stride_h + i * stride_s + d * stride_d
 公开 theorem surface 用 `TensorView.loaded` / `TensorView.observe` 把这些 offset
 公式连接到数学 tensor slice。证明内部仍可使用更底层的 `InputAt` escape hatch
 表示任意 offset map,再把结果封装成 `TensorView`。aliasing 通过选择相同或不同的
-`RegionName` 表示;pointer value、pointer cast、pointer comparison、block pointer
-都还没有建模。
+`RegionName` 表示;这些 named region 之外的通用 pointer alias analysis 还没有建模。
 
 ## 浮点模型
 
@@ -191,7 +210,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;没有 whole-grid execution semantics |
 | loop | Supported | bounded `tl.for`,由 `forLoop_inv` 支撑 |
 | conditional | Limited | 只有 `tl.if cond { ... }`;没有 `else`、`break`、`continue` |
-| arithmetic | Supported | 同 channel `.real` 或 `.nat` 上的 `+`, `-`, `*`, `/` |
+| arithmetic | Supported | 同 channel `.real` 或 `.nat` 上的 `+`, `-`, `*`, `/`;pointer offset 支持 `ptr + nat` |
 | comparison | Supported | `.real` 或 `.nat` 上的 `<`, `<=`, `==`, `>`, `>=`, `!=` |
 | bool op | Limited | `tl.logical_and`;没有完整 bool operator family |
 | pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
@@ -201,8 +220,8 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]` |
 | transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
-| load | Limited | region-plus-offset load,可带 `mask` / `other`;没有 first-class pointer |
-| store | Limited | region-plus-offset store,可带 `mask`;没有 first-class pointer |
+| load | Limited | region-plus-offset 或 pointer-register load,可带 `mask` / `other` |
+| store | Limited | region-plus-offset 或 pointer-register store,可带 `mask` |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
 | integer memory | Gap | memory 是 `RegionName → Nat → ℝ`;还没有 int/Nat tensor memory (#20) |
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
@@ -216,7 +235,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 - 完整 IEEE-754 浮点语义。
 - Triton block pointer 以及 block-pointer-only 限制。
 - `boundary_check` / `padding_option`。
-- first-class pointer 与 pointer-valued expression。
+- `RegionName × Nat` pointer value 之外的完整 CUDA/Triton pointer 语义。
 - named-region equality 之外的通用 pointer alias analysis。
 - 完整 Python/Triton JIT 语义、decorator、meta-parameter execution,
   以及 `triton { ... }` 块外的 Python control flow。
