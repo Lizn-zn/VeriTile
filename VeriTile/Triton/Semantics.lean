@@ -59,18 +59,34 @@ namespace NumericDType
 
 def add : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
   | .real, x, y => WithBot.realAdd x y
+  | .fp32, x, y => WithBot.realAdd x y
+  | .fp16, x, y => WithBot.realAdd x y
+  | .bf16, x, y => WithBot.realAdd x y
+  | .int32, x, y => x + y
   | .nat, x, y => x + y
 
 def sub : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
   | .real, x, y => WithBot.realSub x y
+  | .fp32, x, y => WithBot.realSub x y
+  | .fp16, x, y => WithBot.realSub x y
+  | .bf16, x, y => WithBot.realSub x y
+  | .int32, x, y => x - y
   | .nat, x, y => x - y
 
 def mul : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
   | .real, x, y => WithBot.realMul x y
+  | .fp32, x, y => WithBot.realMul x y
+  | .fp16, x, y => WithBot.realMul x y
+  | .bf16, x, y => WithBot.realMul x y
+  | .int32, x, y => x * y
   | .nat, x, y => x * y
 
 noncomputable def div : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
   | .real, x, y => WithBot.realDiv x y
+  | .fp32, x, y => WithBot.realDiv x y
+  | .fp16, x, y => WithBot.realDiv x y
+  | .bf16, x, y => WithBot.realDiv x y
+  | .int32, x, y => x / y
   | .nat, x, y => x / y
 
 end NumericDType
@@ -80,34 +96,84 @@ namespace ComparableDType
 noncomputable def lt :
     ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
   | .real, x, y => decide (x < y)
+  | .fp32, x, y => decide (x < y)
+  | .fp16, x, y => decide (x < y)
+  | .bf16, x, y => decide (x < y)
+  | .int32, x, y => decide (x < y)
   | .nat, x, y => decide (x < y)
 
 noncomputable def le :
     ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
   | .real, x, y => decide (x ≤ y)
+  | .fp32, x, y => decide (x ≤ y)
+  | .fp16, x, y => decide (x ≤ y)
+  | .bf16, x, y => decide (x ≤ y)
+  | .int32, x, y => decide (x ≤ y)
   | .nat, x, y => decide (x ≤ y)
 
 noncomputable def eq :
     ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
   | .real, x, y => decide (x = y)
+  | .fp32, x, y => decide (x = y)
+  | .fp16, x, y => decide (x = y)
+  | .bf16, x, y => decide (x = y)
+  | .int32, x, y => decide (x = y)
   | .nat, x, y => decide (x = y)
 
 noncomputable def gt :
     ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
   | .real, x, y => decide (x > y)
+  | .fp32, x, y => decide (x > y)
+  | .fp16, x, y => decide (x > y)
+  | .bf16, x, y => decide (x > y)
+  | .int32, x, y => decide (x > y)
   | .nat, x, y => decide (x > y)
 
 noncomputable def ge :
     ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
   | .real, x, y => decide (x ≥ y)
+  | .fp32, x, y => decide (x ≥ y)
+  | .fp16, x, y => decide (x ≥ y)
+  | .bf16, x, y => decide (x ≥ y)
+  | .int32, x, y => decide (x ≥ y)
   | .nat, x, y => decide (x ≥ y)
 
 noncomputable def ne :
     ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
   | .real, x, y => decide (x ≠ y)
+  | .fp32, x, y => decide (x ≠ y)
+  | .fp16, x, y => decide (x ≠ y)
+  | .bf16, x, y => decide (x ≠ y)
+  | .int32, x, y => decide (x ≠ y)
   | .nat, x, y => decide (x ≠ y)
 
 end ComparableDType
+
+namespace FloatDType
+
+def ofWithBot : FloatDType dtype → WithBot ℝ → TileCarrier dtype
+  | .real, x => x
+  | .fp32, x => x
+  | .fp16, x => x
+  | .bf16, x => x
+
+def toWithBot : FloatDType dtype → TileCarrier dtype → WithBot ℝ
+  | .real, x => x
+  | .fp32, x => x
+  | .fp16, x => x
+  | .bf16, x => x
+
+def ofReal (h : FloatDType dtype) (x : ℝ) : TileCarrier dtype :=
+  h.ofWithBot (some x)
+
+def cast (src : FloatDType srcDtype) (dst : FloatDType dstDtype)
+    (x : TileCarrier srcDtype) : TileCarrier dstDtype :=
+  dst.ofWithBot (src.toWithBot x)
+
+def storeValue (h : FloatDType dtype) (x : TileCarrier dtype) : ℝ :=
+  (h.toWithBot x).unbotD 0
+
+end FloatDType
 
 /-- Cast a typed tile across definitional dtype/shape equalities. -/
 def castTile {dtype shape dtype' shape'}
@@ -1014,6 +1080,7 @@ def Tile.select {dtype : TileDType} {shape : TileShape}
 
 noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)
   | .const c, _ => some (Tile.scalar (some c : WithBot ℝ))
+  | .constFloat h c, _ => some (Tile.scalar (h.ofReal c))
   | .constNat n, _ => some (Tile.scalar n)
   | .constBool b, _ => some (Tile.scalar b)
   | .negInf, _ => some (Tile.scalar (none : WithBot ℝ))
@@ -1026,6 +1093,9 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .full shape e, s => do
       let v ← evalOp e s
       some ⟨fun _ => v.data PUnit.unit⟩
+  | .castFloat src dst a, s => do
+      let va ← evalOp a s
+      some ⟨fun i => src.cast dst (va.data i)⟩
   | .add h bc a b, s => do
       let va ← evalOp a s
       let vb ← evalOp b s
@@ -1117,6 +1187,40 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       some ⟨fun i =>
         let p := ptrs.data i
         if masks.data i then some (s.readMem p.1 p.2) else others.data i⟩
+  | .loadFloat h region off, s => do
+      let offsets ← evalOp off s
+      some ⟨fun i => h.ofReal (s.readMem region (offsets.data i))⟩
+  | .loadFloatMask h region off mask, s => do
+      let offsets ← evalOp off s
+      let masks ← evalOp mask s
+      some ⟨fun i =>
+        let addr := offsets.data i
+        if masks.data i then h.ofReal (s.readMem region addr) else h.ofReal (s.undef region addr)⟩
+  | .loadFloatMaskOther h region off mask other, s => do
+      let offsets ← evalOp off s
+      let masks ← evalOp mask s
+      let others ← evalOp other s
+      some ⟨fun i =>
+        let addr := offsets.data i
+        if masks.data i then h.ofReal (s.readMem region addr) else others.data i⟩
+  | .loadPtrFloat h ptr, s => do
+      let ptrs ← evalOp ptr s
+      some ⟨fun i =>
+        let p := ptrs.data i
+        h.ofReal (s.readMem p.1 p.2)⟩
+  | .loadPtrFloatMask h ptr mask, s => do
+      let ptrs ← evalOp ptr s
+      let masks ← evalOp mask s
+      some ⟨fun i =>
+        let p := ptrs.data i
+        if masks.data i then h.ofReal (s.readMem p.1 p.2) else h.ofReal (s.undef p.1 p.2)⟩
+  | .loadPtrFloatMaskOther h ptr mask other, s => do
+      let ptrs ← evalOp ptr s
+      let masks ← evalOp mask s
+      let others ← evalOp other s
+      some ⟨fun i =>
+        let p := ptrs.data i
+        if masks.data i then h.ofReal (s.readMem p.1 p.2) else others.data i⟩
   | .natToReal a, s => return Tile.natToReal (← evalOp a s)
 
 mutual
@@ -1157,6 +1261,37 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
         (fun acc i =>
           let p := ptrs.data i
           if masks.data i then acc.writeMem p.1 p.2 ((values.data i).unbotD 0)
+          else acc) s)
+  | .storeFloat h region shape off val, s => do
+      let offsets ← evalOp off s
+      let values ← evalOp val s
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i => acc.writeMem region (offsets.data i)
+                        (h.storeValue (values.data i))) s)
+  | .storeFloatMask h region shape off val mask, s => do
+      let offsets ← evalOp off s
+      let values ← evalOp val s
+      let masks ← evalOp mask s
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i =>
+          if masks.data i then acc.writeMem region (offsets.data i)
+                                (h.storeValue (values.data i))
+          else acc) s)
+  | .storePtrFloat h shape ptr val, s => do
+      let ptrs ← evalOp ptr s
+      let values ← evalOp val s
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i =>
+          let p := ptrs.data i
+          acc.writeMem p.1 p.2 (h.storeValue (values.data i))) s)
+  | .storePtrFloatMask h shape ptr val mask, s => do
+      let ptrs ← evalOp ptr s
+      let values ← evalOp val s
+      let masks ← evalOp mask s
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i =>
+          let p := ptrs.data i
+          if masks.data i then acc.writeMem p.1 p.2 (h.storeValue (values.data i))
           else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
@@ -1296,6 +1431,38 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
     cases h
     simp [BlockState.foldl_writeMemAt_pid]
   case storePtrMask shape ptr val mask =>
+    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
+    rename_i ptrs
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases hmask : evalOp mask s <;> simp [hmask] at h
+    rename_i masks
+    cases h
+    simp [BlockState.foldl_writeMemAt_masked_pid]
+  case storeFloat hfloat region shape off val =>
+    cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
+    rename_i offsets
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases h
+    simp [BlockState.foldl_writeMem_pid]
+  case storeFloatMask hfloat region shape off val mask =>
+    cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
+    rename_i offsets
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases hmask : evalOp mask s <;> simp [hmask] at h
+    rename_i masks
+    cases h
+    simp [BlockState.foldl_writeMem_masked_pid]
+  case storePtrFloat hfloat shape ptr val =>
+    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
+    rename_i ptrs
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases h
+    simp [BlockState.foldl_writeMemAt_pid]
+  case storePtrFloatMask hfloat shape ptr val mask =>
     cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
     rename_i ptrs
     cases hval : evalOp val s <;> simp [hval] at h

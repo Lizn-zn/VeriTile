@@ -39,10 +39,16 @@ Stmt : Type
 - Real 反引用: `$ℝ(x)`,把 Lean `ℝ` 项降到 `.real` channel。
 - `-inf` 降到 `Op.negInf`,内部表示为 `⊥ : WithBot ℝ`。
 - `tl.toReal(x)` 把 `.nat` 标量/tile 转成 `.real`。
+- `tl.cast(x, tl.float64|tl.float32|tl.float16|tl.bfloat16)` 改变浮点
+  dtype index。当前语义里它保留底层 `WithBot ℝ` 值,不建模 rounding。
 
 当前 channel:
 
 - `.real`: 用 `WithBot ℝ` 建模,主要为了表达 `-inf`。
+- `.fp32`, `.fp16`, `.bf16`: 显式浮点 dtype channel,当前和 `.real` 一样
+  使用 `WithBot ℝ` 数学 carrier。
+- `.int32`: AST 层 signed-integer channel,已有算术/比较语义;DSL 里 int32
+  cast 还没建模。
 - `.nat`: 用于 offset、loop counter、size 和地址算术。
 - `.bool`: 由比较产生,用于 mask 和 `tl.where`。
 
@@ -189,6 +195,11 @@ b * stride_b + h * stride_h + i * stride_s + d * stride_d
 含义是:当前 theorem 证明的是实数数学正确性,不是 IEEE-754 bit-level 等价。
 rounding、NaN、signed zero、overflow、underflow、denormal、exception flag、
 硬件 dot precision、fast-math rewrite 都未建模。
+
+core AST 现在有 typed floating load/store 构造,例如 `Op.loadFloat`,
+`Op.loadPtrFloat`, `Stmt.storeFloat`。公开 DSL 的 `tl.load` / `tl.store`
+默认仍是 `.real`;如果 kernel 需要在中间寄存器携带显式浮点 dtype,使用
+`tl.cast`。
 
 ## Operator / syntax 覆盖 checklist
 

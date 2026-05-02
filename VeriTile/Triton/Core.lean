@@ -36,6 +36,10 @@ block-local values with framework-level tensors.
 -/
 inductive TileDType where
   | real
+  | fp32
+  | fp16
+  | bf16
+  | int32
   | nat
   | bool
   | ptr
@@ -57,12 +61,28 @@ range preconditions on every theorem. With `WithBot ℝ`:
   `sigmoid(-∞)`; see `WithBot.realExp` / `WithBot.realSigmoid` in Semantics
 
 `tl.load` lifts `mem : RegionName → Nat → ℝ` to `some _ : WithBot ℝ`.
-`tl.store` demotes via `unbot' 0` — well-formed kernels never store `⊥`. -/
+`tl.store` demotes via `unbot' 0` — well-formed kernels never store `⊥`.
+
+Hardware-shaped floating channels (`.fp32`, `.fp16`, `.bf16`) currently share
+the same `WithBot ℝ` carrier as `.real`. They are a type-layer hook: kernels
+can express dtype choices and casts, while this branch still proves over the
+existing mathematical real model rather than IEEE rounding semantics. -/
 abbrev TileCarrier : TileDType → Type
   | .real => WithBot ℝ
+  | .fp32 => WithBot ℝ
+  | .fp16 => WithBot ℝ
+  | .bf16 => WithBot ℝ
+  | .int32 => Int
   | .nat  => Nat
   | .bool => Bool
   | .ptr  => RegionName × Nat
+
+/-- Floating data channels currently backed by the mathematical real model. -/
+inductive FloatDType : TileDType → Type where
+  | real : FloatDType .real
+  | fp32 : FloatDType .fp32
+  | fp16 : FloatDType .fp16
+  | bf16 : FloatDType .bf16
 
 /--
 Shape of a Triton block-local tile.
@@ -383,11 +403,19 @@ end Broadcast
 /-- DTypes that support Triton's arithmetic operators in the current model. -/
 inductive NumericDType : TileDType → Type where
   | real : NumericDType .real
+  | fp32 : NumericDType .fp32
+  | fp16 : NumericDType .fp16
+  | bf16 : NumericDType .bf16
+  | int32 : NumericDType .int32
   | nat  : NumericDType .nat
 
 /-- DTypes that support Triton's comparison operators in the current model. -/
 inductive ComparableDType : TileDType → Type where
   | real : ComparableDType .real
+  | fp32 : ComparableDType .fp32
+  | fp16 : ComparableDType .fp16
+  | bf16 : ComparableDType .bf16
+  | int32 : ComparableDType .int32
   | nat  : ComparableDType .nat
 
 /--
@@ -444,6 +472,7 @@ Notes on individual constructors:
 -/
 inductive Op : TileDType → TileShape → Type where
   | const     : ℝ → Op .real []
+  | constFloat : FloatDType dtype → ℝ → Op dtype []
   | constNat  : Nat → Op .nat []
   | constBool : Bool → Op .bool []
   | negInf    : Op .real []
@@ -452,6 +481,7 @@ inductive Op : TileDType → TileShape → Type where
   | arange    : (n : Nat) → Op .nat [n]
   | broadcast : Op dtype [] → (shape : TileShape) → Op dtype shape
   | full      : (shape : TileShape) → Op dtype [] → Op dtype shape
+  | castFloat : FloatDType src → FloatDType dst → Op src shape → Op dst shape
   | add       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | sub       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | mul       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
@@ -534,6 +564,15 @@ inductive Op : TileDType → TileShape → Type where
   | loadPtr   : Op .ptr shape → Op .real shape
   | loadPtrMask : Op .ptr shape → Op .bool shape → Op .real shape
   | loadPtrMaskOther : Op .ptr shape → Op .bool shape → Op .real shape → Op .real shape
+  | loadFloat : FloatDType dtype → (region : RegionName) → (offset : Op .nat shape) → Op dtype shape
+  | loadFloatMask : FloatDType dtype → (region : RegionName) → (offset : Op .nat shape) →
+                (mask : Op .bool shape) → Op dtype shape
+  | loadFloatMaskOther : FloatDType dtype → (region : RegionName) → (offset : Op .nat shape) →
+                (mask : Op .bool shape) → (other : Op dtype shape) → Op dtype shape
+  | loadPtrFloat : FloatDType dtype → Op .ptr shape → Op dtype shape
+  | loadPtrFloatMask : FloatDType dtype → Op .ptr shape → Op .bool shape → Op dtype shape
+  | loadPtrFloatMaskOther : FloatDType dtype → Op .ptr shape → Op .bool shape →
+                Op dtype shape → Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
 
 /--
@@ -564,6 +603,16 @@ inductive Stmt : Type where
               (ptr : Op .ptr shape) → (value : Op .real shape) → Stmt
   | storePtrMask : (shape : TileShape) →
               (ptr : Op .ptr shape) → (value : Op .real shape) →
+              (mask : Op .bool shape) → Stmt
+  | storeFloat : FloatDType dtype → (region : RegionName) → (shape : TileShape) →
+              (offset : Op .nat shape) → (value : Op dtype shape) → Stmt
+  | storeFloatMask : FloatDType dtype → (region : RegionName) → (shape : TileShape) →
+              (offset : Op .nat shape) → (value : Op dtype shape) →
+              (mask : Op .bool shape) → Stmt
+  | storePtrFloat : FloatDType dtype → (shape : TileShape) →
+              (ptr : Op .ptr shape) → (value : Op dtype shape) → Stmt
+  | storePtrFloatMask : FloatDType dtype → (shape : TileShape) →
+              (ptr : Op .ptr shape) → (value : Op dtype shape) →
               (mask : Op .bool shape) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt

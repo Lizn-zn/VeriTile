@@ -43,10 +43,17 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 - Real antiquotation: `$ℝ(x)` lowers a Lean `ℝ` term to the `.real` channel.
 - `-inf` lowers to `Op.negInf`, represented internally by `⊥ : WithBot ℝ`.
 - `tl.toReal(x)` converts a `.nat` scalar/tile to `.real`.
+- `tl.cast(x, tl.float64|tl.float32|tl.float16|tl.bfloat16)` changes the
+  floating dtype index. In the current semantic model this preserves the
+  underlying `WithBot ℝ` value; it does not model rounding.
 
 Supported channels:
 
 - `.real`: modeled as `WithBot ℝ`, mainly to represent `-inf`.
+- `.fp32`, `.fp16`, `.bf16`: explicit floating dtype channels, currently
+  backed by the same `WithBot ℝ` mathematical carrier as `.real`.
+- `.int32`: AST-level signed-integer channel with arithmetic/comparison
+  semantics; DSL surface casts to/from int32 are not modeled yet.
 - `.nat`: used for offsets, loop counters, sizes, and address arithmetic.
 - `.bool`: produced by comparisons and consumed by masks / `tl.where`.
 
@@ -205,6 +212,11 @@ What this means: theorems prove real-valued mathematical correctness, not
 bit-level IEEE-754 equivalence. Rounding, NaNs, signed zeros, overflow,
 underflow, denormals, exception flags, hardware dot precision, and fast-math
 rewrites are not modeled.
+
+The core AST has typed floating load/store constructors such as
+`Op.loadFloat`, `Op.loadPtrFloat`, and `Stmt.storeFloat`. The public DSL still
+defaults `tl.load` / `tl.store` to `.real`; use `tl.cast` where a kernel needs
+to carry an explicit floating dtype through intermediate registers.
 
 ## Operator and Syntax Coverage Checklist
 

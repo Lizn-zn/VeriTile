@@ -54,6 +54,22 @@ def unaryMathOpsSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
   t    := tl.tanh(x)
 }
 
+/-- DSL smoke test for explicit floating dtype casts. -/
+def dtypeCastSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  x    := tl.load(tl.ptr($(xReg)) + offs)
+  x32  := tl.cast(x, tl.float32)
+  one  := tl.cast(1, tl.float32)
+  y32  := x32 + one
+  y    := tl.cast(y32, tl.float64)
+  tl.store(tl.ptr($(outReg)) + offs, y)
+}
+
+/-- Core smoke test for typed floating load/store AST nodes. -/
+def fp16LoadStoreCoreSmoke (xReg outReg : RegionName) (N : Nat) : Stmt :=
+  Stmt.storeFloat FloatDType.fp16 outReg [N] (Op.arange N)
+    (Op.loadFloat FloatDType.fp16 xReg (Op.arange N))
+
 /-- `tl.load(p, mask=m)` with no `other=` uses `s.undef` for masked-off lanes. -/
 example : evalOp
     (Op.loadMask "X" (Op.constNat 0)

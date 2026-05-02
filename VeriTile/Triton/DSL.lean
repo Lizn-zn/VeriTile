@@ -73,6 +73,7 @@ declare_syntax_cat tritonExpr
 declare_syntax_cat tritonStmt
 declare_syntax_cat tritonKwarg
 declare_syntax_cat tritonReduceKwarg
+declare_syntax_cat tritonDType
 
 -- Expressions
 syntax num : tritonExpr
@@ -99,7 +100,13 @@ syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 -- error in this stage — use `tl.expand_dims` first.
 syntax "tl.where(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
+syntax "tl.cast(" tritonExpr ", " tritonDType ")" : tritonExpr
 syntax "-inf" : tritonExpr
+
+syntax "tl.float64" : tritonDType
+syntax "tl.float32" : tritonDType
+syntax "tl.float16" : tritonDType
+syntax "tl.bfloat16" : tritonDType
 
 -- Block-level matrix multiply. Two-arg form `tl.dot(a, b)` produces `a @ b`;
 -- three-arg form `tl.dot(a, b, acc)` is the fused-accumulator pattern (the
@@ -198,6 +205,10 @@ private def identAsStr (i : TSyntax `ident) : MacroM (TSyntax `term) :=
 
 private inductive DInfo where
   | real
+  | fp32
+  | fp16
+  | bf16
+  | int32
   | nat
   | bool
   | ptr
@@ -242,9 +253,23 @@ private def setNthOne : List (TSyntax `term) → Nat → MacroM (List (TSyntax `
 
 private def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .real => `(TileDType.real)
+  | .fp32 => `(TileDType.fp32)
+  | .fp16 => `(TileDType.fp16)
+  | .bf16 => `(TileDType.bf16)
+  | .int32 => `(TileDType.int32)
   | .nat => `(TileDType.nat)
   | .bool => `(TileDType.bool)
   | .ptr => `(TileDType.ptr)
+
+private def DInfo.floatProof : DInfo → MacroM (TSyntax `term)
+  | .real => `(FloatDType.real)
+  | .fp32 => `(FloatDType.fp32)
+  | .fp16 => `(FloatDType.fp16)
+  | .bf16 => `(FloatDType.bf16)
+  | .int32 => Macro.throwError "tl.cast: int32 casts are not modeled yet"
+  | .nat => Macro.throwError "tl.cast: Nat casts are not modeled yet; use tl.toReal for Nat to real"
+  | .bool => Macro.throwError "tl.cast: Bool casts are not supported"
+  | .ptr => Macro.throwError "tl.cast: pointer casts are not supported"
 
 private def SInfo.term : SInfo → MacroM (TSyntax `term)
   | SInfo.dims ds => do
@@ -257,15 +282,30 @@ private def SInfo.term : SInfo → MacroM (TSyntax `term)
 
 private def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
   | .real => `(NumericDType.real)
+  | .fp32 => `(NumericDType.fp32)
+  | .fp16 => `(NumericDType.fp16)
+  | .bf16 => `(NumericDType.bf16)
+  | .int32 => `(NumericDType.int32)
   | .nat => `(NumericDType.nat)
   | .bool => Macro.throwError "arithmetic on Bool values is not supported"
   | .ptr => Macro.throwError "arithmetic on pointer values is not supported; use pointer + Nat offset"
 
 private def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
   | .real => `(ComparableDType.real)
+  | .fp32 => `(ComparableDType.fp32)
+  | .fp16 => `(ComparableDType.fp16)
+  | .bf16 => `(ComparableDType.bf16)
+  | .int32 => `(ComparableDType.int32)
   | .nat => `(ComparableDType.nat)
   | .bool => Macro.throwError "comparison on Bool values is not supported"
   | .ptr => Macro.throwError "comparison on pointer values is not supported"
+
+private def expandDType : TSyntax `tritonDType → MacroM DInfo
+  | `(tritonDType| tl.float64) => pure .real
+  | `(tritonDType| tl.float32) => pure .fp32
+  | `(tritonDType| tl.float16) => pure .fp16
+  | `(tritonDType| tl.bfloat16) => pure .bf16
+  | _ => Macro.throwUnsupported
 
 private def lookupEnv (env : Env) (name : String) : MacroM (DInfo × SInfo) := do
   match env.find? (fun entry => entry.1 == name) with
@@ -483,6 +523,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .nat e'.dtype "tl.toReal"
       pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.cast($e:tritonExpr, $dt:tritonDType)) => do
+      let e' ← expandExpr env e
+      let dst ← expandDType dt
+      let srcProof ← e'.dtype.floatProof
+      let dstProof ← dst.floatProof
+      pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape⟩
   | `(tritonExpr| -inf) =>
       pure ⟨← `(Op.negInf), .real, SInfo.scalar⟩
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) => do
