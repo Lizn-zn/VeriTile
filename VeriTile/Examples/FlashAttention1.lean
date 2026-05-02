@@ -8427,6 +8427,151 @@ theorem fa1_forward_correct_4D_slice
     scale s
     hQ_inner hK_inner hV_inner hInj idx
 
+/-- Boundary 4D-aware corollary of `fa1_forward_correct_strided_boundary`.
+Mirrors `fa1_forward_correct_4D_slice` but uses the boundary kernel and the
+boundary-masked Q-row slicer. K and V are sliced directly via `sliceBH`
+(shape `[S_k, D]`) rather than `slice4DFlat`, since the boundary kernel
+already takes K/V on the logical `[S_k, D]` domain.
+
+Differences from the non-boundary version:
+* No `hQBnd : s.pids 0 * M + M ≤ S_q`: the boundary kernel's store mask
+  handles the partial Q-row tail. Instead the conclusion is per-`idx`,
+  guarded by `s.pids 0 * M + idx.1.val < S_q`.
+* `hSk : Bk * numKVBlocks = S_k` becomes `hSkLe : S_k ≤ Bk * numKVBlocks`
+  (the boundary kernel only needs the cover-all-of-K/V condition).
+* `hSk : 0 < S_k` is required by `streaming_eq_attentionReal` to ensure
+  the running normalizer is non-zero. -/
+theorem fa1_forward_correct_4D_boundary_slice
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ4D : InputAt s qReg
+        (Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0) Q4D)
+    (hK4D : InputAt s kReg
+        (Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0) K4D)
+    (hV4D : InputAt s vReg
+        (Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0) V4D)
+    (hOValid : Offset.StridesValid [B, H, S_q, D] [sOB, sOH, sOM, sOD]) :
+    ∀ idx : TileIndex [M, D],
+      s.pids 0 * M + idx.1.val < S_q →
+      observeTileAt
+          (exec (fa1ForwardKernelStridedBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionReal
+                (slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
+                  (s.pids 0))
+                (sliceBH K4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩)
+                (sliceBH V4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩)
+                scale idx) := by
+  intro idx hIdxIn
+  -- `hQIn`: in-bounds Q rows read the logical Q tensor.
+  have hQIn_inner : ∀ tileIdx : TileIndex [M, D],
+      s.pids 0 * M + tileIdx.1.val < S_q →
+      s.mem qReg
+        (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+          + tileIdx.1.val * sQS + tileIdx.2.1.val * sQD) =
+        slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
+          (s.pids 0) tileIdx := by
+    intro tileIdx hIn
+    obtain ⟨i, d, _⟩ := tileIdx
+    have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+                    ⟨s.pids 0 * M + i.val, hIn⟩,
+                    d, PUnit.unit)
+    show s.mem qReg
+      (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+        + i.val * sQS + d.val * sQD) = _
+    rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + i.val * sQS + d.val * sQD =
+          Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + i.val, hIn⟩,
+             d, PUnit.unit) by
+        simp [Offset.strided, Nat.add_mul]
+        ring]
+    rw [slice4DQRowsBoundary_of_lt M Q4D _ _ _ i d hIn]
+    exact h
+  -- `hQOut`: out-of-bounds Q rows are zero by definition.
+  have hQOut_inner : ∀ tileIdx : TileIndex [M, D],
+      ¬ s.pids 0 * M + tileIdx.1.val < S_q →
+      slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
+        (s.pids 0) tileIdx = 0 := by
+    intro tileIdx hOut
+    obtain ⟨i, d, _⟩ := tileIdx
+    exact slice4DQRowsBoundary_of_not_lt M Q4D _ _ _ i d hOut
+  -- Convert `hK4D` to inner-theorem form: K-side slice is `sliceBH K4D b h`,
+  -- which has shape `[S_k, D]` directly (no `slice4DFlat` rewriting needed).
+  have hK_inner : InputAt s kReg
+      (fun idx : TileIndex [S_k, D] =>
+        s.pids 2 * sKB + s.pids 1 * sKH
+          + idx.1.val * sKN + idx.2.1.val * sKD)
+      (sliceBH K4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩) := by
+    intro tileIdx
+    obtain ⟨j, d, _⟩ := tileIdx
+    have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
+    show s.mem kReg
+      (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
+    rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
+          Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit) by
+        simp [Offset.strided]]
+    exact h
+  -- Convert `hV4D` similarly.
+  have hV_inner : InputAt s vReg
+      (fun idx : TileIndex [S_k, D] =>
+        s.pids 2 * sVB + s.pids 1 * sVH
+          + idx.1.val * sVN + idx.2.1.val * sVD)
+      (sliceBH V4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩) := by
+    intro tileIdx
+    obtain ⟨j, d, _⟩ := tileIdx
+    have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
+    show s.mem vReg
+      (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
+    rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
+          Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit) by
+        simp [Offset.strided]]
+    exact h
+  -- Output tile-local injectivity from `Offset.strided_inj`.
+  have hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD) := by
+    have hOValidLocal : Offset.StridesValid [M, D] [sOM, sOD] :=
+      ⟨hOValid.2.2.1, hOValid.2.2.2.1, trivial⟩
+    have hStrInj := Offset.strided_inj
+        (s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM)
+        hOValidLocal
+    intro a b hab
+    apply hStrInj
+    obtain ⟨a₁, a₂, _⟩ := a
+    obtain ⟨b₁, b₂, _⟩ := b
+    show Offset.strided [M, D] [sOM, sOD] _ _ =
+         Offset.strided [M, D] [sOM, sOD] _ _
+    simp only [Offset.strided]
+    have := hab
+    simp only at this
+    omega
+  exact fa1_forward_correct_strided_boundary hBk hSk hSkLe
+    qReg kReg vReg outReg
+    sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+    sOB sOH sOM sOD
+    (slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ (s.pids 0))
+    (sliceBH K4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩)
+    (sliceBH V4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩)
+    scale s hQIn_inner hQOut_inner hK_inner hV_inner hInj idx hIdxIn
+
 /-! ## attentionReal4D bridge
 
 The slice-form result of `fa1_forward_correct_4D_slice` equals the
@@ -8617,6 +8762,69 @@ theorem fa1_forward_correct_4D
   congr 1
   exact attentionReal_slice_eq_attentionReal4D hSk Q4D K4D V4D scale
     ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ (s.pids 0) hQBnd idx
+
+/-- Boundary FA-1 forward correctness in user-facing `attentionReal4D`
+form. Bundle of `fa1_forward_correct_4D_boundary_slice` plus an inline
+`attentionReal_row_eq` bridge: the same statement, with the slice-form
+result re-expressed at the corresponding 4D index of
+`attentionReal4D Q4D K4D V4D scale`.
+
+Unlike the non-boundary `_4D` theorem, the conclusion is guarded by
+the per-row bound `s.pids 0 * M + idx.1.val < S_q`. The bridge cannot
+reuse `attentionReal_slice_eq_attentionReal4D` directly because the
+boundary K/V slice uses `sliceBH` (shape `[S_k, D]`) instead of
+`slice4DFlat` (shape `[Bk * numKVBlocks, D]`), so the row-equality is
+derived inline via `attentionReal_row_eq`. -/
+theorem fa1_forward_correct_4D_boundary
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ4D : InputAt s qReg
+        (Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0) Q4D)
+    (hK4D : InputAt s kReg
+        (Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0) K4D)
+    (hV4D : InputAt s vReg
+        (Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0) V4D)
+    (hOValid : Offset.StridesValid [B, H, S_q, D] [sOB, sOH, sOM, sOD]) :
+    ∀ idx : TileIndex [M, D],
+      ∀ hLt : s.pids 0 * M + idx.1.val < S_q,
+      observeTileAt
+          (exec (fa1ForwardKernelStridedBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionReal4D Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx hLt
+  rw [fa1_forward_correct_4D_boundary_slice hBk hSk hSkLe
+        qReg kReg vReg outReg
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD
+        Q4D K4D V4D scale s hPidB hPidH hQ4D hK4D hV4D hOValid idx hLt]
+  congr 1
+  -- Bridge: `attentionReal` over the boundary Q-row slice + `sliceBH` K/V
+  -- equals `attentionReal4D` at the global `(b, h, qb*M + i, d)` index.
+  -- For in-bounds rows, `slice4DQRowsBoundary` returns exactly the same
+  -- value as `Q4D ∘ globalIndex`, so `attentionReal_row_eq` applies.
+  obtain ⟨i, d, _⟩ := idx
+  rw [attentionReal4D_slice]
+  apply attentionReal_row_eq
+  intro d'
+  -- Goal: `slice4DQRowsBoundary M Q4D b h qb (i, d', ()) = sliceBH Q4D b h (⟨qb*M+i,_⟩, d', ())`
+  rw [slice4DQRowsBoundary_of_lt M Q4D _ _ _ i d' hLt]
+  rfl
 
 /-- 4D causal FA-1 forward correctness in raw streaming form, parameterized
 by the causal loop-step lemma. The closed theorem
@@ -8997,6 +9205,52 @@ theorem fa1_forward_correct_4D_causal_layout
       Q4D K4D V4D scale s hPidB hPidH hQBnd
       hQ4D hK4D hV4D layout.hOValid idx
 
+/-- Boundary FA-1 forward correctness over a bundled 4D layout. This is
+the layout-level version of `fa1_forward_correct_4D_boundary`: same
+statement, with the stride plumbing hidden behind `FA1Layout4D` and
+the kernel selected via `layout.boundaryKernel`.
+
+Unlike the non-boundary `_4D_layout`, the conclusion is guarded by
+`s.pids 0 * M + idx.1.val < S_q`, since the boundary kernel masks
+partial Q-row tails rather than requiring the caller to discharge
+`hQBnd`. -/
+theorem fa1_forward_correct_4D_boundary_layout
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (layout : FA1Layout4D B H S_q S_k D)
+    (qReg kReg vReg outReg : RegionName)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ4D : TensorView.loaded s (layout.qView qReg) Q4D)
+    (hK4D : TensorView.loaded s (layout.kView kReg) K4D)
+    (hV4D : TensorView.loaded s (layout.vView vReg) V4D) :
+    ∀ idx : TileIndex [M, D],
+      ∀ hLt : s.pids 0 * M + idx.1.val < S_q,
+      observeTileAt
+          (exec (layout.boundaryKernel qReg kReg vReg outReg M Bk numKVBlocks scale) s)
+          outReg (layout.outBlockOffset s M) idx
+        = some (attentionReal4D Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx hLt
+  simpa [FA1Layout4D.boundaryKernel, FA1Layout4D.qOffset, FA1Layout4D.kOffset,
+         FA1Layout4D.vOffset, FA1Layout4D.outBlockOffset,
+         FA1Layout4D.qView, FA1Layout4D.kView, FA1Layout4D.vView,
+         TensorView.loaded, TensorView.offset,
+         FA1Layout4D.qStrides, FA1Layout4D.kStrides,
+         FA1Layout4D.vStrides, FA1Layout4D.oStrides]
+    using fa1_forward_correct_4D_boundary hBk hSk hSkLe
+      qReg kReg vReg outReg
+      layout.qB layout.qH layout.qS layout.qD
+      layout.kB layout.kH layout.kS layout.kD
+      layout.vB layout.vH layout.vS layout.vD
+      layout.oB layout.oH layout.oS layout.oD
+      Q4D K4D V4D scale s hPidB hPidH
+      hQ4D hK4D hV4D layout.hOValid idx hLt
+
 /-! ## View-level theorem surface
 
 These are the preferred public FA-1 theorem statements. The caller supplies
@@ -9062,5 +9316,39 @@ theorem fa1_forward_correct_4D_causal_views
       views.qReg views.kReg views.vReg views.outReg
       Q4D K4D V4D scale s hPidB hPidH hQBnd
       hQ4D hK4D hV4D idx
+
+/-- Boundary FA-1 forward correctness over bundled tensor views. The
+preferred public boundary theorem statement: caller supplies one
+`FA1Views4D` value, then states Q/K/V memory preconditions directly as
+`views.qView.loaded`, `views.kView.loaded`, and `views.vView.loaded`,
+and the kernel is selected via `views.boundaryKernel`. The conclusion
+is per-`idx`, guarded by `s.pids 0 * M + idx.1.val < S_q`. -/
+theorem fa1_forward_correct_4D_boundary_views
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (views : FA1Views4D B H S_q S_k D)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ4D : TensorView.loaded s views.qView Q4D)
+    (hK4D : TensorView.loaded s views.kView K4D)
+    (hV4D : TensorView.loaded s views.vView V4D) :
+    ∀ idx : TileIndex [M, D],
+      ∀ hLt : s.pids 0 * M + idx.1.val < S_q,
+      observeTileAt
+          (exec (views.boundaryKernel M Bk numKVBlocks scale) s)
+          views.outReg (views.outBlockOffset s M) idx
+        = some (attentionReal4D Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx hLt
+  simpa [FA1Views4D.boundaryKernel, FA1Views4D.outBlockOffset,
+         FA1Views4D.qView, FA1Views4D.kView, FA1Views4D.vView]
+    using fa1_forward_correct_4D_boundary_layout hBk hSk hSkLe views.layout
+      views.qReg views.kReg views.vReg views.outReg
+      Q4D K4D V4D scale s hPidB hPidH
+      hQ4D hK4D hV4D idx hLt
 
 end VeriTile.Examples
