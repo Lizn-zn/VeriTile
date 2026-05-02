@@ -2203,6 +2203,62 @@ theorem alibiScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
     alibiScore_lane_eq qStart slope Q K scale i
       (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
 
+theorem slidingScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
+    (qStart window : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < numKVBlocks) :
+    Tile.select
+      (Tile.cop ComparableDType.real.lt Broadcast.scalarR
+        (Tile.bop max (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Tile.bop WithBot.realSub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+            (Tile.natToReal
+              (Tile.expandDim ⟨0, by simp⟩
+                (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+            (Tile.natToReal
+              (Tile.expandDim ⟨1, by simp⟩
+                (Tile.vec (fun i : Fin M => qStart + i.val)))))
+          (Tile.bop WithBot.realSub Broadcast.scalarL
+            (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+            (Tile.bop WithBot.realSub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+              (Tile.natToReal
+                (Tile.expandDim ⟨0, by simp⟩
+                  (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+              (Tile.natToReal
+                (Tile.expandDim ⟨1, by simp⟩
+                  (Tile.vec (fun i : Fin M => qStart + i.val)))))))
+        (Tile.scalar (((window : ℝ) : WithBot ℝ))))
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.dot [] (Tile.ofReal Q)
+          (Tile.transpose [] (Tile.ofReal
+            (fun idx : TileIndex [Bk, D] =>
+              K (scoreBlockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) idx.1, idx.2.1, PUnit.unit)))))
+        (Tile.scalar ((scale : ℝ) : WithBot ℝ)))
+      (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk])
+      =
+      scoreBlockLane (slidingVisible window qStart) (dotScore Q K scale) k
+        (Nat.succ_le_iff.mpr hk) := by
+  rw [slidingVisibleBlock_tile_eq qStart window k hk]
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  cases u
+  simp only [Tile.select_data, Tile.bop, Tile.scalar,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul]
+  unfold scoreBlockIndex
+  let jg := FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j
+  by_cases hvis : slidingVisible window qStart i jg = Bool.true
+  · simp [visibleBlock, scoreBlockIndex, jg, hvis]
+    have hraw := FA1Math.block_scaled_data_eq Q K scale k hk i j
+    simp only [WithBot.realMul] at hraw
+    exact hraw.trans (by
+      simpa [scoreBlockLane, scoreBlockIndex, dotScore, allVisible, hvis, jg] using
+        slidingScore_lane_eq qStart window Q K scale i jg
+    )
+  · simp [visibleBlock, scoreBlockIndex, jg, Bool.eq_false_iff.mpr hvis]
+    simpa [scoreBlockLane, scoreBlockIndex, dotScore, Bool.eq_false_iff.mpr hvis, jg] using
+      slidingScore_lane_eq qStart window Q K scale i jg
+
 def P_fa1_score_blockrec
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg : RegionName)
