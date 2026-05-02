@@ -2491,6 +2491,23 @@ theorem softcapScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
   exact softcapScore_lane_eq softcap Q K scale i
     (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
 
+theorem softcapScoreBlock_numeric_tile_eq {M D Bk numKVBlocks : Nat}
+    (softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < numKVBlocks) :
+    Tile.bop NumericDType.real.mul Broadcast.scalarL
+      (Tile.scalar ((softcap : ℝ) : WithBot ℝ))
+      (Tile.uop WithBot.realTanh
+        (Tile.bop NumericDType.real.div Broadcast.scalarR
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
+          (Tile.scalar ((softcap : ℝ) : WithBot ℝ))))
+      =
+      scoreBlockLane allVisible (softcapDotScore softcap Q K scale) k
+        (Nat.succ_le_iff.mpr hk) := by
+  unfold rawScoreBlockTile
+  exact softcapScoreBlock_tile_eq softcap Q K scale k hk
+
 theorem distanceBlock_tile_eq {M Bk numKVBlocks : Nat}
     (qStart : Nat) (k : Nat) (hk : k < numKVBlocks) :
     Tile.bop max (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
@@ -2808,6 +2825,20 @@ def P_fa1_score_blockrec_loaded
   s.regs .real [Bk, D] "v" =
       some (valueBlock V k (Nat.succ_le_iff.mpr hk))
 
+def P_fa1_score_blockrec_scored
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (s : BlockState) : Prop :=
+  P_fa1_score_blockrec_loaded qReg kReg vReg origPid Q K V visible score
+    k hk s ∧
+  s.regs .real [M, Bk] "scores" =
+    some (scoreBlockLane visible score k (Nat.succ_le_iff.mpr hk))
+
 theorem fa1_score_loop_loadBlock_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg : RegionName)
@@ -2866,6 +2897,80 @@ theorem fa1_score_loop_loadBlock_correct
     · simp [sLoad, s4, s3, ptrs]
     · simp [sLoad, s4, kTile]
     · simp [sLoad, vTile]
+
+theorem fa1_score_loop_scoreSoftcap_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale softcap : ℝ)
+    (k : Nat) (sLoad : BlockState) (hk : k < numKVBlocks)
+    (hP : P_fa1_score_blockrec_loaded qReg kReg vReg origPid Q K V allVisible
+      (softcapDotScore softcap Q K scale) k hk sLoad) :
+    ∃ sScore,
+      stepStmts (fa1ScoreLoopScoreSoftcap M D Bk scale softcap) sLoad =
+        some sScore ∧
+      P_fa1_score_blockrec_scored qReg kReg vReg origPid Q K V allVisible
+        (softcapDotScore softcap Q K scale) k hk sScore := by
+  have hLoaded := hP
+  rcases hP with
+    ⟨hCore, _hoffs_n, _hk_ptrs, _hv_ptrs, hkTileReg, _hvTileReg⟩
+  rcases hCore with
+    ⟨_hpidReg, _hpid, _hoffs_m, _hoffs_d, hq, _hm, _hl, _ho, _hQ, _hK, _hV⟩
+  let raw : Tile .real [M, Bk] :=
+    rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk)
+  let scores : Tile .real [M, Bk] :=
+    scoreBlockLane allVisible (softcapDotScore softcap Q K scale) k
+      (Nat.succ_le_iff.mpr hk)
+  let sRaw := sLoad.setReg "raw" .real [M, Bk] raw
+  let sScore := sRaw.setReg "scores" .real [M, Bk] scores
+  refine ⟨sScore, ?_, ?_⟩
+  · simp [fa1ScoreLoopScoreSoftcap, stepStmts, stepStmt, evalOp, Option.bind,
+      hq, hkTileReg, raw, scores, sRaw, sScore]
+    simp only [valueBlock]
+    change (sLoad.setReg "raw" .real [M, Bk]
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
+        "scores" .real [M, Bk]
+          (Tile.bop NumericDType.real.mul Broadcast.scalarL
+            (Tile.scalar ((softcap : ℝ) : WithBot ℝ))
+            (Tile.uop WithBot.realTanh
+              (Tile.bop NumericDType.real.div Broadcast.scalarR
+                (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
+                (Tile.scalar ((softcap : ℝ) : WithBot ℝ))))) =
+        (sLoad.setReg "raw" .real [M, Bk]
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
+        "scores" .real [M, Bk]
+          (scoreBlockLane allVisible (softcapDotScore softcap Q K scale) k
+            (Nat.succ_le_iff.mpr hk))
+    rw [softcapScoreBlock_numeric_tile_eq softcap Q K scale k hk]
+  · refine ⟨?_, ?_⟩
+    · rcases hLoaded with
+        ⟨hCore, hoffs_n, hk_ptrs, hv_ptrs, hkReg, hvReg⟩
+      rcases hCore with
+        ⟨hpidReg, hpid, hoffs_m, hoffs_d, hq, hm, hl, ho, hQ, hK, hV⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+      · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+        · simp [sScore, sRaw, hpidReg]
+        · simpa [sScore, sRaw] using hpid
+        · simp [sScore, sRaw, hoffs_m]
+        · simp [sScore, sRaw, hoffs_d]
+        · simp [sScore, sRaw, hq]
+        · simp [sScore, sRaw, hm]
+        · simp [sScore, sRaw, hl]
+        · simp [sScore, sRaw, ho]
+        · intro idx
+          simpa [sScore, sRaw] using hQ idx
+        · intro idx
+          simpa [sScore, sRaw] using hK idx
+        · intro idx
+          simpa [sScore, sRaw] using hV idx
+      · simp [sScore, sRaw, hoffs_n]
+      · simp [sScore, sRaw, hk_ptrs]
+      · simp [sScore, sRaw, hv_ptrs]
+      · simp [sScore, sRaw, hkReg]
+      · simp [sScore, sRaw, hvReg]
+    · simp [sScore, scores]
 
 theorem fa1_score_preLoop_correct
     {M D S : Nat}
