@@ -419,6 +419,148 @@ theorem oFreeScore_div_lFreeScore_eq_attentionRealAlibiSlidingSoftcap {M S D : N
   rw [oFreeScore_div_lFreeScore_eq_attentionRealMaskedScore]
   rfl
 
+/-! ## Score-prefix recurrence
+
+This is the score-level recurrence target shared by ALiBi, sliding-window
+masks, and softcap. It intentionally abstracts over the concrete source of
+the score so the final prefix ratio can be reused for all score transforms.
+-/
+
+noncomputable def lScorePrefix {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (k : Nat) (i : Fin M) : ℝ :=
+  Finset.univ.sum (fun n : Fin k =>
+    if h : n.val < S then
+      if visible i ⟨n.val, h⟩ then Real.exp (score i ⟨n.val, h⟩) else 0
+    else
+      0)
+
+noncomputable def oScorePrefix {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (k : Nat) (idx : TileIndex [M, D]) : ℝ :=
+  let i := idx.1
+  let d := idx.2.1
+  Finset.univ.sum (fun n : Fin k =>
+    if h : n.val < S then
+      (if visible i ⟨n.val, h⟩ then Real.exp (score i ⟨n.val, h⟩) else 0) *
+        V (⟨n.val, h⟩, d, PUnit.unit)
+    else
+      0)
+
+@[simp] theorem lScorePrefix_zero {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (i : Fin M) :
+    lScorePrefix visible score 0 i = 0 := by
+  simp [lScorePrefix]
+
+@[simp] theorem oScorePrefix_zero {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (idx : TileIndex [M, D]) :
+    oScorePrefix visible score V 0 idx = 0 := by
+  simp [oScorePrefix]
+
+theorem lScorePrefix_succ {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (k : Nat) (i : Fin M) :
+    lScorePrefix visible score (k + 1) i =
+      lScorePrefix visible score k i +
+        (if h : k < S then
+          if visible i ⟨k, h⟩ then Real.exp (score i ⟨k, h⟩) else 0
+        else
+          0) := by
+  unfold lScorePrefix
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+theorem oScorePrefix_succ {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (k : Nat) (idx : TileIndex [M, D]) :
+    oScorePrefix visible score V (k + 1) idx =
+      oScorePrefix visible score V k idx +
+        (if h : k < S then
+          (if visible idx.1 ⟨k, h⟩ then Real.exp (score idx.1 ⟨k, h⟩) else 0) *
+            V (⟨k, h⟩, idx.2.1, PUnit.unit)
+        else
+          0) := by
+  unfold oScorePrefix
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+theorem lScorePrefix_final_eq_lFreeScore {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (i : Fin M) :
+    lScorePrefix visible score S i = lFreeScore visible score i := by
+  unfold lScorePrefix lFreeScore
+  apply Finset.sum_congr rfl
+  intro j _
+  simp [j.isLt]
+
+theorem oScorePrefix_final_eq_oFreeScore {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (idx : TileIndex [M, D]) :
+    oScorePrefix visible score V S idx = oFreeScore visible score V idx := by
+  unfold oScorePrefix oFreeScore
+  apply Finset.sum_congr rfl
+  intro j _
+  simp [j.isLt]
+
+theorem oScorePrefix_div_lScorePrefix_eq_attentionRealMaskedScore {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (idx : TileIndex [M, D]) :
+    oScorePrefix visible score V S idx / lScorePrefix visible score S idx.1 =
+      attentionRealMaskedScore visible score V idx := by
+  rw [oScorePrefix_final_eq_oFreeScore, lScorePrefix_final_eq_lFreeScore]
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealMaskedScore]
+
+theorem oScorePrefix_div_lScorePrefix_eq_attentionRealAlibi {M S D : Nat}
+    (qStart : Nat) (slope : ℝ)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oScorePrefix allVisible (alibiScore qStart slope Q K scale) V S idx /
+        lScorePrefix allVisible (alibiScore qStart slope Q K scale) S idx.1 =
+      attentionRealAlibi qStart slope Q K V scale idx := by
+  rw [oScorePrefix_final_eq_oFreeScore, lScorePrefix_final_eq_lFreeScore]
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealAlibi]
+
+theorem oScorePrefix_div_lScorePrefix_eq_attentionRealSlidingWindow {M S D : Nat}
+    (qStart window : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oScorePrefix (slidingVisible window qStart) (dotScore Q K scale) V S idx /
+        lScorePrefix (slidingVisible window qStart) (dotScore Q K scale) S idx.1 =
+      attentionRealSlidingWindow qStart window Q K V scale idx := by
+  rw [oScorePrefix_final_eq_oFreeScore, lScorePrefix_final_eq_lFreeScore]
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealSlidingWindow]
+
+theorem oScorePrefix_div_lScorePrefix_eq_attentionRealSoftcap {M S D : Nat}
+    (softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oScorePrefix allVisible (softcapDotScore softcap Q K scale) V S idx /
+        lScorePrefix allVisible (softcapDotScore softcap Q K scale) S idx.1 =
+      attentionRealSoftcap softcap Q K V scale idx := by
+  rw [oScorePrefix_final_eq_oFreeScore, lScorePrefix_final_eq_lFreeScore]
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealSoftcap]
+
+theorem oScorePrefix_div_lScorePrefix_eq_attentionRealAlibiSlidingSoftcap {M S D : Nat}
+    (qStart window : Nat) (slope softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oScorePrefix (slidingVisible window qStart)
+        (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+        V S idx /
+      lScorePrefix (slidingVisible window qStart)
+        (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+        S idx.1 =
+      attentionRealAlibiSlidingSoftcap qStart window slope softcap Q K V scale idx := by
+  rw [oScorePrefix_final_eq_oFreeScore, lScorePrefix_final_eq_lFreeScore]
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealAlibiSlidingSoftcap]
+
 @[simp] theorem attentionRealScore_apply {M S D : Nat}
     (score : Fin M → Fin S → ℝ) (V : TileIndex [S, D] → ℝ)
     (i : Fin M) (d : Fin D) :
