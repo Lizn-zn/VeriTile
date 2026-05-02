@@ -204,7 +204,8 @@ core AST 现在有 typed floating load/store 构造,例如 `Op.loadFloat`,
 Float theorem policy: 算法正确性 theorem 应该证明在擦除后的 `.real`
 kernel 上。面向 float 的 theorem 可以用 `Kernel.CorrectViaFloatErasure`
 加上 erasure 等式 `k.eraseFloat = realK`,为带 dtype 标注的 kernel 暴露
-theorem,但不在每个浮点 channel 里重新证明算法。
+theorem,但不在每个浮点 channel 里重新证明算法。这些定义放在
+`VeriTile.Triton.Float`。
 
 ## Operator / syntax 覆盖 checklist
 
