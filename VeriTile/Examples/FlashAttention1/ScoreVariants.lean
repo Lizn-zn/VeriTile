@@ -1983,6 +1983,96 @@ def valueBlock {D Bk numKVBlocks : Nat}
   Tile.ofReal (fun idx : TileIndex [Bk, D] =>
     V (scoreBlockIndex Bk numKVBlocks k h idx.1, idx.2.1, PUnit.unit))
 
+noncomputable def lScoreBlockFree {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (i : Fin M) : ℝ :=
+  Finset.univ.sum (fun n : Fin k =>
+    Finset.univ.sum (fun jLocal : Fin Bk =>
+      let j := scoreBlockIndex Bk numKVBlocks n.val
+        (Nat.lt_of_lt_of_le n.isLt hk) jLocal
+      if visible i j then Real.exp (score i j) else 0))
+
+noncomputable def oScoreBlockFree {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, D]) : ℝ :=
+  Finset.univ.sum (fun n : Fin k =>
+    Finset.univ.sum (fun jLocal : Fin Bk =>
+      let j := scoreBlockIndex Bk numKVBlocks n.val
+        (Nat.lt_of_lt_of_le n.isLt hk) jLocal
+      (if visible idx.1 j then Real.exp (score idx.1 j) else 0) *
+        V (j, idx.2.1, PUnit.unit)))
+
+@[simp] theorem lScoreBlockFree_zero {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ) (i : Fin M) :
+    lScoreBlockFree visible score 0 (Nat.zero_le _) i = 0 := by
+  simp [lScoreBlockFree]
+
+@[simp] theorem oScoreBlockFree_zero {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (idx : TileIndex [M, D]) :
+    oScoreBlockFree visible score V 0 (Nat.zero_le _) idx = 0 := by
+  simp [oScoreBlockFree]
+
+theorem lScoreBlockFree_succ {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k + 1 ≤ numKVBlocks) (i : Fin M) :
+    lScoreBlockFree visible score (k + 1) hk i =
+      lScoreBlockFree visible score k (Nat.le_of_succ_le hk) i +
+      Finset.univ.sum (fun jLocal : Fin Bk =>
+        let j := scoreBlockIndex Bk numKVBlocks k hk jLocal
+        if visible i j then Real.exp (score i j) else 0) := by
+  unfold lScoreBlockFree
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+theorem oScoreBlockFree_succ {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (k : Nat) (hk : k + 1 ≤ numKVBlocks) (idx : TileIndex [M, D]) :
+    oScoreBlockFree visible score V (k + 1) hk idx =
+      oScoreBlockFree visible score V k (Nat.le_of_succ_le hk) idx +
+      Finset.univ.sum (fun jLocal : Fin Bk =>
+        let j := scoreBlockIndex Bk numKVBlocks k hk jLocal
+        (if visible idx.1 j then Real.exp (score idx.1 j) else 0) *
+          V (j, idx.2.1, PUnit.unit)) := by
+  unfold oScoreBlockFree
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+theorem lScoreBlockFree_final_eq_lFreeScore {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ) (i : Fin M) :
+    lScoreBlockFree visible score numKVBlocks (le_refl _) i =
+      lFreeScore visible score i := by
+  unfold lScoreBlockFree lFreeScore
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  · intro _; simp
+  · intro j _
+    simp [scoreBlockIndex, FA1Math.blockIndex_blockIndexEquiv]
+
+theorem oScoreBlockFree_final_eq_oFreeScore {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (idx : TileIndex [M, D]) :
+    oScoreBlockFree visible score V numKVBlocks (le_refl _) idx =
+      oFreeScore visible score V idx := by
+  unfold oScoreBlockFree oFreeScore
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  · intro _; simp
+  · intro j _
+    simp [scoreBlockIndex, FA1Math.blockIndex_blockIndexEquiv]
+
 @[simp] theorem scoreBlockLane_data {M Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
     (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
