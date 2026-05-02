@@ -1739,6 +1739,252 @@ def valueBlock {D Bk numKVBlocks : Nat}
       ((V (scoreBlockIndex Bk numKVBlocks k h j, d, PUnit.unit) : ℝ) :
         WithBot ℝ) := rfl
 
+/-! ## Block-partial score recurrences
+
+These mirror the executable FA-1 loop's block granularity while keeping the
+score and visibility predicates generic. They are the math bridge needed by
+the loop-step proof: one loop iteration consumes exactly one `Bk`-wide score
+block.
+-/
+
+noncomputable def mScoreBlockPartial {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ) :
+    Nat → Fin M → WithBot ℝ
+  | 0, _ => ⊥
+  | k + 1, i =>
+      if h : k + 1 ≤ numKVBlocks then
+        max (mScoreBlockPartial visible score k i)
+          ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+            scoreLane visible score i (scoreBlockIndex Bk numKVBlocks k h jLocal))
+      else
+        mScoreBlockPartial visible score k i
+
+noncomputable def alphaScoreBlockPartial {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (i : Fin M) : ℝ :=
+  (WithBot.realExp
+    (WithBot.realSub
+      (mScoreBlockPartial visible score k i)
+      (mScoreBlockPartial visible score (k + 1) i))).unbotD 0
+
+noncomputable def lScoreBlockPartial {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ) :
+    Nat → Fin M → ℝ
+  | 0, _ => 0
+  | k + 1, i =>
+      if h : k + 1 ≤ numKVBlocks then
+        alphaScoreBlockPartial visible score k i *
+          lScoreBlockPartial visible score k i +
+        (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          (WithBot.realExp
+            (WithBot.realSub
+              (scoreLane visible score i (scoreBlockIndex Bk numKVBlocks k h jLocal))
+              (mScoreBlockPartial visible score (k + 1) i))).unbotD 0)
+      else
+        lScoreBlockPartial visible score k i
+
+noncomputable def oScoreBlockPartial {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ) :
+    Nat → TileIndex [M, D] → ℝ
+  | 0, _ => 0
+  | k + 1, idx =>
+      if h : k + 1 ≤ numKVBlocks then
+        alphaScoreBlockPartial visible score k idx.1 *
+          oScoreBlockPartial visible score V k idx +
+        (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          let j := scoreBlockIndex Bk numKVBlocks k h jLocal
+          (WithBot.realExp
+            (WithBot.realSub
+              (scoreLane visible score idx.1 j)
+              (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0 *
+            V (j, idx.2.1, PUnit.unit))
+      else
+        oScoreBlockPartial visible score V k idx
+
+theorem mScoreBlockPartial_succ_of_lt {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    mScoreBlockPartial visible score (k + 1) i =
+      max (mScoreBlockPartial visible score k i)
+        ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+          scoreLane visible score i
+            (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal)) := by
+  conv_lhs => rw [mScoreBlockPartial]
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+theorem lScoreBlockPartial_succ_of_lt {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    lScoreBlockPartial visible score (k + 1) i =
+      alphaScoreBlockPartial visible score k i *
+        lScoreBlockPartial visible score k i +
+      (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+        (WithBot.realExp
+          (WithBot.realSub
+            (scoreLane visible score i
+              (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal))
+            (mScoreBlockPartial visible score (k + 1) i))).unbotD 0) := by
+  conv_lhs => rw [lScoreBlockPartial]
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+theorem oScoreBlockPartial_succ_of_lt {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (idx : TileIndex [M, D]) :
+    oScoreBlockPartial visible score V (k + 1) idx =
+      alphaScoreBlockPartial visible score k idx.1 *
+        oScoreBlockPartial visible score V k idx +
+      (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+        let j := scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal
+        (WithBot.realExp
+          (WithBot.realSub
+            (scoreLane visible score idx.1 j)
+            (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0 *
+          V (j, idx.2.1, PUnit.unit)) := by
+  conv_lhs => rw [oScoreBlockPartial]
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+theorem score_block_mNew_tile_eq {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) :
+    Tile.bop max (Broadcast.consSame Broadcast.nil)
+      (⟨fun idx : TileIndex [M] =>
+        mScoreBlockPartial visible score k idx.1⟩ : Tile .real [M])
+      (⟨fun idx : TileIndex [M] =>
+        (Finset.univ : Finset (Fin Bk)).sup
+          (fun j => scoreLane visible score idx.1
+            (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j))⟩ :
+        Tile .real [M])
+      =
+      ⟨fun idx : TileIndex [M] =>
+        mScoreBlockPartial visible score (k + 1) idx.1⟩ := by
+  ext idx
+  simp [Tile.bop]
+  rw [mScoreBlockPartial_succ_of_lt visible score k hk idx.1]
+
+theorem score_block_alpha_tile_eq {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) :
+    Tile.uop WithBot.realExp
+      (Tile.bop WithBot.realSub (Broadcast.consSame Broadcast.nil)
+        (⟨fun idx : TileIndex [M] =>
+          mScoreBlockPartial visible score k idx.1⟩ : Tile .real [M])
+        (Tile.bop max (Broadcast.consSame Broadcast.nil)
+          (⟨fun idx : TileIndex [M] =>
+            mScoreBlockPartial visible score k idx.1⟩ : Tile .real [M])
+          (⟨fun idx : TileIndex [M] =>
+            (Finset.univ : Finset (Fin Bk)).sup
+              (fun j => scoreLane visible score idx.1
+                (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j))⟩ :
+            Tile .real [M])))
+      =
+      Tile.ofReal (fun idx : TileIndex [M] =>
+        alphaScoreBlockPartial visible score k idx.1) := by
+  ext idx
+  have hmTile := score_block_mNew_tile_eq visible score k hk
+  have hm := congrArg (fun t : Tile .real [M] => t.data idx) hmTile
+  simp [Tile.bop] at hm
+  simp [Tile.uop, Tile.bop, Tile.ofReal, alphaScoreBlockPartial]
+  rw [hm]
+  exact FA1MathBoundary.realExp_eq_some_unbotD _
+
+theorem score_block_p_tile_eq {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) :
+    Tile.uop WithBot.realExp
+      (Tile.bop WithBot.realSub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (scoreBlockLane visible score k (Nat.succ_le_iff.mpr hk))
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.bop max (Broadcast.consSame Broadcast.nil)
+            (⟨fun idx : TileIndex [M] =>
+              mScoreBlockPartial visible score k idx.1⟩ : Tile .real [M])
+            (⟨fun idx : TileIndex [M] =>
+              (Finset.univ : Finset (Fin Bk)).sup
+                (fun j => scoreLane visible score idx.1
+                  (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j))⟩ :
+              Tile .real [M]))))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, Bk] =>
+        (WithBot.realExp
+          (WithBot.realSub
+            (scoreLane visible score idx.1
+              (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1))
+            (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0) := by
+  ext idx
+  have hmTile := score_block_mNew_tile_eq visible score k hk
+  have hm := congrArg (fun t : Tile .real [M] => t.data (idx.1, PUnit.unit)) hmTile
+  simp [Tile.bop] at hm
+  simp [Tile.uop, Tile.bop, Tile.expandDim, Tile.ofReal,
+    TileShape.dropInsertedIndex]
+  rw [hm]
+  exact FA1MathBoundary.realExp_eq_some_unbotD _
+
+theorem score_block_lNew_tile_eq {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame Broadcast.nil)
+      (Tile.bop WithBot.realMul (Broadcast.consSame Broadcast.nil)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          alphaScoreBlockPartial visible score k idx.1)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          lScoreBlockPartial visible score k idx.1))
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        Finset.univ.sum (fun j : Fin Bk =>
+          (WithBot.realExp
+            (WithBot.realSub
+              (scoreLane visible score idx.1
+                (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j))
+              (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0))
+      =
+      Tile.ofReal (fun idx : TileIndex [M] =>
+        lScoreBlockPartial visible score (k + 1) idx.1) := by
+  ext idx
+  simp [Tile.bop, Tile.ofReal]
+  rw [lScoreBlockPartial_succ_of_lt visible score k hk idx.1]
+  simp [WithBot.realSub]
+
+theorem score_block_oAcc_tile_eq {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Tile.bop WithBot.realMul (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.ofReal fun idx : TileIndex [M] =>
+            alphaScoreBlockPartial visible score k idx.1))
+        (Tile.ofReal fun idx : TileIndex [M, D] =>
+          oScoreBlockPartial visible score V k idx))
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        Finset.univ.sum (fun jLocal : Fin Bk =>
+          let j := scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal
+          (WithBot.realExp
+            (WithBot.realSub
+              (scoreLane visible score idx.1 j)
+              (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0 *
+            V (j, idx.2.1, PUnit.unit)))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, D] =>
+        oScoreBlockPartial visible score V (k + 1) idx) := by
+  ext idx
+  rcases idx with ⟨i, d, u⟩
+  cases u
+  simp [Tile.bop, Tile.expandDim, Tile.ofReal, TileShape.dropInsertedIndex]
+  rw [oScoreBlockPartial_succ_of_lt visible score V k hk (i, d, PUnit.unit)]
+  simp [WithBot.realSub]
+
 theorem fa1_score_preLoop_correct
     {M D S : Nat}
     (qReg kReg vReg : RegionName)
