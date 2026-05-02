@@ -66,6 +66,8 @@ syntax "tl.load(" tritonExpr ("," tritonKwarg)* ")" : tritonExpr
 
 syntax:max tritonExpr:max noWs "[" ":" "," "None" "]" : tritonExpr
 syntax:max tritonExpr:max noWs "[" "None" "," ":" "]" : tritonExpr
+syntax "tl.expand_dims(" tritonExpr ", " tritonReduceKwarg ")" : tritonExpr
+syntax "tl.expand_dims(" tritonExpr ", " num ")" : tritonExpr
 
 syntax "tl.trans(" tritonExpr ")" : tritonExpr
 
@@ -89,6 +91,8 @@ syntax ident " := " tritonExpr : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt
+syntax "tl.static_range " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
+syntax "tl.static_range " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "tl.if " tritonExpr " { " tritonStmt* " }" : tritonStmt
 
 -- Block (the user-facing entry point)

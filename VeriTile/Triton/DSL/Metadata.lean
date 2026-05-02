@@ -89,6 +89,8 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
       exprRegions c ++ exprRegions a ++ exprRegions b
   | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions e
   | `(tritonExpr| $e:tritonExpr[ None , : ])     => exprRegions e
+  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:tritonReduceKwarg)) => exprRegions e
+  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:num)) => exprRegions e
   | `(tritonExpr| tl.trans($e:tritonExpr))       => exprRegions e
   | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr)) => exprRegions v
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*])) => []
@@ -115,6 +117,16 @@ partial def stmtRegions :
           let (i, o) := stmtRegions st
           (acc.1 ++ i, acc.2 ++ o)) ([], [])
   | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
+      stmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+  | `(tritonStmt| tl.static_range $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      stmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+  | `(tritonStmt| tl.static_range $_:ident in $_:num { $stmts:tritonStmt* }) =>
       stmts.toList.foldl
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
           let (i, o) := stmtRegions st

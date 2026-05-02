@@ -161,13 +161,13 @@ example : (B M K N : Nat) → Op .real [B, M, N] := fun B M K N =>
 
 /-! ### `tl.expand_dims` surface forms
 
-Two literal slicer postfixes are accepted in this stage:
+Two literal slicer postfixes are accepted for rank-1 inputs:
 
 * `e[:, None]` — `[N] → [N, 1]`, axis 1
 * `e[None, :]` — `[N] → [1, N]`, axis 0
 
-Both lower to `Op.expandDim` with the appropriate `Fin (rank + 1)` axis.
-Higher-rank inputs raise a macro error. -/
+The function surface `tl.expand_dims(e, axis=N)` / `tl.expand_dims(e, N)`
+lowers to the same `Op.expandDim` for any macro-known rank. -/
 
 /-- `[:, None]` produces a `[N, 1]` tile. -/
 def colExpandSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
@@ -183,6 +183,52 @@ def rowExpandSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
   offs := pid * $(N) + tl.arange(0, $(N))
   x    := tl.load($(xReg) + offs)
   xr   := x[None, :]
+}
+
+/-- `tl.expand_dims(x, axis=1)` is the function-form equivalent of
+`x[:, None]`. -/
+def expandDimsKwargSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(N) + tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  xc   := tl.expand_dims(x, axis=1)
+}
+
+/-- Positional-axis `tl.expand_dims(x, 0)` produces a `[1, N]` tile. -/
+def expandDimsPositionalSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(N) + tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  xr   := tl.expand_dims(x, 0)
+}
+
+/-- Function-form `tl.expand_dims` also works on higher-rank tiles. -/
+def expandDimsRank2Smoke
+    (xReg : RegionName) (M N stride : Nat) : Kernel := triton {
+  offsM := tl.arange(0, $(M))
+  offsN := tl.arange(0, $(N))
+  ptrs  := offsM[:, None] * $(stride) + offsN[None, :]
+  x     := tl.load($(xReg) + ptrs)
+  x3    := tl.expand_dims(x, axis=0)
+}
+
+/-! ### `tl.static_range` surface alias -/
+
+/-- `tl.static_range` currently lowers to the same bounded-loop AST as
+`tl.for`; unroll / pipeline attributes are intentionally not modeled. -/
+def staticRangeSmoke (N : Nat) : Kernel := triton {
+  acc := 0
+  tl.static_range i in $(N) {
+    acc := acc + tl.toReal(i)
+  }
+}
+
+/-- Numeric-literal `tl.static_range` bounds share the same lowering. -/
+def staticRangeLiteralSmoke : Kernel := triton {
+  acc := 0
+  tl.static_range i in 4 {
+    acc := acc + tl.toReal(i)
+  }
 }
 
 /-- `Tile.expandDim` semantics on a literal rank-1 tile: `[3] → [1, 3]`. -/

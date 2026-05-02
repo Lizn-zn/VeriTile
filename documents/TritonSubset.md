@@ -29,6 +29,9 @@ values have shape `[]`; a matrix `[M, D]` has index shape
   The runtime state stores `pids : Nat → Nat`, so every axis is total.
 - `tl.for i in $(n) { ... }` and `tl.for i in N { ... }`.
   The loop is operationally modeled and proved through `forLoop_inv`.
+- `tl.static_range i in $(n) { ... }` and `tl.static_range i in N { ... }`
+  are surface aliases for the same bounded-loop AST. Unroll and pipeline
+  attributes are not modeled.
 - `tl.if cond { ... }` for scalar boolean conditions (`Op .bool []`).
   There is no `else`, `break`, or `continue`; Triton block-skipping patterns
   should be written by negating the skip condition and wrapping the useful
@@ -66,6 +69,8 @@ Supported channels:
 - `tl.zeros([dims...])`, sugar for `tl.full([dims...], 0)`.
 - `e[:, None]` and `e[None, :]` for rank-1 inputs only.
   These lower to `Op.expandDim`.
+- `tl.expand_dims(e, axis=N)` and `tl.expand_dims(e, N)` insert a unit axis
+  at a literal position for any macro-known rank.
 - `tl.trans(e)` swaps the trailing two axes, with any leading axes treated as
   a batch prefix.
 
@@ -256,7 +261,7 @@ current semantic contract.
 | --- | --- | --- |
 | Scalar/tile constants | Supported | Real literals, `$(n)`, `$ℝ(x)`, `-inf`, register refs |
 | Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; no whole-grid execution semantics |
-| Loops | Supported | Bounded `tl.for`, backed by `forLoop_inv` |
+| Loops | Supported | Bounded `tl.for`; `tl.static_range` alias backed by the same loop AST |
 | Conditionals | Limited | `tl.if cond { ... }` only; no `else`, `break`, or `continue` |
 | Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel `.real` or `.nat` operands; `ptr + nat` for pointer offsets |
 | Comparisons | Supported | `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or `.nat` |
@@ -265,7 +270,7 @@ current semantic contract.
 | Unary math | Supported | `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh` |
 | Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
-| Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]` |
+| Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
 | Loads | Limited | Pointer-expression load, optional `mask`, optional `other` |
@@ -296,8 +301,9 @@ current semantic contract.
 - Caches and performance hints such as `cache_modifier`, `eviction_policy`,
   `volatile`, or `is_volatile`.
 - Arbitrary axis permutation. `tl.trans` only swaps trailing two axes.
-- Higher-rank surface slicing beyond the currently supported rank-1
-  `[:, None]` / `[None, :]` forms.
+- Higher-rank bracket slicing beyond the currently supported rank-1
+  `[:, None]` / `[None, :]` forms. Use `tl.expand_dims(e, axis=N)` for
+  explicit unit-axis insertion.
 - Integer widths, overflow, and signedness. The `.nat` channel is mathematical
   `Nat`.
 

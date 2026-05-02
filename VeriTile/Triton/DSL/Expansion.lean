@@ -388,6 +388,17 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $e:tritonExpr[ None , : ]) => do
       -- `e[None, :]` — insert a unit axis at position 0: `[N] → [1, N]`.
       expandSlicerNone env e (axisIdx := 0)
+  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $kw:tritonReduceKwarg)) => do
+      match kw with
+      | `(tritonReduceKwarg| axis = $n:num) =>
+          expandExpandDims env e (axisIdx := n.getNat)
+      | `(tritonReduceKwarg| $name:ident = $_) =>
+          Macro.throwError
+            ("tl.expand_dims: unknown kwarg `" ++ name.getId.toString ++
+             "`. Only literal `axis = N` is supported.")
+      | _ => Macro.throwUnsupported
+  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $n:num)) => do
+      expandExpandDims env e (axisIdx := n.getNat)
   | `(tritonExpr| tl.trans($e:tritonExpr)) => do
       -- `tl.trans(e)` — transpose the trailing two axes (`Op.transpose`).
       expandTranspose env e
@@ -633,9 +644,26 @@ partial def expandTranspose (env : Env)
   pure ⟨← `(Op.transpose (batch := $batchT) (M := $M) (N := $N) $e'.term),
         e'.dtype, .dims (batch ++ [N, M])⟩
 
+/-- Lower `tl.expand_dims(e, axis=N)` / `tl.expand_dims(e, N)` to
+`Op.expandDim`. The axis must be a literal in `[0, rank]`; dimensions are
+typed by inserting a unit axis into the macro-tracked shape. -/
+partial def expandExpandDims (env : Env)
+    (e : TSyntax `tritonExpr) (axisIdx : Nat) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  if axisIdx > dims.length then
+    Macro.throwError
+      ("tl.expand_dims: axis `" ++ toString axisIdx ++
+       "` out of bounds for rank " ++ toString dims.length)
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  let outDims : List (TSyntax `term) :=
+    dims.take axisIdx ++ [← `((1 : Nat))] ++ dims.drop axisIdx
+  pure ⟨← `(Op.expandDim (⟨$axisLit, by simp⟩) $e'.term),
+        e'.dtype, .dims outDims⟩
+
 /-- Lower `e[:, None]` / `e[None, :]` to `Op.expandDim` with the appropriate
-axis. First-stage restriction: input must be rank-1; higher ranks raise a
-macro error so the user knows to wait for fully ND surface slicers. -/
+axis. This postfix surface intentionally remains rank-1 only; use
+`tl.expand_dims(e, axis=N)` for general-rank insertion. -/
 partial def expandSlicerNone (env : Env)
     (e : TSyntax `tritonExpr) (axisIdx : Nat) : MacroM EOut := do
   let e' ← expandExpr env e
@@ -644,16 +672,8 @@ partial def expandSlicerNone (env : Env)
     Macro.throwError
       ("[:, None] / [None, :]: rank-1 input required, got rank " ++
        toString dims.length ++
-       ". Higher-rank tiles will be supported in a follow-up; for now write `tl.expand_dims` once added.")
-  let n := dims.head!
-  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
-  let outDims : List (TSyntax `term) ←
-    if axisIdx = 0 then
-      pure [← `((1 : Nat)), n]
-    else
-      pure [n, ← `((1 : Nat))]
-  pure ⟨← `(Op.expandDim (⟨$axisLit, by simp⟩) $e'.term),
-        e'.dtype, .dims outDims⟩
+       ". Use `tl.expand_dims(e, axis=N)` for general-rank insertion.")
+  expandExpandDims env e (axisIdx := axisIdx)
 
 end
 
@@ -730,6 +750,16 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       let (body, _) ← expandStmts bodyEnv stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$body,*]), env)
   | `(tritonStmt| tl.for $i:ident in $n:num { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
+      let (body, _) ← expandStmts bodyEnv stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$body,*]), env)
+  | `(tritonStmt| tl.static_range $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
+      let (body, _) ← expandStmts bodyEnv stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$body,*]), env)
+  | `(tritonStmt| tl.static_range $i:ident in $n:num { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
       let (body, _) ← expandStmts bodyEnv stmts.toList

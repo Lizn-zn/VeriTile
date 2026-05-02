@@ -26,6 +26,9 @@ Stmt : Type
   运行时状态保存 `pids : Nat → Nat`,所以任意 axis 都有定义。
 - `tl.for i in $(n) { ... }` 与 `tl.for i in N { ... }`。
   loop 有操作语义,证明通过 `forLoop_inv`。
+- `tl.static_range i in $(n) { ... }` 与 `tl.static_range i in N { ... }`
+  是同一个 bounded-loop AST 的 surface alias。当前不建模 unroll / pipeline
+  属性。
 - `tl.if cond { ... }` 支持 scalar bool 条件(`Op .bool []`)。
   当前没有 `else`、`break` 或 `continue`;Triton 的 block-skipping pattern
   应该通过取反 skip 条件并包住有效 body 来表示。逐元素条件选择仍使用 `tl.where`。
@@ -61,6 +64,8 @@ Stmt : Type
 - `tl.zeros([dims...])`,是 `tl.full([dims...], 0)` 的糖。
 - rank-1 输入上的 `e[:, None]` 和 `e[None, :]`。
   它们降到 `Op.expandDim`。
+- `tl.expand_dims(e, axis=N)` 与 `tl.expand_dims(e, N)` 在 literal axis
+  位置插入 unit axis,支持任意 macro-known rank。
 - `tl.trans(e)` 交换最后两个 axis,前面的 axis 作为 batch prefix 保持不变。
 
 ### 算术、比较与 broadcast
@@ -235,7 +240,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | --- | --- | --- |
 | scalar/tile 常量 | Supported | 实数字面量、`$(n)`、`$ℝ(x)`、`-inf`、register ref |
 | program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;没有 whole-grid execution semantics |
-| loop | Supported | bounded `tl.for`,由 `forLoop_inv` 支撑 |
+| loop | Supported | bounded `tl.for`;`tl.static_range` alias 降到同一个 loop AST |
 | conditional | Limited | 只有 `tl.if cond { ... }`;没有 `else`、`break`、`continue` |
 | arithmetic | Supported | 同 channel `.real` 或 `.nat` 上的 `+`, `-`, `*`, `/`;pointer offset 支持 `ptr + nat` |
 | comparison | Supported | `.real` 或 `.nat` 上的 `<`, `<=`, `==`, `>`, `>=`, `!=` |
@@ -244,7 +249,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | unary math | Supported | `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh` |
 | reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis` / `keep_dims` |
 | broadcast | Supported | ND same-dim、scalar-to-tile、dimension-`1` expansion |
-| shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]` |
+| shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]`,literal-axis `tl.expand_dims` |
 | transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
 | load | Limited | pointer-expression load,可带 `mask` / `other` |
@@ -274,7 +279,8 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 - cache/performance hint,例如 `cache_modifier`, `eviction_policy`, `volatile`,
   `is_volatile`。
 - 任意 axis permutation。`tl.trans` 只交换最后两个 axis。
-- 高 rank surface slicing。目前只支持 rank-1 的 `[:, None]` / `[None, :]`。
+- 高 rank bracket slicing。目前只支持 rank-1 的 `[:, None]` / `[None, :]`;
+  显式插入 unit axis 请用 `tl.expand_dims(e, axis=N)`。
 - integer width、overflow、signedness。`.nat` channel 是数学 `Nat`。
 
 ## 文档自动生成
