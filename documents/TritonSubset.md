@@ -218,6 +218,12 @@ The core AST has typed floating load/store constructors such as
 defaults `tl.load` / `tl.store` to `.real`; use `tl.cast` where a kernel needs
 to carry an explicit floating dtype through intermediate registers.
 
+Float theorem policy: algorithmic correctness theorems should be proved over
+the erased `.real` kernel. A float-facing theorem can use
+`Kernel.CorrectViaFloatErasure` plus an erasure equality
+`k.eraseFloat = realK` to expose a theorem for the dtype-annotated kernel
+without re-proving the algorithm in each floating channel.
+
 ## Operator and Syntax Coverage Checklist
 
 This table is the current operator-coverage contract for GitHub issue #15.

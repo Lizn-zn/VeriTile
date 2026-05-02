@@ -201,6 +201,11 @@ core AST 现在有 typed floating load/store 构造,例如 `Op.loadFloat`,
 默认仍是 `.real`;如果 kernel 需要在中间寄存器携带显式浮点 dtype,使用
 `tl.cast`。
 
+Float theorem policy: 算法正确性 theorem 应该证明在擦除后的 `.real`
+kernel 上。面向 float 的 theorem 可以用 `Kernel.CorrectViaFloatErasure`
+加上 erasure 等式 `k.eraseFloat = realK`,为带 dtype 标注的 kernel 暴露
+theorem,但不在每个浮点 channel 里重新证明算法。
+
 ## Operator / syntax 覆盖 checklist
 
 这个表是 GitHub issue #15 当前的 operator-coverage contract。`Supported`

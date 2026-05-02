@@ -65,6 +65,25 @@ def dtypeCastSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   tl.store(tl.ptr($(outReg)) + offs, y)
 }
 
+/-- The real kernel recovered by erasing `dtypeCastSmoke`'s float annotations. -/
+def dtypeCastSmokeErasedReal (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  x    := tl.load(tl.ptr($(xReg)) + offs)
+  x32  := x
+  one  := 1
+  y32  := x32 + one
+  y    := y32
+  tl.store(tl.ptr($(outReg)) + offs, y)
+}
+
+/-- Float theorem bridge smoke: erasure recovers the real proof target. -/
+example (xReg outReg : RegionName) (N : Nat) :
+    (dtypeCastSmoke xReg outReg N).eraseFloat =
+      dtypeCastSmokeErasedReal xReg outReg N := by
+  simp [dtypeCastSmoke, dtypeCastSmokeErasedReal, Kernel.eraseFloat,
+    Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat,
+    eraseFloatDType, NumericDType.eraseFloat]
+
 /-- Core smoke test for typed floating load/store AST nodes. -/
 def fp16LoadStoreCoreSmoke (xReg outReg : RegionName) (N : Nat) : Stmt :=
   Stmt.storeFloat FloatDType.fp16 outReg [N] (Op.arange N)
