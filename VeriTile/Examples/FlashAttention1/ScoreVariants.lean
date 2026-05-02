@@ -619,6 +619,26 @@ theorem alphaScore_shift_cancel (mOld mNew x : ℝ) :
     rw [← Real.exp_add, add_neg_cancel, Real.exp_zero]]
   ring
 
+theorem softcapScore_toWithBot (softcap score : ℝ) :
+    WithBot.realMul ((softcap : ℝ) : WithBot ℝ)
+      (WithBot.realTanh
+        (WithBot.realDiv ((score : ℝ) : WithBot ℝ) ((softcap : ℝ) : WithBot ℝ))) =
+      ((softcapScore softcap score : ℝ) : WithBot ℝ) := by
+  simp [WithBot.realMul, WithBot.realDiv, softcapScore]
+
+theorem softcapScore_lane_eq {M S D : Nat}
+    (softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (i : Fin M) (j : Fin S) :
+    WithBot.realMul ((softcap : ℝ) : WithBot ℝ)
+      (WithBot.realTanh
+        (WithBot.realDiv
+          ((FA1Math.scaledScore Q K scale i j : ℝ) : WithBot ℝ)
+          ((softcap : ℝ) : WithBot ℝ))) =
+      scoreLane allVisible (softcapDotScore softcap Q K scale) i j := by
+  rw [softcapScore_toWithBot]
+  simp [scoreLane, allVisible, softcapDotScore, dotScore]
+
 noncomputable def mScoreOnline {M S : Nat}
     (visible : Fin M → Fin S → Bool)
     (score : Fin M → Fin S → ℝ) : Nat → Fin M → WithBot ℝ
@@ -1136,6 +1156,93 @@ private def fa1ScorePostLoop (outReg : RegionName) (M D : Nat) : List Stmt :=
       (Op.ref .nat [M, D] "o_ptrs")
       (Op.ref .real [M, D] "out")
   ]
+
+private def fa1ScoreLoopBodySoftcap (kReg vReg : RegionName)
+    (M D Bk : Nat) (scale softcap : ℝ) : List Stmt :=
+  [ Stmt.assign .nat [Bk] "offs_n"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "n")
+          (Op.constNat Bk))
+        (Op.arange Bk))
+  , Stmt.assign .nat [Bk, D] "k_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+          (Op.constNat D))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+  , Stmt.assign .nat [Bk, D] "v_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+          (Op.constNat D))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+  , Stmt.assign .real [Bk, D] "k"
+      (Op.load kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+  , Stmt.assign .real [Bk, D] "v"
+      (Op.load vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+  , Stmt.assign .real [M, Bk] "raw"
+      (Op.mul .real Broadcast.scalarR
+        (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+          (Op.ref .real [M, D] "q")
+          (Op.transpose (batch := []) (M := Bk) (N := D)
+            (Op.ref .real [Bk, D] "k")))
+        (Op.const scale))
+  , Stmt.assign .real [M, Bk] "scores"
+      (Op.mul .real Broadcast.scalarL
+        (Op.const softcap)
+        (Op.tanh
+          (Op.div .real Broadcast.scalarR
+            (Op.ref .real [M, Bk] "raw")
+            (Op.const softcap))))
+  , Stmt.assign .real [M] "m_block"
+      (Op.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
+        (Op.ref .real [M, Bk] "scores"))
+  , Stmt.assign .real [M] "m_new"
+      (Op.max2 (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [M] "m_i")
+        (Op.ref .real [M] "m_block"))
+  , Stmt.assign .real [M] "alpha"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [M] "m_i")
+          (Op.ref .real [M] "m_new")))
+  , Stmt.assign .real [M, Bk] "p"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Op.ref .real [M, Bk] "scores")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "m_new"))))
+  , Stmt.assign .real [M] "l_new"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [M] "alpha")
+          (Op.ref .real [M] "l_i"))
+        (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
+          (Op.ref .real [M, Bk] "p")))
+  , Stmt.assign .real [M, D] "o_acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+          (Op.ref .real [M, D] "o_acc"))
+        (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+          (Op.ref .real [M, Bk] "p")
+          (Op.ref .real [Bk, D] "v")))
+  , Stmt.assign .real [M] "m_i"
+      (Op.ref .real [M] "m_new")
+  , Stmt.assign .real [M] "l_i"
+      (Op.ref .real [M] "l_new")
+  ]
+
+@[simp] theorem fa1ForwardKernelSoftcap_body_eq
+    (qReg kReg vReg outReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale softcap : ℝ) :
+    (fa1ForwardKernelSoftcap qReg kReg vReg outReg M D Bk numKVBlocks
+        scale softcap).body =
+      fa1ScorePreLoop qReg M D ++
+      [Stmt.forLoop "n" numKVBlocks
+        (fa1ScoreLoopBodySoftcap kReg vReg M D Bk scale softcap)] ++
+      fa1ScorePostLoop outReg M D := by
+  rfl
 
 def P_fa1_score
     {M D S : Nat}
