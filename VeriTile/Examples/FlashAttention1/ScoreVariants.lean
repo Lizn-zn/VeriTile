@@ -1782,6 +1782,43 @@ def valueBlock {D Bk numKVBlocks : Nat}
       ((V (scoreBlockIndex Bk numKVBlocks k h j, d, PUnit.unit) : ℝ) :
         WithBot ℝ) := rfl
 
+theorem fa1_score_block_read
+    {D Bk numKVBlocks : Nat}
+    (region : RegionName) (s : BlockState)
+    (X : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (hX : InputAt s region
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) X)
+    (k : Nat) (hk : k < numKVBlocks)
+    (j : Fin Bk) (d : Fin D) :
+    s.readMem region ((k * Bk + j.val) * D + d.val) =
+      X (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j,
+        d, PUnit.unit) := by
+  rw [BlockState.readMem]
+  have haddr :
+      (k * Bk + j.val) * D + d.val =
+        Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D
+          (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j,
+            d, PUnit.unit) := by
+    simp [Offset.rowMajor2D, Offset.strided, scoreBlockIndex, FA1Math.blockIndex]
+  rw [haddr]
+  exact hX _
+
+theorem fa1_score_block_load_tile_eq
+    {D Bk numKVBlocks : Nat}
+    (region : RegionName) (s : BlockState)
+    (X : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (hX : InputAt s region
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) X)
+    (k : Nat) (hk : k < numKVBlocks) :
+    (⟨fun idx : TileIndex [Bk, D] =>
+        some (s.readMem region ((k * Bk + idx.1.val) * D + idx.2.1.val))⟩
+      : Tile .real [Bk, D])
+      =
+      valueBlock X k (Nat.succ_le_iff.mpr hk) := by
+  ext idx
+  rw [valueBlock_data]
+  exact congrArg some (fa1_score_block_read region s X hX k hk idx.1 idx.2.1)
+
 noncomputable def rawScoreBlockTile {M D Bk numKVBlocks : Nat}
     (Q : TileIndex [M, D] → ℝ)
     (K : TileIndex [Bk * numKVBlocks, D] → ℝ)
@@ -2113,6 +2150,22 @@ theorem score_block_pv_dot_eq {M D Bk numKVBlocks : Nat}
   rcases idx with ⟨i, d, u⟩
   cases u
   simp [Tile.dot, Tile.ofReal, valueBlock]
+
+theorem rawScoreBlockTile_eq {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < numKVBlocks) :
+    rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk) =
+      scoreBlockLane allVisible (dotScore Q K scale) k
+        (Nat.succ_le_iff.mpr hk) := by
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  cases u
+  simp only [rawScoreBlockTile, Tile.bop, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.mul]
+  unfold scoreBlockIndex
+  rw [FA1Math.block_scaled_data_eq Q K scale k hk i j]
+  simp [scoreBlockLane, scoreLane, dotScore, allVisible, scoreBlockIndex]
 
 theorem score_block_lNew_tile_eq {M Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
