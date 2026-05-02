@@ -71,6 +71,9 @@ Stmt : Type
   结果是 `.bool`。
 - 布尔合取: `tl.logical_and(a, b)`,作用于 `.bool`。
 - 双参数 `tl.max(a, b)` 作为 `.real` 上的点态 max。
+- `tl.maximum(a, b)` 与 `tl.minimum(a, b)` 是基于 comparison + `tl.where`
+  的点态选择 sugar,支持 comparable channel。分支 broadcast 当前限于
+  scalar-to-tile lifting,与 `tl.where` 一致。
 - Broadcast 是 ND 的:同维度、scalar-to-tile、或维度 `1` 扩到另一边。
   DSL 通过语法构造 broadcast proof,所以语义等价但写法不同的维度表达式,
   可能仍需要写成一致形式。
@@ -86,8 +89,10 @@ Stmt : Type
 - `tl.sigmoid`
 - `tl.sqrt`
 - `tl.tanh`
+- `tl.abs`
 
-这些都作用于 `.real` channel。
+这些都作用于 `.real` channel。`tl.abs(x)` 当前在实数语义里降为
+`tl.where(x < 0, 0 - x, x)`。
 
 ### Reduction
 

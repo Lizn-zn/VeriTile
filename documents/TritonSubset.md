@@ -77,6 +77,9 @@ Supported channels:
   `.nat`, producing `.bool`.
 - Boolean conjunction: `tl.logical_and(a, b)` on `.bool` values.
 - Two-argument `tl.max(a, b)` as pointwise max on `.real`.
+- `tl.maximum(a, b)` and `tl.minimum(a, b)` as pointwise select-based sugar
+  over comparable channels. Branch broadcasting is currently limited to
+  scalar-to-tile lifting, matching `tl.where`.
 - Broadcasting is ND and follows the current `Broadcast` witness:
   same dimension, scalar-to-tile, or dimension `1` expanded to the other side.
   The DSL constructs the broadcast proof syntactically, so equivalent but
@@ -95,8 +98,10 @@ Supported channels:
 - `tl.sigmoid`
 - `tl.sqrt`
 - `tl.tanh`
+- `tl.abs`
 
-These operate on the `.real` channel.
+These operate on the `.real` channel. `tl.abs(x)` is desugared to
+`tl.where(x < 0, 0 - x, x)` in the current real-valued semantics.
 
 ### Reductions
 

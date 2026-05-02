@@ -195,6 +195,17 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.tanh"
       pure ⟨← `(Op.tanh $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.abs($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.abs"
+      let (cmpBc, cmpShape) ← broadcastTerm e'.shape SInfo.scalar "tl.abs"
+      ensureShape e'.shape cmpShape "tl.abs"
+      let (subBc, subShape) ← broadcastTerm SInfo.scalar e'.shape "tl.abs"
+      ensureShape e'.shape subShape "tl.abs"
+      let zero ← `(Op.const 0)
+      let cond ← `(Op.lt ComparableDType.real $cmpBc $e'.term $zero)
+      let neg ← `(Op.sub NumericDType.real $subBc $zero $e'.term)
+      pure ⟨← `(Op.where $cond $neg $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) => do
       let a' ← expandExpr env a
       let b' ← expandExpr env b
@@ -209,6 +220,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       ensureDType .real b'.dtype "tl.max"
       let (bc, outShape) ← broadcastTerm a'.shape b'.shape "tl.max"
       pure ⟨← `(Op.max2 $bc $a'.term $b'.term), .real, outShape⟩
+  | `(tritonExpr| tl.maximum($a:tritonExpr, $b:tritonExpr)) => do
+      expandMinMax env "tl.maximum" (← `(Op.gt)) a b
+  | `(tritonExpr| tl.minimum($a:tritonExpr, $b:tritonExpr)) => do
+      expandMinMax env "tl.minimum" (← `(Op.lt)) a b
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
       expandReduce env "tl.sum" (← `(Op.reduceSum)) e kwargs
   | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
@@ -403,6 +418,18 @@ partial def expandCmp (env : Env) (ctx : String) (op : TSyntax `term)
   let cp ← a'.dtype.comparableProof
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
   pure ⟨← `($op $cp $bc $a'.term $b'.term), .bool, outShape⟩
+
+partial def expandMinMax (env : Env) (ctx : String) (cmp : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let cp ← a'.dtype.comparableProof
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  let aTerm ← coerceShape a'.term a'.shape outShape (ctx ++ " lhs")
+  let bTerm ← coerceShape b'.term b'.shape outShape (ctx ++ " rhs")
+  pure ⟨← `(Op.where ($cmp $cp $bc $a'.term $b'.term) $aTerm $bTerm), a'.dtype, outShape⟩
 
 /-- Lower a `tl.sum(...)` / `tl.max(...)` expression with optional reduction
 kwargs (`axis = K`, `keep_dims = true|false`) into the corresponding

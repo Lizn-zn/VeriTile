@@ -54,6 +54,11 @@ def unaryMathOpsSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
   s    := tl.sigmoid(x)
   r    := tl.sqrt(e)
   t    := tl.tanh(x)
+  a    := tl.abs(x)
+  lo   := tl.minimum(x, 0)
+  hi   := tl.maximum(x, 0)
+  nlo  := tl.minimum(offs, $(N))
+  nhi  := tl.maximum(offs, $(N))
 }
 
 /-- DSL smoke test for explicit floating dtype casts. -/

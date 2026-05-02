@@ -39,9 +39,14 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.abs($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.maximum($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.minimum($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=

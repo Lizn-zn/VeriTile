@@ -30,8 +30,11 @@ syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.tanh(" tritonExpr ")" : tritonExpr
+syntax "tl.abs(" tritonExpr ")" : tritonExpr
 syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.maximum(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.minimum(" tritonExpr ", " tritonExpr ")" : tritonExpr
 -- Element-wise select. All three operands must broadcast to a common
 -- shape; the macro lifts scalars via `Op.broadcast`.
 syntax "tl.where(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
