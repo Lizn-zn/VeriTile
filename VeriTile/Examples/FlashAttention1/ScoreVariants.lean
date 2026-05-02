@@ -1088,6 +1088,127 @@ theorem oScoreOnline_div_lScoreOnline_eq_attentionRealAlibiSlidingSoftcap {M S D
   rw [mul_div_mul_left _ _ (Real.exp_ne_zero _)]
   rw [oScorePrefix_div_lScorePrefix_eq_attentionRealAlibiSlidingSoftcap]
 
+/-! ## Generic score loop invariant
+
+`P_fa1_score` is the operational invariant shape needed by score-transform
+FA-1 kernels. It mirrors `P_fa1`, but the running accumulator slots are driven
+by an explicit `score` function and `visible` predicate instead of being tied
+to bare scaled dot-product scores.
+-/
+
+def P_fa1_score
+    {M D S : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ)
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (k : Nat) (s : BlockState) : Prop :=
+  s.regs .nat [] "pid" = some (Tile.scalar origPid) ∧
+  s.pid = origPid ∧
+  s.regs .nat [M] "offs_m" = some
+      (Tile.vec (fun i : Fin M => origPid * M + i.val)) ∧
+  s.regs .nat [D] "offs_d" = some
+      (Tile.vec (fun d : Fin D => d.val)) ∧
+  s.regs .real [M, D] "q" = some (Tile.ofReal Q) ∧
+  s.regs .real [M] "m_i" = some
+      ⟨fun idx : TileIndex [M] =>
+        mScoreOnline visible score k idx.1⟩ ∧
+  s.regs .real [M] "l_i" = some
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        lScoreOnline visible score k idx.1) ∧
+  s.regs .real [M, D] "o_acc" = some
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        oScoreOnline visible score V k idx) ∧
+  InputAt s qReg
+      (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) Q ∧
+  InputAt s kReg
+      (Offset.rowMajor2D (rows := S) (cols := D) 0 D) K ∧
+  InputAt s vReg
+      (Offset.rowMajor2D (rows := S) (cols := D) 0 D) V
+
+theorem P_fa1_score_readout_ratio
+    {M D S : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ)
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (s : BlockState)
+    (_hP : P_fa1_score qReg kReg vReg origPid Q K V visible score S s)
+    (idx : TileIndex [M, D]) :
+    oScoreOnline visible score V S idx /
+        lScoreOnline visible score S idx.1 =
+      attentionRealMaskedScore visible score V idx := by
+  exact oScoreOnline_div_lScoreOnline_eq_attentionRealMaskedScore
+    visible score V idx
+
+theorem P_fa1_score_readout_alibi
+    {M D S : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid qStart : Nat) (slope : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ) (scale : ℝ) (s : BlockState)
+    (_hP : P_fa1_score qReg kReg vReg origPid Q K V allVisible
+      (alibiScore qStart slope Q K scale) S s)
+    (idx : TileIndex [M, D]) :
+    oScoreOnline allVisible (alibiScore qStart slope Q K scale) V S idx /
+        lScoreOnline allVisible (alibiScore qStart slope Q K scale) S idx.1 =
+      attentionRealAlibi qStart slope Q K V scale idx := by
+  exact oScoreOnline_div_lScoreOnline_eq_attentionRealAlibi
+    qStart slope Q K V scale idx
+
+theorem P_fa1_score_readout_slidingWindow
+    {M D S : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid qStart window : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ) (scale : ℝ) (s : BlockState)
+    (_hP : P_fa1_score qReg kReg vReg origPid Q K V
+      (slidingVisible window qStart) (dotScore Q K scale) S s)
+    (idx : TileIndex [M, D]) :
+    oScoreOnline (slidingVisible window qStart) (dotScore Q K scale) V S idx /
+        lScoreOnline (slidingVisible window qStart) (dotScore Q K scale) S idx.1 =
+      attentionRealSlidingWindow qStart window Q K V scale idx := by
+  exact oScoreOnline_div_lScoreOnline_eq_attentionRealSlidingWindow
+    qStart window Q K V scale idx
+
+theorem P_fa1_score_readout_softcap
+    {M D S : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat) (softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ) (scale : ℝ) (s : BlockState)
+    (_hP : P_fa1_score qReg kReg vReg origPid Q K V allVisible
+      (softcapDotScore softcap Q K scale) S s)
+    (idx : TileIndex [M, D]) :
+    oScoreOnline allVisible (softcapDotScore softcap Q K scale) V S idx /
+        lScoreOnline allVisible (softcapDotScore softcap Q K scale) S idx.1 =
+      attentionRealSoftcap softcap Q K V scale idx := by
+  exact oScoreOnline_div_lScoreOnline_eq_attentionRealSoftcap
+    softcap Q K V scale idx
+
+theorem P_fa1_score_readout_alibiSlidingSoftcap
+    {M D S : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid qStart window : Nat) (slope softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ) (scale : ℝ) (s : BlockState)
+    (_hP : P_fa1_score qReg kReg vReg origPid Q K V
+      (slidingVisible window qStart)
+      (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+      S s)
+    (idx : TileIndex [M, D]) :
+    oScoreOnline (slidingVisible window qStart)
+        (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+        V S idx /
+      lScoreOnline (slidingVisible window qStart)
+        (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+        S idx.1 =
+      attentionRealAlibiSlidingSoftcap qStart window slope softcap Q K V scale idx := by
+  exact oScoreOnline_div_lScoreOnline_eq_attentionRealAlibiSlidingSoftcap
+    qStart window slope softcap Q K V scale idx
+
 @[simp] theorem attentionRealScore_apply {M S D : Nat}
     (score : Fin M → Fin S → ℝ) (V : TileIndex [S, D] → ℝ)
     (i : Fin M) (d : Fin D) :
