@@ -2040,6 +2040,80 @@ theorem score_block_p_tile_eq {M Bk numKVBlocks : Nat}
   rw [hm]
   exact FA1MathBoundary.realExp_eq_some_unbotD _
 
+theorem score_block_mBlock_reduceMax_eq {M Bk numKVBlocks : Nat}
+    (hBk : 0 < Bk)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) :
+    Tile.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
+      (scoreBlockLane visible score k (Nat.succ_le_iff.mpr hk))
+      =
+      some
+        (⟨fun idx : TileIndex [M] =>
+          (Finset.univ : Finset (Fin Bk)).sup
+            (fun j => scoreLane visible score idx.1
+              (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j))⟩ :
+          Tile .real [M]) := by
+  unfold Tile.reduceMax
+  simp [Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, hBk, scoreBlockLane]
+  funext idx
+  rw [Finset.sup'_eq_sup]
+  apply Finset.sup_congr rfl
+  intro j _
+  simp [scoreBlockIndex]
+
+theorem score_block_p_rowSum_eq {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) :
+    Tile.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
+      (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+        (WithBot.realExp
+          (WithBot.realSub
+            (scoreLane visible score idx.1
+              (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1))
+            (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0)
+      =
+      Tile.ofReal (fun idx : TileIndex [M] =>
+        Finset.univ.sum (fun j : Fin Bk =>
+          (WithBot.realExp
+            (WithBot.realSub
+              (scoreLane visible score idx.1
+                (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j))
+              (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0)) := by
+  ext idx
+  simp [Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+    TileShape.eraseAxis, TileShape.insertAxisIndex, Tile.ofReal]
+  rfl
+
+theorem score_block_pv_dot_eq {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (k : Nat) (hk : k < numKVBlocks) :
+    Tile.dot [] (M := M) (K := Bk) (N := D)
+      (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+        (WithBot.realExp
+          (WithBot.realSub
+            (scoreLane visible score idx.1
+              (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1))
+            (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0)
+      (valueBlock V k (Nat.succ_le_iff.mpr hk))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, D] =>
+        Finset.univ.sum (fun jLocal : Fin Bk =>
+          let j := scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal
+          (WithBot.realExp
+            (WithBot.realSub
+              (scoreLane visible score idx.1 j)
+              (mScoreBlockPartial visible score (k + 1) idx.1))).unbotD 0 *
+            V (j, idx.2.1, PUnit.unit))) := by
+  ext idx
+  rcases idx with ⟨i, d, u⟩
+  cases u
+  simp [Tile.dot, Tile.ofReal, valueBlock]
+
 theorem score_block_lNew_tile_eq {M Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
     (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
