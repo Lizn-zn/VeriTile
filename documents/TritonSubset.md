@@ -68,12 +68,18 @@ Supported channels:
   Mixed-channel arithmetic is rejected by the DSL.
 - Pointwise comparisons: `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or
   `.nat`, producing `.bool`.
+- Boolean conjunction: `tl.logical_and(a, b)` on `.bool` values.
 - Two-argument `tl.max(a, b)` as pointwise max on `.real`.
 - Broadcasting is ND and follows the current `Broadcast` witness:
   same dimension, scalar-to-tile, or dimension `1` expanded to the other side.
   The DSL constructs the broadcast proof syntactically, so equivalent but
   non-identical dimension expressions may still need to be written in a
   matching form.
+- Elementwise selection: `tl.where(cond, a, b)`.
+  The condition must be `.bool`, the branches must have the same dtype, and
+  scalar-to-tile lifting is accepted. Non-scalar operands must already have
+  the same surface shape; use the supported unit-axis slicers to make shapes
+  agree before calling `tl.where`.
 
 ### Unary Math
 
@@ -184,6 +190,41 @@ What this means: theorems prove real-valued mathematical correctness, not
 bit-level IEEE-754 equivalence. Rounding, NaNs, signed zeros, overflow,
 underflow, denormals, exception flags, hardware dot precision, and fast-math
 rewrites are not modeled.
+
+## Operator and Syntax Coverage Checklist
+
+This table is the current operator-coverage contract for GitHub issue #15.
+`Supported` means the syntax has a Lean AST constructor or accepted DSL
+lowering, operational semantics, and at least the proof surface needed by the
+current examples. `Limited` means VeriTile has a deliberately narrow version
+of the Triton feature. `Gap` means kernels using the feature are outside the
+current semantic contract.
+
+| Area | Status | Coverage |
+| --- | --- | --- |
+| Scalar/tile constants | Supported | Real literals, `$(n)`, `$ℝ(x)`, `-inf`, register refs |
+| Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; no whole-grid execution semantics |
+| Loops | Supported | Bounded `tl.for`, backed by `forLoop_inv` |
+| Conditionals | Limited | `tl.if cond { ... }` only; no `else`, `break`, or `continue` |
+| Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel `.real` or `.nat` operands |
+| Comparisons | Supported | `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or `.nat` |
+| Boolean ops | Limited | `tl.logical_and`; no general boolean operator family |
+| Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
+| Unary math | Supported | `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh` |
+| Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |
+| Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
+| Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]` |
+| Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
+| Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
+| Loads | Limited | Region-plus-offset load, optional `mask`, optional `other`; no first-class pointers |
+| Stores | Limited | Region-plus-offset store, optional `mask`; no first-class pointers |
+| Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
+| Integer memory | Gap | Memory is `RegionName → Nat → ℝ`; no int/Nat tensor memory yet (#20) |
+| Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
+| Indirection | Gap | No gather / paged-KV style data-dependent address model yet (#42) |
+| Block pointers | Gap | No `tl.make_block_ptr`, `tl.advance`, or block-pointer load/store |
+| Atomics / async / barriers | Gap | No `tl.atomic_*`, async copy, TMA, barriers, or scheduling semantics (#12) |
+| Floating point fidelity | Gap | Real-valued model only; no IEEE-754 or mixed-precision hardware semantics (#11) |
 
 ## Unsupported or Not Yet Faithfully Modeled
 

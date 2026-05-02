@@ -63,10 +63,15 @@ Stmt : Type
   混合 channel 算术会被 DSL 拒绝。
 - 点态比较: `<`, `<=`, `==`, `>`, `>=`, `!=`,作用于 `.real` 或 `.nat`,
   结果是 `.bool`。
+- 布尔合取: `tl.logical_and(a, b)`,作用于 `.bool`。
 - 双参数 `tl.max(a, b)` 作为 `.real` 上的点态 max。
 - Broadcast 是 ND 的:同维度、scalar-to-tile、或维度 `1` 扩到另一边。
   DSL 通过语法构造 broadcast proof,所以语义等价但写法不同的维度表达式,
   可能仍需要写成一致形式。
+- 逐元素选择: `tl.where(cond, a, b)`。
+  条件必须是 `.bool`,两个分支 dtype 必须一致,并支持 scalar-to-tile lifting。
+  非 scalar 操作数必须已经有相同 surface shape;需要时先用当前支持的 unit-axis
+  slicer 把 shape 对齐。
 
 ### 一元数学函数
 
@@ -172,6 +177,39 @@ b * stride_b + h * stride_h + i * stride_s + d * stride_d
 含义是:当前 theorem 证明的是实数数学正确性,不是 IEEE-754 bit-level 等价。
 rounding、NaN、signed zero、overflow、underflow、denormal、exception flag、
 硬件 dot precision、fast-math rewrite 都未建模。
+
+## Operator / syntax 覆盖 checklist
+
+这个表是 GitHub issue #15 当前的 operator-coverage contract。`Supported`
+表示已有 Lean AST 构造或 DSL lowering、操作语义,并且覆盖当前 examples 需要的证明
+surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。`Gap` 表示使用该
+特性的 kernel 目前不在语义契约内。
+
+| Area | Status | Coverage |
+| --- | --- | --- |
+| scalar/tile 常量 | Supported | 实数字面量、`$(n)`、`$ℝ(x)`、`-inf`、register ref |
+| program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;没有 whole-grid execution semantics |
+| loop | Supported | bounded `tl.for`,由 `forLoop_inv` 支撑 |
+| conditional | Limited | 只有 `tl.if cond { ... }`;没有 `else`、`break`、`continue` |
+| arithmetic | Supported | 同 channel `.real` 或 `.nat` 上的 `+`, `-`, `*`, `/` |
+| comparison | Supported | `.real` 或 `.nat` 上的 `<`, `<=`, `==`, `>`, `>=`, `!=` |
+| bool op | Limited | `tl.logical_and`;没有完整 bool operator family |
+| pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
+| unary math | Supported | `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh` |
+| reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis` / `keep_dims` |
+| broadcast | Supported | ND same-dim、scalar-to-tile、dimension-`1` expansion |
+| shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]` |
+| transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
+| matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
+| load | Limited | region-plus-offset load,可带 `mask` / `other`;没有 first-class pointer |
+| store | Limited | region-plus-offset store,可带 `mask`;没有 first-class pointer |
+| tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
+| integer memory | Gap | memory 是 `RegionName → Nat → ℝ`;还没有 int/Nat tensor memory (#20) |
+| randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
+| indirection | Gap | 还没有 gather / paged-KV 风格的 data-dependent address model (#42) |
+| block pointer | Gap | 还没有 `tl.make_block_ptr`、`tl.advance` 或 block-pointer load/store |
+| atomic / async / barrier | Gap | 还没有 `tl.atomic_*`、async copy、TMA、barrier 或 scheduling semantics (#12) |
+| floating-point fidelity | Gap | 只有 real-valued model;没有 IEEE-754 或 mixed-precision hardware semantics (#11) |
 
 ## 尚不支持或尚未真实建模
 
