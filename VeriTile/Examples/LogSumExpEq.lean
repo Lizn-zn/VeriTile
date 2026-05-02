@@ -56,23 +56,23 @@ open VeriTile.Triton
 def directLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load(tl.ptr($(xReg)) + offs)
+  x    := tl.load($(xReg) + offs)
   e    := tl.exp(x)
   s    := tl.sum(e, axis=0)
   y    := tl.log(s)
-  tl.store(tl.ptr($(yReg)) + pid, y)
+  tl.store($(yReg) + pid, y)
 }
 
 /-- Shift-trick LSE kernel: y = m + log(Σ exp(x - m)) where m = max(x). -/
 def stableLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load(tl.ptr($(xReg)) + offs)
+  x    := tl.load($(xReg) + offs)
   m    := tl.max(x, axis=0)
   e    := tl.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := m + tl.log(s)
-  tl.store(tl.ptr($(yReg)) + pid, y)
+  tl.store($(yReg) + pid, y)
 }
 
 /-! ## Kernel-level refinement -/

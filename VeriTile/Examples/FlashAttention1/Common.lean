@@ -71,7 +71,7 @@ def fa1ForwardKernel
 
   -- Load Q-block once (reused across all KV blocks).
   q_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
 
   -- Initialize accumulators at the right tile shape (so the loop
   -- registers stay rank-correct across iterations).
@@ -83,8 +83,8 @@ def fa1ForwardKernel
     offs_n  := n * $(Bk) + tl.arange(0, $(Bk))
     k_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs)
+    k       := tl.load($(kReg) + k_ptrs)
+    v       := tl.load($(vReg) + v_ptrs)
 
     -- Scaled scores: [M, Bk]
     scores  := tl.dot(q, tl.trans(k)) * $ℝ(scale)
@@ -103,7 +103,7 @@ def fa1ForwardKernel
   -- Final normalize and store.
   out    := o_acc / l_i[:, None]
   o_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out)
+  tl.store($(outReg) + o_ptrs, out)
 }
 
 /-! ## Strided / 4D-aware kernel
@@ -147,7 +147,7 @@ def fa1ForwardKernelStrided
   offs_d := tl.arange(0, $(D))
 
   q_ptrs := q_base_off + offs_m[:, None] * $(stride_qs) + offs_d[None, :] * $(stride_qd)
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
 
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
@@ -157,8 +157,8 @@ def fa1ForwardKernelStrided
     offs_n  := n * $(Bk) + tl.arange(0, $(Bk))
     k_ptrs  := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
     v_ptrs  := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs)
+    k       := tl.load($(kReg) + k_ptrs)
+    v       := tl.load($(vReg) + v_ptrs)
 
     scores  := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     m_block := tl.max(scores, axis = 1)
@@ -173,7 +173,7 @@ def fa1ForwardKernelStrided
 
   out    := o_acc / l_i[:, None]
   o_ptrs := o_base_off + offs_m[:, None] * $(stride_om) + offs_d[None, :] * $(stride_od)
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out)
+  tl.store($(outReg) + o_ptrs, out)
 }
 
 /-! ## Causal strided / 4D-aware kernel
@@ -215,7 +215,7 @@ def fa1ForwardKernelStridedCausal
   offs_d := tl.arange(0, $(D))
 
   q_ptrs := q_base_off + offs_m[:, None] * $(stride_qs) + offs_d[None, :] * $(stride_qd)
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
 
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
@@ -225,8 +225,8 @@ def fa1ForwardKernelStridedCausal
     offs_n  := n * $(Bk) + tl.arange(0, $(Bk))
     k_ptrs  := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
     v_ptrs  := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs)
+    k       := tl.load($(kReg) + k_ptrs)
+    v       := tl.load($(vReg) + v_ptrs)
 
     scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     causal     := offs_m[:, None] >= offs_n[None, :]
@@ -243,7 +243,7 @@ def fa1ForwardKernelStridedCausal
 
   out    := o_acc / l_i[:, None]
   o_ptrs := o_base_off + offs_m[:, None] * $(stride_om) + offs_d[None, :] * $(stride_od)
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out)
+  tl.store($(outReg) + o_ptrs, out)
 }
 
 /-! ## Boundary-masked strided kernels (FA-1 v1 scaffold)
@@ -287,7 +287,7 @@ def fa1ForwardKernelStridedBoundary
 
   q_ptrs := q_base_off + offs_m[:, None] * $(stride_qs) + offs_d[None, :] * $(stride_qd)
   q_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs, mask=q_mask, other=0)
+  q      := tl.load($(qReg) + q_ptrs, mask=q_mask, other=0)
 
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
@@ -298,8 +298,8 @@ def fa1ForwardKernelStridedBoundary
     k_ptrs  := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
     v_ptrs  := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
     kv_mask := (offs_n[:, None] + offs_d[None, :] * $(0)) < $(S_k)
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs, mask=kv_mask, other=0)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs, mask=kv_mask, other=0)
+    k       := tl.load($(kReg) + k_ptrs, mask=kv_mask, other=0)
+    v       := tl.load($(vReg) + v_ptrs, mask=kv_mask, other=0)
 
     scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     score_mask := (offs_m[:, None] * $(0) + offs_n[None, :]) < $(S_k)
@@ -317,7 +317,7 @@ def fa1ForwardKernelStridedBoundary
   out    := o_acc / l_i[:, None]
   o_ptrs := o_base_off + offs_m[:, None] * $(stride_om) + offs_d[None, :] * $(stride_od)
   o_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out, mask=o_mask)
+  tl.store($(outReg) + o_ptrs, out, mask=o_mask)
 }
 
 def fa1ForwardKernelStridedCausalBoundary
@@ -346,7 +346,7 @@ def fa1ForwardKernelStridedCausalBoundary
 
   q_ptrs := q_base_off + offs_m[:, None] * $(stride_qs) + offs_d[None, :] * $(stride_qd)
   q_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs, mask=q_mask, other=0)
+  q      := tl.load($(qReg) + q_ptrs, mask=q_mask, other=0)
 
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
@@ -357,8 +357,8 @@ def fa1ForwardKernelStridedCausalBoundary
     k_ptrs  := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
     v_ptrs  := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
     kv_mask := (offs_n[:, None] + offs_d[None, :] * $(0)) < $(S_k)
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs, mask=kv_mask, other=0)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs, mask=kv_mask, other=0)
+    k       := tl.load($(kReg) + k_ptrs, mask=kv_mask, other=0)
+    v       := tl.load($(vReg) + v_ptrs, mask=kv_mask, other=0)
 
     scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     causal     := offs_m[:, None] >= offs_n[None, :]
@@ -378,7 +378,7 @@ def fa1ForwardKernelStridedCausalBoundary
   out    := o_acc / l_i[:, None]
   o_ptrs := o_base_off + offs_m[:, None] * $(stride_om) + offs_d[None, :] * $(stride_od)
   o_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out, mask=o_mask)
+  tl.store($(outReg) + o_ptrs, out, mask=o_mask)
 }
 
 /-! ## Boundary-masked strided kernels with D-tail masks
@@ -416,7 +416,7 @@ def fa1ForwardKernelStridedBoundaryD
   q_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
   q_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
   q_mask     := tl.logical_and(q_seq_mask, q_d_mask)
-  q          := tl.load(tl.ptr($(qReg)) + q_ptrs, mask=q_mask, other=0)
+  q          := tl.load($(qReg) + q_ptrs, mask=q_mask, other=0)
 
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
@@ -429,8 +429,8 @@ def fa1ForwardKernelStridedBoundaryD
     kv_seq_mask := (offs_n[:, None] + offs_d[None, :] * $(0)) < $(S_k)
     kv_d_mask   := (offs_n[:, None] * $(0) + offs_d[None, :]) < $(D)
     kv_mask     := tl.logical_and(kv_seq_mask, kv_d_mask)
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs, mask=kv_mask, other=0)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs, mask=kv_mask, other=0)
+    k       := tl.load($(kReg) + k_ptrs, mask=kv_mask, other=0)
+    v       := tl.load($(vReg) + v_ptrs, mask=kv_mask, other=0)
 
     scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     score_mask := (offs_m[:, None] * $(0) + offs_n[None, :]) < $(S_k)
@@ -450,7 +450,7 @@ def fa1ForwardKernelStridedBoundaryD
   o_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
   o_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
   o_mask     := tl.logical_and(o_seq_mask, o_d_mask)
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out, mask=o_mask)
+  tl.store($(outReg) + o_ptrs, out, mask=o_mask)
 }
 
 def fa1ForwardKernelStridedCausalBoundaryD
@@ -481,7 +481,7 @@ def fa1ForwardKernelStridedCausalBoundaryD
   q_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
   q_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
   q_mask     := tl.logical_and(q_seq_mask, q_d_mask)
-  q          := tl.load(tl.ptr($(qReg)) + q_ptrs, mask=q_mask, other=0)
+  q          := tl.load($(qReg) + q_ptrs, mask=q_mask, other=0)
 
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
@@ -494,8 +494,8 @@ def fa1ForwardKernelStridedCausalBoundaryD
     kv_seq_mask := (offs_n[:, None] + offs_d[None, :] * $(0)) < $(S_k)
     kv_d_mask   := (offs_n[:, None] * $(0) + offs_d[None, :]) < $(D)
     kv_mask     := tl.logical_and(kv_seq_mask, kv_d_mask)
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs, mask=kv_mask, other=0)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs, mask=kv_mask, other=0)
+    k       := tl.load($(kReg) + k_ptrs, mask=kv_mask, other=0)
+    v       := tl.load($(vReg) + v_ptrs, mask=kv_mask, other=0)
 
     scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     causal     := offs_m[:, None] >= offs_n[None, :]
@@ -517,7 +517,7 @@ def fa1ForwardKernelStridedCausalBoundaryD
   o_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
   o_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
   o_mask     := tl.logical_and(o_seq_mask, o_d_mask)
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out, mask=o_mask)
+  tl.store($(outReg) + o_ptrs, out, mask=o_mask)
 }
 
 /-! ## Naive single-block reference kernels
@@ -558,13 +558,13 @@ def fa1NaiveForwardKernelStridedBoundaryD
   q_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
   q_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
   q_mask     := tl.logical_and(q_seq_mask, q_d_mask)
-  q          := tl.load(tl.ptr($(qReg)) + q_ptrs, mask=q_mask, other=0)
+  q          := tl.load($(qReg) + q_ptrs, mask=q_mask, other=0)
 
   k_ptrs := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
   v_ptrs := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
   kv_d_mask := (offs_n[:, None] * $(0) + offs_d[None, :]) < $(D)
-  k      := tl.load(tl.ptr($(kReg)) + k_ptrs, mask=kv_d_mask, other=0)
-  v      := tl.load(tl.ptr($(vReg)) + v_ptrs, mask=kv_d_mask, other=0)
+  k      := tl.load($(kReg) + k_ptrs, mask=kv_d_mask, other=0)
+  v      := tl.load($(vReg) + v_ptrs, mask=kv_d_mask, other=0)
 
   scores := tl.dot(q, tl.trans(k)) * $ℝ(scale)
   p      := tl.exp(scores)
@@ -576,7 +576,7 @@ def fa1NaiveForwardKernelStridedBoundaryD
   o_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
   o_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
   o_mask     := tl.logical_and(o_seq_mask, o_d_mask)
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out, mask=o_mask)
+  tl.store($(outReg) + o_ptrs, out, mask=o_mask)
 }
 
 def fa1NaiveForwardKernelStridedCausalBoundaryD
@@ -608,13 +608,13 @@ def fa1NaiveForwardKernelStridedCausalBoundaryD
   q_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
   q_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
   q_mask     := tl.logical_and(q_seq_mask, q_d_mask)
-  q          := tl.load(tl.ptr($(qReg)) + q_ptrs, mask=q_mask, other=0)
+  q          := tl.load($(qReg) + q_ptrs, mask=q_mask, other=0)
 
   k_ptrs := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
   v_ptrs := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
   kv_d_mask := (offs_n[:, None] * $(0) + offs_d[None, :]) < $(D)
-  k      := tl.load(tl.ptr($(kReg)) + k_ptrs, mask=kv_d_mask, other=0)
-  v      := tl.load(tl.ptr($(vReg)) + v_ptrs, mask=kv_d_mask, other=0)
+  k      := tl.load($(kReg) + k_ptrs, mask=kv_d_mask, other=0)
+  v      := tl.load($(vReg) + v_ptrs, mask=kv_d_mask, other=0)
 
   scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
   causal     := offs_m[:, None] >= offs_n[None, :]
@@ -628,7 +628,7 @@ def fa1NaiveForwardKernelStridedCausalBoundaryD
   o_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
   o_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
   o_mask     := tl.logical_and(o_seq_mask, o_d_mask)
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out, mask=o_mask)
+  tl.store($(outReg) + o_ptrs, out, mask=o_mask)
 }
 
 /-! ## Math model — softmax-attention

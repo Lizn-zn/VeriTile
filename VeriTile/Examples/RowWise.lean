@@ -53,9 +53,9 @@ def rowWiseSumKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : Kernel :=
   triton {
     row    := tl.program_id(0)
     cols   := tl.arange(0, $(blockSize))
-    values := tl.load(tl.ptr($(xReg)) + row * $(nCol) + cols)
+    values := tl.load($(xReg) + row * $(nCol) + cols)
     result := tl.sum(values, axis=0)
-    tl.store(tl.ptr($(yReg)) + row, result)
+    tl.store($(yReg) + row, result)
   }
 
 /-- Row-wise max over a row-major 2D matrix.
@@ -66,9 +66,9 @@ def rowWiseMaxKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : Kernel :=
   triton {
     row    := tl.program_id(0)
     cols   := tl.arange(0, $(blockSize))
-    values := tl.load(tl.ptr($(xReg)) + row * $(nCol) + cols)
+    values := tl.load($(xReg) + row * $(nCol) + cols)
     result := tl.max(values, axis=0)
-    tl.store(tl.ptr($(yReg)) + row, result)
+    tl.store($(yReg) + row, result)
   }
 
 /-! ## Math denotations -/

@@ -25,17 +25,17 @@ def twoPassLayerNormKernel
     (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : Kernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(N) + tl.arange($(N))
-  x      := tl.load(tl.ptr($(xReg)) + offs)
+  x      := tl.load($(xReg) + offs)
   s_x    := tl.sum(x)
   μ      := s_x / tl.toReal($(N))
   d      := x - μ
   s_d2   := tl.sum(d * d)
   v      := s_d2 / tl.toReal($(N))
-  γ      := tl.load(tl.ptr($(γReg)) + tl.arange($(N)))
-  β      := tl.load(tl.ptr($(βReg)) + tl.arange($(N)))
+  γ      := tl.load($(γReg) + tl.arange($(N)))
+  β      := tl.load($(βReg) + tl.arange($(N)))
   σ_inv  := 1 / tl.sqrt(v + $ℝ(ε))
   y      := (x - μ) * σ_inv * γ + β
-  tl.store(tl.ptr($(yReg)) + offs, y)
+  tl.store($(yReg) + offs, y)
 }
 
 /-- Fused single-pass LayerNorm kernel: Welford `forLoop`, then affine. -/
@@ -45,7 +45,7 @@ def fusedLayerNormKernel
   M   := 0
   S   := 0
   tl.for i in $(N) {
-    xi      := tl.load(tl.ptr($(xReg)) + (pid * $(N) + i))
+    xi      := tl.load($(xReg) + (pid * $(N) + i))
     delta   := xi - M
     M       := M + delta / (tl.toReal(i) + 1)
     delta2  := xi - M
@@ -58,11 +58,11 @@ def fusedLayerNormKernel
   -- computed in a single pass over `x`; the residual `(x − μ)` still
   -- needs the second read of x.
   offs    := pid * $(N) + tl.arange($(N))
-  x       := tl.load(tl.ptr($(xReg)) + offs)
-  γ       := tl.load(tl.ptr($(γReg)) + tl.arange($(N)))
-  β       := tl.load(tl.ptr($(βReg)) + tl.arange($(N)))
+  x       := tl.load($(xReg) + offs)
+  γ       := tl.load($(γReg) + tl.arange($(N)))
+  β       := tl.load($(βReg) + tl.arange($(N)))
   y       := (x - μ) * σ_inv * γ + β
-  tl.store(tl.ptr($(yReg)) + offs, y)
+  tl.store($(yReg) + offs, y)
 }
 
 def layerNormAffineTailKernel

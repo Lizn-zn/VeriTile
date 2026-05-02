@@ -9,23 +9,23 @@ Example:
   def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
     pid  := tl.program_id(0)
     offs := pid * $(N) + tl.arange($(N))
-    x    := tl.load(tl.ptr($(xReg)) + offs)
+    x    := tl.load($(xReg) + offs)
     e    := tl.exp(x)
     s    := tl.sum(e)
     y    := e / s
-    tl.store(tl.ptr($(yReg)) + offs, y)
+    tl.store($(yReg) + offs, y)
   }
 
 Conventions:
   * Bare identifiers in expression position → register references
     (`pid`, `x`, `e`, etc. become `Op.ref "pid"`, `Op.ref "x"`, ...).
-  * Memory accesses use first-class pointer values:
-    `tl.ptr($(xReg)) + offs` builds a pointer tile, and `tl.load(ptr)` /
-    `tl.store(ptr, value)` consume pointer-valued expressions.
+  * Memory accesses use pointer-like kernel parameters:
+    `$(xReg) + offs` builds a pointer tile in pointer context, and
+    `tl.load(ptr)` / `tl.store(ptr, value)` consume pointer-valued expressions.
   * `$(<lean-term>)` antiquotes a Lean-level value; in numeric context it
     becomes `Op.constNat`, inside `tl.arange(...)` it is fed directly as
-    the `Nat` length, and inside `tl.ptr($(REGION))` it is used as a
-    `RegionName` pointer base.
+    the `Nat` length; in pointer context (for example `tl.load($(REGION) + i)`)
+    it is used as a `RegionName` pointer base.
   * `$ℝ(<lean-term>)` antiquotes a Lean-level `ℝ` value into `Op.const`.
     Symmetric with `$(t)` (which always lowers to `Op.constNat`). Used
     when a kernel parameter has type `ℝ` (e.g. LayerNorm's `ε : ℝ`) and
@@ -37,11 +37,10 @@ Conventions:
 
 Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
 `tl.arange(start, end)`, `tl.exp(_)`, `tl.log(_)`, `tl.sigmoid(_)`,
-`tl.sqrt(_)`, `tl.tanh(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.ptr($(REGION))`,
-`tl.load(ptrExpr)`, binary `+ - * /`, parens, identifiers, numerals,
-antiquotation (`$(t)` for `Nat`, `$ℝ(t)` for `ℝ`). Pointer arithmetic supports
-`ptr + nat` and `nat + ptr`; raw `tl.load($(REGION) + offset)` is intentionally
-not part of the DSL surface.
+`tl.sqrt(_)`, `tl.tanh(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load(ptrExpr)`,
+binary `+ - * /`, parens, identifiers, numerals, antiquotation (`$(t)` for
+`Nat` in numeric context / `RegionName` in pointer context, `$ℝ(t)` for `ℝ`).
+Pointer arithmetic supports `ptr + nat` and `nat + ptr`.
 
 The two-argument `tl.arange(start, end)` lowers to `start + tl.arange(end - start)`
 at macro time (no new AST constructor). The literal-0 special case
@@ -91,7 +90,6 @@ syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.tanh(" tritonExpr ")" : tritonExpr
-syntax "tl.ptr(" "$(" term ")" ")" : tritonExpr
 syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 -- Element-wise select. All three operands must broadcast to a common
@@ -383,7 +381,7 @@ mutual
 partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
     MacroM (Option StaticPtrOut) := do
   match stx with
-  | `(tritonExpr| tl.ptr($($r:term))) =>
+  | `(tritonExpr| $($r:term)) =>
       let zero ← `(Op.constNat 0)
       pure (some ⟨r, zero, SInfo.scalar, Bool.true⟩)
   | `(tritonExpr| ($e:tritonExpr)) =>
@@ -401,20 +399,7 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
             let bTerm := b'.term
             let nextOff ← `(Op.add NumericDType.nat $bc $off $bTerm)
             pure (some ⟨p.region, nextOff, outShape, Bool.false⟩)
-      | none =>
-          match ← expandStaticPtrExpr env b with
-          | some p =>
-              let a' ← expandExpr env a
-              ensureDType .nat a'.dtype "pointer offset"
-              if p.baseOnly then
-                pure (some ⟨p.region, a'.term, a'.shape, Bool.false⟩)
-              else
-                let (bc, outShape) ← broadcastTerm p.shape a'.shape "pointer offset"
-                let off := p.offset
-                let aTerm := a'.term
-                let nextOff ← `(Op.add NumericDType.nat $bc $off $aTerm)
-                pure (some ⟨p.region, nextOff, outShape, Bool.false⟩)
-          | none => pure none
+      | none => pure none
   | _ => pure none
 
 partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
@@ -499,8 +484,6 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.tanh"
       pure ⟨← `(Op.tanh $e'.term), .real, e'.shape⟩
-  | `(tritonExpr| tl.ptr($($r:term))) =>
-      pure ⟨← `(Op.ptrBase $r), .ptr, SInfo.scalar⟩
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) => do
       let a' ← expandExpr env a
       let b' ← expandExpr env b
@@ -617,21 +600,26 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => do
       expandCmp env "comparison" (← `(Op.ne)) a b
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
-      let a' ← expandExpr env a
-      let b' ← expandExpr env b
-      match a'.dtype, b'.dtype with
-      | .ptr, .nat =>
-          let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
-          pure ⟨← `(Op.ptrAdd $bc $a'.term $b'.term), .ptr, outShape⟩
-      | .nat, .ptr =>
-          let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
-          pure ⟨← `(Op.ptrAdd $bc $b'.term $a'.term), .ptr, outShape⟩
-      | _, _ =>
-          unless a'.dtype == b'.dtype do
-            Macro.throwError "arithmetic: dtype mismatch"
-          let np ← a'.dtype.numericProof
-          let (bc, outShape) ← broadcastTerm a'.shape b'.shape "arithmetic"
-          pure ⟨← `(Op.add $np $bc $a'.term $b'.term), a'.dtype, outShape⟩
+      match ← expandStaticPtrExpr env stx with
+      | some sp =>
+          let (bc, _) ← broadcastTerm SInfo.scalar sp.shape "pointer arithmetic"
+          pure ⟨← `(Op.ptrAdd $bc (Op.ptrBase $sp.region) $sp.offset), .ptr, sp.shape⟩
+      | none =>
+          let a' ← expandExpr env a
+          let b' ← expandExpr env b
+          match a'.dtype, b'.dtype with
+          | .ptr, .nat =>
+              let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
+              pure ⟨← `(Op.ptrAdd $bc $a'.term $b'.term), .ptr, outShape⟩
+          | .nat, .ptr =>
+              let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
+              pure ⟨← `(Op.ptrAdd $bc $b'.term $a'.term), .ptr, outShape⟩
+          | _, _ =>
+              unless a'.dtype == b'.dtype do
+                Macro.throwError "arithmetic: dtype mismatch"
+              let np ← a'.dtype.numericProof
+              let (bc, outShape) ← broadcastTerm a'.shape b'.shape "arithmetic"
+              pure ⟨← `(Op.add $np $bc $a'.term $b'.term), a'.dtype, outShape⟩
   | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
       expandArith env "arithmetic" (← `(Op.sub)) a b
   | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => do
@@ -1032,6 +1020,15 @@ end
 
 mutual
 
+/-- Collect region terms from statically visible pointer expressions. -/
+private partial def staticPtrRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
+  match stx with
+  | `(tritonExpr| $($r:term)) => [r]
+  | `(tritonExpr| ($e:tritonExpr)) => staticPtrRegions e
+  | `(tritonExpr| $a:tritonExpr + $_b:tritonExpr) =>
+      staticPtrRegions a
+  | _ => []
+
 /-- Collect all region terms reachable from a `tritonExpr`. Returns `term`
     syntax — each element is the Lean term inside a `tl.load(...)`
     pointer (recursively in subexpressions). -/
@@ -1044,13 +1041,12 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
             match kw with
             | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
-      exprRegions p ++ kwargRegions
+      staticPtrRegions p ++ kwargRegions
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.ptr($($r:term)))            => [r]
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
@@ -1087,7 +1083,8 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| $a:tritonExpr >  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) =>
+      staticPtrRegions stx ++ exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => exprRegions a ++ exprRegions b
@@ -1114,7 +1111,7 @@ private partial def stmtRegions :
             match kw with
             | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
-      (exprRegions v ++ kwargRegions, exprRegions p)
+      (exprRegions v ++ kwargRegions, staticPtrRegions p)
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       stmts.toList.foldl
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>

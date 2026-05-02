@@ -25,13 +25,13 @@ open VeriTile.Triton
 def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x      := tl.load(tl.ptr($(xReg)) + offs)
+  x      := tl.load($(xReg) + offs)
   m      := tl.max(x, axis=0)
   e      := tl.exp(x - m)
   s      := tl.sum(e, axis=0)
   inv_s  := 1 / s
   y      := e * inv_s
-  tl.store(tl.ptr($(yReg)) + offs, y)
+  tl.store($(yReg) + offs, y)
 }
 
 /-- Closed-form spec for `softmaxRecipKernel`'s `Y[pid*N+i]` cell. -/

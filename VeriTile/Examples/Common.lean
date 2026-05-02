@@ -75,7 +75,7 @@ def InputRowLoadedAt (s : BlockState) (region : RegionName)
 
 /-- Read region `region` at the single cell `basePid` from the optional
     final `BlockState` of an `exec` call. Models the
-    *single-scalar-per-block* output pattern (`tl.store(tl.ptr($(yReg)) + row, _)`)
+    *single-scalar-per-block* output pattern (`tl.store($(yReg) + row, _)`)
     distinct from the tile-scatter pattern observed by `observeAt`. -/
 noncomputable def observeRowAt
     (sf : Option BlockState) (region : RegionName) (basePid : Nat) : Option ℝ :=

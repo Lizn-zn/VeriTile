@@ -116,18 +116,18 @@ bit-level / precision 语义。
 
 支持的 load:
 
-- `tl.load(tl.ptr($(region)))`
-- `tl.load(tl.ptr($(region)) + offset)`
-- `ptrs := tl.ptr($(region)) + offset; tl.load(ptrs)`
+- `tl.load($(region))`
+- `tl.load($(region) + offset)`
+- `ptrs := $(region) + offset; tl.load(ptrs)`
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
 
 支持的 store:
 
-- `tl.store(tl.ptr($(region)), value)`
-- `tl.store(tl.ptr($(region)) + offset, value)`
-- `ptrs := tl.ptr($(region)) + offset; tl.store(ptrs, value)`
+- `tl.store($(region), value)`
+- `tl.store($(region) + offset, value)`
+- `ptrs := $(region) + offset; tl.store(ptrs, value)`
 - `tl.store(ptr, value, mask=mask)`
 
 未知 kwarg 会报错。特别地,`tl.load(..., boundary_check=...)` 和
@@ -168,13 +168,13 @@ Kernel.WellTypedMemory Γ k
 
 这是轻量静态层。它检查 named-region load/store 是否使用 `Γ` 声明的 dtype,
 但执行语义仍然读写 real-valued `BlockState.mem`。对于 pointer-valued
-load/store,静态可见的 `tl.ptr(region)` base 会按 `Γ` 检查;pointer register
+load/store,静态可见的 `$(region)` pointer base 会按 `Γ` 检查;pointer register
 在这一层先视为 dynamic/external value。
 
 pointer value 可以 inline 使用、赋值和复用:
 
 ```lean
-ptrs := tl.ptr($(xReg)) + offs
+ptrs := $(xReg) + offs
 x := tl.load(ptrs)
 ptrs2 := ptrs + stride
 ```

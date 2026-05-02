@@ -27,15 +27,15 @@ def alibiScoreSmokeKernel (qReg kReg scoreReg : RegionName)
   offs_d := tl.arange(0, $(D))
   q_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
   k_ptrs := offs_n[:, None] * $(D) + offs_d[None, :]
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
-  k      := tl.load(tl.ptr($(kReg)) + k_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
+  k      := tl.load($(kReg) + k_ptrs)
   raw    := tl.dot(q, tl.trans(k)) * $ℝ(scale)
   delta  := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
   dist   := tl.max(delta, 0 - delta)
   bias   := 0 - $ℝ(slope) * dist
   scores := raw + bias
   s_ptrs := offs_m[:, None] * $(Bk) + offs_n[None, :]
-  tl.store(tl.ptr($(scoreReg)) + s_ptrs, scores)
+  tl.store($(scoreReg) + s_ptrs, scores)
 }
 
 /-- FA-1 score block with a symmetric sliding-window mask. -/
@@ -47,15 +47,15 @@ def slidingWindowScoreSmokeKernel (qReg kReg scoreReg : RegionName)
   offs_d := tl.arange(0, $(D))
   q_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
   k_ptrs := offs_n[:, None] * $(D) + offs_d[None, :]
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
-  k      := tl.load(tl.ptr($(kReg)) + k_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
+  k      := tl.load($(kReg) + k_ptrs)
   raw    := tl.dot(q, tl.trans(k)) * $ℝ(scale)
   delta  := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
   dist   := tl.max(delta, 0 - delta)
   mask   := dist < $ℝ((window : ℝ))
   scores := tl.where(mask, raw, -inf)
   s_ptrs := offs_m[:, None] * $(Bk) + offs_n[None, :]
-  tl.store(tl.ptr($(scoreReg)) + s_ptrs, scores)
+  tl.store($(scoreReg) + s_ptrs, scores)
 }
 
 /-- FA-1 score block with Gemma-style softcap. -/
@@ -67,12 +67,12 @@ def softcapScoreSmokeKernel (qReg kReg scoreReg : RegionName)
   offs_d := tl.arange(0, $(D))
   q_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
   k_ptrs := offs_n[:, None] * $(D) + offs_d[None, :]
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
-  k      := tl.load(tl.ptr($(kReg)) + k_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
+  k      := tl.load($(kReg) + k_ptrs)
   raw    := tl.dot(q, tl.trans(k)) * $ℝ(scale)
   scores := $ℝ(softcap) * tl.tanh(raw / $ℝ(softcap))
   s_ptrs := offs_m[:, None] * $(Bk) + offs_n[None, :]
-  tl.store(tl.ptr($(scoreReg)) + s_ptrs, scores)
+  tl.store($(scoreReg) + s_ptrs, scores)
 }
 
 /-! ## Full forward kernel surfaces -/
@@ -85,7 +85,7 @@ def fa1ForwardKernelAlibi
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
   q_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
   o_acc  := tl.zeros([$(M), $(D)])
@@ -94,8 +94,8 @@ def fa1ForwardKernelAlibi
     offs_n  := n * $(Bk) + tl.arange(0, $(Bk))
     k_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs)
+    k       := tl.load($(kReg) + k_ptrs)
+    v       := tl.load($(vReg) + v_ptrs)
     raw     := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     delta   := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
     dist    := tl.max(delta, 0 - delta)
@@ -112,7 +112,7 @@ def fa1ForwardKernelAlibi
 
   out    := o_acc / l_i[:, None]
   o_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out)
+  tl.store($(outReg) + o_ptrs, out)
 }
 
 /-- FA-1 forward with a symmetric sliding-window score mask. -/
@@ -123,7 +123,7 @@ def fa1ForwardKernelSlidingWindow
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
   q_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
   o_acc  := tl.zeros([$(M), $(D)])
@@ -132,8 +132,8 @@ def fa1ForwardKernelSlidingWindow
     offs_n  := n * $(Bk) + tl.arange(0, $(Bk))
     k_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs)
+    k       := tl.load($(kReg) + k_ptrs)
+    v       := tl.load($(vReg) + v_ptrs)
     raw     := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     delta   := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
     dist    := tl.max(delta, 0 - delta)
@@ -151,7 +151,7 @@ def fa1ForwardKernelSlidingWindow
 
   out    := o_acc / l_i[:, None]
   o_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out)
+  tl.store($(outReg) + o_ptrs, out)
 }
 
 /-- FA-1 forward with Gemma-style softcap applied to scores before softmax. -/
@@ -162,7 +162,7 @@ def fa1ForwardKernelSoftcap
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
   q_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
   o_acc  := tl.zeros([$(M), $(D)])
@@ -171,8 +171,8 @@ def fa1ForwardKernelSoftcap
     offs_n  := n * $(Bk) + tl.arange(0, $(Bk))
     k_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs)
+    k       := tl.load($(kReg) + k_ptrs)
+    v       := tl.load($(vReg) + v_ptrs)
     raw     := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     scores  := $ℝ(softcap) * tl.tanh(raw / $ℝ(softcap))
     m_block := tl.max(scores, axis = 1)
@@ -187,7 +187,7 @@ def fa1ForwardKernelSoftcap
 
   out    := o_acc / l_i[:, None]
   o_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out)
+  tl.store($(outReg) + o_ptrs, out)
 }
 
 /-- FA-1 forward with ALiBi, softcap, and sliding-window masking composed. -/
@@ -198,7 +198,7 @@ def fa1ForwardKernelAlibiSlidingSoftcap
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
   q_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  q      := tl.load(tl.ptr($(qReg)) + q_ptrs)
+  q      := tl.load($(qReg) + q_ptrs)
   m_i    := tl.full([$(M)], -inf)
   l_i    := tl.zeros([$(M)])
   o_acc  := tl.zeros([$(M), $(D)])
@@ -207,8 +207,8 @@ def fa1ForwardKernelAlibiSlidingSoftcap
     offs_n  := n * $(Bk) + tl.arange(0, $(Bk))
     k_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
-    k       := tl.load(tl.ptr($(kReg)) + k_ptrs)
-    v       := tl.load(tl.ptr($(vReg)) + v_ptrs)
+    k       := tl.load($(kReg) + k_ptrs)
+    v       := tl.load($(vReg) + v_ptrs)
     raw     := tl.dot(q, tl.trans(k)) * $ℝ(scale)
     delta   := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
     dist    := tl.max(delta, 0 - delta)
@@ -228,7 +228,7 @@ def fa1ForwardKernelAlibiSlidingSoftcap
 
   out    := o_acc / l_i[:, None]
   o_ptrs := offs_m[:, None] * $(D) + offs_d[None, :]
-  tl.store(tl.ptr($(outReg)) + o_ptrs, out)
+  tl.store($(outReg) + o_ptrs, out)
 }
 
 /-- Absolute distance on sequence indices, as a natural number. -/

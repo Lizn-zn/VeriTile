@@ -61,10 +61,10 @@ scatter to `outReg`, so the result is still `xs + ys`. -/
 def addKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load(tl.ptr($(xReg)) + offs)
-  y    := tl.load(tl.ptr($(yReg)) + offs)
+  x    := tl.load($(xReg) + offs)
+  y    := tl.load($(yReg) + offs)
   out  := x + y
-  tl.store(tl.ptr($(outReg)) + offs, out)
+  tl.store($(outReg) + offs, out)
 }
 
 /-! ## Math denotation -/
@@ -109,10 +109,10 @@ def addKernelMasked (xReg yReg outReg : RegionName)
   pid     := tl.program_id(0)
   offsets := pid * $(blockSize) + tl.arange(0, $(blockSize))
   mask    := offsets < $(nElements)
-  x       := tl.load(tl.ptr($(xReg)) + offsets, mask=mask)
-  y       := tl.load(tl.ptr($(yReg)) + offsets, mask=mask)
+  x       := tl.load($(xReg) + offsets, mask=mask)
+  y       := tl.load($(yReg) + offsets, mask=mask)
   output  := x + y
-  tl.store(tl.ptr($(outReg)) + offsets, output, mask=mask)
+  tl.store($(outReg) + offsets, output, mask=mask)
 }
 
 end VeriTile.Examples

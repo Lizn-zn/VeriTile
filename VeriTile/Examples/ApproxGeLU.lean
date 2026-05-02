@@ -65,14 +65,14 @@ GeLU using `2 * sigmoid(2u) - 1` for `tanh(u)`, and writes the result to
 def approxGeLUKernel (xReg outReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid     := tl.program_id(0)
   offsets := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x       := tl.load(tl.ptr($(xReg)) + offsets)
+  x       := tl.load($(xReg) + offsets)
   x3      := x * x * x
   c       := 7978845608028654 / 10000000000000000
   k       := 44715 / 1000000
   u       := c * (x + k * x3)
   tanh_u  := 2 * tl.sigmoid(2 * u) - 1
   y       := (1 / 2) * x * (1 + tanh_u)
-  tl.store(tl.ptr($(outReg)) + offsets, y)
+  tl.store($(outReg) + offsets, y)
 }
 
 /-! ## Math Denotations -/

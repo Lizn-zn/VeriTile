@@ -126,18 +126,18 @@ The current `tl.dot` model is mathematical real matrix multiplication over the
 
 Supported loads:
 
-- `tl.load(tl.ptr($(region)))`
-- `tl.load(tl.ptr($(region)) + offset)`
-- `ptrs := tl.ptr($(region)) + offset; tl.load(ptrs)`
+- `tl.load($(region))`
+- `tl.load($(region) + offset)`
+- `ptrs := $(region) + offset; tl.load(ptrs)`
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
 
 Supported stores:
 
-- `tl.store(tl.ptr($(region)), value)`
-- `tl.store(tl.ptr($(region)) + offset, value)`
-- `ptrs := tl.ptr($(region)) + offset; tl.store(ptrs, value)`
+- `tl.store($(region), value)`
+- `tl.store($(region) + offset, value)`
+- `ptrs := $(region) + offset; tl.store(ptrs, value)`
 - `tl.store(ptr, value, mask=mask)`
 
 Unknown kwargs are rejected. In particular, `tl.load(..., boundary_check=...)`
@@ -179,13 +179,13 @@ Kernel.WellTypedMemory Γ k
 This is a lightweight static layer. It checks that named-region loads/stores
 use the dtype declared by `Γ`, while execution still reads and writes the
 real-valued `BlockState.mem`. For pointer-valued loads/stores, statically
-visible `tl.ptr(region)` bases are checked against `Γ`; pointer registers are
+visible `$(region)` pointer bases are checked against `Γ`; pointer registers are
 treated as dynamic/external values in this layer.
 
 Pointer values can be used inline, assigned, and reused:
 
 ```lean
-ptrs := tl.ptr($(xReg)) + offs
+ptrs := $(xReg) + offs
 x := tl.load(ptrs)
 ptrs2 := ptrs + stride
 ```

@@ -71,23 +71,23 @@ Region names are kernel parameters; both kernels share the input region
 def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load(tl.ptr($(xReg)) + offs)
+  x    := tl.load($(xReg) + offs)
   e    := tl.exp(x)
   s    := tl.sum(e, axis=0)
   y    := e / s
-  tl.store(tl.ptr($(yReg)) + offs, y)
+  tl.store($(yReg) + offs, y)
 }
 
 /-- Stable softmax: subtract the max before exponentiating. -/
 def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load(tl.ptr($(xReg)) + offs)
+  x    := tl.load($(xReg) + offs)
   m    := tl.max(x, axis=0)
   e    := tl.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := e / s
-  tl.store(tl.ptr($(yReg)) + offs, y)
+  tl.store($(yReg) + offs, y)
 }
 
 /-! ## (c) Math denotation and equivalence -/
