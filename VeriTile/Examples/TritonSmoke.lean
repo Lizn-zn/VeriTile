@@ -7,6 +7,7 @@ Small smoke tests for the typed Triton core.
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
+import VeriTile.Triton.MemoryTyping
 import VeriTile.Triton.DSL
 
 namespace VeriTile.Examples.TritonSmoke
@@ -89,6 +90,18 @@ example (xReg outReg : RegionName) (N : Nat) :
 def fp16LoadStoreCoreSmoke (xReg outReg : RegionName) (N : Nat) : Stmt :=
   Stmt.storeFloat FloatDType.fp16 outReg [N] (Op.arange N)
     (Op.loadFloat FloatDType.fp16 xReg (Op.arange N))
+
+/-- Lightweight region typing accepts the fp16 load/store smoke under fp16 buffers. -/
+example (xReg outReg : RegionName) (N : Nat) :
+    (fp16LoadStoreCoreSmoke xReg outReg N).WellTypedMemory (fun _ => TileDType.fp16) := by
+  simp [fp16LoadStoreCoreSmoke, Stmt.WellTypedMemory, Op.WellTypedMemory,
+    FloatDType.dtype]
+
+/-- Real-only DSL kernels require real-typed buffers in the lightweight contract. -/
+example (xReg yReg : RegionName) :
+    (scalarCopyKernel xReg yReg).WellTypedMemory (fun _ => TileDType.real) := by
+  simp [scalarCopyKernel, Kernel.WellTypedMemory, StmtList.WellTypedMemory,
+    Stmt.WellTypedMemory, Op.WellTypedMemory]
 
 /-- `tl.load(p, mask=m)` with no `other=` uses `s.undef` for masked-off lanes. -/
 example : evalOp

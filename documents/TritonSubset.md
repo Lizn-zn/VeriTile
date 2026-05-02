@@ -169,6 +169,19 @@ The memory model remains:
 RegionName → Nat → ℝ
 ```
 
+Region dtype contracts are modeled separately in `VeriTile.Triton.MemoryTyping`:
+
+```lean
+RegionTyping := RegionName → TileDType
+Kernel.WellTypedMemory Γ k
+```
+
+This is a lightweight static layer. It checks that named-region loads/stores
+use the dtype declared by `Γ`, while execution still reads and writes the
+real-valued `BlockState.mem`. For pointer-valued loads/stores, statically
+visible `tl.ptr(region)` bases are checked against `Γ`; pointer registers are
+treated as dynamic/external values in this layer.
+
 Pointer values can be used inline, assigned, and reused:
 
 ```lean

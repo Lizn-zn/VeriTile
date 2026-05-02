@@ -159,6 +159,18 @@ RegionName × Nat
 RegionName → Nat → ℝ
 ```
 
+Region dtype contract 单独放在 `VeriTile.Triton.MemoryTyping`:
+
+```lean
+RegionTyping := RegionName → TileDType
+Kernel.WellTypedMemory Γ k
+```
+
+这是轻量静态层。它检查 named-region load/store 是否使用 `Γ` 声明的 dtype,
+但执行语义仍然读写 real-valued `BlockState.mem`。对于 pointer-valued
+load/store,静态可见的 `tl.ptr(region)` base 会按 `Γ` 检查;pointer register
+在这一层先视为 dynamic/external value。
+
 pointer value 可以 inline 使用、赋值和复用:
 
 ```lean
