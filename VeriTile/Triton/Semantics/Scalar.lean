@@ -82,6 +82,18 @@ noncomputable def div : NumericDType dtype → TileCarrier dtype → TileCarrier
 
 end NumericDType
 
+namespace IntegralDType
+
+def floorDiv : IntegralDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
+  | .int32, x, y => x / y
+  | .nat, x, y => x / y
+
+def mod : IntegralDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
+  | .int32, x, y => x % y
+  | .nat, x, y => x % y
+
+end IntegralDType
+
 namespace ComparableDType
 
 noncomputable def lt :

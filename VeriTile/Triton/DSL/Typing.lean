@@ -98,6 +98,16 @@ def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
   | .bool => Macro.throwError "arithmetic on Bool values is not supported"
   | .ptr => Macro.throwError "arithmetic on pointer values is not supported; use pointer + Nat offset"
 
+def DInfo.integralProof : DInfo → MacroM (TSyntax `term)
+  | .int32 => `(IntegralDType.int32)
+  | .nat => `(IntegralDType.nat)
+  | .real => Macro.throwError "integer division/remainder on Real values is not supported"
+  | .fp32 => Macro.throwError "integer division/remainder on floating values is not supported"
+  | .fp16 => Macro.throwError "integer division/remainder on floating values is not supported"
+  | .bf16 => Macro.throwError "integer division/remainder on floating values is not supported"
+  | .bool => Macro.throwError "integer division/remainder on Bool values is not supported"
+  | .ptr => Macro.throwError "integer division/remainder on pointer values is not supported"
+
 def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
   | .real => `(ComparableDType.real)
   | .fp32 => `(ComparableDType.fp32)

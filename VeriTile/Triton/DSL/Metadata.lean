@@ -10,6 +10,19 @@ open Lean
 
 namespace VeriTile.Triton.DSL.Metadata
 
+private def methodCastExpr? (stx : TSyntax `tritonExpr) : Option (TSyntax `tritonExpr) :=
+  let k := stx.raw.getKind
+  if k == ``tritonMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 5 then
+      some ⟨args[0]⟩
+    else if h : args.size = 6 then
+      some ⟨args[0]⟩
+    else
+      none
+  else
+    none
+
 mutual
 
 /-- Collect region terms from statically visible pointer expressions. -/
@@ -25,6 +38,9 @@ private partial def staticPtrRegions : TSyntax `tritonExpr → List (TSyntax `te
     syntax - each element is the Lean term inside a `tl.load(...)`
     pointer (recursively in subexpressions). -/
 private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
+  match methodCastExpr? stx with
+  | some e => exprRegions e
+  | none =>
   match stx with
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
@@ -41,6 +57,11 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.abs($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.logical_or($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.logical_not($e:tritonExpr)) => exprRegions e
+  | `(tritonExpr| tl.cdiv($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
       exprRegions a ++ exprRegions b
@@ -65,6 +86,7 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
             | _ => acc) []
       exprRegions e ++ kwargRegions
   | `(tritonExpr| tl.toReal($e:tritonExpr))      => exprRegions e
+  | `(tritonExpr| tl.cast($e:tritonExpr, $_:tritonDType)) => exprRegions e
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $c:tritonExpr)) =>
@@ -80,11 +102,16 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| $a:tritonExpr >  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr &  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr |  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| ~$e:tritonExpr) => exprRegions e
   | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) =>
       staticPtrRegions stx ++ exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) =>
       exprRegions c ++ exprRegions a ++ exprRegions b
   | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions e

@@ -42,6 +42,14 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.bop h.div bc va vb)
+  | .floorDiv h bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop h.floorDiv bc va vb)
+  | .mod h bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop h.mod bc va vb)
   | .exp a, s => return Tile.uop WithBot.realExp (← evalOp a s)
   | .log a, s => return Tile.uop WithBot.realLog (← evalOp a s)
   | .sigmoid a, s => return Tile.uop WithBot.realSigmoid (← evalOp a s)
@@ -57,6 +65,13 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.bop (fun x y : Bool => x && y) bc va vb)
+  | .boolOr bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop (fun x y : Bool => x || y) bc va vb)
+  | .boolNot a, s => do
+      let va ← evalOp a s
+      some (Tile.uop (fun x : Bool => !x) va)
   | .max2 bc a b, s => do
       let va ← evalOp a s
       let vb ← evalOp b s

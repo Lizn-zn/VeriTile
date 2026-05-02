@@ -83,6 +83,11 @@ inductive NumericDType : TileDType → Type where
   | int32 : NumericDType .int32
   | nat  : NumericDType .nat
 
+/-- Integer-like dtypes that support floor division and remainder. -/
+inductive IntegralDType : TileDType → Type where
+  | int32 : IntegralDType .int32
+  | nat  : IntegralDType .nat
+
 /-- DTypes that support Triton's comparison operators in the current model. -/
 inductive ComparableDType : TileDType → Type where
   | real : ComparableDType .real

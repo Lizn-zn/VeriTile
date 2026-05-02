@@ -34,7 +34,8 @@ def Tile.ptrAdd {a b out}
     let o := offs.data (bc.rightIndex i)
     (p.1, p.2 + o)⟩
 
-def Tile.uop {shape} (op : WithBot ℝ → WithBot ℝ) (x : Tile .real shape) : Tile .real shape :=
+def Tile.uop {dtype shape} (op : TileCarrier dtype → TileCarrier dtype)
+    (x : Tile dtype shape) : Tile dtype shape :=
   ⟨fun i => op (x.data i)⟩
 
 /-! ### Lifted unary functions on `WithBot ℝ`

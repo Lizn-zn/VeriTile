@@ -44,6 +44,9 @@ Stmt : Type
 - `tl.toReal(x)` 把 `.nat` 标量/tile 转成 `.real`。
 - `tl.cast(x, tl.float64|tl.float32|tl.float16|tl.bfloat16)` 改变浮点
   dtype index。当前语义里它保留底层 `WithBot ℝ` 值,不建模 rounding。
+- `(x).to(tl.float64|tl.float32|tl.float16|tl.bfloat16)` 也支持,作为
+  method-style cast spelling。裸 identifier 需要加括号,避免 Lean 把 `x.to`
+  解析成一个 hierarchical identifier。
 
 当前 channel:
 
@@ -60,6 +63,7 @@ Stmt : Type
 - `tl.arange(n)` 与 `tl.arange(start, end)`。
   双参数形式降为 `start + tl.arange(end - start)`;
   `tl.arange(0, end)` 会折叠成 `tl.arange(end)`。
+  两个 bound 都支持数字字面量和 `$(...)` Lean `Nat` meta-expression。
 - `tl.full([dims...], value)`。
 - `tl.zeros([dims...])`,是 `tl.full([dims...], 0)` 的糖。
 - rank-1 输入上的 `e[:, None]` 和 `e[None, :]`。
@@ -70,11 +74,14 @@ Stmt : Type
 
 ### 算术、比较与 broadcast
 
-- 算术: `+`, `-`, `*`, `/`,作用于 `.real` 或 `.nat`。
+- 算术: `+`, `-`, `*`, `/`,作用于 numeric channel。
   混合 channel 算术会被 DSL 拒绝。
+- 整数 floor division / remainder: `.nat` / `.int32` 上的 `//` 与 `%`。
+- `.nat` 上的 `tl.cdiv(x, y)`,当前降为 `(x + y - 1) / y`。
 - 点态比较: `<`, `<=`, `==`, `>`, `>=`, `!=`,作用于 `.real` 或 `.nat`,
   结果是 `.bool`。
-- 布尔合取: `tl.logical_and(a, b)`,作用于 `.bool`。
+- Bool operator: `.bool` 上的 `tl.logical_and`、`tl.logical_or`、
+  `tl.logical_not`,以及 mask 常用写法 `a & b`、`a | b`、`~a`。
 - 双参数 `tl.max(a, b)` 作为 `.real` 上的点态 max。
 - `tl.maximum(a, b)` 与 `tl.minimum(a, b)` 是基于 comparison + `tl.where`
   的点态选择 sugar,支持 comparable channel。分支 broadcast 当前限于
@@ -242,9 +249,9 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;没有 whole-grid execution semantics |
 | loop | Supported | bounded `tl.for`;`tl.static_range` alias 降到同一个 loop AST |
 | conditional | Limited | 只有 `tl.if cond { ... }`;没有 `else`、`break`、`continue` |
-| arithmetic | Supported | 同 channel `.real` 或 `.nat` 上的 `+`, `-`, `*`, `/`;pointer offset 支持 `ptr + nat` |
+| arithmetic | Supported | 同 channel numeric 上的 `+`, `-`, `*`, `/`;integer `//` / `%`;`.nat` `tl.cdiv`;pointer offset 支持 `ptr + nat` |
 | comparison | Supported | `.real` 或 `.nat` 上的 `<`, `<=`, `==`, `>`, `>=`, `!=` |
-| bool op | Limited | `tl.logical_and`;没有完整 bool operator family |
+| bool op | Supported | `tl.logical_and`、`tl.logical_or`、`tl.logical_not`,以及 `&`、`|`、`~` mask spelling |
 | pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
 | unary math | Supported | `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh` |
 | reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis` / `keep_dims` |

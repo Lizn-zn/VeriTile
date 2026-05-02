@@ -76,6 +76,8 @@ inductive Op : TileDType → TileShape → Type where
   | sub       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | mul       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | div       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
+  | floorDiv  : IntegralDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
+  | mod       : IntegralDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | exp       : Op .real shape → Op .real shape
   | log       : Op .real shape → Op .real shape
   | sigmoid   : Op .real shape → Op .real shape
@@ -88,6 +90,8 @@ inductive Op : TileDType → TileShape → Type where
   | ge        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | ne        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | boolAnd   : Broadcast a b out → Op .bool a → Op .bool b → Op .bool out
+  | boolOr    : Broadcast a b out → Op .bool a → Op .bool b → Op .bool out
+  | boolNot   : Op .bool shape → Op .bool shape
   | max2      : Broadcast a b out → Op .real a → Op .real b → Op .real out
   /--
   Element-wise select (`tl.where(cond, a, b)`): pick `a` where the bool

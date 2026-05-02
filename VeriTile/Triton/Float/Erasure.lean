@@ -31,6 +31,15 @@ def eraseFloat : NumericDType dtype → NumericDType (eraseFloatDType dtype)
 
 end NumericDType
 
+namespace IntegralDType
+
+/-- Integral witness after floating-dtype erasure. -/
+def eraseFloat : IntegralDType dtype → IntegralDType (eraseFloatDType dtype)
+  | .int32 => .int32
+  | .nat => .nat
+
+end IntegralDType
+
 namespace ComparableDType
 
 /-- Comparable witness after floating-dtype erasure. -/
@@ -81,6 +90,8 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .sub h bc a b => .sub h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .mul h bc a b => .mul h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .div h bc a b => .div h.eraseFloat bc a.eraseFloat b.eraseFloat
+  | .floorDiv h bc a b => .floorDiv h.eraseFloat bc a.eraseFloat b.eraseFloat
+  | .mod h bc a b => .mod h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .exp a => .exp a.eraseFloat
   | .log a => .log a.eraseFloat
   | .sigmoid a => .sigmoid a.eraseFloat
@@ -93,6 +104,8 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .ge h bc a b => .ge h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .ne h bc a b => .ne h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .boolAnd bc a b => .boolAnd bc a.eraseFloat b.eraseFloat
+  | .boolOr bc a b => .boolOr bc a.eraseFloat b.eraseFloat
+  | .boolNot a => .boolNot a.eraseFloat
   | .max2 bc a b => .max2 bc a.eraseFloat b.eraseFloat
   | .where c a b => .where c.eraseFloat a.eraseFloat b.eraseFloat
   | .reduceMax axis keepDims a => .reduceMax axis keepDims a.eraseFloat

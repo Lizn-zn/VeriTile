@@ -49,6 +49,9 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 - `tl.cast(x, tl.float64|tl.float32|tl.float16|tl.bfloat16)` changes the
   floating dtype index. In the current semantic model this preserves the
   underlying `WithBot ℝ` value; it does not model rounding.
+- `(x).to(tl.float64|tl.float32|tl.float16|tl.bfloat16)` is accepted as the
+  method-style cast spelling. Parentheses around bare identifiers avoid
+  Lean's hierarchical-name parser treating `x.to` as one identifier.
 
 Supported channels:
 
@@ -65,6 +68,8 @@ Supported channels:
 - `tl.arange(n)` and `tl.arange(start, end)`.
   The two-argument form lowers to `start + tl.arange(end - start)`;
   `tl.arange(0, end)` collapses to `tl.arange(end)`.
+  Numeric literals and `$(...)` Lean `Nat` meta-expressions are accepted for
+  both bounds.
 - `tl.full([dims...], value)`.
 - `tl.zeros([dims...])`, sugar for `tl.full([dims...], 0)`.
 - `e[:, None]` and `e[None, :]` for rank-1 inputs only.
@@ -76,11 +81,15 @@ Supported channels:
 
 ### Arithmetic, Comparisons, and Broadcasting
 
-- Arithmetic: `+`, `-`, `*`, `/` on `.real` or `.nat` values.
+- Arithmetic: `+`, `-`, `*`, `/` on numeric values.
   Mixed-channel arithmetic is rejected by the DSL.
+- Integer floor division and remainder: `//` and `%` on `.nat` / `.int32`.
+- `tl.cdiv(x, y)` on `.nat`, lowered as `(x + y - 1) / y` with the current
+  mathematical `Nat` semantics.
 - Pointwise comparisons: `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or
   `.nat`, producing `.bool`.
-- Boolean conjunction: `tl.logical_and(a, b)` on `.bool` values.
+- Boolean ops: `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus mask
+  operator spellings `a & b`, `a | b`, and `~a` on `.bool` values.
 - Two-argument `tl.max(a, b)` as pointwise max on `.real`.
 - `tl.maximum(a, b)` and `tl.minimum(a, b)` as pointwise select-based sugar
   over comparable channels. Branch broadcasting is currently limited to
@@ -263,9 +272,9 @@ current semantic contract.
 | Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; no whole-grid execution semantics |
 | Loops | Supported | Bounded `tl.for`; `tl.static_range` alias backed by the same loop AST |
 | Conditionals | Limited | `tl.if cond { ... }` only; no `else`, `break`, or `continue` |
-| Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel `.real` or `.nat` operands; `ptr + nat` for pointer offsets |
+| Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel numeric operands; `//`, `%` on integer channels; `tl.cdiv` on `.nat`; `ptr + nat` for pointer offsets |
 | Comparisons | Supported | `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or `.nat` |
-| Boolean ops | Limited | `tl.logical_and`; no general boolean operator family |
+| Boolean ops | Supported | `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus `&`, `|`, `~` mask spellings |
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
 | Unary math | Supported | `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh` |
 | Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |

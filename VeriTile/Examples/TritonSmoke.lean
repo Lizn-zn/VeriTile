@@ -72,6 +72,17 @@ def dtypeCastSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   tl.store($(outReg) + offs, y)
 }
 
+/-- DSL smoke test for Triton's method-style cast spelling. -/
+def dtypeToSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  x32  := (x).to(tl.float32)
+  one  := (1).to(tl.float32)
+  y32  := x32 + one
+  y    := (y32).to(tl.float64)
+  tl.store($(outReg) + offs, y)
+}
+
 /-- The real kernel recovered by erasing `dtypeCastSmoke`'s float annotations. -/
 def dtypeCastSmokeErasedReal (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   offs := tl.arange(0, $(N))
@@ -101,6 +112,31 @@ example (xReg outReg : RegionName) (N : Nat) :
     (fp16LoadStoreCoreSmoke xReg outReg N).RespectsRegionTyping (fun _ => TileDType.fp16) := by
   simp [fp16LoadStoreCoreSmoke, Stmt.RespectsRegionTyping, Op.RespectsRegionTyping,
     FloatDType.dtype]
+
+/-! ### Integer/meta and boolean surface operators -/
+
+/-- Common grid/layout integer operators: `tl.cdiv`, `//`, `%`, and
+meta-expression antiquotation inside `tl.arange`. -/
+def integerSurfaceSmoke
+    (nElements blockSize lo hi : Nat) : Kernel := triton {
+  pid       := tl.program_id(0)
+  nBlocks   := tl.cdiv($(nElements), $(blockSize))
+  group     := pid // $(4)
+  blockRem  := pid % $(4)
+  offs      := tl.arange($(lo), $(hi))
+  lanes     := tl.arange(0, $(blockSize))
+  laneGroup := lanes // $(4)
+  laneRem   := lanes % $(4)
+}
+
+/-- Boolean function and operator spellings for masks. -/
+def booleanSurfaceSmoke (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  a    := offs < $(N)
+  b    := (offs % $(2)) == $(0)
+  c    := tl.logical_or(a, tl.logical_not(b))
+  d    := (a & b) | ~c
+}
 
 /-- Real-only DSL kernels require real-typed buffers in the lightweight contract. -/
 example (xReg yReg : RegionName) :

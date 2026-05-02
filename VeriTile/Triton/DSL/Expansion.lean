@@ -87,6 +87,20 @@ private structure StaticPtrOut where
   shape : SInfo
   baseOnly : Bool
 
+private def methodCast? (stx : TSyntax `tritonExpr) :
+    Option (TSyntax `tritonExpr × TSyntax `tritonDType) :=
+  let k := stx.raw.getKind
+  if k == ``tritonMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 5 then
+      some (⟨args[0]⟩, ⟨args[3]⟩)
+    else if h : args.size = 6 then
+      some (⟨args[0]⟩, ⟨args[4]⟩)
+    else
+      none
+  else
+    none
+
 mutual
 
 partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
@@ -114,6 +128,14 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
   | _ => pure none
 
 partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
+  match methodCast? stx with
+  | some (e, dt) =>
+      let e' ← expandExpr env e
+      let dst ← expandDType dt
+      let srcProof ← e'.dtype.floatProof
+      let dstProof ← dst.floatProof
+      pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape⟩
+  | none =>
   match stx with
   | `(tritonExpr| $n:num) =>
       -- Bare numeric literals are `ℝ` data constants (e.g. `1` in `1 / s`).
@@ -207,12 +229,13 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let neg ← `(Op.sub NumericDType.real $subBc $zero $e'.term)
       pure ⟨← `(Op.where $cond $neg $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) => do
-      let a' ← expandExpr env a
-      let b' ← expandExpr env b
-      ensureDType .bool a'.dtype "tl.logical_and"
-      ensureDType .bool b'.dtype "tl.logical_and"
-      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "tl.logical_and"
-      pure ⟨← `(Op.boolAnd $bc $a'.term $b'.term), .bool, outShape⟩
+      expandBoolBin env "tl.logical_and" (← `(Op.boolAnd)) a b
+  | `(tritonExpr| tl.logical_or($a:tritonExpr, $b:tritonExpr)) => do
+      expandBoolBin env "tl.logical_or" (← `(Op.boolOr)) a b
+  | `(tritonExpr| tl.logical_not($a:tritonExpr)) => do
+      expandBoolNot env "tl.logical_not" a
+  | `(tritonExpr| tl.cdiv($a:tritonExpr, $b:tritonExpr)) => do
+      expandCdiv env a b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
       let a' ← expandExpr env a
       let b' ← expandExpr env b
@@ -325,6 +348,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandCmp env "comparison" (← `(Op.ge)) a b
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => do
       expandCmp env "comparison" (← `(Op.ne)) a b
+  | `(tritonExpr| $a:tritonExpr & $b:tritonExpr) => do
+      expandBoolBin env "boolean &" (← `(Op.boolAnd)) a b
+  | `(tritonExpr| $a:tritonExpr | $b:tritonExpr) => do
+      expandBoolBin env "boolean |" (← `(Op.boolOr)) a b
+  | `(tritonExpr| ~$a:tritonExpr) => do
+      expandBoolNot env "boolean ~" a
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
       match ← expandStaticPtrExpr env stx with
       | some sp =>
@@ -352,6 +381,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandArith env "arithmetic" (← `(Op.mul)) a b
   | `(tritonExpr| $a:tritonExpr / $b:tritonExpr) => do
       expandArith env "arithmetic" (← `(Op.div)) a b
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => do
+      expandIntegralArith env "integer floor division" (← `(Op.floorDiv)) a b
+  | `(tritonExpr| $a:tritonExpr % $b:tritonExpr) => do
+      expandIntegralArith env "integer remainder" (← `(Op.mod)) a b
   | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) => do
       -- All three must converge to a common shape. To stay aligned with
       -- the same-shape `Op.where` AST node, we accept only scalar →
@@ -419,6 +452,46 @@ partial def expandArith (env : Env) (ctx : String) (op : TSyntax `term)
   let np ← a'.dtype.numericProof
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
   pure ⟨← `($op $np $bc $a'.term $b'.term), a'.dtype, outShape⟩
+
+partial def expandIntegralArith (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let ip ← a'.dtype.integralProof
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $ip $bc $a'.term $b'.term), a'.dtype, outShape⟩
+
+partial def expandCdiv (env : Env)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .nat a'.dtype "tl.cdiv lhs"
+  ensureDType .nat b'.dtype "tl.cdiv rhs"
+  let (addBc, outShape) ← broadcastTerm a'.shape b'.shape "tl.cdiv"
+  let (subBc, subShape) ← broadcastTerm outShape SInfo.scalar "tl.cdiv"
+  ensureShape outShape subShape "tl.cdiv"
+  let (divBc, divShape) ← broadcastTerm outShape b'.shape "tl.cdiv"
+  ensureShape outShape divShape "tl.cdiv"
+  let sum ← `(Op.add NumericDType.nat $addBc $a'.term $b'.term)
+  let numerator ← `(Op.sub NumericDType.nat $subBc $sum (Op.constNat 1))
+  pure ⟨← `(Op.div NumericDType.nat $divBc $numerator $b'.term), .nat, outShape⟩
+
+partial def expandBoolBin (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .bool a'.dtype ctx
+  ensureDType .bool b'.dtype ctx
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $bc $a'.term $b'.term), .bool, outShape⟩
+
+partial def expandBoolNot (env : Env) (ctx : String)
+    (a : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  ensureDType .bool a'.dtype ctx
+  pure ⟨← `(Op.boolNot $a'.term), .bool, a'.shape⟩
 
 partial def expandCmp (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do

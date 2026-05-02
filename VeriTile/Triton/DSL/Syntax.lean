@@ -32,6 +32,9 @@ syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.tanh(" tritonExpr ")" : tritonExpr
 syntax "tl.abs(" tritonExpr ")" : tritonExpr
 syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.logical_or(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.logical_not(" tritonExpr ")" : tritonExpr
+syntax "tl.cdiv(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.maximum(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.minimum(" tritonExpr ", " tritonExpr ")" : tritonExpr
@@ -40,6 +43,7 @@ syntax "tl.minimum(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.where(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "tl.cast(" tritonExpr ", " tritonDType ")" : tritonExpr
+syntax:max (name := tritonMethodCast) tritonExpr:max noWs "." "to" "(" tritonDType ")" : tritonExpr
 syntax "-inf" : tritonExpr
 
 syntax "tl.float64" : tritonDType
@@ -83,8 +87,13 @@ syntax:50 tritonExpr:51 " != " tritonExpr:51 : tritonExpr
 
 syntax:60 tritonExpr:60 " + " tritonExpr:61 : tritonExpr
 syntax:60 tritonExpr:60 " - " tritonExpr:61 : tritonExpr
+syntax:55 tritonExpr:55 " & " tritonExpr:56 : tritonExpr
+syntax:54 tritonExpr:54 " | " tritonExpr:55 : tritonExpr
+syntax:75 "~" tritonExpr:76 : tritonExpr
 syntax:70 tritonExpr:70 " * " tritonExpr:71 : tritonExpr
 syntax:70 tritonExpr:70 " / " tritonExpr:71 : tritonExpr
+syntax:70 tritonExpr:70 " // " tritonExpr:71 : tritonExpr
+syntax:70 tritonExpr:70 " % " tritonExpr:71 : tritonExpr
 
 -- Statements
 syntax ident " := " tritonExpr : tritonStmt
