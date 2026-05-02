@@ -3318,6 +3318,186 @@ theorem fa1_score_loop_scoreSlidingWindow_correct
       · simp [sScore, sVis, sDist, sDelta, sRaw, hvReg]
     · simp [sScore, scores]
 
+theorem fa1_score_loop_scoreAlibiSlidingSoftcap_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid qStart window : Nat)
+    (slope softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ)
+    (k : Nat) (sLoad : BlockState) (hk : k < numKVBlocks)
+    (hqStart : qStart = origPid * M)
+    (hP : P_fa1_score_blockrec_loaded qReg kReg vReg origPid Q K V
+      (slidingVisible window qStart)
+      (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+      k hk sLoad) :
+    ∃ sScore,
+      stepStmts
+        (fa1ScoreLoopScoreAlibiSlidingSoftcap M D Bk window scale slope softcap)
+        sLoad = some sScore ∧
+      P_fa1_score_blockrec_scored qReg kReg vReg origPid Q K V
+        (slidingVisible window qStart)
+        (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+        k hk sScore := by
+  subst qStart
+  have hLoaded := hP
+  rcases hP with
+    ⟨hCore, hoffs_n, _hk_ptrs, _hv_ptrs, hkTileReg, _hvTileReg⟩
+  rcases hCore with
+    ⟨_hpidReg, _hpid, hoffs_m, _hoffs_d, hq, _hm, _hl, _ho, _hQ, _hK, _hV⟩
+  let raw : Tile .real [M, Bk] :=
+    rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk)
+  let delta : Tile .real [M, Bk] :=
+    Tile.bop NumericDType.real.sub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+      (Tile.natToReal
+        (Tile.expandDim ⟨0, by simp⟩
+          (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+      (Tile.natToReal
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.vec (fun i : Fin M => origPid * M + i.val))))
+  let dist : Tile .real [M, Bk] :=
+    distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k
+  let biased : Tile .real [M, Bk] :=
+    alibiScoreBlockTile (origPid * M) slope Q K scale k (Nat.succ_le_iff.mpr hk)
+  let capped : Tile .real [M, Bk] :=
+    softcapScoreTile softcap biased
+  let vis : Tile .bool [M, Bk] :=
+    slidingVisibleBlockTile (M := M) (Bk := Bk) (origPid * M) window k
+  let scores : Tile .real [M, Bk] :=
+    scoreBlockLane (slidingVisible window (origPid * M))
+      (fun i j => softcapScore softcap (alibiScore (origPid * M) slope Q K scale i j))
+      k (Nat.succ_le_iff.mpr hk)
+  let sRaw := sLoad.setReg "raw" .real [M, Bk] raw
+  let sDelta := sRaw.setReg "delta" .real [M, Bk] delta
+  let sDist := sDelta.setReg "dist" .real [M, Bk] dist
+  let sBiased := sDist.setReg "biased" .real [M, Bk] biased
+  let sCapped := sBiased.setReg "capped" .real [M, Bk] capped
+  let sVis := sCapped.setReg "visible" .bool [M, Bk] vis
+  let sScore := sVis.setReg "scores" .real [M, Bk] scores
+  refine ⟨sScore, ?_, ?_⟩
+  · simp [fa1ScoreLoopScoreAlibiSlidingSoftcap, stepStmts, stepStmt, evalOp,
+      Option.bind, hq, hkTileReg, hoffs_n, hoffs_m, raw, delta, dist, biased,
+      capped, vis, scores, sRaw, sDelta, sDist, sBiased, sCapped, sVis, sScore]
+    simp only [valueBlock]
+    change ((((((sLoad.setReg "raw" .real [M, Bk]
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
+        "delta" .real [M, Bk] delta).setReg
+        "dist" .real [M, Bk]
+          (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)).setReg
+        "biased" .real [M, Bk]
+          (Tile.bop NumericDType.real.add
+            (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
+            (Tile.bop NumericDType.real.sub Broadcast.scalarL
+              (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+              (Tile.bop NumericDType.real.mul Broadcast.scalarL
+                (Tile.scalar ((slope : ℝ) : WithBot ℝ))
+                (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k))))).setReg
+        "capped" .real [M, Bk]
+          (Tile.bop NumericDType.real.mul Broadcast.scalarL
+            (Tile.scalar ((softcap : ℝ) : WithBot ℝ))
+            (Tile.uop WithBot.realTanh
+              (Tile.bop NumericDType.real.div Broadcast.scalarR
+                (Tile.bop NumericDType.real.add
+                  (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                  (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
+                  (Tile.bop NumericDType.real.sub Broadcast.scalarL
+                    (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+                    (Tile.bop NumericDType.real.mul Broadcast.scalarL
+                      (Tile.scalar ((slope : ℝ) : WithBot ℝ))
+                      (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k))))
+                (Tile.scalar ((softcap : ℝ) : WithBot ℝ)))))).setReg
+        "visible" .bool [M, Bk]
+          (Tile.cop ComparableDType.real.lt Broadcast.scalarR
+            (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)
+            (Tile.scalar (((window : ℝ) : WithBot ℝ))))).setReg
+        "scores" .real [M, Bk]
+          (Tile.select
+            (Tile.cop ComparableDType.real.lt Broadcast.scalarR
+              (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)
+              (Tile.scalar (((window : ℝ) : WithBot ℝ))))
+            (Tile.bop NumericDType.real.mul Broadcast.scalarL
+              (Tile.scalar ((softcap : ℝ) : WithBot ℝ))
+              (Tile.uop WithBot.realTanh
+                (Tile.bop NumericDType.real.div Broadcast.scalarR
+                  (Tile.bop NumericDType.real.add
+                    (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
+                    (Tile.bop NumericDType.real.sub Broadcast.scalarL
+                      (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+                      (Tile.bop NumericDType.real.mul Broadcast.scalarL
+                        (Tile.scalar ((slope : ℝ) : WithBot ℝ))
+                        (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k))))
+                  (Tile.scalar ((softcap : ℝ) : WithBot ℝ)))))
+            (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk])) =
+        ((((((sLoad.setReg "raw" .real [M, Bk]
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
+        "delta" .real [M, Bk] delta).setReg
+        "dist" .real [M, Bk]
+          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
+        "biased" .real [M, Bk] biased).setReg
+        "capped" .real [M, Bk] capped).setReg
+        "visible" .bool [M, Bk] vis).setReg
+        "scores" .real [M, Bk] scores
+    rw [distanceBlockTileNumeric_eq (M := M) (Bk := Bk) (origPid * M) k]
+    rw [alibiScoreBlock_numeric_eq_tile (origPid * M) slope Q K scale k hk]
+    rw [softcapScoreTileNumeric_eq softcap
+      (alibiScoreBlockTile (origPid * M) slope Q K scale k (Nat.succ_le_iff.mpr hk))]
+    change ((((((sLoad.setReg "raw" .real [M, Bk]
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
+        "delta" .real [M, Bk] delta).setReg
+        "dist" .real [M, Bk]
+          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
+        "biased" .real [M, Bk] biased).setReg
+        "capped" .real [M, Bk] capped).setReg
+        "visible" .bool [M, Bk] vis).setReg
+        "scores" .real [M, Bk]
+          (Tile.select vis capped
+            (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk])) =
+        ((((((sLoad.setReg "raw" .real [M, Bk]
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
+        "delta" .real [M, Bk] delta).setReg
+        "dist" .real [M, Bk]
+          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
+        "biased" .real [M, Bk] biased).setReg
+        "capped" .real [M, Bk] capped).setReg
+        "visible" .bool [M, Bk] vis).setReg
+        "scores" .real [M, Bk] scores
+    rw [show Tile.select vis capped
+        (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk]) =
+        scores by
+      simp [vis, capped, biased, scores]
+      exact alibiSlidingSoftcapScoreBlock_numeric_tile_eq
+        (origPid * M) window slope softcap Q K scale k hk]
+  · refine ⟨?_, ?_⟩
+    · rcases hLoaded with
+        ⟨hCore, hoffs_n, hk_ptrs, hv_ptrs, hkReg, hvReg⟩
+      rcases hCore with
+        ⟨hpidReg, hpid, hoffs_m, hoffs_d, hq, hm, hl, ho, hQ, hK, hV⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+      · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+        · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hpidReg]
+        · simpa [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw] using hpid
+        · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hoffs_m]
+        · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hoffs_d]
+        · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hq]
+        · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hm]
+        · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hl]
+        · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, ho]
+        · intro idx
+          simpa [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw] using hQ idx
+        · intro idx
+          simpa [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw] using hK idx
+        · intro idx
+          simpa [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw] using hV idx
+      · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hoffs_n]
+      · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hk_ptrs]
+      · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hv_ptrs]
+      · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hkReg]
+      · simp [sScore, sVis, sCapped, sBiased, sDist, sDelta, sRaw, hvReg]
+    · simp [sScore, scores]
+
 theorem fa1_score_preLoop_correct
     {M D S : Nat}
     (qReg kReg vReg : RegionName)
