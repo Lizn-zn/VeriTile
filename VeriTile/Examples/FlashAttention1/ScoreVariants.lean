@@ -682,6 +682,15 @@ theorem alibiBias_toWithBot (slope : ℝ) (qPos kPos : Nat) :
     ((-slope * (natAbsDiff qPos kPos : ℝ) : ℝ) : WithBot ℝ)
   ring_nf
 
+theorem alibiBiasSub_toWithBot (slope : ℝ) (qPos kPos : Nat) :
+    WithBot.realSub ((0 : ℝ) : WithBot ℝ)
+      (WithBot.realMul ((slope : ℝ) : WithBot ℝ)
+        (((natAbsDiff qPos kPos : ℝ) : WithBot ℝ))) =
+      ((alibiBias slope qPos kPos : ℝ) : WithBot ℝ) := by
+  change (((0 - slope * (natAbsDiff qPos kPos : ℝ) : ℝ)) : WithBot ℝ) =
+    ((-slope * (natAbsDiff qPos kPos : ℝ) : ℝ) : WithBot ℝ)
+  ring_nf
+
 theorem alibiScore_lane_eq {M S D : Nat}
     (qStart : Nat) (slope : ℝ)
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
@@ -2128,6 +2137,71 @@ theorem slidingVisibleBlock_tile_eq {M Bk numKVBlocks : Nat}
       WithBot ℝ) < (((window : Nat) : ℝ) : WithBot ℝ))
     rw [WithBot.coe_lt_coe]
     exact_mod_cast hlt
+
+theorem alibiScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
+    (qStart : Nat) (slope : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < numKVBlocks) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.dot [] (Tile.ofReal Q)
+          (Tile.transpose [] (Tile.ofReal
+            (fun idx : TileIndex [Bk, D] =>
+              K (scoreBlockIndex Bk numKVBlocks k
+                (Nat.succ_le_iff.mpr hk) idx.1, idx.2.1, PUnit.unit)))))
+        (Tile.scalar ((scale : ℝ) : WithBot ℝ)))
+      (Tile.bop WithBot.realSub Broadcast.scalarL
+        (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+        (Tile.bop WithBot.realMul Broadcast.scalarL
+          (Tile.scalar ((slope : ℝ) : WithBot ℝ))
+          (Tile.bop max (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Tile.bop WithBot.realSub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+              (Tile.natToReal
+                (Tile.expandDim ⟨0, by simp⟩
+                  (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+              (Tile.natToReal
+                (Tile.expandDim ⟨1, by simp⟩
+                  (Tile.vec (fun i : Fin M => qStart + i.val)))))
+            (Tile.bop WithBot.realSub Broadcast.scalarL
+              (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+              (Tile.bop WithBot.realSub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+                (Tile.natToReal
+                  (Tile.expandDim ⟨0, by simp⟩
+                    (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+                (Tile.natToReal
+                  (Tile.expandDim ⟨1, by simp⟩
+                    (Tile.vec (fun i : Fin M => qStart + i.val)))))))))
+      =
+      scoreBlockLane allVisible (alibiScore qStart slope Q K scale) k
+        (Nat.succ_le_iff.mpr hk) := by
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  cases u
+  simp only [Tile.bop, Tile.scalar, Tile.natToReal, Tile.expandDim_data,
+    Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex, NumericDType.mul]
+  unfold scoreBlockIndex
+  rw [FA1Math.block_scaled_data_eq Q K scale k hk i j]
+  have hdist :
+      max (WithBot.realSub (some (((k * Bk + j.val : Nat) : ℝ)))
+            (some (((qStart + i.val : Nat) : ℝ))))
+          (WithBot.realSub (((0 : ℝ) : WithBot ℝ))
+            (WithBot.realSub (some (((k * Bk + j.val : Nat) : ℝ)))
+              (some (((qStart + i.val : Nat) : ℝ))))) =
+        (((natAbsDiff (qStart + i.val) (k * Bk + j.val) : Nat) : ℝ) :
+          WithBot ℝ) := by
+    change (((max (((k * Bk + j.val : Nat) : ℝ) - ((qStart + i.val : Nat) : ℝ))
+        (0 - (((k * Bk + j.val : Nat) : ℝ) - ((qStart + i.val : Nat) : ℝ))) : ℝ) :
+        WithBot ℝ) =
+      (((natAbsDiff (qStart + i.val) (k * Bk + j.val) : Nat) : ℝ) :
+        WithBot ℝ))
+    rw [real_max_delta_eq_natAbsDiff]
+  rw [hdist]
+  rw [alibiBiasSub_toWithBot slope (qStart + i.val) (k * Bk + j.val)]
+  simpa [scoreBlockLane, scoreBlockIndex, FA1Math.blockIndex] using
+    alibiScore_lane_eq qStart slope Q K scale i
+      (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
 
 def P_fa1_score_blockrec
     {M D Bk numKVBlocks : Nat}
