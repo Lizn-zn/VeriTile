@@ -235,6 +235,40 @@ def fa1ForwardKernelAlibiSlidingSoftcap
 def natAbsDiff (a b : Nat) : Nat :=
   if a ≤ b then b - a else a - b
 
+theorem real_max_delta_eq_natAbsDiff (a b : Nat) :
+    max ((b : ℝ) - (a : ℝ)) (0 - ((b : ℝ) - (a : ℝ))) =
+      (natAbsDiff a b : ℝ) := by
+  unfold natAbsDiff
+  by_cases h : a ≤ b
+  · rw [if_pos h]
+    rw [Nat.cast_sub h]
+    rw [show 0 - ((b : ℝ) - (a : ℝ)) = (a : ℝ) - (b : ℝ) by ring]
+    have hreal : (a : ℝ) ≤ b := by exact_mod_cast h
+    have hnonneg : 0 ≤ (b : ℝ) - (a : ℝ) := by nlinarith
+    rw [max_eq_left]
+    nlinarith [hnonneg]
+  · rw [if_neg h]
+    have hb : b ≤ a := Nat.le_of_lt (Nat.lt_of_not_ge h)
+    rw [Nat.cast_sub hb]
+    rw [show 0 - ((b : ℝ) - (a : ℝ)) = (a : ℝ) - (b : ℝ) by ring]
+    have hreal : (b : ℝ) ≤ a := by exact_mod_cast hb
+    have hle0 : (b : ℝ) - (a : ℝ) ≤ 0 := by nlinarith
+    rw [max_eq_right]
+    nlinarith [hle0]
+
+theorem withBot_natAbsDiff_lt_window (dist window : Nat) :
+    decide ((((dist : ℝ) : WithBot ℝ) < (((window : ℝ) : WithBot ℝ)))) =
+      decide (dist < window) := by
+  by_cases h : dist < window
+  · rw [decide_eq_true h]
+    rw [decide_eq_true]
+    exact_mod_cast h
+  · rw [decide_eq_false h]
+    rw [decide_eq_false]
+    intro hlt
+    apply h
+    exact_mod_cast hlt
+
 /-- Generic attention over an explicit real score function. -/
 noncomputable def attentionRealScore {M S D : Nat}
     (score : Fin M → Fin S → ℝ)
@@ -2014,6 +2048,86 @@ theorem softcapScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
   rw [FA1Math.block_scaled_data_eq Q K scale k hk i j]
   exact softcapScore_lane_eq softcap Q K scale i
     (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
+
+theorem distanceBlock_tile_eq {M Bk numKVBlocks : Nat}
+    (qStart : Nat) (k : Nat) (hk : k < numKVBlocks) :
+    Tile.bop max (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Tile.bop WithBot.realSub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Tile.natToReal
+          (Tile.expandDim ⟨0, by simp⟩
+            (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+        (Tile.natToReal
+          (Tile.expandDim ⟨1, by simp⟩
+            (Tile.vec (fun i : Fin M => qStart + i.val)))))
+      (Tile.bop WithBot.realSub Broadcast.scalarL
+        (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+        (Tile.bop WithBot.realSub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+          (Tile.natToReal
+            (Tile.expandDim ⟨0, by simp⟩
+              (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+          (Tile.natToReal
+            (Tile.expandDim ⟨1, by simp⟩
+              (Tile.vec (fun i : Fin M => qStart + i.val))))))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, Bk] =>
+        (natAbsDiff (qStart + idx.1.val)
+          (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) idx.2.1).val :
+            Nat)) := by
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  cases u
+  simp only [Tile.bop, Tile.scalar, Tile.natToReal, Tile.expandDim_data,
+    Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex, Tile.ofReal_data]
+  unfold scoreBlockIndex
+  change (((max (((k * Bk + j.val : Nat) : ℝ) - ((qStart + i.val : Nat) : ℝ))
+        (0 - (((k * Bk + j.val : Nat) : ℝ) - ((qStart + i.val : Nat) : ℝ))) : ℝ) :
+        WithBot ℝ) =
+      (((natAbsDiff (qStart + i.val) (k * Bk + j.val) : Nat) : ℝ) : WithBot ℝ))
+  rw [real_max_delta_eq_natAbsDiff]
+
+theorem slidingVisibleBlock_tile_eq {M Bk numKVBlocks : Nat}
+    (qStart window : Nat) (k : Nat) (hk : k < numKVBlocks) :
+    Tile.cop ComparableDType.real.lt Broadcast.scalarR
+      (Tile.bop max (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Tile.bop WithBot.realSub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+          (Tile.natToReal
+            (Tile.expandDim ⟨0, by simp⟩
+              (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+          (Tile.natToReal
+            (Tile.expandDim ⟨1, by simp⟩
+              (Tile.vec (fun i : Fin M => qStart + i.val)))))
+        (Tile.bop WithBot.realSub Broadcast.scalarL
+          (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+          (Tile.bop WithBot.realSub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+            (Tile.natToReal
+              (Tile.expandDim ⟨0, by simp⟩
+                (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+            (Tile.natToReal
+              (Tile.expandDim ⟨1, by simp⟩
+                (Tile.vec (fun i : Fin M => qStart + i.val)))))))
+      (Tile.scalar (((window : ℝ) : WithBot ℝ)))
+      =
+      visibleBlock (slidingVisible window qStart) k (Nat.succ_le_iff.mpr hk) := by
+  rw [distanceBlock_tile_eq qStart k hk]
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  cases u
+  simp only [Tile.cop, Tile.scalar, Tile.ofReal_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, ComparableDType.lt]
+  unfold visibleBlock slidingVisible scoreBlockIndex
+  simp [FA1Math.blockIndex]
+  constructor
+  · intro hlt
+    change ((((natAbsDiff (qStart + i.val) (k * Bk + j.val) : Nat) : ℝ) :
+      WithBot ℝ) < (((window : Nat) : ℝ) : WithBot ℝ)) at hlt
+    rw [WithBot.coe_lt_coe] at hlt
+    exact_mod_cast hlt
+  · intro hlt
+    change ((((natAbsDiff (qStart + i.val) (k * Bk + j.val) : Nat) : ℝ) :
+      WithBot ℝ) < (((window : Nat) : ℝ) : WithBot ℝ))
+    rw [WithBot.coe_lt_coe]
+    exact_mod_cast hlt
 
 def P_fa1_score_blockrec
     {M D Bk numKVBlocks : Nat}
