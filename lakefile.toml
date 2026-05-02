@@ -14,6 +14,8 @@ name = "VeriTile"
 globs = [
   "VeriTile.Triton.+",
   "VeriTile.Examples.Common",
+  "VeriTile.Examples.TritonSmoke",
+  "VeriTile.Examples.LoopInvariant",
   "VeriTile.Examples.SoftmaxEq",
   "VeriTile.Examples.LogSumExpEq",
   "VeriTile.Examples.SoftmaxReciprocal",

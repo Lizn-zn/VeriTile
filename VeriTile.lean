@@ -10,7 +10,8 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Memory
 import VeriTile.Triton.LoopInvariant
-import VeriTile.Triton.Examples
+import VeriTile.Examples.TritonSmoke
+import VeriTile.Examples.LoopInvariant
 import VeriTile.Examples.SoftmaxEq
 import VeriTile.Examples.LogSumExpEq
 import VeriTile.Examples.SoftmaxReciprocal

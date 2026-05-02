@@ -1,5 +1,5 @@
 /-
-VeriTile.Triton.Examples
+VeriTile.Examples.TritonSmoke
 
 Small smoke tests for the typed Triton core.
 -/
@@ -8,7 +8,9 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.DSL
 
-namespace VeriTile.Triton.Examples
+namespace VeriTile.Examples.TritonSmoke
+
+open VeriTile.Triton
 
 /-- Smoke test for scalar-pointer load/store syntax. -/
 def scalarCopyKernel (xReg yReg : RegionName) : Kernel := triton {
@@ -309,4 +311,4 @@ example :
     mT.data (⟨2, by decide⟩, ⟨1, by decide⟩, PUnit.unit) =
       m.data (⟨1, by decide⟩, ⟨2, by decide⟩, PUnit.unit) := rfl
 
-end VeriTile.Triton.Examples
+end VeriTile.Examples.TritonSmoke
