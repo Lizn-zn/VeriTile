@@ -2962,6 +2962,1017 @@ theorem streaming_eq_attentionReal {M D Bk : Nat} (hBk : 0 < Bk)
 
 end FA1MathBoundary
 
+/-! ## Causal boundary streaming math model
+
+Combines the KV boundary mask with the causal `j <= qStart + i` mask.
+Out-of-range or future lanes are represented as `⊥`, matching the
+causal-boundary kernel's two `tl.where(..., -inf)` stages. -/
+
+namespace FA1MathCausalBoundary
+
+/-- `WithBot.realExp` is never bottom, so it is equal to its `unbotD`
+payload rewrapped as `some`. -/
+theorem realExp_eq_some_unbotD (x : WithBot ℝ) :
+    WithBot.realExp x = some ((WithBot.realExp x).unbotD 0) := by
+  cases x <;> rfl
+
+@[simp] theorem realExp_realSub_bot_unbotD (m : WithBot ℝ) :
+    (WithBot.realExp (WithBot.realSub (⊥ : WithBot ℝ) m)).unbotD 0 = 0 := by
+  cases m <;> rfl
+
+@[simp] theorem realExp_optionMap_sub_bot_unbotD (m : WithBot ℝ) :
+    (WithBot.realExp (Option.map₂ (fun x y : ℝ => x - y) (⊥ : WithBot ℝ) m)).unbotD 0 = 0 := by
+  cases m <;> rfl
+
+/-- Causal + boundary masked score for a padded loop lane. -/
+noncomputable def maskedScore {M S_k D : Nat}
+    (Bk k qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (jLocal : Fin Bk) : WithBot ℝ :=
+  match FA1MathBoundary.blockIndex? S_k Bk k jLocal with
+  | some j =>
+      if j.val ≤ qStart + i.val then
+        (FA1Math.scaledScore Q K scale i j : ℝ)
+      else
+        ⊥
+  | none => ⊥
+
+@[simp] theorem maskedScore_of_lt_of_le {M S_k D : Nat}
+    (Bk k qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (jLocal : Fin Bk)
+    (hLt : k * Bk + jLocal.val < S_k)
+    (hLe : k * Bk + jLocal.val ≤ qStart + i.val) :
+    maskedScore Bk k qStart Q K scale i jLocal =
+      ((FA1Math.scaledScore Q K scale i
+        ⟨k * Bk + jLocal.val, hLt⟩ : ℝ) : WithBot ℝ) := by
+  simp [maskedScore, FA1MathBoundary.blockIndex?_of_lt, hLt, hLe]
+
+@[simp] theorem maskedScore_of_lt_of_not_le {M S_k D : Nat}
+    (Bk k qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (jLocal : Fin Bk)
+    (hLt : k * Bk + jLocal.val < S_k)
+    (hLe : ¬ k * Bk + jLocal.val ≤ qStart + i.val) :
+    maskedScore Bk k qStart Q K scale i jLocal = (⊥ : WithBot ℝ) := by
+  simp [maskedScore, FA1MathBoundary.blockIndex?_of_lt, hLt, hLe]
+
+@[simp] theorem maskedScore_of_not_lt {M S_k D : Nat}
+    (Bk k qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (i : Fin M) (jLocal : Fin Bk)
+    (hLt : ¬ k * Bk + jLocal.val < S_k) :
+    maskedScore Bk k qStart Q K scale i jLocal = (⊥ : WithBot ℝ) := by
+  simp [maskedScore, FA1MathBoundary.blockIndex?_of_not_lt, hLt]
+
+/-- Running per-row max over the first `k` padded KV blocks. -/
+noncomputable def mPartial {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ) :
+    Nat → Fin M → WithBot ℝ
+  | 0, _ => ⊥
+  | k + 1, i =>
+      if _h : k + 1 ≤ numKVBlocks then
+        max (mPartial Bk qStart Q numKVBlocks K scale k i)
+          ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+            maskedScore Bk k qStart Q K scale i jLocal)
+      else
+        mPartial Bk qStart Q numKVBlocks K scale k i
+
+/-- Boundary-causal α multiplier `exp(m_k - m_{k+1})`. -/
+noncomputable def alphaPartial {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (i : Fin M) : ℝ :=
+  (WithBot.realExp
+    (WithBot.realSub
+      (mPartial Bk qStart Q numKVBlocks K scale k i)
+      (mPartial Bk qStart Q numKVBlocks K scale (k + 1) i))).unbotD 0
+
+/-- Boundary-causal running normalizer. -/
+noncomputable def lPartial {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ) :
+    Nat → Fin M → ℝ
+  | 0, _ => 0
+  | k + 1, i =>
+      if _h : k + 1 ≤ numKVBlocks then
+        let mNew := mPartial Bk qStart Q numKVBlocks K scale (k + 1) i
+        alphaPartial Bk qStart Q numKVBlocks K scale k i *
+          lPartial Bk qStart Q numKVBlocks K scale k i +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            (WithBot.realExp
+              (WithBot.realSub
+                (maskedScore Bk k qStart Q K scale i jLocal) mNew)).unbotD 0)
+      else
+        lPartial Bk qStart Q numKVBlocks K scale k i
+
+/-- Boundary-causal running unnormalized output accumulator. -/
+noncomputable def oPartial {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ) :
+    Nat → TileIndex [M, D] → ℝ
+  | 0, _ => 0
+  | k + 1, idx =>
+      if _h : k + 1 ≤ numKVBlocks then
+        let i := idx.1
+        let d := idx.2.1
+        let mNew := mPartial Bk qStart Q numKVBlocks K scale (k + 1) i
+        alphaPartial Bk qStart Q numKVBlocks K scale k i *
+          oPartial Bk qStart Q numKVBlocks K V scale k idx +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            match FA1MathBoundary.blockIndex? S_k Bk k jLocal with
+            | some j =>
+                if j.val ≤ qStart + i.val then
+                  (WithBot.realExp
+                    (WithBot.realSub
+                      (maskedScore Bk k qStart Q K scale i jLocal) mNew)).unbotD 0 *
+                    V (j, d, PUnit.unit)
+                else
+                  0
+            | none => 0)
+      else
+        oPartial Bk qStart Q numKVBlocks K V scale k idx
+
+theorem mPartial_succ_of_lt {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    mPartial Bk qStart Q numKVBlocks K scale (k + 1) i =
+      max (mPartial Bk qStart Q numKVBlocks K scale k i)
+        ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+          maskedScore Bk k qStart Q K scale i jLocal) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      max (mPartial Bk qStart Q numKVBlocks K scale k i)
+        ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
+          maskedScore Bk k qStart Q K scale i jLocal)
+    else mPartial Bk qStart Q numKVBlocks K scale k i) = _
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+theorem lPartial_succ_of_lt {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (i : Fin M) :
+    lPartial Bk qStart Q numKVBlocks K scale (k + 1) i =
+      let mNew := mPartial Bk qStart Q numKVBlocks K scale (k + 1) i
+      alphaPartial Bk qStart Q numKVBlocks K scale k i *
+        lPartial Bk qStart Q numKVBlocks K scale k i +
+        (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          (WithBot.realExp
+            (WithBot.realSub
+              (maskedScore Bk k qStart Q K scale i jLocal) mNew)).unbotD 0) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      (let mNew := mPartial Bk qStart Q numKVBlocks K scale (k + 1) i
+       alphaPartial Bk qStart Q numKVBlocks K scale k i *
+          lPartial Bk qStart Q numKVBlocks K scale k i +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            (WithBot.realExp
+              (WithBot.realSub
+                (maskedScore Bk k qStart Q K scale i jLocal) mNew)).unbotD 0))
+    else lPartial Bk qStart Q numKVBlocks K scale k i) = _
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+theorem oPartial_succ_of_lt {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < numKVBlocks) (idx : TileIndex [M, D]) :
+    oPartial Bk qStart Q numKVBlocks K V scale (k + 1) idx =
+      let i := idx.1
+      let d := idx.2.1
+      let mNew := mPartial Bk qStart Q numKVBlocks K scale (k + 1) i
+      alphaPartial Bk qStart Q numKVBlocks K scale k i *
+        oPartial Bk qStart Q numKVBlocks K V scale k idx +
+        (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+          match FA1MathBoundary.blockIndex? S_k Bk k jLocal with
+          | some j =>
+              if j.val ≤ qStart + i.val then
+                (WithBot.realExp
+                  (WithBot.realSub
+                    (maskedScore Bk k qStart Q K scale i jLocal) mNew)).unbotD 0 *
+                  V (j, d, PUnit.unit)
+              else
+                0
+          | none => 0) := by
+  change (if h : k + 1 ≤ numKVBlocks then
+      (let i := idx.1
+       let d := idx.2.1
+       let mNew := mPartial Bk qStart Q numKVBlocks K scale (k + 1) i
+       alphaPartial Bk qStart Q numKVBlocks K scale k i *
+          oPartial Bk qStart Q numKVBlocks K V scale k idx +
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            match FA1MathBoundary.blockIndex? S_k Bk k jLocal with
+            | some j =>
+                if j.val ≤ qStart + i.val then
+                  (WithBot.realExp
+                    (WithBot.realSub
+                      (maskedScore Bk k qStart Q K scale i jLocal) mNew)).unbotD 0 *
+                    V (j, d, PUnit.unit)
+                else
+                  0
+            | none => 0))
+    else oPartial Bk qStart Q numKVBlocks K V scale k idx) = _
+  rw [dif_pos (Nat.succ_le_iff.mpr hk)]
+
+/-- Boundary score mask `offs_n < S_k` lifted to the `[M, Bk]` score tile. -/
+theorem block_score_mask_tile_eq {M Bk S_k : Nat} (k : Nat) :
+    (Tile.cop (ComparableDType.nat.lt)
+      Broadcast.scalarR
+      (Tile.bop NumericDType.nat.add (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Tile.bop NumericDType.nat.mul Broadcast.scalarR
+          (Tile.expandDim ⟨1, by simp⟩
+            (Tile.vec (fun i : Fin M => i.val)))
+          (Tile.scalar 0))
+        (Tile.expandDim ⟨0, by simp⟩
+          (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+      (Tile.scalar S_k))
+      = ⟨fun idx : TileIndex [M, Bk] =>
+          decide (k * Bk + idx.2.1.val < S_k)⟩ := by
+  ext idx
+  obtain ⟨i, j, _⟩ := idx
+  simp only [Tile.cop, Tile.bop, ComparableDType.lt, NumericDType.add,
+    NumericDType.mul, Tile.expandDim_data, Tile.vec_data, Tile.scalar_data_index,
+    Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex]
+  simp
+
+/-- Causal mask `offs_m[:, None] >= offs_n[None, :]`, stated against the
+same `qStart` used by the recurrence. -/
+theorem block_causal_mask_tile_eq {M Bk : Nat} (qStart k : Nat) :
+    (Tile.cop (ComparableDType.nat.ge)
+      (Broadcast.consR (Broadcast.consL Broadcast.nil))
+      (Tile.expandDim ⟨1, by simp⟩
+        (Tile.vec (fun i : Fin M => qStart + i.val)))
+      (Tile.expandDim ⟨0, by simp⟩
+        (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+      = ⟨fun idx : TileIndex [M, Bk] =>
+          decide ((k * Bk + idx.2.1.val) ≤ (qStart + idx.1.val))⟩ := by
+  ext idx
+  obtain ⟨i, j, _⟩ := idx
+  simp [Tile.cop, ComparableDType.ge, Tile.expandDim, Tile.vec,
+    Broadcast.leftIndex, Broadcast.rightIndex, TileShape.dropInsertedIndex]
+
+/-- Applying the causal mask and then the boundary score mask to the raw
+score tile produces exactly `maskedScore`. -/
+theorem block_scores_tile_eq {M S_k D Bk : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) :
+    Tile.select
+      (⟨fun idx : TileIndex [M, Bk] =>
+        decide (k * Bk + idx.2.1.val < S_k)⟩ : Tile .bool [M, Bk])
+      (Tile.select
+        (⟨fun idx : TileIndex [M, Bk] =>
+          decide ((k * Bk + idx.2.1.val) ≤ (qStart + idx.1.val))⟩ :
+            Tile .bool [M, Bk])
+        (Tile.ofReal (fun idx : TileIndex [M, Bk] =>
+          match FA1MathBoundary.blockIndex? S_k Bk k idx.2.1 with
+          | some j => FA1Math.scaledScore Q K scale idx.1 j
+          | none => 0))
+        (⟨fun _ : TileIndex [M, Bk] => (none : WithBot ℝ)⟩ : Tile .real [M, Bk]))
+      (⟨fun _ : TileIndex [M, Bk] => (none : WithBot ℝ)⟩ : Tile .real [M, Bk])
+    = ⟨fun idx : TileIndex [M, Bk] =>
+        maskedScore Bk k qStart Q K scale idx.1 idx.2.1⟩ := by
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  cases u
+  simp only [Tile.select_data, Tile.ofReal_data]
+  by_cases hLt : k * Bk + j.val < S_k
+  · rw [decide_eq_true hLt]
+    simp only [if_true]
+    by_cases hLe : k * Bk + j.val ≤ qStart + i.val
+    · rw [decide_eq_true hLe]
+      simp [FA1MathBoundary.blockIndex?_of_lt, maskedScore_of_lt_of_le,
+        hLt, hLe]
+      rfl
+    · rw [decide_eq_false hLe]
+      simp [maskedScore_of_lt_of_not_le, hLt, hLe]
+      rfl
+  · rw [decide_eq_false hLt]
+    simp [maskedScore_of_not_lt, hLt]
+    rfl
+
+/-- Row-max of the causal-boundary masked scores tile. -/
+theorem block_mBlock_tile_eq {M S_k D Bk : Nat} (hBk : 0 < Bk)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) :
+    Tile.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
+      ⟨fun idx : TileIndex [M, Bk] =>
+        maskedScore Bk k qStart Q K scale idx.1 idx.2.1⟩
+    = some ⟨fun idx : TileIndex [M] =>
+        (Finset.univ : Finset (Fin Bk)).sup
+          (fun jLocal => maskedScore Bk k qStart Q K scale idx.1 jLocal)⟩ := by
+  unfold Tile.reduceMax
+  simp [Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, hBk]
+  funext idx
+  rw [Finset.sup'_eq_sup]
+  rfl
+
+/-- Boundary-causal loop-local `m_new = max(m_i, m_block)` realizes the
+streaming `mPartial` recurrence. -/
+theorem block_mNew_tile_eq {M S_k D Bk N : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.bop max (Broadcast.consSame Broadcast.nil)
+      (⟨fun idx : TileIndex [M] => mPartial Bk qStart Q N K scale k idx.1⟩ : Tile .real [M])
+      (⟨fun idx : TileIndex [M] =>
+        (Finset.univ : Finset (Fin Bk)).sup
+          (fun j => maskedScore Bk k qStart Q K scale idx.1 j)⟩ : Tile .real [M])
+      =
+      ⟨fun idx : TileIndex [M] => mPartial Bk qStart Q N K scale (k + 1) idx.1⟩ := by
+  ext idx
+  simp [Tile.bop]
+  rw [mPartial_succ_of_lt Bk qStart Q N K scale k hk idx.1]
+
+/-- Boundary-causal loop-local `l_new` expression realizes the streaming
+`lPartial` recurrence. -/
+theorem block_lNew_tile_eq {M S_k D Bk N : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < N) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame Broadcast.nil)
+      (Tile.bop WithBot.realMul (Broadcast.consSame Broadcast.nil)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          alphaPartial Bk qStart Q N K scale k idx.1)
+        (Tile.ofReal fun idx : TileIndex [M] =>
+          lPartial Bk qStart Q N K scale k idx.1))
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        Finset.univ.sum (fun j : Fin Bk =>
+          (WithBot.realExp
+            (WithBot.realSub
+              (maskedScore Bk k qStart Q K scale idx.1 j)
+              (mPartial Bk qStart Q N K scale (k + 1) idx.1))).unbotD 0))
+      =
+      Tile.ofReal (fun idx : TileIndex [M] =>
+        lPartial Bk qStart Q N K scale (k + 1) idx.1) := by
+  ext idx
+  simp [Tile.bop, Tile.ofReal]
+  rw [lPartial_succ_of_lt Bk qStart Q N K scale k hk idx.1]
+  simp [WithBot.realSub]
+
+/-- Boundary-causal loop-local `o_acc` update realizes the streaming
+`oPartial` recurrence. -/
+theorem block_oAcc_tile_eq {M S_k D Bk N : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k < N) :
+    Tile.bop WithBot.realAdd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Tile.bop WithBot.realMul (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.ofReal fun idx : TileIndex [M] =>
+            alphaPartial Bk qStart Q N K scale k idx.1))
+        (Tile.ofReal fun idx : TileIndex [M, D] =>
+          oPartial Bk qStart Q N K V scale k idx))
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        Finset.univ.sum (fun j : Fin Bk =>
+          match FA1MathBoundary.blockIndex? S_k Bk k j with
+          | some jGlobal =>
+              if jGlobal.val ≤ qStart + idx.1.val then
+                (WithBot.realExp
+                  (WithBot.realSub
+                    (maskedScore Bk k qStart Q K scale idx.1 j)
+                    (mPartial Bk qStart Q N K scale (k + 1) idx.1))).unbotD 0 *
+                  V (jGlobal, idx.2.1, PUnit.unit)
+              else
+                0
+          | none => 0))
+      =
+      Tile.ofReal (fun idx : TileIndex [M, D] =>
+        oPartial Bk qStart Q N K V scale (k + 1) idx) := by
+  ext idx
+  rcases idx with ⟨i, d, u⟩
+  cases u
+  simp [Tile.bop, Tile.expandDim, Tile.ofReal, TileShape.dropInsertedIndex]
+  rw [oPartial_succ_of_lt Bk qStart Q N K V scale k hk (i, d, PUnit.unit)]
+  simp [WithBot.realSub]
+
+/-! ### Causal boundary m-free reference sums -/
+
+/-- Causal-boundary m-free normalizer over the first `k` padded KV blocks.
+Out-of-range and future lanes contribute zero mass. -/
+noncomputable def lFreeBoundary {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (i : Fin M) : ℝ :=
+  Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
+    match FA1MathBoundary.blockIndex? S_k Bk n.val jL with
+    | some j =>
+        if j.val ≤ qStart + i.val then
+          Real.exp (FA1Math.scaledScore Q K scale i j)
+        else
+          0
+    | none => 0))
+
+/-- Causal-boundary m-free unnormalized output over the first `k` padded
+KV blocks. -/
+noncomputable def oFreeBoundary {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (idx : TileIndex [M, D]) : ℝ :=
+  Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
+    match FA1MathBoundary.blockIndex? S_k Bk n.val jL with
+    | some j =>
+        (if j.val ≤ qStart + idx.1.val then
+          Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+        else
+          0) * V (j, idx.2.1, PUnit.unit)
+    | none => 0))
+
+@[simp] theorem lFreeBoundary_zero {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (i : Fin M) :
+    lFreeBoundary Bk qStart Q K scale 0 i = 0 := by
+  unfold lFreeBoundary
+  simp
+
+@[simp] theorem oFreeBoundary_zero {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    oFreeBoundary Bk qStart Q K V scale 0 idx = 0 := by
+  unfold oFreeBoundary
+  simp
+
+/-- Recurrence: `lFreeBoundary (k+1)` adds the next masked causal block. -/
+theorem lFreeBoundary_succ {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (i : Fin M) :
+    lFreeBoundary Bk qStart Q K scale (k + 1) i =
+      lFreeBoundary Bk qStart Q K scale k i +
+      Finset.univ.sum (fun jL : Fin Bk =>
+        match FA1MathBoundary.blockIndex? S_k Bk k jL with
+        | some j =>
+            if j.val ≤ qStart + i.val then
+              Real.exp (FA1Math.scaledScore Q K scale i j)
+            else
+              0
+        | none => 0) := by
+  unfold lFreeBoundary
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+/-- Recurrence: `oFreeBoundary (k+1)` adds the next masked causal block. -/
+theorem oFreeBoundary_succ {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (idx : TileIndex [M, D]) :
+    oFreeBoundary Bk qStart Q K V scale (k + 1) idx =
+      oFreeBoundary Bk qStart Q K V scale k idx +
+      Finset.univ.sum (fun jL : Fin Bk =>
+        match FA1MathBoundary.blockIndex? S_k Bk k jL with
+        | some j =>
+            (if j.val ≤ qStart + idx.1.val then
+              Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+            else
+              0) * V (j, idx.2.1, PUnit.unit)
+        | none => 0) := by
+  unfold oFreeBoundary
+  rw [Fin.sum_univ_castSucc]
+  simp [Fin.val_last]
+
+/-- Flat-index form of the final causal-boundary normalizer. -/
+theorem lFreeBoundary_eq_flat {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (numKVBlocks : Nat) (i : Fin M) :
+    lFreeBoundary Bk qStart Q K scale numKVBlocks i =
+      Finset.univ.sum (fun j' : Fin (Bk * numKVBlocks) =>
+        if h : j'.val < S_k then
+          if j'.val ≤ qStart + i.val then
+            Real.exp (FA1Math.scaledScore Q K scale i ⟨j'.val, h⟩)
+          else
+            0
+        else
+          0) := by
+  unfold lFreeBoundary
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  · intro _; simp
+  · intro j' _
+    set p := FA1Math.blockIndexEquiv Bk numKVBlocks j' with hp
+    show (if h : j'.val < S_k then
+            if j'.val ≤ qStart + i.val then
+              Real.exp (FA1Math.scaledScore Q K scale i ⟨j'.val, h⟩)
+            else
+              0
+          else
+            0)
+        = (match FA1MathBoundary.blockIndex? S_k Bk p.1.val p.2 with
+          | some j =>
+              if j.val ≤ qStart + i.val then
+                Real.exp (FA1Math.scaledScore Q K scale i j)
+              else
+                0
+          | none => 0)
+    have hValEq : p.1.val * Bk + p.2.val = j'.val := by
+      have hBI := FA1Math.blockIndex_blockIndexEquiv (Bk := Bk) (N := numKVBlocks) j'
+      have h1 := congrArg Fin.val hBI
+      change p.1.val * Bk + p.2.val = j'.val at h1
+      exact h1
+    by_cases hLt : p.1.val * Bk + p.2.val < S_k
+    · rw [FA1MathBoundary.blockIndex?_of_lt S_k Bk p.1.val p.2 hLt]
+      have hLt' : j'.val < S_k := hValEq ▸ hLt
+      rw [dif_pos hLt']
+      have hFinEq : (⟨p.1.val * Bk + p.2.val, hLt⟩ : Fin S_k) =
+          ⟨j'.val, hLt'⟩ := Fin.ext hValEq
+      rw [hFinEq]
+    · rw [FA1MathBoundary.blockIndex?_of_not_lt S_k Bk p.1.val p.2 hLt]
+      have hLt' : ¬ j'.val < S_k := hValEq ▸ hLt
+      rw [dif_neg hLt']
+
+/-- Flat-index form of the final causal-boundary output accumulator. -/
+theorem oFreeBoundary_eq_flat {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (numKVBlocks : Nat) (idx : TileIndex [M, D]) :
+    oFreeBoundary Bk qStart Q K V scale numKVBlocks idx =
+      Finset.univ.sum (fun j' : Fin (Bk * numKVBlocks) =>
+        if h : j'.val < S_k then
+          (if j'.val ≤ qStart + idx.1.val then
+            Real.exp (FA1Math.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
+          else
+            0) * V (⟨j'.val, h⟩, idx.2.1, PUnit.unit)
+        else
+          0) := by
+  unfold oFreeBoundary
+  rw [← Finset.sum_product', Finset.univ_product_univ]
+  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  · intro _; simp
+  · intro j' _
+    set p := FA1Math.blockIndexEquiv Bk numKVBlocks j' with hp
+    show (if h : j'.val < S_k then
+            (if j'.val ≤ qStart + idx.1.val then
+              Real.exp (FA1Math.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
+            else
+              0) * V (⟨j'.val, h⟩, idx.2.1, PUnit.unit)
+          else
+            0)
+        = (match FA1MathBoundary.blockIndex? S_k Bk p.1.val p.2 with
+          | some j =>
+              (if j.val ≤ qStart + idx.1.val then
+                Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+              else
+                0) * V (j, idx.2.1, PUnit.unit)
+          | none => 0)
+    have hValEq : p.1.val * Bk + p.2.val = j'.val := by
+      have hBI := FA1Math.blockIndex_blockIndexEquiv (Bk := Bk) (N := numKVBlocks) j'
+      have h1 := congrArg Fin.val hBI
+      change p.1.val * Bk + p.2.val = j'.val at h1
+      exact h1
+    by_cases hLt : p.1.val * Bk + p.2.val < S_k
+    · rw [FA1MathBoundary.blockIndex?_of_lt S_k Bk p.1.val p.2 hLt]
+      have hLt' : j'.val < S_k := hValEq ▸ hLt
+      rw [dif_pos hLt']
+      have hFinEq : (⟨p.1.val * Bk + p.2.val, hLt⟩ : Fin S_k) =
+          ⟨j'.val, hLt'⟩ := Fin.ext hValEq
+      rw [hFinEq]
+    · rw [FA1MathBoundary.blockIndex?_of_not_lt S_k Bk p.1.val p.2 hLt]
+      have hLt' : ¬ j'.val < S_k := hValEq ▸ hLt
+      rw [dif_neg hLt']
+
+/-- Reindex the final causal-boundary normalizer from padded loop lanes to
+the logical KV domain. Out-of-range padded lanes contribute zero. -/
+theorem lFreeBoundary_final_eq_finSk_sum {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (numKVBlocks : Nat) (hSkLe : S_k ≤ Bk * numKVBlocks) (i : Fin M) :
+    lFreeBoundary Bk qStart Q K scale numKVBlocks i =
+      Finset.univ.sum (fun j : Fin S_k =>
+        if j.val ≤ qStart + i.val then
+          Real.exp (FA1Math.scaledScore Q K scale i j)
+        else
+          0) := by
+  rw [lFreeBoundary_eq_flat]
+  rw [show (Finset.univ.sum (fun j' : Fin (Bk * numKVBlocks) =>
+        if h : j'.val < S_k then
+          if j'.val ≤ qStart + i.val then
+            Real.exp (FA1Math.scaledScore Q K scale i ⟨j'.val, h⟩)
+          else
+            0
+        else
+          0)) =
+        ((Finset.univ : Finset (Fin (Bk * numKVBlocks))).filter
+          (fun j' => j'.val < S_k)).sum
+          (fun j' : Fin (Bk * numKVBlocks) =>
+            if h : j'.val < S_k then
+              if j'.val ≤ qStart + i.val then
+                Real.exp (FA1Math.scaledScore Q K scale i ⟨j'.val, h⟩)
+              else
+                0
+            else
+              0)
+        from ?_]
+  · refine (Finset.sum_bij (fun (j : Fin S_k) (_ : j ∈ Finset.univ) =>
+      Fin.castLE hSkLe j) ?_ ?_ ?_ ?_).symm
+    · intro j _
+      simp [Fin.val_castLE, j.isLt]
+    · intro j₁ _ j₂ _ heq
+      apply Fin.ext
+      have := congrArg Fin.val heq
+      simpa [Fin.val_castLE] using this
+    · intro j' hj'
+      simp at hj'
+      refine ⟨⟨j'.val, hj'⟩, Finset.mem_univ _, ?_⟩
+      apply Fin.ext
+      simp
+    · intro j _
+      have hLt : (Fin.castLE hSkLe j).val < S_k := by
+        rw [Fin.val_castLE]; exact j.isLt
+      rw [dif_pos hLt]
+      simp [Fin.val_castLE]
+  · refine (Finset.sum_filter_of_ne ?_).symm
+    intro j' _ hNe
+    by_contra hLt
+    apply hNe
+    rw [dif_neg hLt]
+
+/-- Reindex the final causal-boundary output accumulator from padded loop
+lanes to the logical KV domain. -/
+theorem oFreeBoundary_final_eq_finSk_sum {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (numKVBlocks : Nat) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (idx : TileIndex [M, D]) :
+    oFreeBoundary Bk qStart Q K V scale numKVBlocks idx =
+      Finset.univ.sum (fun j : Fin S_k =>
+        (if j.val ≤ qStart + idx.1.val then
+          Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+        else
+          0) * V (j, idx.2.1, PUnit.unit)) := by
+  rw [oFreeBoundary_eq_flat]
+  rw [show (Finset.univ.sum (fun j' : Fin (Bk * numKVBlocks) =>
+        if h : j'.val < S_k then
+          (if j'.val ≤ qStart + idx.1.val then
+            Real.exp (FA1Math.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
+          else
+            0) * V (⟨j'.val, h⟩, idx.2.1, PUnit.unit)
+        else
+          0)) =
+        ((Finset.univ : Finset (Fin (Bk * numKVBlocks))).filter
+          (fun j' => j'.val < S_k)).sum
+          (fun j' : Fin (Bk * numKVBlocks) =>
+            if h : j'.val < S_k then
+              (if j'.val ≤ qStart + idx.1.val then
+                Real.exp (FA1Math.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
+              else
+                0) * V (⟨j'.val, h⟩, idx.2.1, PUnit.unit)
+            else
+              0)
+        from ?_]
+  · refine (Finset.sum_bij (fun (j : Fin S_k) (_ : j ∈ Finset.univ) =>
+      Fin.castLE hSkLe j) ?_ ?_ ?_ ?_).symm
+    · intro j _
+      simp [Fin.val_castLE, j.isLt]
+    · intro j₁ _ j₂ _ heq
+      apply Fin.ext
+      have := congrArg Fin.val heq
+      simpa [Fin.val_castLE] using this
+    · intro j' hj'
+      simp at hj'
+      refine ⟨⟨j'.val, hj'⟩, Finset.mem_univ _, ?_⟩
+      apply Fin.ext
+      simp
+    · intro j _
+      have hLt : (Fin.castLE hSkLe j).val < S_k := by
+        rw [Fin.val_castLE]; exact j.isLt
+      rw [dif_pos hLt]
+      simp [Fin.val_castLE]
+  · refine (Finset.sum_filter_of_ne ?_).symm
+    intro j' _ hNe
+    by_contra hLt
+    apply hNe
+    rw [dif_neg hLt]
+
+/-- Causal-boundary m-free ratio is exactly the local-block causal attention
+spec over the logical KV domain. -/
+theorem oFreeBoundary_div_lFreeBoundary_eq_attentionRealCausalBlock
+    {M S_k D : Nat} (Bk : Nat)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (numKVBlocks : Nat) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (idx : TileIndex [M, D])
+    (_hlFree : lFreeBoundary Bk qStart Q K scale numKVBlocks idx.1 ≠ 0) :
+    oFreeBoundary Bk qStart Q K V scale numKVBlocks idx /
+        lFreeBoundary Bk qStart Q K scale numKVBlocks idx.1
+      = attentionRealCausalBlock qStart Q K V scale idx := by
+  rw [oFreeBoundary_final_eq_finSk_sum Bk qStart Q K V scale numKVBlocks hSkLe idx]
+  rw [lFreeBoundary_final_eq_finSk_sum Bk qStart Q K scale numKVBlocks hSkLe idx.1]
+  unfold attentionRealCausalBlock
+  rfl
+
+/-- The final causal-boundary m-free normalizer is positive when the logical
+KV domain is non-empty: key 0 is in range and causally visible. -/
+theorem lFreeBoundary_final_pos {M S_k D : Nat} (Bk : Nat)
+    (hSk : 0 < S_k)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (numKVBlocks : Nat) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (i : Fin M) :
+    0 < lFreeBoundary Bk qStart Q K scale numKVBlocks i := by
+  rw [lFreeBoundary_final_eq_finSk_sum Bk qStart Q K scale numKVBlocks hSkLe i]
+  apply Finset.sum_pos'
+  · intro j _
+    by_cases h : j.val ≤ qStart + i.val
+    · simp [h, le_of_lt (Real.exp_pos _)]
+    · simp [h]
+  · refine ⟨⟨0, hSk⟩, Finset.mem_univ _, ?_⟩
+    simp [Real.exp_pos]
+
+/-- Once the loop has processed at least one block and `S_k > 0`,
+causal-boundary `mPartial` is non-bottom. The first logical key is both
+in range and causally visible. -/
+theorem mPartial_succ_ne_bot {M S_k D : Nat} {Bk : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k + 1 ≤ numKVBlocks) (i : Fin M) :
+    mPartial Bk qStart Q numKVBlocks K scale (k + 1) i ≠ ⊥ := by
+  induction k with
+  | zero =>
+      rw [mPartial_succ_of_lt Bk qStart Q numKVBlocks K scale 0
+            (Nat.lt_of_succ_le hk) i]
+      have hLt : 0 * Bk + (⟨0, hBk⟩ : Fin Bk).val < S_k := by
+        simp; exact hSk
+      have hLe : 0 * Bk + (⟨0, hBk⟩ : Fin Bk).val ≤ qStart + i.val := by
+        simp
+      have h0 : maskedScore Bk 0 qStart Q K scale i (⟨0, hBk⟩ : Fin Bk) ≠ ⊥ := by
+        rw [maskedScore_of_lt_of_le Bk 0 qStart Q K scale i _ hLt hLe]
+        exact WithBot.coe_ne_bot
+      show mPartial Bk qStart Q numKVBlocks K scale 0 i ⊔ _ ≠ ⊥
+      change ⊥ ⊔ _ ≠ ⊥
+      rw [bot_sup_eq]
+      simp [Finset.sup_eq_bot_iff]
+      exact ⟨⟨0, hBk⟩, h0⟩
+  | succ k' ih =>
+      have hk' : k' + 1 ≤ numKVBlocks := by omega
+      rw [mPartial_succ_of_lt Bk qStart Q numKVBlocks K scale (k' + 1)
+            (Nat.lt_of_succ_le hk) i]
+      intro hcontra
+      have h_left : mPartial Bk qStart Q numKVBlocks K scale (k' + 1) i ≤ ⊥ := by
+        rw [← hcontra]; exact le_max_left _ _
+      exact ih hk' (le_bot_iff.mp h_left)
+
+/-- Causal-boundary streaming normalizer equals the m-free normalizer times
+the final exponential shift. -/
+theorem lPartial_eq_mShifted {M S_k D : Nat} {Bk : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (i : Fin M) :
+    lPartial Bk qStart Q numKVBlocks K scale k i =
+      Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale k i).unbotD 0) *
+        lFreeBoundary Bk qStart Q K scale k i := by
+  induction k with
+  | zero =>
+      show (0 : ℝ) =
+        Real.exp (-((⊥ : WithBot ℝ).unbotD 0)) *
+          lFreeBoundary Bk qStart Q K scale 0 i
+      rw [lFreeBoundary_zero]
+      ring
+  | succ k ih =>
+      have hk' : k ≤ numKVBlocks := Nat.le_of_succ_le hk
+      rw [lPartial_succ_of_lt Bk qStart Q numKVBlocks K scale k
+        (Nat.lt_of_succ_le hk) i]
+      rw [ih hk']
+      rw [lFreeBoundary_succ Bk qStart Q K scale k i, mul_add]
+      have hSumB :
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            (WithBot.realExp
+              (WithBot.realSub
+                (maskedScore Bk k qStart Q K scale i jLocal)
+                (mPartial Bk qStart Q numKVBlocks K scale (k + 1) i))).unbotD 0)
+          =
+          Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale (k + 1) i).unbotD 0) *
+            (Finset.univ : Finset (Fin Bk)).sum (fun jL : Fin Bk =>
+              match FA1MathBoundary.blockIndex? S_k Bk k jL with
+              | some j =>
+                  if j.val ≤ qStart + i.val then
+                    Real.exp (FA1Math.scaledScore Q K scale i j)
+                  else
+                    0
+              | none => 0) := by
+        rw [Finset.mul_sum]
+        apply Finset.sum_congr rfl
+        intro jLocal _
+        by_cases hLt : k * Bk + jLocal.val < S_k
+        · rw [FA1MathBoundary.blockIndex?_of_lt S_k Bk k jLocal hLt]
+          by_cases hLe : k * Bk + jLocal.val ≤ qStart + i.val
+          · rw [maskedScore_of_lt_of_le Bk k qStart Q K scale i jLocal hLt hLe]
+            obtain ⟨m, hm⟩ := WithBot.ne_bot_iff_exists.mp
+              (mPartial_succ_ne_bot hBk hSk qStart Q numKVBlocks K scale k hk i)
+            rw [← hm]
+            simp [hLe, WithBot.realSub]
+            rw [show FA1Math.scaledScore Q K scale i ⟨k * Bk + jLocal.val, hLt⟩ - m =
+                  -m + FA1Math.scaledScore Q K scale i ⟨k * Bk + jLocal.val, hLt⟩
+                  by ring,
+                Real.exp_add]
+          · rw [maskedScore_of_lt_of_not_le Bk k qStart Q K scale i jLocal hLt hLe]
+            simp [hLe]
+        · rw [maskedScore_of_not_lt Bk k qStart Q K scale i jLocal hLt,
+            FA1MathBoundary.blockIndex?_of_not_lt S_k Bk k jLocal hLt]
+          simp
+      have hSumA :
+          alphaPartial Bk qStart Q numKVBlocks K scale k i *
+            (Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale k i).unbotD 0) *
+              lFreeBoundary Bk qStart Q K scale k i)
+          =
+          Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale (k + 1) i).unbotD 0) *
+            lFreeBoundary Bk qStart Q K scale k i := by
+        rcases Nat.eq_zero_or_pos k with hkz | hkpos
+        · subst hkz
+          rw [lFreeBoundary_zero]
+          ring
+        · obtain ⟨k', rfl⟩ := Nat.exists_eq_succ_of_ne_zero (Nat.pos_iff_ne_zero.mp hkpos)
+          have hk_succ : k' + 1 ≤ numKVBlocks := Nat.le_of_succ_le hk
+          have hmk_ne :=
+            mPartial_succ_ne_bot hBk hSk qStart Q numKVBlocks K scale k' hk_succ i
+          have hmk1_ne :=
+            mPartial_succ_ne_bot hBk hSk qStart Q numKVBlocks K scale (k' + 1) hk i
+          obtain ⟨rk, hrk⟩ := WithBot.ne_bot_iff_exists.mp hmk_ne
+          obtain ⟨rk1, hrk1⟩ := WithBot.ne_bot_iff_exists.mp hmk1_ne
+          have hAlpha :
+              alphaPartial Bk qStart Q numKVBlocks K scale (k' + 1) i =
+                Real.exp (rk - rk1) := by
+            unfold alphaPartial
+            rw [← hrk, ← hrk1]
+            simp [WithBot.realSub]
+          rw [hAlpha, ← hrk, ← hrk1]
+          simp only [WithBot.unbotD_coe]
+          rw [show Real.exp (rk - rk1) = Real.exp (-rk1) * Real.exp rk by
+                rw [show rk - rk1 = -rk1 + rk by ring, Real.exp_add]]
+          rw [show Real.exp (-rk1) * Real.exp rk *
+                    (Real.exp (-rk) * lFreeBoundary Bk qStart Q K scale (k' + 1) i)
+                = Real.exp (-rk1) *
+                    (Real.exp rk * Real.exp (-rk) *
+                      lFreeBoundary Bk qStart Q K scale (k' + 1) i) by ring]
+          rw [show Real.exp rk * Real.exp (-rk) = 1 by
+                rw [← Real.exp_add, add_neg_cancel, Real.exp_zero]]
+          ring
+      linarith [hSumA, hSumB]
+
+/-- Causal-boundary streaming output accumulator equals the m-free output
+accumulator times the final exponential shift. -/
+theorem oPartial_eq_mShifted {M S_k D : Nat} {Bk : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (k : Nat) (hk : k ≤ numKVBlocks) (idx : TileIndex [M, D]) :
+    oPartial Bk qStart Q numKVBlocks K V scale k idx =
+      Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale k idx.1).unbotD 0) *
+        oFreeBoundary Bk qStart Q K V scale k idx := by
+  induction k with
+  | zero =>
+      show (0 : ℝ) =
+        Real.exp (-((⊥ : WithBot ℝ).unbotD 0)) *
+          oFreeBoundary Bk qStart Q K V scale 0 idx
+      rw [oFreeBoundary_zero]
+      ring
+  | succ k ih =>
+      have hk' : k ≤ numKVBlocks := Nat.le_of_succ_le hk
+      rw [oPartial_succ_of_lt Bk qStart Q numKVBlocks K V scale k
+        (Nat.lt_of_succ_le hk) idx]
+      rw [ih hk']
+      rw [oFreeBoundary_succ Bk qStart Q K V scale k idx, mul_add]
+      have hSumB :
+          (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
+            match FA1MathBoundary.blockIndex? S_k Bk k jLocal with
+            | some j =>
+                if j.val ≤ qStart + idx.1.val then
+                  (WithBot.realExp
+                    (WithBot.realSub
+                      (maskedScore Bk k qStart Q K scale idx.1 jLocal)
+                      (mPartial Bk qStart Q numKVBlocks K scale (k + 1) idx.1))).unbotD 0 *
+                    V (j, idx.2.1, PUnit.unit)
+                else
+                  0
+            | none => 0)
+          =
+          Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale (k + 1) idx.1).unbotD 0) *
+            (Finset.univ : Finset (Fin Bk)).sum (fun jL : Fin Bk =>
+              match FA1MathBoundary.blockIndex? S_k Bk k jL with
+              | some j =>
+                  (if j.val ≤ qStart + idx.1.val then
+                    Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+                  else
+                    0) * V (j, idx.2.1, PUnit.unit)
+              | none => 0) := by
+        rw [Finset.mul_sum]
+        apply Finset.sum_congr rfl
+        intro jLocal _
+        by_cases hLt : k * Bk + jLocal.val < S_k
+        · rw [FA1MathBoundary.blockIndex?_of_lt S_k Bk k jLocal hLt]
+          by_cases hLe : k * Bk + jLocal.val ≤ qStart + idx.1.val
+          · rw [maskedScore_of_lt_of_le Bk k qStart Q K scale idx.1 jLocal hLt hLe]
+            obtain ⟨m, hm⟩ := WithBot.ne_bot_iff_exists.mp
+              (mPartial_succ_ne_bot hBk hSk qStart Q numKVBlocks K scale k hk idx.1)
+            rw [← hm]
+            simp [hLe, WithBot.realSub]
+            rw [show FA1Math.scaledScore Q K scale idx.1 ⟨k * Bk + jLocal.val, hLt⟩ - m =
+                  -m + FA1Math.scaledScore Q K scale idx.1 ⟨k * Bk + jLocal.val, hLt⟩
+                  by ring,
+                Real.exp_add]
+            ring
+          · rw [maskedScore_of_lt_of_not_le Bk k qStart Q K scale idx.1 jLocal hLt hLe]
+            simp [hLe]
+        · rw [FA1MathBoundary.blockIndex?_of_not_lt S_k Bk k jLocal hLt]
+          simp
+      have hSumA :
+          alphaPartial Bk qStart Q numKVBlocks K scale k idx.1 *
+            (Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale k idx.1).unbotD 0) *
+              oFreeBoundary Bk qStart Q K V scale k idx)
+          =
+          Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale (k + 1) idx.1).unbotD 0) *
+            oFreeBoundary Bk qStart Q K V scale k idx := by
+        rcases Nat.eq_zero_or_pos k with hkz | hkpos
+        · subst hkz
+          rw [oFreeBoundary_zero]
+          ring
+        · obtain ⟨k', rfl⟩ := Nat.exists_eq_succ_of_ne_zero (Nat.pos_iff_ne_zero.mp hkpos)
+          have hk_succ : k' + 1 ≤ numKVBlocks := Nat.le_of_succ_le hk
+          have hmk_ne :=
+            mPartial_succ_ne_bot hBk hSk qStart Q numKVBlocks K scale k' hk_succ idx.1
+          have hmk1_ne :=
+            mPartial_succ_ne_bot hBk hSk qStart Q numKVBlocks K scale (k' + 1) hk idx.1
+          obtain ⟨rk, hrk⟩ := WithBot.ne_bot_iff_exists.mp hmk_ne
+          obtain ⟨rk1, hrk1⟩ := WithBot.ne_bot_iff_exists.mp hmk1_ne
+          have hAlpha :
+              alphaPartial Bk qStart Q numKVBlocks K scale (k' + 1) idx.1 =
+                Real.exp (rk - rk1) := by
+            unfold alphaPartial
+            rw [← hrk, ← hrk1]
+            simp [WithBot.realSub]
+          rw [hAlpha, ← hrk, ← hrk1]
+          simp only [WithBot.unbotD_coe]
+          rw [show Real.exp (rk - rk1) = Real.exp (-rk1) * Real.exp rk by
+                rw [show rk - rk1 = -rk1 + rk by ring, Real.exp_add]]
+          rw [show Real.exp (-rk1) * Real.exp rk *
+                    (Real.exp (-rk) * oFreeBoundary Bk qStart Q K V scale (k' + 1) idx)
+                = Real.exp (-rk1) *
+                    (Real.exp rk * Real.exp (-rk) *
+                      oFreeBoundary Bk qStart Q K V scale (k' + 1) idx) by ring]
+          rw [show Real.exp rk * Real.exp (-rk) = 1 by
+                rw [← Real.exp_add, add_neg_cancel, Real.exp_zero]]
+          ring
+      linarith [hSumA, hSumB]
+
+/-- The final causal-boundary streaming normalizer is nonzero when the
+logical KV domain is non-empty. -/
+theorem lPartial_final_ne_zero {M S_k D : Nat} {Bk : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
+    (K : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (i : Fin M) :
+    lPartial Bk qStart Q numKVBlocks K scale numKVBlocks i ≠ 0 := by
+  rw [lPartial_eq_mShifted hBk hSk qStart Q numKVBlocks K scale numKVBlocks
+      (le_refl _) i]
+  exact mul_ne_zero (Real.exp_ne_zero _)
+    (ne_of_gt (lFreeBoundary_final_pos Bk hSk qStart Q K scale numKVBlocks hSkLe i))
+
+/-- Final causal-boundary streaming ratio equals the local-block causal
+attention spec over the logical `[S_k, D]` KV domain. -/
+theorem streaming_eq_attentionRealCausalBlock {M D Bk : Nat} (hBk : 0 < Bk)
+    {S_k numKVBlocks : Nat} (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (qStart : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    oPartial Bk qStart Q numKVBlocks K V scale numKVBlocks idx /
+        lPartial Bk qStart Q numKVBlocks K scale numKVBlocks idx.1
+      = attentionRealCausalBlock qStart Q K V scale idx := by
+  have hl : lPartial Bk qStart Q numKVBlocks K scale numKVBlocks idx.1 ≠ 0 :=
+    lPartial_final_ne_zero hBk hSk qStart Q numKVBlocks K scale hSkLe idx.1
+  rw [oPartial_eq_mShifted hBk hSk qStart Q numKVBlocks K V scale numKVBlocks
+        (le_refl _) idx,
+      lPartial_eq_mShifted hBk hSk qStart Q numKVBlocks K scale numKVBlocks
+        (le_refl _) idx.1]
+  rw [mul_div_mul_left _ _ (Real.exp_ne_zero _)]
+  have hlFree : lFreeBoundary Bk qStart Q K scale numKVBlocks idx.1 ≠ 0 := by
+    intro h
+    apply hl
+    rw [lPartial_eq_mShifted hBk hSk qStart Q numKVBlocks K scale numKVBlocks
+        (le_refl _) idx.1, h, mul_zero]
+  exact oFreeBoundary_div_lFreeBoundary_eq_attentionRealCausalBlock Bk qStart Q K V scale
+    numKVBlocks hSkLe idx hlFree
+
+end FA1MathCausalBoundary
+
 /-! ## Causal streaming math model
 
 The causal loop is the same online-softmax recurrence, but each block
@@ -3373,8 +4384,6 @@ theorem lPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
               Real.exp_add]
         · rw [maskedScore_of_not_le qStart Q K scale i j hvis]
           simp [hvis]
-          cases mPartial Bk qStart Q numKVBlocks K scale (k + 1) i <;>
-            (left; unfold WithBot.realExp; rfl)
       have hSumA :
           (WithBot.realExp
               (Option.map₂ (fun x y : ℝ => x - y)
@@ -3478,8 +4487,6 @@ theorem oPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
           ring
         · rw [maskedScore_of_not_le qStart Q K scale idx.1 j hvis]
           simp [hvis]
-          cases mPartial Bk qStart Q numKVBlocks K scale (k + 1) idx.1 <;>
-            (left; left; unfold WithBot.realExp; rfl)
       have hSumA :
           (WithBot.realExp
               (Option.map₂ (fun x y : ℝ => x - y)
@@ -4084,6 +5091,53 @@ def P_fa1_strided_boundary
   s.regs .real [M, D] "o_acc" = some
       (Tile.ofReal fun idx : TileIndex [M, D] =>
         FA1MathBoundary.oPartial Bk Q numKVBlocks K V scale k idx) ∧
+  InputAt s kReg
+      (fun idx : TileIndex [S_k, D] =>
+        batch * sKB + headIdx * sKH
+          + idx.1.val * sKN + idx.2.1.val * sKD) K ∧
+  InputAt s vReg
+      (fun idx : TileIndex [S_k, D] =>
+        batch * sVB + headIdx * sVH
+          + idx.1.val * sVN + idx.2.1.val * sVD) V
+
+/-- Loop-carried predicate for causal boundary-masked strided kernels.
+
+This combines `P_fa1_strided_boundary`'s logical `[S_k, D]` K/V memory
+contract with the causal streaming recurrence parameterized by
+`qStart = qb * M`. -/
+def P_fa1_strided_causal_boundary
+    {M D Bk numKVBlocks S_k : Nat}
+    (_qReg kReg vReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH _sQS _sQD : Nat)
+    (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat)
+    (sOB sOH _sOM _sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (s : BlockState) : Prop :=
+  s.pids 0 = qb ∧ s.pids 1 = headIdx ∧ s.pids 2 = batch ∧
+  s.regs .nat [] "pid_qb" = some (Tile.scalar qb) ∧
+  s.regs .nat [] "pid_h"  = some (Tile.scalar headIdx) ∧
+  s.regs .nat [] "pid_b"  = some (Tile.scalar batch) ∧
+  s.regs .nat [] "q_base_off" = some (Tile.scalar (batch * sQB + headIdx * sQH)) ∧
+  s.regs .nat [] "k_base_off" = some (Tile.scalar (batch * sKB + headIdx * sKH)) ∧
+  s.regs .nat [] "v_base_off" = some (Tile.scalar (batch * sVB + headIdx * sVH)) ∧
+  s.regs .nat [] "o_base_off" = some (Tile.scalar (batch * sOB + headIdx * sOH)) ∧
+  s.regs .nat [M] "offs_m" = some
+      (Tile.vec (fun i : Fin M => qb * M + i.val)) ∧
+  s.regs .nat [D] "offs_d" = some
+      (Tile.vec (fun d : Fin D => d.val)) ∧
+  s.regs .real [M, D] "q" = some (Tile.ofReal Q) ∧
+  s.regs .real [M] "m_i" = some
+      ⟨fun idx : TileIndex [M] =>
+        FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale k idx.1⟩ ∧
+  s.regs .real [M] "l_i" = some
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        FA1MathCausalBoundary.lPartial Bk (qb * M) Q numKVBlocks K scale k idx.1) ∧
+  s.regs .real [M, D] "o_acc" = some
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        FA1MathCausalBoundary.oPartial Bk (qb * M) Q numKVBlocks K V scale k idx) ∧
   InputAt s kReg
       (fun idx : TileIndex [S_k, D] =>
         batch * sKB + headIdx * sKH
@@ -4806,6 +5860,119 @@ private def fa1LoopBodyStridedBoundary (kReg vReg : RegionName)
       (Op.ref .real [M] "l_new")
   ]
 
+private def fa1LoopBodyStridedCausalBoundary (kReg vReg : RegionName)
+    (M D Bk S_k : Nat) (sKN sKD sVN sVD : Nat) (scale : ℝ) : List Stmt :=
+  [ Stmt.assign .nat [Bk] "offs_n"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "n")
+          (Op.constNat Bk))
+        (Op.arange Bk))
+  , Stmt.assign .nat [Bk, D] "k_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.add .nat Broadcast.scalarL
+          (Op.ref .nat [] "k_base_off")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+            (Op.constNat sKN)))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat sKD)))
+  , Stmt.assign .nat [Bk, D] "v_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.add .nat Broadcast.scalarL
+          (Op.ref .nat [] "v_base_off")
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+            (Op.constNat sVN)))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat sVD)))
+  , Stmt.assign .bool [Bk, D] "kv_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+            (Op.constNat 0)))
+        (Op.constNat S_k))
+  , Stmt.assign .real [Bk, D] "k"
+      (Op.loadMaskOther kReg
+        (Op.ref .nat [Bk, D] "k_ptrs")
+        (Op.ref .bool [Bk, D] "kv_mask")
+        (Op.broadcast (Op.const 0) [Bk, D]))
+  , Stmt.assign .real [Bk, D] "v"
+      (Op.loadMaskOther vReg
+        (Op.ref .nat [Bk, D] "v_ptrs")
+        (Op.ref .bool [Bk, D] "kv_mask")
+        (Op.broadcast (Op.const 0) [Bk, D]))
+  , Stmt.assign .real [M, Bk] "scores_raw"
+      (Op.mul .real Broadcast.scalarR
+        (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+          (Op.ref .real [M, D] "q")
+          (Op.transpose (batch := []) (M := Bk) (N := D)
+            (Op.ref .real [Bk, D] "k")))
+        (Op.const scale))
+  , Stmt.assign .bool [M, Bk] "causal"
+      (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+  , Stmt.assign .real [M, Bk] "causal_scores"
+      (Op.where
+        (Op.ref .bool [M, Bk] "causal")
+        (Op.ref .real [M, Bk] "scores_raw")
+        (Op.broadcast Op.negInf [M, Bk]))
+  , Stmt.assign .bool [M, Bk] "score_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+            (Op.constNat 0))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+        (Op.constNat S_k))
+  , Stmt.assign .real [M, Bk] "scores"
+      (Op.where
+        (Op.ref .bool [M, Bk] "score_mask")
+        (Op.ref .real [M, Bk] "causal_scores")
+        (Op.broadcast Op.negInf [M, Bk]))
+  , Stmt.assign .real [M] "m_block"
+      (Op.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
+        (Op.ref .real [M, Bk] "scores"))
+  , Stmt.assign .real [M] "m_new"
+      (Op.max2 (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [M] "m_i")
+        (Op.ref .real [M] "m_block"))
+  , Stmt.assign .real [M] "alpha"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [M] "m_i")
+          (Op.ref .real [M] "m_new")))
+  , Stmt.assign .real [M, Bk] "p"
+      (Op.exp
+        (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Op.ref .real [M, Bk] "scores")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "m_new"))))
+  , Stmt.assign .real [M] "l_new"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil)
+          (Op.ref .real [M] "alpha")
+          (Op.ref .real [M] "l_i"))
+        (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
+          (Op.ref .real [M, Bk] "p")))
+  , Stmt.assign .real [M, D] "o_acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+          (Op.ref .real [M, D] "o_acc"))
+        (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+          (Op.ref .real [M, Bk] "p")
+          (Op.ref .real [Bk, D] "v")))
+  , Stmt.assign .real [M] "m_i"
+      (Op.ref .real [M] "m_new")
+  , Stmt.assign .real [M] "l_i"
+      (Op.ref .real [M] "l_new")
+  ]
+
 private def fa1PostLoopStridedBoundary (outReg : RegionName) (M D S_q : Nat)
     (sOM sOD : Nat) : List Stmt :=
   [ Stmt.assign .real [M, D] "out"
@@ -4849,6 +6016,22 @@ private def fa1PostLoopStridedBoundary (outReg : RegionName) (M D S_q : Nat)
         sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
       [Stmt.forLoop "n" numKVBlocks
         (fa1LoopBodyStridedBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)] ++
+      fa1PostLoopStridedBoundary outReg M D S_q sOM sOD := by
+  rfl
+
+@[simp] theorem fa1ForwardKernelStridedCausalBoundary_body_eq
+    (qReg kReg vReg outReg : RegionName)
+    (M D Bk numKVBlocks S_q S_k : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (scale : ℝ) :
+    (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg M D Bk numKVBlocks S_q S_k
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD scale).body =
+      fa1PreLoopStridedBoundary qReg M D S_q
+        sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
+      [Stmt.forLoop "n" numKVBlocks
+        (fa1LoopBodyStridedCausalBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)] ++
       fa1PostLoopStridedBoundary outReg M D S_q sOM sOD := by
   rfl
 
@@ -5095,6 +6278,60 @@ theorem fa1_preLoop_correct_strided_boundary
       simpa [s0] using hK idx
     · intro idx
       simpa [s0] using hV idx
+
+/-- Causal boundary-masked strided initialization stage. Operationally this
+is the same pre-loop as the non-causal boundary kernel; only the loop
+invariant's accumulator interpretation changes to `FA1MathCausalBoundary`,
+whose `k = 0` state is the same `(-inf, 0, 0)` initialization. -/
+theorem fa1_preLoop_correct_strided_causal_boundary
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (qReg kReg vReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hQIn : ∀ idx : TileIndex [M, D],
+        s.pids 0 * M + idx.1.val < S_q →
+        s.mem qReg
+          (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
+    (hQOut : ∀ idx : TileIndex [M, D],
+        ¬ s.pids 0 * M + idx.1.val < S_q → Q idx = 0)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V) :
+    ∃ s0,
+      stepStmts (fa1PreLoopStridedBoundary qReg M D S_q
+          sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH) s = some s0 ∧
+      P_fa1_strided_causal_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg
+        (s.pids 0) (s.pids 1) (s.pids 2)
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD
+        Q K V scale 0 s0 := by
+  rcases fa1_preLoop_correct_strided_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+      qReg kReg vReg
+      sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+      sOB sOH sOM sOD Q K V scale s hQIn hQOut hK hV with
+    ⟨s0, hExec, hP⟩
+  rcases hP with
+    ⟨hpids0, hpids1, hpids2,
+     hpid_qb, hpid_h, hpid_b,
+     hq_base, hk_base, hv_base, ho_base,
+     hoffs_m, hoffs_d, hq, hm, hl, ho, hK0, hV0⟩
+  refine ⟨s0, hExec, ?_⟩
+  refine ⟨hpids0, hpids1, hpids2,
+    hpid_qb, hpid_h, hpid_b, hq_base, hk_base, hv_base, ho_base,
+    hoffs_m, hoffs_d, hq, ?_, ?_, ?_, hK0, hV0⟩
+  · simpa [FA1MathBoundary.mPartial, FA1MathCausalBoundary.mPartial] using hm
+  · simpa [FA1MathBoundary.lPartial, FA1MathCausalBoundary.lPartial] using hl
+  · simpa [FA1MathBoundary.oPartial, FA1MathCausalBoundary.oPartial] using ho
 
 /-- Strided initialization stage: the strided pre-loop block establishes
 `P_fa1_strided 0` from the strided / 4D-aware InputAt premises. The
@@ -7103,6 +8340,68 @@ theorem fa1_postLoop_correct_strided_boundary_raw
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj_store idx]
   simp [hIdx]
 
+/-- Causal boundary strided readout stage, raw accumulator form. For
+in-bounds query rows (`qb*M + i < S_q`), the masked store writes the
+normalized causal-boundary streaming accumulator. -/
+theorem fa1_postLoop_correct_strided_causal_boundary_raw
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (sLoop : BlockState)
+    (hP : P_fa1_strided_causal_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale numKVBlocks sLoop)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        batch * sOB + headIdx * sOH + qb * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD)) :
+    ∀ idx : TileIndex [M, D],
+      qb * M + idx.1.val < S_q →
+      observeTileAt
+          (stepStmts (fa1PostLoopStridedBoundary outReg M D S_q sOM sOD) sLoop)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            batch * sOB + headIdx * sOH + qb * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some
+            (FA1MathCausalBoundary.oPartial Bk (qb * M) Q numKVBlocks K V scale
+                numKVBlocks idx /
+              FA1MathCausalBoundary.lPartial Bk (qb * M) Q numKVBlocks K scale
+                numKVBlocks idx.1) := by
+  intro idx hIdx
+  rcases hP with
+    ⟨_hpids0, _hpids1, _hpids2,
+     _hpid_qb, _hpid_h, _hpid_b,
+     _hq_base, _hk_base, _hv_base, ho_base,
+     hoffs_m, hoffs_d, _hq, _hm, hl, ho, _hK, _hV⟩
+  have h_inj_store :
+      Function.Injective
+        (fun i : TileIndex [M, D] =>
+          batch * sOB + headIdx * sOH
+            + (qb * M + i.1.val) * sOM + i.2.1.val * sOD) := by
+    intro a b h
+    apply hInj
+    simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
+    exact h
+  simp [observeTileAt, fa1PostLoopStridedBoundary, stepStmts, stepStmt, evalOp,
+        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+        Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, Option.bind,
+        TileShape.dropInsertedIndex]
+  rw [show batch * sOB + headIdx * sOH + qb * M * sOM
+        + idx.1.val * sOM + idx.2.1.val * sOD =
+      batch * sOB + headIdx * sOH
+        + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
+    simp [Nat.add_mul, Nat.add_assoc]]
+  simp only [BlockState.readMem]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj_store idx]
+  simp [hIdx]
+
 /-- Boundary strided forward correctness in raw streaming form, parameterized
 by the boundary loop-step lemma. This is the v1 analogue of
 `fa1_forward_correct_strided_causal_raw_of_step`: pre-loop establishes the
@@ -7234,6 +8533,620 @@ theorem fa1_forward_correct_strided_boundary_raw_of_step
     show stepStmts [] sLoop = some sLoop
     unfold stepStmts
     rfl
+
+/-- Causal boundary strided forward correctness in raw streaming form,
+parameterized by the causal-boundary loop-step lemma. -/
+theorem fa1_forward_correct_strided_causal_boundary_raw_of_step
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQIn : ∀ idx : TileIndex [M, D],
+        s.pids 0 * M + idx.1.val < S_q →
+        s.mem qReg
+          (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
+    (hQOut : ∀ idx : TileIndex [M, D],
+        ¬ s.pids 0 * M + idx.1.val < S_q → Q idx = 0)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD))
+    (hStep :
+      ∀ i st, i < numKVBlocks →
+        P_fa1_strided_causal_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+          qReg kReg vReg
+          (s.pids 0) (s.pids 1) (s.pids 2)
+          sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+          sOB sOH sOM sOD Q K V scale i st →
+        ∃ st',
+          stepStmts (fa1LoopBodyStridedCausalBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)
+            (st.setReg "n" .nat [] (Tile.scalar i)) = some st' ∧
+          P_fa1_strided_causal_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+            qReg kReg vReg
+            (s.pids 0) (s.pids 1) (s.pids 2)
+            sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+            sOB sOH sOM sOD Q K V scale (i + 1) st') :
+    ∀ idx : TileIndex [M, D],
+      s.pids 0 * M + idx.1.val < S_q →
+      observeTileAt
+          (exec (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some
+            (FA1MathCausalBoundary.oPartial Bk (s.pids 0 * M) Q numKVBlocks K V scale
+                numKVBlocks idx /
+              FA1MathCausalBoundary.lPartial Bk (s.pids 0 * M) Q numKVBlocks K scale
+                numKVBlocks idx.1) := by
+  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
+      stepStmt st sa = some sb →
+      stepStmts (st :: rest) sa = stepStmts rest sb := by
+    intro st rest sa sb h
+    conv_lhs => unfold stepStmts
+    rw [h]
+  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
+      stepStmts l1 sa = some sb →
+      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
+    intro l1
+    induction l1 with
+    | nil =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        injection h with h
+        rw [List.nil_append, ← h]
+    | cons st rest ih =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        cases hst : stepStmt st sa with
+        | none => rw [hst] at h; simp at h
+        | some sm =>
+            rw [hst] at h
+            simp at h
+            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
+            exact ih l2 sm sb h
+  obtain ⟨s0, hPre, hP0⟩ :=
+    fa1_preLoop_correct_strided_causal_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+      qReg kReg vReg
+      sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+      sOB sOH sOM sOD Q K V scale s hQIn hQOut hK hV
+  obtain ⟨sLoop, hLoopStmt, hPLoop⟩ :=
+    forLoop_inv
+      (P := P_fa1_strided_causal_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg
+        (s.pids 0) (s.pids 1) (s.pids 2)
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale) hP0 hStep
+  intro idx hIdx
+  show observeTileAt (stepStmts _ s) outReg _ idx = _
+  rw [show (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg
+        M D Bk numKVBlocks S_q S_k
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD scale).body =
+        fa1PreLoopStridedBoundary qReg M D S_q
+          sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
+        [Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStridedCausalBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)] ++
+        fa1PostLoopStridedBoundary outReg M D S_q sOM sOD from rfl]
+  rw [List.append_assoc,
+      stepStmts_append (fa1PreLoopStridedBoundary qReg M D S_q
+          sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH)
+        ([Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStridedCausalBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)] ++
+          fa1PostLoopStridedBoundary outReg M D S_q sOM sOD) s s0 hPre]
+  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks
+          (fa1LoopBodyStridedCausalBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)]
+        (fa1PostLoopStridedBoundary outReg M D S_q sOM sOD) s0 sLoop ?_]
+  · exact fa1_postLoop_correct_strided_causal_boundary_raw
+      qReg kReg vReg outReg
+      (s.pids 0) (s.pids 1) (s.pids 2)
+      sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+      sOB sOH sOM sOD Q K V scale sLoop hPLoop hInj idx hIdx
+  · rw [stepStmts_cons _ [] _ _ hLoopStmt]
+    show stepStmts [] sLoop = some sLoop
+    unfold stepStmts
+    rfl
+
+set_option maxHeartbeats 5000000 in
+/-- Causal boundary strided loop step. One iteration preserves
+`P_fa1_strided_causal_boundary`: K/V loads use the logical boundary mask,
+scores are first causal-masked and then boundary-masked, and the
+online-softmax update follows `FA1MathCausalBoundary`. -/
+theorem fa1_step_strided_causal_boundary
+    {M D Bk numKVBlocks S_k : Nat} (hBk : 0 < Bk)
+    (qReg kReg vReg : RegionName)
+    (qb headIdx batch : Nat)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ) (k : Nat) (s : BlockState)
+    (hk : k < numKVBlocks)
+    (hP : P_fa1_strided_causal_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale k s) :
+    ∃ s',
+      stepStmts (fa1LoopBodyStridedCausalBoundary kReg vReg M D Bk S_k sKN sKD sVN sVD scale)
+        (s.setReg "n" .nat [] (Tile.scalar k)) = some s' ∧
+      P_fa1_strided_causal_boundary (Bk := Bk) (numKVBlocks := numKVBlocks)
+        qReg kReg vReg qb headIdx batch
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale (k + 1) s' := by
+  rcases hP with
+    ⟨hpids0, hpids1, hpids2,
+     hpid_qb, hpid_h, hpid_b,
+     hq_base, hk_base, hv_base, ho_base,
+     hoffs_m, hoffs_d, hq, hm, hl, ho, hK, hV⟩
+  let kBase : Nat := batch * sKB + headIdx * sKH
+  let vBase : Nat := batch * sVB + headIdx * sVH
+  let offsN : Tile .nat [Bk] := Tile.vec fun j : Fin Bk => k * Bk + j.val
+  let kPtrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      kBase + (k * Bk + idx.1.val) * sKN + idx.2.1.val * sKD⟩
+  let vPtrs : Tile .nat [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      vBase + (k * Bk + idx.1.val) * sVN + idx.2.1.val * sVD⟩
+  let kvMask : Tile .bool [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] => decide (k * Bk + idx.1.val < S_k)⟩
+  let kLoaded : Tile .real [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      if h : k * Bk + idx.1.val < S_k then
+        some (s.readMem kReg
+          (kBase + (k * Bk + idx.1.val) * sKN + idx.2.1.val * sKD))
+      else
+        some 0⟩
+  let vLoaded : Tile .real [Bk, D] :=
+    ⟨fun idx : TileIndex [Bk, D] =>
+      if h : k * Bk + idx.1.val < S_k then
+        some (s.readMem vReg
+          (vBase + (k * Bk + idx.1.val) * sVN + idx.2.1.val * sVD))
+      else
+        some 0⟩
+  have hK_loaded_eq : kLoaded =
+      Tile.ofReal (fun idx : TileIndex [Bk, D] =>
+        match FA1MathBoundary.blockIndex? S_k Bk k idx.1 with
+        | some j => K (j, idx.2.1, PUnit.unit)
+        | none => 0) :=
+    fa1_block_load_tile_eq_strided_boundary kReg s kBase sKN sKD K hK k
+  have hV_loaded_eq : vLoaded =
+      Tile.ofReal (fun idx : TileIndex [Bk, D] =>
+        match FA1MathBoundary.blockIndex? S_k Bk k idx.1 with
+        | some j => V (j, idx.2.1, PUnit.unit)
+        | none => 0) :=
+    fa1_block_load_tile_eq_strided_boundary vReg s vBase sVN sVD V hV k
+  let scoresRaw : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      Option.map (fun a => a * scale)
+        (@Finset.sum (Fin D) (WithBot ℝ) _ Finset.univ
+          (fun d : Fin D => Option.map (fun b => Q (idx.1, d, PUnit.unit) * b)
+            (kLoaded.data (idx.2.1, d, PUnit.unit))))⟩
+  let causal : Tile .bool [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      decide (k * Bk + idx.2.1.val ≤ qb * M + idx.1.val)⟩
+  let causalScores : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      if k * Bk + idx.2.1.val ≤ qb * M + idx.1.val then scoresRaw.data idx
+      else (none : WithBot ℝ)⟩
+  let scoreMask : Tile .bool [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] => decide (k * Bk + idx.2.1.val < S_k)⟩
+  let scores : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      if k * Bk + idx.2.1.val < S_k then causalScores.data idx else (none : WithBot ℝ)⟩
+  let mBlock : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      (Finset.univ : Finset (Fin Bk)).sup'
+        (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+        (fun j : Fin Bk => scores.data (idx.1, j, PUnit.unit))⟩
+  let mNew : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      max (FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+        (mBlock.data idx)⟩
+  let alpha : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      WithBot.realExp
+        (WithBot.realSub
+          (FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+          (mNew.data idx))⟩
+  let p : Tile .real [M, Bk] :=
+    ⟨fun idx : TileIndex [M, Bk] =>
+      WithBot.realExp
+        (WithBot.realSub (scores.data idx) (mNew.data (idx.1, PUnit.unit)))⟩
+  let lNew : Tile .real [M] :=
+    ⟨fun idx : TileIndex [M] =>
+      Option.map₂ (· + ·)
+        (Option.map (· * FA1MathCausalBoundary.lPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+          (alpha.data idx))
+        (@Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ
+          (fun j : Fin Bk => p.data (idx.1, j, PUnit.unit)))⟩
+  let oNew : Tile .real [M, D] :=
+    ⟨fun idx : TileIndex [M, D] =>
+      Option.map₂ (· + ·)
+        (Option.map
+          (· * FA1MathCausalBoundary.oPartial Bk (qb * M) Q numKVBlocks K V scale k
+            (idx.1, idx.2.1, PUnit.unit))
+          (alpha.data (idx.1, PUnit.unit)))
+        (@Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ
+          (fun j : Fin Bk =>
+            Option.map₂ (· * ·)
+              (p.data (idx.1, j, PUnit.unit))
+              (vLoaded.data (j, idx.2.1, PUnit.unit))))⟩
+  let s0 := s.setReg "n" .nat [] (Tile.scalar k)
+  let s1 := s0.setReg "offs_n" .nat [Bk] offsN
+  let s2 := s1.setReg "k_ptrs" .nat [Bk, D] kPtrs
+  let s3 := s2.setReg "v_ptrs" .nat [Bk, D] vPtrs
+  let s4 := s3.setReg "kv_mask" .bool [Bk, D] kvMask
+  let s5 := s4.setReg "k" .real [Bk, D] kLoaded
+  let s6 := s5.setReg "v" .real [Bk, D] vLoaded
+  let s7 := s6.setReg "scores_raw" .real [M, Bk] scoresRaw
+  let s8 := s7.setReg "causal" .bool [M, Bk] causal
+  let s9 := s8.setReg "causal_scores" .real [M, Bk] causalScores
+  let s10 := s9.setReg "score_mask" .bool [M, Bk] scoreMask
+  let s11 := s10.setReg "scores" .real [M, Bk] scores
+  let s12 := s11.setReg "m_block" .real [M] mBlock
+  let s13 := s12.setReg "m_new" .real [M] mNew
+  let s14 := s13.setReg "alpha" .real [M] alpha
+  let s15 := s14.setReg "p" .real [M, Bk] p
+  let s16 := s15.setReg "l_new" .real [M] lNew
+  let s17 := s16.setReg "o_acc" .real [M, D] oNew
+  let s18 := s17.setReg "m_i" .real [M] mNew
+  let s' := s18.setReg "l_i" .real [M] lNew
+  have h_score_per_j : ∀ (i : Fin M) (j : Fin Bk),
+      scores.data (i, j, PUnit.unit)
+        = FA1MathCausalBoundary.maskedScore Bk k (qb * M) Q K scale i j := by
+    intro i j
+    by_cases hLt : k * Bk + j.val < S_k
+    · show (if k * Bk + ↑j < S_k then causalScores.data (i, j, PUnit.unit)
+          else (none : WithBot ℝ)) = _
+      rw [if_pos hLt]
+      by_cases hLe : k * Bk + j.val ≤ qb * M + i.val
+      · show (if k * Bk + ↑j ≤ qb * M + ↑i then scoresRaw.data (i, j, PUnit.unit)
+            else (none : WithBot ℝ)) = _
+        rw [if_pos hLe]
+        have hkLoaded : ∀ d : Fin D,
+            kLoaded.data (j, d, PUnit.unit)
+              = some (K (⟨k * Bk + j.val, hLt⟩, d, PUnit.unit)) := by
+          intro d
+          have := congrArg (fun t : Tile .real [Bk, D] => t.data (j, d, PUnit.unit))
+            hK_loaded_eq
+          simp [Tile.ofReal, FA1MathBoundary.blockIndex?_of_lt _ _ _ _ hLt] at this
+          exact this
+        rw [FA1MathCausalBoundary.maskedScore_of_lt_of_le Bk k (qb * M) Q K scale i j hLt hLe]
+        show Option.map (· * scale) _ = _
+        have h_sum :
+            (∑ x : Fin D, Option.map (fun b : ℝ => Q (i, x, PUnit.unit) * b)
+              (kLoaded.data (j, x, PUnit.unit)) : WithBot ℝ)
+            = some (∑ x : Fin D,
+                Q (i, x, PUnit.unit) * K (⟨k * Bk + j.val, hLt⟩, x, PUnit.unit)) := by
+          rw [← WithBot.sum_someTerm_eq_some]
+          apply Finset.sum_congr rfl
+          intro x _
+          rw [hkLoaded x]
+          rfl
+        rw [h_sum]
+        show (some _ : WithBot ℝ) = some _
+        unfold FA1Math.scaledScore
+        congr 1
+        ring
+      · show (if k * Bk + ↑j ≤ qb * M + ↑i then scoresRaw.data (i, j, PUnit.unit)
+            else (none : WithBot ℝ)) = _
+        rw [if_neg hLe]
+        rw [FA1MathCausalBoundary.maskedScore_of_lt_of_not_le Bk k (qb * M) Q K scale i j hLt hLe]
+        rfl
+    · show (if k * Bk + ↑j < S_k then causalScores.data (i, j, PUnit.unit)
+          else (none : WithBot ℝ)) = _
+      rw [if_neg hLt]
+      rw [FA1MathCausalBoundary.maskedScore_of_not_lt Bk k (qb * M) Q K scale i j hLt]
+      rfl
+  refine ⟨s', ?_, ?_⟩
+  · simp [fa1LoopBodyStridedCausalBoundary, stepStmts, stepStmt, evalOp,
+      Tile.bop, Tile.cop, Tile.select, Tile.expandDim,
+      Tile.transpose, Tile.dot, Tile.reduceMax, Tile.reduceMaxDrop,
+      Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+      TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      ComparableDType.lt, ComparableDType.ge, BlockState.readMem, Option.bind,
+      hBk, hoffs_m, hoffs_d, hq, hm, hl, ho, hk_base, hv_base]
+    rfl
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · exact hpids0
+    · exact hpids1
+    · exact hpids2
+    · exact hpid_qb
+    · exact hpid_h
+    · exact hpid_b
+    · exact hq_base
+    · exact hk_base
+    · exact hv_base
+    · exact ho_base
+    · simp [s', s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+        hoffs_m]
+    · simp [s', s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+        hoffs_d]
+    · simp [s', s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0,
+        hq]
+    · have h_regs_m_i : s'.regs .real [M] "m_i" = some mNew := by
+        simp [s', s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+      rw [h_regs_m_i]
+      congr 1
+      ext idx
+      show max (FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale k idx.1) (mBlock.data idx)
+        = FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1
+      rw [FA1MathCausalBoundary.mPartial_succ_of_lt Bk (qb * M) Q numKVBlocks K scale k hk idx.1]
+      congr 1
+      show Finset.univ.sup' ⟨⟨0, hBk⟩, Finset.mem_univ _⟩
+          (fun j => scores.data (idx.1, j, PUnit.unit))
+          = Finset.univ.sup
+              (fun j => FA1MathCausalBoundary.maskedScore Bk k (qb * M) Q K scale idx.1 j)
+      rw [Finset.sup'_eq_sup]
+      apply Finset.sup_congr rfl
+      intro j _
+      exact h_score_per_j idx.1 j
+    · have h_regs_l_i : s'.regs .real [M] "l_i" = some lNew := by
+        simp [s', s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+      rw [h_regs_l_i]
+      apply congrArg some
+      apply Tile.ext
+      intro idx
+      have h_mNew : mNew.data (idx.1, PUnit.unit)
+          = FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1 := by
+        show max (FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+            (mBlock.data (idx.1, PUnit.unit)) = _
+        rw [FA1MathCausalBoundary.mPartial_succ_of_lt Bk (qb * M) Q numKVBlocks K scale k hk idx.1]
+        congr 1
+        show Finset.univ.sup' ⟨⟨0, hBk⟩, Finset.mem_univ _⟩
+            (fun j => scores.data (idx.1, j, PUnit.unit))
+            = Finset.univ.sup
+                (fun j => FA1MathCausalBoundary.maskedScore Bk k (qb * M) Q K scale idx.1 j)
+        rw [Finset.sup'_eq_sup]
+        apply Finset.sup_congr rfl
+        intro j _
+        exact h_score_per_j idx.1 j
+      have h_alpha : alpha.data idx
+          = some (FA1MathCausalBoundary.alphaPartial Bk (qb * M) Q numKVBlocks K scale k idx.1) := by
+        show WithBot.realExp _ = _
+        rw [h_mNew]
+        unfold FA1MathCausalBoundary.alphaPartial
+        exact FA1MathCausalBoundary.realExp_eq_some_unbotD _
+      have h_p_sum : (∑ j : Fin Bk, p.data (idx.1, j, PUnit.unit) : WithBot ℝ)
+          = some (∑ j : Fin Bk,
+              (WithBot.realExp
+                (WithBot.realSub
+                  (FA1MathCausalBoundary.maskedScore Bk k (qb * M) Q K scale idx.1 j)
+                  (FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1))
+              ).unbotD 0) := by
+        rw [← WithBot.sum_someTerm_eq_some]
+        apply Finset.sum_congr rfl
+        intro j _
+        show WithBot.realExp _ = _
+        rw [h_score_per_j idx.1 j, h_mNew]
+        exact FA1MathCausalBoundary.realExp_eq_some_unbotD _
+      show Option.map₂ (fun x1 x2 : ℝ => x1 + x2)
+          (Option.map (fun x : ℝ =>
+            x * FA1MathCausalBoundary.lPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+            (alpha.data idx))
+          (∑ j : Fin Bk, p.data (idx.1, j, PUnit.unit) : WithBot ℝ)
+          = some (FA1MathCausalBoundary.lPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1)
+      rw [h_alpha, h_p_sum,
+        FA1MathCausalBoundary.lPartial_succ_of_lt Bk (qb * M) Q numKVBlocks K scale k hk idx.1]
+      rfl
+    · have h_regs_o_acc : s'.regs .real [M, D] "o_acc" = some oNew := by
+        simp [s', s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+      rw [h_regs_o_acc]
+      apply congrArg some
+      apply Tile.ext
+      intro idx
+      have h_mNew : mNew.data (idx.1, PUnit.unit)
+          = FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1 := by
+        show max (FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale k idx.1)
+            (mBlock.data (idx.1, PUnit.unit)) = _
+        rw [FA1MathCausalBoundary.mPartial_succ_of_lt Bk (qb * M) Q numKVBlocks K scale k hk idx.1]
+        congr 1
+        show Finset.univ.sup' ⟨⟨0, hBk⟩, Finset.mem_univ _⟩
+            (fun j => scores.data (idx.1, j, PUnit.unit))
+            = Finset.univ.sup
+                (fun j => FA1MathCausalBoundary.maskedScore Bk k (qb * M) Q K scale idx.1 j)
+        rw [Finset.sup'_eq_sup]
+        apply Finset.sup_congr rfl
+        intro j _
+        exact h_score_per_j idx.1 j
+      have h_alpha : alpha.data (idx.1, PUnit.unit)
+          = some (FA1MathCausalBoundary.alphaPartial Bk (qb * M) Q numKVBlocks K scale k idx.1) := by
+        show WithBot.realExp _ = _
+        rw [h_mNew]
+        unfold FA1MathCausalBoundary.alphaPartial
+        exact FA1MathCausalBoundary.realExp_eq_some_unbotD _
+      have h_vLoaded : ∀ j : Fin Bk,
+          vLoaded.data (j, idx.2.1, PUnit.unit)
+            = some (match FA1MathBoundary.blockIndex? S_k Bk k j with
+                    | some jGlobal => V (jGlobal, idx.2.1, PUnit.unit)
+                    | none => 0) := by
+        intro j
+        have := congrArg (fun t : Tile .real [Bk, D] => t.data (j, idx.2.1, PUnit.unit))
+          hV_loaded_eq
+        simp [Tile.ofReal] at this
+        exact this
+      have h_p_per_j : ∀ j : Fin Bk,
+          p.data (idx.1, j, PUnit.unit)
+            = some ((WithBot.realExp
+                (WithBot.realSub
+                  (FA1MathCausalBoundary.maskedScore Bk k (qb * M) Q K scale idx.1 j)
+                  (FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1))
+              ).unbotD 0) := by
+        intro j
+        show WithBot.realExp _ = _
+        rw [h_score_per_j idx.1 j, h_mNew]
+        exact FA1MathCausalBoundary.realExp_eq_some_unbotD _
+      have h_pv_sum :
+          (∑ j : Fin Bk, Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+              (p.data (idx.1, j, PUnit.unit))
+              (vLoaded.data (j, idx.2.1, PUnit.unit)) : WithBot ℝ)
+            = some (∑ j : Fin Bk,
+                match FA1MathBoundary.blockIndex? S_k Bk k j with
+                | some jGlobal =>
+                    if jGlobal.val ≤ qb * M + idx.1.val then
+                      (WithBot.realExp
+                        (WithBot.realSub
+                          (FA1MathCausalBoundary.maskedScore Bk k (qb * M) Q K scale idx.1 j)
+                          (FA1MathCausalBoundary.mPartial Bk (qb * M) Q numKVBlocks K scale (k + 1) idx.1))
+                      ).unbotD 0 * V (jGlobal, idx.2.1, PUnit.unit)
+                    else
+                      0
+                | none => 0) := by
+        rw [← WithBot.sum_someTerm_eq_some]
+        apply Finset.sum_congr rfl
+        intro j _
+        rw [h_p_per_j j, h_vLoaded j]
+        by_cases hLt : k * Bk + j.val < S_k
+        · rw [FA1MathBoundary.blockIndex?_of_lt S_k Bk k j hLt]
+          by_cases hLe : k * Bk + j.val ≤ qb * M + idx.1.val
+          · simp [hLe]
+          · rw [FA1MathCausalBoundary.maskedScore_of_lt_of_not_le Bk k (qb * M) Q K scale idx.1 j hLt hLe]
+            simp [hLe]
+        · simp [FA1MathBoundary.blockIndex?_of_not_lt _ _ _ _ hLt]
+      show Option.map₂ (fun x1 x2 : ℝ => x1 + x2)
+          (Option.map (fun x : ℝ =>
+            x * FA1MathCausalBoundary.oPartial Bk (qb * M) Q numKVBlocks K V scale k
+              (idx.1, idx.2.1, PUnit.unit))
+            (alpha.data (idx.1, PUnit.unit)))
+          (∑ j : Fin Bk, Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+            (p.data (idx.1, j, PUnit.unit))
+            (vLoaded.data (j, idx.2.1, PUnit.unit)) : WithBot ℝ)
+          = some (FA1MathCausalBoundary.oPartial Bk (qb * M) Q numKVBlocks K V scale (k + 1) idx)
+      rw [h_alpha, h_pv_sum,
+        FA1MathCausalBoundary.oPartial_succ_of_lt Bk (qb * M) Q numKVBlocks K V scale k hk idx]
+      rfl
+    · intro idx
+      simpa [s', s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+        using hK idx
+    · intro idx
+      simpa [s', s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1, s0]
+        using hV idx
+
+/-- Causal boundary strided FA-1 forward correctness, raw form. Bundles
+`fa1_forward_correct_strided_causal_boundary_raw_of_step` with the proven
+causal-boundary loop step. -/
+theorem fa1_forward_correct_strided_causal_boundary_raw
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (hBk : 0 < Bk)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQIn : ∀ idx : TileIndex [M, D],
+        s.pids 0 * M + idx.1.val < S_q →
+        s.mem qReg
+          (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
+    (hQOut : ∀ idx : TileIndex [M, D],
+        ¬ s.pids 0 * M + idx.1.val < S_q → Q idx = 0)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD)) :
+    ∀ idx : TileIndex [M, D],
+      s.pids 0 * M + idx.1.val < S_q →
+      observeTileAt
+          (exec (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some
+            (FA1MathCausalBoundary.oPartial Bk (s.pids 0 * M) Q numKVBlocks K V scale
+                numKVBlocks idx /
+              FA1MathCausalBoundary.lPartial Bk (s.pids 0 * M) Q numKVBlocks K scale
+                numKVBlocks idx.1) := by
+  exact fa1_forward_correct_strided_causal_boundary_raw_of_step
+    qReg kReg vReg outReg
+    sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+    sOB sOH sOM sOD Q K V scale s hQIn hQOut hK hV hInj
+    (fun i st hi hPi =>
+      fa1_step_strided_causal_boundary hBk qReg kReg vReg
+        (s.pids 0) (s.pids 1) (s.pids 2)
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale i st hi hPi)
+
+/-- Causal-boundary strided FA-1 forward correctness in canonical spec form. -/
+theorem fa1_forward_correct_strided_causal_boundary
+    {M D Bk numKVBlocks S_q S_k : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S_k, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQIn : ∀ idx : TileIndex [M, D],
+        s.pids 0 * M + idx.1.val < S_q →
+        s.mem qReg
+          (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
+    (hQOut : ∀ idx : TileIndex [M, D],
+        ¬ s.pids 0 * M + idx.1.val < S_q → Q idx = 0)
+    (hK : InputAt s kReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sKB + s.pids 1 * sKH
+            + idx.1.val * sKN + idx.2.1.val * sKD) K)
+    (hV : InputAt s vReg
+        (fun idx : TileIndex [S_k, D] =>
+          s.pids 2 * sVB + s.pids 1 * sVH
+            + idx.1.val * sVN + idx.2.1.val * sVD) V)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD)) :
+    ∀ idx : TileIndex [M, D],
+      s.pids 0 * M + idx.1.val < S_q →
+      observeTileAt
+          (exec (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionRealCausalBlock (s.pids 0 * M) Q K V scale idx) := by
+  intro idx hIdx
+  rw [fa1_forward_correct_strided_causal_boundary_raw hBk
+        qReg kReg vReg outReg
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD Q K V scale s hQIn hQOut hK hV hInj idx hIdx]
+  congr 1
+  exact FA1MathCausalBoundary.streaming_eq_attentionRealCausalBlock hBk hSk hSkLe
+    (s.pids 0 * M) Q K V scale idx
 
 set_option maxHeartbeats 4000000 in
 /-- Boundary strided loop step. One iteration of the v1 KV loop preserves
@@ -8826,6 +10739,183 @@ theorem fa1_forward_correct_4D_boundary
   rw [slice4DQRowsBoundary_of_lt M Q4D _ _ _ i d' hLt]
   rfl
 
+/-- Causal-boundary 4D-aware corollary of
+`fa1_forward_correct_strided_causal_boundary`. The result is still stated in
+slice-local `attentionRealCausalBlock` form; `fa1_forward_correct_4D_causal_boundary`
+below rewrites it to the user-facing 4D causal spec. -/
+theorem fa1_forward_correct_4D_causal_boundary_slice
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ4D : InputAt s qReg
+        (Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0) Q4D)
+    (hK4D : InputAt s kReg
+        (Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0) K4D)
+    (hV4D : InputAt s vReg
+        (Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0) V4D)
+    (hOValid : Offset.StridesValid [B, H, S_q, D] [sOB, sOH, sOM, sOD]) :
+    ∀ idx : TileIndex [M, D],
+      s.pids 0 * M + idx.1.val < S_q →
+      observeTileAt
+          (exec (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionRealCausalBlock (s.pids 0 * M)
+                (slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
+                  (s.pids 0))
+                (sliceBH K4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩)
+                (sliceBH V4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩)
+                scale idx) := by
+  intro idx hIdxIn
+  have hQIn_inner : ∀ tileIdx : TileIndex [M, D],
+      s.pids 0 * M + tileIdx.1.val < S_q →
+      s.mem qReg
+        (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+          + tileIdx.1.val * sQS + tileIdx.2.1.val * sQD) =
+        slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
+          (s.pids 0) tileIdx := by
+    intro tileIdx hIn
+    obtain ⟨i, d, _⟩ := tileIdx
+    have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+                    ⟨s.pids 0 * M + i.val, hIn⟩,
+                    d, PUnit.unit)
+    show s.mem qReg
+      (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+        + i.val * sQS + d.val * sQD) = _
+    rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
+            + i.val * sQS + d.val * sQD =
+          Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + i.val, hIn⟩,
+             d, PUnit.unit) by
+        simp [Offset.strided, Nat.add_mul]
+        ring]
+    rw [slice4DQRowsBoundary_of_lt M Q4D _ _ _ i d hIn]
+    exact h
+  have hQOut_inner : ∀ tileIdx : TileIndex [M, D],
+      ¬ s.pids 0 * M + tileIdx.1.val < S_q →
+      slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
+        (s.pids 0) tileIdx = 0 := by
+    intro tileIdx hOut
+    obtain ⟨i, d, _⟩ := tileIdx
+    exact slice4DQRowsBoundary_of_not_lt M Q4D _ _ _ i d hOut
+  have hK_inner : InputAt s kReg
+      (fun idx : TileIndex [S_k, D] =>
+        s.pids 2 * sKB + s.pids 1 * sKH
+          + idx.1.val * sKN + idx.2.1.val * sKD)
+      (sliceBH K4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩) := by
+    intro tileIdx
+    obtain ⟨j, d, _⟩ := tileIdx
+    have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
+    show s.mem kReg
+      (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
+    rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
+          Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit) by
+        simp [Offset.strided]]
+    exact h
+  have hV_inner : InputAt s vReg
+      (fun idx : TileIndex [S_k, D] =>
+        s.pids 2 * sVB + s.pids 1 * sVH
+          + idx.1.val * sVN + idx.2.1.val * sVD)
+      (sliceBH V4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩) := by
+    intro tileIdx
+    obtain ⟨j, d, _⟩ := tileIdx
+    have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
+    show s.mem vReg
+      (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
+    rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
+          Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit) by
+        simp [Offset.strided]]
+    exact h
+  have hInj : Function.Injective
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+          + idx.1.val * sOM + idx.2.1.val * sOD) := by
+    have hOValidLocal : Offset.StridesValid [M, D] [sOM, sOD] :=
+      ⟨hOValid.2.2.1, hOValid.2.2.2.1, trivial⟩
+    have hStrInj := Offset.strided_inj
+        (s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM)
+        hOValidLocal
+    intro a b hab
+    apply hStrInj
+    obtain ⟨a₁, a₂, _⟩ := a
+    obtain ⟨b₁, b₂, _⟩ := b
+    show Offset.strided [M, D] [sOM, sOD] _ _ =
+         Offset.strided [M, D] [sOM, sOD] _ _
+    simp only [Offset.strided]
+    have := hab
+    simp only at this
+    omega
+  exact fa1_forward_correct_strided_causal_boundary hBk hSk hSkLe
+    qReg kReg vReg outReg
+    sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+    sOB sOH sOM sOD
+    (slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩ (s.pids 0))
+    (sliceBH K4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩)
+    (sliceBH V4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩)
+    scale s hQIn_inner hQOut_inner hK_inner hV_inner hInj idx hIdxIn
+
+/-- Causal-boundary FA-1 forward correctness in user-facing
+`attentionReal4DCausal` form. -/
+theorem fa1_forward_correct_4D_causal_boundary
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (qReg kReg vReg outReg : RegionName)
+    (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
+    (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ4D : InputAt s qReg
+        (Offset.strided [B, H, S_q, D] [sQB, sQH, sQS, sQD] 0) Q4D)
+    (hK4D : InputAt s kReg
+        (Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0) K4D)
+    (hV4D : InputAt s vReg
+        (Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0) V4D)
+    (hOValid : Offset.StridesValid [B, H, S_q, D] [sOB, sOH, sOM, sOD]) :
+    ∀ idx : TileIndex [M, D],
+      ∀ hLt : s.pids 0 * M + idx.1.val < S_q,
+      observeTileAt
+          (exec (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg
+              M D Bk numKVBlocks S_q S_k
+              sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+              sOB sOH sOM sOD scale) s)
+          outReg
+          (fun idx : TileIndex [M, D] =>
+            s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
+              + idx.1.val * sOM + idx.2.1.val * sOD) idx
+        = some (attentionReal4DCausal Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx hLt
+  rw [fa1_forward_correct_4D_causal_boundary_slice hBk hSk hSkLe
+        qReg kReg vReg outReg
+        sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
+        sOB sOH sOM sOD
+        Q4D K4D V4D scale s hPidB hPidH hQ4D hK4D hV4D hOValid idx hLt]
+  congr 1
+  obtain ⟨i, d, _⟩ := idx
+  have hLtI : s.pids 0 * M + i.val < S_q := by
+    simpa using hLt
+  rw [attentionReal4DCausal_slice]
+  unfold attentionRealCausalBlock attentionRealCausal
+  simp [sliceBH, slice4DQRowsBoundary, hLtI]
+
 /-- 4D causal FA-1 forward correctness in raw streaming form, parameterized
 by the causal loop-step lemma. The closed theorem
 `fa1_forward_correct_4D_causal_raw` supplies `fa1_step_strided_causal`
@@ -9251,6 +11341,44 @@ theorem fa1_forward_correct_4D_boundary_layout
       Q4D K4D V4D scale s hPidB hPidH
       hQ4D hK4D hV4D layout.hOValid idx hLt
 
+/-- Causal-boundary FA-1 forward correctness over a bundled 4D layout. -/
+theorem fa1_forward_correct_4D_causal_boundary_layout
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (layout : FA1Layout4D B H S_q S_k D)
+    (qReg kReg vReg outReg : RegionName)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ4D : TensorView.loaded s (layout.qView qReg) Q4D)
+    (hK4D : TensorView.loaded s (layout.kView kReg) K4D)
+    (hV4D : TensorView.loaded s (layout.vView vReg) V4D) :
+    ∀ idx : TileIndex [M, D],
+      ∀ hLt : s.pids 0 * M + idx.1.val < S_q,
+      observeTileAt
+          (exec (layout.causalBoundaryKernel qReg kReg vReg outReg M Bk numKVBlocks scale) s)
+          outReg (layout.outBlockOffset s M) idx
+        = some (attentionReal4DCausal Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx hLt
+  simpa [FA1Layout4D.causalBoundaryKernel, FA1Layout4D.qOffset, FA1Layout4D.kOffset,
+         FA1Layout4D.vOffset, FA1Layout4D.outBlockOffset,
+         FA1Layout4D.qView, FA1Layout4D.kView, FA1Layout4D.vView,
+         TensorView.loaded, TensorView.offset,
+         FA1Layout4D.qStrides, FA1Layout4D.kStrides,
+         FA1Layout4D.vStrides, FA1Layout4D.oStrides]
+    using fa1_forward_correct_4D_causal_boundary hBk hSk hSkLe
+      qReg kReg vReg outReg
+      layout.qB layout.qH layout.qS layout.qD
+      layout.kB layout.kH layout.kS layout.kD
+      layout.vB layout.vH layout.vS layout.vD
+      layout.oB layout.oH layout.oS layout.oD
+      Q4D K4D V4D scale s hPidB hPidH
+      hQ4D hK4D hV4D layout.hOValid idx hLt
+
 /-! ## View-level theorem surface
 
 These are the preferred public FA-1 theorem statements. The caller supplies
@@ -9347,6 +11475,35 @@ theorem fa1_forward_correct_4D_boundary_views
   simpa [FA1Views4D.boundaryKernel, FA1Views4D.outBlockOffset,
          FA1Views4D.qView, FA1Views4D.kView, FA1Views4D.vView]
     using fa1_forward_correct_4D_boundary_layout hBk hSk hSkLe views.layout
+      views.qReg views.kReg views.vReg views.outReg
+      Q4D K4D V4D scale s hPidB hPidH
+      hQ4D hK4D hV4D idx hLt
+
+/-- Causal-boundary FA-1 forward correctness over bundled tensor views. -/
+theorem fa1_forward_correct_4D_causal_boundary_views
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hSk : 0 < S_k) (hSkLe : S_k ≤ Bk * numKVBlocks)
+    (views : FA1Views4D B H S_q S_k D)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ4D : TensorView.loaded s views.qView Q4D)
+    (hK4D : TensorView.loaded s views.kView K4D)
+    (hV4D : TensorView.loaded s views.vView V4D) :
+    ∀ idx : TileIndex [M, D],
+      ∀ hLt : s.pids 0 * M + idx.1.val < S_q,
+      observeTileAt
+          (exec (views.causalBoundaryKernel M Bk numKVBlocks scale) s)
+          views.outReg (views.outBlockOffset s M) idx
+        = some (attentionReal4DCausal Q4D K4D V4D scale
+            (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+             ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+             idx.2.1, PUnit.unit)) := by
+  intro idx hLt
+  simpa [FA1Views4D.causalBoundaryKernel, FA1Views4D.outBlockOffset,
+         FA1Views4D.qView, FA1Views4D.kView, FA1Views4D.vView]
+    using fa1_forward_correct_4D_causal_boundary_layout hBk hSk hSkLe views.layout
       views.qReg views.kReg views.vReg views.outReg
       Q4D K4D V4D scale s hPidB hPidH
       hQ4D hK4D hV4D idx hLt
