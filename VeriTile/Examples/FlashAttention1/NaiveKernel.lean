@@ -884,32 +884,6 @@ theorem fa1_naive_forward_correct_strided_boundaryD
         = some (attentionReal Q K V scale
             (idx.1, ⟨idx.2.1.val, hDIdx⟩, PUnit.unit)) := by
   intro idx hLt hDIdx
-  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
-      stepStmt st sa = some sb →
-      stepStmts (st :: rest) sa = stepStmts rest sb := by
-    intro st rest sa sb h
-    conv_lhs => unfold stepStmts
-    rw [h]
-  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
-      stepStmts l1 sa = some sb →
-      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
-    intro l1
-    induction l1 with
-    | nil =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        injection h with h
-        rw [List.nil_append, ← h]
-    | cons st rest ih =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        cases hst : stepStmt st sa with
-        | none => rw [hst] at h; simp at h
-        | some sm =>
-            rw [hst] at h
-            simp at h
-            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
-            exact ih l2 sm sb h
   obtain ⟨s0, hPre, hOffsM0, _hOffsN0, hOffsD0, hOBase0, hQ0, hK0, hV0⟩ :=
     fa1_naive_pre_boundaryD_correct qReg kReg vReg qb headIdx batch
       sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD sOB sOH
@@ -947,8 +921,8 @@ theorem fa1_naive_forward_correct_strided_boundaryD
               (fa1NaiveComputeBoundaryD M S Bd scale ++
                 fa1NaiveStoreBoundaryD outReg M Bd S_q D sOM sOD) by
         rw [List.append_assoc]]
-  rw [stepStmts_append _ _ _ _ hPre]
-  rw [stepStmts_append _ _ _ _ hCompute]
+  rw [stepStmts.append_some hPre]
+  rw [stepStmts.append_some hCompute]
   exact fa1_naive_store_boundaryD_correct outReg qb batch headIdx sOB sOH sOM sOD
     Q K V scale s1 hS hDLe hOffsM1 hOffsD1 hOBase1 hOut1 hInj idx hLt hDIdx
 
@@ -994,32 +968,6 @@ theorem fa1_naive_forward_correct_strided_causal_boundaryD
         = some (attentionRealCausalBlock (qb * M) Q K V scale
             (idx.1, ⟨idx.2.1.val, hDIdx⟩, PUnit.unit)) := by
   intro idx hLt hDIdx
-  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
-      stepStmt st sa = some sb →
-      stepStmts (st :: rest) sa = stepStmts rest sb := by
-    intro st rest sa sb h
-    conv_lhs => unfold stepStmts
-    rw [h]
-  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
-      stepStmts l1 sa = some sb →
-      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
-    intro l1
-    induction l1 with
-    | nil =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        injection h with h
-        rw [List.nil_append, ← h]
-    | cons st rest ih =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        cases hst : stepStmt st sa with
-        | none => rw [hst] at h; simp at h
-        | some sm =>
-            rw [hst] at h
-            simp at h
-            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
-            exact ih l2 sm sb h
   obtain ⟨s0, hPre, hOffsM0, hOffsN0, hOffsD0, hOBase0, hQ0, hK0, hV0⟩ :=
     fa1_naive_pre_boundaryD_correct qReg kReg vReg qb headIdx batch
       sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD sOB sOH
@@ -1058,8 +1006,8 @@ theorem fa1_naive_forward_correct_strided_causal_boundaryD
               (fa1NaiveComputeCausalBoundaryD M S Bd scale ++
                 fa1NaiveStoreBoundaryD outReg M Bd S_q D sOM sOD) by
         rw [List.append_assoc]]
-  rw [stepStmts_append _ _ _ _ hPre]
-  rw [stepStmts_append _ _ _ _ hCompute]
+  rw [stepStmts.append_some hPre]
+  rw [stepStmts.append_some hCompute]
   exact fa1_naive_store_causal_boundaryD_correct outReg qb batch headIdx sOB sOH sOM sOD
     Q K V scale s1 hS hDLe hOffsM1 hOffsD1 hOBase1 hOut1 hInj idx hLt hDIdx
 

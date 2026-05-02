@@ -1128,6 +1128,31 @@ namespace stepStmts
   unfold stepStmts
   rfl
 
+theorem cons_some {st : Stmt} {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmt st s = some s') :
+    stepStmts (st :: rest) s = stepStmts rest s' := by
+  conv_lhs => unfold stepStmts
+  rw [h]
+
+theorem append_some {l1 l2 : List Stmt} {s s' : BlockState}
+    (h : stepStmts l1 s = some s') :
+    stepStmts (l1 ++ l2) s = stepStmts l2 s' := by
+  induction l1 generalizing s with
+  | nil =>
+      unfold stepStmts at h
+      injection h with hs
+      subst hs
+      rfl
+  | cons st rest ih =>
+      conv_lhs at h => unfold stepStmts
+      cases hst : stepStmt st s with
+      | none =>
+          simp [hst] at h
+      | some smid =>
+          simp [hst] at h
+          rw [List.cons_append, cons_some hst]
+          exact ih h
+
 end stepStmts
 
 namespace stepForLoopAux

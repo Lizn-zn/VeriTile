@@ -290,12 +290,6 @@ theorem fused_layernorm_correct
     -- The fused kernel's body is `[pid; M:=0; S:=0; forLoop body; tail...]`.
     -- The affine tail kernel's body is the same `tail...`. Therefore:
     -- exec fused s = stepStmts (tail) sLoop = exec affineTail sLoop.
-    have stmts_cons : ∀ (st : Stmt) (rest : List Stmt) (s s' : BlockState),
-        stepStmt st s = some s' →
-        stepStmts (st :: rest) s = stepStmts rest s' := by
-      intro st rest s s' h
-      conv_lhs => unfold stepStmts
-      rw [h]
     have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
                   = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
       simp [stepStmt, evalOp]
@@ -313,7 +307,7 @@ theorem fused_layernorm_correct
       rfl
     show stepStmts (fusedLayerNormKernel xReg γReg βReg yReg N ε).body s
         = stepStmts (layerNormAffineTailKernel xReg γReg βReg yReg N ε).body sLoop
-    -- Unfold kernel body literals so stmts_cons can match `:: pattern`
+    -- Unfold kernel body literals so `stepStmts.cons_some` can match `::`.
     simp only [show (fusedLayerNormKernel xReg γReg βReg yReg N ε).body =
         ([ .assign .nat [] "pid" (.programId 0)
          , .assign .real [] "M" (.const 0)
@@ -325,10 +319,10 @@ theorem fused_layernorm_correct
     rw [show ∀ (a b c d : Stmt) (rest : List Stmt) (s : BlockState),
         stepStmts ([a, b, c, d] ++ rest) s
           = stepStmts (a :: b :: c :: d :: rest) s from fun _ _ _ _ _ _ => rfl]
-    rw [stmts_cons _ _ _ _ hpid]
-    rw [stmts_cons _ _ _ _ hM0]
-    rw [stmts_cons _ _ _ _ hS0]
-    rw [stmts_cons _ _ _ _ hLoop]
+    rw [stepStmts.cons_some hpid]
+    rw [stepStmts.cons_some hM0]
+    rw [stepStmts.cons_some hS0]
+    rw [stepStmts.cons_some hLoop]
   rw [h_exec_tail]
   have hpidLoop : sLoop.pid = s.pid := by
     exact hPloop.2.2.2.1

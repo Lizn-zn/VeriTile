@@ -4335,28 +4335,6 @@ theorem fa1_score_loop_tail_correct
     · intro idx
       simpa [s', s7, s6, s5, s4, s3, s2, s1] using hV idx
 
-private theorem stepStmts_append_some (l1 l2 : List Stmt) (sa sb : BlockState)
-    (h : stepStmts l1 sa = some sb) :
-    stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
-  induction l1 generalizing sa with
-  | nil =>
-      conv_lhs at h => unfold stepStmts
-      injection h with hsb
-      simp [hsb]
-  | cons st rest ih =>
-      conv_lhs at h => unfold stepStmts
-      cases hst : stepStmt st sa with
-      | none =>
-          rw [hst] at h
-          simp at h
-      | some sm =>
-          rw [hst] at h
-          simp at h
-          rw [List.cons_append]
-          conv_lhs => unfold stepStmts
-          rw [hst]
-          exact ih sm h
-
 theorem fa1_score_loop_stepSoftcap_correct
     {M D Bk numKVBlocks : Nat} (hBk : 0 < Bk)
     (qReg kReg vReg : RegionName)
@@ -4384,8 +4362,8 @@ theorem fa1_score_loop_stepSoftcap_correct
   refine ⟨s', ?_, hTailP⟩
   rw [fa1ScoreLoopBodySoftcap_parts_eq]
   rw [List.append_assoc]
-  rw [stepStmts_append_some _ _ _ _ hLoad]
-  rw [stepStmts_append_some _ _ _ _ hScore]
+  rw [stepStmts.append_some hLoad]
+  rw [stepStmts.append_some hScore]
   exact hTail
 
 theorem fa1_score_loop_stepAlibi_correct
@@ -4417,8 +4395,8 @@ theorem fa1_score_loop_stepAlibi_correct
   refine ⟨s', ?_, hTailP⟩
   rw [fa1ScoreLoopBodyAlibi_parts_eq]
   rw [List.append_assoc]
-  rw [stepStmts_append_some _ _ _ _ hLoad]
-  rw [stepStmts_append_some _ _ _ _ hScore]
+  rw [stepStmts.append_some hLoad]
+  rw [stepStmts.append_some hScore]
   exact hTail
 
 theorem fa1_score_loop_stepSlidingWindow_correct
@@ -4449,8 +4427,8 @@ theorem fa1_score_loop_stepSlidingWindow_correct
   refine ⟨s', ?_, hTailP⟩
   rw [fa1ScoreLoopBodySlidingWindow_parts_eq]
   rw [List.append_assoc]
-  rw [stepStmts_append_some _ _ _ _ hLoad]
-  rw [stepStmts_append_some _ _ _ _ hScore]
+  rw [stepStmts.append_some hLoad]
+  rw [stepStmts.append_some hScore]
   exact hTail
 
 theorem fa1_score_loop_stepAlibiSlidingSoftcap_correct
@@ -4492,8 +4470,8 @@ theorem fa1_score_loop_stepAlibiSlidingSoftcap_correct
   refine ⟨s', ?_, hTailP⟩
   rw [fa1ScoreLoopBodyAlibiSlidingSoftcap_parts_eq]
   rw [List.append_assoc]
-  rw [stepStmts_append_some _ _ _ _ hLoad]
-  rw [stepStmts_append_some _ _ _ _ hScore]
+  rw [stepStmts.append_some hLoad]
+  rw [stepStmts.append_some hScore]
   exact hTail
 
 theorem fa1_score_preLoop_correct
@@ -4737,32 +4715,6 @@ theorem fa1_score_blockrec_forward_raw_of_step
         = some
           (oScoreBlockPartial visible score V numKVBlocks idx /
             lScoreBlockPartial visible score numKVBlocks idx.1) := by
-  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
-      stepStmt st sa = some sb →
-      stepStmts (st :: rest) sa = stepStmts rest sb := by
-    intro st rest sa sb h
-    conv_lhs => unfold stepStmts
-    rw [h]
-  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
-      stepStmts l1 sa = some sb →
-      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
-    intro l1
-    induction l1 with
-    | nil =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        injection h with h
-        rw [List.nil_append, ← h]
-    | cons st rest ih =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        cases hst : stepStmt st sa with
-        | none => rw [hst] at h; simp at h
-        | some sm =>
-            rw [hst] at h
-            simp at h
-            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
-            exact ih l2 sm sb h
   obtain ⟨s0, hPre, hP0⟩ :=
     fa1_score_blockrec_preLoop_correct qReg kReg vReg Q K V visible score s hQ hK hV
   obtain ⟨sLoop, hLoopStmt, hPLoop⟩ :=
@@ -4771,17 +4723,15 @@ theorem fa1_score_blockrec_forward_raw_of_step
       hStep
   intro idx
   rw [List.append_assoc,
-      stepStmts_append (fa1ScorePreLoop qReg M D)
-        ([Stmt.forLoop "n" numKVBlocks body] ++ fa1ScorePostLoop outReg M D)
-        s s0 hPre]
-  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks body]
-      (fa1ScorePostLoop outReg M D) s0 sLoop ?_]
+      stepStmts.append_some (l1 := fa1ScorePreLoop qReg M D)
+        (l2 := [Stmt.forLoop "n" numKVBlocks body] ++ fa1ScorePostLoop outReg M D)
+        hPre]
+  rw [stepStmts.append_some (l1 := ([Stmt.forLoop "n" numKVBlocks body]))
+      (l2 := fa1ScorePostLoop outReg M D) ?_]
   · exact fa1_score_blockrec_postLoop_correct qReg kReg vReg outReg s.pid Q K V
       visible score sLoop hPLoop idx
-  · rw [stepStmts_cons _ [] _ _ hLoopStmt]
-    show stepStmts [] sLoop = some sLoop
-    unfold stepStmts
-    rfl
+  · rw [stepStmts.cons_some hLoopStmt]
+    exact stepStmts.nil
 
 theorem fa1_forward_softcap_blockrec_raw_of_step
     {M D Bk numKVBlocks : Nat}

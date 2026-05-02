@@ -376,29 +376,18 @@ theorem online_softmax_correct
                 = some s0 := by
       simp [stepStmt, evalOp, s0]
       rfl
-    -- Chain: 3 assigns + forLoop = exec body. Each `stepStmts (st :: rest) s`
-    -- reduces to `match stepStmt st s with | some s' => stepStmts rest s'`.
-    -- We provide each `stepStmt` rewrite explicitly via the haves above.
-    have stmts_cons : ∀ (st : Stmt) (rest : List Stmt) (s s' : BlockState),
-        stepStmt st s = some s' →
-        stepStmts (st :: rest) s = stepStmts rest s' := by
-      intro st rest s s' h
-      conv_lhs => unfold stepStmts
-      rw [h]
-    have stmts_nil : ∀ (s : BlockState), stepStmts [] s = some s := by
-      intro s
-      conv_lhs => unfold stepStmts
+    -- Chain the pre-loop assignments and the loop statement explicitly.
     show stepStmts (onlineSoftmaxKernel xReg yReg N).body s = some sLoop
     show stepStmts
         [ .assign .nat [] "pid" (.programId 0)
         , .assign .real [] "m" .negInf
         , .assign .real [] "l" (.const 0)
         , .forLoop "i" N (onlineSoftmaxLoopBody xReg N) ] s = some sLoop
-    rw [stmts_cons _ _ _ _ hpid]
-    rw [stmts_cons _ _ _ _ hm0]
-    rw [stmts_cons _ _ _ _ hl0]
-    rw [stmts_cons _ _ _ _ hLoop]
-    exact stmts_nil _
+    rw [stepStmts.cons_some hpid]
+    rw [stepStmts.cons_some hm0]
+    rw [stepStmts.cons_some hl0]
+    rw [stepStmts.cons_some hLoop]
+    exact stepStmts.nil
   constructor
   · rw [hExec]
     simp [hm]

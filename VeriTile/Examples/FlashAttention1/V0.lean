@@ -2598,33 +2598,6 @@ theorem fa1_forward_correct
           outReg
           (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
         = some (attentionReal Q K V scale idx) := by
-  -- Helper: `stepStmts` distributes over list append.
-  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
-      stepStmt st sa = some sb →
-      stepStmts (st :: rest) sa = stepStmts rest sb := by
-    intro st rest sa sb h
-    conv_lhs => unfold stepStmts
-    rw [h]
-  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
-      stepStmts l1 sa = some sb →
-      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
-    intro l1
-    induction l1 with
-    | nil =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        injection h with h
-        rw [List.nil_append, ← h]
-    | cons st rest ih =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        cases hst : stepStmt st sa with
-        | none => rw [hst] at h; simp at h
-        | some sm =>
-            rw [hst] at h
-            simp at h
-            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
-            exact ih l2 sm sb h
   -- Stage B: pre-loop establishes P_fa1 0.
   obtain ⟨s0, hPre, hP0⟩ :=
     fa1_preLoop_correct qReg kReg vReg Q K V scale s _hQ _hK _hV
@@ -2643,19 +2616,18 @@ theorem fa1_forward_correct
   -- Walk preLoop: stepStmts (preLoop ++ [forLoop] ++ postLoop) s
   --             = stepStmts ([forLoop] ++ postLoop) s0
   rw [List.append_assoc,
-      stepStmts_append (fa1PreLoop qReg M D)
-        ([Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)] ++
-          fa1PostLoop outReg M D) s s0 hPre]
+      stepStmts.append_some (l1 := fa1PreLoop qReg M D)
+        (l2 := [Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)] ++
+          fa1PostLoop outReg M D) hPre]
   -- Walk forLoop: stepStmts ([forLoop] ++ postLoop) s0 = stepStmts postLoop sLoop.
-  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)]
-        (fa1PostLoop outReg M D) s0 sLoop ?_]
+  rw [stepStmts.append_some
+        (l1 := [Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)])
+        (l2 := fa1PostLoop outReg M D) ?_]
   · exact fa1_postLoop_correct hBk hNumKVBlocks qReg kReg vReg outReg s.pid Q K V scale
       sLoop hPLoop idx
   · -- stepStmts [forLoop] s0 = stepStmts [] sLoop = some sLoop
-    rw [stepStmts_cons _ [] _ _ hLoopStmt]
-    show stepStmts [] sLoop = some sLoop
-    unfold stepStmts
-    rfl
+    rw [stepStmts.cons_some hLoopStmt]
+    exact stepStmts.nil
 
 /-- Strided / 4D-aware FA-1 forward correctness — single program-instance
 slice. Threads `fa1_preLoop_correct_strided`, `fa1_step_strided`, and
@@ -2708,32 +2680,6 @@ theorem fa1_forward_correct_strided
             s.pids 2 * sOB + s.pids 1 * sOH + s.pids 0 * M * sOM
               + idx.1.val * sOM + idx.2.1.val * sOD) idx
         = some (attentionReal Q K V scale idx) := by
-  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
-      stepStmt st sa = some sb →
-      stepStmts (st :: rest) sa = stepStmts rest sb := by
-    intro st rest sa sb h
-    conv_lhs => unfold stepStmts
-    rw [h]
-  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
-      stepStmts l1 sa = some sb →
-      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
-    intro l1
-    induction l1 with
-    | nil =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        injection h with h
-        rw [List.nil_append, ← h]
-    | cons st rest ih =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        cases hst : stepStmt st sa with
-        | none => rw [hst] at h; simp at h
-        | some sm =>
-            rw [hst] at h
-            simp at h
-            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
-            exact ih l2 sm sb h
   -- Stage B: strided pre-loop establishes P_fa1_strided 0.
   obtain ⟨s0, hPre, hP0⟩ :=
     fa1_preLoop_correct_strided qReg kReg vReg
@@ -2762,23 +2708,23 @@ theorem fa1_forward_correct_strided
           (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
         fa1PostLoopStrided outReg M D sOM sOD from rfl]
   rw [List.append_assoc,
-      stepStmts_append (fa1PreLoopStrided qReg M D
+      stepStmts.append_some (l1 := fa1PreLoopStrided qReg M D
           sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH)
-        ([Stmt.forLoop "n" numKVBlocks
+        (l2 := [Stmt.forLoop "n" numKVBlocks
           (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
-          fa1PostLoopStrided outReg M D sOM sOD) s s0 hPre]
-  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks
+          fa1PostLoopStrided outReg M D sOM sOD) hPre]
+  have hLoopList :
+      stepStmts [Stmt.forLoop "n" numKVBlocks
           (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)]
-        (fa1PostLoopStrided outReg M D sOM sOD) s0 sLoop ?_]
+        s0 = some sLoop := by
+    rw [stepStmts.cons_some hLoopStmt]
+    exact stepStmts.nil
+  rw [stepStmts.append_some hLoopList]
   · exact fa1_postLoop_correct_strided hBk hNumKVBlocks
       qReg kReg vReg outReg
       (s.pids 0) (s.pids 1) (s.pids 2)
       sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
       sOB sOH sOM sOD Q K V scale sLoop hPLoop hInj idx
-  · rw [stepStmts_cons _ [] _ _ hLoopStmt]
-    show stepStmts [] sLoop = some sLoop
-    unfold stepStmts
-    rfl
 
 /-- Causal strided forward correctness in raw streaming form, parameterized
 by the causal loop-step lemma. Kept as a factoring lemma for the closed
@@ -2836,32 +2782,6 @@ theorem fa1_forward_correct_strided_causal_raw_of_step
                 numKVBlocks idx /
               FA1MathCausal.lPartial Bk (s.pids 0 * M) Q numKVBlocks K scale
                 numKVBlocks idx.1) := by
-  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
-      stepStmt st sa = some sb →
-      stepStmts (st :: rest) sa = stepStmts rest sb := by
-    intro st rest sa sb h
-    conv_lhs => unfold stepStmts
-    rw [h]
-  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
-      stepStmts l1 sa = some sb →
-      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
-    intro l1
-    induction l1 with
-    | nil =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        injection h with h
-        rw [List.nil_append, ← h]
-    | cons st rest ih =>
-        intro l2 sa sb h
-        conv_lhs at h => unfold stepStmts
-        cases hst : stepStmt st sa with
-        | none => rw [hst] at h; simp at h
-        | some sm =>
-            rw [hst] at h
-            simp at h
-            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
-            exact ih l2 sm sb h
   obtain ⟨s0, hPre, hP0⟩ :=
     fa1_preLoop_correct_strided_causal qReg kReg vReg
       sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
@@ -2882,23 +2802,23 @@ theorem fa1_forward_correct_strided_causal_raw_of_step
           (fa1LoopBodyStridedCausal kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
         fa1PostLoopStrided outReg M D sOM sOD from rfl]
   rw [List.append_assoc,
-      stepStmts_append (fa1PreLoopStrided qReg M D
+      stepStmts.append_some (l1 := fa1PreLoopStrided qReg M D
           sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH)
-        ([Stmt.forLoop "n" numKVBlocks
+        (l2 := [Stmt.forLoop "n" numKVBlocks
           (fa1LoopBodyStridedCausal kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
-          fa1PostLoopStrided outReg M D sOM sOD) s s0 hPre]
-  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks
+          fa1PostLoopStrided outReg M D sOM sOD) hPre]
+  have hLoopList :
+      stepStmts [Stmt.forLoop "n" numKVBlocks
           (fa1LoopBodyStridedCausal kReg vReg M D Bk sKN sKD sVN sVD scale)]
-        (fa1PostLoopStrided outReg M D sOM sOD) s0 sLoop ?_]
+        s0 = some sLoop := by
+    rw [stepStmts.cons_some hLoopStmt]
+    exact stepStmts.nil
+  rw [stepStmts.append_some hLoopList]
   · exact fa1_postLoop_correct_strided_causal_raw
       qReg kReg vReg outReg
       (s.pids 0) (s.pids 1) (s.pids 2)
       sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
       sOB sOH sOM sOD Q K V scale sLoop hPLoop hInj idx
-  · rw [stepStmts_cons _ [] _ _ hLoopStmt]
-    show stepStmts [] sLoop = some sLoop
-    unfold stepStmts
-    rfl
 
 /-- Causal strided forward correctness in raw streaming form. This is
 `fa1_forward_correct_strided_causal_raw_of_step` with the loop-step

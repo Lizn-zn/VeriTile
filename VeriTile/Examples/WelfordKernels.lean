@@ -465,14 +465,6 @@ theorem online_welford_correct
         some ((sLoop.writeMem meanReg 0 (welfordMean xs blockSize)).writeMem
           varReg 0 (welfordS xs blockSize / blockSize)) := by
     -- Walk through pre-loop assigns, forLoop, post-loop stores explicitly.
-    have stmts_cons : ∀ (st : Stmt) (rest : List Stmt) (s s' : BlockState),
-        stepStmt st s = some s' →
-        stepStmts (st :: rest) s = stepStmts rest s' := by
-      intro st rest s s' h
-      conv_lhs => unfold stepStmts
-      rw [h]
-    have stmts_nil : ∀ (s : BlockState), stepStmts [] s = some s := by
-      intro s; conv_lhs => unfold stepStmts
     have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
                   = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
       simp [stepStmt, evalOp]
@@ -516,13 +508,13 @@ theorem online_welford_correct
             (.div .real .nil (.ref .real [] "S")
               (.natToReal (.constNat blockSize)))
         ] s = _
-    rw [stmts_cons _ _ _ _ hpid]
-    rw [stmts_cons _ _ _ _ hM0]
-    rw [stmts_cons _ _ _ _ hS0]
-    rw [stmts_cons _ _ _ _ hLoop]
-    rw [stmts_cons _ _ _ _ hMeanStore]
-    rw [stmts_cons _ _ _ _ hVarStore]
-    exact stmts_nil _
+    rw [stepStmts.cons_some hpid]
+    rw [stepStmts.cons_some hM0]
+    rw [stepStmts.cons_some hS0]
+    rw [stepStmts.cons_some hLoop]
+    rw [stepStmts.cons_some hMeanStore]
+    rw [stepStmts.cons_some hVarStore]
+    exact stepStmts.nil
   constructor
   · rw [hExec]
     simp [BlockState.readMem, BlockState.writeMem, h_mv, welfordMeanSpec,
