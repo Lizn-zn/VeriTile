@@ -1654,6 +1654,110 @@ private def fa1ScoreLoopScoreSoftcap
             (Op.const softcap))))
   ]
 
+private def fa1ScoreLoopScoreAlibi
+    (M D Bk : Nat) (scale slope : ℝ) : List Stmt :=
+  [ Stmt.assign .real [M, Bk] "raw"
+      (Op.mul .real Broadcast.scalarR
+        (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+          (Op.ref .real [M, D] "q")
+          (Op.transpose (batch := []) (M := Bk) (N := D)
+            (Op.ref .real [Bk, D] "k")))
+        (Op.const scale))
+  , Stmt.assign .real [M, Bk] "delta"
+      (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+        (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+  , Stmt.assign .real [M, Bk] "dist"
+      (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [M, Bk] "delta")
+        (Op.sub .real Broadcast.scalarL
+          (Op.const 0)
+          (Op.ref .real [M, Bk] "delta")))
+  , Stmt.assign .real [M, Bk] "scores"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [M, Bk] "raw")
+        (Op.sub .real Broadcast.scalarL
+          (Op.const 0)
+          (Op.mul .real Broadcast.scalarL
+            (Op.const slope)
+            (Op.ref .real [M, Bk] "dist"))))
+  ]
+
+private def fa1ScoreLoopScoreSlidingWindow
+    (M D Bk window : Nat) (scale : ℝ) : List Stmt :=
+  [ Stmt.assign .real [M, Bk] "raw"
+      (Op.mul .real Broadcast.scalarR
+        (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+          (Op.ref .real [M, D] "q")
+          (Op.transpose (batch := []) (M := Bk) (N := D)
+            (Op.ref .real [Bk, D] "k")))
+        (Op.const scale))
+  , Stmt.assign .real [M, Bk] "delta"
+      (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+        (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+  , Stmt.assign .real [M, Bk] "dist"
+      (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [M, Bk] "delta")
+        (Op.sub .real Broadcast.scalarL
+          (Op.const 0)
+          (Op.ref .real [M, Bk] "delta")))
+  , Stmt.assign .bool [M, Bk] "visible"
+      (Op.lt ComparableDType.real Broadcast.scalarR
+        (Op.ref .real [M, Bk] "dist")
+        (Op.const (window : ℝ)))
+  , Stmt.assign .real [M, Bk] "scores"
+      (Op.where
+        (Op.ref .bool [M, Bk] "visible")
+        (Op.ref .real [M, Bk] "raw")
+        (Op.broadcast Op.negInf [M, Bk]))
+  ]
+
+private def fa1ScoreLoopScoreAlibiSlidingSoftcap
+    (M D Bk window : Nat) (scale slope softcap : ℝ) : List Stmt :=
+  [ Stmt.assign .real [M, Bk] "raw"
+      (Op.mul .real Broadcast.scalarR
+        (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+          (Op.ref .real [M, D] "q")
+          (Op.transpose (batch := []) (M := Bk) (N := D)
+            (Op.ref .real [Bk, D] "k")))
+        (Op.const scale))
+  , Stmt.assign .real [M, Bk] "delta"
+      (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+        (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+  , Stmt.assign .real [M, Bk] "dist"
+      (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [M, Bk] "delta")
+        (Op.sub .real Broadcast.scalarL
+          (Op.const 0)
+          (Op.ref .real [M, Bk] "delta")))
+  , Stmt.assign .real [M, Bk] "biased"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [M, Bk] "raw")
+        (Op.sub .real Broadcast.scalarL
+          (Op.const 0)
+          (Op.mul .real Broadcast.scalarL
+            (Op.const slope)
+            (Op.ref .real [M, Bk] "dist"))))
+  , Stmt.assign .real [M, Bk] "capped"
+      (Op.mul .real Broadcast.scalarL
+        (Op.const softcap)
+        (Op.tanh
+          (Op.div .real Broadcast.scalarR
+            (Op.ref .real [M, Bk] "biased")
+            (Op.const softcap))))
+  , Stmt.assign .bool [M, Bk] "visible"
+      (Op.lt ComparableDType.real Broadcast.scalarR
+        (Op.ref .real [M, Bk] "dist")
+        (Op.const (window : ℝ)))
+  , Stmt.assign .real [M, Bk] "scores"
+      (Op.where
+        (Op.ref .bool [M, Bk] "visible")
+        (Op.ref .real [M, Bk] "capped")
+        (Op.broadcast Op.negInf [M, Bk]))
+  ]
+
 private def fa1ScoreLoopTail (M D Bk : Nat) : List Stmt :=
   [ Stmt.assign .real [M] "m_block"
       (Op.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ (keepDims := Bool.false)
@@ -1698,6 +1802,32 @@ private def fa1ScoreLoopTail (M D Bk : Nat) : List Stmt :=
     fa1ScoreLoopBodySoftcap kReg vReg M D Bk scale softcap =
       fa1ScoreLoopLoadBlock kReg vReg D Bk ++
       fa1ScoreLoopScoreSoftcap M D Bk scale softcap ++
+      fa1ScoreLoopTail M D Bk := by
+  rfl
+
+@[simp] theorem fa1ScoreLoopBodyAlibi_parts_eq
+    (kReg vReg : RegionName) (M D Bk : Nat) (scale slope : ℝ) :
+    fa1ScoreLoopBodyAlibi kReg vReg M D Bk scale slope =
+      fa1ScoreLoopLoadBlock kReg vReg D Bk ++
+      fa1ScoreLoopScoreAlibi M D Bk scale slope ++
+      fa1ScoreLoopTail M D Bk := by
+  rfl
+
+@[simp] theorem fa1ScoreLoopBodySlidingWindow_parts_eq
+    (kReg vReg : RegionName) (M D Bk window : Nat) (scale : ℝ) :
+    fa1ScoreLoopBodySlidingWindow kReg vReg M D Bk window scale =
+      fa1ScoreLoopLoadBlock kReg vReg D Bk ++
+      fa1ScoreLoopScoreSlidingWindow M D Bk window scale ++
+      fa1ScoreLoopTail M D Bk := by
+  rfl
+
+@[simp] theorem fa1ScoreLoopBodyAlibiSlidingSoftcap_parts_eq
+    (kReg vReg : RegionName) (M D Bk window : Nat)
+    (scale slope softcap : ℝ) :
+    fa1ScoreLoopBodyAlibiSlidingSoftcap kReg vReg M D Bk window
+        scale slope softcap =
+      fa1ScoreLoopLoadBlock kReg vReg D Bk ++
+      fa1ScoreLoopScoreAlibiSlidingSoftcap M D Bk window scale slope softcap ++
       fa1ScoreLoopTail M D Bk := by
   rfl
 
