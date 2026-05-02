@@ -1643,6 +1643,49 @@ def P_fa1_score
   InputAt s vReg
       (Offset.rowMajor2D (rows := S) (cols := D) 0 D) V
 
+/-- Block-indexed wrapper around `P_fa1_score`.
+
+The generic online recurrence is indexed by the number of logical key
+positions already consumed. The executable FA-1 loop is indexed by KV blocks,
+so after `k` loop iterations the recurrence has consumed `Bk * k` key lanes.
+-/
+def P_fa1_score_blocks
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (s : BlockState) : Prop :=
+  P_fa1_score qReg kReg vReg origPid Q K V visible score (Bk * k) s
+
+theorem P_fa1_score_blocks_zero
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (s : BlockState) :
+    P_fa1_score_blocks qReg kReg vReg origPid Q K V visible score 0 s =
+      P_fa1_score qReg kReg vReg origPid Q K V visible score 0 s := by
+  simp [P_fa1_score_blocks]
+
+theorem P_fa1_score_blocks_final
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (s : BlockState) :
+    P_fa1_score_blocks qReg kReg vReg origPid Q K V visible score numKVBlocks s =
+      P_fa1_score qReg kReg vReg origPid Q K V visible score (Bk * numKVBlocks) s := by
+  rfl
+
 theorem fa1_score_preLoop_correct
     {M D S : Nat}
     (qReg kReg vReg : RegionName)
@@ -1701,6 +1744,26 @@ theorem fa1_score_preLoop_correct
     · intro idx
       simpa [s0] using hV idx
 
+theorem fa1_score_preLoop_correct_blocks
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ) (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V) :
+    ∃ s0,
+      stepStmts (fa1ScorePreLoop qReg M D) s = some s0 ∧
+      P_fa1_score_blocks qReg kReg vReg s.pid Q K V visible score 0 s0 := by
+  rcases fa1_score_preLoop_correct qReg kReg vReg Q K V visible score s hQ hK hV with
+    ⟨s0, hStep, hP⟩
+  exact ⟨s0, hStep, by simpa [P_fa1_score_blocks] using hP⟩
+
 theorem fa1_score_postLoop_correct
     {M D S : Nat}
     (qReg kReg vReg outReg : RegionName)
@@ -1741,6 +1804,26 @@ theorem fa1_score_postLoop_correct
   simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
   simp [oScoreOnline_div_lScoreOnline_eq_attentionRealMaskedScore visible score V idx]
+
+theorem fa1_score_postLoop_correct_blocks
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ) (sLoop : BlockState)
+    (hP : P_fa1_score_blocks qReg kReg vReg origPid Q K V visible score
+      numKVBlocks sLoop) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (stepStmts (fa1ScorePostLoop outReg M D) sLoop)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) idx
+        = some (attentionRealMaskedScore visible score V idx) := by
+  intro idx
+  exact fa1_score_postLoop_correct qReg kReg vReg outReg origPid Q K V
+    visible score sLoop (by simpa [P_fa1_score_blocks] using hP) idx
 
 theorem P_fa1_score_readout_ratio
     {M D S : Nat}
