@@ -2088,7 +2088,32 @@ def distanceBlockTile {M Bk : Nat} (qStart : Nat) (k : Nat) :
             (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
         (Tile.natToReal
           (Tile.expandDim ⟨1, by simp⟩
+          (Tile.vec (fun i : Fin M => qStart + i.val))))))
+
+def distanceBlockTileNumeric {M Bk : Nat} (qStart : Nat) (k : Nat) :
+    Tile .real [M, Bk] :=
+  Tile.bop max (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    (Tile.bop NumericDType.real.sub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+      (Tile.natToReal
+        (Tile.expandDim ⟨0, by simp⟩
+          (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+      (Tile.natToReal
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.vec (fun i : Fin M => qStart + i.val)))))
+    (Tile.bop NumericDType.real.sub Broadcast.scalarL
+      (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+      (Tile.bop NumericDType.real.sub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+        (Tile.natToReal
+          (Tile.expandDim ⟨0, by simp⟩
+            (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+        (Tile.natToReal
+          (Tile.expandDim ⟨1, by simp⟩
             (Tile.vec (fun i : Fin M => qStart + i.val))))))
+
+theorem distanceBlockTileNumeric_eq {M Bk : Nat} (qStart : Nat) (k : Nat) :
+    distanceBlockTileNumeric (M := M) (Bk := Bk) qStart k =
+      distanceBlockTile (M := M) (Bk := Bk) qStart k := by
+  rfl
 
 noncomputable def slidingVisibleBlockTile {M Bk : Nat}
     (qStart window : Nat) (k : Nat) : Tile .bool [M, Bk] :=
@@ -3004,6 +3029,104 @@ theorem fa1_score_loop_scoreSoftcap_correct
       · simp [sScore, sRaw, hv_ptrs]
       · simp [sScore, sRaw, hkReg]
       · simp [sScore, sRaw, hvReg]
+    · simp [sScore, scores]
+
+theorem fa1_score_loop_scoreAlibi_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid qStart : Nat)
+    (slope : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ)
+    (k : Nat) (sLoad : BlockState) (hk : k < numKVBlocks)
+    (hqStart : qStart = origPid * M)
+    (hP : P_fa1_score_blockrec_loaded qReg kReg vReg origPid Q K V allVisible
+      (alibiScore qStart slope Q K scale) k hk sLoad) :
+    ∃ sScore,
+      stepStmts (fa1ScoreLoopScoreAlibi M D Bk scale slope) sLoad =
+        some sScore ∧
+      P_fa1_score_blockrec_scored qReg kReg vReg origPid Q K V allVisible
+        (alibiScore qStart slope Q K scale) k hk sScore := by
+  subst qStart
+  have hLoaded := hP
+  rcases hP with
+    ⟨hCore, hoffs_n, _hk_ptrs, _hv_ptrs, hkTileReg, _hvTileReg⟩
+  rcases hCore with
+    ⟨_hpidReg, _hpid, hoffs_m, _hoffs_d, hq, _hm, _hl, _ho, _hQ, _hK, _hV⟩
+  let raw : Tile .real [M, Bk] :=
+    rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk)
+  let delta : Tile .real [M, Bk] :=
+    Tile.bop NumericDType.real.sub (Broadcast.consL (Broadcast.consR Broadcast.nil))
+      (Tile.natToReal
+        (Tile.expandDim ⟨0, by simp⟩
+          (Tile.vec (fun j : Fin Bk => k * Bk + j.val))))
+      (Tile.natToReal
+        (Tile.expandDim ⟨1, by simp⟩
+          (Tile.vec (fun i : Fin M => origPid * M + i.val))))
+  let dist : Tile .real [M, Bk] :=
+    distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k
+  let scores : Tile .real [M, Bk] :=
+    scoreBlockLane allVisible (alibiScore (origPid * M) slope Q K scale) k
+      (Nat.succ_le_iff.mpr hk)
+  let sRaw := sLoad.setReg "raw" .real [M, Bk] raw
+  let sDelta := sRaw.setReg "delta" .real [M, Bk] delta
+  let sDist := sDelta.setReg "dist" .real [M, Bk] dist
+  let sScore := sDist.setReg "scores" .real [M, Bk] scores
+  refine ⟨sScore, ?_, ?_⟩
+  · simp [fa1ScoreLoopScoreAlibi, stepStmts, stepStmt, evalOp, Option.bind,
+      hq, hkTileReg, hoffs_n, hoffs_m, raw, delta, dist, scores, sRaw, sDelta, sDist,
+      sScore]
+    simp only [valueBlock]
+    change (((sLoad.setReg "raw" .real [M, Bk]
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
+        "delta" .real [M, Bk] delta).setReg
+        "dist" .real [M, Bk]
+          (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)).setReg
+        "scores" .real [M, Bk]
+          (Tile.bop NumericDType.real.add
+            (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
+            (Tile.bop NumericDType.real.sub Broadcast.scalarL
+              (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+              (Tile.bop NumericDType.real.mul Broadcast.scalarL
+                (Tile.scalar ((slope : ℝ) : WithBot ℝ))
+                (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)))) =
+        (((sLoad.setReg "raw" .real [M, Bk]
+          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
+        "delta" .real [M, Bk] delta).setReg
+        "dist" .real [M, Bk] (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
+        "scores" .real [M, Bk]
+          (scoreBlockLane allVisible (alibiScore (origPid * M) slope Q K scale) k
+            (Nat.succ_le_iff.mpr hk))
+    rw [distanceBlockTileNumeric_eq (M := M) (Bk := Bk) (origPid * M) k]
+    rw [alibiScoreBlock_numeric_tile_eq (origPid * M) slope Q K scale k hk]
+  · refine ⟨?_, ?_⟩
+    · rcases hLoaded with
+        ⟨hCore, hoffs_n, hk_ptrs, hv_ptrs, hkReg, hvReg⟩
+      rcases hCore with
+        ⟨hpidReg, hpid, hoffs_m, hoffs_d, hq, hm, hl, ho, hQ, hK, hV⟩
+      refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
+      · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+        · simp [sScore, sDist, sDelta, sRaw, hpidReg]
+        · simpa [sScore, sDist, sDelta, sRaw] using hpid
+        · simp [sScore, sDist, sDelta, sRaw, hoffs_m]
+        · simp [sScore, sDist, sDelta, sRaw, hoffs_d]
+        · simp [sScore, sDist, sDelta, sRaw, hq]
+        · simp [sScore, sDist, sDelta, sRaw, hm]
+        · simp [sScore, sDist, sDelta, sRaw, hl]
+        · simp [sScore, sDist, sDelta, sRaw, ho]
+        · intro idx
+          simpa [sScore, sDist, sDelta, sRaw] using hQ idx
+        · intro idx
+          simpa [sScore, sDist, sDelta, sRaw] using hK idx
+        · intro idx
+          simpa [sScore, sDist, sDelta, sRaw] using hV idx
+      · simp [sScore, sDist, sDelta, sRaw, hoffs_n]
+      · simp [sScore, sDist, sDelta, sRaw, hk_ptrs]
+      · simp [sScore, sDist, sDelta, sRaw, hv_ptrs]
+      · simp [sScore, sDist, sDelta, sRaw, hkReg]
+      · simp [sScore, sDist, sDelta, sRaw, hvReg]
     · simp [sScore, scores]
 
 theorem fa1_score_preLoop_correct
