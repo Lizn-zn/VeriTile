@@ -1,0 +1,124 @@
+/-
+VeriTile.Triton.DSL.Metadata
+
+Syntax-level metadata collection for `triton { ... }` blocks.
+-/
+
+import VeriTile.Triton.DSL.Syntax
+
+open Lean
+
+namespace VeriTile.Triton.DSL.Metadata
+
+mutual
+
+/-- Collect region terms from statically visible pointer expressions. -/
+private partial def staticPtrRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
+  match stx with
+  | `(tritonExpr| $($r:term)) => [r]
+  | `(tritonExpr| ($e:tritonExpr)) => staticPtrRegions e
+  | `(tritonExpr| $a:tritonExpr + $_b:tritonExpr) =>
+      staticPtrRegions a
+  | _ => []
+
+/-- Collect all region terms reachable from a `tritonExpr`. Returns `term`
+    syntax - each element is the Lean term inside a `tl.load(...)`
+    pointer (recursively in subexpressions). -/
+private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
+  match stx with
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
+            match kw with
+            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      staticPtrRegions p ++ kwargRegions
+  | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
+  | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions e ++ kwargRegions
+  | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions e ++ kwargRegions
+  | `(tritonExpr| tl.toReal($e:tritonExpr))      => exprRegions e
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $c:tritonExpr)) =>
+      exprRegions a ++ exprRegions b ++ exprRegions c
+  | `(tritonExpr| ($e:tritonExpr))               => exprRegions e
+  | `(tritonExpr| tl.program_id($e:tritonExpr))  => exprRegions e
+  | `(tritonExpr| tl.arange($e:tritonExpr))      => exprRegions e
+  | `(tritonExpr| tl.arange($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr <  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr >  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) =>
+      staticPtrRegions stx ++ exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions c ++ exprRegions a ++ exprRegions b
+  | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions e
+  | `(tritonExpr| $e:tritonExpr[ None , : ])     => exprRegions e
+  | `(tritonExpr| tl.trans($e:tritonExpr))       => exprRegions e
+  | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr)) => exprRegions v
+  | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*])) => []
+  | _ => []
+end
+
+/-- Per-statement region split: `(input regions, output regions)`. -/
+partial def stmtRegions :
+    TSyntax `tritonStmt → List (TSyntax `term) × List (TSyntax `term) := fun stx =>
+  match stx with
+  | `(tritonStmt| $_:ident := $e:tritonExpr) =>
+      (exprRegions e, [])
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
+            match kw with
+            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+  | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      stmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+  | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
+      stmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+  | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) =>
+      stmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) (exprRegions cond, [])
+  | _ => ([], [])
+
+end VeriTile.Triton.DSL.Metadata
