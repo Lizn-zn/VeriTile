@@ -163,7 +163,7 @@ Region dtype contract 单独放在 `VeriTile.Triton.MemoryTyping`:
 
 ```lean
 RegionTyping := RegionName → TileDType
-Kernel.WellTypedMemory Γ k
+Kernel.RespectsRegionTyping Γ k
 ```
 
 这是轻量静态层。它检查 named-region load/store 是否使用 `Γ` 声明的 dtype,

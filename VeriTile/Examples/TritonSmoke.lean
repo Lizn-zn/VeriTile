@@ -93,15 +93,15 @@ def fp16LoadStoreCoreSmoke (xReg outReg : RegionName) (N : Nat) : Stmt :=
 
 /-- Lightweight region typing accepts the fp16 load/store smoke under fp16 buffers. -/
 example (xReg outReg : RegionName) (N : Nat) :
-    (fp16LoadStoreCoreSmoke xReg outReg N).WellTypedMemory (fun _ => TileDType.fp16) := by
-  simp [fp16LoadStoreCoreSmoke, Stmt.WellTypedMemory, Op.WellTypedMemory,
+    (fp16LoadStoreCoreSmoke xReg outReg N).RespectsRegionTyping (fun _ => TileDType.fp16) := by
+  simp [fp16LoadStoreCoreSmoke, Stmt.RespectsRegionTyping, Op.RespectsRegionTyping,
     FloatDType.dtype]
 
 /-- Real-only DSL kernels require real-typed buffers in the lightweight contract. -/
 example (xReg yReg : RegionName) :
-    (scalarCopyKernel xReg yReg).WellTypedMemory (fun _ => TileDType.real) := by
-  simp [scalarCopyKernel, Kernel.WellTypedMemory, StmtList.WellTypedMemory,
-    Stmt.WellTypedMemory, Op.WellTypedMemory]
+    (scalarCopyKernel xReg yReg).RespectsRegionTyping (fun _ => TileDType.real) := by
+  simp [scalarCopyKernel, Kernel.RespectsRegionTyping, StmtList.RespectsRegionTyping,
+    Stmt.RespectsRegionTyping, Op.RespectsRegionTyping]
 
 /-- `tl.load(p, mask=m)` with no `other=` uses `s.undef` for masked-off lanes. -/
 example : evalOp

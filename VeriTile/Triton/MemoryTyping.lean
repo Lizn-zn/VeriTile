@@ -39,13 +39,13 @@ def Op.PointerRegionsHaveDType (Γ : RegionTyping) (dtype : TileDType) :
     Op .ptr shape → Prop
   | .ptrBase region => Γ region = dtype
   | .ptrAdd _ ptr off =>
-      ptr.PointerRegionsHaveDType Γ dtype ∧ off.WellTypedMemory Γ
+      ptr.PointerRegionsHaveDType Γ dtype ∧ off.RespectsRegionTyping Γ
   | .broadcast ptr _ =>
       ptr.PointerRegionsHaveDType Γ dtype
   | .full _ ptr =>
       ptr.PointerRegionsHaveDType Γ dtype
   | .where c a b =>
-      c.WellTypedMemory Γ ∧
+      c.RespectsRegionTyping Γ ∧
       a.PointerRegionsHaveDType Γ dtype ∧
       b.PointerRegionsHaveDType Γ dtype
   | .transpose ptr =>
@@ -57,7 +57,7 @@ termination_by ptr => sizeOf ptr
 decreasing_by all_goals (simp_wf; try omega)
 
 /-- Memory-region dtype contract for expressions. -/
-def Op.WellTypedMemory (Γ : RegionTyping) : Op dtype shape → Prop
+def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .const _ => True
   | .constFloat _ _ => True
   | .constNat _ => True
@@ -66,67 +66,67 @@ def Op.WellTypedMemory (Γ : RegionTyping) : Op dtype shape → Prop
   | .programId _ => True
   | .ref _ _ _ => True
   | .arange _ => True
-  | .broadcast e _ => e.WellTypedMemory Γ
-  | .full _ e => e.WellTypedMemory Γ
-  | .castFloat _ _ e => e.WellTypedMemory Γ
-  | .add _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .sub _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .mul _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .div _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .exp a => a.WellTypedMemory Γ
-  | .log a => a.WellTypedMemory Γ
-  | .sigmoid a => a.WellTypedMemory Γ
-  | .sqrt a => a.WellTypedMemory Γ
-  | .tanh a => a.WellTypedMemory Γ
-  | .lt _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .le _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .eq _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .gt _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .ge _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .ne _ _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .boolAnd _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .max2 _ a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
+  | .broadcast e _ => e.RespectsRegionTyping Γ
+  | .full _ e => e.RespectsRegionTyping Γ
+  | .castFloat _ _ e => e.RespectsRegionTyping Γ
+  | .add _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .sub _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .mul _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .div _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .exp a => a.RespectsRegionTyping Γ
+  | .log a => a.RespectsRegionTyping Γ
+  | .sigmoid a => a.RespectsRegionTyping Γ
+  | .sqrt a => a.RespectsRegionTyping Γ
+  | .tanh a => a.RespectsRegionTyping Γ
+  | .lt _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .le _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .eq _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .gt _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .ge _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .ne _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .boolAnd _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .max2 _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .where c a b =>
-      c.WellTypedMemory Γ ∧ a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .reduceMax _ _ a => a.WellTypedMemory Γ
-  | .reduceSum _ _ a => a.WellTypedMemory Γ
-  | .dot a b => a.WellTypedMemory Γ ∧ b.WellTypedMemory Γ
-  | .transpose a => a.WellTypedMemory Γ
-  | .expandDim _ a => a.WellTypedMemory Γ
+      c.RespectsRegionTyping Γ ∧ a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .reduceMax _ _ a => a.RespectsRegionTyping Γ
+  | .reduceSum _ _ a => a.RespectsRegionTyping Γ
+  | .dot a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .transpose a => a.RespectsRegionTyping Γ
+  | .expandDim _ a => a.RespectsRegionTyping Γ
   | .ptrBase _ => True
   | .ptrAdd _ ptr off =>
-      ptr.WellTypedMemory Γ ∧ off.WellTypedMemory Γ
+      ptr.RespectsRegionTyping Γ ∧ off.RespectsRegionTyping Γ
   | .load region off =>
-      Γ region = .real ∧ off.WellTypedMemory Γ
+      Γ region = .real ∧ off.RespectsRegionTyping Γ
   | .loadMask region off mask =>
-      Γ region = .real ∧ off.WellTypedMemory Γ ∧ mask.WellTypedMemory Γ
+      Γ region = .real ∧ off.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
   | .loadMaskOther region off mask other =>
       Γ region = .real ∧
-      off.WellTypedMemory Γ ∧ mask.WellTypedMemory Γ ∧ other.WellTypedMemory Γ
+      off.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ ∧ other.RespectsRegionTyping Γ
   | .loadPtr ptr =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ .real
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ .real
   | .loadPtrMask ptr mask =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ .real ∧
-      mask.WellTypedMemory Γ
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ .real ∧
+      mask.RespectsRegionTyping Γ
   | .loadPtrMaskOther ptr mask other =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ .real ∧
-      mask.WellTypedMemory Γ ∧ other.WellTypedMemory Γ
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ .real ∧
+      mask.RespectsRegionTyping Γ ∧ other.RespectsRegionTyping Γ
   | .loadFloat h region off =>
-      Γ region = h.dtype ∧ off.WellTypedMemory Γ
+      Γ region = h.dtype ∧ off.RespectsRegionTyping Γ
   | .loadFloatMask h region off mask =>
-      Γ region = h.dtype ∧ off.WellTypedMemory Γ ∧ mask.WellTypedMemory Γ
+      Γ region = h.dtype ∧ off.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
   | .loadFloatMaskOther h region off mask other =>
       Γ region = h.dtype ∧
-      off.WellTypedMemory Γ ∧ mask.WellTypedMemory Γ ∧ other.WellTypedMemory Γ
+      off.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ ∧ other.RespectsRegionTyping Γ
   | .loadPtrFloat h ptr =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype
   | .loadPtrFloatMask h ptr mask =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
-      mask.WellTypedMemory Γ
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
+      mask.RespectsRegionTyping Γ
   | .loadPtrFloatMaskOther h ptr mask other =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
-      mask.WellTypedMemory Γ ∧ other.WellTypedMemory Γ
-  | .natToReal a => a.WellTypedMemory Γ
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
+      mask.RespectsRegionTyping Γ ∧ other.RespectsRegionTyping Γ
+  | .natToReal a => a.RespectsRegionTyping Γ
 termination_by op => sizeOf op
 decreasing_by all_goals (simp_wf; try omega)
 
@@ -135,40 +135,40 @@ end
 mutual
 
 /-- Memory-region dtype contract for statements. -/
-def Stmt.WellTypedMemory (Γ : RegionTyping) : Stmt → Prop
-  | .assign _ _ _ e => e.WellTypedMemory Γ
+def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
+  | .assign _ _ _ e => e.RespectsRegionTyping Γ
   | .store region _ off val =>
-      Γ region = .real ∧ off.WellTypedMemory Γ ∧ val.WellTypedMemory Γ
+      Γ region = .real ∧ off.RespectsRegionTyping Γ ∧ val.RespectsRegionTyping Γ
   | .storeMask region _ off val mask =>
       Γ region = .real ∧
-      off.WellTypedMemory Γ ∧ val.WellTypedMemory Γ ∧ mask.WellTypedMemory Γ
+      off.RespectsRegionTyping Γ ∧ val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
   | .storePtr _ ptr val =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ .real ∧
-      val.WellTypedMemory Γ
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ .real ∧
+      val.RespectsRegionTyping Γ
   | .storePtrMask _ ptr val mask =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ .real ∧
-      val.WellTypedMemory Γ ∧ mask.WellTypedMemory Γ
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ .real ∧
+      val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
   | .storeFloat h region _ off val =>
-      Γ region = h.dtype ∧ off.WellTypedMemory Γ ∧ val.WellTypedMemory Γ
+      Γ region = h.dtype ∧ off.RespectsRegionTyping Γ ∧ val.RespectsRegionTyping Γ
   | .storeFloatMask h region _ off val mask =>
       Γ region = h.dtype ∧
-      off.WellTypedMemory Γ ∧ val.WellTypedMemory Γ ∧ mask.WellTypedMemory Γ
+      off.RespectsRegionTyping Γ ∧ val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
   | .storePtrFloat h _ ptr val =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
-      val.WellTypedMemory Γ
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
+      val.RespectsRegionTyping Γ
   | .storePtrFloatMask h _ ptr val mask =>
-      ptr.WellTypedMemory Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
-      val.WellTypedMemory Γ ∧ mask.WellTypedMemory Γ
-  | .forLoop _ _ body => StmtList.WellTypedMemory Γ body
+      ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
+      val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
+  | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
   | .ifThen cond body =>
-      cond.WellTypedMemory Γ ∧ StmtList.WellTypedMemory Γ body
+      cond.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body
 termination_by st => sizeOf st
 decreasing_by all_goals (simp_wf; try omega)
 
 /-- Memory-region dtype contract for statement lists. -/
-def StmtList.WellTypedMemory (Γ : RegionTyping) : List Stmt → Prop
+def StmtList.RespectsRegionTyping (Γ : RegionTyping) : List Stmt → Prop
   | [] => True
-  | st :: rest => st.WellTypedMemory Γ ∧ StmtList.WellTypedMemory Γ rest
+  | st :: rest => st.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ rest
 termination_by body => sizeOf body
 decreasing_by all_goals (simp_wf; try omega)
 
@@ -177,8 +177,8 @@ end
 namespace Kernel
 
 /-- Memory-region dtype contract for kernels. -/
-def WellTypedMemory (Γ : RegionTyping) (k : Kernel) : Prop :=
-  StmtList.WellTypedMemory Γ k.body
+def RespectsRegionTyping (Γ : RegionTyping) (k : Kernel) : Prop :=
+  StmtList.RespectsRegionTyping Γ k.body
 
 end Kernel
 

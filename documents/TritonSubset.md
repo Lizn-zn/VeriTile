@@ -173,7 +173,7 @@ Region dtype contracts are modeled separately in `VeriTile.Triton.MemoryTyping`:
 
 ```lean
 RegionTyping := RegionName → TileDType
-Kernel.WellTypedMemory Γ k
+Kernel.RespectsRegionTyping Γ k
 ```
 
 This is a lightweight static layer. It checks that named-region loads/stores
