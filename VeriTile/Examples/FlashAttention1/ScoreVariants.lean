@@ -2584,6 +2584,308 @@ theorem fa1_score_postLoop_correct_blocks
   exact fa1_score_postLoop_correct qReg kReg vReg outReg origPid Q K V
     visible score sLoop (by simpa [P_fa1_score_blocks] using hP) idx
 
+theorem fa1_score_blockrec_postLoop_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ) (sLoop : BlockState)
+    (hP : P_fa1_score_blockrec qReg kReg vReg origPid Q K V visible score
+      numKVBlocks sLoop) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (stepStmts (fa1ScorePostLoop outReg M D) sLoop)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) idx
+        = some
+          (oScoreBlockPartial visible score V numKVBlocks idx /
+            lScoreBlockPartial visible score numKVBlocks idx.1) := by
+  intro idx
+  rcases hP with
+    ⟨_hpidReg, _hpid, hoffs_m, hoffs_d, _hq, _hm, hl, ho, _hQ, _hK, _hV⟩
+  have h_inj :
+      Function.Injective
+        (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) :=
+    Offset.rowMajor2D_inj (base := origPid * M * D) (rowStride := D) (le_refl D)
+  have h_inj_store :
+      Function.Injective
+        (fun i : TileIndex [M, D] => (origPid * M + i.1.val) * D + i.2.1.val) := by
+    intro a b h
+    apply h_inj
+    simpa [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
+      Nat.add_assoc] using h
+  simp [observeTileAt, fa1ScorePostLoop, stepStmts, stepStmt, evalOp,
+        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
+        Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+        NumericDType.div, Offset.rowMajor2D, Offset.strided, Option.bind,
+        TileShape.dropInsertedIndex]
+  rw [show origPid * M * D + idx.1.val * D + idx.2.1.val =
+      (origPid * M + idx.1.val) * D + idx.2.1.val by
+        rw [Nat.add_mul]]
+  simp only [BlockState.readMem]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
+
+theorem fa1_score_blockrec_forward_raw_of_step
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (body : List Stmt)
+    (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hStep :
+      ∀ i st, i < numKVBlocks →
+        P_fa1_score_blockrec qReg kReg vReg s.pid Q K V visible score i st →
+          ∃ st',
+            stepStmts body (st.setReg "n" .nat [] (Tile.scalar i)) = some st' ∧
+            P_fa1_score_blockrec qReg kReg vReg s.pid Q K V visible score
+              (i + 1) st') :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (stepStmts
+            (fa1ScorePreLoop qReg M D ++
+              [Stmt.forLoop "n" numKVBlocks body] ++
+              fa1ScorePostLoop outReg M D) s)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
+        = some
+          (oScoreBlockPartial visible score V numKVBlocks idx /
+            lScoreBlockPartial visible score numKVBlocks idx.1) := by
+  have stepStmts_cons : ∀ (st : Stmt) (rest : List Stmt) (sa sb : BlockState),
+      stepStmt st sa = some sb →
+      stepStmts (st :: rest) sa = stepStmts rest sb := by
+    intro st rest sa sb h
+    conv_lhs => unfold stepStmts
+    rw [h]
+  have stepStmts_append : ∀ (l1 l2 : List Stmt) (sa sb : BlockState),
+      stepStmts l1 sa = some sb →
+      stepStmts (l1 ++ l2) sa = stepStmts l2 sb := by
+    intro l1
+    induction l1 with
+    | nil =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        injection h with h
+        rw [List.nil_append, ← h]
+    | cons st rest ih =>
+        intro l2 sa sb h
+        conv_lhs at h => unfold stepStmts
+        cases hst : stepStmt st sa with
+        | none => rw [hst] at h; simp at h
+        | some sm =>
+            rw [hst] at h
+            simp at h
+            rw [List.cons_append, stepStmts_cons _ _ _ _ hst]
+            exact ih l2 sm sb h
+  obtain ⟨s0, hPre, hP0⟩ :=
+    fa1_score_blockrec_preLoop_correct qReg kReg vReg Q K V visible score s hQ hK hV
+  obtain ⟨sLoop, hLoopStmt, hPLoop⟩ :=
+    forLoop_inv
+      (P := P_fa1_score_blockrec qReg kReg vReg s.pid Q K V visible score) hP0
+      hStep
+  intro idx
+  rw [List.append_assoc,
+      stepStmts_append (fa1ScorePreLoop qReg M D)
+        ([Stmt.forLoop "n" numKVBlocks body] ++ fa1ScorePostLoop outReg M D)
+        s s0 hPre]
+  rw [stepStmts_append [Stmt.forLoop "n" numKVBlocks body]
+      (fa1ScorePostLoop outReg M D) s0 sLoop ?_]
+  · exact fa1_score_blockrec_postLoop_correct qReg kReg vReg outReg s.pid Q K V
+      visible score sLoop hPLoop idx
+  · rw [stepStmts_cons _ [] _ _ hLoopStmt]
+    show stepStmts [] sLoop = some sLoop
+    unfold stepStmts
+    rfl
+
+theorem fa1_forward_softcap_blockrec_raw_of_step
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale softcap : ℝ)
+    (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hStep :
+      ∀ i st, i < numKVBlocks →
+        P_fa1_score_blockrec qReg kReg vReg s.pid Q K V allVisible
+          (softcapDotScore softcap Q K scale) i st →
+          ∃ st',
+            stepStmts (fa1ScoreLoopBodySoftcap kReg vReg M D Bk scale softcap)
+              (st.setReg "n" .nat [] (Tile.scalar i)) = some st' ∧
+            P_fa1_score_blockrec qReg kReg vReg s.pid Q K V allVisible
+              (softcapDotScore softcap Q K scale) (i + 1) st') :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec
+            (fa1ForwardKernelSoftcap qReg kReg vReg outReg M D Bk
+              numKVBlocks scale softcap) s)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
+        = some
+          (oScoreBlockPartial allVisible (softcapDotScore softcap Q K scale) V
+              numKVBlocks idx /
+            lScoreBlockPartial allVisible (softcapDotScore softcap Q K scale)
+              numKVBlocks idx.1) := by
+  intro idx
+  show observeTileAt (stepStmts _ s) outReg _ idx = _
+  rw [fa1ForwardKernelSoftcap_body_eq]
+  exact fa1_score_blockrec_forward_raw_of_step qReg kReg vReg outReg Q K V
+    allVisible (softcapDotScore softcap Q K scale)
+    (fa1ScoreLoopBodySoftcap kReg vReg M D Bk scale softcap) s hQ hK hV
+    hStep idx
+
+theorem fa1_forward_alibi_blockrec_raw_of_step
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (qStart : Nat) (slope : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hStep :
+      ∀ i st, i < numKVBlocks →
+        P_fa1_score_blockrec qReg kReg vReg s.pid Q K V allVisible
+          (alibiScore qStart slope Q K scale) i st →
+          ∃ st',
+            stepStmts (fa1ScoreLoopBodyAlibi kReg vReg M D Bk scale slope)
+              (st.setReg "n" .nat [] (Tile.scalar i)) = some st' ∧
+            P_fa1_score_blockrec qReg kReg vReg s.pid Q K V allVisible
+              (alibiScore qStart slope Q K scale) (i + 1) st') :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec
+            (fa1ForwardKernelAlibi qReg kReg vReg outReg M D Bk
+              numKVBlocks scale slope) s)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
+        = some
+          (oScoreBlockPartial allVisible (alibiScore qStart slope Q K scale) V
+              numKVBlocks idx /
+            lScoreBlockPartial allVisible (alibiScore qStart slope Q K scale)
+              numKVBlocks idx.1) := by
+  intro idx
+  show observeTileAt (stepStmts _ s) outReg _ idx = _
+  rw [fa1ForwardKernelAlibi_body_eq]
+  exact fa1_score_blockrec_forward_raw_of_step qReg kReg vReg outReg Q K V
+    allVisible (alibiScore qStart slope Q K scale)
+    (fa1ScoreLoopBodyAlibi kReg vReg M D Bk scale slope) s hQ hK hV
+    hStep idx
+
+theorem fa1_forward_slidingWindow_blockrec_raw_of_step
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (qStart window : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hStep :
+      ∀ i st, i < numKVBlocks →
+        P_fa1_score_blockrec qReg kReg vReg s.pid Q K V
+          (slidingVisible window qStart) (dotScore Q K scale) i st →
+          ∃ st',
+            stepStmts (fa1ScoreLoopBodySlidingWindow kReg vReg M D Bk window scale)
+              (st.setReg "n" .nat [] (Tile.scalar i)) = some st' ∧
+            P_fa1_score_blockrec qReg kReg vReg s.pid Q K V
+              (slidingVisible window qStart) (dotScore Q K scale) (i + 1) st') :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec
+            (fa1ForwardKernelSlidingWindow qReg kReg vReg outReg M D Bk
+              numKVBlocks window scale) s)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
+        = some
+          (oScoreBlockPartial (slidingVisible window qStart) (dotScore Q K scale) V
+              numKVBlocks idx /
+            lScoreBlockPartial (slidingVisible window qStart) (dotScore Q K scale)
+              numKVBlocks idx.1) := by
+  intro idx
+  show observeTileAt (stepStmts _ s) outReg _ idx = _
+  rw [fa1ForwardKernelSlidingWindow_body_eq]
+  exact fa1_score_blockrec_forward_raw_of_step qReg kReg vReg outReg Q K V
+    (slidingVisible window qStart) (dotScore Q K scale)
+    (fa1ScoreLoopBodySlidingWindow kReg vReg M D Bk window scale) s hQ hK hV
+    hStep idx
+
+theorem fa1_forward_alibiSlidingSoftcap_blockrec_raw_of_step
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (qStart window : Nat) (slope softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ)
+    (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hStep :
+      ∀ i st, i < numKVBlocks →
+        P_fa1_score_blockrec qReg kReg vReg s.pid Q K V
+          (slidingVisible window qStart)
+          (fun r c => softcapScore softcap (alibiScore qStart slope Q K scale r c))
+          i st →
+          ∃ st',
+            stepStmts
+              (fa1ScoreLoopBodyAlibiSlidingSoftcap kReg vReg M D Bk window
+                scale slope softcap)
+              (st.setReg "n" .nat [] (Tile.scalar i)) = some st' ∧
+            P_fa1_score_blockrec qReg kReg vReg s.pid Q K V
+              (slidingVisible window qStart)
+              (fun r c => softcapScore softcap (alibiScore qStart slope Q K scale r c))
+              (i + 1) st') :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (exec
+            (fa1ForwardKernelAlibiSlidingSoftcap qReg kReg vReg outReg M D Bk
+              numKVBlocks window scale slope softcap) s)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) idx
+        = some
+          (oScoreBlockPartial (slidingVisible window qStart)
+              (fun r c => softcapScore softcap (alibiScore qStart slope Q K scale r c))
+              V numKVBlocks idx /
+            lScoreBlockPartial (slidingVisible window qStart)
+              (fun r c => softcapScore softcap (alibiScore qStart slope Q K scale r c))
+              numKVBlocks idx.1) := by
+  intro idx
+  show observeTileAt (stepStmts _ s) outReg _ idx = _
+  rw [fa1ForwardKernelAlibiSlidingSoftcap_body_eq]
+  exact fa1_score_blockrec_forward_raw_of_step qReg kReg vReg outReg Q K V
+    (slidingVisible window qStart)
+    (fun r c => softcapScore softcap (alibiScore qStart slope Q K scale r c))
+    (fa1ScoreLoopBodyAlibiSlidingSoftcap kReg vReg M D Bk window scale slope softcap)
+    s hQ hK hV hStep idx
+
 theorem P_fa1_score_readout_ratio
     {M D S : Nat}
     (qReg kReg vReg : RegionName)
