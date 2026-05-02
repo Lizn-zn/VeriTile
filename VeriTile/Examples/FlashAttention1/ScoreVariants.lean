@@ -1985,6 +1985,68 @@ theorem score_block_oAcc_tile_eq {M D Bk numKVBlocks : Nat}
   rw [oScoreBlockPartial_succ_of_lt visible score V k hk (i, d, PUnit.unit)]
   simp [WithBot.realSub]
 
+theorem softcapScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
+    (softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < numKVBlocks) :
+    Tile.bop WithBot.realMul Broadcast.scalarL
+      (Tile.scalar ((softcap : ℝ) : WithBot ℝ))
+      (Tile.uop WithBot.realTanh
+        (Tile.bop WithBot.realDiv Broadcast.scalarR
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.dot [] (Tile.ofReal Q)
+              (Tile.transpose [] (Tile.ofReal
+                (fun idx : TileIndex [Bk, D] =>
+                  K (scoreBlockIndex Bk numKVBlocks k
+                    (Nat.succ_le_iff.mpr hk) idx.1, idx.2.1, PUnit.unit)))))
+            (Tile.scalar ((scale : ℝ) : WithBot ℝ)))
+          (Tile.scalar ((softcap : ℝ) : WithBot ℝ))))
+      =
+      scoreBlockLane allVisible (softcapDotScore softcap Q K scale) k
+        (Nat.succ_le_iff.mpr hk) := by
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  cases u
+  simp only [Tile.bop, Tile.scalar, Tile.uop, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.mul]
+  unfold scoreBlockIndex
+  rw [FA1Math.block_scaled_data_eq Q K scale k hk i j]
+  exact softcapScore_lane_eq softcap Q K scale i
+    (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
+
+def P_fa1_score_blockrec
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (s : BlockState) : Prop :=
+  s.regs .nat [] "pid" = some (Tile.scalar origPid) ∧
+  s.pid = origPid ∧
+  s.regs .nat [M] "offs_m" = some
+      (Tile.vec (fun i : Fin M => origPid * M + i.val)) ∧
+  s.regs .nat [D] "offs_d" = some
+      (Tile.vec (fun d : Fin D => d.val)) ∧
+  s.regs .real [M, D] "q" = some (Tile.ofReal Q) ∧
+  s.regs .real [M] "m_i" = some
+      ⟨fun idx : TileIndex [M] =>
+        mScoreBlockPartial visible score k idx.1⟩ ∧
+  s.regs .real [M] "l_i" = some
+      (Tile.ofReal fun idx : TileIndex [M] =>
+        lScoreBlockPartial visible score k idx.1) ∧
+  s.regs .real [M, D] "o_acc" = some
+      (Tile.ofReal fun idx : TileIndex [M, D] =>
+        oScoreBlockPartial visible score V k idx) ∧
+  InputAt s qReg
+      (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) Q ∧
+  InputAt s kReg
+      (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K ∧
+  InputAt s vReg
+      (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V
+
 theorem fa1_score_preLoop_correct
     {M D S : Nat}
     (qReg kReg vReg : RegionName)
@@ -2062,6 +2124,32 @@ theorem fa1_score_preLoop_correct_blocks
   rcases fa1_score_preLoop_correct qReg kReg vReg Q K V visible score s hQ hK hV with
     ⟨s0, hStep, hP⟩
   exact ⟨s0, hStep, by simpa [P_fa1_score_blocks] using hP⟩
+
+theorem fa1_score_blockrec_preLoop_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ) (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V) :
+    ∃ s0,
+      stepStmts (fa1ScorePreLoop qReg M D) s = some s0 ∧
+      P_fa1_score_blockrec qReg kReg vReg s.pid Q K V visible score 0 s0 := by
+  rcases fa1_score_preLoop_correct qReg kReg vReg Q K V visible score s hQ hK hV with
+    ⟨s0, hStep, hP⟩
+  rcases hP with
+    ⟨hpidReg, hpid, hoffs_m, hoffs_d, hq, _hm, _hl, _ho, hQ', hK', hV'⟩
+  refine ⟨s0, hStep, ?_⟩
+  refine ⟨hpidReg, hpid, hoffs_m, hoffs_d, hq, ?_, ?_, ?_, hQ', hK', hV'⟩
+  · simpa [mScoreBlockPartial]
+  · simpa [lScoreBlockPartial, Tile.ofReal]
+  · simpa [oScoreBlockPartial, Tile.ofReal]
 
 theorem fa1_score_postLoop_correct
     {M D S : Nat}
