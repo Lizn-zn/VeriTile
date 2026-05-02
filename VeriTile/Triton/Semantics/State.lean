@@ -1,0 +1,463 @@
+/-
+VeriTile.Triton.Semantics.State
+
+Execution state, register updates, memory writes, and readback lemmas.
+-/
+
+import VeriTile.Triton.Semantics.Scalar
+
+namespace VeriTile.Triton
+
+/-- A typed register file. The same register name can only be observed at the
+    dtype/shape requested by the typed AST node that references it. -/
+abbrev RegFile :=
+  (dtype : TileDType) → (shape : TileShape) → RegName → Option (Tile dtype shape)
+
+/--
+A block-level execution state.
+
+`regs` is typed directly; there is no dynamically tagged runtime value.
+`undef` models Triton's masked load with `other=None`.
+-/
+structure BlockState where
+  mem   : RegionName → Nat → ℝ
+  regs  : RegFile
+  /-- Per-axis program IDs. `pids axis` is the value of
+  `tl.program_id(axis)`. Total over `Nat`; out-of-range axes default to `0`
+  (or whatever the launch model picks). FA-1's batch/head launch grid uses
+  axes 0/1/2 for `(q_block, head, batch)`. -/
+  pids  : Nat → Nat
+  undef : RegionName → Nat → ℝ := fun _ _ => 0
+
+instance : Inhabited BlockState :=
+  ⟨{ mem := fun _ _ => 0
+   , regs := fun _ _ _ => none
+   , pids := fun _ => 0
+   , undef := fun _ _ => 0 }⟩
+
+namespace BlockState
+
+/-- Backward-compatible single-axis program id: equals `pids 0`. -/
+@[reducible] def pid (s : BlockState) : Nat := s.pids 0
+
+@[simp] theorem pid_eq (s : BlockState) : s.pid = s.pids 0 := rfl
+
+@[ext] theorem ext {s t : BlockState}
+    (hmem : ∀ region offset, s.mem region offset = t.mem region offset)
+    (hregs : ∀ dtype shape name, s.regs dtype shape name = t.regs dtype shape name)
+    (hpids : ∀ axis, s.pids axis = t.pids axis)
+    (hundef : ∀ region offset, s.undef region offset = t.undef region offset) :
+    s = t := by
+  cases s
+  cases t
+  simp only at hmem hregs hpids hundef
+  congr
+  · exact funext fun region => funext fun offset => hmem region offset
+  · exact funext fun dtype => funext fun shape => funext fun name => hregs dtype shape name
+  · exact funext hpids
+  · exact funext fun region => funext fun offset => hundef region offset
+
+/-- Update a single typed register. -/
+def setReg (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) : BlockState :=
+  { s with regs := fun dtype' shape' name' =>
+      if hd : dtype' = dtype then
+        if hs : shape' = shape then
+          if name' = name then some (castTile hd hs v) else s.regs dtype' shape' name'
+        else s.regs dtype' shape' name'
+      else s.regs dtype' shape' name' }
+
+@[simp] theorem setReg_same (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
+    (s.setReg name dtype shape v).regs dtype shape name = some v := by
+  simp [setReg]
+
+@[simp] theorem setReg_ne_name (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (h : name' ≠ name) :
+    (s.setReg name dtype shape v).regs dtype' shape' name' =
+      s.regs dtype' shape' name' := by
+  simp [setReg, h]
+
+@[simp] theorem setReg_ne_dtype (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (h : dtype' ≠ dtype) :
+    (s.setReg name dtype shape v).regs dtype' shape' name' =
+      s.regs dtype' shape' name' := by
+  simp [setReg, h]
+
+@[simp] theorem setReg_ne_shape (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (h : shape' ≠ shape) :
+    (s.setReg name dtype shape v).regs dtype' shape' name' =
+      s.regs dtype' shape' name' := by
+  simp [setReg, h]
+
+@[simp] theorem setReg_mem (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape)
+    (region : RegionName) (offset : Nat) :
+    (s.setReg name dtype shape v).mem region offset = s.mem region offset := rfl
+
+@[simp] theorem setReg_pids (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
+    (s.setReg name dtype shape v).pids = s.pids := rfl
+
+@[simp] theorem setReg_pid (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
+    (s.setReg name dtype shape v).pid = s.pid := rfl
+
+@[simp] theorem setReg_undef (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape)
+    (region : RegionName) (offset : Nat) :
+    (s.setReg name dtype shape v).undef region offset = s.undef region offset := rfl
+
+/-- Write a single scalar to memory. -/
+def writeMem (s : BlockState) (region : RegionName) (offset : Nat) (v : ℝ) : BlockState :=
+  { s with mem := fun r o =>
+      if r = region ∧ o = offset then v else s.mem r o }
+
+@[simp] theorem writeMem_regs (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) (dtype : TileDType) (shape : TileShape)
+    (name : RegName) :
+    (s.writeMem region offset v).regs dtype shape name = s.regs dtype shape name := rfl
+
+@[simp] theorem writeMem_pids (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) :
+    (s.writeMem region offset v).pids = s.pids := rfl
+
+@[simp] theorem writeMem_pid (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) :
+    (s.writeMem region offset v).pid = s.pid := rfl
+
+@[simp] theorem writeMem_undef (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) :
+    (s.writeMem region offset v).undef r o = s.undef r o := rfl
+
+/-- Read a single scalar from memory. -/
+@[inline] def readMem (s : BlockState) (region : RegionName) (offset : Nat) : ℝ :=
+  s.mem region offset
+
+private theorem foldl_writeMem_preserves {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (o : Nat) (l : List α) :
+    ∀ (s : BlockState), (∀ k ∈ l, offsetFn k ≠ o) →
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        region o)
+      = s.mem region o := by
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s h
+    have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self)
+    have htl : ∀ k ∈ tl, offsetFn k ≠ o :=
+      fun k hk => h k (List.mem_cons_of_mem hd hk)
+    rw [List.foldl_cons, ih _ htl]
+    show (if region = region ∧ o = offsetFn hd then valueFn hd else s.mem region o)
+        = s.mem region o
+    rw [if_neg]
+    rintro ⟨_, h_eq⟩
+    exact hhd h_eq.symm
+
+theorem scatter_readback_list {α : Type} {region : RegionName}
+    (l : List α) (s : BlockState) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (i : α) (h_nodup : l.Nodup) (h_mem : i ∈ l)
+    (h_inj : Function.Injective offsetFn) :
+    (l.foldl
+       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        region (offsetFn i)
+    = valueFn i := by
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
+  rw [hl, List.foldl_append, List.foldl_cons]
+  have h_not_in : ∀ k ∈ l₂, offsetFn k ≠ offsetFn i := fun k hk heq => by
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  rw [foldl_writeMem_preserves offsetFn valueFn (offsetFn i) l₂ _ h_not_in]
+  show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _)
+      = valueFn i
+  exact if_pos ⟨rfl, rfl⟩
+
+theorem scatter_readback {region : RegionName} {n : Nat}
+    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
+    (h_inj : Function.Injective offsetFn) (i : Fin n) :
+    ((List.finRange n).foldl
+       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        region (offsetFn i)
+      = valueFn i := by
+  exact scatter_readback_list (List.finRange n) s offsetFn valueFn
+    i (List.nodup_finRange n) (List.mem_finRange i) h_inj
+
+theorem scatter_readback_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ)
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        region (offsetFn i)
+    = valueFn i :=
+  scatter_readback_list (TileShape.allIndices shape) s offsetFn valueFn
+    i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) h_inj
+
+private theorem foldl_writeMem_masked_preserves {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α) :
+    ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
+      ((l.foldl
+          (fun acc k =>
+            if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region o)
+      = s.mem region o := by
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s h
+    rw [List.foldl_cons]
+    have htl : ∀ k ∈ tl, mask k = true → offsetFn k ≠ o :=
+      fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
+    by_cases hmaskhd : mask hd = true
+    · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
+      simp only [hmaskhd, if_true]
+      rw [ih _ htl]
+      show (if region = region ∧ o = offsetFn hd then valueFn hd else s.mem region o)
+          = s.mem region o
+      rw [if_neg]
+      rintro ⟨_, h_eq⟩
+      exact hhd h_eq.symm
+    · have hmaskhd' : mask hd = false := by
+        rcases hmaskFalse : mask hd
+        · rfl
+        · exact absurd hmaskFalse hmaskhd
+      simp only [hmaskhd', if_false, Bool.false_eq_true]
+      exact ih _ htl
+
+theorem scatter_readback_masked_list {α : Type} {region : RegionName}
+    (l : List α) (s : BlockState)
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool)
+    (i : α) (h_nodup : l.Nodup) (h_mem : i ∈ l)
+    (h_inj : Function.Injective offsetFn) :
+    (l.foldl
+       (fun acc k =>
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if mask i then valueFn i else s.mem region (offsetFn i) := by
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  rw [hl, List.foldl_append, List.foldl_cons]
+  have h_l1_not_in : ∀ k ∈ l₁, mask k = true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    rw [hki] at hk
+    exact (hl1_disj i hk i (List.mem_cons_self)) rfl
+  have h_l2_not_in : ∀ k ∈ l₂, mask k = true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  rw [foldl_writeMem_masked_preserves offsetFn valueFn mask (offsetFn i) l₂ _ h_l2_not_in]
+  by_cases hmi : mask i = true
+  · simp only [hmi, if_true]
+    show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _)
+        = valueFn i
+    exact if_pos ⟨rfl, rfl⟩
+  · have hmi' : mask i = false := by
+      rcases hmiFalse : mask i
+      · rfl
+      · exact absurd hmiFalse hmi
+    simp only [hmi', if_false, Bool.false_eq_true]
+    rw [foldl_writeMem_masked_preserves offsetFn valueFn mask (offsetFn i) l₁ _ h_l1_not_in]
+
+theorem scatter_readback_masked {region : RegionName} {n : Nat}
+    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
+    (mask : Fin n → Bool)
+    (h_inj : Function.Injective offsetFn) (i : Fin n) :
+    ((List.finRange n).foldl
+       (fun acc k =>
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if mask i then valueFn i else s.mem region (offsetFn i) :=
+  scatter_readback_masked_list (List.finRange n) s offsetFn valueFn mask
+    i (List.nodup_finRange n) (List.mem_finRange i) h_inj
+
+theorem scatter_readback_masked_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ) (mask : TileIndex shape → Bool)
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if mask i then valueFn i else s.mem region (offsetFn i) :=
+  scatter_readback_masked_list (TileShape.allIndices shape) s offsetFn valueFn mask
+    i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) h_inj
+
+theorem scatter_readback_prop_masked {region : RegionName} {n : Nat}
+    (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
+    (P : Fin n → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : Fin n) :
+    ((List.finRange n).foldl
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if P i then valueFn i else s.mem region (offsetFn i) := by
+  have h := scatter_readback_masked (region := region) s offsetFn valueFn
+              (fun k => decide (P k)) h_inj i
+  simp only [decide_eq_true_eq] at h
+  exact h
+
+theorem scatter_readback_prop_masked_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ) (P : TileIndex shape → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = if P i then valueFn i else s.mem region (offsetFn i) := by
+  have h := scatter_readback_masked_nd (region := region) s offsetFn valueFn
+              (fun k => decide (P k)) h_inj i
+  simp only [decide_eq_true_eq] at h
+  exact h
+
+theorem scatter_readback_prop_masked_list_of_true {α : Type} {region : RegionName}
+    (l : List α) (s : BlockState)
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (i : α) (h_nodup : l.Nodup) (h_mem : i ∈ l) (hPi : P i)
+    (h_no_collision :
+      ∀ k, k ∈ l → P k → offsetFn k = offsetFn i → k = i) :
+    (l.foldl
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = valueFn i := by
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
+  rw [hl, List.foldl_append, List.foldl_cons]
+  have h_l2_not_in : ∀ k ∈ l₂, decide (P k) = true → offsetFn k ≠ offsetFn i := by
+    intro k hk hPkDec heq
+    have hPk : P k := by simpa only [decide_eq_true_eq] using hPkDec
+    have hki : k = i :=
+      h_no_collision k (by
+        rw [hl]
+        exact List.mem_append_right l₁ (List.mem_cons_of_mem i hk)) hPk heq
+    subst hki
+    exact hi_notin_l2 hk
+  simp only [hPi, if_true]
+  let st : BlockState :=
+    (List.foldl
+      (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s l₁).writeMem region (offsetFn i) (valueFn i)
+  have hpres :=
+    foldl_writeMem_masked_preserves (region := region) offsetFn valueFn (fun k => decide (P k))
+      (offsetFn i) l₂ st h_l2_not_in
+  have hstep :
+      (fun (acc : BlockState) k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+        =
+      (fun (acc : BlockState) k =>
+        if decide (P k) then acc.writeMem region (offsetFn k) (valueFn k) else acc) := by
+    funext acc k
+    by_cases hk : P k <;> simp [hk]
+  change (List.foldl
+      (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      st l₂).mem region (offsetFn i) = valueFn i
+  rw [show List.foldl
+      (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      st l₂ =
+    List.foldl
+      (fun acc k => if decide (P k) then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      st l₂ by
+        rw [hstep]]
+  rw [hpres]
+  simp [BlockState.writeMem, st]
+
+theorem scatter_readback_prop_masked_nd_of_true {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ) (P : TileIndex shape → Prop) [DecidablePred P]
+    (i : TileIndex shape) (hPi : P i)
+    (h_no_collision :
+      ∀ k, P k → offsetFn k = offsetFn i → k = i) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = valueFn i :=
+  scatter_readback_prop_masked_list_of_true (TileShape.allIndices shape) s offsetFn valueFn P
+    i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) hPi
+    (fun k _hk hPk heq => h_no_collision k hPk heq)
+
+theorem scatter_preserves_other_region {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (R : RegionName) (h_ne : R ≠ region) (off : Nat) :
+    ∀ (l : List α) (s : BlockState),
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
+        R off)
+      = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s
+    rw [List.foldl_cons, ih]
+    show (s.writeMem region (offsetFn hd) (valueFn hd)).mem R off = s.mem R off
+    unfold writeMem
+    show (if R = region ∧ off = offsetFn hd then valueFn hd else s.mem R off)
+        = s.mem R off
+    rw [if_neg]
+    rintro ⟨h_R, _⟩
+    exact h_ne h_R
+
+theorem foldl_writeMem_pid {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (l : List α) (s : BlockState) :
+    ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).pid)
+      = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      simp
+
+theorem foldl_writeMem_masked_pid {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (mask : α → Bool) (l : List α) (s : BlockState) :
+    ((l.foldl
+        (fun acc k =>
+          if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).pid)
+      = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hmask : mask hd
+      · simp [hmask]
+      · simp [hmask]
+
+theorem foldl_writeMemAt_pid {α : Type}
+    (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (l : List α) (s : BlockState) :
+    ((l.foldl (fun acc k => acc.writeMem (regionFn k) (offsetFn k) (valueFn k)) s).pid)
+      = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      simp
+
+theorem foldl_writeMemAt_masked_pid {α : Type}
+    (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (mask : α → Bool) (l : List α) (s : BlockState) :
+    ((l.foldl
+        (fun acc k =>
+          if mask k then acc.writeMem (regionFn k) (offsetFn k) (valueFn k) else acc) s).pid)
+      = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hmask : mask hd
+      · simp [hmask]
+      · simp [hmask]
+
+end BlockState
+
+end VeriTile.Triton
