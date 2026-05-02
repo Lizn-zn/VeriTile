@@ -174,7 +174,9 @@ connect those formulas to mathematical tensor slices. Internally, proofs may
 still use the lower-level `InputAt` escape hatch for arbitrary offset maps and
 then package the result as a `TensorView`. Aliasing is represented by choosing
 equal or distinct `RegionName`s; pointer values, pointer casts, pointer
-comparison, and block pointers are not modeled.
+comparison, and block pointers are not modeled. See
+[`GpuMemoryModel.md`](./GpuMemoryModel.md) for the GPU memory hierarchy scope
+and the sequential-consistency assumptions.
 
 ## Floating-Point Model
 

@@ -186,6 +186,7 @@ See the full softmax example in
 ## More Documentation
 
 - [Supported Triton subset and semantic gaps](./documents/TritonSubset.md)
+- [GPU memory modeling scope](./documents/GpuMemoryModel.md)
 - [FA-1 Step 2 boundary-mask plan](./documents/FA1_Step2_BoundaryMasks.md)
 - [LLM proof wrapper](./scripts/README.md)
 - [LLM benchmark protocol](./bench/llm_eval/README.md)
