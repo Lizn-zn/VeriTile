@@ -2707,6 +2707,21 @@ theorem slidingScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
   · simp [visibleBlock, scoreBlockIndex, jg, Bool.eq_false_iff.mpr hvis]
     simp [scoreBlockLane, scoreBlockIndex, Bool.eq_false_iff.mpr hvis, jg]
 
+theorem slidingScoreBlock_numeric_tile_eq {M D Bk numKVBlocks : Nat}
+    (qStart window : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < numKVBlocks) :
+    Tile.select
+      (slidingVisibleBlockTile (M := M) (Bk := Bk) qStart window k)
+      (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
+      (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk])
+      =
+      scoreBlockLane (slidingVisible window qStart) (dotScore Q K scale) k
+        (Nat.succ_le_iff.mpr hk) := by
+  unfold slidingVisibleBlockTile rawScoreBlockTile distanceBlockTile
+  exact slidingScoreBlock_tile_eq qStart window Q K scale k hk
+
 theorem alibiScoreBlockTile_eq {M D Bk numKVBlocks : Nat}
     (qStart : Nat) (slope : ℝ)
     (Q : TileIndex [M, D] → ℝ)
@@ -2716,6 +2731,25 @@ theorem alibiScoreBlockTile_eq {M D Bk numKVBlocks : Nat}
       scoreBlockLane allVisible (alibiScore qStart slope Q K scale) k
         (Nat.succ_le_iff.mpr hk) := by
   unfold alibiScoreBlockTile rawScoreBlockTile distanceBlockTile
+  exact alibiScoreBlock_tile_eq qStart slope Q K scale k hk
+
+theorem alibiScoreBlock_numeric_tile_eq {M D Bk numKVBlocks : Nat}
+    (qStart : Nat) (slope : ℝ)
+    (Q : TileIndex [M, D] → ℝ)
+    (K : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (scale : ℝ) (k : Nat) (hk : k < numKVBlocks) :
+    Tile.bop NumericDType.real.add
+      (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
+      (Tile.bop NumericDType.real.sub Broadcast.scalarL
+        (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
+        (Tile.bop NumericDType.real.mul Broadcast.scalarL
+          (Tile.scalar ((slope : ℝ) : WithBot ℝ))
+          (distanceBlockTile (M := M) (Bk := Bk) qStart k)))
+      =
+      scoreBlockLane allVisible (alibiScore qStart slope Q K scale) k
+        (Nat.succ_le_iff.mpr hk) := by
+  unfold rawScoreBlockTile distanceBlockTile
   exact alibiScoreBlock_tile_eq qStart slope Q K scale k hk
 
 theorem slidingVisibleBlockTile_eq {M Bk numKVBlocks : Nat}
