@@ -50,16 +50,6 @@ def rowTileView (s : BlockState) (region : RegionName)
 def scalarCellView (region : RegionName) (base : Nat) : TensorView [] :=
   { region := region, base := base, strides := [] }
 
-theorem inputLoadedAt_of_programTileView_loaded
-    {s : BlockState} {region : RegionName} {N : Nat} {xs : Fin N → ℝ}
-    (h : TensorView.loaded s (programTileView s region N)
-      (fun idx : TileIndex [N] => xs idx.1)) :
-    InputLoadedAt s region N xs := by
-  intro i
-  have hi := h (i, PUnit.unit)
-  simpa [TensorView.loaded, InputAt, TensorView.offset,
-         programTileView, Offset.strided] using hi
-
 /-- Region `region` holds a feature vector at offsets `[0, N)`.
     Used for per-column parameters such as LayerNorm `γ` and `β`, which are
     shared across rows and are loaded with `tl.arange(0, N)`, not
@@ -67,16 +57,6 @@ theorem inputLoadedAt_of_programTileView_loaded
 def InputFeatureLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=
   ∀ i : Fin N, s.mem region i.val = xs i
-
-theorem inputFeatureLoadedAt_of_featureView_loaded
-    {s : BlockState} {region : RegionName} {N : Nat} {xs : Fin N → ℝ}
-    (h : TensorView.loaded s (featureView region N)
-      (fun idx : TileIndex [N] => xs idx.1)) :
-    InputFeatureLoadedAt s region N xs := by
-  intro i
-  have hi := h (i, PUnit.unit)
-  simpa [TensorView.loaded, InputAt, TensorView.offset,
-         featureView, Offset.strided] using hi
 
 /-- Read region `region` at the cell `pid*N + i.val` from the optional
     final `BlockState` of an `exec` call. -/
@@ -93,17 +73,6 @@ def InputRowLoadedAt (s : BlockState) (region : RegionName)
     (rowStride blockSize : Nat) (xs : Fin blockSize → ℝ) : Prop :=
   ∀ i : Fin blockSize, s.mem region (s.pid * rowStride + i.val) = xs i
 
-theorem inputRowLoadedAt_of_rowTileView_loaded
-    {s : BlockState} {region : RegionName}
-    {rowStride blockSize : Nat} {xs : Fin blockSize → ℝ}
-    (h : TensorView.loaded s (rowTileView s region rowStride blockSize)
-      (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    InputRowLoadedAt s region rowStride blockSize xs := by
-  intro i
-  have hi := h (i, PUnit.unit)
-  simpa [TensorView.loaded, InputAt, TensorView.offset,
-         rowTileView, Offset.strided] using hi
-
 /-- Read region `region` at the single cell `basePid` from the optional
     final `BlockState` of an `exec` call. Models the
     *single-scalar-per-block* output pattern (`tl.store(tl.ptr($(yReg)) + row, _)`)
@@ -113,17 +82,5 @@ noncomputable def observeRowAt
   sf.map (·.readMem region basePid)
 
 /-! ## Backwards-compatible 1D injectivity helper -/
-
-/-- Stride injectivity for the canonical 1D scatter offset
-`fun idx : TileIndex [n] => base + idx.1.val`.
-
-Used by every 1D kernel proof feeding `scatter_readback_nd` /
-`scatter_readback_prop_masked_nd` after the ND switch. Equivalent to
-`Offset.linear1D_inj`; kept as a separate name for the existing call sites. -/
-theorem injective_offset_singleton {n : Nat} (base : Nat) :
-    Function.Injective (fun idx : TileIndex [n] => base + idx.1.val) := by
-  rintro ⟨a, _⟩ ⟨b, _⟩ hab
-  obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-  rfl
 
 end VeriTile.Examples
