@@ -1096,6 +1096,47 @@ by an explicit `score` function and `visible` predicate instead of being tied
 to bare scaled dot-product scores.
 -/
 
+private def fa1ScorePreLoop (qReg : RegionName) (M D : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "pid" (Op.programId 0)
+  , Stmt.assign .nat [M] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil
+          (Op.ref .nat [] "pid")
+          (Op.constNat M))
+        (Op.arange M))
+  , Stmt.assign .nat [D] "offs_d" (Op.arange D)
+  , Stmt.assign .nat [M, D] "q_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+          (Op.constNat D))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+  , Stmt.assign .real [M, D] "q"
+      (Op.load qReg (Op.ref .nat [M, D] "q_ptrs"))
+  , Stmt.assign .real [M] "m_i"
+      (Op.full [M] Op.negInf)
+  , Stmt.assign .real [M] "l_i"
+      (Op.full [M] (Op.const 0))
+  , Stmt.assign .real [M, D] "o_acc"
+      (Op.full [M, D] (Op.const 0))
+  ]
+
+private def fa1ScorePostLoop (outReg : RegionName) (M D : Nat) : List Stmt :=
+  [ Stmt.assign .real [M, D] "out"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [M, D] "o_acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i")))
+  , Stmt.assign .nat [M, D] "o_ptrs"
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+          (Op.constNat D))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+  , Stmt.store outReg [M, D]
+      (Op.ref .nat [M, D] "o_ptrs")
+      (Op.ref .real [M, D] "out")
+  ]
+
 def P_fa1_score
     {M D S : Nat}
     (qReg kReg vReg : RegionName)
@@ -1126,6 +1167,105 @@ def P_fa1_score
       (Offset.rowMajor2D (rows := S) (cols := D) 0 D) K ∧
   InputAt s vReg
       (Offset.rowMajor2D (rows := S) (cols := D) 0 D) V
+
+theorem fa1_score_preLoop_correct
+    {M D S : Nat}
+    (qReg kReg vReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ)
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := S) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := S) (cols := D) 0 D) V) :
+    ∃ s0,
+      stepStmts (fa1ScorePreLoop qReg M D) s = some s0 ∧
+      P_fa1_score qReg kReg vReg s.pid Q K V visible score 0 s0 := by
+  let qPtrs : Tile .nat [M, D] :=
+    ⟨fun idx => (s.pid * M + idx.1.val) * D + idx.2.1.val⟩
+  let qLoaded : Tile .real [M, D] :=
+    ⟨fun idx => some (s.readMem qReg ((s.pid * M + idx.1.val) * D + idx.2.1.val))⟩
+  let s0 :=
+    ((((((((s.setReg "pid" .nat [] (Tile.scalar s.pid))
+      ).setReg "offs_m" .nat [M] (Tile.vec fun i : Fin M => s.pid * M + i.val)
+      ).setReg "offs_d" .nat [D] (Tile.vec fun d : Fin D => d.val)
+      ).setReg "q_ptrs" .nat [M, D] qPtrs
+      ).setReg "q" .real [M, D] qLoaded
+      ).setReg "m_i" .real [M] ⟨fun _ => (⊥ : WithBot ℝ)⟩
+      ).setReg "l_i" .real [M] (Tile.ofReal fun _ => 0)
+      ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
+  have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
+    ext idx
+    simp [qLoaded, Tile.ofReal, BlockState.readMem]
+    rw [show (s.pid * M + idx.1.val) * D + idx.2.1.val =
+        Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D idx by
+          simp [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
+            Nat.add_assoc]]
+    exact congrArg some (hQ idx)
+  refine ⟨s0, ?_, ?_⟩
+  · simp [fa1ScorePreLoop, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
+      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex,
+      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qLoaded, s0]
+    rfl
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0]
+    · simp [s0, hQ_loaded_eq]
+    · simp [s0, mScoreOnline]
+    · simp [s0, lScoreOnline, Tile.ofReal]
+    · simp [s0, oScoreOnline, Tile.ofReal]
+    · intro idx
+      simpa [s0] using hQ idx
+    · intro idx
+      simpa [s0] using hK idx
+    · intro idx
+      simpa [s0] using hV idx
+
+theorem fa1_score_postLoop_correct
+    {M D S : Nat}
+    (qReg kReg vReg outReg : RegionName)
+    (origPid : Nat)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [S, D] → ℝ)
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (sLoop : BlockState)
+    (hP : P_fa1_score qReg kReg vReg origPid Q K V visible score S sLoop) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+          (stepStmts (fa1ScorePostLoop outReg M D) sLoop)
+          outReg
+          (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) idx
+        = some (attentionRealMaskedScore visible score V idx) := by
+  intro idx
+  rcases hP with
+    ⟨_hpidReg, _hpid, hoffs_m, hoffs_d, _hq, _hm, hl, ho, _hQ, _hK, _hV⟩
+  have h_inj :
+      Function.Injective
+        (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) :=
+    Offset.rowMajor2D_inj (base := origPid * M * D) (rowStride := D) (le_refl D)
+  have h_inj_store :
+      Function.Injective
+        (fun i : TileIndex [M, D] => (origPid * M + i.1.val) * D + i.2.1.val) := by
+    intro a b h
+    apply h_inj
+    simpa [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
+      Nat.add_assoc] using h
+  simp [observeTileAt, fa1ScorePostLoop, stepStmts, stepStmt, evalOp,
+        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
+        Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+        NumericDType.div, Offset.rowMajor2D, Offset.strided, Option.bind,
+        TileShape.dropInsertedIndex]
+  rw [show origPid * M * D + idx.1.val * D + idx.2.1.val =
+      (origPid * M + idx.1.val) * D + idx.2.1.val by
+        rw [Nat.add_mul]]
+  simp only [BlockState.readMem]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
+  simp [oScoreOnline_div_lScoreOnline_eq_attentionRealMaskedScore visible score V idx]
 
 theorem P_fa1_score_readout_ratio
     {M D S : Nat}
