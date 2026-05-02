@@ -164,6 +164,105 @@ noncomputable def attentionRealAlibiSlidingSoftcap {M S D : Nat}
   let score := fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j)
   attentionRealMaskedScore (slidingVisible window qStart) score V
 
+/-! ## M-free score references
+
+These are the final, non-online sums that online-softmax recurrences should
+factor to. They deliberately mention only a score function and a visibility
+predicate, so ALiBi, sliding-window masks, and softcap all share the same
+ratio bridge.
+-/
+
+noncomputable def lFreeScore {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (i : Fin M) : ℝ :=
+  Finset.univ.sum (fun j : Fin S =>
+    if visible i j then Real.exp (score i j) else 0)
+
+noncomputable def oFreeScore {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (idx : TileIndex [M, D]) : ℝ :=
+  let i := idx.1
+  let d := idx.2.1
+  Finset.univ.sum (fun j : Fin S =>
+    (if visible i j then Real.exp (score i j) else 0) *
+      V (j, d, PUnit.unit))
+
+def allVisible {M S : Nat} : Fin M → Fin S → Bool :=
+  fun _ _ => Bool.true
+
+theorem oFreeScore_div_lFreeScore_eq_attentionRealMaskedScore {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (idx : TileIndex [M, D]) :
+    oFreeScore visible score V idx / lFreeScore visible score idx.1 =
+      attentionRealMaskedScore visible score V idx := by
+  obtain ⟨i, d, u⟩ := idx
+  cases u
+  rfl
+
+theorem attentionRealScore_eq_masked_allVisible {M S D : Nat}
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) :
+    attentionRealScore score V =
+      attentionRealMaskedScore allVisible score V := by
+  funext idx
+  obtain ⟨i, d, u⟩ := idx
+  cases u
+  simp [attentionRealScore, attentionRealMaskedScore, allVisible]
+
+theorem oFreeScore_div_lFreeScore_eq_attentionRealScore {M S D : Nat}
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (idx : TileIndex [M, D]) :
+    oFreeScore allVisible score V idx / lFreeScore allVisible score idx.1 =
+      attentionRealScore score V idx := by
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealMaskedScore]
+  rw [attentionRealScore_eq_masked_allVisible]
+
+theorem oFreeScore_div_lFreeScore_eq_attentionRealAlibi {M S D : Nat}
+    (qStart : Nat) (slope : ℝ)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oFreeScore allVisible (alibiScore qStart slope Q K scale) V idx /
+        lFreeScore allVisible (alibiScore qStart slope Q K scale) idx.1 =
+      attentionRealAlibi qStart slope Q K V scale idx := by
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealScore]
+  rfl
+
+theorem oFreeScore_div_lFreeScore_eq_attentionRealSlidingWindow {M S D : Nat}
+    (qStart window : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oFreeScore (slidingVisible window qStart) (dotScore Q K scale) V idx /
+        lFreeScore (slidingVisible window qStart) (dotScore Q K scale) idx.1 =
+      attentionRealSlidingWindow qStart window Q K V scale idx := by
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealMaskedScore]
+  rfl
+
+theorem oFreeScore_div_lFreeScore_eq_attentionRealSoftcap {M S D : Nat}
+    (softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oFreeScore allVisible (softcapDotScore softcap Q K scale) V idx /
+        lFreeScore allVisible (softcapDotScore softcap Q K scale) idx.1 =
+      attentionRealSoftcap softcap Q K V scale idx := by
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealScore]
+  rfl
+
+theorem oFreeScore_div_lFreeScore_eq_attentionRealAlibiSlidingSoftcap {M S D : Nat}
+    (qStart window : Nat) (slope softcap : ℝ)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D]) :
+    oFreeScore (slidingVisible window qStart)
+        (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+        V idx /
+      lFreeScore (slidingVisible window qStart)
+        (fun i j => softcapScore softcap (alibiScore qStart slope Q K scale i j))
+        idx.1 =
+      attentionRealAlibiSlidingSoftcap qStart window slope softcap Q K V scale idx := by
+  rw [oFreeScore_div_lFreeScore_eq_attentionRealMaskedScore]
+  rfl
+
 @[simp] theorem attentionRealScore_apply {M S D : Nat}
     (score : Fin M → Fin S → ℝ) (V : TileIndex [S, D] → ℝ)
     (i : Fin M) (d : Fin D) :
@@ -214,6 +313,16 @@ noncomputable def attentionReal4DSoftcap {B H S_q S_k D : Nat}
       (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
       scale (i, d, PUnit.unit)
 
+noncomputable def attentionReal4DAlibiSlidingSoftcap {B H S_q S_k D : Nat}
+    (window : Nat) (slopes : Fin H → ℝ) (softcap : ℝ)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) : TileIndex [B, H, S_q, D] → ℝ :=
+  fun (b, h, i, d, _) =>
+    attentionRealAlibiSlidingSoftcap 0 window (slopes h) softcap
+      (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+      scale (i, d, PUnit.unit)
+
 @[simp] theorem attentionReal4DAlibi_slice {B H S_q S_k D : Nat}
     (slopes : Fin H → ℝ)
     (Q : TileIndex [B, H, S_q, D] → ℝ)
@@ -241,6 +350,17 @@ noncomputable def attentionReal4DSoftcap {B H S_q S_k D : Nat}
     (scale : ℝ) (b : Fin B) (h : Fin H) (i : Fin S_q) (d : Fin D) :
     attentionReal4DSoftcap softcap Q K V scale (b, h, i, d, PUnit.unit) =
       attentionRealSoftcap softcap
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        scale (i, d, PUnit.unit) := rfl
+
+@[simp] theorem attentionReal4DAlibiSlidingSoftcap_slice {B H S_q S_k D : Nat}
+    (window : Nat) (slopes : Fin H → ℝ) (softcap : ℝ)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (b : Fin B) (h : Fin H) (i : Fin S_q) (d : Fin D) :
+    attentionReal4DAlibiSlidingSoftcap window slopes softcap Q K V scale
+        (b, h, i, d, PUnit.unit) =
+      attentionRealAlibiSlidingSoftcap 0 window (slopes h) softcap
         (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
         scale (i, d, PUnit.unit) := rfl
 
