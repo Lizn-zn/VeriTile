@@ -1686,6 +1686,59 @@ theorem P_fa1_score_blocks_final
       P_fa1_score qReg kReg vReg origPid Q K V visible score (Bk * numKVBlocks) s := by
   rfl
 
+/-! ## Block-local score views
+
+The executable loop consumes one `Bk`-wide KV block at a time. These helpers
+repackage the generic key-indexed score recurrence into the block-local tile
+shape that the loop body computes.
+-/
+
+def scoreBlockIndex (Bk numKVBlocks k : Nat) (h : k + 1 ≤ numKVBlocks)
+    (jLocal : Fin Bk) : Fin (Bk * numKVBlocks) :=
+  FA1Math.blockIndex Bk numKVBlocks k h jLocal
+
+noncomputable def scoreBlockLane {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (h : k + 1 ≤ numKVBlocks) :
+    Tile .real [M, Bk] :=
+  ⟨fun idx : TileIndex [M, Bk] =>
+    scoreLane visible score idx.1 (scoreBlockIndex Bk numKVBlocks k h idx.2.1)⟩
+
+def visibleBlock {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (k : Nat) (h : k + 1 ≤ numKVBlocks) :
+    Tile .bool [M, Bk] :=
+  ⟨fun idx : TileIndex [M, Bk] =>
+    visible idx.1 (scoreBlockIndex Bk numKVBlocks k h idx.2.1)⟩
+
+def valueBlock {D Bk numKVBlocks : Nat}
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (k : Nat) (h : k + 1 ≤ numKVBlocks) :
+    Tile .real [Bk, D] :=
+  Tile.ofReal (fun idx : TileIndex [Bk, D] =>
+    V (scoreBlockIndex Bk numKVBlocks k h idx.1, idx.2.1, PUnit.unit))
+
+@[simp] theorem scoreBlockLane_data {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (score : Fin M → Fin (Bk * numKVBlocks) → ℝ)
+    (k : Nat) (h : k + 1 ≤ numKVBlocks) (i : Fin M) (j : Fin Bk) :
+    (scoreBlockLane visible score k h).data (i, j, PUnit.unit) =
+      scoreLane visible score i (scoreBlockIndex Bk numKVBlocks k h j) := rfl
+
+@[simp] theorem visibleBlock_data {M Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (k : Nat) (h : k + 1 ≤ numKVBlocks) (i : Fin M) (j : Fin Bk) :
+    (visibleBlock visible k h).data (i, j, PUnit.unit) =
+      visible i (scoreBlockIndex Bk numKVBlocks k h j) := rfl
+
+@[simp] theorem valueBlock_data {D Bk numKVBlocks : Nat}
+    (V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (k : Nat) (h : k + 1 ≤ numKVBlocks) (j : Fin Bk) (d : Fin D) :
+    (valueBlock V k h).data (j, d, PUnit.unit) =
+      ((V (scoreBlockIndex Bk numKVBlocks k h j, d, PUnit.unit) : ℝ) :
+        WithBot ℝ) := rfl
+
 theorem fa1_score_preLoop_correct
     {M D S : Nat}
     (qReg kReg vReg : RegionName)
