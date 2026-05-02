@@ -40,6 +40,18 @@ def comparisonOpsSmoke : Kernel := triton {
   r6  := a != b
 }
 
+/-- Unary math ops used by score-level attention variants are reachable via the DSL. -/
+def unaryMathOpsSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(N) + tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  e    := tl.exp(x)
+  l    := tl.log(e)
+  s    := tl.sigmoid(x)
+  r    := tl.sqrt(e)
+  t    := tl.tanh(x)
+}
+
 /-- `tl.load(p, mask=m)` with no `other=` uses `s.undef` for masked-off lanes. -/
 example : evalOp
     (Op.loadMask "X" (Op.constNat 0)

@@ -74,6 +74,7 @@ Stmt : Type
 - `tl.log`
 - `tl.sigmoid`
 - `tl.sqrt`
+- `tl.tanh`
 
 这些都作用于 `.real` channel。
 

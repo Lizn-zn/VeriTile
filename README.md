@@ -179,6 +179,7 @@ See the full softmax example in
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
 | [`VeriTile/Examples/FlashAttention1/V0.lean`](./VeriTile/Examples/FlashAttention1/V0.lean) | FA-1 v0/full-tile forward correctness, non-causal and causal, over 4D strided layouts |
 | [`VeriTile/Examples/FlashAttention1/V1Boundary.lean`](./VeriTile/Examples/FlashAttention1/V1Boundary.lean) | FA-1 v1 boundary-mask and D-tail correctness over 4D strided layouts |
+| [`VeriTile/Examples/FlashAttention1/ScoreVariants.lean`](./VeriTile/Examples/FlashAttention1/ScoreVariants.lean) | Score-level FA-1 realism references and DSL smoke kernels for ALiBi, sliding window, and softcap |
 | [`VeriTile/Examples/FlashAttention1/NaiveKernel.lean`](./VeriTile/Examples/FlashAttention1/NaiveKernel.lean) | Executable naive FA-1 boundary kernels, correctness, and kernel-pair refinement |
 | [`VeriTile/Examples/FlashAttention1/NaiveRefinement.lean`](./VeriTile/Examples/FlashAttention1/NaiveRefinement.lean) | FA-1 v1 boundary/D-tail refinement aliases to the naive direct-attention reference |
 

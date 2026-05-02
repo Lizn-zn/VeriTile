@@ -12,6 +12,7 @@ import Mathlib.Data.Real.Sqrt
 import Mathlib.Analysis.SpecialFunctions.Exp
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import Mathlib.Analysis.SpecialFunctions.Sigmoid
+import Mathlib.Analysis.Complex.Trigonometric
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Core
 
@@ -587,6 +588,10 @@ noncomputable def WithBot.realSqrt : WithBot ℝ → WithBot ℝ
   | none   => none             -- sqrt(-∞) undefined
   | some r => some (Real.sqrt r)
 
+noncomputable def WithBot.realTanh : WithBot ℝ → WithBot ℝ
+  | none   => some (-1)        -- tanh(-∞) = -1
+  | some r => some (Real.tanh r)
+
 @[simp] theorem WithBot.realExp_some (r : ℝ) :
     WithBot.realExp (some r) = some (Real.exp r) := rfl
 @[simp] theorem WithBot.realLog_some (r : ℝ) :
@@ -595,11 +600,15 @@ noncomputable def WithBot.realSqrt : WithBot ℝ → WithBot ℝ
     WithBot.realSigmoid (some r) = some (Real.sigmoid r) := rfl
 @[simp] theorem WithBot.realSqrt_some (r : ℝ) :
     WithBot.realSqrt (some r) = some (Real.sqrt r) := rfl
+@[simp] theorem WithBot.realTanh_some (r : ℝ) :
+    WithBot.realTanh (some r) = some (Real.tanh r) := rfl
 
 @[simp] theorem WithBot.realExp_bot :
     WithBot.realExp (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realSigmoid_bot :
     WithBot.realSigmoid (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realTanh_bot :
+    WithBot.realTanh (⊥ : WithBot ℝ) = ((-1 : ℝ) : WithBot ℝ) := rfl
 
 @[simp] theorem WithBot.realExp_coe (r : ℝ) :
     WithBot.realExp ((r : ℝ) : WithBot ℝ) = (((Real.exp r : ℝ)) : WithBot ℝ) := rfl
@@ -609,6 +618,8 @@ noncomputable def WithBot.realSqrt : WithBot ℝ → WithBot ℝ
     WithBot.realSigmoid ((r : ℝ) : WithBot ℝ) = (((Real.sigmoid r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realSqrt_coe (r : ℝ) :
     WithBot.realSqrt ((r : ℝ) : WithBot ℝ) = (((Real.sqrt r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realTanh_coe (r : ℝ) :
+    WithBot.realTanh ((r : ℝ) : WithBot ℝ) = (((Real.tanh r : ℝ)) : WithBot ℝ) := rfl
 
 /-! ### Algebraic simp lemmas on `WithBot ℝ` arithmetic helpers -/
 
@@ -1001,6 +1012,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .log a, s => return Tile.uop WithBot.realLog (← evalOp a s)
   | .sigmoid a, s => return Tile.uop WithBot.realSigmoid (← evalOp a s)
   | .sqrt a, s => return Tile.uop WithBot.realSqrt (← evalOp a s)
+  | .tanh a, s => return Tile.uop WithBot.realTanh (← evalOp a s)
   | .lt h bc a b, s => return Tile.cop h.lt bc (← evalOp a s) (← evalOp b s)
   | .le h bc a b, s => return Tile.cop h.le bc (← evalOp a s) (← evalOp b s)
   | .eq h bc a b, s => return Tile.cop h.eq bc (← evalOp a s) (← evalOp b s)

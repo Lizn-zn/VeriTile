@@ -44,7 +44,7 @@ Conventions:
 
 Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
 `tl.arange(start, end)`, `tl.exp(_)`, `tl.log(_)`, `tl.sigmoid(_)`,
-`tl.sqrt(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load($(REGION) + offset)`,
+`tl.sqrt(_)`, `tl.tanh(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load($(REGION) + offset)`,
 binary `+ - * /`, parens, identifiers, numerals, antiquotation
 (`$(t)` for `Nat`, `$ℝ(t)` for `ℝ`). `tl.load($(REGION))` is sugar for
 offset `0`.
@@ -105,6 +105,7 @@ syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
+syntax "tl.tanh(" tritonExpr ")" : tritonExpr
 syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 -- Element-wise select. All three operands must broadcast to a common
@@ -436,6 +437,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.sqrt"
       pure ⟨← `(Op.sqrt $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.tanh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.tanh"
+      pure ⟨← `(Op.tanh $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) => do
       let a' ← expandExpr env a
       let b' ← expandExpr env b
@@ -923,6 +928,7 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>

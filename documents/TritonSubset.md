@@ -81,6 +81,7 @@ Supported channels:
 - `tl.log`
 - `tl.sigmoid`
 - `tl.sqrt`
+- `tl.tanh`
 
 These operate on the `.real` channel.
 

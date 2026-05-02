@@ -458,6 +458,7 @@ inductive Op : TileDType → TileShape → Type where
   | log       : Op .real shape → Op .real shape
   | sigmoid   : Op .real shape → Op .real shape
   | sqrt      : Op .real shape → Op .real shape
+  | tanh      : Op .real shape → Op .real shape
   | lt        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | le        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | eq        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
