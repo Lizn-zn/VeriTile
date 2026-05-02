@@ -561,6 +561,138 @@ theorem oScorePrefix_div_lScorePrefix_eq_attentionRealAlibiSlidingSoftcap {M S D
   rw [oScorePrefix_final_eq_oFreeScore, lScorePrefix_final_eq_lFreeScore]
   rw [oFreeScore_div_lFreeScore_eq_attentionRealAlibiSlidingSoftcap]
 
+/-! ## Shifted online score recurrence
+
+These definitions mirror FA-1's numerically stable loop state for an
+arbitrary score function. Masked-out keys are represented as `⊥`, so their
+exponentiated contribution is zero.
+-/
+
+noncomputable def scoreLane {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (i : Fin M) (j : Fin S) : WithBot ℝ :=
+  if visible i j then ((score i j : ℝ) : WithBot ℝ) else ⊥
+
+noncomputable def mScoreOnline {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) : Nat → Fin M → WithBot ℝ
+  | 0, _ => ⊥
+  | k + 1, i =>
+      if h : k < S then
+        max (mScoreOnline visible score k i) (scoreLane visible score i ⟨k, h⟩)
+      else
+        mScoreOnline visible score k i
+
+noncomputable def alphaScoreOnline {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (k : Nat) (i : Fin M) : ℝ :=
+  (WithBot.realExp
+    (WithBot.realSub
+      (mScoreOnline visible score k i)
+      (mScoreOnline visible score (k + 1) i))).unbotD 0
+
+noncomputable def lScoreOnline {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) : Nat → Fin M → ℝ
+  | 0, _ => 0
+  | k + 1, i =>
+      if h : k < S then
+        let mNew := mScoreOnline visible score (k + 1) i
+        alphaScoreOnline visible score k i *
+          lScoreOnline visible score k i +
+          (WithBot.realExp
+            (WithBot.realSub (scoreLane visible score i ⟨k, h⟩) mNew)).unbotD 0
+      else
+        lScoreOnline visible score k i
+
+noncomputable def oScoreOnline {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) : Nat → TileIndex [M, D] → ℝ
+  | 0, _ => 0
+  | k + 1, idx =>
+      if h : k < S then
+        let i := idx.1
+        let d := idx.2.1
+        let mNew := mScoreOnline visible score (k + 1) i
+        alphaScoreOnline visible score k i *
+          oScoreOnline visible score V k idx +
+          (WithBot.realExp
+            (WithBot.realSub (scoreLane visible score i ⟨k, h⟩) mNew)).unbotD 0 *
+            V (⟨k, h⟩, d, PUnit.unit)
+      else
+        oScoreOnline visible score V k idx
+
+@[simp] theorem mScoreOnline_zero {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (i : Fin M) :
+    mScoreOnline visible score 0 i = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem lScoreOnline_zero {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (i : Fin M) :
+    lScoreOnline visible score 0 i = 0 := rfl
+
+@[simp] theorem oScoreOnline_zero {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (idx : TileIndex [M, D]) :
+    oScoreOnline visible score V 0 idx = 0 := rfl
+
+theorem mScoreOnline_succ_of_lt {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (k : Nat) (hk : k < S) (i : Fin M) :
+    mScoreOnline visible score (k + 1) i =
+      max (mScoreOnline visible score k i) (scoreLane visible score i ⟨k, hk⟩) := by
+  change (if h : k < S then
+      max (mScoreOnline visible score k i) (scoreLane visible score i ⟨k, h⟩)
+    else mScoreOnline visible score k i) = _
+  rw [dif_pos hk]
+
+theorem lScoreOnline_succ_of_lt {M S : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ) (k : Nat) (hk : k < S) (i : Fin M) :
+    lScoreOnline visible score (k + 1) i =
+      let mNew := mScoreOnline visible score (k + 1) i
+      alphaScoreOnline visible score k i *
+        lScoreOnline visible score k i +
+        (WithBot.realExp
+          (WithBot.realSub (scoreLane visible score i ⟨k, hk⟩) mNew)).unbotD 0 := by
+  change (if h : k < S then
+      (let mNew := mScoreOnline visible score (k + 1) i
+       alphaScoreOnline visible score k i *
+          lScoreOnline visible score k i +
+          (WithBot.realExp
+            (WithBot.realSub (scoreLane visible score i ⟨k, h⟩) mNew)).unbotD 0)
+    else lScoreOnline visible score k i) = _
+  rw [dif_pos hk]
+
+theorem oScoreOnline_succ_of_lt {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (score : Fin M → Fin S → ℝ)
+    (V : TileIndex [S, D] → ℝ) (k : Nat) (hk : k < S)
+    (idx : TileIndex [M, D]) :
+    oScoreOnline visible score V (k + 1) idx =
+      let i := idx.1
+      let d := idx.2.1
+      let mNew := mScoreOnline visible score (k + 1) i
+      alphaScoreOnline visible score k i *
+        oScoreOnline visible score V k idx +
+        (WithBot.realExp
+          (WithBot.realSub (scoreLane visible score i ⟨k, hk⟩) mNew)).unbotD 0 *
+          V (⟨k, hk⟩, d, PUnit.unit) := by
+  change (if h : k < S then
+      (let i := idx.1
+       let d := idx.2.1
+       let mNew := mScoreOnline visible score (k + 1) i
+       alphaScoreOnline visible score k i *
+          oScoreOnline visible score V k idx +
+          (WithBot.realExp
+            (WithBot.realSub (scoreLane visible score i ⟨k, h⟩) mNew)).unbotD 0 *
+            V (⟨k, h⟩, d, PUnit.unit))
+    else oScoreOnline visible score V k idx) = _
+  rw [dif_pos hk]
+
 @[simp] theorem attentionRealScore_apply {M S D : Nat}
     (score : Fin M → Fin S → ℝ) (V : TileIndex [S, D] → ℝ)
     (i : Fin M) (d : Fin D) :
