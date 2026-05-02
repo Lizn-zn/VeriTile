@@ -58,8 +58,10 @@ Core Phase C additions on `main`:
 - FA-1 v0/full-tile forward proofs over 4D strided Q/K/V/O layouts:
   `fa1_forward_correct_4D_views` and
   `fa1_forward_correct_4D_causal_views`.
-  Boundary-masked FA-1 v1 kernels and recurrence scaffolding are present, but
-  their final correctness theorem is still in progress.
+  Boundary-masked FA-1 v1 adds sequence-boundary, causal-boundary, D-tail,
+  and naive-reference refinement surfaces, including
+  `fa1_boundaryD_refines_naive_reference_views` and
+  `fa1_causal_boundaryD_refines_naive_reference_views`.
 - Artifact gate in CI via `scripts/check-artifact.sh`: `lake build`, no
   `sorry`, axiom whitelist, key theorem surface, and README/example drift
   checks.
@@ -177,6 +179,7 @@ See the full softmax example in
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
 | [`VeriTile/Examples/FlashAttention1/V0.lean`](./VeriTile/Examples/FlashAttention1/V0.lean) | FA-1 v0/full-tile forward correctness, non-causal and causal, over 4D strided layouts |
 | [`VeriTile/Examples/FlashAttention1/V1Boundary.lean`](./VeriTile/Examples/FlashAttention1/V1Boundary.lean) | FA-1 v1 boundary-mask and D-tail correctness over 4D strided layouts |
+| [`VeriTile/Examples/FlashAttention1/NaiveRefinement.lean`](./VeriTile/Examples/FlashAttention1/NaiveRefinement.lean) | FA-1 v1 boundary/D-tail refinement to the naive direct-attention reference |
 
 ## More Documentation
 

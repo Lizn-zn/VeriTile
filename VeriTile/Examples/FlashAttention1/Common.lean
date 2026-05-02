@@ -520,6 +520,117 @@ def fa1ForwardKernelStridedCausalBoundaryD
   tl.store($(outReg) + o_ptrs, out, mask=o_mask)
 }
 
+/-! ## Naive single-block reference kernels
+
+These kernels are the Step 4 baseline: each program instance computes one
+Q-block output directly as `softmax(QKᵀ * scale) · V` over the whole logical
+KV sequence. There is no KV-block loop and no online-softmax recurrence.
+The D-tail variants keep the production-style `Bd` tile width while masking
+logical lanes `d >= D`.
+-/
+
+def fa1NaiveForwardKernelStridedBoundaryD
+    (qReg kReg vReg outReg : RegionName)
+    (M Bd S_q S_k D : Nat)
+    -- Q strides (axes [B, H, S_q, D]):
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    -- K strides (axes [B, H, S_k, D]):
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    -- V strides (axes [B, H, S_k, D]):
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    -- Output strides (axes [B, H, S_q, D]):
+    (stride_ob stride_oh stride_om stride_od : Nat)
+    (scale : ℝ) : Kernel := triton {
+  pid_qb := tl.program_id(0)
+  pid_h  := tl.program_id(1)
+  pid_b  := tl.program_id(2)
+
+  q_base_off := pid_b * $(stride_qb) + pid_h * $(stride_qh)
+  k_base_off := pid_b * $(stride_kb) + pid_h * $(stride_kh)
+  v_base_off := pid_b * $(stride_vb) + pid_h * $(stride_vh)
+  o_base_off := pid_b * $(stride_ob) + pid_h * $(stride_oh)
+
+  offs_m := pid_qb * $(M) + tl.arange(0, $(M))
+  offs_n := tl.arange(0, $(S_k))
+  offs_d := tl.arange(0, $(Bd))
+
+  q_ptrs := q_base_off + offs_m[:, None] * $(stride_qs) + offs_d[None, :] * $(stride_qd)
+  q_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
+  q_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
+  q_mask     := tl.logical_and(q_seq_mask, q_d_mask)
+  q          := tl.load($(qReg) + q_ptrs, mask=q_mask, other=0)
+
+  k_ptrs := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
+  v_ptrs := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
+  kv_d_mask := (offs_n[:, None] * $(0) + offs_d[None, :]) < $(D)
+  k      := tl.load($(kReg) + k_ptrs, mask=kv_d_mask, other=0)
+  v      := tl.load($(vReg) + v_ptrs, mask=kv_d_mask, other=0)
+
+  scores := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+  p      := tl.exp(scores)
+  l      := tl.sum(p, axis = 1)
+  o_acc  := tl.dot(p, v)
+  out    := o_acc / l[:, None]
+
+  o_ptrs := o_base_off + offs_m[:, None] * $(stride_om) + offs_d[None, :] * $(stride_od)
+  o_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
+  o_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
+  o_mask     := tl.logical_and(o_seq_mask, o_d_mask)
+  tl.store($(outReg) + o_ptrs, out, mask=o_mask)
+}
+
+def fa1NaiveForwardKernelStridedCausalBoundaryD
+    (qReg kReg vReg outReg : RegionName)
+    (M Bd S_q S_k D : Nat)
+    -- Q strides (axes [B, H, S_q, D]):
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    -- K strides (axes [B, H, S_k, D]):
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    -- V strides (axes [B, H, S_k, D]):
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    -- Output strides (axes [B, H, S_q, D]):
+    (stride_ob stride_oh stride_om stride_od : Nat)
+    (scale : ℝ) : Kernel := triton {
+  pid_qb := tl.program_id(0)
+  pid_h  := tl.program_id(1)
+  pid_b  := tl.program_id(2)
+
+  q_base_off := pid_b * $(stride_qb) + pid_h * $(stride_qh)
+  k_base_off := pid_b * $(stride_kb) + pid_h * $(stride_kh)
+  v_base_off := pid_b * $(stride_vb) + pid_h * $(stride_vh)
+  o_base_off := pid_b * $(stride_ob) + pid_h * $(stride_oh)
+
+  offs_m := pid_qb * $(M) + tl.arange(0, $(M))
+  offs_n := tl.arange(0, $(S_k))
+  offs_d := tl.arange(0, $(Bd))
+
+  q_ptrs := q_base_off + offs_m[:, None] * $(stride_qs) + offs_d[None, :] * $(stride_qd)
+  q_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
+  q_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
+  q_mask     := tl.logical_and(q_seq_mask, q_d_mask)
+  q          := tl.load($(qReg) + q_ptrs, mask=q_mask, other=0)
+
+  k_ptrs := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
+  v_ptrs := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
+  kv_d_mask := (offs_n[:, None] * $(0) + offs_d[None, :]) < $(D)
+  k      := tl.load($(kReg) + k_ptrs, mask=kv_d_mask, other=0)
+  v      := tl.load($(vReg) + v_ptrs, mask=kv_d_mask, other=0)
+
+  scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+  causal     := offs_m[:, None] >= offs_n[None, :]
+  scores     := tl.where(causal, scores_raw, -inf)
+  p          := tl.exp(scores)
+  l          := tl.sum(p, axis = 1)
+  o_acc      := tl.dot(p, v)
+  out        := o_acc / l[:, None]
+
+  o_ptrs := o_base_off + offs_m[:, None] * $(stride_om) + offs_d[None, :] * $(stride_od)
+  o_seq_mask := (offs_m[:, None] + offs_d[None, :] * $(0)) < $(S_q)
+  o_d_mask   := (offs_m[:, None] * $(0) + offs_d[None, :]) < $(D)
+  o_mask     := tl.logical_and(o_seq_mask, o_d_mask)
+  tl.store($(outReg) + o_ptrs, out, mask=o_mask)
+}
+
 /-! ## Math model — softmax-attention
 
 Spec layer is ℝ-valued: `BlockState.mem` only reads ℝ, never `⊥`, so
@@ -952,6 +1063,26 @@ def causalBoundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
     layout.vB layout.vH layout.vS layout.vD
     layout.oB layout.oH layout.oS layout.oD scale
 
+def naiveBoundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
+    (qReg kReg vReg outReg : RegionName)
+    (M Bd : Nat) (scale : ℝ) : Kernel :=
+  fa1NaiveForwardKernelStridedBoundaryD qReg kReg vReg outReg
+    M Bd S_q S_k D
+    layout.qB layout.qH layout.qS layout.qD
+    layout.kB layout.kH layout.kS layout.kD
+    layout.vB layout.vH layout.vS layout.vD
+    layout.oB layout.oH layout.oS layout.oD scale
+
+def naiveCausalBoundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
+    (qReg kReg vReg outReg : RegionName)
+    (M Bd : Nat) (scale : ℝ) : Kernel :=
+  fa1NaiveForwardKernelStridedCausalBoundaryD qReg kReg vReg outReg
+    M Bd S_q S_k D
+    layout.qB layout.qH layout.qS layout.qD
+    layout.kB layout.kH layout.kS layout.kD
+    layout.vB layout.vH layout.vS layout.vD
+    layout.oB layout.oH layout.oS layout.oD scale
+
 end FA1Layout4D
 
 /-! ## View-level theorem surface
@@ -1021,6 +1152,16 @@ def causalBoundaryKernelD (views : FA1Views4D B H S_q S_k D)
     (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
   views.layout.causalBoundaryKernelD views.qReg views.kReg views.vReg views.outReg
     M Bd Bk numKVBlocks scale
+
+def naiveBoundaryKernelD (views : FA1Views4D B H S_q S_k D)
+    (M Bd : Nat) (scale : ℝ) : Kernel :=
+  views.layout.naiveBoundaryKernelD views.qReg views.kReg views.vReg views.outReg
+    M Bd scale
+
+def naiveCausalBoundaryKernelD (views : FA1Views4D B H S_q S_k D)
+    (M Bd : Nat) (scale : ℝ) : Kernel :=
+  views.layout.naiveCausalBoundaryKernelD views.qReg views.kReg views.vReg views.outReg
+    M Bd scale
 
 end FA1Views4D
 

@@ -13,3 +13,4 @@ VeriTile/Examples/WelfordKernels.lean	welford_kernels_refinement_view	Welford re
 VeriTile/Examples/LayerNormKernels.lean	layernorm_kernels_refinement_view	LayerNorm refinement
 VeriTile/Examples/ApproxGeLU.lean	approx_gelu_kernel_correct_view	ApproxGeLU correctness
 VeriTile/Examples/FlashAttention1/V0.lean	fa1_forward_correct_4D_causal_views	FlashAttention-1 causal 4D correctness
+VeriTile/Examples/FlashAttention1/NaiveRefinement.lean	fa1_causal_boundaryD_refines_naive_reference_views	FlashAttention-1 v1 naive-reference refinement

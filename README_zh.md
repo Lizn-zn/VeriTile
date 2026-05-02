@@ -53,8 +53,10 @@ Phase B 截止包含:
 - 4D strided Q/K/V/O tensor view 上的 FA-1 v0/full-tile forward 证明:
   `fa1_forward_correct_4D_views` 与
   `fa1_forward_correct_4D_causal_views`。
-  Boundary-masked FA-1 v1 kernel 和 recurrence scaffold 已有,但最终 correctness
-  theorem 仍在推进中。
+  Boundary-masked FA-1 v1 已覆盖 sequence-boundary、causal-boundary、D-tail
+  和 naive-reference refinement surface,包括
+  `fa1_boundaryD_refines_naive_reference_views` 与
+  `fa1_causal_boundaryD_refines_naive_reference_views`。
 - CI 中的 artifact gate:`scripts/check-artifact.sh`,检查 `lake build`、无
   `sorry`、axiom whitelist、关键 theorem surface、README/example 漂移。
 
@@ -169,6 +171,7 @@ theorem softmax_kernels_refinement_view
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
 | [`VeriTile/Examples/FlashAttention1/V0.lean`](./VeriTile/Examples/FlashAttention1/V0.lean) | FA-1 v0/full-tile forward correctness,4D strided layout,含 non-causal 与 causal |
 | [`VeriTile/Examples/FlashAttention1/V1Boundary.lean`](./VeriTile/Examples/FlashAttention1/V1Boundary.lean) | FA-1 v1 boundary-mask 与 D-tail correctness,覆盖 4D strided layout |
+| [`VeriTile/Examples/FlashAttention1/NaiveRefinement.lean`](./VeriTile/Examples/FlashAttention1/NaiveRefinement.lean) | FA-1 v1 boundary/D-tail 到 naive direct-attention reference 的 refinement |
 
 ## 更多文档
 
