@@ -434,6 +434,72 @@ theorem scatter_readback_prop_masked_nd {region : RegionName} {shape : TileShape
   simp only [decide_eq_true_eq] at h
   exact h
 
+theorem scatter_readback_prop_masked_list_of_true {α : Type} {region : RegionName}
+    (l : List α) (s : BlockState)
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (i : α) (h_nodup : l.Nodup) (h_mem : i ∈ l) (hPi : P i)
+    (h_no_collision :
+      ∀ k, k ∈ l → P k → offsetFn k = offsetFn i → k = i) :
+    (l.foldl
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = valueFn i := by
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
+  rw [hl, List.foldl_append, List.foldl_cons]
+  have h_l2_not_in : ∀ k ∈ l₂, decide (P k) = true → offsetFn k ≠ offsetFn i := by
+    intro k hk hPkDec heq
+    have hPk : P k := by simpa only [decide_eq_true_eq] using hPkDec
+    have hki : k = i :=
+      h_no_collision k (by
+        rw [hl]
+        exact List.mem_append_right l₁ (List.mem_cons_of_mem i hk)) hPk heq
+    subst hki
+    exact hi_notin_l2 hk
+  simp only [hPi, if_true]
+  let st : BlockState :=
+    (List.foldl
+      (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s l₁).writeMem region (offsetFn i) (valueFn i)
+  have hpres :=
+    foldl_writeMem_masked_preserves (region := region) offsetFn valueFn (fun k => decide (P k))
+      (offsetFn i) l₂ st h_l2_not_in
+  have hstep :
+      (fun (acc : BlockState) k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+        =
+      (fun (acc : BlockState) k =>
+        if decide (P k) then acc.writeMem region (offsetFn k) (valueFn k) else acc) := by
+    funext acc k
+    by_cases hk : P k <;> simp [hk]
+  change (List.foldl
+      (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      st l₂).mem region (offsetFn i) = valueFn i
+  rw [show List.foldl
+      (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      st l₂ =
+    List.foldl
+      (fun acc k => if decide (P k) then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      st l₂ by
+        rw [hstep]]
+  rw [hpres]
+  simp [BlockState.writeMem, st]
+
+theorem scatter_readback_prop_masked_nd_of_true {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → ℝ) (P : TileIndex shape → Prop) [DecidablePred P]
+    (i : TileIndex shape) (hPi : P i)
+    (h_no_collision :
+      ∀ k, P k → offsetFn k = offsetFn i → k = i) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
+        region (offsetFn i)
+    = valueFn i :=
+  scatter_readback_prop_masked_list_of_true (TileShape.allIndices shape) s offsetFn valueFn P
+    i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) hPi
+    (fun k _hk hPk heq => h_no_collision k hPk heq)
+
 theorem scatter_preserves_other_region {α : Type}
     (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
     (R : RegionName) (h_ne : R ≠ region) (off : Nat) :
@@ -941,6 +1007,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .gt h bc a b, s => return Tile.cop h.gt bc (← evalOp a s) (← evalOp b s)
   | .ge h bc a b, s => return Tile.cop h.ge bc (← evalOp a s) (← evalOp b s)
   | .ne h bc a b, s => return Tile.cop h.ne bc (← evalOp a s) (← evalOp b s)
+  | .boolAnd bc a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.bop (fun x y : Bool => x && y) bc va vb)
   | .max2 bc a b, s => do
       let va ← evalOp a s
       let vb ← evalOp b s

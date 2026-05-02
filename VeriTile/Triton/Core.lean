@@ -464,6 +464,7 @@ inductive Op : TileDType → TileShape → Type where
   | gt        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | ge        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | ne        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
+  | boolAnd   : Broadcast a b out → Op .bool a → Op .bool b → Op .bool out
   | max2      : Broadcast a b out → Op .real a → Op .real b → Op .real out
   /--
   Element-wise select (`tl.where(cond, a, b)`): pick `a` where the bool

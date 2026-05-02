@@ -105,6 +105,7 @@ syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
+syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 -- Element-wise select. All three operands must broadcast to a common
 -- shape; the macro lifts scalars via `Op.broadcast`. Non-scalar shape
@@ -435,6 +436,13 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.sqrt"
       pure ⟨← `(Op.sqrt $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      ensureDType .bool a'.dtype "tl.logical_and"
+      ensureDType .bool b'.dtype "tl.logical_and"
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "tl.logical_and"
+      pure ⟨← `(Op.boolAnd $bc $a'.term $b'.term), .bool, outShape⟩
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
       let a' ← expandExpr env a
       let b' ← expandExpr env b
@@ -915,6 +923,8 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
