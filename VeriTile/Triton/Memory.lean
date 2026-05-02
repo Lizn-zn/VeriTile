@@ -94,6 +94,29 @@ def InputAt {shape : TileShape} (s : BlockState) (region : RegionName)
     (xs : TileIndex shape → ℝ) : Prop :=
   ∀ idx : TileIndex shape, s.mem region (offsetFn idx) = xs idx
 
+/-- Generic tile-load bridge: if a tile-local address map factors through a
+larger loaded memory contract, the concrete memory tile is `Tile.ofReal` of
+the corresponding logical slice. This is the reusable replacement for
+one-off 2D `InputLoadedAt` lemmas in examples. -/
+theorem load_tile_eq_of_InputAt_map
+    {tileShape fullShape : TileShape}
+    (s : BlockState) (region : RegionName)
+    (addr : TileIndex tileShape → Nat)
+    (offsetFn : TileIndex fullShape → Nat)
+    (embed : TileIndex tileShape → TileIndex fullShape)
+    (xs : TileIndex fullShape → ℝ)
+    (hAddr : ∀ idx : TileIndex tileShape, addr idx = offsetFn (embed idx))
+    (hLoaded : InputAt s region offsetFn xs) :
+    (⟨fun idx : TileIndex tileShape => some (s.readMem region (addr idx))⟩
+      : Tile .real tileShape)
+      =
+    Tile.ofReal (fun idx : TileIndex tileShape => xs (embed idx)) := by
+  ext idx
+  rw [Tile.ofReal_data]
+  change some (s.mem region (addr idx)) = some (xs (embed idx))
+  rw [hAddr idx]
+  exact congrArg some (hLoaded (embed idx))
+
 /-- Read the cell at `offsetFn idx` of an ND tile from the optional final
 state of `exec`. -/
 noncomputable def observeTileAt {shape : TileShape}

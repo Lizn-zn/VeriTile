@@ -808,9 +808,18 @@ theorem fa1_block_load_tile_eq
       Tile.ofReal (fun idx : TileIndex [Bk, D] =>
         X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
           idx.2.1, PUnit.unit)) := by
-  ext idx
-  rw [Tile.ofReal_data]
-  exact congrArg some (fa1_block_read region s X hX n hn idx.1 idx.2.1)
+  apply load_tile_eq_of_InputAt_map
+    (s := s) (region := region)
+    (addr := fun idx : TileIndex [Bk, D] =>
+      (n * Bk + idx.1.val) * D + idx.2.1.val)
+    (offsetFn := Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D)
+    (embed := fun idx : TileIndex [Bk, D] =>
+      (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
+        idx.2.1, PUnit.unit))
+    (xs := X)
+  · intro idx
+    simp [Offset.rowMajor2D, Offset.strided, FA1Math.blockIndex]
+  · exact hX
 
 /-- Strided variant of `fa1_block_read`: reading the `n`-th KV block at
 the strided address `base + (n*Bk + j) * sN + d * sD` recovers the
@@ -859,10 +868,19 @@ theorem fa1_block_load_tile_eq_strided
       Tile.ofReal (fun idx : TileIndex [Bk, D] =>
         X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
           idx.2.1, PUnit.unit)) := by
-  ext idx
-  rw [Tile.ofReal_data]
-  exact congrArg some
-    (fa1_block_read_strided region s base sN sD X hX n hn idx.1 idx.2.1)
+  apply load_tile_eq_of_InputAt_map
+    (s := s) (region := region)
+    (addr := fun idx : TileIndex [Bk, D] =>
+      base + (n * Bk + idx.1.val) * sN + idx.2.1.val * sD)
+    (offsetFn := fun idx : TileIndex [Bk * numKVBlocks, D] =>
+      base + idx.1.val * sN + idx.2.1.val * sD)
+    (embed := fun idx : TileIndex [Bk, D] =>
+      (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
+        idx.2.1, PUnit.unit))
+    (xs := X)
+  · intro idx
+    simp [FA1Math.blockIndex]
+  · exact hX
 
 /-- Boundary-masked strided KV block load. Valid local lanes read the logical
 `[S_k, D]` tensor through `blockIndex?`; invalid padded lanes are exactly the
