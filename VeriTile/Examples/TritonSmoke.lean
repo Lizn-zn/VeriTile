@@ -199,6 +199,12 @@ def uint32LoadStoreSmoke (idxReg outReg : RegionName) : Kernel := triton {
   tl.store($(outReg), idx)
 }
 
+/-- Signed integer HBM dtypes map to VeriTile's mathematical `.int` channel. -/
+def int64LoadStoreSmoke (idxReg outReg : RegionName) : Kernel := triton {
+  idx := tl.load($(idxReg), dtype=tl.int64)
+  tl.store($(outReg), idx)
+}
+
 /-- Masked integer HBM load with a Nat `other=` value. -/
 def uint64MaskedLoadStoreSmoke (idxReg outReg : RegionName) : Kernel := triton {
   mask := $(0) < $(0)
@@ -234,6 +240,14 @@ def natLoadStoreCoreKernel (idxReg outReg : RegionName) : Kernel :=
         (Op.load .nat (MemAccess.region idxReg (Op.constNat 0)) MaskOpt.none)
         MaskOpt.none] }
 
+def intLoadStoreCoreKernel (idxReg outReg : RegionName) : Kernel :=
+  { inputs := [idxReg]
+  , outputs := [outReg]
+  , body :=
+      [Stmt.store .int [] (MemAccess.region outReg (Op.constNat 0))
+        (Op.load .int (MemAccess.region idxReg (Op.constNat 0)) MaskOpt.none)
+        MaskOpt.none] }
+
 noncomputable def argmax2ExpectedIndex (s : BlockState) (xReg : RegionName) : Nat :=
   by
     classical
@@ -256,6 +270,15 @@ theorem nat_load_store_correct
     result.map (fun s' => s'.readMemTyped .nat outReg 0) =
       some (some (s.readMemValue .nat idxReg 0)) := by
   simp [natLoadStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
+    BlockState.readMemValue, BlockState.readMemTyped, BlockState.writeMemTyped,
+    Option.bind, Option.map, MemCell.readAs_of_same]
+
+theorem int_load_store_correct
+    (idxReg outReg : RegionName) (s : BlockState) :
+    let result := exec (intLoadStoreCoreKernel idxReg outReg) s
+    result.map (fun s' => s'.readMemTyped .int outReg 0) =
+      some (some (s.readMemValue .int idxReg 0)) := by
+  simp [intLoadStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
     BlockState.readMemValue, BlockState.readMemTyped, BlockState.writeMemTyped,
     Option.bind, Option.map, MemCell.readAs_of_same]
 

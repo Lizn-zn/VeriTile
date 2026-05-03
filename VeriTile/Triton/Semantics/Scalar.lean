@@ -53,7 +53,7 @@ def add : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → Til
   | .fp32, x, y => WithBot.realAdd x y
   | .fp16, x, y => WithBot.realAdd x y
   | .bf16, x, y => WithBot.realAdd x y
-  | .int32, x, y => x + y
+  | .int, x, y => x + y
   | .nat, x, y => x + y
 
 def sub : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
@@ -61,7 +61,7 @@ def sub : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → Til
   | .fp32, x, y => WithBot.realSub x y
   | .fp16, x, y => WithBot.realSub x y
   | .bf16, x, y => WithBot.realSub x y
-  | .int32, x, y => x - y
+  | .int, x, y => x - y
   | .nat, x, y => x - y
 
 def mul : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
@@ -69,7 +69,7 @@ def mul : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → Til
   | .fp32, x, y => WithBot.realMul x y
   | .fp16, x, y => WithBot.realMul x y
   | .bf16, x, y => WithBot.realMul x y
-  | .int32, x, y => x * y
+  | .int, x, y => x * y
   | .nat, x, y => x * y
 
 noncomputable def div : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
@@ -77,7 +77,7 @@ noncomputable def div : NumericDType dtype → TileCarrier dtype → TileCarrier
   | .fp32, x, y => WithBot.realDiv x y
   | .fp16, x, y => WithBot.realDiv x y
   | .bf16, x, y => WithBot.realDiv x y
-  | .int32, x, y => x / y
+  | .int, x, y => x / y
   | .nat, x, y => x / y
 
 end NumericDType
@@ -85,11 +85,11 @@ end NumericDType
 namespace IntegralDType
 
 def floorDiv : IntegralDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
-  | .int32, x, y => x / y
+  | .int, x, y => x / y
   | .nat, x, y => x / y
 
 def mod : IntegralDType dtype → TileCarrier dtype → TileCarrier dtype → TileCarrier dtype
-  | .int32, x, y => x % y
+  | .int, x, y => x % y
   | .nat, x, y => x % y
 
 end IntegralDType
@@ -102,7 +102,7 @@ noncomputable def lt :
   | .fp32, x, y => decide (x < y)
   | .fp16, x, y => decide (x < y)
   | .bf16, x, y => decide (x < y)
-  | .int32, x, y => decide (x < y)
+  | .int, x, y => decide (x < y)
   | .nat, x, y => decide (x < y)
 
 noncomputable def le :
@@ -111,7 +111,7 @@ noncomputable def le :
   | .fp32, x, y => decide (x ≤ y)
   | .fp16, x, y => decide (x ≤ y)
   | .bf16, x, y => decide (x ≤ y)
-  | .int32, x, y => decide (x ≤ y)
+  | .int, x, y => decide (x ≤ y)
   | .nat, x, y => decide (x ≤ y)
 
 noncomputable def eq :
@@ -120,7 +120,7 @@ noncomputable def eq :
   | .fp32, x, y => decide (x = y)
   | .fp16, x, y => decide (x = y)
   | .bf16, x, y => decide (x = y)
-  | .int32, x, y => decide (x = y)
+  | .int, x, y => decide (x = y)
   | .nat, x, y => decide (x = y)
 
 noncomputable def gt :
@@ -129,7 +129,7 @@ noncomputable def gt :
   | .fp32, x, y => decide (x > y)
   | .fp16, x, y => decide (x > y)
   | .bf16, x, y => decide (x > y)
-  | .int32, x, y => decide (x > y)
+  | .int, x, y => decide (x > y)
   | .nat, x, y => decide (x > y)
 
 noncomputable def ge :
@@ -138,7 +138,7 @@ noncomputable def ge :
   | .fp32, x, y => decide (x ≥ y)
   | .fp16, x, y => decide (x ≥ y)
   | .bf16, x, y => decide (x ≥ y)
-  | .int32, x, y => decide (x ≥ y)
+  | .int, x, y => decide (x ≥ y)
   | .nat, x, y => decide (x ≥ y)
 
 noncomputable def ne :
@@ -147,7 +147,7 @@ noncomputable def ne :
   | .fp32, x, y => decide (x ≠ y)
   | .fp16, x, y => decide (x ≠ y)
   | .bf16, x, y => decide (x ≠ y)
-  | .int32, x, y => decide (x ≠ y)
+  | .int, x, y => decide (x ≠ y)
   | .nat, x, y => decide (x ≠ y)
 
 end ComparableDType

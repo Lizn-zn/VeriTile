@@ -34,7 +34,7 @@ def eraseFloat : NumericDType dtype → NumericDType (eraseFloatDType dtype)
   | .fp32 => .real
   | .fp16 => .real
   | .bf16 => .real
-  | .int32 => .int32
+  | .int => .int
   | .nat => .nat
 
 end NumericDType
@@ -43,7 +43,7 @@ namespace IntegralDType
 
 /-- Integral witness after floating-dtype erasure. -/
 def eraseFloat : IntegralDType dtype → IntegralDType (eraseFloatDType dtype)
-  | .int32 => .int32
+  | .int => .int
   | .nat => .nat
 
 end IntegralDType
@@ -56,7 +56,7 @@ def eraseFloat : ComparableDType dtype → ComparableDType (eraseFloatDType dtyp
   | .fp32 => .real
   | .fp16 => .real
   | .bf16 => .real
-  | .int32 => .int32
+  | .int => .int
   | .nat => .nat
 
 end ComparableDType

@@ -58,8 +58,9 @@ Supported channels:
 - `.real`: modeled as `WithBot ℝ`, mainly to represent `-inf`.
 - `.fp32`, `.fp16`, `.bf16`: explicit floating dtype channels, currently
   backed by the same `WithBot ℝ` mathematical carrier as `.real`.
-- `.int32`: AST-level signed-integer channel with arithmetic/comparison
-  semantics; DSL surface casts to/from int32 are not modeled yet.
+- `.int`: AST-level signed mathematical-integer channel with
+  arithmetic/comparison semantics. `tl.int32` and `tl.int64` both map here;
+  bit width, overflow, and signed cast fidelity are not modeled yet.
 - `.nat`: used for offsets, loop counters, sizes, and address arithmetic.
 - `.bool`: produced by comparisons and consumed by masks / `tl.where`.
 
@@ -83,7 +84,7 @@ Supported channels:
 
 - Arithmetic: `+`, `-`, `*`, `/` on numeric values.
   Mixed-channel arithmetic is rejected by the DSL.
-- Integer floor division and remainder: `//` and `%` on `.nat` / `.int32`.
+- Integer floor division and remainder: `//` and `%` on `.nat` / `.int`.
 - `tl.cdiv(x, y)` on `.nat`, lowered as `(x + y - 1) / y` with the current
   mathematical `Nat` semantics.
 - Pointwise comparisons: `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or
@@ -151,7 +152,7 @@ Supported loads:
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
-- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.uint32|tl.uint64)`
+- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.int64|tl.uint32|tl.uint64)`
 - `tl.load(ptr, mask=mask, other=other, dtype=...)`
 - `bp := tl.make_block_ptr($(region), base=$(base), shape=[...],
   strides=[...], offsets=[...], block_shape=[...])`
@@ -274,13 +275,13 @@ Stmt.store : TileDType → MemAccess shape → Op ... → MaskOpt dtype shape �
 ```
 
 The public DSL defaults `tl.load` to `.real`, but accepts `dtype=...` with
-`tl.float32`, `tl.float16`, `tl.bfloat16`, `tl.int32`, `tl.uint32`, or `tl.uint64` to
-produce typed memory nodes. `tl.uint64` maps to VeriTile's `.nat` channel for
-nonnegative index/block-table values; `tl.uint32` maps to the same `.nat`
-channel. `tl.int64` is parsed but rejected with a dedicated diagnostic because
-there is no signed 64-bit carrier yet. `tl.store` infers its dtype from the
-value being stored, with optional matching `dtype=` syntax for Triton-like
-surface spelling.
+`tl.float32`, `tl.float16`, `tl.bfloat16`, `tl.int32`, `tl.int64`, `tl.uint32`,
+or `tl.uint64` to produce typed memory nodes. `tl.uint64` and `tl.uint32` map
+to VeriTile's `.nat` channel for nonnegative index/block-table values.
+`tl.int32` and `tl.int64` map to VeriTile's `.int` channel, a mathematical
+signed-integer abstraction with no bit-width or overflow semantics. `tl.store`
+infers its dtype from the value being stored, with optional matching `dtype=`
+syntax for Triton-like surface spelling.
 
 Float theorem policy: algorithmic correctness/refinement theorems are proved
 over erased `.real` kernels via `Kernel.AlgorithmCorrect` and
@@ -317,10 +318,10 @@ current semantic contract.
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
-| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional `dtype=` for float/int32/uint32/uint64; block-pointer load with `boundary_check` and `padding_option="zero"` |
+| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional `dtype=` for float/int32/int64/uint32/uint64; block-pointer load with `boundary_check` and `padding_option="zero"` |
 | Stores | Limited | Pointer-expression store, optional `mask`, dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
-| Integer memory | Limited | Typed cells plus typed load/store support Nat/index and int32 HBM values; no richer signed/unsigned width lattice yet |
+| Integer memory | Limited | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no richer signed/unsigned width lattice yet |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
 | Indirection | Gap | No gather / paged-KV style data-dependent address model yet (#42) |
 | Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |
@@ -341,7 +342,7 @@ faithfully in the current Lean DSL?
 | First-class pointer expressions | Limited | Surface + lightweight semantics | `ptrs := $(r) + offs`, pointer registers, pointer load/store, and pointer offset updates work for `RegionName × Nat`; no pointer casts/comparison/alias analysis. |
 | Block pointers / `boundary_check` | Limited | Surface + sequential semantics | `tl.make_block_ptr`, `tl.advance`, zero-padded checked loads, and checked store-skip work; no `order`, non-zero padding, TMA, or hardware behavior. |
 | Typed floating memory | Limited | Semantic abstraction | `dtype=tl.float32/fp16/bf16` creates typed floating nodes and erases to real for algorithm proofs; IEEE rounding is not modeled. |
-| Integer / bool tensor memory | Limited | Dtype coverage | Typed cells plus typed load/store support Nat/index and int32 HBM values; no complete Triton integer-width lattice yet. |
+| Integer / bool tensor memory | Limited | Dtype coverage | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no complete Triton integer-width lattice yet. |
 | Indirect / gather addressing | Gap | Core addressing semantics (#42) | Blocks paged attention, embedding/table lookup, cross-entropy index lookup, and data-dependent pointer chasing. |
 | RNG / dropout | Gap | State/probabilistic semantics (#41) | Blocks faithful dropout and stochastic kernels. |
 | Atomics / async / shared memory / barriers | Gap | Concurrency semantics (#12) | Blocks production-style backward kernels, reductions using shared memory phases, async/TMA pipelines, and race/scheduling reasoning. |

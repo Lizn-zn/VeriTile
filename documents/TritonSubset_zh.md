@@ -53,8 +53,9 @@ Stmt : Type
 - `.real`: 用 `WithBot ℝ` 建模,主要为了表达 `-inf`。
 - `.fp32`, `.fp16`, `.bf16`: 显式浮点 dtype channel,当前和 `.real` 一样
   使用 `WithBot ℝ` 数学 carrier。
-- `.int32`: AST 层 signed-integer channel,已有算术/比较语义;DSL 里 int32
-  cast 还没建模。
+- `.int`: AST 层 signed mathematical-integer channel,已有算术/比较语义。
+  `tl.int32` 和 `tl.int64` 都映射到这里;bit width、overflow 和 signed cast
+  fidelity 还没建模。
 - `.nat`: 用于 offset、loop counter、size 和地址算术。
 - `.bool`: 由比较产生,用于 mask 和 `tl.where`。
 
@@ -76,7 +77,7 @@ Stmt : Type
 
 - 算术: `+`, `-`, `*`, `/`,作用于 numeric channel。
   混合 channel 算术会被 DSL 拒绝。
-- 整数 floor division / remainder: `.nat` / `.int32` 上的 `//` 与 `%`。
+- 整数 floor division / remainder: `.nat` / `.int` 上的 `//` 与 `%`。
 - `.nat` 上的 `tl.cdiv(x, y)`,当前降为 `(x + y - 1) / y`。
 - 点态比较: `<`, `<=`, `==`, `>`, `>=`, `!=`,作用于 `.real` 或 `.nat`,
   结果是 `.bool`。
@@ -139,7 +140,7 @@ bit-level / precision 语义。
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
-- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.uint32|tl.uint64)`
+- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.int64|tl.uint32|tl.uint64)`
 - `tl.load(ptr, mask=mask, other=other, dtype=...)`
 - `bp := tl.make_block_ptr($(region), base=$(base), shape=[...],
   strides=[...], offsets=[...], block_shape=[...])`
@@ -252,11 +253,12 @@ Stmt.store : TileDType → MemAccess shape → Op ... → MaskOpt dtype shape �
 ```
 
 公开 DSL 的 `tl.load` 默认仍是 `.real`,但支持
-`dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.uint32|tl.uint64`,用于生成
-typed memory node。`tl.uint64` 映射到 VeriTile 的 `.nat` channel,用于非负
-index/block-table value;`tl.uint32` 也映射到同一个 `.nat` channel。`tl.int64`
-会 parse,但因为还没有 signed 64-bit carrier,会给明确错误。`tl.store` 从写入的
-value 推断 dtype,也支持可选的、必须匹配 value dtype 的 `dtype=` surface spelling。
+`dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.int64|tl.uint32|tl.uint64`,
+用于生成 typed memory node。`tl.uint64` 和 `tl.uint32` 映射到 VeriTile 的
+`.nat` channel,用于非负 index/block-table value。`tl.int32` 和 `tl.int64`
+映射到 VeriTile 的 `.int` channel,这是数学 signed-integer abstraction,没有
+bit-width 或 overflow 语义。`tl.store` 从写入的 value 推断 dtype,也支持可选的、
+必须匹配 value dtype 的 `dtype=` surface spelling。
 
 Float theorem policy: 算法正确性 / refinement theorem 通过
 `Kernel.AlgorithmCorrect` 和 `Kernel.AlgorithmRefine` 证明在擦除后的 `.real`
@@ -290,10 +292,10 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]`,literal-axis `tl.expand_dims` |
 | transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
-| load | Limited | pointer-expression load,可带 `mask` / `other` / float/int32/uint32/uint64 `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
+| load | Limited | pointer-expression load,可带 `mask` / `other` / float/int32/int64/uint32/uint64 `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
 | store | Limited | pointer-expression store,可带 `mask`;dtype 从 value 推断,也可写匹配的 `dtype=`;block-pointer store 支持 `boundary_check` |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
-| integer memory | Limited | typed cell 加 typed load/store 支持 Nat/index 和 int32 HBM value;还没有更完整的 signed/unsigned width lattice |
+| integer memory | Limited | typed cell 加 typed load/store 支持 Nat/index 和数学 signed-Int HBM value;还没有更完整的 signed/unsigned width lattice |
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
 | indirection | Gap | 还没有 gather / paged-KV 风格的 data-dependent address model (#42) |
 | block pointer | Limited | `tl.make_block_ptr`、`tl.advance`、带 checked-axis zero padding / store skip 的 block-pointer load/store;没有硬件/TMA 行为 |
@@ -313,7 +315,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | first-class pointer expression | Limited | surface + lightweight semantics | 支持 `ptrs := $(r) + offs`、pointer register、pointer load/store、pointer offset update;没有 pointer cast/comparison/alias analysis。 |
 | block pointer / `boundary_check` | Limited | surface + sequential semantics | 支持 `tl.make_block_ptr`、`tl.advance`、zero-padded checked load、checked store-skip;没有 `order`、非 zero padding、TMA 或硬件行为。 |
 | typed floating memory | Limited | semantic abstraction | `dtype=tl.float32/fp16/bf16` 会生成 typed floating node,算法证明擦除到 real;没有 IEEE rounding。 |
-| integer / bool tensor memory | Limited | dtype coverage | typed cell 加 typed load/store 支持 Nat/index 和 int32 HBM value;还没有完整 Triton integer-width lattice。 |
+| integer / bool tensor memory | Limited | dtype coverage | typed cell 加 typed load/store 支持 Nat/index 和数学 signed-Int HBM value;还没有完整 Triton integer-width lattice。 |
 | indirect / gather addressing | Gap | core addressing semantics (#42) | 阻塞 paged attention、embedding/table lookup、cross-entropy index lookup、data-dependent pointer chasing。 |
 | RNG / dropout | Gap | state/probabilistic semantics (#41) | 阻塞 faithful dropout 和随机 kernel。 |
 | atomics / async / shared memory / barriers | Gap | concurrency semantics (#12) | 阻塞 production-style backward kernel、shared-memory phase reduction、async/TMA pipeline、race/scheduling reasoning。 |

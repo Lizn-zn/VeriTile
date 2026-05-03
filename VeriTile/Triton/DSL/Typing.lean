@@ -16,7 +16,7 @@ inductive DInfo where
   | fp32
   | fp16
   | bf16
-  | int32
+  | int
   | nat
   | bool
   | ptr
@@ -65,7 +65,7 @@ def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .fp32 => `(TileDType.fp32)
   | .fp16 => `(TileDType.fp16)
   | .bf16 => `(TileDType.bf16)
-  | .int32 => `(TileDType.int32)
+  | .int => `(TileDType.int)
   | .nat => `(TileDType.nat)
   | .bool => `(TileDType.bool)
   | .ptr => `(TileDType.ptr)
@@ -76,7 +76,7 @@ def DInfo.floatProof : DInfo → MacroM (TSyntax `term)
   | .fp32 => `(FloatDType.fp32)
   | .fp16 => `(FloatDType.fp16)
   | .bf16 => `(FloatDType.bf16)
-  | .int32 => Macro.throwError "tl.cast: int32 casts are not modeled yet"
+  | .int => Macro.throwError "tl.cast: signed integer casts are not modeled yet"
   | .nat => Macro.throwError "tl.cast: Nat casts are not modeled yet; use tl.toReal for Nat to real"
   | .bool => Macro.throwError "tl.cast: Bool casts are not supported"
   | .ptr => Macro.throwError "tl.cast: pointer casts are not supported"
@@ -96,14 +96,14 @@ def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
   | .fp32 => `(NumericDType.fp32)
   | .fp16 => `(NumericDType.fp16)
   | .bf16 => `(NumericDType.bf16)
-  | .int32 => `(NumericDType.int32)
+  | .int => `(NumericDType.int)
   | .nat => `(NumericDType.nat)
   | .bool => Macro.throwError "arithmetic on Bool values is not supported"
   | .ptr => Macro.throwError "arithmetic on pointer values is not supported; use pointer + Nat offset"
   | .blockPtr => Macro.throwError "arithmetic on block pointers is not supported; use tl.advance"
 
 def DInfo.integralProof : DInfo → MacroM (TSyntax `term)
-  | .int32 => `(IntegralDType.int32)
+  | .int => `(IntegralDType.int)
   | .nat => `(IntegralDType.nat)
   | .real => Macro.throwError "integer division/remainder on Real values is not supported"
   | .fp32 => Macro.throwError "integer division/remainder on floating values is not supported"
@@ -118,7 +118,7 @@ def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
   | .fp32 => `(ComparableDType.fp32)
   | .fp16 => `(ComparableDType.fp16)
   | .bf16 => `(ComparableDType.bf16)
-  | .int32 => `(ComparableDType.int32)
+  | .int => `(ComparableDType.int)
   | .nat => `(ComparableDType.nat)
   | .bool => Macro.throwError "comparison on Bool values is not supported"
   | .ptr => Macro.throwError "comparison on pointer values is not supported"
@@ -129,9 +129,8 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.float32) => pure .fp32
   | `(tritonDType| tl.float16) => pure .fp16
   | `(tritonDType| tl.bfloat16) => pure .bf16
-  | `(tritonDType| tl.int32) => pure .int32
-  | `(tritonDType| tl.int64) =>
-      Macro.throwError "tl.int64 is not modeled yet; use tl.uint32/tl.uint64 for nonnegative indices or add an int64 carrier"
+  | `(tritonDType| tl.int32) => pure .int
+  | `(tritonDType| tl.int64) => pure .int
   | `(tritonDType| tl.uint32) => pure .nat
   | `(tritonDType| tl.uint64) => pure .nat
   | _ => Macro.throwUnsupported

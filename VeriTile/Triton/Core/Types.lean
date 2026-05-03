@@ -92,7 +92,7 @@ inductive TileDType where
   | fp32
   | fp16
   | bf16
-  | int32
+  | int
   | nat
   | bool
   | ptr
@@ -127,7 +127,7 @@ abbrev TileCarrier : TileDType → Type
   | .fp32 => WithBot ℝ
   | .fp16 => WithBot ℝ
   | .bf16 => WithBot ℝ
-  | .int32 => Int
+  | .int => Int
   | .nat  => Nat
   | .bool => Bool
   | .ptr  => RegionName × Nat
@@ -164,12 +164,12 @@ inductive NumericDType : TileDType → Type where
   | fp32 : NumericDType .fp32
   | fp16 : NumericDType .fp16
   | bf16 : NumericDType .bf16
-  | int32 : NumericDType .int32
+  | int : NumericDType .int
   | nat  : NumericDType .nat
 
 /-- Integer-like dtypes that support floor division and remainder. -/
 inductive IntegralDType : TileDType → Type where
-  | int32 : IntegralDType .int32
+  | int : IntegralDType .int
   | nat  : IntegralDType .nat
 
 /-- DTypes that support Triton's comparison operators in the current model. -/
@@ -178,7 +178,7 @@ inductive ComparableDType : TileDType → Type where
   | fp32 : ComparableDType .fp32
   | fp16 : ComparableDType .fp16
   | bf16 : ComparableDType .bf16
-  | int32 : ComparableDType .int32
+  | int : ComparableDType .int
   | nat  : ComparableDType .nat
 
 end VeriTile.Triton

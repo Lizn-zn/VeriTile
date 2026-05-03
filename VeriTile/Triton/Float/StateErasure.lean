@@ -17,7 +17,7 @@ def eraseFloatCarrier : (dtype : TileDType) →
   | .fp32, value => FloatDType.fp32.toWithBot value
   | .fp16, value => FloatDType.fp16.toWithBot value
   | .bf16, value => FloatDType.bf16.toWithBot value
-  | .int32, value => value
+  | .int, value => value
   | .nat, value => value
   | .bool, value => value
   | .ptr, value => value
@@ -51,7 +51,7 @@ def eraseFloatRegs (regs : RegFile) : RegFile :=
     | .fp32 => none
     | .fp16 => none
     | .bf16 => none
-    | .int32 => regs .int32 shape name
+    | .int => regs .int shape name
     | .nat => regs .nat shape name
     | .bool => regs .bool shape name
     | .ptr => regs .ptr shape name

@@ -50,8 +50,9 @@ Not modeled yet:
 - Paged-KV or gather-style data-dependent indirection. That needs a sibling
   view model on top of the same storage layer; see issue #42.
 - Rich signed/unsigned integer dtype lattice. The current typed HBM model
-  supports `.nat` (`tl.uint64`) and `.int32`, enough for index/block-table
-  cells, but not every Triton integer width.
+  supports `.nat` (`tl.uint32` / `tl.uint64`) and mathematical `.int`
+  (`tl.int32` / `tl.int64`), enough for index/block-table cells, but not
+  bit-width-specific integer semantics.
 
 ## Sequential Consistency
 
