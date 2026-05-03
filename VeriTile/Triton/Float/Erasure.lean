@@ -18,6 +18,14 @@ def eraseFloatDType : TileDType → TileDType
   | .bf16 => .real
   | dtype => dtype
 
+/-- Erase a floating dtype tag to the real channel. -/
+def FloatDType.eraseFloat (_ : FloatDType) : FloatDType :=
+  .real
+
+@[simp] theorem eraseFloatDType_float (dtype : FloatDType) :
+    eraseFloatDType dtype.toTileDType = .real := by
+  cases dtype <;> rfl
+
 namespace NumericDType
 
 /-- Numeric witness after floating-dtype erasure. -/
@@ -58,10 +66,9 @@ mutual
 /-- Erase explicit floating dtype annotations from an expression. -/
 def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .const c => .const c
-  | .constFloat .real c => .const c
-  | .constFloat .fp32 c => .const c
-  | .constFloat .fp16 c => .const c
-  | .constFloat .bf16 c => .const c
+  | .constFloat h c => by
+      rw [eraseFloatDType_float h]
+      exact .const c
   | .constNat n => .constNat n
   | .constBool b => .constBool b
   | .negInf => .negInf
@@ -70,22 +77,8 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .arange n => .arange n
   | .broadcast e shape => .broadcast e.eraseFloat shape
   | .full shape e => .full shape e.eraseFloat
-  | .castFloat .real .real e => e.eraseFloat
-  | .castFloat .real .fp32 e => e.eraseFloat
-  | .castFloat .real .fp16 e => e.eraseFloat
-  | .castFloat .real .bf16 e => e.eraseFloat
-  | .castFloat .fp32 .real e => e.eraseFloat
-  | .castFloat .fp32 .fp32 e => e.eraseFloat
-  | .castFloat .fp32 .fp16 e => e.eraseFloat
-  | .castFloat .fp32 .bf16 e => e.eraseFloat
-  | .castFloat .fp16 .real e => e.eraseFloat
-  | .castFloat .fp16 .fp32 e => e.eraseFloat
-  | .castFloat .fp16 .fp16 e => e.eraseFloat
-  | .castFloat .fp16 .bf16 e => e.eraseFloat
-  | .castFloat .bf16 .real e => e.eraseFloat
-  | .castFloat .bf16 .fp32 e => e.eraseFloat
-  | .castFloat .bf16 .fp16 e => e.eraseFloat
-  | .castFloat .bf16 .bf16 e => e.eraseFloat
+  | .castFloat src dst e => by
+      simpa [eraseFloatDType_float src, eraseFloatDType_float dst] using e.eraseFloat
   | .add h bc a b => .add h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .sub h bc a b => .sub h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .mul h bc a b => .mul h.eraseFloat bc a.eraseFloat b.eraseFloat
@@ -118,114 +111,42 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .makeBlockPtr region baseOffset parentShape blockShape strides offsets =>
       .makeBlockPtr region baseOffset parentShape blockShape strides offsets
   | .advanceBlockPtr ptr deltas => .advanceBlockPtr ptr.eraseFloat deltas
-  | .load region off => .load region off.eraseFloat
-  | .loadMask region off mask => .loadMask region off.eraseFloat mask.eraseFloat
-  | .loadMaskOther region off mask other =>
-      .loadMaskOther region off.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadPtr ptr => .loadPtr ptr.eraseFloat
-  | .loadPtrMask ptr mask => .loadPtrMask ptr.eraseFloat mask.eraseFloat
-  | .loadPtrMaskOther ptr mask other =>
-      .loadPtrMaskOther ptr.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadFloat .real region off => .load region off.eraseFloat
-  | .loadFloat .fp32 region off => .load region off.eraseFloat
-  | .loadFloat .fp16 region off => .load region off.eraseFloat
-  | .loadFloat .bf16 region off => .load region off.eraseFloat
-  | .loadFloatMask .real region off mask => .loadMask region off.eraseFloat mask.eraseFloat
-  | .loadFloatMask .fp32 region off mask => .loadMask region off.eraseFloat mask.eraseFloat
-  | .loadFloatMask .fp16 region off mask => .loadMask region off.eraseFloat mask.eraseFloat
-  | .loadFloatMask .bf16 region off mask => .loadMask region off.eraseFloat mask.eraseFloat
-  | .loadFloatMaskOther .real region off mask other =>
-      .loadMaskOther region off.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadFloatMaskOther .fp32 region off mask other =>
-      .loadMaskOther region off.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadFloatMaskOther .fp16 region off mask other =>
-      .loadMaskOther region off.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadFloatMaskOther .bf16 region off mask other =>
-      .loadMaskOther region off.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadPtrFloat .real ptr => .loadPtr ptr.eraseFloat
-  | .loadPtrFloat .fp32 ptr => .loadPtr ptr.eraseFloat
-  | .loadPtrFloat .fp16 ptr => .loadPtr ptr.eraseFloat
-  | .loadPtrFloat .bf16 ptr => .loadPtr ptr.eraseFloat
-  | .loadPtrFloatMask .real ptr mask => .loadPtrMask ptr.eraseFloat mask.eraseFloat
-  | .loadPtrFloatMask .fp32 ptr mask => .loadPtrMask ptr.eraseFloat mask.eraseFloat
-  | .loadPtrFloatMask .fp16 ptr mask => .loadPtrMask ptr.eraseFloat mask.eraseFloat
-  | .loadPtrFloatMask .bf16 ptr mask => .loadPtrMask ptr.eraseFloat mask.eraseFloat
-  | .loadPtrFloatMaskOther .real ptr mask other =>
-      .loadPtrMaskOther ptr.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadPtrFloatMaskOther .fp32 ptr mask other =>
-      .loadPtrMaskOther ptr.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadPtrFloatMaskOther .fp16 ptr mask other =>
-      .loadPtrMaskOther ptr.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadPtrFloatMaskOther .bf16 ptr mask other =>
-      .loadPtrMaskOther ptr.eraseFloat mask.eraseFloat other.eraseFloat
-  | .loadBlockPtr ptr boundaryCheck padding =>
-      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
-  | .loadBlockPtrFloat .real ptr boundaryCheck padding =>
-      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
-  | .loadBlockPtrFloat .fp32 ptr boundaryCheck padding =>
-      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
-  | .loadBlockPtrFloat .fp16 ptr boundaryCheck padding =>
-      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
-  | .loadBlockPtrFloat .bf16 ptr boundaryCheck padding =>
-      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
+  | .load h mem mask => by
+      have mask' : MaskOpt .real shape := by
+        simpa [eraseFloatDType_float h] using mask.eraseFloat
+      simpa [eraseFloatDType_float h] using
+        (Op.load .real mem.eraseFloat mask')
   | .natToReal a => .natToReal a.eraseFloat
 termination_by e => sizeOf e
+decreasing_by
+  all_goals (simp_wf; try omega; try decreasing_trivial)
+
+/-- Erase explicit floating dtype annotations from a memory access. -/
+def MemAccess.eraseFloat : MemAccess shape → MemAccess shape
+  | .region region off => .region region off.eraseFloat
+  | .ptr ptr => .ptr ptr.eraseFloat
+  | .blockPtr ptr boundaryCheck => .blockPtr ptr.eraseFloat boundaryCheck
+termination_by mem => sizeOf mem
+decreasing_by all_goals (simp_wf; try omega)
+
+/-- Erase explicit floating dtype annotations from a memory mask. -/
+def MaskOpt.eraseFloat : MaskOpt dtype shape → MaskOpt (eraseFloatDType dtype) shape
+  | .none => .none
+  | .mask mask => .mask mask.eraseFloat
+  | .maskOther mask other => .maskOther mask.eraseFloat other.eraseFloat
+termination_by mask => sizeOf mask
 decreasing_by all_goals (simp_wf; try omega)
 
 /-- Erase explicit floating dtype annotations from a statement. -/
 def Stmt.eraseFloat : Stmt → Stmt
   | .assign dtype shape name e =>
       .assign (eraseFloatDType dtype) shape name e.eraseFloat
-  | .store region shape off val =>
-      .store region shape off.eraseFloat val.eraseFloat
-  | .storeMask region shape off val mask =>
-      .storeMask region shape off.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storePtr shape ptr val =>
-      .storePtr shape ptr.eraseFloat val.eraseFloat
-  | .storePtrMask shape ptr val mask =>
-      .storePtrMask shape ptr.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storeFloat .real region shape off val =>
-      .store region shape off.eraseFloat val.eraseFloat
-  | .storeFloat .fp32 region shape off val =>
-      .store region shape off.eraseFloat val.eraseFloat
-  | .storeFloat .fp16 region shape off val =>
-      .store region shape off.eraseFloat val.eraseFloat
-  | .storeFloat .bf16 region shape off val =>
-      .store region shape off.eraseFloat val.eraseFloat
-  | .storeFloatMask .real region shape off val mask =>
-      .storeMask region shape off.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storeFloatMask .fp32 region shape off val mask =>
-      .storeMask region shape off.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storeFloatMask .fp16 region shape off val mask =>
-      .storeMask region shape off.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storeFloatMask .bf16 region shape off val mask =>
-      .storeMask region shape off.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storePtrFloat .real shape ptr val =>
-      .storePtr shape ptr.eraseFloat val.eraseFloat
-  | .storePtrFloat .fp32 shape ptr val =>
-      .storePtr shape ptr.eraseFloat val.eraseFloat
-  | .storePtrFloat .fp16 shape ptr val =>
-      .storePtr shape ptr.eraseFloat val.eraseFloat
-  | .storePtrFloat .bf16 shape ptr val =>
-      .storePtr shape ptr.eraseFloat val.eraseFloat
-  | .storePtrFloatMask .real shape ptr val mask =>
-      .storePtrMask shape ptr.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storePtrFloatMask .fp32 shape ptr val mask =>
-      .storePtrMask shape ptr.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storePtrFloatMask .fp16 shape ptr val mask =>
-      .storePtrMask shape ptr.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storePtrFloatMask .bf16 shape ptr val mask =>
-      .storePtrMask shape ptr.eraseFloat val.eraseFloat mask.eraseFloat
-  | .storeBlockPtr shape ptr val boundaryCheck =>
-      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
-  | .storeBlockPtrFloat .real shape ptr val boundaryCheck =>
-      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
-  | .storeBlockPtrFloat .fp32 shape ptr val boundaryCheck =>
-      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
-  | .storeBlockPtrFloat .fp16 shape ptr val boundaryCheck =>
-      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
-  | .storeBlockPtrFloat .bf16 shape ptr val boundaryCheck =>
-      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
+  | .store h shape mem val mask => by
+      have val' : Op .real shape := by
+        simpa [eraseFloatDType_float h] using val.eraseFloat
+      have mask' : MaskOpt .real shape := by
+        simpa [eraseFloatDType_float h] using mask.eraseFloat
+      exact .store .real shape mem.eraseFloat val' mask'
   | .forLoop idx n body =>
       .forLoop idx n (Stmt.eraseFloatList body)
   | .ifThen cond body =>
@@ -241,6 +162,91 @@ termination_by body => sizeOf body
 decreasing_by all_goals (simp_wf; try omega)
 
 end
+
+@[simp] theorem MemAccess.eraseFloat_region
+    (region : RegionName) (off : Op .nat shape) :
+    (MemAccess.region region off).eraseFloat =
+      MemAccess.region region off.eraseFloat := by
+  rw [MemAccess.eraseFloat.eq_def]
+
+@[simp] theorem MemAccess.eraseFloat_ptr (ptr : Op .ptr shape) :
+    (MemAccess.ptr ptr).eraseFloat = MemAccess.ptr ptr.eraseFloat := by
+  rw [MemAccess.eraseFloat.eq_def]
+
+@[simp] theorem MemAccess.eraseFloat_blockPtr
+    (ptr : Op .blockPtr shape) (boundaryCheck : List Nat) :
+    (MemAccess.blockPtr ptr boundaryCheck).eraseFloat =
+      MemAccess.blockPtr ptr.eraseFloat boundaryCheck := by
+  rw [MemAccess.eraseFloat.eq_def]
+
+@[simp] theorem MaskOpt.eraseFloat_none {dtype : TileDType} :
+    (MaskOpt.none : MaskOpt dtype shape).eraseFloat = MaskOpt.none := by
+  rw [MaskOpt.eraseFloat.eq_def]
+
+@[simp] theorem MaskOpt.eraseFloat_mask
+    (mask : Op .bool shape) :
+    (MaskOpt.mask (dtype := dtype) mask).eraseFloat =
+      MaskOpt.mask mask.eraseFloat := by
+  rw [MaskOpt.eraseFloat.eq_def]
+
+@[simp] theorem MaskOpt.eraseFloat_maskOther
+    (mask : Op .bool shape) (other : Op dtype shape) :
+    (MaskOpt.maskOther mask other).eraseFloat =
+      MaskOpt.maskOther mask.eraseFloat other.eraseFloat := by
+  rw [MaskOpt.eraseFloat.eq_def]
+
+@[simp] theorem Op.eraseFloat_ref
+    (dtype : TileDType) (shape : TileShape) (name : RegName) :
+    (Op.ref dtype shape name).eraseFloat =
+      Op.ref (eraseFloatDType dtype) shape name := by
+  rw [Op.eraseFloat.eq_def]
+
+@[simp] theorem Op.eraseFloat_castFloat
+    (src dst : FloatDType) (e : Op src.toTileDType shape) :
+    (Op.castFloat src dst e).eraseFloat =
+      cast (by simp [eraseFloatDType_float src, eraseFloatDType_float dst])
+        e.eraseFloat := by
+  rw [Op.eraseFloat.eq_def]
+  simp [eraseFloatDType]
+
+@[simp] theorem Op.eraseFloat_load
+    (h : FloatDType) (mem : MemAccess shape)
+    (mask : MaskOpt h.toTileDType shape) :
+    (Op.load h mem mask).eraseFloat =
+      cast (by simp [eraseFloatDType_float h])
+        (Op.load .real mem.eraseFloat
+          (cast (by simp [eraseFloatDType_float h]) mask.eraseFloat)) := by
+  rw [Op.eraseFloat.eq_def]
+  simp [eraseFloatDType]
+
+@[simp] theorem Op.eraseFloat_reduceMax
+    (axis : Fin shape.length) (keepDims : Bool) (e : Op .real shape) :
+    (Op.reduceMax axis keepDims e).eraseFloat =
+      cast (by simp [eraseFloatDType])
+        (@Op.reduceMax shape axis keepDims
+          (cast (by simp [eraseFloatDType]) e.eraseFloat)) := by
+  rw [Op.eraseFloat.eq_def]
+  simp [eraseFloatDType]
+
+@[simp] theorem Op.eraseFloat_reduceSum
+    (axis : Fin shape.length) (keepDims : Bool) (e : Op .real shape) :
+    (Op.reduceSum axis keepDims e).eraseFloat =
+      cast (by simp [eraseFloatDType])
+        (@Op.reduceSum shape axis keepDims
+          (cast (by simp [eraseFloatDType]) e.eraseFloat)) := by
+  rw [Op.eraseFloat.eq_def]
+  simp [eraseFloatDType]
+
+@[simp] theorem Stmt.eraseFloat_store
+    (h : FloatDType) (shape : TileShape)
+    (mem : MemAccess shape) (val : Op h.toTileDType shape)
+    (mask : MaskOpt h.toTileDType shape) :
+    (Stmt.store h shape mem val mask).eraseFloat =
+      Stmt.store .real shape mem.eraseFloat
+        (cast (by simp [eraseFloatDType_float h]) val.eraseFloat)
+        (cast (by simp [eraseFloatDType_float h]) mask.eraseFloat) := by
+  rw [Stmt.eraseFloat.eq_def]
+  simp [eraseFloatDType]
 
 namespace Kernel
 

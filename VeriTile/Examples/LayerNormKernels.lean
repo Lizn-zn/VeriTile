@@ -80,9 +80,12 @@ def layerNormAffineTailKernel
           (.add .nat .scalarL
             (.mul .nat .nil (.ref .nat [] "pid") (.constNat N))
             (.arange N))
-      , .assign .real [N] "x" (.load xReg (.ref .nat [N] "offs"))
-      , .assign .real [N] "γ" (.load γReg (.arange N))
-      , .assign .real [N] "β" (.load βReg (.arange N))
+      , .assign .real [N] "x"
+          (.load .real (MemAccess.region xReg (.ref .nat [N] "offs")) MaskOpt.none)
+      , .assign .real [N] "γ"
+          (.load .real (MemAccess.region γReg (.arange N)) MaskOpt.none)
+      , .assign .real [N] "β"
+          (.load .real (MemAccess.region βReg (.arange N)) MaskOpt.none)
       , .assign .real [N] "y"
           (.add .real (.consSame .nil)
             (.mul .real (.consSame .nil)
@@ -91,7 +94,8 @@ def layerNormAffineTailKernel
                 (.ref .real [] "σ_inv"))
               (.ref .real [N] "γ"))
             (.ref .real [N] "β"))
-      , .store yReg [N] (.ref .nat [N] "offs") (.ref .real [N] "y")
+      , .store .real [N] (MemAccess.region yReg (.ref .nat [N] "offs"))
+          (.ref .real [N] "y") MaskOpt.none
       ] }
 
 /-- LayerNorm spec: `y_i = (x_i − μ) / √(var + ε) · γ_i + β_i`. -/
@@ -262,11 +266,11 @@ theorem fused_layernorm_correct
   have hLoopAuxExpanded :
       stepForLoopAux "i" 0 N
         [Stmt.assign .real [] "xi"
-            (Op.load xReg
+            (Op.load .real (MemAccess.region xReg
               (Op.add .nat .nil
                 (Op.mul .nat .nil (Op.ref .nat [] "pid")
                   (Op.constNat N))
-                (Op.ref .nat [] "i"))),
+                (Op.ref .nat [] "i"))) MaskOpt.none),
           Stmt.assign .real [] "delta"
             (Op.sub .real .nil (Op.ref .real [] "xi")
               (Op.ref .real [] "M")),

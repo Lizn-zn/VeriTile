@@ -14,90 +14,40 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
   | .assign dtype shape name e, s => do
       let v ← evalOp e s
       some (s.setReg name dtype shape v)
-  | .store region shape off val, s => do
-      let offsets ← evalOp off s
+  | .store h shape mem val mask, s => do
       let values ← evalOp val s
-      -- `mem : RegionName → Nat → ℝ`; demote `WithBot ℝ → ℝ` via `unbotD 0`.
-      -- Well-formed kernels never store `⊥`, so the default value is unobservable.
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i => acc.writeMem region (offsets.data i)
-                        ((values.data i).unbotD 0)) s)
-  | .storeMask region shape off val mask, s => do
-      let offsets ← evalOp off s
-      let values ← evalOp val s
-      let masks ← evalOp mask s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i =>
-          if masks.data i then acc.writeMem region (offsets.data i)
-                                ((values.data i).unbotD 0)
-          else acc) s)
-  | .storePtr shape ptr val, s => do
-      let ptrs ← evalOp ptr s
-      let values ← evalOp val s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i =>
-          let p := ptrs.data i
-          acc.writeMem p.1 p.2 ((values.data i).unbotD 0)) s)
-  | .storePtrMask shape ptr val mask, s => do
-      let ptrs ← evalOp ptr s
-      let values ← evalOp val s
-      let masks ← evalOp mask s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i =>
-          let p := ptrs.data i
-          if masks.data i then acc.writeMem p.1 p.2 ((values.data i).unbotD 0)
-          else acc) s)
-  | .storeFloat h region shape off val, s => do
-      let offsets ← evalOp off s
-      let values ← evalOp val s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i => acc.writeMem region (offsets.data i)
-                        (h.storeValue (values.data i))) s)
-  | .storeFloatMask h region shape off val mask, s => do
-      let offsets ← evalOp off s
-      let values ← evalOp val s
-      let masks ← evalOp mask s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i =>
-          if masks.data i then acc.writeMem region (offsets.data i)
-                                (h.storeValue (values.data i))
-          else acc) s)
-  | .storePtrFloat h shape ptr val, s => do
-      let ptrs ← evalOp ptr s
-      let values ← evalOp val s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i =>
-          let p := ptrs.data i
-          acc.writeMem p.1 p.2 (h.storeValue (values.data i))) s)
-  | .storePtrFloatMask h shape ptr val mask, s => do
-      let ptrs ← evalOp ptr s
-      let values ← evalOp val s
-      let masks ← evalOp mask s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i =>
-          let p := ptrs.data i
-          if masks.data i then acc.writeMem p.1 p.2 (h.storeValue (values.data i))
-          else acc) s)
-  | .storeBlockPtr shape ptr val boundaryCheck, s => do
-      let ptrTile ← evalOp ptr s
-      let values ← evalOp val s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i =>
-          let bp := ptrTile.data i
-          let idx := TileShape.indexToList shape i
-          if bp.inBounds idx boundaryCheck then
-            acc.writeMem bp.region (bp.address idx) ((values.data i).unbotD 0)
-          else acc) s)
-  | .storeBlockPtrFloat h shape ptr val boundaryCheck, s => do
-      let ptrTile ← evalOp ptr s
-      let values ← evalOp val s
-      some ((TileShape.allIndices shape).foldl
-        (fun acc i =>
-          let bp := ptrTile.data i
-          let idx := TileShape.indexToList shape i
-          if bp.inBounds idx boundaryCheck then
-            acc.writeMem bp.region (bp.address idx) (h.storeValue (values.data i))
-          else acc) s)
+      let mkActive : Option (TileIndex shape → Bool) :=
+        match mask with
+        | .none => some (fun _ : TileIndex shape => true)
+        | .mask mask =>
+            (evalOp mask s).map fun masks => fun i : TileIndex shape => masks.data i
+        | .maskOther mask _ =>
+            (evalOp mask s).map fun masks => fun i : TileIndex shape => masks.data i
+      let active ← mkActive
+      let writeValue : TileIndex shape → ℝ := fun i => h.storeValue (values.data i)
+      match mem with
+      | .region region off => do
+          let offsets ← evalOp off s
+          some ((TileShape.allIndices shape).foldl
+            (fun acc i =>
+              if active i then acc.writeMem region (offsets.data i) (writeValue i)
+              else acc) s)
+      | .ptr ptr => do
+          let ptrs ← evalOp ptr s
+          some ((TileShape.allIndices shape).foldl
+            (fun acc i =>
+              let p := ptrs.data i
+              if active i then acc.writeMem p.1 p.2 (writeValue i)
+              else acc) s)
+      | .blockPtr ptr boundaryCheck => do
+          let ptrTile ← evalOp ptr s
+          some ((TileShape.allIndices shape).foldl
+            (fun acc i =>
+              let bp := ptrTile.data i
+              let idx := TileShape.indexToList shape i
+              if active i && bp.inBounds idx boundaryCheck then
+                acc.writeMem bp.region (bp.address idx) (writeValue i)
+              else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
   | .ifThen cond body, s => do
@@ -212,84 +162,81 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
         simp [stepStmt, hv] at h
         cases h
         rfl
-  case store region shape off val =>
-    cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
-    rename_i offsets
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases h
-    simp [BlockState.foldl_writeMem_pid]
-  case storeMask region shape off val mask =>
-    cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
-    rename_i offsets
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases hmask : evalOp mask s <;> simp [hmask] at h
-    rename_i masks
-    cases h
-    simp [BlockState.foldl_writeMemAt_masked_pid]
-  case storePtr shape ptr val =>
-    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
-    rename_i ptrs
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases h
-    simp [BlockState.foldl_writeMemAt_pid]
-  case storePtrMask shape ptr val mask =>
-    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
-    rename_i ptrs
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases hmask : evalOp mask s <;> simp [hmask] at h
-    rename_i masks
-    cases h
-    simp [BlockState.foldl_writeMemAt_masked_pid]
-  case storeFloat hfloat region shape off val =>
-    cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
-    rename_i offsets
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases h
-    simp [BlockState.foldl_writeMem_pid]
-  case storeFloatMask hfloat region shape off val mask =>
-    cases hoff : evalOp off s <;> simp [stepStmt, hoff] at h
-    rename_i offsets
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases hmask : evalOp mask s <;> simp [hmask] at h
-    rename_i masks
-    cases h
-    simp [BlockState.foldl_writeMemAt_masked_pid]
-  case storePtrFloat hfloat shape ptr val =>
-    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
-    rename_i ptrs
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases h
-    simp [BlockState.foldl_writeMemAt_pid]
-  case storePtrFloatMask hfloat shape ptr val mask =>
-    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
-    rename_i ptrs
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases hmask : evalOp mask s <;> simp [hmask] at h
-    rename_i masks
-    cases h
-    simp [BlockState.foldl_writeMemAt_masked_pid]
-  case storeBlockPtr shape ptr val boundaryCheck =>
-    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
-    rename_i ptrTile
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases h
-    simp [BlockState.foldl_writeMemAt_masked_pid]
-  case storeBlockPtrFloat hfloat shape ptr val boundaryCheck =>
-    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
-    rename_i ptrTile
-    cases hval : evalOp val s <;> simp [hval] at h
-    rename_i values
-    cases h
-    simp [BlockState.foldl_writeMemAt_masked_pid]
+  case store hfloat shape mem val mask =>
+    cases hval : evalOp val s with
+    | none =>
+        unfold stepStmt at h
+        simp [hval] at h
+    | some values =>
+        unfold stepStmt at h
+        simp [hval] at h
+        cases mask <;> simp at h
+        · cases mem with
+          | region region off =>
+            cases hoff : evalOp off s <;> simp [hoff] at h
+            rename_i offsets
+            cases h
+            simpa [BlockState.pid] using
+              BlockState.foldl_writeMem_pid region
+                (fun i : TileIndex shape => offsets.data i)
+                (fun i : TileIndex shape => hfloat.storeValue (values.data i))
+                (TileShape.allIndices shape) s
+          | ptr ptr =>
+            cases hptr : evalOp ptr s <;> simp [hptr] at h
+            cases h
+            simp [BlockState.pid, BlockState.foldl_writeMemAt_pid]
+          | blockPtr ptr boundaryCheck =>
+            cases hptr : evalOp ptr s <;> simp [hptr] at h
+            cases h
+            simp [BlockState.foldl_writeMemAt_masked_pid]
+        · rename_i mask
+          cases hmask : evalOp mask s <;> simp [hmask] at h
+          rename_i masks
+          cases mem with
+          | region region off =>
+            cases hoff : evalOp off s <;> simp [hoff] at h
+            cases h
+            simp [BlockState.foldl_writeMemAt_masked_pid]
+          | ptr ptr =>
+            cases hptr : evalOp ptr s <;> simp [hptr] at h
+            cases h
+            simp [BlockState.foldl_writeMemAt_masked_pid]
+          | blockPtr ptr boundaryCheck =>
+            cases hptr : evalOp ptr s <;> simp [hptr] at h
+            rename_i ptrTile
+            cases h
+            simpa [BlockState.pid, Bool.and_eq_true] using
+              BlockState.foldl_writeMemAt_masked_pid
+                (fun i : TileIndex shape => (ptrTile.data i).region)
+                (fun i : TileIndex shape => (ptrTile.data i).address (TileShape.indexToList shape i))
+                (fun i : TileIndex shape => hfloat.storeValue (values.data i))
+                (fun i : TileIndex shape =>
+                  masks.data i && (ptrTile.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
+                (TileShape.allIndices shape) s
+        · rename_i mask other
+          cases hmask : evalOp mask s <;> simp [hmask] at h
+          rename_i masks
+          cases mem with
+          | region region off =>
+            cases hoff : evalOp off s <;> simp [hoff] at h
+            cases h
+            simp [BlockState.foldl_writeMemAt_masked_pid]
+          | ptr ptr =>
+            cases hptr : evalOp ptr s <;> simp [hptr] at h
+            cases h
+            simp [BlockState.foldl_writeMemAt_masked_pid]
+          | blockPtr ptr boundaryCheck =>
+            cases hptr : evalOp ptr s <;> simp [hptr] at h
+            rename_i ptrTile
+            cases h
+            simpa [BlockState.pid, Bool.and_eq_true] using
+              BlockState.foldl_writeMemAt_masked_pid
+                (fun i : TileIndex shape => (ptrTile.data i).region)
+                (fun i : TileIndex shape => (ptrTile.data i).address (TileShape.indexToList shape i))
+                (fun i : TileIndex shape => hfloat.storeValue (values.data i))
+                (fun i : TileIndex shape =>
+                  masks.data i && (ptrTile.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
+                (TileShape.allIndices shape) s
   case forLoop idx n body =>
     simp at h
     exact stepForLoopAux_pid h

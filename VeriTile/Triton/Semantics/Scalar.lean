@@ -154,27 +154,39 @@ end ComparableDType
 
 namespace FloatDType
 
-def ofWithBot : FloatDType dtype → WithBot ℝ → TileCarrier dtype
+def ofWithBot : (dtype : FloatDType) → WithBot ℝ → TileCarrier dtype.toTileDType
   | .real, x => x
   | .fp32, x => x
   | .fp16, x => x
   | .bf16, x => x
 
-def toWithBot : FloatDType dtype → TileCarrier dtype → WithBot ℝ
+def toWithBot : (dtype : FloatDType) → TileCarrier dtype.toTileDType → WithBot ℝ
   | .real, x => x
   | .fp32, x => x
   | .fp16, x => x
   | .bf16, x => x
 
-def ofReal (h : FloatDType dtype) (x : ℝ) : TileCarrier dtype :=
+def ofReal (h : FloatDType) (x : ℝ) : TileCarrier h.toTileDType :=
   h.ofWithBot (some x)
 
-def cast (src : FloatDType srcDtype) (dst : FloatDType dstDtype)
-    (x : TileCarrier srcDtype) : TileCarrier dstDtype :=
+def cast (src dst : FloatDType)
+    (x : TileCarrier src.toTileDType) : TileCarrier dst.toTileDType :=
   dst.ofWithBot (src.toWithBot x)
 
-def storeValue (h : FloatDType dtype) (x : TileCarrier dtype) : ℝ :=
+def storeValue (h : FloatDType) (x : TileCarrier h.toTileDType) : ℝ :=
   (h.toWithBot x).unbotD 0
+
+@[simp] theorem real_ofWithBot (x : WithBot ℝ) :
+    FloatDType.real.ofWithBot x = x := rfl
+
+@[simp] theorem real_toWithBot (x : TileCarrier FloatDType.real.toTileDType) :
+    FloatDType.real.toWithBot x = x := rfl
+
+@[simp] theorem real_ofReal (x : ℝ) :
+    FloatDType.real.ofReal x = (some x : WithBot ℝ) := rfl
+
+@[simp] theorem real_storeValue (x : TileCarrier FloatDType.real.toTileDType) :
+    FloatDType.real.storeValue x = x.unbotD 0 := rfl
 
 end FloatDType
 

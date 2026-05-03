@@ -375,11 +375,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           Macro.throwError "tl.load: block-pointer `boundary_check` cannot be combined with `mask` or `other`"
         let p' ← expandExpr env p
         ensureDType .blockPtr p'.dtype "tl.load block pointer"
-        if isRealDType outDType then
-          return ⟨← `(Op.loadBlockPtr $p'.term $boundaryCheck $padding), .real, p'.shape⟩
-        else
-          let hp ← outDType.floatProof
-          return ⟨← `(Op.loadBlockPtrFloat $hp $p'.term $boundaryCheck $padding), outDType, p'.shape⟩
+        let hp ← outDType.floatProof
+        return ⟨← `(Op.load $hp (MemAccess.blockPtr $p'.term $boundaryCheck) MaskOpt.none),
+          outDType, p'.shape⟩
       if let some (_, otherDType, _) := otherTerm then
         unless otherDType == outDType do
           Macro.throwError "tl.load other: dtype must match load result dtype"
@@ -389,39 +387,27 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           | some sp =>
               let r := sp.region
               let off := sp.offset
-              if isRealDType outDType then
-                pure ⟨← `(Op.load $r $off), .real, sp.shape⟩
-              else
-                let hp ← outDType.floatProof
-                pure ⟨← `(Op.loadFloat $hp $r $off), outDType, sp.shape⟩
+              let hp ← outDType.floatProof
+              pure ⟨← `(Op.load $hp (MemAccess.region $r $off) MaskOpt.none), outDType, sp.shape⟩
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.load pointer"
-              if isRealDType outDType then
-                pure ⟨← `(Op.loadPtr $p'.term), .real, p'.shape⟩
-              else
-                let hp ← outDType.floatProof
-                pure ⟨← `(Op.loadPtrFloat $hp $p'.term), outDType, p'.shape⟩
+              let hp ← outDType.floatProof
+              pure ⟨← `(Op.load $hp (MemAccess.ptr $p'.term) MaskOpt.none), outDType, p'.shape⟩
       | some (m, mShape), none =>
           match ← expandStaticPtrExpr env p with
           | some sp =>
               let r := sp.region
               let off := sp.offset
               let m' ← coerceShape m mShape sp.shape "tl.load mask"
-              if isRealDType outDType then
-                pure ⟨← `(Op.loadMask $r $off $m'), .real, sp.shape⟩
-              else
-                let hp ← outDType.floatProof
-                pure ⟨← `(Op.loadFloatMask $hp $r $off $m'), outDType, sp.shape⟩
+              let hp ← outDType.floatProof
+              pure ⟨← `(Op.load $hp (MemAccess.region $r $off) (MaskOpt.mask $m')), outDType, sp.shape⟩
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.load pointer"
               let m' ← coerceShape m mShape p'.shape "tl.load mask"
-              if isRealDType outDType then
-                pure ⟨← `(Op.loadPtrMask $p'.term $m'), .real, p'.shape⟩
-              else
-                let hp ← outDType.floatProof
-                pure ⟨← `(Op.loadPtrFloatMask $hp $p'.term $m'), outDType, p'.shape⟩
+              let hp ← outDType.floatProof
+              pure ⟨← `(Op.load $hp (MemAccess.ptr $p'.term) (MaskOpt.mask $m')), outDType, p'.shape⟩
       | some (m, mShape), some (o, otherDType, oShape) =>
           match ← expandStaticPtrExpr env p with
           | some sp =>
@@ -429,21 +415,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               let off := sp.offset
               let m' ← coerceShape m mShape sp.shape "tl.load mask"
               let o' ← coerceShape o oShape sp.shape "tl.load other"
-              if isRealDType otherDType then
-                pure ⟨← `(Op.loadMaskOther $r $off $m' $o'), .real, sp.shape⟩
-              else
-                let hp ← otherDType.floatProof
-                pure ⟨← `(Op.loadFloatMaskOther $hp $r $off $m' $o'), otherDType, sp.shape⟩
+              let hp ← otherDType.floatProof
+              pure ⟨← `(Op.load $hp (MemAccess.region $r $off) (MaskOpt.maskOther $m' $o')), otherDType, sp.shape⟩
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.load pointer"
               let m' ← coerceShape m mShape p'.shape "tl.load mask"
               let o' ← coerceShape o oShape p'.shape "tl.load other"
-              if isRealDType otherDType then
-                pure ⟨← `(Op.loadPtrMaskOther $p'.term $m' $o'), .real, p'.shape⟩
-              else
-                let hp ← otherDType.floatProof
-                pure ⟨← `(Op.loadPtrFloatMaskOther $hp $p'.term $m' $o'), otherDType, p'.shape⟩
+              let hp ← otherDType.floatProof
+              pure ⟨← `(Op.load $hp (MemAccess.ptr $p'.term) (MaskOpt.maskOther $m' $o')), otherDType, p'.shape⟩
       | none, some _ =>
           Macro.throwError
             "tl.load: `other=` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"
@@ -916,11 +896,8 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
         ensureDType .blockPtr p'.dtype "tl.store block pointer"
         let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
         let sh ← p'.shape.term
-        if isRealDType storeDType then
-          return (← `(Stmt.storeBlockPtr $sh $p'.term $vTerm $boundaryCheck), env)
-        else
-          let hp ← storeDType.floatProof
-          return (← `(Stmt.storeBlockPtrFloat $hp $sh $p'.term $vTerm $boundaryCheck), env)
+        let hp ← storeDType.floatProof
+        return (← `(Stmt.store $hp $sh (MemAccess.blockPtr $p'.term $boundaryCheck) $vTerm MaskOpt.none), env)
       match maskTerm with
       | none =>
           match ← expandStaticPtrExpr env p with
@@ -929,21 +906,15 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
               let r := sp.region
               let off := sp.offset
               let sh ← sp.shape.term
-              if isRealDType storeDType then
-                pure (← `(Stmt.store $r $sh $off $vTerm), env)
-              else
-                let hp ← storeDType.floatProof
-                pure (← `(Stmt.storeFloat $hp $r $sh $off $vTerm), env)
+              let hp ← storeDType.floatProof
+              pure (← `(Stmt.store $hp $sh (MemAccess.region $r $off) $vTerm MaskOpt.none), env)
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.store pointer"
               let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
               let sh ← p'.shape.term
-              if isRealDType storeDType then
-                pure (← `(Stmt.storePtr $sh $p'.term $vTerm), env)
-              else
-                let hp ← storeDType.floatProof
-                pure (← `(Stmt.storePtrFloat $hp $sh $p'.term $vTerm), env)
+              let hp ← storeDType.floatProof
+              pure (← `(Stmt.store $hp $sh (MemAccess.ptr $p'.term) $vTerm MaskOpt.none), env)
       | some (m, mShape) =>
           match ← expandStaticPtrExpr env p with
           | some sp =>
@@ -952,22 +923,16 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
               let r := sp.region
               let off := sp.offset
               let sh ← sp.shape.term
-              if isRealDType storeDType then
-                pure (← `(Stmt.storeMask $r $sh $off $vTerm $m'), env)
-              else
-                let hp ← storeDType.floatProof
-                pure (← `(Stmt.storeFloatMask $hp $r $sh $off $vTerm $m'), env)
+              let hp ← storeDType.floatProof
+              pure (← `(Stmt.store $hp $sh (MemAccess.region $r $off) $vTerm (MaskOpt.mask $m')), env)
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.store pointer"
               let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
               let m' ← coerceShape m mShape p'.shape "tl.store mask"
               let sh ← p'.shape.term
-              if isRealDType storeDType then
-                pure (← `(Stmt.storePtrMask $sh $p'.term $vTerm $m'), env)
-              else
-                let hp ← storeDType.floatProof
-                pure (← `(Stmt.storePtrFloatMask $hp $sh $p'.term $vTerm $m'), env)
+              let hp ← storeDType.floatProof
+              pure (← `(Stmt.store $hp $sh (MemAccess.ptr $p'.term) $vTerm (MaskOpt.mask $m')), env)
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
