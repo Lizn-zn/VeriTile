@@ -39,15 +39,14 @@
    DSL/AST 允许 kernel 带 `.fp32`、`.fp16`、`.bf16` dtype 标注。
 2. VeriTile **不证明 IEEE-754 浮点正确性**。算法正确性只在擦除后的数学
    `.real` kernel 上证明。
-3. float theorem 到 real theorem 的连接是一个 trusted abstraction boundary。
-   在 Lean 里,它体现为 `Kernel.CorrectViaFloatErasure` 和
-   `k.eraseFloat = realK` 这类 erasure 等式;论文 claim 的含义是:在
-   "Real abstraction 足以代表相关 floating kernel 行为" 这个假设下成立。
-4. 面向 float 的 kernel 通过测试验证,不做 bit-level 证明:smoke test 覆盖
-   typed-float DSL lowering 与 erasure,differential test 覆盖选定可运行
-   Triton/Python kernel 与数值 reference 的一致性。
+3. 形式 Lean 层使用 `Kernel.AlgorithmCorrect`:带 dtype 标注的 kernel 先通过
+   `k.eraseFloat` 擦到 Real kernel,再精确证明它满足 Real 算法 spec。
+4. 计算层使用 `Kernel.ComputeCorrectAt?`:真实观测到的 floating 输出用 epsilon
+   bound 和数学 spec 比较。当前这一层由测试支撑;未来如果做 IEEE 形式化,可以
+   直接证明这一层。
 
-因此,IEEE-754 rounding、NaN、signed zero、overflow/underflow、denormal、
+因此,Real 算法正确性到 floating computation 的 bridge 是显式 trusted boundary,
+不是隐藏假设。IEEE-754 rounding、NaN、signed zero、overflow/underflow、denormal、
 exception flag、硬件 dot precision、fast-math rewrite 都不属于形式证明范围。
 它们是文档化的 semantic gap 和测试目标,不是 Phase D 的证明义务。
 

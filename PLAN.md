@@ -40,17 +40,17 @@ The final project position is deliberately **Real-first**:
    and AST.
 2. VeriTile does **not** prove IEEE-754 floating-point correctness. Algorithmic
    correctness is proved over the erased mathematical `.real` kernel.
-3. The bridge from a float-facing theorem to the real theorem is a trusted
-   abstraction boundary. In Lean, this appears as `Kernel.CorrectViaFloatErasure`
-   plus erasure equations such as `k.eraseFloat = realK`; the scientific claim
-   is conditional on the assumption that the real abstraction is an acceptable
-   model of the relevant floating kernel behavior.
-4. Float-facing kernels are validated by testing, not by bit-level proof:
-   smoke tests check typed-float DSL lowering and erasure, while differential
-   tests compare selected runnable Triton/Python kernels against numerical
-   references.
+3. The formal Lean layer uses `Kernel.AlgorithmCorrect`: the dtype-annotated
+   kernel is erased with `k.eraseFloat`, then proved exactly against the Real
+   algorithmic specification.
+4. The computational layer uses `Kernel.ComputeCorrectAt?`: observed floating
+   outputs are compared against the mathematical specification with an
+   epsilon bound. Today this layer is test-backed; a future IEEE formalization
+   could prove it directly.
 
-Consequently, IEEE-754 rounding, NaNs, signed zero, overflow/underflow,
+Consequently, the trusted bridge between Real algorithmic correctness and
+floating computation is explicit rather than hidden. IEEE-754 rounding, NaNs,
+signed zero, overflow/underflow,
 denormals, exception flags, hardware dot precision, and fast-math rewrites are
 out of the formal proof scope. They are documented semantic gaps and testing
 targets, not Phase-D proof obligations.

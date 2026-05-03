@@ -49,17 +49,16 @@ theorem float_add_correct_bridge
     (xReg yReg outReg : RegionName) (blockSize : Nat)
     {post : BlockState → BlockState → Prop}
     (hreal : Kernel.Correct (addKernel xReg yReg outReg blockSize) post) :
-    Kernel.CorrectViaFloatErasure (floatAddKernel xReg yReg outReg blockSize) post :=
-  Kernel.correctViaFloatErasure_of_erase_eq
+    Kernel.AlgorithmCorrect (floatAddKernel xReg yReg outReg blockSize) post :=
+  Kernel.algorithmCorrect_of_erase_eq
     (float_add_erases_to_real xReg yReg outReg blockSize) hreal
 
 /-! ## Reused correctness theorem -/
 
 /-- Float-facing VectorAdd correctness view.
 
-The theorem statement starts from the fp32-annotated kernel, but execution is
-the erased Real semantics. This is the intended proof policy for float kernels:
-state float, prove Real. -/
+The theorem statement starts from the fp32-annotated kernel, but the formal
+algorithmic proof runs the erased Real semantics: state float, prove Real. -/
 theorem float_add_kernel_correct_view
     (xReg yReg outReg : RegionName)
     (blockSize : Nat) (hBlockSize : 0 < blockSize)

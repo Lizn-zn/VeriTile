@@ -236,12 +236,12 @@ floating memory node。`tl.store` 从写入的 value 推断 dtype,也支持可�
 必须匹配 value dtype 的 `dtype=` surface spelling。integer / boolean tensor
 memory 还没有建模。
 
-Float theorem policy: 算法正确性 theorem 证明在擦除后的 `.real` kernel 上。
-面向 float 的 theorem 可以用 `Kernel.CorrectViaFloatErasure` 加上 erasure
-等式 `k.eraseFloat = realK`,为带 dtype 标注的 kernel 暴露 theorem,但不在
-每个浮点 channel 里重新证明算法。这个 Real theorem 到真实 floating-point 行为
-的 bridge 是 trusted abstraction boundary,不是 IEEE-754 proof。面向 float
-的 kernel 通过 smoke / differential tests 支撑。这些定义放在
+Float theorem policy: 算法正确性 theorem 通过 `Kernel.AlgorithmCorrect`
+证明在擦除后的 `.real` kernel 上。面向 float 的 theorem 使用 erasure 等式
+`k.eraseFloat = realK`,为带 dtype 标注的 kernel 暴露 theorem,但不在每个
+浮点 channel 里重新证明算法。计算正确性由 `Kernel.ComputeCorrectAt?`
+单独表示,它是对观测输出的 epsilon-bound predicate。当前这一层由 smoke /
+differential tests 支撑,不是 IEEE-754 proof。这些定义放在
 `VeriTile.Triton.Float`。
 
 ## Operator / syntax 覆盖 checklist
