@@ -31,6 +31,30 @@ This document is the program-level plan agreed in the brainstorm of 2026-04-26. 
 **Plus headline corollary** (derived, not a 9th main theorem):
 - **`fa1_eq_fa2 : Y_fa1 = Y_fa2`** — by spec transitivity through `standardAttentionMath` from #7 and #8 (~30 lines). **This is the sentence the paper foregrounds**, but it is *not* a separately-proved theorem; its content is fully discharged by #7 and #8.
 
+## Float theorem policy
+
+The final project position is deliberately **Real-first**:
+
+1. VeriTile can express user-facing float kernels and float theorem statements:
+   kernels may carry `.fp32`, `.fp16`, and `.bf16` dtype annotations in the DSL
+   and AST.
+2. VeriTile does **not** prove IEEE-754 floating-point correctness. Algorithmic
+   correctness is proved over the erased mathematical `.real` kernel.
+3. The bridge from a float-facing theorem to the real theorem is a trusted
+   abstraction boundary. In Lean, this appears as `Kernel.CorrectViaFloatErasure`
+   plus erasure equations such as `k.eraseFloat = realK`; the scientific claim
+   is conditional on the assumption that the real abstraction is an acceptable
+   model of the relevant floating kernel behavior.
+4. Float-facing kernels are validated by testing, not by bit-level proof:
+   smoke tests check typed-float DSL lowering and erasure, while differential
+   tests compare selected runnable Triton/Python kernels against numerical
+   references.
+
+Consequently, IEEE-754 rounding, NaNs, signed zero, overflow/underflow,
+denormals, exception flags, hardware dot precision, and fast-math rewrites are
+out of the formal proof scope. They are documented semantic gaps and testing
+targets, not Phase-D proof obligations.
+
 ### Tier 1 — Loop-free (Phase A, 3 pairs)
 
 1. **`softmax_kernels_refinement`** — DONE — naive ↔ numerically-stable softmax
@@ -199,6 +223,8 @@ Phase A scouting evaluates both for FA pseudocode and recommends one; Phase C im
 
 *Differential testing finalises (artifact, non-gating, see §Differential testing):*
 - Add **FA-2 forward** to the diff-test set; perform a one-time **FA-1 vs FA-2 cross-check** (same input, observe identical output to tolerance) as a sanity-check supplement to the formal `fa1_eq_fa2` corollary
+- Add float-facing theorem smoke coverage for selected dtype-annotated kernels:
+  typed DSL surface, erasure equality, and representative numerical agreement.
 - Final state of `tools/diff_test/`: 1–2 Tier 1+2 representatives + FA-1 + FA-2 + FA-1↔FA-2 cross-check. Tier 1+2 kernels not in the representative set remain proof-only
 
 *Paper draft:*
@@ -240,6 +266,7 @@ Outline (10 sections):
 | FA-2 multi-block abstraction unexpectedly complex | D | Phase C-end draft of `multiBlockExec` exposes hidden complexity | T3-D → T3-A only; downgrade target venue to OOPSLA |
 | `/lean4:autoprove` can't handle long proofs (Tier 3 ~200–600 lines) | C | Phase B-end held-out close rate < 30% on long lemmas | Honest report: split long proofs into sub-lemmas the plugin can close + a human-written composition; describe the human-LLM split in the benchmark report |
 | Upstream `lean4` plugin breaks / changes API mid-program | A–D | `/lean4:autoprove` returns errors or different output format | Pin a specific plugin version in repo (record commit / version in CONTRIBUTING.md); fall back to running an older cached version |
+| Float abstraction bridge is too strong for a reviewer | C–D | Review / internal audit asks for IEEE-754 proof | State the trusted-boundary policy explicitly: VeriTile proves the Real abstraction, exposes float-facing theorems via erasure, and validates representative float behavior by testing. IEEE-754 proof is out of scope, not hidden work. |
 | Differential test numerical gap exceeds tolerance for a representative kernel | B–D | GPU output vs reference | Yellow flag, not gating — diagnose: IEEE-754 intrinsic difference (acceptable, document), `.py` implementation bug (fix), or correspondence assertion off (re-check side-by-side). Formal proof remains valid; diff-test artifact updated or its scope noted |
 | Miss PLDI deadline (~Month 11) | D | Phase C-end timing review | Submit OOPSLA-spring (~Month 14) or ICSE-empirical |
 
@@ -252,6 +279,10 @@ Differential testing is a **non-formal validation artifact, not part of the trus
 **What it is not** — it is not a phase gate. The trusted proof chain is the Lean theorem statement against the embedded operational semantics; correctness rests on that, not on numerical agreement.
 
 **What it does not solve** — diff testing on a hand-written `.py` does not validate the embedded operational semantics itself, nor does it close the gap between the embedded AST and a real `.py` (the AST↔`.py` correspondence is a human assertion, supported by the paper appendix; a Python lifter would close this gap formally — that's P3+ work).
+
+It also does not prove floating-point correctness. Float tests support the
+trusted bridge between dtype-annotated kernels and the Real abstraction; they do
+not replace a full IEEE-754 formalization.
 
 **Selected representatives** (the diff-test set across the whole program, ~3–4 kernels total):
 - 1–2 Tier 1+2 kernels (e.g., `naiveSoftmaxKernel` for the simplest case; one Tier 2 streaming kernel)

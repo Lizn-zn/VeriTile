@@ -314,8 +314,13 @@ lean-toolchain         锁定的 Lean toolchain
 - **Phase B:** `forLoop` 语义, Tier 2 kernel, differential testing. 已完成.
 - **Phase C:** ND tile、masking、`tl.dot`、strided memory、FA-1 forward
   correctness。核心 non-causal / causal 4D theorem 已在 `main`。
-- **Phase D:** 收敛剩余语义 gap:block pointer、`boundary_check`、IEEE-754
-  保真、whole-grid launch semantics、FA-1 vs FA-2、论文 artifact packaging。
+- **Float policy:** VeriTile 可以为 dtype-annotated kernel 表达面向 float 的
+  theorem,但算法证明保持在擦除后的数学 `.real` kernel 上。Real↔float bridge
+  是 trusted abstraction boundary,通过 smoke/differential tests 支撑,不做
+  IEEE-754 证明。
+- **Phase D:** 收敛剩余 in-scope 语义 gap:block pointer、`boundary_check`、
+  whole-grid launch semantics、FA-1 vs FA-2、float-facing theorem tests、论文
+  artifact packaging。IEEE-754 保真仍是明确 out-of-scope gap。
 
 完整计划见 [`PLAN_zh.md`](./PLAN_zh.md).
 

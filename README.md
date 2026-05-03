@@ -326,9 +326,14 @@ lean-toolchain         Pinned Lean toolchain
 - **Phase B:** `forLoop` semantics, Tier 2 kernels, differential testing. Done.
 - **Phase C:** ND tiles, masking, `tl.dot`, strided memory, FA-1 forward
   correctness. Core non-causal and causal 4D theorems are on `main`.
-- **Phase D:** close the remaining semantic gaps: block pointers,
-  `boundary_check`, IEEE-754 fidelity, whole-grid launch semantics, FA-1 vs
-  FA-2, and paper artifact packaging.
+- **Float policy:** VeriTile can state float-facing theorems for dtype-annotated
+  kernels, but algorithmic proofs stay over the erased mathematical `.real`
+  kernel. The Real↔float bridge is a trusted abstraction boundary, supported by
+  smoke/differential tests rather than IEEE-754 proof.
+- **Phase D:** close the remaining in-scope semantic gaps: block pointers,
+  `boundary_check`, whole-grid launch semantics, FA-1 vs FA-2, float-facing
+  theorem tests, and paper artifact packaging. IEEE-754 fidelity remains an
+  explicit out-of-scope gap.
 
 See [`PLAN.md`](./PLAN.md) for the full plan.
 

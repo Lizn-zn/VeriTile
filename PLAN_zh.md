@@ -31,6 +31,26 @@
 **外加 headline corollary**(派生,**不是第 9 个主定理**):
 - **`fa1_eq_fa2 : Y_fa1 = Y_fa2`** —— 由 #7 与 #8 通过 `standardAttentionMath` 的 spec 传递性导出(~30 行)。**这是论文 foreground 的句子**,但内容已经被 #7 与 #8 完全包含。
 
+## Float theorem policy
+
+项目最终采用明确的 **Real-first** 路线:
+
+1. VeriTile 能表达面向用户的 float kernel 和 float theorem statement:
+   DSL/AST 允许 kernel 带 `.fp32`、`.fp16`、`.bf16` dtype 标注。
+2. VeriTile **不证明 IEEE-754 浮点正确性**。算法正确性只在擦除后的数学
+   `.real` kernel 上证明。
+3. float theorem 到 real theorem 的连接是一个 trusted abstraction boundary。
+   在 Lean 里,它体现为 `Kernel.CorrectViaFloatErasure` 和
+   `k.eraseFloat = realK` 这类 erasure 等式;论文 claim 的含义是:在
+   "Real abstraction 足以代表相关 floating kernel 行为" 这个假设下成立。
+4. 面向 float 的 kernel 通过测试验证,不做 bit-level 证明:smoke test 覆盖
+   typed-float DSL lowering 与 erasure,differential test 覆盖选定可运行
+   Triton/Python kernel 与数值 reference 的一致性。
+
+因此,IEEE-754 rounding、NaN、signed zero、overflow/underflow、denormal、
+exception flag、硬件 dot precision、fast-math rewrite 都不属于形式证明范围。
+它们是文档化的 semantic gap 和测试目标,不是 Phase D 的证明义务。
+
 ### Tier 1 — Loop-free(Phase A,3 对)
 
 1. **`softmax_kernels_refinement`** —— 已完成 —— naive ↔ 数值稳定 softmax
@@ -199,6 +219,8 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 
 *Differential testing 收尾(工件,非 gating,见 §Differential testing):*
 - 把 **FA-2 forward** 加入 diff-test 集;一次性 **FA-1 vs FA-2 互查**(相同输入,输出在容差内一致),作为 `fa1_eq_fa2` corollary 的非形式 sanity-check 补充
+- 为选定 dtype-annotated kernel 增加 float-facing theorem smoke coverage:
+  typed DSL surface、erasure equality、代表性数值一致性。
 - `tools/diff_test/` 最终状态:1–2 个 Tier 1+2 代表 + FA-1 + FA-2 + FA-1↔FA-2 互查。代表集之外的 Tier 1+2 kernel 仅靠证明保证
 
 *论文 draft:*
@@ -240,6 +262,7 @@ Phase A scouting 在 FA pseudocode 上各跑一次评估,推荐一个;Phase C �
 | FA-2 multi-block 抽象超预期复杂 | D | Phase C 末草拟 `multiBlockExec` 时暴露隐藏复杂度 | T3-D → T3-A only;论文目标降档 OOPSLA |
 | `/lean4:autoprove` 处理不了长证明(Tier 3 ~200–600 行) | C | Phase B 末 held-out close rate < 30% | 诚实报告:把长证明切成插件能闭合的子引理 + 人工写的组合;benchmark report 里描述人机分工 |
 | 上游 `lean4` 插件 break / API 变更 | A–D | `/lean4:autoprove` 报错或输出格式变化 | 在仓库里 pin 一个具体插件版本(commit / version 记录在 CONTRIBUTING.md);fall back 跑老缓存版 |
+| Float abstraction bridge 对 reviewer 来说太强 | C–D | review / internal audit 要求 IEEE-754 proof | 明确写出 trusted-boundary policy:VeriTile 证明 Real abstraction,通过 erasure 暴露 float-facing theorem,用测试验证代表性 float 行为。IEEE-754 proof 是 out of scope,不是隐藏未完成项。 |
 | Diff-test 数值差超容差(代表性 kernel) | B–D | GPU 输出 vs reference | 黄旗,非 gate —— 排查:IEEE-754 内禀差异(可接受,文档化)、`.py` 实现 bug(修)、对应断言不准(对照重检)。形式证明仍然有效;diff-test 工件更新或文档化其范围 |
 | 错过 PLDI deadline(~Month 11) | D | Phase C 末时间评估 | 投 OOPSLA-spring(~Month 14)或 ICSE-empirical |
 
@@ -252,6 +275,9 @@ Differential testing 是**非形式 validation 工件,不属于可信证明链**
 **它不是什么** —— 它**不是** phase gate。可信证明链是 Lean 定理对嵌入式操作语义的命题;正确性靠这个,不靠数值一致。
 
 **它解决不了什么** —— 对手写 `.py` 跑 diff testing **不能**验证嵌入式操作语义本身,**也不能**关闭嵌入式 AST 与真实 `.py` 之间的 gap(AST↔`.py` 对应是人工断言,论文附录支撑;只有 Python lifter 才能形式化关闭 —— 那是 P3+ 工作)
+
+它也不证明浮点正确性。float test 支撑的是 dtype-annotated kernel 与 Real
+abstraction 之间的 trusted bridge;它不替代完整 IEEE-754 形式化。
 
 **选定代表性集合**(整个 program 的 diff-test 集,共 ~3–4 个 kernel):
 - 1–2 个 Tier 1+2 kernel(如最简单的 `naiveSoftmaxKernel`;一个 Tier 2 streaming kernel)
