@@ -14,7 +14,7 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
   | .assign dtype shape name e, s => do
       let v ← evalOp e s
       some (s.setReg name dtype shape v)
-  | .store h shape mem val mask, s => do
+  | .store dtype shape mem val mask, s => do
       let values ← evalOp val s
       let mkActive : Option (TileIndex shape → Bool) :=
         match mask with
@@ -24,20 +24,20 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
         | .maskOther mask _ =>
             (evalOp mask s).map fun masks => fun i : TileIndex shape => masks.data i
       let active ← mkActive
-      let writeValue : TileIndex shape → ℝ := fun i => h.storeValue (values.data i)
+      let writeValue : TileIndex shape → TileCarrier dtype := fun i => values.data i
       match mem with
       | .region region off => do
           let offsets ← evalOp off s
           some ((TileShape.allIndices shape).foldl
             (fun acc i =>
-              if active i then acc.writeMem region (offsets.data i) (writeValue i)
+              if active i then acc.writeMemTyped dtype region (offsets.data i) (writeValue i)
               else acc) s)
       | .ptr ptr => do
           let ptrs ← evalOp ptr s
           some ((TileShape.allIndices shape).foldl
             (fun acc i =>
               let p := ptrs.data i
-              if active i then acc.writeMem p.1 p.2 (writeValue i)
+              if active i then acc.writeMemTyped dtype p.1 p.2 (writeValue i)
               else acc) s)
       | .blockPtr ptr boundaryCheck => do
           let ptrTile ← evalOp ptr s
@@ -46,7 +46,7 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
               let bp := ptrTile.data i
               let idx := TileShape.indexToList shape i
               if active i && bp.inBounds idx boundaryCheck then
-                acc.writeMem bp.region (bp.address idx) (writeValue i)
+                acc.writeMemTyped dtype bp.region (bp.address idx) (writeValue i)
               else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
@@ -162,7 +162,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
         simp [stepStmt, hv] at h
         cases h
         rfl
-  case store hfloat shape mem val mask =>
+  case store dtype shape mem val mask =>
     cases hval : evalOp val s with
     | none =>
         unfold stepStmt at h
@@ -177,39 +177,66 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
             rename_i offsets
             cases h
             simpa [BlockState.pid] using
-              BlockState.foldl_writeMem_pid region
+              BlockState.foldl_writeMemTyped_pid dtype region
                 (fun i : TileIndex shape => offsets.data i)
-                (fun i : TileIndex shape => hfloat.storeValue (values.data i))
+                (fun i : TileIndex shape => values.data i)
                 (TileShape.allIndices shape) s
           | ptr ptr =>
             cases hptr : evalOp ptr s <;> simp [hptr] at h
+            rename_i ptrs
             cases h
-            simp [BlockState.pid, BlockState.foldl_writeMemAt_pid]
+            simpa [BlockState.pid] using
+              BlockState.foldl_writeMemTypedAt_pid dtype
+                (fun i : TileIndex shape => (ptrs.data i).1)
+                (fun i : TileIndex shape => (ptrs.data i).2)
+                (fun i : TileIndex shape => values.data i)
+                (TileShape.allIndices shape) s
           | blockPtr ptr boundaryCheck =>
             cases hptr : evalOp ptr s <;> simp [hptr] at h
+            rename_i ptrTile
             cases h
-            simp [BlockState.foldl_writeMemAt_masked_pid]
+            simpa [BlockState.pid, Bool.and_eq_true] using
+              BlockState.foldl_writeMemTypedAt_masked_pid dtype
+                (fun i : TileIndex shape => (ptrTile.data i).region)
+                (fun i : TileIndex shape => (ptrTile.data i).address (TileShape.indexToList shape i))
+                (fun i : TileIndex shape => values.data i)
+                (fun i : TileIndex shape =>
+                  (ptrTile.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
+                (TileShape.allIndices shape) s
         · rename_i mask
           cases hmask : evalOp mask s <;> simp [hmask] at h
           rename_i masks
           cases mem with
           | region region off =>
             cases hoff : evalOp off s <;> simp [hoff] at h
+            rename_i offsets
             cases h
-            simp [BlockState.foldl_writeMemAt_masked_pid]
+            simpa [BlockState.pid] using
+              BlockState.foldl_writeMemTyped_masked_pid dtype region
+                (fun i : TileIndex shape => offsets.data i)
+                (fun i : TileIndex shape => values.data i)
+                (fun i : TileIndex shape => masks.data i)
+                (TileShape.allIndices shape) s
           | ptr ptr =>
             cases hptr : evalOp ptr s <;> simp [hptr] at h
+            rename_i ptrs
             cases h
-            simp [BlockState.foldl_writeMemAt_masked_pid]
+            simpa [BlockState.pid] using
+              BlockState.foldl_writeMemTypedAt_masked_pid dtype
+                (fun i : TileIndex shape => (ptrs.data i).1)
+                (fun i : TileIndex shape => (ptrs.data i).2)
+                (fun i : TileIndex shape => values.data i)
+                (fun i : TileIndex shape => masks.data i)
+                (TileShape.allIndices shape) s
           | blockPtr ptr boundaryCheck =>
             cases hptr : evalOp ptr s <;> simp [hptr] at h
             rename_i ptrTile
             cases h
             simpa [BlockState.pid, Bool.and_eq_true] using
-              BlockState.foldl_writeMemAt_masked_pid
+              BlockState.foldl_writeMemTypedAt_masked_pid dtype
                 (fun i : TileIndex shape => (ptrTile.data i).region)
                 (fun i : TileIndex shape => (ptrTile.data i).address (TileShape.indexToList shape i))
-                (fun i : TileIndex shape => hfloat.storeValue (values.data i))
+                (fun i : TileIndex shape => values.data i)
                 (fun i : TileIndex shape =>
                   masks.data i && (ptrTile.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
                 (TileShape.allIndices shape) s
@@ -219,21 +246,34 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
           cases mem with
           | region region off =>
             cases hoff : evalOp off s <;> simp [hoff] at h
+            rename_i offsets
             cases h
-            simp [BlockState.foldl_writeMemAt_masked_pid]
+            simpa [BlockState.pid] using
+              BlockState.foldl_writeMemTyped_masked_pid dtype region
+                (fun i : TileIndex shape => offsets.data i)
+                (fun i : TileIndex shape => values.data i)
+                (fun i : TileIndex shape => masks.data i)
+                (TileShape.allIndices shape) s
           | ptr ptr =>
             cases hptr : evalOp ptr s <;> simp [hptr] at h
+            rename_i ptrs
             cases h
-            simp [BlockState.foldl_writeMemAt_masked_pid]
+            simpa [BlockState.pid] using
+              BlockState.foldl_writeMemTypedAt_masked_pid dtype
+                (fun i : TileIndex shape => (ptrs.data i).1)
+                (fun i : TileIndex shape => (ptrs.data i).2)
+                (fun i : TileIndex shape => values.data i)
+                (fun i : TileIndex shape => masks.data i)
+                (TileShape.allIndices shape) s
           | blockPtr ptr boundaryCheck =>
             cases hptr : evalOp ptr s <;> simp [hptr] at h
             rename_i ptrTile
             cases h
             simpa [BlockState.pid, Bool.and_eq_true] using
-              BlockState.foldl_writeMemAt_masked_pid
+              BlockState.foldl_writeMemTypedAt_masked_pid dtype
                 (fun i : TileIndex shape => (ptrTile.data i).region)
                 (fun i : TileIndex shape => (ptrTile.data i).address (TileShape.indexToList shape i))
-                (fun i : TileIndex shape => hfloat.storeValue (values.data i))
+                (fun i : TileIndex shape => values.data i)
                 (fun i : TileIndex shape =>
                   masks.data i && (ptrTile.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
                 (TileShape.allIndices shape) s

@@ -1067,7 +1067,7 @@ theorem fa1_preLoop_correct_strided_boundary
     (scale : ℝ) (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -1127,7 +1127,7 @@ theorem fa1_preLoop_correct_strided_boundary
     ext idx
     rw [Tile.ofReal_data]
     by_cases h : s.pids 0 * M + idx.1.val < S_q
-    · simp [qLoaded, qBase, h, BlockState.readMem]
+    · simp [qLoaded, qBase, h]
       rw [show qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD =
           s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD by
@@ -1137,8 +1137,7 @@ theorem fa1_preLoop_correct_strided_boundary
   refine ⟨s0, ?_, ?_⟩
   · simp [fa1PreLoopStridedBoundary, stepStmts, stepStmt, evalOp,
       Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
-      ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex,
-      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qMask, qLoaded, qBase, s0]
+      ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal, qPtrs, qMask, qLoaded, qBase, s0]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s0]
@@ -1175,7 +1174,7 @@ theorem fa1_preLoop_correct_strided_boundaryD
     (scale : ℝ) (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -1244,7 +1243,7 @@ theorem fa1_preLoop_correct_strided_boundaryD
     · by_cases hRow : s.pids 0 * M + idx.1.val < S_q
       · have hBoth : (s.pids 0 * M + idx.1.val < S_q) ∧ (idx.2.1.val < D) :=
           ⟨hRow, hD⟩
-        simp [qLoaded, qBase, hBoth, padHeadD, BlockState.readMem]
+        simp [qLoaded, qBase, hBoth, padHeadD]
         rw [show qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD =
             s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
               + idx.1.val * sQS + idx.2.1.val * sQD by
@@ -1263,8 +1262,7 @@ theorem fa1_preLoop_correct_strided_boundaryD
   refine ⟨s0, ?_, ?_⟩
   · simp [fa1PreLoopStridedBoundaryD, stepStmts, stepStmt, evalOp,
       Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
-      ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex,
-      BlockState.readMem, Tile.vec, Tile.ofReal,
+      ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal,
       qPtrs, qSeqMask, qDMask, qMask, qLoaded, qBase, s0]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -1302,7 +1300,7 @@ theorem fa1_preLoop_correct_strided_causal_boundaryD
     (scale : ℝ) (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -1358,7 +1356,7 @@ theorem fa1_preLoop_correct_strided_causal_boundary
     (scale : ℝ) (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -1442,8 +1440,7 @@ theorem fa1_postLoop_correct_strided_boundary_raw
     apply hInj
     simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
     exact h
-  simp [observeTileAt, fa1PostLoopStridedBoundary, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+  simp [observeTileAt, fa1PostLoopStridedBoundary, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
         Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind,
         TileShape.dropInsertedIndex]
@@ -1452,7 +1449,6 @@ theorem fa1_postLoop_correct_strided_boundary_raw
       batch * sOB + headIdx * sOH
         + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
     simp [Nat.add_mul, Nat.add_assoc]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj_store idx]
   simp [hIdx]
 
@@ -1504,8 +1500,7 @@ theorem fa1_postLoop_correct_strided_causal_boundary_raw
     apply hInj
     simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
     exact h
-  simp [observeTileAt, fa1PostLoopStridedBoundary, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+  simp [observeTileAt, fa1PostLoopStridedBoundary, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
         Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind,
         TileShape.dropInsertedIndex]
@@ -1514,7 +1509,6 @@ theorem fa1_postLoop_correct_strided_causal_boundary_raw
       batch * sOB + headIdx * sOH
         + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
     simp [Nat.add_mul, Nat.add_assoc]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj_store idx]
   simp [hIdx]
 
@@ -1587,8 +1581,7 @@ theorem fa1_postLoop_correct_strided_boundaryD_raw
     cases hRowEq
     cases Fin.ext hDEq
     rfl
-  simp [observeTileAt, fa1PostLoopStridedBoundaryD, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+  simp [observeTileAt, fa1PostLoopStridedBoundaryD, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
         Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind,
         TileShape.dropInsertedIndex]
@@ -1597,7 +1590,6 @@ theorem fa1_postLoop_correct_strided_boundaryD_raw
       batch * sOB + headIdx * sOH
         + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
     simp [Nat.add_mul, Nat.add_assoc]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_prop_masked_nd_of_true _ _ _ _ idx
         (by exact ⟨hRow, hD⟩) h_no_collision]
 
@@ -1669,8 +1661,7 @@ theorem fa1_postLoop_correct_strided_causal_boundaryD_raw
     cases hRowEq
     cases Fin.ext hDEq
     rfl
-  simp [observeTileAt, fa1PostLoopStridedBoundaryD, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+  simp [observeTileAt, fa1PostLoopStridedBoundaryD, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
         Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind,
         TileShape.dropInsertedIndex]
@@ -1679,7 +1670,6 @@ theorem fa1_postLoop_correct_strided_causal_boundaryD_raw
       batch * sOB + headIdx * sOH
         + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
     simp [Nat.add_mul, Nat.add_assoc]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_prop_masked_nd_of_true _ _ _ _ idx
         (by exact ⟨hRow, hD⟩) h_no_collision]
 
@@ -1700,7 +1690,7 @@ theorem fa1_forward_correct_strided_boundary_raw_of_step
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -1802,7 +1792,7 @@ theorem fa1_forward_correct_strided_boundaryD_raw_of_step
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -1910,7 +1900,7 @@ theorem fa1_forward_correct_strided_causal_boundary_raw_of_step
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -2013,7 +2003,7 @@ theorem fa1_forward_correct_strided_causal_boundaryD_raw_of_step
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -2123,7 +2113,7 @@ theorem fa1_forward_correct_strided_boundaryD_of_step
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -2198,7 +2188,7 @@ theorem fa1_forward_correct_strided_causal_boundaryD_of_step
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -2417,7 +2407,7 @@ theorem fa1_step_strided_boundaryD
       Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
       TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
       NumericDType.add, NumericDType.mul, NumericDType.sub,
-      ComparableDType.lt, BlockState.readMem, Option.bind,
+      ComparableDType.lt, Option.bind,
       hBk, hoffs_m, hoffs_d, hq, hm, hl, ho, hk_base, hv_base]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -2601,7 +2591,7 @@ theorem fa1_forward_correct_strided_boundaryD_raw
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -2662,7 +2652,7 @@ theorem fa1_forward_correct_strided_boundaryD
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -2874,7 +2864,7 @@ theorem fa1_step_strided_causal_boundaryD
       Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
       TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
       NumericDType.add, NumericDType.mul, NumericDType.sub,
-      ComparableDType.lt, ComparableDType.ge, BlockState.readMem, Option.bind,
+      ComparableDType.lt, ComparableDType.ge, Option.bind,
       hBk, hoffs_m, hoffs_d, hq, hm, hl, ho, hk_base, hv_base]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -3065,7 +3055,7 @@ theorem fa1_forward_correct_strided_causal_boundaryD_raw
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -3127,7 +3117,7 @@ theorem fa1_forward_correct_strided_causal_boundaryD
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -3365,7 +3355,7 @@ theorem fa1_step_strided_causal_boundary
       Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
       TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
       NumericDType.add, NumericDType.mul, NumericDType.sub,
-      ComparableDType.lt, ComparableDType.ge, BlockState.readMem, Option.bind,
+      ComparableDType.lt, ComparableDType.ge, Option.bind,
       hBk, hoffs_m, hoffs_d, hq, hm, hl, ho, hk_base, hv_base]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -3558,7 +3548,7 @@ theorem fa1_forward_correct_strided_causal_boundary_raw
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -3614,7 +3604,7 @@ theorem fa1_forward_correct_strided_causal_boundary
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -3805,7 +3795,7 @@ theorem fa1_step_strided_boundary
       Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
       TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
       NumericDType.add, NumericDType.mul, NumericDType.sub,
-      ComparableDType.lt, BlockState.readMem, Option.bind,
+      ComparableDType.lt, Option.bind,
       hBk, hoffs_m, hoffs_d, hq, hm, hl, ho, hk_base, hv_base]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -4126,7 +4116,7 @@ theorem fa1_forward_correct_strided_boundary_raw
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -4187,7 +4177,7 @@ theorem fa1_forward_correct_strided_boundary
     (s : BlockState)
     (hQIn : ∀ idx : TileIndex [M, D],
         s.pids 0 * M + idx.1.val < S_q →
-        s.mem qReg
+        s.readMem qReg
           (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
             + idx.1.val * sQS + idx.2.1.val * sQD) = Q idx)
     (hQOut : ∀ idx : TileIndex [M, D],
@@ -4263,7 +4253,7 @@ theorem fa1_forward_correct_4D_boundary_slice
   -- `hQIn`: in-bounds Q rows read the logical Q tensor.
   have hQIn_inner : ∀ tileIdx : TileIndex [M, D],
       s.pids 0 * M + tileIdx.1.val < S_q →
-      s.mem qReg
+      s.readMem qReg
         (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
           + tileIdx.1.val * sQS + tileIdx.2.1.val * sQD) =
         slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
@@ -4273,7 +4263,7 @@ theorem fa1_forward_correct_4D_boundary_slice
     have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨s.pids 0 * M + i.val, hIn⟩,
                     d, PUnit.unit)
-    show s.mem qReg
+    show s.readMem qReg
       (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
         + i.val * sQS + d.val * sQD) = _
     rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
@@ -4304,7 +4294,7 @@ theorem fa1_forward_correct_4D_boundary_slice
     intro tileIdx
     obtain ⟨j, d, _⟩ := tileIdx
     have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
-    show s.mem kReg
+    show s.readMem kReg
       (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
     rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
           Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
@@ -4320,7 +4310,7 @@ theorem fa1_forward_correct_4D_boundary_slice
     intro tileIdx
     obtain ⟨j, d, _⟩ := tileIdx
     have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
-    show s.mem vReg
+    show s.readMem vReg
       (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
     rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
           Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0
@@ -4448,7 +4438,7 @@ theorem fa1_forward_correct_4D_boundaryD
   intro idx hLt hDIdx
   have hQIn_inner : ∀ tileIdx : TileIndex [M, D],
       s.pids 0 * M + tileIdx.1.val < S_q →
-      s.mem qReg
+      s.readMem qReg
         (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
           + tileIdx.1.val * sQS + tileIdx.2.1.val * sQD) =
         slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
@@ -4458,7 +4448,7 @@ theorem fa1_forward_correct_4D_boundaryD
     have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨s.pids 0 * M + i.val, hIn⟩,
                     d, PUnit.unit)
-    show s.mem qReg
+    show s.readMem qReg
       (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
         + i.val * sQS + d.val * sQD) = _
     rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
@@ -4486,7 +4476,7 @@ theorem fa1_forward_correct_4D_boundaryD
     intro tileIdx
     obtain ⟨j, d, _⟩ := tileIdx
     have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
-    show s.mem kReg
+    show s.readMem kReg
       (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
     rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
           Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
@@ -4501,7 +4491,7 @@ theorem fa1_forward_correct_4D_boundaryD
     intro tileIdx
     obtain ⟨j, d, _⟩ := tileIdx
     have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
-    show s.mem vReg
+    show s.readMem vReg
       (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
     rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
           Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0
@@ -4584,7 +4574,7 @@ theorem fa1_forward_correct_4D_causal_boundaryD
   intro idx hLt hDIdx
   have hQIn_inner : ∀ tileIdx : TileIndex [M, D],
       s.pids 0 * M + tileIdx.1.val < S_q →
-      s.mem qReg
+      s.readMem qReg
         (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
           + tileIdx.1.val * sQS + tileIdx.2.1.val * sQD) =
         slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
@@ -4594,7 +4584,7 @@ theorem fa1_forward_correct_4D_causal_boundaryD
     have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨s.pids 0 * M + i.val, hIn⟩,
                     d, PUnit.unit)
-    show s.mem qReg
+    show s.readMem qReg
       (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
         + i.val * sQS + d.val * sQD) = _
     rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
@@ -4622,7 +4612,7 @@ theorem fa1_forward_correct_4D_causal_boundaryD
     intro tileIdx
     obtain ⟨j, d, _⟩ := tileIdx
     have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
-    show s.mem kReg
+    show s.readMem kReg
       (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
     rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
           Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
@@ -4637,7 +4627,7 @@ theorem fa1_forward_correct_4D_causal_boundaryD
     intro tileIdx
     obtain ⟨j, d, _⟩ := tileIdx
     have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
-    show s.mem vReg
+    show s.readMem vReg
       (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
     rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
           Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0
@@ -4721,7 +4711,7 @@ theorem fa1_forward_correct_4D_causal_boundary_slice
   intro idx hIdxIn
   have hQIn_inner : ∀ tileIdx : TileIndex [M, D],
       s.pids 0 * M + tileIdx.1.val < S_q →
-      s.mem qReg
+      s.readMem qReg
         (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
           + tileIdx.1.val * sQS + tileIdx.2.1.val * sQD) =
         slice4DQRowsBoundary M Q4D ⟨s.pids 2, hPidB⟩ ⟨s.pids 1, hPidH⟩
@@ -4731,7 +4721,7 @@ theorem fa1_forward_correct_4D_causal_boundary_slice
     have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨s.pids 0 * M + i.val, hIn⟩,
                     d, PUnit.unit)
-    show s.mem qReg
+    show s.readMem qReg
       (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
         + i.val * sQS + d.val * sQD) = _
     rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
@@ -4759,7 +4749,7 @@ theorem fa1_forward_correct_4D_causal_boundary_slice
     intro tileIdx
     obtain ⟨j, d, _⟩ := tileIdx
     have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
-    show s.mem kReg
+    show s.readMem kReg
       (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
     rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
           Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
@@ -4774,7 +4764,7 @@ theorem fa1_forward_correct_4D_causal_boundary_slice
     intro tileIdx
     obtain ⟨j, d, _⟩ := tileIdx
     have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, j, d, PUnit.unit)
-    show s.mem vReg
+    show s.readMem vReg
       (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
     rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
           Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0

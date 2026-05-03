@@ -126,7 +126,7 @@ private theorem layernorm_welford_step
         (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
       P_layernorm xs γs βs xReg γReg βReg origPid (i + 1) s' := by
   rcases hP with ⟨hM, hS, hpidReg, hpid, hX, hγ, hβ⟩
-  let xi : ℝ := s.mem xReg (origPid * N + i)
+  let xi : ℝ := s.readMem xReg (origPid * N + i)
   have hxi : xi = xs ⟨i, hi⟩ := by
     have hx := hX ⟨i, hi⟩
     rw [hpid] at hx
@@ -147,10 +147,9 @@ private theorem layernorm_welford_step
   refine ⟨s', ?_, ?_⟩
   · simp [onlineWelfordLoopBody, stepStmts, stepStmt, evalOp, Tile.bop,
       Tile.natToReal, NumericDType.add, NumericDType.mul, NumericDType.sub,
-      NumericDType.div, BlockState.readMem, hM, hS, hpidReg,
+      NumericDType.div, hM, hS, hpidReg,
       xi, m, ssum, delta, m', delta2, ssum', s',
-      WithBot.realAdd, WithBot.realSub, WithBot.realMul, WithBot.realDiv,
-      BlockState.setReg]
+      WithBot.realAdd, WithBot.realSub, WithBot.realMul, WithBot.realDiv]
     rfl
   · simp [P_layernorm, s', InputLoadedAt, InputFeatureLoadedAt, welfordMean,
       welfordS, hi, xi, m, ssum, delta, m', delta2, ssum', hpidReg, hpid, hxi]
@@ -204,8 +203,7 @@ private theorem layernorm_affine_tail_correct
     injective_offset_singleton (s.pid * N)
   simp [observeAt, exec, layerNormAffineTailKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.natToReal,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
-        BlockState.setReg, BlockState.readMem, layerNormSpec,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, layerNormSpec,
         hM, hS, hpidReg, hMean, hSEq]
   unfold InputLoadedAt at hX
   unfold InputFeatureLoadedAt at hγ hβ
@@ -232,8 +230,7 @@ theorem twopass_layernorm_correct
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         Tile.natToReal,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
-        BlockState.setReg, BlockState.readMem, layerNormSpec, twoPassMean,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, layerNormSpec, twoPassMean,
         twoPassS]
   unfold InputLoadedAt at _h_x
   unfold InputFeatureLoadedAt at _h_γ _h_β

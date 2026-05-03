@@ -4,8 +4,7 @@ VeriTile.Triton.Float.Correctness
 Float-facing correctness bridge for the current real-valued Triton semantics.
 -/
 
-import VeriTile.Triton.Float.Erasure
-import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float.StateErasure
 
 namespace VeriTile.Triton
 

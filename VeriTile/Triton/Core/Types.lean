@@ -114,8 +114,9 @@ range preconditions on every theorem. With `WithBot ℝ`:
 * `exp ⊥ := 0` and `sigmoid ⊥ := 0` mirror IEEE behavior of `exp(-∞)`/
   `sigmoid(-∞)`; see `WithBot.realExp` / `WithBot.realSigmoid` in Semantics
 
-`tl.load` lifts `mem : RegionName → Nat → ℝ` to `some _ : WithBot ℝ`.
-`tl.store` demotes via `unbot' 0` — well-formed kernels never store `⊥`.
+`tl.load` reads typed `MemCell`s through the operational `readMemValue` view.
+`tl.store` writes typed cells; floating stores demote via `unbot' 0` —
+well-formed kernels never store `⊥`.
 
 Hardware-shaped floating channels (`.fp32`, `.fp16`, `.bf16`) currently share
 the same `WithBot ℝ` carrier as `.real`. They are a type-layer hook: kernels

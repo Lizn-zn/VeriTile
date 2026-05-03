@@ -124,8 +124,8 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
       ptr.RespectsRegionTyping Γ ∧ off.RespectsRegionTyping Γ
   | .makeBlockPtr _ _ _ _ _ _ => True
   | .advanceBlockPtr ptr _ => ptr.RespectsRegionTyping Γ
-  | .load h mem mask =>
-      mem.RespectsRegionTyping Γ h.toTileDType ∧ mask.RespectsRegionTyping Γ
+  | .load dtype mem mask =>
+      mem.RespectsRegionTyping Γ dtype ∧ mask.RespectsRegionTyping Γ
   | .natToReal a => a.RespectsRegionTyping Γ
 termination_by op => sizeOf op
 decreasing_by all_goals (simp_wf; try omega)
@@ -137,8 +137,8 @@ mutual
 /-- Memory-region dtype contract for statements. -/
 def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
   | .assign _ _ _ e => e.RespectsRegionTyping Γ
-  | .store h _ mem val mask =>
-      mem.RespectsRegionTyping Γ h.toTileDType ∧
+  | .store dtype _ mem val mask =>
+      mem.RespectsRegionTyping Γ dtype ∧
       val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
   | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
   | .ifThen cond body =>

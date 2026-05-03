@@ -633,7 +633,7 @@ def fa1NaiveForwardKernelStridedCausalBoundaryD
 
 /-! ## Math model — softmax-attention
 
-Spec layer is ℝ-valued: `BlockState.mem` only reads ℝ, never `⊥`, so
+Spec layer is ℝ-valued: `BlockState.readMem` only reads ℝ, never `⊥`, so
 the natural type of a `tl.load`-fed kernel input is
 `TileIndex shape → ℝ`. We lift to `Tile .real` (whose carrier is
 `WithBot ℝ`) only as an internal staging step — `Tile.ofReal` /

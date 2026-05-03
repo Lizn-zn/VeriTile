@@ -178,8 +178,7 @@ theorem softmax_naive_correct
   simp [observeAt, exec, naiveSoftmaxKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        NumericDType.add, NumericDType.mul, NumericDType.div,
-        BlockState.setReg, BlockState.readMem, naiveSpec]
+        NumericDType.add, NumericDType.mul, NumericDType.div, naiveSpec]
   unfold InputLoadedAt at _h_x
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]
@@ -205,8 +204,7 @@ theorem softmax_stable_correct
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
-        BlockState.setReg, BlockState.readMem, stableSpec, tileMax]
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableSpec, tileMax]
   unfold InputLoadedAt at _h_x
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]
@@ -235,7 +233,6 @@ theorem softmax_kernels_refinement
   congr 1
   unfold naiveSpec stableSpec
   have h := naive_eq_stable xs (tileMax hN xs)
-  simp only [] at h
   exact congrFun h i
 
 /-- View-level surface for `softmax_kernels_refinement`. -/

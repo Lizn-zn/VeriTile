@@ -3251,8 +3251,7 @@ theorem approx_gelu_kernel_correct
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, approxGeLUKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
-        NumericDType.sub, NumericDType.div, BlockState.setReg,
-        BlockState.readMem, approxGeLUSpec, approxGeLUScalar]
+        NumericDType.sub, NumericDType.div, approxGeLUSpec, approxGeLUScalar]
   unfold InputLoadedAt at _h_x
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]

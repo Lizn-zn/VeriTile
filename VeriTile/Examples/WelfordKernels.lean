@@ -329,7 +329,6 @@ theorem twopass_welford_correct
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         Tile.natToReal, NumericDType.add,
         NumericDType.mul, NumericDType.sub, NumericDType.div,
-        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         welfordMeanSpec, twoPassMean]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
@@ -340,7 +339,6 @@ theorem twopass_welford_correct
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         Tile.natToReal, NumericDType.add,
         NumericDType.mul, NumericDType.sub, NumericDType.div,
-        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         welfordVarSpec, twoPassS, twoPassMean]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
@@ -368,7 +366,7 @@ theorem online_welford_step
         (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
       P_welford xs xReg origPid (i + 1) s' := by
   rcases hP with ⟨hM, hS, hpidReg, hpid, hX⟩
-  let xi : ℝ := s.mem xReg (origPid * N + i)
+  let xi : ℝ := s.readMem xReg (origPid * N + i)
   have hxi : xi = xs ⟨i, hi⟩ := by
     have hx := hX ⟨i, hi⟩
     rw [hpid] at hx

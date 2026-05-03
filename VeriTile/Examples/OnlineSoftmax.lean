@@ -235,7 +235,7 @@ private theorem online_softmax_step
         (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
       P_online_softmax xs xReg origPid (i + 1) s' := by
   rcases hP with ⟨hm, hl, hpidReg, hpid, hX⟩
-  let xi : ℝ := s.mem xReg (origPid * N + i)
+  let xi : ℝ := s.readMem xReg (origPid * N + i)
   have hxi : xi = xs ⟨i, hi⟩ := by
     have hx := hX ⟨i, hi⟩
     rw [hpid] at hx

@@ -51,6 +51,8 @@ syntax "tl.float64" : tritonDType
 syntax "tl.float32" : tritonDType
 syntax "tl.float16" : tritonDType
 syntax "tl.bfloat16" : tritonDType
+syntax "tl.int32" : tritonDType
+syntax "tl.uint64" : tritonDType
 
 -- Block-level matrix multiply.
 syntax "tl.dot(" tritonExpr ", " tritonExpr ")" : tritonExpr
