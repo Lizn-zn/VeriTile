@@ -257,12 +257,13 @@ defaults `tl.load` to `.real`, but accepts `dtype=...` with `tl.float32`,
 `dtype=` syntax for Triton-like surface spelling. Integer and boolean tensor
 memory are not modeled yet.
 
-Float theorem policy: algorithmic correctness theorems are proved over the
-erased `.real` kernel via `Kernel.AlgorithmCorrect`. A float-facing theorem
-uses an erasure equality `k.eraseFloat = realK` to expose a theorem for the
-dtype-annotated kernel without re-proving the algorithm in each floating
-channel. Computational correctness is represented separately by
-`Kernel.ComputeCorrectAt?`, an epsilon-bound predicate over observed outputs.
+Float theorem policy: algorithmic correctness/refinement theorems are proved
+over erased `.real` kernels via `Kernel.AlgorithmCorrect` and
+`Kernel.AlgorithmRefine`. A float-facing theorem uses erasure equations such as
+`k.eraseFloat = realK` to expose a theorem for dtype-annotated kernels without
+re-proving the algorithm in each floating channel. Computational
+correctness/refinement is represented separately by `Kernel.ComputeCorrectAt?`
+and `Kernel.ComputeRefineAt?`, epsilon-bound predicates over observed outputs.
 That layer is currently supported by smoke and differential tests rather than
 IEEE-754 proof. These definitions live in `VeriTile.Triton.Float`.
 

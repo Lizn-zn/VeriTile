@@ -40,13 +40,15 @@ The final project position is deliberately **Real-first**:
    and AST.
 2. VeriTile does **not** prove IEEE-754 floating-point correctness. Algorithmic
    correctness is proved over the erased mathematical `.real` kernel.
-3. The formal Lean layer uses `Kernel.AlgorithmCorrect`: the dtype-annotated
-   kernel is erased with `k.eraseFloat`, then proved exactly against the Real
-   algorithmic specification.
-4. The computational layer uses `Kernel.ComputeCorrectAt?`: observed floating
-   outputs are compared against the mathematical specification with an
-   epsilon bound. Today this layer is test-backed; a future IEEE formalization
-   could prove it directly.
+3. The formal Lean layer uses `Kernel.AlgorithmCorrect` and
+   `Kernel.AlgorithmRefine`: dtype-annotated kernels are erased with
+   `k.eraseFloat`, then proved exactly against the Real algorithmic
+   specification or Real kernel-pair refinement.
+4. The computational layer uses `Kernel.ComputeCorrectAt?` and
+   `Kernel.ComputeRefineAt?`: observed floating outputs are compared against
+   the mathematical specification, or against another kernel's observations,
+   with an epsilon bound. Today this layer is test-backed; a future IEEE
+   formalization could prove it directly.
 
 Consequently, the trusted bridge between Real algorithmic correctness and
 floating computation is explicit rather than hidden. IEEE-754 rounding, NaNs,

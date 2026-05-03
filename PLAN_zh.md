@@ -39,11 +39,12 @@
    DSL/AST 允许 kernel 带 `.fp32`、`.fp16`、`.bf16` dtype 标注。
 2. VeriTile **不证明 IEEE-754 浮点正确性**。算法正确性只在擦除后的数学
    `.real` kernel 上证明。
-3. 形式 Lean 层使用 `Kernel.AlgorithmCorrect`:带 dtype 标注的 kernel 先通过
-   `k.eraseFloat` 擦到 Real kernel,再精确证明它满足 Real 算法 spec。
-4. 计算层使用 `Kernel.ComputeCorrectAt?`:真实观测到的 floating 输出用 epsilon
-   bound 和数学 spec 比较。当前这一层由测试支撑;未来如果做 IEEE 形式化,可以
-   直接证明这一层。
+3. 形式 Lean 层使用 `Kernel.AlgorithmCorrect` 和 `Kernel.AlgorithmRefine`:
+   带 dtype 标注的 kernel 先通过 `k.eraseFloat` 擦到 Real kernel,再精确证明
+   它满足 Real 算法 spec 或 Real kernel-pair refinement。
+4. 计算层使用 `Kernel.ComputeCorrectAt?` 和 `Kernel.ComputeRefineAt?`:真实观测到
+   的 floating 输出用 epsilon bound 和数学 spec 比较,或和另一个 kernel 的观测
+   输出比较。当前这一层由测试支撑;未来如果做 IEEE 形式化,可以直接证明这一层。
 
 因此,Real 算法正确性到 floating computation 的 bridge 是显式 trusted boundary,
 不是隐藏假设。IEEE-754 rounding、NaN、signed zero、overflow/underflow、denormal、

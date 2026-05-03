@@ -53,6 +53,21 @@ theorem float_add_correct_bridge
   Kernel.algorithmCorrect_of_erase_eq
     (float_add_erases_to_real xReg yReg outReg blockSize) hreal
 
+/-- The fp32-annotated kernel algorithmically refines the existing Real kernel:
+after erasure, both executions produce the same final state. -/
+theorem float_add_refines_real_add
+    (xReg yReg outReg : RegionName) (blockSize : Nat) :
+    Kernel.AlgorithmRefine
+      (floatAddKernel xReg yReg outReg blockSize)
+      (addKernel xReg yReg outReg blockSize)
+      (fun _ floatFinal realFinal => floatFinal = realFinal) := by
+  refine Kernel.algorithmRefine_of_erase_eq
+    (float_add_erases_to_real xReg yReg outReg blockSize) ?_ ?_
+  · simp [addKernel, Kernel.eraseFloat, Stmt.eraseFloatList, Stmt.eraseFloat,
+      Op.eraseFloat, eraseFloatDType, NumericDType.eraseFloat]
+  · intro s lhs' rhs' hl hr
+    exact (Option.some.inj (hl.trans hr.symm))
+
 /-! ## Reused correctness theorem -/
 
 /-- Float-facing VectorAdd correctness view.
