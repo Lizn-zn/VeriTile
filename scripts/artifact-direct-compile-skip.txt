@@ -1,0 +1,7 @@
+# Manifest files that are covered by `lake build VeriTileFull` but are too
+# expensive to recompile directly in clean CI.
+#
+# Direct `lake env lean file.lean` deliberately bypasses Lake target planning.
+# For ApproxGeLU this repeats the heavy Mathlib/VeriTileMath certificate chain
+# after `VeriTileFull` has already built it.
+VeriTile/Examples/ApproxGeLU.lean

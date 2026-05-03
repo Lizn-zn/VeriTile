@@ -9,6 +9,7 @@ AXIOM_WHITELIST="${SCRIPT_DIR}/artifact-axiom-whitelist.txt"
 THEOREM_LIST="${SCRIPT_DIR}/artifact-theorems.txt"
 EXAMPLE_LIST="${SCRIPT_DIR}/artifact-examples.tsv"
 DOC_TERMS="${SCRIPT_DIR}/artifact-doc-terms.tsv"
+DIRECT_COMPILE_SKIP="${SCRIPT_DIR}/artifact-direct-compile-skip.txt"
 
 failures=0
 
@@ -139,6 +140,15 @@ manifest_lean_files() {
   done < "${EXAMPLE_LIST}"
 }
 
+should_direct_compile_manifest_file() {
+  local file="$1"
+  if [[ -f "${DIRECT_COMPILE_SKIP}" ]] &&
+      grep -Fxq "${file}" "${DIRECT_COMPILE_SKIP}"; then
+    return 1
+  fi
+  return 0
+}
+
 check_manifest_files_compile() {
   local file out
   local before="${failures}"
@@ -157,6 +167,9 @@ check_manifest_files_compile() {
   rm -f "${out}"
 
   while IFS= read -r file; do
+    if ! should_direct_compile_manifest_file "${file}"; then
+      continue
+    fi
     if [[ ! -f "${file}" ]]; then
       fail "manifest Lean file missing before direct compile: ${file}"
       continue
@@ -172,7 +185,7 @@ check_manifest_files_compile() {
   done < <(manifest_lean_files | sort -u)
 
   if [[ "${failures}" -eq "${before}" ]]; then
-    ok "manifest Lean files compile directly"
+    ok "manifest Lean files compile directly, except full-target-covered skips"
   fi
 }
 
