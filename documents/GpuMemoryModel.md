@@ -53,8 +53,8 @@ Not modeled yet:
   alias/page-ownership, and paged FA-1 equivalence proofs are still future
   consumer work; see issue #42.
 - Rich signed/unsigned integer dtype lattice. The current typed HBM model
-  supports `.nat` (`tl.uint32` / `tl.uint64`) and mathematical `.int`
-  (`tl.int32` / `tl.int64`), enough for index/block-table cells, but not
+  supports `.nat` (`tl.uint8/uint16/uint32/uint64`) and mathematical `.int`
+  (`tl.int8/int16/int32/int64`), enough for index/block-table cells, but not
   bit-width-specific integer semantics.
 
 ## Sequential Consistency

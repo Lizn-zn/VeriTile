@@ -42,7 +42,7 @@ def readAs (cell : MemCell) (dtype : TileDType) : Option (TileCarrier dtype) :=
     (MemCell.of dtype value).readAs dtype = some value := by
   cases dtype <;> rfl
 
-def eraseFloat : MemCell → MemCell
+def eraseDType : MemCell → MemCell
   | ⟨.real, value⟩ => of .real value
   | ⟨.fp32, value⟩ => of .real (FloatDType.fp32.toWithBot value)
   | ⟨.fp16, value⟩ => of .real (FloatDType.fp16.toWithBot value)
@@ -56,8 +56,8 @@ def eraseFloat : MemCell → MemCell
 @[simp] theorem readAs_real_real (value : ℝ) :
     (MemCell.real value).readAs .real = some (some value : WithBot ℝ) := rfl
 
-@[simp] theorem eraseFloat_real (value : ℝ) :
-    (MemCell.real value).eraseFloat = MemCell.real value := rfl
+@[simp] theorem eraseDType_real (value : ℝ) :
+    (MemCell.real value).eraseDType = MemCell.real value := rfl
 
 end MemCell
 

@@ -59,8 +59,9 @@ Supported channels:
 - `.fp32`, `.fp16`, `.bf16`: explicit floating dtype channels, currently
   backed by the same `WithBot ℝ` mathematical carrier as `.real`.
 - `.int`: AST-level signed mathematical-integer channel with
-  arithmetic/comparison semantics. `tl.int32` and `tl.int64` both map here;
-  bit width, overflow, and signed cast fidelity are not modeled yet.
+  arithmetic/comparison semantics. `tl.int8`, `tl.int16`, `tl.int32`, and
+  `tl.int64` all map here; bit width, overflow, and signed cast fidelity are
+  not modeled yet.
 - `.nat`: used for offsets, loop counters, sizes, and address arithmetic.
 - `.bool`: produced by comparisons and consumed by masks / `tl.where`.
 
@@ -176,7 +177,7 @@ Supported loads:
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
-- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.int64|tl.uint32|tl.uint64)`
+- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int8|tl.int16|tl.int32|tl.int64|tl.uint8|tl.uint16|tl.uint32|tl.uint64)`
 - `tl.load(ptr, mask=mask, other=other, dtype=...)`
 - `bp := tl.make_block_ptr($(region), base=$(base), shape=[...],
   strides=[...], offsets=[...], block_shape=[...])`
@@ -316,17 +317,19 @@ Stmt.store : TileDType → MemAccess shape → Op ... → MaskOpt dtype shape �
 
 The public DSL defaults `tl.load` to `.real`, but accepts `dtype=...` with
 `tl.float32`, `tl.float16`, `tl.bfloat16`, `tl.int32`, `tl.int64`, `tl.uint32`,
-or `tl.uint64` to produce typed memory nodes. `tl.uint64` and `tl.uint32` map
-to VeriTile's `.nat` channel for nonnegative index/block-table values.
-`tl.int32` and `tl.int64` map to VeriTile's `.int` channel, a mathematical
-signed-integer abstraction with no bit-width or overflow semantics. `tl.store`
+or `tl.uint64` to produce typed memory nodes. The narrower spellings
+`tl.int8`, `tl.int16`, `tl.uint8`, and `tl.uint16` are also accepted.
+All `tl.uint*` spellings map to VeriTile's `.nat` channel for nonnegative
+index/block-table values. All `tl.int*` spellings map to VeriTile's `.int`
+channel, a mathematical signed-integer abstraction with no bit-width or
+overflow semantics. `tl.store`
 infers its dtype from the value being stored, with optional matching `dtype=`
 syntax for Triton-like surface spelling.
 
 Float theorem policy: algorithmic correctness/refinement theorems are proved
 over erased `.real` kernels via `Kernel.AlgorithmCorrect` and
 `Kernel.AlgorithmRefine`. A float-facing theorem uses erasure equations such as
-`k.eraseFloat = realK` to expose a theorem for dtype-annotated kernels without
+`k.eraseDType = realK` to expose a theorem for dtype-annotated kernels without
 re-proving the algorithm in each floating channel. Computational
 correctness/refinement is represented separately by `Kernel.ComputeCorrectAt?`
 and `Kernel.ComputeRefineAt?`, epsilon-bound predicates over observed outputs.
@@ -362,7 +365,7 @@ current semantic contract.
 | Shape/view ops | Limited | `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`, `tl.flip`, `tl.join`, projection-form `tl.split(x, 0|1)` |
 | Transpose | Supported | `tl.trans(e)` swaps trailing two axes; arbitrary static permutations use `tl.permute(e, [axes])` |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
-| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional `dtype=` for float/int32/int64/uint32/uint64; block-pointer load with `boundary_check` and `padding_option="zero"` |
+| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional `dtype=` for float/int*/uint* spelling-only integer channels; block-pointer load with `boundary_check` and `padding_option="zero"` |
 | Stores | Limited | Pointer-expression store, optional `mask`, dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
 | Integer memory | Limited | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no richer signed/unsigned width lattice yet |

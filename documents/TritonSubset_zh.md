@@ -54,8 +54,8 @@ Stmt : Type
 - `.fp32`, `.fp16`, `.bf16`: 显式浮点 dtype channel,当前和 `.real` 一样
   使用 `WithBot ℝ` 数学 carrier。
 - `.int`: AST 层 signed mathematical-integer channel,已有算术/比较语义。
-  `tl.int32` 和 `tl.int64` 都映射到这里;bit width、overflow 和 signed cast
-  fidelity 还没建模。
+  `tl.int8`、`tl.int16`、`tl.int32` 和 `tl.int64` 都映射到这里;bit width、
+  overflow 和 signed cast fidelity 还没建模。
 - `.nat`: 用于 offset、loop counter、size 和地址算术。
 - `.bool`: 由比较产生,用于 mask 和 `tl.where`。
 
@@ -160,7 +160,7 @@ bit-level / precision 语义。
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
-- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.int64|tl.uint32|tl.uint64)`
+- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int8|tl.int16|tl.int32|tl.int64|tl.uint8|tl.uint16|tl.uint32|tl.uint64)`
 - `tl.load(ptr, mask=mask, other=other, dtype=...)`
 - `bp := tl.make_block_ptr($(region), base=$(base), shape=[...],
   strides=[...], offsets=[...], block_shape=[...])`
@@ -288,16 +288,16 @@ Stmt.store : TileDType → MemAccess shape → Op ... → MaskOpt dtype shape �
 ```
 
 公开 DSL 的 `tl.load` 默认仍是 `.real`,但支持
-`dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.int64|tl.uint32|tl.uint64`,
-用于生成 typed memory node。`tl.uint64` 和 `tl.uint32` 映射到 VeriTile 的
-`.nat` channel,用于非负 index/block-table value。`tl.int32` 和 `tl.int64`
+`dtype=tl.float32|tl.float16|tl.bfloat16|tl.int*/tl.uint*`,
+用于生成 typed memory node。所有 `tl.uint*` spelling 映射到 VeriTile 的
+`.nat` channel,用于非负 index/block-table value。所有 `tl.int*` spelling
 映射到 VeriTile 的 `.int` channel,这是数学 signed-integer abstraction,没有
 bit-width 或 overflow 语义。`tl.store` 从写入的 value 推断 dtype,也支持可选的、
 必须匹配 value dtype 的 `dtype=` surface spelling。
 
 Float theorem policy: 算法正确性 / refinement theorem 通过
 `Kernel.AlgorithmCorrect` 和 `Kernel.AlgorithmRefine` 证明在擦除后的 `.real`
-kernel 上。面向 float 的 theorem 使用 `k.eraseFloat = realK` 这类 erasure
+kernel 上。面向 float 的 theorem 使用 `k.eraseDType = realK` 这类 erasure
 等式,为带 dtype 标注的 kernel 暴露 theorem,但不在每个浮点 channel 里重新证明
 算法。计算正确性 / refinement 由 `Kernel.ComputeCorrectAt?` 和
 `Kernel.ComputeRefineAt?` 单独表示,它们是对观测输出的 epsilon-bound
@@ -331,7 +331,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | shape/view op | Limited | `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`, `tl.flip`, `tl.join`,projection-form `tl.split(x, 0|1)` |
 | transpose | Supported | `tl.trans(e)` 交换最后两个 axis;任意静态 permutation 用 `tl.permute(e, [axes])` |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
-| load | Limited | pointer-expression load,可带 `mask` / `other` / float/int32/int64/uint32/uint64 `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
+| load | Limited | pointer-expression load,可带 `mask` / `other` / float/int*/uint* spelling-only integer `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
 | store | Limited | pointer-expression store,可带 `mask`;dtype 从 value 推断,也可写匹配的 `dtype=`;block-pointer store 支持 `boundary_check` |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
 | integer memory | Limited | typed cell 加 typed load/store 支持 Nat/index 和数学 signed-Int HBM value;还没有更完整的 signed/unsigned width lattice |

@@ -38,14 +38,14 @@ def floatAddKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : Kernel :=
 /-- The fp32-annotated kernel erases to the existing Real VectorAdd kernel. -/
 theorem float_add_erases_to_real
     (xReg yReg outReg : RegionName) (blockSize : Nat) :
-    (floatAddKernel xReg yReg outReg blockSize).eraseFloat =
+    (floatAddKernel xReg yReg outReg blockSize).eraseDType =
       addKernel xReg yReg outReg blockSize := by
-  simp [floatAddKernel, addKernel, Kernel.eraseFloat, Stmt.eraseFloatList,
-    Stmt.eraseFloat, Op.eraseFloat, eraseFloatDType, NumericDType.eraseFloat]
+  simp [floatAddKernel, addKernel, Kernel.eraseDType, Stmt.eraseDTypeList,
+    Stmt.eraseDType, Op.eraseDType, eraseDType, NumericDType.eraseDType]
   all_goals
-    rw [Op.eraseFloat.eq_def]
-    simp [MemAccess.eraseFloat.eq_def, MaskOpt.eraseFloat.eq_def, Op.eraseFloat.eq_def,
-      eraseFloatDType]
+    rw [Op.eraseDType.eq_def]
+    simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def, Op.eraseDType.eq_def,
+      eraseDType]
 
 /-- Generic theorem bridge: any Real proof about `addKernel` can be exposed as
 a float-facing theorem for `floatAddKernel` through erasure. -/
@@ -73,7 +73,7 @@ theorem float_add_kernel_correct_view
       (fun idx : TileIndex [blockSize] => ys idx.1)) :
     ∀ idx : TileIndex [blockSize],
       TensorView.observe
-          (exec (floatAddKernel xReg yReg outReg blockSize).eraseFloat s)
+          (exec (floatAddKernel xReg yReg outReg blockSize).eraseDType s)
           (programTileView s outReg blockSize) idx
         = some (addSpec xs ys idx.1) := by
   simpa [float_add_erases_to_real xReg yReg outReg blockSize]
@@ -133,29 +133,29 @@ def floatSoftmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel 
 /-- The fp32 per-element-divide softmax erases to the existing Real kernel. -/
 theorem float_stable_softmax_erases_to_real
     (xReg yReg : RegionName) (blockSize : Nat) :
-    (floatStableSoftmaxKernel xReg yReg blockSize).eraseFloat =
+    (floatStableSoftmaxKernel xReg yReg blockSize).eraseDType =
       stableSoftmaxKernel xReg yReg blockSize := by
-  simp [floatStableSoftmaxKernel, stableSoftmaxKernel, Kernel.eraseFloat,
-    Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat, eraseFloatDType,
-    NumericDType.eraseFloat]
+  simp [floatStableSoftmaxKernel, stableSoftmaxKernel, Kernel.eraseDType,
+    Stmt.eraseDTypeList, Stmt.eraseDType, Op.eraseDType, eraseDType,
+    NumericDType.eraseDType]
   all_goals
-    rw [Op.eraseFloat.eq_def]
-    simp [MemAccess.eraseFloat.eq_def, MaskOpt.eraseFloat.eq_def, Op.eraseFloat.eq_def,
-      eraseFloatDType]
+    rw [Op.eraseDType.eq_def]
+    simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def, Op.eraseDType.eq_def,
+      eraseDType]
 
 /-- The fp32 reciprocal-form softmax erases to the existing Real optimized
 kernel. -/
 theorem float_softmax_recip_erases_to_real
     (xReg yReg : RegionName) (blockSize : Nat) :
-    (floatSoftmaxRecipKernel xReg yReg blockSize).eraseFloat =
+    (floatSoftmaxRecipKernel xReg yReg blockSize).eraseDType =
       softmaxRecipKernel xReg yReg blockSize := by
-  simp [floatSoftmaxRecipKernel, softmaxRecipKernel, Kernel.eraseFloat,
-    Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat, eraseFloatDType,
-    NumericDType.eraseFloat]
+  simp [floatSoftmaxRecipKernel, softmaxRecipKernel, Kernel.eraseDType,
+    Stmt.eraseDTypeList, Stmt.eraseDType, Op.eraseDType, eraseDType,
+    NumericDType.eraseDType]
   all_goals
-    rw [Op.eraseFloat.eq_def]
-    simp [MemAccess.eraseFloat.eq_def, MaskOpt.eraseFloat.eq_def, Op.eraseFloat.eq_def,
-      eraseFloatDType]
+    rw [Op.eraseDType.eq_def]
+    simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def, Op.eraseDType.eq_def,
+      eraseDType]
 
 /-- Float-facing rewrite refinement: the fp32 per-element-divide softmax and
 the fp32 reciprocal-form softmax are algorithmically equivalent after erasure.
@@ -169,10 +169,10 @@ theorem float_softmax_reciprocal_algorithm_refine_view
       (fun idx : TileIndex [N] => xs idx.1)) :
     ∀ idx : TileIndex [N],
       TensorView.observe
-          (exec (floatStableSoftmaxKernel xReg yReg N).eraseFloat s)
+          (exec (floatStableSoftmaxKernel xReg yReg N).eraseDType s)
           (programTileView s yReg N) idx =
       TensorView.observe
-          (exec (floatSoftmaxRecipKernel xReg yReg N).eraseFloat s)
+          (exec (floatSoftmaxRecipKernel xReg yReg N).eraseDType s)
           (programTileView s yReg N) idx := by
   simpa [float_stable_softmax_erases_to_real xReg yReg N,
     float_softmax_recip_erases_to_real xReg yReg N]

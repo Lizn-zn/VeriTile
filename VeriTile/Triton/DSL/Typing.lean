@@ -129,8 +129,12 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.float32) => pure .fp32
   | `(tritonDType| tl.float16) => pure .fp16
   | `(tritonDType| tl.bfloat16) => pure .bf16
+  | `(tritonDType| tl.int8) => pure .int
+  | `(tritonDType| tl.int16) => pure .int
   | `(tritonDType| tl.int32) => pure .int
   | `(tritonDType| tl.int64) => pure .int
+  | `(tritonDType| tl.uint8) => pure .nat
+  | `(tritonDType| tl.uint16) => pure .nat
   | `(tritonDType| tl.uint32) => pure .nat
   | `(tritonDType| tl.uint64) => pure .nat
   | _ => Macro.throwUnsupported

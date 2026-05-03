@@ -261,10 +261,26 @@ def uint32LoadStoreSmoke (idxReg outReg : RegionName) : Kernel := triton {
   tl.store($(outReg), idx)
 }
 
+/-- Narrow unsigned integer spellings also map to VeriTile's `.nat` channel. -/
+def uint8Uint16LoadStoreSmoke (idx8Reg idx16Reg out8Reg out16Reg : RegionName) : Kernel := triton {
+  idx8  := tl.load($(idx8Reg), dtype=tl.uint8)
+  idx16 := tl.load($(idx16Reg), dtype=tl.uint16)
+  tl.store($(out8Reg), idx8)
+  tl.store($(out16Reg), idx16)
+}
+
 /-- Signed integer HBM dtypes map to VeriTile's mathematical `.int` channel. -/
 def int64LoadStoreSmoke (idxReg outReg : RegionName) : Kernel := triton {
   idx := tl.load($(idxReg), dtype=tl.int64)
   tl.store($(outReg), idx)
+}
+
+/-- Narrow signed integer spellings also map to VeriTile's `.int` channel. -/
+def int8Int16LoadStoreSmoke (idx8Reg idx16Reg out8Reg out16Reg : RegionName) : Kernel := triton {
+  idx8  := tl.load($(idx8Reg), dtype=tl.int8)
+  idx16 := tl.load($(idx16Reg), dtype=tl.int16)
+  tl.store($(out8Reg), idx8)
+  tl.store($(out16Reg), idx16)
 }
 
 /-- Masked integer HBM load with a Nat `other=` value. -/
@@ -595,7 +611,7 @@ example :
     (({ mem := fun _ _ => MemCell.of .fp32 (some (5 : ℝ))
       , regs := fun _ _ _ => none
       , pids := fun _ => 0
-      , undef := fun _ _ => 0 } : BlockState).eraseFloat).readMem "X" 0 = 5 := by
+      , undef := fun _ _ => 0 } : BlockState).eraseDType).readMem "X" 0 = 5 := by
   rfl
 
 /-- `tl.load(p, mask=m)` with no `other=` uses `s.undef` for masked-off lanes. -/

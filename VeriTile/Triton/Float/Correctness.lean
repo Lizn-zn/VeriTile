@@ -36,11 +36,11 @@ Algorithmic correctness for kernels that carry explicit `.fp32` / `.fp16` /
 `.bf16` annotations in the current real-valued semantics.
 
 The theorem is stated on the dtype-annotated kernel `k`, but the proof runs the
-erased Real kernel `k.eraseFloat`. This is the formal Lean proof layer for
+erased Real kernel `k.eraseDType`. This is the formal Lean proof layer for
 float-facing kernels: state float, prove Real.
 -/
 def AlgorithmCorrect (k : Kernel) (post : BlockState → BlockState → Prop) : Prop :=
-  Correct k.eraseFloat post
+  Correct k.eraseDType post
 
 /--
 Algorithmic refinement for dtype-annotated kernels.
@@ -51,7 +51,7 @@ relation. This is the kernel-pair analogue of `AlgorithmCorrect`.
 def AlgorithmRefine
     (lhs rhs : Kernel)
     (rel : BlockState → BlockState → BlockState → Prop) : Prop :=
-  Refine lhs.eraseFloat rhs.eraseFloat rel
+  Refine lhs.eraseDType rhs.eraseDType rel
 
 /--
 Computational correctness for observed floating outputs, expressed as an
@@ -90,7 +90,7 @@ def ComputeRefineAt?
 showing that floating-dtype erasure produces the real kernel. -/
 theorem algorithmCorrect_of_erase_eq {k realK : Kernel}
     {post : BlockState → BlockState → Prop}
-    (herase : k.eraseFloat = realK)
+    (herase : k.eraseDType = realK)
     (hreal : Correct realK post) :
     AlgorithmCorrect k post := by
   intro s s' h
@@ -100,8 +100,8 @@ theorem algorithmCorrect_of_erase_eq {k realK : Kernel}
 theorem by showing that floating-dtype erasure produces the real kernels. -/
 theorem algorithmRefine_of_erase_eq {lhs rhs realL realR : Kernel}
     {rel : BlockState → BlockState → BlockState → Prop}
-    (hlhs : lhs.eraseFloat = realL)
-    (hrhs : rhs.eraseFloat = realR)
+    (hlhs : lhs.eraseDType = realL)
+    (hrhs : rhs.eraseDType = realR)
     (hrefine : Refine realL realR rel) :
     AlgorithmRefine lhs rhs rel := by
   intro s lhs' rhs' hl hr

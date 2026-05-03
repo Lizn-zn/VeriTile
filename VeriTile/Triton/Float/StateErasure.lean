@@ -11,8 +11,8 @@ namespace VeriTile.Triton
 
 /-! ## State-level floating erasure -/
 
-def eraseFloatCarrier : (dtype : TileDType) →
-    TileCarrier dtype → TileCarrier (eraseFloatDType dtype)
+def eraseDTypeCarrier : (dtype : TileDType) →
+    TileCarrier dtype → TileCarrier (eraseDType dtype)
   | .real, value => value
   | .fp32, value => FloatDType.fp32.toWithBot value
   | .fp16, value => FloatDType.fp16.toWithBot value
@@ -23,31 +23,31 @@ def eraseFloatCarrier : (dtype : TileDType) →
   | .ptr, value => value
   | .blockPtr, value => value
 
-def Tile.eraseFloat {dtype : TileDType} {shape : TileShape}
-    (tile : Tile dtype shape) : Tile (eraseFloatDType dtype) shape :=
-  ⟨fun idx => eraseFloatCarrier dtype (tile.data idx)⟩
+def Tile.eraseDType {dtype : TileDType} {shape : TileShape}
+    (tile : Tile dtype shape) : Tile (eraseDType dtype) shape :=
+  ⟨fun idx => eraseDTypeCarrier dtype (tile.data idx)⟩
 
 namespace BlockState
 
-private def eraseFloatRealReg (regs : RegFile) (shape : TileShape)
+private def eraseDTypeRealReg (regs : RegFile) (shape : TileShape)
     (name : RegName) : Option (Tile .real shape) :=
   match regs .real shape name with
   | some value => some value
   | none =>
       match regs .fp32 shape name with
-      | some value => some value.eraseFloat
+      | some value => some value.eraseDType
       | none =>
           match regs .fp16 shape name with
-          | some value => some value.eraseFloat
+          | some value => some value.eraseDType
           | none =>
               match regs .bf16 shape name with
-              | some value => some value.eraseFloat
+              | some value => some value.eraseDType
               | none => none
 
-def eraseFloatRegs (regs : RegFile) : RegFile :=
+def eraseDTypeRegs (regs : RegFile) : RegFile :=
   fun dtype shape name =>
     match dtype with
-    | .real => eraseFloatRealReg regs shape name
+    | .real => eraseDTypeRealReg regs shape name
     | .fp32 => none
     | .fp16 => none
     | .bf16 => none
@@ -59,20 +59,20 @@ def eraseFloatRegs (regs : RegFile) : RegFile :=
 
 /-- Erase floating dtype tags in memory and registers, preserving launch ids and
 the masked-load undef oracle. -/
-def eraseFloat (s : BlockState) : BlockState :=
-  { mem := fun region offset => (s.mem region offset).eraseFloat
-  , regs := eraseFloatRegs s.regs
+def eraseDType (s : BlockState) : BlockState :=
+  { mem := fun region offset => (s.mem region offset).eraseDType
+  , regs := eraseDTypeRegs s.regs
   , pids := s.pids
   , undef := s.undef }
 
-@[simp] theorem eraseFloat_pids (s : BlockState) :
-    s.eraseFloat.pids = s.pids := rfl
+@[simp] theorem eraseDType_pids (s : BlockState) :
+    s.eraseDType.pids = s.pids := rfl
 
-@[simp] theorem eraseFloat_pid (s : BlockState) :
-    s.eraseFloat.pid = s.pid := rfl
+@[simp] theorem eraseDType_pid (s : BlockState) :
+    s.eraseDType.pid = s.pid := rfl
 
-@[simp] theorem eraseFloat_undef (s : BlockState) :
-    s.eraseFloat.undef = s.undef := rfl
+@[simp] theorem eraseDType_undef (s : BlockState) :
+    s.eraseDType.undef = s.undef := rfl
 
 end BlockState
 

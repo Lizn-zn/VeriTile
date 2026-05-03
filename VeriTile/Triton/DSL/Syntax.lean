@@ -60,8 +60,12 @@ syntax "tl.float64" : tritonDType
 syntax "tl.float32" : tritonDType
 syntax "tl.float16" : tritonDType
 syntax "tl.bfloat16" : tritonDType
+syntax "tl.int8" : tritonDType
+syntax "tl.int16" : tritonDType
 syntax "tl.int32" : tritonDType
 syntax "tl.int64" : tritonDType
+syntax "tl.uint8" : tritonDType
+syntax "tl.uint16" : tritonDType
 syntax "tl.uint32" : tritonDType
 syntax "tl.uint64" : tritonDType
 
