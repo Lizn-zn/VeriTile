@@ -218,6 +218,22 @@ pointer-valued loads/stores, statically visible `$(region)` pointer bases are
 checked against `Γ`; pointer registers are treated as dynamic/external values
 in this layer.
 
+The optional executable checker adds diagnostics and pointer provenance
+tracking without replacing the proof-side contract:
+
+```lean
+RegionEnv := RegionName → Option TileDType
+Kernel.check Γ k
+Kernel.checkStrict Γ k
+```
+
+`Kernel.check` runs in lax mode and skips undeclared regions; `checkStrict`
+reports undeclared regions. The checker tracks register dtype/shape
+consistency, pointer and block-pointer provenance through assignments, direct
+and pointer-derived load/store dtype mismatches, and basic block-pointer
+metadata sanity. It deliberately does not prove bounds, aliasing, launch
+coverage, page ownership, or IEEE/hardware dtype fidelity.
+
 Pointer values can be used inline, assigned, and reused:
 
 ```lean
@@ -348,12 +364,12 @@ faithfully in the current Lean DSL?
 | Atomics / async / shared memory / barriers | Gap | Concurrency semantics (#12) | Blocks production-style backward kernels, reductions using shared memory phases, async/TMA pipelines, and race/scheduling reasoning. |
 | Whole-grid launch semantics | Gap | Execution model (#5) | Theorems currently quantify over one symbolic program instance through `BlockState.pids`; full launch coverage is manual. |
 | Python/Triton source ingestion | Gap | Front-end/lifter (#10) | Users must write Lean `triton { ... }`; decorators, Python-side constexpr execution, and general Python control flow are not parsed. |
-| Type checking / pointer provenance | Gap | Static analysis (#46) | DSL rejects many type mismatches syntactically, but there is no full checker for pointer provenance, block-pointer rank/stride consistency, or bounds assumptions. |
+| Type checking / pointer provenance | Limited | Optional checker (#46) | `Kernel.check` / `checkStrict` track register dtype/shape, pointer and block-pointer provenance, dtype mismatches, and basic block-pointer metadata; no bounds, alias, launch, or page-ownership proof. |
 
 Recommended near-term priority for expressiveness is to remove core semantic
-gaps before building a full Python lifter: pointer provenance/type checking
-(#46), RNG/dropout (#41), and atomics/async/concurrency (#12). A lifter is
-only useful for kernels whose operations are already representable.
+gaps before building a full Python lifter: RNG/dropout (#41),
+atomics/async/concurrency (#12), and bounds/memory-safety assumptions (#48).
+A lifter is only useful for kernels whose operations are already representable.
 
 ## Unsupported or Not Yet Faithfully Modeled
 

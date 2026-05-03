@@ -7,3 +7,4 @@ re-exports the region contract definitions and AST predicates.
 
 import VeriTile.Triton.MemoryTyping.Region
 import VeriTile.Triton.MemoryTyping.Contracts
+import VeriTile.Triton.MemoryTyping.Checker

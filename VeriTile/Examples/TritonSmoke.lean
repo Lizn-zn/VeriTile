@@ -358,6 +358,143 @@ theorem indirect_load_correct_view
     congr
     exact Fin.ext h
 
+/-! ### Optional well-formedness checker (issue #46) -/
+
+def checkerEnv (entries : List (RegionName × TileDType)) : RegionEnv :=
+  fun region => (entries.find? (fun entry => entry.1 == region)).map (·.2)
+
+def registerConflictKernel : Kernel :=
+  { inputs := [], outputs := []
+  , body :=
+      [ Stmt.assign .nat [] "x" (Op.constNat 0)
+      , Stmt.assign .real [] "x" (Op.const 0) ] }
+
+def pointerWhereConflictKernel : Kernel :=
+  { inputs := [], outputs := []
+  , body :=
+      [ Stmt.assign .ptr [] "p"
+          (Op.where (Op.constBool Bool.true) (Op.ptrBase "x") (Op.ptrBase "y")) ] }
+
+def checkerValidPointerStoreKernel (xReg outReg : RegionName) : Kernel :=
+  { inputs := [xReg], outputs := [outReg]
+  , body :=
+      [ Stmt.assign .nat [4] "offs" (Op.arange 4)
+      , Stmt.assign .real [4] "x"
+          (Op.load .real (MemAccess.region xReg (Op.ref .nat [4] "offs")) MaskOpt.none)
+      , Stmt.assign .ptr [4] "outPtrs"
+          (Op.ptrAdd Broadcast.scalarL (Op.ptrBase outReg) (Op.ref .nat [4] "offs"))
+      , Stmt.store .real [4]
+          (MemAccess.ptr (Op.ref .ptr [4] "outPtrs"))
+          (Op.ref .real [4] "x")
+          MaskOpt.none ] }
+
+def unboundPointerRefKernel : Kernel :=
+  { inputs := ["x"], outputs := []
+  , body :=
+      [ Stmt.assign .real [] "x"
+          (Op.load .real (MemAccess.ptr (Op.ref .ptr [] "p")) MaskOpt.none) ] }
+
+def nonPointerRefAsPointerKernel : Kernel :=
+  { inputs := ["x"], outputs := []
+  , body :=
+      [ Stmt.assign .real [] "p" (Op.const 0)
+      , Stmt.assign .real [] "x"
+          (Op.load .real (MemAccess.ptr (Op.ref .ptr [] "p")) MaskOpt.none) ] }
+
+def blockPointerRefKernel (xReg : RegionName) : Kernel :=
+  { inputs := [xReg], outputs := []
+  , body :=
+      [ Stmt.assign .blockPtr [1] "bp"
+          (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
+      , Stmt.assign .blockPtr [1] "bp2"
+          (Op.advanceBlockPtr (Op.ref .blockPtr [1] "bp") [1])
+      , Stmt.store .real [1]
+          (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp2") [0])
+          (Op.full [1] (Op.const 1))
+          MaskOpt.none ] }
+
+def blockPointerMetadataMismatchKernel (xReg : RegionName) : Kernel :=
+  { inputs := [xReg], outputs := []
+  , body :=
+      [ Stmt.assign .blockPtr [1] "bp"
+          (Op.makeBlockPtr xReg 0 [8] [1] [] [0]) ] }
+
+def blockPointerBoundaryMismatchKernel (xReg : RegionName) : Kernel :=
+  { inputs := [xReg], outputs := []
+  , body :=
+      [ Stmt.assign .blockPtr [1] "bp"
+          (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
+      , Stmt.store .real [1]
+          (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp") [1])
+          (Op.full [1] (Op.const 1))
+          MaskOpt.none ] }
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real), ("out", .real)])
+      (checkerValidPointerStoreKernel "x" "out") = .ok () := by
+  native_decide
+
+example :
+    Kernel.check (checkerEnv []) (scalarCopyKernel "x" "y") = .ok () := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv []) (scalarCopyKernel "x" "y") =
+      .error (.undeclaredRegion "x") := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("idx", .real), ("out", .nat)])
+      (natLoadStoreKernel "idx" "out") =
+      .error (.regionDTypeMismatch "idx" .nat .real) := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("idx", .real), ("out", .nat)])
+      (uint64PointerRegisterLoadSmoke "idx" "out") =
+      .error (.regionDTypeMismatch "idx" .nat .real) := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv []) registerConflictKernel =
+      .error (.registerDTypeShapeMismatch "x" .nat .real [] []) := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real), ("y", .real)])
+      pointerWhereConflictKernel =
+      .error (.pointerProvenanceConflict "x" "y") := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real)])
+      unboundPointerRefKernel =
+      .error (.unboundRegister "p") := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real)])
+      nonPointerRefAsPointerKernel =
+      .error (.registerDTypeShapeMismatch "p" .real .ptr [] []) := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real)])
+      (blockPointerRefKernel "x") = .ok () := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real)])
+      (blockPointerMetadataMismatchKernel "x") =
+      .error (.blockPointerMetadataMismatch 1 0 1 1) := by
+  native_decide
+
+example :
+    Kernel.checkStrict (checkerEnv [("x", .real)])
+      (blockPointerBoundaryMismatchKernel "x") =
+      .error (.boundaryAxisOutOfRange 1 1) := by
+  native_decide
+
 example : (MemCell.of .nat 7).readAs .nat = some 7 := by
   rfl
 

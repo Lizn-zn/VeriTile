@@ -204,6 +204,21 @@ Kernel.RespectsRegionTyping Γ k
 `$(region)` pointer base 会按 `Γ` 检查;pointer register 在这一层先视为
 dynamic/external value。
 
+可选 executable checker 在不替代 proof-side contract 的前提下,补诊断和 pointer
+provenance tracking:
+
+```lean
+RegionEnv := RegionName → Option TileDType
+Kernel.check Γ k
+Kernel.checkStrict Γ k
+```
+
+`Kernel.check` 是 lax mode,未声明 region 会跳过;`checkStrict` 会把未声明 region
+报错。checker 跟踪 register dtype/shape 一致性、pointer / block-pointer
+provenance、直接和 pointer-derived load/store dtype mismatch,以及基本 block-pointer
+metadata sanity。它刻意不证明 bounds、alias、launch coverage、page ownership 或
+IEEE/hardware dtype fidelity。
+
 pointer value 可以 inline 使用、赋值和复用:
 
 ```lean
@@ -321,10 +336,10 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | atomics / async / shared memory / barriers | Gap | concurrency semantics (#12) | 阻塞 production-style backward kernel、shared-memory phase reduction、async/TMA pipeline、race/scheduling reasoning。 |
 | whole-grid launch semantics | Gap | execution model (#5) | 当前 theorem 通过 `BlockState.pids` 描述一个 symbolic program instance;整个 launch 的覆盖性需要手动量化。 |
 | Python/Triton source ingestion | Gap | front-end/lifter (#10) | 用户必须写 Lean `triton { ... }`;decorator、Python-side constexpr execution、一般 Python control flow 还不能解析。 |
-| type checking / pointer provenance | Gap | static analysis (#46) | DSL 会拒绝很多语法层 type mismatch,但没有完整 checker 来验证 pointer provenance、block-pointer rank/stride 一致性或 bounds assumption。 |
+| type checking / pointer provenance | Limited | optional checker (#46) | `Kernel.check` / `checkStrict` 跟踪 register dtype/shape、pointer 和 block-pointer provenance、dtype mismatch、基本 block-pointer metadata;不证明 bounds、alias、launch 或 page ownership。 |
 
-近期表达力优先级应先消除 core semantic gap,再做完整 Python lifter:pointer
-provenance/type checking (#46)、RNG/dropout (#41)、atomics/async/concurrency (#12)。
+近期表达力优先级应先消除 core semantic gap,再做完整 Python lifter:RNG/dropout
+(#41)、atomics/async/concurrency (#12)、bounds/memory-safety assumption (#48)。
 如果 kernel 的操作本身还不可表达,lifter 提早做收益不大。
 
 ## 尚不支持或尚未真实建模
