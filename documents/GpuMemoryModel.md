@@ -66,10 +66,12 @@ Within one symbolic program instance, memory is sequentially consistent:
 - masked stores leave masked-off lanes unchanged;
 - masked loads with `other=None` use `BlockState.undef` for masked-off lanes.
 
-This is the right abstraction for current single-program proofs. Whole-grid
-execution is not modeled: theorem statements quantify over symbolic program
-IDs through `BlockState.pids`, and grid coverage is proved manually when
-needed.
+This is the right abstraction for current per-program proofs. Whole-grid
+execution is only modeled as a theorem surface: `GridIndex` instantiates
+`BlockState.pids`, and `Kernel.ForAllPrograms` / `ForAllProgramsSome` quantify
+over every program instance in an ND grid. VeriTile does not yet model a
+sequential or concurrent launch executor, global memory merge, overlapping
+writes, races, atomics, or scheduling.
 
 ## Not Modeled
 

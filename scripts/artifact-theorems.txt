@@ -12,6 +12,7 @@ VeriTile/Examples/FloatDType.lean:float_softmax_reciprocal_algorithm_refine_view
 VeriTile/Examples/TritonSmoke.lean:argmax2_index_store_correct
 VeriTile/Examples/TritonSmoke.lean:nat_load_store_correct
 VeriTile/Examples/TritonSmoke.lean:indirect_load_correct_view
+VeriTile/Examples/TritonSmoke.lean:launch_noop_for_all_programs_some
 VeriTile/Examples/OnlineSoftmax.lean:online_softmax_correct_view
 VeriTile/Examples/RowWise.lean:rowWiseSum_correct_view
 VeriTile/Examples/RowWise.lean:rowWiseMax_correct_view

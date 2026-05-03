@@ -9,6 +9,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.Memory
 import VeriTile.Triton.MemoryTyping
+import VeriTile.Triton.Launch
 import VeriTile.Triton.DSL
 
 namespace VeriTile.Examples.TritonSmoke
@@ -357,6 +358,31 @@ theorem indirect_load_correct_view
     rcases bu
     congr
     exact Fin.ext h
+
+/-! ### ND grid launch theorem surface (issue #5) -/
+
+def launchNoopKernel : Kernel :=
+  { inputs := [], outputs := [], body := [] }
+
+theorem launch_noop_for_all_programs_some
+    (g : Grid) (s : BlockState) :
+    Kernel.ForAllProgramsSome launchNoopKernel g s
+      (fun idx s' => s'.pids = idx.toPids) := by
+  intro idx
+  refine ⟨s.withGridIndex idx, ?_, rfl⟩
+  simp [launchNoopKernel, exec]
+
+example (g : Grid) (s : BlockState) (idx : GridIndex g)
+    (ax : Fin g.rank) :
+    evalOp (Op.programId ax.val) (s.withGridIndex idx) =
+      some (Tile.scalar (idx ax).val) :=
+  program_id_under_grid_index s idx ax
+
+example (g : Grid) (s : BlockState) (idx : GridIndex g)
+    (ax : Nat) (h : g.rank ≤ ax) :
+    evalOp (Op.programId ax) (s.withGridIndex idx) =
+      some (Tile.scalar 0) :=
+  program_id_out_of_grid_rank s idx h
 
 /-! ### Optional well-formedness checker (issue #46) -/
 

@@ -321,7 +321,7 @@ current semantic contract.
 | Area | Status | Coverage |
 | --- | --- | --- |
 | Scalar/tile constants | Supported | Real literals, `$(n)`, `$ℝ(x)`, `-inf`, register refs |
-| Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; no whole-grid execution semantics |
+| Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; ND grid quantification is available through `GridIndex` / `Kernel.ForAllPrograms`, but no launch executor is modeled |
 | Loops | Supported | Bounded `tl.for`; `tl.static_range` alias backed by the same loop AST |
 | Conditionals | Limited | `tl.if cond { ... }` only; no `else`, `break`, or `continue` |
 | Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel numeric operands; `//`, `%` on integer channels; `tl.cdiv` on `.nat`; `ptr + nat` for pointer offsets |
@@ -362,7 +362,7 @@ faithfully in the current Lean DSL?
 | Indirect / gather addressing | Limited | Surface + view semantics (#42) | Typed index tensor loads can drive pointer arithmetic and ordinary masked loads; alias analysis, bounds proof, page ownership, and paged FA-1 equivalence are not modeled yet. |
 | RNG / dropout | Gap | State/probabilistic semantics (#41) | Blocks faithful dropout and stochastic kernels. |
 | Atomics / async / shared memory / barriers | Gap | Concurrency semantics (#12) | Blocks production-style backward kernels, reductions using shared memory phases, async/TMA pipelines, and race/scheduling reasoning. |
-| Whole-grid launch semantics | Gap | Execution model (#5) | Theorems currently quantify over one symbolic program instance through `BlockState.pids`; full launch coverage is manual. |
+| Whole-grid launch semantics | Limited | ND grid theorem surface (#5) | `GridIndex`, `BlockState.withGridIndex`, `Kernel.ForAllPrograms`, and `ForAllProgramsSome` quantify per-program correctness over arbitrary-rank grids; no launch executor, memory merge, races, atomics, or scheduling. |
 | Python/Triton source ingestion | Gap | Front-end/lifter (#10) | Users must write Lean `triton { ... }`; decorators, Python-side constexpr execution, and general Python control flow are not parsed. |
 | Type checking / pointer provenance | Limited | Optional checker (#46) | `Kernel.check` / `checkStrict` track register dtype/shape, pointer and block-pointer provenance, dtype mismatches, and basic block-pointer metadata; no bounds, alias, launch, or page-ownership proof. |
 
@@ -383,9 +383,10 @@ A lifter is only useful for kernels whose operations are already representable.
 - Atomic operations.
 - Async copy / TMA / shared-memory staging.
 - Barriers and inter-program or inter-warp synchronization.
-- Grid launch semantics. A theorem describes one symbolic program instance
-  with `BlockState.pids`; whole-grid coverage is expressed manually by
-  quantifying over valid program IDs.
+- Full grid launch execution. `GridIndex` / `Kernel.ForAllPrograms` provide a
+  theorem surface for quantifying over every program instance in an ND grid,
+  but VeriTile still does not model a sequential or concurrent launch executor,
+  global memory merge, overlapping writes, races, atomics, or scheduling.
 - Caches and performance hints such as `cache_modifier`, `eviction_policy`,
   `volatile`, or `is_volatile`.
 - Arbitrary axis permutation. `tl.trans` only swaps trailing two axes.

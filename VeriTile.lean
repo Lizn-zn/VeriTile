@@ -11,6 +11,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.MemoryTyping
 import VeriTile.Triton.Memory
+import VeriTile.Triton.Launch
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.TritonSmoke
 import VeriTile.Examples.LoopInvariant

@@ -10,6 +10,7 @@ VeriTile/Examples/FloatDType.lean	float_softmax_reciprocal_algorithm_refine_view
 VeriTile/Examples/TritonSmoke.lean	argmax2_index_store_correct	Typed Nat memory store
 VeriTile/Examples/TritonSmoke.lean	nat_load_store_correct	Typed Nat memory load/store
 VeriTile/Examples/TritonSmoke.lean	indirect_load_correct_view	Indirect indexed load correctness
+VeriTile/Examples/TritonSmoke.lean	launch_noop_for_all_programs_some	ND grid launch surface
 VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct_view	Online softmax correctness
 VeriTile/Examples/RowWise.lean	rowWiseSum_correct_view	Row-wise reductions
 VeriTile/Examples/FusedSiLU.lean	silu_kernels_refinement_view	Fused SiLU refinement

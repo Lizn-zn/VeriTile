@@ -294,7 +294,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | Area | Status | Coverage |
 | --- | --- | --- |
 | scalar/tile 常量 | Supported | 实数字面量、`$(n)`、`$ℝ(x)`、`-inf`、register ref |
-| program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;没有 whole-grid execution semantics |
+| program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;可通过 `GridIndex` / `Kernel.ForAllPrograms` 做 ND grid 量化,但没有 launch executor |
 | loop | Supported | bounded `tl.for`;`tl.static_range` alias 降到同一个 loop AST |
 | conditional | Limited | 只有 `tl.if cond { ... }`;没有 `else`、`break`、`continue` |
 | arithmetic | Supported | 同 channel numeric 上的 `+`, `-`, `*`, `/`;integer `//` / `%`;`.nat` `tl.cdiv`;pointer offset 支持 `ptr + nat` |
@@ -334,7 +334,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | indirect / gather addressing | Limited | surface + view semantics (#42) | typed index tensor load 可以驱动 pointer arithmetic 和普通 masked load;alias analysis、bounds proof、page ownership、paged FA-1 等价还没建模。 |
 | RNG / dropout | Gap | state/probabilistic semantics (#41) | 阻塞 faithful dropout 和随机 kernel。 |
 | atomics / async / shared memory / barriers | Gap | concurrency semantics (#12) | 阻塞 production-style backward kernel、shared-memory phase reduction、async/TMA pipeline、race/scheduling reasoning。 |
-| whole-grid launch semantics | Gap | execution model (#5) | 当前 theorem 通过 `BlockState.pids` 描述一个 symbolic program instance;整个 launch 的覆盖性需要手动量化。 |
+| whole-grid launch semantics | Limited | ND grid theorem surface (#5) | `GridIndex`、`BlockState.withGridIndex`、`Kernel.ForAllPrograms`、`ForAllProgramsSome` 支持 arbitrary-rank grid 上的 per-program correctness 量化;没有 launch executor、memory merge、race、atomic 或 scheduling。 |
 | Python/Triton source ingestion | Gap | front-end/lifter (#10) | 用户必须写 Lean `triton { ... }`;decorator、Python-side constexpr execution、一般 Python control flow 还不能解析。 |
 | type checking / pointer provenance | Limited | optional checker (#46) | `Kernel.check` / `checkStrict` 跟踪 register dtype/shape、pointer 和 block-pointer provenance、dtype mismatch、基本 block-pointer metadata;不证明 bounds、alias、launch 或 page ownership。 |
 
@@ -353,8 +353,10 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 - atomic operations。
 - async copy / TMA / shared-memory staging。
 - barrier、跨 program 或跨 warp synchronization。
-- grid launch semantics。当前 theorem 描述一个带 `BlockState.pids` 的符号 program
-  instance;整个 grid 的覆盖性需要手动对合法 program id 量化。
+- 完整 grid launch execution。`GridIndex` / `Kernel.ForAllPrograms` 提供
+  ND grid 上每个 program instance 的 theorem surface,但 VeriTile 仍不建模
+  sequential/concurrent launch executor、global memory merge、overlapping
+  writes、race、atomic 或 scheduling。
 - cache/performance hint,例如 `cache_modifier`, `eviction_policy`, `volatile`,
   `is_volatile`。
 - 任意 axis permutation。`tl.trans` 只交换最后两个 axis。
