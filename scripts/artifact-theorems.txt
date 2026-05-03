@@ -8,6 +8,7 @@ VeriTile/Examples/SoftmaxReciprocal.lean:softmax_reciprocal_refinement_view
 VeriTile/Examples/VectorAdd.lean:add_kernel_correct_view
 VeriTile/Examples/VectorAdd.lean:add_kernel_masked_correct_view
 VeriTile/Examples/FloatDType.lean:float_add_kernel_correct_view
+VeriTile/Examples/FloatDType.lean:float_softmax_reciprocal_algorithm_refine_view
 VeriTile/Examples/OnlineSoftmax.lean:online_softmax_correct_view
 VeriTile/Examples/RowWise.lean:rowWiseSum_correct_view
 VeriTile/Examples/RowWise.lean:rowWiseMax_correct_view

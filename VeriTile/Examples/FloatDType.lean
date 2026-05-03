@@ -12,6 +12,7 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.MemoryTyping
 import VeriTile.Triton.DSL
 import VeriTile.Examples.VectorAdd
+import VeriTile.Examples.SoftmaxReciprocal
 
 namespace VeriTile.Examples
 
@@ -53,21 +54,6 @@ theorem float_add_correct_bridge
   Kernel.algorithmCorrect_of_erase_eq
     (float_add_erases_to_real xReg yReg outReg blockSize) hreal
 
-/-- The fp32-annotated kernel algorithmically refines the existing Real kernel:
-after erasure, both executions produce the same final state. -/
-theorem float_add_refines_real_add
-    (xReg yReg outReg : RegionName) (blockSize : Nat) :
-    Kernel.AlgorithmRefine
-      (floatAddKernel xReg yReg outReg blockSize)
-      (addKernel xReg yReg outReg blockSize)
-      (fun _ floatFinal realFinal => floatFinal = realFinal) := by
-  refine Kernel.algorithmRefine_of_erase_eq
-    (float_add_erases_to_real xReg yReg outReg blockSize) ?_ ?_
-  · simp [addKernel, Kernel.eraseFloat, Stmt.eraseFloatList, Stmt.eraseFloat,
-      Op.eraseFloat, eraseFloatDType, NumericDType.eraseFloat]
-  · intro s lhs' rhs' hl hr
-    exact (Option.some.inj (hl.trans hr.symm))
-
 /-! ## Reused correctness theorem -/
 
 /-- Float-facing VectorAdd correctness view.
@@ -101,5 +87,84 @@ theorem float_add_respects_fp32_regions
       (fun _ => TileDType.fp32) := by
   simp [floatAddKernel, Kernel.RespectsRegionTyping, StmtList.RespectsRegionTyping,
     Stmt.RespectsRegionTyping, Op.RespectsRegionTyping, FloatDType.dtype]
+
+/-! ## Float-facing rewrite refinement -/
+
+/-- Stable softmax with explicit fp32 input/output annotations and per-element
+division `y = e / s`. The reductions still run in the Real abstraction after
+the input load is cast to `tl.float64`. -/
+def floatStableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  x32  := tl.load($(xReg) + offs, dtype=tl.float32)
+  x    := (x32).to(tl.float64)
+  m    := tl.max(x, axis=0)
+  e    := tl.exp(x - m)
+  s    := tl.sum(e, axis=0)
+  y    := e / s
+  y32  := (y).to(tl.float32)
+  tl.store($(yReg) + offs, y32)
+}
+
+/-- Optimized stable softmax: precompute `1 / s` and use multiplication,
+saving per-lane divisions versus `floatStableSoftmaxKernel`. -/
+def floatSoftmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
+  pid    := tl.program_id(0)
+  offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
+  x32    := tl.load($(xReg) + offs, dtype=tl.float32)
+  x      := (x32).to(tl.float64)
+  m      := tl.max(x, axis=0)
+  e      := tl.exp(x - m)
+  s      := tl.sum(e, axis=0)
+  inv_s  := 1 / s
+  y      := e * inv_s
+  y32    := (y).to(tl.float32)
+  tl.store($(yReg) + offs, y32)
+}
+
+/-- The fp32 per-element-divide softmax erases to the existing Real kernel. -/
+theorem float_stable_softmax_erases_to_real
+    (xReg yReg : RegionName) (blockSize : Nat) :
+    (floatStableSoftmaxKernel xReg yReg blockSize).eraseFloat =
+      stableSoftmaxKernel xReg yReg blockSize := by
+  simp [floatStableSoftmaxKernel, stableSoftmaxKernel, Kernel.eraseFloat,
+    Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat,
+    eraseFloatDType, NumericDType.eraseFloat]
+
+/-- The fp32 reciprocal-form softmax erases to the existing Real optimized
+kernel. -/
+theorem float_softmax_recip_erases_to_real
+    (xReg yReg : RegionName) (blockSize : Nat) :
+    (floatSoftmaxRecipKernel xReg yReg blockSize).eraseFloat =
+      softmaxRecipKernel xReg yReg blockSize := by
+  simp [floatSoftmaxRecipKernel, softmaxRecipKernel, Kernel.eraseFloat,
+    Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat,
+    eraseFloatDType, NumericDType.eraseFloat]
+
+/-- Float-facing rewrite refinement: the fp32 per-element-divide softmax and
+the fp32 reciprocal-form softmax are algorithmically equivalent after erasure.
+
+This is the float theorem policy applied to a real optimization: state the
+dtype-annotated rewrite, prove it through the existing Real refinement. -/
+theorem float_softmax_reciprocal_algorithm_refine_view
+    (xReg yReg : RegionName)
+    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    Kernel.AlgorithmRefine
+      (floatStableSoftmaxKernel xReg yReg N)
+      (floatSoftmaxRecipKernel xReg yReg N)
+      (fun init divFinal recipFinal =>
+        init = s →
+        ∀ idx : TileIndex [N],
+          TensorView.observe (some divFinal) (programTileView s yReg N) idx =
+          TensorView.observe (some recipFinal) (programTileView s yReg N) idx) := by
+  refine Kernel.algorithmRefine_of_erase_eq
+    (float_stable_softmax_erases_to_real xReg yReg N)
+    (float_softmax_recip_erases_to_real xReg yReg N) ?_
+  intro init divFinal recipFinal hDiv hRecip hInit idx
+  subst init
+  have h := softmax_reciprocal_refinement_view xReg yReg N hN s xs h_x idx
+  simpa [hDiv, hRecip] using h
 
 end VeriTile.Examples
