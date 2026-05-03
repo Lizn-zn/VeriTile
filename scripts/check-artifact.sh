@@ -125,6 +125,43 @@ check_examples_manifest() {
   fi
 }
 
+manifest_lean_files() {
+  local line file theorem
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    is_comment_or_blank "${line}" && continue
+    file="${line%%:*}"
+    printf '%s\n' "${file}"
+  done < "${THEOREM_LIST}"
+
+  while IFS=$'\t' read -r file theorem _label || [[ -n "${file:-}" ]]; do
+    is_comment_or_blank "${file:-}" && continue
+    printf '%s\n' "${file}"
+  done < "${EXAMPLE_LIST}"
+}
+
+check_manifest_files_compile() {
+  local file out
+  local before="${failures}"
+  while IFS= read -r file; do
+    if [[ ! -f "${file}" ]]; then
+      fail "manifest Lean file missing before direct compile: ${file}"
+      continue
+    fi
+    out="$(mktemp)"
+    if lake env lean "${file}" >"${out}" 2>&1; then
+      :
+    else
+      fail "manifest Lean file does not compile directly: ${file}"
+      tail -n 80 "${out}" >&2
+    fi
+    rm -f "${out}"
+  done < <(manifest_lean_files | sort -u)
+
+  if [[ "${failures}" -eq "${before}" ]]; then
+    ok "manifest Lean files compile directly"
+  fi
+}
+
 check_readme_example_links() {
   local readme link rel missing=0
   for readme in README.md README_zh.md; do
@@ -164,6 +201,7 @@ run_build_no_sorry
 check_axioms
 check_key_theorems
 check_examples_manifest
+check_manifest_files_compile
 check_readme_example_links
 check_documentation_terms
 
