@@ -137,12 +137,21 @@ def writeMem (s : BlockState) (region : RegionName) (offset : Nat) (v : ℝ) : B
 @[inline] def readMem (s : BlockState) (region : RegionName) (offset : Nat) : ℝ :=
   s.mem region offset
 
+@[simp] theorem setReg_readMem (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape)
+    (region : RegionName) (offset : Nat) :
+    (s.setReg name dtype shape v).readMem region offset = s.readMem region offset := rfl
+
+@[simp] theorem writeMem_readMem (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) :
+    (s.writeMem region offset v).readMem r o =
+      if r = region ∧ o = offset then v else s.readMem r o := rfl
+
 private theorem foldl_writeMem_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → ℝ) (o : Nat) (l : List α) :
     ∀ (s : BlockState), (∀ k ∈ l, offsetFn k ≠ o) →
-      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
-        region o)
-      = s.mem region o := by
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).readMem region o)
+      = s.readMem region o := by
   induction l with
   | nil => intros; rfl
   | cons hd tl ih =>
@@ -151,8 +160,8 @@ private theorem foldl_writeMem_preserves {α : Type} {region : RegionName}
     have htl : ∀ k ∈ tl, offsetFn k ≠ o :=
       fun k hk => h k (List.mem_cons_of_mem hd hk)
     rw [List.foldl_cons, ih _ htl]
-    show (if region = region ∧ o = offsetFn hd then valueFn hd else s.mem region o)
-        = s.mem region o
+    show (if region = region ∧ o = offsetFn hd then valueFn hd else s.readMem region o)
+        = s.readMem region o
     rw [if_neg]
     rintro ⟨_, h_eq⟩
     exact hhd h_eq.symm
@@ -162,8 +171,7 @@ theorem scatter_readback_list {α : Type} {region : RegionName}
     (i : α) (h_nodup : l.Nodup) (h_mem : i ∈ l)
     (h_inj : Function.Injective offsetFn) :
     (l.foldl
-       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
-        region (offsetFn i)
+       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).readMem region (offsetFn i)
     = valueFn i := by
   obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
   rw [hl] at h_nodup
@@ -183,8 +191,7 @@ theorem scatter_readback {region : RegionName} {n : Nat}
     (s : BlockState) (offsetFn : Fin n → Nat) (valueFn : Fin n → ℝ)
     (h_inj : Function.Injective offsetFn) (i : Fin n) :
     ((List.finRange n).foldl
-       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
-        region (offsetFn i)
+       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).readMem region (offsetFn i)
       = valueFn i := by
   exact scatter_readback_list (List.finRange n) s offsetFn valueFn
     i (List.nodup_finRange n) (List.mem_finRange i) h_inj
@@ -194,8 +201,7 @@ theorem scatter_readback_nd {region : RegionName} {shape : TileShape}
     (valueFn : TileIndex shape → ℝ)
     (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
     ((TileShape.allIndices shape).foldl
-       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
-        region (offsetFn i)
+       (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).readMem region (offsetFn i)
     = valueFn i :=
   scatter_readback_list (TileShape.allIndices shape) s offsetFn valueFn
     i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) h_inj
@@ -205,9 +211,8 @@ private theorem foldl_writeMem_masked_preserves {α : Type} {region : RegionName
     ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
       ((l.foldl
           (fun acc k =>
-            if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
-        region o)
-      = s.mem region o := by
+            if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region o)
+      = s.readMem region o := by
   induction l with
   | nil => intros; rfl
   | cons hd tl ih =>
@@ -219,8 +224,8 @@ private theorem foldl_writeMem_masked_preserves {α : Type} {region : RegionName
     · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
       simp only [hmaskhd, if_true]
       rw [ih _ htl]
-      show (if region = region ∧ o = offsetFn hd then valueFn hd else s.mem region o)
-          = s.mem region o
+      show (if region = region ∧ o = offsetFn hd then valueFn hd else s.readMem region o)
+          = s.readMem region o
       rw [if_neg]
       rintro ⟨_, h_eq⟩
       exact hhd h_eq.symm
@@ -238,9 +243,8 @@ theorem scatter_readback_masked_list {α : Type} {region : RegionName}
     (h_inj : Function.Injective offsetFn) :
     (l.foldl
        (fun acc k =>
-         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
-        region (offsetFn i)
-    = if mask i then valueFn i else s.mem region (offsetFn i) := by
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region (offsetFn i)
+    = if mask i then valueFn i else s.readMem region (offsetFn i) := by
   obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
   rw [hl] at h_nodup
   rw [List.nodup_append, List.nodup_cons] at h_nodup
@@ -275,9 +279,8 @@ theorem scatter_readback_masked {region : RegionName} {n : Nat}
     (h_inj : Function.Injective offsetFn) (i : Fin n) :
     ((List.finRange n).foldl
        (fun acc k =>
-         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
-        region (offsetFn i)
-    = if mask i then valueFn i else s.mem region (offsetFn i) :=
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region (offsetFn i)
+    = if mask i then valueFn i else s.readMem region (offsetFn i) :=
   scatter_readback_masked_list (List.finRange n) s offsetFn valueFn mask
     i (List.nodup_finRange n) (List.mem_finRange i) h_inj
 
@@ -287,9 +290,8 @@ theorem scatter_readback_masked_nd {region : RegionName} {shape : TileShape}
     (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
     ((TileShape.allIndices shape).foldl
        (fun acc k =>
-         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
-        region (offsetFn i)
-    = if mask i then valueFn i else s.mem region (offsetFn i) :=
+         if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region (offsetFn i)
+    = if mask i then valueFn i else s.readMem region (offsetFn i) :=
   scatter_readback_masked_list (TileShape.allIndices shape) s offsetFn valueFn mask
     i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) h_inj
 
@@ -298,9 +300,8 @@ theorem scatter_readback_prop_masked {region : RegionName} {n : Nat}
     (P : Fin n → Prop) [DecidablePred P]
     (h_inj : Function.Injective offsetFn) (i : Fin n) :
     ((List.finRange n).foldl
-       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
-        region (offsetFn i)
-    = if P i then valueFn i else s.mem region (offsetFn i) := by
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region (offsetFn i)
+    = if P i then valueFn i else s.readMem region (offsetFn i) := by
   have h := scatter_readback_masked (region := region) s offsetFn valueFn
               (fun k => decide (P k)) h_inj i
   simp only [decide_eq_true_eq] at h
@@ -311,9 +312,8 @@ theorem scatter_readback_prop_masked_nd {region : RegionName} {shape : TileShape
     (valueFn : TileIndex shape → ℝ) (P : TileIndex shape → Prop) [DecidablePred P]
     (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
     ((TileShape.allIndices shape).foldl
-       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
-        region (offsetFn i)
-    = if P i then valueFn i else s.mem region (offsetFn i) := by
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region (offsetFn i)
+    = if P i then valueFn i else s.readMem region (offsetFn i) := by
   have h := scatter_readback_masked_nd (region := region) s offsetFn valueFn
               (fun k => decide (P k)) h_inj i
   simp only [decide_eq_true_eq] at h
@@ -326,8 +326,7 @@ theorem scatter_readback_prop_masked_list_of_true {α : Type} {region : RegionNa
     (h_no_collision :
       ∀ k, k ∈ l → P k → offsetFn k = offsetFn i → k = i) :
     (l.foldl
-       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
-        region (offsetFn i)
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region (offsetFn i)
     = valueFn i := by
   obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem h_mem
   rw [hl] at h_nodup
@@ -360,7 +359,7 @@ theorem scatter_readback_prop_masked_list_of_true {α : Type} {region : RegionNa
     by_cases hk : P k <;> simp [hk]
   change (List.foldl
       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
-      st l₂).mem region (offsetFn i) = valueFn i
+      st l₂).readMem region (offsetFn i) = valueFn i
   rw [show List.foldl
       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
       st l₂ =
@@ -369,7 +368,7 @@ theorem scatter_readback_prop_masked_list_of_true {α : Type} {region : RegionNa
       st l₂ by
         rw [hstep]]
   rw [hpres]
-  simp [BlockState.writeMem, st]
+  simp [BlockState.readMem, BlockState.writeMem, st]
 
 theorem scatter_readback_prop_masked_nd_of_true {region : RegionName} {shape : TileShape}
     (s : BlockState) (offsetFn : TileIndex shape → Nat)
@@ -378,8 +377,7 @@ theorem scatter_readback_prop_masked_nd_of_true {region : RegionName} {shape : T
     (h_no_collision :
       ∀ k, P k → offsetFn k = offsetFn i → k = i) :
     ((TileShape.allIndices shape).foldl
-       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem
-        region (offsetFn i)
+       (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region (offsetFn i)
     = valueFn i :=
   scatter_readback_prop_masked_list_of_true (TileShape.allIndices shape) s offsetFn valueFn P
     i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) hPi
@@ -389,19 +387,18 @@ theorem scatter_preserves_other_region {α : Type}
     (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
     (R : RegionName) (h_ne : R ≠ region) (off : Nat) :
     ∀ (l : List α) (s : BlockState),
-      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).mem
-        R off)
-      = s.mem R off := by
+      ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).readMem R off)
+      = s.readMem R off := by
   intro l
   induction l with
   | nil => intros; rfl
   | cons hd tl ih =>
     intro s
     rw [List.foldl_cons, ih]
-    show (s.writeMem region (offsetFn hd) (valueFn hd)).mem R off = s.mem R off
+    show (s.writeMem region (offsetFn hd) (valueFn hd)).readMem R off = s.readMem R off
     unfold writeMem
-    show (if R = region ∧ off = offsetFn hd then valueFn hd else s.mem R off)
-        = s.mem R off
+    show (if R = region ∧ off = offsetFn hd then valueFn hd else s.readMem R off)
+        = s.readMem R off
     rw [if_neg]
     rintro ⟨h_R, _⟩
     exact h_ne h_R

@@ -137,7 +137,7 @@ theorem fa1_preLoop_correct
       ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
   have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
     ext idx
-    simp [qLoaded, Tile.ofReal, BlockState.readMem]
+    simp [qLoaded, Tile.ofReal]
     rw [show (s.pid * M + idx.1.val) * D + idx.2.1.val =
         Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D idx by
           simp [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
@@ -145,8 +145,7 @@ theorem fa1_preLoop_correct
     exact congrArg some (hQ idx)
   refine ⟨s0, ?_, ?_⟩
   · simp [fa1PreLoop, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
-      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex,
-      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qLoaded, s0]
+      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal, qPtrs, qLoaded, s0]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s0]
@@ -212,15 +211,13 @@ theorem fa1_postLoop_correct
     apply h_inj
     simpa [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
       Nat.add_assoc] using h
-  simp [observeTileAt, fa1PostLoop, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
+  simp [observeTileAt, fa1PostLoop, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
         Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, Offset.rowMajor2D, Offset.strided, Option.bind,
         TileShape.dropInsertedIndex]
   rw [show origPid * M * D + idx.1.val * D + idx.2.1.val =
       (origPid * M + idx.1.val) * D + idx.2.1.val by
         rw [Nat.add_mul]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
   simp [FA1Math.streaming_eq_attentionReal hBk Q numKVBlocks hNumKVBlocks K V scale idx
         (FA1Math.lPartial_final_ne_zero hBk Q numKVBlocks hNumKVBlocks K scale idx.1)]
@@ -690,7 +687,7 @@ theorem fa1_preLoop_correct_strided
       ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
   have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
     ext idx
-    simp [qLoaded, qBase, Tile.ofReal, BlockState.readMem]
+    simp [qLoaded, qBase, Tile.ofReal]
     rw [show qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD =
         s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
           + idx.1.val * sQS + idx.2.1.val * sQD by
@@ -698,8 +695,7 @@ theorem fa1_preLoop_correct_strided
     exact congrArg some (hQ idx)
   refine ⟨s0, ?_, ?_⟩
   · simp [fa1PreLoopStrided, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
-      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex,
-      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qLoaded, qBase, s0]
+      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal, qPtrs, qLoaded, qBase, s0]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s0]
@@ -786,7 +782,7 @@ theorem fa1_preLoop_correct_strided_causal
       ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
   have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
     ext idx
-    simp [qLoaded, qBase, Tile.ofReal, BlockState.readMem]
+    simp [qLoaded, qBase, Tile.ofReal]
     rw [show qBase + (s.pids 0 * M + idx.1.val) * sQS + idx.2.1.val * sQD =
         s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
           + idx.1.val * sQS + idx.2.1.val * sQD by
@@ -794,8 +790,7 @@ theorem fa1_preLoop_correct_strided_causal
     exact congrArg some (hQ idx)
   refine ⟨s0, ?_, ?_⟩
   · simp [fa1PreLoopStrided, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
-      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex,
-      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qLoaded, qBase, s0]
+      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal, qPtrs, qLoaded, qBase, s0]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s0]
@@ -897,15 +892,14 @@ theorem fa1_step
       Tile.transpose, Tile.dot, Tile.reduceMax, Tile.reduceMaxDrop,
       Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
       TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      BlockState.readMem, Option.bind, hBk, hoffs_d, hq, hm, hl, ho]
+      NumericDType.add, NumericDType.mul, NumericDType.sub, Option.bind, hBk, hoffs_d, hq, hm, hl, ho]
     have hKmem : ∀ (j : Fin Bk) (d : Fin D),
-        s.mem kReg ((k * Bk + j.val) * D + d.val) =
+        s.readMem kReg ((k * Bk + j.val) * D + d.val) =
           K (FA1Math.blockIndex Bk numKVBlocks k
             (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
       fa1_block_read kReg s K hK k hk
     have hVmem : ∀ (j : Fin Bk) (d : Fin D),
-        s.mem vReg ((k * Bk + j.val) * D + d.val) =
+        s.readMem vReg ((k * Bk + j.val) * D + d.val) =
           V (FA1Math.blockIndex Bk numKVBlocks k
             (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
       fa1_block_read vReg s V hV k hk
@@ -1552,18 +1546,17 @@ theorem fa1_step_strided
       Tile.transpose, Tile.dot, Tile.reduceMax, Tile.reduceMaxDrop,
       Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
       TileShape.eraseAxis, TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      BlockState.readMem, Option.bind, hBk, hoffs_d, hq, hm, hl, ho,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, Option.bind, hBk, hoffs_d, hq, hm, hl, ho,
       hk_base, hv_base]
     have hKmem : ∀ (j : Fin Bk) (d : Fin D),
-        s.mem kReg (batch * sKB + headIdx * sKH
+        s.readMem kReg (batch * sKB + headIdx * sKH
             + (k * Bk + j.val) * sKN + d.val * sKD) =
           K (FA1Math.blockIndex Bk numKVBlocks k
             (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
       fa1_block_read_strided kReg s
         (batch * sKB + headIdx * sKH) sKN sKD K hK k hk
     have hVmem : ∀ (j : Fin Bk) (d : Fin D),
-        s.mem vReg (batch * sVB + headIdx * sVH
+        s.readMem vReg (batch * sVB + headIdx * sVH
             + (k * Bk + j.val) * sVN + d.val * sVD) =
           V (FA1Math.blockIndex Bk numKVBlocks k
             (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
@@ -2208,17 +2201,17 @@ theorem fa1_step_strided_causal
       Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
       TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
       TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
-      NumericDType.sub, ComparableDType.ge, BlockState.readMem, Option.bind,
+      NumericDType.sub, ComparableDType.ge, Option.bind,
       hBk, hoffs_m, hoffs_d, hq, hm, hl, ho, hk_base, hv_base]
     have hKmem : ∀ (j : Fin Bk) (d : Fin D),
-        s.mem kReg (batch * sKB + headIdx * sKH
+        s.readMem kReg (batch * sKB + headIdx * sKH
             + (k * Bk + j.val) * sKN + d.val * sKD) =
           K (FA1Math.blockIndex Bk numKVBlocks k
             (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
       fa1_block_read_strided kReg s
         (batch * sKB + headIdx * sKH) sKN sKD K hK k hk
     have hVmem : ∀ (j : Fin Bk) (d : Fin D),
-        s.mem vReg (batch * sVB + headIdx * sVH
+        s.readMem vReg (batch * sVB + headIdx * sVH
             + (k * Bk + j.val) * sVN + d.val * sVD) =
           V (FA1Math.blockIndex Bk numKVBlocks k
             (Nat.succ_le_iff.mpr hk) j, d, PUnit.unit) :=
@@ -2498,8 +2491,7 @@ theorem fa1_postLoop_correct_strided
     apply hInj
     simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
     exact h
-  simp [observeTileAt, fa1PostLoopStrided, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+  simp [observeTileAt, fa1PostLoopStrided, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
         Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, Option.bind,
         TileShape.dropInsertedIndex]
@@ -2508,7 +2500,6 @@ theorem fa1_postLoop_correct_strided
       batch * sOB + headIdx * sOH
         + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
     simp [Nat.add_mul, Nat.add_assoc]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
   simp [FA1Math.streaming_eq_attentionReal hBk Q numKVBlocks hNumKVBlocks K V scale idx
         (FA1Math.lPartial_final_ne_zero hBk Q numKVBlocks hNumKVBlocks K scale idx.1)]
@@ -2561,8 +2552,7 @@ theorem fa1_postLoop_correct_strided_causal_raw
     apply hInj
     simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
     exact h
-  simp [observeTileAt, fa1PostLoopStrided, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
+  simp [observeTileAt, fa1PostLoopStrided, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
         Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, Option.bind,
         TileShape.dropInsertedIndex]
@@ -2571,7 +2561,6 @@ theorem fa1_postLoop_correct_strided_causal_raw
       batch * sOB + headIdx * sOH
         + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
     simp [Nat.add_mul, Nat.add_assoc]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
 
 theorem fa1_forward_correct
@@ -2980,7 +2969,7 @@ theorem fa1_forward_correct_4D_slice
     have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨s.pids 0 * M + i.val, by have := i.isLt; omega⟩,
                     d, PUnit.unit)
-    show s.mem qReg
+    show s.readMem qReg
       (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
         + i.val * sQS + d.val * sQD) = _
     rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
@@ -3004,7 +2993,7 @@ theorem fa1_forward_correct_4D_slice
     have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨j.val, by have := j.isLt; omega⟩,
                     d, PUnit.unit)
-    show s.mem kReg
+    show s.readMem kReg
       (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
     rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
           Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
@@ -3024,7 +3013,7 @@ theorem fa1_forward_correct_4D_slice
     have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨j.val, by have := j.isLt; omega⟩,
                     d, PUnit.unit)
-    show s.mem vReg
+    show s.readMem vReg
       (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
     rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
           Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0
@@ -3216,7 +3205,7 @@ theorem fa1_forward_correct_4D_causal_raw_of_step
     have h := hQ4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨s.pids 0 * M + i.val, by have := i.isLt; omega⟩,
                     d, PUnit.unit)
-    show s.mem qReg
+    show s.readMem qReg
       (s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
         + i.val * sQS + d.val * sQD) = _
     rw [show s.pids 2 * sQB + s.pids 1 * sQH + s.pids 0 * M * sQS
@@ -3239,7 +3228,7 @@ theorem fa1_forward_correct_4D_causal_raw_of_step
     have h := hK4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨j.val, by have := j.isLt; omega⟩,
                     d, PUnit.unit)
-    show s.mem kReg
+    show s.readMem kReg
       (s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD) = _
     rw [show s.pids 2 * sKB + s.pids 1 * sKH + j.val * sKN + d.val * sKD =
           Offset.strided [B, H, S_k, D] [sKB, sKH, sKN, sKD] 0
@@ -3258,7 +3247,7 @@ theorem fa1_forward_correct_4D_causal_raw_of_step
     have h := hV4D (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
                     ⟨j.val, by have := j.isLt; omega⟩,
                     d, PUnit.unit)
-    show s.mem vReg
+    show s.readMem vReg
       (s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD) = _
     rw [show s.pids 2 * sVB + s.pids 1 * sVH + j.val * sVN + d.val * sVD =
           Offset.strided [B, H, S_k, D] [sVB, sVH, sVN, sVD] 0

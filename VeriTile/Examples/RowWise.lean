@@ -102,7 +102,6 @@ theorem rowWiseSum_correct
         Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.mul, NumericDType.add,
-        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         rowWiseSumSpec]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
@@ -139,7 +138,6 @@ theorem rowWiseMax_correct
         Tile.bop, Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.mul, NumericDType.add,
-        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         rowWiseMaxSpec]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]

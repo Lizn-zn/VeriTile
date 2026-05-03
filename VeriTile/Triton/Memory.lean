@@ -9,14 +9,14 @@ mathematical objects.
 
 VeriTile's memory modeling sits in three layers, low → high:
 
-  Storage      `BlockState.mem : RegionName → Nat → ℝ`     -- raw bytes
+  Storage      `readMem` / `writeMem` over named regions    -- scalar cells
                 ↕
   Address map  `Offset.strided` / arbitrary `offsetFn`     -- "index → addr"
                 ↕
   View         `TensorView { region, base, strides }`      -- typed fat pointer
 
 The Storage layer is ground truth — `tl.load` / `tl.store` ultimately read
-and write `s.mem region addr`. The View layer is what kernel correctness
+and write `s.readMem region addr`. The View layer is what kernel correctness
 theorems quantify over; users name tensors, not byte addresses.
 
 ## What `TensorView` is (and isn't)
@@ -29,13 +29,13 @@ metadata, C++ `std::mdspan`, or Triton's own `tl.make_block_ptr`:
   | piece    | role                                              |
   | -------- | ------------------------------------------------- |
   | shape    | type-level dimensions (`TileShape`)               |
-  | region   | which named buffer in `BlockState.mem`            |
+  | region   | which named buffer the view addresses             |
   | base     | starting offset within that region                |
   | strides  | per-axis cell-count step (not byte step)          |
 
 `view.offset idx` computes an address; `view.loaded s xs` declares "memory
 at these addresses contains tensor `xs`"; `view.observe sf idx` reads back.
-None of this stores data — data lives in `BlockState.mem`.
+None of this stores data — data is accessed through `BlockState.readMem`.
 
 ## Coverage and escape hatches
 
@@ -45,7 +45,7 @@ the vast majority of production kernels (FA-1/2 forward and backward, GEMM,
 LayerNorm, Welford, RMSNorm, sliding-window attention, …).
 
 Non-affine addressing patterns need a different lens (still on top of the
-same `BlockState.mem`):
+same state-level memory API):
 
   * Paged KV (issue #42, vLLM-style):
       `addr = base + block_table[idx_block] * page_stride + …`
@@ -92,7 +92,7 @@ namespace VeriTile.Triton
 def InputAt {shape : TileShape} (s : BlockState) (region : RegionName)
     (offsetFn : TileIndex shape → Nat)
     (xs : TileIndex shape → ℝ) : Prop :=
-  ∀ idx : TileIndex shape, s.mem region (offsetFn idx) = xs idx
+  ∀ idx : TileIndex shape, s.readMem region (offsetFn idx) = xs idx
 
 /-- Generic tile-load bridge: if a tile-local address map factors through a
 larger loaded memory contract, the concrete memory tile is `Tile.ofReal` of
@@ -113,7 +113,7 @@ theorem load_tile_eq_of_InputAt_map
     Tile.ofReal (fun idx : TileIndex tileShape => xs (embed idx)) := by
   ext idx
   rw [Tile.ofReal_data]
-  change some (s.mem region (addr idx)) = some (xs (embed idx))
+  change some (s.readMem region (addr idx)) = some (xs (embed idx))
   rw [hAddr idx]
   exact congrArg some (hLoaded (embed idx))
 

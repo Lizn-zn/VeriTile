@@ -120,9 +120,7 @@ theorem direct_lse_correct
   simp [observeLSE, exec, directLSEKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        NumericDType.add, NumericDType.mul,
-        BlockState.setReg, BlockState.readMem,
-        BlockState.writeMem, directLSESpec]
+        NumericDType.add, NumericDType.mul, directLSESpec]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
   rfl
@@ -141,7 +139,6 @@ theorem stable_lse_correct
         Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
-        BlockState.setReg, BlockState.readMem, BlockState.writeMem,
         stableLSESpec, tileMax]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
@@ -175,7 +172,7 @@ theorem log_sum_exp_refinement_view
   have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
     (N := N) (xs := xs) h_x
   simpa [TensorView.observe, observeTileAt, scalarCellView,
-         TensorView.offset, Offset.strided, observeLSE, BlockState.readMem]
+         TensorView.offset, Offset.strided, observeLSE]
     using log_sum_exp_refinement xReg yReg N hN s xs hx
 
 end VeriTile.Examples

@@ -103,8 +103,7 @@ theorem add_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [observeAt, exec, addKernel, stepStmts, stepStmt, evalOp, Tile.bop,
-        NumericDType.add, NumericDType.mul, BlockState.setReg,
-        BlockState.readMem, addSpec]
+        NumericDType.add, NumericDType.mul, addSpec]
   unfold InputLoadedAt at _h_x _h_y
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_y]
@@ -209,7 +208,7 @@ theorem add_kernel_masked_correct
     rfl
   simp [observeAt, exec, addKernelMasked, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
-        ComparableDType.lt, BlockState.setReg, BlockState.readMem]
+        ComparableDType.lt]
   unfold InputLoadedAt at h_x h_y
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
   by_cases hi : s.pid * blockSize + i.val < nElements

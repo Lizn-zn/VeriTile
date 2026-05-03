@@ -424,7 +424,7 @@ def Tile.expandDim {dtype : TileDType} {shape : TileShape}
       x.data (TileShape.dropInsertedIndex shape axis 1 idx) := rfl
 
 /-- Lift a plain ℝ-valued tile-shaped function into a `Tile .real`. Useful
-at the spec / boundary layer: `BlockState.mem` reads ℝ, never `⊥`, so a
+at the spec / boundary layer: `BlockState.readMem` reads ℝ, never `⊥`, so a
 `tl.load`-fed kernel input is naturally a `TileIndex shape → ℝ`. The
 `⊥` sentinel of `WithBot ℝ` is reserved for `-inf` / masked-off /
 `tl.full(_, -inf)` values introduced *inside* a kernel; spec-level

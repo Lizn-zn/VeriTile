@@ -2236,7 +2236,7 @@ theorem fa1_score_block_mem_load_tile_eq
         (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) X)
     (k : Nat) (hk : k < numKVBlocks) :
     (⟨fun idx : TileIndex [Bk, D] =>
-        some (s.mem region ((k * Bk + idx.1.val) * D + idx.2.1.val))⟩
+        some (s.readMem region ((k * Bk + idx.1.val) * D + idx.2.1.val))⟩
       : Tile .real [Bk, D])
       =
       valueBlock X k (Nat.succ_le_iff.mpr hk) := by
@@ -3607,7 +3607,7 @@ theorem fa1_score_loop_loadBlock_correct
   refine ⟨sLoad, ?_, ?_⟩
   · simp [fa1ScoreLoopLoadBlock, stepStmts, stepStmt, evalOp, Tile.bop,
       Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
-      NumericDType.mul, BlockState.readMem, Option.bind, hoffs_d,
+      NumericDType.mul, Option.bind, hoffs_d,
       offsN, ptrs, kTile, vTile, s0, s1, s2, s3, s4, sLoad]
     rw [fa1_score_block_mem_load_tile_eq kReg s K hK k hk]
     rw [fa1_score_block_mem_load_tile_eq vReg s V hV k hk]
@@ -4503,7 +4503,7 @@ theorem fa1_score_preLoop_correct
       ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
   have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
     ext idx
-    simp [qLoaded, Tile.ofReal, BlockState.readMem]
+    simp [qLoaded, Tile.ofReal]
     rw [show (s.pid * M + idx.1.val) * D + idx.2.1.val =
         Offset.rowMajor2D (rows := M) (cols := D) (s.pid * M * D) D idx by
           simp [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
@@ -4511,8 +4511,7 @@ theorem fa1_score_preLoop_correct
     exact congrArg some (hQ idx)
   refine ⟨s0, ?_, ?_⟩
   · simp [fa1ScorePreLoop, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
-      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex,
-      BlockState.readMem, Tile.vec, Tile.ofReal, qPtrs, qLoaded, s0]
+      NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal, qPtrs, qLoaded, s0]
     rfl
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s0]
@@ -4605,15 +4604,13 @@ theorem fa1_score_postLoop_correct
     apply h_inj
     simpa [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
       Nat.add_assoc] using h
-  simp [observeTileAt, fa1ScorePostLoop, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
+  simp [observeTileAt, fa1ScorePostLoop, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
         Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, Offset.rowMajor2D, Offset.strided, Option.bind,
         TileShape.dropInsertedIndex]
   rw [show origPid * M * D + idx.1.val * D + idx.2.1.val =
       (origPid * M + idx.1.val) * D + idx.2.1.val by
         rw [Nat.add_mul]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
   simp [oScoreOnline_div_lScoreOnline_eq_attentionRealMaskedScore visible score V idx]
 
@@ -4669,15 +4666,13 @@ theorem fa1_score_blockrec_postLoop_correct
     apply h_inj
     simpa [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
       Nat.add_assoc] using h
-  simp [observeTileAt, fa1ScorePostLoop, stepStmts, stepStmt, evalOp,
-        BlockState.setReg, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
+  simp [observeTileAt, fa1ScorePostLoop, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
         Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, Offset.rowMajor2D, Offset.strided, Option.bind,
         TileShape.dropInsertedIndex]
   rw [show origPid * M * D + idx.1.val * D + idx.2.1.val =
       (origPid * M + idx.1.val) * D + idx.2.1.val by
         rw [Nat.add_mul]]
-  simp only [BlockState.readMem]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
 
 theorem fa1_score_blockrec_forward_raw_of_step

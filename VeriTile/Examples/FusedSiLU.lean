@@ -149,7 +149,7 @@ theorem fused_silu_correct
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, fusedSiLUKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
-        BlockState.setReg, BlockState.readMem, fusedSiLUSpec]
+        fusedSiLUSpec]
   unfold InputLoadedAt at _h_x _h_g _h_res
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_g, _h_res]
@@ -170,7 +170,7 @@ theorem silu_step_gate_correct
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, siluStepGate, stepStmts, stepStmt, evalOp,
         Tile.bop, NumericDType.add, NumericDType.mul,
-        BlockState.setReg, BlockState.readMem, gateSpec]
+        gateSpec]
   unfold InputLoadedAt at _h_x _h_g
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_g]
@@ -188,14 +188,14 @@ theorem silu_step_gate_preserves
         = some (s.readMem keepReg (s.pid * blockSize + i.val)) := by
   intro i
   simp [observeAt, exec, siluStepGate, stepStmts, stepStmt, evalOp,
-        Tile.bop, NumericDType.add, NumericDType.mul,
-        BlockState.setReg, BlockState.readMem]
+        Tile.bop, NumericDType.add, NumericDType.mul]
   unfold InputLoadedAt at _h_x _h_g
   simp_rw [_h_x, _h_g]
   rw [BlockState.scatter_preserves_other_region zReg
         (fun k : TileIndex [blockSize] => s.pid * blockSize + k.1.val)
         (fun k : TileIndex [blockSize] => xs k.1 * gates k.1)
         keepReg h_keep (s.pid * blockSize + i.val)]
+  simp [BlockState.pid_eq]
 
 theorem silu_step_silu_correct
     (zReg siluReg : RegionName)
@@ -212,7 +212,7 @@ theorem silu_step_silu_correct
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, siluStepSilu, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
-        BlockState.setReg, BlockState.readMem, siluSpec]
+        siluSpec]
   unfold InputLoadedAt at _h_z
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_z]
@@ -229,14 +229,14 @@ theorem silu_step_silu_preserves
         = some (s.readMem keepReg (s.pid * blockSize + i.val)) := by
   intro i
   simp [observeAt, exec, siluStepSilu, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
-        BlockState.setReg, BlockState.readMem]
+        Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul]
   unfold InputLoadedAt at _h_z
   simp_rw [_h_z]
   rw [BlockState.scatter_preserves_other_region siluReg
         (fun k : TileIndex [blockSize] => s.pid * blockSize + k.1.val)
         (fun k : TileIndex [blockSize] => zs k.1 * Real.sigmoid (zs k.1))
         keepReg h_keep (s.pid * blockSize + i.val)]
+  simp [BlockState.pid_eq]
 
 theorem silu_step_residual_correct
     (siluReg residualReg outReg : RegionName)
@@ -253,8 +253,7 @@ theorem silu_step_residual_correct
       Function.Injective (fun idx : TileIndex [blockSize] => s.pid * blockSize + idx.1.val) :=
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, siluStepResidual, stepStmts, stepStmt, evalOp,
-        Tile.bop, NumericDType.add, NumericDType.mul,
-        BlockState.setReg, BlockState.readMem]
+        Tile.bop, NumericDType.add, NumericDType.mul]
   unfold InputLoadedAt at _h_silu _h_res
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_silu, _h_res]
@@ -272,14 +271,14 @@ theorem silu_step_residual_preserves
         = some (s.readMem keepReg (s.pid * blockSize + i.val)) := by
   intro i
   simp [observeAt, exec, siluStepResidual, stepStmts, stepStmt, evalOp,
-        Tile.bop, NumericDType.add, NumericDType.mul,
-        BlockState.setReg, BlockState.readMem]
+        Tile.bop, NumericDType.add, NumericDType.mul]
   unfold InputLoadedAt at _h_silu _h_res
   simp_rw [_h_silu, _h_res]
   rw [BlockState.scatter_preserves_other_region outReg
         (fun k : TileIndex [blockSize] => s.pid * blockSize + k.1.val)
         (fun k : TileIndex [blockSize] => residuals k.1 + silus k.1)
         keepReg h_keep (s.pid * blockSize + i.val)]
+  simp [BlockState.pid_eq]
 
 set_option maxHeartbeats 800000 in
 theorem unfused_silu_correct
@@ -313,7 +312,7 @@ theorem unfused_silu_correct
           silu_step_gate_correct xReg gateReg zReg blockSize _hN s xs gates
             _h_x _h_g j
         rw [h_gate] at hzj
-        simp [observeAt, BlockState.readMem] at hzj
+        simp [observeAt] at hzj
         rw [hpid1]
         exact hzj
       have h_res1 : InputLoadedAt s1 residualReg blockSize residuals := by
@@ -322,7 +321,7 @@ theorem unfused_silu_correct
           silu_step_gate_preserves xReg gateReg zReg residualReg blockSize _hN s
             xs gates _h_x _h_g (fun h => _h_zRes h.symm) j
         rw [h_gate] at hrj
-        simp [observeAt, BlockState.readMem] at hrj
+        simp [observeAt] at hrj
         rw [hpid1]
         rw [hrj]
         exact _h_res j
@@ -343,7 +342,7 @@ theorem unfused_silu_correct
               silu_step_silu_correct zReg siluReg blockSize _hN s1
                 (gateSpec xs gates) h_z j
             rw [h_silu] at hsj
-            simp [observeAt, BlockState.readMem] at hsj
+            simp [observeAt] at hsj
             rw [hpid2]
             exact hsj
           have h_res2 : InputLoadedAt s2 residualReg blockSize residuals := by
@@ -352,7 +351,7 @@ theorem unfused_silu_correct
               silu_step_silu_preserves zReg siluReg residualReg blockSize _hN s1
                 (gateSpec xs gates) h_z (fun h => _h_siluRes h.symm) j
             rw [h_silu] at hrj
-            simp [observeAt, BlockState.readMem] at hrj
+            simp [observeAt] at hrj
             rw [hpid2]
             rw [hrj]
             exact h_res1 j
