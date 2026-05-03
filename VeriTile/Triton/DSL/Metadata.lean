@@ -123,8 +123,11 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr &  $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr ^  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr |  $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| ~$e:tritonExpr) => exprRegions e
+  | `(tritonExpr| $a:tritonExpr << $b:tritonExpr) => exprRegions a ++ exprRegions b
+  | `(tritonExpr| $a:tritonExpr >> $b:tritonExpr) => exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) =>
       staticPtrRegions stx ++ exprRegions a ++ exprRegions b
   | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => exprRegions a ++ exprRegions b

@@ -474,9 +474,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => do
       expandCmp env "comparison" (← `(Op.ne)) a b
   | `(tritonExpr| $a:tritonExpr & $b:tritonExpr) => do
-      expandBoolBin env "boolean &" (← `(Op.boolAnd)) a b
+      expandBoolOrNatBitwise env "`&`" (← `(Op.boolAnd)) (← `(Op.bitAnd)) a b
   | `(tritonExpr| $a:tritonExpr | $b:tritonExpr) => do
-      expandBoolBin env "boolean |" (← `(Op.boolOr)) a b
+      expandBoolOrNatBitwise env "`|`" (← `(Op.boolOr)) (← `(Op.bitOr)) a b
+  | `(tritonExpr| $a:tritonExpr ^ $b:tritonExpr) => do
+      expandNatBitwise env "`^`" (← `(Op.bitXor)) a b
+  | `(tritonExpr| $a:tritonExpr << $b:tritonExpr) => do
+      expandNatBitwise env "`<<`" (← `(Op.shiftLeft)) a b
+  | `(tritonExpr| $a:tritonExpr >> $b:tritonExpr) => do
+      expandNatBitwise env "`>>`" (← `(Op.shiftRight)) a b
   | `(tritonExpr| ~$a:tritonExpr) => do
       expandBoolNot env "boolean ~" a
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
@@ -611,6 +617,29 @@ partial def expandBoolBin (env : Env) (ctx : String) (op : TSyntax `term)
   ensureDType .bool b'.dtype ctx
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
   pure ⟨← `($op $bc $a'.term $b'.term), .bool, outShape⟩
+
+partial def expandNatBitwise (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .nat a'.dtype ctx
+  ensureDType .nat b'.dtype ctx
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $bc $a'.term $b'.term), .nat, outShape⟩
+
+partial def expandBoolOrNatBitwise (env : Env) (ctx : String)
+    (boolOp natOp : TSyntax `term) (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  match a'.dtype with
+  | .bool => pure ⟨← `($boolOp $bc $a'.term $b'.term), .bool, outShape⟩
+  | .nat => pure ⟨← `($natOp $bc $a'.term $b'.term), .nat, outShape⟩
+  | _ =>
+      Macro.throwError
+        (ctx ++ ": only Bool logical ops and Nat bitwise ops are modeled; signed integer bitwise ops require fixed-width integer semantics")
 
 partial def expandBoolNot (env : Env) (ctx : String)
     (a : TSyntax `tritonExpr) : MacroM EOut := do

@@ -71,6 +71,18 @@ def unaryMathOpsSmoke (xReg : RegionName) (N : Nat) : Kernel := triton {
   nhi  := tl.maximum(offs, $(N))
 }
 
+/-- Nat bitwise surface smoke. Signed integer bitwise semantics is deliberately
+deferred until fixed-width integer carriers exist. -/
+def natBitwiseOpsSmoke (outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  a    := offs & $(7)
+  b    := offs | $(1)
+  c    := a ^ b
+  d    := c << $(1)
+  e    := d >> $(2)
+  tl.store($(outReg) + offs, e)
+}
+
 /-- DSL smoke test for explicit floating dtype casts. -/
 def dtypeCastSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   offs := tl.arange(0, $(N))

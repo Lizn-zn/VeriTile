@@ -69,6 +69,11 @@ inductive Op : TileDType → TileShape → Type where
   | div       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | floorDiv  : IntegralDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | mod       : IntegralDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
+  | bitAnd    : Broadcast a b out → Op .nat a → Op .nat b → Op .nat out
+  | bitOr     : Broadcast a b out → Op .nat a → Op .nat b → Op .nat out
+  | bitXor    : Broadcast a b out → Op .nat a → Op .nat b → Op .nat out
+  | shiftLeft : Broadcast a b out → Op .nat a → Op .nat b → Op .nat out
+  | shiftRight : Broadcast a b out → Op .nat a → Op .nat b → Op .nat out
   | exp       : Op .real shape → Op .real shape
   | exp2      : Op .real shape → Op .real shape
   | log       : Op .real shape → Op .real shape

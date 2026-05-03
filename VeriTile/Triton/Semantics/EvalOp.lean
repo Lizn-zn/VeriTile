@@ -5,6 +5,7 @@ Expression evaluation for the typed Triton AST.
 -/
 
 import VeriTile.Triton.Semantics.TileOps
+import Batteries.Data.Nat.Bitwise
 
 namespace VeriTile.Triton
 
@@ -50,6 +51,11 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.bop h.mod bc va vb)
+  | .bitAnd bc a b, s => return Tile.bop (· &&& ·) bc (← evalOp a s) (← evalOp b s)
+  | .bitOr bc a b, s => return Tile.bop (· ||| ·) bc (← evalOp a s) (← evalOp b s)
+  | .bitXor bc a b, s => return Tile.bop (· ^^^ ·) bc (← evalOp a s) (← evalOp b s)
+  | .shiftLeft bc a b, s => return Tile.bop (· <<< ·) bc (← evalOp a s) (← evalOp b s)
+  | .shiftRight bc a b, s => return Tile.bop (· >>> ·) bc (← evalOp a s) (← evalOp b s)
   | .exp a, s => return Tile.uop WithBot.realExp (← evalOp a s)
   | .exp2 a, s => return Tile.uop WithBot.realExp2 (← evalOp a s)
   | .log a, s => return Tile.uop WithBot.realLog (← evalOp a s)

@@ -83,6 +83,9 @@ Stmt : Type
   结果是 `.bool`。
 - Bool operator: `.bool` 上的 `tl.logical_and`、`tl.logical_or`、
   `tl.logical_not`,以及 mask 常用写法 `a & b`、`a | b`、`~a`。
+- Nat bitwise operator: `.nat` channel 上的 `&`, `|`, `^`, `<<`, `>>`。`.nat`
+  上不建模 `~`,因为数学自然数没有固定 bit width;signed/fixed-width
+  bitwise 语义留给 fixed-width integer model。
 - 双参数 `tl.max(a, b)` 作为 `.real` 上的点态 max。
 - `tl.maximum(a, b)` 与 `tl.minimum(a, b)` 是基于 comparison + `tl.where`
   的点态选择 sugar,支持 comparable channel。分支 broadcast 当前限于
@@ -308,6 +311,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | arithmetic | Supported | 同 channel numeric 上的 `+`, `-`, `*`, `/`;integer `//` / `%`;`.nat` `tl.cdiv`;pointer offset 支持 `ptr + nat` |
 | comparison | Supported | `.real` 或 `.nat` 上的 `<`, `<=`, `==`, `>`, `>=`, `!=` |
 | bool op | Supported | `tl.logical_and`、`tl.logical_or`、`tl.logical_not`,以及 `&`、`|`、`~` mask spelling |
+| Nat bitwise op | Limited | `.nat` 上的 `&`, `|`, `^`, `<<`, `>>`;暂不支持 `.nat ~` 和 signed fixed-width bitwise 语义 |
 | pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
 | unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
 | reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis` / `keep_dims` |
@@ -370,7 +374,8 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 - 任意 axis permutation。`tl.trans` 只交换最后两个 axis。
 - 高 rank bracket slicing。目前只支持 rank-1 的 `[:, None]` / `[None, :]`;
   显式插入 unit axis 请用 `tl.expand_dims(e, axis=N)`。
-- integer width、overflow、signedness。`.nat` channel 是数学 `Nat`。
+- integer width、overflow、signedness 和 signed bitwise 行为。`.nat`
+  channel 是数学 `Nat`。
 
 ## 文档自动生成
 

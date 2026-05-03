@@ -85,6 +85,11 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .div h bc a b => .div h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .floorDiv h bc a b => .floorDiv h.eraseFloat bc a.eraseFloat b.eraseFloat
   | .mod h bc a b => .mod h.eraseFloat bc a.eraseFloat b.eraseFloat
+  | .bitAnd bc a b => .bitAnd bc a.eraseFloat b.eraseFloat
+  | .bitOr bc a b => .bitOr bc a.eraseFloat b.eraseFloat
+  | .bitXor bc a b => .bitXor bc a.eraseFloat b.eraseFloat
+  | .shiftLeft bc a b => .shiftLeft bc a.eraseFloat b.eraseFloat
+  | .shiftRight bc a b => .shiftRight bc a.eraseFloat b.eraseFloat
   | .exp a => .exp a.eraseFloat
   | .exp2 a => .exp2 a.eraseFloat
   | .log a => .log a.eraseFloat

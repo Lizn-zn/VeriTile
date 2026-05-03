@@ -109,8 +109,11 @@ syntax:50 tritonExpr:51 " != " tritonExpr:51 : tritonExpr
 syntax:60 tritonExpr:60 " + " tritonExpr:61 : tritonExpr
 syntax:60 tritonExpr:60 " - " tritonExpr:61 : tritonExpr
 syntax:55 tritonExpr:55 " & " tritonExpr:56 : tritonExpr
+syntax:55 tritonExpr:55 " ^ " tritonExpr:56 : tritonExpr
 syntax:54 tritonExpr:54 " | " tritonExpr:55 : tritonExpr
 syntax:75 "~" tritonExpr:76 : tritonExpr
+syntax:65 tritonExpr:65 " << " tritonExpr:66 : tritonExpr
+syntax:65 tritonExpr:65 " >> " tritonExpr:66 : tritonExpr
 syntax:70 tritonExpr:70 " * " tritonExpr:71 : tritonExpr
 syntax:70 tritonExpr:70 " / " tritonExpr:71 : tritonExpr
 syntax:70 tritonExpr:70 " // " tritonExpr:71 : tritonExpr

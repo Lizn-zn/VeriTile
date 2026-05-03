@@ -97,6 +97,11 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .div _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .floorDiv _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .mod _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .bitAnd _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .bitOr _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .bitXor _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .shiftLeft _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .shiftRight _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .exp a => a.RespectsRegionTyping Γ
   | .exp2 a => a.RespectsRegionTyping Γ
   | .log a => a.RespectsRegionTyping Γ

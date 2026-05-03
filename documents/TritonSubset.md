@@ -91,6 +91,10 @@ Supported channels:
   `.nat`, producing `.bool`.
 - Boolean ops: `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus mask
   operator spellings `a & b`, `a | b`, and `~a` on `.bool` values.
+- Nat bitwise ops: `&`, `|`, `^`, `<<`, `>>` on the `.nat` channel. `~` is
+  not modeled for `.nat`, because mathematical naturals do not have a finite
+  width; signed/fixed-width bitwise semantics is deferred to the fixed-width
+  integer model.
 - Two-argument `tl.max(a, b)` as pointwise max on `.real`.
 - `tl.maximum(a, b)` and `tl.minimum(a, b)` as pointwise select-based sugar
   over comparable channels. Branch broadcasting is currently limited to
@@ -335,6 +339,7 @@ current semantic contract.
 | Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel numeric operands; `//`, `%` on integer channels; `tl.cdiv` on `.nat`; `ptr + nat` for pointer offsets |
 | Comparisons | Supported | `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or `.nat` |
 | Boolean ops | Supported | `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus `&`, `|`, `~` mask spellings |
+| Nat bitwise ops | Limited | `&`, `|`, `^`, `<<`, `>>` on `.nat`; no `.nat ~` and no signed fixed-width bitwise semantics yet |
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
 | Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
 | Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |
@@ -401,8 +406,8 @@ A lifter is only useful for kernels whose operations are already representable.
 - Higher-rank bracket slicing beyond the currently supported rank-1
   `[:, None]` / `[None, :]` forms. Use `tl.expand_dims(e, axis=N)` for
   explicit unit-axis insertion.
-- Integer widths, overflow, and signedness. The `.nat` channel is mathematical
-  `Nat`.
+- Integer widths, overflow, signedness, and signed bitwise behavior. The `.nat`
+  channel is mathematical `Nat`.
 
 ## Documentation Generation
 
