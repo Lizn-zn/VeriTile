@@ -139,6 +139,8 @@ bit-level / precision 语义。
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
+- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16)`
+- `tl.load(ptr, mask=mask, other=other, dtype=...)`
 
 支持的 store:
 
@@ -146,6 +148,8 @@ bit-level / precision 语义。
 - `tl.store($(region) + offset, value)`
 - `ptrs := $(region) + offset; tl.store(ptrs, value)`
 - `tl.store(ptr, value, mask=mask)`
+- `tl.store(ptr, value, dtype=...)`,其中 `dtype` 必须和 value dtype 一致。
+  不写 `dtype=` 时,store 从 `value` 推断 dtype。
 
 未知 kwarg 会报错。特别地,`tl.load(..., boundary_check=...)` 和
 `tl.store(..., boundary_check=...)` 不会被静默忽略。
@@ -226,9 +230,11 @@ rounding、NaN、signed zero、overflow、underflow、denormal、exception flag�
 硬件 dot precision、fast-math rewrite 都未建模。
 
 core AST 现在有 typed floating load/store 构造,例如 `Op.loadFloat`,
-`Op.loadPtrFloat`, `Stmt.storeFloat`。公开 DSL 的 `tl.load` / `tl.store`
-默认仍是 `.real`;如果 kernel 需要在中间寄存器携带显式浮点 dtype,使用
-`tl.cast`。
+`Op.loadPtrFloat`, `Stmt.storeFloat`。公开 DSL 的 `tl.load` 默认仍是
+`.real`,但支持 `dtype=tl.float32|tl.float16|tl.bfloat16`,用于生成 typed
+floating memory node。`tl.store` 从写入的 value 推断 dtype,也支持可选的、
+必须匹配 value dtype 的 `dtype=` surface spelling。integer / boolean tensor
+memory 还没有建模。
 
 Float theorem policy: 算法正确性 theorem 应该证明在擦除后的 `.real`
 kernel 上。面向 float 的 theorem 可以用 `Kernel.CorrectViaFloatErasure`
@@ -259,10 +265,10 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]`,literal-axis `tl.expand_dims` |
 | transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
-| load | Limited | pointer-expression load,可带 `mask` / `other` |
-| store | Limited | pointer-expression store,可带 `mask` |
+| load | Limited | pointer-expression load,可带 `mask` / `other` / floating `dtype=` |
+| store | Limited | pointer-expression store,可带 `mask`;floating dtype 从 value 推断,也可写匹配的 `dtype=` |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
-| integer memory | Gap | memory 是 `RegionName → Nat → ℝ`;还没有 int/Nat tensor memory (#20) |
+| integer memory | Gap | memory 是 `RegionName → Nat → ℝ`;float dtype surface 会擦除到 real,int/Nat tensor memory 仍没有 (#20) |
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
 | indirection | Gap | 还没有 gather / paged-KV 风格的 data-dependent address model (#42) |
 | block pointer | Gap | 还没有 `tl.make_block_ptr`、`tl.advance` 或 block-pointer load/store |

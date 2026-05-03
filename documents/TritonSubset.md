@@ -151,6 +151,8 @@ Supported loads:
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
+- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16)`
+- `tl.load(ptr, mask=mask, other=other, dtype=...)`
 
 Supported stores:
 
@@ -158,6 +160,8 @@ Supported stores:
 - `tl.store($(region) + offset, value)`
 - `ptrs := $(region) + offset; tl.store(ptrs, value)`
 - `tl.store(ptr, value, mask=mask)`
+- `tl.store(ptr, value, dtype=...)`, where `dtype` must match the value dtype.
+  Without `dtype=`, stores infer the dtype from `value`.
 
 Unknown kwargs are rejected. In particular, `tl.load(..., boundary_check=...)`
 and `tl.store(..., boundary_check=...)` are not silently ignored.
@@ -246,9 +250,12 @@ underflow, denormals, exception flags, hardware dot precision, and fast-math
 rewrites are not modeled.
 
 The core AST has typed floating load/store constructors such as
-`Op.loadFloat`, `Op.loadPtrFloat`, and `Stmt.storeFloat`. The public DSL still
-defaults `tl.load` / `tl.store` to `.real`; use `tl.cast` where a kernel needs
-to carry an explicit floating dtype through intermediate registers.
+`Op.loadFloat`, `Op.loadPtrFloat`, and `Stmt.storeFloat`. The public DSL
+defaults `tl.load` to `.real`, but accepts `dtype=...` with `tl.float32`,
+`tl.float16`, or `tl.bfloat16` to produce typed floating memory nodes.
+`tl.store` infers its dtype from the value being stored, with optional matching
+`dtype=` syntax for Triton-like surface spelling. Integer and boolean tensor
+memory are not modeled yet.
 
 Float theorem policy: algorithmic correctness theorems should be proved over
 the erased `.real` kernel. A float-facing theorem can use
@@ -282,10 +289,10 @@ current semantic contract.
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
-| Loads | Limited | Pointer-expression load, optional `mask`, optional `other` |
-| Stores | Limited | Pointer-expression store, optional `mask` |
+| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional floating `dtype=` |
+| Stores | Limited | Pointer-expression store, optional `mask`, floating dtype inferred from value with optional matching `dtype=` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
-| Integer memory | Gap | Memory is `RegionName → Nat → ℝ`; no int/Nat tensor memory yet (#20) |
+| Integer memory | Gap | Memory is `RegionName → Nat → ℝ`; float dtype surface is erased to real, and int/Nat tensor memory is still absent (#20) |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
 | Indirection | Gap | No gather / paged-KV style data-dependent address model yet (#42) |
 | Block pointers | Gap | No `tl.make_block_ptr`, `tl.advance`, or block-pointer load/store |

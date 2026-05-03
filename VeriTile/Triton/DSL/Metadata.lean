@@ -42,12 +42,12 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | some e => exprRegions e
   | none =>
   match stx with
-  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
             match kw with
-            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
       staticPtrRegions p ++ kwargRegions
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
@@ -130,12 +130,12 @@ partial def stmtRegions :
   match stx with
   | `(tritonStmt| $_:ident := $e:tritonExpr) =>
       (exprRegions e, [])
-  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonKwarg]*)) =>
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonKwarg) =>
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
             match kw with
-            | `(tritonKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
       (exprRegions v ++ kwargRegions, staticPtrRegions p)
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>

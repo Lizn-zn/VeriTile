@@ -83,6 +83,23 @@ def dtypeToSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   tl.store($(outReg) + offs, y)
 }
 
+/-- DSL smoke test for typed floating memory surface syntax. -/
+def dtypeLoadStoreSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs, dtype=tl.float32)
+  y    := x + (1).to(tl.float32)
+  tl.store($(outReg) + offs, y)
+}
+
+/-- DSL smoke test for masked typed floating load/store surface syntax. -/
+def dtypeMaskedLoadStoreSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  mask := offs < $(N)
+  zero := (0).to(tl.float32)
+  x    := tl.load($(xReg) + offs, mask=mask, other=zero, dtype=tl.float32)
+  tl.store($(outReg) + offs, x, mask=mask)
+}
+
 /-- The real kernel recovered by erasing `dtypeCastSmoke`'s float annotations. -/
 def dtypeCastSmokeErasedReal (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   offs := tl.arange(0, $(N))
@@ -94,11 +111,27 @@ def dtypeCastSmokeErasedReal (xReg outReg : RegionName) (N : Nat) : Kernel := tr
   tl.store($(outReg) + offs, y)
 }
 
+/-- The real kernel recovered by erasing `dtypeLoadStoreSmoke`'s float memory. -/
+def dtypeLoadStoreSmokeErasedReal (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  y    := x + 1
+  tl.store($(outReg) + offs, y)
+}
+
 /-- Float theorem bridge smoke: erasure recovers the real proof target. -/
 example (xReg outReg : RegionName) (N : Nat) :
     (dtypeCastSmoke xReg outReg N).eraseFloat =
       dtypeCastSmokeErasedReal xReg outReg N := by
   simp [dtypeCastSmoke, dtypeCastSmokeErasedReal, Kernel.eraseFloat,
+    Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat,
+    eraseFloatDType, NumericDType.eraseFloat]
+
+/-- Typed memory theorem bridge smoke: erasure recovers the real proof target. -/
+example (xReg outReg : RegionName) (N : Nat) :
+    (dtypeLoadStoreSmoke xReg outReg N).eraseFloat =
+      dtypeLoadStoreSmokeErasedReal xReg outReg N := by
+  simp [dtypeLoadStoreSmoke, dtypeLoadStoreSmokeErasedReal, Kernel.eraseFloat,
     Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat,
     eraseFloatDType, NumericDType.eraseFloat]
 
@@ -112,6 +145,20 @@ example (xReg outReg : RegionName) (N : Nat) :
     (fp16LoadStoreCoreSmoke xReg outReg N).RespectsRegionTyping (fun _ => TileDType.fp16) := by
   simp [fp16LoadStoreCoreSmoke, Stmt.RespectsRegionTyping, Op.RespectsRegionTyping,
     FloatDType.dtype]
+
+/-- Lightweight region typing accepts typed DSL memory under fp32 buffers. -/
+example (xReg outReg : RegionName) (N : Nat) :
+    (dtypeLoadStoreSmoke xReg outReg N).RespectsRegionTyping (fun _ => TileDType.fp32) := by
+  simp [dtypeLoadStoreSmoke, Kernel.RespectsRegionTyping, StmtList.RespectsRegionTyping,
+    Stmt.RespectsRegionTyping, Op.RespectsRegionTyping, FloatDType.dtype]
+
+/-- Masked typed DSL memory also respects fp32 region contracts. -/
+example (xReg outReg : RegionName) (N : Nat) :
+    (dtypeMaskedLoadStoreSmoke xReg outReg N).RespectsRegionTyping
+      (fun _ => TileDType.fp32) := by
+  simp [dtypeMaskedLoadStoreSmoke, Kernel.RespectsRegionTyping,
+    StmtList.RespectsRegionTyping, Stmt.RespectsRegionTyping,
+    Op.RespectsRegionTyping, FloatDType.dtype]
 
 /-! ### Integer/meta and boolean surface operators -/
 

@@ -11,6 +11,7 @@ namespace VeriTile.Triton.DSL
 declare_syntax_cat tritonExpr
 declare_syntax_cat tritonStmt
 declare_syntax_cat tritonKwarg
+declare_syntax_cat tritonMemKwarg
 declare_syntax_cat tritonReduceKwarg
 declare_syntax_cat tritonDType
 
@@ -57,6 +58,8 @@ syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 
 -- kwarg: `name = expr`. Used for `mask=` / `other=` in tl.load / tl.store.
 syntax ident " = " tritonExpr : tritonKwarg
+syntax ident " = " tritonExpr : tritonMemKwarg
+syntax ident "=" tritonDType : tritonMemKwarg
 
 syntax "axis" "=" num : tritonReduceKwarg
 syntax "keep_dims" "=" "false" : tritonReduceKwarg
@@ -66,7 +69,7 @@ syntax ident "=" tritonExpr : tritonReduceKwarg
 syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 
-syntax "tl.load(" tritonExpr ("," tritonKwarg)* ")" : tritonExpr
+syntax "tl.load(" tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
 
 syntax:max tritonExpr:max noWs "[" ":" "," "None" "]" : tritonExpr
 syntax:max tritonExpr:max noWs "[" "None" "," ":" "]" : tritonExpr
@@ -97,7 +100,7 @@ syntax:70 tritonExpr:70 " % " tritonExpr:71 : tritonExpr
 
 -- Statements
 syntax ident " := " tritonExpr : tritonStmt
-syntax "tl.store(" tritonExpr ", " tritonExpr ("," tritonKwarg)* ")" : tritonStmt
+syntax "tl.store(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "tl.static_range " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
