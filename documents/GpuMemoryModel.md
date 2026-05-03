@@ -49,9 +49,9 @@ Not modeled yet:
 - Hardware/TMA block-pointer behavior beyond the sequential lane semantics.
 - Paged-KV or gather-style data-dependent indirection. That needs a sibling
   view model on top of the same storage layer; see issue #42.
-- Non-floating typed loads from HBM. Typed storage and typed stores exist, but
-  `tl.load(..., dtype=...)` is still limited to the floating channels plus the
-  proof-facing Real view.
+- Rich signed/unsigned integer dtype lattice. The current typed HBM model
+  supports `.nat` (`tl.uint64`) and `.int32`, enough for index/block-table
+  cells, but not every Triton integer width.
 
 ## Sequential Consistency
 

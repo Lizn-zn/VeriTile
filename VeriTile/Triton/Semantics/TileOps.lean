@@ -247,9 +247,9 @@ to `Option ℝ` for typeclass purposes. -/
 /-- After a `tl.sum` reduce on a `some`-lifted tile, demoting via `unbotD 0`
 (used by `tl.store`) recovers the underlying ℝ-valued sum.
 
-Stated in the `some`-form (rather than `↑`) because that's what `evalOp`
-produces — `tl.load` lifts via `some (s.readMem ...)` and `tl.sum` on a tile
-of `some`-values gives `∑ some (xs i)` literally. -/
+Stated in the `some`-form (rather than `↑`) because Real `tl.load` values
+arrive in the `some` carrier and `tl.sum` on a tile of `some`-values gives
+`∑ some (xs i)` literally. -/
 @[simp] theorem WithBot.unbotD_sum_some {ι} (s : Finset ι) (f : ι → ℝ) :
     WithBot.unbotD (0 : ℝ) (∑ i ∈ s, (some (f i) : WithBot ℝ)) = ∑ i ∈ s, f i := by
   show WithBot.unbotD (0 : ℝ) (∑ i ∈ s, ((f i : ℝ) : WithBot ℝ)) = ∑ i ∈ s, f i

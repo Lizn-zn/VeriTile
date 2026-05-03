@@ -281,6 +281,50 @@ than projecting `BlockState.mem` directly. -/
     (region : RegionName) (offset : Nat) : Option (TileCarrier dtype) :=
   (s.mem region offset).readAs dtype
 
+def defaultCarrier : (dtype : TileDType) → TileCarrier dtype
+  | .real => some 0
+  | .fp32 => some 0
+  | .fp16 => some 0
+  | .bf16 => some 0
+  | .int32 => 0
+  | .nat => 0
+  | .bool => false
+  | .ptr => ("", 0)
+  | .blockPtr =>
+      { region := "", baseOffset := 0, parentShape := [], blockShape := [],
+        strides := [], offsets := [] }
+
+/-- Read a typed scalar for operational `tl.load`. Floating channels keep the
+current finite-fallback semantics; non-floating channels read exact typed cells
+and use the dtype default on mismatch. -/
+@[inline] def readMemValue (s : BlockState) (dtype : TileDType)
+    (region : RegionName) (offset : Nat) : TileCarrier dtype :=
+  match dtype with
+  | .real => s.readMemAs .real region offset
+  | .fp32 => s.readMemAs .fp32 region offset
+  | .fp16 => s.readMemAs .fp16 region offset
+  | .bf16 => s.readMemAs .bf16 region offset
+  | .int32 =>
+      match s.readMemTyped .int32 region offset with
+      | some value => value
+      | none => defaultCarrier .int32
+  | .nat =>
+      match s.readMemTyped .nat region offset with
+      | some value => value
+      | none => defaultCarrier .nat
+  | .bool =>
+      match s.readMemTyped .bool region offset with
+      | some value => value
+      | none => defaultCarrier .bool
+  | .ptr =>
+      match s.readMemTyped .ptr region offset with
+      | some value => value
+      | none => defaultCarrier .ptr
+  | .blockPtr =>
+      match s.readMemTyped .blockPtr region offset with
+      | some value => value
+      | none => defaultCarrier .blockPtr
+
 @[simp] theorem setReg_readMem (s : BlockState) (name : RegName)
     (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape)
     (region : RegionName) (offset : Nat) :
@@ -297,6 +341,29 @@ than projecting `BlockState.mem` directly. -/
     (memDType : TileDType) (region : RegionName) (offset : Nat) :
     (s.setReg name regDType shape v).readMemTyped memDType region offset =
       s.readMemTyped memDType region offset := rfl
+
+@[simp] theorem setReg_readMemValue (s : BlockState) (name : RegName)
+    (regDType : TileDType) (shape : TileShape) (v : Tile regDType shape)
+    (memDType : TileDType) (region : RegionName) (offset : Nat) :
+    (s.setReg name regDType shape v).readMemValue memDType region offset =
+      s.readMemValue memDType region offset := by
+  cases memDType <;> rfl
+
+@[simp] theorem readMemValue_real (s : BlockState) (region : RegionName) (offset : Nat) :
+    s.readMemValue .real region offset = some (s.readMem region offset) := by
+  unfold readMemValue
+  unfold readMemAs readMem
+  cases h : (s.mem region offset).readAs .real with
+  | none => simp [h]
+  | some value =>
+      cases value
+      · simp [h]
+        change some (0 : ℝ) = some 0
+        rfl
+      · rename_i value
+        simp [h]
+        change some value = some value
+        rfl
 
 @[simp] theorem readMemAs_real (s : BlockState) (region : RegionName) (offset : Nat) :
     s.readMemAs .real region offset = some (s.readMem region offset) := by

@@ -375,8 +375,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           Macro.throwError "tl.load: block-pointer `boundary_check` cannot be combined with `mask` or `other`"
         let p' ← expandExpr env p
         ensureDType .blockPtr p'.dtype "tl.load block pointer"
-        let hp ← outDType.floatProof
-        return ⟨← `(Op.load $hp (MemAccess.blockPtr $p'.term $boundaryCheck) MaskOpt.none),
+        let dt ← outDType.term
+        return ⟨← `(Op.load $dt (MemAccess.blockPtr $p'.term $boundaryCheck) MaskOpt.none),
           outDType, p'.shape⟩
       if let some (_, otherDType, _) := otherTerm then
         unless otherDType == outDType do
@@ -387,27 +387,27 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           | some sp =>
               let r := sp.region
               let off := sp.offset
-              let hp ← outDType.floatProof
-              pure ⟨← `(Op.load $hp (MemAccess.region $r $off) MaskOpt.none), outDType, sp.shape⟩
+              let dt ← outDType.term
+              pure ⟨← `(Op.load $dt (MemAccess.region $r $off) MaskOpt.none), outDType, sp.shape⟩
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.load pointer"
-              let hp ← outDType.floatProof
-              pure ⟨← `(Op.load $hp (MemAccess.ptr $p'.term) MaskOpt.none), outDType, p'.shape⟩
+              let dt ← outDType.term
+              pure ⟨← `(Op.load $dt (MemAccess.ptr $p'.term) MaskOpt.none), outDType, p'.shape⟩
       | some (m, mShape), none =>
           match ← expandStaticPtrExpr env p with
           | some sp =>
               let r := sp.region
               let off := sp.offset
               let m' ← coerceShape m mShape sp.shape "tl.load mask"
-              let hp ← outDType.floatProof
-              pure ⟨← `(Op.load $hp (MemAccess.region $r $off) (MaskOpt.mask $m')), outDType, sp.shape⟩
+              let dt ← outDType.term
+              pure ⟨← `(Op.load $dt (MemAccess.region $r $off) (MaskOpt.mask $m')), outDType, sp.shape⟩
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.load pointer"
               let m' ← coerceShape m mShape p'.shape "tl.load mask"
-              let hp ← outDType.floatProof
-              pure ⟨← `(Op.load $hp (MemAccess.ptr $p'.term) (MaskOpt.mask $m')), outDType, p'.shape⟩
+              let dt ← outDType.term
+              pure ⟨← `(Op.load $dt (MemAccess.ptr $p'.term) (MaskOpt.mask $m')), outDType, p'.shape⟩
       | some (m, mShape), some (o, otherDType, oShape) =>
           match ← expandStaticPtrExpr env p with
           | some sp =>
@@ -415,15 +415,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               let off := sp.offset
               let m' ← coerceShape m mShape sp.shape "tl.load mask"
               let o' ← coerceShape o oShape sp.shape "tl.load other"
-              let hp ← otherDType.floatProof
-              pure ⟨← `(Op.load $hp (MemAccess.region $r $off) (MaskOpt.maskOther $m' $o')), otherDType, sp.shape⟩
+              let dt ← otherDType.term
+              pure ⟨← `(Op.load $dt (MemAccess.region $r $off) (MaskOpt.maskOther $m' $o')), otherDType, sp.shape⟩
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.load pointer"
               let m' ← coerceShape m mShape p'.shape "tl.load mask"
               let o' ← coerceShape o oShape p'.shape "tl.load other"
-              let hp ← otherDType.floatProof
-              pure ⟨← `(Op.load $hp (MemAccess.ptr $p'.term) (MaskOpt.maskOther $m' $o')), otherDType, p'.shape⟩
+              let dt ← otherDType.term
+              pure ⟨← `(Op.load $dt (MemAccess.ptr $p'.term) (MaskOpt.maskOther $m' $o')), otherDType, p'.shape⟩
       | none, some _ =>
           Macro.throwError
             "tl.load: `other=` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"

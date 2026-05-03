@@ -111,11 +111,7 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .makeBlockPtr region baseOffset parentShape blockShape strides offsets =>
       .makeBlockPtr region baseOffset parentShape blockShape strides offsets
   | .advanceBlockPtr ptr deltas => .advanceBlockPtr ptr.eraseFloat deltas
-  | .load h mem mask => by
-      have mask' : MaskOpt .real shape := by
-        simpa [eraseFloatDType_float h] using mask.eraseFloat
-      simpa [eraseFloatDType_float h] using
-        (Op.load .real mem.eraseFloat mask')
+  | .load dtype mem mask => .load (eraseFloatDType dtype) mem.eraseFloat mask.eraseFloat
   | .natToReal a => .natToReal a.eraseFloat
 termination_by e => sizeOf e
 decreasing_by
@@ -206,14 +202,11 @@ end
   simp [eraseFloatDType]
 
 @[simp] theorem Op.eraseFloat_load
-    (h : FloatDType) (mem : MemAccess shape)
-    (mask : MaskOpt h.toTileDType shape) :
-    (Op.load h mem mask).eraseFloat =
-      cast (by simp [eraseFloatDType_float h])
-        (Op.load .real mem.eraseFloat
-          (cast (by simp [eraseFloatDType_float h]) mask.eraseFloat)) := by
+    (dtype : TileDType) (mem : MemAccess shape)
+    (mask : MaskOpt dtype shape) :
+    (Op.load dtype mem mask).eraseFloat =
+      Op.load (eraseFloatDType dtype) mem.eraseFloat mask.eraseFloat := by
   rw [Op.eraseFloat.eq_def]
-  simp [eraseFloatDType]
 
 @[simp] theorem Op.eraseFloat_reduceMax
     (axis : Fin shape.length) (keepDims : Bool) (e : Op .real shape) :

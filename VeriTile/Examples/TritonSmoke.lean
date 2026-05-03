@@ -187,6 +187,12 @@ def argmax2IndexStoreKernel (xReg outReg : RegionName) : Kernel := triton {
   tl.store($(outReg), idx)
 }
 
+/-- #20 symmetry smoke: load a Nat/index cell from HBM and store it back out. -/
+def natLoadStoreKernel (idxReg outReg : RegionName) : Kernel := triton {
+  idx := tl.load($(idxReg), dtype=tl.uint64)
+  tl.store($(outReg), idx)
+}
+
 def argmax2IndexStoreCoreKernel (xReg outReg : RegionName) : Kernel :=
   { inputs := [xReg]
   , outputs := [outReg]
@@ -200,12 +206,18 @@ def argmax2IndexStoreCoreKernel (xReg outReg : RegionName) : Kernel :=
           (Op.constNat 0))
         MaskOpt.none] }
 
+def natLoadStoreCoreKernel (idxReg outReg : RegionName) : Kernel :=
+  { inputs := [idxReg]
+  , outputs := [outReg]
+  , body :=
+      [Stmt.store .nat [] (MemAccess.region outReg (Op.constNat 0))
+        (Op.load .nat (MemAccess.region idxReg (Op.constNat 0)) MaskOpt.none)
+        MaskOpt.none] }
+
 noncomputable def argmax2ExpectedIndex (s : BlockState) (xReg : RegionName) : Nat :=
   by
     classical
-    let a : WithBot ℝ := s.readMemAs FloatDType.real xReg 0
-    let b : WithBot ℝ := s.readMemAs FloatDType.real xReg 1
-    exact if a < b then 1 else 0
+    exact if s.readMem xReg 0 < s.readMem xReg 1 then 1 else 0
 
 theorem argmax2_index_store_correct
     (xReg outReg : RegionName) (s : BlockState) :
@@ -214,11 +226,18 @@ theorem argmax2_index_store_correct
       some (some (argmax2ExpectedIndex s xReg)) := by
   classical
   simp [argmax2IndexStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
-    argmax2ExpectedIndex, BlockState.writeMemTyped, BlockState.readMemAs,
-    BlockState.readMemTyped,
+    argmax2ExpectedIndex, BlockState.writeMemTyped, BlockState.readMemTyped,
     ComparableDType.lt, Tile.cop, Tile.select, Option.bind, Option.map,
-    MemCell.readAs_of_same, WithBot.some_eq_coe]
-  rfl
+    MemCell.readAs_of_same, WithBot.some_eq_coe, WithBot.coe_lt_coe]
+
+theorem nat_load_store_correct
+    (idxReg outReg : RegionName) (s : BlockState) :
+    let result := exec (natLoadStoreCoreKernel idxReg outReg) s
+    result.map (fun s' => s'.readMemTyped .nat outReg 0) =
+      some (some (s.readMemValue .nat idxReg 0)) := by
+  simp [natLoadStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
+    BlockState.readMemValue, BlockState.readMemTyped, BlockState.writeMemTyped,
+    Option.bind, Option.map, MemCell.readAs_of_same]
 
 example : (MemCell.of .nat 7).readAs .nat = some 7 := by
   rfl

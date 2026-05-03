@@ -151,7 +151,7 @@ Supported loads:
 - `tl.load(ptr, mask=mask)`
 - `tl.load(ptr, mask=mask, other=other)`
 - `tl.load(ptr, other=other, mask=mask)`
-- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16)`
+- `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16|tl.int32|tl.uint64)`
 - `tl.load(ptr, mask=mask, other=other, dtype=...)`
 - `bp := tl.make_block_ptr($(region), base=$(base), shape=[...],
   strides=[...], offsets=[...], block_shape=[...])`
@@ -269,16 +269,16 @@ rewrites are not modeled.
 The core AST uses one dtype-indexed memory form:
 
 ```lean
-Op.load    : FloatDType → MemAccess shape → MaskOpt dtype shape → Op ...
+Op.load    : TileDType → MemAccess shape → MaskOpt dtype shape → Op ...
 Stmt.store : TileDType → MemAccess shape → Op ... → MaskOpt dtype shape → Stmt
 ```
 
 The public DSL defaults `tl.load` to `.real`, but accepts `dtype=...` with
-`tl.float32`, `tl.float16`, or `tl.bfloat16` to produce typed floating memory
-nodes. `tl.store` infers its dtype from the value being stored, with optional
-matching `dtype=` syntax for Triton-like surface spelling. This supports typed
-stores such as Nat/index outputs. Non-floating typed `tl.load` from HBM is not
-modeled yet.
+`tl.float32`, `tl.float16`, `tl.bfloat16`, `tl.int32`, or `tl.uint64` to
+produce typed memory nodes. `tl.uint64` maps to VeriTile's `.nat` channel for
+nonnegative index/block-table values. `tl.store` infers its dtype from the
+value being stored, with optional matching `dtype=` syntax for Triton-like
+surface spelling.
 
 Float theorem policy: algorithmic correctness/refinement theorems are proved
 over erased `.real` kernels via `Kernel.AlgorithmCorrect` and
@@ -315,10 +315,10 @@ current semantic contract.
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
-| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional floating `dtype=`; block-pointer load with `boundary_check` and `padding_option="zero"` |
+| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional `dtype=` for float/int32/uint64; block-pointer load with `boundary_check` and `padding_option="zero"` |
 | Stores | Limited | Pointer-expression store, optional `mask`, dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
-| Integer memory | Limited | Typed cells and typed stores support Nat/index outputs; non-floating typed loads are still not modeled |
+| Integer memory | Limited | Typed cells plus typed load/store support Nat/index and int32 HBM values; no richer signed/unsigned width lattice yet |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
 | Indirection | Gap | No gather / paged-KV style data-dependent address model yet (#42) |
 | Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |
@@ -338,8 +338,8 @@ faithfully in the current Lean DSL?
 | FlashAttention-style dense tiled kernels | Supported for FA-1 forward subset | Proof engineering + limited semantics | Dot, transpose, causal/boundary masks, D-tail, and 4D views are covered; async/shared-memory/hardware dot fidelity remain out of scope. |
 | First-class pointer expressions | Limited | Surface + lightweight semantics | `ptrs := $(r) + offs`, pointer registers, pointer load/store, and pointer offset updates work for `RegionName × Nat`; no pointer casts/comparison/alias analysis. |
 | Block pointers / `boundary_check` | Limited | Surface + sequential semantics | `tl.make_block_ptr`, `tl.advance`, zero-padded checked loads, and checked store-skip work; no `order`, non-zero padding, TMA, or hardware behavior. |
-| Typed floating memory | Limited | Semantic abstraction | `dtype=tl.float32/fp16/bf16` creates typed floating nodes and erases to real for algorithm proofs; IEEE rounding and real typed storage are not modeled. |
-| Integer / bool tensor memory | Gap | Core memory semantics (#20) | Blocks index tensors, paged-KV block tables, argmax/topk outputs, integer scratch buffers, and bool/int mask tables. |
+| Typed floating memory | Limited | Semantic abstraction | `dtype=tl.float32/fp16/bf16` creates typed floating nodes and erases to real for algorithm proofs; IEEE rounding is not modeled. |
+| Integer / bool tensor memory | Limited | Dtype coverage | Typed cells plus typed load/store support Nat/index and int32 HBM values; no complete Triton integer-width lattice yet. |
 | Indirect / gather addressing | Gap | Core addressing semantics (#42) | Blocks paged attention, embedding/table lookup, cross-entropy index lookup, and data-dependent pointer chasing. |
 | RNG / dropout | Gap | State/probabilistic semantics (#41) | Blocks faithful dropout and stochastic kernels. |
 | Atomics / async / shared memory / barriers | Gap | Concurrency semantics (#12) | Blocks production-style backward kernels, reductions using shared memory phases, async/TMA pipelines, and race/scheduling reasoning. |

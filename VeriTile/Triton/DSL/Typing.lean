@@ -129,6 +129,8 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.float32) => pure .fp32
   | `(tritonDType| tl.float16) => pure .fp16
   | `(tritonDType| tl.bfloat16) => pure .bf16
+  | `(tritonDType| tl.int32) => pure .int32
+  | `(tritonDType| tl.uint64) => pure .nat
   | _ => Macro.throwUnsupported
 
 def lookupEnv (env : Env) (name : String) : MacroM (DInfo × SInfo) := do

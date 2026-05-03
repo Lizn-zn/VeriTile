@@ -114,7 +114,7 @@ range preconditions on every theorem. With `WithBot ℝ`:
 * `exp ⊥ := 0` and `sigmoid ⊥ := 0` mirror IEEE behavior of `exp(-∞)`/
   `sigmoid(-∞)`; see `WithBot.realExp` / `WithBot.realSigmoid` in Semantics
 
-`tl.load` reads typed `MemCell`s through the operational `readMemAs` view.
+`tl.load` reads typed `MemCell`s through the operational `readMemValue` view.
 `tl.store` writes typed cells; floating stores demote via `unbot' 0` —
 well-formed kernels never store `⊥`.
 

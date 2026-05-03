@@ -124,8 +124,8 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
       ptr.RespectsRegionTyping Γ ∧ off.RespectsRegionTyping Γ
   | .makeBlockPtr _ _ _ _ _ _ => True
   | .advanceBlockPtr ptr _ => ptr.RespectsRegionTyping Γ
-  | .load h mem mask =>
-      mem.RespectsRegionTyping Γ h.toTileDType ∧ mask.RespectsRegionTyping Γ
+  | .load dtype mem mask =>
+      mem.RespectsRegionTyping Γ dtype ∧ mask.RespectsRegionTyping Γ
   | .natToReal a => a.RespectsRegionTyping Γ
 termination_by op => sizeOf op
 decreasing_by all_goals (simp_wf; try omega)

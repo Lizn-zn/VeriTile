@@ -146,8 +146,8 @@ inductive Op : TileDType → TileShape → Type where
                 (strides offsets : List Nat) →
                 Op .blockPtr blockShape
   | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
-  | load      : (dtype : FloatDType) → MemAccess shape →
-                MaskOpt dtype.toTileDType shape → Op dtype.toTileDType shape
+  | load      : (dtype : TileDType) → MemAccess shape →
+                MaskOpt dtype shape → Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
 
 /-- Memory address form shared by load and store nodes. -/

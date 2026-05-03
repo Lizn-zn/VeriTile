@@ -109,7 +109,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .advanceBlockPtr ptr deltas, s => do
       let p ← evalOp ptr s
       some ⟨fun i => (p.data i).advance deltas⟩
-  | .load h mem mask, s => do
+  | .load dtype mem mask, s => do
       let addr ←
         match mem with
         | .region region off => do
@@ -128,7 +128,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
               (bp.region, bp.address idx, bp.inBounds idx boundaryCheck)
       let read := fun i =>
         let (region, offset, ok) := addr i
-        if ok then s.readMemAs h region offset else h.ofReal 0
+        if ok then s.readMemValue dtype region offset else BlockState.defaultCarrier dtype
       match mask with
       | .none => some ⟨read⟩
       | .mask mask => do
@@ -136,9 +136,14 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
           some ⟨fun i =>
             let (region, offset, ok) := addr i
             if masks.data i then
-              if ok then s.readMemAs h region offset else h.ofReal 0
+              if ok then s.readMemValue dtype region offset else BlockState.defaultCarrier dtype
             else
-              if ok then h.ofReal (s.undef region offset) else h.ofReal 0⟩
+              match dtype with
+              | .real => if ok then some (s.undef region offset) else some 0
+              | .fp32 => if ok then FloatDType.fp32.ofReal (s.undef region offset) else FloatDType.fp32.ofReal 0
+              | .fp16 => if ok then FloatDType.fp16.ofReal (s.undef region offset) else FloatDType.fp16.ofReal 0
+              | .bf16 => if ok then FloatDType.bf16.ofReal (s.undef region offset) else FloatDType.bf16.ofReal 0
+              | dtype => BlockState.defaultCarrier dtype⟩
       | .maskOther mask other => do
           let masks ← evalOp mask s
           let others ← evalOp other s
