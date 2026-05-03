@@ -142,6 +142,20 @@ manifest_lean_files() {
 check_manifest_files_compile() {
   local file out
   local before="${failures}"
+  out="$(mktemp)"
+  if lake build VeriTileFull >"${out}" 2>&1; then
+    if grep -qiE "declaration uses 'sorry'|uses sorry|sorryAx" "${out}"; then
+      fail "VeriTileFull build passed but emitted sorry warnings"
+      tail -n 40 "${out}" >&2
+    else
+      ok "VeriTileFull builds before manifest direct compile"
+    fi
+  else
+    fail "VeriTileFull build failed before manifest direct compile"
+    tail -n 80 "${out}" >&2
+  fi
+  rm -f "${out}"
+
   while IFS= read -r file; do
     if [[ ! -f "${file}" ]]; then
       fail "manifest Lean file missing before direct compile: ${file}"
