@@ -4,9 +4,29 @@ on:
   push:
     branches:
       - main
+    paths:
+      - '**.lean'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+      - 'lean-toolchain'
+      - 'scripts/**'
+      - '.github/workflows/**'
+      - 'documents/**'
+      - 'README.md'
+      - 'README_zh.md'
   pull_request:
     branches:
       - main
+    paths:
+      - '**.lean'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+      - 'lean-toolchain'
+      - 'scripts/**'
+      - '.github/workflows/**'
+      - 'documents/**'
+      - 'README.md'
+      - 'README_zh.md'
   workflow_dispatch:
 
 jobs:
@@ -22,6 +42,7 @@ jobs:
         uses: leanprover/lean-action@v1
         with:
           build: true
+          build-args: "VeriTile VeriTileFull"
           test: false
           lint: false
           use-mathlib-cache: auto

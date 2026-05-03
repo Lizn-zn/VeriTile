@@ -9,7 +9,6 @@ AXIOM_WHITELIST="${SCRIPT_DIR}/artifact-axiom-whitelist.txt"
 THEOREM_LIST="${SCRIPT_DIR}/artifact-theorems.txt"
 EXAMPLE_LIST="${SCRIPT_DIR}/artifact-examples.tsv"
 DOC_TERMS="${SCRIPT_DIR}/artifact-doc-terms.tsv"
-DIRECT_COMPILE_SKIP="${SCRIPT_DIR}/artifact-direct-compile-skip.txt"
 
 failures=0
 
@@ -37,7 +36,7 @@ theorem_exists() {
 run_build_no_sorry() {
   local out
   out="$(mktemp)"
-  if lake build >"${out}" 2>&1; then
+  if lake build VeriTile VeriTileFull >"${out}" 2>&1; then
     if grep -qiE "declaration uses 'sorry'|uses sorry|sorryAx" "${out}"; then
       fail "lake build passed but emitted sorry warnings"
       tail -n 40 "${out}" >&2
@@ -126,69 +125,6 @@ check_examples_manifest() {
   fi
 }
 
-manifest_lean_files() {
-  local line file theorem
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    is_comment_or_blank "${line}" && continue
-    file="${line%%:*}"
-    printf '%s\n' "${file}"
-  done < "${THEOREM_LIST}"
-
-  while IFS=$'\t' read -r file theorem _label || [[ -n "${file:-}" ]]; do
-    is_comment_or_blank "${file:-}" && continue
-    printf '%s\n' "${file}"
-  done < "${EXAMPLE_LIST}"
-}
-
-should_direct_compile_manifest_file() {
-  local file="$1"
-  if [[ -f "${DIRECT_COMPILE_SKIP}" ]] &&
-      grep -Fxq "${file}" "${DIRECT_COMPILE_SKIP}"; then
-    return 1
-  fi
-  return 0
-}
-
-check_manifest_files_compile() {
-  local file out
-  local before="${failures}"
-  out="$(mktemp)"
-  if lake build VeriTileFull >"${out}" 2>&1; then
-    if grep -qiE "declaration uses 'sorry'|uses sorry|sorryAx" "${out}"; then
-      fail "VeriTileFull build passed but emitted sorry warnings"
-      tail -n 40 "${out}" >&2
-    else
-      ok "VeriTileFull builds before manifest direct compile"
-    fi
-  else
-    fail "VeriTileFull build failed before manifest direct compile"
-    tail -n 80 "${out}" >&2
-  fi
-  rm -f "${out}"
-
-  while IFS= read -r file; do
-    if ! should_direct_compile_manifest_file "${file}"; then
-      continue
-    fi
-    if [[ ! -f "${file}" ]]; then
-      fail "manifest Lean file missing before direct compile: ${file}"
-      continue
-    fi
-    out="$(mktemp)"
-    if lake env lean "${file}" >"${out}" 2>&1; then
-      :
-    else
-      fail "manifest Lean file does not compile directly: ${file}"
-      tail -n 80 "${out}" >&2
-    fi
-    rm -f "${out}"
-  done < <(manifest_lean_files | sort -u)
-
-  if [[ "${failures}" -eq "${before}" ]]; then
-    ok "manifest Lean files compile directly, except full-target-covered skips"
-  fi
-}
-
 check_readme_example_links() {
   local readme link rel missing=0
   for readme in README.md README_zh.md; do
@@ -228,7 +164,6 @@ run_build_no_sorry
 check_axioms
 check_key_theorems
 check_examples_manifest
-check_manifest_files_compile
 check_readme_example_links
 check_documentation_terms
 
