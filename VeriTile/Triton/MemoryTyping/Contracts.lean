@@ -38,6 +38,27 @@ def Op.PointerRegionsHaveDType (Γ : RegionTyping) (dtype : TileDType) :
 termination_by ptr => sizeOf ptr
 decreasing_by all_goals (simp_wf; try omega)
 
+/--
+All statically visible base regions inside a block pointer expression have dtype
+`dtype` under `Γ`. Block-pointer registers are dynamic/external values at this
+lightweight layer, like pointer registers.
+-/
+def Op.BlockPointerRegionHasDType (Γ : RegionTyping) (dtype : TileDType) :
+    Op .blockPtr shape → Prop
+  | .makeBlockPtr region _ _ _ _ _ => Γ region = dtype
+  | .advanceBlockPtr ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
+  | .broadcast ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
+  | .full _ ptr => ptr.BlockPointerRegionHasDType Γ dtype
+  | .where c a b =>
+      c.RespectsRegionTyping Γ ∧
+      a.BlockPointerRegionHasDType Γ dtype ∧
+      b.BlockPointerRegionHasDType Γ dtype
+  | .transpose ptr => ptr.BlockPointerRegionHasDType Γ dtype
+  | .expandDim _ ptr => ptr.BlockPointerRegionHasDType Γ dtype
+  | .ref .blockPtr _ _ => True
+termination_by ptr => sizeOf ptr
+decreasing_by all_goals (simp_wf; try omega)
+
 /-- Memory-region dtype contract for expressions. -/
 def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .const _ => True
@@ -82,6 +103,8 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .ptrBase _ => True
   | .ptrAdd _ ptr off =>
       ptr.RespectsRegionTyping Γ ∧ off.RespectsRegionTyping Γ
+  | .makeBlockPtr _ _ _ _ _ _ => True
+  | .advanceBlockPtr ptr _ => ptr.RespectsRegionTyping Γ
   | .load region off =>
       Γ region = .real ∧ off.RespectsRegionTyping Γ
   | .loadMask region off mask =>
@@ -112,6 +135,10 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .loadPtrFloatMaskOther h ptr mask other =>
       ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
       mask.RespectsRegionTyping Γ ∧ other.RespectsRegionTyping Γ
+  | .loadBlockPtr ptr _ _ =>
+      ptr.RespectsRegionTyping Γ ∧ ptr.BlockPointerRegionHasDType Γ .real
+  | .loadBlockPtrFloat h ptr _ _ =>
+      ptr.RespectsRegionTyping Γ ∧ ptr.BlockPointerRegionHasDType Γ h.dtype
   | .natToReal a => a.RespectsRegionTyping Γ
 termination_by op => sizeOf op
 decreasing_by all_goals (simp_wf; try omega)
@@ -145,6 +172,12 @@ def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
   | .storePtrFloatMask h _ ptr val mask =>
       ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ h.dtype ∧
       val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
+  | .storeBlockPtr _ ptr val _ =>
+      ptr.RespectsRegionTyping Γ ∧ ptr.BlockPointerRegionHasDType Γ .real ∧
+      val.RespectsRegionTyping Γ
+  | .storeBlockPtrFloat h _ ptr val _ =>
+      ptr.RespectsRegionTyping Γ ∧ ptr.BlockPointerRegionHasDType Γ h.dtype ∧
+      val.RespectsRegionTyping Γ
   | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
   | .ifThen cond body =>
       cond.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body

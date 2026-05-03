@@ -60,6 +60,8 @@ syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax ident " = " tritonExpr : tritonKwarg
 syntax ident " = " tritonExpr : tritonMemKwarg
 syntax ident "=" tritonDType : tritonMemKwarg
+syntax "boundary_check=" term : tritonMemKwarg
+syntax "padding_option=\"zero\"" : tritonMemKwarg
 
 syntax "axis" "=" num : tritonReduceKwarg
 syntax "keep_dims" "=" "false" : tritonReduceKwarg
@@ -70,6 +72,10 @@ syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 
 syntax "tl.load(" tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
+syntax "tl.make_block_ptr(" tritonExpr ", " ident "=" tritonExpr ", " ident "=" "[" tritonExpr,*
+  "]" ", " ident "=" "[" tritonExpr,* "]" ", " ident "=" "[" tritonExpr,* "]"
+  ", " ident "=" "[" tritonExpr,* "]" ")" : tritonExpr
+syntax "tl.advance(" tritonExpr ", " "[" tritonExpr,* "]" ")" : tritonExpr
 
 syntax:max tritonExpr:max noWs "[" ":" "," "None" "]" : tritonExpr
 syntax:max tritonExpr:max noWs "[" "None" "," ":" "]" : tritonExpr

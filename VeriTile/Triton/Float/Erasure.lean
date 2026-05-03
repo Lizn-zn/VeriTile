@@ -115,6 +115,9 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .expandDim axis a => .expandDim axis a.eraseFloat
   | .ptrBase region => .ptrBase region
   | .ptrAdd bc ptr off => .ptrAdd bc ptr.eraseFloat off.eraseFloat
+  | .makeBlockPtr region baseOffset parentShape blockShape strides offsets =>
+      .makeBlockPtr region baseOffset parentShape blockShape strides offsets
+  | .advanceBlockPtr ptr deltas => .advanceBlockPtr ptr.eraseFloat deltas
   | .load region off => .load region off.eraseFloat
   | .loadMask region off mask => .loadMask region off.eraseFloat mask.eraseFloat
   | .loadMaskOther region off mask other =>
@@ -155,6 +158,16 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
       .loadPtrMaskOther ptr.eraseFloat mask.eraseFloat other.eraseFloat
   | .loadPtrFloatMaskOther .bf16 ptr mask other =>
       .loadPtrMaskOther ptr.eraseFloat mask.eraseFloat other.eraseFloat
+  | .loadBlockPtr ptr boundaryCheck padding =>
+      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
+  | .loadBlockPtrFloat .real ptr boundaryCheck padding =>
+      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
+  | .loadBlockPtrFloat .fp32 ptr boundaryCheck padding =>
+      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
+  | .loadBlockPtrFloat .fp16 ptr boundaryCheck padding =>
+      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
+  | .loadBlockPtrFloat .bf16 ptr boundaryCheck padding =>
+      .loadBlockPtr ptr.eraseFloat boundaryCheck padding
   | .natToReal a => .natToReal a.eraseFloat
 termination_by e => sizeOf e
 decreasing_by all_goals (simp_wf; try omega)
@@ -203,6 +216,16 @@ def Stmt.eraseFloat : Stmt → Stmt
       .storePtrMask shape ptr.eraseFloat val.eraseFloat mask.eraseFloat
   | .storePtrFloatMask .bf16 shape ptr val mask =>
       .storePtrMask shape ptr.eraseFloat val.eraseFloat mask.eraseFloat
+  | .storeBlockPtr shape ptr val boundaryCheck =>
+      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
+  | .storeBlockPtrFloat .real shape ptr val boundaryCheck =>
+      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
+  | .storeBlockPtrFloat .fp32 shape ptr val boundaryCheck =>
+      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
+  | .storeBlockPtrFloat .fp16 shape ptr val boundaryCheck =>
+      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
+  | .storeBlockPtrFloat .bf16 shape ptr val boundaryCheck =>
+      .storeBlockPtr shape ptr.eraseFloat val.eraseFloat boundaryCheck
   | .forLoop idx n body =>
       .forLoop idx n (Stmt.eraseFloatList body)
   | .ifThen cond body =>

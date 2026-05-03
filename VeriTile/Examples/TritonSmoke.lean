@@ -7,6 +7,7 @@ Small smoke tests for the typed Triton core.
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
+import VeriTile.Triton.Memory
 import VeriTile.Triton.MemoryTyping
 import VeriTile.Triton.DSL
 
@@ -528,5 +529,50 @@ def pointerValueMaskedStoreSmoke (xReg outReg : RegionName) (N : Nat) : Kernel :
   outPtrs := $(outReg) + offs
   tl.store(outPtrs, x, mask=mask)
 }
+
+/-! ### Block pointers and boundary checks (issue #47) -/
+
+def blockPointerBoundaryCopySmoke (xReg outReg : RegionName) (N B : Nat) : Kernel := triton {
+  xBp := tl.make_block_ptr($(xReg), base=$(0), shape=[$(N)], strides=[1], offsets=[0], block_shape=[$(B)])
+  x   := tl.load(xBp, boundary_check=([0] : List Nat), padding_option="zero")
+  yBp := tl.make_block_ptr($(outReg), base=$(0), shape=[$(N)], strides=[1], offsets=[0], block_shape=[$(B)])
+  tl.store(yBp, x, boundary_check=([0] : List Nat))
+}
+
+def blockPointerOobLoad (xReg : RegionName) : Op .real [1] :=
+  Op.loadBlockPtr
+    (Op.makeBlockPtr xReg 0 [0] [1] [1] [0])
+    [0] .zero
+
+theorem blockPointerOobLoad_zero (xReg : RegionName)
+    (s : BlockState) (i : TileIndex [1]) :
+    (evalOp (blockPointerOobLoad xReg) s).map (fun t => t.data i) =
+      some (some 0) := by
+  rcases i with ⟨i, u⟩
+  rcases u
+  simp [blockPointerOobLoad, evalOp]
+  rfl
+
+def blockPointerOobStoreStmt (outReg : RegionName) : Stmt :=
+  Stmt.storeBlockPtr [1]
+    (Op.makeBlockPtr outReg 0 [0] [1] [1] [0])
+    (Op.full [1] (Op.const 7))
+    [0]
+
+theorem blockPointerOobStore_skips (outReg : RegionName)
+    (s : BlockState) :
+    stepStmt (blockPointerOobStoreStmt outReg) s = some s := by
+  simp [blockPointerOobStoreStmt, stepStmt, evalOp, BlockPtr.inBounds,
+    BlockPtr.address]
+
+theorem blockPointerOobStore_observe_unchanged (outReg : RegionName)
+    (s : BlockState) :
+    TensorView.observe (stepStmt (blockPointerOobStoreStmt outReg) s)
+        ({ region := outReg, base := 0, strides := [] } : TensorView [])
+        PUnit.unit =
+      TensorView.observe (some s)
+        ({ region := outReg, base := 0, strides := [] } : TensorView [])
+        PUnit.unit := by
+  simp [blockPointerOobStore_skips]
 
 end VeriTile.Examples.TritonSmoke

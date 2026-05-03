@@ -32,6 +32,12 @@ private partial def staticPtrRegions : TSyntax `tritonExpr → List (TSyntax `te
   | `(tritonExpr| ($e:tritonExpr)) => staticPtrRegions e
   | `(tritonExpr| $a:tritonExpr + $_b:tritonExpr) =>
       staticPtrRegions a
+  | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $_:ident=$_:tritonExpr,
+        $_:ident=[$_:tritonExpr,*], $_:ident=[$_:tritonExpr,*],
+        $_:ident=[$_:tritonExpr,*], $_:ident=[$_:tritonExpr,*])) =>
+      staticPtrRegions p
+  | `(tritonExpr| tl.advance($p:tritonExpr, [$_:tritonExpr,*])) =>
+      staticPtrRegions p
   | _ => []
 
 /-- Collect all region terms reachable from a `tritonExpr`. Returns `term`
@@ -91,6 +97,12 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
       exprRegions a ++ exprRegions b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $c:tritonExpr)) =>
       exprRegions a ++ exprRegions b ++ exprRegions c
+  | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $_:ident=$base:tritonExpr,
+        $_:ident=[$_parent:tritonExpr,*], $_:ident=[$_strides:tritonExpr,*],
+        $_:ident=[$_offsets:tritonExpr,*], $_:ident=[$_block:tritonExpr,*])) =>
+      staticPtrRegions p ++ exprRegions base
+  | `(tritonExpr| tl.advance($p:tritonExpr, [$_deltas:tritonExpr,*])) =>
+      exprRegions p
   | `(tritonExpr| ($e:tritonExpr))               => exprRegions e
   | `(tritonExpr| tl.program_id($e:tritonExpr))  => exprRegions e
   | `(tritonExpr| tl.arange($e:tritonExpr))      => exprRegions e

@@ -15,6 +15,70 @@ abbrev RegionName := String
 /-- Symbolic name for a register (scalar or tile variable). -/
 abbrev RegName := String
 
+/-- Padding behavior for out-of-bounds block-pointer loads. -/
+inductive PaddingOption where
+  | zero
+  deriving DecidableEq, Repr
+
+/--
+Runtime value carried by Triton block pointers.
+
+The model is intentionally layout-explicit rather than hardware-specific:
+`parentShape`, `blockShape`, `strides`, and `offsets` are outermost-first lists.
+For a block-local index `idx`, the parent tensor coordinate is
+`offsets + idx`; the flat memory address is
+`baseOffset + Σ axis, (offsets[axis] + idx[axis]) * strides[axis]`.
+-/
+structure BlockPtr where
+  region : RegionName
+  baseOffset : Nat
+  parentShape : List Nat
+  blockShape : List Nat
+  strides : List Nat
+  offsets : List Nat
+  deriving DecidableEq, Repr
+
+namespace BlockPtr
+
+private def nthD (xs : List Nat) (i : Nat) : Nat :=
+  xs.getD i 0
+
+private def checkedInBounds (parentShape offsets idx : List Nat) (axis : Nat) : Bool :=
+  nthD offsets axis + nthD idx axis < nthD parentShape axis
+
+@[simp] private theorem checkedInBounds_empty_parent_axis0 (idx : List Nat) :
+    checkedInBounds [0] [0] idx 0 = false := by
+  simp [checkedInBounds, nthD]
+
+def inBounds (ptr : BlockPtr) (idx checkedAxes : List Nat) : Bool :=
+  checkedAxes.all (checkedInBounds ptr.parentShape ptr.offsets idx)
+
+def address (ptr : BlockPtr) (idx : List Nat) : Nat :=
+  let axisOffsets :=
+    (List.range ptr.strides.length).map fun axis =>
+      (nthD ptr.offsets axis + nthD idx axis) * nthD ptr.strides axis
+  ptr.baseOffset + axisOffsets.sum
+
+def advance (ptr : BlockPtr) (deltas : List Nat) : BlockPtr :=
+  let offsets :=
+    (List.range (max ptr.offsets.length deltas.length)).map
+      (fun axis => nthD ptr.offsets axis + nthD deltas axis)
+  { ptr with offsets := offsets }
+
+@[simp] theorem inBounds_empty_parent_axis0 (ptr : BlockPtr) (idx : List Nat) :
+    BlockPtr.inBounds { ptr with parentShape := [0], offsets := [0] } idx [0] = false := by
+  simp [BlockPtr.inBounds, checkedInBounds, nthD]
+
+@[simp] theorem inBounds_mk_empty_parent_axis0
+    (region : RegionName) (baseOffset : Nat) (blockShape strides idx : List Nat) :
+    BlockPtr.inBounds
+      { region := region, baseOffset := baseOffset, parentShape := [0],
+        blockShape := blockShape, strides := strides, offsets := [0] }
+      idx [0] = false := by
+  simp [BlockPtr.inBounds, checkedInBounds, nthD]
+
+end BlockPtr
+
 /--
 Triton block-local value type.
 
@@ -32,6 +96,7 @@ inductive TileDType where
   | nat
   | bool
   | ptr
+  | blockPtr
   deriving DecidableEq, Repr
 
 /-- Lean carrier for each VeriTile tile dtype.
@@ -65,6 +130,7 @@ abbrev TileCarrier : TileDType → Type
   | .nat  => Nat
   | .bool => Bool
   | .ptr  => RegionName × Nat
+  | .blockPtr => BlockPtr
 
 /-- Floating data channels currently backed by the mathematical real model. -/
 inductive FloatDType : TileDType → Type where

@@ -98,6 +98,17 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let ptrs ← evalOp ptr s
       let offs ← evalOp off s
       some (Tile.ptrAdd bc ptrs offs)
+  | .makeBlockPtr region baseOffset parentShape blockShape strides offsets, _ =>
+      some ⟨fun _ =>
+        { region := region
+        , baseOffset := baseOffset
+        , parentShape := parentShape
+        , blockShape := blockShape
+        , strides := strides
+        , offsets := offsets }⟩
+  | .advanceBlockPtr ptr deltas, s => do
+      let p ← evalOp ptr s
+      some ⟨fun i => (p.data i).advance deltas⟩
   | .load region off, s => do
       let offsets ← evalOp off s
       some ⟨fun i => some (s.readMem region (offsets.data i))⟩
@@ -166,6 +177,24 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       some ⟨fun i =>
         let p := ptrs.data i
         if masks.data i then h.ofReal (s.readMem p.1 p.2) else others.data i⟩
+  | .loadBlockPtr ptr boundaryCheck .zero, s => do
+      let p ← evalOp ptr s
+      some ⟨fun i =>
+        let bp := p.data i
+        let idx := TileShape.indexToList shape i
+        if bp.inBounds idx boundaryCheck then
+          some (s.readMem bp.region (bp.address idx))
+        else
+          some 0⟩
+  | .loadBlockPtrFloat h ptr boundaryCheck .zero, s => do
+      let p ← evalOp ptr s
+      some ⟨fun i =>
+        let bp := p.data i
+        let idx := TileShape.indexToList shape i
+        if bp.inBounds idx boundaryCheck then
+          h.ofReal (s.readMem bp.region (bp.address idx))
+        else
+          h.ofReal 0⟩
   | .natToReal a, s => return Tile.natToReal (← evalOp a s)
 
 end VeriTile.Triton

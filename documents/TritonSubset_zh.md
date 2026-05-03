@@ -141,6 +141,10 @@ bit-level / precision 语义。
 - `tl.load(ptr, other=other, mask=mask)`
 - `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16)`
 - `tl.load(ptr, mask=mask, other=other, dtype=...)`
+- `bp := tl.make_block_ptr($(region), base=$(base), shape=[...],
+  strides=[...], offsets=[...], block_shape=[...])`
+- `bp2 := tl.advance(bp, [deltas...])`
+- `tl.load(bp, boundary_check=([axes...] : List Nat), padding_option="zero")`
 
 支持的 store:
 
@@ -150,9 +154,11 @@ bit-level / precision 语义。
 - `tl.store(ptr, value, mask=mask)`
 - `tl.store(ptr, value, dtype=...)`,其中 `dtype` 必须和 value dtype 一致。
   不写 `dtype=` 时,store 从 `value` 推断 dtype。
+- `tl.store(bp, value, boundary_check=([axes...] : List Nat))`
 
-未知 kwarg 会报错。特别地,`tl.load(..., boundary_check=...)` 和
-`tl.store(..., boundary_check=...)` 不会被静默忽略。
+未知 kwarg 会报错。对 block pointer 来说,`boundary_check` 只支持在
+block-pointer `tl.load` / `tl.store` 上使用,不能和 `mask` / `other` 混用。
+当前唯一建模的 `padding_option` 是 `"zero"`。
 
 masked load 语义:
 
@@ -201,8 +207,12 @@ ptrs2 := ptrs + stride
 ```
 
 这个模型故意比 CUDA/Triton pointer 窄:目前支持从 `RegionName` 创建 pointer base、
-pointer 加 `.nat` offset、以及通过 pointer-valued register 做 load/store。pointer
-cast、pointer comparison、block pointer、typed address space 都还没有建模。
+pointer 加 `.nat` offset、以及通过 pointer-valued register 做 load/store。它也把
+block pointer 建模为 first-class `.blockPtr` tile value,携带 base region、base
+offset、parent shape、block shape、strides 和 logical offsets。block-pointer
+load/store 会逐 lane 计算地址;checked 维度越界的 load lane 返回 zero,checked 维度
+越界的 store lane 不写内存。pointer cast、pointer comparison、硬件/TMA block-pointer
+行为、typed address space 还没有建模。
 
 Offset 是显式 `.nat` 表达式。高维 tensor 通过用户写出的 strided offset 公式表示,
 例如:
@@ -268,21 +278,20 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]`,literal-axis `tl.expand_dims` |
 | transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
-| load | Limited | pointer-expression load,可带 `mask` / `other` / floating `dtype=` |
-| store | Limited | pointer-expression store,可带 `mask`;floating dtype 从 value 推断,也可写匹配的 `dtype=` |
+| load | Limited | pointer-expression load,可带 `mask` / `other` / floating `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
+| store | Limited | pointer-expression store,可带 `mask`;floating dtype 从 value 推断,也可写匹配的 `dtype=`;block-pointer store 支持 `boundary_check` |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
 | integer memory | Gap | memory 是 `RegionName → Nat → ℝ`;float dtype surface 会擦除到 real,int/Nat tensor memory 仍没有 (#20) |
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
 | indirection | Gap | 还没有 gather / paged-KV 风格的 data-dependent address model (#42) |
-| block pointer | Gap | 还没有 `tl.make_block_ptr`、`tl.advance` 或 block-pointer load/store |
+| block pointer | Limited | `tl.make_block_ptr`、`tl.advance`、带 checked-axis zero padding / store skip 的 block-pointer load/store;没有硬件/TMA 行为 |
 | atomic / async / barrier | Gap | 还没有 `tl.atomic_*`、async copy、TMA、barrier 或 scheduling semantics (#12) |
 | floating-point fidelity | Gap | 只有 real-valued model;没有 IEEE-754 或 mixed-precision hardware semantics (#11) |
 
 ## 尚不支持或尚未真实建模
 
 - 完整 IEEE-754 浮点语义。
-- Triton block pointer 以及 block-pointer-only 限制。
-- `boundary_check` / `padding_option`。
+- block-pointer 硬件/TMA 行为,以及 `"zero"` 之外的 padding option。
 - `RegionName × Nat` pointer value 之外的完整 CUDA/Triton pointer 语义。
 - named-region equality 之外的通用 pointer alias analysis。
 - 完整 Python/Triton JIT 语义、decorator、meta-parameter execution,

@@ -68,7 +68,7 @@ Core Phase C additions on `main`:
 
 The currently supported Triton subset and known semantic gaps are documented in
 [`documents/TritonSubset.md`](./documents/TritonSubset.md). Important open gaps
-include full IEEE-754 semantics, block pointers, `boundary_check`, atomics,
+include full IEEE-754 semantics, block-pointer hardware/TMA behavior, atomics,
 async copy, and whole-grid launch semantics.
 
 ## Environment
@@ -330,8 +330,8 @@ lean-toolchain         Pinned Lean toolchain
   kernels, but algorithmic proofs stay over the erased mathematical `.real`
   kernel. The Real↔float bridge is a trusted abstraction boundary, supported by
   smoke/differential tests rather than IEEE-754 proof.
-- **Phase D:** close the remaining in-scope semantic gaps: block pointers,
-  `boundary_check`, whole-grid launch semantics, FA-1 vs FA-2, float-facing
+- **Phase D:** close the remaining in-scope semantic gaps: block-pointer
+  hardware/TMA behavior, whole-grid launch semantics, FA-1 vs FA-2, float-facing
   theorem tests, and paper artifact packaging. IEEE-754 fidelity remains an
   explicit out-of-scope gap.
 

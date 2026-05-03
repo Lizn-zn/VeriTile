@@ -105,6 +105,30 @@ private def isRealDType : DInfo → Bool
   | .real => Bool.true
   | _ => Bool.false
 
+private def natDimTerm (ctx : String) (d : TSyntax `tritonExpr) :
+    MacroM (TSyntax `term) := do
+  match d with
+  | `(tritonExpr| $($t:term)) => `(($t : Nat))
+  | `(tritonExpr| $n:num) => `(($n : Nat))
+  | _ => Macro.throwError (ctx ++ ": each entry must be a numeric literal or `$(t)` antiquote")
+
+private def natListTerm (ctx : String) (dims : Array (TSyntax `tritonExpr)) :
+    MacroM (TSyntax `term × List (TSyntax `term)) := do
+  let mut dimTerms : Array (TSyntax `term) := #[]
+  for d in dims do
+    dimTerms := dimTerms.push (← natDimTerm ctx d)
+  let rec go : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : List Nat))
+    | d :: rest => do
+        let tail ← go rest
+        `($d :: $tail)
+  pure (← go dimTerms.toList, dimTerms.toList)
+
+private def paddingOptionTerm (s : String) : MacroM (TSyntax `term) := do
+  match s with
+  | "zero" => `(PaddingOption.zero)
+  | other => Macro.throwError ("padding_option: unsupported value `" ++ other ++ "`; only \"zero\" is modeled")
+
 mutual
 
 partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
@@ -280,12 +304,49 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let (bc, outShape) ← broadcastTerm dot.shape acc'.shape "tl.dot accumulator"
       pure ⟨← `(Op.add NumericDType.real $bc $dot.term $acc'.term),
             .real, outShape⟩
+  | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $baseKw:ident=$base:tritonExpr,
+        $shapeKw:ident=[$parentDims:tritonExpr,*], $stridesKw:ident=[$strideDims:tritonExpr,*],
+        $offsetsKw:ident=[$offsetDims:tritonExpr,*], $blockShapeKw:ident=[$blockDims:tritonExpr,*])) => do
+      unless baseKw.getId.toString == "base" &&
+          shapeKw.getId.toString == "shape" &&
+          stridesKw.getId.toString == "strides" &&
+          offsetsKw.getId.toString == "offsets" &&
+          blockShapeKw.getId.toString == "block_shape" do
+        Macro.throwError "tl.make_block_ptr kwargs must be `base`, `shape`, `strides`, `offsets`, `block_shape` in that order"
+      let sp ← expandStaticPtrExpr env p
+      let region ← match sp with
+        | some sp =>
+            unless sp.baseOnly do
+              Macro.throwError "tl.make_block_ptr: pointer base must be a region antiquote like `$(xReg)`"
+            pure sp.region
+        | none =>
+            Macro.throwError "tl.make_block_ptr: first argument must be a region antiquote like `$(xReg)`"
+      let baseTerm ← natDimTerm "tl.make_block_ptr base" base
+      let (parentShape, _) ← natListTerm "tl.make_block_ptr shape" parentDims
+      let (strides, _) ← natListTerm "tl.make_block_ptr strides" strideDims
+      let (offsets, _) ← natListTerm "tl.make_block_ptr offsets" offsetDims
+      let (blockShape, blockShapeInfo) ← natListTerm "tl.make_block_ptr block_shape" blockDims
+      pure ⟨← `(Op.makeBlockPtr $region $baseTerm $parentShape $blockShape $strides $offsets),
+            .blockPtr, .dims blockShapeInfo⟩
+  | `(tritonExpr| tl.advance($p:tritonExpr, [$deltas:tritonExpr,*])) => do
+      let p' ← expandExpr env p
+      ensureDType .blockPtr p'.dtype "tl.advance pointer"
+      let (deltasTerm, _) ← natListTerm "tl.advance offsets" deltas
+      pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape⟩
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       let mut maskTerm : Option (TSyntax `term × SInfo) := none
       let mut otherTerm : Option (TSyntax `term × DInfo × SInfo) := none
       let mut dtype? : Option DInfo := none
+      let mut boundaryCheck? : Option (TSyntax `term) := none
+      let mut padding : TSyntax `term ← `(PaddingOption.zero)
       for kw in kwargs do
         match kw with
+        | `(tritonMemKwarg| boundary_check=$axes:term) =>
+            if boundaryCheck?.isSome then
+              Macro.throwError "tl.load: duplicate `boundary_check=` kwarg"
+            boundaryCheck? := some axes
+        | `(tritonMemKwarg| padding_option="zero") =>
+            padding := ← `(PaddingOption.zero)
         | `(tritonMemKwarg| $name:ident = $val:tritonExpr) =>
             let val' ← expandExpr env val
             match name.getId.toString with
@@ -297,18 +358,28 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
             | unknown =>
                 let msg : String :=
                   "tl.load: unknown kwarg `" ++ unknown ++
-                  "`. Only `mask`, `other`, and `dtype` are recognized."
+                  "`. Only `mask`, `other`, `dtype`, `boundary_check`, and `padding_option` are recognized."
                 Macro.throwError msg
         | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
             unless name.getId.toString == "dtype" do
               Macro.throwError
                 ("tl.load: unknown kwarg `" ++ name.getId.toString ++
-                 "`. Only `mask`, `other`, and `dtype` are recognized.")
+                 "`. Only `mask`, `other`, `dtype`, `boundary_check`, and `padding_option` are recognized.")
             if dtype?.isSome then
               Macro.throwError "tl.load: duplicate `dtype=` kwarg"
             dtype? := some (← expandDType dt)
         | _ => Macro.throwUnsupported
       let outDType := dtype?.getD .real
+      if let some boundaryCheck := boundaryCheck? then
+        if maskTerm.isSome || otherTerm.isSome then
+          Macro.throwError "tl.load: block-pointer `boundary_check` cannot be combined with `mask` or `other`"
+        let p' ← expandExpr env p
+        ensureDType .blockPtr p'.dtype "tl.load block pointer"
+        if isRealDType outDType then
+          return ⟨← `(Op.loadBlockPtr $p'.term $boundaryCheck $padding), .real, p'.shape⟩
+        else
+          let hp ← outDType.floatProof
+          return ⟨← `(Op.loadBlockPtrFloat $hp $p'.term $boundaryCheck $padding), outDType, p'.shape⟩
       if let some (_, otherDType, _) := otherTerm then
         unless otherDType == outDType do
           Macro.throwError "tl.load other: dtype must match load result dtype"
@@ -805,8 +876,15 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
   | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       let mut maskTerm : Option (TSyntax `term × SInfo) := none
       let mut dtype? : Option DInfo := none
+      let mut boundaryCheck? : Option (TSyntax `term) := none
       for kw in kwargs do
         match kw with
+        | `(tritonMemKwarg| boundary_check=$axes:term) =>
+            if boundaryCheck?.isSome then
+              Macro.throwError "tl.store: duplicate `boundary_check=` kwarg"
+            boundaryCheck? := some axes
+        | `(tritonMemKwarg| padding_option="zero") =>
+            Macro.throwError "tl.store: `padding_option` is only valid on tl.load"
         | `(tritonMemKwarg| $name:ident = $kval:tritonExpr) =>
             let kval' ← expandExpr env kval
             match name.getId.toString with
@@ -816,13 +894,13 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
             | unknown =>
                 let msg : String :=
                   "tl.store: unknown kwarg `" ++ unknown ++
-                  "`. Only `mask` and `dtype` are recognized (Triton's tl.store has no `other`; see issue #16)."
+                  "`. Only `mask`, `dtype`, and `boundary_check` are recognized (Triton's tl.store has no `other`; see issue #16)."
                 Macro.throwError msg
         | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
             unless name.getId.toString == "dtype" do
               Macro.throwError
                 ("tl.store: unknown kwarg `" ++ name.getId.toString ++
-                 "`. Only `mask` and `dtype` are recognized (Triton's tl.store has no `other`; see issue #16).")
+                 "`. Only `mask`, `dtype`, and `boundary_check` are recognized (Triton's tl.store has no `other`; see issue #16).")
             if dtype?.isSome then
               Macro.throwError "tl.store: duplicate `dtype=` kwarg"
             dtype? := some (← expandDType dt)
@@ -831,6 +909,18 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       let storeDType := dtype?.getD v'.dtype
       unless storeDType == v'.dtype do
         Macro.throwError "tl.store: `dtype=` must match the value dtype"
+      if let some boundaryCheck := boundaryCheck? then
+        if maskTerm.isSome then
+          Macro.throwError "tl.store: block-pointer `boundary_check` cannot be combined with `mask`"
+        let p' ← expandExpr env p
+        ensureDType .blockPtr p'.dtype "tl.store block pointer"
+        let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
+        let sh ← p'.shape.term
+        if isRealDType storeDType then
+          return (← `(Stmt.storeBlockPtr $sh $p'.term $vTerm $boundaryCheck), env)
+        else
+          let hp ← storeDType.floatProof
+          return (← `(Stmt.storeBlockPtrFloat $hp $sh $p'.term $vTerm $boundaryCheck), env)
       match maskTerm with
       | none =>
           match ← expandStaticPtrExpr env p with
