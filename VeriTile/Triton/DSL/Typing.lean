@@ -130,6 +130,9 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.float16) => pure .fp16
   | `(tritonDType| tl.bfloat16) => pure .bf16
   | `(tritonDType| tl.int32) => pure .int32
+  | `(tritonDType| tl.int64) =>
+      Macro.throwError "tl.int64 is not modeled yet; use tl.uint32/tl.uint64 for nonnegative indices or add an int64 carrier"
+  | `(tritonDType| tl.uint32) => pure .nat
   | `(tritonDType| tl.uint64) => pure .nat
   | _ => Macro.throwUnsupported
 

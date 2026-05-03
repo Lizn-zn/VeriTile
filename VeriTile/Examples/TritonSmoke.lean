@@ -193,6 +193,26 @@ def natLoadStoreKernel (idxReg outReg : RegionName) : Kernel := triton {
   tl.store($(outReg), idx)
 }
 
+/-- `tl.uint32` is also an index-like HBM dtype and maps to VeriTile `.nat`. -/
+def uint32LoadStoreSmoke (idxReg outReg : RegionName) : Kernel := triton {
+  idx := tl.load($(idxReg), dtype=tl.uint32)
+  tl.store($(outReg), idx)
+}
+
+/-- Masked integer HBM load with a Nat `other=` value. -/
+def uint64MaskedLoadStoreSmoke (idxReg outReg : RegionName) : Kernel := triton {
+  mask := $(0) < $(0)
+  idx  := tl.load($(idxReg), mask=mask, other=$(0), dtype=tl.uint64)
+  tl.store($(outReg), idx)
+}
+
+/-- Pointer-register typed integer load. -/
+def uint64PointerRegisterLoadSmoke (idxReg outReg : RegionName) : Kernel := triton {
+  ptr := $(idxReg) + $(0)
+  idx := tl.load(ptr, dtype=tl.uint64)
+  tl.store($(outReg), idx)
+}
+
 def argmax2IndexStoreCoreKernel (xReg outReg : RegionName) : Kernel :=
   { inputs := [xReg]
   , outputs := [outReg]
