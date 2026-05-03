@@ -70,10 +70,18 @@ inductive Op : TileDType → TileShape → Type where
   | floorDiv  : IntegralDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | mod       : IntegralDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | exp       : Op .real shape → Op .real shape
+  | exp2      : Op .real shape → Op .real shape
   | log       : Op .real shape → Op .real shape
+  | log2      : Op .real shape → Op .real shape
   | sigmoid   : Op .real shape → Op .real shape
   | sqrt      : Op .real shape → Op .real shape
   | tanh      : Op .real shape → Op .real shape
+  | sin       : Op .real shape → Op .real shape
+  | cos       : Op .real shape → Op .real shape
+  | tan       : Op .real shape → Op .real shape
+  | atan      : Op .real shape → Op .real shape
+  | cosh      : Op .real shape → Op .real shape
+  | sinh      : Op .real shape → Op .real shape
   | lt        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | le        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | eq        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out

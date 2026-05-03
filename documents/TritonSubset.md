@@ -113,6 +113,14 @@ Supported channels:
 - `tl.sigmoid`
 - `tl.sqrt`
 - `tl.tanh`
+- `tl.sin`
+- `tl.cos`
+- `tl.tan`
+- `tl.atan`
+- `tl.cosh`
+- `tl.sinh`
+- `tl.log2` (Real semantics: `tl.log(x) / log(2)`)
+- `tl.exp2` (Real semantics: `tl.exp(x * log(2))`)
 - `tl.abs`
 
 These operate on the `.real` channel. `tl.abs(x)` is desugared to
@@ -328,7 +336,7 @@ current semantic contract.
 | Comparisons | Supported | `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or `.nat` |
 | Boolean ops | Supported | `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus `&`, `|`, `~` mask spellings |
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
-| Unary math | Supported | `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh` |
+| Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
 | Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |

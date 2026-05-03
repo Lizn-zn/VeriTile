@@ -57,10 +57,18 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
             | _ => acc) []
       staticPtrRegions p ++ kwargRegions
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.exp2($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.log2($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.sin($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.cos($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.tan($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.atan($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.cosh($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.sinh($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.abs($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b

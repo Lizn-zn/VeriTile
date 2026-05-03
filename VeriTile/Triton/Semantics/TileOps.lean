@@ -9,6 +9,8 @@ import Mathlib.Analysis.SpecialFunctions.Exp
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import Mathlib.Analysis.SpecialFunctions.Sigmoid
 import Mathlib.Analysis.Complex.Trigonometric
+import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic
+import Mathlib.Analysis.SpecialFunctions.Trigonometric.Arctan
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Semantics.State
 
@@ -53,6 +55,14 @@ noncomputable def WithBot.realLog : WithBot ℝ → WithBot ℝ
   | none   => none
   | some r => some (Real.log r)
 
+noncomputable def WithBot.realLog2 : WithBot ℝ → WithBot ℝ
+  | none   => none
+  | some r => some (Real.log r / Real.log 2)
+
+noncomputable def WithBot.realExp2 : WithBot ℝ → WithBot ℝ
+  | none   => some 0
+  | some r => some (Real.exp (r * Real.log 2))
+
 noncomputable def WithBot.realSigmoid : WithBot ℝ → WithBot ℝ
   | none   => some 0           -- sigmoid(-∞) = 0
   | some r => some (Real.sigmoid r)
@@ -65,34 +75,96 @@ noncomputable def WithBot.realTanh : WithBot ℝ → WithBot ℝ
   | none   => some (-1)        -- tanh(-∞) = -1
   | some r => some (Real.tanh r)
 
+noncomputable def WithBot.realSin : WithBot ℝ → WithBot ℝ
+  | none   => none
+  | some r => some (Real.sin r)
+
+noncomputable def WithBot.realCos : WithBot ℝ → WithBot ℝ
+  | none   => none
+  | some r => some (Real.cos r)
+
+noncomputable def WithBot.realTan : WithBot ℝ → WithBot ℝ
+  | none   => none
+  | some r => some (Real.tan r)
+
+noncomputable def WithBot.realAtan : WithBot ℝ → WithBot ℝ
+  | none   => some (-(Real.pi / 2))
+  | some r => some (Real.arctan r)
+
+noncomputable def WithBot.realCosh : WithBot ℝ → WithBot ℝ
+  | none   => none
+  | some r => some (Real.cosh r)
+
+noncomputable def WithBot.realSinh : WithBot ℝ → WithBot ℝ
+  | none   => none
+  | some r => some (Real.sinh r)
+
 @[simp] theorem WithBot.realExp_some (r : ℝ) :
     WithBot.realExp (some r) = some (Real.exp r) := rfl
 @[simp] theorem WithBot.realLog_some (r : ℝ) :
     WithBot.realLog (some r) = some (Real.log r) := rfl
+@[simp] theorem WithBot.realLog2_some (r : ℝ) :
+    WithBot.realLog2 (some r) = some (Real.log r / Real.log 2) := rfl
+@[simp] theorem WithBot.realExp2_some (r : ℝ) :
+    WithBot.realExp2 (some r) = some (Real.exp (r * Real.log 2)) := rfl
 @[simp] theorem WithBot.realSigmoid_some (r : ℝ) :
     WithBot.realSigmoid (some r) = some (Real.sigmoid r) := rfl
 @[simp] theorem WithBot.realSqrt_some (r : ℝ) :
     WithBot.realSqrt (some r) = some (Real.sqrt r) := rfl
 @[simp] theorem WithBot.realTanh_some (r : ℝ) :
     WithBot.realTanh (some r) = some (Real.tanh r) := rfl
+@[simp] theorem WithBot.realSin_some (r : ℝ) :
+    WithBot.realSin (some r) = some (Real.sin r) := rfl
+@[simp] theorem WithBot.realCos_some (r : ℝ) :
+    WithBot.realCos (some r) = some (Real.cos r) := rfl
+@[simp] theorem WithBot.realTan_some (r : ℝ) :
+    WithBot.realTan (some r) = some (Real.tan r) := rfl
+@[simp] theorem WithBot.realAtan_some (r : ℝ) :
+    WithBot.realAtan (some r) = some (Real.arctan r) := rfl
+@[simp] theorem WithBot.realCosh_some (r : ℝ) :
+    WithBot.realCosh (some r) = some (Real.cosh r) := rfl
+@[simp] theorem WithBot.realSinh_some (r : ℝ) :
+    WithBot.realSinh (some r) = some (Real.sinh r) := rfl
 
 @[simp] theorem WithBot.realExp_bot :
     WithBot.realExp (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realExp2_bot :
+    WithBot.realExp2 (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realSigmoid_bot :
     WithBot.realSigmoid (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realTanh_bot :
     WithBot.realTanh (⊥ : WithBot ℝ) = ((-1 : ℝ) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realAtan_bot :
+    WithBot.realAtan (⊥ : WithBot ℝ) = ((-(Real.pi / 2) : ℝ) : WithBot ℝ) := rfl
 
 @[simp] theorem WithBot.realExp_coe (r : ℝ) :
     WithBot.realExp ((r : ℝ) : WithBot ℝ) = (((Real.exp r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realLog_coe (r : ℝ) :
     WithBot.realLog ((r : ℝ) : WithBot ℝ) = (((Real.log r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realLog2_coe (r : ℝ) :
+    WithBot.realLog2 ((r : ℝ) : WithBot ℝ) =
+      (((Real.log r / Real.log 2 : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realExp2_coe (r : ℝ) :
+    WithBot.realExp2 ((r : ℝ) : WithBot ℝ) =
+      (((Real.exp (r * Real.log 2) : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realSigmoid_coe (r : ℝ) :
     WithBot.realSigmoid ((r : ℝ) : WithBot ℝ) = (((Real.sigmoid r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realSqrt_coe (r : ℝ) :
     WithBot.realSqrt ((r : ℝ) : WithBot ℝ) = (((Real.sqrt r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realTanh_coe (r : ℝ) :
     WithBot.realTanh ((r : ℝ) : WithBot ℝ) = (((Real.tanh r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realSin_coe (r : ℝ) :
+    WithBot.realSin ((r : ℝ) : WithBot ℝ) = (((Real.sin r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realCos_coe (r : ℝ) :
+    WithBot.realCos ((r : ℝ) : WithBot ℝ) = (((Real.cos r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realTan_coe (r : ℝ) :
+    WithBot.realTan ((r : ℝ) : WithBot ℝ) = (((Real.tan r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realAtan_coe (r : ℝ) :
+    WithBot.realAtan ((r : ℝ) : WithBot ℝ) = (((Real.arctan r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realCosh_coe (r : ℝ) :
+    WithBot.realCosh ((r : ℝ) : WithBot ℝ) = (((Real.cosh r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realSinh_coe (r : ℝ) :
+    WithBot.realSinh ((r : ℝ) : WithBot ℝ) = (((Real.sinh r : ℝ)) : WithBot ℝ) := rfl
 
 /-! ### Algebraic simp lemmas on `WithBot ℝ` arithmetic helpers -/
 

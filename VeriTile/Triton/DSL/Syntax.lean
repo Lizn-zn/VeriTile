@@ -27,10 +27,18 @@ syntax "tl.program_id(" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.exp(" tritonExpr ")" : tritonExpr
+syntax "tl.exp2(" tritonExpr ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
+syntax "tl.log2(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.tanh(" tritonExpr ")" : tritonExpr
+syntax "tl.sin(" tritonExpr ")" : tritonExpr
+syntax "tl.cos(" tritonExpr ")" : tritonExpr
+syntax "tl.tan(" tritonExpr ")" : tritonExpr
+syntax "tl.atan(" tritonExpr ")" : tritonExpr
+syntax "tl.cosh(" tritonExpr ")" : tritonExpr
+syntax "tl.sinh(" tritonExpr ")" : tritonExpr
 syntax "tl.abs(" tritonExpr ")" : tritonExpr
 syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.logical_or(" tritonExpr ", " tritonExpr ")" : tritonExpr

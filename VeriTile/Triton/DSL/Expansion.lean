@@ -36,8 +36,10 @@ Conventions:
   * Statements are separated by newlines (no explicit terminator).
 
 Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
-`tl.arange(start, end)`, `tl.exp(_)`, `tl.log(_)`, `tl.sigmoid(_)`,
-`tl.sqrt(_)`, `tl.tanh(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load(ptrExpr)`,
+`tl.arange(start, end)`, `tl.exp(_)`, `tl.exp2(_)`, `tl.log(_)`, `tl.log2(_)`,
+`tl.sigmoid(_)`, `tl.sqrt(_)`, `tl.tanh(_)`, `tl.sin(_)`, `tl.cos(_)`,
+`tl.tan(_)`, `tl.atan(_)`, `tl.cosh(_)`, `tl.sinh(_)`, `tl.max(_)`,
+`tl.sum(_)`, `tl.load(ptrExpr)`,
 binary `+ - * /`, parens, identifiers, numerals, antiquotation (`$(t)` for
 `Nat` in numeric context / `RegionName` in pointer context, `$ℝ(t)` for `ℝ`).
 Pointer arithmetic supports `ptr + nat` and `nat + ptr`.
@@ -229,10 +231,18 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.exp"
       pure ⟨← `(Op.exp $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.exp2($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.exp2"
+      pure ⟨← `(Op.exp2 $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.log($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.log"
       pure ⟨← `(Op.log $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.log2($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.log2"
+      pure ⟨← `(Op.log2 $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.sigmoid($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.sigmoid"
@@ -245,6 +255,30 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.tanh"
       pure ⟨← `(Op.tanh $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.sin($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.sin"
+      pure ⟨← `(Op.sin $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.cos($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.cos"
+      pure ⟨← `(Op.cos $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.tan($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.tan"
+      pure ⟨← `(Op.tan $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.atan($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.atan"
+      pure ⟨← `(Op.atan $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.cosh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.cosh"
+      pure ⟨← `(Op.cosh $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.sinh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.sinh"
+      pure ⟨← `(Op.sinh $e'.term), .real, e'.shape⟩
   | `(tritonExpr| tl.abs($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.abs"

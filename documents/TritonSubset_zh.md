@@ -102,6 +102,14 @@ Stmt : Type
 - `tl.sigmoid`
 - `tl.sqrt`
 - `tl.tanh`
+- `tl.sin`
+- `tl.cos`
+- `tl.tan`
+- `tl.atan`
+- `tl.cosh`
+- `tl.sinh`
+- `tl.log2`(Real 语义为 `tl.log(x) / log(2)`)
+- `tl.exp2`(Real 语义为 `tl.exp(x * log(2))`)
 - `tl.abs`
 
 这些都作用于 `.real` channel。`tl.abs(x)` 当前在实数语义里降为
@@ -301,7 +309,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | comparison | Supported | `.real` 或 `.nat` 上的 `<`, `<=`, `==`, `>`, `>=`, `!=` |
 | bool op | Supported | `tl.logical_and`、`tl.logical_or`、`tl.logical_not`,以及 `&`、`|`、`~` mask spelling |
 | pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
-| unary math | Supported | `tl.exp`, `tl.log`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh` |
+| unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
 | reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis` / `keep_dims` |
 | broadcast | Supported | ND same-dim、scalar-to-tile、dimension-`1` expansion |
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]`,literal-axis `tl.expand_dims` |
