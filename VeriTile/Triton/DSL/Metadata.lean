@@ -159,6 +159,28 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
       staticPtrRegions p ++ exprRegions base
   | `(tritonExpr| tl.advance($p:tritonExpr, [$_deltas:tritonExpr,*])) =>
       exprRegions p
+  | `(tritonExpr| tl.permute($e:tritonExpr, [$_:num,*])) =>
+      exprRegions e
+  | `(tritonExpr| tl.reshape($e:tritonExpr, [$dims:tritonExpr,*])) =>
+      dims.getElems.foldl (fun acc d => acc ++ exprRegions d) (exprRegions e)
+  | `(tritonExpr| tl.view($e:tritonExpr, [$dims:tritonExpr,*])) =>
+      dims.getElems.foldl (fun acc d => acc ++ exprRegions d) (exprRegions e)
+  | `(tritonExpr| tl.ravel($e:tritonExpr)) =>
+      exprRegions e
+  | `(tritonExpr| tl.flip($e:tritonExpr, $_:num)) =>
+      exprRegions e
+  | `(tritonExpr| tl.flip($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions e ++ kwargRegions
+  | `(tritonExpr| tl.join($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions a ++ exprRegions b
+  | `(tritonExpr| tl.split($e:tritonExpr, $_:num)) =>
+      exprRegions e
   | `(tritonExpr| ($e:tritonExpr))               => exprRegions e
   | `(tritonExpr| tl.program_id($e:tritonExpr))  => exprRegions e
   | `(tritonExpr| tl.arange($e:tritonExpr))      => exprRegions e

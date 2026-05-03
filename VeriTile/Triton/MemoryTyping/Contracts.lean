@@ -135,6 +135,10 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .sort _ a => a.RespectsRegionTyping Γ
   | .dot a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .transpose a => a.RespectsRegionTyping Γ
+  | .reshape _ a => a.RespectsRegionTyping Γ
+  | .remap _ _ a => a.RespectsRegionTyping Γ
+  | .join a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .split _ a => a.RespectsRegionTyping Γ
   | .expandDim _ a => a.RespectsRegionTyping Γ
   | .ptrBase _ => True
   | .ptrAdd _ ptr off =>

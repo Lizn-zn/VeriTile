@@ -174,6 +174,10 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .sort _ a => a.check ctx
   | .dot a b => a.check ctx *> b.check ctx
   | .transpose a => a.check ctx
+  | .reshape _ a => a.check ctx
+  | .remap _ _ a => a.check ctx
+  | .join a b => a.check ctx *> b.check ctx
+  | .split _ a => a.check ctx
   | .expandDim _ a => a.check ctx
   | .ptrBase _ => .ok ()
   | .ptrAdd _ ptr off => ptr.check ctx *> off.check ctx

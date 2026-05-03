@@ -95,6 +95,10 @@ Stmt : Type
   `sum`、`prod`、`max`、`min`;不把任意用户函数塞进 AST。
 - Index/order op: `.real` tile 上的 `tl.argmax`、`tl.argmin`、`tl.sort`,
   需要静态 `axis=N`。arg tie 返回最小 axis index;sort 沿所选 axis 升序。
+- Shape/view op: `tl.reshape`、`tl.view`、`tl.ravel`、`tl.permute`、
+  `tl.flip`、`tl.join` 和 projection 形式的 `tl.split(x, 0|1)`。View
+  语义是 row-major reshape 或 typed index remap。`tl.split` 暂时暴露成两个
+  projection,因为 Lean DSL 还没有 `a, b = tl.split(x)` 这种 tuple destructuring。
 - Broadcast 是 ND 的:同维度、scalar-to-tile、或维度 `1` 扩到另一边。
   DSL 通过语法构造 broadcast proof,所以语义等价但写法不同的维度表达式,
   可能仍需要写成一致形式。
@@ -324,7 +328,8 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | index/order op | Limited | `.real` tile 上的 `tl.argmax`, `tl.argmin`, `tl.sort`,需要静态 `axis=N`;arg tie 返回最小 axis index,sort 升序 |
 | broadcast | Supported | ND same-dim、scalar-to-tile、dimension-`1` expansion |
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]`,literal-axis `tl.expand_dims` |
-| transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
+| shape/view op | Limited | `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`, `tl.flip`, `tl.join`,projection-form `tl.split(x, 0|1)` |
+| transpose | Supported | `tl.trans(e)` 交换最后两个 axis;任意静态 permutation 用 `tl.permute(e, [axes])` |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
 | load | Limited | pointer-expression load,可带 `mask` / `other` / float/int32/int64/uint32/uint64 `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
 | store | Limited | pointer-expression store,可带 `mask`;dtype 从 value 推断,也可写匹配的 `dtype=`;block-pointer store 支持 `boundary_check` |
@@ -378,7 +383,6 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
   writes、race、atomic 或 scheduling。
 - cache/performance hint,例如 `cache_modifier`, `eviction_policy`, `volatile`,
   `is_volatile`。
-- 任意 axis permutation。`tl.trans` 只交换最后两个 axis。
 - 高 rank bracket slicing。目前只支持 rank-1 的 `[:, None]` / `[None, :]`;
   显式插入 unit axis 请用 `tl.expand_dims(e, axis=N)`。
 - integer width、overflow、signedness 和 signed bitwise 行为。`.nat`

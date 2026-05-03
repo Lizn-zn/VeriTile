@@ -122,6 +122,10 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .sort axis a => .sort axis a.eraseFloat
   | .dot a b => .dot a.eraseFloat b.eraseFloat
   | .transpose a => .transpose a.eraseFloat
+  | .reshape outShape a => .reshape outShape a.eraseFloat
+  | .remap outShape map a => .remap outShape map a.eraseFloat
+  | .join a b => .join a.eraseFloat b.eraseFloat
+  | .split side a => .split side a.eraseFloat
   | .expandDim axis a => .expandDim axis a.eraseFloat
   | .ptrBase region => .ptrBase region
   | .ptrAdd bc ptr off => .ptrAdd bc ptr.eraseFloat off.eraseFloat

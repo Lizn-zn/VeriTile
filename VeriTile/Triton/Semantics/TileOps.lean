@@ -40,6 +40,29 @@ def Tile.uop {dtype shape} (op : TileCarrier dtype → TileCarrier dtype)
     (x : Tile dtype shape) : Tile dtype shape :=
   ⟨fun i => op (x.data i)⟩
 
+def Tile.remap {dtype inShape outShape}
+    (map : TileIndex outShape → TileIndex inShape)
+    (x : Tile dtype inShape) : Tile dtype outShape :=
+  ⟨fun i => x.data (map i)⟩
+
+def Tile.reshape {dtype inShape outShape}
+    (x : Tile dtype inShape) : Tile dtype outShape :=
+  let inputs := TileShape.allIndices inShape
+  ⟨fun i =>
+    match inputs[TileShape.linearIndex outShape i]? with
+    | some j => x.data j
+    | none => BlockState.defaultCarrier dtype⟩
+
+def Tile.join {dtype shape}
+    (a b : Tile dtype shape) : Tile dtype (shape ++ [2]) :=
+  ⟨fun i =>
+    let parts := TileShape.splitLastIndex shape i
+    if parts.2.val = 0 then a.data parts.1 else b.data parts.1⟩
+
+def Tile.split {dtype shape}
+    (side : Fin 2) (x : Tile dtype (shape ++ [2])) : Tile dtype shape :=
+  ⟨fun i => x.data (TileShape.appendAxisIndex shape i side)⟩
+
 /-! ### Lifted unary functions on `WithBot ℝ`
 
 `exp(-∞) = 0` and `sigmoid(-∞) = 0` are the IEEE-faithful values; this is what

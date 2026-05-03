@@ -97,6 +97,35 @@ def replaceAxisCoord :
       (idx.1,
        replaceAxisCoord rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ idx.2 r)
 
+/-- Flip the coordinate at `axis`, preserving all other coordinates. -/
+def flipIndex (shape : TileShape) (axis : Fin shape.length)
+    (idx : TileIndex shape) : TileIndex shape :=
+  replaceAxisCoord shape axis idx (Fin.rev (axisCoord shape axis idx))
+
+/-- Product of all dimensions. Scalars have one element. -/
+def product : TileShape → Nat
+  | [] => 1
+  | d :: rest => d * product rest
+
+/-- Row-major / outer-to-inner linear index. -/
+def linearIndex : (shape : TileShape) → TileIndex shape → Nat
+  | [], _ => 0
+  | _ :: rest, idx => idx.1.val * product rest + linearIndex rest idx.2
+
+/-- Append a final axis coordinate to an index. -/
+def appendAxisIndex :
+    (shape : TileShape) → TileIndex shape → Fin n → TileIndex (shape ++ [n])
+  | [], _, k => (k, PUnit.unit)
+  | _ :: rest, idx, k => (idx.1, appendAxisIndex rest idx.2 k)
+
+/-- Split the final coordinate from an index of `shape ++ [n]`. -/
+def splitLastIndex :
+    (shape : TileShape) → TileIndex (shape ++ [n]) → TileIndex shape × Fin n
+  | [], idx => (PUnit.unit, idx.1)
+  | _ :: rest, idx =>
+      let tail := splitLastIndex rest idx.2
+      ((idx.1, tail.1), tail.2)
+
 @[simp] theorem axisDim_head (d : Nat) (rest : TileShape) :
     axisDim (d :: rest) ⟨0, Nat.succ_pos _⟩ = d := rfl
 
@@ -127,6 +156,29 @@ def replaceAxisCoord :
 @[simp] theorem replaceAxisCoord_head {d : Nat} {rest : TileShape}
     (idx : TileIndex (d :: rest)) (k : Fin d) :
     replaceAxisCoord (d :: rest) ⟨0, Nat.succ_pos _⟩ idx k = (k, idx.2) := rfl
+
+@[simp] theorem product_nil :
+    product [] = 1 := rfl
+
+@[simp] theorem product_cons (d : Nat) (rest : TileShape) :
+    product (d :: rest) = d * product rest := rfl
+
+@[simp] theorem appendAxisIndex_nil (k : Fin n) :
+    appendAxisIndex [] PUnit.unit k = (k, PUnit.unit) := rfl
+
+@[simp] theorem appendAxisIndex_cons {d n : Nat} {rest : TileShape}
+    (idx : TileIndex (d :: rest)) (k : Fin n) :
+    appendAxisIndex (d :: rest) idx k =
+      (idx.1, appendAxisIndex rest idx.2 k) := rfl
+
+@[simp] theorem splitLastIndex_nil (idx : TileIndex [n]) :
+    splitLastIndex [] idx = (PUnit.unit, idx.1) := rfl
+
+@[simp] theorem splitLastIndex_cons {d n : Nat} {rest : TileShape}
+    (idx : TileIndex ((d :: rest) ++ [n])) :
+    splitLastIndex (d :: rest) idx =
+      let tail := splitLastIndex rest idx.2
+      ((idx.1, tail.1), tail.2) := rfl
 
 /-- Insert a new axis of size `n` at position `axis` of `shape`. The axis
 position ranges over `Fin (shape.length + 1)` (one slot more than the

@@ -103,6 +103,14 @@ syntax "tl.expand_dims(" tritonExpr ", " tritonReduceKwarg ")" : tritonExpr
 syntax "tl.expand_dims(" tritonExpr ", " num ")" : tritonExpr
 
 syntax "tl.trans(" tritonExpr ")" : tritonExpr
+syntax "tl.permute(" tritonExpr ", " "[" num,* "]" ")" : tritonExpr
+syntax "tl.reshape(" tritonExpr ", " "[" tritonExpr,* "]" ")" : tritonExpr
+syntax "tl.view(" tritonExpr ", " "[" tritonExpr,* "]" ")" : tritonExpr
+syntax "tl.ravel(" tritonExpr ")" : tritonExpr
+syntax "tl.flip(" tritonExpr ", " num ")" : tritonExpr
+syntax "tl.flip(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax "tl.join(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.split(" tritonExpr ", " num ")" : tritonExpr
 
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ")" : tritonExpr

@@ -108,6 +108,22 @@ def argSortOpsSmoke (xReg idxReg outReg : RegionName) (N : Nat) : Kernel := trit
   tl.store($(outReg) + offs, y)
 }
 
+/-- Generic shape/view surface smoke. `tl.split` is exposed as projection
+form `tl.split(x, 0|1)` because the Lean DSL does not have tuple
+destructuring syntax. -/
+def shapeViewOpsSmoke (xReg outReg : RegionName) : Kernel := triton {
+  offs   := tl.arange(0, 6)
+  x      := tl.load($(xReg) + offs)
+  matrix := tl.reshape(x, [3, 2])
+  left   := tl.split(matrix, 0)
+  right  := tl.split(matrix, 1)
+  joined := tl.join(left, right)
+  perm   := tl.permute(joined, [1, 0])
+  flip   := tl.flip(perm, dim = 1)
+  y      := tl.reshape(flip, [6])
+  tl.store($(outReg) + offs, y)
+}
+
 /-- DSL smoke test for explicit floating dtype casts. -/
 def dtypeCastSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   offs := tl.arange(0, $(N))

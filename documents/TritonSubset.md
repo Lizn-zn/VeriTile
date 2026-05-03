@@ -106,6 +106,11 @@ Supported channels:
 - Index/order ops: `tl.argmax`, `tl.argmin`, and `tl.sort` on `.real` tiles
   with static `axis=N`. Arg ties return the smallest axis index; sort is
   ascending along the selected axis.
+- Shape/view ops: `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`,
+  `tl.flip`, `tl.join`, and projection-form `tl.split(x, 0|1)`. Views are
+  modeled as row-major reshape or typed index remaps. `tl.split` is exposed
+  as two projections because the Lean DSL does not yet have tuple
+  destructuring syntax for `a, b = tl.split(x)`.
 - Broadcasting is ND and follows the current `Broadcast` witness:
   same dimension, scalar-to-tile, or dimension `1` expanded to the other side.
   The DSL constructs the broadcast proof syntactically, so equivalent but
@@ -354,7 +359,8 @@ current semantic contract.
 | Index/order ops | Limited | `tl.argmax`, `tl.argmin`, `tl.sort` over `.real` tiles with static `axis=N`; arg ties return the smallest axis index, sort is ascending |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
-| Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
+| Shape/view ops | Limited | `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`, `tl.flip`, `tl.join`, projection-form `tl.split(x, 0|1)` |
+| Transpose | Supported | `tl.trans(e)` swaps trailing two axes; arbitrary static permutations use `tl.permute(e, [axes])` |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
 | Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional `dtype=` for float/int32/int64/uint32/uint64; block-pointer load with `boundary_check` and `padding_option="zero"` |
 | Stores | Limited | Pointer-expression store, optional `mask`, dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
@@ -411,7 +417,6 @@ A lifter is only useful for kernels whose operations are already representable.
   global memory merge, overlapping writes, races, atomics, or scheduling.
 - Caches and performance hints such as `cache_modifier`, `eviction_policy`,
   `volatile`, or `is_volatile`.
-- Arbitrary axis permutation. `tl.trans` only swaps trailing two axes.
 - Higher-rank bracket slicing beyond the currently supported rank-1
   `[:, None]` / `[None, :]` forms. Use `tl.expand_dims(e, axis=N)` for
   explicit unit-axis insertion.

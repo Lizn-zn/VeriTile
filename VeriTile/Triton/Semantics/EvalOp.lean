@@ -111,6 +111,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .transpose (batch := batch) a, s => do
       let va ← evalOp a s
       some (Tile.transpose batch va)
+  | .reshape _ a, s => return Tile.reshape (← evalOp a s)
+  | .remap _ map a, s => return Tile.remap map (← evalOp a s)
+  | .join a b, s => return Tile.join (← evalOp a s) (← evalOp b s)
+  | .split side a, s => return Tile.split side (← evalOp a s)
   | .ptrBase region, _ => some (Tile.scalar (region, 0))
   | .ptrAdd bc ptr off, s => do
       let ptrs ← evalOp ptr s

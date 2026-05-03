@@ -165,6 +165,23 @@ inductive Op : TileDType → TileShape → Type where
   | transpose : {dtype : TileDType} → {batch : TileShape} → {M N : Nat} →
                 Op dtype (batch ++ [M, N]) →
                 Op dtype (batch ++ [N, M])
+  /-- Generic row-major reshape/view. The DSL checks obvious literal element
+  count mismatches; the total semantics defaults out-of-range remaps to the
+  dtype default carrier so this node remains total on symbolic shapes. -/
+  | reshape  : {dtype : TileDType} → (outShape : TileShape) →
+                Op dtype shape → Op dtype outShape
+  /-- Generic pure index-remap view. Used by surface `tl.flip` and
+  `tl.permute`, where the macro can generate a typed `TileIndex` map. -/
+  | remap    : {dtype : TileDType} → (outShape : TileShape) →
+                (TileIndex outShape → TileIndex shape) →
+                Op dtype shape → Op dtype outShape
+  /-- Join two same-shaped tensors by adding a final minor axis of size 2. -/
+  | join     : {dtype : TileDType} → {shape : TileShape} →
+                Op dtype shape → Op dtype shape → Op dtype (shape ++ [2])
+  /-- Project one side of a final size-2 minor axis. This is the expression
+  form used by the DSL for `tl.split(x, 0)` / `tl.split(x, 1)`. -/
+  | split    : {dtype : TileDType} → {shape : TileShape} →
+                (side : Fin 2) → Op dtype (shape ++ [2]) → Op dtype shape
   /--
   Insert a unit-size axis at position `axis` of `shape`. Models Triton's
   `tl.expand_dims(e, axis = K)` and the slicer surface forms `e[:, None]`
