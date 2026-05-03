@@ -35,11 +35,17 @@ contiguous/strided examples. Lower-level proofs can still use `InputAt` with
 an arbitrary offset function when a helper has not been packaged as a
 `TensorView`.
 
+Partially modeled:
+
+- First-class pointer values for `RegionName × Nat`.
+- Triton-style block pointer values for `tl.make_block_ptr` / `tl.advance` and
+  checked block-pointer load/store with zero padding / store skip.
+
 Not modeled yet:
 
-- First-class pointer values, pointer casts, pointer comparison, or pointer
-  alias analysis beyond `RegionName` equality.
-- Triton block pointers such as `tl.make_block_ptr` / `tl.advance`.
+- Pointer casts, pointer comparison, or pointer alias analysis beyond
+  `RegionName` equality.
+- Hardware/TMA block-pointer behavior beyond the sequential lane semantics.
 - Paged-KV or gather-style data-dependent indirection. That needs a sibling
   view model on top of the same storage layer; see issue #42.
 - Typed non-real memory. The storage model is currently real-valued; see

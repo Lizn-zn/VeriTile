@@ -150,6 +150,11 @@ inductive Op : TileDType → TileShape → Type where
                 Op dtype (TileShape.insertAxis shape axis 1)
   | ptrBase   : (region : RegionName) → Op .ptr []
   | ptrAdd    : Broadcast a b out → Op .ptr a → Op .nat b → Op .ptr out
+  | makeBlockPtr : (region : RegionName) → (baseOffset : Nat) →
+                (parentShape : List Nat) → (blockShape : TileShape) →
+                (strides offsets : List Nat) →
+                Op .blockPtr blockShape
+  | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
   | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
   | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
                 (mask : Op .bool shape) → Op .real shape
@@ -167,6 +172,11 @@ inductive Op : TileDType → TileShape → Type where
   | loadPtrFloatMask : FloatDType dtype → Op .ptr shape → Op .bool shape → Op dtype shape
   | loadPtrFloatMaskOther : FloatDType dtype → Op .ptr shape → Op .bool shape →
                 Op dtype shape → Op dtype shape
+  | loadBlockPtr : Op .blockPtr shape → (boundaryCheck : List Nat) →
+                (padding : PaddingOption) → Op .real shape
+  | loadBlockPtrFloat : FloatDType dtype → Op .blockPtr shape →
+                (boundaryCheck : List Nat) → (padding : PaddingOption) →
+                Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
 
 /--
@@ -208,6 +218,11 @@ inductive Stmt : Type where
   | storePtrFloatMask : FloatDType dtype → (shape : TileShape) →
               (ptr : Op .ptr shape) → (value : Op dtype shape) →
               (mask : Op .bool shape) → Stmt
+  | storeBlockPtr : (shape : TileShape) → (ptr : Op .blockPtr shape) →
+              (value : Op .real shape) → (boundaryCheck : List Nat) → Stmt
+  | storeBlockPtrFloat : FloatDType dtype → (shape : TileShape) →
+              (ptr : Op .blockPtr shape) → (value : Op dtype shape) →
+              (boundaryCheck : List Nat) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
 

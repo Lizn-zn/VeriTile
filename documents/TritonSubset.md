@@ -153,6 +153,10 @@ Supported loads:
 - `tl.load(ptr, other=other, mask=mask)`
 - `tl.load(ptr, dtype=tl.float32|tl.float16|tl.bfloat16)`
 - `tl.load(ptr, mask=mask, other=other, dtype=...)`
+- `bp := tl.make_block_ptr($(region), base=$(base), shape=[...],
+  strides=[...], offsets=[...], block_shape=[...])`
+- `bp2 := tl.advance(bp, [deltas...])`
+- `tl.load(bp, boundary_check=([axes...] : List Nat), padding_option="zero")`
 
 Supported stores:
 
@@ -162,9 +166,11 @@ Supported stores:
 - `tl.store(ptr, value, mask=mask)`
 - `tl.store(ptr, value, dtype=...)`, where `dtype` must match the value dtype.
   Without `dtype=`, stores infer the dtype from `value`.
+- `tl.store(bp, value, boundary_check=([axes...] : List Nat))`
 
-Unknown kwargs are rejected. In particular, `tl.load(..., boundary_check=...)`
-and `tl.store(..., boundary_check=...)` are not silently ignored.
+Unknown kwargs are rejected. For block pointers, `boundary_check` is supported
+only on block-pointer `tl.load` / `tl.store`; it cannot be mixed with `mask` or
+`other`. The only modeled `padding_option` is `"zero"`.
 
 Masked load semantics:
 
@@ -215,8 +221,13 @@ ptrs2 := ptrs + stride
 
 This is intentionally narrower than CUDA/Triton pointers: VeriTile supports
 pointer base creation from a `RegionName`, pointer plus `.nat` offsets, and
-load/store through pointer-valued registers. It does not yet model pointer
-casts, pointer comparison, block pointers, or a typed address space.
+load/store through pointer-valued registers. It also models block pointers as
+first-class `.blockPtr` tile values carrying base region, base offset, parent
+shape, block shape, strides, and logical offsets. Block-pointer load/store
+computes each lane address from that layout; out-of-bounds checked load lanes
+return zero, and out-of-bounds checked store lanes leave memory unchanged. It
+does not yet model pointer casts, pointer comparison, hardware/TMA block-pointer
+behavior, or a typed address space.
 
 Offsets are explicit `.nat` expressions. For higher-dimensional tensors, the
 user supplies strided offset formulas such as:
@@ -292,21 +303,21 @@ current semantic contract.
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
-| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional floating `dtype=` |
-| Stores | Limited | Pointer-expression store, optional `mask`, floating dtype inferred from value with optional matching `dtype=` |
+| Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional floating `dtype=`; block-pointer load with `boundary_check` and `padding_option="zero"` |
+| Stores | Limited | Pointer-expression store, optional `mask`, floating dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
 | Integer memory | Gap | Memory is `RegionName → Nat → ℝ`; float dtype surface is erased to real, and int/Nat tensor memory is still absent (#20) |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
 | Indirection | Gap | No gather / paged-KV style data-dependent address model yet (#42) |
-| Block pointers | Gap | No `tl.make_block_ptr`, `tl.advance`, or block-pointer load/store |
+| Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |
 | Atomics / async / barriers | Gap | No `tl.atomic_*`, async copy, TMA, barriers, or scheduling semantics (#12) |
 | Floating point fidelity | Gap | Real-valued model only; no IEEE-754 or mixed-precision hardware semantics (#11) |
 
 ## Unsupported or Not Yet Faithfully Modeled
 
 - Full IEEE-754 floating-point semantics.
-- Triton block pointers and block-pointer-only restrictions.
-- `boundary_check` / `padding_option`.
+- Block-pointer hardware/TMA behavior and unsupported padding options beyond
+  `"zero"`.
 - Full CUDA/Triton pointer semantics beyond `RegionName × Nat` pointer values.
 - Arbitrary pointer alias analysis beyond named-region equality.
 - General Python/Triton JIT semantics, decorators, meta-parameter execution,

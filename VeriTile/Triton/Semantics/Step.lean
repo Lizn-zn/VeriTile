@@ -78,6 +78,26 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
           let p := ptrs.data i
           if masks.data i then acc.writeMem p.1 p.2 (h.storeValue (values.data i))
           else acc) s)
+  | .storeBlockPtr shape ptr val boundaryCheck, s => do
+      let ptrTile ← evalOp ptr s
+      let values ← evalOp val s
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i =>
+          let bp := ptrTile.data i
+          let idx := TileShape.indexToList shape i
+          if bp.inBounds idx boundaryCheck then
+            acc.writeMem bp.region (bp.address idx) ((values.data i).unbotD 0)
+          else acc) s)
+  | .storeBlockPtrFloat h shape ptr val boundaryCheck, s => do
+      let ptrTile ← evalOp ptr s
+      let values ← evalOp val s
+      some ((TileShape.allIndices shape).foldl
+        (fun acc i =>
+          let bp := ptrTile.data i
+          let idx := TileShape.indexToList shape i
+          if bp.inBounds idx boundaryCheck then
+            acc.writeMem bp.region (bp.address idx) (h.storeValue (values.data i))
+          else acc) s)
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
   | .ifThen cond body, s => do
@@ -207,7 +227,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
     cases hmask : evalOp mask s <;> simp [hmask] at h
     rename_i masks
     cases h
-    simp [BlockState.foldl_writeMem_masked_pid]
+    simp [BlockState.foldl_writeMemAt_masked_pid]
   case storePtr shape ptr val =>
     cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
     rename_i ptrs
@@ -239,7 +259,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
     cases hmask : evalOp mask s <;> simp [hmask] at h
     rename_i masks
     cases h
-    simp [BlockState.foldl_writeMem_masked_pid]
+    simp [BlockState.foldl_writeMemAt_masked_pid]
   case storePtrFloat hfloat shape ptr val =>
     cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
     rename_i ptrs
@@ -254,6 +274,20 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
     rename_i values
     cases hmask : evalOp mask s <;> simp [hmask] at h
     rename_i masks
+    cases h
+    simp [BlockState.foldl_writeMemAt_masked_pid]
+  case storeBlockPtr shape ptr val boundaryCheck =>
+    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
+    rename_i ptrTile
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
+    cases h
+    simp [BlockState.foldl_writeMemAt_masked_pid]
+  case storeBlockPtrFloat hfloat shape ptr val boundaryCheck =>
+    cases hptr : evalOp ptr s <;> simp [stepStmt, hptr] at h
+    rename_i ptrTile
+    cases hval : evalOp val s <;> simp [hval] at h
+    rename_i values
     cases h
     simp [BlockState.foldl_writeMemAt_masked_pid]
   case forLoop idx n body =>

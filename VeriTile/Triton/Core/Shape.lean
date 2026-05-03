@@ -29,6 +29,11 @@ abbrev TileIndex : TileShape → Type
 
 namespace TileShape
 
+/-- Convert a dependent tile index to an outermost-first list of coordinates. -/
+def indexToList : (shape : TileShape) → TileIndex shape → List Nat
+  | [], _ => []
+  | _ :: rest, idx => idx.1.val :: indexToList rest idx.2
+
 /-- Dimension at an axis. -/
 def axisDim : (shape : TileShape) → Fin shape.length → Nat
   | [], axis => nomatch axis
