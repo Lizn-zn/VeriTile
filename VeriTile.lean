@@ -18,6 +18,7 @@ import VeriTile.Examples.SoftmaxEq
 import VeriTile.Examples.LogSumExpEq
 import VeriTile.Examples.SoftmaxReciprocal
 import VeriTile.Examples.VectorAdd
+import VeriTile.Examples.FloatDType
 import VeriTile.Examples.FusedSiLU
 import VeriTile.Examples.RowWise
 import VeriTile.Examples.WelfordKernels
