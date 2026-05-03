@@ -323,7 +323,7 @@ current semantic contract.
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
 | Integer memory | Limited | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no richer signed/unsigned width lattice yet |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
-| Indirection | Gap | No gather / paged-KV style data-dependent address model yet (#42) |
+| Indirection | Limited | Typed index loads can feed pointer arithmetic for gather/paged-KV style data-dependent addresses (#42); no alias/bounds/page-ownership proof layer yet |
 | Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |
 | Atomics / async / barriers | Gap | No `tl.atomic_*`, async copy, TMA, barriers, or scheduling semantics (#12) |
 | Floating point fidelity | Gap | Real-valued model only; no IEEE-754 or mixed-precision hardware semantics (#11) |
@@ -343,7 +343,7 @@ faithfully in the current Lean DSL?
 | Block pointers / `boundary_check` | Limited | Surface + sequential semantics | `tl.make_block_ptr`, `tl.advance`, zero-padded checked loads, and checked store-skip work; no `order`, non-zero padding, TMA, or hardware behavior. |
 | Typed floating memory | Limited | Semantic abstraction | `dtype=tl.float32/fp16/bf16` creates typed floating nodes and erases to real for algorithm proofs; IEEE rounding is not modeled. |
 | Integer / bool tensor memory | Limited | Dtype coverage | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no complete Triton integer-width lattice yet. |
-| Indirect / gather addressing | Gap | Core addressing semantics (#42) | Blocks paged attention, embedding/table lookup, cross-entropy index lookup, and data-dependent pointer chasing. |
+| Indirect / gather addressing | Limited | Surface + view semantics (#42) | Typed index tensor loads can drive pointer arithmetic and ordinary masked loads; alias analysis, bounds proof, page ownership, and paged FA-1 equivalence are not modeled yet. |
 | RNG / dropout | Gap | State/probabilistic semantics (#41) | Blocks faithful dropout and stochastic kernels. |
 | Atomics / async / shared memory / barriers | Gap | Concurrency semantics (#12) | Blocks production-style backward kernels, reductions using shared memory phases, async/TMA pipelines, and race/scheduling reasoning. |
 | Whole-grid launch semantics | Gap | Execution model (#5) | Theorems currently quantify over one symbolic program instance through `BlockState.pids`; full launch coverage is manual. |
@@ -351,9 +351,9 @@ faithfully in the current Lean DSL?
 | Type checking / pointer provenance | Gap | Static analysis (#46) | DSL rejects many type mismatches syntactically, but there is no full checker for pointer provenance, block-pointer rank/stride consistency, or bounds assumptions. |
 
 Recommended near-term priority for expressiveness is to remove core semantic
-gaps before building a full Python lifter: typed/int/bool memory (#20),
-pointer provenance/type checking (#46), and indirect addressing (#42). A
-lifter is only useful for kernels whose operations are already representable.
+gaps before building a full Python lifter: pointer provenance/type checking
+(#46), RNG/dropout (#41), and atomics/async/concurrency (#12). A lifter is
+only useful for kernels whose operations are already representable.
 
 ## Unsupported or Not Yet Faithfully Modeled
 

@@ -297,7 +297,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
 | integer memory | Limited | typed cell 加 typed load/store 支持 Nat/index 和数学 signed-Int HBM value;还没有更完整的 signed/unsigned width lattice |
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
-| indirection | Gap | 还没有 gather / paged-KV 风格的 data-dependent address model (#42) |
+| indirection | Limited | typed index load 可以参与 pointer arithmetic,表达 gather / paged-KV 风格 data-dependent address (#42);还没有 alias/bounds/page-ownership proof layer |
 | block pointer | Limited | `tl.make_block_ptr`、`tl.advance`、带 checked-axis zero padding / store skip 的 block-pointer load/store;没有硬件/TMA 行为 |
 | atomic / async / barrier | Gap | 还没有 `tl.atomic_*`、async copy、TMA、barrier 或 scheduling semantics (#12) |
 | floating-point fidelity | Gap | 只有 real-valued model;没有 IEEE-754 或 mixed-precision hardware semantics (#11) |
@@ -316,15 +316,15 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | block pointer / `boundary_check` | Limited | surface + sequential semantics | 支持 `tl.make_block_ptr`、`tl.advance`、zero-padded checked load、checked store-skip;没有 `order`、非 zero padding、TMA 或硬件行为。 |
 | typed floating memory | Limited | semantic abstraction | `dtype=tl.float32/fp16/bf16` 会生成 typed floating node,算法证明擦除到 real;没有 IEEE rounding。 |
 | integer / bool tensor memory | Limited | dtype coverage | typed cell 加 typed load/store 支持 Nat/index 和数学 signed-Int HBM value;还没有完整 Triton integer-width lattice。 |
-| indirect / gather addressing | Gap | core addressing semantics (#42) | 阻塞 paged attention、embedding/table lookup、cross-entropy index lookup、data-dependent pointer chasing。 |
+| indirect / gather addressing | Limited | surface + view semantics (#42) | typed index tensor load 可以驱动 pointer arithmetic 和普通 masked load;alias analysis、bounds proof、page ownership、paged FA-1 等价还没建模。 |
 | RNG / dropout | Gap | state/probabilistic semantics (#41) | 阻塞 faithful dropout 和随机 kernel。 |
 | atomics / async / shared memory / barriers | Gap | concurrency semantics (#12) | 阻塞 production-style backward kernel、shared-memory phase reduction、async/TMA pipeline、race/scheduling reasoning。 |
 | whole-grid launch semantics | Gap | execution model (#5) | 当前 theorem 通过 `BlockState.pids` 描述一个 symbolic program instance;整个 launch 的覆盖性需要手动量化。 |
 | Python/Triton source ingestion | Gap | front-end/lifter (#10) | 用户必须写 Lean `triton { ... }`;decorator、Python-side constexpr execution、一般 Python control flow 还不能解析。 |
 | type checking / pointer provenance | Gap | static analysis (#46) | DSL 会拒绝很多语法层 type mismatch,但没有完整 checker 来验证 pointer provenance、block-pointer rank/stride 一致性或 bounds assumption。 |
 
-近期表达力优先级应先消除 core semantic gap,再做完整 Python lifter:typed/int/bool
-memory (#20)、pointer provenance/type checking (#46)、indirect addressing (#42)。
+近期表达力优先级应先消除 core semantic gap,再做完整 Python lifter:pointer
+provenance/type checking (#46)、RNG/dropout (#41)、atomics/async/concurrency (#12)。
 如果 kernel 的操作本身还不可表达,lifter 提早做收益不大。
 
 ## 尚不支持或尚未真实建模

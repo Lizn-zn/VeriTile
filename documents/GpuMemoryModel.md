@@ -47,8 +47,11 @@ Not modeled yet:
 - Pointer casts, pointer comparison, or pointer alias analysis beyond
   `RegionName` equality.
 - Hardware/TMA block-pointer behavior beyond the sequential lane semantics.
-- Paged-KV or gather-style data-dependent indirection. That needs a sibling
-  view model on top of the same storage layer; see issue #42.
+- Full paged-KV proof infrastructure. The storage model now supports the
+  core indirect-addressing pattern — typed index loads feeding pointer
+  arithmetic — and `IndirectView` packages the read-only view layer. Bounds,
+  alias/page-ownership, and paged FA-1 equivalence proofs are still future
+  consumer work; see issue #42.
 - Rich signed/unsigned integer dtype lattice. The current typed HBM model
   supports `.nat` (`tl.uint32` / `tl.uint64`) and mathematical `.int`
   (`tl.int32` / `tl.int64`), enough for index/block-table cells, but not
@@ -92,8 +95,9 @@ The current model is intentionally small. The likely extension points are:
 
 - **Memory safety / bounds (#48):** add region sizes and checked launch-level
   bounds assumptions on top of the current typed storage layer.
-- **Paged KV / indirect addressing (#42):** add a gathered or paged view layer
-  for data-dependent address maps.
+- **Paged KV / indirect addressing (#42):** extend the current `IndirectView`
+  smoke/proof surface into paged-attention-specific logical views and
+  consumer-side equivalence theorems.
 - **Async and concurrency (#12):** introduce shared-memory state, barriers,
   atomics, and an explicit scheduling or trace model.
 - **Floating-point fidelity (#11):** replace or refine the `R` abstraction with

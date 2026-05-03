@@ -9,6 +9,7 @@ VeriTile/Examples/VectorAdd.lean	add_kernel_masked_correct_view	Vector add corre
 VeriTile/Examples/FloatDType.lean	float_softmax_reciprocal_algorithm_refine_view	Float dtype rewrite refinement
 VeriTile/Examples/TritonSmoke.lean	argmax2_index_store_correct	Typed Nat memory store
 VeriTile/Examples/TritonSmoke.lean	nat_load_store_correct	Typed Nat memory load/store
+VeriTile/Examples/TritonSmoke.lean	indirect_load_correct_view	Indirect indexed load correctness
 VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct_view	Online softmax correctness
 VeriTile/Examples/RowWise.lean	rowWiseSum_correct_view	Row-wise reductions
 VeriTile/Examples/FusedSiLU.lean	silu_kernels_refinement_view	Fused SiLU refinement

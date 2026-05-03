@@ -44,25 +44,27 @@ None of this stores data — data is accessed through `BlockState.readMem`.
 the vast majority of production kernels (FA-1/2 forward and backward, GEMM,
 LayerNorm, Welford, RMSNorm, sliding-window attention, …).
 
-Non-affine addressing patterns need a different lens (still on top of the
-same state-level memory API):
+Non-affine addressing patterns use a sibling lens (still on top of the same
+state-level memory API):
 
   * Paged KV (issue #42, vLLM-style):
       `addr = base + block_table[idx_block] * page_stride + …`
-      — data-dependent indirection; future `GatheredView` / `Op.gather`.
+      — data-dependent indirection through `IndirectView`.
   * Scatter / gather with arbitrary index tensors — same family.
   * Atomic reduce — orthogonal (concurrency, not addressing; see issue #12).
 
-For these, `InputAt` (arbitrary `offsetFn`) is the present escape hatch;
-when they enter scope, expect a sibling structure to `TensorView`.
+For these, `IndirectView` packages the common read-only gather pattern:
+load a Nat index tensor from one region, feed it to a data-address function,
+then read from a data region. The executable Triton surface remains ordinary
+typed `tl.load` plus pointer arithmetic rather than a special gather AST node.
 
 ## Module contents
 
 * `InputAt` / `observeTileAt` for arbitrary offset maps (low-level).
 * `Offset` families for linear, row-major, contiguous, and generic strided
   layouts, with injectivity lemmas (`StridesValid` + `strided_inj`).
-* `TensorView`: typed fat-pointer metadata; preferred surface for kernel
-  pre/post-conditions.
+* `TensorView`: typed fat-pointer metadata for strided-affine layouts.
+* `IndirectView`: typed metadata for read-only, index-tensor-driven loads.
 
 ## API guidance
 
@@ -334,5 +336,42 @@ logical tensor value. -/
   exact h idx
 
 end TensorView
+
+/-! ## Indirect views -/
+
+/--
+A read-only logical view driven by an index tensor in memory.
+
+`idxShape` indexes the HBM tensor that stores Nat indices. `innerShape`
+indexes the data slice reached by each loaded index. This covers 1D embedding
+lookup (`idxShape = [N]`, `innerShape = []`) and paged-KV style reads where a
+loaded block id selects a physical page and an inner `D` coordinate selects a
+lane within that page.
+-/
+structure IndirectView (idxShape innerShape : TileShape) where
+  idxRegion  : RegionName
+  dataRegion : RegionName
+  idxOffset  : TileIndex idxShape → Nat
+  dataAddr   : Nat → TileIndex innerShape → Nat
+
+namespace IndirectView
+
+/-- Read an element through an indirect view from a concrete state. -/
+def observe {idxShape innerShape : TileShape}
+    (view : IndirectView idxShape innerShape) (s : BlockState)
+    (idx : TileIndex idxShape) (inner : TileIndex innerShape) : ℝ :=
+  let loadedIdx := s.readMemValue .nat view.idxRegion (view.idxOffset idx)
+  s.readMem view.dataRegion (view.dataAddr loadedIdx inner)
+
+/-- Address helper for paged layouts: a logical token `t` first selects a
+logical page, the block table maps that page to a physical block, and `d`
+selects the inner element within that physical block. -/
+def pagedAddr (block : Nat → Nat)
+    (pageSize pageStride tokenStride dStride : Nat) (t d : Nat) : Nat :=
+  block (t / pageSize) * pageStride
+    + (t % pageSize) * tokenStride
+    + d * dStride
+
+end IndirectView
 
 end VeriTile.Triton

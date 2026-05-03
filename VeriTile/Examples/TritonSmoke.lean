@@ -219,6 +219,36 @@ def uint64PointerRegisterLoadSmoke (idxReg outReg : RegionName) : Kernel := trit
   tl.store($(outReg), idx)
 }
 
+/-! ### Indirect addressing / gather-style reads -/
+
+/-- Generic indirect-addressing smoke: load a Nat index tensor from HBM, feed
+it into pointer arithmetic, then issue an ordinary second load. This is the
+shared surface pattern for embedding lookup, label lookup, and paged KV. -/
+def indirectLoadSmoke (idxReg dataReg outReg : RegionName)
+    (N stride : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  idx  := tl.load($(idxReg) + offs, dtype=tl.uint64)
+  ptrs := $(dataReg) + idx * $(stride)
+  x    := tl.load(ptrs)
+  tl.store($(outReg) + offs, x)
+}
+
+/-- Paged-KV address smoke: a block-table load drives the physical K-cache
+page address. This deliberately uses the same typed load + pointer arithmetic
+primitive as `indirectLoadSmoke`, not a special gather AST node. -/
+def pagedKVAddressSmoke (blockTableReg kReg outReg : RegionName)
+    (T D pageSize pageStride tokenStride dStride : Nat) : Kernel := triton {
+  token := tl.arange(0, $(T))
+  d     := tl.arange(0, $(D))
+  block := tl.load($(blockTableReg) + (token // $(pageSize)), dtype=tl.uint64)
+  ptrs  := $(kReg)
+    + block[:, None] * $(pageStride)
+    + (token[:, None] % $(pageSize)) * $(tokenStride)
+    + d[None, :] * $(dStride)
+  k     := tl.load(ptrs)
+  tl.store($(outReg) + token[:, None] * $(D) + d[None, :], k)
+}
+
 def argmax2IndexStoreCoreKernel (xReg outReg : RegionName) : Kernel :=
   { inputs := [xReg]
   , outputs := [outReg]
@@ -247,6 +277,32 @@ def intLoadStoreCoreKernel (idxReg outReg : RegionName) : Kernel :=
       [Stmt.store .int [] (MemAccess.region outReg (Op.constNat 0))
         (Op.load .int (MemAccess.region idxReg (Op.constNat 0)) MaskOpt.none)
         MaskOpt.none] }
+
+def indirectLoadCoreKernel (idxReg dataReg outReg : RegionName)
+    (N stride : Nat) : Kernel :=
+  { inputs := [idxReg, dataReg]
+  , outputs := [outReg]
+  , body :=
+      [Stmt.store .real [N] (MemAccess.region outReg (Op.arange N))
+        (Op.load .real
+          (MemAccess.ptr
+            (Op.ptrAdd Broadcast.scalarL
+              (Op.ptrBase dataReg)
+              (Op.mul NumericDType.nat Broadcast.scalarR
+                (Op.load .nat (MemAccess.region idxReg (Op.arange N)) MaskOpt.none)
+                (Op.constNat stride))))
+          MaskOpt.none)
+        MaskOpt.none] }
+
+def indirectLoadView (idxReg dataReg : RegionName)
+    (N stride : Nat) : IndirectView [N] [] :=
+  { idxRegion := idxReg
+  , dataRegion := dataReg
+  , idxOffset := fun i => i.1.val
+  , dataAddr := fun loadedIdx _ => loadedIdx * stride }
+
+def linearOutView (outReg : RegionName) (N : Nat) : TensorView [N] :=
+  { region := outReg, base := 0, strides := [1] }
 
 noncomputable def argmax2ExpectedIndex (s : BlockState) (xReg : RegionName) : Nat :=
   by
@@ -281,6 +337,26 @@ theorem int_load_store_correct
   simp [intLoadStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
     BlockState.readMemValue, BlockState.readMemTyped, BlockState.writeMemTyped,
     Option.bind, Option.map, MemCell.readAs_of_same]
+
+theorem indirect_load_correct_view
+    (idxReg dataReg outReg : RegionName) (N stride : Nat)
+    (s : BlockState) (i : TileIndex [N]) :
+    TensorView.observe
+        (exec (indirectLoadCoreKernel idxReg dataReg outReg N stride) s)
+        (linearOutView outReg N) i =
+      some (IndirectView.observe (indirectLoadView idxReg dataReg N stride) s i PUnit.unit) := by
+  simp [indirectLoadCoreKernel, indirectLoadView, linearOutView, exec, stepStmts,
+    stepStmt, evalOp, TensorView.observe, observeTileAt, TensorView.offset,
+    Offset.strided, Tile.ptrAdd, Tile.bop]
+  rw [BlockState.scatter_readback_nd]
+  · simp [IndirectView.observe, NumericDType.mul]
+  · intro a b h
+    rcases a with ⟨a, au⟩
+    rcases au
+    rcases b with ⟨b, bu⟩
+    rcases bu
+    congr
+    exact Fin.ext h
 
 example : (MemCell.of .nat 7).readAs .nat = some 7 := by
   rfl
