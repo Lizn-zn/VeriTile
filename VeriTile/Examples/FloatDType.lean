@@ -96,14 +96,12 @@ the input load is cast to `tl.float64`. -/
 def floatStableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x32  := tl.load($(xReg) + offs, dtype=tl.float32)
-  x    := (x32).to(tl.float64)
+  x    := (tl.load($(xReg) + offs, dtype=tl.float32)).to(tl.float64)
   m    := tl.max(x, axis=0)
   e    := tl.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := e / s
-  y32  := (y).to(tl.float32)
-  tl.store($(yReg) + offs, y32)
+  tl.store($(yReg) + offs, (y).to(tl.float32))
 }
 
 /-- Optimized stable softmax: precompute `1 / s` and use multiplication,
@@ -111,15 +109,13 @@ saving per-lane divisions versus `floatStableSoftmaxKernel`. -/
 def floatSoftmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x32    := tl.load($(xReg) + offs, dtype=tl.float32)
-  x      := (x32).to(tl.float64)
+  x      := (tl.load($(xReg) + offs, dtype=tl.float32)).to(tl.float64)
   m      := tl.max(x, axis=0)
   e      := tl.exp(x - m)
   s      := tl.sum(e, axis=0)
   inv_s  := 1 / s
   y      := e * inv_s
-  y32    := (y).to(tl.float32)
-  tl.store($(yReg) + offs, y32)
+  tl.store($(yReg) + offs, (y).to(tl.float32))
 }
 
 /-- The fp32 per-element-divide softmax erases to the existing Real kernel. -/
@@ -130,6 +126,13 @@ theorem float_stable_softmax_erases_to_real
   simp [floatStableSoftmaxKernel, stableSoftmaxKernel, Kernel.eraseFloat,
     Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat,
     eraseFloatDType, NumericDType.eraseFloat]
+  constructor
+  · unfold Op.eraseFloat
+    change (Op.reduceMax 0 Bool.false ((Op.ref TileDType.real [blockSize] "x" : Op .real [blockSize]).eraseFloat) = Op.reduceMax 0 Bool.false (Op.ref TileDType.real [blockSize] "x"))
+    simp [Op.eraseFloat, eraseFloatDType]
+  · unfold Op.eraseFloat
+    change (Op.reduceSum 0 Bool.false ((Op.ref TileDType.real [blockSize] "e" : Op .real [blockSize]).eraseFloat) = Op.reduceSum 0 Bool.false (Op.ref TileDType.real [blockSize] "e"))
+    simp [Op.eraseFloat, eraseFloatDType]
 
 /-- The fp32 reciprocal-form softmax erases to the existing Real optimized
 kernel. -/
@@ -140,6 +143,13 @@ theorem float_softmax_recip_erases_to_real
   simp [floatSoftmaxRecipKernel, softmaxRecipKernel, Kernel.eraseFloat,
     Stmt.eraseFloatList, Stmt.eraseFloat, Op.eraseFloat,
     eraseFloatDType, NumericDType.eraseFloat]
+  constructor
+  · unfold Op.eraseFloat
+    change (Op.reduceMax 0 Bool.false ((Op.ref TileDType.real [blockSize] "x" : Op .real [blockSize]).eraseFloat) = Op.reduceMax 0 Bool.false (Op.ref TileDType.real [blockSize] "x"))
+    simp [Op.eraseFloat, eraseFloatDType]
+  · unfold Op.eraseFloat
+    change (Op.reduceSum 0 Bool.false ((Op.ref TileDType.real [blockSize] "e" : Op .real [blockSize]).eraseFloat) = Op.reduceSum 0 Bool.false (Op.ref TileDType.real [blockSize] "e"))
+    simp [Op.eraseFloat, eraseFloatDType]
 
 /-- Float-facing rewrite refinement: the fp32 per-element-divide softmax and
 the fp32 reciprocal-form softmax are algorithmically equivalent after erasure.
