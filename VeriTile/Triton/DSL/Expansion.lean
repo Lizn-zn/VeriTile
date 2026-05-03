@@ -309,6 +309,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandMinMax env "tl.maximum" (← `(Op.gt)) a b
   | `(tritonExpr| tl.minimum($a:tritonExpr, $b:tritonExpr)) => do
       expandMinMax env "tl.minimum" (← `(Op.lt)) a b
+  | `(tritonExpr| tl.cumsum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandScan env "tl.cumsum" (← `(ScanOp.sum)) e kwargs
+  | `(tritonExpr| tl.cumprod($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandScan env "tl.cumprod" (← `(ScanOp.prod)) e kwargs
+  | `(tritonExpr| tl.associative_scan($e:tritonExpr, $op:tritonScanOp $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandScan env "tl.associative_scan" (← expandScanOp op) e kwargs
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
       expandReduce env "tl.sum" (← `(Op.reduceSum)) e kwargs
   | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
@@ -605,8 +611,8 @@ partial def expandCdiv (env : Env)
   ensureShape outShape subShape "tl.cdiv"
   let (divBc, divShape) ← broadcastTerm outShape b'.shape "tl.cdiv"
   ensureShape outShape divShape "tl.cdiv"
-  let sum ← `(Op.add NumericDType.nat $addBc $a'.term $b'.term)
-  let numerator ← `(Op.sub NumericDType.nat $subBc $sum (Op.constNat 1))
+  let sumTerm ← `(Op.add NumericDType.nat $addBc $a'.term $b'.term)
+  let numerator ← `(Op.sub NumericDType.nat $subBc $sumTerm (Op.constNat 1))
   pure ⟨← `(Op.div NumericDType.nat $divBc $numerator $b'.term), .nat, outShape⟩
 
 partial def expandBoolBin (env : Env) (ctx : String) (op : TSyntax `term)
@@ -668,6 +674,53 @@ partial def expandMinMax (env : Env) (ctx : String) (cmp : TSyntax `term)
   let aTerm ← coerceShape a'.term a'.shape outShape (ctx ++ " lhs")
   let bTerm ← coerceShape b'.term b'.shape outShape (ctx ++ " rhs")
   pure ⟨← `(Op.where ($cmp $cp $bc $a'.term $b'.term) $aTerm $bTerm), a'.dtype, outShape⟩
+
+partial def expandScanOp : TSyntax `tritonScanOp → MacroM (TSyntax `term)
+  | `(tritonScanOp| $name:ident) =>
+      match name.getId.toString with
+      | "sum" => `(ScanOp.sum)
+      | "prod" => `(ScanOp.prod)
+      | "max" => `(ScanOp.max)
+      | "min" => `(ScanOp.min)
+      | other =>
+          Macro.throwError
+            ("tl.associative_scan: unsupported op `" ++ other ++
+             "`. Supported ops: sum, prod, max, min.")
+  | _ => Macro.throwUnsupported
+
+partial def expandScan (env : Env) (ctx : String) (op : TSyntax `term)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  ensureDType .real e'.dtype ctx
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.isEmpty then
+    Macro.throwError (ctx ++ ": rank-≥ 1 input required")
+  let mut seenAxis : Bool := Bool.false
+  let mut axisIdx : Nat := 0
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axisIdx := n.getNat
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        Macro.throwError (ctx ++ ": `keep_dims` is not meaningful for prefix scans")
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        Macro.throwError (ctx ++ ": `keep_dims` is not meaningful for prefix scans")
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        Macro.throwError
+          (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
+           "`. Only `axis = N` is supported.")
+    | _ =>
+        Macro.throwUnsupported
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  pure ⟨← `(Op.scan $op (⟨$axisLit, by simp⟩) $e'.term), .real, e'.shape⟩
 
 /-- Lower a `tl.sum(...)` / `tl.max(...)` expression with optional reduction
 kwargs (`axis = K`, `keep_dims = true|false`) into the corresponding

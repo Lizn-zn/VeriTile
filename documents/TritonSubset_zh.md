@@ -90,6 +90,9 @@ Stmt : Type
 - `tl.maximum(a, b)` 与 `tl.minimum(a, b)` 是基于 comparison + `tl.where`
   的点态选择 sugar,支持 comparable channel。分支 broadcast 当前限于
   scalar-to-tile lifting,与 `tl.where` 一致。
+- Prefix scan: `.real` tile 上的 `tl.cumsum`、`tl.cumprod` 和
+  `tl.associative_scan(x, op, axis=N)`。支持的 associative op 是闭合枚举
+  `sum`、`prod`、`max`、`min`;不把任意用户函数塞进 AST。
 - Broadcast 是 ND 的:同维度、scalar-to-tile、或维度 `1` 扩到另一边。
   DSL 通过语法构造 broadcast proof,所以语义等价但写法不同的维度表达式,
   可能仍需要写成一致形式。
@@ -315,6 +318,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
 | unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
 | reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis` / `keep_dims` |
+| prefix scan | Limited | `.real` tile 上的 `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)`;不支持 arbitrary combine function |
 | broadcast | Supported | ND same-dim、scalar-to-tile、dimension-`1` expansion |
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]`,literal-axis `tl.expand_dims` |
 | transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |

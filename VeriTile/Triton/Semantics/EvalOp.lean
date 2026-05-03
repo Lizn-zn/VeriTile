@@ -94,6 +94,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       Tile.reduceMax axis keepDims va
   | .reduceSum axis keepDims a, s => return Tile.reduceSum axis keepDims (← evalOp a s)
+  | .scan op axis a, s => return Tile.scan op axis (← evalOp a s)
   | .dot (batch := batch) a b, s => do
       let va ← evalOp a s
       let vb ← evalOp b s

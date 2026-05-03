@@ -116,6 +116,7 @@ def Op.eraseFloat : Op dtype shape → Op (eraseFloatDType dtype) shape
   | .where c a b => .where c.eraseFloat a.eraseFloat b.eraseFloat
   | .reduceMax axis keepDims a => .reduceMax axis keepDims a.eraseFloat
   | .reduceSum axis keepDims a => .reduceSum axis keepDims a.eraseFloat
+  | .scan op axis a => .scan op axis a.eraseFloat
   | .dot a b => .dot a.eraseFloat b.eraseFloat
   | .transpose a => .transpose a.eraseFloat
   | .expandDim axis a => .expandDim axis a.eraseFloat

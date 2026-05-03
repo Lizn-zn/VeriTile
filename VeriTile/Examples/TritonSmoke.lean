@@ -83,6 +83,19 @@ def natBitwiseOpsSmoke (outReg : RegionName) (N : Nat) : Kernel := triton {
   tl.store($(outReg) + offs, e)
 }
 
+/-- Prefix scan surface smoke. `tl.associative_scan` accepts the closed
+`ScanOp` enum (`sum/prod/max/min`) rather than arbitrary functions. -/
+def scanOpsSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  s    := tl.cumsum(x, axis = 0)
+  p    := tl.cumprod(x, axis = 0)
+  m    := tl.associative_scan(x, max, axis = 0)
+  n    := tl.associative_scan(x, min, axis = 0)
+  y    := s + p + m + n
+  tl.store($(outReg) + offs, y)
+}
+
 /-- DSL smoke test for explicit floating dtype casts. -/
 def dtypeCastSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   offs := tl.arange(0, $(N))

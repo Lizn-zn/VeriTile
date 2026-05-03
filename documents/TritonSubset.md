@@ -99,6 +99,10 @@ Supported channels:
 - `tl.maximum(a, b)` and `tl.minimum(a, b)` as pointwise select-based sugar
   over comparable channels. Branch broadcasting is currently limited to
   scalar-to-tile lifting, matching `tl.where`.
+- Prefix scans: `tl.cumsum`, `tl.cumprod`, and `tl.associative_scan(x, op,
+  axis=N)` on `.real` tiles. The supported associative op names are the closed
+  enum `sum`, `prod`, `max`, `min`; arbitrary user functions are not embedded
+  in the AST.
 - Broadcasting is ND and follows the current `Broadcast` witness:
   same dimension, scalar-to-tile, or dimension `1` expanded to the other side.
   The DSL constructs the broadcast proof syntactically, so equivalent but
@@ -343,6 +347,7 @@ current semantic contract.
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
 | Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
 | Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |
+| Prefix scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` over `.real` tiles; no arbitrary combine functions |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |

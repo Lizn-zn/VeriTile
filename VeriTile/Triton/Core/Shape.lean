@@ -78,6 +78,25 @@ def replaceAxisIndex :
       (outIdx.1,
        replaceAxisIndex rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ outIdx.2 r)
 
+/-- Read the coordinate at `axis` from a same-shape index. -/
+def axisCoord :
+    (shape : TileShape) → (axis : Fin shape.length) →
+    TileIndex shape → Fin (axisDim shape axis)
+  | [], axis, _ => nomatch axis
+  | _ :: _, ⟨0, _⟩, idx => idx.1
+  | _ :: rest, ⟨k + 1, h⟩, idx =>
+      axisCoord rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ idx.2
+
+/-- Replace the coordinate at `axis` in a same-shape index. -/
+def replaceAxisCoord :
+    (shape : TileShape) → (axis : Fin shape.length) →
+    TileIndex shape → Fin (axisDim shape axis) → TileIndex shape
+  | [], axis, _, _ => nomatch axis
+  | _ :: _, ⟨0, _⟩, idx, r => (r, idx.2)
+  | _ :: rest, ⟨k + 1, h⟩, idx, r =>
+      (idx.1,
+       replaceAxisCoord rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ idx.2 r)
+
 @[simp] theorem axisDim_head (d : Nat) (rest : TileShape) :
     axisDim (d :: rest) ⟨0, Nat.succ_pos _⟩ = d := rfl
 
@@ -100,6 +119,14 @@ def replaceAxisIndex :
 @[simp] theorem replaceAxisIndex_head {d : Nat} {rest : TileShape}
     (outIdx : TileIndex (1 :: rest)) (k : Fin d) :
     replaceAxisIndex (d :: rest) ⟨0, Nat.succ_pos _⟩ outIdx k = (k, outIdx.2) := rfl
+
+@[simp] theorem axisCoord_head {d : Nat} {rest : TileShape}
+    (idx : TileIndex (d :: rest)) :
+    axisCoord (d :: rest) ⟨0, Nat.succ_pos _⟩ idx = idx.1 := rfl
+
+@[simp] theorem replaceAxisCoord_head {d : Nat} {rest : TileShape}
+    (idx : TileIndex (d :: rest)) (k : Fin d) :
+    replaceAxisCoord (d :: rest) ⟨0, Nat.succ_pos _⟩ idx k = (k, idx.2) := rfl
 
 /-- Insert a new axis of size `n` at position `axis` of `shape`. The axis
 position ranges over `Fin (shape.length + 1)` (one slot more than the

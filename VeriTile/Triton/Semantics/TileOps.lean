@@ -99,6 +99,13 @@ noncomputable def WithBot.realSinh : WithBot ℝ → WithBot ℝ
   | none   => none
   | some r => some (Real.sinh r)
 
+noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
+  | .sum, xs => xs.foldl WithBot.realAdd ((0 : ℝ) : WithBot ℝ)
+  | .prod, xs => xs.foldl WithBot.realMul ((1 : ℝ) : WithBot ℝ)
+  | .max, xs => xs.foldl (fun acc x => if acc ≤ x then x else acc) (⊥ : WithBot ℝ)
+  | .min, [] => ⊥
+  | .min, x :: xs => xs.foldl (fun acc x => if acc ≤ x then acc else x) x
+
 @[simp] theorem WithBot.realExp_some (r : ℝ) :
     WithBot.realExp (some r) = some (Real.exp r) := rfl
 @[simp] theorem WithBot.realLog_some (r : ℝ) :
@@ -390,6 +397,19 @@ noncomputable def Tile.reduceMax {shape : TileShape}
   cases keepDims
   · exact Tile.reduceMaxDrop axis x
   · exact Tile.reduceMaxKeep axis x
+
+/-- Prefix scan along an axis. At each output index, folds all input lanes
+whose coordinate on `axis` is less than or equal to the output coordinate. -/
+noncomputable def Tile.scan {shape : TileShape}
+    (op : ScanOp) (axis : Fin shape.length) (x : Tile .real shape) :
+    Tile .real shape :=
+  ⟨fun idx =>
+    let coord := TileShape.axisCoord shape axis idx
+    let vals :=
+      ((Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).filter
+        (fun k => k.val ≤ coord.val)).toList.map
+        (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))
+    op.eval vals⟩
 
 /-! ### `simp` lemmas for the structural cases of reduceMax -/
 

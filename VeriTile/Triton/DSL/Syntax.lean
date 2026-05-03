@@ -13,6 +13,7 @@ declare_syntax_cat tritonStmt
 declare_syntax_cat tritonKwarg
 declare_syntax_cat tritonMemKwarg
 declare_syntax_cat tritonReduceKwarg
+declare_syntax_cat tritonScanOp
 declare_syntax_cat tritonDType
 
 -- Expressions
@@ -82,6 +83,10 @@ syntax ident "=" tritonExpr : tritonReduceKwarg
 
 syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax ident : tritonScanOp
+syntax "tl.cumsum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax "tl.cumprod(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax "tl.associative_scan(" tritonExpr ", " tritonScanOp ("," tritonReduceKwarg)* ")" : tritonExpr
 
 syntax "tl.load(" tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
 syntax "tl.make_block_ptr(" tritonExpr ", " ident "=" tritonExpr ", " ident "=" "[" tritonExpr,*

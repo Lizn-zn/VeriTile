@@ -49,6 +49,13 @@ Notes on individual constructors:
   masked-off lanes use the state's `undef` oracle; with `MaskOpt.maskOther`,
   masked-off lanes use the supplied `other` value.
 -/
+inductive ScanOp where
+  | sum
+  | prod
+  | max
+  | min
+  deriving Repr, BEq
+
 mutual
 
 inductive Op : TileDType → TileShape → Type where
@@ -114,6 +121,11 @@ inductive Op : TileDType → TileShape → Type where
   | reduceSum : (axis : Fin shape.length) → (keepDims : Bool) →
                 Op .real shape →
                 Op .real (TileShape.reduceShape shape axis keepDims)
+  /-- Prefix scan along an axis. `tl.cumsum` and `tl.cumprod` lower to this
+  node with `.sum` / `.prod`; `tl.associative_scan` accepts the closed
+  `ScanOp` enum rather than arbitrary functions. -/
+  | scan      : (op : ScanOp) → (axis : Fin shape.length) →
+                Op .real shape → Op .real shape
   /--
   Block-level (possibly batched) matrix multiply (`tl.dot` in Triton):
   `c[…, m, n] = ∑_k a[…, m, k] * b[…, k, n]`.
