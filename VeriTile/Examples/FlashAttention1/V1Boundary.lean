@@ -74,10 +74,7 @@ private def fa1PreLoopStridedBoundary (qReg : RegionName) (M D S_q : Nat)
             (Op.constNat 0)))
         (Op.constNat S_q))
   , Stmt.assign .real [M, D] "q"
-      (Op.loadMaskOther qReg
-        (Op.ref .nat [M, D] "q_ptrs")
-        (Op.ref .bool [M, D] "q_mask")
-        (Op.broadcast (Op.const 0) [M, D]))
+      (Op.load .real (MemAccess.region qReg (Op.ref .nat [M, D] "q_ptrs")) (MaskOpt.maskOther (Op.ref .bool [M, D] "q_mask") (Op.broadcast (Op.const 0) [M, D])))
   , Stmt.assign .real [M] "m_i"
       (Op.full [M] Op.negInf)
   , Stmt.assign .real [M] "l_i"
@@ -123,15 +120,9 @@ private def fa1LoopBodyStridedBoundary (kReg vReg : RegionName)
             (Op.constNat 0)))
         (Op.constNat S_k))
   , Stmt.assign .real [Bk, D] "k"
-      (Op.loadMaskOther kReg
-        (Op.ref .nat [Bk, D] "k_ptrs")
-        (Op.ref .bool [Bk, D] "kv_mask")
-        (Op.broadcast (Op.const 0) [Bk, D]))
+      (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs")) (MaskOpt.maskOther (Op.ref .bool [Bk, D] "kv_mask") (Op.broadcast (Op.const 0) [Bk, D])))
   , Stmt.assign .real [Bk, D] "v"
-      (Op.loadMaskOther vReg
-        (Op.ref .nat [Bk, D] "v_ptrs")
-        (Op.ref .bool [Bk, D] "kv_mask")
-        (Op.broadcast (Op.const 0) [Bk, D]))
+      (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs")) (MaskOpt.maskOther (Op.ref .bool [Bk, D] "kv_mask") (Op.broadcast (Op.const 0) [Bk, D])))
   , Stmt.assign .real [M, Bk] "scores_raw"
       (Op.mul .real Broadcast.scalarR
         (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
@@ -227,15 +218,9 @@ private def fa1LoopBodyStridedCausalBoundary (kReg vReg : RegionName)
             (Op.constNat 0)))
         (Op.constNat S_k))
   , Stmt.assign .real [Bk, D] "k"
-      (Op.loadMaskOther kReg
-        (Op.ref .nat [Bk, D] "k_ptrs")
-        (Op.ref .bool [Bk, D] "kv_mask")
-        (Op.broadcast (Op.const 0) [Bk, D]))
+      (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs")) (MaskOpt.maskOther (Op.ref .bool [Bk, D] "kv_mask") (Op.broadcast (Op.const 0) [Bk, D])))
   , Stmt.assign .real [Bk, D] "v"
-      (Op.loadMaskOther vReg
-        (Op.ref .nat [Bk, D] "v_ptrs")
-        (Op.ref .bool [Bk, D] "kv_mask")
-        (Op.broadcast (Op.const 0) [Bk, D]))
+      (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs")) (MaskOpt.maskOther (Op.ref .bool [Bk, D] "kv_mask") (Op.broadcast (Op.const 0) [Bk, D])))
   , Stmt.assign .real [M, Bk] "scores_raw"
       (Op.mul .real Broadcast.scalarR
         (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
@@ -327,10 +312,7 @@ private def fa1PostLoopStridedBoundary (outReg : RegionName) (M D S_q : Nat)
             (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
             (Op.constNat 0)))
         (Op.constNat S_q))
-  , Stmt.storeMask outReg [M, D]
-      (Op.ref .nat [M, D] "o_ptrs")
-      (Op.ref .real [M, D] "out")
-      (Op.ref .bool [M, D] "o_mask")
+  , Stmt.store .real [M, D] (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs")) (Op.ref .real [M, D] "out") (MaskOpt.mask (Op.ref .bool [M, D] "o_mask"))
   ]
 
 @[simp] theorem fa1ForwardKernelStridedBoundary_body_eq
@@ -441,10 +423,7 @@ private def fa1PreLoopStridedBoundaryD (qReg : RegionName)
         (Op.ref .bool [M, Bd] "q_seq_mask")
         (Op.ref .bool [M, Bd] "q_d_mask"))
   , Stmt.assign .real [M, Bd] "q"
-      (Op.loadMaskOther qReg
-        (Op.ref .nat [M, Bd] "q_ptrs")
-        (Op.ref .bool [M, Bd] "q_mask")
-        (Op.broadcast (Op.const 0) [M, Bd]))
+      (Op.load .real (MemAccess.region qReg (Op.ref .nat [M, Bd] "q_ptrs")) (MaskOpt.maskOther (Op.ref .bool [M, Bd] "q_mask") (Op.broadcast (Op.const 0) [M, Bd])))
   , Stmt.assign .real [M] "m_i"
       (Op.full [M] Op.negInf)
   , Stmt.assign .real [M] "l_i"
@@ -502,15 +481,9 @@ private def fa1LoopBodyStridedBoundaryD (kReg vReg : RegionName)
         (Op.ref .bool [Bk, Bd] "kv_seq_mask")
         (Op.ref .bool [Bk, Bd] "kv_d_mask"))
   , Stmt.assign .real [Bk, Bd] "k"
-      (Op.loadMaskOther kReg
-        (Op.ref .nat [Bk, Bd] "k_ptrs")
-        (Op.ref .bool [Bk, Bd] "kv_mask")
-        (Op.broadcast (Op.const 0) [Bk, Bd]))
+      (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, Bd] "k_ptrs")) (MaskOpt.maskOther (Op.ref .bool [Bk, Bd] "kv_mask") (Op.broadcast (Op.const 0) [Bk, Bd])))
   , Stmt.assign .real [Bk, Bd] "v"
-      (Op.loadMaskOther vReg
-        (Op.ref .nat [Bk, Bd] "v_ptrs")
-        (Op.ref .bool [Bk, Bd] "kv_mask")
-        (Op.broadcast (Op.const 0) [Bk, Bd]))
+      (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, Bd] "v_ptrs")) (MaskOpt.maskOther (Op.ref .bool [Bk, Bd] "kv_mask") (Op.broadcast (Op.const 0) [Bk, Bd])))
   , Stmt.assign .real [M, Bk] "scores_raw"
       (Op.mul .real Broadcast.scalarR
         (Op.dot (batch := []) (M := M) (K := Bd) (N := Bk)
@@ -618,15 +591,9 @@ private def fa1LoopBodyStridedCausalBoundaryD (kReg vReg : RegionName)
         (Op.ref .bool [Bk, Bd] "kv_seq_mask")
         (Op.ref .bool [Bk, Bd] "kv_d_mask"))
   , Stmt.assign .real [Bk, Bd] "k"
-      (Op.loadMaskOther kReg
-        (Op.ref .nat [Bk, Bd] "k_ptrs")
-        (Op.ref .bool [Bk, Bd] "kv_mask")
-        (Op.broadcast (Op.const 0) [Bk, Bd]))
+      (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, Bd] "k_ptrs")) (MaskOpt.maskOther (Op.ref .bool [Bk, Bd] "kv_mask") (Op.broadcast (Op.const 0) [Bk, Bd])))
   , Stmt.assign .real [Bk, Bd] "v"
-      (Op.loadMaskOther vReg
-        (Op.ref .nat [Bk, Bd] "v_ptrs")
-        (Op.ref .bool [Bk, Bd] "kv_mask")
-        (Op.broadcast (Op.const 0) [Bk, Bd]))
+      (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, Bd] "v_ptrs")) (MaskOpt.maskOther (Op.ref .bool [Bk, Bd] "kv_mask") (Op.broadcast (Op.const 0) [Bk, Bd])))
   , Stmt.assign .real [M, Bk] "scores_raw"
       (Op.mul .real Broadcast.scalarR
         (Op.dot (batch := []) (M := M) (K := Bd) (N := Bk)
@@ -730,10 +697,7 @@ private def fa1PostLoopStridedBoundaryD (outReg : RegionName)
       (Op.boolAnd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
         (Op.ref .bool [M, Bd] "o_seq_mask")
         (Op.ref .bool [M, Bd] "o_d_mask"))
-  , Stmt.storeMask outReg [M, Bd]
-      (Op.ref .nat [M, Bd] "o_ptrs")
-      (Op.ref .real [M, Bd] "out")
-      (Op.ref .bool [M, Bd] "o_mask")
+  , Stmt.store .real [M, Bd] (MemAccess.region outReg (Op.ref .nat [M, Bd] "o_ptrs")) (Op.ref .real [M, Bd] "out") (MaskOpt.mask (Op.ref .bool [M, Bd] "o_mask"))
   ]
 
 @[simp] theorem fa1ForwardKernelStridedBoundaryD_body_eq

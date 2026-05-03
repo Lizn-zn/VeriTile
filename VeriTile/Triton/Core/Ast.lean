@@ -8,7 +8,7 @@ import VeriTile.Triton.Core.Shape
 
 namespace VeriTile.Triton
 
-/--
+/-
 P1 Triton expressions.
 
 Each constructor models one Triton expression or block-level reduction.
@@ -47,7 +47,7 @@ Notes on individual constructors:
   typed constructors; mixed-channel comparison rejects at elaboration time.
   Shape semantics follow Triton: `()×()→()`, `(n)×()→(n)`, `()×(n)→(n)`,
   `(n)×(n)→(n)` (length match required for tile×tile).
-* `load region offset opts` reads from `region`. Per RP1, region is
+* `load dtype mem mask` reads from `mem`. Per RP1, region is
   a kernel-level name. Per the mask extension (Issue #16/#17):
   - `opts.mask = none, opts.other = none`: classic unmasked load. Result shape
     follows `offset` shape (scalarNat → scalar; tileNat → tile gather).
@@ -60,9 +60,11 @@ Notes on individual constructors:
     `undef` oracle.
   - `opts.mask = none, opts.other = some o`: `none` (semantic error).
 -/
+mutual
+
 inductive Op : TileDType → TileShape → Type where
   | const     : ℝ → Op .real []
-  | constFloat : FloatDType dtype → ℝ → Op dtype []
+  | constFloat : (dtype : FloatDType) → ℝ → Op dtype.toTileDType []
   | constNat  : Nat → Op .nat []
   | constBool : Bool → Op .bool []
   | negInf    : Op .real []
@@ -71,7 +73,7 @@ inductive Op : TileDType → TileShape → Type where
   | arange    : (n : Nat) → Op .nat [n]
   | broadcast : Op dtype [] → (shape : TileShape) → Op dtype shape
   | full      : (shape : TileShape) → Op dtype [] → Op dtype shape
-  | castFloat : FloatDType src → FloatDType dst → Op src shape → Op dst shape
+  | castFloat : (src dst : FloatDType) → Op src.toTileDType shape → Op dst.toTileDType shape
   | add       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | sub       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | mul       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
@@ -155,29 +157,31 @@ inductive Op : TileDType → TileShape → Type where
                 (strides offsets : List Nat) →
                 Op .blockPtr blockShape
   | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
-  | load      : (region : RegionName) → (offset : Op .nat shape) → Op .real shape
-  | loadMask  : (region : RegionName) → (offset : Op .nat shape) →
-                (mask : Op .bool shape) → Op .real shape
-  | loadMaskOther : (region : RegionName) → (offset : Op .nat shape) →
-                (mask : Op .bool shape) → (other : Op .real shape) → Op .real shape
-  | loadPtr   : Op .ptr shape → Op .real shape
-  | loadPtrMask : Op .ptr shape → Op .bool shape → Op .real shape
-  | loadPtrMaskOther : Op .ptr shape → Op .bool shape → Op .real shape → Op .real shape
-  | loadFloat : FloatDType dtype → (region : RegionName) → (offset : Op .nat shape) → Op dtype shape
-  | loadFloatMask : FloatDType dtype → (region : RegionName) → (offset : Op .nat shape) →
-                (mask : Op .bool shape) → Op dtype shape
-  | loadFloatMaskOther : FloatDType dtype → (region : RegionName) → (offset : Op .nat shape) →
-                (mask : Op .bool shape) → (other : Op dtype shape) → Op dtype shape
-  | loadPtrFloat : FloatDType dtype → Op .ptr shape → Op dtype shape
-  | loadPtrFloatMask : FloatDType dtype → Op .ptr shape → Op .bool shape → Op dtype shape
-  | loadPtrFloatMaskOther : FloatDType dtype → Op .ptr shape → Op .bool shape →
-                Op dtype shape → Op dtype shape
-  | loadBlockPtr : Op .blockPtr shape → (boundaryCheck : List Nat) →
-                (padding : PaddingOption) → Op .real shape
-  | loadBlockPtrFloat : FloatDType dtype → Op .blockPtr shape →
-                (boundaryCheck : List Nat) → (padding : PaddingOption) →
-                Op dtype shape
+  | load      : (dtype : FloatDType) → MemAccess shape →
+                MaskOpt dtype.toTileDType shape → Op dtype.toTileDType shape
   | natToReal : Op .nat shape → Op .real shape
+
+/-- Memory address form shared by load and store nodes. -/
+inductive MemAccess : TileShape → Type where
+  | region : (region : RegionName) → (offset : Op .nat shape) → MemAccess shape
+  | ptr : Op .ptr shape → MemAccess shape
+  | blockPtr : Op .blockPtr shape → (boundaryCheck : List Nat) → MemAccess shape
+
+/-- Optional mask/other clause for Triton memory operations. -/
+inductive MaskOpt : TileDType → TileShape → Type where
+  | none : MaskOpt dtype shape
+  | mask : Op .bool shape → MaskOpt dtype shape
+  | maskOther : Op .bool shape → Op dtype shape → MaskOpt dtype shape
+
+end
+
+namespace Op
+
+/-- Ergonomic constructor for the common unmasked Real region load. -/
+def load' (region : RegionName) (off : Op .nat shape) : Op .real shape :=
+  .load .real (.region region off) .none
+
+end Op
 
 /--
 P1 Triton statements (mutating constructs).
@@ -198,36 +202,23 @@ P1 Triton statements (mutating constructs).
 -/
 inductive Stmt : Type where
   | assign  : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape → Stmt
-  | store   : (region : RegionName) → (shape : TileShape) →
-              (offset : Op .nat shape) → (value : Op .real shape) → Stmt
-  | storeMask : (region : RegionName) → (shape : TileShape) →
-              (offset : Op .nat shape) → (value : Op .real shape) →
-              (mask : Op .bool shape) → Stmt
-  | storePtr : (shape : TileShape) →
-              (ptr : Op .ptr shape) → (value : Op .real shape) → Stmt
-  | storePtrMask : (shape : TileShape) →
-              (ptr : Op .ptr shape) → (value : Op .real shape) →
-              (mask : Op .bool shape) → Stmt
-  | storeFloat : FloatDType dtype → (region : RegionName) → (shape : TileShape) →
-              (offset : Op .nat shape) → (value : Op dtype shape) → Stmt
-  | storeFloatMask : FloatDType dtype → (region : RegionName) → (shape : TileShape) →
-              (offset : Op .nat shape) → (value : Op dtype shape) →
-              (mask : Op .bool shape) → Stmt
-  | storePtrFloat : FloatDType dtype → (shape : TileShape) →
-              (ptr : Op .ptr shape) → (value : Op dtype shape) → Stmt
-  | storePtrFloatMask : FloatDType dtype → (shape : TileShape) →
-              (ptr : Op .ptr shape) → (value : Op dtype shape) →
-              (mask : Op .bool shape) → Stmt
-  | storeBlockPtr : (shape : TileShape) → (ptr : Op .blockPtr shape) →
-              (value : Op .real shape) → (boundaryCheck : List Nat) → Stmt
-  | storeBlockPtrFloat : FloatDType dtype → (shape : TileShape) →
-              (ptr : Op .blockPtr shape) → (value : Op dtype shape) →
-              (boundaryCheck : List Nat) → Stmt
+  | store   : (dtype : FloatDType) → (shape : TileShape) →
+              MemAccess shape → (value : Op dtype.toTileDType shape) →
+              (mask : MaskOpt dtype.toTileDType shape) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
 
 instance : Inhabited Stmt :=
   ⟨.assign .real [] "" (.const 0)⟩
+
+namespace Stmt
+
+/-- Ergonomic constructor for the common unmasked Real region store. -/
+def store' (region : RegionName) (shape : TileShape)
+    (off : Op .nat shape) (value : Op .real shape) : Stmt :=
+  .store .real shape (.region region off) value .none
+
+end Stmt
 
 /--
 A complete Triton kernel.

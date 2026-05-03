@@ -32,11 +32,11 @@ def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : Kernel := triton {
 
 private def onlineSoftmaxLoopBody (xReg : RegionName) (N : Nat) : List Stmt :=
   [Stmt.assign .real [] "xi"
-      (Op.load xReg
+      (Op.load .real (MemAccess.region xReg
         (Op.add .nat .nil
           (Op.mul .nat .nil (Op.ref .nat [] "pid")
             (Op.constNat N))
-          (Op.ref .nat [] "i"))),
+          (Op.ref .nat [] "i"))) MaskOpt.none),
     Stmt.assign .real [] "m_new"
       (Op.max2 .nil (Op.ref .real [] "m") (Op.ref .real [] "xi")),
     Stmt.assign .real [] "l"
@@ -341,11 +341,11 @@ theorem online_softmax_correct
   have hLoopAuxExpanded :
       stepForLoopAux "i" 0 N
         [Stmt.assign .real [] "xi"
-            (Op.load xReg
+            (Op.load .real (MemAccess.region xReg
               (Op.add .nat .nil
                 (Op.mul .nat .nil (Op.ref .nat [] "pid")
                   (Op.constNat N))
-                (Op.ref .nat [] "i"))),
+                (Op.ref .nat [] "i"))) MaskOpt.none),
           Stmt.assign .real [] "m_new"
             (Op.max2 .nil (Op.ref .real [] "m") (Op.ref .real [] "xi")),
           Stmt.assign .real [] "l"

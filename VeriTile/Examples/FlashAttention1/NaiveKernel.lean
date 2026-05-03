@@ -450,10 +450,7 @@ private def fa1NaivePreBoundaryD (qReg kReg vReg : RegionName)
         (Op.ref .bool [M, Bd] "q_seq_mask")
         (Op.ref .bool [M, Bd] "q_d_mask"))
   , Stmt.assign .real [M, Bd] "q"
-      (Op.loadMaskOther qReg
-        (Op.ref .nat [M, Bd] "q_ptrs")
-        (Op.ref .bool [M, Bd] "q_mask")
-        (Op.full [M, Bd] (Op.const 0)))
+      (Op.load .real (MemAccess.region qReg (Op.ref .nat [M, Bd] "q_ptrs")) (MaskOpt.maskOther (Op.ref .bool [M, Bd] "q_mask") (Op.full [M, Bd] (Op.const 0))))
   , Stmt.assign .nat [S, Bd] "k_ptrs"
       (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
         (Op.add .nat Broadcast.scalarL
@@ -483,15 +480,9 @@ private def fa1NaivePreBoundaryD (qReg kReg vReg : RegionName)
           (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bd] "offs_d")))
         (Op.constNat D))
   , Stmt.assign .real [S, Bd] "k"
-      (Op.loadMaskOther kReg
-        (Op.ref .nat [S, Bd] "k_ptrs")
-        (Op.ref .bool [S, Bd] "kv_d_mask")
-        (Op.full [S, Bd] (Op.const 0)))
+      (Op.load .real (MemAccess.region kReg (Op.ref .nat [S, Bd] "k_ptrs")) (MaskOpt.maskOther (Op.ref .bool [S, Bd] "kv_d_mask") (Op.full [S, Bd] (Op.const 0))))
   , Stmt.assign .real [S, Bd] "v"
-      (Op.loadMaskOther vReg
-        (Op.ref .nat [S, Bd] "v_ptrs")
-        (Op.ref .bool [S, Bd] "kv_d_mask")
-        (Op.full [S, Bd] (Op.const 0)))
+      (Op.load .real (MemAccess.region vReg (Op.ref .nat [S, Bd] "v_ptrs")) (MaskOpt.maskOther (Op.ref .bool [S, Bd] "kv_d_mask") (Op.full [S, Bd] (Op.const 0))))
   ]
 
 theorem fa1_naive_pre_boundaryD_correct
@@ -662,10 +653,7 @@ private def fa1NaiveStoreBoundaryD (outReg : RegionName)
       (Op.boolAnd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
         (Op.ref .bool [M, Bd] "o_seq_mask")
         (Op.ref .bool [M, Bd] "o_d_mask"))
-  , Stmt.storeMask outReg [M, Bd]
-      (Op.ref .nat [M, Bd] "o_ptrs")
-      (Op.ref .real [M, Bd] "out")
-      (Op.ref .bool [M, Bd] "o_mask")
+  , Stmt.store .real [M, Bd] (MemAccess.region outReg (Op.ref .nat [M, Bd] "o_ptrs")) (Op.ref .real [M, Bd] "out") (MaskOpt.mask (Op.ref .bool [M, Bd] "o_mask"))
   ]
 
 theorem fa1_naive_store_boundaryD_correct

@@ -26,7 +26,7 @@ private def fa1PreLoop (qReg : RegionName) (M D : Nat) : List Stmt :=
           (Op.constNat D))
         (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
   , Stmt.assign .real [M, D] "q"
-      (Op.load qReg (Op.ref .nat [M, D] "q_ptrs"))
+      (Op.load .real (MemAccess.region qReg (Op.ref .nat [M, D] "q_ptrs")) MaskOpt.none)
   , Stmt.assign .real [M] "m_i"
       (Op.full [M] Op.negInf)
   , Stmt.assign .real [M] "l_i"
@@ -58,9 +58,9 @@ private def fa1LoopBody (kReg vReg : RegionName)
           (Op.constNat D))
         (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
   , Stmt.assign .real [Bk, D] "k"
-      (Op.load kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+      (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs")) MaskOpt.none)
   , Stmt.assign .real [Bk, D] "v"
-      (Op.load vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+      (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs")) MaskOpt.none)
   , Stmt.assign .real [M, Bk] "scores"
       (Op.mul .real Broadcast.scalarR
         (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
@@ -178,9 +178,7 @@ private def fa1PostLoop (outReg : RegionName) (M D : Nat) : List Stmt :=
           (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
           (Op.constNat D))
         (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
-  , Stmt.store outReg [M, D]
-      (Op.ref .nat [M, D] "o_ptrs")
-      (Op.ref .real [M, D] "out")
+  , Stmt.store .real [M, D] (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs")) (Op.ref .real [M, D] "out") MaskOpt.none
   ]
 
 /-- Readout stage: once the loop invariant holds at `numKVBlocks`, the
@@ -301,7 +299,7 @@ private def fa1PreLoopStrided (qReg : RegionName) (M D : Nat)
           (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
           (Op.constNat sQD)))
   , Stmt.assign .real [M, D] "q"
-      (Op.load qReg (Op.ref .nat [M, D] "q_ptrs"))
+      (Op.load .real (MemAccess.region qReg (Op.ref .nat [M, D] "q_ptrs")) MaskOpt.none)
   , Stmt.assign .real [M] "m_i"
       (Op.full [M] Op.negInf)
   , Stmt.assign .real [M] "l_i"
@@ -342,9 +340,9 @@ private def fa1LoopBodyStrided (kReg vReg : RegionName)
           (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
           (Op.constNat sVD)))
   , Stmt.assign .real [Bk, D] "k"
-      (Op.load kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+      (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs")) MaskOpt.none)
   , Stmt.assign .real [Bk, D] "v"
-      (Op.load vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+      (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs")) MaskOpt.none)
   , Stmt.assign .real [M, Bk] "scores"
       (Op.mul .real Broadcast.scalarR
         (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
@@ -424,9 +422,9 @@ private def fa1LoopBodyStridedCausal (kReg vReg : RegionName)
           (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
           (Op.constNat sVD)))
   , Stmt.assign .real [Bk, D] "k"
-      (Op.load kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+      (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs")) MaskOpt.none)
   , Stmt.assign .real [Bk, D] "v"
-      (Op.load vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+      (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs")) MaskOpt.none)
   , Stmt.assign .real [M, Bk] "scores_raw"
       (Op.mul .real Broadcast.scalarR
         (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
@@ -500,9 +498,7 @@ private def fa1PostLoopStrided (outReg : RegionName) (M D : Nat)
         (Op.mul .nat Broadcast.scalarR
           (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
           (Op.constNat sOD)))
-  , Stmt.store outReg [M, D]
-      (Op.ref .nat [M, D] "o_ptrs")
-      (Op.ref .real [M, D] "out")
+  , Stmt.store .real [M, D] (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs")) (Op.ref .real [M, D] "out") MaskOpt.none
   ]
 
 /-- The DSL-expanded body of `fa1ForwardKernelStrided` is the factored

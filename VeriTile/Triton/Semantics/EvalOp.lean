@@ -109,92 +109,40 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .advanceBlockPtr ptr deltas, s => do
       let p ← evalOp ptr s
       some ⟨fun i => (p.data i).advance deltas⟩
-  | .load region off, s => do
-      let offsets ← evalOp off s
-      some ⟨fun i => some (s.readMem region (offsets.data i))⟩
-  | .loadMask region off mask, s => do
-      let offsets ← evalOp off s
-      let masks ← evalOp mask s
-      some ⟨fun i =>
-        let addr := offsets.data i
-        if masks.data i then some (s.readMem region addr) else some (s.undef region addr)⟩
-  | .loadMaskOther region off mask other, s => do
-      let offsets ← evalOp off s
-      let masks ← evalOp mask s
-      let others ← evalOp other s
-      some ⟨fun i =>
-        let addr := offsets.data i
-        if masks.data i then some (s.readMem region addr) else others.data i⟩
-  | .loadPtr ptr, s => do
-      let ptrs ← evalOp ptr s
-      some ⟨fun i =>
-        let p := ptrs.data i
-        some (s.readMem p.1 p.2)⟩
-  | .loadPtrMask ptr mask, s => do
-      let ptrs ← evalOp ptr s
-      let masks ← evalOp mask s
-      some ⟨fun i =>
-        let p := ptrs.data i
-        if masks.data i then some (s.readMem p.1 p.2) else some (s.undef p.1 p.2)⟩
-  | .loadPtrMaskOther ptr mask other, s => do
-      let ptrs ← evalOp ptr s
-      let masks ← evalOp mask s
-      let others ← evalOp other s
-      some ⟨fun i =>
-        let p := ptrs.data i
-        if masks.data i then some (s.readMem p.1 p.2) else others.data i⟩
-  | .loadFloat h region off, s => do
-      let offsets ← evalOp off s
-      some ⟨fun i => h.ofReal (s.readMem region (offsets.data i))⟩
-  | .loadFloatMask h region off mask, s => do
-      let offsets ← evalOp off s
-      let masks ← evalOp mask s
-      some ⟨fun i =>
-        let addr := offsets.data i
-        if masks.data i then h.ofReal (s.readMem region addr) else h.ofReal (s.undef region addr)⟩
-  | .loadFloatMaskOther h region off mask other, s => do
-      let offsets ← evalOp off s
-      let masks ← evalOp mask s
-      let others ← evalOp other s
-      some ⟨fun i =>
-        let addr := offsets.data i
-        if masks.data i then h.ofReal (s.readMem region addr) else others.data i⟩
-  | .loadPtrFloat h ptr, s => do
-      let ptrs ← evalOp ptr s
-      some ⟨fun i =>
-        let p := ptrs.data i
-        h.ofReal (s.readMem p.1 p.2)⟩
-  | .loadPtrFloatMask h ptr mask, s => do
-      let ptrs ← evalOp ptr s
-      let masks ← evalOp mask s
-      some ⟨fun i =>
-        let p := ptrs.data i
-        if masks.data i then h.ofReal (s.readMem p.1 p.2) else h.ofReal (s.undef p.1 p.2)⟩
-  | .loadPtrFloatMaskOther h ptr mask other, s => do
-      let ptrs ← evalOp ptr s
-      let masks ← evalOp mask s
-      let others ← evalOp other s
-      some ⟨fun i =>
-        let p := ptrs.data i
-        if masks.data i then h.ofReal (s.readMem p.1 p.2) else others.data i⟩
-  | .loadBlockPtr ptr boundaryCheck .zero, s => do
-      let p ← evalOp ptr s
-      some ⟨fun i =>
-        let bp := p.data i
-        let idx := TileShape.indexToList shape i
-        if bp.inBounds idx boundaryCheck then
-          some (s.readMem bp.region (bp.address idx))
-        else
-          some 0⟩
-  | .loadBlockPtrFloat h ptr boundaryCheck .zero, s => do
-      let p ← evalOp ptr s
-      some ⟨fun i =>
-        let bp := p.data i
-        let idx := TileShape.indexToList shape i
-        if bp.inBounds idx boundaryCheck then
-          h.ofReal (s.readMem bp.region (bp.address idx))
-        else
-          h.ofReal 0⟩
+  | .load h mem mask, s => do
+      let addr ←
+        match mem with
+        | .region region off => do
+            let offsets ← evalOp off s
+            some fun i => (region, offsets.data i, true)
+        | .ptr ptr => do
+            let ptrs ← evalOp ptr s
+            some fun i =>
+              let p := ptrs.data i
+              (p.1, p.2, true)
+        | .blockPtr ptr boundaryCheck => do
+            let ptrs ← evalOp ptr s
+            some fun i =>
+              let bp := ptrs.data i
+              let idx := TileShape.indexToList shape i
+              (bp.region, bp.address idx, bp.inBounds idx boundaryCheck)
+      let read := fun i =>
+        let (region, offset, ok) := addr i
+        if ok then h.ofReal (s.readMem region offset) else h.ofReal 0
+      match mask with
+      | .none => some ⟨read⟩
+      | .mask mask => do
+          let masks ← evalOp mask s
+          some ⟨fun i =>
+            let (region, offset, ok) := addr i
+            if masks.data i then
+              if ok then h.ofReal (s.readMem region offset) else h.ofReal 0
+            else
+              if ok then h.ofReal (s.undef region offset) else h.ofReal 0⟩
+      | .maskOther mask other => do
+          let masks ← evalOp mask s
+          let others ← evalOp other s
+          some ⟨fun i => if masks.data i then read i else others.data i⟩
   | .natToReal a, s => return Tile.natToReal (← evalOp a s)
 
 end VeriTile.Triton

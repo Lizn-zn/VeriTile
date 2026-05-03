@@ -133,11 +133,28 @@ abbrev TileCarrier : TileDType → Type
   | .blockPtr => BlockPtr
 
 /-- Floating data channels currently backed by the mathematical real model. -/
-inductive FloatDType : TileDType → Type where
-  | real : FloatDType .real
-  | fp32 : FloatDType .fp32
-  | fp16 : FloatDType .fp16
-  | bf16 : FloatDType .bf16
+inductive FloatDType where
+  | real
+  | fp32
+  | fp16
+  | bf16
+  deriving DecidableEq, Repr
+
+namespace FloatDType
+
+/-- The concrete AST dtype represented by a floating dtype tag. -/
+def toTileDType : FloatDType → TileDType
+  | .real => .real
+  | .fp32 => .fp32
+  | .fp16 => .fp16
+  | .bf16 => .bf16
+
+@[simp] theorem toTileDType_real : FloatDType.real.toTileDType = .real := rfl
+@[simp] theorem toTileDType_fp32 : FloatDType.fp32.toTileDType = .fp32 := rfl
+@[simp] theorem toTileDType_fp16 : FloatDType.fp16.toTileDType = .fp16 := rfl
+@[simp] theorem toTileDType_bf16 : FloatDType.bf16.toTileDType = .bf16 := rfl
+
+end FloatDType
 
 
 /-- DTypes that support Triton's arithmetic operators in the current model. -/
