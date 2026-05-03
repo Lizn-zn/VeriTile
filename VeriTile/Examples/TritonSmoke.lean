@@ -175,6 +175,67 @@ def booleanSurfaceSmoke (N : Nat) : Kernel := triton {
 example : True := by
   trivial
 
+/-! ### Typed memory cells -/
+
+/-- Tiny #20 acceptance kernel: compare two Real inputs and store the winning
+index as a Nat memory cell. This exercises a non-Real HBM output. -/
+def argmax2IndexStoreKernel (xReg outReg : RegionName) : Kernel := triton {
+  x0    := tl.load($(xReg) + $(0))
+  x1    := tl.load($(xReg) + $(1))
+  take1 := x0 < x1
+  idx   := tl.where(take1, $(1), $(0))
+  tl.store($(outReg), idx)
+}
+
+def argmax2IndexStoreCoreKernel (xReg outReg : RegionName) : Kernel :=
+  { inputs := [xReg]
+  , outputs := [outReg]
+  , body :=
+      [Stmt.store .nat [] (MemAccess.region outReg (Op.constNat 0))
+        (Op.where
+          (Op.lt ComparableDType.real Broadcast.nil
+            (Op.load .real (MemAccess.region xReg (Op.constNat 0)) MaskOpt.none)
+            (Op.load .real (MemAccess.region xReg (Op.constNat 1)) MaskOpt.none))
+          (Op.constNat 1)
+          (Op.constNat 0))
+        MaskOpt.none] }
+
+noncomputable def argmax2ExpectedIndex (s : BlockState) (xReg : RegionName) : Nat :=
+  by
+    classical
+    let a : WithBot ℝ := s.readMemAs FloatDType.real xReg 0
+    let b : WithBot ℝ := s.readMemAs FloatDType.real xReg 1
+    exact if a < b then 1 else 0
+
+theorem argmax2_index_store_correct
+    (xReg outReg : RegionName) (s : BlockState) :
+    let result := exec (argmax2IndexStoreCoreKernel xReg outReg) s
+    result.map (fun s' => s'.readMemTyped .nat outReg 0) =
+      some (some (argmax2ExpectedIndex s xReg)) := by
+  classical
+  simp [argmax2IndexStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
+    argmax2ExpectedIndex, BlockState.writeMemTyped, BlockState.readMemAs,
+    BlockState.readMemTyped,
+    ComparableDType.lt, Tile.cop, Tile.select, Option.bind, Option.map,
+    MemCell.readAs_of_same, WithBot.some_eq_coe]
+  rfl
+
+example : (MemCell.of .nat 7).readAs .nat = some 7 := by
+  rfl
+
+example : (MemCell.of TileDType.bool Bool.true).readAs TileDType.bool = some Bool.true := by
+  rfl
+
+example : (MemCell.of .fp32 (some (3 : ℝ))).readAs .real = none := by
+  rfl
+
+example :
+    (({ mem := fun _ _ => MemCell.of .fp32 (some (5 : ℝ))
+      , regs := fun _ _ _ => none
+      , pids := fun _ => 0
+      , undef := fun _ _ => 0 } : BlockState).eraseFloat).readMem "X" 0 = 5 := by
+  rfl
+
 /-- `tl.load(p, mask=m)` with no `other=` uses `s.undef` for masked-off lanes. -/
 example : evalOp
     (Op.load .real (MemAccess.region "X" (Op.constNat 0))

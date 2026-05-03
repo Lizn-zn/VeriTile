@@ -896,8 +896,8 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
         ensureDType .blockPtr p'.dtype "tl.store block pointer"
         let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
         let sh ← p'.shape.term
-        let hp ← storeDType.floatProof
-        return (← `(Stmt.store $hp $sh (MemAccess.blockPtr $p'.term $boundaryCheck) $vTerm MaskOpt.none), env)
+        let dt ← storeDType.term
+        return (← `(Stmt.store $dt $sh (MemAccess.blockPtr $p'.term $boundaryCheck) $vTerm MaskOpt.none), env)
       match maskTerm with
       | none =>
           match ← expandStaticPtrExpr env p with
@@ -906,15 +906,15 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
               let r := sp.region
               let off := sp.offset
               let sh ← sp.shape.term
-              let hp ← storeDType.floatProof
-              pure (← `(Stmt.store $hp $sh (MemAccess.region $r $off) $vTerm MaskOpt.none), env)
+              let dt ← storeDType.term
+              pure (← `(Stmt.store $dt $sh (MemAccess.region $r $off) $vTerm MaskOpt.none), env)
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.store pointer"
               let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
               let sh ← p'.shape.term
-              let hp ← storeDType.floatProof
-              pure (← `(Stmt.store $hp $sh (MemAccess.ptr $p'.term) $vTerm MaskOpt.none), env)
+              let dt ← storeDType.term
+              pure (← `(Stmt.store $dt $sh (MemAccess.ptr $p'.term) $vTerm MaskOpt.none), env)
       | some (m, mShape) =>
           match ← expandStaticPtrExpr env p with
           | some sp =>
@@ -923,16 +923,16 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
               let r := sp.region
               let off := sp.offset
               let sh ← sp.shape.term
-              let hp ← storeDType.floatProof
-              pure (← `(Stmt.store $hp $sh (MemAccess.region $r $off) $vTerm (MaskOpt.mask $m')), env)
+              let dt ← storeDType.term
+              pure (← `(Stmt.store $dt $sh (MemAccess.region $r $off) $vTerm (MaskOpt.mask $m')), env)
           | none =>
               let p' ← expandExpr env p
               ensureDType .ptr p'.dtype "tl.store pointer"
               let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
               let m' ← coerceShape m mShape p'.shape "tl.store mask"
               let sh ← p'.shape.term
-              let hp ← storeDType.floatProof
-              pure (← `(Stmt.store $hp $sh (MemAccess.ptr $p'.term) $vTerm (MaskOpt.mask $m')), env)
+              let dt ← storeDType.term
+              pure (← `(Stmt.store $dt $sh (MemAccess.ptr $p'.term) $vTerm (MaskOpt.mask $m')), env)
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env

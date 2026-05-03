@@ -128,7 +128,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
               (bp.region, bp.address idx, bp.inBounds idx boundaryCheck)
       let read := fun i =>
         let (region, offset, ok) := addr i
-        if ok then h.ofReal (s.readMem region offset) else h.ofReal 0
+        if ok then s.readMemAs h region offset else h.ofReal 0
       match mask with
       | .none => some ⟨read⟩
       | .mask mask => do
@@ -136,7 +136,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
           some ⟨fun i =>
             let (region, offset, ok) := addr i
             if masks.data i then
-              if ok then h.ofReal (s.readMem region offset) else h.ofReal 0
+              if ok then s.readMemAs h region offset else h.ofReal 0
             else
               if ok then h.ofReal (s.undef region offset) else h.ofReal 0⟩
       | .maskOther mask other => do

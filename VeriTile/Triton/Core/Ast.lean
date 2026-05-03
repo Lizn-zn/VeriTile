@@ -32,10 +32,6 @@ Notes on individual constructors:
   Triton axis. The `keepDims` flag controls whether the reduced rank dim is
   stripped (`false`) or collapsed to `1` (`true`), matching Triton's
   `tl.sum / tl.max` `keep_dims=` kwarg.
-* `load region offset` evaluates `offset` (a `Nat`-valued scalar or tile,
-  i.e. produced from `constNat` / `programId` / `arange` / `Nat`-arithmetic)
-  and reads from `region`. Scalar offset = single-cell read; tile offset
-  = gather.
 * `natToReal` lifts a `Nat`-channel value (`scalarNat` / `tileNat`) into
   the `ℝ` channel. Used by kernels that mix loop counters / sizes with
   ℝ data (e.g. Welford's `delta / (i + 1)`, division by block size).
@@ -47,18 +43,11 @@ Notes on individual constructors:
   typed constructors; mixed-channel comparison rejects at elaboration time.
   Shape semantics follow Triton: `()×()→()`, `(n)×()→(n)`, `()×(n)→(n)`,
   `(n)×(n)→(n)` (length match required for tile×tile).
-* `load dtype mem mask` reads from `mem`. Per RP1, region is
-  a kernel-level name. Per the mask extension (Issue #16/#17):
-  - `opts.mask = none, opts.other = none`: classic unmasked load. Result shape
-    follows `offset` shape (scalarNat → scalar; tileNat → tile gather).
-  - `opts.mask = some m, opts.other = some o`: masked load. `m` evaluates to a
-    `scalarBool` (broadcasts) or `tileBool` (per-lane, length-matching).
-    For each lane where `m` is `true`, read from memory; where `false`,
-    use `o`. Result still follows `offset` shape.
-  - `opts.mask = some m, opts.other = none`: Triton leaves masked-off values
-    undefined. The operational semantics models this with the state's
-    `undef` oracle.
-  - `opts.mask = none, opts.other = some o`: `none` (semantic error).
+* `load dtype mem mask` reads from a `MemAccess`: named-region plus `.nat`
+  offsets, first-class pointer values, or block pointers with checked axes.
+  Scalar offset = single-cell read; tile offset = gather. With `MaskOpt.mask`,
+  masked-off lanes use the state's `undef` oracle; with `MaskOpt.maskOther`,
+  masked-off lanes use the supplied `other` value.
 -/
 mutual
 
@@ -202,9 +191,9 @@ P1 Triton statements (mutating constructs).
 -/
 inductive Stmt : Type where
   | assign  : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape → Stmt
-  | store   : (dtype : FloatDType) → (shape : TileShape) →
-              MemAccess shape → (value : Op dtype.toTileDType shape) →
-              (mask : MaskOpt dtype.toTileDType shape) → Stmt
+  | store   : (dtype : TileDType) → (shape : TileShape) →
+              MemAccess shape → (value : Op dtype shape) →
+              (mask : MaskOpt dtype shape) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
 

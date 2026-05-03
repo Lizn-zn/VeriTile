@@ -180,11 +180,16 @@ VeriTile 用一个窄版 first-class pointer value 建模 pointer:
 RegionName × Nat
 ```
 
-整体内存模型仍然是:
+runtime memory model 在 cell 边界是 typed:
 
 ```lean
-RegionName → Nat → ℝ
+RegionName → Nat → MemCell
 ```
+
+proof-facing 的 Real 兼容 API 仍然是 `BlockState.readMem` /
+`BlockState.writeMem`,所以现有数学正确性 theorem 继续暴露 Real-valued
+observation surface。换句话说,旧的 theorem-facing `RegionName → Nat → ℝ`
+view 仍然作为 API 层存在,但它不再是 runtime storage representation。
 
 Region dtype contract 单独放在 `VeriTile.Triton.MemoryTyping`:
 
@@ -194,9 +199,9 @@ Kernel.RespectsRegionTyping Γ k
 ```
 
 这是轻量静态层。它检查 named-region load/store 是否使用 `Γ` 声明的 dtype,
-但执行语义仍然读写 real-valued `BlockState.mem`。对于 pointer-valued
-load/store,静态可见的 `$(region)` pointer base 会按 `Γ` 检查;pointer register
-在这一层先视为 dynamic/external value。
+执行语义则写入 typed `MemCell`。对于 pointer-valued load/store,静态可见的
+`$(region)` pointer base 会按 `Γ` 检查;pointer register 在这一层先视为
+dynamic/external value。
 
 pointer value 可以 inline 使用、赋值和复用:
 
@@ -239,12 +244,18 @@ b * stride_b + h * stride_h + i * stride_s + d * stride_d
 rounding、NaN、signed zero、overflow、underflow、denormal、exception flag、
 硬件 dot precision、fast-math rewrite 都未建模。
 
-core AST 现在有 typed floating load/store 构造,例如 `Op.loadFloat`,
-`Op.loadPtrFloat`, `Stmt.storeFloat`。公开 DSL 的 `tl.load` 默认仍是
-`.real`,但支持 `dtype=tl.float32|tl.float16|tl.bfloat16`,用于生成 typed
-floating memory node。`tl.store` 从写入的 value 推断 dtype,也支持可选的、
-必须匹配 value dtype 的 `dtype=` surface spelling。integer / boolean tensor
-memory 还没有建模。
+core AST 现在使用统一的 dtype-indexed memory form:
+
+```lean
+Op.load    : FloatDType → MemAccess shape → MaskOpt dtype shape → Op ...
+Stmt.store : TileDType → MemAccess shape → Op ... → MaskOpt dtype shape → Stmt
+```
+
+公开 DSL 的 `tl.load` 默认仍是 `.real`,但支持
+`dtype=tl.float32|tl.float16|tl.bfloat16`,用于生成 typed floating memory
+node。`tl.store` 从写入的 value 推断 dtype,也支持可选的、必须匹配 value dtype 的
+`dtype=` surface spelling。Nat/index 这类 typed store 已支持;non-floating
+typed `tl.load` from HBM 还没有建模。
 
 Float theorem policy: 算法正确性 / refinement theorem 通过
 `Kernel.AlgorithmCorrect` 和 `Kernel.AlgorithmRefine` 证明在擦除后的 `.real`
@@ -279,9 +290,9 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | transpose | Limited | `tl.trans(e)` 只交换最后两个 axis |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
 | load | Limited | pointer-expression load,可带 `mask` / `other` / floating `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
-| store | Limited | pointer-expression store,可带 `mask`;floating dtype 从 value 推断,也可写匹配的 `dtype=`;block-pointer store 支持 `boundary_check` |
+| store | Limited | pointer-expression store,可带 `mask`;dtype 从 value 推断,也可写匹配的 `dtype=`;block-pointer store 支持 `boundary_check` |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
-| integer memory | Gap | memory 是 `RegionName → Nat → ℝ`;float dtype surface 会擦除到 real,int/Nat tensor memory 仍没有 (#20) |
+| integer memory | Limited | typed cell 和 typed store 支持 Nat/index 输出;non-floating typed load 还没有建模 |
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
 | indirection | Gap | 还没有 gather / paged-KV 风格的 data-dependent address model (#42) |
 | block pointer | Limited | `tl.make_block_ptr`、`tl.advance`、带 checked-axis zero padding / store skip 的 block-pointer load/store;没有硬件/TMA 行为 |

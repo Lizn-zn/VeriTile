@@ -8,7 +8,7 @@ microarchitectural model of CUDA hardware.
 
 | GPU concept | VeriTile model | Notes |
 | --- | --- | --- |
-| Global memory / HBM | `BlockState.mem : RegionName -> Nat -> ℝ` | Target of `tl.load` and `tl.store`. `RegionName` separates named buffers; `Nat` is a cell offset, not a byte address. |
+| Global memory / HBM | `BlockState.mem : RegionName -> Nat -> MemCell` | Target of `tl.load` and `tl.store`. `RegionName` separates named buffers; `Nat` is a cell offset, not a byte address. Proof-facing Real contracts use `readMem` / `writeMem`. |
 | Block-local variables | `BlockState.regs : RegFile` | Logical Triton SSA/register values created by assignments. This is not the physical CUDA register file. |
 | Addressing metadata | `TensorView`, `Offset.strided`, `InputAt` | Connects logical tensors to global-memory offsets for theorem statements and proof internals. |
 
@@ -20,7 +20,8 @@ TensorView.observe sf view idx
 ```
 
 `TensorView` is metadata: it records a region, base offset, and per-axis
-strides. It does not store data. Data lives in `BlockState.mem`.
+strides. It does not store data. Data lives in `BlockState.mem`, while existing
+Real-valued theorem statements observe it through `BlockState.readMem`.
 
 ## Addressing Model
 
@@ -48,8 +49,9 @@ Not modeled yet:
 - Hardware/TMA block-pointer behavior beyond the sequential lane semantics.
 - Paged-KV or gather-style data-dependent indirection. That needs a sibling
   view model on top of the same storage layer; see issue #42.
-- Typed non-real memory. The storage model is currently real-valued; see
-  issue #20.
+- Non-floating typed loads from HBM. Typed storage and typed stores exist, but
+  `tl.load(..., dtype=...)` is still limited to the floating channels plus the
+  proof-facing Real view.
 
 ## Sequential Consistency
 
@@ -87,8 +89,8 @@ properties or CUDA memory-system fidelity.
 
 The current model is intentionally small. The likely extension points are:
 
-- **Typed memory (#20):** generalize storage beyond `RegionName -> Nat -> ℝ` so
-  integer/Nat tensors can be loaded and stored.
+- **Memory safety / bounds (#48):** add region sizes and checked launch-level
+  bounds assumptions on top of the current typed storage layer.
 - **Paged KV / indirect addressing (#42):** add a gathered or paged view layer
   for data-dependent address maps.
 - **Async and concurrency (#12):** introduce shared-memory state, barriers,

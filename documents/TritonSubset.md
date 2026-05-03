@@ -192,11 +192,17 @@ VeriTile models a limited first-class pointer value as:
 RegionName × Nat
 ```
 
-The memory model remains:
+The runtime memory model is typed at the cell boundary:
 
 ```lean
-RegionName → Nat → ℝ
+RegionName → Nat → MemCell
 ```
+
+The proof-facing Real compatibility API remains `BlockState.readMem` /
+`BlockState.writeMem`, so existing mathematical correctness theorems keep their
+Real-valued observation surface. In other words, the old theorem-facing
+`RegionName → Nat → ℝ` view still exists as an API layer, but it is no longer
+the runtime storage representation.
 
 Region dtype contracts are modeled separately in `VeriTile.Triton.MemoryTyping`:
 
@@ -206,10 +212,10 @@ Kernel.RespectsRegionTyping Γ k
 ```
 
 This is a lightweight static layer. It checks that named-region loads/stores
-use the dtype declared by `Γ`, while execution still reads and writes the
-real-valued `BlockState.mem`. For pointer-valued loads/stores, statically
-visible `$(region)` pointer bases are checked against `Γ`; pointer registers are
-treated as dynamic/external values in this layer.
+use the dtype declared by `Γ`, while execution stores typed `MemCell`s. For
+pointer-valued loads/stores, statically visible `$(region)` pointer bases are
+checked against `Γ`; pointer registers are treated as dynamic/external values
+in this layer.
 
 Pointer values can be used inline, assigned, and reused:
 
@@ -260,13 +266,19 @@ bit-level IEEE-754 equivalence. Rounding, NaNs, signed zeros, overflow,
 underflow, denormals, exception flags, hardware dot precision, and fast-math
 rewrites are not modeled.
 
-The core AST has typed floating load/store constructors such as
-`Op.loadFloat`, `Op.loadPtrFloat`, and `Stmt.storeFloat`. The public DSL
-defaults `tl.load` to `.real`, but accepts `dtype=...` with `tl.float32`,
-`tl.float16`, or `tl.bfloat16` to produce typed floating memory nodes.
-`tl.store` infers its dtype from the value being stored, with optional matching
-`dtype=` syntax for Triton-like surface spelling. Integer and boolean tensor
-memory are not modeled yet.
+The core AST uses one dtype-indexed memory form:
+
+```lean
+Op.load    : FloatDType → MemAccess shape → MaskOpt dtype shape → Op ...
+Stmt.store : TileDType → MemAccess shape → Op ... → MaskOpt dtype shape → Stmt
+```
+
+The public DSL defaults `tl.load` to `.real`, but accepts `dtype=...` with
+`tl.float32`, `tl.float16`, or `tl.bfloat16` to produce typed floating memory
+nodes. `tl.store` infers its dtype from the value being stored, with optional
+matching `dtype=` syntax for Triton-like surface spelling. This supports typed
+stores such as Nat/index outputs. Non-floating typed `tl.load` from HBM is not
+modeled yet.
 
 Float theorem policy: algorithmic correctness/refinement theorems are proved
 over erased `.real` kernels via `Kernel.AlgorithmCorrect` and
@@ -304,9 +316,9 @@ current semantic contract.
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
 | Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional floating `dtype=`; block-pointer load with `boundary_check` and `padding_option="zero"` |
-| Stores | Limited | Pointer-expression store, optional `mask`, floating dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
+| Stores | Limited | Pointer-expression store, optional `mask`, dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
-| Integer memory | Gap | Memory is `RegionName → Nat → ℝ`; float dtype surface is erased to real, and int/Nat tensor memory is still absent (#20) |
+| Integer memory | Limited | Typed cells and typed stores support Nat/index outputs; non-floating typed loads are still not modeled |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
 | Indirection | Gap | No gather / paged-KV style data-dependent address model yet (#42) |
 | Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |

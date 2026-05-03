@@ -137,8 +137,8 @@ mutual
 /-- Memory-region dtype contract for statements. -/
 def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
   | .assign _ _ _ e => e.RespectsRegionTyping Γ
-  | .store h _ mem val mask =>
-      mem.RespectsRegionTyping Γ h.toTileDType ∧
+  | .store dtype _ mem val mask =>
+      mem.RespectsRegionTyping Γ dtype ∧
       val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
   | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
   | .ifThen cond body =>

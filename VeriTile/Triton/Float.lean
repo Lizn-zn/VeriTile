@@ -6,4 +6,5 @@ the erasure layer and the float-facing correctness bridge.
 -/
 
 import VeriTile.Triton.Float.Erasure
+import VeriTile.Triton.Float.StateErasure
 import VeriTile.Triton.Float.Correctness
