@@ -107,6 +107,30 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
             | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
       exprRegions e ++ kwargRegions
+  | `(tritonExpr| tl.argmax($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions e ++ kwargRegions
+  | `(tritonExpr| tl.argmin($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions e ++ kwargRegions
+  | `(tritonExpr| tl.sort($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions e ++ kwargRegions
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl

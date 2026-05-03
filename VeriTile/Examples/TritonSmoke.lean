@@ -96,6 +96,18 @@ def scanOpsSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   tl.store($(outReg) + offs, y)
 }
 
+/-- Arg/indexing and sort surface smoke. Arg ties are specified to keep the
+smallest axis index; sort is ascending along the static axis. -/
+def argSortOpsSmoke (xReg idxReg outReg : RegionName) (N : Nat) : Kernel := triton {
+  offs := tl.arange(0, $(N))
+  x    := tl.load($(xReg) + offs)
+  imax := tl.argmax(x, axis = 0)
+  imin := tl.argmin(x, axis = 0)
+  y    := tl.sort(x, axis = 0)
+  tl.store($(idxReg), imax + imin)
+  tl.store($(outReg) + offs, y)
+}
+
 /-- DSL smoke test for explicit floating dtype casts. -/
 def dtypeCastSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   offs := tl.arange(0, $(N))

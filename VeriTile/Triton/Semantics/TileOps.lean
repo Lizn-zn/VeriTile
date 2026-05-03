@@ -411,6 +411,53 @@ noncomputable def Tile.scan {shape : TileShape}
         (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))
     op.eval vals⟩
 
+noncomputable def Tile.argBestDrop {shape : TileShape}
+    (better : WithBot ℝ → WithBot ℝ → Bool)
+    (axis : Fin shape.length) (x : Tile .real shape) :
+    Tile .nat (TileShape.eraseAxis shape axis) :=
+  ⟨fun outIdx =>
+    if h : 0 < TileShape.axisDim shape axis then
+      let first : Fin (TileShape.axisDim shape axis) := ⟨0, h⟩
+      let best :=
+        (List.finRange (TileShape.axisDim shape axis)).foldl
+          (fun best k =>
+            if better
+                (x.data (TileShape.insertAxisIndex shape axis outIdx k))
+                (x.data (TileShape.insertAxisIndex shape axis outIdx best)) then
+              k
+            else
+              best)
+          first
+      best.val
+    else
+      0⟩
+
+/-- Axis index of the maximum value. Ties keep the earlier/smaller axis
+coordinate because replacement only occurs on strict improvement. -/
+noncomputable def Tile.argMaxDrop {shape : TileShape}
+    (axis : Fin shape.length) (x : Tile .real shape) :
+    Tile .nat (TileShape.eraseAxis shape axis) :=
+  Tile.argBestDrop (fun candidate current => decide (current < candidate)) axis x
+
+/-- Axis index of the minimum value. Ties keep the earlier/smaller axis
+coordinate because replacement only occurs on strict improvement. -/
+noncomputable def Tile.argMinDrop {shape : TileShape}
+    (axis : Fin shape.length) (x : Tile .real shape) :
+    Tile .nat (TileShape.eraseAxis shape axis) :=
+  Tile.argBestDrop (fun candidate current => decide (candidate < current)) axis x
+
+/-- Sort values along `axis` in ascending order, preserving all other
+coordinates. -/
+noncomputable def Tile.sortAxis {shape : TileShape}
+    (axis : Fin shape.length) (x : Tile .real shape) :
+    Tile .real shape :=
+  ⟨fun idx =>
+    let coord := TileShape.axisCoord shape axis idx
+    let vals :=
+      (List.finRange (TileShape.axisDim shape axis)).map
+        (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))
+    (vals.mergeSort (fun a b => decide (a ≤ b))).getD coord.val ⊥⟩
+
 /-! ### `simp` lemmas for the structural cases of reduceMax -/
 
 @[simp] theorem Tile.reduceMax_false {shape : TileShape}

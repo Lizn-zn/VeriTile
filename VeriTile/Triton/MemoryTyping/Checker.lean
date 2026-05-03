@@ -169,6 +169,9 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .reduceMax _ _ a => a.check ctx
   | .reduceSum _ _ a => a.check ctx
   | .scan _ _ a => a.check ctx
+  | .argMax _ a => a.check ctx
+  | .argMin _ a => a.check ctx
+  | .sort _ a => a.check ctx
   | .dot a b => a.check ctx *> b.check ctx
   | .transpose a => a.check ctx
   | .expandDim _ a => a.check ctx

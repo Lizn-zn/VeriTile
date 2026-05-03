@@ -126,6 +126,16 @@ inductive Op : TileDType → TileShape → Type where
   `ScanOp` enum rather than arbitrary functions. -/
   | scan      : (op : ScanOp) → (axis : Fin shape.length) →
                 Op .real shape → Op .real shape
+  /-- Axis index of the maximum value, with ties resolved toward the smallest
+  axis coordinate. -/
+  | argMax    : (axis : Fin shape.length) → Op .real shape →
+                Op .nat (TileShape.eraseAxis shape axis)
+  /-- Axis index of the minimum value, with ties resolved toward the smallest
+  axis coordinate. -/
+  | argMin    : (axis : Fin shape.length) → Op .real shape →
+                Op .nat (TileShape.eraseAxis shape axis)
+  /-- Sort values along `axis` in ascending order. -/
+  | sort      : (axis : Fin shape.length) → Op .real shape → Op .real shape
   /--
   Block-level (possibly batched) matrix multiply (`tl.dot` in Triton):
   `c[…, m, n] = ∑_k a[…, m, k] * b[…, k, n]`.

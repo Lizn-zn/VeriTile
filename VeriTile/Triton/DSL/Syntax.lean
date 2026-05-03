@@ -87,6 +87,9 @@ syntax ident : tritonScanOp
 syntax "tl.cumsum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.cumprod(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.associative_scan(" tritonExpr ", " tritonScanOp ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax "tl.argmax(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax "tl.argmin(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax "tl.sort(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 
 syntax "tl.load(" tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
 syntax "tl.make_block_ptr(" tritonExpr ", " ident "=" tritonExpr ", " ident "=" "[" tritonExpr,*

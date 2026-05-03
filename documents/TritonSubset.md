@@ -103,6 +103,9 @@ Supported channels:
   axis=N)` on `.real` tiles. The supported associative op names are the closed
   enum `sum`, `prod`, `max`, `min`; arbitrary user functions are not embedded
   in the AST.
+- Index/order ops: `tl.argmax`, `tl.argmin`, and `tl.sort` on `.real` tiles
+  with static `axis=N`. Arg ties return the smallest axis index; sort is
+  ascending along the selected axis.
 - Broadcasting is ND and follows the current `Broadcast` witness:
   same dimension, scalar-to-tile, or dimension `1` expanded to the other side.
   The DSL constructs the broadcast proof syntactically, so equivalent but
@@ -348,6 +351,7 @@ current semantic contract.
 | Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
 | Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |
 | Prefix scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` over `.real` tiles; no arbitrary combine functions |
+| Index/order ops | Limited | `tl.argmax`, `tl.argmin`, `tl.sort` over `.real` tiles with static `axis=N`; arg ties return the smallest axis index, sort is ascending |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
 | Transpose | Limited | `tl.trans(e)` swaps trailing two axes only |

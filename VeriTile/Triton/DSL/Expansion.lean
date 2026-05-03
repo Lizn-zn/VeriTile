@@ -315,6 +315,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandScan env "tl.cumprod" (← `(ScanOp.prod)) e kwargs
   | `(tritonExpr| tl.associative_scan($e:tritonExpr, $op:tritonScanOp $[, $kwargs:tritonReduceKwarg]*)) => do
       expandScan env "tl.associative_scan" (← expandScanOp op) e kwargs
+  | `(tritonExpr| tl.argmax($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandArgReduce env "tl.argmax" (← `(Op.argMax)) e kwargs
+  | `(tritonExpr| tl.argmin($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandArgReduce env "tl.argmin" (← `(Op.argMin)) e kwargs
+  | `(tritonExpr| tl.sort($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      expandSort env e kwargs
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
       expandReduce env "tl.sum" (← `(Op.reduceSum)) e kwargs
   | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
@@ -721,6 +727,56 @@ partial def expandScan (env : Env) (ctx : String) (op : TSyntax `term)
         Macro.throwUnsupported
   let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
   pure ⟨← `(Op.scan $op (⟨$axisLit, by simp⟩) $e'.term), .real, e'.shape⟩
+
+partial def parseAxisOnlyKwargs (ctx : String) (dims : List (TSyntax `term))
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM Nat := do
+  if dims.isEmpty then
+    Macro.throwError (ctx ++ ": rank-≥ 1 input required")
+  let mut seenAxis : Bool := Bool.false
+  let mut axisIdx : Nat := 0
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axisIdx := n.getNat
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        Macro.throwError (ctx ++ ": `keep_dims` is not supported")
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        Macro.throwError (ctx ++ ": `keep_dims` is not supported")
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        Macro.throwError
+          (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
+           "`. Only `axis = N` is supported.")
+    | _ =>
+        Macro.throwUnsupported
+  pure axisIdx
+
+partial def expandArgReduce (env : Env) (ctx : String) (op : TSyntax `term)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  ensureDType .real e'.dtype ctx
+  let dims := match e'.shape with | .dims ds => ds
+  let axisIdx ← parseAxisOnlyKwargs ctx dims kwargs
+  let outDims ← eraseNth dims axisIdx
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  pure ⟨← `($op (⟨$axisLit, by simp⟩) $e'.term), .nat, .dims outDims⟩
+
+partial def expandSort (env : Env)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  ensureDType .real e'.dtype "tl.sort"
+  let dims := match e'.shape with | .dims ds => ds
+  let axisIdx ← parseAxisOnlyKwargs "tl.sort" dims kwargs
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  pure ⟨← `(Op.sort (⟨$axisLit, by simp⟩) $e'.term), .real, e'.shape⟩
 
 /-- Lower a `tl.sum(...)` / `tl.max(...)` expression with optional reduction
 kwargs (`axis = K`, `keep_dims = true|false`) into the corresponding
