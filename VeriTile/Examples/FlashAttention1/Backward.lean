@@ -216,6 +216,42 @@ theorem probability_tile_eq {M S D : Nat}
   rw [FA1Math.scaled_data_eq' Q K scale idx.1 idx.2.1]
   simp [Tile.ofReal, probability]
 
+/-- Tile-level bridge for `dP = dO · Vᵀ`. -/
+theorem dP_tile_eq {M S D : Nat}
+    (V : TileIndex [S, D] → ℝ) (dO : TileIndex [M, D] → ℝ)
+    (idx : TileIndex [M, S]) :
+    ((Tile.dot [] (Tile.ofReal dO) (Tile.transpose [] (Tile.ofReal V))).data idx).unbotD 0 =
+      dP V dO idx.1 idx.2.1 := by
+  rw [Tile.dot_nil_data]
+  simp [Tile.transpose, Tile.ofReal, dP]
+
+/-- Tile-level bridge for `corr = sum(P * dP, axis=1)`. -/
+theorem rowCorrection_tile_eq {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (V : TileIndex [S, D] → ℝ) (dO : TileIndex [M, D] → ℝ)
+    (LSE : Fin M → ℝ) (scale : ℝ) (idx : TileIndex [M]) :
+    (Tile.reduceSumDrop (shape := [M, S]) 1
+      (Tile.ofReal fun idx : TileIndex [M, S] =>
+        probability Q K LSE scale idx.1 idx.2.1 * dP V dO idx.1 idx.2.1)).data idx =
+      some (rowCorrection Q K V dO LSE scale idx.1) := by
+  simp [Tile.reduceSumDrop, Tile.ofReal, rowCorrection]
+  congr 1
+
+/-- Tile-level bridge for `dS = P * (dP - corr[:, None])`. -/
+theorem dS_tile_eq {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (V : TileIndex [S, D] → ℝ) (dO : TileIndex [M, D] → ℝ)
+    (LSE : Fin M → ℝ) (scale : ℝ) (idx : TileIndex [M, S]) :
+    Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+      ((Tile.ofReal fun idx : TileIndex [M, S] =>
+        probability Q K LSE scale idx.1 idx.2.1).data idx)
+      (Option.map₂ (fun x1 x2 : ℝ => x1 - x2)
+        ((Tile.ofReal fun idx : TileIndex [M, S] => dP V dO idx.1 idx.2.1).data idx)
+        ((Tile.ofReal fun idx : TileIndex [M] =>
+          rowCorrection Q K V dO LSE scale idx.1).data (idx.1, PUnit.unit))) =
+      some (dS Q K V dO LSE scale idx.1 idx.2.1) := by
+  simp [Tile.ofReal, dS]
+
 /-- Jacobian-vector product of row softmax after simplifying
 `(diag(P) - P·Pᵀ) dP`. -/
 noncomputable def softmaxJacobianJVP {S : Nat}
