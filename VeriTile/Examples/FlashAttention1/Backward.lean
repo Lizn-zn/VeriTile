@@ -196,6 +196,26 @@ theorem dK_tile_eq_attentionBackwardReal {M S D : Nat}
   simp [Tile.transpose, Tile.ofReal, attentionBackwardReal_dK]
   ring
 
+/-- Tile-level bridge for the stripped kernel's probability tile
+`P = exp(scores - LSE[:, None])`. -/
+theorem probability_tile_eq {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (LSE : Fin M → ℝ) (scale : ℝ) (idx : TileIndex [M, S]) :
+    WithBot.realExp
+      (Option.map₂ (fun x1 x2 : ℝ => x1 - x2)
+        (Option.map (fun a : ℝ => a * scale)
+          ((Tile.dot [] (Tile.ofReal Q) (Tile.transpose [] (Tile.ofReal K))).data idx))
+        ((Tile.ofReal fun idx : TileIndex [M] => LSE idx.1).data (idx.1, PUnit.unit))) =
+      some (probability Q K LSE scale idx.1 idx.2.1) := by
+  change WithBot.realExp
+      (Option.map₂ (fun x1 x2 : ℝ => x1 - x2)
+        (Option.map (fun a : ℝ => a * scale)
+          ((Tile.dot [] (Tile.ofReal Q) (Tile.transpose [] (Tile.ofReal K))).data
+            (idx.1, idx.2.1, PUnit.unit)))
+        ((Tile.ofReal fun idx : TileIndex [M] => LSE idx.1).data (idx.1, PUnit.unit))) = _
+  rw [FA1Math.scaled_data_eq' Q K scale idx.1 idx.2.1]
+  simp [Tile.ofReal, probability]
+
 /-- Jacobian-vector product of row softmax after simplifying
 `(diag(P) - P·Pᵀ) dP`. -/
 noncomputable def softmaxJacobianJVP {S : Nat}
