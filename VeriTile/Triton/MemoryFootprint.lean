@@ -150,6 +150,38 @@ theorem disjoint_activeAddrTileImage_of_image_disjoint
   rcases h₂ with ⟨j, haj, hj⟩
   exact h i j hai haj (hi.trans hj.symm)
 
+theorem not_tileImage_of_region_ne {shape : TileShape}
+    {region other : RegionName} {off : TileIndex shape → Nat} {offset : Nat}
+    (h : other ≠ region) :
+    ¬ WriteFootprint.tileImage region off (other, offset) := by
+  intro hmem
+  exact h hmem.1
+
+theorem not_activeTileImage_of_region_ne {shape : TileShape}
+    {region other : RegionName} {off : TileIndex shape → Nat}
+    {active : TileIndex shape → Prop} {offset : Nat}
+    (h : other ≠ region) :
+    ¬ WriteFootprint.activeTileImage region off active (other, offset) := by
+  intro hmem
+  exact h hmem.1
+
+theorem not_addrTileImage_of_forall_ne {shape : TileShape}
+    {addr : TileIndex shape → MemCellAddr} {cell : MemCellAddr}
+    (h : ∀ i, addr i ≠ cell) :
+    ¬ WriteFootprint.addrTileImage addr cell := by
+  intro hmem
+  rcases hmem with ⟨i, hi⟩
+  exact h i hi
+
+theorem not_activeAddrTileImage_of_forall_ne {shape : TileShape}
+    {addr : TileIndex shape → MemCellAddr}
+    {active : TileIndex shape → Prop} {cell : MemCellAddr}
+    (h : ∀ i, active i → addr i ≠ cell) :
+    ¬ WriteFootprint.activeAddrTileImage addr active cell := by
+  intro hmem
+  rcases hmem with ⟨i, hactive, hi⟩
+  exact h i hactive hi
+
 end WriteFootprint
 
 namespace Stmt

@@ -80,6 +80,31 @@ theorem mergeFrames_mem_unwritten {k : Kernel} {g : Grid} {s : BlockState}
   dsimp
   rw [dif_neg hNotWritten]
 
+theorem mergeFrames_mem_eq_of_not_written {k : Kernel} {g : Grid} {s : BlockState}
+    {frames : Kernel.GridFrames k g s}
+    {region : RegionName} {offset : Nat}
+    (hNotWritten : ¬ Kernel.GridWriteFootprint frames (region, offset)) :
+    (Kernel.mergeFrames g s frames).mem region offset = s.mem region offset :=
+  Kernel.mergeFrames_mem_unwritten region offset hNotWritten
+
+theorem mergeFrames_mem_eq_of_region_not_written {k : Kernel} {g : Grid} {s : BlockState}
+    {frames : Kernel.GridFrames k g s}
+    {region : RegionName}
+    (hNotWritten : ∀ offset, ¬ Kernel.GridWriteFootprint frames (region, offset)) :
+    (Kernel.mergeFrames g s frames).mem region = s.mem region := by
+  funext offset
+  exact Kernel.mergeFrames_mem_eq_of_not_written (frames := frames)
+    (region := region) (offset := offset) (hNotWritten offset)
+
+theorem GridWriteFootprint.not_region_of_forall_frames
+    {k : Kernel} {g : Grid} {s : BlockState}
+    {frames : Kernel.GridFrames k g s} {region : RegionName}
+    (h : ∀ idx offset, ¬ (frames idx).writes (region, offset)) :
+    ∀ offset, ¬ Kernel.GridWriteFootprint frames (region, offset) := by
+  intro offset hWritten
+  rcases hWritten with ⟨idx, hidx⟩
+  exact h idx offset hidx
+
 theorem mergeFrames_writeWithin {k : Kernel} {g : Grid} {s : BlockState}
     (frames : Kernel.GridFrames k g s) :
     BlockState.WriteWithin (Kernel.GridWriteFootprint frames) s
@@ -93,8 +118,8 @@ theorem execFrame_mem_eq_initial_of_not_writes {k : Kernel} {g : Grid}
     (region : RegionName) (offset : Nat)
     (hNotWritten : ¬ frame.writes (region, offset)) :
     frame.final.mem region offset = s.mem region offset := by
-  have h := frame.h_writeWithin region offset hNotWritten
-  simpa [BlockState.withGridIndex, BlockState.withPids] using h.symm
+  have h := frame.mem_eq_of_not_written hNotWritten
+  simpa [BlockState.withGridIndex, BlockState.withPids] using h
 
 end Kernel
 

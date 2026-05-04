@@ -73,6 +73,13 @@ Structured footprint extraction and proof automation live in
 smart constructors such as `WriteFootprint.tileImage`,
 `activeTileImage`, and block-pointer address-image helpers.
 
+Unrelated-memory preservation helpers live on the same frame stack (#62).
+Use `BlockState.WriteWithin.mem_eq_of_not_written`,
+`Kernel.ExecFrame.mem_eq_of_region_not_written`,
+`Kernel.ExecWritesWithin.mem_eq_of_region_not_written`, and
+`Kernel.mergeFrames_mem_eq_of_region_not_written` before unfolding
+`WriteWithin` or `GridWriteFootprint` by hand.
+
 ## Examples
 
 `VeriTile/Examples/MemorySafety.lean` contains representative proofs:

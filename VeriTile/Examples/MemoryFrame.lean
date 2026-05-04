@@ -74,6 +74,15 @@ theorem scalarDirectStore_writesWithin_tileImage
       exact Stmt.storeAddressesWithin_region_unmasked outReg (Op.constNat 0)
         s (Tile.scalar 0) (by simp [evalOp]))
 
+theorem scalarDirectStore_preserves_unrelated_region
+    (outReg otherReg : RegionName) (s s' : BlockState)
+    (hOther : otherReg ≠ outReg)
+    (hExec : exec (scalarDirectStoreKernel outReg) s = some s') :
+    s'.mem otherReg = s.mem otherReg := by
+  exact Kernel.ExecWritesWithin.mem_eq_of_region_not_written
+    (scalarDirectStore_writesWithin_tileImage outReg s) hExec
+    (fun offset => WriteFootprint.not_tileImage_of_region_ne hOther)
+
 theorem scalarDirectStore_writesWithin_perStmt
     (outReg : RegionName) (s : BlockState) :
     (scalarDirectStoreKernel outReg).ExecWritesWithin s

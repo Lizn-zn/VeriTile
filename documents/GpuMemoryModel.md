@@ -116,6 +116,8 @@ The next proof-ergonomics layer is:
 - **Structured footprint extraction (#61):** `WriteFootprint.tileImage`,
   `activeTileImage`, and address-image helpers derive predicate footprints from
   common direct, masked, checked block-pointer, and regular store patterns.
+- **Unrelated-frame helpers (#62):** convenience lemmas prove that cells or
+  whole regions outside a single-program or grid footprint are preserved.
 
 Longer-term extension points remain:
 

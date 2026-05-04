@@ -91,10 +91,10 @@ theorem gridConstStore_merge_unrelated
     (hOther : otherReg ≠ outReg) :
     (Kernel.mergeFrames (Grid1 n) s (gridConstStoreFrames outReg n s)).mem otherReg offset =
       s.mem otherReg offset := by
-  apply Kernel.mergeFrames_mem_unwritten
-  intro hWritten
-  rcases hWritten with ⟨idx, hidx⟩
-  simp [gridConstStoreFrames, gridConstStoreFrame, WriteFootprint.tileImage] at hidx
-  exact hOther hidx.1
+  exact Kernel.mergeFrames_mem_eq_of_not_written (frames := gridConstStoreFrames outReg n s)
+    (region := otherReg) (offset := offset) (by
+      apply Kernel.GridWriteFootprint.not_region_of_forall_frames
+      intro idx offset
+      exact WriteFootprint.not_tileImage_of_region_ne hOther)
 
 end VeriTile.Examples.GridComposition

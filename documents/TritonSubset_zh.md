@@ -340,7 +340,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | load | Limited | pointer-expression load,可带 `mask` / `other` / float/int*/uint* spelling-only integer `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
 | store | Limited | pointer-expression store,可带 `mask`;dtype 从 value 推断,也可写匹配的 `dtype=`;block-pointer store 支持 `boundary_check` |
 | memory bounds safety | Limited | `Kernel.MemorySafe` / `ComputeKernel.MemorySafe` 证明 direct、pointer、block-pointer memory op 的 active-lane region bounds;不包含 alias、race、frame 或 permission model |
-| memory frame contract | Limited | predicate-level `WriteFootprint`、`BlockState.WriteWithin`、`Stmt.StoreAddressesWithin` 和 `Kernel.ExecFrame`,用于 single-program write-frame reasoning;`tileImage` / `activeTileImage` helper 可提取 direct、masked、checked block-pointer store footprint |
+| memory frame contract | Limited | predicate-level `WriteFootprint`、`BlockState.WriteWithin`、`Stmt.StoreAddressesWithin` 和 `Kernel.ExecFrame`,用于 single-program write-frame reasoning;`tileImage` / `activeTileImage` helper 可提取 direct、masked、checked block-pointer store footprint, unrelated-region preservation helper 覆盖常见 frame readback 目标 |
 | disjoint grid composition | Limited | `Kernel.GridFrames`、`GridWritesDisjoint` 和 `mergeFrames` 能合并 pairwise-disjoint write footprint 的 explicit per-program frame;没有 overlapping write 或 scheduling semantics |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
 | integer memory | Limited | typed cell 加 typed load/store 支持 Nat/index 和数学 signed-Int HBM value;还没有更完整的 signed/unsigned width lattice |

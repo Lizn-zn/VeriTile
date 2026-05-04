@@ -109,6 +109,25 @@ theorem writeWithin_refl (P : WriteFootprint) (s : BlockState) :
   intro _ _ _
   rfl
 
+namespace WriteWithin
+
+theorem mem_eq_of_not_written {P : WriteFootprint} {s₀ s₁ : BlockState}
+    (h : BlockState.WriteWithin P s₀ s₁)
+    {region : RegionName} {offset : Nat}
+    (hnot : ¬ P (region, offset)) :
+    s₁.mem region offset = s₀.mem region offset :=
+  (h region offset hnot).symm
+
+theorem mem_eq_of_region_not_written {P : WriteFootprint} {s₀ s₁ : BlockState}
+    (h : BlockState.WriteWithin P s₀ s₁)
+    {region : RegionName}
+    (hnot : ∀ offset, ¬ P (region, offset)) :
+    s₁.mem region = s₀.mem region := by
+  funext offset
+  exact mem_eq_of_not_written h (hnot offset)
+
+end WriteWithin
+
 theorem writeWithin_trans {P : WriteFootprint} {s₀ s₁ s₂ : BlockState}
     (h₀₁ : WriteWithin P s₀ s₁) (h₁₂ : WriteWithin P s₁ s₂) :
     WriteWithin P s₀ s₂ := by
@@ -430,10 +449,50 @@ structure ExecFrame (k : Kernel) (s : BlockState) where
   h_exec : exec k s = some final
   h_writeWithin : BlockState.WriteWithin writes s final
 
+namespace ExecFrame
+
+theorem mem_eq_of_not_written {k : Kernel} {s : BlockState}
+    (frame : Kernel.ExecFrame k s)
+    {region : RegionName} {offset : Nat}
+    (hnot : ¬ frame.writes (region, offset)) :
+    frame.final.mem region offset = s.mem region offset :=
+  BlockState.WriteWithin.mem_eq_of_not_written frame.h_writeWithin hnot
+
+theorem mem_eq_of_region_not_written {k : Kernel} {s : BlockState}
+    (frame : Kernel.ExecFrame k s)
+    {region : RegionName}
+    (hnot : ∀ offset, ¬ frame.writes (region, offset)) :
+    frame.final.mem region = s.mem region :=
+  BlockState.WriteWithin.mem_eq_of_region_not_written frame.h_writeWithin hnot
+
+end ExecFrame
+
 /-- Reusable single-kernel frame predicate. If execution fails, this is vacuous;
 use `ExecFrame` when a concrete successful final state is needed. -/
 def ExecWritesWithin (k : Kernel) (s : BlockState) (P : WriteFootprint) : Prop :=
   ∀ s', exec k s = some s' → BlockState.WriteWithin P s s'
+
+namespace ExecWritesWithin
+
+theorem mem_eq_of_not_written {k : Kernel} {s s' : BlockState}
+    {P : WriteFootprint}
+    (hFrame : Kernel.ExecWritesWithin k s P)
+    (hExec : exec k s = some s')
+    {region : RegionName} {offset : Nat}
+    (hnot : ¬ P (region, offset)) :
+    s'.mem region offset = s.mem region offset :=
+  BlockState.WriteWithin.mem_eq_of_not_written (hFrame s' hExec) hnot
+
+theorem mem_eq_of_region_not_written {k : Kernel} {s s' : BlockState}
+    {P : WriteFootprint}
+    (hFrame : Kernel.ExecWritesWithin k s P)
+    (hExec : exec k s = some s')
+    {region : RegionName}
+    (hnot : ∀ offset, ¬ P (region, offset)) :
+    s'.mem region = s.mem region :=
+  BlockState.WriteWithin.mem_eq_of_region_not_written (hFrame s' hExec) hnot
+
+end ExecWritesWithin
 
 end Kernel
 
