@@ -168,12 +168,8 @@ This is `Limited` atomic support, not a full concurrent executor.
 
 ## Async / TMA Contract Slice
 
-The async/TMA slice is currently a contract vocabulary plus a compute-facing
-failure marker, not an implementation. The contract lives in:
-
-```text
-VeriTile/Triton/Concurrency/Async.lean
-```
+The async/TMA slice is currently a documented contract plus compute-facing
+failure markers, not an implementation.
 
 The design mirrors the `atomic_add` marker pattern. Future compute-facing
 `tl.async_*` or TMA syntax should project only when a recognized discipline is
@@ -185,18 +181,18 @@ ComputeKernel async/TMA surface
   -> theorem eliminates marker into ordinary mathematical behavior
 ```
 
-The current contract names the required discipline:
+The contract names the future required discipline:
 
 - every async issue has a matching wait;
 - no read observes the destination before the matching wait;
 - destination ownership is unambiguous within the program slice;
 - overlapping destinations are explicitly ordered or rejected.
 
-Projection failures should use a named reason such as
-`requiresAsyncSequentialization`. `ComputeStmt.asyncMarker` is the first
-explicit AST hook for this path: it makes async/TMA-shaped syntax representable
-in the compute layer while preserving the fact that it has no
-`AlgorithmCorrect` projection yet. The DSL surfaces `tl.async_copy(dst, src)`,
+Projection failures use the named reason `requiresAsyncSequentialization`.
+`ComputeStmt.asyncMarker` is the explicit AST hook for this path: it makes
+async/TMA-shaped syntax representable in the compute layer while preserving
+the fact that it has no `AlgorithmCorrect` projection yet. The DSL surfaces
+`tl.async_copy(dst, src)`,
 `tl.async_wait()`, and `tl.debug_barrier()` currently lower to this failure
 marker; they are not executable semantics and they do not imply shared-memory,
 barrier, or TMA modeling.
