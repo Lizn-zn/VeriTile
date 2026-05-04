@@ -1,0 +1,625 @@
+/-
+VeriTile.Triton.DSL.Expansion.Compute
+
+Compute, reduction, and shape-view expansion helpers.
+-/
+
+import VeriTile.Triton.DSL.Expansion.Common
+
+open Lean
+
+namespace VeriTile.Triton.DSL
+
+partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let np ← a'.dtype.numericProof
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $np $bc $a'.term $b'.term), a'.dtype, outShape, none⟩
+
+partial def expandIntegralArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let ip ← a'.dtype.integralProof
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $ip $bc $a'.term $b'.term), a'.dtype, outShape, none⟩
+
+partial def expandCdiv (expandExpr : ExprExpander) (env : Env)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureAlgorithmOnly "tl.cdiv" a'
+  ensureAlgorithmOnly "tl.cdiv" b'
+  ensureDType .nat a'.dtype "tl.cdiv lhs"
+  ensureDType .nat b'.dtype "tl.cdiv rhs"
+  let (addBc, outShape) ← broadcastTerm a'.shape b'.shape "tl.cdiv"
+  let (subBc, subShape) ← broadcastTerm outShape SInfo.scalar "tl.cdiv"
+  ensureShape outShape subShape "tl.cdiv"
+  let (divBc, divShape) ← broadcastTerm outShape b'.shape "tl.cdiv"
+  ensureShape outShape divShape "tl.cdiv"
+  let sumTerm ← `(Op.add NumericDType.nat $addBc $a'.term $b'.term)
+  let numerator ← `(Op.sub NumericDType.nat $subBc $sumTerm (Op.constNat 1))
+  pure ⟨← `(Op.div NumericDType.nat $divBc $numerator $b'.term), .nat, outShape, none⟩
+
+partial def expandBoolBin (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
+  ensureDType .bool a'.dtype ctx
+  ensureDType .bool b'.dtype ctx
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $bc $a'.term $b'.term), .bool, outShape, none⟩
+
+partial def expandNatBitwise (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
+  ensureDType .nat a'.dtype ctx
+  ensureDType .nat b'.dtype ctx
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $bc $a'.term $b'.term), .nat, outShape, none⟩
+
+partial def expandBoolOrNatBitwise (expandExpr : ExprExpander) (env : Env) (ctx : String)
+    (boolOp natOp : TSyntax `term) (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  match a'.dtype with
+  | .bool => pure ⟨← `($boolOp $bc $a'.term $b'.term), .bool, outShape, none⟩
+  | .nat => pure ⟨← `($natOp $bc $a'.term $b'.term), .nat, outShape, none⟩
+  | _ =>
+      Macro.throwError
+        (ctx ++ ": only Bool logical ops and Nat bitwise ops are modeled; signed integer bitwise ops require fixed-width integer semantics")
+
+partial def expandBoolNot (expandExpr : ExprExpander) (env : Env) (ctx : String)
+    (a : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  ensureAlgorithmOnly ctx a'
+  ensureDType .bool a'.dtype ctx
+  pure ⟨← `(Op.boolNot $a'.term), .bool, a'.shape, none⟩
+
+partial def expandCmp (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let cp ← a'.dtype.comparableProof
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  pure ⟨← `($op $cp $bc $a'.term $b'.term), .bool, outShape, none⟩
+
+partial def expandMinMax (expandExpr : ExprExpander) (env : Env) (ctx : String) (cmp : TSyntax `term)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
+  unless a'.dtype == b'.dtype do
+    Macro.throwError (ctx ++ ": dtype mismatch")
+  let cp ← a'.dtype.comparableProof
+  let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
+  let aTerm ← coerceShape a'.term a'.shape outShape (ctx ++ " lhs")
+  let bTerm ← coerceShape b'.term b'.shape outShape (ctx ++ " rhs")
+  pure ⟨← `(Op.where ($cmp $cp $bc $a'.term $b'.term) $aTerm $bTerm), a'.dtype, outShape, none⟩
+
+partial def expandScanOp : TSyntax `tritonScanOp → MacroM (TSyntax `term)
+  | `(tritonScanOp| $name:ident) =>
+      match name.getId.toString with
+      | "sum" => `(ScanOp.sum)
+      | "prod" => `(ScanOp.prod)
+      | "max" => `(ScanOp.max)
+      | "min" => `(ScanOp.min)
+      | other =>
+          Macro.throwError
+            ("tl.associative_scan: unsupported op `" ++ other ++
+             "`. Supported ops: sum, prod, max, min.")
+  | _ => Macro.throwUnsupported
+
+partial def expandScan (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  ensureDType .real e'.dtype ctx
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.isEmpty then
+    Macro.throwError (ctx ++ ": rank-≥ 1 input required")
+  let mut seenAxis : Bool := Bool.false
+  let mut axisIdx : Nat := 0
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axisIdx := n.getNat
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        Macro.throwError (ctx ++ ": `keep_dims` is not meaningful for prefix scans")
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        Macro.throwError (ctx ++ ": `keep_dims` is not meaningful for prefix scans")
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        Macro.throwError
+          (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
+           "`. Only `axis = N` is supported.")
+    | _ =>
+        Macro.throwUnsupported
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  pure ⟨← `(Op.scan $op (⟨$axisLit, by simp⟩) $e'.term), .real, e'.shape, none⟩
+
+partial def parseAxisOnlyKwargs (ctx : String) (dims : List (TSyntax `term))
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM Nat := do
+  if dims.isEmpty then
+    Macro.throwError (ctx ++ ": rank-≥ 1 input required")
+  let mut seenAxis : Bool := Bool.false
+  let mut axisIdx : Nat := 0
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axisIdx := n.getNat
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        Macro.throwError (ctx ++ ": `keep_dims` is not supported")
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        Macro.throwError (ctx ++ ": `keep_dims` is not supported")
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        Macro.throwError
+          (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
+           "`. Only `axis = N` is supported.")
+    | _ =>
+        Macro.throwUnsupported
+  pure axisIdx
+
+partial def expandArgReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  ensureDType .real e'.dtype ctx
+  let dims := match e'.shape with | .dims ds => ds
+  let axisIdx ← parseAxisOnlyKwargs ctx dims kwargs
+  let outDims ← eraseNth dims axisIdx
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  pure ⟨← `($op (⟨$axisLit, by simp⟩) $e'.term), .nat, .dims outDims, none⟩
+
+partial def expandSort (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  ensureDType .real e'.dtype "tl.sort"
+  let dims := match e'.shape with | .dims ds => ds
+  let axisIdx ← parseAxisOnlyKwargs "tl.sort" dims kwargs
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  pure ⟨← `(Op.sort (⟨$axisLit, by simp⟩) $e'.term), .real, e'.shape, none⟩
+
+/-- Lower a `tl.sum(...)` / `tl.max(...)` expression with optional reduction
+kwargs (`axis = K`, `keep_dims = true|false`) into the corresponding
+`Op.reduceSum / .reduceMax` AST nodes.
+
+Triton spec for omitted `axis` is `axis = None` → **reduce over all
+dimensions**, not "reduce the last axis". We honor that: omitted-axis on a
+rank-`N` tile lowers to `N` nested `axis = 0, keep_dims = keepDims` calls,
+collapsing the tile to a scalar (`keep_dims = false`) or to all-`1`s
+(`keep_dims = true`). For rank-1 tiles this degenerates to a single call,
+so existing 1D `tl.sum(x)` / `tl.max(x)` kernels are unaffected. With an
+explicit `axis = K` we lower to a single call against that axis.
+
+`keep_dims = false` erases the reduced dim; `keep_dims = true` collapses
+it to `1`. -/
+partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  ensureDType .real e'.dtype ctx
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.isEmpty then
+    Macro.throwError (ctx ++ ": reduction expects a tile, got scalar")
+  let mut seenAxis : Bool := Bool.false
+  let mut seenKeepDims : Bool := Bool.false
+  let mut keepDims : Bool := Bool.false
+  let mut axis? : Option Nat := none
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axis? := some n.getNat
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        if seenKeepDims then
+          Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
+        seenKeepDims := Bool.true
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        if seenKeepDims then
+          Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
+        seenKeepDims := Bool.true
+        keepDims := Bool.true
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        let nm := name.getId.toString
+        if nm == "axis" || nm == "keep_dims" then
+          Macro.throwError
+            (ctx ++ ": `" ++ nm ++ "=` value is not a recognized literal")
+        else
+          Macro.throwError
+            (ctx ++ ": unknown kwarg `" ++ nm ++
+             "`. Only `axis = N` and `keep_dims = true|false` are supported.")
+    | _ => Macro.throwUnsupported
+  let kdLit : TSyntax `term ← if keepDims then `(Bool.true) else `(Bool.false)
+  match axis? with
+  | some axisIdx =>
+      -- Single-axis reduction with explicit `axis = K`.
+      let outDims ←
+        if keepDims then setNthOne dims axisIdx else eraseNth dims axisIdx
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+      pure ⟨← `($op (⟨$axisLit, by simp⟩) $kdLit $e'.term),
+            .real, SInfo.dims outDims, none⟩
+  | none =>
+      -- `axis = None` (Triton default): reduce over all dimensions.
+      -- Two regimes, because `keep_dims` changes how the rank evolves:
+      --   * `keep_dims = false`: each call drops the front axis; emit
+      --     `dims.length` nested calls with `axis = 0`.
+      --   * `keep_dims = true`: rank is preserved; emit calls with
+      --     `axis = 0, 1, …, dims.length - 1` so every axis is reduced.
+      let mut term := e'.term
+      for j in [:dims.length] do
+        let axisIdx := if keepDims then j else 0
+        let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+        term ← `($op (⟨$axisLit, by simp⟩) $kdLit $term)
+      let outDims : List (TSyntax `term) ←
+        if keepDims then
+          let oneLit : TSyntax `term ← `((1 : Nat))
+          pure (List.replicate dims.length oneLit)
+        else
+          pure []
+      pure ⟨term, .real, SInfo.dims outDims, none⟩
+
+/-- Lower a `tl.dot(a, b)` to `Op.dot a b`. Both operands must be rank-2
+real tiles whose inner dim agrees syntactically (same dim term). The
+result shape is `[outerDim a, innerDim b]`. -/
+partial def expandDot (expandExpr : ExprExpander) (env : Env)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .real a'.dtype "tl.dot"
+  ensureDType .real b'.dtype "tl.dot"
+  -- Both operands must be rank ≥ 2 (the trailing two dims are the matmul);
+  -- any leading dims form a shared `batch` prefix that must agree
+  -- syntactically. The inner dim `K` is the last of `a` / first-of-trailing
+  -- of `b` and must match.
+  let aDims := match a'.shape with | .dims ds => ds
+  let bDims := match b'.shape with | .dims ds => ds
+  if aDims.length < 2 then
+    Macro.throwError "tl.dot: LHS must have rank ≥ 2"
+  if bDims.length < 2 then
+    Macro.throwError "tl.dot: RHS must have rank ≥ 2"
+  if aDims.length != bDims.length then
+    Macro.throwError
+      ("tl.dot: rank mismatch — LHS rank " ++ toString aDims.length ++
+       ", RHS rank " ++ toString bDims.length)
+  let aBatch := aDims.dropLast.dropLast
+  let bBatch := bDims.dropLast.dropLast
+  unless termListEq aBatch bBatch do
+    Macro.throwError "tl.dot: batch prefix mismatch"
+  -- aDims = batch ++ [aM, aK], bDims = batch ++ [bK, bN]
+  let aM := aDims[aDims.length - 2]!
+  let aK := aDims[aDims.length - 1]!
+  let bK := bDims[bDims.length - 2]!
+  let bN := bDims[bDims.length - 1]!
+  unless termKey aK == termKey bK do
+    Macro.throwError
+      ("tl.dot: inner dim mismatch — LHS innermost `" ++ termKey aK ++
+       "` ≠ RHS outer-trailing `" ++ termKey bK ++ "`")
+  -- Pin the implicit `batch` / `M` / `K` / `N` arguments via named
+  -- positions; the unification `batch ++ [M, K] = ...` is not
+  -- invertible automatically through `List.append`.
+  let rec batchTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : TileShape))
+    | d :: rest => do
+        let tail ← batchTerm rest
+        `($d :: $tail)
+  let batchT ← batchTerm aBatch
+  pure ⟨← `(Op.dot (batch := $batchT) (M := $aM) (K := $aK) (N := $bN)
+              $a'.term $b'.term),
+        .real, .dims (aBatch ++ [aM, bN]), none⟩
+
+/-- Lower `tl.full([dims*], value)` to `Op.full`. The DSL value is
+restricted to a real / nat scalar (its dtype propagates to the resulting
+tile). The shape list may be any rank including empty (which degenerates
+to the scalar value itself, matching `Op.full shape (Op.const v) = v`
+for `shape = []`). -/
+partial def expandFull (expandExpr : ExprExpander) (env : Env)
+    (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr) :
+    MacroM EOut := do
+  let v' ← expandExpr env v
+  -- Value must be a scalar; tile-shaped values aren't broadcast here.
+  match v'.shape with
+  | .dims [] => pure ()
+  | _ => Macro.throwError "tl.full: value must be a scalar (rank-0)"
+  -- Each dim is a tritonExpr; its surface form may be `$(t)` (a Lean
+  -- `Nat` antiquote) or a numeral. We extract a plain `term` per dim
+  -- without going through `expandExpr` (which would promote the dim to
+  -- an `Op`). The user is responsible for keeping dims consistent with
+  -- the surrounding code; the macro just stitches them into the
+  -- `TileShape` literal that types the result.
+  let mut dimTerms : Array (TSyntax `term) := #[]
+  -- Wrap every dim in `(_ : Nat)` so its `termKey` matches what
+  -- `tl.arange(0, end)` emits (which also wraps); without this,
+  -- `tl.full([\$(M)], …)` would not broadcast against `[M]`-shaped
+  -- tiles produced by arange.
+  for d in dims do
+    match d with
+    | `(tritonExpr| $($t:term)) =>
+        dimTerms := dimTerms.push (← `(($t : Nat)))
+    | `(tritonExpr| $n:num) =>
+        dimTerms := dimTerms.push (← `(($n : Nat)))
+    | _ =>
+        Macro.throwError "tl.full: each dim must be a numeric literal or `$(t)` antiquote"
+  let rec shapeTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : TileShape))
+    | d :: rest => do
+        let tail ← shapeTerm rest
+        `($d :: $tail)
+  let shape ← shapeTerm dimTerms.toList
+  pure ⟨← `(Op.full $shape $v'.term), v'.dtype, .dims dimTerms.toList, none⟩
+
+/-- Lower `tl.trans(e)` to `Op.transpose`. Rank-≥ 2 required; the
+trailing two dims are swapped, any leading dims pass through as the
+`batch` prefix. The input shape's `SInfo.dims` already lists
+outermost-first, so picking off the last two and rebuilding
+`batch ++ [N, M]` is straightforward. -/
+partial def expandTranspose (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.length < 2 then
+    Macro.throwError
+      ("tl.trans: rank-≥ 2 input required, got rank " ++ toString dims.length ++
+       ". (Triton `.T` / `tl.trans` swaps the trailing two axes; on a rank-1 tile use `tl.expand_dims` first.)")
+  let batch := dims.dropLast.dropLast
+  let M := dims[dims.length - 2]!
+  let N := dims[dims.length - 1]!
+  -- Build a `TileShape` term for `batch` so the elaborator pins the
+  -- implicit `batch` argument (the unification `batch ++ [M, N] = ...`
+  -- is not invertible automatically through `List.append`).
+  let rec batchTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : TileShape))
+    | d :: rest => do
+        let tail ← batchTerm rest
+        `($d :: $tail)
+  let batchT ← batchTerm batch
+  pure ⟨← `(Op.transpose (batch := $batchT) (M := $M) (N := $N) $e'.term),
+        e'.dtype, .dims (batch ++ [N, M]), none⟩
+
+partial def shapeTermOfDims (dims : List (TSyntax `term)) : MacroM (TSyntax `term) := do
+  (SInfo.dims dims).term
+
+partial def termNatLit? (t : TSyntax `term) : Option Nat :=
+  match t with
+  | `($n:num) => some n.getNat
+  | `(($e:term)) => termNatLit? e
+  | `(($e:term : $_:term)) => termNatLit? e
+  | _ => none
+
+partial def literalProduct? (dims : List (TSyntax `term)) : Option Nat :=
+  dims.foldl
+    (fun acc d => do
+      let p ← acc
+      let n ← termNatLit? d
+      some (p * n))
+    (some 1)
+
+partial def coordProjTerm (idx : TSyntax `term) (pos : Nat) :
+    MacroM (TSyntax `term) := do
+  let mut cursor := idx
+  for _ in [:pos] do
+    cursor ← `(($cursor).2)
+  `(($cursor).1)
+
+partial def indexTupleTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+  | [] => `(PUnit.unit)
+  | c :: rest => do
+      let tail ← indexTupleTerm rest
+      `(($c, $tail))
+
+partial def validatePermutation (rank : Nat) (axes : List Nat) (ctx : String) :
+    MacroM Unit := do
+  unless axes.length == rank do
+    Macro.throwError
+      (ctx ++ ": permutation length " ++ toString axes.length ++
+       " does not match rank " ++ toString rank)
+  for ax in axes do
+    if ax ≥ rank then
+      Macro.throwError
+        (ctx ++ ": axis `" ++ toString ax ++ "` out of bounds for rank " ++
+         toString rank)
+  for i in [:rank] do
+    unless axes.count i == 1 do
+      Macro.throwError
+        (ctx ++ ": axes must be a permutation of 0.." ++ toString (rank - 1))
+
+partial def expandPermute (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr) (axesStx : List (TSyntax `num)) :
+    MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  let axes := axesStx.map (fun n => n.getNat)
+  validatePermutation dims.length axes "tl.permute"
+  let outDims := axes.map (fun ax => dims[ax]!)
+  let outShape ← shapeTermOfDims outDims
+  let idx : TSyntax `term ← `(idx)
+  let mut inputCoords : List (TSyntax `term) := []
+  for inputAxis in [:dims.length] do
+    let outPos := axes.idxOf inputAxis
+    if outPos == axes.length then
+      Macro.throwError "internal error: validated permutation lost an axis"
+    inputCoords := inputCoords ++ [← coordProjTerm idx outPos]
+  let mapBody ← indexTupleTerm inputCoords
+  pure ⟨← `(Op.remap $outShape (fun idx => $mapBody) $e'.term),
+        e'.dtype, .dims outDims, none⟩
+
+partial def expandFlip (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr) (axisIdx : Nat) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.isEmpty then
+    Macro.throwError "tl.flip: rank-≥ 1 input required"
+  if axisIdx ≥ dims.length then
+    Macro.throwError
+      ("tl.flip: axis `" ++ toString axisIdx ++ "` out of bounds for rank " ++
+       toString dims.length)
+  let shape ← e'.shape.term
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  pure ⟨← `(Op.remap $shape
+              (fun idx => TileShape.flipIndex $shape (⟨$axisLit, by simp⟩) idx)
+              $e'.term),
+        e'.dtype, e'.shape, none⟩
+
+partial def parseFlipKwargs (kwargs : TSyntaxArray `tritonReduceKwarg) :
+    MacroM Nat := do
+  let mut axis? : Option Nat := none
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if axis?.isSome then
+          Macro.throwError "tl.flip: duplicate axis/dim kwarg"
+        axis? := some n.getNat
+    | `(tritonReduceKwarg| $name:ident = $val:tritonExpr) =>
+        let nm := name.getId.toString
+        unless nm == "dim" do
+          Macro.throwError
+            ("tl.flip: unsupported kwarg `" ++ nm ++ "`. Only `dim = N` / `axis = N` is supported.")
+        if axis?.isSome then
+          Macro.throwError "tl.flip: duplicate axis/dim kwarg"
+        match val with
+        | `(tritonExpr| $n:num) => axis? := some n.getNat
+        | _ => Macro.throwError "tl.flip: `dim=` must be a numeric literal"
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        Macro.throwError "tl.flip: `keep_dims` is not supported"
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        Macro.throwError "tl.flip: `keep_dims` is not supported"
+    | _ => Macro.throwUnsupported
+  match axis? with
+  | some ax => pure ax
+  | none => Macro.throwError "tl.flip: explicit `dim = N` / `axis = N` is required"
+
+partial def expandReshapeLike (expandExpr : ExprExpander) (env : Env) (ctx : String)
+    (e : TSyntax `tritonExpr) (dims : Array (TSyntax `tritonExpr)) :
+    MacroM EOut := do
+  let e' ← expandExpr env e
+  let (outShape, outDims) ← natListTerm ctx dims
+  let inDims := match e'.shape with | .dims ds => ds
+  match literalProduct? inDims, literalProduct? outDims with
+  | some inProduct, some outProduct =>
+      unless inProduct == outProduct do
+        Macro.throwError
+          (ctx ++ ": literal element-count mismatch (" ++ toString inProduct ++
+           " input elements vs " ++ toString outProduct ++ " output elements)")
+  | _, _ => pure ()
+  pure ⟨← `(Op.reshape $outShape $e'.term), e'.dtype, .dims outDims, none⟩
+
+partial def expandRavel (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  let product ←
+    match dims with
+    | [] => `((1 : Nat))
+    | d :: rest => do
+        let mut acc := d
+        for next in rest do
+          acc ← `($acc * $next)
+        pure acc
+  let outShape ← shapeTermOfDims [product]
+  pure ⟨← `(Op.reshape $outShape $e'.term), e'.dtype, .dims [product], none⟩
+
+partial def expandJoin (expandExpr : ExprExpander) (env : Env)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  unless a'.dtype == b'.dtype do
+    Macro.throwError "tl.join: dtype mismatch"
+  ensureShape a'.shape b'.shape "tl.join"
+  let dims := match a'.shape with | .dims ds => ds
+  let two : TSyntax `term ← `((2 : Nat))
+  pure ⟨← `(Op.join $a'.term $b'.term), a'.dtype, .dims (dims ++ [two]), none⟩
+
+partial def expandSplit (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr) (side : Nat) : MacroM EOut := do
+  let e' ← expandExpr env e
+  unless side == 0 || side == 1 do
+    Macro.throwError "tl.split: side must be literal 0 or 1"
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.isEmpty then
+    Macro.throwError "tl.split: rank-≥ 1 input required"
+  let lastDim := dims[dims.length - 1]!
+  unless termNatLit? lastDim == some 2 do
+    Macro.throwError "tl.split: final dimension must be the literal 2"
+  let outDims := dims.dropLast
+  let outShape ← shapeTermOfDims outDims
+  let sideLit : TSyntax `num := ⟨Syntax.mkNumLit (toString side)⟩
+  pure ⟨← `(Op.split (shape := $outShape) (⟨$sideLit, by decide⟩) $e'.term),
+        e'.dtype, .dims outDims, none⟩
+
+/-- Lower `tl.expand_dims(e, axis=N)` / `tl.expand_dims(e, N)` to
+`Op.expandDim`. The axis must be a literal in `[0, rank]`; dimensions are
+typed by inserting a unit axis into the macro-tracked shape. -/
+partial def expandExpandDims (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr) (axisIdx : Nat) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  if axisIdx > dims.length then
+    Macro.throwError
+      ("tl.expand_dims: axis `" ++ toString axisIdx ++
+       "` out of bounds for rank " ++ toString dims.length)
+  let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+  let outDims : List (TSyntax `term) :=
+    dims.take axisIdx ++ [← `((1 : Nat))] ++ dims.drop axisIdx
+  pure ⟨← `(Op.expandDim (⟨$axisLit, by simp⟩) $e'.term),
+        e'.dtype, .dims outDims, none⟩
+
+/-- Lower `e[:, None]` / `e[None, :]` to `Op.expandDim` with the appropriate
+axis. This postfix surface intentionally remains rank-1 only; use
+`tl.expand_dims(e, axis=N)` for general-rank insertion. -/
+partial def expandSlicerNone (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr) (axisIdx : Nat) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.length != 1 then
+    Macro.throwError
+      ("[:, None] / [None, :]: rank-1 input required, got rank " ++
+       toString dims.length ++
+       ". Use `tl.expand_dims(e, axis=N)` for general-rank insertion.")
+  expandExpandDims expandExpr env e (axisIdx := axisIdx)
+
+end VeriTile.Triton.DSL

@@ -4,7 +4,7 @@ VeriTile.Examples.GridComposition
 Representative whole-grid disjoint-frame composition smoke.
 -/
 
-import VeriTile.Triton.MemoryFootprint
+import VeriTile.Triton.Memory.Footprint
 import VeriTile.Triton.Launch.Composition
 
 namespace VeriTile.Examples.GridComposition

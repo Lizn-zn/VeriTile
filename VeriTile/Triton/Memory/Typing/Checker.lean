@@ -1,10 +1,10 @@
 /-
-VeriTile.Triton.MemoryTyping.Checker
+VeriTile.Triton.Memory.Typing.Checker
 
 Optional well-formedness checker for Triton kernels.
 -/
 
-import VeriTile.Triton.MemoryTyping.Region
+import VeriTile.Triton.Memory.Typing.Region
 
 namespace VeriTile.Triton
 

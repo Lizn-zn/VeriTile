@@ -9,7 +9,7 @@ import VeriTile.Triton.Compute
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.Memory
-import VeriTile.Triton.MemoryTyping
+import VeriTile.Triton.Memory.Typing
 import VeriTile.Triton.Launch
 import VeriTile.Triton.Concurrency
 import VeriTile.Triton.DSL

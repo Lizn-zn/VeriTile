@@ -4,7 +4,7 @@ VeriTile.Triton.Concurrency.Trace
 Minimal trace/interleaving vocabulary for future #12 atomic/barrier semantics.
 -/
 
-import VeriTile.Triton.MemoryFrame
+import VeriTile.Triton.Memory.Frame
 
 namespace VeriTile.Triton
 
@@ -17,6 +17,36 @@ ordering and linearization statements.
 
 /-- Program id in a future concurrent trace. Kept non-dependent for the first slice. -/
 abbrev ProgramId := List Nat
+
+/-- Warp identity for future ownership/permission disciplines. -/
+abbrev WarpId := Nat
+
+/-- Abstract permission interface for future ownership-transfer reasoning.
+
+The first concrete instance is exclusive ownership; richer fractional /
+invariant-carrying permissions for CAS/XCHG can instantiate the same interface
+later without changing theorem statements. -/
+class PermissionModel (Perm : Type) where
+  valid : Perm → Prop
+  disjoint : Perm → Perm → Prop
+  combine : Perm → Perm → Option Perm
+  combine_disjoint_valid :
+    ∀ p q, disjoint p q → ∀ pq, combine p q = some pq →
+      valid p ∧ valid q → valid pq
+
+/-- Future ownership map over memory cells, parameterized by the permission model. -/
+abbrev OwnershipMap (Perm : Type) [PermissionModel Perm] := MemCellAddr → Option Perm
+
+/-- Current simple ownership instance: one warp owns a cell exclusively. -/
+structure ExclusivePerm where
+  owner : WarpId
+  deriving DecidableEq, Repr
+
+instance : PermissionModel ExclusivePerm where
+  valid _ := True
+  disjoint _ _ := False
+  combine _ _ := none
+  combine_disjoint_valid _ _ hdisjoint _ _ _ := False.elim hdisjoint
 
 /-- Logical thread/lane identity for a trace event. -/
 structure ThreadId where
@@ -33,6 +63,32 @@ inductive RMWOp where
   | cas
   deriving DecidableEq, BEq, Repr
 
+/-- Extensible read-modify-write event payload.
+
+Commutative atomics use `input` as their contribution and leave the optional
+fields empty. CAS/XCHG-style operations can later fill `extraInput`,
+`observed`, and `result` without changing the trace event constructor. -/
+structure RMWEvent where
+  cell : MemCellAddr
+  op : RMWOp
+  input : MemCell
+  extraInput : Option MemCell := none
+  observed : Option MemCell := none
+  result : Option MemCell := none
+
+namespace RMWEvent
+
+def region (event : RMWEvent) : RegionName :=
+  event.cell.1
+
+def offset (event : RMWEvent) : Nat :=
+  event.cell.2
+
+def value (event : RMWEvent) : MemCell :=
+  event.input
+
+end RMWEvent
+
 /--
 Memory event after projection to the algorithm layer.
 
@@ -42,19 +98,19 @@ future `rmw .add` proofs can fold over the event values after dtype erasure.
 inductive MemoryEvent where
   | read (region : RegionName) (offset : Nat) (value : MemCell)
   | write (region : RegionName) (offset : Nat) (value : MemCell)
-  | rmw (region : RegionName) (offset : Nat) (op : RMWOp) (value : MemCell)
+  | rmw (event : RMWEvent)
 
 namespace MemoryEvent
 
 def region : MemoryEvent → RegionName
   | .read region _ _ => region
   | .write region _ _ => region
-  | .rmw region _ _ _ => region
+  | .rmw event => event.region
 
 def offset : MemoryEvent → Nat
   | .read _ offset _ => offset
   | .write _ offset _ => offset
-  | .rmw _ offset _ _ => offset
+  | .rmw event => event.offset
 
 def cell (event : MemoryEvent) : MemCellAddr :=
   (event.region, event.offset)
@@ -62,19 +118,19 @@ def cell (event : MemoryEvent) : MemCellAddr :=
 def value : MemoryEvent → MemCell
   | .read _ _ value => value
   | .write _ _ value => value
-  | .rmw _ _ _ value => value
+  | .rmw event => event.value
 
 def isRMWOp (op : RMWOp) : MemoryEvent → Prop
-  | .rmw _ _ op' _ => op' = op
+  | .rmw event => event.op = op
   | _ => False
 
 def matchesCell (cell : MemCellAddr) (event : MemoryEvent) : Bool :=
   event.region == cell.1 && event.offset == cell.2
 
 def rmwValue? (op : RMWOp) (cell : MemCellAddr) : MemoryEvent → Option MemCell
-  | .rmw region offset op' value =>
-      if region == cell.1 && offset == cell.2 && op' == op then
-        some value
+  | .rmw event =>
+      if event.cell.1 == cell.1 && event.cell.2 == cell.2 && event.op == op then
+        some event.value
       else
         none
   | _ => none
@@ -85,13 +141,12 @@ def rmwValue? (op : RMWOp) (cell : MemCellAddr) : MemoryEvent → Option MemCell
 @[simp] theorem cell_write (region : RegionName) (offset : Nat) (value : MemCell) :
     MemoryEvent.cell (.write region offset value) = (region, offset) := rfl
 
-@[simp] theorem cell_rmw
-    (region : RegionName) (offset : Nat) (op : RMWOp) (value : MemCell) :
-    MemoryEvent.cell (.rmw region offset op value) = (region, offset) := rfl
+@[simp] theorem cell_rmw (event : RMWEvent) :
+    MemoryEvent.cell (.rmw event) = event.cell := rfl
 
 @[simp] theorem isRMWOp_rmw_self
-    (region : RegionName) (offset : Nat) (op : RMWOp) (value : MemCell) :
-    MemoryEvent.isRMWOp op (.rmw region offset op value) := rfl
+    (event : RMWEvent) :
+    MemoryEvent.isRMWOp event.op (.rmw event) := rfl
 
 end MemoryEvent
 
@@ -120,6 +175,54 @@ def rmwValue? (op : RMWOp) (cell : MemCellAddr) (event : TraceEvent) : Option Me
   event.event.rmwValue? op cell
 
 end TraceEvent
+
+/-- Async event vocabulary for future producer-consumer pipelines. -/
+inductive AsyncEvent where
+  | copy (src dst : MemCellAddr)
+  | wait
+  deriving DecidableEq, Repr
+
+/-- Barrier event vocabulary for future ordering/ownership-transfer proofs. -/
+inductive BarrierEvent where
+  | arrive (name : String)
+  | wait (name : String)
+  deriving DecidableEq, Repr
+
+/-- General effect event for the #81 concurrency framework.
+
+The existing `Trace` remains the memory/atomic trace used by #66. `EffectTrace`
+is the broader producer-consumer vocabulary for async/barrier reasoning. -/
+inductive EffectEvent where
+  | memory (event : MemoryEvent)
+  | async (event : AsyncEvent)
+  | barrier (event : BarrierEvent)
+
+/-- One event in a future effect trace. -/
+structure EffectTraceEvent where
+  tid : ThreadId
+  event : EffectEvent
+
+abbrev EffectTrace := List EffectTraceEvent
+
+namespace EffectTrace
+
+/-- Event `a` appears before event `b` in an effect trace. -/
+def OccursBefore (trace : EffectTrace) (a b : EffectTraceEvent) : Prop :=
+  ∃ (pref mid suff : EffectTrace),
+    trace = pref ++ a :: mid ++ b :: suff
+
+/-- First-slice happens-before relation: explicit trace order.
+
+Future discipline layers can strengthen this with program-order, async-wait, and
+barrier edges without changing the consumer theorem surface. -/
+def HappensBefore (trace : EffectTrace) (a b : EffectTraceEvent) : Prop :=
+  OccursBefore trace a b
+
+theorem happensBefore_of_occursBefore {trace : EffectTrace} {a b : EffectTraceEvent}
+    (h : OccursBefore trace a b) :
+    HappensBefore trace a b := h
+
+end EffectTrace
 
 namespace Trace
 

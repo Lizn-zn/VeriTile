@@ -9,7 +9,7 @@ reusing the Real-valued VectorAdd proof.
 -/
 
 import VeriTile.Triton.Float
-import VeriTile.Triton.MemoryTyping
+import VeriTile.Triton.Memory.Typing
 import VeriTile.Triton.DSL
 import VeriTile.Examples.VectorAdd
 import VeriTile.Examples.SoftmaxReciprocal

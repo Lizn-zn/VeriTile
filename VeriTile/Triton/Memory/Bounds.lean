@@ -1,5 +1,5 @@
 /-
-VeriTile.Triton.MemoryBounds
+VeriTile.Triton.Memory.Bounds
 
 Layer-1 bounds safety for the VeriTile memory model.
 -/

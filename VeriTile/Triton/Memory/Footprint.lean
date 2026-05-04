@@ -1,10 +1,10 @@
 /-
-VeriTile.Triton.MemoryFootprint
+VeriTile.Triton.Memory.Footprint
 
 Proof-ergonomic write-footprint constructors and extraction lemmas.
 -/
 
-import VeriTile.Triton.MemoryFrame
+import VeriTile.Triton.Memory.Frame
 
 namespace VeriTile.Triton
 

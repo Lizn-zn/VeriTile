@@ -234,7 +234,7 @@ Real-valued observation surface. In other words, the old theorem-facing
 `RegionName → Nat → ℝ` view still exists as an API layer, but it is no longer
 the runtime storage representation.
 
-Region dtype contracts are modeled separately in `VeriTile.Triton.MemoryTyping`:
+Region dtype contracts are modeled separately in `VeriTile.Triton.Memory.Typing`:
 
 ```lean
 RegionTyping := RegionName → TileDType

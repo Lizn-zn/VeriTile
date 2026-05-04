@@ -49,7 +49,11 @@ noncomputable def evalMask (s : BlockState) : MaskOpt dtype shape → Option (Ti
 
 def atomicTraceEvent (tid : ThreadId) (region : RegionName) (offset : Nat)
     (dtype : TileDType) (value : TileCarrier dtype) : TraceEvent :=
-  { tid := tid, event := .rmw region offset .add (MemCell.of dtype value) }
+  { tid := tid,
+    event := .rmw
+      { cell := (region, offset)
+        op := .add
+        input := MemCell.of dtype value } }
 
 /--
 Trace events emitted by one statement in one state.

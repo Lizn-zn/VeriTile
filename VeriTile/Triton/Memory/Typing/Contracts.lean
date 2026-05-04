@@ -1,10 +1,10 @@
 /-
-VeriTile.Triton.MemoryTyping.Contracts
+VeriTile.Triton.Memory.Typing.Contracts
 
 Lightweight region-dtype contract predicates for Triton kernels.
 -/
 
-import VeriTile.Triton.MemoryTyping.Region
+import VeriTile.Triton.Memory.Typing.Region
 
 namespace VeriTile.Triton
 

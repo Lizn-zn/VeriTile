@@ -5,7 +5,7 @@ Layer-2b disjoint whole-grid composition over explicit per-program frames.
 -/
 
 import VeriTile.Triton.Launch.Grid
-import VeriTile.Triton.MemoryFrame
+import VeriTile.Triton.Memory.Frame
 
 namespace VeriTile.Triton
 

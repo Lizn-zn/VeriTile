@@ -1,5 +1,5 @@
 /-
-VeriTile.Triton.MemoryTyping.Region
+VeriTile.Triton.Memory.Typing.Region
 
 Basic region-dtype contracts for Triton memory typing.
 -/

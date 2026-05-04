@@ -216,7 +216,7 @@ proof-facing 的 Real 兼容 API 仍然是 `BlockState.readMem` /
 observation surface。换句话说,旧的 theorem-facing `RegionName → Nat → ℝ`
 view 仍然作为 API 层存在,但它不再是 runtime storage representation。
 
-Region dtype contract 单独放在 `VeriTile.Triton.MemoryTyping`:
+Region dtype contract 单独放在 `VeriTile.Triton.Memory.Typing`:
 
 ```lean
 RegionTyping := RegionName → TileDType
