@@ -33,7 +33,7 @@ VeriTile uses two kernel layers:
 
 ```text
 ComputeKernel
-  -- erase dtype / abstract effects / sequentialize if possible -->
+  -- erase dtype / erase hardware payloads -->
 AlgKernel (= Kernel)
 ```
 
@@ -43,7 +43,9 @@ and future atomics, async/TMA, barriers, shared memory, WGMMA, and scheduling
 annotations if they are added.
 
 `AlgKernel` is the proof layer. It is the existing `Kernel` type with
-mathematical Real/Nat/Int semantics. `AlgorithmCorrect` is proved here.
+mathematical Real/Nat/Int semantics, possibly extended later with
+proof-facing abstract effect markers such as an algebraic `atomic_add`.
+`AlgorithmCorrect` is proved here.
 
 There is no separate `ConcurrentKernel` layer in the near-term architecture.
 If a future feature has a concrete need for a third layer, that should be a new
@@ -58,26 +60,44 @@ ComputeKernel.toAlgorithm? : ComputeKernel -> Except _ AlgKernel
 ```
 
 Today this bridge covers compute-facing constructs that can be projected to
-the algorithm layer. As #12 features arrive, the same bridge may also:
+the algorithm layer. As #12 features arrive, the bridge should remain mostly a
+representation-erasure step:
 
 - erase dtype or bit payloads;
 - fold supported constant bitcasts;
-- abstract `atomic_add` into a mathematical monoid reduction when accepted
-  algebraic laws exist;
-- sequentialize disciplined async/TMA into ordinary algorithmic loads and
-  stores;
+- project hardware-ish `atomic_add` into a proof-facing abstract AlgKernel
+  atomic/reduction marker when an algorithm-level interpretation is available;
+- project disciplined async/TMA into proof-facing sequentialization markers or
+  ordinary algorithmic loads/stores when the discipline is explicit;
 - reject unsupported or nondeterministic effects.
 
 This bridge is intentionally allowed to fail. A failed projection means the
 kernel has no `AlgorithmCorrect` statement in the current proof layer.
+
+The bridge does not need to eliminate every concurrent construct. In
+particular, future atomic support may project:
+
+```text
+ComputeKernel.atomic_add fp32
+  --> AlgKernel.atomic_add real
+```
+
+and leave the theorem:
+
+```text
+AlgKernel.atomic_add real == mathematical sum/fold
+```
+
+to the AlgKernel proof layer. This keeps associativity/commutativity arguments
+where the mathematical laws actually hold.
 
 ## Correctness Tracks
 
 | Feature class | AlgorithmCorrect | Runtime / differential testing |
 | --- | --- | --- |
 | Deterministic and algorithm-projectable | Yes, via `toAlgorithm?` and `Kernel.Correct` | Optional |
-| Atomic or reduction with algebraic abstraction | Yes, if `toAlgorithm?` produces an algorithm reduction spec | Recommended |
-| Async/TMA with valid sequentialization discipline | Yes, if `toAlgorithm?` succeeds under the discipline condition | Recommended |
+| Atomic or reduction with algebraic abstraction | Yes, if `toAlgorithm?` projects to an abstract AlgKernel reduction marker and a theorem discharges it | Recommended |
+| Async/TMA with valid sequentialization discipline | Yes, if `toAlgorithm?` projects to a sequential AlgKernel form or an abstract sequentialization marker with a theorem | Recommended |
 | Non-sequential with no algorithm projection | No | Testing/runtime-only until a stronger semantics exists |
 
 `AlgorithmCorrect` is available only when `ComputeKernel.toAlgorithm?`
@@ -91,8 +111,8 @@ Future projection failures should be distinguishable in documentation and,
 when useful, in the error type:
 
 - a dtype or bit payload cannot be erased to mathematical semantics;
-- an atomic operation has no accepted algebraic abstraction;
-- async/TMA lacks a valid sequentialization discipline;
+- an atomic operation has no accepted AlgKernel marker or algebraic theorem;
+- async/TMA lacks a valid sequentialization marker or discipline theorem;
 - barrier or shared-memory behavior requires a trace model that does not exist
   yet;
 - overlapping writes are not covered by disjoint merge or by an atomic/reduce
