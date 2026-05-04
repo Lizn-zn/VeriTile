@@ -189,7 +189,7 @@ The contract names the future required discipline:
 - overlapping destinations are explicitly ordered or rejected.
 
 Projection failures use the named reason `requiresAsyncSequentialization`.
-`ComputeStmt.asyncMarker` is the explicit AST hook for this path: it makes
+`ComputeStmt.effectMarker` is the explicit AST hook for this path: it makes
 async/TMA-shaped syntax representable in the compute layer while preserving
 the fact that it has no `AlgorithmCorrect` projection yet. The DSL surfaces
 `tl.async_copy(dst, src)`,

@@ -65,16 +65,16 @@ example (outReg : RegionName) :
                 (Op.ref .real [] "x") MaskOpt.none ] } := by
   rfl
 
-def asyncMarkerSmoke : ComputeKernel :=
-  .mk [] [] [ComputeStmt.asyncMarker "tl.async_copy"]
+def effectMarkerSmoke : ComputeKernel :=
+  .mk [] [] [ComputeStmt.effectMarker "tl.async_copy"]
 
 example :
-    asyncMarkerSmoke.toAlgorithm? =
+    effectMarkerSmoke.toAlgorithm? =
       Except.error (.requiresAsyncSequentialization "tl.async_copy") := by
   rfl
 
 example (post : ComputeKernel.AlgSpec) :
-    ¬ ComputeKernel.ComputeCorrect asyncMarkerSmoke post :=
+    ¬ ComputeKernel.ComputeCorrect effectMarkerSmoke post :=
   ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
 def asyncCopySurfaceSmoke (srcReg dstReg : RegionName) : ComputeKernel := triton {
