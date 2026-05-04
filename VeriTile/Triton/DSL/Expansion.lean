@@ -6,7 +6,7 @@ modelled on the `arm64 { ... }` style used in arm-in-lean.
 
 Example:
 
-  def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
+  def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : ComputeKernel := triton {
     pid  := tl.program_id(0)
     offs := pid * $(N) + tl.arange($(N))
     x    := tl.load($(xReg) + offs)
@@ -1348,6 +1348,6 @@ macro_rules
         ([], [])
       let insArr  : Array (TSyntax `term) := allIns.toArray
       let outsArr : Array (TSyntax `term) := allOuts.toArray
-      `(Kernel.mk [$insArr,*] [$outsArr,*] [$stmtTerms,*])
+      `(ComputeKernel.fromAlg (Kernel.mk [$insArr,*] [$outsArr,*] [$stmtTerms,*]))
 
 end VeriTile.Triton.DSL

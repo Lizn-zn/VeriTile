@@ -111,4 +111,48 @@ theorem algorithmRefine_of_erase_eq {lhs rhs realL realR : Kernel}
 
 end Kernel
 
+namespace ComputeKernel
+
+/-! ## Compute-kernel algorithm projection -/
+
+/-- Error type for compute-kernel features that cannot be projected into the
+algorithm layer. PR3a has no failing constructor; future bitcast support will
+use these cases. -/
+inductive EraseDTypeError where
+  | requiresComputeSemantics (op : String)
+  | unsupportedBitcast (reason : String)
+  deriving Repr, BEq
+
+/-- Public spec shape used by the current postcondition-style correctness API. -/
+abbrev AlgSpec := BlockState → BlockState → Prop
+
+/-- Fallible projection from the compute-facing kernel surface to the algorithm
+kernel surface. With only `.fromAlg`, this always succeeds. -/
+def toAlgorithm? : ComputeKernel → Except EraseDTypeError AlgKernel
+  | .fromAlg k => Except.ok k
+
+/-- Algorithm correctness for compute kernels: successful projection exposes
+ordinary `Kernel.Correct`; failed projection is intentionally unprovable. -/
+def AlgorithmCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
+  match ck.toAlgorithm? with
+  | Except.ok ak => Kernel.Correct ak post
+  | Except.error _ => False
+
+/-- Bridge from an explicit successful projection to compute-kernel algorithm
+correctness. This keeps `Except` plumbing out of user theorem statements. -/
+theorem algorithmCorrect_of_toAlgorithm_eq {ck : ComputeKernel} {ak : AlgKernel}
+    {post : AlgSpec}
+    (h : ck.toAlgorithm? = Except.ok ak)
+    (hc : Kernel.Correct ak post) :
+    AlgorithmCorrect ck post := by
+  simp [AlgorithmCorrect, h, hc]
+
+/-- Transition bridge for legacy algorithm kernels wrapped by the DSL. -/
+theorem algorithmCorrect_fromAlg {k : AlgKernel} {post : AlgSpec}
+    (hc : Kernel.Correct k post) :
+    AlgorithmCorrect (.fromAlg k) post := by
+  simpa [AlgorithmCorrect, toAlgorithm?] using hc
+
+end ComputeKernel
+
 end VeriTile.Triton

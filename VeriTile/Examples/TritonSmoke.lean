@@ -22,6 +22,24 @@ def scalarCopyKernel (xReg yReg : RegionName) : Kernel := triton {
   tl.store($(yReg), x)
 }
 
+/-- The public DSL surface is compute-facing; legacy `Kernel` annotations work
+through coercion from this `.fromAlg` subset. -/
+def scalarCopyComputeKernel (xReg yReg : RegionName) : ComputeKernel := triton {
+  x := tl.load($(xReg))
+  tl.store($(yReg), x)
+}
+
+example (xReg yReg : RegionName) :
+    (scalarCopyComputeKernel xReg yReg).toAlgorithm? =
+      Except.ok (scalarCopyKernel xReg yReg) := by
+  rfl
+
+example (xReg yReg : RegionName)
+    (post : BlockState → BlockState → Prop)
+    (h : Kernel.Correct (scalarCopyKernel xReg yReg) post) :
+    ComputeKernel.AlgorithmCorrect (scalarCopyComputeKernel xReg yReg) post :=
+  ComputeKernel.algorithmCorrect_fromAlg h
+
 /-- Vector-add kernel with explicit boundary mask. -/
 def addKernelMaskedSmoke (xReg yReg outReg : RegionName)
     (blockSize nElements : Nat) : Kernel := triton {

@@ -275,4 +275,43 @@ structure Kernel where
   body    : List Stmt
   deriving Inhabited
 
+/-! ## Compute-facing kernel wrapper -/
+
+/-- Long-term name for the algorithm-layer dtype universe. -/
+abbrev AlgDType := TileDType
+
+/-- Long-term name for the algorithm-layer expression AST. -/
+abbrev AlgOp := Op
+
+/-- Long-term name for the algorithm-layer kernel AST. -/
+abbrev AlgKernel := Kernel
+
+/--
+Compute-facing kernel surface.
+
+For now every compute kernel is just an algorithm kernel wrapper. Future
+compute-only nodes such as bitcast will extend this type, while algorithm
+correctness continues to project through `ComputeKernel.toAlgorithm?`.
+-/
+inductive ComputeKernel where
+  | fromAlg : AlgKernel → ComputeKernel
+  deriving Inhabited
+
+namespace ComputeKernel
+
+/-- Project the current algorithm-only compute kernel subset back to `Kernel`. -/
+def toAlgKernel : ComputeKernel → AlgKernel
+  | .fromAlg k => k
+
+instance : Coe ComputeKernel AlgKernel where
+  coe := toAlgKernel
+
+@[simp] theorem toAlgKernel_fromAlg (k : AlgKernel) :
+    (ComputeKernel.fromAlg k).toAlgKernel = k := rfl
+
+@[simp] theorem coe_fromAlg (k : AlgKernel) :
+    ((ComputeKernel.fromAlg k : ComputeKernel) : AlgKernel) = k := rfl
+
+end ComputeKernel
+
 end VeriTile.Triton
