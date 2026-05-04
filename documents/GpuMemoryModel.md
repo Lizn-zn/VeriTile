@@ -73,6 +73,12 @@ over every program instance in an ND grid. VeriTile does not yet model a
 sequential or concurrent launch executor, global memory merge, overlapping
 writes, races, atomics, or scheduling.
 
+Layer-2a frame reasoning is modeled as a predicate-level proof contract:
+`WriteFootprint := (RegionName × Nat) → Prop` and `BlockState.WriteWithin`
+state that a single-program execution changed only the cells inside a supplied
+footprint. This is still not a whole-grid executor; disjoint merge of multiple
+program results is tracked separately by #49.
+
 ## Not Modeled
 
 The following hardware layers and performance effects are intentionally outside
@@ -97,6 +103,8 @@ The current model is intentionally small. The likely extension points are:
 
 - **Memory safety / bounds (#48):** add region sizes and checked launch-level
   bounds assumptions on top of the current typed storage layer.
+- **Write footprints / frame (#60):** predicate-level `WriteFootprint` and
+  `BlockState.WriteWithin` contracts for single-program frame reasoning.
 - **Paged KV / indirect addressing (#42):** extend the current `IndirectView`
   smoke/proof surface into paged-attention-specific logical views and
   consumer-side equivalence theorems.

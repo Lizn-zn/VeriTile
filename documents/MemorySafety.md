@@ -62,6 +62,11 @@ This layer does not model or prove:
 Those are later layers in the memory-model roadmap. `Kernel.MemorySafe` is only
 the per-program active-lane region-bounds contract.
 
+Layer 2a is implemented separately in `VeriTile.Triton.MemoryFrame`. It adds
+predicate-level write footprints and `BlockState.WriteWithin` frame contracts
+for single-program executions; whole-grid merge remains a separate composition
+layer.
+
 ## Examples
 
 `VeriTile/Examples/MemorySafety.lean` contains representative proofs:

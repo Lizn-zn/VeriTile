@@ -12,10 +12,12 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.MemoryTyping
 import VeriTile.Triton.Memory
 import VeriTile.Triton.MemoryBounds
+import VeriTile.Triton.MemoryFrame
 import VeriTile.Triton.Launch
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.TritonSmoke
 import VeriTile.Examples.MemorySafety
+import VeriTile.Examples.MemoryFrame
 import VeriTile.Examples.LoopInvariant
 import VeriTile.Examples.SoftmaxEq
 import VeriTile.Examples.LogSumExpEq
