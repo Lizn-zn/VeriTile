@@ -382,7 +382,7 @@ current semantic contract.
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
 | Indirection | Limited | Typed index loads can feed pointer arithmetic for gather/paged-KV style data-dependent addresses (#42); no alias/bounds/page-ownership proof layer yet |
 | Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |
-| Atomics / async / barriers | Gap | No `tl.atomic_*`, async copy, TMA, barriers, or scheduling semantics (#12); see `ConcurrencySemantics.md` for the ComputeKernel-to-AlgKernel boundary |
+| Atomics / async / barriers | Limited | `tl.atomic_add` has an AlgKernel `Stmt.atomicAdd` marker, sequential single-program semantics, trace payload vocabulary, and a Real grid-merge sum theorem; no full scheduler, barriers, async copy, TMA, or IEEE atomic semantics (#12) |
 | Floating point fidelity | Gap | Real-valued model only; no IEEE-754 or mixed-precision hardware semantics (#11) |
 
 ## Expressiveness Matrix
@@ -404,8 +404,8 @@ faithfully in the current Lean DSL?
 | Active-lane memory bounds | Limited | Lean proof predicate (#48) | `Kernel.MemorySafe` checks direct region offsets, dynamic pointer addresses, mask activeness, and `boundary_check` block-pointer lanes against `RegionBounds`; no race freedom, frame theorem, or permission accounting. |
 | Single-program write footprint/frame | Limited | Predicate-level frame contract + extraction helpers (#60/#61) | `WriteFootprint := (RegionName × Nat) → Prop` and `BlockState.WriteWithin` state that an execution only modified cells inside a supplied footprint; `tileImage` / `activeTileImage` helpers extract direct, masked, and checked block-pointer store footprints. |
 | RNG / dropout | Gap | State/probabilistic semantics (#41) | Blocks faithful dropout and stochastic kernels. |
-| Atomics / async / shared memory / barriers | Gap | Concurrency semantics (#12) | Blocks production-style backward kernels, reductions using shared memory phases, async/TMA pipelines, and race/scheduling reasoning; `ConcurrencySemantics.md` defines the current projection boundary. |
-| Whole-grid launch semantics | Limited | ND grid theorem surface + disjoint merge (#5/#49) | `GridIndex`, `BlockState.withGridIndex`, `Kernel.ForAllPrograms`, and `ForAllProgramsSome` quantify per-program correctness; `Kernel.mergeFrames` merges explicit per-program `ExecFrame`s under pairwise-disjoint footprints. No overlapping writes, races, atomics, scheduling, or interleaved executor. |
+| Atomics / async / shared memory / barriers | Limited | Atomic-add slice + concurrency boundary (#12) | `tl.atomic_add` has a proof-facing marker and Real trace/grid-sum theorem; async/TMA, shared memory, barriers, full scheduling, and IEEE atomic behavior remain gaps. |
+| Whole-grid launch semantics | Limited | ND grid theorem surface + disjoint/atomic merge (#5/#49/#12) | `GridIndex`, `BlockState.withGridIndex`, `Kernel.ForAllPrograms`, and `ForAllProgramsSome` quantify per-program correctness; `Kernel.mergeFrames` handles pairwise-disjoint footprints and `Kernel.mergeFramesWithAtomic` handles selected Real atomic-add contributions. No full race/scheduler/interleaved executor. |
 | Python/Triton source ingestion | Gap | Front-end/lifter (#10) | Users must write Lean `triton { ... }`; decorators, Python-side constexpr execution, and general Python control flow are not parsed. |
 | Type checking / pointer provenance | Limited | Optional checker (#46) | `Kernel.check` / `checkStrict` track register dtype/shape, pointer and block-pointer provenance, dtype mismatches, and basic block-pointer metadata; no bounds, alias, launch, or page-ownership proof. |
 

@@ -220,6 +220,11 @@ def MemorySafe (bounds : RegionBounds) : Stmt → Prop
       value.MemorySafe bounds ∧
       mask.MemorySafe bounds ∧
       ∀ s, mem.ActiveAddressSafe bounds s (mask.Active s)
+  | .atomicAdd _ _ mem value mask =>
+      mem.MemorySafe bounds ∧
+      value.MemorySafe bounds ∧
+      mask.MemorySafe bounds ∧
+      ∀ s, mem.ActiveAddressSafe bounds s (mask.Active s)
   | .forLoop _ _ body => MemorySafeList bounds body
   | .ifThen cond body => cond.MemorySafe bounds ∧ MemorySafeList bounds body
 

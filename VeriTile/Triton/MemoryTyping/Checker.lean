@@ -288,6 +288,11 @@ def Stmt.check (ctx : CheckCtx) : Stmt → Except CheckError CheckCtx
       mask.check ctx
       mem.check ctx dtype
       .ok ctx
+  | @Stmt.atomicAdd dtype _ _ mem val mask => do
+      val.check ctx
+      mask.check ctx
+      mem.check ctx dtype
+      .ok ctx
   | .forLoop idx _ body => do
       let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
       StmtList.check ctx' body

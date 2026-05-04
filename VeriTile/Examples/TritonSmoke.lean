@@ -11,6 +11,7 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.Memory
 import VeriTile.Triton.MemoryTyping
 import VeriTile.Triton.Launch
+import VeriTile.Triton.Concurrency
 import VeriTile.Triton.DSL
 
 namespace VeriTile.Examples.TritonSmoke
@@ -40,6 +41,29 @@ example (xReg yReg : RegionName)
     (h : Kernel.Correct (scalarCopyKernel xReg yReg) post) :
     ComputeKernel.ComputeCorrect (scalarCopyComputeKernel xReg yReg) post :=
   ComputeKernel.computeCorrect_fromAlg h
+
+def atomicAddSmoke (outReg : RegionName) : ComputeKernel := triton {
+  x := 1
+  tl.atomic_add($(outReg), x)
+}
+
+def atomicAddMaskedSmoke (outReg : RegionName) (N : Nat) : ComputeKernel := triton {
+  offs := tl.arange(0, $(N))
+  mask := offs < $(N)
+  vals := tl.full([$(N)], 1)
+  tl.atomic_add($(outReg) + offs, vals, mask=mask)
+}
+
+example (outReg : RegionName) :
+    (atomicAddSmoke outReg).toAlgorithm? =
+      Except.ok
+        { inputs := []
+        , outputs := [outReg]
+        , body :=
+            [ Stmt.assign .real [] "x" (Op.const 1)
+            , Stmt.atomicAdd NumericDType.real [] (MemAccess.region outReg (Op.constNat 0))
+                (Op.ref .real [] "x") MaskOpt.none ] } := by
+  rfl
 
 /-- Vector-add kernel with explicit boundary mask. -/
 def addKernelMaskedSmoke (xReg yReg outReg : RegionName)

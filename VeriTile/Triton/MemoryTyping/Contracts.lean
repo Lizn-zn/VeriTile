@@ -162,6 +162,9 @@ def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
   | .store dtype _ mem val mask =>
       mem.RespectsRegionTyping Γ dtype ∧
       val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
+  | @Stmt.atomicAdd dtype _ _ mem val mask =>
+      mem.RespectsRegionTyping Γ dtype ∧
+      val.RespectsRegionTyping Γ ∧ mask.RespectsRegionTyping Γ
   | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
   | .ifThen cond body =>
       cond.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body

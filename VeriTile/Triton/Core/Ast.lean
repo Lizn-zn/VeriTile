@@ -235,6 +235,9 @@ P1 Triton statements (mutating constructs).
   starting at `offset`. With `mask = none`, every lane is written. With
   `mask = some m`, lanes where `m` evaluates `false` are **left untouched**
   (Triton `tl.store` semantics — no `other` parameter on store side).
+* `atomicAdd h mem value mask` is a proof-facing read-modify-write marker for
+  `tl.atomic_add`. It is restricted by `NumericDType` so non-additive channels
+  such as Bool and pointers cannot be represented as atomic additions.
 * `forLoop i n body` runs `body` `n` times, with the scalar register `i` bound
   to the iteration index.
 * `ifThen cond body` runs `body` when the scalar `cond` evaluates `true`, and
@@ -246,6 +249,9 @@ P1 Triton statements (mutating constructs).
 inductive Stmt : Type where
   | assign  : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape → Stmt
   | store   : (dtype : TileDType) → (shape : TileShape) →
+              MemAccess shape → (value : Op dtype shape) →
+              (mask : MaskOpt dtype shape) → Stmt
+  | atomicAdd : NumericDType dtype → (shape : TileShape) →
               MemAccess shape → (value : Op dtype shape) →
               (mask : MaskOpt dtype shape) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
@@ -468,6 +474,8 @@ inductive ComputeStmt : Type where
       ComputeExpr dtype shape → ComputeStmt
   | store : (dtype : AlgDType) → (shape : TileShape) →
       MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
+  | atomicAdd : NumericDType dtype → (shape : TileShape) →
+      MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List ComputeStmt) → ComputeStmt
   | ifThen : (cond : Op .bool []) → (body : List ComputeStmt) → ComputeStmt
 
@@ -481,6 +489,8 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
       Except.ok (.assign dtype shape name (← e.toAlgorithm?))
   | .store dtype shape mem value mask => do
       Except.ok (.store dtype shape mem (← value.toAlgorithm?) mask)
+  | .atomicAdd h shape mem value mask => do
+      Except.ok (.atomicAdd h shape mem (← value.toAlgorithm?) mask)
   | .forLoop idx n body => do
       Except.ok (.forLoop idx n (← listToAlgorithm? body))
   | .ifThen cond body => do

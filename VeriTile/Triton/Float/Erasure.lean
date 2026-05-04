@@ -161,6 +161,8 @@ def Stmt.eraseDType : Stmt → Stmt
       .assign (VeriTile.Triton.eraseDType dtype) shape name e.eraseDType
   | .store dtype shape mem val mask =>
       .store (VeriTile.Triton.eraseDType dtype) shape mem.eraseDType val.eraseDType mask.eraseDType
+  | .atomicAdd h shape mem val mask =>
+      .atomicAdd h.eraseDType shape mem.eraseDType val.eraseDType mask.eraseDType
   | .forLoop idx n body =>
       .forLoop idx n (Stmt.eraseDTypeList body)
   | .ifThen cond body =>
@@ -254,6 +256,14 @@ end
     (mask : MaskOpt dtype shape) :
     (Stmt.store dtype shape mem val mask).eraseDType =
       Stmt.store (VeriTile.Triton.eraseDType dtype) shape mem.eraseDType val.eraseDType mask.eraseDType := by
+  rw [Stmt.eraseDType.eq_def]
+
+@[simp] theorem Stmt.eraseDType_atomicAdd
+    (h : NumericDType dtype) (shape : TileShape)
+    (mem : MemAccess shape) (val : Op dtype shape)
+    (mask : MaskOpt dtype shape) :
+    (Stmt.atomicAdd h shape mem val mask).eraseDType =
+      Stmt.atomicAdd h.eraseDType shape mem.eraseDType val.eraseDType mask.eraseDType := by
   rw [Stmt.eraseDType.eq_def]
 
 namespace Kernel

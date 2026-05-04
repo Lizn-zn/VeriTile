@@ -152,11 +152,25 @@ This is enough to state future atomic-add theorems as folds or sums over
 `rmw .add` event values. The trace module is not a scheduler and does not
 change `Kernel.exec`.
 
+## Atomic Add Slice
+
+The first concrete atomic slice is intentionally narrow:
+
+- `tl.atomic_add` lowers to a proof-facing `Stmt.atomicAdd` marker;
+- single-program `stepStmt` performs a sequential read-add-write update;
+- `Stmt.atomicTraceEvents` records active lanes as `MemoryEvent.rmw ... .add value`;
+- `Kernel.mergeFramesWithAtomic` combines #49 ordinary frame writes with
+  selected grid-level atomic traces;
+- `Kernel.mergeFramesWithAtomic_atomicAdd_eq_finsetSum` states the Real
+  final-cell theorem as initial value plus a `Finset.sum` of trace payloads.
+
+This is `Limited` atomic support, not a full concurrent executor.
+
 ## Non-Goals
 
 This boundary document does not implement:
 
-- `tl.atomic_*`;
+- `tl.atomic_*` beyond the limited `tl.atomic_add` proof-facing slice;
 - async copy or TMA;
 - WGMMA or warp specialization;
 - shared memory or barriers;

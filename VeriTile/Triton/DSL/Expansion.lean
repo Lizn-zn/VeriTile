@@ -1482,10 +1482,98 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
                 match v'.computeTerm with
                 | some _ => pure valueExpr
                 | none => `(ComputeExpr.alg $vTerm)
-              pure (← `(Stmt.store $dt $sh (MemAccess.ptr $p'.term) $vTerm (MaskOpt.mask $m')),
-                ← `(ComputeStmt.store $dt $sh (MemAccess.ptr $p'.term) $valueExpr' (MaskOpt.mask $m')),
+                pure (← `(Stmt.store $dt $sh (MemAccess.ptr $p'.term) $vTerm (MaskOpt.mask $m')),
+                  ← `(ComputeStmt.store $dt $sh (MemAccess.ptr $p'.term) $valueExpr' (MaskOpt.mask $m')),
+                  env, v'.computeTerm.isSome)
+  | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      let mut maskTerm : Option (TSyntax `term × SInfo) := none
+      let mut dtype? : Option DInfo := none
+      for kw in kwargs do
+        match kw with
+        | `(tritonMemKwarg| boundary_check=$_:term) =>
+            Macro.throwError "tl.atomic_add: `boundary_check=` is not supported; block-pointer atomics are deferred"
+        | `(tritonMemKwarg| padding_option="zero") =>
+            Macro.throwError "tl.atomic_add: `padding_option` is only valid on tl.load"
+        | `(tritonMemKwarg| $name:ident = $kval:tritonExpr) =>
+            let kval' ← expandExpr env kval
+            match name.getId.toString with
+            | "mask" =>
+                ensureDType .bool kval'.dtype "tl.atomic_add mask"
+                maskTerm := some (kval'.term, kval'.shape)
+            | unknown =>
+                Macro.throwError
+                  ("tl.atomic_add: unknown kwarg `" ++ unknown ++
+                   "`. Only `mask` and `dtype` are recognized.")
+        | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
+            unless name.getId.toString == "dtype" do
+              Macro.throwError
+                ("tl.atomic_add: unknown kwarg `" ++ name.getId.toString ++
+                 "`. Only `mask` and `dtype` are recognized.")
+            if dtype?.isSome then
+              Macro.throwError "tl.atomic_add: duplicate `dtype=` kwarg"
+            dtype? := some (← expandDType dt)
+        | _ => Macro.throwUnsupported
+      let v' ← expandExpr env v
+      let valueExpr ←
+        match v'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $v'.term)
+      let atomicDType := dtype?.getD v'.dtype
+      unless atomicDType == v'.dtype do
+        Macro.throwError "tl.atomic_add: `dtype=` must match the value dtype"
+      let hnum ← atomicDType.numericProof
+      match maskTerm with
+      | none =>
+          match ← expandStaticPtrExpr env p with
+          | some sp =>
+              let vTerm ← coerceShape v'.term v'.shape sp.shape "tl.atomic_add value"
+              let sh ← sp.shape.term
+              let valueExpr' ←
+                match v'.computeTerm with
+                | some _ => pure valueExpr
+                | none => `(ComputeExpr.alg $vTerm)
+              pure (← `(Stmt.atomicAdd $hnum $sh (MemAccess.region $sp.region $sp.offset) $vTerm MaskOpt.none),
+                ← `(ComputeStmt.atomicAdd $hnum $sh (MemAccess.region $sp.region $sp.offset) $valueExpr' MaskOpt.none),
                 env, v'.computeTerm.isSome)
-  | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
+          | none =>
+              let p' ← expandExpr env p
+              ensureDType .ptr p'.dtype "tl.atomic_add pointer"
+              let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.atomic_add value"
+              let sh ← p'.shape.term
+              let valueExpr' ←
+                match v'.computeTerm with
+                | some _ => pure valueExpr
+                | none => `(ComputeExpr.alg $vTerm)
+              pure (← `(Stmt.atomicAdd $hnum $sh (MemAccess.ptr $p'.term) $vTerm MaskOpt.none),
+                ← `(ComputeStmt.atomicAdd $hnum $sh (MemAccess.ptr $p'.term) $valueExpr' MaskOpt.none),
+                env, v'.computeTerm.isSome)
+      | some (m, mShape) =>
+          match ← expandStaticPtrExpr env p with
+          | some sp =>
+              let vTerm ← coerceShape v'.term v'.shape sp.shape "tl.atomic_add value"
+              let m' ← coerceShape m mShape sp.shape "tl.atomic_add mask"
+              let sh ← sp.shape.term
+              let valueExpr' ←
+                match v'.computeTerm with
+                | some _ => pure valueExpr
+                | none => `(ComputeExpr.alg $vTerm)
+              pure (← `(Stmt.atomicAdd $hnum $sh (MemAccess.region $sp.region $sp.offset) $vTerm (MaskOpt.mask $m')),
+                ← `(ComputeStmt.atomicAdd $hnum $sh (MemAccess.region $sp.region $sp.offset) $valueExpr' (MaskOpt.mask $m')),
+                env, v'.computeTerm.isSome)
+          | none =>
+              let p' ← expandExpr env p
+              ensureDType .ptr p'.dtype "tl.atomic_add pointer"
+              let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.atomic_add value"
+              let m' ← coerceShape m mShape p'.shape "tl.atomic_add mask"
+              let sh ← p'.shape.term
+              let valueExpr' ←
+                match v'.computeTerm with
+                | some _ => pure valueExpr
+                | none => `(ComputeExpr.alg $vTerm)
+              pure (← `(Stmt.atomicAdd $hnum $sh (MemAccess.ptr $p'.term) $vTerm (MaskOpt.mask $m')),
+                ← `(ComputeStmt.atomicAdd $hnum $sh (MemAccess.ptr $p'.term) $valueExpr' (MaskOpt.mask $m')),
+                env, v'.computeTerm.isSome)
+    | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
       let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv stmts.toList

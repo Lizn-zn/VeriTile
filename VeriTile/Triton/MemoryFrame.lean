@@ -218,6 +218,97 @@ theorem foldl_writeMemTypedAt_prop_writeWithin {α : Type} {P : WriteFootprint}
       · simp only [hactive, if_false]
         exact ih s (fun i hi hai => hmem i (List.mem_cons_of_mem hd hi) hai)
 
+theorem foldl_atomicAddAt_masked_writeWithin {α : Type} {P : WriteFootprint}
+    (dtype : TileDType) (h : NumericDType dtype)
+    (regionFn : α → RegionName) (offsetFn : α → Nat)
+    (valueFn : BlockState → α → TileCarrier dtype) (mask : α → Bool)
+    (l : List α) (s : BlockState)
+    (hmem : ∀ i, i ∈ l → mask i = true → P (regionFn i, offsetFn i)) :
+    WriteWithin P s
+      (l.foldl
+        (fun acc i =>
+          if mask i then
+            acc.writeMemTyped dtype (regionFn i) (offsetFn i)
+              (h.add (acc.readMemValue dtype (regionFn i) (offsetFn i)) (valueFn acc i))
+          else acc) s) := by
+  induction l generalizing s with
+  | nil =>
+      exact writeWithin_refl P s
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hmask : mask hd = true
+      · simp only [hmask, if_true]
+        have hfirst :
+            WriteWithin P s
+              (s.writeMemTyped dtype (regionFn hd) (offsetFn hd)
+                (h.add (s.readMemValue dtype (regionFn hd) (offsetFn hd)) (valueFn s hd))) :=
+          writeMemTyped_writeWithin dtype (regionFn hd) (offsetFn hd)
+            _ (hmem hd (List.mem_cons_self) hmask)
+        have htail :
+            WriteWithin P
+              (s.writeMemTyped dtype (regionFn hd) (offsetFn hd)
+                (h.add (s.readMemValue dtype (regionFn hd) (offsetFn hd)) (valueFn s hd)))
+              (tl.foldl
+                (fun acc i =>
+                  if mask i then
+                    acc.writeMemTyped dtype (regionFn i) (offsetFn i)
+                      (h.add (acc.readMemValue dtype (regionFn i) (offsetFn i)) (valueFn acc i))
+                  else acc)
+                (s.writeMemTyped dtype (regionFn hd) (offsetFn hd)
+                  (h.add (s.readMemValue dtype (regionFn hd) (offsetFn hd)) (valueFn s hd)))) :=
+          ih _ (fun i hi hmi => hmem i (List.mem_cons_of_mem hd hi) hmi)
+        exact writeWithin_trans hfirst htail
+      · have hmaskFalse : mask hd = false := by
+          cases h' : mask hd
+          · rfl
+          · exact False.elim (hmask h')
+        simp only [hmaskFalse]
+        exact ih s (fun i hi hmi => hmem i (List.mem_cons_of_mem hd hi) hmi)
+
+theorem foldl_atomicAddAt_prop_writeWithin {α : Type} {P : WriteFootprint}
+    (dtype : TileDType) (h : NumericDType dtype)
+    (regionFn : α → RegionName) (offsetFn : α → Nat)
+    (valueFn : BlockState → α → TileCarrier dtype)
+    (active : α → Prop) [DecidablePred active]
+    (l : List α) (s : BlockState)
+    (hmem : ∀ i, i ∈ l → active i → P (regionFn i, offsetFn i)) :
+    WriteWithin P s
+      (l.foldl
+        (fun acc i =>
+          if active i then
+            acc.writeMemTyped dtype (regionFn i) (offsetFn i)
+              (h.add (acc.readMemValue dtype (regionFn i) (offsetFn i)) (valueFn acc i))
+          else acc) s) := by
+  induction l generalizing s with
+  | nil =>
+      exact writeWithin_refl P s
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hactive : active hd
+      · simp only [hactive, if_true]
+        have hfirst :
+            WriteWithin P s
+              (s.writeMemTyped dtype (regionFn hd) (offsetFn hd)
+                (h.add (s.readMemValue dtype (regionFn hd) (offsetFn hd)) (valueFn s hd))) :=
+          writeMemTyped_writeWithin dtype (regionFn hd) (offsetFn hd)
+            _ (hmem hd (List.mem_cons_self) hactive)
+        have htail :
+            WriteWithin P
+              (s.writeMemTyped dtype (regionFn hd) (offsetFn hd)
+                (h.add (s.readMemValue dtype (regionFn hd) (offsetFn hd)) (valueFn s hd)))
+              (tl.foldl
+                (fun acc i =>
+                  if active i then
+                    acc.writeMemTyped dtype (regionFn i) (offsetFn i)
+                      (h.add (acc.readMemValue dtype (regionFn i) (offsetFn i)) (valueFn acc i))
+                  else acc)
+                (s.writeMemTyped dtype (regionFn hd) (offsetFn hd)
+                  (h.add (s.readMemValue dtype (regionFn hd) (offsetFn hd)) (valueFn s hd)))) :=
+          ih _ (fun i hi hai => hmem i (List.mem_cons_of_mem hd hi) hai)
+        exact writeWithin_trans hfirst htail
+      · simp only [hactive, if_false]
+        exact ih s (fun i hi hai => hmem i (List.mem_cons_of_mem hd hi) hai)
+
 end BlockState
 
 namespace Stmt
@@ -430,6 +521,164 @@ theorem stepStmt_store_writeWithin {P : WriteFootprint} {s s' : BlockState}
                         (fun i : TileIndex shape =>
                           (ptrs.data i).address (TileShape.indexToList shape i))
                         (fun i : TileIndex shape => values.data i)
+                        (fun i : TileIndex shape =>
+                          masks.data i = true ∧
+                            (ptrs.data i).inBounds (TileShape.indexToList shape i) boundaryCheck = true)
+                        (TileShape.allIndices shape) s
+                        (fun i hi hactive => by
+                          have hm : masks.data i = true := hactive.1
+                          have hb : (ptrs.data i).inBounds
+                              (TileShape.indexToList shape i) boundaryCheck = true := hactive.2
+                          exact hAddr masks hmasks ptrs hptr i hm hb)
+
+theorem stepStmt_atomicAdd_writeWithin {P : WriteFootprint} {s s' : BlockState}
+    {dtype : TileDType} {hnum : NumericDType dtype} {shape : TileShape}
+    {mem : MemAccess shape} {value : Op dtype shape} {mask : MaskOpt dtype shape}
+    (hStep : stepStmt (Stmt.atomicAdd hnum shape mem value mask) s = some s')
+    (hAddr : Stmt.StoreAddressesWithin P s mem mask) :
+    BlockState.WriteWithin P s s' := by
+  cases hvalue : evalOp value s with
+  | none =>
+      unfold stepStmt at hStep
+      simp [hvalue] at hStep
+  | some values =>
+      cases mask with
+      | none =>
+          cases mem with
+          | region region off =>
+              cases hoff : evalOp off s with
+              | none => simp [stepStmt, hvalue, hoff] at hStep
+              | some offsets =>
+                  simp [stepStmt, hvalue, hoff] at hStep
+                  cases hStep
+                  exact BlockState.foldl_atomicAddAt_masked_writeWithin dtype hnum
+                    (fun _ : TileIndex shape => region)
+                    (fun i : TileIndex shape => offsets.data i)
+                    (fun _ i => values.data i)
+                    (fun _ : TileIndex shape => true)
+                    (TileShape.allIndices shape) s
+                    (fun i hi _ => hAddr offsets hoff i)
+          | ptr ptr =>
+              cases hptr : evalOp ptr s with
+              | none => simp [stepStmt, hvalue, hptr] at hStep
+              | some ptrs =>
+                  simp [stepStmt, hvalue, hptr] at hStep
+                  cases hStep
+                  exact BlockState.foldl_atomicAddAt_masked_writeWithin dtype hnum
+                    (fun i : TileIndex shape => (ptrs.data i).1)
+                    (fun i : TileIndex shape => (ptrs.data i).2)
+                    (fun _ i => values.data i)
+                    (fun _ : TileIndex shape => true)
+                    (TileShape.allIndices shape) s
+                    (fun i hi _ => hAddr ptrs hptr i)
+          | blockPtr ptr boundaryCheck =>
+              cases hptr : evalOp ptr s with
+              | none => simp [stepStmt, hvalue, hptr] at hStep
+              | some ptrs =>
+                  simp [stepStmt, hvalue, hptr] at hStep
+                  cases hStep
+                  exact BlockState.foldl_atomicAddAt_masked_writeWithin dtype hnum
+                    (fun i : TileIndex shape => (ptrs.data i).region)
+                    (fun i : TileIndex shape =>
+                      (ptrs.data i).address (TileShape.indexToList shape i))
+                    (fun _ i => values.data i)
+                    (fun i : TileIndex shape =>
+                      (ptrs.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
+                    (TileShape.allIndices shape) s
+                    (fun i hi hactive => hAddr ptrs hptr i hactive)
+      | mask maskOp =>
+          cases hmasks : evalOp maskOp s with
+          | none => simp [stepStmt, hvalue, hmasks] at hStep
+          | some masks =>
+              cases mem with
+              | region region off =>
+                  cases hoff : evalOp off s with
+                  | none => simp [stepStmt, hvalue, hmasks, hoff] at hStep
+                  | some offsets =>
+                      simp [stepStmt, hvalue, hmasks, hoff] at hStep
+                      cases hStep
+                      exact BlockState.foldl_atomicAddAt_masked_writeWithin dtype hnum
+                        (fun _ : TileIndex shape => region)
+                        (fun i : TileIndex shape => offsets.data i)
+                        (fun _ i => values.data i)
+                        (fun i : TileIndex shape => masks.data i)
+                        (TileShape.allIndices shape) s
+                        (fun i hi hactive => hAddr masks hmasks offsets hoff i hactive)
+              | ptr ptr =>
+                  cases hptr : evalOp ptr s with
+                  | none => simp [stepStmt, hvalue, hmasks, hptr] at hStep
+                  | some ptrs =>
+                      simp [stepStmt, hvalue, hmasks, hptr] at hStep
+                      cases hStep
+                      exact BlockState.foldl_atomicAddAt_masked_writeWithin dtype hnum
+                        (fun i : TileIndex shape => (ptrs.data i).1)
+                        (fun i : TileIndex shape => (ptrs.data i).2)
+                        (fun _ i => values.data i)
+                        (fun i : TileIndex shape => masks.data i)
+                        (TileShape.allIndices shape) s
+                        (fun i hi hactive => hAddr masks hmasks ptrs hptr i hactive)
+              | blockPtr ptr boundaryCheck =>
+                  cases hptr : evalOp ptr s with
+                  | none => simp [stepStmt, hvalue, hmasks, hptr] at hStep
+                  | some ptrs =>
+                      simp [stepStmt, hvalue, hmasks, hptr] at hStep
+                      cases hStep
+                      exact BlockState.foldl_atomicAddAt_prop_writeWithin dtype hnum
+                        (fun i : TileIndex shape => (ptrs.data i).region)
+                        (fun i : TileIndex shape =>
+                          (ptrs.data i).address (TileShape.indexToList shape i))
+                        (fun _ i => values.data i)
+                        (fun i : TileIndex shape =>
+                          masks.data i = true ∧
+                            (ptrs.data i).inBounds (TileShape.indexToList shape i) boundaryCheck = true)
+                        (TileShape.allIndices shape) s
+                        (fun i hi hactive => by
+                          have hm : masks.data i = true := hactive.1
+                          have hb : (ptrs.data i).inBounds
+                              (TileShape.indexToList shape i) boundaryCheck = true := hactive.2
+                          exact hAddr masks hmasks ptrs hptr i hm hb)
+      | maskOther maskOp other =>
+          cases hmasks : evalOp maskOp s with
+          | none => simp [stepStmt, hvalue, hmasks] at hStep
+          | some masks =>
+              cases mem with
+              | region region off =>
+                  cases hoff : evalOp off s with
+                  | none => simp [stepStmt, hvalue, hmasks, hoff] at hStep
+                  | some offsets =>
+                      simp [stepStmt, hvalue, hmasks, hoff] at hStep
+                      cases hStep
+                      exact BlockState.foldl_atomicAddAt_masked_writeWithin dtype hnum
+                        (fun _ : TileIndex shape => region)
+                        (fun i : TileIndex shape => offsets.data i)
+                        (fun _ i => values.data i)
+                        (fun i : TileIndex shape => masks.data i)
+                        (TileShape.allIndices shape) s
+                        (fun i hi hactive => hAddr masks hmasks offsets hoff i hactive)
+              | ptr ptr =>
+                  cases hptr : evalOp ptr s with
+                  | none => simp [stepStmt, hvalue, hmasks, hptr] at hStep
+                  | some ptrs =>
+                      simp [stepStmt, hvalue, hmasks, hptr] at hStep
+                      cases hStep
+                      exact BlockState.foldl_atomicAddAt_masked_writeWithin dtype hnum
+                        (fun i : TileIndex shape => (ptrs.data i).1)
+                        (fun i : TileIndex shape => (ptrs.data i).2)
+                        (fun _ i => values.data i)
+                        (fun i : TileIndex shape => masks.data i)
+                        (TileShape.allIndices shape) s
+                        (fun i hi hactive => hAddr masks hmasks ptrs hptr i hactive)
+              | blockPtr ptr boundaryCheck =>
+                  cases hptr : evalOp ptr s with
+                  | none => simp [stepStmt, hvalue, hmasks, hptr] at hStep
+                  | some ptrs =>
+                      simp [stepStmt, hvalue, hmasks, hptr] at hStep
+                      cases hStep
+                      exact BlockState.foldl_atomicAddAt_prop_writeWithin dtype hnum
+                        (fun i : TileIndex shape => (ptrs.data i).region)
+                        (fun i : TileIndex shape =>
+                          (ptrs.data i).address (TileShape.indexToList shape i))
+                        (fun _ i => values.data i)
                         (fun i : TileIndex shape =>
                           masks.data i = true ∧
                             (ptrs.data i).inBounds (TileShape.indexToList shape i) boundaryCheck = true)
