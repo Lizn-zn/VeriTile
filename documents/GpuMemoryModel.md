@@ -101,14 +101,24 @@ properties or CUDA memory-system fidelity.
 
 ## Extension Path
 
-The current model is intentionally small. The likely extension points are:
+The current model is intentionally small. The landed memory-proof layers are:
 
-- **Memory safety / bounds (#48):** add region sizes and checked launch-level
-  bounds assumptions on top of the current typed storage layer.
+- **Memory safety / bounds (#48):** active-lane region-bounds contracts on top
+  of the current typed storage layer.
 - **Write footprints / frame (#60):** predicate-level `WriteFootprint` and
   `BlockState.WriteWithin` contracts for single-program frame reasoning.
-- **Disjoint whole-grid composition (#49):** merge explicit per-program
-  `Kernel.ExecFrame`s when their write footprints are pairwise disjoint.
+- **Disjoint whole-grid composition (#49):** `Kernel.mergeFrames` merges
+  explicit per-program `Kernel.ExecFrame`s when their write footprints are
+  pairwise disjoint.
+
+The next proof-ergonomics layer is:
+
+- **Structured footprint extraction (#61):** derive predicate footprints from
+  common direct, masked, checked block-pointer, and regular strided store
+  patterns.
+
+Longer-term extension points remain:
+
 - **Paged KV / indirect addressing (#42):** extend the current `IndirectView`
   smoke/proof surface into paged-attention-specific logical views and
   consumer-side equivalence theorems.
