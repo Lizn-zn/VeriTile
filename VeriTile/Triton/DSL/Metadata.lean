@@ -239,6 +239,14 @@ partial def stmtRegions :
             | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
       (exprRegions v ++ kwargRegions, staticPtrRegions p)
+  | `(tritonStmt| tl.async_copy($dst:tritonExpr, $src:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
+            match kw with
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      (staticPtrRegions src ++ exprRegions src ++ kwargRegions, staticPtrRegions dst)
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       stmts.toList.foldl
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>

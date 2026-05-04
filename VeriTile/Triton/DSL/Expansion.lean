@@ -1573,6 +1573,11 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
               pure (← `(Stmt.atomicAdd $hnum $sh (MemAccess.ptr $p'.term) $vTerm (MaskOpt.mask $m')),
                 ← `(ComputeStmt.atomicAdd $hnum $sh (MemAccess.ptr $p'.term) $valueExpr' (MaskOpt.mask $m')),
                 env, v'.computeTerm.isSome)
+  | `(tritonStmt| tl.async_copy($dst:tritonExpr, $src:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) => do
+      discard <| expandExpr env dst
+      discard <| expandExpr env src
+      pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+        ← `(ComputeStmt.asyncMarker "tl.async_copy"), env, Bool.true)
     | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env

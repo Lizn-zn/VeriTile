@@ -382,7 +382,7 @@ current semantic contract.
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
 | Indirection | Limited | Typed index loads can feed pointer arithmetic for gather/paged-KV style data-dependent addresses (#42); no alias/bounds/page-ownership proof layer yet |
 | Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |
-| Atomics / async / barriers | Limited | `tl.atomic_add` has an AlgKernel `Stmt.atomicAdd` marker, sequential single-program semantics, trace payload vocabulary, and a Real grid-merge sum theorem; async/TMA has contract vocabulary and a compute-facing failure marker only; no full scheduler, barriers, executable async copy AST, TMA AST, or IEEE atomic semantics (#12/#67/#68) |
+| Atomics / async / barriers | Limited | `tl.atomic_add` has an AlgKernel `Stmt.atomicAdd` marker, sequential single-program semantics, trace payload vocabulary, and a Real grid-merge sum theorem; `tl.async_copy` lowers to a compute-facing failure marker only; no full scheduler, barriers, executable async copy semantics, TMA AST, or IEEE atomic semantics (#12/#67/#68/#69) |
 | Floating point fidelity | Gap | Real-valued model only; no IEEE-754 or mixed-precision hardware semantics (#11) |
 
 ## Expressiveness Matrix
