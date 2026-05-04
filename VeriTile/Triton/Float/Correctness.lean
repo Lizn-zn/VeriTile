@@ -202,6 +202,20 @@ theorem computeCorrect_of_toAlgKernel {ck : ComputeKernel} {post : AlgSpec}
     ComputeCorrect ck post := by
   exact computeCorrect_of_toAlgorithm_eq h hc
 
+/-- Projection failure makes algorithm correctness impossible. -/
+theorem not_algorithmCorrect_of_toAlgorithm_error {ck : ComputeKernel}
+    {err : EraseDTypeError} {post : AlgSpec}
+    (h : ck.toAlgorithm? = Except.error err) :
+    ¬ AlgorithmCorrect ck post := by
+  simp [AlgorithmCorrect, h]
+
+/-- Projection failure makes public compute correctness impossible. -/
+theorem not_computeCorrect_of_toAlgorithm_error {ck : ComputeKernel}
+    {err : EraseDTypeError} {post : AlgSpec}
+    (h : ck.toAlgorithm? = Except.error err) :
+    ¬ ComputeCorrect ck post := by
+  simp [ComputeCorrect, AlgorithmCorrect, h]
+
 /-- Bridge from explicit successful projections to public compute-facing
 refinement. -/
 theorem computeRefine_of_toAlgorithm_eq
@@ -223,6 +237,22 @@ theorem computeRefine_of_toAlgKernel
     (hrefine : Kernel.Refine lhs.toAlgKernel rhs.toAlgKernel rel) :
     ComputeRefine lhs rhs rel := by
   exact computeRefine_of_toAlgorithm_eq hlhs hrhs hrefine
+
+/-- A projection failure on either side makes compute refinement impossible. -/
+theorem not_computeRefine_of_left_toAlgorithm_error {lhs rhs : ComputeKernel}
+    {err : EraseDTypeError}
+    {rel : BlockState → BlockState → BlockState → Prop}
+    (h : lhs.toAlgorithm? = Except.error err) :
+    ¬ ComputeRefine lhs rhs rel := by
+  cases hrhs : rhs.toAlgorithm? <;> simp [ComputeRefine, h, hrhs]
+
+/-- A projection failure on either side makes compute refinement impossible. -/
+theorem not_computeRefine_of_right_toAlgorithm_error {lhs rhs : ComputeKernel}
+    {err : EraseDTypeError}
+    {rel : BlockState → BlockState → BlockState → Prop}
+    (h : rhs.toAlgorithm? = Except.error err) :
+    ¬ ComputeRefine lhs rhs rel := by
+  cases hlhs : lhs.toAlgorithm? <;> simp [ComputeRefine, h, hlhs]
 
 /-- Transition bridge for legacy algorithm kernels wrapped by the DSL. -/
 theorem algorithmCorrect_fromAlg {k : AlgKernel} {post : AlgSpec}
@@ -257,6 +287,13 @@ theorem execCorrect_of_toAlgKernel {ck : ComputeKernel} {s : BlockState}
   intro s0 s' hExec hs0
   subst s0
   exact hc s' hExec
+
+/-- Projection failure makes one-run compute correctness impossible. -/
+theorem not_execCorrect_of_toAlgorithm_error {ck : ComputeKernel}
+    {err : EraseDTypeError} {s : BlockState} {post : BlockState → Prop}
+    (h : ck.toAlgorithm? = Except.error err) :
+    ¬ ExecCorrect ck s post := by
+  simp [ExecCorrect, ComputeCorrect, AlgorithmCorrect, h]
 
 /-- Transition bridge for legacy algorithm-kernel refinements wrapped by the
 DSL. -/

@@ -73,6 +73,10 @@ example :
       Except.error (.requiresAsyncSequentialization "tl.async_copy") := by
   rfl
 
+example (post : ComputeKernel.AlgSpec) :
+    ¬ ComputeKernel.ComputeCorrect asyncMarkerSmoke post :=
+  ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
+
 def asyncCopySurfaceSmoke (srcReg dstReg : RegionName) : ComputeKernel := triton {
   tl.async_copy($(dstReg), $(srcReg))
 }
@@ -81,6 +85,10 @@ example (srcReg dstReg : RegionName) :
     (asyncCopySurfaceSmoke srcReg dstReg).toAlgorithm? =
       Except.error (.requiresAsyncSequentialization "tl.async_copy") := by
   rfl
+
+example (srcReg dstReg : RegionName) (post : ComputeKernel.AlgSpec) :
+    ¬ ComputeKernel.ComputeCorrect (asyncCopySurfaceSmoke srcReg dstReg) post :=
+  ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
 /-- Vector-add kernel with explicit boundary mask. -/
 def addKernelMaskedSmoke (xReg yReg outReg : RegionName)
