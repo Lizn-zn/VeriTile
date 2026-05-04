@@ -252,6 +252,41 @@ theorem dS_tile_eq {M S D : Nat}
       some (dS Q K V dO LSE scale idx.1 idx.2.1) := by
   simp [Tile.ofReal, dS]
 
+/-- Bundled theorem surface for the stripped backward pure-tile computation:
+the three gradient tiles computed from the Real intermediates are exactly the
+three components of `attentionBackwardReal`. -/
+theorem strippedBackward_tile_bridges_complete {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    (∀ idx : TileIndex [M, D],
+      Option.getD
+        (Option.map (fun a : ℝ => a * scale)
+          ((Tile.dot []
+            (Tile.ofReal fun idx : TileIndex [M, S] =>
+              dS Q K V dO LSE scale idx.1 idx.2.1)
+            (Tile.ofReal K)).data idx)) 0 =
+        (attentionBackwardReal Q K V dO LSE scale).dQ idx) ∧
+    (∀ idx : TileIndex [S, D],
+      Option.getD
+        (Option.map (fun a : ℝ => a * scale)
+          ((Tile.dot []
+            (Tile.transpose []
+              (Tile.ofReal fun idx : TileIndex [M, S] =>
+                dS Q K V dO LSE scale idx.1 idx.2.1))
+            (Tile.ofReal Q)).data idx)) 0 =
+        (attentionBackwardReal Q K V dO LSE scale).dK idx) ∧
+    (∀ idx : TileIndex [S, D],
+      ((Tile.dot []
+          (Tile.transpose []
+            (Tile.ofReal fun idx : TileIndex [M, S] =>
+              probability Q K LSE scale idx.1 idx.2.1))
+          (Tile.ofReal dO)).data idx).unbotD 0 =
+        (attentionBackwardReal Q K V dO LSE scale).dV idx) := by
+  exact ⟨
+    dQ_tile_eq_attentionBackwardReal Q K V dO LSE scale,
+    dK_tile_eq_attentionBackwardReal Q K V dO LSE scale,
+    dV_tile_eq_attentionBackwardReal Q K V dO LSE scale⟩
+
 /-- Jacobian-vector product of row softmax after simplifying
 `(diag(P) - P·Pᵀ) dP`. -/
 noncomputable def softmaxJacobianJVP {S : Nat}
