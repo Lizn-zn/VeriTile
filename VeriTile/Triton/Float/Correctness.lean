@@ -115,21 +115,8 @@ namespace ComputeKernel
 
 /-! ## Compute-kernel algorithm projection -/
 
-/-- Error type for compute-kernel features that cannot be projected into the
-algorithm layer. PR3a has no failing constructor; future bitcast support will
-use these cases. -/
-inductive EraseDTypeError where
-  | requiresComputeSemantics (op : String)
-  | unsupportedBitcast (reason : String)
-  deriving Repr, BEq
-
 /-- Public spec shape used by the current postcondition-style correctness API. -/
 abbrev AlgSpec := BlockState → BlockState → Prop
-
-/-- Fallible projection from the compute-facing kernel surface to the algorithm
-kernel surface. With only `.fromAlg`, this always succeeds. -/
-def toAlgorithm? : ComputeKernel → Except EraseDTypeError AlgKernel
-  | .fromAlg k => Except.ok k
 
 /-- Algorithm correctness for compute kernels: successful projection exposes
 ordinary `Kernel.Correct`; failed projection is intentionally unprovable. -/
@@ -138,12 +125,13 @@ def AlgorithmCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
   | Except.ok ak => Kernel.Correct ak post
   | Except.error _ => False
 
-/-- Current compute-kernel execution: PR3a/PR3b only contains the `.fromAlg`
-subset, so execution is the algorithm execution of the projected kernel. Future
-compute-only statements should refine this definition rather than changing the
-AlgorithmCorrect API. -/
+/-- Current compute-kernel execution is defined by successful algorithm
+projection. Future compute-only execution can refine this definition without
+changing the `AlgorithmCorrect` API. -/
 noncomputable def eval (ck : ComputeKernel) (s : BlockState) : Option BlockState :=
-  exec ck.toAlgKernel s
+  match ck.toAlgorithm? with
+  | Except.ok ak => exec ak s
+  | Except.error _ => none
 
 /-- Bridge from an explicit successful projection to compute-kernel algorithm
 correctness. This keeps `Except` plumbing out of user theorem statements. -/
@@ -161,16 +149,12 @@ theorem algorithmCorrect_fromAlg {k : AlgKernel} {post : AlgSpec}
   simpa [AlgorithmCorrect, toAlgorithm?] using hc
 
 /-- Successful algorithm projection preserves the current compute-kernel
-execution semantics. For the present `.fromAlg` subset this is reflexivity
-after unwrapping the successful projection proof. -/
+execution semantics. -/
 theorem toAlgorithm?_sound {ck : ComputeKernel} {ak : AlgKernel}
     (h : ck.toAlgorithm? = Except.ok ak) :
     ∀ s, ck.eval s = exec ak s := by
   intro s
-  cases ck with
-  | fromAlg k =>
-      simp [toAlgorithm?, eval] at h ⊢
-      exact congrArg (fun k' => exec k' s) h
+  simp [eval, h]
 
 end ComputeKernel
 

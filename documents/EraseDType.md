@@ -8,10 +8,10 @@ VeriTile uses two kernel layers:
 - `ComputeKernel` is the compute-facing DSL surface. The `triton { ... }`
   macro always produces a `ComputeKernel`.
 
-Today every executable `ComputeKernel` is still `ComputeKernel.fromAlg k` for
-some algorithm kernel `k`. This is the PR3a transition scaffold: the DSL has a
-single compute-facing surface, while full compute-only statement semantics are
-kept out of the algorithm layer.
+The DSL has a single compute-facing surface. Pure algorithm kernels are emitted
+as `ComputeKernel.fromAlg k`; kernels containing compute-facing expressions are
+emitted as `ComputeKernel.mk inputs outputs body`, where `body` is a list of
+`ComputeStmt`s.
 
 ## Algorithm Projection
 
@@ -22,9 +22,10 @@ to the algorithm layer:
 ComputeKernel.toAlgorithm? : ComputeKernel -> Except EraseDTypeError AlgKernel
 ```
 
-For the current `.fromAlg` subset this projection succeeds. Compute-only
-features that cannot be projected must fail this projection instead of
-inventing fake algorithm meanings.
+For the `.fromAlg` subset this projection succeeds immediately. For
+`ComputeKernel.mk`, projection recursively lowers each `ComputeStmt` /
+`ComputeExpr`; compute-only features that cannot be projected must fail this
+projection instead of inventing fake algorithm meanings.
 
 `ComputeKernel.AlgorithmCorrect` hides the `Except` plumbing:
 
@@ -94,8 +95,11 @@ The current DSL accepts only the narrow algorithm-projectable slice:
 
 - `tl.bitcast(<uint32 numeric literal>, tl.float32)` when the bits decode to a
   finite-normal binary32 value.
-- The projection uses the computable `Float32Bits.decodeRat` decoder and lowers
-  to an algorithm `Op.const`.
+- The DSL stores this as `ComputeOp.bitcast .uint32 .fp32 ...`; it does not run
+  a separate macro-level IEEE decoder.
+- `ComputeKernel.toAlgorithm?` projects the containing `ComputeStmt` through the
+  shared computable `Float32Bits.decodeRat` decoder and lowers to an algorithm
+  `Op.const`.
 - Zero/subnormal, NaN/Inf, non-`tl.float32` destinations, and runtime bitcast
   expressions are rejected at expansion time.
 

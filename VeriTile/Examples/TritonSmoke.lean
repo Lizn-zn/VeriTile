@@ -5,6 +5,7 @@ Small smoke tests for the typed Triton core.
 -/
 
 import VeriTile.Triton.Core
+import VeriTile.Triton.Compute
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.Memory
@@ -187,6 +188,17 @@ def bitcastConstantSmoke (outReg : RegionName) : Kernel := triton {
   one := tl.bitcast(0x3f800000, tl.float32)
   tl.store($(outReg), one)
 }
+
+/-- The compute-facing surface keeps `tl.bitcast` as a `ComputeOp` until
+`ComputeKernel.toAlgorithm?` projects it through the shared decoder. -/
+def bitcastConstantComputeSmoke (outReg : RegionName) : ComputeKernel := triton {
+  one := tl.bitcast(0x3f800000, tl.float32)
+  tl.store($(outReg), one)
+}
+
+example :
+    ComputeOp.constOpToAlgorithm? ComputeOp.oneBitcast = Except.ok (Op.const 1) :=
+  ComputeOp.oneBitcast_toAlgorithm
 
 /-- The real kernel recovered by erasing `dtypeCastSmoke`'s float annotations. -/
 def dtypeCastSmokeErasedReal (xReg outReg : RegionName) (N : Nat) : Kernel := triton {

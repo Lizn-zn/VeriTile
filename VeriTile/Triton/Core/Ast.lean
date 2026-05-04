@@ -4,6 +4,7 @@ VeriTile.Triton.Core.Ast
 Typed expression, statement, and kernel AST definitions for the Triton core.
 -/
 
+import Mathlib.Data.Rat.Defs
 import VeriTile.Triton.Core.Shape
 
 namespace VeriTile.Triton
@@ -286,28 +287,225 @@ abbrev AlgOp := Op
 /-- Long-term name for the algorithm-layer kernel AST. -/
 abbrev AlgKernel := Kernel
 
+/-- Error type for compute-kernel features that cannot be projected into the
+algorithm layer. -/
+inductive EraseDTypeError where
+  | requiresComputeSemantics (op : String)
+  | unsupportedBitcast (reason : String)
+  deriving Repr, BEq
+
+/-! ## Compute-facing dtype/op skeleton -/
+
+structure UInt32Bits where
+  bits : BitVec 32
+  deriving Repr, BEq, DecidableEq
+
+structure Float32Bits where
+  bits : BitVec 32
+  deriving Repr, BEq, DecidableEq
+
+namespace UInt32Bits
+
+def toNat (x : UInt32Bits) : Nat :=
+  x.bits.toNat
+
+end UInt32Bits
+
+namespace Float32Bits
+
+private def pow2 (n : Nat) : Rat :=
+  (2 : Rat) ^ n
+
+private def scalePow2 (q : Rat) (e : Int) : Rat :=
+  if _h : 0 ≤ e then
+    q * pow2 e.toNat
+  else
+    q / pow2 (-e).toNat
+
+/--
+Computable finite-normal IEEE-754 binary32 decode to `Rat`.
+
+This initial algorithm bridge intentionally supports only finite normal values.
+Zeros, subnormals, infinities, and NaNs return `none` until the compute-correct
+IEEE model is widened.
+-/
+def decodeRat (x : Float32Bits) : Option Rat :=
+  let n := x.bits.toNat
+  let sign := n / 2^31
+  let exp := (n / 2^23) % 256
+  let frac := n % 2^23
+  if exp = 0 ∨ exp = 255 then
+    none
+  else
+    let significand : Rat := (2^23 + frac : Nat)
+    let signed := if sign = 0 then significand else -significand
+    some (scalePow2 signed (Int.ofNat exp - 150))
+
+noncomputable def decodeReal (x : Float32Bits) : WithBot ℝ :=
+  match decodeRat x with
+  | some q => some (q : ℝ)
+  | none => none
+
+end Float32Bits
+
+inductive ComputeDType where
+  | uint32
+  | fp32
+  deriving Repr, BEq, DecidableEq
+
+namespace ComputeDType
+
+def eraseDType : ComputeDType → AlgDType
+  | .uint32 => .nat
+  | .fp32 => .real
+
+def width : ComputeDType → Nat
+  | .uint32 => 32
+  | .fp32 => 32
+
+end ComputeDType
+
+def ComputeCarrier : ComputeDType → Type
+  | .uint32 => UInt32Bits
+  | .fp32 => Float32Bits
+
+inductive ComputeOp : ComputeDType → TileShape → Type where
+  | const : ComputeCarrier dtype → ComputeOp dtype []
+  | bitcast :
+      (src dst : ComputeDType) →
+      src.width = dst.width →
+      ComputeOp src shape →
+      ComputeOp dst shape
+
+namespace ComputeOp
+
+def bitcastPayload (src dst : ComputeDType) :
+    ComputeCarrier src → Option (ComputeCarrier dst) :=
+  match src, dst with
+  | .uint32, .fp32 => fun x => some ({ bits := x.bits } : Float32Bits)
+  | .fp32, .uint32 => fun x => some ({ bits := x.bits } : UInt32Bits)
+  | .uint32, .uint32 => fun x => some x
+  | .fp32, .fp32 => fun x => some x
+
+def constPayload? : ComputeOp dtype [] → Option (ComputeCarrier dtype)
+  | .const value => some value
+  | .bitcast src dst _ e =>
+      match constPayload? e with
+      | some value => bitcastPayload src dst value
+      | none => none
+
+def constToAlgorithm? :
+    (dtype : ComputeDType) → ComputeCarrier dtype →
+      Except EraseDTypeError (Op dtype.eraseDType [])
+  | .uint32, value => Except.ok (Op.constNat value.toNat)
+  | .fp32, value =>
+      match Float32Bits.decodeRat value with
+      | some q => Except.ok (Op.const (q : ℝ))
+      | none => Except.error (.unsupportedBitcast "unsupported fp32 decode")
+
+def constOpToAlgorithm? (op : ComputeOp dtype []) :
+    Except EraseDTypeError (Op dtype.eraseDType []) := do
+  let value ←
+    match constPayload? op with
+    | some value => Except.ok value
+    | none => Except.error (.requiresComputeSemantics "runtime bitcast")
+  constToAlgorithm? dtype value
+
+def toAlgorithm? : (op : ComputeOp dtype shape) →
+    Except EraseDTypeError (Op dtype.eraseDType shape)
+  | .const value => constToAlgorithm? _ value
+  | .bitcast src dst h e =>
+      match shape with
+      | [] => constOpToAlgorithm? (.bitcast src dst h e)
+      | _ => Except.error (.requiresComputeSemantics "non-scalar runtime bitcast")
+
+end ComputeOp
+
+inductive ComputeExpr : AlgDType → TileShape → Type where
+  | alg : Op dtype shape → ComputeExpr dtype shape
+  | compute : ComputeOp cdtype shape → ComputeExpr cdtype.eraseDType shape
+
+namespace ComputeExpr
+
+def toAlgorithm? : ComputeExpr dtype shape → Except EraseDTypeError (Op dtype shape)
+  | .alg e => Except.ok e
+  | .compute e => ComputeOp.toAlgorithm? e
+
+end ComputeExpr
+
+inductive ComputeStmt : Type where
+  | alg : Stmt → ComputeStmt
+  | assign : (dtype : AlgDType) → (shape : TileShape) → RegName →
+      ComputeExpr dtype shape → ComputeStmt
+  | store : (dtype : AlgDType) → (shape : TileShape) →
+      MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
+  | forLoop : (idx : RegName) → (n : Nat) → (body : List ComputeStmt) → ComputeStmt
+  | ifThen : (cond : Op .bool []) → (body : List ComputeStmt) → ComputeStmt
+
+namespace ComputeStmt
+
+mutual
+
+def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
+  | .alg st => Except.ok st
+  | .assign dtype shape name e => do
+      Except.ok (.assign dtype shape name (← e.toAlgorithm?))
+  | .store dtype shape mem value mask => do
+      Except.ok (.store dtype shape mem (← value.toAlgorithm?) mask)
+  | .forLoop idx n body => do
+      Except.ok (.forLoop idx n (← listToAlgorithm? body))
+  | .ifThen cond body => do
+      Except.ok (.ifThen cond (← listToAlgorithm? body))
+
+def listToAlgorithm? : List ComputeStmt → Except EraseDTypeError (List Stmt)
+  | [] => Except.ok []
+  | st :: rest => do
+      let st' ← toAlgorithm? st
+      let rest' ← listToAlgorithm? rest
+      Except.ok (st' :: rest')
+
+end
+
+end ComputeStmt
+
 /--
 Compute-facing kernel surface.
 
-For now every compute kernel is just an algorithm kernel wrapper. Future
-compute-only nodes such as bitcast will extend this type, while algorithm
-correctness continues to project through `ComputeKernel.toAlgorithm?`.
+Pure algorithm kernels can still use `fromAlg`; kernels that contain
+compute-facing nodes use `mk` and project through `ComputeKernel.toAlgorithm?`.
 -/
 inductive ComputeKernel where
   | fromAlg : AlgKernel → ComputeKernel
+  | mk : (inputs outputs : List RegionName) → (body : List ComputeStmt) → ComputeKernel
   deriving Inhabited
 
 namespace ComputeKernel
 
-/-- Project the current algorithm-only compute kernel subset back to `Kernel`. -/
-def toAlgKernel : ComputeKernel → AlgKernel
-  | .fromAlg k => k
+/-- Fallible projection from the compute-facing kernel surface to the algorithm
+kernel surface. -/
+def toAlgorithm? : ComputeKernel → Except EraseDTypeError AlgKernel
+  | .fromAlg k => Except.ok k
+  | .mk inputs outputs body => do
+      Except.ok (Kernel.mk inputs outputs (← ComputeStmt.listToAlgorithm? body))
+
+/--
+Legacy coercion used by existing examples whose definitions are still annotated
+as `Kernel`. New proof-facing code should use `ComputeKernel.toAlgorithm?` or
+`ComputeKernel.AlgorithmCorrect` so failed compute projection is explicit.
+-/
+def toAlgKernel (ck : ComputeKernel) : AlgKernel :=
+  match ck.toAlgorithm? with
+  | Except.ok k => k
+  | Except.error _ => default
 
 instance : Coe ComputeKernel AlgKernel where
   coe := toAlgKernel
 
 @[simp] theorem toAlgKernel_fromAlg (k : AlgKernel) :
     (ComputeKernel.fromAlg k).toAlgKernel = k := rfl
+
+@[simp] theorem toAlgorithm?_fromAlg (k : AlgKernel) :
+    (ComputeKernel.fromAlg k).toAlgorithm? = Except.ok k := rfl
 
 @[simp] theorem coe_fromAlg (k : AlgKernel) :
     ((ComputeKernel.fromAlg k : ComputeKernel) : AlgKernel) = k := rfl
