@@ -70,7 +70,7 @@ def effectMarkerSmoke : ComputeKernel :=
 
 example :
     effectMarkerSmoke.toAlgorithm? =
-      Except.error (.requiresAsyncSequentialization "tl.async_copy") := by
+      Except.error (.requiresEffectProjection "tl.async_copy") := by
   rfl
 
 example (post : ComputeKernel.AlgSpec) :
@@ -83,7 +83,7 @@ def asyncCopySurfaceSmoke (srcReg dstReg : RegionName) : ComputeKernel := triton
 
 example (srcReg dstReg : RegionName) :
     (asyncCopySurfaceSmoke srcReg dstReg).toAlgorithm? =
-      Except.error (.requiresAsyncSequentialization "tl.async_copy") := by
+      Except.error (.requiresEffectProjection "tl.async_copy") := by
   rfl
 
 example (srcReg dstReg : RegionName) (post : ComputeKernel.AlgSpec) :
@@ -96,7 +96,7 @@ def asyncWaitSurfaceSmoke : ComputeKernel := triton {
 
 example :
     asyncWaitSurfaceSmoke.toAlgorithm? =
-      Except.error (.requiresAsyncSequentialization "tl.async_wait") := by
+      Except.error (.requiresEffectProjection "tl.async_wait") := by
   rfl
 
 example (post : ComputeKernel.AlgSpec) :
@@ -109,7 +109,7 @@ def debugBarrierSurfaceSmoke : ComputeKernel := triton {
 
 example :
     debugBarrierSurfaceSmoke.toAlgorithm? =
-      Except.error (.requiresAsyncSequentialization "tl.debug_barrier") := by
+      Except.error (.requiresEffectProjection "tl.debug_barrier") := by
   rfl
 
 example (post : ComputeKernel.AlgSpec) :

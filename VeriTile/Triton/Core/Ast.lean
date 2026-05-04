@@ -298,7 +298,7 @@ abbrev AlgKernel := Kernel
 algorithm layer. -/
 inductive EraseDTypeError where
   | requiresComputeSemantics (op : String)
-  | requiresAsyncSequentialization (op : String)
+  | requiresEffectProjection (op : String)
   | unsupportedBitcast (reason : String)
   deriving Repr, BEq
 
@@ -494,7 +494,7 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
   | .atomicAdd h shape mem value mask => do
       Except.ok (.atomicAdd h shape mem (← value.toAlgorithm?) mask)
   | .effectMarker op =>
-      Except.error (.requiresAsyncSequentialization op)
+      Except.error (.requiresEffectProjection op)
   | .forLoop idx n body => do
       Except.ok (.forLoop idx n (← listToAlgorithm? body))
   | .ifThen cond body => do

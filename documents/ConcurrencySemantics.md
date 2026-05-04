@@ -188,7 +188,7 @@ The contract names the future required discipline:
 - destination ownership is unambiguous within the program slice;
 - overlapping destinations are explicitly ordered or rejected.
 
-Projection failures use the named reason `requiresAsyncSequentialization`.
+Projection failures use the named reason `requiresEffectProjection`.
 `ComputeStmt.effectMarker` is the explicit AST hook for this path: it makes
 async/TMA-shaped syntax representable in the compute layer while preserving
 the fact that it has no `AlgorithmCorrect` projection yet. The DSL surfaces
