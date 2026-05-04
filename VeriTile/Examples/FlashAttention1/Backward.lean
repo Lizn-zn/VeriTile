@@ -146,6 +146,56 @@ theorem attentionBackwardReal_eq_reverseMode {M S D : Nat}
   cases idx
   rfl
 
+/-- Tile-level bridge for the stripped kernel's `dV = Pᵀ · dO`
+register computation. -/
+theorem dV_tile_eq_attentionBackwardReal {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [S, D]) :
+    ((Tile.dot []
+        (Tile.transpose []
+          (Tile.ofReal fun idx : TileIndex [M, S] =>
+            probability Q K LSE scale idx.1 idx.2.1))
+        (Tile.ofReal dO)).data idx).unbotD 0 =
+      (attentionBackwardReal Q K V dO LSE scale).dV idx := by
+  rw [Tile.dot_nil_data]
+  simp [Tile.transpose, Tile.ofReal, attentionBackwardReal_dV]
+
+/-- Tile-level bridge for the stripped kernel's `dQ = dS · K · scale`
+register computation. -/
+theorem dQ_tile_eq_attentionBackwardReal {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    Option.getD
+      (Option.map (fun a : ℝ => a * scale)
+        ((Tile.dot []
+          (Tile.ofReal fun idx : TileIndex [M, S] =>
+            dS Q K V dO LSE scale idx.1 idx.2.1)
+          (Tile.ofReal K)).data idx)) 0 =
+      (attentionBackwardReal Q K V dO LSE scale).dQ idx := by
+  rw [Tile.dot_nil_data]
+  simp [Tile.ofReal, attentionBackwardReal_dQ]
+  ring
+
+/-- Tile-level bridge for the stripped kernel's `dK = dSᵀ · Q · scale`
+register computation. -/
+theorem dK_tile_eq_attentionBackwardReal {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [S, D]) :
+    Option.getD
+      (Option.map (fun a : ℝ => a * scale)
+        ((Tile.dot []
+          (Tile.transpose []
+            (Tile.ofReal fun idx : TileIndex [M, S] =>
+              dS Q K V dO LSE scale idx.1 idx.2.1))
+          (Tile.ofReal Q)).data idx)) 0 =
+      (attentionBackwardReal Q K V dO LSE scale).dK idx := by
+  rw [Tile.dot_nil_data]
+  simp [Tile.transpose, Tile.ofReal, attentionBackwardReal_dK]
+  ring
+
 /-- Jacobian-vector product of row softmax after simplifying
 `(diag(P) - P·Pᵀ) dP`. -/
 noncomputable def softmaxJacobianJVP {S : Nat}
