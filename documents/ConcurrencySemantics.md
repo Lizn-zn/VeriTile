@@ -166,6 +166,36 @@ The first concrete atomic slice is intentionally narrow:
 
 This is `Limited` atomic support, not a full concurrent executor.
 
+## Async / TMA Contract Slice
+
+The async/TMA slice is currently a contract vocabulary, not an implementation.
+It lives in:
+
+```text
+VeriTile/Triton/Concurrency/Async.lean
+```
+
+The design mirrors the `atomic_add` marker pattern. Future compute-facing
+`tl.async_*` or TMA syntax should project only when a recognized discipline is
+available:
+
+```text
+ComputeKernel async/TMA surface
+  -> AlgKernel async/TMA sequentialization marker
+  -> theorem eliminates marker into ordinary mathematical behavior
+```
+
+The current contract names the required discipline:
+
+- every async issue has a matching wait;
+- no read observes the destination before the matching wait;
+- destination ownership is unambiguous within the program slice;
+- overlapping destinations are explicitly ordered or rejected.
+
+Projection failures should use a named reason such as
+`requiresAsyncSequentialization`. Explicit shared-memory state, TMA destination
+state, WGMMA operand layout, and scope-tagged footprints remain #65 triggers.
+
 ## Non-Goals
 
 This boundary document does not implement:

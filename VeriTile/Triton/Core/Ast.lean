@@ -298,6 +298,7 @@ abbrev AlgKernel := Kernel
 algorithm layer. -/
 inductive EraseDTypeError where
   | requiresComputeSemantics (op : String)
+  | requiresAsyncSequentialization (op : String)
   | unsupportedBitcast (reason : String)
   deriving Repr, BEq
 
