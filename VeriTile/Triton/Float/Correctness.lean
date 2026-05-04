@@ -148,9 +148,19 @@ theorem algorithmCorrect_fromAlg {k : AlgKernel} {post : AlgSpec}
     AlgorithmCorrect (.fromAlg k) post := by
   simpa [AlgorithmCorrect, toAlgorithm?] using hc
 
-/-- Successful algorithm projection preserves the current compute-kernel
-execution semantics. -/
-theorem toAlgorithm?_sound {ck : ComputeKernel} {ak : AlgKernel}
+/-- Definition-unfolding lemma: when projection succeeds, `ComputeKernel.eval`
+unfolds to `exec` on the projected algorithm kernel.
+
+This is **not** a compute-vs-algorithm soundness theorem. `ComputeKernel.eval`
+is defined as `match ck.toAlgorithm? with | Except.ok ak => exec ak s | _ => none`,
+so the equation here is just the definition unfolded for the `ok` case. It is
+provided as a `simp`-friendly convenience.
+
+Compute-layer semantics (IEEE rounding, NaN, denormals, etc.) are verified
+empirically by the differential testing pipeline (see PLAN.md "Verification
+architecture" and `documents/EraseDType.md`). There is, by design, no Lean
+theorem connecting compute execution to algorithm execution. -/
+theorem eval_eq_exec_of_toAlgorithm? {ck : ComputeKernel} {ak : AlgKernel}
     (h : ck.toAlgorithm? = Except.ok ak) :
     ∀ s, ck.eval s = exec ak s := by
   intro s

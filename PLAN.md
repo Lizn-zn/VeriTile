@@ -31,31 +31,73 @@ This document is the program-level plan agreed in the brainstorm of 2026-04-26. 
 **Plus headline corollary** (derived, not a 9th main theorem):
 - **`fa1_eq_fa2 : Y_fa1 = Y_fa2`** — by spec transitivity through `standardAttentionMath` from #7 and #8 (~30 lines). **This is the sentence the paper foregrounds**, but it is *not* a separately-proved theorem; its content is fully discharged by #7 and #8.
 
-## Float theorem policy
+## Verification architecture (permanent)
 
-The final project position is deliberately **Real-first**:
+VeriTile splits verification into **two independent and complementary** layers
+(see #58 for the locking rationale):
 
-1. VeriTile can express user-facing float kernels and float theorem statements:
-   kernels may carry `.fp32`, `.fp16`, and `.bf16` dtype annotations in the DSL
-   and AST.
-2. VeriTile does **not** prove IEEE-754 floating-point correctness. Algorithmic
-   correctness is proved over the erased mathematical `.real` kernel.
-3. The formal Lean layer uses `Kernel.AlgorithmCorrect` and
-   `Kernel.AlgorithmRefine`: dtype-annotated kernels are erased with
-   `k.eraseFloat`, then proved exactly against the Real algorithmic
-   specification or Real kernel-pair refinement.
-4. The computational layer uses `Kernel.ComputeCorrectAt?` and
-   `Kernel.ComputeRefineAt?`: observed floating outputs are compared against
-   the mathematical specification, or against another kernel's observations,
-   with an epsilon bound. Today this layer is test-backed; a future IEEE
-   formalization could prove it directly.
+```
+Algorithm layer (Lean proof)         Compute layer (external testing)
+────────────────────────────         ────────────────────────────────
+AlgorithmCorrect ck spec             ComputeCorrect ck
+  := ck.toAlgorithm? = ok ∧            := differential testing of the
+     Kernel.Correct ak spec               actual Triton kernel against
+                                          the algorithm spec within an
+  Real / Int / Nat semantics.            epsilon bound. External pipeline.
+  No IEEE rounding, no NaN,              Not a Lean theorem.
+  no fp exception flags.
+```
 
-Consequently, the trusted bridge between Real algorithmic correctness and
-floating computation is explicit rather than hidden. IEEE-754 rounding, NaNs,
-signed zero, overflow/underflow,
-denormals, exception flags, hardware dot precision, and fast-math rewrites are
-out of the formal proof scope. They are documented semantic gaps and testing
-targets, not Phase-D proof obligations.
+The two layers are **not connected by an internal Lean theorem.** The bridge
+between them is empirical (testing), by design. A VeriTile-certified kernel
+means:
+> The algorithm structure is Lean-proved correct (AlgorithmCorrect), **and**
+> the fp-level implementation has been validated against this algorithm on a
+> representative test set (ComputeCorrect).
+
+Both layers are required for full certification.
+
+### Permanence
+
+IEEE-754 formalization (NaN propagation, denormals, rounding modes,
+hardware-dot precision, fast-math rewrites, exception flags) is **permanently
+out of Lean proof scope**. This is not a deferral — there is no planned bridge
+theorem connecting compute execution to algorithm execution inside Lean.
+ComputeCorrect is and will remain test-backed.
+
+### Algorithm layer details
+
+1. The DSL accepts user-facing float kernels with `.fp32`, `.fp16`, `.bf16`
+   dtype annotations. Bit-level constants (e.g., a sentinel `1.0` written as
+   `tl.bitcast(0x3f800000, tl.float32)`) are accepted via a single
+   computable decoder; finite-normal binary32 patterns only.
+2. Algorithmic correctness is proved over the algorithm-erased kernel after
+   `Kernel.eraseDType` (fp* → real, intN → int, uintN → nat).
+3. The formal Lean layer uses `ComputeKernel.AlgorithmCorrect` and
+   `Kernel.AlgorithmRefine`. Existing `Kernel.Correct` proofs remain valid for
+   the algorithm-side kernel.
+
+### Compute layer details (testing)
+
+1. `ComputeKernel` retains the user-written compute-facing AST faithfully
+   (including `ComputeOp.bitcast`, fp/int width spellings, etc.) so the testing
+   pipeline can lift it back to Triton source for actual execution.
+2. The differential testing pipeline (separate workstream, see #58 referenced
+   follow-up) generates sample inputs, executes the lifted Triton kernel, and
+   checks `|actual_output - algorithm_output_decoded| < epsilon` per spec.
+3. Epsilon strategy is per-op / per-kernel, documented alongside each test
+   suite; not part of the Lean proof.
+
+### What this means for users
+
+- Bug in the algorithm structure: caught by AlgorithmCorrect (Lean fail).
+- Bug in IEEE-specific edge case (NaN, overflow, denormal handling, etc.):
+  caught by ComputeCorrect (testing fail). No Lean proof obligation here by
+  design.
+- "End-to-end correct" means both layers green.
+
+The trusted bridge between Real algorithmic correctness and floating
+computation is **the testing pipeline**, not a Lean theorem.
 
 ### Tier 1 — Loop-free (Phase A, 3 pairs)
 

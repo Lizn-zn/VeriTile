@@ -51,25 +51,33 @@ ComputeKernel.algorithmCorrect_fromAlg :
 This keeps existing algorithm proofs reusable while the DSL return type moves
 to `ComputeKernel`.
 
-Successful projection has an explicit soundness bridge for the current
-`.fromAlg` subset:
+A definition-unfolding lemma is provided for the projection:
 
 ```lean
-ComputeKernel.toAlgorithm?_sound :
+ComputeKernel.eval_eq_exec_of_toAlgorithm? :
   ck.toAlgorithm? = Except.ok ak ->
   ∀ s, ck.eval s = exec ak s
 ```
 
-**Known gap (intentional, scoped).** `ComputeKernel.eval` is currently *defined*
-as `match ck.toAlgorithm? with | Except.ok ak => exec ak s | Except.error _ => none`,
-so the theorem above reduces to definitional equality. It carries no information
-beyond unfolding the projection. The theorem becomes load-bearing only after
-ComputeKernel acquires an *independent* execution semantics — for example, an
-IEEE-faithful evaluator for fp32 arithmetic, a bit-level evaluator for
-`ComputeOp.bitcast` runtime cases, or any future compute-only behavior whose
-algorithm projection is non-trivial. Until then, `AlgorithmCorrect` is a
-statement about the projected algorithm kernel only; users should not read it
-as proving anything about the compute kernel's bit-level behavior.
+This is **not** a soundness theorem. `ComputeKernel.eval` is *defined* as
+`match ck.toAlgorithm? with | Except.ok ak => exec ak s | Except.error _ => none`,
+so the lemma above is the definition unfolded for the success case. It is a
+convenience for `simp` chains, not a claim about compute-vs-algorithm
+semantics.
+
+**By design: there is no internal Lean theorem connecting compute execution to
+algorithm execution.** `ComputeKernel.AlgorithmCorrect` is a statement about
+the projected algorithm kernel only. Compute-layer behavior — IEEE rounding,
+NaN propagation, denormals, hardware-dot precision, fast-math, etc. — is
+verified empirically through the differential testing pipeline (see PLAN.md
+"Verification architecture" and #58), not through a Lean theorem. The bridge
+between AlgorithmCorrect and real fp-level behavior is **the testing
+pipeline**, by design and permanently.
+
+Users reading an `AlgorithmCorrect` certificate should interpret it as: "the
+algorithm structure (over Real / Int / Nat) is Lean-proved correct." For
+end-to-end certification, the matching `ComputeCorrect` test result is also
+required.
 
 ## Naming
 
@@ -156,10 +164,12 @@ proofs that inspect a specific decoded value reduce through
 
 Full runtime bitcast remains compute-only future work. When it is added:
 
-- successful projection must preserve compute semantics through computable
-  decode lemmas (the load-bearing form of `toAlgorithm?_sound`);
+- ComputeOp's representation must remain faithful enough that the testing
+  pipeline can lift `ComputeKernel` back to Triton source (this is the only
+  bridge to compute-layer semantics — there is no Lean-internal soundness
+  theorem covering runtime compute behavior);
 - unsupported runtime cases must make `ComputeKernel.toAlgorithm?` return
-  `Except.error`;
+  `Except.error`, so `AlgorithmCorrect` cannot be claimed for them in Lean;
 - the `Except.error` branch must not be inlined into algorithm-side `Op` terms
   with a fallback constant — invariants of the current bitcast macro must be
   preserved end-to-end.
