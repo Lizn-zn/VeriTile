@@ -53,6 +53,7 @@ syntax "tl.minimum(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.where(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "tl.cast(" tritonExpr ", " tritonDType ")" : tritonExpr
+syntax "tl.bitcast(" tritonExpr ", " tritonDType ")" : tritonExpr
 syntax:max (name := tritonMethodCast) tritonExpr:max noWs "." "to" "(" tritonDType ")" : tritonExpr
 syntax "-inf" : tritonExpr
 

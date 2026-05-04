@@ -47,6 +47,10 @@ Stmt : Type
 - `(x).to(tl.float64|tl.float32|tl.float16|tl.bfloat16)` 也支持,作为
   method-style cast spelling。裸 identifier 需要加括号,避免 Lean 把 `x.to`
   解析成一个 hierarchical identifier。
+- `tl.bitcast(<uint32 numeric literal>, tl.float32)` 只在常量 bit pattern
+  可解码成 finite-normal binary32 时支持。它通过可计算 decoder 降到算法层
+  `.real` 常量。runtime bitcast、非 finite pattern 和其他目标 dtype 仍是
+  compute-only。
 
 当前 channel:
 
@@ -332,6 +336,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | shape/view op | Limited | `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`, `tl.flip`, `tl.join`,projection-form `tl.split(x, 0|1)` |
 | transpose | Supported | `tl.trans(e)` 交换最后两个 axis;任意静态 permutation 用 `tl.permute(e, [axes])` |
 | matrix multiply | Supported | 数学 `ℝ` 模型下的 `tl.dot(a, b)` 和 `tl.dot(a, b, acc)` |
+| bitcast | Limited | 常量 `tl.bitcast(uint32 literal, tl.float32)` 通过可计算 finite-normal decode;runtime bitcast 仍是 compute-only |
 | load | Limited | pointer-expression load,可带 `mask` / `other` / float/int*/uint* spelling-only integer `dtype=`;block-pointer load 支持 `boundary_check` 和 `padding_option="zero"` |
 | store | Limited | pointer-expression store,可带 `mask`;dtype 从 value 推断,也可写匹配的 `dtype=`;block-pointer store 支持 `boundary_check` |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |

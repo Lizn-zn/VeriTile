@@ -138,6 +138,13 @@ def AlgorithmCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
   | Except.ok ak => Kernel.Correct ak post
   | Except.error _ => False
 
+/-- Current compute-kernel execution: PR3a/PR3b only contains the `.fromAlg`
+subset, so execution is the algorithm execution of the projected kernel. Future
+compute-only statements should refine this definition rather than changing the
+AlgorithmCorrect API. -/
+noncomputable def eval (ck : ComputeKernel) (s : BlockState) : Option BlockState :=
+  exec ck.toAlgKernel s
+
 /-- Bridge from an explicit successful projection to compute-kernel algorithm
 correctness. This keeps `Except` plumbing out of user theorem statements. -/
 theorem algorithmCorrect_of_toAlgorithm_eq {ck : ComputeKernel} {ak : AlgKernel}
@@ -152,6 +159,18 @@ theorem algorithmCorrect_fromAlg {k : AlgKernel} {post : AlgSpec}
     (hc : Kernel.Correct k post) :
     AlgorithmCorrect (.fromAlg k) post := by
   simpa [AlgorithmCorrect, toAlgorithm?] using hc
+
+/-- Successful algorithm projection preserves the current compute-kernel
+execution semantics. For the present `.fromAlg` subset this is reflexivity
+after unwrapping the successful projection proof. -/
+theorem toAlgorithm?_sound {ck : ComputeKernel} {ak : AlgKernel}
+    (h : ck.toAlgorithm? = Except.ok ak) :
+    ∀ s, ck.eval s = exec ak s := by
+  intro s
+  cases ck with
+  | fromAlg k =>
+      simp [toAlgorithm?, eval] at h ⊢
+      exact congrArg (fun k' => exec k' s) h
 
 end ComputeKernel
 

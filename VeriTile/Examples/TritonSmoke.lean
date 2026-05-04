@@ -181,6 +181,13 @@ def dtypeMaskedLoadStoreSmoke (xReg outReg : RegionName) (N : Nat) : Kernel := t
   tl.store($(outReg) + offs, x, mask=mask)
 }
 
+/-- Constant bit reinterpretation is accepted only when it can be projected to
+an algorithm-layer value by the computable decoder. -/
+def bitcastConstantSmoke (outReg : RegionName) : Kernel := triton {
+  one := tl.bitcast(0x3f800000, tl.float32)
+  tl.store($(outReg), one)
+}
+
 /-- The real kernel recovered by erasing `dtypeCastSmoke`'s float annotations. -/
 def dtypeCastSmokeErasedReal (xReg outReg : RegionName) (N : Nat) : Kernel := triton {
   offs := tl.arange(0, $(N))

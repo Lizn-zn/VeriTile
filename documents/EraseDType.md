@@ -8,10 +8,10 @@ VeriTile uses two kernel layers:
 - `ComputeKernel` is the compute-facing DSL surface. The `triton { ... }`
   macro always produces a `ComputeKernel`.
 
-Today every `ComputeKernel` is `ComputeKernel.fromAlg k` for some algorithm
-kernel `k`. This is the PR3a transition scaffold. It lets the DSL move to a
-single compute-facing surface before compute-only operations such as
-`tl.bitcast` are added.
+Today every executable `ComputeKernel` is still `ComputeKernel.fromAlg k` for
+some algorithm kernel `k`. This is the PR3a transition scaffold: the DSL has a
+single compute-facing surface, while full compute-only statement semantics are
+kept out of the algorithm layer.
 
 ## Algorithm Projection
 
@@ -22,9 +22,9 @@ to the algorithm layer:
 ComputeKernel.toAlgorithm? : ComputeKernel -> Except EraseDTypeError AlgKernel
 ```
 
-For the current `.fromAlg` subset this projection always succeeds. Future
-compute-only features can fail this projection instead of inventing fake
-algorithm meanings.
+For the current `.fromAlg` subset this projection succeeds. Compute-only
+features that cannot be projected must fail this projection instead of
+inventing fake algorithm meanings.
 
 `ComputeKernel.AlgorithmCorrect` hides the `Except` plumbing:
 
@@ -49,6 +49,19 @@ ComputeKernel.algorithmCorrect_fromAlg :
 
 This keeps existing algorithm proofs reusable while the DSL return type moves
 to `ComputeKernel`.
+
+Successful projection has an explicit soundness bridge for the current
+`.fromAlg` subset:
+
+```lean
+ComputeKernel.toAlgorithm?_sound :
+  ck.toAlgorithm? = Except.ok ak ->
+  ∀ s, ck.eval s = exec ak s
+```
+
+Future compute-only execution rules must extend this theorem; otherwise
+`ComputeKernel.AlgorithmCorrect` would only be a statement about the projected
+algorithm kernel, not about compute execution.
 
 ## Naming
 
@@ -77,12 +90,23 @@ semantics are implied by those spellings.
 `tl.bitcast` is compute-only. It must not be modeled as numeric `tl.cast`, and
 it must not become an `AlgOp.bitcast`.
 
-When compute bit payloads are introduced, supported constant bitcasts may
-project to algorithm constants through computable decoders. Runtime bitcasts or
-unsupported decode cases should return `Except.error` from
-`ComputeKernel.toAlgorithm?`, making `ComputeKernel.AlgorithmCorrect` reduce to
-`False`.
+The current DSL accepts only the narrow algorithm-projectable slice:
 
-Future successful-erasure support for bitcast must include a soundness theorem
-showing that successful projection preserves compute semantics modulo the
-computable decode lemma.
+- `tl.bitcast(<uint32 numeric literal>, tl.float32)` when the bits decode to a
+  finite-normal binary32 value.
+- The projection uses the computable `Float32Bits.decodeRat` decoder and lowers
+  to an algorithm `Op.const`.
+- Zero/subnormal, NaN/Inf, non-`tl.float32` destinations, and runtime bitcast
+  expressions are rejected at expansion time.
+
+The representative theorem is:
+
+```lean
+ComputeOp.oneBitcast_toAlgorithm :
+  ComputeOp.constOpToAlgorithm? ComputeOp.oneBitcast = Except.ok (Op.const 1)
+```
+
+Full runtime bitcast remains compute-only future work. When it is added,
+successful projection must preserve compute semantics through computable decode
+lemmas, and unsupported runtime cases must make `ComputeKernel.toAlgorithm?`
+return `Except.error`.

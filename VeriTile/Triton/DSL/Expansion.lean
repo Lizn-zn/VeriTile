@@ -131,6 +131,41 @@ private def paddingOptionTerm (s : String) : MacroM (TSyntax `term) := do
   | "zero" => `(PaddingOption.zero)
   | other => Macro.throwError ("padding_option: unsupported value `" ++ other ++ "`; only \"zero\" is modeled")
 
+private def pow2Nat : Nat → Nat
+  | 0 => 1
+  | n + 1 => 2 * pow2Nat n
+
+private def ratRealTerm (num : Int) (den : Nat) : MacroM (TSyntax `term) := do
+  if den = 0 then
+    Macro.throwError "internal error: zero denominator while decoding tl.bitcast"
+  let absNum := num.natAbs
+  let denNat : TSyntax `term := ⟨Syntax.mkNumLit (toString den)⟩
+  let absNat : TSyntax `term := ⟨Syntax.mkNumLit (toString absNum)⟩
+  let denTerm ← `((($denNat : Nat) : Rat))
+  let absTerm ← `((($absNat : Nat) : Rat))
+  let numTerm ←
+    if num < 0 then
+      `((- $absTerm : Rat))
+    else
+      pure absTerm
+  `((($numTerm / $denTerm : Rat) : ℝ))
+
+private def decodeFloat32BitsTerm (bits : Nat) : MacroM (TSyntax `term) := do
+  let sign := bits / pow2Nat 31
+  let exp := (bits / pow2Nat 23) % 256
+  let frac := bits % pow2Nat 23
+  if exp = 0 then
+    Macro.throwError "tl.bitcast(..., tl.float32): zero/subnormal fp32 decode is not modeled in AlgorithmCorrect"
+  if exp = 255 then
+    Macro.throwError "tl.bitcast(..., tl.float32): NaN/Inf fp32 decode is not modeled in AlgorithmCorrect"
+  let significand := pow2Nat 23 + frac
+  let signed : Int := if sign = 0 then Int.ofNat significand else -Int.ofNat significand
+  let scaleExp : Int := Int.ofNat exp - 150
+  if scaleExp ≥ 0 then
+    ratRealTerm (signed * Int.ofNat (pow2Nat scaleExp.toNat)) 1
+  else
+    ratRealTerm signed (pow2Nat (-scaleExp).toNat)
+
 mutual
 
 partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
@@ -329,6 +364,20 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .nat e'.dtype "tl.toReal"
       pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape⟩
+  | `(tritonExpr| tl.bitcast($e:tritonExpr, $dt:tritonDType)) => do
+      let dst ← expandDType dt
+      unless dst == .fp32 do
+        Macro.throwError "tl.bitcast: only uint32 constant bits to tl.float32 are modeled in AlgorithmCorrect"
+      let bits ←
+        match e with
+        | `(tritonExpr| $n:num) => pure n.getNat
+        | _ =>
+            Macro.throwError
+              "tl.bitcast: runtime bitcast is compute-only; AlgorithmCorrect currently accepts only uint32 numeric literal bits"
+      unless bits < pow2Nat 32 do
+        Macro.throwError "tl.bitcast(..., tl.float32): literal does not fit uint32"
+      let value ← decodeFloat32BitsTerm bits
+      pure ⟨← `(Op.const $value), .real, SInfo.scalar⟩
   | `(tritonExpr| tl.cast($e:tritonExpr, $dt:tritonDType)) => do
       let e' ← expandExpr env e
       let dst ← expandDType dt

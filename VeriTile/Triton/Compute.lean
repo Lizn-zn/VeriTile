@@ -153,6 +153,21 @@ example :
   rw [hdecode]
   norm_num
 
+theorem oneBitcast_toAlgorithm :
+    constOpToAlgorithm? oneBitcast = Except.ok (Op.const 1) := by
+  have hdecode :
+      Float32Bits.decodeRat ({ bits := 0x3f800000#32 } : Float32Bits) = some 1 := by
+    native_decide
+  simp [constOpToAlgorithm?, oneBitcast, oneBits, constPayload?, bitcastPayload,
+    constToAlgorithm?]
+  change
+    (match Float32Bits.decodeRat ({ bits := 0x3f800000#32 } : Float32Bits) with
+      | some q => Except.ok (Op.const (q : ℝ))
+      | none => Except.error (.unsupportedBitcast "unsupported fp32 decode")) =
+    Except.ok (Op.const 1)
+  rw [hdecode]
+  norm_num
+
 end ComputeOp
 
 end VeriTile.Triton
