@@ -376,6 +376,7 @@ current semantic contract.
 | Stores | Limited | Pointer-expression store, optional `mask`, dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
 | Memory bounds safety | Limited | `Kernel.MemorySafe` / `ComputeKernel.MemorySafe` prove active-lane region bounds for direct, pointer, and block-pointer memory operations; no alias, race, frame, or permission model |
 | Memory frame contracts | Limited | Predicate-level `WriteFootprint`, `BlockState.WriteWithin`, `Stmt.StoreAddressesWithin`, and `Kernel.ExecFrame` surface for single-program write-frame reasoning; whole-grid merge remains #49 |
+| Disjoint grid composition | Limited | `Kernel.GridFrames`, `GridWritesDisjoint`, and `mergeFrames` merge explicit per-program frames with pairwise-disjoint write footprints; no overlapping writes or scheduling semantics |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
 | Integer memory | Limited | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no richer signed/unsigned width lattice yet |
 | Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
@@ -404,7 +405,7 @@ faithfully in the current Lean DSL?
 | Single-program write footprint/frame | Limited | Predicate-level frame contract (#60) | `WriteFootprint := (RegionName × Nat) → Prop` and `BlockState.WriteWithin` state that an execution only modified cells inside a supplied footprint; structured extraction and whole-grid merge are follow-ups. |
 | RNG / dropout | Gap | State/probabilistic semantics (#41) | Blocks faithful dropout and stochastic kernels. |
 | Atomics / async / shared memory / barriers | Gap | Concurrency semantics (#12) | Blocks production-style backward kernels, reductions using shared memory phases, async/TMA pipelines, and race/scheduling reasoning. |
-| Whole-grid launch semantics | Limited | ND grid theorem surface (#5) | `GridIndex`, `BlockState.withGridIndex`, `Kernel.ForAllPrograms`, and `ForAllProgramsSome` quantify per-program correctness over arbitrary-rank grids; no launch executor, memory merge, races, atomics, or scheduling. |
+| Whole-grid launch semantics | Limited | ND grid theorem surface + disjoint merge (#5/#49) | `GridIndex`, `BlockState.withGridIndex`, `Kernel.ForAllPrograms`, and `ForAllProgramsSome` quantify per-program correctness; `Kernel.mergeFrames` merges explicit per-program `ExecFrame`s under pairwise-disjoint footprints. No overlapping writes, races, atomics, scheduling, or interleaved executor. |
 | Python/Triton source ingestion | Gap | Front-end/lifter (#10) | Users must write Lean `triton { ... }`; decorators, Python-side constexpr execution, and general Python control flow are not parsed. |
 | Type checking / pointer provenance | Limited | Optional checker (#46) | `Kernel.check` / `checkStrict` track register dtype/shape, pointer and block-pointer provenance, dtype mismatches, and basic block-pointer metadata; no bounds, alias, launch, or page-ownership proof. |
 

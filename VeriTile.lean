@@ -18,6 +18,7 @@ import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.TritonSmoke
 import VeriTile.Examples.MemorySafety
 import VeriTile.Examples.MemoryFrame
+import VeriTile.Examples.GridComposition
 import VeriTile.Examples.LoopInvariant
 import VeriTile.Examples.SoftmaxEq
 import VeriTile.Examples.LogSumExpEq

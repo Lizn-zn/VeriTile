@@ -76,8 +76,10 @@ writes, races, atomics, or scheduling.
 Layer-2a frame reasoning is modeled as a predicate-level proof contract:
 `WriteFootprint := (RegionName × Nat) → Prop` and `BlockState.WriteWithin`
 state that a single-program execution changed only the cells inside a supplied
-footprint. This is still not a whole-grid executor; disjoint merge of multiple
-program results is tracked separately by #49.
+footprint. Layer-2b adds `Kernel.mergeFrames`: an extensional, disjoint
+whole-grid merge over explicit per-program `Kernel.ExecFrame`s. This is still
+not a concurrent/interleaved executor; overlapping writes, atomics, scheduling,
+barriers, async, and shared memory remain outside the model.
 
 ## Not Modeled
 
@@ -105,6 +107,8 @@ The current model is intentionally small. The likely extension points are:
   bounds assumptions on top of the current typed storage layer.
 - **Write footprints / frame (#60):** predicate-level `WriteFootprint` and
   `BlockState.WriteWithin` contracts for single-program frame reasoning.
+- **Disjoint whole-grid composition (#49):** merge explicit per-program
+  `Kernel.ExecFrame`s when their write footprints are pairwise disjoint.
 - **Paged KV / indirect addressing (#42):** extend the current `IndirectView`
   smoke/proof surface into paged-attention-specific logical views and
   consumer-side equivalence theorems.

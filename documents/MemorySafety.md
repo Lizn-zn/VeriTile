@@ -65,7 +65,9 @@ the per-program active-lane region-bounds contract.
 Layer 2a is implemented separately in `VeriTile.Triton.MemoryFrame`. It adds
 predicate-level write footprints and `BlockState.WriteWithin` frame contracts
 for single-program executions; whole-grid merge remains a separate composition
-layer.
+layer. Layer 2b lives in `VeriTile.Triton.Launch.Composition`: it merges
+explicit per-program `Kernel.ExecFrame`s when their write footprints are
+pairwise disjoint.
 
 ## Examples
 

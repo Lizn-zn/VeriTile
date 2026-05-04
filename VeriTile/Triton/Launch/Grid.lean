@@ -5,6 +5,7 @@ ND grid-domain theorem surface for Triton program instances.
 -/
 
 import VeriTile.Triton.Semantics
+import Mathlib.Data.Fintype.Pi
 
 namespace VeriTile.Triton
 
@@ -36,6 +37,15 @@ def GridIndex (g : Grid) : Type :=
   (axis : Fin g.rank) → Fin (g.dim axis.val)
 
 namespace GridIndex
+
+noncomputable instance fintype (g : Grid) : Fintype (GridIndex g) := by
+  classical
+  dsimp [GridIndex]
+  infer_instance
+
+noncomputable instance decidableEq (g : Grid) : DecidableEq (GridIndex g) := by
+  classical
+  infer_instance
 
 /-- Convert a typed grid index to the total `Nat → Nat` PID function used by
 `BlockState`. Out-of-rank axes default to `0`, matching the existing
