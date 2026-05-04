@@ -103,6 +103,19 @@ example (post : ComputeKernel.AlgSpec) :
     ¬ ComputeKernel.ComputeCorrect asyncWaitSurfaceSmoke post :=
   ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
+def debugBarrierSurfaceSmoke : ComputeKernel := triton {
+  tl.debug_barrier()
+}
+
+example :
+    debugBarrierSurfaceSmoke.toAlgorithm? =
+      Except.error (.requiresAsyncSequentialization "tl.debug_barrier") := by
+  rfl
+
+example (post : ComputeKernel.AlgSpec) :
+    ¬ ComputeKernel.ComputeCorrect debugBarrierSurfaceSmoke post :=
+  ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
+
 /-- Vector-add kernel with explicit boundary mask. -/
 def addKernelMaskedSmoke (xReg yReg outReg : RegionName)
     (blockSize nElements : Nat) : ComputeKernel := triton {
