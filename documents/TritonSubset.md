@@ -375,7 +375,7 @@ current semantic contract.
 | Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional `dtype=` for float/int*/uint* spelling-only integer channels; block-pointer load with `boundary_check` and `padding_option="zero"` |
 | Stores | Limited | Pointer-expression store, optional `mask`, dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
 | Memory bounds safety | Limited | `Kernel.MemorySafe` / `ComputeKernel.MemorySafe` prove active-lane region bounds for direct, pointer, and block-pointer memory operations; no alias, race, frame, or permission model |
-| Memory frame contracts | Limited | Predicate-level `WriteFootprint`, `BlockState.WriteWithin`, `Stmt.StoreAddressesWithin`, and `Kernel.ExecFrame` surface for single-program write-frame reasoning; whole-grid merge remains #49 |
+| Memory frame contracts | Limited | Predicate-level `WriteFootprint`, `BlockState.WriteWithin`, `Stmt.StoreAddressesWithin`, and `Kernel.ExecFrame` surface for single-program write-frame reasoning; `tileImage` / `activeTileImage` helpers cover common store footprints, and #62 tracks unrelated-region convenience lemmas |
 | Disjoint grid composition | Limited | `Kernel.GridFrames`, `GridWritesDisjoint`, and `mergeFrames` merge explicit per-program frames with pairwise-disjoint write footprints; no overlapping writes or scheduling semantics |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
 | Integer memory | Limited | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no richer signed/unsigned width lattice yet |
