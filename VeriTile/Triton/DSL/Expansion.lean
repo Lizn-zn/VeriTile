@@ -136,11 +136,33 @@ private def uint32BitsTerm (bits : Nat) : MacroM (TSyntax `term) := do
   let bitsNat : TSyntax `term := ⟨Syntax.mkNumLit (toString bits)⟩
   `(({ bits := BitVec.ofNat 32 $bitsNat } : UInt32Bits))
 
-private def algorithmProjectionTerm
-    (op : TSyntax `term) (fallback : TSyntax `term) : MacroM (TSyntax `term) :=
-  `(match ComputeOp.toAlgorithm? $op with
-    | Except.ok alg => alg
-    | Except.error _ => $fallback)
+/-- Macro-time IEEE 754 binary32 bit-pattern triage. Throws on encodings
+that AlgorithmCorrect does not model (subnormal/zero `exp = 0`, NaN/Inf
+`exp = 255`), so the algorithm-side `Op.const` term emitted below is always
+backed by a `decodeRat` value that elaborates to `some _`. This is the
+single point that decides whether a `tl.bitcast` literal is admissible in
+AlgorithmCorrect — there is no runtime `Except.error` fallback downstream. -/
+private def validateFp32BitsForAlg (bits : Nat) : MacroM Unit := do
+  let exp := (bits / (2 ^ 23)) % 256
+  if exp = 0 then
+    Macro.throwError
+      "tl.bitcast(..., tl.float32): zero/subnormal fp32 (exponent field 0) is not modeled in AlgorithmCorrect"
+  if exp = 255 then
+    Macro.throwError
+      "tl.bitcast(..., tl.float32): NaN/Inf fp32 (exponent field 255) is not modeled in AlgorithmCorrect"
+
+/-- Emit the algorithm-side `Op.const` term for a validated fp32 bit pattern.
+
+`Float32Bits.decodeRat` is the single authoritative decoder; the elaborator
+reduces it on the concrete `BitVec 32` literal. The `Option.get` proof
+obligation `(by decide)` is a defense-in-depth check: if `validateFp32BitsForAlg`
+ever lets through an `exp ∈ {0, 255}` pattern, elaboration fails loudly here
+rather than silently substituting a placeholder constant. -/
+private def fp32ConstFromBitsTerm (bits : Nat) : MacroM (TSyntax `term) := do
+  let bitsNat : TSyntax `term := ⟨Syntax.mkNumLit (toString bits)⟩
+  `(Op.const
+      ((((Float32Bits.decodeRat
+            { bits := BitVec.ofNat 32 $bitsNat }).get (by decide)) : ℝ)))
 
 mutual
 
@@ -352,12 +374,13 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               "tl.bitcast: runtime bitcast is compute-only; AlgorithmCorrect currently accepts only uint32 numeric literal bits"
       unless bits < 2^32 do
         Macro.throwError "tl.bitcast(..., tl.float32): literal does not fit uint32"
+      validateFp32BitsForAlg bits
       let payload ← uint32BitsTerm bits
       let op ←
         `(ComputeOp.bitcast ComputeDType.uint32 ComputeDType.fp32 rfl
             (ComputeOp.const $payload))
-      let fallback ← `(Op.const 0)
-      pure ⟨← algorithmProjectionTerm op fallback, .real, SInfo.scalar,
+      let algTerm ← fp32ConstFromBitsTerm bits
+      pure ⟨algTerm, .real, SInfo.scalar,
         some (← `(ComputeExpr.compute $op))⟩
   | `(tritonExpr| tl.cast($e:tritonExpr, $dt:tritonDType)) => do
       let e' ← expandExpr env e

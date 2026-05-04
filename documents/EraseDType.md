@@ -60,9 +60,16 @@ ComputeKernel.toAlgorithm?_sound :
   ∀ s, ck.eval s = exec ak s
 ```
 
-Future compute-only execution rules must extend this theorem; otherwise
-`ComputeKernel.AlgorithmCorrect` would only be a statement about the projected
-algorithm kernel, not about compute execution.
+**Known gap (intentional, scoped).** `ComputeKernel.eval` is currently *defined*
+as `match ck.toAlgorithm? with | Except.ok ak => exec ak s | Except.error _ => none`,
+so the theorem above reduces to definitional equality. It carries no information
+beyond unfolding the projection. The theorem becomes load-bearing only after
+ComputeKernel acquires an *independent* execution semantics — for example, an
+IEEE-faithful evaluator for fp32 arithmetic, a bit-level evaluator for
+`ComputeOp.bitcast` runtime cases, or any future compute-only behavior whose
+algorithm projection is non-trivial. Until then, `AlgorithmCorrect` is a
+statement about the projected algorithm kernel only; users should not read it
+as proving anything about the compute kernel's bit-level behavior.
 
 ## Naming
 
@@ -91,26 +98,68 @@ semantics are implied by those spellings.
 `tl.bitcast` is compute-only. It must not be modeled as numeric `tl.cast`, and
 it must not become an `AlgOp.bitcast`.
 
-The current DSL accepts only the narrow algorithm-projectable slice:
+The DSL accepts a single narrow algorithm-projectable slice:
+`tl.bitcast(<uint32 numeric literal>, tl.float32)` when the bits decode to a
+finite-normal binary32 value.
 
-- `tl.bitcast(<uint32 numeric literal>, tl.float32)` when the bits decode to a
-  finite-normal binary32 value.
-- The DSL stores this as `ComputeOp.bitcast .uint32 .fp32 ...`; it does not run
-  a separate macro-level IEEE decoder.
-- `ComputeKernel.toAlgorithm?` projects the containing `ComputeStmt` through the
-  shared computable `Float32Bits.decodeRat` decoder and lowers to an algorithm
-  `Op.const`.
-- Zero/subnormal, NaN/Inf, non-`tl.float32` destinations, and runtime bitcast
-  expressions are rejected at expansion time.
+### Two views of the same bitcast
 
-The representative theorem is:
+The macro emits two parallel terms for one accepted `tl.bitcast`:
+
+- **Algorithm view** (`EOut.term`): `Op.const ((Float32Bits.decodeRat
+  { bits := BitVec.ofNat 32 <bits> }).get (by decide) : ℝ)`. This is the term
+  used when the surrounding kernel routes to the legacy `ComputeKernel.fromAlg
+  (Kernel.mk ...)` path (no `ComputeStmt` siblings).
+- **Compute view** (`EOut.computeTerm`): `ComputeExpr.compute (ComputeOp.bitcast
+  ComputeDType.uint32 ComputeDType.fp32 rfl (ComputeOp.const ⟨BitVec.ofNat 32
+  <bits>⟩))`. This is what the surrounding kernel uses when it routes to
+  `ComputeKernel.mk inputs outputs body`.
+
+Both views call `Float32Bits.decodeRat` as the single authoritative decoder.
+There is no second IEEE decoder anywhere; in particular the macro does not
+re-implement decoding in `MacroM`. The algorithm view's `Option.get (by decide)`
+elaborates the decoder on the concrete `BitVec 32` literal at typechecking
+time.
+
+### Macro-time admissibility
+
+`tl.bitcast` admissibility is decided at macro-expansion time, before any
+algorithm-side `Op.const` is emitted:
+
+- `dst != tl.float32` → `Macro.throwError`.
+- non-numeric-literal source → `Macro.throwError` (runtime bitcast is
+  compute-only).
+- literal does not fit `uint32` (`bits >= 2^32`) → `Macro.throwError`.
+- exponent field `(bits / 2^23) % 256 = 0` (zero/subnormal) → `Macro.throwError`.
+- exponent field `(bits / 2^23) % 256 = 255` (NaN/Inf) → `Macro.throwError`.
+
+Any literal that survives all of the above is a finite-normal binary32 pattern.
+For such bits, `Float32Bits.decodeRat` is `some _` by construction. The
+`Option.get (by decide)` in the emitted algorithm-side `Op.const` is therefore a
+*defense-in-depth* assertion: if the macro-time admissibility check ever
+regresses, elaboration fails loudly here rather than silently substituting a
+placeholder constant. There is no runtime `match` with an `Except.error`
+fallback in either view.
+
+### Representative theorem
 
 ```lean
 ComputeOp.oneBitcast_toAlgorithm :
   ComputeOp.constOpToAlgorithm? ComputeOp.oneBitcast = Except.ok (Op.const 1)
 ```
 
-Full runtime bitcast remains compute-only future work. When it is added,
-successful projection must preserve compute semantics through computable decode
-lemmas, and unsupported runtime cases must make `ComputeKernel.toAlgorithm?`
-return `Except.error`.
+Algorithm proofs that do not inspect bitcast values continue to work unchanged;
+proofs that inspect a specific decoded value reduce through
+`Float32Bits.decodeRat` (e.g., `decide` / `native_decide`).
+
+### Out of scope here
+
+Full runtime bitcast remains compute-only future work. When it is added:
+
+- successful projection must preserve compute semantics through computable
+  decode lemmas (the load-bearing form of `toAlgorithm?_sound`);
+- unsupported runtime cases must make `ComputeKernel.toAlgorithm?` return
+  `Except.error`;
+- the `Except.error` branch must not be inlined into algorithm-side `Op` terms
+  with a fallback constant — invariants of the current bitcast macro must be
+  preserved end-to-end.
