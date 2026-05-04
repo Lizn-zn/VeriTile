@@ -63,6 +63,7 @@ inductive Op : TileDType → TileShape → Type where
   | const     : ℝ → Op .real []
   | constFloat : (dtype : FloatDType) → ℝ → Op dtype.toTileDType []
   | constNat  : Nat → Op .nat []
+  | constInt  : Int → Op .int []
   | constBool : Bool → Op .bool []
   | negInf    : Op .real []
   | programId : (axis : Nat) → Op .nat []
@@ -365,6 +366,7 @@ end Float32Bits
 
 inductive ComputeDType where
   | uint32
+  | int32
   | fp32
   deriving Repr, BEq, DecidableEq
 
@@ -372,19 +374,25 @@ namespace ComputeDType
 
 def eraseDType : ComputeDType → AlgDType
   | .uint32 => .nat
+  | .int32 => .int
   | .fp32 => .real
 
 def width : ComputeDType → Nat
   | .uint32 => 32
+  | .int32 => 32
   | .fp32 => 32
 
 end ComputeDType
 
 def ComputeCarrier : ComputeDType → Type
   | .uint32 => UInt32Bits
+  | .int32 => Int32Bits
   | .fp32 => Float32Bits
 
 inductive ComputeOp : ComputeDType → TileShape → Type where
+  | alg : (dtype : ComputeDType) →
+      Op dtype.eraseDType shape →
+      ComputeOp dtype shape
   | const : ComputeCarrier dtype → ComputeOp dtype []
   | bitcast :
       (src dst : ComputeDType) →
@@ -397,12 +405,18 @@ namespace ComputeOp
 def bitcastPayload (src dst : ComputeDType) :
     ComputeCarrier src → Option (ComputeCarrier dst) :=
   match src, dst with
-  | .uint32, .fp32 => fun x => some ({ bits := x.bits } : Float32Bits)
-  | .fp32, .uint32 => fun x => some ({ bits := x.bits } : UInt32Bits)
   | .uint32, .uint32 => fun x => some x
+  | .uint32, .int32 => fun x => some ({ bits := x.bits } : Int32Bits)
+  | .uint32, .fp32 => fun x => some ({ bits := x.bits } : Float32Bits)
+  | .int32, .uint32 => fun x => some ({ bits := x.bits } : UInt32Bits)
+  | .int32, .int32 => fun x => some x
+  | .int32, .fp32 => fun x => some ({ bits := x.bits } : Float32Bits)
+  | .fp32, .uint32 => fun x => some ({ bits := x.bits } : UInt32Bits)
+  | .fp32, .int32 => fun x => some ({ bits := x.bits } : Int32Bits)
   | .fp32, .fp32 => fun x => some x
 
 def constPayload? : ComputeOp dtype [] → Option (ComputeCarrier dtype)
+  | .alg _ _ => none
   | .const value => some value
   | .bitcast src dst _ e =>
       match constPayload? e with
@@ -413,21 +427,21 @@ def constToAlgorithm? :
     (dtype : ComputeDType) → ComputeCarrier dtype →
       Except EraseDTypeError (Op dtype.eraseDType [])
   | .uint32, value => Except.ok (Op.constNat value.toNat)
+  | .int32, value => Except.ok (Op.constInt value.toInt)
   | .fp32, value =>
       match Float32Bits.decodeRat value with
       | some q => Except.ok (Op.const (q : ℝ))
       | none => Except.error (.unsupportedBitcast "unsupported fp32 decode")
 
 def constOpToAlgorithm? (op : ComputeOp dtype []) :
-    Except EraseDTypeError (Op dtype.eraseDType []) := do
-  let value ←
-    match constPayload? op with
-    | some value => Except.ok value
-    | none => Except.error (.requiresComputeSemantics "runtime bitcast")
-  constToAlgorithm? dtype value
+    Except EraseDTypeError (Op dtype.eraseDType []) :=
+  match constPayload? op with
+  | some value => constToAlgorithm? dtype value
+  | none => Except.error (.requiresComputeSemantics "runtime bitcast")
 
 def toAlgorithm? : (op : ComputeOp dtype shape) →
     Except EraseDTypeError (Op dtype.eraseDType shape)
+  | .alg _ e => Except.ok e
   | .const value => constToAlgorithm? _ value
   | .bitcast src dst h e =>
       match shape with

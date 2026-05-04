@@ -112,21 +112,25 @@ semantics are implied by those spellings.
 `tl.bitcast` is compute-only. It must not be modeled as numeric `tl.cast`, and
 it must not become an `AlgOp.bitcast`.
 
-The DSL accepts a single narrow algorithm-projectable slice:
-`tl.bitcast(<uint32 numeric literal>, tl.float32)` when the bits decode to a
-finite-normal binary32 value.
+The DSL accepts 32-bit payload reinterpretation among `tl.uint32`, `tl.int32`,
+and `tl.float32`. Constant uint32 bit patterns are algorithm-projectable when
+the destination can be represented in the mathematical algorithm layer:
+`tl.uint32` projects to `.nat`, `tl.int32` projects to `.int`, and `tl.float32`
+projects to `.real` only when the bits decode to a finite-normal binary32
+value. Runtime bitcasts are represented in `ComputeOp.bitcast`, but
+`ComputeKernel.toAlgorithm?` returns `Except.error` for them.
 
 ### Two views of the same bitcast
 
-The macro emits two parallel terms for one accepted `tl.bitcast`:
+The macro emits two parallel terms for one accepted constant `tl.bitcast`:
 
 - **Algorithm view** (`EOut.term`): `Op.const ((Float32Bits.decodeRat
   { bits := BitVec.ofNat 32 <bits> }).get (by decide) : ℝ)`. This is the term
   used when the surrounding kernel routes to the legacy `ComputeKernel.fromAlg
   (Kernel.mk ...)` path (no `ComputeStmt` siblings).
 - **Compute view** (`EOut.computeTerm`): `ComputeExpr.compute (ComputeOp.bitcast
-  ComputeDType.uint32 ComputeDType.fp32 rfl (ComputeOp.const ⟨BitVec.ofNat 32
-  <bits>⟩))`. This is what the surrounding kernel uses when it routes to
+  ComputeDType.uint32 <dst> rfl (ComputeOp.const ⟨BitVec.ofNat 32 <bits>⟩))`.
+  This is what the surrounding kernel uses when it routes to
   `ComputeKernel.mk inputs outputs body`.
 
 Both views call `Float32Bits.decodeRat` as the single authoritative decoder.
@@ -137,29 +141,35 @@ time.
 
 ### Macro-time admissibility
 
-`tl.bitcast` admissibility is decided at macro-expansion time, before any
-algorithm-side `Op.const` is emitted:
+`tl.bitcast` accepts only modeled 32-bit payload destinations at macro
+expansion time:
 
-- `dst != tl.float32` → `Macro.throwError`.
-- non-numeric-literal source → `Macro.throwError` (runtime bitcast is
-  compute-only).
-- literal does not fit `uint32` (`bits >= 2^32`) → `Macro.throwError`.
-- exponent field `(bits / 2^23) % 256 = 0` (zero/subnormal) → `Macro.throwError`.
-- exponent field `(bits / 2^23) % 256 = 255` (NaN/Inf) → `Macro.throwError`.
+- `dst ∉ {tl.uint32, tl.int32, tl.float32}` → `Macro.throwError`.
+- numeric literal source must fit `uint32` (`bits < 2^32`).
+- literal `dst = tl.float32` additionally rejects exponent field
+  `(bits / 2^23) % 256 = 0` (zero/subnormal) or `255` (NaN/Inf), because those
+  values are not yet algorithm-projectable.
+- non-literal sources are accepted as runtime `ComputeOp.bitcast`; projection
+  to the algorithm layer fails with `Except.error (.requiresComputeSemantics
+  "runtime bitcast")`.
 
-Any literal that survives all of the above is a finite-normal binary32 pattern.
-For such bits, `Float32Bits.decodeRat` is `some _` by construction. The
-`Option.get (by decide)` in the emitted algorithm-side `Op.const` is therefore a
-*defense-in-depth* assertion: if the macro-time admissibility check ever
-regresses, elaboration fails loudly here rather than silently substituting a
-placeholder constant. There is no runtime `match` with an `Except.error`
-fallback in either view.
+Any `tl.float32` literal that survives all of the above is a finite-normal
+binary32 pattern. For such bits, `Float32Bits.decodeRat` is `some _` by
+construction. The `Option.get (by decide)` in the emitted algorithm-side
+`Op.const` is therefore a *defense-in-depth* assertion: if the macro-time
+admissibility check ever regresses, elaboration fails loudly here rather than
+silently substituting a placeholder constant. Runtime bitcasts have no
+algorithm fallback constant.
 
 ### Representative theorem
 
 ```lean
 ComputeOp.oneBitcast_toAlgorithm :
   ComputeOp.constOpToAlgorithm? ComputeOp.oneBitcast = Except.ok (Op.const 1)
+
+ComputeOp.minusOneBitcast_toAlgorithm :
+  ComputeOp.constOpToAlgorithm? ComputeOp.minusOneBitcast =
+    Except.ok (Op.constInt (-1))
 ```
 
 Algorithm proofs that do not inspect bitcast values continue to work unchanged;
@@ -168,14 +178,13 @@ proofs that inspect a specific decoded value reduce through
 
 ### Out of scope here
 
-Full runtime bitcast remains compute-only future work. When it is added:
+Runtime bitcast is now expressible, but remains compute-only:
 
 - ComputeOp's representation must remain faithful enough that the testing
-  pipeline can lift `ComputeKernel` back to Triton source (this is the only
-  bridge to compute-layer semantics — there is no Lean-internal soundness
+  pipeline can lift `ComputeKernel` back to Triton source (this is the bridge to
+  compute-layer numeric behavior — there is no Lean-internal IEEE soundness
   theorem covering runtime compute behavior);
-- unsupported runtime cases must make `ComputeKernel.toAlgorithm?` return
+- unsupported runtime cases make `ComputeKernel.toAlgorithm?` return
   `Except.error`, so `AlgorithmCorrect` cannot be claimed for them in Lean;
 - the `Except.error` branch must not be inlined into algorithm-side `Op` terms
-  with a fallback constant — invariants of the current bitcast macro must be
-  preserved end-to-end.
+  with a fallback constant.

@@ -121,6 +121,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .const _ => .ok ()
   | .constFloat _ _ => .ok ()
   | .constNat _ => .ok ()
+  | .constInt _ => .ok ()
   | .constBool _ => .ok ()
   | .negInf => .ok ()
   | .programId _ => .ok ()

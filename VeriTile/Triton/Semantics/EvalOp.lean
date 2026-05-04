@@ -13,6 +13,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .const c, _ => some (Tile.scalar (some c : WithBot ℝ))
   | .constFloat h c, _ => some (Tile.scalar (h.ofReal c))
   | .constNat n, _ => some (Tile.scalar n)
+  | .constInt n, _ => some (Tile.scalar n)
   | .constBool b, _ => some (Tile.scalar b)
   | .negInf, _ => some (Tile.scalar (none : WithBot ℝ))
   | .programId axis, s => some (Tile.scalar (s.pids axis))

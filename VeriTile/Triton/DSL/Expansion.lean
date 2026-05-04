@@ -84,6 +84,12 @@ private structure EOut where
   computeTerm : Option (TSyntax `term) := none
   deriving Inhabited
 
+private inductive CInfo where
+  | uint32
+  | int32
+  | fp32
+  deriving BEq
+
 private structure StaticPtrOut where
   region : TSyntax `term
   offset : TSyntax `term
@@ -136,6 +142,62 @@ private def uint32BitsTerm (bits : Nat) : MacroM (TSyntax `term) := do
   let bitsNat : TSyntax `term := ⟨Syntax.mkNumLit (toString bits)⟩
   `(({ bits := BitVec.ofNat 32 $bitsNat } : UInt32Bits))
 
+private def int32BitsTerm (bits : Nat) : MacroM (TSyntax `term) := do
+  let bitsNat : TSyntax `term := ⟨Syntax.mkNumLit (toString bits)⟩
+  `(({ bits := BitVec.ofNat 32 $bitsNat } : Int32Bits))
+
+private def float32BitsTerm (bits : Nat) : MacroM (TSyntax `term) := do
+  let bitsNat : TSyntax `term := ⟨Syntax.mkNumLit (toString bits)⟩
+  `(({ bits := BitVec.ofNat 32 $bitsNat } : Float32Bits))
+
+private def CInfo.term : CInfo → MacroM (TSyntax `term)
+  | .uint32 => `(ComputeDType.uint32)
+  | .int32 => `(ComputeDType.int32)
+  | .fp32 => `(ComputeDType.fp32)
+
+private def CInfo.algDType : CInfo → DInfo
+  | .uint32 => .nat
+  | .int32 => .int
+  | .fp32 => .real
+
+private def CInfo.placeholderAlgTerm (dtype : CInfo) (shape : SInfo) :
+    MacroM (TSyntax `term) := do
+  let sh ← shape.term
+  match dtype with
+  | .uint32 => `(Op.ref TileDType.nat $sh "__compute_bitcast_unprojected__")
+  | .int32 => `(Op.ref TileDType.int $sh "__compute_bitcast_unprojected__")
+  | .fp32 => `(Op.ref TileDType.real $sh "__compute_bitcast_unprojected__")
+
+private def expandComputeDType : TSyntax `tritonDType → MacroM CInfo
+  | `(tritonDType| tl.uint32) => pure .uint32
+  | `(tritonDType| tl.int32) => pure .int32
+  | `(tritonDType| tl.float32) => pure .fp32
+  | _ =>
+      Macro.throwError
+        "tl.bitcast: only 32-bit payload dtypes are modeled (`tl.uint32`, `tl.int32`, `tl.float32`)"
+
+private def inferComputeSourceDType (ctx : String) (dtype : DInfo) : MacroM CInfo := do
+  match dtype with
+  | .nat => pure .uint32
+  | .int => pure .int32
+  | .real => pure .fp32
+  | .fp32 => pure .fp32
+  | _ =>
+      Macro.throwError
+        (ctx ++ ": source dtype must erase from a modeled 32-bit payload (`tl.uint32`, `tl.int32`, `tl.float32`)")
+
+private def computeLiteralPayloadTerm (dtype : CInfo) (bits : Nat) :
+    MacroM (TSyntax `term) := do
+  match dtype with
+  | .uint32 => uint32BitsTerm bits
+  | .int32 => int32BitsTerm bits
+  | .fp32 => float32BitsTerm bits
+
+private def ensureAlgorithmOnly (ctx : String) (e : EOut) : MacroM Unit := do
+  if e.computeTerm.isSome then
+    Macro.throwError
+      (ctx ++ ": compute-only expressions such as runtime tl.bitcast must be assigned or stored directly before algorithm-layer composition")
+
 /-- Macro-time IEEE 754 binary32 bit-pattern triage. Throws on encodings
 that AlgorithmCorrect does not model (subnormal/zero `exp = 0`, NaN/Inf
 `exp = 255`), so the algorithm-side `Op.const` term emitted below is always
@@ -163,6 +225,18 @@ private def fp32ConstFromBitsTerm (bits : Nat) : MacroM (TSyntax `term) := do
   `(Op.const
       ((((Float32Bits.decodeRat
             { bits := BitVec.ofNat 32 $bitsNat }).get (by decide)) : ℝ)))
+
+private def computeLiteralAlgTerm (dtype : CInfo) (bits : Nat) :
+    MacroM (TSyntax `term) := do
+  match dtype with
+  | .uint32 =>
+      let payload ← uint32BitsTerm bits
+      `(Op.constNat ($payload).toNat)
+  | .int32 =>
+      let payload ← int32BitsTerm bits
+      `(Op.constInt ($payload).toInt)
+  | .fp32 =>
+      fp32ConstFromBitsTerm bits
 
 mutual
 
@@ -363,25 +437,32 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       ensureDType .nat e'.dtype "tl.toReal"
       pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape, none⟩
   | `(tritonExpr| tl.bitcast($e:tritonExpr, $dt:tritonDType)) => do
-      let dst ← expandDType dt
-      unless dst == .fp32 do
-        Macro.throwError "tl.bitcast: only uint32 constant bits to tl.float32 are modeled in AlgorithmCorrect"
-      let bits ←
-        match e with
-        | `(tritonExpr| $n:num) => pure n.getNat
-        | _ =>
-          Macro.throwError
-              "tl.bitcast: runtime bitcast is compute-only; AlgorithmCorrect currently accepts only uint32 numeric literal bits"
-      unless bits < 2^32 do
-        Macro.throwError "tl.bitcast(..., tl.float32): literal does not fit uint32"
-      validateFp32BitsForAlg bits
-      let payload ← uint32BitsTerm bits
-      let op ←
-        `(ComputeOp.bitcast ComputeDType.uint32 ComputeDType.fp32 rfl
-            (ComputeOp.const $payload))
-      let algTerm ← fp32ConstFromBitsTerm bits
-      pure ⟨algTerm, .real, SInfo.scalar,
-        some (← `(ComputeExpr.compute $op))⟩
+      let dst ← expandComputeDType dt
+      let dstTerm ← dst.term
+      match e with
+      | `(tritonExpr| $n:num) =>
+          let bits := n.getNat
+          unless bits < 2^32 do
+            Macro.throwError "tl.bitcast(...): literal does not fit 32 bits"
+          if dst == .fp32 then
+            validateFp32BitsForAlg bits
+          let payload ← computeLiteralPayloadTerm .uint32 bits
+          let op ←
+            `(ComputeOp.bitcast ComputeDType.uint32 $dstTerm rfl
+                (ComputeOp.const $payload))
+          let algTerm ← computeLiteralAlgTerm dst bits
+          pure ⟨algTerm, dst.algDType, SInfo.scalar,
+            some (← `(ComputeExpr.compute $op))⟩
+      | _ =>
+          let e' ← expandExpr env e
+          let src ← inferComputeSourceDType "tl.bitcast" e'.dtype
+          let srcTerm ← src.term
+          let algTerm ← dst.placeholderAlgTerm e'.shape
+          let op ←
+            `(ComputeOp.bitcast $srcTerm $dstTerm rfl
+                (ComputeOp.alg $srcTerm $e'.term))
+          pure ⟨algTerm, dst.algDType, e'.shape,
+            some (← `(ComputeExpr.compute $op))⟩
   | `(tritonExpr| tl.cast($e:tritonExpr, $dt:tritonDType)) => do
       let e' ← expandExpr env e
       let dst ← expandDType dt
@@ -558,6 +639,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       | none =>
           let a' ← expandExpr env a
           let b' ← expandExpr env b
+          ensureAlgorithmOnly "arithmetic" a'
+          ensureAlgorithmOnly "arithmetic" b'
           match a'.dtype, b'.dtype with
           | .ptr, .nat =>
               let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
@@ -660,6 +743,8 @@ partial def expandArith (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
     Macro.throwError (ctx ++ ": dtype mismatch")
   let np ← a'.dtype.numericProof
@@ -670,6 +755,8 @@ partial def expandIntegralArith (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
     Macro.throwError (ctx ++ ": dtype mismatch")
   let ip ← a'.dtype.integralProof
@@ -680,6 +767,8 @@ partial def expandCdiv (env : Env)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  ensureAlgorithmOnly "tl.cdiv" a'
+  ensureAlgorithmOnly "tl.cdiv" b'
   ensureDType .nat a'.dtype "tl.cdiv lhs"
   ensureDType .nat b'.dtype "tl.cdiv rhs"
   let (addBc, outShape) ← broadcastTerm a'.shape b'.shape "tl.cdiv"
@@ -695,6 +784,8 @@ partial def expandBoolBin (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
   ensureDType .bool a'.dtype ctx
   ensureDType .bool b'.dtype ctx
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
@@ -704,6 +795,8 @@ partial def expandNatBitwise (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
   ensureDType .nat a'.dtype ctx
   ensureDType .nat b'.dtype ctx
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
@@ -713,6 +806,8 @@ partial def expandBoolOrNatBitwise (env : Env) (ctx : String)
     (boolOp natOp : TSyntax `term) (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
     Macro.throwError (ctx ++ ": dtype mismatch")
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
@@ -726,6 +821,7 @@ partial def expandBoolOrNatBitwise (env : Env) (ctx : String)
 partial def expandBoolNot (env : Env) (ctx : String)
     (a : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
+  ensureAlgorithmOnly ctx a'
   ensureDType .bool a'.dtype ctx
   pure ⟨← `(Op.boolNot $a'.term), .bool, a'.shape, none⟩
 
@@ -733,6 +829,8 @@ partial def expandCmp (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
     Macro.throwError (ctx ++ ": dtype mismatch")
   let cp ← a'.dtype.comparableProof
@@ -743,6 +841,8 @@ partial def expandMinMax (env : Env) (ctx : String) (cmp : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  ensureAlgorithmOnly ctx a'
+  ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
     Macro.throwError (ctx ++ ": dtype mismatch")
   let cp ← a'.dtype.comparableProof

@@ -83,6 +83,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .const _ => True
   | .constFloat _ _ => True
   | .constNat _ => True
+  | .constInt _ => True
   | .constBool _ => True
   | .negInf => True
   | .programId _ => True

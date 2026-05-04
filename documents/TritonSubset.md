@@ -52,10 +52,10 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 - `(x).to(tl.float64|tl.float32|tl.float16|tl.bfloat16)` is accepted as the
   method-style cast spelling. Parentheses around bare identifiers avoid
   Lean's hierarchical-name parser treating `x.to` as one identifier.
-- `tl.bitcast(<uint32 numeric literal>, tl.float32)` is accepted only when the
-  constant bits decode to a finite-normal binary32 value. It lowers to an
-  algorithm `.real` constant through a computable decoder. Runtime bitcast,
-  non-finite bit patterns, and other destinations remain compute-only.
+- `tl.bitcast(x, tl.uint32|tl.int32|tl.float32)` is modeled in the compute AST
+  for 32-bit payload reinterpretation. Constant uint32 bit patterns can project
+  to the algorithm layer (`.nat`, `.int`, or finite-normal `.real`); runtime
+  bitcasts remain compute-only and make `ComputeKernel.toAlgorithm?` fail.
 
 Supported channels:
 
@@ -371,7 +371,7 @@ current semantic contract.
 | Shape/view ops | Limited | `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`, `tl.flip`, `tl.join`, projection-form `tl.split(x, 0|1)` |
 | Transpose | Supported | `tl.trans(e)` swaps trailing two axes; arbitrary static permutations use `tl.permute(e, [axes])` |
 | Matrix multiply | Supported | `tl.dot(a, b)` and accumulator form `tl.dot(a, b, acc)` over mathematical `ℝ` |
-| Bitcast | Limited | Constant `tl.bitcast(uint32 literal, tl.float32)` through computable finite-normal decode; runtime bitcast remains compute-only |
+| Bitcast | Limited | 32-bit compute payloads `tl.uint32` / `tl.int32` / `tl.float32`; constant uint32 patterns project to algorithm values, runtime bitcast is expressible but compute-only |
 | Loads | Limited | Pointer-expression load, optional `mask`, optional `other`, optional `dtype=` for float/int*/uint* spelling-only integer channels; block-pointer load with `boundary_check` and `padding_option="zero"` |
 | Stores | Limited | Pointer-expression store, optional `mask`, dtype inferred from value with optional matching `dtype=`; block-pointer store with `boundary_check` |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |

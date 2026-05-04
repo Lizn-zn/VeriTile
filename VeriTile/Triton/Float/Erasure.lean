@@ -70,6 +70,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
       rw [eraseDType_float h]
       exact .const c
   | .constNat n => .constNat n
+  | .constInt n => .constInt n
   | .constBool b => .constBool b
   | .negInf => .negInf
   | .programId axis => .programId axis

@@ -196,9 +196,49 @@ def bitcastConstantComputeSmoke (outReg : RegionName) : ComputeKernel := triton 
   tl.store($(outReg), one)
 }
 
+/-- Constant uint32-to-int32 bit reinterpretation projects to mathematical Int. -/
+def bitcastConstantIntSmoke (outReg : RegionName) : ComputeKernel := triton {
+  minusOne := tl.bitcast(0xffffffff, tl.int32)
+  tl.store($(outReg), minusOne)
+}
+
 example :
     ComputeOp.constOpToAlgorithm? ComputeOp.oneBitcast = Except.ok (Op.const 1) :=
   ComputeOp.oneBitcast_toAlgorithm
+
+example :
+    ComputeOp.constOpToAlgorithm? ComputeOp.minusOneBitcast =
+      Except.ok (Op.constInt (-1)) :=
+  ComputeOp.minusOneBitcast_toAlgorithm
+
+/-- Runtime bitcast is expressible in the compute AST, but cannot be projected
+to AlgorithmCorrect until a compute-level numeric semantics handles it. -/
+def bitcastRuntimeSmoke (bitsReg outReg : RegionName) : ComputeKernel := triton {
+  bits := tl.load($(bitsReg), dtype=tl.uint32)
+  y := tl.bitcast(bits, tl.float32)
+  tl.store($(outReg), y)
+}
+
+/-- Runtime integer reinterpretation follows the same compute-only path. -/
+def bitcastRuntimeIntSmoke (bitsReg outReg : RegionName) : ComputeKernel := triton {
+  bits := tl.load($(bitsReg), dtype=tl.uint32)
+  y := tl.bitcast(bits, tl.int32)
+  tl.store($(outReg), y)
+}
+
+example :
+    ComputeOp.toAlgorithm?
+        (ComputeOp.bitcast .uint32 .fp32 rfl
+          (ComputeOp.alg .uint32 (Op.ref .nat [] "bits"))) =
+      Except.error (.requiresComputeSemantics "runtime bitcast") := by
+  simp [ComputeOp.toAlgorithm?, ComputeOp.constOpToAlgorithm?, ComputeOp.constPayload?]
+
+example :
+    ComputeOp.toAlgorithm?
+        (ComputeOp.bitcast .uint32 .int32 rfl
+          (ComputeOp.alg .uint32 (Op.ref .nat [] "bits"))) =
+      Except.error (.requiresComputeSemantics "runtime bitcast") := by
+  simp [ComputeOp.toAlgorithm?, ComputeOp.constOpToAlgorithm?, ComputeOp.constPayload?]
 
 /-- The real kernel recovered by erasing `dtypeCastSmoke`'s float annotations. -/
 def dtypeCastSmokeErasedReal (xReg outReg : RegionName) (N : Nat) : ComputeKernel := triton {
