@@ -267,6 +267,37 @@ theorem fa1BackwardStrippedKernel_toAlgorithm_eq_toAlgKernel
         M S D scale).toAlgKernel := by
   simp [fa1BackwardStrippedKernel, ComputeKernel.toAlgKernel]
 
+/-- Store-stage readback helper for the row-major 2D stores used by the
+stripped backward kernel.  It factors out the final proof obligation for each
+of `dQ`, `dK`, and `dV`: once the address tile and value tile are in
+registers, the corresponding unmasked store reads back exactly that value. -/
+theorem store_stage_readback_rowMajor2D
+    (outReg : RegionName) (ptrName valueName : RegName)
+    (rows cols : Nat) (s : BlockState)
+    (valueFn : TileIndex [rows, cols] → ℝ)
+    (hPtrs : s.regs .nat [rows, cols] ptrName =
+      some (⟨Offset.rowMajor2D (rows := rows) (cols := cols) 0 cols⟩ :
+        Tile .nat [rows, cols]))
+    (hVal : s.regs .real [rows, cols] valueName = some (Tile.ofReal valueFn)) :
+    ∀ idx : TileIndex [rows, cols],
+      observeTileAt
+        (stepStmt (Stmt.store .real [rows, cols]
+          (MemAccess.region outReg (Op.ref .nat [rows, cols] ptrName))
+          (Op.ref .real [rows, cols] valueName) MaskOpt.none) s)
+        outReg (Offset.rowMajor2D (rows := rows) (cols := cols) 0 cols) idx =
+      some (valueFn idx) := by
+  intro idx
+  have h_inj : Function.Injective
+      (fun i : TileIndex [rows, cols] => i.1.val * cols + i.2.1.val) := by
+    intro a b h
+    have hrow : Offset.rowMajor2D (rows := rows) (cols := cols) 0 cols a =
+        Offset.rowMajor2D (rows := rows) (cols := cols) 0 cols b := by
+      simpa [Offset.rowMajor2D, Offset.strided] using h
+    exact Offset.rowMajor2D_inj (base := 0) (rowStride := cols) (le_refl cols) hrow
+  simp [observeTileAt, stepStmt, evalOp, hPtrs, hVal, Tile.ofReal,
+    BlockState.writeMemTyped_real, Offset.rowMajor2D, Offset.strided]
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj idx]
+
 end FA1Backward
 
 end VeriTile.Examples
