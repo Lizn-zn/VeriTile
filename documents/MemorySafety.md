@@ -59,8 +59,9 @@ This layer does not model or prove:
 - Atomics, barriers, async copy, shared memory, or scheduling semantics.
 - Hardware-specific memory hierarchy behavior.
 
-Those are later layers in the memory-model roadmap. `Kernel.MemorySafe` is only
-the per-program active-lane region-bounds contract.
+Those are later layers in the concurrency roadmap; see
+`documents/ConcurrencySemantics.md`. `Kernel.MemorySafe` is only the
+per-program active-lane region-bounds contract.
 
 Layer 2a is implemented separately in `VeriTile.Triton.MemoryFrame`. It adds
 predicate-level write footprints and `BlockState.WriteWithin` frame contracts

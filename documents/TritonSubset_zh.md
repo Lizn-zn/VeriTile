@@ -347,7 +347,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
 | indirection | Limited | typed index load 可以参与 pointer arithmetic,表达 gather / paged-KV 风格 data-dependent address (#42);还没有 alias/bounds/page-ownership proof layer |
 | block pointer | Limited | `tl.make_block_ptr`、`tl.advance`、带 checked-axis zero padding / store skip 的 block-pointer load/store;没有硬件/TMA 行为 |
-| atomic / async / barrier | Gap | 还没有 `tl.atomic_*`、async copy、TMA、barrier 或 scheduling semantics (#12) |
+| atomic / async / barrier | Gap | 还没有 `tl.atomic_*`、async copy、TMA、barrier 或 scheduling semantics (#12);`ConcurrencySemantics.md` 记录 ComputeKernel 到 AlgKernel 的边界 |
 | floating-point fidelity | Gap | 只有 real-valued model;没有 IEEE-754 或 mixed-precision hardware semantics (#11) |
 
 ## 表达力矩阵
@@ -368,7 +368,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | active-lane memory bounds | Limited | Lean proof predicate (#48) | `Kernel.MemorySafe` 按 `RegionBounds` 检查 direct region offset、dynamic pointer address、mask activeness 和 `boundary_check` block-pointer lane;没有 race freedom、frame theorem 或 permission accounting。 |
 | single-program write footprint/frame | Limited | predicate-level frame contract + extraction helpers (#60/#61) | `WriteFootprint := (RegionName × Nat) → Prop` 和 `BlockState.WriteWithin` 表达一次 execution 只修改 supplied footprint 内的 cell;`tileImage` / `activeTileImage` helper 可提取 direct、masked、checked block-pointer store footprint。 |
 | RNG / dropout | Gap | state/probabilistic semantics (#41) | 阻塞 faithful dropout 和随机 kernel。 |
-| atomics / async / shared memory / barriers | Gap | concurrency semantics (#12) | 阻塞 production-style backward kernel、shared-memory phase reduction、async/TMA pipeline、race/scheduling reasoning。 |
+| atomics / async / shared memory / barriers | Gap | concurrency semantics (#12) | 阻塞 production-style backward kernel、shared-memory phase reduction、async/TMA pipeline、race/scheduling reasoning;`ConcurrencySemantics.md` 定义当前 projection boundary。 |
 | whole-grid launch semantics | Limited | ND grid theorem surface + disjoint merge (#5/#49) | `GridIndex`、`BlockState.withGridIndex`、`Kernel.ForAllPrograms`、`ForAllProgramsSome` 支持 per-program correctness 量化;`Kernel.mergeFrames` 可在 pairwise-disjoint footprint 下合并 explicit per-program `ExecFrame`;没有 overlapping write、race、atomic、scheduling 或 interleaved executor。 |
 | Python/Triton source ingestion | Gap | front-end/lifter (#10) | 用户必须写 Lean `triton { ... }`;decorator、Python-side constexpr execution、一般 Python control flow 还不能解析。 |
 | type checking / pointer provenance | Limited | optional checker (#46) | `Kernel.check` / `checkStrict` 跟踪 register dtype/shape、pointer 和 block-pointer provenance、dtype mismatch、基本 block-pointer metadata;不证明 bounds、alias、launch 或 page ownership。 |

@@ -124,7 +124,8 @@ Longer-term extension points remain:
 - **Paged KV / indirect addressing (#42):** extend the current `IndirectView`
   smoke/proof surface into paged-attention-specific logical views and
   consumer-side equivalence theorems.
-- **Async and concurrency (#12):** introduce shared-memory state, barriers,
-  atomics, and an explicit scheduling or trace model.
+- **Async and concurrency (#12):** `ConcurrencySemantics.md` defines the
+  boundary for shared-memory state, barriers, atomics, async/TMA, and explicit
+  scheduling or trace models.
 - **Floating-point fidelity (#11):** replace or refine the `R` abstraction with
   IEEE / mixed-precision semantics where needed.
