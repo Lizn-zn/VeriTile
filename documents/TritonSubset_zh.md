@@ -347,7 +347,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
 | indirection | Limited | typed index load 可以参与 pointer arithmetic,表达 gather / paged-KV 风格 data-dependent address (#42);还没有 alias/bounds/page-ownership proof layer |
 | block pointer | Limited | `tl.make_block_ptr`、`tl.advance`、带 checked-axis zero padding / store skip 的 block-pointer load/store;没有硬件/TMA 行为 |
-| atomic / async / barrier | Limited | `tl.atomic_add` 已有 AlgKernel `Stmt.atomicAdd` marker、单程序顺序语义、trace payload 词汇和 Real grid-merge sum theorem;async/TMA 目前只有 contract vocabulary;还没有完整 scheduler、barrier、async copy AST、TMA AST 或 IEEE atomic 语义 (#12/#67) |
+| atomic / async / barrier | Limited | `tl.atomic_add` 已有 AlgKernel `Stmt.atomicAdd` marker、单程序顺序语义、trace payload 词汇和 Real grid-merge sum theorem;async/TMA 目前只有 contract vocabulary 和 compute-facing failure marker;还没有完整 scheduler、barrier、可执行 async copy AST、TMA AST 或 IEEE atomic 语义 (#12/#67/#68) |
 | floating-point fidelity | Gap | 只有 real-valued model;没有 IEEE-754 或 mixed-precision hardware semantics (#11) |
 
 ## 表达力矩阵

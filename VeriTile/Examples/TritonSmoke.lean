@@ -65,6 +65,14 @@ example (outReg : RegionName) :
                 (Op.ref .real [] "x") MaskOpt.none ] } := by
   rfl
 
+def asyncMarkerSmoke : ComputeKernel :=
+  .mk [] [] [ComputeStmt.asyncMarker "tl.async_copy"]
+
+example :
+    asyncMarkerSmoke.toAlgorithm? =
+      Except.error (.requiresAsyncSequentialization "tl.async_copy") := by
+  rfl
+
 /-- Vector-add kernel with explicit boundary mask. -/
 def addKernelMaskedSmoke (xReg yReg outReg : RegionName)
     (blockSize nElements : Nat) : ComputeKernel := triton {

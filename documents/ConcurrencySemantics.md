@@ -168,8 +168,8 @@ This is `Limited` atomic support, not a full concurrent executor.
 
 ## Async / TMA Contract Slice
 
-The async/TMA slice is currently a contract vocabulary, not an implementation.
-It lives in:
+The async/TMA slice is currently a contract vocabulary plus a compute-facing
+failure marker, not an implementation. The contract lives in:
 
 ```text
 VeriTile/Triton/Concurrency/Async.lean
@@ -193,8 +193,13 @@ The current contract names the required discipline:
 - overlapping destinations are explicitly ordered or rejected.
 
 Projection failures should use a named reason such as
-`requiresAsyncSequentialization`. Explicit shared-memory state, TMA destination
-state, WGMMA operand layout, and scope-tagged footprints remain #65 triggers.
+`requiresAsyncSequentialization`. `ComputeStmt.asyncMarker` is the first
+explicit AST hook for this path: it makes async/TMA-shaped syntax representable
+in the compute layer while preserving the fact that it has no
+`AlgorithmCorrect` projection yet.
+
+Explicit shared-memory state, TMA destination state, WGMMA operand layout, and
+scope-tagged footprints remain #65 triggers.
 
 ## Non-Goals
 

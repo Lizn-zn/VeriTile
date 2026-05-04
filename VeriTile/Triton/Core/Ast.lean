@@ -477,6 +477,7 @@ inductive ComputeStmt : Type where
       MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
   | atomicAdd : NumericDType dtype → (shape : TileShape) →
       MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
+  | asyncMarker : (op : String) → ComputeStmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List ComputeStmt) → ComputeStmt
   | ifThen : (cond : Op .bool []) → (body : List ComputeStmt) → ComputeStmt
 
@@ -492,6 +493,8 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
       Except.ok (.store dtype shape mem (← value.toAlgorithm?) mask)
   | .atomicAdd h shape mem value mask => do
       Except.ok (.atomicAdd h shape mem (← value.toAlgorithm?) mask)
+  | .asyncMarker op =>
+      Except.error (.requiresAsyncSequentialization op)
   | .forLoop idx n body => do
       Except.ok (.forLoop idx n (← listToAlgorithm? body))
   | .ifThen cond body => do
