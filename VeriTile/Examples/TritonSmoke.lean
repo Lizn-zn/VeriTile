@@ -90,6 +90,19 @@ example (srcReg dstReg : RegionName) (post : ComputeKernel.AlgSpec) :
     ¬ ComputeKernel.ComputeCorrect (asyncCopySurfaceSmoke srcReg dstReg) post :=
   ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
+def asyncWaitSurfaceSmoke : ComputeKernel := triton {
+  tl.async_wait()
+}
+
+example :
+    asyncWaitSurfaceSmoke.toAlgorithm? =
+      Except.error (.requiresAsyncSequentialization "tl.async_wait") := by
+  rfl
+
+example (post : ComputeKernel.AlgSpec) :
+    ¬ ComputeKernel.ComputeCorrect asyncWaitSurfaceSmoke post :=
+  ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
+
 /-- Vector-add kernel with explicit boundary mask. -/
 def addKernelMaskedSmoke (xReg yReg outReg : RegionName)
     (blockSize nElements : Nat) : ComputeKernel := triton {

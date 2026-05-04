@@ -1578,6 +1578,9 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       discard <| expandExpr env src
       pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
         ← `(ComputeStmt.asyncMarker "tl.async_copy"), env, Bool.true)
+  | `(tritonStmt| tl.async_wait()) =>
+      pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+        ← `(ComputeStmt.asyncMarker "tl.async_wait"), env, Bool.true)
     | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env

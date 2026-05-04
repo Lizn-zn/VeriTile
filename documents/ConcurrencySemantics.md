@@ -196,9 +196,10 @@ Projection failures should use a named reason such as
 `requiresAsyncSequentialization`. `ComputeStmt.asyncMarker` is the first
 explicit AST hook for this path: it makes async/TMA-shaped syntax representable
 in the compute layer while preserving the fact that it has no
-`AlgorithmCorrect` projection yet. The DSL surface `tl.async_copy(dst, src)`
-currently lowers to this failure marker; it is not executable semantics and it
-does not imply shared-memory or TMA modeling.
+`AlgorithmCorrect` projection yet. The DSL surfaces `tl.async_copy(dst, src)`
+and `tl.async_wait()` currently lower to this failure marker; they are not
+executable semantics and they do not imply shared-memory, barrier, or TMA
+modeling.
 
 Explicit shared-memory state, TMA destination state, WGMMA operand layout, and
 scope-tagged footprints remain #65 triggers.

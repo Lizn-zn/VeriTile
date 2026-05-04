@@ -247,6 +247,8 @@ partial def stmtRegions :
             | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
       (staticPtrRegions src ++ exprRegions src ++ kwargRegions, staticPtrRegions dst)
+  | `(tritonStmt| tl.async_wait()) =>
+      ([], [])
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       stmts.toList.foldl
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
