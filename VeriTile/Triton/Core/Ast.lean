@@ -300,6 +300,10 @@ structure UInt32Bits where
   bits : BitVec 32
   deriving Repr, BEq, DecidableEq
 
+structure Int32Bits where
+  bits : BitVec 32
+  deriving Repr, BEq, DecidableEq
+
 structure Float32Bits where
   bits : BitVec 32
   deriving Repr, BEq, DecidableEq
@@ -310,6 +314,17 @@ def toNat (x : UInt32Bits) : Nat :=
   x.bits.toNat
 
 end UInt32Bits
+
+namespace Int32Bits
+
+def toInt (x : Int32Bits) : Int :=
+  let n := x.bits.toNat
+  if n < 2^31 then
+    Int.ofNat n
+  else
+    Int.ofNat n - Int.ofNat (2^32)
+
+end Int32Bits
 
 namespace Float32Bits
 

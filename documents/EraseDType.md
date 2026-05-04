@@ -65,19 +65,20 @@ so the lemma above is the definition unfolded for the success case. It is a
 convenience for `simp` chains, not a claim about compute-vs-algorithm
 semantics.
 
-**By design: there is no internal Lean theorem connecting compute execution to
-algorithm execution.** `ComputeKernel.AlgorithmCorrect` is a statement about
-the projected algorithm kernel only. Compute-layer behavior — IEEE rounding,
-NaN propagation, denormals, hardware-dot precision, fast-math, etc. — is
-verified empirically through the differential testing pipeline (see PLAN.md
-"Verification architecture" and #58), not through a Lean theorem. The bridge
-between AlgorithmCorrect and real fp-level behavior is **the testing
-pipeline**, by design and permanently.
+**By design: there is no internal Lean theorem connecting bit-level compute
+execution to algorithm execution.** `ComputeKernel.AlgorithmCorrect` is a
+statement about the projected algorithm kernel. The formal compute-to-algorithm
+bridge is `ComputeKernel.toAlgorithm?` / `eraseDType`: it maps compute-facing
+syntax to the Real / Int / Nat algorithm layer where Lean proofs run. Numeric
+compute-layer behavior — IEEE rounding, NaN propagation, denormals,
+hardware-dot precision, fast-math, etc. — is validated empirically through the
+differential testing pipeline (see PLAN.md "Verification architecture" and
+#58), not through a Lean theorem.
 
 Users reading an `AlgorithmCorrect` certificate should interpret it as: "the
-algorithm structure (over Real / Int / Nat) is Lean-proved correct." For
-end-to-end certification, the matching `ComputeCorrect` test result is also
-required.
+projected algorithm structure (over Real / Int / Nat) is Lean-proved correct."
+For end-to-end certification, the matching numeric `ComputeCorrect` test result
+is also required.
 
 ## Naming
 
