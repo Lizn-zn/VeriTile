@@ -44,6 +44,7 @@ import Mathlib.Analysis.SpecialFunctions.Exp
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
@@ -53,7 +54,7 @@ namespace VeriTile.Examples
 open VeriTile.Triton
 
 /-- Direct log-sum-exp kernel: y = log(Σ exp(x)). -/
-def directLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def directLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
@@ -64,7 +65,7 @@ def directLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := trito
 }
 
 /-- Shift-trick LSE kernel: y = m + log(Σ exp(x - m)) where m = max(x). -/
-def stableLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def stableLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
@@ -160,7 +161,7 @@ theorem log_sum_exp_refinement
   exact log_sum_exp_shift_invariant hN xs (tileMax hN xs)
 
 /-- View-level surface for `log_sum_exp_refinement`. -/
-theorem log_sum_exp_refinement_view
+theorem log_sum_exp_refinement_exec_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
@@ -174,5 +175,27 @@ theorem log_sum_exp_refinement_view
   simpa [TensorView.observe, observeTileAt, scalarCellView,
          TensorView.offset, Offset.strided, observeLSE]
     using log_sum_exp_refinement xReg yReg N hN s xs hx
+
+/-- Compute-facing view-level surface for `log_sum_exp_refinement`. -/
+theorem log_sum_exp_refinement_view
+    (xReg yReg : RegionName)
+    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    ComputeKernel.ComputeRefine
+      ((directLSEKernel xReg yReg N))
+      ((stableLSEKernel xReg yReg N))
+      (fun s0 lhs' rhs' =>
+        s0 = s →
+        TensorView.observe (some lhs')
+            (scalarCellView yReg s.pid) PUnit.unit =
+        TensorView.observe (some rhs')
+            (scalarCellView yReg s.pid) PUnit.unit) := by
+  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  have hview := log_sum_exp_refinement_exec_view xReg yReg N hN s xs h_x
+  rw [hL, hR] at hview
+  simpa using hview
 
 end VeriTile.Examples

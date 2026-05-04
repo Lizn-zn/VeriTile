@@ -20,7 +20,7 @@ namespace FA1Score
 /-- FA-1 score block with ALiBi bias. This is a typed surface-shape smoke test:
 `scores = QKᵀ * scale - slope * |offs_m - offs_n|`. -/
 def alibiScoreSmokeKernel (qReg kReg scoreReg : RegionName)
-    (M Bk D : Nat) (scale slope : ℝ) : Kernel := triton {
+    (M Bk D : Nat) (scale slope : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_n := tl.arange(0, $(Bk))
@@ -40,7 +40,7 @@ def alibiScoreSmokeKernel (qReg kReg scoreReg : RegionName)
 
 /-- FA-1 score block with a symmetric sliding-window mask. -/
 def slidingWindowScoreSmokeKernel (qReg kReg scoreReg : RegionName)
-    (M Bk D window : Nat) (scale : ℝ) : Kernel := triton {
+    (M Bk D window : Nat) (scale : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_n := tl.arange(0, $(Bk))
@@ -60,7 +60,7 @@ def slidingWindowScoreSmokeKernel (qReg kReg scoreReg : RegionName)
 
 /-- FA-1 score block with Gemma-style softcap. -/
 def softcapScoreSmokeKernel (qReg kReg scoreReg : RegionName)
-    (M Bk D : Nat) (scale softcap : ℝ) : Kernel := triton {
+    (M Bk D : Nat) (scale softcap : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_n := tl.arange(0, $(Bk))
@@ -80,7 +80,7 @@ def softcapScoreSmokeKernel (qReg kReg scoreReg : RegionName)
 /-- FA-1 forward with ALiBi score bias inside the online-softmax loop. -/
 def fa1ForwardKernelAlibi
     (qReg kReg vReg outReg : RegionName)
-    (M D Bk numKVBlocks : Nat) (scale slope : ℝ) : Kernel := triton {
+    (M D Bk numKVBlocks : Nat) (scale slope : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
@@ -118,7 +118,7 @@ def fa1ForwardKernelAlibi
 /-- FA-1 forward with a symmetric sliding-window score mask. -/
 def fa1ForwardKernelSlidingWindow
     (qReg kReg vReg outReg : RegionName)
-    (M D Bk numKVBlocks window : Nat) (scale : ℝ) : Kernel := triton {
+    (M D Bk numKVBlocks window : Nat) (scale : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
@@ -157,7 +157,7 @@ def fa1ForwardKernelSlidingWindow
 /-- FA-1 forward with Gemma-style softcap applied to scores before softmax. -/
 def fa1ForwardKernelSoftcap
     (qReg kReg vReg outReg : RegionName)
-    (M D Bk numKVBlocks : Nat) (scale softcap : ℝ) : Kernel := triton {
+    (M D Bk numKVBlocks : Nat) (scale softcap : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
@@ -193,7 +193,7 @@ def fa1ForwardKernelSoftcap
 /-- FA-1 forward with ALiBi, softcap, and sliding-window masking composed. -/
 def fa1ForwardKernelAlibiSlidingSoftcap
     (qReg kReg vReg outReg : RegionName)
-    (M D Bk numKVBlocks window : Nat) (scale slope softcap : ℝ) : Kernel := triton {
+    (M D Bk numKVBlocks window : Nat) (scale slope softcap : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs_m := pid * $(M) + tl.arange(0, $(M))
   offs_d := tl.arange(0, $(D))
@@ -1833,7 +1833,7 @@ private def fa1ScoreLoopTail (M D Bk : Nat) : List Stmt :=
     (qReg kReg vReg outReg : RegionName)
     (M D Bk numKVBlocks : Nat) (scale softcap : ℝ) :
     (fa1ForwardKernelSoftcap qReg kReg vReg outReg M D Bk numKVBlocks
-        scale softcap).body =
+        scale softcap).toAlgKernel.body =
       fa1ScorePreLoop qReg M D ++
       [Stmt.forLoop "n" numKVBlocks
         (fa1ScoreLoopBodySoftcap kReg vReg M D Bk scale softcap)] ++
@@ -1844,7 +1844,7 @@ private def fa1ScoreLoopTail (M D Bk : Nat) : List Stmt :=
     (qReg kReg vReg outReg : RegionName)
     (M D Bk numKVBlocks : Nat) (scale slope : ℝ) :
     (fa1ForwardKernelAlibi qReg kReg vReg outReg M D Bk numKVBlocks
-        scale slope).body =
+        scale slope).toAlgKernel.body =
       fa1ScorePreLoop qReg M D ++
       [Stmt.forLoop "n" numKVBlocks
         (fa1ScoreLoopBodyAlibi kReg vReg M D Bk scale slope)] ++
@@ -1855,7 +1855,7 @@ private def fa1ScoreLoopTail (M D Bk : Nat) : List Stmt :=
     (qReg kReg vReg outReg : RegionName)
     (M D Bk numKVBlocks window : Nat) (scale : ℝ) :
     (fa1ForwardKernelSlidingWindow qReg kReg vReg outReg M D Bk numKVBlocks
-        window scale).body =
+        window scale).toAlgKernel.body =
       fa1ScorePreLoop qReg M D ++
       [Stmt.forLoop "n" numKVBlocks
         (fa1ScoreLoopBodySlidingWindow kReg vReg M D Bk window scale)] ++
@@ -1866,7 +1866,7 @@ private def fa1ScoreLoopTail (M D Bk : Nat) : List Stmt :=
     (qReg kReg vReg outReg : RegionName)
     (M D Bk numKVBlocks window : Nat) (scale slope softcap : ℝ) :
     (fa1ForwardKernelAlibiSlidingSoftcap qReg kReg vReg outReg M D Bk
-        numKVBlocks window scale slope softcap).body =
+        numKVBlocks window scale slope softcap).toAlgKernel.body =
       fa1ScorePreLoop qReg M D ++
       [Stmt.forLoop "n" numKVBlocks
         (fa1ScoreLoopBodyAlibiSlidingSoftcap kReg vReg M D Bk window

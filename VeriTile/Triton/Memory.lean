@@ -304,6 +304,11 @@ def loaded {shape : TileShape} (s : BlockState) (view : TensorView shape)
     (xs : TileIndex shape → ℝ) : Prop :=
   InputAt s view.region view.offset xs
 
+/-- One-dimensional loaded-view shorthand for array-shaped specs. -/
+def loadedArray {n : Nat} (s : BlockState) (view : TensorView [n])
+    (xs : Fin n → ℝ) : Prop :=
+  loaded s view (fun idx : TileIndex [n] => xs idx.1)
+
 /-- Non-overlap condition for a tensor view's address map. -/
 def Valid {shape : TileShape} (view : TensorView shape) : Prop :=
   Offset.StridesValid shape view.strides
@@ -318,6 +323,17 @@ noncomputable def observe {shape : TileShape}
     (sf : Option BlockState) (view : TensorView shape)
     (idx : TileIndex shape) : Option ℝ :=
   observeTileAt sf view.region view.offset idx
+
+/-- One-dimensional view equality shorthand for array-shaped specs. -/
+def equalsArray {n : Nat} (sf : Option BlockState) (view : TensorView [n])
+    (xs : Fin n → ℝ) : Prop :=
+  ∀ idx : TileIndex [n], observe sf view idx = some (xs idx.1)
+
+/-- One-dimensional concrete-state view equality shorthand for array-shaped
+specs. -/
+def matchesArray {n : Nat} (s' : BlockState) (view : TensorView [n])
+    (xs : Fin n → ℝ) : Prop :=
+  equalsArray (some s') view xs
 
 /-- A loaded view reads back its logical tensor value from the same state. -/
 theorem readMem_of_loaded {shape : TileShape} {s : BlockState}

@@ -38,6 +38,7 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 
@@ -58,7 +59,7 @@ Reads from `xReg` and `yReg`, writes to `outReg`. No aliasing assumption
 required: even if `xReg = outReg` (read-modify-write of the same buffer)
 the kernel reads first into local registers `x` / `y` before the final
 scatter to `outReg`, so the result is still `xs + ys`. -/
-def addKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def addKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
@@ -109,14 +110,12 @@ theorem add_kernel_correct
   simp [_h_x, _h_y]
 
 /-- View-level surface for `add_kernel_correct`. -/
-theorem add_kernel_correct_view
+theorem add_kernel_correct_exec_view
     (xReg yReg outReg : RegionName)
     (blockSize : Nat) (hBlockSize : 0 < blockSize)
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
-      (fun idx : TileIndex [blockSize] => xs idx.1))
-    (h_y : TensorView.loaded s (programTileView s yReg blockSize)
-      (fun idx : TileIndex [blockSize] => ys idx.1)) :
+    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
     ∀ idx : TileIndex [blockSize],
       TensorView.observe (exec (addKernel xReg yReg outReg blockSize) s)
           (programTileView s outReg blockSize) idx
@@ -129,6 +128,45 @@ theorem add_kernel_correct_view
   simpa [TensorView.observe, observeTileAt, programTileView,
          TensorView.offset, Offset.strided, observeAt]
     using add_kernel_correct xReg yReg outReg blockSize hBlockSize s xs ys hx hy idx.1
+
+/-- Compute-facing correctness theorem for `addKernel`.
+
+From the fixed initial state `s`, the compute-facing kernel writes the
+view-level elementwise-add result to `outReg`. -/
+theorem add_kernel_compute_correct
+    (xReg yReg outReg : RegionName)
+    (blockSize : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
+    ComputeKernel.OutputsMatchArray
+      ((addKernel xReg yReg outReg blockSize))
+      s
+      (programTileView s outReg blockSize)
+      (addSpec xs ys) := by
+  apply ComputeKernel.execCorrect_of_toAlgKernel rfl
+  intro s' hExec idx
+  have hview := add_kernel_correct_exec_view xReg yReg outReg blockSize hBlockSize
+    s xs ys h_x h_y idx
+  rw [hExec] at hview
+  simpa using hview
+
+/-- Manifest-compatible view-level surface for `add_kernel_compute_correct`. -/
+theorem add_kernel_correct_view
+    (xReg yReg outReg : RegionName)
+    (blockSize : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
+    ComputeKernel.OutputsMatchArray
+      ((addKernel xReg yReg outReg blockSize))
+      s
+      (programTileView s outReg blockSize)
+      (addSpec xs ys) := by
+  exact add_kernel_compute_correct xReg yReg outReg blockSize hBlockSize
+    s xs ys h_x h_y
+
+
 
 /-! ## Masked variant (boundary mask)
 
@@ -160,7 +198,7 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     `other=None` undefined load value, but the store mask skips those lanes,
     so the undefined values are not observed. -/
 def addKernelMasked (xReg yReg outReg : RegionName)
-    (blockSize nElements : Nat) : Kernel := triton {
+    (blockSize nElements : Nat) : ComputeKernel := triton {
   pid     := tl.program_id(0)
   offsets := pid * $(blockSize) + tl.arange(0, $(blockSize))
   mask    := offsets < $(nElements)
@@ -216,14 +254,12 @@ theorem add_kernel_masked_correct
   · simp [hi]
 
 /-- View-level surface for `add_kernel_masked_correct`. -/
-theorem add_kernel_masked_correct_view
+theorem add_kernel_masked_correct_exec_view
     (xReg yReg outReg : RegionName)
     (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
-      (fun idx : TileIndex [blockSize] => xs idx.1))
-    (h_y : TensorView.loaded s (programTileView s yReg blockSize)
-      (fun idx : TileIndex [blockSize] => ys idx.1)) :
+    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
     ∀ idx : TileIndex [blockSize],
       let addr := s.pid * blockSize + idx.1.val
       TensorView.observe (exec (addKernelMasked xReg yReg outReg blockSize nElements) s)
@@ -239,5 +275,29 @@ theorem add_kernel_masked_correct_view
          TensorView.offset, Offset.strided, observeAt, addSpec]
     using add_kernel_masked_correct xReg yReg outReg blockSize nElements
       hBlockSize s xs ys hx hy idx.1
+
+/-- Compute-facing view-level surface for `add_kernel_masked_correct`. -/
+theorem add_kernel_masked_correct_view
+    (xReg yReg outReg : RegionName)
+    (blockSize nElements : Nat) (hBlockSize : 0 < blockSize)
+    (s : BlockState) (xs ys : Fin blockSize → ℝ)
+    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
+    ComputeKernel.ExecCorrect
+      ((addKernelMasked xReg yReg outReg blockSize nElements))
+      s
+      (fun s' =>
+        ∀ idx : TileIndex [blockSize],
+          let addr := s.pid * blockSize + idx.1.val
+          TensorView.observe (some s')
+              (programTileView s outReg blockSize) idx
+            = some (if addr < nElements then xs idx.1 + ys idx.1
+                    else s.readMem outReg addr)) := by
+  apply ComputeKernel.execCorrect_of_toAlgKernel rfl
+  intro s' hExec idx
+  have hview := add_kernel_masked_correct_exec_view xReg yReg outReg blockSize nElements
+    hBlockSize s xs ys h_x h_y idx
+  rw [hExec] at hview
+  simpa using hview
 
 end VeriTile.Examples

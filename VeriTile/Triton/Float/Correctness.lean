@@ -5,6 +5,7 @@ Float-facing correctness bridge for the current real-valued Triton semantics.
 -/
 
 import VeriTile.Triton.Float.StateErasure
+import VeriTile.Triton.Memory
 
 namespace VeriTile.Triton
 
@@ -125,6 +126,47 @@ def AlgorithmCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
   | Except.ok ak => Kernel.Correct ak post
   | Except.error _ => False
 
+/-- Public compute-facing correctness surface.
+
+This is the Lean proof layer for `ComputeKernel`: the theorem starts from
+compute-facing syntax, then projects through `toAlgorithm?` and proves the
+algorithmic Real semantics. Numeric IEEE/test-backed compute correctness is a
+separate layer. -/
+def ComputeCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
+  AlgorithmCorrect ck post
+
+/-- Public compute-facing refinement surface. Both compute kernels must project
+successfully to algorithm kernels, then the ordinary algorithm refinement proof
+runs on the projected pair. -/
+def ComputeRefine
+    (lhs rhs : ComputeKernel)
+    (rel : BlockState → BlockState → BlockState → Prop) : Prop :=
+  match lhs.toAlgorithm?, rhs.toAlgorithm? with
+  | Except.ok lhsAlg, Except.ok rhsAlg => Kernel.Refine lhsAlg rhsAlg rel
+  | _, _ => False
+
+/-- One-run compute-facing correctness from a fixed initial state.
+
+This is the ergonomic surface for example theorems that already fix their input
+state and loaded-input hypotheses. It packages the generic two-state
+`ComputeCorrect` postcondition as `s0 = s -> post s'`. -/
+def ExecCorrect
+    (ck : ComputeKernel) (s : BlockState) (post : BlockState → Prop) : Prop :=
+  ComputeCorrect ck (fun s0 s' => s0 = s → post s')
+
+/-- One-run correctness surface for kernels whose observable output is a 1D
+tensor view matching an array-shaped spec. -/
+def OutputsMatchArray {n : Nat}
+    (ck : ComputeKernel) (s : BlockState)
+    (view : TensorView [n]) (spec : Fin n → ℝ) : Prop :=
+  ExecCorrect ck s (fun s' => TensorView.matchesArray s' view spec)
+
+/-- One-run compute-facing refinement from a fixed initial state. -/
+def ExecRefine
+    (lhs rhs : ComputeKernel) (s : BlockState)
+    (rel : BlockState → BlockState → Prop) : Prop :=
+  ComputeRefine lhs rhs (fun s0 lhs' rhs' => s0 = s → rel lhs' rhs')
+
 /-- Current compute-kernel execution is defined by successful algorithm
 projection. Future compute-only execution can refine this definition without
 changing the `AlgorithmCorrect` API. -/
@@ -142,11 +184,116 @@ theorem algorithmCorrect_of_toAlgorithm_eq {ck : ComputeKernel} {ak : AlgKernel}
     AlgorithmCorrect ck post := by
   simp [AlgorithmCorrect, h, hc]
 
+/-- Bridge from an explicit successful projection to public compute-facing
+correctness. -/
+theorem computeCorrect_of_toAlgorithm_eq {ck : ComputeKernel} {ak : AlgKernel}
+    {post : AlgSpec}
+    (h : ck.toAlgorithm? = Except.ok ak)
+    (hc : Kernel.Correct ak post) :
+    ComputeCorrect ck post := by
+  simpa [ComputeCorrect] using algorithmCorrect_of_toAlgorithm_eq h hc
+
+/-- Bridge for projected algorithm kernels using `ck.toAlgKernel` as the
+execution surface. This is the preferred bridge once examples are
+compute-facing by default. -/
+theorem computeCorrect_of_toAlgKernel {ck : ComputeKernel} {post : AlgSpec}
+    (h : ck.toAlgorithm? = Except.ok ck.toAlgKernel)
+    (hc : Kernel.Correct ck.toAlgKernel post) :
+    ComputeCorrect ck post := by
+  exact computeCorrect_of_toAlgorithm_eq h hc
+
+/-- Bridge from explicit successful projections to public compute-facing
+refinement. -/
+theorem computeRefine_of_toAlgorithm_eq
+    {lhs rhs : ComputeKernel} {lhsAlg rhsAlg : AlgKernel}
+    {rel : BlockState → BlockState → BlockState → Prop}
+    (hlhs : lhs.toAlgorithm? = Except.ok lhsAlg)
+    (hrhs : rhs.toAlgorithm? = Except.ok rhsAlg)
+    (hrefine : Kernel.Refine lhsAlg rhsAlg rel) :
+    ComputeRefine lhs rhs rel := by
+  simp [ComputeRefine, hlhs, hrhs, hrefine]
+
+/-- Bridge for projected algorithm-kernel refinements using `toAlgKernel` on
+both sides. -/
+theorem computeRefine_of_toAlgKernel
+    {lhs rhs : ComputeKernel}
+    {rel : BlockState → BlockState → BlockState → Prop}
+    (hlhs : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
+    (hrhs : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
+    (hrefine : Kernel.Refine lhs.toAlgKernel rhs.toAlgKernel rel) :
+    ComputeRefine lhs rhs rel := by
+  exact computeRefine_of_toAlgorithm_eq hlhs hrhs hrefine
+
 /-- Transition bridge for legacy algorithm kernels wrapped by the DSL. -/
 theorem algorithmCorrect_fromAlg {k : AlgKernel} {post : AlgSpec}
     (hc : Kernel.Correct k post) :
     AlgorithmCorrect (.fromAlg k) post := by
   simpa [AlgorithmCorrect, toAlgorithm?] using hc
+
+/-- Transition bridge for legacy algorithm kernels wrapped by the DSL. -/
+theorem computeCorrect_fromAlg {k : AlgKernel} {post : AlgSpec}
+    (hc : Kernel.Correct k post) :
+    ComputeCorrect (.fromAlg k) post := by
+  simpa [ComputeCorrect] using algorithmCorrect_fromAlg hc
+
+/-- Transition bridge for one-run correctness of legacy algorithm kernels. -/
+theorem execCorrect_fromAlg {k : AlgKernel} {s : BlockState}
+    {post : BlockState → Prop}
+    (hc : ∀ s', exec k s = some s' → post s') :
+    ExecCorrect (.fromAlg k) s post := by
+  apply computeCorrect_fromAlg
+  intro s0 s' hExec hs0
+  subst s0
+  exact hc s' hExec
+
+/-- One-run correctness bridge for compute-facing kernels through their
+projected algorithm kernel. -/
+theorem execCorrect_of_toAlgKernel {ck : ComputeKernel} {s : BlockState}
+    {post : BlockState → Prop}
+    (h : ck.toAlgorithm? = Except.ok ck.toAlgKernel)
+    (hc : ∀ s', exec ck.toAlgKernel s = some s' → post s') :
+    ExecCorrect ck s post := by
+  apply computeCorrect_of_toAlgKernel h
+  intro s0 s' hExec hs0
+  subst s0
+  exact hc s' hExec
+
+/-- Transition bridge for legacy algorithm-kernel refinements wrapped by the
+DSL. -/
+theorem computeRefine_fromAlg {lhs rhs : AlgKernel}
+    {rel : BlockState → BlockState → BlockState → Prop}
+    (hrefine : Kernel.Refine lhs rhs rel) :
+    ComputeRefine (.fromAlg lhs) (.fromAlg rhs) rel := by
+  simpa [ComputeRefine, toAlgorithm?] using hrefine
+
+/-- Transition bridge for one-run refinement of legacy algorithm kernels. -/
+theorem execRefine_fromAlg {lhs rhs : AlgKernel} {s : BlockState}
+    {rel : BlockState → BlockState → Prop}
+    (hrefine : ∀ lhs' rhs',
+      exec lhs s = some lhs' →
+      exec rhs s = some rhs' →
+      rel lhs' rhs') :
+    ExecRefine (.fromAlg lhs) (.fromAlg rhs) s rel := by
+  apply computeRefine_fromAlg
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  exact hrefine lhs' rhs' hL hR
+
+/-- One-run refinement bridge for compute-facing kernels through their
+projected algorithm kernels. -/
+theorem execRefine_of_toAlgKernel {lhs rhs : ComputeKernel} {s : BlockState}
+    {rel : BlockState → BlockState → Prop}
+    (hlhs : lhs.toAlgorithm? = Except.ok lhs.toAlgKernel)
+    (hrhs : rhs.toAlgorithm? = Except.ok rhs.toAlgKernel)
+    (hrefine : ∀ lhs' rhs',
+      exec lhs.toAlgKernel s = some lhs' →
+      exec rhs.toAlgKernel s = some rhs' →
+      rel lhs' rhs') :
+    ExecRefine lhs rhs s rel := by
+  apply computeRefine_of_toAlgKernel hlhs hrhs
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  exact hrefine lhs' rhs' hL hR
 
 /-- Definition-unfolding lemma: when projection succeeds, `ComputeKernel.eval`
 unfolds to `exec` on the projected algorithm kernel.

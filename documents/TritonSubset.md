@@ -332,15 +332,15 @@ syntax for Triton-like surface spelling.
 
 Float theorem policy: algorithmic correctness/refinement theorems are proved
 over erased `.real` kernels. The compute-facing DSL surface is
-`ComputeKernel`; `ComputeKernel.AlgorithmCorrect` projects successful compute
-kernels to the algorithm layer through `toAlgorithm?`. Existing float-facing
-theorems can still use erasure equations such as `k.eraseDType = realK` to
-reuse Real proofs for dtype-annotated algorithm kernels. Computational
-correctness/refinement is represented separately by `Kernel.ComputeCorrectAt?`
-and `Kernel.ComputeRefineAt?`, epsilon-bound predicates over observed outputs.
-That layer is currently supported by smoke and differential tests rather than
-IEEE-754 proof. These definitions live in `VeriTile.Triton.Float`; see
-`documents/EraseDType.md` for the compute/algorithm split and bitcast policy.
+`ComputeKernel`; `ComputeKernel.ComputeCorrect` and
+`ComputeKernel.ComputeRefine` project successful compute kernels to the
+algorithm layer through `toAlgorithm?`. Existing float-facing theorems can still
+use erasure equations such as `k.eraseDType = realK` to reuse Real proofs for
+dtype-annotated algorithm kernels. Numeric compute correctness/refinement is
+represented separately by observation-level predicates and differential tests
+rather than IEEE-754 proof. These definitions live in `VeriTile.Triton.Float`;
+see `documents/EraseDType.md` for the compute/algorithm split and bitcast
+policy.
 
 ## Operator and Syntax Coverage Checklist
 

@@ -12,6 +12,7 @@ This file adds only the reciprocal-form kernel and the equivalence theorem.
 
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
@@ -22,7 +23,7 @@ open VeriTile.Triton
 
 /-- Stable softmax with precomputed reciprocal. Saves N-1 divisions vs
     the per-element-divide form (`stableSoftmaxKernel`). -/
-def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x      := tl.load($(xReg) + offs)
@@ -89,7 +90,7 @@ theorem softmax_reciprocal_refinement
   exact div_eq_mul_inv_real _ _ (ne_of_gt h_sum_pos)
 
 /-- View-level surface for `softmax_reciprocal_refinement`. -/
-theorem softmax_reciprocal_refinement_view
+theorem softmax_reciprocal_refinement_exec_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
@@ -105,5 +106,30 @@ theorem softmax_reciprocal_refinement_view
   simpa [TensorView.observe, observeTileAt, programTileView,
          TensorView.offset, Offset.strided, observeAt]
     using softmax_reciprocal_refinement xReg yReg N hN s xs hx idx.1
+
+/-- Compute-facing view-level refinement surface for the reciprocal softmax
+rewrite. -/
+theorem softmax_reciprocal_refinement_view
+    (xReg yReg : RegionName)
+    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    ComputeKernel.ComputeRefine
+      ((stableSoftmaxKernel xReg yReg N))
+      ((softmaxRecipKernel xReg yReg N))
+      (fun s0 lhs' rhs' =>
+        s0 = s →
+        ∀ idx : TileIndex [N],
+          TensorView.observe (some lhs')
+              (programTileView s yReg N) idx =
+          TensorView.observe (some rhs')
+              (programTileView s yReg N) idx) := by
+  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  intro idx
+  have hview := softmax_reciprocal_refinement_exec_view xReg yReg N hN s xs h_x idx
+  rw [hL, hR] at hview
+  simpa using hview
 
 end VeriTile.Examples

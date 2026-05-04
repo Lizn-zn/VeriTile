@@ -803,7 +803,8 @@ def fa1NaiveVerifiedForwardKernelStridedBoundaryD
     (M Bd S_q S D : Nat)
     (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
     (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
-    (scale : ℝ) : Kernel :=
+    (scale : ℝ) : ComputeKernel :=
+  ComputeKernel.fromAlg
   { inputs := [qReg, kReg, vReg]
     outputs := [outReg]
     body :=
@@ -817,7 +818,8 @@ def fa1NaiveVerifiedForwardKernelStridedCausalBoundaryD
     (M Bd S_q S D : Nat)
     (sQB sQH sQS sQD : Nat) (sKB sKH sKN sKD : Nat)
     (sVB sVH sVN sVD : Nat) (sOB sOH sOM sOD : Nat)
-    (scale : ℝ) : Kernel :=
+    (scale : ℝ) : ComputeKernel :=
+  ComputeKernel.fromAlg
   { inputs := [qReg, kReg, vReg]
     outputs := [outReg]
     body :=

@@ -27,6 +27,7 @@ import Mathlib.Algebra.BigOperators.Field
 import Mathlib.Tactic.FieldSimp
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 
@@ -68,7 +69,7 @@ Region names are kernel parameters; both kernels share the input region
 `xReg` (read-only) and output region `yReg`. -/
 
 /-- Naive softmax: `y = exp(x) / sum(exp(x))`. -/
-def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
@@ -79,7 +80,7 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := tr
 }
 
 /-- Stable softmax: subtract the max before exponentiating. -/
-def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
@@ -236,7 +237,7 @@ theorem softmax_kernels_refinement
   exact congrFun h i
 
 /-- View-level surface for `softmax_kernels_refinement`. -/
-theorem softmax_kernels_refinement_view
+theorem softmax_kernels_refinement_exec_view
     (xReg yReg : RegionName)
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
@@ -252,5 +253,29 @@ theorem softmax_kernels_refinement_view
   simpa [TensorView.observe, observeTileAt, programTileView,
          TensorView.offset, Offset.strided, observeAt]
     using softmax_kernels_refinement xReg yReg blockSize hN s xs hx idx.1
+
+/-- Compute-facing view-level surface for `softmax_kernels_refinement`. -/
+theorem softmax_kernels_refinement_view
+    (xReg yReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ComputeKernel.ComputeRefine
+      ((naiveSoftmaxKernel xReg yReg blockSize))
+      ((stableSoftmaxKernel xReg yReg blockSize))
+      (fun s0 lhs' rhs' =>
+        s0 = s →
+        ∀ idx : TileIndex [blockSize],
+          TensorView.observe (some lhs')
+              (programTileView s yReg blockSize) idx =
+          TensorView.observe (some rhs')
+              (programTileView s yReg blockSize) idx) := by
+  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  intro idx
+  have hview := softmax_kernels_refinement_exec_view xReg yReg blockSize hN s xs h_x idx
+  rw [hL, hR] at hview
+  simpa using hview
 
 end VeriTile.Examples

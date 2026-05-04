@@ -11,6 +11,7 @@ kernel proof still depends on the Welford loop invariant.
 
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.Common
@@ -22,7 +23,7 @@ open VeriTile.Triton
 
 /-- Two-pass LayerNorm kernel: `tl.sum` twice (mean and var), then affine. -/
 def twoPassLayerNormKernel
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : Kernel := triton {
+    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(N) + tl.arange($(N))
   x      := tl.load($(xReg) + offs)
@@ -40,7 +41,7 @@ def twoPassLayerNormKernel
 
 /-- Fused single-pass LayerNorm kernel: Welford `forLoop`, then affine. -/
 def fusedLayerNormKernel
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : Kernel := triton {
+    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel := triton {
   pid := tl.program_id(0)
   M   := 0
   S   := 0
@@ -66,7 +67,8 @@ def fusedLayerNormKernel
 }
 
 def layerNormAffineTailKernel
-    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : Kernel :=
+    (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel :=
+  ComputeKernel.fromAlg
   { inputs := [xReg, γReg, βReg]
     outputs := [yReg]
     body :=
@@ -356,7 +358,7 @@ theorem layernorm_kernels_refinement
         _h_x _h_γ _h_β _h_yx _h_yγ _h_yβ i]
 
 /-- View-level surface for `layernorm_kernels_refinement`. -/
-theorem layernorm_kernels_refinement_view
+theorem layernorm_kernels_refinement_exec_view
     (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
     (s : BlockState) (xs γs βs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
@@ -382,5 +384,35 @@ theorem layernorm_kernels_refinement_view
          TensorView.offset, Offset.strided, observeAt]
     using layernorm_kernels_refinement xReg γReg βReg yReg N hN ε s xs γs βs
       hx hγ hβ h_yx h_yγ h_yβ idx.1
+
+/-- Compute-facing view-level surface for `layernorm_kernels_refinement`. -/
+theorem layernorm_kernels_refinement_view
+    (xReg γReg βReg yReg : RegionName) (N : Nat) (hN : 0 < N) (ε : ℝ)
+    (s : BlockState) (xs γs βs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1))
+    (h_γ : TensorView.loaded s (featureView γReg N)
+      (fun idx : TileIndex [N] => γs idx.1))
+    (h_β : TensorView.loaded s (featureView βReg N)
+      (fun idx : TileIndex [N] => βs idx.1))
+    (h_yx : yReg ≠ xReg) (h_yγ : yReg ≠ γReg) (h_yβ : yReg ≠ βReg) :
+    ComputeKernel.ComputeRefine
+      ((twoPassLayerNormKernel xReg γReg βReg yReg N ε))
+      ((fusedLayerNormKernel xReg γReg βReg yReg N ε))
+      (fun s0 lhs' rhs' =>
+        s0 = s →
+        ∀ idx : TileIndex [N],
+          TensorView.observe (some lhs')
+              (programTileView s yReg N) idx
+            = TensorView.observe (some rhs')
+              (programTileView s yReg N) idx) := by
+  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  intro idx
+  have hview := layernorm_kernels_refinement_exec_view xReg γReg βReg yReg N hN ε
+    s xs γs βs h_x h_γ h_β h_yx h_yγ h_yβ idx
+  rw [hL, hR] at hview
+  simpa using hview
 
 end VeriTile.Examples

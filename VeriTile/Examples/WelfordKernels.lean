@@ -13,6 +13,7 @@ import Mathlib.Tactic.Ring
 import Mathlib.Tactic.Linarith
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.Common
@@ -54,7 +55,7 @@ def twopass_welford_kernel(x_ptr, mean_ptr, var_ptr,
 ```
 -/
 def twopassWelfordKernel (xReg meanReg varReg : RegionName)
-    (blockSize : Nat) : Kernel := triton {
+    (blockSize : Nat) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange($(blockSize))
   x      := tl.load($(xReg) + offs)
@@ -102,7 +103,7 @@ def online_welford_kernel(x_ptr, mean_ptr, var_ptr,
 ```
 -/
 def onlineWelfordKernel (xReg meanReg varReg : RegionName)
-    (blockSize : Nat) : Kernel := triton {
+    (blockSize : Nat) : ComputeKernel := triton {
   pid := tl.program_id(0)
   M   := 0
   S   := 0
@@ -538,7 +539,7 @@ theorem welford_kernels_refinement
   exact ⟨h_2p_mean.trans h_on_mean.symm, h_2p_var.trans h_on_var.symm⟩
 
 /-- View-level surface for `welford_kernels_refinement`. -/
-theorem welford_kernels_refinement_view
+theorem welford_kernels_refinement_exec_view
     (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
@@ -567,5 +568,29 @@ theorem welford_kernels_refinement_view
             TensorView.offset, Offset.strided, BlockState.readMem,
             h2p, hon] at hv ⊢
     exact hv
+
+/-- Compute-facing view-level surface for `welford_kernels_refinement`. -/
+theorem welford_kernels_refinement_view
+    (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_mv : meanReg ≠ varReg) :
+    ComputeKernel.ComputeRefine
+      ((twopassWelfordKernel xReg meanReg varReg blockSize))
+      ((onlineWelfordKernel xReg meanReg varReg blockSize))
+      (fun s0 lhs' rhs' =>
+        s0 = s →
+        TensorView.observe (some lhs') (scalarCellView meanReg 0) PUnit.unit
+            = TensorView.observe (some rhs') (scalarCellView meanReg 0) PUnit.unit
+        ∧ TensorView.observe (some lhs') (scalarCellView varReg 0) PUnit.unit
+            = TensorView.observe (some rhs') (scalarCellView varReg 0) PUnit.unit) := by
+  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  have hview := welford_kernels_refinement_exec_view xReg meanReg varReg blockSize
+    hN s xs h_x h_mv
+  rw [hL, hR] at hview
+  simpa using hview
 
 end VeriTile.Examples

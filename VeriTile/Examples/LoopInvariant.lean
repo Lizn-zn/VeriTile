@@ -64,7 +64,8 @@ private def nestedCounterInnerBody : List Stmt :=
 private def nestedCounterOuterBody (N : Nat) : List Stmt :=
   [.forLoop "j" N nestedCounterInnerBody]
 
-private def nestedCounterKernel (M N : Nat) : Kernel :=
+private def nestedCounterKernel (M N : Nat) : ComputeKernel :=
+  ComputeKernel.fromAlg
   { inputs := []
   , outputs := []
   , body :=

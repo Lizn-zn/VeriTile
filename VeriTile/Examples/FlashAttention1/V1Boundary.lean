@@ -323,7 +323,7 @@ private def fa1PostLoopStridedBoundary (outReg : RegionName) (M D S_q : Nat)
     (scale : ℝ) :
     (fa1ForwardKernelStridedBoundary qReg kReg vReg outReg M D Bk numKVBlocks S_q S_k
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
       fa1PreLoopStridedBoundary qReg M D S_q
         sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
       [Stmt.forLoop "n" numKVBlocks
@@ -339,7 +339,7 @@ private def fa1PostLoopStridedBoundary (outReg : RegionName) (M D S_q : Nat)
     (scale : ℝ) :
     (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg M D Bk numKVBlocks S_q S_k
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
       fa1PreLoopStridedBoundary qReg M D S_q
         sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
       [Stmt.forLoop "n" numKVBlocks
@@ -708,7 +708,7 @@ private def fa1PostLoopStridedBoundaryD (outReg : RegionName)
     (scale : ℝ) :
     (fa1ForwardKernelStridedBoundaryD qReg kReg vReg outReg M Bd Bk numKVBlocks S_q S_k D
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
       fa1PreLoopStridedBoundaryD qReg M Bd S_q D
         sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
       [Stmt.forLoop "n" numKVBlocks
@@ -724,7 +724,7 @@ private def fa1PostLoopStridedBoundaryD (outReg : RegionName)
     (scale : ℝ) :
     (fa1ForwardKernelStridedCausalBoundaryD qReg kReg vReg outReg M Bd Bk numKVBlocks S_q S_k D
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
       fa1PreLoopStridedBoundaryD qReg M Bd S_q D
         sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
       [Stmt.forLoop "n" numKVBlocks
@@ -1754,7 +1754,7 @@ theorem fa1_forward_correct_strided_boundary_raw_of_step
   rw [show (fa1ForwardKernelStridedBoundary qReg kReg vReg outReg
         M D Bk numKVBlocks S_q S_k
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
         fa1PreLoopStridedBoundary qReg M D S_q
           sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
         [Stmt.forLoop "n" numKVBlocks
@@ -1862,7 +1862,7 @@ theorem fa1_forward_correct_strided_boundaryD_raw_of_step
   rw [show (fa1ForwardKernelStridedBoundaryD qReg kReg vReg outReg
         M Bd Bk numKVBlocks S_q S_k D
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
         fa1PreLoopStridedBoundaryD qReg M Bd S_q D
           sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
         [Stmt.forLoop "n" numKVBlocks
@@ -1965,7 +1965,7 @@ theorem fa1_forward_correct_strided_causal_boundary_raw_of_step
   rw [show (fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg
         M D Bk numKVBlocks S_q S_k
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
         fa1PreLoopStridedBoundary qReg M D S_q
           sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
         [Stmt.forLoop "n" numKVBlocks
@@ -2073,7 +2073,7 @@ theorem fa1_forward_correct_strided_causal_boundaryD_raw_of_step
   rw [show (fa1ForwardKernelStridedCausalBoundaryD qReg kReg vReg outReg
         M Bd Bk numKVBlocks S_q S_k D
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
         fa1PreLoopStridedBoundaryD qReg M Bd S_q D
           sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
         [Stmt.forLoop "n" numKVBlocks

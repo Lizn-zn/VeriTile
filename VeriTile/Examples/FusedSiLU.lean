@@ -63,6 +63,7 @@ def silu_step_residual(silu_ptr, residual_ptr, out_ptr,
 import Mathlib.Analysis.SpecialFunctions.Sigmoid
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 
@@ -71,7 +72,7 @@ namespace VeriTile.Examples
 open VeriTile.Triton
 
 def fusedSiLUKernel (xReg gateReg residualReg outReg : RegionName)
-    (blockSize : Nat) : Kernel := triton {
+    (blockSize : Nat) : ComputeKernel := triton {
   pid      := tl.program_id(0)
   offsets  := pid * $(blockSize) + tl.arange($(blockSize))
   x        := tl.load($(xReg) + offsets)
@@ -83,7 +84,7 @@ def fusedSiLUKernel (xReg gateReg residualReg outReg : RegionName)
   tl.store($(outReg) + offsets, y)
 }
 
-def siluStepGate (xReg gateReg zReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def siluStepGate (xReg gateReg zReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid     := tl.program_id(0)
   offsets := pid * $(blockSize) + tl.arange($(blockSize))
   x       := tl.load($(xReg) + offsets)
@@ -92,7 +93,7 @@ def siluStepGate (xReg gateReg zReg : RegionName) (blockSize : Nat) : Kernel := 
   tl.store($(zReg) + offsets, z)
 }
 
-def siluStepSilu (zReg siluReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def siluStepSilu (zReg siluReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid     := tl.program_id(0)
   offsets := pid * $(blockSize) + tl.arange($(blockSize))
   z       := tl.load($(zReg) + offsets)
@@ -101,7 +102,7 @@ def siluStepSilu (zReg siluReg : RegionName) (blockSize : Nat) : Kernel := trito
 }
 
 def siluStepResidual (siluReg residualReg outReg : RegionName)
-    (blockSize : Nat) : Kernel := triton {
+    (blockSize : Nat) : ComputeKernel := triton {
   pid      := tl.program_id(0)
   offsets  := pid * $(blockSize) + tl.arange($(blockSize))
   silu     := tl.load($(siluReg) + offsets)
@@ -109,6 +110,25 @@ def siluStepResidual (siluReg residualReg outReg : RegionName)
   y        := residual + silu
   tl.store($(outReg) + offsets, y)
 }
+
+def unfusedSiLUKernel
+    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
+    (blockSize : Nat) : ComputeKernel :=
+  ComputeKernel.fromAlg
+  { inputs := [xReg, gateReg, residualReg]
+  , outputs := [outReg]
+  , body :=
+      (siluStepGate xReg gateReg zReg blockSize).body ++
+      (siluStepSilu zReg siluReg blockSize).body ++
+      (siluStepResidual siluReg residualReg outReg blockSize).body }
+
+private theorem stepStmts_append (xs ys : List Stmt) (s : BlockState) :
+    stepStmts (xs ++ ys) s = (stepStmts xs s).bind (fun s' => stepStmts ys s') := by
+  induction xs generalizing s with
+  | nil => simp
+  | cons st rest ih =>
+      simp [stepStmts]
+      cases stepStmt st s <;> simp [ih]
 
 noncomputable def execUnfusedSiLU
     (xReg gateReg residualReg zReg siluReg outReg : RegionName)
@@ -119,6 +139,16 @@ noncomputable def execUnfusedSiLU
     match exec (siluStepSilu zReg siluReg blockSize) s1 with
     | none => none
     | some s2 => exec (siluStepResidual siluReg residualReg outReg blockSize) s2
+
+theorem exec_unfusedSiLUKernel
+    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
+    (blockSize : Nat) (s : BlockState) :
+    exec (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize) s =
+      execUnfusedSiLU xReg gateReg residualReg zReg siluReg outReg blockSize s := by
+  simp [unfusedSiLUKernel, execUnfusedSiLU, exec, stepStmts_append]
+  cases h1 : stepStmts (siluStepGate xReg gateReg zReg blockSize).body s <;> simp
+  case some s1 =>
+    cases h2 : stepStmts (siluStepSilu zReg siluReg blockSize).body s1 <;> simp
 
 noncomputable def fusedSiLUSpec {blockSize : Nat}
     (xs gates residuals : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
@@ -386,7 +416,7 @@ theorem silu_kernels_refinement
         h_x h_g h_res h_zRes h_siluRes i]
 
 /-- View-level surface for `silu_kernels_refinement`. -/
-theorem silu_kernels_refinement_view
+theorem silu_kernels_refinement_exec_view
     (xReg gateReg residualReg zReg siluReg outReg : RegionName)
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
     (xs gates residuals : Fin blockSize → ℝ)
@@ -416,5 +446,38 @@ theorem silu_kernels_refinement_view
          TensorView.offset, Offset.strided, observeAt]
     using silu_kernels_refinement xReg gateReg residualReg zReg siluReg outReg
       blockSize hN s xs gates residuals hx hg hres h_zRes h_siluRes idx.1
+
+/-- Compute-facing view-level surface for `silu_kernels_refinement`. -/
+theorem silu_kernels_refinement_view
+    (xReg gateReg residualReg zReg siluReg outReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
+    (xs gates residuals : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1))
+    (h_g : TensorView.loaded s (programTileView s gateReg blockSize)
+      (fun idx : TileIndex [blockSize] => gates idx.1))
+    (h_res : TensorView.loaded s (programTileView s residualReg blockSize)
+      (fun idx : TileIndex [blockSize] => residuals idx.1))
+    (h_zRes : zReg ≠ residualReg)
+    (h_siluRes : siluReg ≠ residualReg) :
+    ComputeKernel.ComputeRefine
+      ((fusedSiLUKernel xReg gateReg residualReg outReg blockSize))
+      (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
+      (fun s0 lhs' rhs' =>
+        s0 = s →
+        ∀ idx : TileIndex [blockSize],
+          TensorView.observe (some lhs')
+              (programTileView s outReg blockSize) idx =
+          TensorView.observe (some rhs')
+              (programTileView s outReg blockSize) idx) := by
+  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  intro idx
+  have hview := silu_kernels_refinement_exec_view xReg gateReg residualReg zReg siluReg outReg
+    blockSize hN s xs gates residuals h_x h_g h_res h_zRes h_siluRes idx
+  have hUnf := exec_unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize s
+  rw [← hUnf, hR] at hview
+  simpa [hL] using hview
 
 end VeriTile.Examples

@@ -263,4 +263,14 @@ def eraseDType (k : Kernel) : Kernel :=
 
 end Kernel
 
+namespace ComputeKernel
+
+/-- Project a compute-facing kernel to the algorithm layer, then erase
+algorithm dtype annotations. This keeps float-facing examples compute-first
+while reusing the existing Real proof path. -/
+def eraseDType (ck : ComputeKernel) : ComputeKernel :=
+  ComputeKernel.fromAlg ck.toAlgKernel.eraseDType
+
+end ComputeKernel
+
 end VeriTile.Triton

@@ -301,13 +301,13 @@ bit-width 或 overflow 语义。`tl.store` 从写入的 value 推断 dtype,也�
 
 Float theorem policy: 算法正确性 / refinement theorem 证明在擦除后的 `.real`
 kernel 上。面向 DSL 的 compute surface 是 `ComputeKernel`;
-`ComputeKernel.AlgorithmCorrect` 通过 `toAlgorithm?` 把可擦除的 compute kernel
-投影到算法层。已有 float-facing theorem 仍可使用 `k.eraseDType = realK` 这类
-erasure 等式,为带 dtype 标注的 algorithm kernel 复用 Real proof。计算正确性 /
-refinement 由 `Kernel.ComputeCorrectAt?` 和 `Kernel.ComputeRefineAt?` 单独表示,
-它们是对观测输出的 epsilon-bound predicate。当前这一层由 smoke / differential
-tests 支撑,不是 IEEE-754 proof。这些定义放在 `VeriTile.Triton.Float`;compute /
-algorithm split 和 bitcast policy 见 `documents/EraseDType.md`。
+`ComputeKernel.ComputeCorrect` 和 `ComputeKernel.ComputeRefine` 通过
+`toAlgorithm?` 把可擦除的 compute kernel 投影到算法层。已有 float-facing theorem
+仍可使用 `k.eraseDType = realK` 这类 erasure 等式,为带 dtype 标注的 algorithm
+kernel 复用 Real proof。数值 compute correctness/refinement 仍由观测层 predicate
+和 differential tests 单独支撑,不是 IEEE-754 proof。这些定义放在
+`VeriTile.Triton.Float`;compute / algorithm split 和 bitcast policy 见
+`documents/EraseDType.md`。
 
 ## Operator / syntax 覆盖 checklist
 

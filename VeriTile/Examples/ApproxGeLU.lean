@@ -48,6 +48,7 @@ import VeriTile.Math.RealErf
 import VeriTile.Math.Tanh
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 
@@ -62,7 +63,7 @@ open VeriTile.Triton VeriTile.Math
 Reads `blockSize` values from `xReg`, computes the tanh-style approximate
 GeLU using `2 * sigmoid(2u) - 1` for `tanh(u)`, and writes the result to
 `outReg`. -/
-def approxGeLUKernel (xReg outReg : RegionName) (blockSize : Nat) : Kernel := triton {
+def approxGeLUKernel (xReg outReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid     := tl.program_id(0)
   offsets := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x       := tl.load($(xReg) + offsets)
@@ -3257,7 +3258,7 @@ theorem approx_gelu_kernel_correct
   simp [_h_x]
 
 /-- View-level surface for `approx_gelu_kernel_correct`. -/
-theorem approx_gelu_kernel_correct_view
+theorem approx_gelu_kernel_correct_exec_view
     (xReg outReg : RegionName)
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
     (xs : Fin blockSize → ℝ)
@@ -3273,6 +3274,29 @@ theorem approx_gelu_kernel_correct_view
   simpa [TensorView.observe, observeTileAt, programTileView,
          TensorView.offset, Offset.strided, observeAt]
     using approx_gelu_kernel_correct xReg outReg blockSize hN s xs hx idx.1
+
+/-- Compute-facing view-level surface for `approx_gelu_kernel_correct`. -/
+theorem approx_gelu_kernel_correct_view
+    (xReg outReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState)
+    (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ComputeKernel.ComputeCorrect
+      ((approxGeLUKernel xReg outReg blockSize))
+      (fun s0 s' =>
+        s0 = s →
+        ∀ idx : TileIndex [blockSize],
+          TensorView.observe (some s')
+              (programTileView s outReg blockSize) idx
+            = some (approxGeLUSpec xs idx.1)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have hview := approx_gelu_kernel_correct_exec_view xReg outReg blockSize hN s xs h_x idx
+  rw [hExec] at hview
+  simpa using hview
 
 /-- Target error tolerance for the standard tanh/sigmoid GeLU approximation. -/
 noncomputable def approxGeLUEps : ℝ := 1 / 1000

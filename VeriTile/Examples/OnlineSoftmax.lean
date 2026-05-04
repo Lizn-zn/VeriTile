@@ -6,6 +6,7 @@ Online softmax recurrence and typed Triton kernel skeleton.
 
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.Common
@@ -15,10 +16,10 @@ namespace VeriTile.Examples
 
 open VeriTile.Triton
 
-def batchSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel :=
+def batchSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : ComputeKernel :=
   stableSoftmaxKernel xReg yReg N
 
-def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : Kernel := triton {
+def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : ComputeKernel := triton {
   pid := tl.program_id(0)
   m   := -inf
   l   := 0
@@ -395,7 +396,7 @@ theorem online_softmax_correct
     simp [hl]
 
 /-- View-level surface for `online_softmax_correct`. -/
-theorem online_softmax_correct_view
+theorem online_softmax_correct_exec_view
     (xReg yReg : RegionName) (N : Nat) (hN : 0 < N)
     (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
@@ -408,5 +409,26 @@ theorem online_softmax_correct_view
   have hx := inputLoadedAt_of_programTileView_loaded (s := s) (region := xReg)
     (N := N) (xs := xs) h_x
   exact online_softmax_correct xReg yReg N hN s xs hx
+
+/-- Compute-facing view-level surface for `online_softmax_correct`. -/
+theorem online_softmax_correct_view
+    (xReg yReg : RegionName) (N : Nat) (hN : 0 < N)
+    (s : BlockState) (xs : Fin N → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg N)
+      (fun idx : TileIndex [N] => xs idx.1)) :
+    ComputeKernel.ComputeCorrect
+      ((onlineSoftmaxKernel xReg yReg N))
+      (fun s0 s' =>
+        s0 = s →
+        (s'.regs .real [] "m").map (fun t => t.data PUnit.unit)
+            = some (onlineSoftmaxM xs N)
+        ∧ (s'.regs .real [] "l").map (fun t => t.data PUnit.unit)
+            = some (onlineSoftmaxL xs N)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hview := online_softmax_correct_exec_view xReg yReg N hN s xs h_x
+  rw [hExec] at hview
+  simpa using hview
 
 end VeriTile.Examples

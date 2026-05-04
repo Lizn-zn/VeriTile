@@ -27,25 +27,30 @@ For the `.fromAlg` subset this projection succeeds immediately. For
 `ComputeExpr`; compute-only features that cannot be projected must fail this
 projection instead of inventing fake algorithm meanings.
 
-`ComputeKernel.AlgorithmCorrect` hides the `Except` plumbing:
+`ComputeKernel.ComputeCorrect` is the public proof surface and hides the
+`Except` plumbing:
 
 ```lean
-ComputeKernel.AlgorithmCorrect ck post :=
+ComputeKernel.ComputeCorrect ck post :=
   match ck.toAlgorithm? with
   | Except.ok ak => Kernel.Correct ak post
   | Except.error _ => False
 ```
 
-The public proof surface should use `ComputeKernel.AlgorithmCorrect` for
-compute-facing DSL kernels. Internal helper lemmas may still use
-`Kernel.Correct` when they are specifically about an erased algorithm kernel.
+`ComputeKernel.ComputeRefine` is the corresponding two-kernel surface. Internal
+helper lemmas may still use `Kernel.Correct` / `Kernel.Refine` when they are
+specifically about projected algorithm kernels.
 
 The transition lemma is:
 
 ```lean
-ComputeKernel.algorithmCorrect_fromAlg :
+ComputeKernel.computeCorrect_fromAlg :
   Kernel.Correct k post ->
-  ComputeKernel.AlgorithmCorrect (ComputeKernel.fromAlg k) post
+  ComputeKernel.ComputeCorrect (ComputeKernel.fromAlg k) post
+
+ComputeKernel.computeRefine_fromAlg :
+  Kernel.Refine lhs rhs rel ->
+  ComputeKernel.ComputeRefine (ComputeKernel.fromAlg lhs) (ComputeKernel.fromAlg rhs) rel
 ```
 
 This keeps existing algorithm proofs reusable while the DSL return type moves
@@ -66,7 +71,7 @@ convenience for `simp` chains, not a claim about compute-vs-algorithm
 semantics.
 
 **By design: there is no internal Lean theorem connecting bit-level compute
-execution to algorithm execution.** `ComputeKernel.AlgorithmCorrect` is a
+execution to algorithm execution.** `ComputeKernel.ComputeCorrect` is a
 statement about the projected algorithm kernel. The formal compute-to-algorithm
 bridge is `ComputeKernel.toAlgorithm?` / `eraseDType`: it maps compute-facing
 syntax to the Real / Int / Nat algorithm layer where Lean proofs run. Numeric
@@ -75,10 +80,10 @@ hardware-dot precision, fast-math, etc. — is validated empirically through the
 differential testing pipeline (see PLAN.md "Verification architecture" and
 #58), not through a Lean theorem.
 
-Users reading an `AlgorithmCorrect` certificate should interpret it as: "the
+Users reading a `ComputeCorrect` Lean certificate should interpret it as: "the
 projected algorithm structure (over Real / Int / Nat) is Lean-proved correct."
-For end-to-end certification, the matching numeric `ComputeCorrect` test result
-is also required.
+For end-to-end certification, the matching numeric compute test result is also
+required.
 
 ## Naming
 

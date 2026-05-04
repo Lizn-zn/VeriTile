@@ -15,6 +15,7 @@ is loaded by `InputRowLoadedAt`.
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 
@@ -49,7 +50,7 @@ def row_wise_max(X, Y, n_cols: tl.constexpr, BLOCK_SIZE: tl.constexpr):
 
 Per `program_id`: gather `blockSize` cells from row `pid` of `xReg` (row
 stride `nCol`), sum them, and scatter the scalar to `yReg[pid]`. -/
-def rowWiseSumKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : Kernel :=
+def rowWiseSumKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : ComputeKernel :=
   triton {
     row    := tl.program_id(0)
     cols   := tl.arange(0, $(blockSize))
@@ -62,7 +63,7 @@ def rowWiseSumKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : Kernel :=
 
 Per `program_id`: gather `blockSize` cells from row `pid` of `xReg` (row
 stride `nCol`), reduce by max, and scatter the scalar to `yReg[pid]`. -/
-def rowWiseMaxKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : Kernel :=
+def rowWiseMaxKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : ComputeKernel :=
   triton {
     row    := tl.program_id(0)
     cols   := tl.arange(0, $(blockSize))
@@ -108,7 +109,7 @@ theorem rowWiseSum_correct
   rfl
 
 /-- View-level surface for `rowWiseSum_correct`. -/
-theorem rowWiseSum_correct_view
+theorem rowWiseSum_correct_exec_view
     (xReg yReg : RegionName) (nCol blockSize : Nat)
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
@@ -121,6 +122,26 @@ theorem rowWiseSum_correct_view
   simpa [TensorView.observe, observeTileAt, scalarCellView,
          TensorView.offset, Offset.strided, observeRowAt, BlockState.readMem]
     using rowWiseSum_correct xReg yReg nCol blockSize s xs hx
+
+/-- Compute-facing view-level surface for `rowWiseSum_correct`. -/
+theorem rowWiseSum_correct_view
+    (xReg yReg : RegionName) (nCol blockSize : Nat)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ComputeKernel.ComputeCorrect
+      ((rowWiseSumKernel xReg yReg nCol blockSize))
+      (fun s0 s' =>
+        s0 = s →
+        TensorView.observe (some s')
+            (scalarCellView yReg s.pid) PUnit.unit
+          = some (rowWiseSumSpec xs)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hview := rowWiseSum_correct_exec_view xReg yReg nCol blockSize s xs h_x
+  rw [hExec] at hview
+  simpa using hview
 
 /-- **Row-wise max kernel correctness.**
 
@@ -144,7 +165,7 @@ theorem rowWiseMax_correct
   rfl
 
 /-- View-level surface for `rowWiseMax_correct`. -/
-theorem rowWiseMax_correct_view
+theorem rowWiseMax_correct_exec_view
     (xReg yReg : RegionName) (nCol blockSize : Nat) (hN : 0 < blockSize)
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
@@ -157,5 +178,25 @@ theorem rowWiseMax_correct_view
   simpa [TensorView.observe, observeTileAt, scalarCellView,
          TensorView.offset, Offset.strided, observeRowAt, BlockState.readMem]
     using rowWiseMax_correct xReg yReg nCol blockSize hN s xs hx
+
+/-- Compute-facing view-level surface for `rowWiseMax_correct`. -/
+theorem rowWiseMax_correct_view
+    (xReg yReg : RegionName) (nCol blockSize : Nat) (hN : 0 < blockSize)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
+      (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ComputeKernel.ComputeCorrect
+      ((rowWiseMaxKernel xReg yReg nCol blockSize))
+      (fun s0 s' =>
+        s0 = s →
+        TensorView.observe (some s')
+            (scalarCellView yReg s.pid) PUnit.unit
+          = some (rowWiseMaxSpec hN xs)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hview := rowWiseMax_correct_exec_view xReg yReg nCol blockSize hN s xs h_x
+  rw [hExec] at hview
+  simpa using hview
 
 end VeriTile.Examples

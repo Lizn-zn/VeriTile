@@ -506,7 +506,7 @@ def toAlgorithm? : ComputeKernel → Except EraseDTypeError AlgKernel
 /--
 Legacy coercion used by existing examples whose definitions are still annotated
 as `Kernel`. New proof-facing code should use `ComputeKernel.toAlgorithm?` or
-`ComputeKernel.AlgorithmCorrect` so failed compute projection is explicit.
+`ComputeKernel.ComputeCorrect` so failed compute projection is explicit.
 -/
 def toAlgKernel (ck : ComputeKernel) : AlgKernel :=
   match ck.toAlgorithm? with
@@ -515,6 +515,18 @@ def toAlgKernel (ck : ComputeKernel) : AlgKernel :=
 
 instance : Coe ComputeKernel AlgKernel where
   coe := toAlgKernel
+
+/-- Projected algorithm inputs for compatibility with existing proof scripts. -/
+abbrev inputs (ck : ComputeKernel) : List RegionName :=
+  ck.toAlgKernel.inputs
+
+/-- Projected algorithm outputs for compatibility with existing proof scripts. -/
+abbrev outputs (ck : ComputeKernel) : List RegionName :=
+  ck.toAlgKernel.outputs
+
+/-- Projected algorithm body for compatibility with existing proof scripts. -/
+abbrev body (ck : ComputeKernel) : List Stmt :=
+  ck.toAlgKernel.body
 
 @[simp] theorem toAlgKernel_fromAlg (k : AlgKernel) :
     (ComputeKernel.fromAlg k).toAlgKernel = k := rfl

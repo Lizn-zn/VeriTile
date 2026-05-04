@@ -4,6 +4,7 @@ VeriTile.Examples.FlashAttention1.V0
 FlashAttention-1 v0/full-tile proof surface.
 -/
 
+import VeriTile.Triton.Float
 import VeriTile.Examples.FlashAttention1.Common
 
 namespace VeriTile.Examples
@@ -227,7 +228,7 @@ pre-loop setup, one `forLoop`, then post-loop readout. -/
 @[simp] theorem fa1ForwardKernel_body_eq
     (qReg kReg vReg outReg : RegionName)
     (M D Bk numKVBlocks : Nat) (scale : ℝ) :
-    (fa1ForwardKernel qReg kReg vReg outReg M D Bk numKVBlocks scale).body =
+    (fa1ForwardKernel qReg kReg vReg outReg M D Bk numKVBlocks scale).toAlgKernel.body =
       fa1PreLoop qReg M D ++
       [Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)] ++
       fa1PostLoop outReg M D := by
@@ -509,7 +510,7 @@ operational shape: `fa1PreLoopStrided ++ [forLoop n fa1LoopBodyStrided]
     (scale : ℝ) :
     (fa1ForwardKernelStrided qReg kReg vReg outReg M D Bk numKVBlocks
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
       fa1PreLoopStrided qReg M D sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
       [Stmt.forLoop "n" numKVBlocks
         (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
@@ -527,7 +528,7 @@ with `fa1LoopBodyStridedCausal` in the inner `forLoop`. -/
     (scale : ℝ) :
     (fa1ForwardKernelStridedCausal qReg kReg vReg outReg M D Bk numKVBlocks
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
       fa1PreLoopStrided qReg M D sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
       [Stmt.forLoop "n" numKVBlocks
         (fa1LoopBodyStridedCausal kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
@@ -2594,7 +2595,7 @@ theorem fa1_forward_correct
   intro idx
   -- Reshape `exec` through body = preLoop ++ [forLoop] ++ postLoop.
   show observeTileAt (stepStmts _ s) outReg _ idx = _
-  rw [show (fa1ForwardKernel qReg kReg vReg outReg M D Bk numKVBlocks scale).body =
+  rw [show (fa1ForwardKernel qReg kReg vReg outReg M D Bk numKVBlocks scale).toAlgKernel.body =
         fa1PreLoop qReg M D ++
         [Stmt.forLoop "n" numKVBlocks (fa1LoopBody kReg vReg M D Bk scale)] ++
         fa1PostLoop outReg M D from rfl]
@@ -2687,7 +2688,7 @@ theorem fa1_forward_correct_strided
   show observeTileAt (stepStmts _ s) outReg _ idx = _
   rw [show (fa1ForwardKernelStrided qReg kReg vReg outReg M D Bk numKVBlocks
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
         fa1PreLoopStrided qReg M D sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
         [Stmt.forLoop "n" numKVBlocks
           (fa1LoopBodyStrided kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
@@ -2781,7 +2782,7 @@ theorem fa1_forward_correct_strided_causal_raw_of_step
   show observeTileAt (stepStmts _ s) outReg _ idx = _
   rw [show (fa1ForwardKernelStridedCausal qReg kReg vReg outReg M D Bk numKVBlocks
         sQB sQH sQS sQD sKB sKH sKN sKD sVB sVH sVN sVD
-        sOB sOH sOM sOD scale).body =
+        sOB sOH sOM sOD scale).toAlgKernel.body =
         fa1PreLoopStrided qReg M D sQB sQH sQS sQD sKB sKH sVB sVH sOB sOH ++
         [Stmt.forLoop "n" numKVBlocks
           (fa1LoopBodyStridedCausal kReg vReg M D Bk sKN sKD sVN sVD scale)] ++
@@ -3496,7 +3497,7 @@ theorem fa1_forward_correct_4D_causal_layout
       Q4D K4D V4D scale s hPidB hPidH hQBnd
       hQ4D hK4D hV4D layout.hOValid idx
 
-theorem fa1_forward_correct_4D_views
+theorem fa1_forward_correct_4D_exec_views
     {B H S_q S_k D Bk numKVBlocks M : Nat}
     (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
     (hSk : Bk * numKVBlocks = S_k)
@@ -3525,8 +3526,42 @@ theorem fa1_forward_correct_4D_views
       Q4D K4D V4D scale s hPidB hPidH hQBnd
       hQ4D hK4D hV4D idx
 
+theorem fa1_forward_correct_4D_views
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (hSk : Bk * numKVBlocks = S_k)
+    (views : FA1Views4D B H S_q S_k D)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQBnd : s.pids 0 * M + M ≤ S_q)
+    (hQ4D : TensorView.loaded s views.qView Q4D)
+    (hK4D : TensorView.loaded s views.kView K4D)
+    (hV4D : TensorView.loaded s views.vView V4D) :
+    ComputeKernel.ComputeCorrect
+      ((views.kernel M Bk numKVBlocks scale))
+      (fun s0 s' =>
+        s0 = s →
+        ∀ idx : TileIndex [M, D],
+          observeTileAt
+              (some s')
+              views.outReg (views.outBlockOffset s M) idx
+            = some (attentionReal4D Q4D K4D V4D scale
+                (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+                 ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+                 idx.2.1, PUnit.unit))) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have hview := fa1_forward_correct_4D_exec_views hBk hNumKVBlocks hSk
+    views Q4D K4D V4D scale s hPidB hPidH hQBnd hQ4D hK4D hV4D idx
+  rw [hExec] at hview
+  simpa using hview
+
 /-- Causal FA-1 forward correctness over bundled tensor views. -/
-theorem fa1_forward_correct_4D_causal_views
+theorem fa1_forward_correct_4D_causal_exec_views
     {B H S_q S_k D Bk numKVBlocks M : Nat}
     (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
     (hSk : Bk * numKVBlocks = S_k)
@@ -3554,6 +3589,41 @@ theorem fa1_forward_correct_4D_causal_views
       views.qReg views.kReg views.vReg views.outReg
       Q4D K4D V4D scale s hPidB hPidH hQBnd
       hQ4D hK4D hV4D idx
+
+/-- Compute-facing causal FA-1 forward correctness over bundled tensor views. -/
+theorem fa1_forward_correct_4D_causal_views
+    {B H S_q S_k D Bk numKVBlocks M : Nat}
+    (hBk : 0 < Bk) (hNumKVBlocks : 0 < numKVBlocks)
+    (hSk : Bk * numKVBlocks = S_k)
+    (views : FA1Views4D B H S_q S_k D)
+    (Q4D : TileIndex [B, H, S_q, D] → ℝ)
+    (K4D V4D : TileIndex [B, H, S_k, D] → ℝ)
+    (scale : ℝ) (s : BlockState)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQBnd : s.pids 0 * M + M ≤ S_q)
+    (hQ4D : TensorView.loaded s views.qView Q4D)
+    (hK4D : TensorView.loaded s views.kView K4D)
+    (hV4D : TensorView.loaded s views.vView V4D) :
+    ComputeKernel.ComputeCorrect
+      ((views.causalKernel M Bk numKVBlocks scale))
+      (fun s0 s' =>
+        s0 = s →
+        ∀ idx : TileIndex [M, D],
+          observeTileAt
+              (some s')
+              views.outReg (views.outBlockOffset s M) idx
+            = some (attentionReal4DCausal Q4D K4D V4D scale
+                (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+                 ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+                 idx.2.1, PUnit.unit))) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have hview := fa1_forward_correct_4D_causal_exec_views hBk hNumKVBlocks hSk
+    views Q4D K4D V4D scale s hPidB hPidH hQBnd hQ4D hK4D hV4D idx
+  rw [hExec] at hview
+  simpa using hview
 
 
 end VeriTile.Examples

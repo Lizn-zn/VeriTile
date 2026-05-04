@@ -63,7 +63,7 @@ kernel can be parameterized by precomputed constants. -/
 
 def fa1ForwardKernel
     (qReg kReg vReg outReg : RegionName)
-    (M D Bk numKVBlocks : Nat) (scale : ℝ) : Kernel := triton {
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel := triton {
   pid    := tl.program_id(0)
 
   offs_m := pid * $(M) + tl.arange(0, $(M))
@@ -133,7 +133,7 @@ def fa1ForwardKernelStrided
     (stride_vb stride_vh stride_vn stride_vd : Nat)
     -- Output strides (axes [B, H, S_q, D]):
     (stride_ob stride_oh stride_om stride_od : Nat)
-    (scale : ℝ) : Kernel := triton {
+    (scale : ℝ) : ComputeKernel := triton {
   pid_qb := tl.program_id(0)
   pid_h  := tl.program_id(1)
   pid_b  := tl.program_id(2)
@@ -201,7 +201,7 @@ def fa1ForwardKernelStridedCausal
     (stride_vb stride_vh stride_vn stride_vd : Nat)
     -- Output strides (axes [B, H, S_q, D]):
     (stride_ob stride_oh stride_om stride_od : Nat)
-    (scale : ℝ) : Kernel := triton {
+    (scale : ℝ) : ComputeKernel := triton {
   pid_qb := tl.program_id(0)
   pid_h  := tl.program_id(1)
   pid_b  := tl.program_id(2)
@@ -272,7 +272,7 @@ def fa1ForwardKernelStridedBoundary
     (stride_vb stride_vh stride_vn stride_vd : Nat)
     -- Output strides (axes [B, H, S_q, D]):
     (stride_ob stride_oh stride_om stride_od : Nat)
-    (scale : ℝ) : Kernel := triton {
+    (scale : ℝ) : ComputeKernel := triton {
   pid_qb := tl.program_id(0)
   pid_h  := tl.program_id(1)
   pid_b  := tl.program_id(2)
@@ -331,7 +331,7 @@ def fa1ForwardKernelStridedCausalBoundary
     (stride_vb stride_vh stride_vn stride_vd : Nat)
     -- Output strides (axes [B, H, S_q, D]):
     (stride_ob stride_oh stride_om stride_od : Nat)
-    (scale : ℝ) : Kernel := triton {
+    (scale : ℝ) : ComputeKernel := triton {
   pid_qb := tl.program_id(0)
   pid_h  := tl.program_id(1)
   pid_b  := tl.program_id(2)
@@ -399,7 +399,7 @@ def fa1ForwardKernelStridedBoundaryD
     (stride_vb stride_vh stride_vn stride_vd : Nat)
     -- Output strides (axes [B, H, S_q, D]):
     (stride_ob stride_oh stride_om stride_od : Nat)
-    (scale : ℝ) : Kernel := triton {
+    (scale : ℝ) : ComputeKernel := triton {
   pid_qb := tl.program_id(0)
   pid_h  := tl.program_id(1)
   pid_b  := tl.program_id(2)
@@ -464,7 +464,7 @@ def fa1ForwardKernelStridedCausalBoundaryD
     (stride_vb stride_vh stride_vn stride_vd : Nat)
     -- Output strides (axes [B, H, S_q, D]):
     (stride_ob stride_oh stride_om stride_od : Nat)
-    (scale : ℝ) : Kernel := triton {
+    (scale : ℝ) : ComputeKernel := triton {
   pid_qb := tl.program_id(0)
   pid_h  := tl.program_id(1)
   pid_b  := tl.program_id(2)
@@ -540,7 +540,7 @@ def fa1NaiveForwardKernelStridedBoundaryD
     (stride_vb stride_vh stride_vn stride_vd : Nat)
     -- Output strides (axes [B, H, S_q, D]):
     (stride_ob stride_oh stride_om stride_od : Nat)
-    (scale : ℝ) : Kernel := triton {
+    (scale : ℝ) : ComputeKernel := triton {
   pid_qb := tl.program_id(0)
   pid_h  := tl.program_id(1)
   pid_b  := tl.program_id(2)
@@ -590,7 +590,7 @@ def fa1NaiveForwardKernelStridedCausalBoundaryD
     (stride_vb stride_vh stride_vn stride_vd : Nat)
     -- Output strides (axes [B, H, S_q, D]):
     (stride_ob stride_oh stride_om stride_od : Nat)
-    (scale : ℝ) : Kernel := triton {
+    (scale : ℝ) : ComputeKernel := triton {
   pid_qb := tl.program_id(0)
   pid_h  := tl.program_id(1)
   pid_b  := tl.program_id(2)
@@ -1008,7 +1008,7 @@ def outBlockOffsetD (layout : FA1Layout4D B H S_q S_k D)
 
 def kernel (layout : FA1Layout4D B H S_q S_k D)
     (qReg kReg vReg outReg : RegionName)
-    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   fa1ForwardKernelStrided qReg kReg vReg outReg M D Bk numKVBlocks
     layout.qB layout.qH layout.qS layout.qD
     layout.kB layout.kH layout.kS layout.kD
@@ -1017,7 +1017,7 @@ def kernel (layout : FA1Layout4D B H S_q S_k D)
 
 def causalKernel (layout : FA1Layout4D B H S_q S_k D)
     (qReg kReg vReg outReg : RegionName)
-    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   fa1ForwardKernelStridedCausal qReg kReg vReg outReg M D Bk numKVBlocks
     layout.qB layout.qH layout.qS layout.qD
     layout.kB layout.kH layout.kS layout.kD
@@ -1026,7 +1026,7 @@ def causalKernel (layout : FA1Layout4D B H S_q S_k D)
 
 def boundaryKernel (layout : FA1Layout4D B H S_q S_k D)
     (qReg kReg vReg outReg : RegionName)
-    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   fa1ForwardKernelStridedBoundary qReg kReg vReg outReg M D Bk numKVBlocks S_q S_k
     layout.qB layout.qH layout.qS layout.qD
     layout.kB layout.kH layout.kS layout.kD
@@ -1035,7 +1035,7 @@ def boundaryKernel (layout : FA1Layout4D B H S_q S_k D)
 
 def causalBoundaryKernel (layout : FA1Layout4D B H S_q S_k D)
     (qReg kReg vReg outReg : RegionName)
-    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   fa1ForwardKernelStridedCausalBoundary qReg kReg vReg outReg
     M D Bk numKVBlocks S_q S_k
     layout.qB layout.qH layout.qS layout.qD
@@ -1045,7 +1045,7 @@ def causalBoundaryKernel (layout : FA1Layout4D B H S_q S_k D)
 
 def boundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
     (qReg kReg vReg outReg : RegionName)
-    (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   fa1ForwardKernelStridedBoundaryD qReg kReg vReg outReg
     M Bd Bk numKVBlocks S_q S_k D
     layout.qB layout.qH layout.qS layout.qD
@@ -1055,7 +1055,7 @@ def boundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
 
 def causalBoundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
     (qReg kReg vReg outReg : RegionName)
-    (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   fa1ForwardKernelStridedCausalBoundaryD qReg kReg vReg outReg
     M Bd Bk numKVBlocks S_q S_k D
     layout.qB layout.qH layout.qS layout.qD
@@ -1065,7 +1065,7 @@ def causalBoundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
 
 def naiveBoundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
     (qReg kReg vReg outReg : RegionName)
-    (M Bd : Nat) (scale : ℝ) : Kernel :=
+    (M Bd : Nat) (scale : ℝ) : ComputeKernel :=
   fa1NaiveForwardKernelStridedBoundaryD qReg kReg vReg outReg
     M Bd S_q S_k D
     layout.qB layout.qH layout.qS layout.qD
@@ -1075,7 +1075,7 @@ def naiveBoundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
 
 def naiveCausalBoundaryKernelD (layout : FA1Layout4D B H S_q S_k D)
     (qReg kReg vReg outReg : RegionName)
-    (M Bd : Nat) (scale : ℝ) : Kernel :=
+    (M Bd : Nat) (scale : ℝ) : ComputeKernel :=
   fa1NaiveForwardKernelStridedCausalBoundaryD qReg kReg vReg outReg
     M Bd S_q S_k D
     layout.qB layout.qH layout.qS layout.qD
@@ -1124,42 +1124,42 @@ def outBlockOffsetD (views : FA1Views4D B H S_q S_k D)
   views.layout.outBlockOffsetD s M Bd
 
 def kernel (views : FA1Views4D B H S_q S_k D)
-    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   views.layout.kernel views.qReg views.kReg views.vReg views.outReg
     M Bk numKVBlocks scale
 
 def causalKernel (views : FA1Views4D B H S_q S_k D)
-    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   views.layout.causalKernel views.qReg views.kReg views.vReg views.outReg
     M Bk numKVBlocks scale
 
 def boundaryKernel (views : FA1Views4D B H S_q S_k D)
-    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   views.layout.boundaryKernel views.qReg views.kReg views.vReg views.outReg
     M Bk numKVBlocks scale
 
 def causalBoundaryKernel (views : FA1Views4D B H S_q S_k D)
-    (M Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   views.layout.causalBoundaryKernel views.qReg views.kReg views.vReg views.outReg
     M Bk numKVBlocks scale
 
 def boundaryKernelD (views : FA1Views4D B H S_q S_k D)
-    (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   views.layout.boundaryKernelD views.qReg views.kReg views.vReg views.outReg
     M Bd Bk numKVBlocks scale
 
 def causalBoundaryKernelD (views : FA1Views4D B H S_q S_k D)
-    (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : Kernel :=
+    (M Bd Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
   views.layout.causalBoundaryKernelD views.qReg views.kReg views.vReg views.outReg
     M Bd Bk numKVBlocks scale
 
 def naiveBoundaryKernelD (views : FA1Views4D B H S_q S_k D)
-    (M Bd : Nat) (scale : ℝ) : Kernel :=
+    (M Bd : Nat) (scale : ℝ) : ComputeKernel :=
   views.layout.naiveBoundaryKernelD views.qReg views.kReg views.vReg views.outReg
     M Bd scale
 
 def naiveCausalBoundaryKernelD (views : FA1Views4D B H S_q S_k D)
-    (M Bd : Nat) (scale : ℝ) : Kernel :=
+    (M Bd : Nat) (scale : ℝ) : ComputeKernel :=
   views.layout.naiveCausalBoundaryKernelD views.qReg views.kReg views.vReg views.outReg
     M Bd scale
 
