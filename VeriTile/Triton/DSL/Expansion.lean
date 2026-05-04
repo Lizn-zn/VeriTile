@@ -1357,6 +1357,21 @@ mutual
 
 partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
     MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+  let unsupportedAtomic2 (op : String) (p v : TSyntax `tritonExpr) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    discard <| expandExpr env p
+    discard <| expandExpr env v
+    let opTerm : TSyntax `term := ⟨Syntax.mkStrLit op⟩
+    pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+      ← `(ComputeStmt.effectMarker $opTerm), env, Bool.true)
+  let unsupportedAtomic3 (op : String) (p cmp v : TSyntax `tritonExpr) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    discard <| expandExpr env p
+    discard <| expandExpr env cmp
+    discard <| expandExpr env v
+    let opTerm : TSyntax `term := ⟨Syntax.mkStrLit op⟩
+    pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+      ← `(ComputeStmt.effectMarker $opTerm), env, Bool.true)
   match stx with
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
       let nameLit ← identAsStr i
@@ -1573,6 +1588,20 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
               pure (← `(Stmt.atomicAdd $hnum $sh (MemAccess.ptr $p'.term) $vTerm (MaskOpt.mask $m')),
                 ← `(ComputeStmt.atomicAdd $hnum $sh (MemAccess.ptr $p'.term) $valueExpr' (MaskOpt.mask $m')),
                 env, v'.computeTerm.isSome)
+  | `(tritonStmt| tl.atomic_max($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_max" p v
+  | `(tritonStmt| tl.atomic_min($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_min" p v
+  | `(tritonStmt| tl.atomic_and($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_and" p v
+  | `(tritonStmt| tl.atomic_or($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_or" p v
+  | `(tritonStmt| tl.atomic_xor($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_xor" p v
+  | `(tritonStmt| tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic2 "tl.atomic_xchg" p v
+  | `(tritonStmt| tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      unsupportedAtomic3 "tl.atomic_cas" p cmp v
   | `(tritonStmt| tl.async_copy($dst:tritonExpr, $src:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) => do
       discard <| expandExpr env dst
       discard <| expandExpr env src

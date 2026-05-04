@@ -65,6 +65,77 @@ example (outReg : RegionName) :
                 (Op.ref .real [] "x") MaskOpt.none ] } := by
   rfl
 
+def atomicMaxFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+  x := 1
+  tl.atomic_max($(outReg), x)
+}
+
+def atomicMinFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+  x := 1
+  tl.atomic_min($(outReg), x)
+}
+
+def atomicAndFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+  x := 1
+  tl.atomic_and($(outReg), x)
+}
+
+def atomicOrFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+  x := 1
+  tl.atomic_or($(outReg), x)
+}
+
+def atomicXorFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+  x := 1
+  tl.atomic_xor($(outReg), x)
+}
+
+def atomicXchgFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+  x := 1
+  tl.atomic_xchg($(outReg), x)
+}
+
+def atomicCasFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+  cmp := 0
+  x := 1
+  tl.atomic_cas($(outReg), cmp, x)
+}
+
+example (outReg : RegionName) :
+    (atomicMaxFailureSmoke outReg).toAlgorithm? =
+      Except.error (.requiresEffectProjection "tl.atomic_max") := by
+  rfl
+
+example (outReg : RegionName) :
+    (atomicMinFailureSmoke outReg).toAlgorithm? =
+      Except.error (.requiresEffectProjection "tl.atomic_min") := by
+  rfl
+
+example (outReg : RegionName) :
+    (atomicAndFailureSmoke outReg).toAlgorithm? =
+      Except.error (.requiresEffectProjection "tl.atomic_and") := by
+  rfl
+
+example (outReg : RegionName) :
+    (atomicOrFailureSmoke outReg).toAlgorithm? =
+      Except.error (.requiresEffectProjection "tl.atomic_or") := by
+  rfl
+
+example (outReg : RegionName) :
+    (atomicXorFailureSmoke outReg).toAlgorithm? =
+      Except.error (.requiresEffectProjection "tl.atomic_xor") := by
+  rfl
+
+example (outReg : RegionName) :
+    (atomicXchgFailureSmoke outReg).toAlgorithm? =
+      Except.error (.requiresEffectProjection "tl.atomic_xchg") := by
+  rfl
+
+example (outReg : RegionName) :
+    (atomicCasFailureSmoke outReg).toAlgorithm? =
+      Except.error (.requiresEffectProjection "tl.atomic_cas") := by
+  rfl
+
 def effectMarkerSmoke : ComputeKernel :=
   .mk [] [] [ComputeStmt.effectMarker "tl.async_copy"]
 

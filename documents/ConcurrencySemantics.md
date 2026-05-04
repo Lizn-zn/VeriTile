@@ -165,6 +165,10 @@ The first concrete atomic slice is intentionally narrow:
   final-cell theorem as initial value plus a `Finset.sum` of trace payloads.
 
 This is `Limited` atomic support, not a full concurrent executor.
+Other Triton atomic surfaces (`tl.atomic_max`, `tl.atomic_min`,
+`tl.atomic_and`, `tl.atomic_or`, `tl.atomic_xor`, `tl.atomic_xchg`, and
+`tl.atomic_cas`) currently lower to `ComputeStmt.effectMarker` and fail
+projection with `requiresEffectProjection`.
 
 ## Async / TMA Contract Slice
 
@@ -204,7 +208,7 @@ scope-tagged footprints remain #65 triggers.
 
 This boundary document does not implement:
 
-- `tl.atomic_*` beyond the limited `tl.atomic_add` proof-facing slice;
+- executable `tl.atomic_*` beyond the limited `tl.atomic_add` proof-facing slice;
 - async copy or TMA;
 - WGMMA or warp specialization;
 - shared memory or barriers;
