@@ -15,6 +15,7 @@ globs = [
   "VeriTile.Triton.+",
   "VeriTile.Examples.Common",
   "VeriTile.Examples.TritonSmoke",
+  "VeriTile.Examples.MemorySafety",
   "VeriTile.Examples.LoopInvariant",
   "VeriTile.Examples.SoftmaxEq",
   "VeriTile.Examples.LogSumExpEq",

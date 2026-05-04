@@ -177,6 +177,7 @@ See the full softmax example in
 | [`VeriTile/Examples/LogSumExpEq.lean`](./VeriTile/Examples/LogSumExpEq.lean) | Direct log-sum-exp vs shift-trick log-sum-exp |
 | [`VeriTile/Examples/SoftmaxReciprocal.lean`](./VeriTile/Examples/SoftmaxReciprocal.lean) | Stable softmax division vs precomputed reciprocal |
 | [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | Elementwise add (multi-buffer kernel ↔ math correctness) |
+| [`VeriTile/Examples/MemorySafety.lean`](./VeriTile/Examples/MemorySafety.lean) | Layer-1 active-lane bounds safety for direct, masked, and block-pointer memory |
 | [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | Fused-sigmoid MLP block vs manually-expanded `1/(1+exp(-z))` (kernel-pair refinement) |
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
 | [`VeriTile/Examples/FlashAttention1/V0.lean`](./VeriTile/Examples/FlashAttention1/V0.lean) | FA-1 v0/full-tile forward correctness, non-causal and causal, over 4D strided layouts |
@@ -189,6 +190,7 @@ See the full softmax example in
 
 - [Supported Triton subset and semantic gaps](./documents/TritonSubset.md)
 - [GPU memory modeling scope](./documents/GpuMemoryModel.md)
+- [Layer-1 memory bounds safety](./documents/MemorySafety.md)
 - [FA-1 Step 2 boundary-mask plan](./documents/FA1_Step2_BoundaryMasks.md)
 - [LLM proof wrapper](./scripts/README.md)
 - [LLM benchmark protocol](./bench/llm_eval/README.md)
