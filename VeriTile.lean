@@ -14,6 +14,7 @@ import VeriTile.Triton.Memory
 import VeriTile.Triton.MemoryBounds
 import VeriTile.Triton.MemoryFrame
 import VeriTile.Triton.MemoryFootprint
+import VeriTile.Triton.Concurrency
 import VeriTile.Triton.Launch
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.TritonSmoke

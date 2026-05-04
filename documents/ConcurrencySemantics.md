@@ -132,6 +132,26 @@ The intended implementation order is:
 4. WGMMA, warp specialization, and full Hopper-shaped kernels, deferred until
    stronger concurrency infrastructure exists.
 
+## Trace Vocabulary
+
+The first vocabulary slice lives in:
+
+```text
+VeriTile/Triton/Concurrency/Trace.lean
+```
+
+It defines `ThreadId`, `RMWOp`, `MemoryEvent`, `TraceEvent`, and `Trace`.
+`MemoryEvent.rmw` records both the RMW operation and the algorithm-layer
+payload value:
+
+```lean
+| rmw (region : RegionName) (offset : Nat) (op : RMWOp) (value : MemCell)
+```
+
+This is enough to state future atomic-add theorems as folds or sums over
+`rmw .add` event values. The trace module is not a scheduler and does not
+change `Kernel.exec`.
+
 ## Non-Goals
 
 This boundary document does not implement:
