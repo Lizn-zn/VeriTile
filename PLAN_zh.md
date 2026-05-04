@@ -31,25 +31,64 @@
 **外加 headline corollary**(派生,**不是第 9 个主定理**):
 - **`fa1_eq_fa2 : Y_fa1 = Y_fa2`** —— 由 #7 与 #8 通过 `standardAttentionMath` 的 spec 传递性导出(~30 行)。**这是论文 foreground 的句子**,但内容已经被 #7 与 #8 完全包含。
 
-## Float theorem policy
+## 验证架构(永久)
 
-项目最终采用明确的 **Real-first** 路线:
+VeriTile 的验证拆成**两个独立互补的层**(锁定理由见 #58):
 
-1. VeriTile 能表达面向用户的 float kernel 和 float theorem statement:
-   DSL/AST 允许 kernel 带 `.fp32`、`.fp16`、`.bf16` dtype 标注。
-2. VeriTile **不证明 IEEE-754 浮点正确性**。算法正确性只在擦除后的数学
-   `.real` kernel 上证明。
-3. 形式 Lean 层使用 `Kernel.AlgorithmCorrect` 和 `Kernel.AlgorithmRefine`:
-   带 dtype 标注的 kernel 先通过 `k.eraseFloat` 擦到 Real kernel,再精确证明
-   它满足 Real 算法 spec 或 Real kernel-pair refinement。
-4. 计算层使用 `Kernel.ComputeCorrectAt?` 和 `Kernel.ComputeRefineAt?`:真实观测到
-   的 floating 输出用 epsilon bound 和数学 spec 比较,或和另一个 kernel 的观测
-   输出比较。当前这一层由测试支撑;未来如果做 IEEE 形式化,可以直接证明这一层。
+```
+Algorithm 层(Lean 证明)             Compute 层(外部测试)
+────────────────────────             ──────────────────────
+AlgorithmCorrect ck spec             ComputeCorrect ck
+  := ck.toAlgorithm? = ok ∧            := 实际 Triton kernel 在差分
+     Kernel.Correct ak spec               测试下与算法 spec 比较,
+                                          epsilon bound 内匹配。
+  Real / Int / Nat 语义。              外部 pipeline,不是 Lean 定理。
+  无 IEEE rounding,无 NaN,
+  无 fp exception flag。
+```
 
-因此,Real 算法正确性到 floating computation 的 bridge 是显式 trusted boundary,
-不是隐藏假设。IEEE-754 rounding、NaN、signed zero、overflow/underflow、denormal、
-exception flag、硬件 dot precision、fast-math rewrite 都不属于形式证明范围。
-它们是文档化的 semantic gap 和测试目标,不是 Phase D 的证明义务。
+两层**不通过任何内部 Lean 定理连接**。两者之间的 bridge 是经验性的(测试),
+**这是 design 决定**。一个 VeriTile-certified kernel 意味着:
+> 算法结构由 Lean 证明正确(AlgorithmCorrect),**并且** fp 层实现已通过
+> 代表性测试集与该算法对照验证(ComputeCorrect)。
+
+完整 certification 需要两层都成立。
+
+### 永久性
+
+IEEE-754 形式化(NaN 传播、denormal、rounding mode、硬件 dot precision、
+fast-math、exception flag)**永久不在 Lean 证明范围内**。这不是延期 ——
+不存在计划中的 bridge 定理把 compute 执行连到 Lean 内部的算法执行上。
+ComputeCorrect 现在是、未来也是 test-backed。
+
+### Algorithm 层细节
+
+1. DSL 接受用户面向的 float kernel,`.fp32`/`.fp16`/`.bf16` dtype 标注照常。
+   bit-level 常量(例如哨兵 `1.0` 写成 `tl.bitcast(0x3f800000, tl.float32)`)
+   通过单一 computable decoder 接受;只支持 finite-normal binary32 模式。
+2. 算法正确性在 `Kernel.eraseDType`(fp* → real,intN → int,uintN → nat)
+   之后的算法层 kernel 上证明。
+3. 形式 Lean 层使用 `ComputeKernel.AlgorithmCorrect` 和 `Kernel.AlgorithmRefine`。
+   现有 `Kernel.Correct` 证明在算法侧 kernel 上继续有效。
+
+### Compute 层细节(测试)
+
+1. `ComputeKernel` 忠实保留用户写的 compute-facing AST(包括 `ComputeOp.bitcast`、
+   fp/int 宽度拼写等),让测试 pipeline 能 lift 回 Triton 源码做实机执行。
+2. 差分测试 pipeline(独立 workstream,见 #58 follow-up)生成样本输入,
+   执行 lift 出来的 Triton kernel,按 `|actual_output - algorithm_output_decoded|
+   < epsilon` 校验。
+3. epsilon 策略 per-op / per-kernel,文档化在每个 test suite 旁边;不进 Lean 证明。
+
+### 用户视角
+
+- 算法结构有 bug:AlgorithmCorrect 抓(Lean 证明 fail)。
+- IEEE-specific edge case 有 bug(NaN、overflow、denormal 处理等):
+  ComputeCorrect 抓(测试 fail)。**这一层 by design 没有 Lean 证明义务**。
+- "End-to-end correct" 意味着两层都绿。
+
+Real 算法正确性到 floating computation 的 trusted bridge **是测试 pipeline**,
+不是 Lean 定理。
 
 ### Tier 1 — Loop-free(Phase A,3 对)
 
