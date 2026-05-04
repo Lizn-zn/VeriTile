@@ -113,9 +113,9 @@ The current model is intentionally small. The landed memory-proof layers are:
 
 The next proof-ergonomics layer is:
 
-- **Structured footprint extraction (#61):** derive predicate footprints from
-  common direct, masked, checked block-pointer, and regular strided store
-  patterns.
+- **Structured footprint extraction (#61):** `WriteFootprint.tileImage`,
+  `activeTileImage`, and address-image helpers derive predicate footprints from
+  common direct, masked, checked block-pointer, and regular store patterns.
 
 Longer-term extension points remain:
 

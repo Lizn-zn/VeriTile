@@ -67,7 +67,11 @@ predicate-level write footprints and `BlockState.WriteWithin` frame contracts
 for single-program executions. Layer 2b lives in
 `VeriTile.Triton.Launch.Composition`: it merges explicit per-program
 `Kernel.ExecFrame`s when their write footprints are pairwise disjoint.
-Structured footprint extraction and proof automation are tracked by #61.
+Structured footprint extraction and proof automation live in
+`VeriTile.Triton.MemoryFootprint` (#61). This layer keeps
+`WriteFootprint := MemCellAddr -> Prop` as the semantic interface and adds
+smart constructors such as `WriteFootprint.tileImage`,
+`activeTileImage`, and block-pointer address-image helpers.
 
 ## Examples
 

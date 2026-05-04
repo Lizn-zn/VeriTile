@@ -178,7 +178,7 @@ See the full softmax example in
 | [`VeriTile/Examples/SoftmaxReciprocal.lean`](./VeriTile/Examples/SoftmaxReciprocal.lean) | Stable softmax division vs precomputed reciprocal |
 | [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | Elementwise add (multi-buffer kernel ↔ math correctness) |
 | [`VeriTile/Examples/MemorySafety.lean`](./VeriTile/Examples/MemorySafety.lean) | Layer-1 active-lane bounds safety for direct, masked, and block-pointer memory |
-| [`VeriTile/Examples/MemoryFrame.lean`](./VeriTile/Examples/MemoryFrame.lean) | Layer-2a write-footprint frame contracts for direct, masked, and block-pointer stores |
+| [`VeriTile/Examples/MemoryFrame.lean`](./VeriTile/Examples/MemoryFrame.lean) | Layer-2a/#61 write-footprint frame contracts and extracted direct, masked, and block-pointer store footprints |
 | [`VeriTile/Examples/GridComposition.lean`](./VeriTile/Examples/GridComposition.lean) | Layer-2b disjoint whole-grid merge over per-program write footprints |
 | [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | Fused-sigmoid MLP block vs manually-expanded `1/(1+exp(-z))` (kernel-pair refinement) |
 | [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |

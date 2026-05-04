@@ -4,6 +4,7 @@ VeriTile.Examples.GridComposition
 Representative whole-grid disjoint-frame composition smoke.
 -/
 
+import VeriTile.Triton.MemoryFootprint
 import VeriTile.Triton.Launch.Composition
 
 namespace VeriTile.Examples.GridComposition
@@ -53,13 +54,13 @@ def gridConstStoreFrame (outReg : RegionName) (n : Nat) (s : BlockState)
   let axis0 : Fin (Grid1 n).rank := ⟨0, by simp [Grid.rank]⟩
   let off : Nat := (idx axis0).val
   { final := (s.withGridIndex idx).writeMemTyped .real outReg off (some 1)
-    writes := WriteFootprint.singleton outReg off
+    writes := WriteFootprint.tileImage outReg (fun _ : TileIndex [] => off)
     h_exec := by
       simp [gridConstStoreKernel, exec, stepStmts, stepStmt, evalOp,
         Grid1, off, axis0]
     h_writeWithin := by
       exact BlockState.writeMemTyped_writeWithin .real outReg off (some 1)
-        (by simp [WriteFootprint.singleton]) }
+        (by simp [WriteFootprint.tileImage]) }
 
 def gridConstStoreFrames (outReg : RegionName) (n : Nat) (s : BlockState) :
     Kernel.GridFrames (gridConstStoreKernel outReg) (Grid1 n) s :=
@@ -68,13 +69,10 @@ def gridConstStoreFrames (outReg : RegionName) (n : Nat) (s : BlockState) :
 theorem gridConstStoreFrames_disjoint
     (outReg : RegionName) (n : Nat) (s : BlockState) :
     Kernel.GridWritesDisjoint (gridConstStoreFrames outReg n s) := by
-  intro idx₁ idx₂ hne addr h₁ h₂
-  simp [gridConstStoreFrames, gridConstStoreFrame, WriteFootprint.singleton] at h₁ h₂
-  have h0 :
-      (idx₁ ⟨0, by simp [Grid.rank]⟩).val =
-        (idx₂ ⟨0, by simp [Grid.rank]⟩).val := by
-    exact congrArg Prod.snd (h₁.symm.trans h₂)
-  exact hne (grid1_ext h0)
+  intro idx₁ idx₂ hne
+  apply WriteFootprint.disjoint_tileImage_of_image_disjoint
+  intro _ _ hEq
+  exact hne (grid1_ext hEq)
 
 theorem gridConstStore_merge_observe_written
     (outReg : RegionName) (n : Nat) (s : BlockState) (i : Fin n) :
@@ -82,9 +80,10 @@ theorem gridConstStore_merge_observe_written
       ((gridConstStoreFrames outReg n s) (grid1Index i)).final.mem outReg i.val := by
   apply Kernel.mergeFrames_mem_written
   · exact gridConstStoreFrames_disjoint outReg n s
-  · change WriteFootprint.singleton outReg
-      ((grid1Index i ⟨0, by simp [Grid.rank]⟩).val) (outReg, i.val)
-    simp [WriteFootprint.singleton]
+  · change WriteFootprint.tileImage outReg
+      (fun _ : TileIndex [] =>
+        (grid1Index i ⟨0, by simp [Grid.rank]⟩).val) (outReg, i.val)
+    simp [WriteFootprint.tileImage]
     exact (grid1Index_zero i).symm
 
 theorem gridConstStore_merge_unrelated
@@ -95,7 +94,7 @@ theorem gridConstStore_merge_unrelated
   apply Kernel.mergeFrames_mem_unwritten
   intro hWritten
   rcases hWritten with ⟨idx, hidx⟩
-  simp [gridConstStoreFrames, gridConstStoreFrame, WriteFootprint.singleton] at hidx
+  simp [gridConstStoreFrames, gridConstStoreFrame, WriteFootprint.tileImage] at hidx
   exact hOther hidx.1
 
 end VeriTile.Examples.GridComposition

@@ -12,7 +12,7 @@ VeriTile/Examples/TritonSmoke.lean	nat_load_store_correct	Typed Nat memory load/
 VeriTile/Examples/TritonSmoke.lean	indirect_load_correct_view	Indirect indexed load correctness
 VeriTile/Examples/TritonSmoke.lean	launch_noop_for_all_programs_some	ND grid launch surface
 VeriTile/Examples/MemorySafety.lean	blockPtrBoundary_memorySafe	Layer-1 active-lane memory bounds safety
-VeriTile/Examples/MemoryFrame.lean	blockPtrOOBStore_writesWithin_empty	Layer-2a memory footprint/frame primitives
+VeriTile/Examples/MemoryFrame.lean	blockPtrOOBStore_writesWithin_checkedFootprint	Layer-2a/#61 memory footprint extraction primitives
 VeriTile/Examples/GridComposition.lean	gridConstStore_merge_observe_written	Layer-2b disjoint whole-grid composition
 VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct_view	Online softmax correctness
 VeriTile/Examples/RowWise.lean	rowWiseSum_correct_view	Row-wise reductions
