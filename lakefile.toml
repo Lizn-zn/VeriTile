@@ -44,4 +44,7 @@ globs = ["VeriTile.Math.+"]
 # GeLU error bound or before any release tagging.
 [[lean_lib]]
 name = "VeriTileFull"
-globs = ["VeriTile.Examples.ApproxGeLU"]
+globs = [
+  "VeriTile.Examples.ApproxGeLU",
+  "VeriTile.Examples.ApproxGeLU.+",
+]
