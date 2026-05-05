@@ -1,0 +1,944 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>VeriTile — Architecture Overview</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+/* ---------- Typography & palette ---------- */
+:root {
+  --bg:      #f6f8fb;
+  --ink:     #1f2937;
+  --sub:     #4b5563;
+  --rule:    #d6dce3;
+  --card:    #ffffff;
+  --bd:      #c8d2df;
+  --code-bg: #eef1f6;
+  --blue:    #2e6fdb;
+  --green:   #129160;
+  --orange:  #c2410c;
+  --purple:  #7b3fa8;
+  --teal:    #0e7490;
+}
+html, body { background: var(--bg); }
+.remark-container { background: var(--bg); }
+.remark-slide-content {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Inter", "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 22px;
+  line-height: 1.42;
+  padding: 36px 56px 44px 56px;
+  letter-spacing: -0.005em;
+}
+.remark-slide-content h1,
+.remark-slide-content h2,
+.remark-slide-content h3 { color: var(--ink); font-weight: 700; }
+.remark-slide-content h1 { font-size: 38px; margin: 0 0 0.15em; }
+.remark-slide-content h2 { font-size: 30px; margin: 0 0 0.4em; }
+.remark-slide-content h3 { font-size: 22px; margin: 0 0 0.3em; }
+.remark-slide-content code {
+  font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  background: var(--code-bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.remark-slide-content pre {
+  background: var(--code-bg);
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  padding: 14px 16px;
+  font-size: 16px;
+  line-height: 1.45;
+  overflow: auto;
+}
+.remark-slide-content pre code { background: none; padding: 0; font-size: 16px; }
+.remark-slide-content a { color: var(--blue); text-decoration: none; }
+.remark-slide-content ul, .remark-slide-content ol { margin: 0.2em 0 0.4em 1.1em; }
+.remark-slide-content li { margin: 0.18em 0; }
+
+/* ---------- Slide chrome ---------- */
+.eyebrow {
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--blue);
+  margin-bottom: 6px;
+}
+.rule {
+  height: 3px; width: 84px; background: var(--blue);
+  margin: 6px 0 18px 0; border-radius: 2px;
+}
+.footer {
+  position: absolute; bottom: 14px; left: 56px; right: 56px;
+  display: flex; justify-content: space-between;
+  font-size: 12px; color: var(--sub);
+}
+.footer .right { text-align: right; }
+
+/* ---------- Layout helpers ---------- */
+.cols   { display: grid; gap: 14px; }
+.cols-2 { grid-template-columns: 1fr 1fr; }
+.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.row    { display: flex; gap: 12px; align-items: stretch; }
+
+/* ---------- Cards ---------- */
+.card {
+  background: var(--card);
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 14px 16px;
+  position: relative;
+}
+.card.tight { padding: 10px 12px; }
+.card.accent-blue   { border-left: 4px solid var(--blue); }
+.card.accent-green  { border-left: 4px solid var(--green); }
+.card.accent-orange { border-left: 4px solid var(--orange); }
+.card.accent-purple { border-left: 4px solid var(--purple); }
+.card.accent-teal   { border-left: 4px solid var(--teal); }
+.card .label {
+  font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase;
+  font-weight: 700; margin-bottom: 6px;
+}
+.card.accent-blue   > .label { color: var(--blue); }
+.card.accent-green  > .label { color: var(--green); }
+.card.accent-orange > .label { color: var(--orange); }
+.card.accent-purple > .label { color: var(--purple); }
+.card.accent-teal   > .label { color: var(--teal); }
+.card ul { margin: 0 0 0 1.1em; }
+.card li { font-size: 16px; line-height: 1.4; margin: 4px 0; }
+
+/* ---------- Type / utility classes ---------- */
+.muted    { color: var(--sub); }
+.small    { font-size: 14px; }
+.tiny     { font-size: 12px; }
+.kbd      { font-family: "JetBrains Mono", Menlo, monospace; font-size: 0.92em; }
+.center   { text-align: center; }
+.right    { text-align: right; }
+.tag {
+  display: inline-block;
+  background: var(--blue); color: white;
+  padding: 2px 8px; border-radius: 10px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+}
+.tag.green  { background: var(--green); }
+.tag.orange { background: var(--orange); }
+.tag.purple { background: var(--purple); }
+
+/* ---------- Pipeline / flow ---------- */
+.flow {
+  display: flex; align-items: stretch; gap: 6px;
+  margin: 10px 0;
+}
+.flow-stage {
+  flex: 1;
+  background: var(--card);
+  border: 1px solid var(--bd);
+  border-radius: 8px;
+  padding: 10px 10px;
+  text-align: center;
+  font-size: 13px;
+  position: relative;
+}
+.flow-stage strong {
+  display: block;
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 13px;
+  margin-bottom: 4px;
+  color: var(--ink);
+}
+.flow-stage .muted { font-size: 12px; }
+.flow-stage.b1 { border-top: 3px solid var(--blue); }
+.flow-stage.b2 { border-top: 3px solid var(--orange); }
+.flow-stage.b3 { border-top: 3px solid var(--green); }
+.flow-stage.b4 { border-top: 3px solid var(--purple); }
+.flow-arrow {
+  align-self: center;
+  font-size: 20px;
+  color: #9aa6b8;
+  width: 18px;
+  text-align: center;
+}
+
+/* ---------- Title slide ---------- */
+.title-slide {
+  background: var(--bg);
+  padding-left: 70px;
+}
+.title-slide .left-bar {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  width: 12px; background: var(--blue);
+}
+.title-slide h1 {
+  font-size: 96px; line-height: 1; margin: 0 0 8px 0; letter-spacing: -0.03em;
+}
+.title-slide .lede { font-size: 28px; color: var(--ink); }
+.title-slide .blurb { font-size: 18px; color: var(--sub); margin-top: 24px; max-width: 720px; }
+
+/* ---------- Diagrams ---------- */
+.layer-stack { display: flex; flex-direction: column; gap: 8px; }
+.layer-stack .layer {
+  background: var(--card); border: 1px solid var(--bd); border-radius: 8px;
+  padding: 10px 14px;
+}
+.layer .layer-title {
+  font-family: "JetBrains Mono", Menlo, monospace;
+  font-size: 14px; font-weight: 700;
+}
+.layer .layer-body { font-size: 14px; color: var(--sub); margin-top: 2px; }
+.layer.b1 { border-left: 4px solid var(--blue); }
+.layer.b2 { border-left: 4px solid var(--orange); }
+.layer.b3 { border-left: 4px solid var(--green); }
+.layer.b4 { border-left: 4px solid var(--purple); }
+
+.numbox {
+  background: var(--card); border: 1px solid var(--bd); border-radius: 8px;
+  padding: 18px 16px; text-align: center;
+}
+.numbox .num { font-size: 48px; font-weight: 800; line-height: 1; }
+.numbox.b1 { border-top: 4px solid var(--blue); }
+.numbox.b1 .num { color: var(--blue); }
+.numbox.b2 { border-top: 4px solid var(--orange); }
+.numbox.b2 .num { color: var(--orange); }
+.numbox.b3 { border-top: 4px solid var(--green); }
+.numbox.b3 .num { color: var(--green); }
+.numbox.b4 { border-top: 4px solid var(--purple); }
+.numbox.b4 .num { color: var(--purple); }
+.numbox .lab { font-size: 13px; color: var(--sub); margin-top: 6px; }
+
+/* ---------- Hide remark page numbers (we draw our own) ---------- */
+.remark-slide-number { display: none; }
+</style>
+</head>
+<body>
+
+<textarea id="source">
+
+name: title
+class: title-slide
+
+<div class="left-bar"></div>
+
+.eyebrow[Project overview]
+
+# VeriTile
+
+.lede[Translation validation for Triton GPU kernels, in Lean 4.]
+
+.blurb[
+Embed a small Triton-style kernel language inside Lean. Give it operational
+semantics. Then prove kernel-pair refinement and end-to-end correctness against
+mathematical specs — with an LLM agent driving the proofs.
+]
+
+<div class="footer"><span></span><span class="right">VeriTile · Architecture walkthrough</span></div>
+
+---
+name: motivation
+
+.eyebrow[Motivation]
+# What VeriTile sets out to do
+<div class="rule"></div>
+
+.cols.cols-2[
+.card.accent-blue[
+.label[The problem]
+Triton powers production attention, GEMM, normalization, SSM, RoPE,
+MoE routing — and yet there is no machine-checked way to certify
+that an *optimized* Triton kernel computes the same thing as the
+naive reference.
+
+Engineers re-derive the algebra by hand for every variant, and a
+single off-by-one (`mask=`, `other=`, partial KV block, D-tail) can
+silently change results.
+]
+.card.accent-orange[
+.label[Our approach]
+- Embed a Triton-style DSL inside Lean 4.
+- Give the embedded kernel formal **operational semantics**.
+- Prove **kernel-pair refinement** and **correctness** against math specs.
+- Use an LLM agent (`scripts/prove.sh` → `/lean4:autoprove`) to drive proofs.
+]
+]
+
+<div style="height:14px"></div>
+
+.card.accent-green[
+.label[What success looks like]
+A Triton engineer pastes a real `.py` kernel, annotates a math spec, and
+VeriTile + LLM closes the proof. Output: a Lean theorem stating that the
+kernel refines its specification — for every input, every program_id, every
+tile.
+.muted[ No hand-picked toy theorems. Production kernels with real loops,
+masks, ND tiles, strided layouts. ]
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">2 / 18</span></div>
+
+---
+name: north-star
+
+.eyebrow[Design principles]
+# Four axes that must advance together
+<div class="rule"></div>
+
+.cols.cols-2[
+.card.accent-blue[
+.label[1 · Real DSL surface]
+Accept the ops, control flow, memory and concurrency primitives that
+production `.py` kernels actually use — not a minimal subset.
+.muted[ DSL surface stays close to real Triton; user keeps writing
+Triton, not Lean. ]
+]
+.card.accent-orange[
+.label[2 · Production-scale algorithms]
+Full FA-1 forward + backward, FA-2, fused-norm family, grouped GEMM,
+SSM, RoPE, GQA / MQA / MLA — not 8 hand-picked theorems.
+.muted[ Every production kernel needs forward + backward + math equivalence. ]
+]
+.card.accent-green[
+.label[3 · Triton-user friendliness]
+Move the user's delta from "rewrite into the embedding" toward
+"paste-in `.py`" with near-zero changes (Python lifter is roadmap).
+]
+.card.accent-purple[
+.label[4 · Production horizontal infra]
+Algorithm/Compute split, Memory frame, Concurrency refinement,
+ND-general framework — no ad-hoc dimension shortcuts.
+]
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">3 / 18</span></div>
+
+---
+name: two-layer
+
+.eyebrow[Architecture lock-in (since v0.2)]
+# Two-layer architecture: Lean proof  ⟂  external testing
+<div class="rule"></div>
+
+.cols.cols-2[
+.card.accent-blue[
+.label[Algorithm layer  ·  Lean proof]
+**`Kernel.AlgorithmCorrect ck post`**
+
+Real / Int / Nat semantics. No IEEE rounding, no NaN.
+- `eraseDType`: `fp32 → ℝ`, `int32 → ℤ`, `uint32 → ℕ`.
+- Computable bit-pattern decoder for `fp32` constants.
+- Existing `Kernel.Correct` proofs reused on the algorithm side.
+
+Catches **algorithm-structure bugs** — every wrong recurrence, wrong
+masking, wrong reduction is a failed Lean proof.
+]
+.card.accent-orange[
+.label[Compute layer  ·  External testing]
+**Differential testing on a representative kernel set.**
+
+Hand-written `.py` Triton ↔ PyTorch / `flash-attn`, ε-bound match.
+
+- 1–2 Tier-1/2 kernels, FA-1 forward, mid-term FA-2 / FA-1 backward.
+- Tolerance: Tier 1+2 ≤ 1e-5; FA-class ≤ 1e-3.
+- **Not a phase gate**, **not a Lean theorem** — a credibility artifact.
+
+Catches **IEEE-754 edge cases** (NaN, denormal, overflow, fast-math).
+]
+]
+
+<div style="height:6px"></div>
+
+.card[
+.label.muted[The bridge between the two layers is empirical, by design]
+IEEE-754 formalization (NaN propagation, denormals, rounding modes, hardware
+dot precision, fast-math, exception flags) is **permanently outside Lean
+proof scope**. There is no planned bridge theorem connecting compute
+execution to Lean-internal algorithm execution. *VeriTile-certified* = both
+layers green.
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">4 / 18</span></div>
+
+---
+name: pipeline
+
+.eyebrow[End-to-end pipeline]
+# From paste-in kernel to machine-checked theorem
+<div class="rule"></div>
+
+<div class="flow">
+  <div class="flow-stage b1"><strong>triton { … }</strong><span class="muted">surface syntax</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-stage b1"><strong>DSL macro</strong><span class="muted">elaboration + typing</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-stage b2"><strong>ComputeKernel</strong><span class="muted">fp32 / int32 / uint32 + bitcast</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-stage b2"><strong>toAlgorithm?</strong><span class="muted">Except EraseDTypeError</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-stage b3"><strong>AlgKernel</strong><span class="muted">ℝ / ℤ / ℕ AST</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-stage b3"><strong>exec</strong><span class="muted">evalOp · stepStmt · forLoop_inv</span></div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-stage b4"><strong>Theorem</strong><span class="muted">Correct / Refine</span></div>
+</div>
+
+<div style="height:8px"></div>
+
+**Cross-cutting subsystems plugged into the same `BlockState`:**
+
+.cols.cols-4[
+.card.accent-blue.tight[
+.label[Memory]
+Bounds · Footprint · Frame · Typing · View
+]
+.card.accent-orange.tight[
+.label[Concurrency]
+Trace · Refinement · Atomic · Discipline
+]
+.card.accent-green.tight[
+.label[Launch]
+Grid (ND program_id) · Composition (disjoint merge)
+]
+.card.accent-purple.tight[
+.label[LoopInvariant]
+`forLoop_inv` master induction lemma
+]
+]
+
+.muted.small[ Theorems stack on top of the same shared interpreter — adding a new op or kernel has bounded blast radius. ]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">5 / 18</span></div>
+
+---
+name: dsl
+
+.eyebrow[Module · `VeriTile/Triton/DSL/`]
+# DSL layer — accept Triton-like surface syntax
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Input]
+- User-written `triton { … }` blocks
+- Sugars: `tl.load / tl.store / tl.dot / tl.where / tl.sum / tl.max / tl.exp / tl.arange / tl.program_id`
+- Kwargs: `mask=`, `other=`, `axis=`, `keep_dims=`
+- Region-polymorphic kernels via `$(xReg)`, `$(yReg)`
+]
+.card.accent-orange[
+.label[What we did]
+- `Syntax` + `Expansion`: macro elaborator desugars into typed `Op / Stmt`
+- `Typing`: infers `TileDType × TileShape`, inserts `NumericDType / Broadcast` evidence
+- `Metadata`: kwargs, axis, keep_dims
+- Optional well-formedness checker
+]
+.card.accent-green[
+.label[Output]
+- Typed AST: `Op : TileDType → TileShape → Type`
+- `Stmt` list (assigns, stores, forLoops)
+- A `Kernel` record `{inputs, outputs, body}`
+- Same kernel re-instantiable on any region names
+]
+]
+
+```lean
+def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
+  pid  := tl.program_id(0)
+  offs := pid * $(N) + tl.arange($(N))
+  x    := tl.load($(xReg) + offs)
+  e    := tl.exp(x);  s := tl.sum(e);  y := e / s
+  tl.store($(yReg) + offs, y)
+}
+```
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">6 / 18</span></div>
+
+---
+name: core
+
+.eyebrow[Module · `VeriTile/Triton/Core/`]
+# Core AST — types, shapes, and the typed `Op`
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Input]
+- AST nodes from the DSL macro
+- User-supplied dtype: `.real / .nat / .int / .bool`
+- User-supplied shape: `.scalar / .vec n / .mat m n / ND`
+]
+.card.accent-orange[
+.label[What we did]
+- `TileDType / TileShape / TileIndex / TileCarrier`
+- `Tile` = `TileIndex shape → TileCarrier dtype`
+- `Op : TileDType → TileShape → Type` indexed by both — no existential wrapper
+- `Stmt` is the existential boundary (assign / store / forLoop)
+]
+.card.accent-green[
+.label[Output]
+- Fully-typed kernel structure used by every layer
+- Smart constructors: `Tile.scalar / Tile.vec / Tile.mat`
+- `bop / uop / cop` with `NumericDType` + `Broadcast` evidence
+- `Kernel = { inputs, outputs, body : List Stmt }`
+]
+]
+
+```lean
+inductive Op : TileDType → TileShape → Type
+  | const     (x : ℝ)                            : Op .real .scalar
+  | arange    (n : Nat)                          : Op .nat  (.vec n)
+  | add  {α o} (h : NumericDType α)              : Op α o → Op α o → Op α o
+  | load      (region) (addr : Op .nat shape)    : Op .real shape
+  | dot       …
+  -- Type indices flow through every layer; no dynamic tag, no recovery step.
+```
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">7 / 18</span></div>
+
+---
+name: compute-kernel
+
+.eyebrow[Module · `VeriTile/Triton/Float/` + `Core/Ast.lean`]
+# `ComputeKernel` — proof-stating surface, projects to `AlgKernel`
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Input]
+- A typed kernel that may carry `.fp32 / .int32 / .uint32` and bit-level `.const` / `.bitcast`.
+- Algorithm-side statements lift via `ComputeStmt.alg`.
+]
+.card.accent-orange[
+.label[What we did]
+- `ComputeOp` constructors: `.alg`, `.const`, `.bitcast` (width-preserving)
+- Computable `Float32Bits.decodeRat` for finite-normal binary32
+- `ck.toAlgorithm?` traverses the body via `ComputeStmt.listToAlgorithm?`
+- `GapPolicy` records whether an externally-checked compute gap is required
+]
+.card.accent-green[
+.label[Output]
+- `AlgKernel` (or `Except EraseDTypeError`)
+- `ComputeKernel.AlgorithmCorrect`, `ComputeRefine`, `ExecCorrect`
+- Failed projection ⇒ `False` — explicit, not silent
+- User-facing theorems ride this surface; proofs run on the `AlgKernel` side
+]
+]
+
+```lean
+def AlgorithmCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
+  match ck.toAlgorithm? with
+  | .ok ak  => Kernel.Correct ak post
+  | .error _ => False
+
+def ComputeCorrect (ck) (post) (gap : GapPolicy := .ignore) : Prop :=
+  GapPolicy.Holds gap ∧ ProjectedCorrect ck post     -- gap = .require contract → externally checked
+```
+
+.muted.small[ `ComputeKernel` is the **proof-stating** Lean AST — it lets users state theorems on fp/int kernels and have the proof flow through `toAlgorithm?` to the algorithm side. It is **not** the differential-testing pipeline; that is external (PLAN.md §Differential testing). ]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">8 / 18</span></div>
+
+---
+name: semantics
+
+.eyebrow[Module · `VeriTile/Triton/Semantics/`]
+# Operational semantics — `evalOp`, `stepStmt`, `exec`
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Input]
+- `AlgKernel` + initial `BlockState`
+- `BlockState = mem · regs · pid · undef`
+- `regs : RegFile` dependently typed by `(dtype, shape, name)`
+]
+.card.accent-orange[
+.label[What we did]
+- `evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)`
+- `stepStmt`, `stepStmts`, `stepForLoopAux` — mutual
+- `TileOps`: scalar / vec / mat, broadcasting, reductions
+- Mask + bool channel; `tl.load(p, mask, other)` lowers to separate AST
+- `other = None` modeled by a per-state `undef` oracle
+]
+.card.accent-green[
+.label[Output]
+- `exec : AlgKernel → BlockState → Option BlockState`
+- Deterministic except for the explicit `undef` channel
+- The single source of truth used by every theorem in the project
+]
+]
+
+.card[
+.label.muted[Notable design choice]
+**`WithBot ℝ` carrier.** `tl.full((), -inf)` lowers to true `⊥` — kernels
+using `-inf` as a max-accumulator seed need **no input-range hypothesis**.
+No `-1e38` stand-in.
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">9 / 18</span></div>
+
+---
+name: loopinv
+
+.eyebrow[Module · `VeriTile/Triton/LoopInvariant.lean`]
+# `forLoop_inv` — the master induction lemma
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Input]
+- A loop body of type `List Stmt`
+- A loop counter range `[0, n)`
+- An invariant `Inv : Nat → BlockState → Prop`
+- A step lemma:  `Inv k s → Inv (k+1) (run body s_with_k)`
+]
+.card.accent-orange[
+.label[What we did]
+- Bind the loop counter to an index register before each iteration — matches Triton's induction var
+- Support nested loops and early-exit `None` propagation
+- Pre-bake simp / cases lemmas to absorb the four known pitfalls
+  ( `forLoop_unfold` eagerness · `stepStmts []` non-rfl · `if_neg` in `∧` · match cascades)
+]
+.card.accent-green[
+.label[Output]
+- A reusable `forLoop_inv` theorem — the **single entry** every loop-bearing kernel proof goes through
+- Drives FA-1 forward / boundary, Welford, online-softmax, fused LayerNorm, ScoreVariants, …
+]
+]
+
+.card[
+.label.muted[Why a master lemma]
+Every Triton kernel of interest contains at least one streaming reduction.
+Without a single, well-tested loop-induction principle, every proof would
+re-invent its own recursion, and every example would re-discover the same
+four pitfalls. `forLoop_inv` makes the induction step the only thing the
+LLM agent has to discover.
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">10 / 18</span></div>
+
+---
+name: memory
+
+.eyebrow[Module · `VeriTile/Triton/Memory/`]
+# Memory subsystem — bounds · footprint · frame · typing · view
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Input]
+- Kernel execution traces over a flat memory
+- Per-program region offsets and tile shapes
+- Region bounds (`RegionBounds`)
+]
+.card.accent-orange[
+.label[What we did]
+- **Bounds** — read/write OOB safety (Layer-1)
+- **Footprint** — per-kernel read/write footprints
+- **Frame** — write-footprint frame contracts; unrelated-region preservation; disjoint composition (Layer-2a)
+- **Typing** — typed memory loads (int / nat / fp regions)
+- **View** — `TensorView` / `programTileView` API for tile-level theorems
+]
+.card.accent-green[
+.label[Output]
+- Reusable memory-safety lemmas plugged into refinement proofs
+- `TensorView.observe / loaded` for stating theorems at tile level rather than at flat addresses
+- Direct, masked, and block-pointer footprints unified
+]
+]
+
+```lean
+namespace ComputeKernel
+def MemorySafe (bounds : RegionBounds) (ck : ComputeKernel) : Prop := …
+def ExecWritesWithin (ck) (s : BlockState) (P : WriteFootprint) : Prop := …
+end ComputeKernel
+```
+
+.muted.small[ Layer-2b grid composition (next slide) builds on Layer-2a frame contracts. ]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">11 / 18</span></div>
+
+---
+name: concurrency
+
+.eyebrow[Module · `VeriTile/Triton/Concurrency/`]
+# Concurrency framework — trace · refinement · discipline
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Input]
+- Kernels with atomic-add, async-copy, async-wait, debug-barrier, producer-consumer patterns
+]
+.card.accent-orange[
+.label[What we did]
+- **Trace** — vocabulary for observable concurrency events
+- **Refinement** — behavioural refinement; sequential-consistency single-layer spec
+- **Atomic** — atomic-add proof surface
+- **Discipline / ProducerConsumer** — failure markers and projection-failure correctness lemmas
+]
+.card.accent-green[
+.label[Output]
+- Generalized effect projection — concurrency primitives manifest as failure markers on the projection boundary
+- Algorithmic theorems are unaffected by reorderings under the documented discipline
+]
+]
+
+.card[
+.label.muted[Current scope vs roadmap]
+We currently support concurrency primitives via *projection boundaries* and
+*failure markers*. The atomic-add main theorem and async-copy serialization
+equivalence are roadmap items: they will move primitives **into** the proof
+chain proper rather than parking them at the boundary.
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">12 / 18</span></div>
+
+---
+name: launch
+
+.eyebrow[Module · `VeriTile/Triton/Launch/`]
+# Launch — ND grid + disjoint-writes composition
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Input]
+- A per-program-id kernel + an ND grid shape
+- Per-program write footprints (from `Memory/Frame`)
+]
+.card.accent-orange[
+.label[What we did]
+- **Grid** — launch every program_id over an ND index space
+- **Composition** — assemble per-program writes into a final whole-grid memory, given a disjoint-writes proof
+- Generic `Fin shape.length` axis — no 1D / 2D shortcuts
+]
+.card.accent-green[
+.label[Output]
+- Whole-grid output state expressed as the disjoint union of per-program contributions
+- Lifts a single-program correctness proof into a full-grid correctness proof — the bridge to multi-block FA-2
+]
+]
+
+.card[
+.label.muted[Worked example]
+`Examples/GridComposition.lean` exercises the Layer-2b disjoint merge end
+to end, on the same `programTileView` API used by single-program proofs.
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">13 / 18</span></div>
+
+---
+name: theorems
+
+.eyebrow[Module · `VeriTile/Examples/`]
+# Theorem library — what we actually prove
+<div class="rule"></div>
+
+.cols.cols-2[
+.card.accent-blue[
+.label[Loop-free pairs · Tier 1]
+- `softmax_kernels_refinement` (naive ↔ stable)
+- `log_sum_exp_refinement` (direct ↔ shift trick)
+- `softmax_reciprocal_refinement` (e/s ↔ inv_s · e)
+- `vector_add` (multi-buffer · math correctness)
+]
+.card.accent-orange[
+.label[Streaming reductions · Tier 2]
+- `online_softmax_recurrence_eq_batch` *(FA core)*
+- `welford_kernels_refinement`
+- `layernorm_kernels_refinement`
+- `forLoop_inv`, mask + bool channel, typed Tile, WithBot ℝ
+]
+.card.accent-green[
+.label[FA-1 forward · Tier 3-A]
+- `fa1_forward_correct` (non-causal)
+- `…_strided` / `…_strided_causal`
+- `…_4D_views` / `…_4D_causal_views`
+- `V1Boundary`: 8 boundary / D-tail variants
+- `ScoreVariants`: ALiBi · sliding · softcap
+- ~16k lines, V0 + V1Boundary + ScoreVariants + Common
+]
+.card.accent-purple[
+.label[Cross-cutting]
+- `MemorySafety`, `MemoryFrame`
+- `GridComposition` (Layer-2b)
+- `FusedSiLU` (kernel-pair refinement)
+- `FA-1 backward stripped` *(in progress, 1 sorry)*
+]
+]
+
+.muted.small.center[ Each theorem states equivalence between two embedded kernels — or between a kernel and a math spec — at every tile index. ]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">14 / 18</span></div>
+
+---
+name: workflow
+
+.eyebrow[Proof workflow]
+# From a stated theorem to a closed proof
+<div class="rule"></div>
+
+.cols.cols-2[
+<div>
+.card.accent-blue[
+.label[1 · Write two kernels]
+Original Triton kernel + an optimized rewrite, both inside the embedded
+`triton { … }` DSL.
+]
+<div style="height:8px"></div>
+.card.accent-orange[
+.label[2 · State the theorem]
+Spec-side equivalence: for every tile index,
+`observe(exec(kernel₁, s)) = observe(exec(kernel₂, s))`.
+]
+<div style="height:8px"></div>
+.card.accent-green[
+.label[3 · Run scripts/prove.sh]
+Wraps `/lean4:autoprove` (Claude Code plugin). Multi-cycle iteration,
+deep-mode escalation, tactic cascades, repair patterns.
+]
+<div style="height:8px"></div>
+.card.accent-purple[
+.label[4 · CI gate: lake build]
+Whole library 0 sorry (except FA-1 backward × 1).
+Artifact gate: `lake build`, no sorry, axiom whitelist, surface check.
+]
+</div>
+
+.card[
+.label[Artifact gate · `scripts/check-artifact.sh`]
+- `lake build` clean
+- 0 sorry except FA-1 backward sub-2b
+- Axiom whitelist enforced
+- Key theorem surface preserved
+- README / example drift checks
+
+<div style="height:10px"></div>
+.label.muted[Held-out LLM bench]
+`bench/llm_eval/<tier>/` is locked **before** each Tier — measures close-rate
+without tuning the tool on the eval set.
+
+- N = 5 independent runs per held-out lemma, different random seeds
+- Cost report per Tier: API calls, tokens, wall-clock, dollars
+- Hands-off: no human prompt iteration during eval
+]
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">15 / 18</span></div>
+
+---
+name: status
+
+.eyebrow[Status — 2026-05-05]
+# Where the project stands today
+<div class="rule"></div>
+
+.cols.cols-4[
+<div class="numbox b1"><div class="num">80</div><div class="lab">.lean files</div></div>
+<div class="numbox b2"><div class="num">~42.7k</div><div class="lab">lines of Lean</div></div>
+<div class="numbox b3"><div class="num">0</div><div class="lab">sorry (lib core)</div></div>
+<div class="numbox b4"><div class="num">3</div><div class="lab">Tier milestones closed</div></div>
+]
+
+<div style="height:14px"></div>
+
+<div class="layer-stack">
+  <div class="layer b1"><div class="layer-title">Tier 1 · v0.1-tier1</div><div class="layer-body">Loop-free kernel pairs × 3 + <code>welford_eq_two_pass</code>.</div></div>
+  <div class="layer b2"><div class="layer-title">Tier 2 · v0.2-tier2</div><div class="layer-body">Streaming reductions × 3, <code>forLoop_inv</code>, mask + bool channel, typed Tile refactor, WithBot ℝ carrier.</div></div>
+  <div class="layer b3"><div class="layer-title">Tier 3-A · v0.3-tier3a (pending tag)</div><div class="layer-body">FA-1 forward full coverage: non-causal, strided, causal, 4D, boundary, boundaryD, score variants — ~16k lines.</div></div>
+  <div class="layer b4"><div class="layer-title">Horizontal infra</div><div class="layer-body">Algorithm/Compute split, float erasure, Memory subsystem, Concurrency framework, ND grid + composition, DSL expansion.</div></div>
+</div>
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">16 / 18</span></div>
+
+---
+name: roadmap
+
+.eyebrow[Roadmap]
+# What comes next — architecture stays, coverage grows
+<div class="rule"></div>
+
+.cols.cols-3[
+.card.accent-blue[
+.label[Near-term]
+- Close FA-1 backward stripped (last sorry)
+- Tag `v0.3-tier3a`
+- Add mask to FA-1 backward
+- Wire FA-1 backward to multi-block
+]
+.card.accent-orange[
+.label[Mid-term]
+- Tier 3-B FA-2 forward: `multiBlockExec`, delayed rescale, mask-skip — headline `fa1_eq_fa2` corollary
+- Tier 3-C FA backward full coverage
+- Tier 4 production batch: grouped GEMM, Mamba/SSM, RoPE, fused-norm family, GQA / MQA / MLA
+]
+.card.accent-green[
+.label[Long-term]
+- Concurrency primitives in the proof chain proper (atomic-add, async-copy serialization)
+- `.py` paste-in surface — Python lifter prototype
+- ND-general closure (eliminate residual 1D/2D paths)
+- Effect framework polish; full block-pointer coverage
+]
+]
+
+.muted.small.center[ No fixed time windows — VeriTile advances by Tier; main branch always builds. ]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">17 / 18</span></div>
+
+---
+name: closing
+
+.eyebrow[Takeaways]
+# Why the architecture is now stable
+<div class="rule"></div>
+
+.cols.cols-2[
+.card.accent-blue[
+.label[End-to-end typed pipeline]
+`TileDType × TileShape` index every `Op`, `Tile`, `RegFile`, `evalOp`.
+No dynamic tag, no existential recovery step. The type system *is* the
+soundness backbone.
+]
+.card.accent-orange[
+.label[Two-layer split is permanent]
+Algorithm correctness in Lean (`Kernel.Correct`); IEEE-754 fidelity via
+external testing. The two never merge by Lean theorem — by design.
+`ComputeKernel` is the in-Lean proof-stating bridge to the algorithm side
+via `toAlgorithm?`.
+]
+.card.accent-green[
+.label[Single shared interpreter]
+`evalOp / stepStmt / forLoop_inv` are reused by every theorem.
+Adding a new op or a new kernel has bounded blast radius.
+]
+.card.accent-purple[
+.label[Cross-cutting subsystems plug in cleanly]
+Memory · Concurrency · Launch attach to the same `BlockState`.
+New primitives extend the system without rewriting existing proofs.
+]
+]
+
+<div style="height:8px"></div>
+
+.center[
+**Architecture locked since v0.2** — what changes from here is theorem coverage, not foundations.
+]
+
+<div class="footer"><span class="muted">VeriTile</span><span class="right muted">18 / 18</span></div>
+
+</textarea>
+
+<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
+<script>
+var slideshow = remark.create({
+  ratio: "16:9",
+  highlightStyle: "github",
+  highlightLanguage: "lean",
+  highlightLines: true,
+  countIncrementalSlides: false,
+  navigation: { scroll: false, touch: true, click: false }
+});
+</script>
+</body>
+</html>
