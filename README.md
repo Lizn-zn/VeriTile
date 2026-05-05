@@ -64,8 +64,8 @@ Tier 3-A on `main` (full FA-1 forward):
   `fa1_boundaryD_refines_naive_reference_views` and
   `fa1_causal_boundaryD_refines_naive_reference_views`.
 - Artifact gate in CI via `scripts/check-artifact.sh`: `lake build`, no
-  `sorry`, axiom whitelist, key theorem surface, and README/example drift
-  checks.
+  `sorry`, axiom whitelist, `scripts/kernel-manifest.tsv`, and README/example
+  drift checks.
 
 The currently supported Triton subset and known semantic gaps are documented in
 [`documents/TritonSubset.md`](./documents/TritonSubset.md). Important open gaps

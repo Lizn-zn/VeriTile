@@ -18,6 +18,9 @@ notes for in-progress or closed milestones live in [`../Notes/`](../Notes).
   `ComputeKernel` (compute-facing AST, preserves bitcast / fp width
   spellings) projected to algorithm-layer `Kernel` via
   `ComputeKernel.toAlgorithm?` / `eraseDType`.
+- [`KernelManifest.md`](./KernelManifest.md) — the schema for
+  `scripts/kernel-manifest.tsv`, the canonical per-kernel registry used by
+  artifact checks and future benchmark ports.
 
 ## Memory model
 

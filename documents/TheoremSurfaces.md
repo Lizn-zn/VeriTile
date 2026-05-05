@@ -11,7 +11,7 @@ public compute-facing APIs:
 Projected algorithm lemmas may still mention `Kernel.Correct` or
 `Kernel.Refine` when they are explicitly internal bridge lemmas. Those lemmas
 should not be the exported example theorem named in
-`scripts/artifact-theorems.txt`.
+`scripts/kernel-manifest.tsv`.
 
 ## Naming
 
@@ -26,4 +26,4 @@ Domain-specific theorem surfaces that are not ordinary single-kernel or
 two-kernel example views, such as whole-grid launch facts or specialized
 FlashAttention math/trace statements, may keep established descriptive names.
 When a public artifact theorem is renamed to follow this style,
-`scripts/artifact-theorems.txt` must be updated in the same commit.
+`scripts/kernel-manifest.tsv` must be updated in the same commit.

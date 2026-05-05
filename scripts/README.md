@@ -48,9 +48,14 @@ See `PLAN.md` decision log entry 5 for why this is a wrapper rather than a custo
 
 `scripts/check-artifact.sh` is the local release/CI gate for the Lean artifact.
 It runs `lake build`, rejects Lean `sorry` warnings, checks declared axioms
-against `scripts/artifact-axiom-whitelist.txt`, verifies the key theorem surface
-listed in `scripts/artifact-theorems.txt`, and checks the examples manifest /
-README example links for drift.
+against `scripts/artifact-axiom-whitelist.txt`, validates the per-kernel
+registry in `scripts/kernel-manifest.tsv`, and checks README example links for
+drift.
+
+`scripts/kernel-manifest.tsv` is the source of truth for public kernel/example
+metadata: file, theorem symbol, theorem kind, verification status, source,
+static config, label, and notes. See `documents/KernelManifest.md` before
+adding a new public example or benchmark port.
 
 ```bash
 scripts/check-artifact.sh

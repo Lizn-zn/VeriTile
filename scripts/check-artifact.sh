@@ -6,8 +6,7 @@ PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
 cd "${PROJECT_ROOT}"
 
 AXIOM_WHITELIST="${SCRIPT_DIR}/artifact-axiom-whitelist.txt"
-THEOREM_LIST="${SCRIPT_DIR}/artifact-theorems.txt"
-EXAMPLE_LIST="${SCRIPT_DIR}/artifact-examples.tsv"
+KERNEL_MANIFEST="${SCRIPT_DIR}/kernel-manifest.tsv"
 DOC_TERMS="${SCRIPT_DIR}/artifact-doc-terms.tsv"
 
 failures=0
@@ -88,40 +87,73 @@ check_axioms() {
   rm -f "${actual}" "${expected}" "${unexpected}" "${missing}"
 }
 
-check_key_theorems() {
-  local line file name
-  local before="${failures}"
-  while IFS= read -r line || [[ -n "${line}" ]]; do
-    is_comment_or_blank "${line}" && continue
-    file="${line%%:*}"
-    name="${line#*:}"
-    if theorem_exists "${file}" "${name}"; then
-      :
-    else
-      fail "missing key theorem ${name} in ${file}"
-    fi
-  done < "${THEOREM_LIST}"
-
-  if [[ "${failures}" -eq "${before}" ]]; then
-    ok "key theorem surface exists"
-  fi
+valid_manifest_kind() {
+  case "$1" in
+    correct|refine|math|launch|trace|safety|frame) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
-check_examples_manifest() {
-  local line file theorem label
+valid_manifest_status() {
+  case "$1" in
+    proven|projected|test-gap|blocked|smoke) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+check_kernel_manifest() {
+  local id file theorem kind status source source_ref config label notes extra
   local before="${failures}"
-  while IFS=$'\t' read -r file theorem label || [[ -n "${file:-}" ]]; do
-    is_comment_or_blank "${file:-}" && continue
+  local ids
+  ids="$(mktemp)"
+
+  if [[ ! -f "${KERNEL_MANIFEST}" ]]; then
+    fail "kernel manifest missing: ${KERNEL_MANIFEST}"
+    rm -f "${ids}"
+    return
+  fi
+
+  while IFS=$'\t' read -r id file theorem kind status source source_ref config label notes extra ||
+      [[ -n "${id:-}" ]]; do
+    is_comment_or_blank "${id:-}" && continue
+    if [[ "${id}" == "id" ]]; then
+      continue
+    fi
+
+    if [[ -n "${extra:-}" ]]; then
+      fail "kernel manifest row ${id} has too many columns"
+      continue
+    fi
+    if [[ -z "${id}" || -z "${file}" || -z "${theorem}" || -z "${kind}" ||
+          -z "${status}" || -z "${source}" || -z "${source_ref}" ||
+          -z "${config}" || -z "${label}" || -z "${notes}" ]]; then
+      fail "kernel manifest row has empty required field: ${id:-<missing id>}"
+      continue
+    fi
+    if grep -Fxq "${id}" "${ids}"; then
+      fail "duplicate kernel manifest id: ${id}"
+    else
+      printf '%s\n' "${id}" >>"${ids}"
+    fi
+    if ! valid_manifest_kind "${kind}"; then
+      fail "kernel manifest ${id} has invalid kind: ${kind}"
+    fi
+    if ! valid_manifest_status "${status}"; then
+      fail "kernel manifest ${id} has invalid status: ${status}"
+    fi
     if [[ ! -f "${file}" ]]; then
-      fail "example file missing: ${file}"
+      fail "kernel manifest ${id} missing file: ${file}"
       continue
     fi
     if ! theorem_exists "${file}" "${theorem}"; then
-      fail "example '${label}' lacks representative theorem ${theorem} in ${file}"
+      fail "kernel manifest ${id} missing theorem ${theorem} in ${file}"
     fi
-  done < "${EXAMPLE_LIST}"
+  done < "${KERNEL_MANIFEST}"
+
+  rm -f "${ids}"
+
   if [[ "${failures}" -eq "${before}" ]]; then
-    ok "examples manifest is internally consistent"
+    ok "kernel manifest is internally consistent"
   fi
 }
 
@@ -162,8 +194,7 @@ check_documentation_terms() {
 
 run_build_no_sorry
 check_axioms
-check_key_theorems
-check_examples_manifest
+check_kernel_manifest
 check_readme_example_links
 check_documentation_terms
 

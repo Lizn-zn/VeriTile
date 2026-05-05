@@ -1,0 +1,45 @@
+# VeriTile kernel/example manifest.
+#
+# Schema:
+# id<TAB>file<TAB>theorem<TAB>kind<TAB>status<TAB>source<TAB>source_ref<TAB>config<TAB>label<TAB>notes
+#
+# Allowed kind values:
+# correct, refine, math, launch, trace, safety, frame
+#
+# Allowed status values:
+# proven, projected, test-gap, blocked, smoke
+id	file	theorem	kind	status	source	source_ref	config	label	notes
+softmax_stable_refine	VeriTile/Examples/SoftmaxEq.lean	softmax_kernels_refinement_view	refine	proven	internal	-	-	Naive softmax vs stable softmax	stable shift-trick refinement
+log_sum_exp_shift_refine	VeriTile/Examples/LogSumExpEq.lean	log_sum_exp_refinement_view	refine	proven	internal	-	-	Direct LSE vs shift-trick LSE	stable shift-trick refinement
+softmax_reciprocal_refine	VeriTile/Examples/SoftmaxReciprocal.lean	softmax_reciprocal_refinement_view	refine	proven	internal	-	-	Stable softmax division vs reciprocal	reciprocal rewrite refinement
+vector_add_aligned	VeriTile/Examples/VectorAdd.lean	add_kernel_correct_view	correct	proven	internal	-	BLOCK_SIZE=N	Vector add aligned correctness	aligned single-block elementwise add
+vector_add_masked	VeriTile/Examples/VectorAdd.lean	add_kernel_masked_correct_view	correct	proven	internal	-	BLOCK_SIZE, n_elements	Vector add correctness	masked boundary variant
+float_add	VeriTile/Examples/FloatDType.lean	float_add_kernel_correct_view	correct	proven	internal	-	fp32 erased to real	Float add correctness	algorithm-layer Real proof through dtype erasure
+float_softmax_reciprocal	VeriTile/Examples/FloatDType.lean	float_softmax_reciprocal_refinement_view	refine	proven	internal	-	fp32 erased to real	Float dtype rewrite refinement	algorithm-layer Real proof through dtype erasure
+argmax2_nat_store	VeriTile/Examples/TritonSmoke.lean	argmax2_index_store_correct_view	correct	proven	internal	-	2 elements	Typed Nat memory store	smoke for Nat store
+nat_load_store	VeriTile/Examples/TritonSmoke.lean	nat_load_store_correct_view	correct	proven	internal	-	1 scalar	Typed Nat memory load/store	smoke for typed HBM load/store
+indirect_load	VeriTile/Examples/TritonSmoke.lean	indirect_load_correct_view	correct	proven	internal	-	1 scalar	Indirect indexed load correctness	generic indirect view smoke
+launch_noop_grid	VeriTile/Examples/TritonSmoke.lean	launch_noop_for_all_programs_some	launch	proven	internal	-	ND grid	ND grid launch surface	ForAllProgramsSome smoke
+memory_safety_blockptr_boundary	VeriTile/Examples/MemorySafety.lean	blockPtrBoundary_memorySafe	safety	proven	internal	-	block pointer boundary_check	Layer-1 active-lane memory bounds safety	masked inactive lanes are vacuously safe
+memory_frame_blockptr_oob	VeriTile/Examples/MemoryFrame.lean	blockPtrOOBStore_writesWithin_checkedFootprint	frame	proven	internal	-	block pointer boundary_check	Layer-2a/#61 memory footprint extraction primitives	checked footprint for OOB store
+grid_const_store_merge	VeriTile/Examples/GridComposition.lean	gridConstStore_merge_observe_written	frame	proven	internal	-	ND grid	Layer-2b disjoint whole-grid composition	mergeFrames smoke
+online_softmax	VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct_view	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
+rowwise_sum	VeriTile/Examples/RowWise.lean	rowWiseSum_correct_view	correct	proven	internal	-	-	Row-wise reductions	sum variant
+rowwise_max	VeriTile/Examples/RowWise.lean	rowWiseMax_correct_view	correct	proven	internal	-	-	Row-wise max	max variant
+fused_silu_refine	VeriTile/Examples/FusedSiLU.lean	silu_kernels_refinement_view	refine	proven	internal	-	-	Fused SiLU refinement	fused vs unfused rewrite
+welford_refine	VeriTile/Examples/WelfordKernels.lean	welford_kernels_refinement_view	refine	proven	internal	-	-	Welford refinement	two-pass vs online Welford surface
+layernorm_refine	VeriTile/Examples/LayerNormKernels.lean	layernorm_kernels_refinement_view	refine	proven	internal	-	-	LayerNorm refinement	layernorm kernel rewrite
+approx_gelu	VeriTile/Examples/ApproxGeLU.lean	approx_gelu_kernel_correct_view	correct	proven	internal	-	-	ApproxGeLU correctness	polynomial approximation surface
+mhc_width_1x1	VeriTile/Examples/HyperConnections/MHC.lean	mhcWidthConnection_correct_view	correct	proven	internal:#101	-	S=T=D=1,numIters=0	HyperConnections mHC fixed-rank width correctness	first proof-covered width slice
+mhc_depth_1x1	VeriTile/Examples/HyperConnections/MHC.lean	mhcDepthConnection_correct_view	correct	proven	internal:#101	-	S=T=D=1,numIters=0	HyperConnections mHC fixed-rank depth correctness	first proof-covered depth slice
+fa1_forward_4d	VeriTile/Examples/FlashAttention1/V0.lean	fa1_forward_correct_4D_views	correct	proven	internal	-	4D views	FlashAttention-1 non-causal 4D correctness	Real algorithm proof
+fa1_forward_4d_causal	VeriTile/Examples/FlashAttention1/V0.lean	fa1_forward_correct_4D_causal_views	correct	proven	internal	-	4D views, causal	FlashAttention-1 causal 4D correctness	Real algorithm proof
+fa1_boundaryd_naive_refine	VeriTile/Examples/FlashAttention1/NaiveRefinement.lean	fa1_boundaryD_refines_naive_reference_views	refine	proven	internal	-	boundary D-tail	FlashAttention-1 v1 naive-reference refinement	non-causal boundaryD
+fa1_causal_boundaryd_naive_refine	VeriTile/Examples/FlashAttention1/NaiveRefinement.lean	fa1_causal_boundaryD_refines_naive_reference_views	refine	proven	internal	-	boundary D-tail, causal	FlashAttention-1 v1 causal naive-reference refinement	causal boundaryD
+fa1_backward_lse_math	VeriTile/Examples/FlashAttention1/Backward.lean	streamingLSE_eq_lseReal	math	proven	internal	-	Real spec	FA1 backward streaming LSE math	closed-form math identity
+fa1_backward_reverse_mode_math	VeriTile/Examples/FlashAttention1/Backward.lean	attentionBackwardReal_eq_reverseMode	math	proven	internal	-	Real spec	FlashAttention-1 backward Real spec surface	reverse-mode identity
+fa1_backward_softmax_jvp_math	VeriTile/Examples/FlashAttention1/Backward.lean	softmax_jvp_identity	math	proven	internal	-	Real spec	FA1 backward softmax JVP identity	closed-form math identity
+fa1_backward_stripped	VeriTile/Examples/FlashAttention1/Backward.lean	fa1BackwardStrippedKernel_correct	correct	proven	internal	-	stripped backward	FA1 backward stripped kernel correctness	non-atomic stripped slice
+fa1_backward_atomic_trace	VeriTile/Examples/FlashAttention1/Backward.lean	fa1BackwardAtomicDQKernel_statefulTrace_blockContribution_from_inputs_of_exec	trace	proven	internal	-	atomic dQ	FA1 backward atomic dQ trace	one-block contribution trace
+fa1_backward_tail_stores	VeriTile/Examples/FlashAttention1/Backward.lean	fa1BackwardAtomicDQKernel_tailStores_readback_from_inputs	correct	proven	internal	-	atomic dQ tail stores	FA1 backward tail-store readback	dK/dV ordinary store readback
+fa1_backward_grid_merged_dq	VeriTile/Examples/FlashAttention1/Backward.lean	fa1BackwardAtomicDQKernel_gridMerged_dQ_correct	correct	proven	internal	-	atomic dQ grid merge	FA1 backward grid-merged dQ correctness	atomic_add contributions merged across grid
