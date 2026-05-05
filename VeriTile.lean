@@ -32,3 +32,4 @@ import VeriTile.Examples.RowWise
 import VeriTile.Examples.WelfordKernels
 import VeriTile.Examples.LayerNormKernels
 import VeriTile.Examples.OnlineSoftmax
+import VeriTile.Examples.HyperConnections.MHC

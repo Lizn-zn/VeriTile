@@ -28,6 +28,7 @@ globs = [
   "VeriTile.Examples.WelfordKernels",
   "VeriTile.Examples.LayerNormKernels",
   "VeriTile.Examples.OnlineSoftmax",
+  "VeriTile.Examples.HyperConnections.+",
   "VeriTile.Examples.FlashAttention1",
   "VeriTile.Examples.FlashAttention1.+",
 ]
