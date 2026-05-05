@@ -159,6 +159,7 @@ syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "tl.static_range " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.static_range " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "tl.if " tritonExpr " { " tritonStmt* " }" : tritonStmt
+syntax "tl.if " tritonExpr " { " tritonStmt* " }" " else " " { " tritonStmt* " }" : tritonStmt
 
 -- Block (the user-facing entry point)
 syntax (name := tritonBlock) "triton " "{" tritonStmt* "}" : term

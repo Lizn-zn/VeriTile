@@ -168,6 +168,10 @@ def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
   | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
   | .ifThen cond body =>
       cond.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body
+  | .ifThenElse cond thenBody elseBody =>
+      cond.RespectsRegionTyping Γ ∧
+      StmtList.RespectsRegionTyping Γ thenBody ∧
+      StmtList.RespectsRegionTyping Γ elseBody
 termination_by st => sizeOf st
 decreasing_by all_goals (simp_wf; try omega)
 

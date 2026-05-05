@@ -541,6 +541,15 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
+      let cond' ← expandExpr env cond
+      ensureDType .bool cond'.dtype "tl.if condition"
+      ensureShape SInfo.scalar cond'.shape "tl.if condition"
+      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env thenStmts.toList
+      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env elseStmts.toList
+      pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
+        ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
+        env, cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
   | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) => do
       let cond' ← expandExpr env cond
       ensureDType .bool cond'.dtype "tl.if condition"

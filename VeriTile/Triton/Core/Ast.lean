@@ -241,10 +241,10 @@ P1 Triton statements (mutating constructs).
 * `forLoop i n body` runs `body` `n` times, with the scalar register `i` bound
   to the iteration index.
 * `ifThen cond body` runs `body` when the scalar `cond` evaluates `true`, and
-  is a no-op when `false`. This is a VeriTile DSL-level scalar conditional
-  used to model Triton block-level control-flow patterns. It has no `else`;
-  the FA-2 block-skipping pattern `if start_n + BLOCK_N <= start_m: continue`
-  rewrites to `if not skippable { ...work... }`.
+  is a no-op when `false`.
+* `ifThenElse cond thenBody elseBody` runs one of two scalar-gated statement
+  blocks. This models Triton block-level `if ... else ...` control flow without
+  early-exit effects such as `break` or `continue`.
 -/
 inductive Stmt : Type where
   | assign  : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape → Stmt
@@ -256,6 +256,7 @@ inductive Stmt : Type where
               (mask : MaskOpt dtype shape) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
+  | ifThenElse : (cond : Op .bool []) → (thenBody elseBody : List Stmt) → Stmt
 
 instance : Inhabited Stmt :=
   ⟨.assign .real [] "" (.const 0)⟩
@@ -483,6 +484,8 @@ inductive ComputeStmt : Type where
   | effectMarker : (op : String) → ComputeStmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List ComputeStmt) → ComputeStmt
   | ifThen : (cond : Op .bool []) → (body : List ComputeStmt) → ComputeStmt
+  | ifThenElse : (cond : Op .bool []) →
+      (thenBody elseBody : List ComputeStmt) → ComputeStmt
 
 namespace ComputeStmt
 
@@ -502,6 +505,8 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
       Except.ok (.forLoop idx n (← listToAlgorithm? body))
   | .ifThen cond body => do
       Except.ok (.ifThen cond (← listToAlgorithm? body))
+  | .ifThenElse cond thenBody elseBody => do
+      Except.ok (.ifThenElse cond (← listToAlgorithm? thenBody) (← listToAlgorithm? elseBody))
 
 def listToAlgorithm? : List ComputeStmt → Except EraseDTypeError (List Stmt)
   | [] => Except.ok []

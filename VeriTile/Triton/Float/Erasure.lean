@@ -167,6 +167,9 @@ def Stmt.eraseDType : Stmt → Stmt
       .forLoop idx n (Stmt.eraseDTypeList body)
   | .ifThen cond body =>
       .ifThen cond.eraseDType (Stmt.eraseDTypeList body)
+  | .ifThenElse cond thenBody elseBody =>
+      .ifThenElse cond.eraseDType (Stmt.eraseDTypeList thenBody)
+        (Stmt.eraseDTypeList elseBody)
 termination_by st => sizeOf st
 decreasing_by all_goals (simp_wf; try omega)
 

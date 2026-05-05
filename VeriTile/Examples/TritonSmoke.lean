@@ -1127,6 +1127,48 @@ example :
     stepStmt (Stmt.ifThen cond body) s = some s := by
   norm_num [stepStmt, evalOp, Tile.cop, ComparableDType.lt]
 
+/-! ### `tl.if ... else ...` scalar conditional surface (issue #54) -/
+
+/-- Scalar if-else skeleton.  The branch condition is scalar; element-wise
+selection remains `tl.where`. -/
+def ifThenElseSmoke (outReg : RegionName) (P : Nat) :
+    Kernel := triton {
+  pid := tl.program_id(0)
+  tl.if pid < $(P) {
+    tl.store($(outReg) + $(0), $ℝ(1))
+  } else {
+    tl.store($(outReg) + $(0), $ℝ(2))
+  }
+}
+
+example :
+    let s : BlockState :=
+      { mem := fun _ _ => 0, regs := fun _ _ _ => none
+      , pids := fun _ => 0, undef := fun _ _ => 0 }
+    let cond : Op .bool [] :=
+      Op.lt ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 1)
+    let thenBody : List Stmt := [Stmt.assign .real [] "x" (Op.const 7)]
+    let elseBody : List Stmt := [Stmt.assign .real [] "x" (Op.const 9)]
+    (stepStmt (Stmt.ifThenElse cond thenBody elseBody) s).bind
+        (fun s' => s'.regs .real [] "x")
+      = some (Tile.scalar (some (7 : ℝ) : WithBot ℝ)) := by
+  norm_num [stepStmt, stepStmts, evalOp, Tile.cop, ComparableDType.lt,
+    BlockState.setReg]
+
+example :
+    let s : BlockState :=
+      { mem := fun _ _ => 0, regs := fun _ _ _ => none
+      , pids := fun _ => 0, undef := fun _ _ => 0 }
+    let cond : Op .bool [] :=
+      Op.lt ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 1)
+    let thenBody : List Stmt := [Stmt.assign .real [] "x" (Op.const 7)]
+    let elseBody : List Stmt := [Stmt.assign .real [] "x" (Op.const 9)]
+    (stepStmt (Stmt.ifThenElse cond thenBody elseBody) s).bind
+        (fun s' => s'.regs .real [] "x")
+      = some (Tile.scalar (some (9 : ℝ) : WithBot ℝ)) := by
+  norm_num [stepStmt, stepStmts, evalOp, Tile.cop, ComparableDType.lt,
+    BlockState.setReg]
+
 /-! ### `tl.trans` / transpose (issue #36)
 
 Trailing-two-axes transpose: rank-2 case is the standard `.T`; rank-≥ 3

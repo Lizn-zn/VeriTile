@@ -29,9 +29,10 @@ Stmt : Type
 - `tl.static_range i in $(n) { ... }` 与 `tl.static_range i in N { ... }`
   是同一个 bounded-loop AST 的 surface alias。当前不建模 unroll / pipeline
   属性。
-- `tl.if cond { ... }` 支持 scalar bool 条件(`Op .bool []`)。
-  当前没有 `else`、`break` 或 `continue`;Triton 的 block-skipping pattern
-  应该通过取反 skip 条件并包住有效 body 来表示。逐元素条件选择仍使用 `tl.where`。
+- `tl.if cond { ... }` 和 `tl.if cond { ... } else { ... }` 支持 scalar
+  bool 条件(`Op .bool []`)。当前没有 `break` 或 `continue`;Triton 的
+  block-skipping pattern 应该通过取反 skip 条件并包住有效 body 来表示。逐元素条件选择仍使用
+  `tl.where`。
 - 寄存器赋值:
   `x := expr`。
 
@@ -322,7 +323,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | scalar/tile 常量 | Supported | 实数字面量、`$(n)`、`$ℝ(x)`、`-inf`、register ref |
 | program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;可通过 `GridIndex` / `Kernel.ForAllPrograms` 做 ND grid 量化,但没有 launch executor |
 | loop | Supported | bounded `tl.for`;`tl.static_range` alias 降到同一个 loop AST |
-| conditional | Limited | 只有 `tl.if cond { ... }`;没有 `else`、`break`、`continue` |
+| conditional | Limited | scalar `tl.if cond { ... }` 与 `tl.if cond { ... } else { ... }`;没有 `break`、`continue` |
 | arithmetic | Supported | 同 channel numeric 上的 `+`, `-`, `*`, `/`;integer `//` / `%`;`.nat` `tl.cdiv`;pointer offset 支持 `ptr + nat` |
 | comparison | Supported | `.real` 或 `.nat` 上的 `<`, `<=`, `==`, `>`, `>=`, `!=` |
 | bool op | Supported | `tl.logical_and`、`tl.logical_or`、`tl.logical_not`,以及 `&`、`|`、`~` mask spelling |

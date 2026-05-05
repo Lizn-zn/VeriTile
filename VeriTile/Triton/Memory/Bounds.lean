@@ -227,6 +227,10 @@ def MemorySafe (bounds : RegionBounds) : Stmt → Prop
       ∀ s, mem.ActiveAddressSafe bounds s (mask.Active s)
   | .forLoop _ _ body => MemorySafeList bounds body
   | .ifThen cond body => cond.MemorySafe bounds ∧ MemorySafeList bounds body
+  | .ifThenElse cond thenBody elseBody =>
+      cond.MemorySafe bounds ∧
+      MemorySafeList bounds thenBody ∧
+      MemorySafeList bounds elseBody
 
 /-- Memory-safety contract for statement lists. -/
 def MemorySafeList (bounds : RegionBounds) : List Stmt → Prop

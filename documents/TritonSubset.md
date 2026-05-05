@@ -32,10 +32,11 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 - `tl.static_range i in $(n) { ... }` and `tl.static_range i in N { ... }`
   are surface aliases for the same bounded-loop AST. Unroll and pipeline
   attributes are not modeled.
-- `tl.if cond { ... }` for scalar boolean conditions (`Op .bool []`).
-  There is no `else`, `break`, or `continue`; Triton block-skipping patterns
-  should be written by negating the skip condition and wrapping the useful
-  body. Elementwise conditional selection remains `tl.where`.
+- `tl.if cond { ... }` and `tl.if cond { ... } else { ... }` for scalar
+  boolean conditions (`Op .bool []`). There is no `break` or `continue`;
+  Triton block-skipping patterns should be written by negating the skip
+  condition and wrapping the useful body. Elementwise conditional selection
+  remains `tl.where`.
 - Register assignment:
   `x := expr`.
 
@@ -358,7 +359,7 @@ current semantic contract.
 | Scalar/tile constants | Supported | Real literals, `$(n)`, `$ℝ(x)`, `-inf`, register refs |
 | Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; ND grid quantification is available through `GridIndex` / `Kernel.ForAllPrograms`, but no launch executor is modeled |
 | Loops | Supported | Bounded `tl.for`; `tl.static_range` alias backed by the same loop AST |
-| Conditionals | Limited | `tl.if cond { ... }` only; no `else`, `break`, or `continue` |
+| Conditionals | Limited | Scalar `tl.if cond { ... }` and `tl.if cond { ... } else { ... }`; no `break` or `continue` |
 | Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel numeric operands; `//`, `%` on integer channels; `tl.cdiv` on `.nat`; `ptr + nat` for pointer offsets |
 | Comparisons | Supported | `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or `.nat` |
 | Boolean ops | Supported | `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus `&`, `|`, `~` mask spellings |

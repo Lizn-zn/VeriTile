@@ -299,6 +299,11 @@ def Stmt.check (ctx : CheckCtx) : Stmt → Except CheckError CheckCtx
   | .ifThen cond body => do
       cond.check ctx
       StmtList.check ctx body
+  | .ifThenElse cond thenBody elseBody => do
+      cond.check ctx
+      let _ ← StmtList.check ctx thenBody
+      let _ ← StmtList.check ctx elseBody
+      .ok ctx
 termination_by st => sizeOf st
 decreasing_by all_goals (simp_wf; try omega)
 

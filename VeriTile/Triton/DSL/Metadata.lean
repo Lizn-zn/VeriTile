@@ -327,6 +327,16 @@ partial def stmtRegions :
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
           let (i, o) := stmtRegions st
           (acc.1 ++ i, acc.2 ++ o)) ([], [])
+  | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
+      let thenRegions := thenStmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+      let elseRegions := elseStmts.toList.foldl
+        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
+          let (i, o) := stmtRegions st
+          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+      (exprRegions cond ++ thenRegions.1 ++ elseRegions.1, thenRegions.2 ++ elseRegions.2)
   | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) =>
       stmts.toList.foldl
         (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
