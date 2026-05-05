@@ -23,6 +23,7 @@ launch_noop_grid	VeriTile/Examples/TritonSmoke.lean	launch_noop_for_all_programs
 memory_safety_blockptr_boundary	VeriTile/Examples/MemorySafety.lean	blockPtrBoundary_memorySafe	safety	proven	internal	-	block pointer boundary_check	Layer-1 active-lane memory bounds safety	masked inactive lanes are vacuously safe
 memory_frame_blockptr_oob	VeriTile/Examples/MemoryFrame.lean	blockPtrOOBStore_writesWithin_checkedFootprint	frame	proven	internal	-	block pointer boundary_check	Layer-2a/#61 memory footprint extraction primitives	checked footprint for OOB store
 grid_const_store_merge	VeriTile/Examples/GridComposition.lean	gridConstStore_merge_observe_written	frame	proven	internal	-	ND grid	Layer-2b disjoint whole-grid composition	mergeFrames smoke
+splitk_atomic_add_merge	VeriTile/Examples/GridComposition.lean	splitKAtomicAdd_merge_sum	trace	proven	internal:#104	-	split-K toy grid	Minimal atomic-grid composition smoke	second consumer of mergeFramesWithAtomic outside FA-1 backward
 online_softmax	VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct_view	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
 rowwise_sum	VeriTile/Examples/RowWise.lean	rowWiseSum_correct_view	correct	proven	internal	-	-	Row-wise reductions	sum variant
 rowwise_max	VeriTile/Examples/RowWise.lean	rowWiseMax_correct_view	correct	proven	internal	-	-	Row-wise max	max variant
