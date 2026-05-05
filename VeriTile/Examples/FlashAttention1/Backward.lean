@@ -1198,6 +1198,53 @@ theorem fa1BackwardAtomicDQKernel_gridMerged_dQ_correct
   rw [dQBlockContribution_sum_eq_attentionBackwardReal Q K V dO LSE scale idx]
   simp [attentionBackwardReal_dQ]
 
+/-- Launcher-facing grid correctness for the atomic `dQ` output cells.
+
+This is the #88 surface over the same atomic `dQ` composition theorem above:
+the caller supplies a `GridLaunchedAtomic` witness rather than raw
+`frames`/`contributors`/`atomicTrace` arguments. -/
+theorem fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              dQBlockContribution Q K V dO LSE scale block idx)) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some ((attentionBackwardReal Q K V dO LSE scale).dQ idx) := by
+  intro idx
+  simp [observeTileAt]
+  rw [hLaunch.observeAtomicCell
+    (region := dQReg) (offset := Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)
+    (hNoOrdinaryWrite := hNoOrdinaryDQ idx)]
+  rw [hInitialDQ idx, hAtomicContrib idx]
+  rw [dQBlockContribution_sum_eq_attentionBackwardReal Q K V dO LSE scale idx]
+  simp [attentionBackwardReal_dQ]
+
 /-- Readback for the final three stores of the stripped backward kernel.
 
 The computational prefix establishes the pointer/value registers; this lemma

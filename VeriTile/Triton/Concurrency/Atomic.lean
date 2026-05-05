@@ -152,6 +152,11 @@ end Trace
 
 namespace Kernel
 
+/-- General ND-grid thread identity used by launcher trace witnesses. -/
+def threadIdOf {g : Grid} (idx : GridIndex g) : ThreadId :=
+  { program := List.ofFn fun axis : Fin g.rank => (idx axis).val
+    lane := 0 }
+
 /--
 Simple statement-list atomic trace extraction.
 
@@ -296,6 +301,24 @@ theorem AtomicTraceStateful_final_eq_exec
     exec k s = some final := by
   exact AtomicTraceStatefulList_final_eq_stepStmts hTrace
 
+/-- One program instance's stateful execution trace and final state. -/
+structure ProgramRun (k : Kernel) (g : Grid) (s : BlockState)
+    (idx : GridIndex g) where
+  trace : Trace
+  final : BlockState
+  h_trace :
+    Kernel.AtomicTraceStateful k (Kernel.threadIdOf idx)
+      (s.withGridIndex idx) trace final
+
+namespace ProgramRun
+
+theorem h_exec {k : Kernel} {g : Grid} {s : BlockState}
+    {idx : GridIndex g} (run : Kernel.ProgramRun k g s idx) :
+    exec k (s.withGridIndex idx) = some run.final :=
+  Kernel.AtomicTraceStateful_final_eq_exec run.h_trace
+
+end ProgramRun
+
 theorem AtomicTraceStatefulList_append_of_stepPrefix
     {tid : ThreadId} {l₁ l₂ : List Stmt} {s s₁ s₂ : BlockState}
     {trace₂ : Trace}
@@ -369,6 +392,70 @@ theorem mergeFramesWithAtomic_atomicAdd_eq_finsetSum {k : Kernel} {g : Grid}
   classical
   unfold Kernel.mergeFramesWithAtomic Kernel.atomicContributionRealSum
   simp [hNoOrdinaryWrite, BlockState.readMem]
+
+/-- Relational whole-grid launch surface for kernels with atomic-add
+contributions.
+
+The relation packages per-program stateful traces, ordinary write frames, the
+selected atomic contributors, and the final-state merge.  It deliberately stays
+relational: no arbitrary program scheduling order is chosen. -/
+structure GridLaunchedAtomic (k : Kernel) (g : Grid)
+    (s sFinal : BlockState) where
+  runs : (idx : GridIndex g) → Kernel.ProgramRun k g s idx
+  frames : Kernel.GridFrames k g s
+  h_frame_final : ∀ idx, (frames idx).final = (runs idx).final
+  h_disjoint : Kernel.GridWritesDisjoint frames
+  contributors : Finset (GridIndex g)
+  h_final :
+    sFinal = Kernel.mergeFramesWithAtomic g s frames contributors
+      (fun idx => (runs idx).trace)
+
+namespace GridLaunchedAtomic
+
+theorem observeAtomicCell {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedAtomic k g s sFinal)
+    (region : RegionName) (offset : Nat)
+    (hNoOrdinaryWrite : ¬ Kernel.GridWriteFootprint h.frames (region, offset)) :
+    sFinal.readMem region offset =
+      s.readMem region offset +
+        h.contributors.sum
+          (fun idx => (h.runs idx).trace.atomicAddRealSum (region, offset)) := by
+  rcases h with ⟨runs, frames, _hFrameFinal, _hDisjoint, contributors, hFinal⟩
+  subst sFinal
+  exact Kernel.mergeFramesWithAtomic_atomicAdd_eq_finsetSum
+    (frames := frames) (contributors := contributors)
+    (atomicTrace := fun idx => (runs idx).trace)
+    (region := region) (offset := offset)
+    (hNoOrdinaryWrite := hNoOrdinaryWrite)
+
+theorem observeOrdinaryCell {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedAtomic k g s sFinal)
+    (idx : GridIndex g) (region : RegionName) (offset : Nat)
+    (hWrite : (h.frames idx).writes (region, offset)) :
+    sFinal.mem region offset = (h.frames idx).final.mem region offset := by
+  classical
+  rcases h with ⟨_runs, frames, _hFrameFinal, hDisjoint, _contributors, hFinal⟩
+  subst sFinal
+  unfold Kernel.mergeFramesWithAtomic
+  dsimp
+  have hWritten : Kernel.GridWriteFootprint frames (region, offset) := ⟨idx, hWrite⟩
+  simp [hWritten]
+  exact Kernel.mergeFrames_mem_written hDisjoint idx region offset hWrite
+
+theorem observeAtomicCell_of_sum_eq {k : Kernel} {g : Grid}
+    {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedAtomic k g s sFinal)
+    (region : RegionName) (offset : Nat)
+    (hNoOrdinaryWrite : ¬ Kernel.GridWriteFootprint h.frames (region, offset))
+    (rhs : ℝ)
+    (hSum :
+      h.contributors.sum
+          (fun idx => (h.runs idx).trace.atomicAddRealSum (region, offset)) =
+        rhs) :
+    sFinal.readMem region offset = s.readMem region offset + rhs := by
+  rw [h.observeAtomicCell region offset hNoOrdinaryWrite, hSum]
+
+end GridLaunchedAtomic
 
 end Kernel
 

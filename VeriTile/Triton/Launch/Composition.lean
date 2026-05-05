@@ -121,6 +121,49 @@ theorem execFrame_mem_eq_initial_of_not_writes {k : Kernel} {g : Grid}
   have h := frame.mem_eq_of_not_written hNotWritten
   simpa [BlockState.withGridIndex, BlockState.withPids] using h
 
+/-- Relational whole-grid launch surface for kernels whose per-program writes
+are ordinary disjoint frame writes.
+
+This is the launcher-facing wrapper around `mergeFrames`: callers provide one
+successful framed execution for every program index plus pairwise disjointness,
+and the relation exposes the merged final state without committing to an
+arbitrary program execution order. -/
+structure GridLaunchedOrdinary (k : Kernel) (g : Grid)
+    (s sFinal : BlockState) where
+  frames : Kernel.GridFrames k g s
+  h_disjoint : Kernel.GridWritesDisjoint frames
+  h_final : sFinal = Kernel.mergeFrames g s frames
+
+namespace GridLaunchedOrdinary
+
+theorem observeOrdinaryCell {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedOrdinary k g s sFinal)
+    (idx : GridIndex g) (region : RegionName) (offset : Nat)
+    (hWrite : (h.frames idx).writes (region, offset)) :
+    sFinal.mem region offset = (h.frames idx).final.mem region offset := by
+  rcases h with ⟨frames, hDisjoint, hFinal⟩
+  subst sFinal
+  exact Kernel.mergeFrames_mem_written hDisjoint idx region offset hWrite
+
+theorem observeUnwrittenCell {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedOrdinary k g s sFinal)
+    (region : RegionName) (offset : Nat)
+    (hNotWritten : ¬ Kernel.GridWriteFootprint h.frames (region, offset)) :
+    sFinal.mem region offset = s.mem region offset := by
+  rcases h with ⟨frames, _hDisjoint, hFinal⟩
+  subst sFinal
+  exact Kernel.mergeFrames_mem_eq_of_not_written (frames := frames)
+    (region := region) (offset := offset) hNotWritten
+
+theorem writeWithin {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedOrdinary k g s sFinal) :
+    BlockState.WriteWithin (Kernel.GridWriteFootprint h.frames) s sFinal := by
+  rcases h with ⟨frames, _hDisjoint, hFinal⟩
+  subst sFinal
+  exact Kernel.mergeFrames_writeWithin frames
+
+end GridLaunchedOrdinary
+
 end Kernel
 
 end VeriTile.Triton

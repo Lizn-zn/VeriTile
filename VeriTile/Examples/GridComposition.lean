@@ -75,17 +75,24 @@ theorem gridConstStoreFrames_disjoint
   intro _ _ hEq
   exact hne (grid1_ext hEq)
 
-theorem gridConstStore_merge_observe_written
+/-- Canonical ordinary launch witness for the one-dimensional disjoint store smoke. -/
+def gridConstStoreLaunched (outReg : RegionName) (n : Nat) (s : BlockState) :
+    Kernel.GridLaunchedOrdinary (gridConstStoreKernel outReg) (Grid1 n) s
+      (Kernel.mergeFrames (Grid1 n) s (gridConstStoreFrames outReg n s)) :=
+  { frames := gridConstStoreFrames outReg n s
+    h_disjoint := gridConstStoreFrames_disjoint outReg n s
+    h_final := rfl }
+
+theorem gridConstStore_launched_observe_written
     (outReg : RegionName) (n : Nat) (s : BlockState) (i : Fin n) :
     (Kernel.mergeFrames (Grid1 n) s (gridConstStoreFrames outReg n s)).mem outReg i.val =
       ((gridConstStoreFrames outReg n s) (grid1Index i)).final.mem outReg i.val := by
-  apply Kernel.mergeFrames_mem_written
-  · exact gridConstStoreFrames_disjoint outReg n s
-  · change WriteFootprint.tileImage outReg
+  apply (gridConstStoreLaunched outReg n s).observeOrdinaryCell
+  change WriteFootprint.tileImage outReg
       (fun _ : TileIndex [] =>
         (grid1Index i ⟨0, by simp [Grid.rank]⟩).val) (outReg, i.val)
-    simp [WriteFootprint.tileImage]
-    exact (grid1Index_zero i).symm
+  simp [WriteFootprint.tileImage]
+  exact (grid1Index_zero i).symm
 
 theorem gridConstStore_merge_unrelated
     (outReg otherReg : RegionName) (n : Nat) (s : BlockState) (offset : Nat)
@@ -112,14 +119,10 @@ def splitKAtomicAddKernel (outReg : RegionName) : Kernel :=
           (Op.natToReal (Op.ref .nat [] "pid")) MaskOpt.none
       ] }
 
-private def grid1ThreadId {n : Nat} (idx : GridIndex (Grid1 n)) : ThreadId :=
-  { program := [(idx ⟨0, by simp [Grid.rank]⟩).val]
-    lane := 0 }
-
 /-- Toy trace for the split-K smoke: one Real atomic-add event per program. -/
 def splitKAtomicTrace {n : Nat} (outReg : RegionName)
     (contrib : GridIndex (Grid1 n) → ℝ) (idx : GridIndex (Grid1 n)) : Trace :=
-  [Stmt.atomicTraceEvent (grid1ThreadId idx) outReg 0 .real (contrib idx)]
+  [Stmt.atomicTraceEvent (Kernel.threadIdOf idx) outReg 0 .real (contrib idx)]
 
 @[simp] theorem splitKAtomicTrace_sum {n : Nat} (outReg : RegionName)
     (contrib : GridIndex (Grid1 n) → ℝ) (idx : GridIndex (Grid1 n)) :
@@ -133,26 +136,23 @@ This is the second consumer of the generic `mergeFramesWithAtomic` theorem
 after FA-1 backward: when every program contributes one atomic-add payload to a
 single output cell, the merged cell equals the initial value plus the Finset
 sum of all per-program contributions. -/
-theorem splitKAtomicAdd_merge_sum
-    (outReg : RegionName) (n : Nat) (s : BlockState)
-    (frames : Kernel.GridFrames (splitKAtomicAddKernel outReg) (Grid1 n) s)
+theorem splitKAtomicAdd_launched_sum
+    (outReg : RegionName) (n : Nat) (s sFinal : BlockState)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic (splitKAtomicAddKernel outReg) (Grid1 n) s sFinal)
     (contrib : GridIndex (Grid1 n) → ℝ)
-    (hNoOrdinaryWrite : ¬ Kernel.GridWriteFootprint frames (outReg, 0)) :
-    (Kernel.mergeFramesWithAtomic (Grid1 n) s frames
-        (Finset.univ : Finset (GridIndex (Grid1 n)))
-        (splitKAtomicTrace outReg contrib)).readMem outReg 0 =
+    (hNoOrdinaryWrite : ¬ Kernel.GridWriteFootprint hLaunch.frames (outReg, 0))
+    (hContrib :
+      ∀ idx ∈ hLaunch.contributors,
+        (hLaunch.runs idx).trace.atomicAddRealSum (outReg, 0) = contrib idx) :
+    sFinal.readMem outReg 0 =
       s.readMem outReg 0 +
-        (Finset.univ : Finset (GridIndex (Grid1 n))).sum contrib := by
+        hLaunch.contributors.sum contrib := by
   classical
-  rw [Kernel.mergeFramesWithAtomic_atomicAdd_eq_finsetSum
-    (frames := frames)
-    (contributors := (Finset.univ : Finset (GridIndex (Grid1 n))))
-    (atomicTrace := splitKAtomicTrace outReg contrib)
-    (region := outReg) (offset := 0)
-    (hNoOrdinaryWrite := hNoOrdinaryWrite)]
+  rw [hLaunch.observeAtomicCell outReg 0 hNoOrdinaryWrite]
   congr 1
   apply Finset.sum_congr rfl
-  intro idx _
-  simp
+  intro idx hidx
+  exact hContrib idx hidx
 
 end VeriTile.Examples.GridComposition
