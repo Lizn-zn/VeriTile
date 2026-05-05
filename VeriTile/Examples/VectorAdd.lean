@@ -139,13 +139,18 @@ theorem add_kernel_compute_correct
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeKernel.OutputsMatchArray
+    ComputeKernel.ComputeCorrect
       ((addKernel xReg yReg outReg blockSize))
-      s
-      (programTileView s outReg blockSize)
-      (addSpec xs ys) := by
-  apply ComputeKernel.execCorrect_of_toAlgKernel rfl
-  intro s' hExec idx
+      (fun s0 s' =>
+        s0 = s →
+        ∀ idx : TileIndex [blockSize],
+          TensorView.observe (some s')
+              (programTileView s outReg blockSize) idx
+            = some (addSpec xs ys idx.1)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
   have hview := add_kernel_correct_exec_view xReg yReg outReg blockSize hBlockSize
     s xs ys h_x h_y idx
   rw [hExec] at hview
@@ -158,11 +163,14 @@ theorem add_kernel_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeKernel.OutputsMatchArray
+    ComputeKernel.ComputeCorrect
       ((addKernel xReg yReg outReg blockSize))
-      s
-      (programTileView s outReg blockSize)
-      (addSpec xs ys) := by
+      (fun s0 s' =>
+        s0 = s →
+        ∀ idx : TileIndex [blockSize],
+          TensorView.observe (some s')
+              (programTileView s outReg blockSize) idx
+            = some (addSpec xs ys idx.1)) := by
   exact add_kernel_compute_correct xReg yReg outReg blockSize hBlockSize
     s xs ys h_x h_y
 
