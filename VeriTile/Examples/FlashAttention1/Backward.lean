@@ -663,7 +663,9 @@ noncomputable def fa1BackwardAtomicDQPreAtomicState
     ((fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale).toAlgKernel.body.take 29) s).getD s
 
-set_option maxHeartbeats 8000000 in
+/- #97: these FA-1 backward readback simp blocks still need elevated
+heartbeats, but the Tile accessor simp pass reduced them from 8M to 2M. -/
+set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_step
     {M D Bk numKVBlocks : Nat}
@@ -730,7 +732,7 @@ theorem fa1BackwardAtomicDQPreAtomic_step
       WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq,
       dS, rowCorrection, dP, probability, FA1Math.scaledScore]
 
-set_option maxHeartbeats 8000000 in
+set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_qPtrs
     {M D Bk numKVBlocks : Nat}
@@ -779,7 +781,7 @@ theorem fa1BackwardAtomicDQPreAtomic_qPtrs
       WithBot.sum_someTerm_eq_some,
       dS, rowCorrection, dP, probability, FA1Math.scaledScore]
 
-set_option maxHeartbeats 8000000 in
+set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_kBlockPtrs
     {M D Bk numKVBlocks : Nat}
@@ -838,7 +840,7 @@ theorem fa1BackwardAtomicDQPreAtomic_kBlockPtrs
             Offset.rowMajor2D, Offset.strided]
           ring
 
-set_option maxHeartbeats 8000000 in
+set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_vBlockPtrs
     {M D Bk numKVBlocks : Nat}
@@ -897,7 +899,7 @@ theorem fa1BackwardAtomicDQPreAtomic_vBlockPtrs
             Offset.rowMajor2D, Offset.strided]
           ring
 
-set_option maxHeartbeats 8000000 in
+set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_dQPart
     {M D Bk numKVBlocks : Nat}
@@ -966,7 +968,7 @@ theorem fa1BackwardAtomicDQPreAtomic_dQPart
   rw [mul_comm]
   rfl
 
-set_option maxHeartbeats 8000000 in
+set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_dKBlock
     {M D Bk numKVBlocks : Nat}
@@ -1038,7 +1040,7 @@ theorem fa1BackwardAtomicDQPreAtomic_dKBlock
   rw [mul_comm]
   rfl
 
-set_option maxHeartbeats 8000000 in
+set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_dVBlock
     {M D Bk numKVBlocks : Nat}
@@ -1654,7 +1656,7 @@ theorem atomicBackward_tailStores_readback_rowMajor2D_base
       BlockState.foldl_writeMem_regs]
     rw [BlockState.scatter_readback_nd _ _ _ hInj idx]
 
-set_option maxHeartbeats 8000000 in
+set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
 /-- Input-level readback for the ordinary `dK`/`dV` stores of one atomic-`dQ`
 backward block program.  The `dQ` result is handled by the atomic trace/merge
