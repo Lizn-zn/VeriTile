@@ -112,6 +112,28 @@ theorem atomicTraceEvents_atomicAdd_region_none
         some (Stmt.atomicTraceEvent tid region (offsets.data i) dtype (values.data i))) := by
   simp [atomicTraceEvents, evalMask, hOffsets, hValues]
 
+/-- Trace emitted by an unmasked region-addressed `atomic_add` whose offset and
+payload tiles are read from registers. -/
+theorem atomicTraceEvents_atomicAdd_region_none_of_reg_refs
+    {dtype : TileDType} (hnum : NumericDType dtype) {shape : TileShape}
+    (tid : ThreadId) (s : BlockState) (region : RegionName)
+    (ptrName valueName : RegName)
+    (offsets : Tile .nat shape) (values : Tile dtype shape)
+    (hOffsets : s.regs .nat shape ptrName = some offsets)
+    (hValues : s.regs dtype shape valueName = some values) :
+    Stmt.atomicTraceEvents tid s
+        (Stmt.atomicAdd hnum shape
+          (MemAccess.region region (Op.ref .nat shape ptrName))
+          (Op.ref dtype shape valueName) MaskOpt.none) =
+      some ((TileShape.allIndices shape).filterMap fun i =>
+        some (Stmt.atomicTraceEvent tid region (offsets.data i) dtype (values.data i))) := by
+  apply atomicTraceEvents_atomicAdd_region_none
+    (hnum := hnum) (tid := tid) (s := s) (region := region)
+    (off := Op.ref .nat shape ptrName) (value := Op.ref dtype shape valueName)
+    (offsets := offsets) (values := values)
+  · simp [evalOp, hOffsets]
+  · simp [evalOp, hValues]
+
 end Stmt
 
 namespace Trace

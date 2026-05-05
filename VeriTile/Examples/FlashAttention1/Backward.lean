@@ -649,24 +649,6 @@ theorem fa1BackwardAtomicDQKernel_statefulTrace_of_tail
       M D Bk numKVBlocks scale tid s sPre hPre
   · exact hTail
 
-/-- Trace emitted by the atomic `dQ` statement once the pre-atomic registers
-are known. -/
-theorem fa1BackwardAtomicDQ_atomicTraceEvents_of_regs
-    (dQReg : RegionName) (M D : Nat) (tid : ThreadId) (sPre : BlockState)
-    (qPtrs : Tile .nat [M, D]) (dQPart : Tile .real [M, D])
-    (hPtrs : sPre.regs .nat [M, D] "q_ptrs" = some qPtrs)
-    (hVal : sPre.regs .real [M, D] "dQ_part" = some dQPart) :
-    Stmt.atomicTraceEvents tid sPre
-        (Stmt.atomicAdd NumericDType.real [M, D]
-          (MemAccess.region dQReg (Op.ref .nat [M, D] "q_ptrs"))
-          (Op.ref .real [M, D] "dQ_part") MaskOpt.none) =
-      some ((TileShape.allIndices [M, D]).filterMap fun i =>
-        some (Stmt.atomicTraceEvent tid dQReg (qPtrs.data i) .real (dQPart.data i))) := by
-  apply Stmt.atomicTraceEvents_atomicAdd_region_none
-    (offsets := qPtrs) (values := dQPart)
-  · simp [evalOp, hPtrs]
-  · simp [evalOp, hVal]
-
 /-- Specialized trace surface for one block's atomic `dQ` contribution. -/
 theorem fa1BackwardAtomicDQ_atomicTraceEvents_blockContribution
     {M D Bk numKVBlocks : Nat}
@@ -688,8 +670,9 @@ theorem fa1BackwardAtomicDQ_atomicTraceEvents_blockContribution
           (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
           (some (dQBlockContribution Q K V dO LSE scale block i)))) := by
   simpa [Tile.ofReal] using
-    fa1BackwardAtomicDQ_atomicTraceEvents_of_regs
-      dQReg M D tid sPre
+    Stmt.atomicTraceEvents_atomicAdd_region_none_of_reg_refs
+      (hnum := NumericDType.real) (tid := tid) (s := sPre) (region := dQReg)
+      (ptrName := "q_ptrs") (valueName := "dQ_part")
       (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D])
       (Tile.ofReal (dQBlockContribution Q K V dO LSE scale block))
       hPtrs hVal
@@ -934,65 +917,6 @@ theorem fa1BackwardAtomicDQKernel_statefulTrace_blockContribution_from_inputs_of
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
     scale tid s final Q K V dO LSE block
     hPid hQ hK hV hdO hLSE hTailStep
-
-/-- Store-stage readback helper for the row-major 2D stores used by the
-stripped backward kernel.  It factors out the final proof obligation for each
-of `dQ`, `dK`, and `dV`: once the address tile and value tile are in
-registers, the corresponding unmasked store reads back exactly that value. -/
-theorem store_stage_readback_rowMajor2D
-    (outReg : RegionName) (ptrName valueName : RegName)
-    (rows cols : Nat) (s : BlockState)
-    (valueFn : TileIndex [rows, cols] → ℝ)
-    (hPtrs : s.regs .nat [rows, cols] ptrName =
-      some (⟨Offset.rowMajor2D (rows := rows) (cols := cols) 0 cols⟩ :
-        Tile .nat [rows, cols]))
-    (hVal : s.regs .real [rows, cols] valueName = some (Tile.ofReal valueFn)) :
-    ∀ idx : TileIndex [rows, cols],
-      observeTileAt
-        (stepStmt (Stmt.store .real [rows, cols]
-          (MemAccess.region outReg (Op.ref .nat [rows, cols] ptrName))
-          (Op.ref .real [rows, cols] valueName) MaskOpt.none) s)
-        outReg (Offset.rowMajor2D (rows := rows) (cols := cols) 0 cols) idx =
-      some (valueFn idx) := by
-  intro idx
-  have h_inj : Function.Injective
-      (fun i : TileIndex [rows, cols] => i.1.val * cols + i.2.1.val) := by
-    intro a b h
-    have hrow : Offset.rowMajor2D (rows := rows) (cols := cols) 0 cols a =
-        Offset.rowMajor2D (rows := rows) (cols := cols) 0 cols b := by
-      simpa [Offset.rowMajor2D, Offset.strided] using h
-    exact Offset.rowMajor2D_inj (base := 0) (rowStride := cols) (le_refl cols) hrow
-  simp [observeTileAt, stepStmt, evalOp, hPtrs, hVal, Tile.ofReal,
-    BlockState.writeMemTyped_real, Offset.rowMajor2D, Offset.strided]
-  rw [BlockState.scatter_readback_nd _ _ _ h_inj idx]
-
-/-- Row-major store-stage readback with a nonzero base offset. -/
-theorem store_stage_readback_rowMajor2D_base
-    (outReg : RegionName) (ptrName valueName : RegName)
-    (rows cols base : Nat) (s : BlockState)
-    (valueFn : TileIndex [rows, cols] → ℝ)
-    (hPtrs : s.regs .nat [rows, cols] ptrName =
-      some (⟨Offset.rowMajor2D (rows := rows) (cols := cols) base cols⟩ :
-        Tile .nat [rows, cols]))
-    (hVal : s.regs .real [rows, cols] valueName = some (Tile.ofReal valueFn)) :
-    ∀ idx : TileIndex [rows, cols],
-      observeTileAt
-        (stepStmt (Stmt.store .real [rows, cols]
-          (MemAccess.region outReg (Op.ref .nat [rows, cols] ptrName))
-          (Op.ref .real [rows, cols] valueName) MaskOpt.none) s)
-        outReg (Offset.rowMajor2D (rows := rows) (cols := cols) base cols) idx =
-      some (valueFn idx) := by
-  intro idx
-  have h_inj : Function.Injective
-      (fun i : TileIndex [rows, cols] => base + i.1.val * cols + i.2.1.val) := by
-    intro a b h
-    have hrow : Offset.rowMajor2D (rows := rows) (cols := cols) base cols a =
-        Offset.rowMajor2D (rows := rows) (cols := cols) base cols b := by
-      simpa [Offset.rowMajor2D, Offset.strided] using h
-    exact Offset.rowMajor2D_inj (base := base) (rowStride := cols) (le_refl cols) hrow
-  simp [observeTileAt, stepStmt, evalOp, hPtrs, hVal, Tile.ofReal,
-    BlockState.writeMemTyped_real, Offset.rowMajor2D, Offset.strided]
-  rw [BlockState.scatter_readback_nd _ _ _ h_inj idx]
 
 /-- Readback for the ordinary `dK`/`dV` stores in the atomic-`dQ` backward
 tail.  The leading atomic `dQ` update only changes memory and preserves the
