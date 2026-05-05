@@ -21,6 +21,7 @@ VeriTile/Examples/WelfordKernels.lean:welford_kernels_refinement_view
 VeriTile/Examples/LayerNormKernels.lean:layernorm_kernels_refinement_view
 VeriTile/Examples/ApproxGeLU.lean:approx_gelu_kernel_correct_view
 VeriTile/Examples/HyperConnections/MHC.lean:mhcWidthConnection_correct_view
+VeriTile/Examples/HyperConnections/MHC.lean:mhcDepthConnection_correct_view
 VeriTile/Examples/FlashAttention1/V0.lean:fa1_forward_correct_4D_views
 VeriTile/Examples/FlashAttention1/V0.lean:fa1_forward_correct_4D_causal_views
 VeriTile/Examples/FlashAttention1/NaiveRefinement.lean:fa1_boundaryD_refines_naive_reference_views

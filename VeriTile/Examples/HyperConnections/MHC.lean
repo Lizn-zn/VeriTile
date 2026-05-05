@@ -125,6 +125,12 @@ input spec. -/
 noncomputable def mhcWidthConnectionBranchInSpec1 (residual hPre tau : ℝ) : ℝ :=
   Real.exp (hPre / tau) * residual
 
+/-- Fixed-rank (`S = T = D = 1`, zero Sinkhorn iterations) depth-side output
+spec. -/
+noncomputable def mhcDepthConnectionOutSpec1
+    (resMix branchOut hPost tau : ℝ) : ℝ :=
+  resMix + Real.exp (hPost / tau) * branchOut
+
 theorem mhcWidthConnection_exec_view
     (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
     (tau : ℝ) (s : BlockState)
@@ -176,14 +182,41 @@ theorem mhcWidthConnection_correct_view
   rw [hExec] at hview
   simpa using hview
 
+/-- Scalar fixed-rank depth-side mHC core (`S = T = D = 1`, zero Sinkhorn
+iterations).
+
+For program id `b`, this consumes the width-side residual mix at `resMixReg[b]`,
+the external branch output at `branchOutReg[b]`, and the scalar post logit at
+`hPostReg[0]`, then writes `outReg[b]`.
+-/
+def mhcDepthConnectionKernel1
+    (resMixReg branchOutReg hPostReg outReg : RegionName)
+    (tau : ℝ) : ComputeKernel := triton {
+  b := tl.program_id(0)
+  res_mix := tl.load($(resMixReg) + b)
+  branch_out := tl.load($(branchOutReg) + b)
+  h_post := tl.load($(hPostReg))
+  branch_mix := tl.exp(h_post / $ℝ(tau)) * branch_out
+  out := res_mix + branch_mix
+  tl.store($(outReg) + b, out)
+}
+
 /-- Depth-side mHC core.
 
 This consumes the output of an external branch, mixes it back into the residual
 streams through a normalized post map, and adds it to the width-side residual
-mixture. -/
+mixture.
+
+The fixed-rank `S = T = D = 1`, `numIters = 0` case is definitionally routed to
+`mhcDepthConnectionKernel1`, matching the proof-covered width-side slice.  The
+generic rank / iterative Sinkhorn proof remains future work. -/
 def mhcDepthConnectionKernel
     (resMixReg branchOutReg hPostReg outReg : RegionName)
-    (S T D numIters : Nat) (tau : ℝ) : ComputeKernel := triton {
+    (S T D numIters : Nat) (tau : ℝ) : ComputeKernel :=
+  match S, T, D, numIters with
+  | 1, 1, 1, 0 =>
+      mhcDepthConnectionKernel1 resMixReg branchOutReg hPostReg outReg tau
+  | _, _, _, _ => triton {
   b      := tl.program_id(0)
   offs_s := tl.arange(0, $(S))
   offs_t := tl.arange(0, $(T))
@@ -211,5 +244,52 @@ def mhcDepthConnectionKernel
   out_ptrs := b * $(S * D) + offs_s[:, None] * $(D) + offs_d[None, :]
   tl.store($(outReg) + out_ptrs, out)
 }
+
+theorem mhcDepthConnection_exec_view
+    (resMixReg branchOutReg hPostReg outReg : RegionName)
+    (tau : ℝ) (s : BlockState) :
+    let result := exec
+      (mhcDepthConnectionKernel resMixReg branchOutReg hPostReg outReg
+        1 1 1 0 tau).toAlgKernel s
+    result.map (fun s' => s'.readMem outReg s.pid) =
+      some
+        (mhcDepthConnectionOutSpec1
+          (s.readMem resMixReg s.pid)
+          (s.readMem branchOutReg s.pid)
+          (s.readMem hPostReg 0)
+          tau) := by
+  simp [mhcDepthConnectionKernel, mhcDepthConnectionKernel1, exec, stepStmts, stepStmt, evalOp,
+    mhcDepthConnectionOutSpec1, NumericDType.add, NumericDType.mul, NumericDType.div,
+    WithBot.realAdd, WithBot.realMul, WithBot.realDiv,
+    BlockState.writeMem, BlockState.readMem]
+
+/-- First fixed-rank mHC depth-side correctness theorem.
+
+For `S = T = D = 1` and zero Sinkhorn iterations, the fixed-rank depth kernel
+writes:
+
+`outReg[b, 0, 0] = resMixReg[b, 0, 0] + exp(hPost[0, 0] / tau) * branchOutReg[b, 0, 0]`.
+-/
+theorem mhcDepthConnection_correct_view
+    (resMixReg branchOutReg hPostReg outReg : RegionName)
+    (tau : ℝ) (s : BlockState) :
+    ComputeKernel.ComputeCorrect
+      (mhcDepthConnectionKernel resMixReg branchOutReg hPostReg outReg
+        1 1 1 0 tau)
+      (fun s0 s' =>
+        s0 = s →
+          s'.readMem outReg s.pid =
+            mhcDepthConnectionOutSpec1
+              (s.readMem resMixReg s.pid)
+              (s.readMem branchOutReg s.pid)
+              (s.readMem hPostReg 0)
+              tau) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hview := mhcDepthConnection_exec_view
+    resMixReg branchOutReg hPostReg outReg tau s
+  rw [hExec] at hview
+  simpa using hview
 
 end VeriTile.Examples.HyperConnections
