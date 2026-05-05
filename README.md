@@ -222,6 +222,11 @@ theorem add_kernel_correct_view
 The two surfaces are deliberately parallel — `ComputeRefine` for kernel pairs,
 `ComputeCorrect` for kernel ↔ math spec. Both project through `toAlgorithm?`
 and reuse the same `Kernel.Correct` / `Kernel.Refine` proof underneath.
+Both also accept an optional `GapPolicy` (default: `.ignore`). Use
+`gap := .require contract` when the theorem should record an externally
+checked compute-to-algorithm gap; Lean proves the projected algorithm theorem
+and records the external contract, but does not prove IEEE / bit-level
+compute behavior internally.
 
 Worked single-kernel correctness examples live in
 [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean),
@@ -378,7 +383,7 @@ bench/llm_eval/        Held-out proof-evaluation harness
 scripts/               Proof wrapper scripts
 documents/             Focused project documentation
 Notes/                 Proposal, implementation notes, feasibility studies
-PLAN.md                Project roadmap
+PLAN.md                Architecture, status, and decision log; live roadmap in #91
 VeriTile.lean          Top-level Lean library entry point
 lakefile.toml          Lake project definition
 lean-toolchain         Pinned Lean toolchain
@@ -427,8 +432,8 @@ annotated kernels, but algorithmic proofs stay over the erased mathematical
 supported by smoke / differential tests rather than IEEE-754 proof
 (permanently externalized).
 
-See [`PLAN.md`](./PLAN.md) for the full roadmap, decision log, and cross-
-cutting material.
+See [`PLAN.md`](./PLAN.md) for the architecture, decision log, and cross-
+cutting material. The live open roadmap is tracked in GitHub issue #91.
 
 ## License
 

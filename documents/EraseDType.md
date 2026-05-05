@@ -201,6 +201,7 @@ Runtime bitcast is now expressible, but remains compute-only:
   compute-layer numeric behavior — there is no Lean-internal IEEE soundness
   theorem covering runtime compute behavior);
 - unsupported runtime cases make `ComputeKernel.toAlgorithm?` return
-  `Except.error`, so `AlgorithmCorrect` cannot be claimed for them in Lean;
+  `Except.error`, so `ProjectedCorrect` / `ComputeCorrect` cannot be claimed
+  for them in Lean;
 - the `Except.error` branch must not be inlined into algorithm-side `Op` terms
   with a fallback constant.

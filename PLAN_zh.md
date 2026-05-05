@@ -27,28 +27,29 @@ Triton verification 真正落地需要四个轴同时推进:
    trace/refinement、ND general 框架(无 ad-hoc 维度 shortcut)全部 production-grade
 
 这是开放路线图,**不是固定 N 个定理交付即结束**。下面的 §状态、§进行中、§路线图按
-这四个轴展开。
+这四个轴展开。实时 issue 路线图在 GitHub issue #91;本文档记录架构、状态和决策日志。
 
 ## 验证架构(永久,自 v0.2 起锁定)
 
 VeriTile 的验证拆成**两个独立互补的层**:
 
 ```
-Algorithm 层(Lean 证明)             Compute 层(外部测试)
+Algorithm 层(Lean 证明)             Compute-gap 层(外部测试)
 ────────────────────────             ──────────────────────
-AlgorithmCorrect ck spec             ComputeCorrect ck
-  := ck.toAlgorithm? = ok ∧            := 实际 Triton kernel 在差分
-     Kernel.Correct ak spec               测试下与算法 spec 比较,
-                                          epsilon bound 内匹配。
+ProjectedCorrect ck spec             GapPolicy.require contract
+  := ck.toAlgorithm? = ok ∧            := Python 检查 ComputeKernel
+     Kernel.Correct ak spec               行为与投影后的 AlgKernel
+                                          行为在 contract tolerance 内匹配。
   Real / Int / Nat 语义。              外部 pipeline,不是 Lean 定理。
   无 IEEE rounding,无 NaN,
   无 fp exception flag。
 ```
 
-两层**不通过任何内部 Lean 定理连接**。两者之间的 bridge 是经验性的(测试),
-**这是 design 决定**。一个 VeriTile-certified kernel 意味着:
-> 算法结构由 Lean 证明正确(AlgorithmCorrect),**并且** fp 层实现已通过
-> 代表性测试集与该算法对照验证(ComputeCorrect)。
+两层**不通过任何内部 Lean 定理连接**。compute-facing syntax 与投影后的 algorithm
+syntax 之间的数值 gap 是经验性的(测试),**这是 design 决定**。一个
+VeriTile-certified compute theorem 意味着:
+> 投影后的算法结构由 Lean 证明正确,**并且** 当使用 `gap := .require contract`
+> 时,该 contract 命名的 compute-to-algorithm gap 已由外部验证。
 
 完整 certification 需要两层都成立。
 
@@ -57,7 +58,7 @@ AlgorithmCorrect ck spec             ComputeCorrect ck
 IEEE-754 形式化(NaN 传播、denormal、rounding mode、硬件 dot precision、
 fast-math、exception flag)**永久不在 Lean 证明范围内**。这不是延期 ——
 不存在计划中的 bridge 定理把 compute 执行连到 Lean 内部的算法执行上。
-ComputeCorrect 现在是、未来也是 test-backed。
+需要的 compute gap 现在是、未来也是 test-backed。
 
 ### Algorithm 层细节
 
@@ -66,25 +67,32 @@ ComputeCorrect 现在是、未来也是 test-backed。
    通过单一 computable decoder 接受;只支持 finite-normal binary32 模式。
 2. 算法正确性在 `Kernel.eraseDType`(fp* → real,intN → int,uintN → nat)
    之后的算法层 kernel 上证明。
-3. 形式 Lean 层使用 `ComputeKernel.AlgorithmCorrect` 和 `Kernel.AlgorithmRefine`。
-   现有 `Kernel.Correct` 证明在算法侧 kernel 上继续有效。
+3. 形式 Lean 层使用 `ComputeKernel.ComputeCorrect` /
+   `ComputeKernel.ComputeRefine`,默认 `gap := .ignore`;当需要记录外部 compute-gap
+   检查时使用 `gap := .require contract`。现有 `Kernel.Correct` 证明在算法侧
+   kernel 上继续有效。
 
 ### Compute 层细节(测试)
 
 1. `ComputeKernel` 忠实保留用户写的 compute-facing AST(包括 `ComputeOp.bitcast`、
-   fp/int 宽度拼写等),让测试 pipeline 能 lift 回 Triton 源码做实机执行。
-2. 差分测试 pipeline(独立 workstream)生成样本输入,执行 lift 出来的 Triton
-   kernel,按 `|actual_output - algorithm_output_decoded| < epsilon` 校验。
-3. epsilon 策略 per-op / per-kernel,文档化在每个 test suite 旁边;不进 Lean 证明。
+   fp/int 宽度拼写等)。
+2. Python gap checker(独立 workstream)导出或镜像 `ComputeKernel` 及其投影后的
+   `AlgKernel`,生成样本输入,校验 exact equality 或
+   `|compute_output - algorithm_output| < epsilon` 等 contract relation。
+3. epsilon 策略 per-op / per-kernel,写入 `ComputeGapContract`;Lean 只记录
+   `ExternalChecked contract`。
 
 ### 用户视角
 
-- 算法结构有 bug:AlgorithmCorrect 抓(Lean 证明 fail)。
+- 算法结构有 bug:`ComputeKernel.ComputeCorrect` /
+  `ComputeKernel.ComputeRefine` 抓(投影到内部 `ProjectedCorrect` /
+  `ProjectedRefine` 后 Lean 证明 fail)。
 - IEEE-specific edge case 有 bug(NaN、overflow、denormal 处理等):
-  ComputeCorrect 抓(测试 fail)。**这一层 by design 没有 Lean 证明义务**。
-- "End-to-end correct" 意味着两层都绿。
+  required compute-gap checker 抓(测试 fail)。**这一层 by design 没有 Lean 证明义务**。
+- "Full compute-facing certificate" 意味着投影后的 Lean 证明成立,并且当 theorem
+  选择 `gap := .require contract` 时,所需 gap contract 已验证。
 
-Real 算法正确性到 floating computation 的 trusted bridge **是测试 pipeline**,
+Real 算法正确性到 floating computation 的 trusted bridge **是 external gap checker**,
 不是 Lean 定理。
 
 ## 状态(2026-05-05)
@@ -124,8 +132,10 @@ Real 算法正确性到 floating computation 的 trusted bridge **是测试 pipe
 ### 横向 infra ✅(超出原 PLAN scope,与 Tier 推进并行)
 
 - **双层架构**:`ComputeKernel` / `AlgorithmKernel` 用 `eraseDType` 桥接;
-  `Kernel.AlgorithmRefine` 在算法侧 kernel 上证;`ComputeKernel.AlgorithmCorrect`
-  作为 user-facing 入口;bitcast 通过 compute projection 路由
+  `Kernel.Correct` / `Kernel.Refine` 在算法侧 kernel 上证;`ProjectedCorrect` /
+  `ProjectedRefine` 是内部投影义务;`ComputeKernel.ComputeCorrect` /
+  `ComputeKernel.ComputeRefine` 是 user-facing 入口;bitcast 通过 compute
+  projection 路由
 - **Float dtype erasure**:`.fp32` / `.fp16` / `.bf16` → `ℝ`;bitcast 通过单一
   computable decoder;invalid bitcast bits 在 macro 展开时拒绝
 - **整数 dtype**:signed Int abstraction(typed integer load,Nat store coverage,
@@ -266,25 +276,23 @@ Real 算法正确性到 floating computation 的 trusted bridge **是测试 pipe
 | Float abstraction bridge 对外部 reviewer 太强 | review / audit 要求 IEEE-754 proof | 双层架构永久锁定:VeriTile 证明 Real abstraction,通过 erasure 暴露 float-facing theorem,代表性 float 行为用测试验证 |
 | Diff-test 数值差超容差(代表性 kernel) | GPU 输出 vs reference | 黄旗,非 gate —— 排查 IEEE-754 内禀差异、`.py` 实现 bug、对应断言不准。形式证明仍然有效 |
 
-### Differential testing
+### 外部验证
 
-Differential testing 是**非形式 validation 工件,不属于可信证明链**。在选定的代表性
-kernel 上,我们维护手写的 Python Triton 对应件,与 PyTorch / `flash-attn` reference
-比较,展示嵌入式算法对应可在 GPU 上运行的代码。
+VeriTile 把两种外部验证分开:
 
-**它是什么** —— 一个 credibility 工件,帮助读者 / 用户相信嵌入式 `triton { ... }`
-AST 对应一个真实的、可运行的 Triton kernel。
+1. **Compute-gap contracts** —— 只在 theorem 使用 `gap := .require contract`
+   时必需。这类检查比较 compute-facing `ComputeKernel` 行为与投影后的 `AlgKernel`
+   行为是否满足 contract relation(例如 exact equality 或 epsilon bound)。Lean 记录
+   `ExternalChecked contract`;不在内部证明 IEEE / bit-level compute 行为。
+2. **Runtime credibility tests** —— 可选的 smoke / differential tests,比较代表性
+   可运行 Triton/Python 实现与 PyTorch / `flash-attn` reference。它们帮助说明嵌入式
+   DSL 对应真实可运行 kernel,但不是 Lean 证明链,也不替代 `GapPolicy` contract。
 
-**它不是什么** —— 它**不是** phase gate。可信证明链是 Lean 定理对嵌入式操作语义
-的命题;正确性靠这个,不靠数值一致。
+**Runtime credibility tests 解决不了什么** —— 对手写 `.py` 跑 diff testing
+不能验证嵌入式操作语义本身,也不能关闭嵌入式 AST 与真实 `.py` 源码之间的 gap
+(那需要 Python lifter,见 §远期)。
 
-**它解决不了什么** —— 对手写 `.py` 跑 diff testing **不能**验证嵌入式操作语义本身,
-**也不能**关闭嵌入式 AST 与真实 `.py` 之间的 gap(那需要 Python lifter,见 §远期)。
-
-它也不证明浮点正确性。float test 支撑的是 dtype-annotated kernel 与 Real
-abstraction 之间的 trusted bridge;它不替代完整 IEEE-754 形式化。
-
-**当前代表集**(随路线图扩展):
+**当前 runtime 代表集**(随路线图扩展):
 
 - 1-2 个 Tier 1+2 kernel(例如 `naiveSoftmaxKernel`、一个 streaming kernel)
 - FA-1 forward(各变体抽样)
@@ -294,9 +302,11 @@ abstraction 之间的 trusted bridge;它不替代完整 IEEE-754 形式化。
 **容差**:Tier 1+2 ≤ 1e-5 元素绝对差;FA-class ≤ 1e-3(`flash_attn` 参考自身 vs
 PyTorch 量级)。
 
-**失败处理**:diff-test 失败是黄旗,不是 gate —— 排查:IEEE-754 内禀差异(可接受,
-文档化)、`.py` 实现 bug(修)、对应断言不准(对照重检)。它**不**让形式证明失效;
-证明对嵌入式语义的命题仍然成立。
+**Runtime 失败处理**:runtime diff-test 失败是黄旗,不是 gate —— 排查:IEEE-754
+内禀差异(可接受,文档化)、`.py` 实现 bug(修)、对应断言不准(对照重检)。它不让
+嵌入式语义上的 Lean theorem 失效。required compute-gap contract 失败则不同:
+使用 `gap := .require contract` 的 theorem 在外部证书重新生成并通过之前,不应视为
+完整 certified。
 
 ### LLM benchmark protocol
 

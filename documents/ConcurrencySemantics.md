@@ -45,7 +45,9 @@ annotations if they are added.
 `AlgKernel` is the proof layer. It is the existing `Kernel` type with
 mathematical Real/Nat/Int semantics, possibly extended later with
 proof-facing abstract effect markers such as an algebraic `atomic_add`.
-`AlgorithmCorrect` is proved here.
+`Kernel.Correct` / `Kernel.Refine` are proved here; the public compute-facing
+surface exposes those proofs through `ComputeKernel.ComputeCorrect` /
+`ComputeKernel.ComputeRefine`.
 
 There is no separate `ConcurrentKernel` layer in the near-term architecture.
 If a future feature has a concrete need for a third layer, that should be a new
@@ -72,7 +74,9 @@ representation-erasure step:
 - reject unsupported or nondeterministic effects.
 
 This bridge is intentionally allowed to fail. A failed projection means the
-kernel has no `AlgorithmCorrect` statement in the current proof layer.
+kernel has no `ProjectedCorrect` / `ProjectedRefine` statement in the current
+proof layer, so the public `ComputeCorrect` / `ComputeRefine` surface cannot
+be discharged for it.
 
 The bridge does not need to eliminate every concurrent construct. In
 particular, future atomic support may project:
@@ -93,17 +97,18 @@ where the mathematical laws actually hold.
 
 ## Correctness Tracks
 
-| Feature class | AlgorithmCorrect | Runtime / differential testing |
+| Feature class | Projected algorithm proof / ComputeCorrect | Runtime / differential testing |
 | --- | --- | --- |
 | Deterministic and algorithm-projectable | Yes, via `toAlgorithm?` and `Kernel.Correct` | Optional |
 | Atomic or reduction with algebraic abstraction | Yes, if `toAlgorithm?` projects to an abstract AlgKernel reduction marker and a theorem discharges it | Recommended |
 | Async/TMA with valid sequentialization discipline | Yes, if `toAlgorithm?` projects to a sequential AlgKernel form or an abstract sequentialization marker with a theorem | Recommended |
 | Non-sequential with no algorithm projection | No | Testing/runtime-only until a stronger semantics exists |
 
-`AlgorithmCorrect` is available only when `ComputeKernel.toAlgorithm?`
-succeeds and the resulting `AlgKernel` theorem is proved. Runtime or
-differential testing (#58/#59) remains the validation path for compute effects
-that are not fully represented by the algorithm layer.
+`ComputeCorrect` / `ComputeRefine` are available only when
+`ComputeKernel.toAlgorithm?` succeeds and the resulting `AlgKernel` theorem is
+proved. Optional `GapPolicy` contracts (#58/#59) record externally checked
+compute-to-algorithm gaps for effects that are represented syntactically but
+not internally proved as bit-level compute semantics.
 
 ## Failure Modes
 
@@ -195,7 +200,7 @@ The contract names the future required discipline:
 Projection failures use the named reason `requiresEffectProjection`.
 `ComputeStmt.effectMarker` is the explicit AST hook for this path: it makes
 async/TMA-shaped syntax representable in the compute layer while preserving
-the fact that it has no `AlgorithmCorrect` projection yet. The DSL surfaces
+the fact that it has no `ProjectedCorrect` projection yet. The DSL surfaces
 `tl.async_copy(dst, src)`,
 `tl.async_wait()`, and `tl.debug_barrier()` currently lower to this failure
 marker; they are not executable semantics and they do not imply shared-memory,
@@ -216,5 +221,6 @@ This boundary document does not implement:
 - a scheduler or interleaving semantics;
 - any change to `Kernel.exec`.
 
-The purpose is to keep the current deterministic `AlgorithmCorrect` story
-stable while defining where future non-sequential effects may enter.
+The purpose is to keep the current deterministic `ComputeCorrect` /
+`ProjectedCorrect` story stable while defining where future non-sequential
+effects may enter.

@@ -250,7 +250,7 @@ framework — no ad-hoc dimension shortcuts.
 :::cardBlue
 *Algorithm layer · Lean proof*
 
-`Kernel.AlgorithmCorrect ck post`
+`ProjectedCorrect ck post`
 
 Real / Int / Nat semantics. No IEEE rounding, no NaN.
 
@@ -266,13 +266,13 @@ masking, wrong reduction is a failed Lean proof.
 :::cardOrange
 *Compute layer · External testing*
 
-Differential testing on a representative kernel set.
+Compute-gap checking for required contracts.
 
-Hand-written `.py` Triton ↔ PyTorch / `flash-attn`, ε-bound match.
+`ComputeKernel` behavior ↔ projected `AlgKernel` behavior, ε-bound match.
 
-* 1–2 Tier-1/2 kernels, FA-1 forward, mid-term FA-2 / FA-1 backward.
-* Tolerance: Tier 1+2 ≤ 1e-5; FA-class ≤ 1e-3.
-* *Not a phase gate*, *not a Lean theorem* — a credibility artifact.
+* Per-op / per-kernel `ComputeGapContract`.
+* Recorded in Lean through `GapPolicy`.
+* *Not a Lean theorem* — an externally checked bridge by design.
 
 Catches *IEEE-754 edge cases* (NaN, denormal, overflow, fast-math).
 
@@ -455,7 +455,7 @@ inductive Op : TileDType → TileShape → Type
 *Output*
 
 * `AlgKernel` (or `Except EraseDTypeError`).
-* `ComputeKernel.AlgorithmCorrect`, `ComputeRefine`, `ExecCorrect`.
+* `ComputeKernel.ComputeCorrect`, `ComputeKernel.ComputeRefine`, `ExecCorrect`.
 * Failed projection ⇒ `False` — explicit, not silent.
 * User-facing theorems ride this surface; proofs run on the `AlgKernel` side.
 
@@ -464,7 +464,7 @@ inductive Op : TileDType → TileShape → Type
 ::::
 
 ```
-def AlgorithmCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
+def ProjectedCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
   match ck.toAlgorithm? with
   | .ok ak  => Kernel.Correct ak post
   | .error _ => False
@@ -478,7 +478,7 @@ def ComputeCorrect (ck) (post) (gap : GapPolicy := .ignore) : Prop :=
 `ComputeKernel` is the *proof-stating* Lean AST — it lets users state
 theorems on fp/int kernels and have the proof flow through `toAlgorithm?` to
 the algorithm side. It is *not* the differential-testing pipeline; that is
-external (PLAN.md §Differential testing).
+external (PLAN.md §Compute-gap details).
 
 :::
 

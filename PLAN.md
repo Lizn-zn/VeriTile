@@ -32,6 +32,8 @@ Real Triton verification requires four axes advancing together:
 
 This is an open roadmap, **not "deliver N theorems and stop"**. The §Status,
 §In progress, and §Roadmap sections below organize work along these four axes.
+The live issue-tracked roadmap is GitHub issue #91; this document records the
+architecture, status, and decision log.
 
 ## Verification architecture (permanent, locked since v0.2)
 
@@ -94,7 +96,9 @@ Required compute gaps are and remain test-backed.
 
 ### User perspective
 
-- Algorithm-structure bug: caught by AlgorithmCorrect (Lean proof fails).
+- Algorithm-structure bug: caught by `ComputeKernel.ComputeCorrect` /
+  `ComputeKernel.ComputeRefine` (the Lean proof fails after projection to the
+  internal `ProjectedCorrect` / `ProjectedRefine` obligation).
 - IEEE-specific edge case bug (NaN, overflow, denormal handling, etc.):
   caught by the required compute-gap checker. **This layer has no internal
   Lean proof obligation by design.**
@@ -146,9 +150,11 @@ The trusted bridge from Real-algorithm correctness to floating computation
 ### Horizontal infra ✅ (beyond original PLAN scope, in parallel with Tiers)
 
 - **Two-layer architecture**: `ComputeKernel` / `AlgorithmKernel` bridged by
-  `eraseDType`; `Kernel.AlgorithmRefine` proven on the algorithm side;
-  `ComputeKernel.AlgorithmCorrect` as the user-facing entry; bitcast
-  routed through compute projection
+  `eraseDType`; `Kernel.Correct` / `Kernel.Refine` proven on the algorithm
+  side; `ProjectedCorrect` / `ProjectedRefine` as the internal projection
+  obligations; `ComputeKernel.ComputeCorrect` /
+  `ComputeKernel.ComputeRefine` as the user-facing entries; bitcast routed
+  through compute projection
 - **Float dtype erasure**: `.fp32` / `.fp16` / `.bf16` → `ℝ`; bitcast via a
   single computable decoder; invalid bitcast bits rejected at macro
   expansion
@@ -315,32 +321,28 @@ have **moved out** of the original PLAN's P3+ list and into the roadmap
 | Float-abstraction bridge feels too strong to external reviewers | review / audit demands IEEE-754 proof | two-layer architecture permanently locked: VeriTile proves the Real abstraction, exposes float-facing theorems via erasure, validates representative float behavior with tests |
 | Diff-test numerical delta exceeds tolerance (representative kernel) | GPU output vs reference | yellow flag, not a gate — investigate IEEE-754 inherent delta, `.py` implementation bug, mismatched correspondence assertion. Formal proof remains valid |
 
-### Differential testing
+### External validation
 
-Differential testing is **a non-formal validation artifact and is not part
-of the trusted proof chain.** On a selected representative kernel set, we
-maintain hand-written Python Triton counterparts and compare against
-PyTorch / `flash-attn` references, demonstrating that the embedded
-algorithm corresponds to a runnable GPU kernel.
+VeriTile keeps two external validation tracks separate:
 
-**What it is** — a credibility artifact, helping readers / users believe
-that the embedded `triton { ... }` AST corresponds to a real, runnable
-Triton kernel.
+1. **Compute-gap contracts** — required only when a theorem uses
+   `gap := .require contract`. These checks compare the compute-facing
+   `ComputeKernel` behavior with the projected `AlgKernel` behavior under the
+   contract relation (for example exact equality or an epsilon bound). Lean
+   records `ExternalChecked contract`; it does not prove IEEE / bit-level
+   compute behavior internally.
+2. **Runtime credibility tests** — optional smoke / differential tests that
+   compare representative runnable Triton/Python implementations against
+   PyTorch / `flash-attn` references. These tests help show that the embedded
+   DSL corresponds to realistic runnable kernels, but they are not the Lean
+   proof chain and do not replace `GapPolicy` contracts.
 
-**What it is not** — it is **not** a phase gate. The trusted proof chain
-is Lean theorems over the embedded operational semantics; correctness
-rests on those, not on numerical agreement.
+**What runtime credibility tests cannot solve** — hand-written `.py`
+diff-testing does not validate the embedded operational semantics itself, nor
+does it close the gap between the embedded AST and real `.py` source (that
+requires the Python lifter; see §Long-term).
 
-**What it cannot solve** — diff-testing hand-written `.py` **does not**
-validate the embedded operational semantics itself, **nor** does it close
-the gap between the embedded AST and the real `.py` (that requires the
-Python lifter; see §Long-term).
-
-It also does not prove floating-point correctness. Float tests support the
-trusted bridge between dtype-annotated kernels and the Real abstraction;
-they do not substitute for full IEEE-754 formalization.
-
-**Current representative set** (grows along the roadmap):
+**Current runtime representative set** (grows along the roadmap):
 
 - 1-2 Tier 1+2 kernels (e.g. `naiveSoftmaxKernel`, one streaming kernel)
 - FA-1 forward (sample variants)
@@ -350,11 +352,13 @@ they do not substitute for full IEEE-754 formalization.
 **Tolerances**: Tier 1+2 ≤ 1e-5 element-wise absolute delta; FA-class
 ≤ 1e-3 (the order of `flash_attn` reference vs PyTorch).
 
-**Failure handling**: a diff-test failure is a yellow flag, not a gate —
-investigate IEEE-754 inherent delta (acceptable, document), `.py`
+**Runtime failure handling**: a runtime diff-test failure is a yellow flag,
+not a gate — investigate IEEE-754 inherent delta (acceptable, document), `.py`
 implementation bug (fix), mismatched correspondence assertion (cross-check
-again). It **does not** invalidate the formal proof; the proof's
-proposition over the embedded semantics still holds.
+again). It does not invalidate the Lean theorem over the embedded semantics.
+A required compute-gap contract failure is different: the theorem using
+`gap := .require contract` should not be treated as fully certified until the
+external certificate is regenerated and passes.
 
 ### LLM benchmark protocol
 
