@@ -27,16 +27,17 @@ Agent.
 
 ## Status
 
-Phase B is complete and the core Phase C stack has landed on `main`. See release
+Tier 1 + Tier 2 are closed, and Tier 3-A (full FA-1 forward) has landed on
+`main` with its tag pending. See release
 [`v0.2-tier2`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.2-tier2)
 (prior milestone: [`v0.1-tier1`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.1-tier1)).
 
-Included through Phase B:
+Included through Tier 1 + Tier 2:
 
 - 6 closed kernel-pair refinement theorems (Tier 1 × 3 + Tier 2 × 3).
 - `forLoop` operational semantics + `forLoop_inv` master induction lemma.
-- Online softmax recurrence ≡ batch softmax (paper centerpiece, no input
-  range precondition).
+- Online softmax recurrence ≡ batch softmax (FlashAttention algorithmic
+  core, no input range precondition).
 - Welford online recurrence ≡ two-pass mean/variance.
 - LayerNorm fused single-pass kernel ≡ two-pass kernel.
 - Typed `Op : TileDType → TileShape → Type` with end-to-end typed
@@ -49,7 +50,7 @@ Included through Phase B:
 - 6 comparison operators (`<`, `<=`, `==`, `>`, `>=`, `!=`) over the
   `.real`/`.nat` channels, producing the `.bool` channel.
 
-Core Phase C additions on `main`:
+Tier 3-A on `main` (full FA-1 forward):
 
 - ND tile shapes and ND broadcasting, with typed `Op : TileDType → TileShape → Type`.
 - `tl.dot`, trailing-axis transpose, `tl.where`, `tl.sqrt`, reduction
@@ -190,10 +191,11 @@ See the full softmax example in
 
 ## More Documentation
 
+- [Reference docs index](./documents/README.md) — Triton subset, dtype
+  erasure, GPU memory model, memory safety, concurrency boundary
 - [Supported Triton subset and semantic gaps](./documents/TritonSubset.md)
 - [GPU memory modeling scope](./documents/GpuMemoryModel.md)
 - [Layer-1 memory bounds safety](./documents/MemorySafety.md)
-- [FA-1 Step 2 boundary-mask plan](./documents/FA1_Step2_BoundaryMasks.md)
 - [LLM proof wrapper](./scripts/README.md)
 - [LLM benchmark protocol](./bench/llm_eval/README.md)
 
@@ -326,20 +328,49 @@ lean-toolchain         Pinned Lean toolchain
 
 ## Roadmap
 
-- **Phase A:** Tier 1 refinement examples, LLM proof wrapper, T3 scouting. Done.
-- **Phase B:** `forLoop` semantics, Tier 2 kernels, differential testing. Done.
-- **Phase C:** ND tiles, masking, `tl.dot`, strided memory, FA-1 forward
-  correctness. Core non-causal and causal 4D theorems are on `main`.
-- **Float policy:** VeriTile can state float-facing theorems for dtype-annotated
-  kernels, but algorithmic proofs stay over the erased mathematical `.real`
-  kernel. The Real↔float bridge is a trusted abstraction boundary, supported by
-  smoke/differential tests rather than IEEE-754 proof.
-- **Phase D:** close the remaining in-scope semantic gaps: block-pointer
-  hardware/TMA behavior, whole-grid launch semantics, FA-1 vs FA-2, float-facing
-  theorem tests, and paper artifact packaging. IEEE-754 fidelity remains an
-  explicit out-of-scope gap.
+VeriTile is a long-running project: the goal is to bring real Triton kernels
+(forward + backward + concurrency primitives + production-scale layout /
+masking / autograd) into Lean's proof scope with minimal modification. No
+fixed time windows; advances by Tier.
 
-See [`PLAN.md`](./PLAN.md) for the full plan.
+**Closed**
+
+- **Tier 1** (`v0.1-tier1`): loop-free kernel pair × 3 + `welford_eq_two_pass`.
+- **Tier 2** (`v0.2-tier2`): streaming reductions × 3, `forLoop_inv`, Mask +
+  Bool channel, Typed Tile refactor, `WithBot ℝ` carrier.
+- **Tier 3-A** (`v0.3-tier3a` pending): FA-1 forward full coverage (non-causal,
+  strided, causal, 4D, boundary, boundaryD, score variants), ~16k lines.
+- **Horizontal infra**: Algorithm/Compute split, Float dtype erasure, Memory
+  subsystem (Bounds/Footprint/Frame), Concurrency framework (failure markers
+  + projection boundaries), ND launch + grid composition, DSL surface
+  expansion.
+
+**In progress**
+
+- **FA-1 backward** (`Backward.lean`, 1 sorry): closing the execution wiring
+  of the stripped single-block kernel. Moved from the original PLAN's P3+
+  bucket into the roadmap.
+
+**Roadmap**
+
+- Near-term: close FA-1 backward stripped main theorem, tag `v0.3-tier3a`,
+  add mask to backward.
+- Mid-term: Tier 3-B FA-2 forward + multi-block semantics + `fa1_eq_fa2`
+  headline corollary; Tier 3-C FA backward full coverage (causal +
+  multi-block + FA-2 backward); Tier 4 production-kernel batch 2 (grouped
+  GEMM, Mamba SSM, RoPE, fused-norm family, GQA / MQA / MLA).
+- Long-term: concurrency-primitive main theorems (atomic-add, async-copy
+  serialization), Python lifter prototype, ND-general closure, effect-
+  framework polish, block-pointer full coverage.
+
+**Float policy** — VeriTile can state float-facing theorems for dtype-
+annotated kernels, but algorithmic proofs stay over the erased mathematical
+`.real` kernel. The Real↔float bridge is a trusted abstraction boundary,
+supported by smoke / differential tests rather than IEEE-754 proof
+(permanently externalized).
+
+See [`PLAN.md`](./PLAN.md) for the full roadmap, decision log, and cross-
+cutting material.
 
 ## License
 

@@ -25,15 +25,16 @@ Triton kernel pair 的等价性.
 
 ## 当前状态
 
-Phase B 已完成,核心 Phase C 栈也已经落到 `main`。见 release
+Tier 1 + Tier 2 已闭合,Tier 3-A(FA-1 forward 全套)也已经落到 `main`,Tier 3-A
+tag 待打。见 release
 [`v0.2-tier2`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.2-tier2)
 (前一里程碑:[`v0.1-tier1`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.1-tier1))。
 
-Phase B 截止包含:
+Tier 1 + Tier 2 闭合内容:
 
 - 6 个已闭合 kernel-pair refinement 定理(Tier 1 × 3 + Tier 2 × 3)。
 - `forLoop` 操作语义 + `forLoop_inv` 归纳引理。
-- Online softmax recurrence ≡ batch softmax(论文核心,无输入范围前提)。
+- Online softmax recurrence ≡ batch softmax(FlashAttention 算法核心,无输入范围前提)。
 - Welford online recurrence ≡ two-pass mean/variance。
 - LayerNorm fused 单 pass ≡ two-pass。
 - Typed `Op : TileDType → TileShape → Type`,全链路 typed `evalOp`/`stepStmt`
@@ -45,7 +46,7 @@ Phase B 截止包含:
 - 6 个比较算子(`<`、`<=`、`==`、`>`、`>=`、`!=`)在 `.real`/`.nat` 通道上,
   产生 `.bool` 通道。
 
-`main` 上已有的核心 Phase C 增量:
+`main` 上已有的 Tier 3-A 内容(FA-1 forward 全套):
 
 - ND tile shape 与 ND broadcast,以及 typed `Op : TileDType → TileShape → Type`。
 - `tl.dot`、trailing-axis transpose、`tl.where`、`tl.sqrt`、reduction
@@ -178,9 +179,10 @@ theorem softmax_kernels_refinement_view
 
 ## 更多文档
 
+- [参考文档索引](./documents/README.md) —— Triton 子集、dtype 擦除、GPU 内存模型、
+  内存安全、并发边界
 - [支持的 Triton 子集与语义 gap](./documents/TritonSubset_zh.md)
 - [GPU memory modeling scope](./documents/GpuMemoryModel.md)
-- [FA-1 Step 2 boundary-mask 计划](./documents/FA1_Step2_BoundaryMasks.md)
 - [LLM 证明 Wrapper](./scripts/README.md)
 - [LLM benchmark 协议](./bench/llm_eval/README.md)
 
@@ -310,19 +312,42 @@ lean-toolchain         锁定的 Lean toolchain
 
 ## 路线图
 
-- **Phase A:** Tier 1 refinement 示例, LLM proof wrapper, T3 scouting. 已完成.
-- **Phase B:** `forLoop` 语义, Tier 2 kernel, differential testing. 已完成.
-- **Phase C:** ND tile、masking、`tl.dot`、strided memory、FA-1 forward
-  correctness。核心 non-causal / causal 4D theorem 已在 `main`。
-- **Float policy:** VeriTile 可以为 dtype-annotated kernel 表达面向 float 的
-  theorem,但算法证明保持在擦除后的数学 `.real` kernel 上。Real↔float bridge
-  是 trusted abstraction boundary,通过 smoke/differential tests 支撑,不做
-  IEEE-754 证明。
-- **Phase D:** 收敛剩余 in-scope 语义 gap:block pointer、`boundary_check`、
-  whole-grid launch semantics、FA-1 vs FA-2、float-facing theorem tests、论文
-  artifact packaging。IEEE-754 保真仍是明确 out-of-scope gap。
+VeriTile 是一个长期项目,目标是让真实的 Triton kernel(forward + backward + 并发
+原语 + production-scale layout / masking / autograd)经过最小修改进入 Lean 证明
+范围。无固定时间窗口;按 Tier 推进。
 
-完整计划见 [`PLAN_zh.md`](./PLAN_zh.md).
+**已闭合**
+
+- **Tier 1**(`v0.1-tier1`):loop-free kernel pair × 3 + `welford_eq_two_pass`。
+- **Tier 2**(`v0.2-tier2`):streaming reduction × 3、`forLoop_inv`、Mask + Bool
+  channel、Typed Tile 重构、`WithBot ℝ` 通道。
+- **Tier 3-A**(待打 `v0.3-tier3a`):FA-1 forward 全套(non-causal、strided、
+  causal、4D、boundary、boundaryD、score variants)~16k 行。
+- **横向 infra**:Algorithm/Compute 双层、Float dtype erasure、Memory subsystem
+  (Bounds/Footprint/Frame)、Concurrency framework(failure markers + projection
+  边界)、ND launch + grid composition、DSL 表面扩张。
+
+**进行中**
+
+- **FA-1 backward**(`Backward.lean`,1 个 sorry):stripped 单块 kernel 的执行
+  wiring 闭合中。从原 PLAN P3+ 移入路线图。
+
+**路线图**
+
+- 近期:闭合 FA-1 backward stripped 主定理,打 `v0.3-tier3a`,backward 加 mask。
+- 中期:Tier 3-B FA-2 forward + multi-block 语义 + `fa1_eq_fa2` headline corollary;
+  Tier 3-C FA backward 全套(causal + multi-block + FA-2 backward);Tier 4
+  production kernel 第二批(grouped GEMM、Mamba SSM、RoPE、fused-norm 全家族、
+  GQA / MQA / MLA)。
+- 远期:并发原语主定理(atomic add、async copy 序列化)、Python lifter 雏形、
+  ND general 框架收口、effect framework 完善、block pointer 全套。
+
+**Float policy** —— VeriTile 可以为 dtype-annotated kernel 表达面向 float 的
+theorem,但算法证明保持在擦除后的数学 `.real` kernel 上。Real↔float bridge 是
+trusted abstraction boundary,通过 smoke / differential tests 支撑,**不做**
+IEEE-754 证明(永久外部化)。
+
+完整路线图、决策日志与 cross-cutting 内容见 [`PLAN_zh.md`](./PLAN_zh.md)。
 
 ## License
 

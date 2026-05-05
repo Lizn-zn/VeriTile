@@ -1,5 +1,11 @@
 # FA-1 Step 1 — 4D layout + strides
 
+> **Status:** Closed (Tier 3-A). The 4D layout work landed on `main` —
+> `fa1_forward_correct_4D` and `fa1_forward_correct_4D_causal` in
+> `VeriTile/Examples/FlashAttention1/V0.lean`. This note is kept as an
+> implementation record. References to "Phase D" predate the 2026-05-05
+> PLAN redirect; see `PLAN.md` for the current roadmap.
+
 Design note for tracking issue #39 step 1. Scopes the data-model and
 infrastructure changes needed to lift the FA-1 forward kernel from
 `[M, D] / [Bk·N, D]` toy shapes to real Triton `[B, H, S, D]`

@@ -1,5 +1,10 @@
 # FA-1 v1 / Step 2 — Boundary Masks
 
+> **Status:** Closed (Tier 3-A). The boundary-mask theorems landed in
+> `VeriTile/Examples/FlashAttention1/V1Boundary.lean` (8 variants covering
+> sequence-boundary, causal-boundary, and D-tail). This note is kept as an
+> implementation record.
+
 Tracking note for issue #39 Step 2. The current artifact theorem surface is
 **FA-1 v0/full-tile**: it proves FA-1 over realistic 4D strided memory, but
 still assumes full tiles:
