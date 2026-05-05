@@ -10,6 +10,8 @@ autograd, or an arbitrary user branch.  The branch is split at the DSL boundary:
 `mhcDepthConnectionKernel` consumes a separately supplied branch output.
 -/
 
+import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
 namespace VeriTile.Examples.HyperConnections
@@ -87,6 +89,85 @@ def mhcWidthConnectionKernel
   tl.store($(resMixReg) + res_mix_ptrs, res_mix)
   tl.store($(branchInReg) + branch_ptrs, branch_in)
 }
+
+/-- Scalar fixed-rank width-side mHC core (`S = T = D = 1`, zero Sinkhorn
+iterations).
+
+This is the first proof-facing specialization of `mhcWidthConnectionKernel`.
+It keeps the same layout convention: for program id `b`, the residual and both
+outputs live at address `b`, while both logits are scalar cells at address `0`.
+-/
+def mhcWidthConnectionKernel1
+    (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
+    (tau : ℝ) : ComputeKernel := triton {
+  b := tl.program_id(0)
+  residual := tl.load($(resReg) + b)
+  h_res := tl.load($(hResReg))
+  res_mix := tl.exp(h_res / $ℝ(tau)) * residual
+  h_pre := tl.load($(hPreReg))
+  branch_in := tl.exp(h_pre / $ℝ(tau)) * residual
+  tl.store($(resMixReg) + b, res_mix)
+  tl.store($(branchInReg) + b, branch_in)
+}
+
+/-- Fixed-rank (`S = T = D = 1`, zero Sinkhorn iterations) width-side residual
+mixing spec. -/
+noncomputable def mhcWidthConnectionResMixSpec1 (residual hRes tau : ℝ) : ℝ :=
+  Real.exp (hRes / tau) * residual
+
+/-- Fixed-rank (`S = T = D = 1`, zero Sinkhorn iterations) width-side branch
+input spec. -/
+noncomputable def mhcWidthConnectionBranchInSpec1 (residual hPre tau : ℝ) : ℝ :=
+  Real.exp (hPre / tau) * residual
+
+theorem mhcWidthConnection_exec_correct_view
+    (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
+    (tau : ℝ) (s : BlockState)
+    (hOutNe : resMixReg ≠ branchInReg) :
+    let result := exec (mhcWidthConnectionKernel1
+      resReg hResReg hPreReg resMixReg branchInReg tau).toAlgKernel s
+    result.map (fun s' =>
+      (s'.readMem resMixReg s.pid, s'.readMem branchInReg s.pid)) =
+      some
+        (mhcWidthConnectionResMixSpec1
+          (s.readMem resReg s.pid) (s.readMem hResReg 0) tau,
+         mhcWidthConnectionBranchInSpec1
+          (s.readMem resReg s.pid) (s.readMem hPreReg 0) tau) := by
+  simp [mhcWidthConnectionKernel1, exec, stepStmts, stepStmt, evalOp,
+    mhcWidthConnectionResMixSpec1, mhcWidthConnectionBranchInSpec1,
+    NumericDType.mul, NumericDType.div, WithBot.realMul, WithBot.realDiv,
+    BlockState.writeMem, BlockState.readMem, hOutNe]
+
+/-- First fixed-rank mHC width-side correctness theorem.
+
+For `S = T = D = 1` and zero Sinkhorn iterations, the fixed-rank kernel writes the two
+Real-valued width-side outputs:
+
+* `resMixReg[b, 0, 0] = exp(hRes[0, 0] / tau) * residual[b, 0, 0]`;
+* `branchInReg[b, 0, 0] = exp(hPre[0, 0] / tau) * residual[b, 0, 0]`.
+-/
+theorem mhcWidthConnection_correct_view
+    (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
+    (tau : ℝ) (s : BlockState)
+    (hOutNe : resMixReg ≠ branchInReg) :
+    ComputeKernel.ComputeCorrect
+      (mhcWidthConnectionKernel1 resReg hResReg hPreReg resMixReg branchInReg tau)
+      (fun s0 s' =>
+        s0 = s →
+          s'.readMem resMixReg s.pid =
+            mhcWidthConnectionResMixSpec1
+              (s.readMem resReg s.pid) (s.readMem hResReg 0) tau
+          ∧
+          s'.readMem branchInReg s.pid =
+            mhcWidthConnectionBranchInSpec1
+              (s.readMem resReg s.pid) (s.readMem hPreReg 0) tau) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hview := mhcWidthConnection_exec_correct_view
+    resReg hResReg hPreReg resMixReg branchInReg tau s hOutNe
+  rw [hExec] at hview
+  simpa using hview
 
 /-- Depth-side mHC core.
 
