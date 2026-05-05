@@ -308,6 +308,28 @@ theorem AtomicTraceStatefulList_append_of_stepPrefix
       (tid := tid) (l₁ := l₁) (l₂ := l₂) (s := s) (s₁ := s₁) (s₂ := s₂)
       (trace₁ := []) (trace₂ := trace₂) hNoAtomicPrefix hTail)
 
+/-- Recompose a kernel-level stateful atomic trace from a pure prefix and a
+stateful tail trace.
+
+This is the generic "drop a register-only prefix, replay the tail" pattern used
+by compute-then-atomic kernels: the prefix may update registers and ordinary
+state, but every statement in it must emit an empty atomic trace. -/
+theorem AtomicTraceStateful_of_dropPrefix
+    {k : Kernel} {tid : ThreadId} {s sPrefix final : BlockState}
+    {trace : Trace} (n : Nat)
+    (hPrefixEmpty :
+      ∀ st ∈ k.body.take n, ∀ s0, Stmt.atomicTraceEvents tid s0 st = some [])
+    (hPrefixStep : stepStmts (k.body.take n) s = some sPrefix)
+    (hTail :
+      AtomicTraceStatefulList tid (k.body.drop n) sPrefix = some (trace, final)) :
+    AtomicTraceStateful k tid s trace final := by
+  rw [AtomicTraceStateful]
+  rw [show k.body = k.body.take n ++ k.body.drop n by
+    exact (List.take_append_drop n k.body).symm]
+  apply AtomicTraceStatefulList_append_of_stepPrefix
+  · exact AtomicTraceStatefulList_empty_of_stepStmts hPrefixEmpty hPrefixStep
+  · exact hTail
+
 /-- Sum of Real atomic-add contributions from a selected set of programs. -/
 noncomputable def atomicContributionRealSum {g : Grid}
     (contributors : Finset (GridIndex g))

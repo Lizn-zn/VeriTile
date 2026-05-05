@@ -572,27 +572,20 @@ theorem fa1BackwardAtomicDQKernel_statefulTrace_exec
 /-- The pre-atomic prefix of the block-partitioned backward kernel emits no
 atomic trace events.  It only computes registers; the first trace-producing
 statement is the subsequent `tl.atomic_add`. -/
-theorem fa1BackwardAtomicDQPreAtomic_trace_empty
+theorem fa1BackwardAtomicDQPreAtomic_traceEvents_empty
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (M D Bk numKVBlocks : Nat) (scale : ℝ)
-    (tid : ThreadId) (s sPre : BlockState)
-    (hPre :
-      stepStmts
+    (tid : ThreadId) :
+    ∀ st ∈
         ((fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-          M D Bk numKVBlocks scale).toAlgKernel.body.take 29) s =
-        some sPre) :
-    Kernel.AtomicTraceStatefulList tid
-        ((fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-          M D Bk numKVBlocks scale).toAlgKernel.body.take 29) s =
-      some ([], sPre) := by
-  apply Kernel.AtomicTraceStatefulList_empty_of_stepStmts
-  · intro st hmem s0
-    simp [fa1BackwardAtomicDQKernel] at hmem
-    rcases hmem with hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem |
-      hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem |
-      hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem
-    all_goals subst st; rfl
-  · exact hPre
+          M D Bk numKVBlocks scale).toAlgKernel.body.take 29),
+      ∀ s0, Stmt.atomicTraceEvents tid s0 st = some [] := by
+  intro st hmem s0
+  simp [fa1BackwardAtomicDQKernel] at hmem
+  rcases hmem with hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem |
+    hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem |
+    hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem
+  all_goals subst st; rfl
 
 /-- The post-prefix tail of the block-partitioned backward kernel consists of
 the atomic `dQ` contribution followed by ordinary `dK` and `dV` stores. -/
@@ -634,19 +627,11 @@ theorem fa1BackwardAtomicDQKernel_statefulTrace_of_tail
         (fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
           M D Bk numKVBlocks scale).toAlgKernel
         tid s trace final := by
-  rw [Kernel.AtomicTraceStateful]
-  rw [show
-      (fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-        M D Bk numKVBlocks scale).toAlgKernel.body =
-        ((fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-          M D Bk numKVBlocks scale).toAlgKernel.body.take 29) ++
-        ((fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-          M D Bk numKVBlocks scale).toAlgKernel.body.drop 29) by
-      exact (List.take_append_drop 29 _).symm]
-  apply Kernel.AtomicTraceStatefulList_append_of_stepPrefix
-  · exact fa1BackwardAtomicDQPreAtomic_trace_empty
+  apply Kernel.AtomicTraceStateful_of_dropPrefix (n := 29)
+  · exact fa1BackwardAtomicDQPreAtomic_traceEvents_empty
       qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-      M D Bk numKVBlocks scale tid s sPre hPre
+      M D Bk numKVBlocks scale tid
+  · exact hPre
   · exact hTail
 
 /-- Specialized trace surface for one block's atomic `dQ` contribution. -/
