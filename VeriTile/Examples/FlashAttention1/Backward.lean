@@ -663,10 +663,130 @@ noncomputable def fa1BackwardAtomicDQPreAtomicState
     ((fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale).toAlgKernel.body.take 29) s).getD s
 
-/- #97: these FA-1 backward readback simp blocks still need elevated
-heartbeats, but the Tile accessor simp pass reduced them from 8M to 2M. -/
+private def FA1BackwardAtomicDQPreAtomicFacts
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (s : BlockState) : Prop :=
+  stepStmts
+      ((fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+        M D Bk numKVBlocks scale).toAlgKernel.body.take 29) s =
+    some (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale s) ∧
+  (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .nat [M, D] "q_ptrs" =
+    some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]) ∧
+  (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .nat [Bk, D] "k_block_ptrs" =
+    some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+      Tile .nat [Bk, D]) ∧
+  (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .nat [Bk, D] "v_block_ptrs" =
+    some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+      Tile .nat [Bk, D]) ∧
+  (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .real [M, D] "dQ_part" =
+    some (Tile.ofReal (dQBlockContribution Q K V dO LSE scale block)) ∧
+  (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .real [Bk, D] "dK_block" =
+    some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      (attentionBackwardReal Q K V dO LSE scale).dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) ∧
+  (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .real [Bk, D] "dV_block" =
+    some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      (attentionBackwardReal Q K V dO LSE scale).dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+
 set_option maxHeartbeats 2000000 in
 set_option linter.unusedSimpArgs false in
+private theorem fa1BackwardAtomicDQPreAtomic_facts
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (s : BlockState)
+    (hPid : s.pids 0 = block.val)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1)) :
+    FA1BackwardAtomicDQPreAtomicFacts qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s := by
+  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
+  have hQ0 : ∀ (i : Fin M) (d : Fin D),
+      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
+    fun i d => hQ i d PUnit.unit
+  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
+      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
+    fun j d => hK j d PUnit.unit
+  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
+      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
+    fun j d => hV j d PUnit.unit
+  have hdO0 : ∀ (i : Fin M) (d : Fin D),
+      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
+    fun i d => hdO i d PUnit.unit
+  have hKBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
+      s.readMem kReg ((block.val * Bk + jLocal.val) * D + d.val) =
+        K (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
+    intro jLocal d
+    simpa [FA1Math.blockIndex] using
+      hK0 (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) jLocal) d
+  have hVBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
+      s.readMem vReg ((block.val * Bk + jLocal.val) * D + d.val) =
+        V (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
+    intro jLocal d
+    simpa [FA1Math.blockIndex] using
+      hV0 (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) jLocal) d
+  simp [FA1BackwardAtomicDQPreAtomicFacts, fa1BackwardAtomicDQPreAtomicState,
+      fa1BackwardAtomicDQKernel, stepStmts, stepStmt, evalOp, Option.bind, hPid,
+      hQ0, hK0, hV0, hdO0, hLSE, hKBlock, hVBlock, Offset.rowMajor2D,
+      Offset.strided, TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, Tile.bop, Tile.uop,
+      Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop, Tile.ofReal,
+      probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
+      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
+      dV_block_tile_some_eq_attentionBackwardReal, WithBot.sum_someTerm_eq_some,
+      exp_sum_mul_scale_eq, dS, rowCorrection, dP, probability, FA1Math.scaledScore]
+  constructor
+  · funext idx
+    cases idx with
+    | mk j rest =>
+        cases rest with
+        | mk d tail =>
+            cases tail
+            simp [Tile.bop, Tile.expandDim, Tile.vec, Tile.scalar,
+              Offset.rowMajor2D, Offset.strided]
+            ring
+  · constructor
+    · funext i
+      congr 1
+      rw [mul_comm]
+      rfl
+    · funext i
+      congr 1
+      rw [mul_comm]
+      rfl
+
+/- #97: the expensive FA-1 backward prefix execution proof is centralized in
+`fa1BackwardAtomicDQPreAtomic_facts`; the public readback theorems below are
+now cheap projections of that single proof. -/
 theorem fa1BackwardAtomicDQPreAtomic_step
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
@@ -691,49 +811,10 @@ theorem fa1BackwardAtomicDQPreAtomic_step
           M D Bk numKVBlocks scale).toAlgKernel.body.take 29) s =
       some (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
         M D Bk numKVBlocks scale s) := by
-  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
-  have hQ0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
-    fun i d => hQ i d PUnit.unit
-  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
-    fun j d => hK j d PUnit.unit
-  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
-    fun j d => hV j d PUnit.unit
-  have hdO0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
-    fun i d => hdO i d PUnit.unit
-  have hKBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
-      s.readMem kReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        K (FA1Math.blockIndex Bk numKVBlocks block.val
-            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
-    intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hK0 (FA1Math.blockIndex Bk numKVBlocks block.val
-        (by have := block.isLt; omega) jLocal) d
-  have hVBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
-      s.readMem vReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        V (FA1Math.blockIndex Bk numKVBlocks block.val
-            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
-    intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hV0 (FA1Math.blockIndex Bk numKVBlocks block.val
-        (by have := block.isLt; omega) jLocal) d
-  simp [fa1BackwardAtomicDQPreAtomicState, fa1BackwardAtomicDQKernel,
-      stepStmts, stepStmt, evalOp, Option.bind, hPid, hQ0, hK0, hV0, hdO0, hLSE,
-      hKBlock, hVBlock, Offset.rowMajor2D, Offset.strided,
-      TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
-      Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
-      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
-      dV_block_tile_some_eq_attentionBackwardReal,
-      WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq,
-      dS, rowCorrection, dP, probability, FA1Math.scaledScore]
+  exact (fa1BackwardAtomicDQPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).1
 
-set_option maxHeartbeats 2000000 in
-set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_qPtrs
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
@@ -756,33 +837,10 @@ theorem fa1BackwardAtomicDQPreAtomic_qPtrs
     (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale s).regs .nat [M, D] "q_ptrs" =
       some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]) := by
-  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
-  have hQ0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
-    fun i d => hQ i d PUnit.unit
-  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
-    fun j d => hK j d PUnit.unit
-  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
-    fun j d => hV j d PUnit.unit
-  have hdO0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
-    fun i d => hdO i d PUnit.unit
-  simp [fa1BackwardAtomicDQPreAtomicState, fa1BackwardAtomicDQKernel,
-      stepStmts, stepStmt, evalOp, Option.bind, hPid, hQ0, hK0, hV0, hdO0, hLSE,
-      Offset.rowMajor2D, Offset.strided,
-      TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
-      Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
-      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
-      dV_block_tile_some_eq_attentionBackwardReal,
-      WithBot.sum_someTerm_eq_some,
-      dS, rowCorrection, dP, probability, FA1Math.scaledScore]
+  exact (fa1BackwardAtomicDQPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).2.1
 
-set_option maxHeartbeats 2000000 in
-set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_kBlockPtrs
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
@@ -806,42 +864,10 @@ theorem fa1BackwardAtomicDQPreAtomic_kBlockPtrs
       M D Bk numKVBlocks scale s).regs .nat [Bk, D] "k_block_ptrs" =
       some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
         Tile .nat [Bk, D]) := by
-  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
-  have hQ0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
-    fun i d => hQ i d PUnit.unit
-  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
-    fun j d => hK j d PUnit.unit
-  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
-    fun j d => hV j d PUnit.unit
-  have hdO0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
-    fun i d => hdO i d PUnit.unit
-  simp [fa1BackwardAtomicDQPreAtomicState, fa1BackwardAtomicDQKernel,
-      stepStmts, stepStmt, evalOp, Option.bind, hPid, hQ0, hK0, hV0, hdO0, hLSE,
-      Offset.rowMajor2D, Offset.strided,
-      TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
-      Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
-      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
-      dV_block_tile_some_eq_attentionBackwardReal,
-      WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq,
-      dS, rowCorrection, dP, probability, FA1Math.scaledScore]
-  funext idx
-  cases idx with
-  | mk j rest =>
-      cases rest with
-      | mk d tail =>
-          cases tail
-          simp [Tile.bop, Tile.expandDim, Tile.vec, Tile.scalar,
-            Offset.rowMajor2D, Offset.strided]
-          ring
+  exact (fa1BackwardAtomicDQPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).2.2.1
 
-set_option maxHeartbeats 2000000 in
-set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_vBlockPtrs
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
@@ -865,42 +891,10 @@ theorem fa1BackwardAtomicDQPreAtomic_vBlockPtrs
       M D Bk numKVBlocks scale s).regs .nat [Bk, D] "v_block_ptrs" =
       some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
         Tile .nat [Bk, D]) := by
-  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
-  have hQ0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
-    fun i d => hQ i d PUnit.unit
-  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
-    fun j d => hK j d PUnit.unit
-  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
-    fun j d => hV j d PUnit.unit
-  have hdO0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
-    fun i d => hdO i d PUnit.unit
-  simp [fa1BackwardAtomicDQPreAtomicState, fa1BackwardAtomicDQKernel,
-      stepStmts, stepStmt, evalOp, Option.bind, hPid, hQ0, hK0, hV0, hdO0, hLSE,
-      Offset.rowMajor2D, Offset.strided,
-      TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
-      Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
-      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
-      dV_block_tile_some_eq_attentionBackwardReal,
-      WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq,
-      dS, rowCorrection, dP, probability, FA1Math.scaledScore]
-  funext idx
-  cases idx with
-  | mk j rest =>
-      cases rest with
-      | mk d tail =>
-          cases tail
-          simp [Tile.bop, Tile.expandDim, Tile.vec, Tile.scalar,
-            Offset.rowMajor2D, Offset.strided]
-          ring
+  exact (fa1BackwardAtomicDQPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).2.2.2.1
 
-set_option maxHeartbeats 2000000 in
-set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_dQPart
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
@@ -923,53 +917,10 @@ theorem fa1BackwardAtomicDQPreAtomic_dQPart
     (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale s).regs .real [M, D] "dQ_part" =
       some (Tile.ofReal (dQBlockContribution Q K V dO LSE scale block)) := by
-  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
-  have hQ0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
-    fun i d => hQ i d PUnit.unit
-  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
-    fun j d => hK j d PUnit.unit
-  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
-    fun j d => hV j d PUnit.unit
-  have hdO0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
-    fun i d => hdO i d PUnit.unit
-  have hKBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
-      s.readMem kReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        K (FA1Math.blockIndex Bk numKVBlocks block.val
-            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
-    intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hK0 (FA1Math.blockIndex Bk numKVBlocks block.val
-        (by have := block.isLt; omega) jLocal) d
-  have hVBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
-      s.readMem vReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        V (FA1Math.blockIndex Bk numKVBlocks block.val
-            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
-    intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hV0 (FA1Math.blockIndex Bk numKVBlocks block.val
-        (by have := block.isLt; omega) jLocal) d
-  simp [fa1BackwardAtomicDQPreAtomicState, fa1BackwardAtomicDQKernel,
-      stepStmts, stepStmt, evalOp, Option.bind, hPid, hQ0, hK0, hV0, hdO0, hLSE,
-      hKBlock, hVBlock, Offset.rowMajor2D, Offset.strided,
-      TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
-      Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
-      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
-      dV_block_tile_some_eq_attentionBackwardReal,
-      WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq,
-      dS, rowCorrection, dP, probability, FA1Math.scaledScore]
-  funext i
-  congr 1
-  rw [mul_comm]
-  rfl
+  exact (fa1BackwardAtomicDQPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).2.2.2.2.1
 
-set_option maxHeartbeats 2000000 in
-set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_dKBlock
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
@@ -995,53 +946,10 @@ theorem fa1BackwardAtomicDQPreAtomic_dKBlock
         (attentionBackwardReal Q K V dO LSE scale).dK
           (FA1Math.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
-  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
-  have hQ0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
-    fun i d => hQ i d PUnit.unit
-  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
-    fun j d => hK j d PUnit.unit
-  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
-    fun j d => hV j d PUnit.unit
-  have hdO0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
-    fun i d => hdO i d PUnit.unit
-  have hKBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
-      s.readMem kReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        K (FA1Math.blockIndex Bk numKVBlocks block.val
-            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
-    intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hK0 (FA1Math.blockIndex Bk numKVBlocks block.val
-        (by have := block.isLt; omega) jLocal) d
-  have hVBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
-      s.readMem vReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        V (FA1Math.blockIndex Bk numKVBlocks block.val
-            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
-    intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hV0 (FA1Math.blockIndex Bk numKVBlocks block.val
-        (by have := block.isLt; omega) jLocal) d
-  simp [fa1BackwardAtomicDQPreAtomicState, fa1BackwardAtomicDQKernel,
-      stepStmts, stepStmt, evalOp, Option.bind, hPid, hQ0, hK0, hV0, hdO0, hLSE,
-      hKBlock, hVBlock, Offset.rowMajor2D, Offset.strided,
-      TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
-      Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
-      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
-      dV_block_tile_some_eq_attentionBackwardReal,
-      WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq,
-      dS, rowCorrection, dP, probability, FA1Math.scaledScore]
-  funext i
-  congr 1
-  rw [mul_comm]
-  rfl
+  exact (fa1BackwardAtomicDQPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).2.2.2.2.2.1
 
-set_option maxHeartbeats 2000000 in
-set_option linter.unusedSimpArgs false in
 theorem fa1BackwardAtomicDQPreAtomic_dVBlock
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
@@ -1067,46 +975,10 @@ theorem fa1BackwardAtomicDQPreAtomic_dVBlock
         (attentionBackwardReal Q K V dO LSE scale).dV
           (FA1Math.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
-  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
-  have hQ0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
-    fun i d => hQ i d PUnit.unit
-  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
-    fun j d => hK j d PUnit.unit
-  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
-      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
-    fun j d => hV j d PUnit.unit
-  have hdO0 : ∀ (i : Fin M) (d : Fin D),
-      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
-    fun i d => hdO i d PUnit.unit
-  have hKBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
-      s.readMem kReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        K (FA1Math.blockIndex Bk numKVBlocks block.val
-            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
-    intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hK0 (FA1Math.blockIndex Bk numKVBlocks block.val
-        (by have := block.isLt; omega) jLocal) d
-  have hVBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
-      s.readMem vReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        V (FA1Math.blockIndex Bk numKVBlocks block.val
-            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
-    intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hV0 (FA1Math.blockIndex Bk numKVBlocks block.val
-        (by have := block.isLt; omega) jLocal) d
-  simp [fa1BackwardAtomicDQPreAtomicState, fa1BackwardAtomicDQKernel,
-      stepStmts, stepStmt, evalOp, Option.bind, hPid, hQ0, hK0, hV0, hdO0, hLSE,
-      hKBlock, hVBlock, Offset.rowMajor2D, Offset.strided,
-      TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, NumericDType.sub,
-      Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
-      Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
-      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
-      dV_block_tile_some_eq_attentionBackwardReal,
-      WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq,
-      dS, rowCorrection, dP, probability, FA1Math.scaledScore]
+  exact (fa1BackwardAtomicDQPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).2.2.2.2.2.2
+
 
 /-- State immediately before the final `dQ`/`dK`/`dV` stores of the stripped
 backward kernel.  The first 20 statements are the register-computation prefix;
@@ -1656,7 +1528,7 @@ theorem atomicBackward_tailStores_readback_rowMajor2D_base
       BlockState.foldl_writeMem_regs]
     rw [BlockState.scatter_readback_nd _ _ _ hInj idx]
 
-set_option maxHeartbeats 2000000 in
+set_option maxHeartbeats 1000000 in
 set_option linter.unusedSimpArgs false in
 /-- Input-level readback for the ordinary `dK`/`dV` stores of one atomic-`dQ`
 backward block program.  The `dQ` result is handled by the atomic trace/merge
