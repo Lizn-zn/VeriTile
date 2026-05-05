@@ -38,9 +38,10 @@ example (xReg yReg : RegionName) :
 
 example (xReg yReg : RegionName)
     (post : BlockState → BlockState → Prop)
-    (h : Kernel.Correct (scalarCopyKernel xReg yReg) post) :
+    (h : ComputeKernel.ComputeCorrect (scalarCopyKernel xReg yReg) post) :
     ComputeKernel.ComputeCorrect (scalarCopyComputeKernel xReg yReg) post :=
-  ComputeKernel.computeCorrect_of_toAlgKernel rfl h
+  by
+    simpa [scalarCopyComputeKernel, scalarCopyKernel] using h
 
 def atomicAddSmoke (outReg : RegionName) : ComputeKernel := triton {
   x := 1
@@ -617,7 +618,7 @@ theorem argmax2_index_store_exec_correct
     ComparableDType.lt, Tile.cop, Tile.select, Option.bind, Option.map,
     MemCell.readAs_of_same, WithBot.some_eq_coe, WithBot.coe_lt_coe]
 
-theorem argmax2_index_store_correct
+theorem argmax2_index_store_correct_view
     (xReg outReg : RegionName) (s : BlockState) :
     ComputeKernel.ComputeCorrect
       ((argmax2IndexStoreCoreKernel xReg outReg))
@@ -640,7 +641,7 @@ theorem nat_load_store_exec_correct
     BlockState.readMemValue, BlockState.readMemTyped, BlockState.writeMemTyped,
     Option.bind, Option.map, MemCell.readAs_of_same]
 
-theorem nat_load_store_correct
+theorem nat_load_store_correct_view
     (idxReg outReg : RegionName) (s : BlockState) :
     ComputeKernel.ComputeCorrect
       ((natLoadStoreCoreKernel idxReg outReg))

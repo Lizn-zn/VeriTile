@@ -6,9 +6,9 @@ VeriTile/Examples/SoftmaxEq.lean	softmax_kernels_refinement_view	Naive softmax v
 VeriTile/Examples/LogSumExpEq.lean	log_sum_exp_refinement_view	Direct LSE vs shift-trick LSE
 VeriTile/Examples/SoftmaxReciprocal.lean	softmax_reciprocal_refinement_view	Stable softmax division vs reciprocal
 VeriTile/Examples/VectorAdd.lean	add_kernel_masked_correct_view	Vector add correctness
-VeriTile/Examples/FloatDType.lean	float_softmax_reciprocal_algorithm_refine_view	Float dtype rewrite refinement
-VeriTile/Examples/TritonSmoke.lean	argmax2_index_store_correct	Typed Nat memory store
-VeriTile/Examples/TritonSmoke.lean	nat_load_store_correct	Typed Nat memory load/store
+VeriTile/Examples/FloatDType.lean	float_softmax_reciprocal_refinement_view	Float dtype rewrite refinement
+VeriTile/Examples/TritonSmoke.lean	argmax2_index_store_correct_view	Typed Nat memory store
+VeriTile/Examples/TritonSmoke.lean	nat_load_store_correct_view	Typed Nat memory load/store
 VeriTile/Examples/TritonSmoke.lean	indirect_load_correct_view	Indirect indexed load correctness
 VeriTile/Examples/TritonSmoke.lean	launch_noop_for_all_programs_some	ND grid launch surface
 VeriTile/Examples/MemorySafety.lean	blockPtrBoundary_memorySafe	Layer-1 active-lane memory bounds safety

@@ -283,18 +283,20 @@ theorem add_kernel_masked_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeKernel.ExecCorrect
+    ComputeKernel.ComputeCorrect
       ((addKernelMasked xReg yReg outReg blockSize nElements))
-      s
-      (fun s' =>
+      (fun s0 s' =>
+        s0 = s →
         ∀ idx : TileIndex [blockSize],
           let addr := s.pid * blockSize + idx.1.val
           TensorView.observe (some s')
               (programTileView s outReg blockSize) idx
             = some (if addr < nElements then xs idx.1 + ys idx.1
                     else s.readMem outReg addr)) := by
-  apply ComputeKernel.execCorrect_of_toAlgKernel rfl
-  intro s' hExec idx
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
   have hview := add_kernel_masked_correct_exec_view xReg yReg outReg blockSize nElements
     hBlockSize s xs ys h_x h_y idx
   rw [hExec] at hview

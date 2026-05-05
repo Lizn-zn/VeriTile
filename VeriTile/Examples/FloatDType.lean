@@ -43,16 +43,6 @@ theorem float_add_erases_to_real
   simp [floatAddKernel, addKernel, Kernel.eraseDType, Stmt.eraseDTypeList,
     Stmt.eraseDType, Op.eraseDType, eraseDType, NumericDType.eraseDType]
 
-/-- Generic theorem bridge: any Real proof about `addKernel` can be exposed as
-a float-facing theorem for `floatAddKernel` through erasure. -/
-theorem float_add_correct_bridge
-    (xReg yReg outReg : RegionName) (blockSize : Nat)
-    {post : BlockState → BlockState → Prop}
-    (hreal : Kernel.Correct (addKernel xReg yReg outReg blockSize) post) :
-    Kernel.AlgorithmCorrect (floatAddKernel xReg yReg outReg blockSize) post := by
-  exact Kernel.algorithmCorrect_of_erase_eq
-    (float_add_erases_to_real xReg yReg outReg blockSize) hreal
-
 /-! ## Reused correctness theorem -/
 
 /-- Float-facing VectorAdd correctness view.
@@ -176,7 +166,7 @@ the fp32 reciprocal-form softmax are algorithmically equivalent after erasure.
 
 This is the float theorem policy applied to a real optimization: state the
 dtype-annotated rewrite, prove it through the existing Real refinement. -/
-theorem float_softmax_reciprocal_algorithm_refine_exec_view
+theorem float_softmax_reciprocal_refinement_exec_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
@@ -194,7 +184,7 @@ theorem float_softmax_reciprocal_algorithm_refine_exec_view
 
 /-- Compute-facing surface for the fp32 reciprocal-form softmax rewrite,
 projected to the erased algorithm kernels. -/
-theorem float_softmax_reciprocal_algorithm_refine_view
+theorem float_softmax_reciprocal_refinement_view
     (xReg yReg : RegionName)
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
@@ -213,7 +203,7 @@ theorem float_softmax_reciprocal_algorithm_refine_view
   intro s0 lhs' rhs' hL hR hs0
   subst s0
   intro idx
-  have hview := float_softmax_reciprocal_algorithm_refine_exec_view xReg yReg N hN s xs h_x idx
+  have hview := float_softmax_reciprocal_refinement_exec_view xReg yReg N hN s xs h_x idx
   rw [hL, hR] at hview
   simpa using hview
 
