@@ -34,6 +34,26 @@ feature dimension.  `numIters` controls the fixed Sinkhorn-style log-domain
 normalization count.
 -/
 
+/-- Scalar fixed-rank width-side mHC core (`S = T = D = 1`, zero Sinkhorn
+iterations).
+
+This is the proof-facing specialization of `mhcWidthConnectionKernel`. It keeps
+the same layout convention: for program id `b`, the residual and both outputs
+live at address `b`, while both logits are scalar cells at address `0`.
+-/
+def mhcWidthConnectionKernel1
+    (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
+    (tau : ℝ) : ComputeKernel := triton {
+  b := tl.program_id(0)
+  residual := tl.load($(resReg) + b)
+  h_res := tl.load($(hResReg))
+  res_mix := tl.exp(h_res / $ℝ(tau)) * residual
+  h_pre := tl.load($(hPreReg))
+  branch_in := tl.exp(h_pre / $ℝ(tau)) * residual
+  tl.store($(resMixReg) + b, res_mix)
+  tl.store($(branchInReg) + b, branch_in)
+}
+
 /-- Width-side mHC core.
 
 It computes two normalized maps from logits:
@@ -46,11 +66,16 @@ The kernel stores:
 - `resMixReg[b, s, d] = (resWeights @ residuals)[s, d]`
 - `branchInReg[b, t, d] = (preWeightsᵀ @ residuals)[t, d]`
 
-The exact Real spec/proof is intentionally deferred; this definition is the
-DSL artifact for issue #87. -/
+The fixed-rank `S = T = D = 1`, `numIters = 0` case is definitionally routed to
+`mhcWidthConnectionKernel1`, which is the first proof-covered slice.  The
+generic rank / iterative Sinkhorn proof remains future work. -/
 def mhcWidthConnectionKernel
     (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
-    (S T D numIters : Nat) (tau : ℝ) : ComputeKernel := triton {
+    (S T D numIters : Nat) (tau : ℝ) : ComputeKernel :=
+  match S, T, D, numIters with
+  | 1, 1, 1, 0 =>
+      mhcWidthConnectionKernel1 resReg hResReg hPreReg resMixReg branchInReg tau
+  | _, _, _, _ => triton {
   b      := tl.program_id(0)
   offs_s := tl.arange(0, $(S))
   offs_s2 := tl.arange(0, $(S))
@@ -90,26 +115,6 @@ def mhcWidthConnectionKernel
   tl.store($(branchInReg) + branch_ptrs, branch_in)
 }
 
-/-- Scalar fixed-rank width-side mHC core (`S = T = D = 1`, zero Sinkhorn
-iterations).
-
-This is the first proof-facing specialization of `mhcWidthConnectionKernel`.
-It keeps the same layout convention: for program id `b`, the residual and both
-outputs live at address `b`, while both logits are scalar cells at address `0`.
--/
-def mhcWidthConnectionKernel1
-    (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
-    (tau : ℝ) : ComputeKernel := triton {
-  b := tl.program_id(0)
-  residual := tl.load($(resReg) + b)
-  h_res := tl.load($(hResReg))
-  res_mix := tl.exp(h_res / $ℝ(tau)) * residual
-  h_pre := tl.load($(hPreReg))
-  branch_in := tl.exp(h_pre / $ℝ(tau)) * residual
-  tl.store($(resMixReg) + b, res_mix)
-  tl.store($(branchInReg) + b, branch_in)
-}
-
 /-- Fixed-rank (`S = T = D = 1`, zero Sinkhorn iterations) width-side residual
 mixing spec. -/
 noncomputable def mhcWidthConnectionResMixSpec1 (residual hRes tau : ℝ) : ℝ :=
@@ -120,12 +125,13 @@ input spec. -/
 noncomputable def mhcWidthConnectionBranchInSpec1 (residual hPre tau : ℝ) : ℝ :=
   Real.exp (hPre / tau) * residual
 
-theorem mhcWidthConnection_exec_correct_view
+theorem mhcWidthConnection_exec_view
     (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
     (tau : ℝ) (s : BlockState)
     (hOutNe : resMixReg ≠ branchInReg) :
-    let result := exec (mhcWidthConnectionKernel1
-      resReg hResReg hPreReg resMixReg branchInReg tau).toAlgKernel s
+    let result := exec
+      (mhcWidthConnectionKernel resReg hResReg hPreReg resMixReg branchInReg
+        1 1 1 0 tau).toAlgKernel s
     result.map (fun s' =>
       (s'.readMem resMixReg s.pid, s'.readMem branchInReg s.pid)) =
       some
@@ -133,7 +139,7 @@ theorem mhcWidthConnection_exec_correct_view
           (s.readMem resReg s.pid) (s.readMem hResReg 0) tau,
          mhcWidthConnectionBranchInSpec1
           (s.readMem resReg s.pid) (s.readMem hPreReg 0) tau) := by
-  simp [mhcWidthConnectionKernel1, exec, stepStmts, stepStmt, evalOp,
+  simp [mhcWidthConnectionKernel, mhcWidthConnectionKernel1, exec, stepStmts, stepStmt, evalOp,
     mhcWidthConnectionResMixSpec1, mhcWidthConnectionBranchInSpec1,
     NumericDType.mul, NumericDType.div, WithBot.realMul, WithBot.realDiv,
     BlockState.writeMem, BlockState.readMem, hOutNe]
@@ -151,7 +157,8 @@ theorem mhcWidthConnection_correct_view
     (tau : ℝ) (s : BlockState)
     (hOutNe : resMixReg ≠ branchInReg) :
     ComputeKernel.ComputeCorrect
-      (mhcWidthConnectionKernel1 resReg hResReg hPreReg resMixReg branchInReg tau)
+      (mhcWidthConnectionKernel resReg hResReg hPreReg resMixReg branchInReg
+        1 1 1 0 tau)
       (fun s0 s' =>
         s0 = s →
           s'.readMem resMixReg s.pid =
@@ -164,7 +171,7 @@ theorem mhcWidthConnection_correct_view
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  have hview := mhcWidthConnection_exec_correct_view
+  have hview := mhcWidthConnection_exec_view
     resReg hResReg hPreReg resMixReg branchInReg tau s hOutNe
   rw [hExec] at hview
   simpa using hview
