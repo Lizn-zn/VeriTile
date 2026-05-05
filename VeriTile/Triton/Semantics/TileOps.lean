@@ -22,6 +22,13 @@ def Tile.bop {dtype a b out}
     Tile dtype out :=
   ⟨fun i => op (x.data (bc.leftIndex i)) (y.data (bc.rightIndex i))⟩
 
+@[simp] theorem Tile.bop_data {dtype a b out}
+    (op : TileCarrier dtype → TileCarrier dtype → TileCarrier dtype)
+    (bc : Broadcast a b out) (x : Tile dtype a) (y : Tile dtype b)
+    (i : TileIndex out) :
+    (Tile.bop op bc x y).data i =
+      op (x.data (bc.leftIndex i)) (y.data (bc.rightIndex i)) := rfl
+
 def Tile.cop {dtype a b out}
     (op : TileCarrier dtype → TileCarrier dtype → Bool)
     (bc : Broadcast a b out) (x : Tile dtype a) (y : Tile dtype b) :
@@ -39,6 +46,11 @@ def Tile.ptrAdd {a b out}
 def Tile.uop {dtype shape} (op : TileCarrier dtype → TileCarrier dtype)
     (x : Tile dtype shape) : Tile dtype shape :=
   ⟨fun i => op (x.data i)⟩
+
+@[simp] theorem Tile.uop_data {dtype shape}
+    (op : TileCarrier dtype → TileCarrier dtype)
+    (x : Tile dtype shape) (i : TileIndex shape) :
+    (Tile.uop op x).data i = op (x.data i) := rfl
 
 def Tile.remap {dtype inShape outShape}
     (map : TileIndex outShape → TileIndex inShape)

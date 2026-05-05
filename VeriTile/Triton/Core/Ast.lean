@@ -650,6 +650,10 @@ inductive ComputeKernel where
 
 namespace ComputeKernel
 
+/-- Build a compute-facing kernel from an already-constructed algorithm body. -/
+def fromAlgBody (inputs outputs : List RegionName) (body : List Stmt) : ComputeKernel :=
+  ComputeKernel.mk inputs outputs (body.map ComputeStmt.alg)
+
 /-- Fallible projection from the compute-facing kernel surface to the algorithm
 kernel surface. -/
 def toAlgorithm? : ComputeKernel → Except EraseDTypeError AlgKernel
@@ -679,6 +683,12 @@ def toAlgorithm? : ComputeKernel → Except EraseDTypeError AlgKernel
     Except.ok (Kernel.mk inputs outputs body)
   rw [ComputeStmt.listToAlgorithm?_map_alg]
   rfl
+
+@[simp] theorem toAlgorithm?_fromAlgBody
+    (inputs outputs : List RegionName) (body : List Stmt) :
+    (ComputeKernel.fromAlgBody inputs outputs body).toAlgorithm? =
+      Except.ok (Kernel.mk inputs outputs body) := by
+  simp [ComputeKernel.fromAlgBody]
 
 /--
 Legacy coercion used by existing examples whose definitions are still annotated
@@ -712,6 +722,12 @@ def toAlgKernel (ck : ComputeKernel) : AlgKernel :=
       Kernel.mk inputs outputs body := by
   simp [toAlgKernel]
 
+@[simp] theorem toAlgKernel_fromAlgBody
+    (inputs outputs : List RegionName) (body : List Stmt) :
+    (ComputeKernel.fromAlgBody inputs outputs body).toAlgKernel =
+      Kernel.mk inputs outputs body := by
+  simp [ComputeKernel.fromAlgBody]
+
 instance : Coe ComputeKernel AlgKernel where
   coe := toAlgKernel
 
@@ -740,6 +756,11 @@ abbrev body (ck : ComputeKernel) : List Stmt :=
     (inputs outputs : List RegionName) (body : List Stmt) :
     (ComputeKernel.mk inputs outputs (body.map ComputeStmt.alg)).body = body := by
   simp [ComputeKernel.body]
+
+@[simp] theorem body_fromAlgBody
+    (inputs outputs : List RegionName) (body : List Stmt) :
+    (ComputeKernel.fromAlgBody inputs outputs body).body = body := by
+  simp [ComputeKernel.fromAlgBody]
 
 @[simp] theorem toAlgKernel_body_mk_map_alg
     (inputs outputs : List RegionName) (body : List Stmt) :
