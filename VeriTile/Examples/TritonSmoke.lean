@@ -24,8 +24,8 @@ def scalarCopyKernel (xReg yReg : RegionName) : ComputeKernel := triton {
   tl.store($(yReg), x)
 }
 
-/-- The public DSL surface is compute-facing; legacy `Kernel` annotations work
-through coercion from this `.fromAlg` subset. -/
+/-- The public DSL surface is compute-facing. Pure algorithm statements are
+represented internally as `ComputeStmt.alg` entries in a `ComputeKernel`. -/
 def scalarCopyComputeKernel (xReg yReg : RegionName) : ComputeKernel := triton {
   x := tl.load($(xReg))
   tl.store($(yReg), x)
@@ -40,7 +40,7 @@ example (xReg yReg : RegionName)
     (post : BlockState → BlockState → Prop)
     (h : Kernel.Correct (scalarCopyKernel xReg yReg) post) :
     ComputeKernel.ComputeCorrect (scalarCopyComputeKernel xReg yReg) post :=
-  ComputeKernel.computeCorrect_fromAlg h
+  ComputeKernel.computeCorrect_of_toAlgKernel rfl h
 
 def atomicAddSmoke (outReg : RegionName) : ComputeKernel := triton {
   x := 1
@@ -551,10 +551,7 @@ def pagedKVAddressSmoke (blockTableReg kReg outReg : RegionName)
 }
 
 def argmax2IndexStoreCoreKernel (xReg outReg : RegionName) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [xReg]
-  , outputs := [outReg]
-  , body :=
+  let body : List Stmt :=
       [Stmt.store .nat [] (MemAccess.region outReg (Op.constNat 0))
         (Op.where
           (Op.lt ComparableDType.real Broadcast.nil
@@ -562,42 +559,37 @@ def argmax2IndexStoreCoreKernel (xReg outReg : RegionName) : ComputeKernel :=
             (Op.load .real (MemAccess.region xReg (Op.constNat 1)) MaskOpt.none))
           (Op.constNat 1)
           (Op.constNat 0))
-        MaskOpt.none] }
+        MaskOpt.none]
+  ComputeKernel.mk [xReg] [outReg] (body.map ComputeStmt.alg)
 
 def natLoadStoreCoreKernel (idxReg outReg : RegionName) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [idxReg]
-  , outputs := [outReg]
-  , body :=
+  let body : List Stmt :=
       [Stmt.store .nat [] (MemAccess.region outReg (Op.constNat 0))
         (Op.load .nat (MemAccess.region idxReg (Op.constNat 0)) MaskOpt.none)
-        MaskOpt.none] }
+        MaskOpt.none]
+  ComputeKernel.mk [idxReg] [outReg] (body.map ComputeStmt.alg)
 
 def intLoadStoreCoreKernel (idxReg outReg : RegionName) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [idxReg]
-  , outputs := [outReg]
-  , body :=
+  let body : List Stmt :=
       [Stmt.store .int [] (MemAccess.region outReg (Op.constNat 0))
         (Op.load .int (MemAccess.region idxReg (Op.constNat 0)) MaskOpt.none)
-        MaskOpt.none] }
+        MaskOpt.none]
+  ComputeKernel.mk [idxReg] [outReg] (body.map ComputeStmt.alg)
 
 def indirectLoadCoreKernel (idxReg dataReg outReg : RegionName)
     (N stride : Nat) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [idxReg, dataReg]
-  , outputs := [outReg]
-  , body :=
+  let body : List Stmt :=
       [Stmt.store .real [N] (MemAccess.region outReg (Op.arange N))
         (Op.load .real
           (MemAccess.ptr
             (Op.ptrAdd Broadcast.scalarL
               (Op.ptrBase dataReg)
-              (Op.mul NumericDType.nat Broadcast.scalarR
-                (Op.load .nat (MemAccess.region idxReg (Op.arange N)) MaskOpt.none)
+                (Op.mul NumericDType.nat Broadcast.scalarR
+                  (Op.load .nat (MemAccess.region idxReg (Op.arange N)) MaskOpt.none)
                 (Op.constNat stride))))
           MaskOpt.none)
-        MaskOpt.none] }
+        MaskOpt.none]
+  ComputeKernel.mk [idxReg, dataReg] [outReg] (body.map ComputeStmt.alg)
 
 def indirectLoadView (idxReg dataReg : RegionName)
     (N stride : Nat) : IndirectView [N] [] :=
@@ -712,7 +704,7 @@ theorem indirect_load_correct_view
 /-! ### ND grid launch theorem surface (issue #5) -/
 
 def launchNoopKernel : ComputeKernel :=
-  ComputeKernel.fromAlg { inputs := [], outputs := [], body := [] }
+  ComputeKernel.mk [] [] []
 
 theorem launch_noop_for_all_programs_some
     (g : Grid) (s : BlockState) :
@@ -740,78 +732,70 @@ def checkerEnv (entries : List (RegionName × TileDType)) : RegionEnv :=
   fun region => (entries.find? (fun entry => entry.1 == region)).map (·.2)
 
 def registerConflictKernel : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [], outputs := []
-  , body :=
-      [ Stmt.assign .nat [] "x" (Op.constNat 0)
-      , Stmt.assign .real [] "x" (Op.const 0) ] }
+  let body : List Stmt :=
+    [ Stmt.assign .nat [] "x" (Op.constNat 0)
+    , Stmt.assign .real [] "x" (Op.const 0) ]
+  ComputeKernel.mk [] [] (body.map ComputeStmt.alg)
 
 def pointerWhereConflictKernel : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [], outputs := []
-  , body :=
-      [ Stmt.assign .ptr [] "p"
-          (Op.where (Op.constBool Bool.true) (Op.ptrBase "x") (Op.ptrBase "y")) ] }
+  let body : List Stmt :=
+    [ Stmt.assign .ptr [] "p"
+        (Op.where (Op.constBool Bool.true) (Op.ptrBase "x") (Op.ptrBase "y")) ]
+  ComputeKernel.mk [] [] (body.map ComputeStmt.alg)
 
 def checkerValidPointerStoreKernel (xReg outReg : RegionName) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [xReg], outputs := [outReg]
-  , body :=
-      [ Stmt.assign .nat [4] "offs" (Op.arange 4)
-      , Stmt.assign .real [4] "x"
-          (Op.load .real (MemAccess.region xReg (Op.ref .nat [4] "offs")) MaskOpt.none)
-      , Stmt.assign .ptr [4] "outPtrs"
-          (Op.ptrAdd Broadcast.scalarL (Op.ptrBase outReg) (Op.ref .nat [4] "offs"))
-      , Stmt.store .real [4]
-          (MemAccess.ptr (Op.ref .ptr [4] "outPtrs"))
-          (Op.ref .real [4] "x")
-          MaskOpt.none ] }
+  let body : List Stmt :=
+    [ Stmt.assign .nat [4] "offs" (Op.arange 4)
+    , Stmt.assign .real [4] "x"
+        (Op.load .real (MemAccess.region xReg (Op.ref .nat [4] "offs")) MaskOpt.none)
+    , Stmt.assign .ptr [4] "outPtrs"
+        (Op.ptrAdd Broadcast.scalarL (Op.ptrBase outReg) (Op.ref .nat [4] "offs"))
+    , Stmt.store .real [4]
+        (MemAccess.ptr (Op.ref .ptr [4] "outPtrs"))
+        (Op.ref .real [4] "x")
+        MaskOpt.none ]
+  ComputeKernel.mk [xReg] [outReg] (body.map ComputeStmt.alg)
 
 def unboundPointerRefKernel : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := ["x"], outputs := []
-  , body :=
-      [ Stmt.assign .real [] "x"
-          (Op.load .real (MemAccess.ptr (Op.ref .ptr [] "p")) MaskOpt.none) ] }
+  let body : List Stmt :=
+    [ Stmt.assign .real [] "x"
+        (Op.load .real (MemAccess.ptr (Op.ref .ptr [] "p")) MaskOpt.none) ]
+  ComputeKernel.mk ["x"] [] (body.map ComputeStmt.alg)
 
 def nonPointerRefAsPointerKernel : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := ["x"], outputs := []
-  , body :=
-      [ Stmt.assign .real [] "p" (Op.const 0)
-      , Stmt.assign .real [] "x"
-          (Op.load .real (MemAccess.ptr (Op.ref .ptr [] "p")) MaskOpt.none) ] }
+  let body : List Stmt :=
+    [ Stmt.assign .real [] "p" (Op.const 0)
+    , Stmt.assign .real [] "x"
+        (Op.load .real (MemAccess.ptr (Op.ref .ptr [] "p")) MaskOpt.none) ]
+  ComputeKernel.mk ["x"] [] (body.map ComputeStmt.alg)
 
 def blockPointerRefKernel (xReg : RegionName) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [xReg], outputs := []
-  , body :=
-      [ Stmt.assign .blockPtr [1] "bp"
-          (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
-      , Stmt.assign .blockPtr [1] "bp2"
-          (Op.advanceBlockPtr (Op.ref .blockPtr [1] "bp") [1])
-      , Stmt.store .real [1]
-          (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp2") [0])
-          (Op.full [1] (Op.const 1))
-          MaskOpt.none ] }
+  let body : List Stmt :=
+    [ Stmt.assign .blockPtr [1] "bp"
+        (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
+    , Stmt.assign .blockPtr [1] "bp2"
+        (Op.advanceBlockPtr (Op.ref .blockPtr [1] "bp") [1])
+    , Stmt.store .real [1]
+        (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp2") [0])
+        (Op.full [1] (Op.const 1))
+        MaskOpt.none ]
+  ComputeKernel.mk [xReg] [] (body.map ComputeStmt.alg)
 
 def blockPointerMetadataMismatchKernel (xReg : RegionName) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [xReg], outputs := []
-  , body :=
-      [ Stmt.assign .blockPtr [1] "bp"
-          (Op.makeBlockPtr xReg 0 [8] [1] [] [0]) ] }
+  let body : List Stmt :=
+    [ Stmt.assign .blockPtr [1] "bp"
+        (Op.makeBlockPtr xReg 0 [8] [1] [] [0]) ]
+  ComputeKernel.mk [xReg] [] (body.map ComputeStmt.alg)
 
 def blockPointerBoundaryMismatchKernel (xReg : RegionName) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [xReg], outputs := []
-  , body :=
-      [ Stmt.assign .blockPtr [1] "bp"
-          (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
-      , Stmt.store .real [1]
-          (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp") [1])
-          (Op.full [1] (Op.const 1))
-          MaskOpt.none ] }
+  let body : List Stmt :=
+    [ Stmt.assign .blockPtr [1] "bp"
+        (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
+    , Stmt.store .real [1]
+        (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp") [1])
+        (Op.full [1] (Op.const 1))
+        MaskOpt.none ]
+  ComputeKernel.mk [xReg] [] (body.map ComputeStmt.alg)
 
 example :
     Kernel.checkStrict (checkerEnv [("x", .real), ("out", .real)])

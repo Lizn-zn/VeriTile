@@ -265,9 +265,6 @@ def MemorySafe (bounds : RegionBounds) (ck : ComputeKernel) : Prop :=
   | Except.ok k => k.MemorySafe bounds
   | Except.error _ => False
 
-@[simp] theorem memorySafe_fromAlg (bounds : RegionBounds) (k : Kernel) :
-    (ComputeKernel.fromAlg k).MemorySafe bounds = k.MemorySafe bounds := rfl
-
 end ComputeKernel
 
 end VeriTile.Triton

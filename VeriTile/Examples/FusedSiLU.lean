@@ -114,13 +114,11 @@ def siluStepResidual (siluReg residualReg outReg : RegionName)
 def unfusedSiLUKernel
     (xReg gateReg residualReg zReg siluReg outReg : RegionName)
     (blockSize : Nat) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [xReg, gateReg, residualReg]
-  , outputs := [outReg]
-  , body :=
-      (siluStepGate xReg gateReg zReg blockSize).body ++
-      (siluStepSilu zReg siluReg blockSize).body ++
-      (siluStepResidual siluReg residualReg outReg blockSize).body }
+  let body : List Stmt :=
+    (siluStepGate xReg gateReg zReg blockSize).body ++
+    (siluStepSilu zReg siluReg blockSize).body ++
+    (siluStepResidual siluReg residualReg outReg blockSize).body
+  ComputeKernel.mk [xReg, gateReg, residualReg] [outReg] (body.map ComputeStmt.alg)
 
 private theorem stepStmts_append (xs ys : List Stmt) (s : BlockState) :
     stepStmts (xs ++ ys) s = (stepStmts xs s).bind (fun s' => stepStmts ys s') := by

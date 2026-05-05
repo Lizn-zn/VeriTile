@@ -280,7 +280,8 @@ namespace ComputeKernel
 algorithm dtype annotations. This keeps float-facing examples compute-first
 while reusing the existing Real proof path. -/
 def eraseDType (ck : ComputeKernel) : ComputeKernel :=
-  ComputeKernel.fromAlg ck.toAlgKernel.eraseDType
+  let k := ck.toAlgKernel.eraseDType
+  ComputeKernel.mk k.inputs k.outputs (k.body.map ComputeStmt.alg)
 
 end ComputeKernel
 

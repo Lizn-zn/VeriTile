@@ -38,23 +38,23 @@ This is an open roadmap, **not "deliver N theorems and stop"**. The §Status,
 VeriTile splits verification into **two independent and complementary** layers:
 
 ```
-Algorithm layer (Lean proof)         Compute layer (external testing)
-────────────────────────────         ────────────────────────────────
-AlgorithmCorrect ck spec             ComputeCorrect ck
-  := ck.toAlgorithm? = ok ∧            := differential testing of the
-     Kernel.Correct ak spec               actual Triton kernel against
-                                          the algorithm spec within an
-  Real / Int / Nat semantics.            epsilon bound. External pipeline.
-  No IEEE rounding, no NaN,              Not a Lean theorem.
-  no fp exception flags.
+Algorithm layer (Lean proof)         Compute-gap layer (external testing)
+────────────────────────────         ───────────────────────────────────
+ProjectedCorrect ck spec             GapPolicy.require contract
+  := ck.toAlgorithm? = ok ∧            := Python check of the
+     Kernel.Correct ak spec               ComputeKernel behavior against
+                                          the projected AlgKernel behavior
+  Real / Int / Nat semantics.            within the contract tolerance.
+  No IEEE rounding, no NaN,              Recorded in Lean as
+  no fp exception flags.                 ExternalChecked contract.
 ```
 
-The two layers are **not connected by an internal Lean theorem.** The bridge
-between them is empirical (testing), by design. A VeriTile-certified kernel
-means:
-> The algorithm structure is Lean-proved correct (AlgorithmCorrect), **and**
-> the fp-level implementation has been validated against this algorithm on a
-> representative test set (ComputeCorrect).
+The two layers are **not connected by an internal Lean theorem.** The numeric
+gap between compute-facing syntax and projected algorithm syntax is empirical
+(testing), by design. A VeriTile-certified compute theorem means:
+> The projected algorithm structure is Lean-proved correct, **and** when
+> `gap := .require contract` is used, the compute-to-algorithm gap named by the
+> contract has been externally validated.
 
 Both layers are required for full certification.
 
@@ -64,7 +64,7 @@ IEEE-754 formalization (NaN propagation, denormals, rounding modes, hardware
 dot precision, fast-math, exception flags) is **permanently out of Lean's
 proof scope**. This is not a deferral — there is no planned bridge theorem
 connecting compute execution to Lean-internal algorithm execution.
-ComputeCorrect is and remains test-backed.
+Required compute gaps are and remain test-backed.
 
 ### Algorithm-layer details
 
@@ -75,31 +75,34 @@ ComputeCorrect is and remains test-backed.
    supported.
 2. Algorithmic correctness is proved over algorithm-layer kernels obtained
    via `Kernel.eraseDType` (fp* → real, intN → int, uintN → nat).
-3. The formal Lean layer uses `ComputeKernel.AlgorithmCorrect` and
-   `Kernel.AlgorithmRefine`. Existing `Kernel.Correct` proofs continue to
-   work over algorithm-side kernels.
+3. The formal Lean layer uses `ComputeKernel.ComputeCorrect` /
+   `ComputeKernel.ComputeRefine` with `gap := .ignore` by default, or
+   `gap := .require contract` when an external compute-gap check should be
+   recorded. Existing `Kernel.Correct` proofs continue to work over
+   algorithm-side kernels.
 
-### Compute-layer details (testing)
+### Compute-gap details (testing)
 
 1. `ComputeKernel` faithfully preserves the user-written compute-facing AST
-   (including `ComputeOp.bitcast`, fp/int width spellings, etc.), so the
-   testing pipeline can lift back to Triton source for real execution.
-2. The differential-testing pipeline (separate workstream) generates sample
-   inputs, executes the lifted Triton kernel, and validates
-   `|actual_output - algorithm_output_decoded| < epsilon`.
-3. Epsilon policy is per-op / per-kernel and documented next to each test
-   suite; it never enters Lean proofs.
+   (including `ComputeOp.bitcast`, fp/int width spellings, etc.).
+2. The Python gap checker (separate workstream) exports or mirrors the
+   `ComputeKernel` and its projected `AlgKernel`, generates sample inputs, and
+   validates the contract relation such as exact equality or
+   `|compute_output - algorithm_output| < epsilon`.
+3. Epsilon policy is per-op / per-kernel and appears in
+   `ComputeGapContract`; Lean records only `ExternalChecked contract`.
 
 ### User perspective
 
 - Algorithm-structure bug: caught by AlgorithmCorrect (Lean proof fails).
 - IEEE-specific edge case bug (NaN, overflow, denormal handling, etc.):
-  caught by ComputeCorrect (test fails). **This layer has no Lean proof
-  obligation by design.**
-- "End-to-end correct" means both layers are green.
+  caught by the required compute-gap checker. **This layer has no internal
+  Lean proof obligation by design.**
+- "Full compute-facing certificate" means projected Lean proof plus required
+  gap contract, when the theorem opts into `gap := .require contract`.
 
 The trusted bridge from Real-algorithm correctness to floating computation
-**is the testing pipeline**, not a Lean theorem.
+**is the external gap checker**, not a Lean theorem.
 
 ## Status (2026-05-05)
 

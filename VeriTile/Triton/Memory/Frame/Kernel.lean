@@ -72,10 +72,6 @@ def ExecWritesWithin (ck : ComputeKernel) (s : BlockState) (P : WriteFootprint) 
   | Except.ok k => k.ExecWritesWithin s P
   | Except.error _ => False
 
-@[simp] theorem execWritesWithin_fromAlg (k : Kernel) (s : BlockState)
-    (P : WriteFootprint) :
-    (ComputeKernel.fromAlg k).ExecWritesWithin s P = k.ExecWritesWithin s P := rfl
-
 end ComputeKernel
 
 end VeriTile.Triton

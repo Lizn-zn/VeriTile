@@ -8,10 +8,10 @@ VeriTile uses two kernel layers:
 - `ComputeKernel` is the compute-facing DSL surface. The `triton { ... }`
   macro always produces a `ComputeKernel`.
 
-The DSL has a single compute-facing surface. Pure algorithm kernels are emitted
-as `ComputeKernel.fromAlg k`; kernels containing compute-facing expressions are
-emitted as `ComputeKernel.mk inputs outputs body`, where `body` is a list of
-`ComputeStmt`s.
+The DSL has a single compute-facing surface. Every kernel is emitted as
+`ComputeKernel.mk inputs outputs body`, where `body` is a list of
+`ComputeStmt`s. Pure algorithm statements are represented as `ComputeStmt.alg`
+entries; compute-facing syntax uses the other `ComputeStmt` constructors.
 
 ## Algorithm Projection
 
@@ -22,39 +22,55 @@ to the algorithm layer:
 ComputeKernel.toAlgorithm? : ComputeKernel -> Except EraseDTypeError AlgKernel
 ```
 
-For the `.fromAlg` subset this projection succeeds immediately. For
-`ComputeKernel.mk`, projection recursively lowers each `ComputeStmt` /
-`ComputeExpr`; compute-only features that cannot be projected must fail this
-projection instead of inventing fake algorithm meanings.
+Projection recursively lowers each `ComputeStmt` / `ComputeExpr`;
+`ComputeStmt.alg` passes through unchanged. Compute-only features that cannot
+be projected must fail this projection instead of inventing fake algorithm
+meanings.
 
 `ComputeKernel.ComputeCorrect` is the public proof surface and hides the
-`Except` plumbing:
+`Except` plumbing. By default it only requires the projected algorithm proof:
 
 ```lean
-ComputeKernel.ComputeCorrect ck post :=
-  match ck.toAlgorithm? with
-  | Except.ok ak => Kernel.Correct ak post
-  | Except.error _ => False
+ComputeKernel.ComputeCorrect ck post (gap := .ignore) :=
+  True ∧
+    match ck.toAlgorithm? with
+    | Except.ok ak => Kernel.Correct ak post
+    | Except.error _ => False
 ```
 
-`ComputeKernel.ComputeRefine` is the corresponding two-kernel surface. Internal
-helper lemmas may still use `Kernel.Correct` / `Kernel.Refine` when they are
-specifically about projected algorithm kernels.
-
-The transition lemma is:
+When a theorem should record an externally validated compute-to-algorithm
+gap, use a required gap contract:
 
 ```lean
-ComputeKernel.computeCorrect_fromAlg :
-  Kernel.Correct k post ->
-  ComputeKernel.ComputeCorrect (ComputeKernel.fromAlg k) post
-
-ComputeKernel.computeRefine_fromAlg :
-  Kernel.Refine lhs rhs rel ->
-  ComputeKernel.ComputeRefine (ComputeKernel.fromAlg lhs) (ComputeKernel.fromAlg rhs) rel
+ComputeKernel.ComputeCorrect ck post (gap := .require contract) :=
+  ExternalChecked contract ∧
+    match ck.toAlgorithm? with
+    | Except.ok ak => Kernel.Correct ak post
+    | Except.error _ => False
 ```
 
-This keeps existing algorithm proofs reusable while the DSL return type moves
-to `ComputeKernel`.
+`ComputeKernel.ComputeRefine` is the corresponding two-kernel surface with the
+same optional `GapPolicy`. Internal helper lemmas may still use
+`Kernel.Correct` / `Kernel.Refine` when they are specifically about projected
+algorithm kernels.
+
+The transition lemmas are:
+
+```lean
+ComputeKernel.computeCorrect_of_toAlgorithm_eq :
+  ck.toAlgorithm? = Except.ok ak ->
+  Kernel.Correct ak post ->
+  ComputeKernel.ComputeCorrect ck post
+
+ComputeKernel.computeRefine_of_toAlgorithm_eq :
+  lhs.toAlgorithm? = Except.ok lhsAlg ->
+  rhs.toAlgorithm? = Except.ok rhsAlg ->
+  Kernel.Refine lhsAlg rhsAlg rel ->
+  ComputeKernel.ComputeRefine lhs rhs rel
+```
+
+This keeps projected algorithm proofs reusable while making projection success
+explicit.
 
 A definition-unfolding lemma is provided for the projection:
 
@@ -72,18 +88,19 @@ semantics.
 
 **By design: there is no internal Lean theorem connecting bit-level compute
 execution to algorithm execution.** `ComputeKernel.ComputeCorrect` is a
-statement about the projected algorithm kernel. The formal compute-to-algorithm
-bridge is `ComputeKernel.toAlgorithm?` / `eraseDType`: it maps compute-facing
-syntax to the Real / Int / Nat algorithm layer where Lean proofs run. Numeric
+statement about the projected algorithm kernel plus an optional external gap
+obligation. The formal compute-to-algorithm bridge is
+`ComputeKernel.toAlgorithm?` / `eraseDType`: it maps compute-facing syntax to
+the Real / Int / Nat algorithm layer where Lean proofs run. Numeric
 compute-layer behavior — IEEE rounding, NaN propagation, denormals,
 hardware-dot precision, fast-math, etc. — is validated empirically through the
-differential testing pipeline (see PLAN.md "Verification architecture" and
-#58), not through a Lean theorem.
+external gap checker (see PLAN.md "Verification architecture" and #59), not
+through a Lean theorem.
 
 Users reading a `ComputeCorrect` Lean certificate should interpret it as: "the
 projected algorithm structure (over Real / Int / Nat) is Lean-proved correct."
-For end-to-end certification, the matching numeric compute test result is also
-required.
+If the theorem uses `gap := .require contract`, it also records the trusted
+external validation token for the named compute-to-algorithm gap contract.
 
 ## Naming
 
@@ -125,9 +142,8 @@ value. Runtime bitcasts are represented in `ComputeOp.bitcast`, but
 The macro emits two parallel terms for one accepted constant `tl.bitcast`:
 
 - **Algorithm view** (`EOut.term`): `Op.const ((Float32Bits.decodeRat
-  { bits := BitVec.ofNat 32 <bits> }).get (by decide) : ℝ)`. This is the term
-  used when the surrounding kernel routes to the legacy `ComputeKernel.fromAlg
-  (Kernel.mk ...)` path (no `ComputeStmt` siblings).
+  { bits := BitVec.ofNat 32 <bits> }).get (by decide) : ℝ)`. This is the
+  projected algorithm-side term.
 - **Compute view** (`EOut.computeTerm`): `ComputeExpr.compute (ComputeOp.bitcast
   ComputeDType.uint32 <dst> rfl (ComputeOp.const ⟨BitVec.ofNat 32 <bits>⟩))`.
   This is what the surrounding kernel uses when it routes to

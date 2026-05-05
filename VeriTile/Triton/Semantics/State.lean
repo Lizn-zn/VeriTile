@@ -688,6 +688,18 @@ theorem scatter_preserves_other_region {α : Type}
     rintro ⟨h_R, _⟩
     exact h_ne h_R
 
+@[simp] theorem foldl_writeMem_regs {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (l : List α) (s : BlockState) (dtype : TileDType) (shape : TileShape)
+    (name : RegName) :
+    ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k)) s).regs
+      dtype shape name) = s.regs dtype shape name := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      rfl
+
 theorem foldl_writeMem_pid {α : Type}
     (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
     (l : List α) (s : BlockState) :

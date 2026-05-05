@@ -334,12 +334,14 @@ Float theorem policy: algorithmic correctness/refinement theorems are proved
 over erased `.real` kernels. The compute-facing DSL surface is
 `ComputeKernel`; `ComputeKernel.ComputeCorrect` and
 `ComputeKernel.ComputeRefine` project successful compute kernels to the
-algorithm layer through `toAlgorithm?`. Existing float-facing theorems can still
-use erasure equations such as `k.eraseDType = realK` to reuse Real proofs for
-dtype-annotated algorithm kernels. Numeric compute correctness/refinement is
-represented separately by observation-level predicates and differential tests
-rather than IEEE-754 proof. These definitions live in `VeriTile.Triton.Float`;
-see `documents/EraseDType.md` for the compute/algorithm split and bitcast
+algorithm layer through `toAlgorithm?`, with an optional `GapPolicy` for
+recording externally checked compute-to-algorithm gap contracts. Existing
+float-facing theorems can still use erasure equations such as
+`k.eraseDType = realK` to reuse Real proofs for dtype-annotated algorithm
+kernels. Numeric compute correctness/refinement is represented separately by
+external gap contracts and differential tests rather than IEEE-754 proof. These
+definitions live in `VeriTile.Triton.Float`; see `documents/EraseDType.md` for
+the compute/algorithm split and bitcast
 policy.
 
 ## Operator and Syntax Coverage Checklist

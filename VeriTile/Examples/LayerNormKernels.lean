@@ -68,10 +68,7 @@ def fusedLayerNormKernel
 
 def layerNormAffineTailKernel
     (xReg γReg βReg yReg : RegionName) (N : Nat) (ε : ℝ) : ComputeKernel :=
-  ComputeKernel.fromAlg
-  { inputs := [xReg, γReg, βReg]
-    outputs := [yReg]
-    body :=
+  let body : List Stmt :=
       [ .assign .real [] "μ" (.ref .real [] "M")
       , .assign .real [] "v"
           (.div .real .nil (.ref .real [] "S") (Op.natToReal (.constNat N)))
@@ -98,7 +95,8 @@ def layerNormAffineTailKernel
             (.ref .real [N] "β"))
       , .store .real [N] (MemAccess.region yReg (.ref .nat [N] "offs"))
           (.ref .real [N] "y") MaskOpt.none
-      ] }
+      ]
+  ComputeKernel.mk [xReg, γReg, βReg] [yReg] (body.map ComputeStmt.alg)
 
 /-- LayerNorm spec: `y_i = (x_i − μ) / √(var + ε) · γ_i + β_i`. -/
 noncomputable def layerNormSpec {N : Nat}

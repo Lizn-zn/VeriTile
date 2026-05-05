@@ -570,7 +570,7 @@ end
 
 macro_rules
   | `(triton { $stmts:tritonStmt* }) => do
-      let (algStmtTerms, computeStmtTerms, _, hasCompute) ← expandStmts [] stmts.toList
+      let (_, computeStmtTerms, _, _) ← expandStmts [] stmts.toList
       -- Auto-scan body: collect every region appearing in `tl.load(...)` (inputs)
       -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
       -- dedup (a mix of literals and Lean terms can't be statically deduped, and
@@ -582,9 +582,6 @@ macro_rules
         ([], [])
       let insArr  : Array (TSyntax `term) := allIns.toArray
       let outsArr : Array (TSyntax `term) := allOuts.toArray
-      if hasCompute then
-        `(ComputeKernel.mk [$insArr,*] [$outsArr,*] [$computeStmtTerms,*])
-      else
-        `(ComputeKernel.fromAlg (Kernel.mk [$insArr,*] [$outsArr,*] [$algStmtTerms,*]))
+      `(ComputeKernel.mk [$insArr,*] [$outsArr,*] [$computeStmtTerms,*])
 
 end VeriTile.Triton.DSL
