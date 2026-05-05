@@ -232,6 +232,14 @@ body.deck .card pre {
   margin: 0.6vmin 0;
   border-radius: 0.7vmin;
 }
+/* Footer caption: the paragraph that follows a code block inside a card. */
+body.deck .card pre + p {
+  font-style: italic;
+  color: var(--sub);
+  font-size: 1.7vmin;
+  line-height: 1.4;
+  margin-top: 1vmin;
+}
 body.deck .card-blue   { border-left: 0.45vmin solid var(--blue); }
 body.deck .card-orange { border-left: 0.45vmin solid var(--orange); }
 body.deck .card-green  { border-left: 0.45vmin solid var(--green); }
@@ -390,6 +398,24 @@ body.deck.deck-ready .deck-stage > section.active .numgrid {
   min-height: 0;
 }
 
+/* A <pre> rendered as a direct child of a slide (i.e. NOT inside a card)
+ * gets the hero treatment: bigger font, fills the slide vertically. */
+body.deck.deck-ready .deck-stage > section.active > pre {
+  flex: 1;
+  min-height: 0;
+  font-size: 2.6cqmin;
+  padding: 2cqmin 2.4cqmin;
+  margin: 1cqmin 0;
+  border-radius: 1.2cqmin;
+}
+/* vmin fallback when container queries are unavailable. */
+body.deck section.slide > pre,
+body.deck article > section > pre {
+  font-size: 2.6vmin;
+  padding: 2vmin 2.4vmin;
+  border-radius: 1.2vmin;
+}
+
 /* Cards become flex columns so any code block inside them can grow to
  * fill the card height. */
 body.deck .card { display: flex; flex-direction: column; }
@@ -425,6 +451,7 @@ body.deck.deck-ready .deck-stage > section.title::before {
   body.deck.deck-ready .deck-stage .card p { font-size: 2.3cqmin; }
   body.deck.deck-ready .deck-stage .card ul { font-size: 2.25cqmin; }
   body.deck.deck-ready .deck-stage .card pre { font-size: 1.85cqmin; }
+  body.deck.deck-ready .deck-stage .card pre + p { font-size: 1.7cqmin; }
   body.deck.deck-ready .deck-stage .card-blue   p:first-child strong:first-child,
   body.deck.deck-ready .deck-stage .card-orange p:first-child strong:first-child,
   body.deck.deck-ready .deck-stage .card-green  p:first-child strong:first-child,

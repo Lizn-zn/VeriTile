@@ -67,9 +67,9 @@ end
 — Automated Verification for Triton GPU kernels in Lean 4
 
 
-# Worked example — stable softmax
+# Worked Example — Stable Softmax
 
-`Triton source  →  embedded in Lean 4 (region-polymorphic DSL)  →  theorem proved by an LLM.`
+`Triton source  →  embedded in Lean 4  →  theorem proved by an LLM.`
 
 ::::cols3
 
@@ -77,18 +77,26 @@ end
 *1 · Triton source*
 
 ```
-# Naive form is y = exp(x) / sum(exp(x)),
-# but exp(large) overflows, so subtract
-# the row max first ("stable softmax").
+"""
+Stable Softmax (row-wise, masked).
+  x, y  : input/output ptr (N floats)
+  N     : runtime row length
+  BLOCK : compile-time block size (≥ N)
+  out   : y[i] = exp(x[i]) / Σ exp(x[j])
+    (via `y`, no return — GPU kernel)
+"""
 @triton.jit
-def softmax(x, y, N: tl.constexpr):
-  pid  = tl.program_id(0)              # row id
-  offs = pid * N + tl.arange(0, N)     # row offsets
-  a    = tl.load(x + offs)             # load row
-  m    = tl.max(a, axis=0)             # row max
-  e    = tl.exp(a - m)                 # shifted exp
-  s    = tl.sum(e, axis=0)             # row sum
-  tl.store(y + offs, e / s)            # write
+def softmax(x, y, N, BLOCK: tl.constexpr):
+  pid  = tl.program_id(0)
+  cols = tl.arange(0, BLOCK)
+  mask = cols < N
+  offs = pid * N + cols
+  a    = tl.load(x + offs,
+    mask=(cols < N), other=-float("inf"))
+  m    = tl.max(a, axis=0)
+  e    = tl.exp(a - m)
+  s    = tl.sum(e, axis=0)
+  tl.store(y + offs, e / s, mask=mask)
 ```
 
 The actual `.py` kernel a Triton user ships.
@@ -96,28 +104,32 @@ The actual `.py` kernel a Triton user ships.
 :::
 
 :::cardOrange
-*2 · Embedded in VeriTile (Lean 4 DSL)*
+*2 · Embed the kernel · State the spec*
 
 ```
--- Same kernel, embedded inside Lean 4.
--- `triton { … }` desugars to a typed
---   Op : TileDType → TileShape → Type
--- AST. `$(xReg)` / `$(yReg)` keeps the
--- kernel region-polymorphic.
-def stable (xReg yReg : RegionName) (N : Nat)
-    : Kernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(N) + tl.arange($(N))
-  a    := tl.load($(xReg) + offs)        -- load row
-  m    := tl.max(a)                       -- row max
-  e    := tl.exp(a - m)                   -- shifted
-  s    := tl.sum(e)                       -- row sum
-  y    := e / s                           -- output
-  tl.store($(yReg) + offs, y)
+/- Embed in Lean 4 — `triton { ... }` -/
+def stable_sm (xReg yReg : RegionName)
+    (N BLOCK : Nat) : Kernel := triton {
+  <- paste the .py body here ->
 }
+
+/- Spec — if xReg holds the input xs,
+   then after running stable_sm,
+   yReg[i] equals softmax(xs)[i]
+   at every row index `i`. -/
+theorem stable_sm_correct
+  (xReg yReg : RegionName) (N BLOCK : Nat)
+  (hN : 0 < N) (hBN : N ≤ BLOCK)
+  (s : BlockState) (xs : Fin N → ℝ)
+  (h : InputLoadedAt s xReg N xs) :
+  ∀ i : Fin N,
+    observeAt
+    (exec (stable_sm xReg yReg N BLOCK) s)
+    yReg N s.pid i
+    = some (softmaxSpec xs i)
 ```
 
-Mirrors the `.py` line-for-line. Typed end-to-end — no dynamic tag.
+Mechanical translation, fully automated.
 
 :::
 
@@ -125,26 +137,29 @@ Mirrors the `.py` line-for-line. Typed end-to-end — no dynamic tag.
 *3 · Theorem + LLM-generated proof*
 
 ```
--- `softmaxSpec` is the math reference;
--- `scripts/prove.sh` → `/lean4:autoprove`
--- closed the whole proof end-to-end.
-theorem stable_correct
-    (xReg yReg : RegionName) (N : Nat) (hN : 0 < N)
-    (s : BlockState) (xs : Fin N → ℝ)
-    (h : TensorView.loaded s
-           (programTileView s xReg N)
-           (fun idx => xs idx.1)) :
-    ∀ idx,
-      TensorView.observe
-        (exec (stable xReg yReg N) s)
-        (programTileView s yReg N) idx
-        = softmaxSpec xs idx := by
-  intro idx
-  have h := stable_eq_spec xs (tileMax hN xs)
-  exact congrFun h ⟨idx.1, by omega⟩
+/- Prove the correctness of stable sm.
+   The produced formal proof is
+   checked by Lean 4 theorem prover -/
+theorem stable_sm_correct (...) := by
+  -- 0. Open the recursion on `0 < N`.
+  obtain ⟨n, rfl⟩ :=
+    Nat.exists_eq_succ_of_ne_zero hN.ne'
+  intro i
+  -- 1. Reduce the masked kernel exec at
+  --    row index `i` to its per-row spec.
+  have hRed :=
+    stable_sm_reduce_at xReg yReg
+      (n+1) BLOCK hN hBN s xs h i
+  rw [hRed]
+  -- 2. Unfold the spec helpers.
+  unfold stableSpec softmaxSpec
+  -- 3. Apply the math identity:
+  --    stable = softmax (after row-max).
+  have hEq := stable_eq_softmax xs hN
+  exact congrArg some (congrFun hEq i)
 ```
 
-User wrote zero tactics — agent did multi-cycle iteration + deep-mode escalation.
+Agent generates the proof, fully automated.
 
 :::
 

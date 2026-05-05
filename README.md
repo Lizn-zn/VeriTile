@@ -127,17 +127,27 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
 
 #### 3. State the Lean equivalence theorem, initially leaving the proof to the LLM Agent:
 
+The user-facing surface is `ComputeKernel.ComputeRefine` — it asserts that the
+two compute kernels project to algorithm kernels that, run from the same
+initial state, satisfy the supplied observation relation.
+
 ```lean
 theorem softmax_kernels_refinement_view
     (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N -> Real)
-    (h_x : TensorView.loaded s (programTileView s xReg N)
-      (fun idx : TileIndex [N] => xs idx.1)) :
-    forall idx : TileIndex [N],
-      TensorView.observe (exec (naiveSoftmaxKernel  xReg yReg N) s)
-          (programTileView s yReg N) idx =
-      TensorView.observe (exec (stableSoftmaxKernel xReg yReg N) s)
-          (programTileView s yReg N) idx := by
+    (blockSize : Nat) (hN : 0 < blockSize)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+             (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ComputeKernel.ComputeRefine
+      (naiveSoftmaxKernel  xReg yReg blockSize)
+      (stableSoftmaxKernel xReg yReg blockSize)
+      (fun s0 lhs' rhs' =>
+        s0 = s →
+        ∀ idx : TileIndex [blockSize],
+          TensorView.observe (some lhs')
+              (programTileView s yReg blockSize) idx =
+          TensorView.observe (some rhs')
+              (programTileView s yReg blockSize) idx) := by
   sorry
 ```
 
@@ -147,28 +157,73 @@ theorem softmax_kernels_refinement_view
 scripts/prove.sh path/to/your_refinement_theorem.lean --max-cycles 5
 ```
 
-For the softmax refinement, the generated proof reduces both sides to their
-specifications and then applies the math identity:
+For the softmax refinement, the generated proof first discharges the
+compute-to-algorithm projection, then reduces each side to its specification
+and applies the math identity:
 
 ```lean
 theorem softmax_kernels_refinement_view
     (xReg yReg : RegionName)
-    (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N -> Real)
-    (h_x : TensorView.loaded s (programTileView s xReg N)
-      (fun idx : TileIndex [N] => xs idx.1)) :
-    forall idx : TileIndex [N],
-      TensorView.observe (exec (naiveSoftmaxKernel  xReg yReg N) s)
-          (programTileView s yReg N) idx =
-      TensorView.observe (exec (stableSoftmaxKernel xReg yReg N) s)
-          (programTileView s yReg N) idx := by
-  exact softmax_kernels_refinement_view xReg yReg N hN s xs h_x
-  have h := naive_eq_stable xs (tileMax hN xs)
-  simp only [] at h
-  exact congrFun h i
+    (blockSize : Nat) (hN : 0 < blockSize)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+             (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ComputeKernel.ComputeRefine
+      (naiveSoftmaxKernel  xReg yReg blockSize)
+      (stableSoftmaxKernel xReg yReg blockSize)
+      (fun s0 lhs' rhs' =>
+        s0 = s →
+        ∀ idx : TileIndex [blockSize],
+          TensorView.observe (some lhs')
+              (programTileView s yReg blockSize) idx =
+          TensorView.observe (some rhs')
+              (programTileView s yReg blockSize) idx) := by
+  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
+  intro s0 lhs' rhs' hL hR hs0
+  subst s0
+  intro idx
+  have hview := softmax_kernels_refinement_exec_view
+                  xReg yReg blockSize hN s xs h_x idx
+  rw [hL, hR] at hview
+  simpa using hview
 ```
 
 See the full softmax example in
 [`VeriTile/Examples/SoftmaxEq.lean`](./VeriTile/Examples/SoftmaxEq.lean).
+
+## Single-kernel correctness
+
+Refinement is one shape of theorem (two kernels, one observation relation).
+The other shape is a single kernel against a *math reference*: prove the
+kernel observes the same value as a Lean function on every tile index.
+The user-facing surface is `ComputeKernel.ComputeCorrect`:
+
+```lean
+theorem softmax_stable_correct_view
+    (xReg yReg : RegionName)
+    (blockSize : Nat) (hN : 0 < blockSize)
+    (s : BlockState) (xs : Fin blockSize → ℝ)
+    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
+             (fun idx : TileIndex [blockSize] => xs idx.1)) :
+    ComputeKernel.ComputeCorrect
+      (stableSoftmaxKernel xReg yReg blockSize)
+      (fun s0 s' =>
+        s0 = s →
+        ∀ idx : TileIndex [blockSize],
+          TensorView.observe (some s')
+              (programTileView s yReg blockSize) idx
+            = some (softmaxSpec xs idx)) := by
+  sorry
+```
+
+The two surfaces are deliberately parallel — `ComputeRefine` for kernel pairs,
+`ComputeCorrect` for kernel ↔ math spec. Both project through `toAlgorithm?`
+and reuse the same `Kernel.Correct` / `Kernel.Refine` proof underneath.
+
+Worked single-kernel correctness examples live in
+[`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean),
+[`VeriTile/Examples/RowWise.lean`](./VeriTile/Examples/RowWise.lean),
+[`VeriTile/Examples/OnlineSoftmax.lean`](./VeriTile/Examples/OnlineSoftmax.lean).
 
 ## Other Examples
 
