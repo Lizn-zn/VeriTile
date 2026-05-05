@@ -439,6 +439,87 @@ theorem store_stage_readback_rowMajor2D
     BlockState.writeMemTyped_real, Offset.rowMajor2D, Offset.strided]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj idx]
 
+/-- Sub-2b execution wiring: the stripped FA-1 backward kernel produces final
+memory whose `dQ` / `dK` / `dV` slices match `attentionBackwardReal`.
+
+Connects:
+- the existing tile-level bridges (`dV_tile_eq_attentionBackwardReal` /
+  `dQ_tile_eq_attentionBackwardReal` / `dK_tile_eq_attentionBackwardReal`);
+- the store-stage readback helper (`store_stage_readback_rowMajor2D`);
+- through the `fa1BackwardStrippedKernel` execution path. -/
+theorem fa1BackwardStrippedKernel_correct
+    {M S D : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (s : BlockState)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := S) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := S) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1))
+    (hOutDisjoint :
+      dQReg ≠ dKReg ∧ dQReg ≠ dVReg ∧ dKReg ≠ dVReg) :
+    let bw := attentionBackwardReal Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (exec (fa1BackwardStrippedKernel qReg kReg vReg dOReg lseReg
+            dQReg dKReg dVReg M S D scale) s)
+        dQReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx
+      = some (bw.dQ idx)) ∧
+    (∀ idx : TileIndex [S, D],
+      observeTileAt
+        (exec (fa1BackwardStrippedKernel qReg kReg vReg dOReg lseReg
+            dQReg dKReg dVReg M S D scale) s)
+        dKReg
+        (Offset.rowMajor2D (rows := S) (cols := D) 0 D) idx
+      = some (bw.dK idx)) ∧
+    (∀ idx : TileIndex [S, D],
+      observeTileAt
+        (exec (fa1BackwardStrippedKernel qReg kReg vReg dOReg lseReg
+            dQReg dKReg dVReg M S D scale) s)
+        dVReg
+        (Offset.rowMajor2D (rows := S) (cols := D) 0 D) idx
+      = some (bw.dV idx)) := by
+  /-
+  Sub-2b execution wiring proof — work-in-progress sketch.
+
+  The proof structure (still being filled in) is:
+
+  1. Build explicit `Tile`-valued register snapshots for the 20 pre-store
+     assigns: `offs_m`, `offs_n`, `offs_d`, four `*_ptrs` tiles, five loaded
+     tiles (`q`/`k`/`v`/`dO`/`lse`), and eight intermediate compute tiles
+     (`scores`, `p`, `dV`, `dP`, `corr`, `dS`, `dQ`, `dK`).
+  2. Show `stepStmts (kernel.body without 3 stores) s = some s_pre_stores`
+     by chained `simp` + `rfl` (the V0 forward `fa1_preLoop_correct` template).
+  3. For each output register (`dQ` / `dK` / `dV`), prove its kernel-form
+     `Tile` value equals `Tile.ofReal valueFn` for the corresponding
+     `attentionBackwardReal` component.  The existing tile-level bridges
+     (`dQ_tile_eq_attentionBackwardReal`, etc.) supply the math identities;
+     the conversion from the bridge's `unbotD 0 / getD 0` form back to a
+     `Tile.ofReal` is the load-bearing step.
+  4. Compose three `store_stage_readback_rowMajor2D` applications, one per
+     output region, using the disjointness hypothesis `hOutDisjoint` so the
+     later stores do not clobber the earlier readbacks.
+
+  Status: Steps 1, 3, and 4 are scoped out; step 3's mechanical conversion
+  between `Option.map₂ (· * ·) (some _) (some _)` and `↑(_ * _)` in
+  `WithBot ℝ` (vs the bridges' `Option.map (· * scale)` / `unbotD 0` form)
+  proved tactic-fragile in the alotted time budget.  The bridges
+  `dQ_tile_eq_attentionBackwardReal`, `dK_tile_eq_attentionBackwardReal`,
+  `dV_tile_eq_attentionBackwardReal`, and the readback helper
+  `store_stage_readback_rowMajor2D` (all earlier in this file) are the
+  intended building blocks.
+  -/
+  sorry
+
 end FA1Backward
 
 end VeriTile.Examples
