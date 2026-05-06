@@ -6,9 +6,11 @@ variant, and proof-status tracked.
 
 > Status (2026-05-05): **TritonBench-G v1** picked as the external anchor.
 > Static coverage analysis landed at
-> [`tritonbench_coverage.md`](./tritonbench_coverage.md). Per-kernel manifest
-> and proof-status table still to be designed once the first external-anchor
-> kernel ports.
+> [`tritonbench_coverage.md`](./tritonbench_coverage.md). Imported upstream
+> Python kernels go under [`tritonbench_g/`](./tritonbench_g/); Lean
+> ports live under `VeriTile/Examples/`. Per-kernel manifest is now
+> [`scripts/kernel-manifest.tsv`](../scripts/kernel-manifest.tsv); per-port
+> proof-status table will populate as ports land.
 
 ## Current state
 

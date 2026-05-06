@@ -15,20 +15,21 @@ block components.
 ## Layout
 
 ```text
-docs/verso/
-├── lakefile.toml                 ← Lake project + verso dep
-├── lean-toolchain                ← v4.30.0-rc2
-├── VeriTileOverview.lean         ← #doc (Page) "..." => …  (the deck content)
-├── VeriTileSite.lean             ← Site + slide-style theme
-├── Main.lean                     ← `blogMain` entrypoint
+verso/
+├── lakefile.toml                       ← Lake project + verso dep
+├── lean-toolchain                      ← v4.30.0-rc2
+├── VeriTileOverview.lean               ← #doc (Page) "..." => …  (the deck content)
+├── VeriTileSite.lean                   ← Site + slide-style theme
+├── Main.lean                           ← `blogMain` entrypoint
+├── VeriTile_Architecture_Overview.html ← pre-rendered deck for quick preview
 └── static_files/
-    ├── slides.css                ← Slide presentation CSS
-    └── slides.js                 ← Arrow-key navigation
+    ├── slides.css                      ← Slide presentation CSS
+    └── slides.js                       ← Arrow-key navigation
 ```
 
 ## Build
 
-From `docs/verso/`:
+From `verso/`:
 
 ```bash
 # First time: fetch Verso (large download, takes a few minutes)
@@ -78,6 +79,6 @@ Inside a card, the first `**bold sentence**` becomes the labelled cap
   emits them as plain `<pre><code>`.
 - If Verso's site theme ever changes its top-level wrapper class, the
   CSS rule `header, footer { display: none; }` may need to be adjusted.
-- The earlier remark.js single-file deck lives at
-  `docs/VeriTile_Architecture_Overview.html` — same content, no Lean
+- A pre-rendered single-file deck lives next to this README at
+  `VeriTile_Architecture_Overview.html` — same content, no Lean
   toolchain required.
