@@ -225,8 +225,9 @@ The first concrete atomic slice is intentionally narrow:
 This is `Limited` atomic support, not a full concurrent executor.
 `tl.atomic_xchg` and `tl.atomic_cas` now project to the return-valued
 `Stmt.atomicRMW` algorithm marker, with the single-cell RMW semantics living in
-`RMWOp.apply` / `RMWTrace.applyLinearized`. Their executable statement
-semantics and stateful trace emission are the next #82 slices. Other Triton
+`RMWOp.apply` / `RMWTrace.applyLinearized`. They also have executable
+single-program statement semantics and stateful trace emission through
+`Stmt.atomicTraceEvents` / `Kernel.AtomicTraceStateful`. Other Triton
 atomic surfaces (`tl.atomic_max`, `tl.atomic_min`, `tl.atomic_and`,
 `tl.atomic_or`, and `tl.atomic_xor`) currently lower to
 `ComputeStmt.effectMarker` and fail projection with `requiresEffectProjection`.

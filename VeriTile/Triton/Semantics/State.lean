@@ -61,6 +61,162 @@ def eraseDType : MemCell → MemCell
 
 end MemCell
 
+/-- Extensible read-modify-write event payload used by atomic traces and
+single-cell RMW semantics. -/
+structure RMWEvent where
+  cell : RegionName × Nat
+  op : RMWOp
+  input : MemCell
+  extraInput : Option MemCell := none
+  observed : Option MemCell := none
+  result : Option MemCell := none
+
+namespace RMWEvent
+
+def region (event : RMWEvent) : RegionName :=
+  event.cell.1
+
+def offset (event : RMWEvent) : Nat :=
+  event.cell.2
+
+def value (event : RMWEvent) : MemCell :=
+  event.input
+
+def withObservedResult (event : RMWEvent) (old : MemCell) : RMWEvent :=
+  { event with observed := some old, result := some old }
+
+end RMWEvent
+
+namespace RMWOp
+
+/--
+Apply one linearized single-cell RMW event.
+
+This is algorithm-layer semantics. In particular, CAS compares `MemCell`s by
+mathematical equality, not by a hardware bit-pattern predicate. Bit-level
+fidelity stays in the compute-gap/testing layer.
+-/
+noncomputable def apply : RMWOp → MemCell → RMWEvent → Option (MemCell × RMWEvent) := by
+  classical
+  intro op old event
+  cases op with
+  | xchg =>
+      exact some (event.input, event.withObservedResult old)
+  | cas =>
+      match event.extraInput with
+      | none => exact none
+      | some replacement =>
+          let event' := event.withObservedResult old
+          if old = event.input then
+            exact some (replacement, event')
+          else
+            exact some (old, event')
+  | add => exact none
+  | max => exact none
+  | min => exact none
+
+@[simp] theorem apply_xchg (old input : MemCell) (cell : RegionName × Nat) :
+    RMWOp.apply .xchg old
+        { cell := cell, op := .xchg, input := input } =
+      some (input,
+        { cell := cell, op := .xchg, input := input,
+          observed := some old, result := some old }) := rfl
+
+@[simp] theorem apply_cas_missing_replacement
+    (old cmp : MemCell) (cell : RegionName × Nat) :
+    RMWOp.apply .cas old
+        { cell := cell, op := .cas, input := cmp } = none := rfl
+
+theorem apply_cas_success
+    (old replacement : MemCell) (cell : RegionName × Nat) :
+    RMWOp.apply .cas old
+        { cell := cell, op := .cas, input := old,
+          extraInput := some replacement } =
+      some (replacement,
+        { cell := cell, op := .cas, input := old,
+          extraInput := some replacement,
+          observed := some old, result := some old }) := by
+  simp [apply, RMWEvent.withObservedResult]
+
+theorem apply_cas_failure
+    (old cmp replacement : MemCell) (cell : RegionName × Nat)
+    (h : old ≠ cmp) :
+    RMWOp.apply .cas old
+        { cell := cell, op := .cas, input := cmp,
+          extraInput := some replacement } =
+      some (old,
+        { cell := cell, op := .cas, input := cmp,
+          extraInput := some replacement,
+          observed := some old, result := some old }) := by
+  simp [apply, RMWEvent.withObservedResult, if_neg h]
+
+end RMWOp
+
+namespace RMWTrace
+
+/--
+Apply a per-cell linearization list.
+
+The input list is the chosen linearization order. The returned list is in the
+same order, with `observed` / `result` fields filled by `RMWOp.apply`.
+-/
+noncomputable def applyLinearized :
+    MemCell → List RMWEvent → Option (MemCell × List RMWEvent)
+  | initial, [] => some (initial, [])
+  | initial, event :: events => do
+      let (cell', event') ← RMWOp.apply event.op initial event
+      let (final, events') ← applyLinearized cell' events
+      some (final, event' :: events')
+
+@[simp] theorem applyLinearized_nil (initial : MemCell) :
+    applyLinearized initial [] = some (initial, []) := rfl
+
+@[simp] theorem applyLinearized_cons
+    (initial next final : MemCell)
+    (event event' : RMWEvent) (events events' : List RMWEvent)
+    (hStep : RMWOp.apply event.op initial event = some (next, event'))
+    (hTail : applyLinearized next events = some (final, events')) :
+    applyLinearized initial (event :: events) =
+      some (final, event' :: events') := by
+  simp [applyLinearized, hStep, hTail]
+
+theorem applyLinearized_xchg_two
+    (old first second : MemCell) (cell : RegionName × Nat) :
+    applyLinearized old
+        [ { cell := cell, op := .xchg, input := first }
+        , { cell := cell, op := .xchg, input := second } ] =
+      some (second,
+        [ { cell := cell, op := .xchg, input := first,
+            observed := some old, result := some old }
+        , { cell := cell, op := .xchg, input := second,
+            observed := some first, result := some first } ]) := by
+  simp [applyLinearized]
+
+theorem applyLinearized_cas_success
+    (old replacement : MemCell) (cell : RegionName × Nat) :
+    applyLinearized old
+        [ { cell := cell, op := .cas, input := old,
+            extraInput := some replacement } ] =
+      some (replacement,
+        [ { cell := cell, op := .cas, input := old,
+            extraInput := some replacement,
+            observed := some old, result := some old } ]) := by
+  simp [applyLinearized, RMWOp.apply_cas_success]
+
+theorem applyLinearized_cas_failure
+    (old cmp replacement : MemCell) (cell : RegionName × Nat)
+    (h : old ≠ cmp) :
+    applyLinearized old
+        [ { cell := cell, op := .cas, input := cmp,
+            extraInput := some replacement } ] =
+      some (old,
+        [ { cell := cell, op := .cas, input := cmp,
+            extraInput := some replacement,
+            observed := some old, result := some old } ]) := by
+  simp [applyLinearized, RMWOp.apply_cas_failure, h]
+
+end RMWTrace
+
 /--
 A block-level execution state.
 
@@ -201,6 +357,26 @@ def writeMemTyped (s : BlockState) (dtype : TileDType)
       { s with mem := fun r o =>
           if r = region ∧ o = offset then MemCell.of .blockPtr v else s.mem r o }
 
+/-- Write a dynamically typed cell exactly. Used by order-sensitive atomics
+whose replacement value is already packaged as a `MemCell`. -/
+def writeCell (s : BlockState) (region : RegionName) (offset : Nat)
+    (cell : MemCell) : BlockState :=
+  { s with mem := fun r o =>
+      if r = region ∧ o = offset then cell else s.mem r o }
+
+@[simp] theorem writeCell_regs (s : BlockState) (region : RegionName)
+    (offset : Nat) (cell : MemCell) (dtype : TileDType) (shape : TileShape)
+    (name : RegName) :
+    (s.writeCell region offset cell).regs dtype shape name = s.regs dtype shape name := rfl
+
+@[simp] theorem writeCell_pids (s : BlockState) (region : RegionName)
+    (offset : Nat) (cell : MemCell) :
+    (s.writeCell region offset cell).pids = s.pids := rfl
+
+@[simp] theorem writeCell_pid (s : BlockState) (region : RegionName)
+    (offset : Nat) (cell : MemCell) :
+    (s.writeCell region offset cell).pid = s.pid := rfl
+
 @[simp] theorem writeMem_regs (s : BlockState) (region : RegionName)
     (offset : Nat) (v : ℝ) (dtype : TileDType) (shape : TileShape)
     (name : RegName) :
@@ -293,6 +469,48 @@ def defaultCarrier : (dtype : TileDType) → TileCarrier dtype
   | .blockPtr =>
       { region := "", baseOffset := 0, parentShape := [], blockShape := [],
         strides := [], offsets := [] }
+
+def rmwReturnedValue (dtype : TileDType) (event : RMWEvent) : TileCarrier dtype :=
+  match event.result with
+  | some cell =>
+      match cell.readAs dtype with
+      | some value => value
+      | none => defaultCarrier dtype
+  | none => defaultCarrier dtype
+
+/-- Apply one order-sensitive RMW to a concrete memory cell, returning the
+updated state, returned old value, and populated event. -/
+noncomputable def atomicRMWAt (s : BlockState) (op : RMWOp) (dtype : TileDType)
+    (region : RegionName) (offset : Nat)
+    (input : TileCarrier dtype) (extraInput : Option (TileCarrier dtype)) :
+    Option (BlockState × TileCarrier dtype × RMWEvent) := do
+  let event : RMWEvent :=
+    { cell := (region, offset)
+      op := op
+      input := MemCell.of dtype input
+      extraInput := extraInput.map (MemCell.of dtype) }
+  let (nextCell, event') ← RMWOp.apply op (s.mem region offset) event
+  let ret := rmwReturnedValue dtype event'
+  some (s.writeCell region offset nextCell, ret, event')
+
+theorem atomicRMWAt_pid
+    {s s' : BlockState} {op : RMWOp} {dtype : TileDType}
+    {region : RegionName} {offset : Nat}
+    {input : TileCarrier dtype} {extraInput : Option (TileCarrier dtype)}
+    {ret : TileCarrier dtype} {event : RMWEvent}
+    (h : s.atomicRMWAt op dtype region offset input extraInput =
+      some (s', ret, event)) :
+    s'.pid = s.pid := by
+  unfold atomicRMWAt at h
+  cases hApply : RMWOp.apply op (s.mem region offset)
+      { cell := (region, offset), op := op, input := MemCell.of dtype input,
+        extraInput := extraInput.map (MemCell.of dtype) } with
+  | none => simp [hApply] at h
+  | some out =>
+      rcases out with ⟨nextCell, event'⟩
+      simp [hApply] at h
+      rcases h with ⟨rfl, _hret, _hevent⟩
+      simp
 
 /-- Read a typed scalar for operational `tl.load`. Floating channels keep the
 current finite-fallback semantics; non-floating channels read exact typed cells

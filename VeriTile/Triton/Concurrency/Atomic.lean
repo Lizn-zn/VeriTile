@@ -58,6 +58,35 @@ def atomicTraceEvent (tid : ThreadId) (region : RegionName) (offset : Nat)
         op := .add
         input := MemCell.of dtype value } }
 
+def atomicRMWTraceEvent (tid : ThreadId) (event : RMWEvent) : TraceEvent :=
+  { tid := tid, event := .rmw event }
+
+private noncomputable def foldAtomicRMWTraceIndices
+    {dtype : TileDType} {shape : TileShape}
+    (tid : ThreadId) (op : RMWOp)
+    (regionFn : TileIndex shape → RegionName)
+    (offsetFn : TileIndex shape → Nat)
+    (inputFn : TileIndex shape → TileCarrier dtype)
+    (extraFn : Option (TileIndex shape → TileCarrier dtype))
+    (active : TileIndex shape → Bool)
+    (indices : List (TileIndex shape))
+    (s : BlockState) : Option (BlockState × Trace) := by
+  classical
+  induction indices generalizing s with
+  | nil =>
+      exact some (s, [])
+  | cons i rest ih =>
+      if active i then
+        let extra := extraFn.map (fun f => f i)
+        match s.atomicRMWAt op dtype (regionFn i) (offsetFn i) (inputFn i) extra with
+        | none => exact none
+        | some (s', _, event) =>
+            match ih s' with
+            | none => exact none
+            | some (final, tail) => exact some (final, atomicRMWTraceEvent tid event :: tail)
+      else
+        exact ih s
+
 /--
 Trace events emitted by one statement in one state.
 
@@ -93,6 +122,34 @@ noncomputable def atomicTraceEvents (tid : ThreadId) (s : BlockState) : Stmt →
               some (atomicTraceEvent tid bp.region (bp.address idx) dtype (values.data i))
             else
               none
+  | @Stmt.atomicRMW op _ shape mem input extraInput mask _ => do
+      let inputs ← evalOp input s
+      let extras ←
+        match extraInput with
+        | none => some none
+        | some extra => (evalOp extra s).map some
+      let active ← evalMask s mask
+      let extraFn := extras.map fun extraTile => fun i : TileIndex shape => extraTile.data i
+      let (_, trace) ←
+        match mem with
+        | .region region off => do
+            let offsets ← evalOp off s
+            foldAtomicRMWTraceIndices tid op (fun _ => region) (fun i => offsets.data i)
+              (fun i => inputs.data i) extraFn active (TileShape.allIndices shape) s
+        | .ptr ptr => do
+            let ptrs ← evalOp ptr s
+            foldAtomicRMWTraceIndices tid op (fun i => (ptrs.data i).1) (fun i => (ptrs.data i).2)
+              (fun i => inputs.data i) extraFn active (TileShape.allIndices shape) s
+        | .blockPtr ptr boundaryCheck => do
+            let ptrs ← evalOp ptr s
+            foldAtomicRMWTraceIndices tid op
+              (fun i => (ptrs.data i).region)
+              (fun i => (ptrs.data i).address (TileShape.indexToList shape i))
+              (fun i => inputs.data i) extraFn
+              (fun i =>
+                active i && (ptrs.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
+              (TileShape.allIndices shape) s
+      some trace
   | _ => some []
 
 /-- Relational wrapper for statement-level atomic trace extraction. -/
@@ -111,6 +168,22 @@ theorem atomicTraceEvents_atomicAdd_region_none
       some ((TileShape.allIndices shape).filterMap fun i =>
         some (Stmt.atomicTraceEvent tid region (offsets.data i) dtype (values.data i))) := by
   simp [atomicTraceEvents, evalMask, hOffsets, hValues]
+
+theorem atomicTraceEvents_atomicRMW_xchg_real_scalar_const
+    (tid : ThreadId) (s : BlockState) (region : RegionName)
+    (input : ℝ) :
+    Stmt.atomicTraceEvents tid s
+        (Stmt.atomicRMW .xchg .real []
+          (MemAccess.region region (Op.constNat 0))
+          (Op.const input) none MaskOpt.none none) =
+      some
+        [Stmt.atomicRMWTraceEvent tid
+          { cell := (region, 0)
+            op := .xchg
+            input := MemCell.real input
+            observed := some (s.mem region 0)
+            result := some (s.mem region 0) }] := by
+  rfl
 
 /-- Trace emitted by an unmasked region-addressed `atomic_add` whose offset and
 payload tiles are read from registers. -/
