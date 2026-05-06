@@ -1152,8 +1152,10 @@ exactly one full partition of KV blocks and the initial `dQ` buffer is zero,
 then the merged `dQ` tile reads back `attentionBackwardReal.dQ`.
 
 The per-program trace theorem above supplies the concrete trace shape for a
-block program; this theorem is the final grid-level composition point. -/
-theorem fa1BackwardAtomicDQKernel_gridMerged_dQ_correct
+block program.  This raw merge helper is intentionally private: the public
+surface is `fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct`, which consumes
+the #88 launcher witness instead of raw `frames` / `atomicTrace` arguments. -/
+private theorem fa1BackwardAtomicDQKernel_gridMerged_dQ_correct
     {M D Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (scale : ℝ) (s : BlockState)
