@@ -5,16 +5,21 @@ namespace VeriTile.Bench.TritonBenchG.VectorAdditionCustom
 
 open VeriTile.Triton
 
-/-- Basic VeriTile DSL port of `vector_addition_custom.py`'s `_add_kernel`. -/
-def addKernel (aReg bReg cReg : RegionName) (size blockSize : Nat) :
+/-- Faithful 1:1 transcription of `vector_addition_custom.py`'s `_add_kernel`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `=` → Lean `:=` for register binding.
+- Python pointer args → Lean `RegionName` injected via `$(...)`.
+- Python `BLOCK: tl.constexpr` → Lean `Nat` parameter. -/
+def _add_kernel
+    (A B C : RegionName)
+    (size BLOCK : Nat) :
     ComputeKernel := triton {
-  pid := tl.program_id(0)
-  offsets := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  mask := offsets < $(size)
-  a := tl.load($(aReg) + offsets, mask=mask)
-  b := tl.load($(bReg) + offsets, mask=mask)
-  out := a + b
-  tl.store($(cReg) + offsets, out, mask=mask)
+  prog_id := tl.program_id(0)
+  offs := prog_id * $(BLOCK) + tl.arange(0, $(BLOCK))
+  a := tl.load($(A) + offs, mask=offs < $(size))
+  b := tl.load($(B) + offs, mask=offs < $(size))
+  tl.store($(C) + offs, a + b, mask=offs < $(size))
 }
 
 end VeriTile.Bench.TritonBenchG.VectorAdditionCustom

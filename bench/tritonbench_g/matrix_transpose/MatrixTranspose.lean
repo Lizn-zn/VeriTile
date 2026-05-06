@@ -5,17 +5,26 @@ namespace VeriTile.Bench.TritonBenchG.MatrixTranspose
 
 open VeriTile.Triton
 
-/-- Basic VeriTile DSL port of `matrix_transpose.py`'s `kernel`. -/
-def transposeKernel
-    (matrixReg outReg : RegionName)
-    (matrixStrideX matrixStrideY outStrideX outStrideY sizeM dHead : Nat) :
+/-- Faithful 1:1 transcription of `matrix_transpose.py`'s `kernel`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `=` → Lean `:=` for register binding.
+- Python pointer args → Lean `RegionName` injected via `$(...)`.
+- Python `SIZE_M: tl.constexpr` / `D_HEAD: tl.constexpr` → Lean `Nat`
+  parameters. -/
+def kernel
+    (M Out : RegionName)
+    (matrix_stridex matrix_stridey out_stridex out_stridey
+      SIZE_M D_HEAD : Nat) :
     ComputeKernel := triton {
-  m := tl.arange(0, $(sizeM))
-  d := tl.arange(0, $(dHead))
-  matrixOffsets := (d[None, :]) * $(matrixStrideY) + (m[:, None]) * $(matrixStrideX)
-  outOffsets := (d[None, :]) * $(outStrideX) + (m[:, None]) * $(outStrideY)
-  x := tl.load($(matrixReg) + matrixOffsets)
-  tl.store($(outReg) + outOffsets, x)
+  size_m_arange := tl.arange(0, $(SIZE_M))
+  d_head_arange := tl.arange(0, $(D_HEAD))
+  matrix_ptr := $(M) + d_head_arange[None, :] * $(matrix_stridey)
+                + size_m_arange[:, None] * $(matrix_stridex)
+  out_ptr := $(Out) + d_head_arange[None, :] * $(out_stridex)
+             + size_m_arange[:, None] * $(out_stridey)
+  matrix := tl.load(matrix_ptr)
+  tl.store(out_ptr, matrix)
 }
 
 end VeriTile.Bench.TritonBenchG.MatrixTranspose

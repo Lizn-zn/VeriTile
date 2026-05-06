@@ -5,17 +5,27 @@ namespace VeriTile.Bench.TritonBenchG.AddExample
 
 open VeriTile.Triton
 
-/-- Basic VeriTile DSL port of `add_example.py`'s `add_kernel`. -/
-def addKernel (in0Reg in1Reg outReg : RegionName) (nElements blockSize : Nat) :
+/-- Faithful 1:1 transcription of `add_example.py`'s `add_kernel`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `=` → Lean `:=` for register binding.
+- Python pointer args → Lean `RegionName` injected via `$(...)`.
+- Python `BLOCK_SIZE: tl.constexpr` annotation → Lean `Nat` parameter
+  (the `tl.constexpr` is implicit in Lean params).
+
+Everything else is verbatim from the upstream kernel. -/
+def add_kernel
+    (in_ptr0 in_ptr1 out_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  pid := tl.program_id(0)
-  blockStart := pid * $(blockSize)
-  offsets := blockStart + tl.arange(0, $(blockSize))
-  mask := offsets < $(nElements)
-  x := tl.load($(in0Reg) + offsets, mask=mask)
-  y := tl.load($(in1Reg) + offsets, mask=mask)
-  out := x + y
-  tl.store($(outReg) + offsets, out, mask=mask)
+  pid := tl.program_id(axis=0)
+  block_start := pid * $(BLOCK_SIZE)
+  offsets := block_start + tl.arange(0, $(BLOCK_SIZE))
+  mask := offsets < $(n_elements)
+  x := tl.load($(in_ptr0) + offsets, mask=mask)
+  y := tl.load($(in_ptr1) + offsets, mask=mask)
+  output := x + y
+  tl.store($(out_ptr) + offsets, output, mask=mask)
 }
 
 end VeriTile.Bench.TritonBenchG.AddExample

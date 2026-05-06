@@ -22,11 +22,26 @@ The Lean filename is the **CamelCase form** of the directory name (e.g. `vector_
 
 A port goes through three stages, tracked per-kernel in `README.md`:
 
-1. **DSL port** — `<KernelName>.lean` defines the kernel via `triton { ... }` syntax and compiles. (Today: 15 / 184.)
+1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes only: `=` → `:=`, pointer args → `RegionName` injected via `$(...)`, `tl.constexpr` annotation → Lean `Nat`/`Bool` parameter, Real Lean params → `$ℝ(...)`. The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 5 / 15.**
 2. **Spec** — Real-valued mathematical specification of the kernel's intended output is written.
 3. **Verification** — `ComputeKernel.ComputeCorrect` / `ComputeKernel.ComputeRefine` theorem is proved and registered in `scripts/kernel-manifest.tsv`.
 
-Stage 1 alone is a useful artifact (it confirms the DSL surface covers this kernel's primitives), but the project's verification claim only kicks in at stage 3.
+Stage 1 is the verbatim transcription contract; reaching stage 3 (verification) requires both the DSL gap to close and a proof to land.
+
+## DSL gaps blocking faithful ports
+
+Distinct surface gaps surfaced by the current 15 transcriptions (each port's docstring also records its own reason). Closing any one of these unblocks the ports listed alongside it:
+
+| Gap | Affected ports |
+|---|---|
+| `tl.program_id(axis=0)` keyword form | `add_example`, `add_value`, `sin_computation`, `triton_mul2`, `vector_addition` |
+| `tl.max(x, 0)` positional-axis form | `logsumexp_fwd` |
+| `tl.max(..., return_indices=True)` tuple return + multi-binding `a, b := ...` | `max_reduction` (third kernel only; first two compile) |
+| Real literal `0` / `0.0` written directly inside `tl.where` / arithmetic | `relu_triton_kernel` |
+| `tl.math.*` (libdevice) namespace | `sin_kernel` |
+| `(x).to(tl.float32)` algorithm-layer cast | `cosine_compute` |
+
+Fixing these is L3 operator-coverage work; track under #15 / #86 surfaced gaps. Re-run `bench/check_ports.sh` after each gap closes to flip the affected ports green.
 
 ## Build
 
