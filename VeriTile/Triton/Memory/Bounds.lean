@@ -91,6 +91,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .atan a => a.MemorySafe bounds
   | .cosh a => a.MemorySafe bounds
   | .sinh a => a.MemorySafe bounds
+  | .erf a => a.MemorySafe bounds
   | .lt _ _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .le _ _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .eq _ _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds

@@ -116,6 +116,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .atan a => a.RespectsRegionTyping Γ
   | .cosh a => a.RespectsRegionTyping Γ
   | .sinh a => a.RespectsRegionTyping Γ
+  | .erf a => a.RespectsRegionTyping Γ
   | .lt _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .le _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .eq _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ

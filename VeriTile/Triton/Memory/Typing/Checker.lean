@@ -156,6 +156,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .atan a => a.check ctx
   | .cosh a => a.check ctx
   | .sinh a => a.check ctx
+  | .erf a => a.check ctx
   | .lt _ _ a b => a.check ctx *> b.check ctx
   | .le _ _ a b => a.check ctx *> b.check ctx
   | .eq _ _ a b => a.check ctx *> b.check ctx

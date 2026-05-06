@@ -141,12 +141,18 @@ Supported channels:
 - `tl.atan`
 - `tl.cosh`
 - `tl.sinh`
+- `tl.erf`
+- `tl.extra.cuda.libdevice.erf`
 - `tl.log2` (Real semantics: `tl.log(x) / log(2)`)
 - `tl.exp2` (Real semantics: `tl.exp(x * log(2))`)
 - `tl.abs`
 
 These operate on the `.real` channel. `tl.abs(x)` is desugared to
 `tl.where(x < 0, 0 - x, x)` in the current real-valued semantics.
+`tl.extra.cuda.libdevice.erf(x)` is an algorithm-layer alias for mathematical
+`erf(x)` using the standard integral definition; it is not a proof of CUDA
+libdevice's bit-level approximation, which belongs to the ComputeCorrect gap
+contract path (#59).
 
 ### Reductions
 
@@ -365,7 +371,7 @@ current semantic contract.
 | Boolean ops | Supported | `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus `&`, `|`, `~` mask spellings |
 | Nat bitwise ops | Limited | `&`, `|`, `^`, `<<`, `>>` on `.nat`; no `.nat ~` and no signed fixed-width bitwise semantics yet |
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
-| Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
+| Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf` |
 | Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |
 | Prefix scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` over `.real` tiles; no arbitrary combine functions |
 | Index/order ops | Limited | `tl.argmax`, `tl.argmin`, `tl.sort` over `.real` tiles with static `axis=N`; arg ties return the smallest axis index, sort is ascending |

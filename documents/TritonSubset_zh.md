@@ -125,12 +125,16 @@ Stmt : Type
 - `tl.atan`
 - `tl.cosh`
 - `tl.sinh`
+- `tl.erf`
+- `tl.extra.cuda.libdevice.erf`
 - `tl.log2`(Real 语义为 `tl.log(x) / log(2)`)
 - `tl.exp2`(Real 语义为 `tl.exp(x * log(2))`)
 - `tl.abs`
 
 这些都作用于 `.real` channel。`tl.abs(x)` 当前在实数语义里降为
-`tl.where(x < 0, 0 - x, x)`。
+`tl.where(x < 0, 0 - x, x)`。`tl.extra.cuda.libdevice.erf(x)` 在算法层是
+数学 `erf(x)` 的 alias,使用标准积分定义;它不是 CUDA libdevice bit-level
+近似实现的证明,后者属于 ComputeCorrect gap contract 路径(#59)。
 
 ### Reduction
 
@@ -329,7 +333,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | bool op | Supported | `tl.logical_and`、`tl.logical_or`、`tl.logical_not`,以及 `&`、`|`、`~` mask spelling |
 | Nat bitwise op | Limited | `.nat` 上的 `&`, `|`, `^`, `<<`, `>>`;暂不支持 `.nat ~` 和 signed fixed-width bitwise 语义 |
 | pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
-| unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh` |
+| unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf` |
 | reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis` / `keep_dims` |
 | prefix scan | Limited | `.real` tile 上的 `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)`;不支持 arbitrary combine function |
 | index/order op | Limited | `.real` tile 上的 `tl.argmax`, `tl.argmin`, `tl.sort`,需要静态 `axis=N`;arg tie 返回最小 axis index,sort 升序 |

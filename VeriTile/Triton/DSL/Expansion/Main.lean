@@ -38,8 +38,8 @@ Conventions:
 Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
 `tl.arange(start, end)`, `tl.exp(_)`, `tl.exp2(_)`, `tl.log(_)`, `tl.log2(_)`,
 `tl.sigmoid(_)`, `tl.sqrt(_)`, `tl.tanh(_)`, `tl.sin(_)`, `tl.cos(_)`,
-`tl.tan(_)`, `tl.atan(_)`, `tl.cosh(_)`, `tl.sinh(_)`, `tl.max(_)`,
-`tl.sum(_)`, `tl.load(ptrExpr)`,
+`tl.tan(_)`, `tl.atan(_)`, `tl.cosh(_)`, `tl.sinh(_)`, `tl.erf(_)`,
+`tl.extra.cuda.libdevice.erf(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load(ptrExpr)`,
 binary `+ - * /`, parens, identifiers, numerals, antiquotation (`$(t)` for
 `Nat` in numeric context / `RegionName` in pointer context, `$ℝ(t)` for `ℝ`).
 Pointer arithmetic supports `ptr + nat` and `nat + ptr`.
@@ -192,6 +192,14 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.sinh"
       pure ⟨← `(Op.sinh $e'.term), .real, e'.shape, none⟩
+  | `(tritonExpr| tl.erf($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.erf"
+      pure ⟨← `(Op.erf $e'.term), .real, e'.shape, none⟩
+  | `(tritonExpr| tl.extra.cuda.libdevice.erf($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.extra.cuda.libdevice.erf"
+      pure ⟨← `(Op.erf $e'.term), .real, e'.shape, none⟩
   | `(tritonExpr| tl.abs($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.abs"

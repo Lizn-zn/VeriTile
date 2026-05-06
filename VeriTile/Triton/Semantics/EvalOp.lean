@@ -70,6 +70,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .atan a, s => return Tile.uop WithBot.realAtan (← evalOp a s)
   | .cosh a, s => return Tile.uop WithBot.realCosh (← evalOp a s)
   | .sinh a, s => return Tile.uop WithBot.realSinh (← evalOp a s)
+  | .erf a, s => return Tile.uop WithBot.realErf (← evalOp a s)
   | .lt h bc a b, s => return Tile.cop h.lt bc (← evalOp a s) (← evalOp b s)
   | .le h bc a b, s => return Tile.cop h.le bc (← evalOp a s) (← evalOp b s)
   | .eq h bc a b, s => return Tile.cop h.eq bc (← evalOp a s) (← evalOp b s)

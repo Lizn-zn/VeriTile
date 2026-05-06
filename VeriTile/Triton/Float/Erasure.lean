@@ -104,6 +104,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .atan a => .atan a.eraseDType
   | .cosh a => .cosh a.eraseDType
   | .sinh a => .sinh a.eraseDType
+  | .erf a => .erf a.eraseDType
   | .lt h bc a b => .lt h.eraseDType bc a.eraseDType b.eraseDType
   | .le h bc a b => .le h.eraseDType bc a.eraseDType b.eraseDType
   | .eq h bc a b => .eq h.eraseDType bc a.eraseDType b.eraseDType

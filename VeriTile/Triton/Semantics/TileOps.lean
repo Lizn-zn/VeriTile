@@ -12,6 +12,7 @@ import Mathlib.Analysis.Complex.Trigonometric
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.Basic
 import Mathlib.Analysis.SpecialFunctions.Trigonometric.Arctan
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+import VeriTile.Math.RealErf
 import VeriTile.Triton.Semantics.State
 
 namespace VeriTile.Triton
@@ -134,6 +135,10 @@ noncomputable def WithBot.realSinh : WithBot ℝ → WithBot ℝ
   | none   => none
   | some r => some (Real.sinh r)
 
+noncomputable def WithBot.realErf : WithBot ℝ → WithBot ℝ
+  | none   => some (-1)        -- erf(-∞) = -1
+  | some r => some (VeriTile.Math.realErf r)
+
 noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
   | .sum, xs => xs.foldl WithBot.realAdd ((0 : ℝ) : WithBot ℝ)
   | .prod, xs => xs.foldl WithBot.realMul ((1 : ℝ) : WithBot ℝ)
@@ -167,6 +172,8 @@ noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
     WithBot.realCosh (some r) = some (Real.cosh r) := rfl
 @[simp] theorem WithBot.realSinh_some (r : ℝ) :
     WithBot.realSinh (some r) = some (Real.sinh r) := rfl
+@[simp] theorem WithBot.realErf_some (r : ℝ) :
+    WithBot.realErf (some r) = some (VeriTile.Math.realErf r) := rfl
 
 @[simp] theorem WithBot.realExp_bot :
     WithBot.realExp (⊥ : WithBot ℝ) = ((0 : ℝ) : WithBot ℝ) := rfl
@@ -178,6 +185,8 @@ noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
     WithBot.realTanh (⊥ : WithBot ℝ) = ((-1 : ℝ) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realAtan_bot :
     WithBot.realAtan (⊥ : WithBot ℝ) = ((-(Real.pi / 2) : ℝ) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realErf_bot :
+    WithBot.realErf (⊥ : WithBot ℝ) = ((-1 : ℝ) : WithBot ℝ) := rfl
 
 @[simp] theorem WithBot.realExp_coe (r : ℝ) :
     WithBot.realExp ((r : ℝ) : WithBot ℝ) = (((Real.exp r : ℝ)) : WithBot ℝ) := rfl
@@ -207,6 +216,9 @@ noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
     WithBot.realCosh ((r : ℝ) : WithBot ℝ) = (((Real.cosh r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realSinh_coe (r : ℝ) :
     WithBot.realSinh ((r : ℝ) : WithBot ℝ) = (((Real.sinh r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realErf_coe (r : ℝ) :
+    WithBot.realErf ((r : ℝ) : WithBot ℝ) =
+      (((VeriTile.Math.realErf r : ℝ)) : WithBot ℝ) := rfl
 
 /-! ### Algebraic simp lemmas on `WithBot ℝ` arithmetic helpers -/
 

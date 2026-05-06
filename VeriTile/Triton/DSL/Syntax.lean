@@ -40,6 +40,8 @@ syntax "tl.tan(" tritonExpr ")" : tritonExpr
 syntax "tl.atan(" tritonExpr ")" : tritonExpr
 syntax "tl.cosh(" tritonExpr ")" : tritonExpr
 syntax "tl.sinh(" tritonExpr ")" : tritonExpr
+syntax "tl.erf(" tritonExpr ")" : tritonExpr
+syntax "tl.extra.cuda.libdevice.erf(" tritonExpr ")" : tritonExpr
 syntax "tl.abs(" tritonExpr ")" : tritonExpr
 syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.logical_or(" tritonExpr ", " tritonExpr ")" : tritonExpr

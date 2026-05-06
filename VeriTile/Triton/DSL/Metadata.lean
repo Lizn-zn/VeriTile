@@ -85,6 +85,8 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.atan($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.cosh($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.sinh($e:tritonExpr))        => exprRegions e
+  | `(tritonExpr| tl.erf($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.extra.cuda.libdevice.erf($e:tritonExpr)) => exprRegions e
   | `(tritonExpr| tl.abs($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions a ++ exprRegions b
