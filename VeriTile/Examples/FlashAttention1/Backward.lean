@@ -1144,62 +1144,6 @@ theorem fa1BackwardAtomicDQKernel_tailStores_readback_from_inputs
     rw [hExecTail]
     exact hTail.2 idx
 
-/-- Grid-merge correctness for the atomic `dQ` output cells.
-
-This packages the generic #66 Real atomic-add merge theorem with the FA-1
-block-contribution algebra: if the selected per-program traces contribute
-exactly one full partition of KV blocks and the initial `dQ` buffer is zero,
-then the merged `dQ` tile reads back `attentionBackwardReal.dQ`.
-
-The per-program trace theorem above supplies the concrete trace shape for a
-block program.  This raw merge helper is intentionally private: the public
-surface is `fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct`, which consumes
-the #88 launcher witness instead of raw `frames` / `atomicTrace` arguments. -/
-private theorem fa1BackwardAtomicDQKernel_gridMerged_dQ_correct
-    {M D Bk numKVBlocks : Nat}
-    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
-    (scale : ℝ) (s : BlockState)
-    (Q : TileIndex [M, D] → ℝ)
-    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
-    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
-    (g : Grid)
-    (frames :
-      Kernel.GridFrames
-        (fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-          M D Bk numKVBlocks scale).toAlgKernel g s)
-    (contributors : Finset (GridIndex g))
-    (atomicTrace : GridIndex g → Trace)
-    (hInitialDQ :
-      ∀ idx : TileIndex [M, D],
-        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
-    (hNoOrdinaryDQ :
-      ∀ idx : TileIndex [M, D],
-        ¬ Kernel.GridWriteFootprint frames
-          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
-    (hAtomicContrib :
-      ∀ idx : TileIndex [M, D],
-        contributors.sum
-            (fun gridIdx =>
-              (atomicTrace gridIdx).atomicAddRealSum
-                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
-          Finset.univ.sum
-            (fun block : Fin numKVBlocks =>
-              dQBlockContribution Q K V dO LSE scale block idx)) :
-    ∀ idx : TileIndex [M, D],
-      observeTileAt
-        (some (Kernel.mergeFramesWithAtomic g s frames contributors atomicTrace))
-        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
-      some ((attentionBackwardReal Q K V dO LSE scale).dQ idx) := by
-  intro idx
-  simp [observeTileAt]
-  rw [Kernel.mergeFramesWithAtomic_atomicAdd_eq_finsetSum
-    (frames := frames) (contributors := contributors) (atomicTrace := atomicTrace)
-    (region := dQReg) (offset := Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)
-    (hNoOrdinaryWrite := hNoOrdinaryDQ idx)]
-  rw [hInitialDQ idx, hAtomicContrib idx]
-  rw [dQBlockContribution_sum_eq_attentionBackwardReal Q K V dO LSE scale idx]
-  simp [attentionBackwardReal_dQ]
-
 /-- Launcher-facing grid correctness for the atomic `dQ` output cells.
 
 This is the #88 surface over the same atomic `dQ` composition theorem above:

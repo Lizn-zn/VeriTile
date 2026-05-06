@@ -5,7 +5,7 @@ Layer-2b disjoint whole-grid composition over explicit per-program frames.
 -/
 
 import VeriTile.Triton.Launch.Grid
-import VeriTile.Triton.Memory.Frame
+import VeriTile.Triton.Memory.Footprint
 
 namespace VeriTile.Triton
 
@@ -34,6 +34,25 @@ theorem GridWritesDisjoint.eq_of_both {k : Kernel} {g : Grid} {s : BlockState}
     idx₁ = idx₂ := by
   by_contra hne
   exact hDisjoint idx₁ idx₂ hne addr h₁ h₂
+
+/-- Derive grid-write disjointness for the common structured footprint shape:
+each program writes the image of one tile of offsets into a fixed region, and
+offset images for distinct program ids are pairwise disjoint. -/
+theorem GridWritesDisjoint.of_tileImage
+    {k : Kernel} {g : Grid} {s : BlockState}
+    {frames : Kernel.GridFrames k g s}
+    {shape : TileShape} {region : RegionName}
+    (offset : GridIndex g → TileIndex shape → Nat)
+    (hWrites :
+      ∀ idx, (frames idx).writes = WriteFootprint.tileImage region (offset idx))
+    (hOffsets :
+      ∀ idx₁ idx₂, idx₁ ≠ idx₂ →
+        ∀ i j, offset idx₁ i ≠ offset idx₂ j) :
+    Kernel.GridWritesDisjoint frames := by
+  intro idx₁ idx₂ hne
+  rw [hWrites idx₁, hWrites idx₂]
+  exact WriteFootprint.disjoint_tileImage_of_image_disjoint
+    (hOffsets idx₁ idx₂ hne)
 
 /-- Extensional merge of independent per-program frame results.
 

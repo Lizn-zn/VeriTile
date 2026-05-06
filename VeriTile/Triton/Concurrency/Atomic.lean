@@ -317,6 +317,21 @@ theorem h_exec {k : Kernel} {g : Grid} {s : BlockState}
     exec k (s.withGridIndex idx) = some run.final :=
   Kernel.AtomicTraceStateful_final_eq_exec run.h_trace
 
+/-- Package a uniform per-program stateful trace theorem into the `runs` field
+expected by `GridLaunchedAtomic`. -/
+def of_uniform {k : Kernel} {g : Grid} {s : BlockState}
+    (trace : GridIndex g → Trace)
+    (final : GridIndex g → BlockState)
+    (hTrace :
+      ∀ idx,
+        Kernel.AtomicTraceStateful k (Kernel.threadIdOf idx)
+          (s.withGridIndex idx) (trace idx) (final idx)) :
+    (idx : GridIndex g) → Kernel.ProgramRun k g s idx :=
+  fun idx =>
+    { trace := trace idx
+      final := final idx
+      h_trace := hTrace idx }
+
 end ProgramRun
 
 theorem AtomicTraceStatefulList_append_of_stepPrefix
