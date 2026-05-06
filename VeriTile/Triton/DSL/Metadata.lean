@@ -80,6 +80,7 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.sin($e:tritonExpr))         => exprRegions e
+  | `(tritonExpr| tl.math.sin($e:tritonExpr))    => exprRegions e
   | `(tritonExpr| tl.cos($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.tan($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.atan($e:tritonExpr))        => exprRegions e
@@ -240,6 +241,8 @@ partial def stmtRegions :
     TSyntax `tritonStmt → List (TSyntax `term) × List (TSyntax `term) := fun stx =>
   match stx with
   | `(tritonStmt| $_:ident := $e:tritonExpr) =>
+      (exprRegions e, [])
+  | `(tritonStmt| $_:ident = $e:tritonExpr) =>
       (exprRegions e, [])
   | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=

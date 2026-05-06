@@ -136,6 +136,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandExpr env e
   | `(tritonExpr| tl.program_id($e:tritonExpr)) =>
       expandProgramId e
+  | `(tritonExpr| tl.program_id(axis=$e:tritonExpr)) =>
+      expandProgramId e
   | `(tritonExpr| tl.arange($e:tritonExpr)) =>
       expandArange e
   | `(tritonExpr| tl.arange($s:tritonExpr, $e:tritonExpr)) => do
@@ -171,6 +173,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.sin($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.sin"
+      pure ⟨← `(Op.sin $e'.term), .real, e'.shape, none⟩
+  | `(tritonExpr| tl.math.sin($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.math.sin"
       pure ⟨← `(Op.sin $e'.term), .real, e'.shape, none⟩
   | `(tritonExpr| tl.cos($e:tritonExpr)) => do
       let e' ← expandExpr env e
@@ -540,7 +546,26 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
   | `(tritonStmt| $i:ident := tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       ensureNoAtomicKwargs "tl.atomic_cas" kwargs
       expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) (some i) p cmp (some v)
+  | `(tritonStmt| $i:ident = tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_xchg" kwargs
+      expandAtomicRMWCore "tl.atomic_xchg" (← `(RMWOp.xchg)) (some i) p v none
+  | `(tritonStmt| $i:ident = tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_cas" kwargs
+      expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) (some i) p cmp (some v)
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
+      let nameLit ← identAsStr i
+      let e' ← expandExpr env e
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident = $e:tritonExpr) => do
       let nameLit ← identAsStr i
       let e' ← expandExpr env e
       let dt ← e'.dtype.term

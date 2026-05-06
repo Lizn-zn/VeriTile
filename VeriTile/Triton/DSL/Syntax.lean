@@ -25,6 +25,7 @@ syntax "$(" term ")" : tritonExpr
 syntax "$ℝ(" term ")" : tritonExpr
 syntax "(" tritonExpr ")" : tritonExpr
 syntax "tl.program_id(" tritonExpr ")" : tritonExpr
+syntax "tl.program_id(axis=" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ")" : tritonExpr
 syntax "tl.arange(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.exp(" tritonExpr ")" : tritonExpr
@@ -35,6 +36,7 @@ syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.tanh(" tritonExpr ")" : tritonExpr
 syntax "tl.sin(" tritonExpr ")" : tritonExpr
+syntax "tl.math.sin(" tritonExpr ")" : tritonExpr
 syntax "tl.cos(" tritonExpr ")" : tritonExpr
 syntax "tl.tan(" tritonExpr ")" : tritonExpr
 syntax "tl.atan(" tritonExpr ")" : tritonExpr
@@ -146,6 +148,7 @@ syntax "tl.atomic_cas(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonMe
 
 -- Statements
 syntax ident " := " tritonExpr : tritonStmt
+syntax ident " = " tritonExpr : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.atomic_add(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.atomic_max(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
