@@ -100,6 +100,14 @@ def rmwValue? (op : RMWOp) (cell : MemCellAddr) : MemoryEvent → Option MemCell
         none
   | _ => none
 
+def rmwEvent? (cell : MemCellAddr) : MemoryEvent → Option RMWEvent
+  | .rmw event =>
+      if event.cell.1 == cell.1 && event.cell.2 == cell.2 then
+        some event
+      else
+        none
+  | _ => none
+
 @[simp] theorem cell_read (region : RegionName) (offset : Nat) (value : MemCell) :
     MemoryEvent.cell (.read region offset value) = (region, offset) := rfl
 
@@ -138,6 +146,9 @@ def matchesCell (cell : MemCellAddr) (event : TraceEvent) : Bool :=
 
 def rmwValue? (op : RMWOp) (cell : MemCellAddr) (event : TraceEvent) : Option MemCell :=
   event.event.rmwValue? op cell
+
+def rmwEvent? (cell : MemCellAddr) (event : TraceEvent) : Option RMWEvent :=
+  event.event.rmwEvent? cell
 
 end TraceEvent
 
@@ -198,6 +209,9 @@ def eventsAt (trace : Trace) (cell : MemCellAddr) : List TraceEvent :=
 /-- RMW events with operation `op` touching a concrete memory cell. -/
 def rmwValuesAt (trace : Trace) (op : RMWOp) (cell : MemCellAddr) : List MemCell :=
   trace.filterMap (TraceEvent.rmwValue? op cell)
+
+def rmwEventsAt (trace : Trace) (cell : MemCellAddr) : List RMWEvent :=
+  trace.filterMap (TraceEvent.rmwEvent? cell)
 
 /-- Payloads contributed by future `atomic_add` events at `cell`, in trace order. -/
 def atomicAddValues (trace : Trace) (cell : MemCellAddr) : List MemCell :=

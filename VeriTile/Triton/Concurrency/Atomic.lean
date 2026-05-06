@@ -481,6 +481,68 @@ theorem mergeFramesWithAtomic_atomicAdd_eq_finsetSum {k : Kernel} {g : Grid}
   unfold Kernel.mergeFramesWithAtomic Kernel.atomicContributionRealSum
   simp [hNoOrdinaryWrite, BlockState.readMem]
 
+noncomputable def gridRMWEvents {k : Kernel} {g : Grid} {s : BlockState}
+    (runs : (idx : GridIndex g) → Kernel.ProgramRun k g s idx)
+    (contributors : Finset (GridIndex g)) (cell : MemCellAddr) :
+    List RMWEvent :=
+  contributors.toList.flatMap fun idx => (runs idx).trace.rmwEventsAt cell
+
+/--
+Merge ordinary disjoint frame writes with one order-sensitive RMW cell.
+
+The RMW cell is supplied by a chosen per-cell linearization. Other ordinary
+frame writes still use the #49 merge behavior, and unrelated cells keep the
+initial memory.
+-/
+noncomputable def mergeFramesWithRMW {k : Kernel} (g : Grid) (s : BlockState)
+    (frames : Kernel.GridFrames k g s)
+    (cell : MemCellAddr) (finalCell : MemCell) : BlockState := by
+  classical
+  exact { s with mem := fun region offset =>
+    (by
+      if hCell : (region, offset) = cell then
+        exact finalCell
+      else if h : Kernel.GridWriteFootprint frames (region, offset) then
+        exact (Kernel.mergeFrames g s frames).mem region offset
+      else
+        exact s.mem region offset) }
+
+theorem mergeFramesWithRMW_mem_cell {k : Kernel} {g : Grid} {s : BlockState}
+    (frames : Kernel.GridFrames k g s) (cell : MemCellAddr)
+    (finalCell : MemCell) :
+    (Kernel.mergeFramesWithRMW g s frames cell finalCell).mem cell.1 cell.2 =
+      finalCell := by
+  classical
+  unfold Kernel.mergeFramesWithRMW
+  simp
+
+theorem mergeFramesWithRMW_mem_written_of_ne {k : Kernel} {g : Grid}
+    {s : BlockState} {frames : Kernel.GridFrames k g s}
+    (hDisjoint : Kernel.GridWritesDisjoint frames)
+    (cell : MemCellAddr) (finalCell : MemCell)
+    (idx : GridIndex g) (region : RegionName) (offset : Nat)
+    (hNe : (region, offset) ≠ cell)
+    (hWrite : (frames idx).writes (region, offset)) :
+    (Kernel.mergeFramesWithRMW g s frames cell finalCell).mem region offset =
+      (frames idx).final.mem region offset := by
+  classical
+  unfold Kernel.mergeFramesWithRMW
+  dsimp
+  have hWritten : Kernel.GridWriteFootprint frames (region, offset) := ⟨idx, hWrite⟩
+  simp [hNe, hWritten, Kernel.mergeFrames_mem_written hDisjoint idx region offset hWrite]
+
+theorem mergeFramesWithRMW_mem_unwritten_of_ne {k : Kernel} {g : Grid}
+    {s : BlockState} {frames : Kernel.GridFrames k g s}
+    (cell : MemCellAddr) (finalCell : MemCell)
+    (region : RegionName) (offset : Nat)
+    (hNe : (region, offset) ≠ cell)
+    (hNotWritten : ¬ Kernel.GridWriteFootprint frames (region, offset)) :
+    (Kernel.mergeFramesWithRMW g s frames cell finalCell).mem region offset =
+      s.mem region offset := by
+  classical
+  unfold Kernel.mergeFramesWithRMW
+  simp [hNe, hNotWritten]
+
 /-- Relational whole-grid launch surface for kernels with atomic-add
 contributions.
 
@@ -544,6 +606,77 @@ theorem observeAtomicCell_of_sum_eq {k : Kernel} {g : Grid}
   rw [h.observeAtomicCell region offset hNoOrdinaryWrite, hSum]
 
 end GridLaunchedAtomic
+
+/-- Relational whole-grid launch surface for one order-sensitive RMW cell.
+
+This is the #82 launcher hook for `atomic_xchg` / `atomic_cas`: callers provide
+per-program stateful traces, an explicit contributor set, and a per-cell
+linearization list.  The final cell is produced by `RMWTrace.applyLinearized`.
+No global scheduler or multi-cell transaction semantics are chosen here. -/
+structure GridLaunchedRMW (k : Kernel) (g : Grid)
+    (s sFinal : BlockState) where
+  runs : (idx : GridIndex g) → Kernel.ProgramRun k g s idx
+  frames : Kernel.GridFrames k g s
+  h_frame_final : ∀ idx, (frames idx).final = (runs idx).final
+  h_disjoint : Kernel.GridWritesDisjoint frames
+  contributors : Finset (GridIndex g)
+  cell : MemCellAddr
+  linearization : List RMWEvent
+  finalCell : MemCell
+  linearizedEvents : List RMWEvent
+  h_no_ordinary : ¬ Kernel.GridWriteFootprint frames cell
+  h_events :
+    linearization.Perm (Kernel.gridRMWEvents runs contributors cell)
+  h_apply :
+    RMWTrace.applyLinearized (s.mem cell.1 cell.2) linearization =
+      some (finalCell, linearizedEvents)
+  h_final :
+    sFinal = Kernel.mergeFramesWithRMW g s frames cell finalCell
+
+namespace GridLaunchedRMW
+
+theorem observeRMWCell {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedRMW k g s sFinal) :
+    sFinal.mem h.cell.1 h.cell.2 = h.finalCell := by
+  rcases h with
+    ⟨runs, frames, hFrameFinal, hDisjoint, contributors, cell, linearization,
+      finalCell, linearizedEvents, hNoOrdinary, hEvents, hApply, hFinal⟩
+  subst sFinal
+  exact Kernel.mergeFramesWithRMW_mem_cell frames cell finalCell
+
+theorem observeOrdinaryCell {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedRMW k g s sFinal)
+    (idx : GridIndex g) (region : RegionName) (offset : Nat)
+    (hNe : (region, offset) ≠ h.cell)
+    (hWrite : (h.frames idx).writes (region, offset)) :
+    sFinal.mem region offset = (h.frames idx).final.mem region offset := by
+  rcases h with
+    ⟨runs, frames, hFrameFinal, hDisjoint, contributors, cell, linearization,
+      finalCell, linearizedEvents, hNoOrdinary, hEvents, hApply, hFinal⟩
+  subst sFinal
+  exact Kernel.mergeFramesWithRMW_mem_written_of_ne hDisjoint cell finalCell
+    idx region offset hNe hWrite
+
+theorem observeUnwrittenCell {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedRMW k g s sFinal)
+    (region : RegionName) (offset : Nat)
+    (hNe : (region, offset) ≠ h.cell)
+    (hNotWritten : ¬ Kernel.GridWriteFootprint h.frames (region, offset)) :
+    sFinal.mem region offset = s.mem region offset := by
+  rcases h with
+    ⟨runs, frames, hFrameFinal, hDisjoint, contributors, cell, linearization,
+      finalCell, linearizedEvents, hNoOrdinary, hEvents, hApply, hFinal⟩
+  subst sFinal
+  exact Kernel.mergeFramesWithRMW_mem_unwritten_of_ne cell finalCell
+    region offset hNe hNotWritten
+
+theorem applyLinearized {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedRMW k g s sFinal) :
+    RMWTrace.applyLinearized (s.mem h.cell.1 h.cell.2) h.linearization =
+      some (h.finalCell, h.linearizedEvents) :=
+  h.h_apply
+
+end GridLaunchedRMW
 
 end Kernel
 
