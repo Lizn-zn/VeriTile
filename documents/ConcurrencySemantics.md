@@ -137,6 +137,23 @@ The intended implementation order is:
 4. WGMMA, warp specialization, and full Hopper-shaped kernels, deferred until
    stronger concurrency infrastructure exists.
 
+## Layer Roadmap
+
+The concurrency roadmap is intentionally layered. Each layer has a different
+semantic object, so later layers should extend earlier ones without forcing
+their machinery into simpler proofs.
+
+| Layer | Semantic object | Covers | Tracking |
+| --- | --- | --- | --- |
+| L1: single-cell linearized RMW | `MemCell -> RMWEvent -> Option (MemCell × RMWEvent)` plus a per-cell ordered event list | `atomic_add`, `atomic_xchg`, `atomic_cas`, single-cell max/min/and/or/xor | #66 for commutative add; #82 for order-sensitive xchg/cas |
+| L2: multi-cell atomic transaction | state transformer over multiple cells | DCAS / MCAS / transactional-memory style primitives | no active issue; open when a real consumer appears |
+| L3: cross-cell ordering + async | happens-before / visibility graph plus fences, barriers, and async completion | memory ordering, async copy, TMA/WGMMA visibility, producer-consumer warp specialization | #12 long-horizon |
+| L4: lock-free data-structure invariants | L1/L3 plus a data-structure invariant relating abstract state to memory | queue / stack / set / lock-free protocols | no active issue; consumer-driven only |
+
+#82 implements only L1. It must remain compatible with later L2/L3/L4 work,
+but it must not depend on multi-cell transactions, a global scheduler, async
+visibility, or data-structure invariants.
+
 ## Trace Vocabulary
 
 The first vocabulary slice lives in:
@@ -146,16 +163,52 @@ VeriTile/Triton/Concurrency/Trace.lean
 ```
 
 It defines `ThreadId`, `RMWOp`, `MemoryEvent`, `TraceEvent`, and `Trace`.
-`MemoryEvent.rmw` records both the RMW operation and the algorithm-layer
-payload value:
+`MemoryEvent.rmw` carries the shared `RMWEvent` payload:
 
 ```lean
-| rmw (region : RegionName) (offset : Nat) (op : RMWOp) (value : MemCell)
+structure RMWEvent where
+  cell : MemCellAddr
+  op : RMWOp
+  input : MemCell
+  extraInput : Option MemCell := none
+  observed : Option MemCell := none
+  result : Option MemCell := none
+
+inductive MemoryEvent where
+  | read (region : RegionName) (offset : Nat) (value : MemCell)
+  | write (region : RegionName) (offset : Nat) (value : MemCell)
+  | rmw (event : RMWEvent)
 ```
 
-This is enough to state future atomic-add theorems as folds or sums over
-`rmw .add` event values. The trace module is not a scheduler and does not
-change `Kernel.exec`.
+Commutative atomics use `input` as their contribution and leave the optional
+fields empty. Order-sensitive atomics such as xchg/cas can fill `extraInput`,
+`observed`, and `result` without introducing a second event type. The trace
+module is not a scheduler and does not change `Kernel.exec`.
+
+## #82 PR0 Audit Result
+
+#82's first implementation step is an ownership/API audit before adding
+`atomic_xchg` / `atomic_cas` semantics. The current result is:
+
+```text
+API ready; proceed to PR1.
+```
+
+Audit details:
+
+- `PermissionModel` / `OwnershipMap` are abstract over a permission type.
+  They are not hard-coded to `WarpId` ownership in the public discipline
+  predicates.
+- `RMWEvent` is already the single extensible RMW payload. The trace layer does
+  not need a parallel CAS/XCHG event type.
+- `MemoryEvent.rmw` already carries `RMWEvent`, so adding `.xchg` / `.cas`
+  semantics does not require a constructor-shape refactor.
+- `Stmt.atomicAdd` remains a separate public surface for #66's commutative
+  theorem. #82 should add a new return-valued RMW constructor instead of
+  overloading `Stmt.atomicAdd`.
+- `Trace.LinearizesAt` already provides a per-cell trace hook. #82 may add a
+  generalized event-list linearization predicate, but does not need a global
+  scheduler or timestamp map.
 
 ## Atomic Add Slice
 
