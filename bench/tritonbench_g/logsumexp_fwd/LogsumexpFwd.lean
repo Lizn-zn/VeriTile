@@ -1,7 +1,7 @@
 import VeriTile.Triton.Core
 import VeriTile.Triton.DSL
 
-namespace VeriTile.Bench.TritonBenchG.LogSumExpFwd
+namespace VeriTile.Bench.TritonBenchG.LogsumexpFwd
 
 open VeriTile.Triton
 
@@ -19,4 +19,4 @@ def logsumexpFwdKernel (xReg zReg : RegionName) (d blockSize : Nat) :
   tl.store($(zReg) + iN * tl.cdiv($(d), $(blockSize)) + iD, z)
 }
 
-end VeriTile.Bench.TritonBenchG.LogSumExpFwd
+end VeriTile.Bench.TritonBenchG.LogsumexpFwd
