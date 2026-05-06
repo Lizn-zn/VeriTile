@@ -293,6 +293,16 @@ def Stmt.check (ctx : CheckCtx) : Stmt → Except CheckError CheckCtx
       mask.check ctx
       mem.check ctx dtype
       .ok ctx
+  | .atomicRMW _ dtype shape mem input extraInput mask dest => do
+      input.check ctx
+      match extraInput with
+      | none => pure ()
+      | some extra => extra.check ctx
+      mask.check ctx
+      mem.check ctx dtype
+      match dest with
+      | none => .ok ctx
+      | some name => ctx.setReg name (pointerEntry dtype shape none none)
   | .forLoop idx _ body => do
       let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
       StmtList.check ctx' body

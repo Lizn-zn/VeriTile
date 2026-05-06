@@ -56,6 +56,22 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
             | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
             | _ => acc) []
       staticPtrRegions p ++ kwargRegions
+  | `(tritonExpr| tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
+            match kw with
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions v ++ kwargRegions ++ staticPtrRegions p
+  | `(tritonExpr| tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
+            match kw with
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | _ => acc) []
+      exprRegions cmp ++ exprRegions v ++ kwargRegions ++ staticPtrRegions p
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
   | `(tritonExpr| tl.exp2($e:tritonExpr))        => exprRegions e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e

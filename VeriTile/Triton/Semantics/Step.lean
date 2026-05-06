@@ -88,6 +88,8 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
                 acc.writeMemTyped dtype bp.region (bp.address idx)
                   (atomicValue acc bp.region (bp.address idx) i)
               else acc) s)
+  | .atomicRMW _ _ _ _ _ _ _ _, _ =>
+      none
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
   | .ifThen cond body, s => do
@@ -466,6 +468,9 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
                 (fun i : TileIndex shape =>
                   masks.data i && (ptrTile.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
                 (TileShape.allIndices shape) s
+  case atomicRMW op dtype shape mem input extraInput mask dest =>
+    unfold stepStmt at h
+    simp at h
   case forLoop idx n body =>
     simp at h
     exact stepForLoopAux_pid h

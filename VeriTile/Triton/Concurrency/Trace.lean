@@ -54,15 +54,6 @@ structure ThreadId where
   lane : Nat
   deriving DecidableEq, Repr
 
-/-- Read-modify-write operation tag for future atomic events. -/
-inductive RMWOp where
-  | add
-  | max
-  | min
-  | xchg
-  | cas
-  deriving DecidableEq, BEq, Repr
-
 /-- Extensible read-modify-write event payload.
 
 Commutative atomics use `input` as their contribution and leave the optional

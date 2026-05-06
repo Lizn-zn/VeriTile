@@ -91,15 +91,28 @@ def atomicXorFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
   tl.atomic_xor($(outReg), x)
 }
 
-def atomicXchgFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+def atomicXchgSmoke (outReg : RegionName) : ComputeKernel := triton {
   x := 1
   tl.atomic_xchg($(outReg), x)
 }
 
-def atomicCasFailureSmoke (outReg : RegionName) : ComputeKernel := triton {
+def atomicCasSmoke (outReg : RegionName) : ComputeKernel := triton {
   cmp := 0
   x := 1
   tl.atomic_cas($(outReg), cmp, x)
+}
+
+def atomicXchgReturnSmoke (outReg : RegionName) : ComputeKernel := triton {
+  x := 1
+  old := tl.atomic_xchg($(outReg), x)
+  tl.store($(outReg) + $(1), old)
+}
+
+def atomicCasReturnSmoke (outReg : RegionName) : ComputeKernel := triton {
+  cmp := 0
+  x := 1
+  old := tl.atomic_cas($(outReg), cmp, x)
+  tl.store($(outReg) + $(1), old)
 }
 
 example (outReg : RegionName) :
@@ -128,13 +141,59 @@ example (outReg : RegionName) :
   rfl
 
 example (outReg : RegionName) :
-    (atomicXchgFailureSmoke outReg).toAlgorithm? =
-      Except.error (.requiresEffectProjection "tl.atomic_xchg") := by
+    (atomicXchgSmoke outReg).toAlgorithm? =
+      Except.ok
+        { inputs := []
+        , outputs := [outReg]
+        , body :=
+            [ Stmt.assign .real [] "x" (Op.const 1)
+            , Stmt.atomicRMW RMWOp.xchg .real []
+                (MemAccess.region outReg (Op.constNat 0))
+                (Op.ref .real [] "x") none MaskOpt.none none ] } := by
   rfl
 
 example (outReg : RegionName) :
-    (atomicCasFailureSmoke outReg).toAlgorithm? =
-      Except.error (.requiresEffectProjection "tl.atomic_cas") := by
+    (atomicCasSmoke outReg).toAlgorithm? =
+      Except.ok
+        { inputs := []
+        , outputs := [outReg]
+        , body :=
+            [ Stmt.assign .real [] "cmp" (Op.const 0)
+            , Stmt.assign .real [] "x" (Op.const 1)
+            , Stmt.atomicRMW RMWOp.cas .real []
+                (MemAccess.region outReg (Op.constNat 0))
+                (Op.ref .real [] "cmp") (some (Op.ref .real [] "x"))
+                MaskOpt.none none ] } := by
+  rfl
+
+example (outReg : RegionName) :
+    (atomicXchgReturnSmoke outReg).toAlgorithm? =
+      Except.ok
+        { inputs := [outReg]
+        , outputs := [outReg]
+        , body :=
+            [ Stmt.assign .real [] "x" (Op.const 1)
+            , Stmt.atomicRMW RMWOp.xchg .real []
+                (MemAccess.region outReg (Op.constNat 0))
+                (Op.ref .real [] "x") none MaskOpt.none (some "old")
+            , Stmt.store .real [] (MemAccess.region outReg (Op.constNat 1))
+                (Op.ref .real [] "old") MaskOpt.none ] } := by
+  rfl
+
+example (outReg : RegionName) :
+    (atomicCasReturnSmoke outReg).toAlgorithm? =
+      Except.ok
+        { inputs := [outReg]
+        , outputs := [outReg]
+        , body :=
+            [ Stmt.assign .real [] "cmp" (Op.const 0)
+            , Stmt.assign .real [] "x" (Op.const 1)
+            , Stmt.atomicRMW RMWOp.cas .real []
+                (MemAccess.region outReg (Op.constNat 0))
+                (Op.ref .real [] "cmp") (some (Op.ref .real [] "x"))
+                MaskOpt.none (some "old")
+            , Stmt.store .real [] (MemAccess.region outReg (Op.constNat 1))
+                (Op.ref .real [] "old") MaskOpt.none ] } := by
   rfl
 
 def effectMarkerSmoke : ComputeKernel :=

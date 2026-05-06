@@ -139,6 +139,8 @@ syntax:70 tritonExpr:70 " * " tritonExpr:71 : tritonExpr
 syntax:70 tritonExpr:70 " / " tritonExpr:71 : tritonExpr
 syntax:70 tritonExpr:70 " // " tritonExpr:71 : tritonExpr
 syntax:70 tritonExpr:70 " % " tritonExpr:71 : tritonExpr
+syntax "tl.atomic_xchg(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
+syntax "tl.atomic_cas(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
 
 -- Statements
 syntax ident " := " tritonExpr : tritonStmt

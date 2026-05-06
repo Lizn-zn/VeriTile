@@ -57,6 +57,15 @@ inductive ScanOp where
   | min
   deriving Repr, BEq
 
+/-- Read-modify-write operation tag shared by algorithm AST and traces. -/
+inductive RMWOp where
+  | add
+  | max
+  | min
+  | xchg
+  | cas
+  deriving DecidableEq, BEq, Repr
+
 mutual
 
 inductive Op : TileDType → TileShape → Type where
@@ -238,6 +247,11 @@ P1 Triton statements (mutating constructs).
 * `atomicAdd h mem value mask` is a proof-facing read-modify-write marker for
   `tl.atomic_add`. It is restricted by `NumericDType` so non-additive channels
   such as Bool and pointers cannot be represented as atomic additions.
+* `atomicRMW op dtype mem input extra mask dest` is the return-valued
+  order-sensitive RMW marker for operations such as `tl.atomic_xchg` and
+  `tl.atomic_cas`. `dest = some name` records the returned old value; `none`
+  is the discarded-return form. Execution semantics are added by the
+  concurrency trace layer, not by pretending these operations are commutative.
 * `forLoop i n body` runs `body` `n` times, with the scalar register `i` bound
   to the iteration index.
 * `ifThen cond body` runs `body` when the scalar `cond` evaluates `true`, and
@@ -254,6 +268,10 @@ inductive Stmt : Type where
   | atomicAdd : NumericDType dtype → (shape : TileShape) →
               MemAccess shape → (value : Op dtype shape) →
               (mask : MaskOpt dtype shape) → Stmt
+  | atomicRMW : RMWOp → (dtype : TileDType) → (shape : TileShape) →
+              MemAccess shape → (input : Op dtype shape) →
+              (extraInput : Option (Op dtype shape)) →
+              (mask : MaskOpt dtype shape) → (dest : Option RegName) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
   | ifThenElse : (cond : Op .bool []) → (thenBody elseBody : List Stmt) → Stmt
@@ -481,6 +499,10 @@ inductive ComputeStmt : Type where
       MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
   | atomicAdd : NumericDType dtype → (shape : TileShape) →
       MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
+  | atomicRMW : RMWOp → (dtype : AlgDType) → (shape : TileShape) →
+      MemAccess shape → ComputeExpr dtype shape →
+      Option (ComputeExpr dtype shape) → MaskOpt dtype shape →
+      Option RegName → ComputeStmt
   | effectMarker : (op : String) → ComputeStmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List ComputeStmt) → ComputeStmt
   | ifThen : (cond : Op .bool []) → (body : List ComputeStmt) → ComputeStmt
@@ -499,6 +521,13 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
       Except.ok (.store dtype shape mem (← value.toAlgorithm?) mask)
   | .atomicAdd h shape mem value mask => do
       Except.ok (.atomicAdd h shape mem (← value.toAlgorithm?) mask)
+  | .atomicRMW op dtype shape mem input extraInput mask dest => do
+      let input' ← input.toAlgorithm?
+      let extraInput' ←
+        match extraInput with
+        | none => Except.ok none
+        | some extra => Except.ok (some (← extra.toAlgorithm?))
+      Except.ok (.atomicRMW op dtype shape mem input' extraInput' mask dest)
   | .effectMarker op =>
       Except.error (.requiresEffectProjection op)
   | .forLoop idx n body => do
@@ -540,6 +569,17 @@ end
     ComputeStmt.toAlgorithm?
         (ComputeStmt.atomicAdd h shape mem (ComputeExpr.alg value) mask) =
       Except.ok (Stmt.atomicAdd h shape mem value mask) := rfl
+
+@[simp] theorem toAlgorithm?_atomicRMW_alg
+    (op : RMWOp) (dtype : AlgDType) (shape : TileShape)
+    (mem : MemAccess shape) (input : Op dtype shape)
+    (extraInput : Option (Op dtype shape)) (mask : MaskOpt dtype shape)
+    (dest : Option RegName) :
+    ComputeStmt.toAlgorithm?
+        (ComputeStmt.atomicRMW op dtype shape mem (ComputeExpr.alg input)
+          (extraInput.map ComputeExpr.alg) mask dest) =
+      Except.ok (Stmt.atomicRMW op dtype shape mem input extraInput mask dest) := by
+  cases extraInput <;> rfl
 
 @[simp] theorem listToAlgorithm?_nil :
     ComputeStmt.listToAlgorithm? [] = Except.ok [] := rfl
@@ -606,6 +646,29 @@ end
     | Except.ok rest' => Except.ok (Stmt.atomicAdd h shape mem value mask :: rest')
     | Except.error e => Except.error e
   cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_atomicRMW_alg
+    (op : RMWOp) (dtype : AlgDType) (shape : TileShape)
+    (mem : MemAccess shape) (input : Op dtype shape)
+    (extraInput : Option (Op dtype shape)) (mask : MaskOpt dtype shape)
+    (dest : Option RegName) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm?
+        (ComputeStmt.atomicRMW op dtype shape mem (ComputeExpr.alg input)
+          (extraInput.map ComputeExpr.alg) mask dest :: rest) =
+      match ComputeStmt.listToAlgorithm? rest with
+      | Except.ok rest' =>
+          Except.ok (Stmt.atomicRMW op dtype shape mem input extraInput mask dest :: rest')
+      | Except.error e => Except.error e := by
+  cases extraInput <;>
+    change Except.bind
+      (Except.ok (Stmt.atomicRMW op dtype shape mem input _ mask dest))
+      (fun st' => Except.bind (ComputeStmt.listToAlgorithm? rest)
+        (fun rest' => Except.ok (st' :: rest'))) =
+        match ComputeStmt.listToAlgorithm? rest with
+        | Except.ok rest' =>
+            Except.ok (Stmt.atomicRMW op dtype shape mem input _ mask dest :: rest')
+        | Except.error e => Except.error e
+    <;> cases ComputeStmt.listToAlgorithm? rest <;> rfl
 
 @[simp] theorem listToAlgorithm?_append :
     ∀ xs ys : List ComputeStmt,

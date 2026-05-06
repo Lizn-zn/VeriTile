@@ -466,15 +466,72 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
     let opTerm : TSyntax `term := ⟨Syntax.mkStrLit op⟩
     pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
       ← `(ComputeStmt.effectMarker $opTerm), env, Bool.true)
-  let unsupportedAtomic3 (op : String) (p cmp v : TSyntax `tritonExpr) :
+  let ensureNoAtomicKwargs (op : String) (kwargs : TSyntaxArray `tritonMemKwarg) :
+      MacroM Unit := do
+    unless kwargs.isEmpty do
+      Macro.throwError (op ++ ": kwargs are not modeled for return-valued atomics yet")
+  let expandAtomicRMWCore (opName : String) (opTerm : TSyntax `term)
+      (dest : Option Ident) (p input : TSyntax `tritonExpr)
+      (extraInput : Option (TSyntax `tritonExpr)) :
       MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
-    discard <| expandExpr env p
-    discard <| expandExpr env cmp
-    discard <| expandExpr env v
-    let opTerm : TSyntax `term := ⟨Syntax.mkStrLit op⟩
-    pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
-      ← `(ComputeStmt.effectMarker $opTerm), env, Bool.true)
+    let input' ← expandExpr env input
+    ensureAlgorithmOnly opName input'
+    let extra' ←
+      match extraInput with
+      | none => pure none
+      | some extra => do
+          let e ← expandExpr env extra
+          ensureAlgorithmOnly opName e
+          ensureDType input'.dtype e.dtype opName
+          pure (some e)
+    let mkTerms (memTerm : TSyntax `term) (targetShape : SInfo) :
+        MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+      let inputTerm ← coerceShape input'.term input'.shape targetShape opName
+      let extraTerm? ←
+        match extra' with
+        | none => pure none
+        | some e => pure (some (← coerceShape e.term e.shape targetShape opName))
+      let dt ← input'.dtype.term
+      let sh ← targetShape.term
+      let destTerm ←
+        match dest with
+        | none => `(Option.none)
+        | some ident =>
+            let lit ← identAsStr ⟨ident.raw⟩
+            `(Option.some $lit)
+      let extraAlgTerm ←
+        match extraTerm? with
+        | none => `(Option.none)
+        | some t => `(Option.some $t)
+      let extraComputeTerm ←
+        match extraTerm? with
+        | none => `(Option.none)
+        | some t => `(Option.some (ComputeExpr.alg $t))
+      let alg ←
+        `(Stmt.atomicRMW $opTerm $dt $sh $memTerm $inputTerm $extraAlgTerm
+            (MaskOpt.none) $destTerm)
+      let compute ←
+        `(ComputeStmt.atomicRMW $opTerm $dt $sh $memTerm
+            (ComputeExpr.alg $inputTerm) $extraComputeTerm (MaskOpt.none) $destTerm)
+      let nextEnv :=
+        match dest with
+        | none => env
+        | some ident => (ident.getId.toString, input'.dtype, targetShape) :: env
+      pure (alg, compute, nextEnv, Bool.false)
+    match ← expandStaticPtrExpr env p with
+    | some sp =>
+        mkTerms (← `(MemAccess.region $sp.region $sp.offset)) sp.shape
+    | none =>
+        let p' ← expandExpr env p
+        ensureDType .ptr p'.dtype (opName ++ " pointer")
+        mkTerms (← `(MemAccess.ptr $p'.term)) p'.shape
   match stx with
+  | `(tritonStmt| $i:ident := tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_xchg" kwargs
+      expandAtomicRMWCore "tl.atomic_xchg" (← `(RMWOp.xchg)) (some i) p v none
+  | `(tritonStmt| $i:ident := tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_cas" kwargs
+      expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) (some i) p cmp (some v)
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
       let nameLit ← identAsStr i
       let e' ← expandExpr env e
@@ -502,10 +559,12 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       unsupportedAtomic2 "tl.atomic_or" p v
   | `(tritonStmt| tl.atomic_xor($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
       unsupportedAtomic2 "tl.atomic_xor" p v
-  | `(tritonStmt| tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
-      unsupportedAtomic2 "tl.atomic_xchg" p v
-  | `(tritonStmt| tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
-      unsupportedAtomic3 "tl.atomic_cas" p cmp v
+  | `(tritonStmt| tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_xchg" kwargs
+      expandAtomicRMWCore "tl.atomic_xchg" (← `(RMWOp.xchg)) none p v none
+  | `(tritonStmt| tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      ensureNoAtomicKwargs "tl.atomic_cas" kwargs
+      expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) none p cmp (some v)
   | `(tritonStmt| tl.async_copy($dst:tritonExpr, $src:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) => do
       discard <| expandExpr env dst
       discard <| expandExpr env src
