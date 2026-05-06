@@ -226,7 +226,7 @@ body.deck .card p { font-size: 2.3vmin; line-height: 1.45; margin: 0.4vmin 0; }
 body.deck .card ul { font-size: 2.25vmin; margin: 0.4vmin 0 0.4vmin 1.2em; }
 body.deck .card li { margin: 0.3vmin 0; }
 body.deck .card pre {
-  font-size: 1.85vmin;
+  font-size: 1.7vmin;
   line-height: 1.45;
   padding: 1.2vmin 1.4vmin;
   margin: 0.6vmin 0;
@@ -328,6 +328,90 @@ body.deck .numgrid li strong {
   letter-spacing: -0.02em;
 }
 body.deck .numgrid li:nth-child(2) strong { color: var(--orange); }
+
+/* ---------- Two-flow comparison (Slide "The problem") ----------
+ * `:::flowToday` and `:::flowVeritile` each render a 5-stage horizontal
+ * pipeline. The "today" flow is muted with a warning-coloured tail; the
+ * "veritile" flow is accent-blue with a green ✓ tail. */
+
+body.deck .flow-today,
+body.deck .flow-veritile {
+  display: flex;
+  align-items: stretch;
+  gap: 0.8vmin;
+  margin: 1vmin 0;
+}
+body.deck .flow-today ul,
+body.deck .flow-veritile ul { display: contents; }
+body.deck .flow-today li,
+body.deck .flow-veritile li {
+  flex: 1;
+  list-style: none;
+  background: var(--card);
+  border-radius: 1.4vmin;
+  padding: 1vmin 0.8vmin;
+  text-align: center;
+  font-size: 1.6vmin;
+  line-height: 1.3;
+  margin: 0;
+  position: relative;
+}
+body.deck .flow-today li + li::before,
+body.deck .flow-veritile li + li::before {
+  content: "→";
+  position: absolute;
+  left: -1.1vmin; top: 50%;
+  transform: translateY(-50%);
+  font-size: 1.6vmin;
+  color: #9aa6b8;
+}
+
+/* "Today" — muted, dashed border, warning tail. */
+body.deck .flow-today li {
+  border: 1px dashed var(--bd);
+  color: var(--sub);
+}
+body.deck .flow-today li:last-child {
+  border-style: solid;
+  border-color: var(--orange);
+  color: var(--orange);
+  font-weight: 600;
+}
+
+/* "VeriTile" — accent blue with green ✓ tail and soft shadow. */
+body.deck .flow-veritile li {
+  border: 1px solid var(--bd);
+  border-top: 0.4vmin solid var(--blue);
+  color: var(--ink);
+  box-shadow: var(--shadow-card);
+}
+body.deck .flow-veritile li:last-child {
+  border-top-color: var(--green);
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* "TODAY" / "VERITILE" rail label drawn to the left of each flow. */
+body.deck .flow-today::before {
+  content: "TODAY";
+  align-self: center;
+  font-size: 1.2vmin;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+  color: var(--sub);
+  margin-right: 0.6vmin;
+  min-width: 9vmin;
+}
+body.deck .flow-veritile::before {
+  content: "VERITILE";
+  align-self: center;
+  font-size: 1.2vmin;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+  color: var(--blue);
+  margin-right: 0.6vmin;
+  min-width: 9vmin;
+}
 body.deck .numgrid li:nth-child(3) strong { color: var(--green); }
 body.deck .numgrid li:nth-child(4) strong { color: var(--purple); }
 
@@ -450,7 +534,7 @@ body.deck.deck-ready .deck-stage > section.title::before {
   body.deck.deck-ready .deck-stage pre { font-size: 2cqmin; }
   body.deck.deck-ready .deck-stage .card p { font-size: 2.3cqmin; }
   body.deck.deck-ready .deck-stage .card ul { font-size: 2.25cqmin; }
-  body.deck.deck-ready .deck-stage .card pre { font-size: 1.85cqmin; }
+  body.deck.deck-ready .deck-stage .card pre { font-size: 1.7cqmin; }
   body.deck.deck-ready .deck-stage .card pre + p { font-size: 1.7cqmin; }
   body.deck.deck-ready .deck-stage .card-blue   p:first-child strong:first-child,
   body.deck.deck-ready .deck-stage .card-orange p:first-child strong:first-child,

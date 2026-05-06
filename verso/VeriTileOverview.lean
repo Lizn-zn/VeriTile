@@ -59,6 +59,14 @@ block_component +directive numgrid where
   toHtml id _ _ goB contents := do
     pure {{<div class="numgrid" id={{id}}>{{← contents.mapM goB}}</div>}}
 
+block_component +directive flowToday where
+  toHtml id _ _ goB contents := do
+    pure {{<div class="flow-today" id={{id}}>{{← contents.mapM goB}}</div>}}
+
+block_component +directive flowVeritile where
+  toHtml id _ _ goB contents := do
+    pure {{<div class="flow-veritile" id={{id}}>{{← contents.mapM goB}}</div>}}
+
 end
 
 
@@ -166,82 +174,95 @@ Agent generates the proof, fully automated.
 ::::
 
 
-# What VeriTile sets out to do
+# The problem with optimizing Triton kernels today
 
-::::cols
+`Performance up · correctness on a prayer.`
+
+:::flowToday
+* `.py` kernel
+* PyTorch reference
+* sample a few inputs
+* ship
+* silent bug?
+:::
+
+:::flowVeritile
+* `.py` kernel
+* embedded DSL
+* Lean theorem
+* ship
+* ✓ proven
+:::
+
 :::cardBlue
-*The problem*
+*Workflow today*
 
-Triton powers production attention, GEMM, normalization, SSM, RoPE, MoE
-routing — and yet there is no machine-checked way to certify that an
-optimized Triton kernel computes the same thing as the naive reference.
-
-Engineers re-derive the algebra by hand for every variant, and a single
-off-by-one (`mask=`, `other=`, partial KV block, D-tail) can silently
-change results.
+Triton engineers iterate fast — naive → stable → online → fused. Each
+optimization rewrites the algebra; equivalence is checked by hand, then
+by sampling a few inputs against PyTorch or `flash-attn`. Once the sample
+passes, the kernel ships.
 
 :::
 
 :::cardOrange
-*Our approach*
+*Where bugs hide*
 
-* Embed a Triton-style DSL inside Lean 4.
-* Give the embedded kernel formal operational semantics.
-* Prove kernel-pair refinement and correctness against math specs.
-* Use an LLM agent (`scripts/prove.sh` → `/lean4:autoprove`) to drive proofs.
+A single off-by-one in `mask=` / `other=`, a partial KV block, a D-tail
+boundary, a wrong reduction axis — any of these silently changes the
+result. Sample testing can pass while the algorithm is subtly wrong on
+inputs that never get generated.
 
 :::
-
-::::
 
 :::cardGreen
-*What success looks like.* A Triton engineer pastes a real `.py` kernel,
-annotates a math spec, and VeriTile + LLM closes the proof. Output: a Lean
-theorem stating that the kernel refines its specification — for every
-input, every `program_id`, every tile.
+*What's at stake*
+
+Attention, GEMM, fused-norm, SSM kernels sit on the production hot path.
+A silent regression shifts downstream model behavior; debug cost is
+enormous and rollback hits real users.
+
+:::
+
+:::cardMuted
+*This isn't a Triton problem — it's a verification gap. We close it.*
 
 :::
 
 
-# Four axes that must advance together
+# Features — what we do, what we don't
+
+`Bounded by what we prove · intentional in what we leave to testing.`
 
 ::::cols
 :::cardBlue
-*1 · Real DSL surface*
+*We do this*
 
-Accept the ops, control flow, memory and concurrency primitives that
-production `.py` kernels actually use — not a minimal subset.
-
-:::
-
-:::cardOrange
-*2 · Production-scale algorithms*
-
-Full FA-1 forward + backward, FA-2, fused-norm family, grouped GEMM, SSM,
-RoPE, GQA / MQA / MLA — not 8 hand-picked theorems.
+* *Proving-ensured correctness* — every optimization is a Lean theorem,
+  mechanically checked against its math reference.
+* *Triton-faithful semantics* — full `mask=` / `other=`, ND broadcasting,
+  reductions, `forLoop_inv` master induction.
+* *Triton-user friendly DSL* — `triton { ... }` reads like `.py`,
+  region-polymorphic, kwargs supported.
+* *LLM-driven proofs* — `scripts/prove.sh` → `/lean4:autoprove`,
+  multi-cycle iteration, deep-mode escalation.
 
 :::
 
-::::
+:::cardMuted
+*We explicitly don't*
 
-::::cols
-:::cardGreen
-*3 · Triton-user friendliness*
-
-Move the user's delta from "rewrite into the embedding" toward "paste-in
-`.py`" with near-zero changes (Python lifter is roadmap).
-
-:::
-
-:::cardPurple
-*4 · Production horizontal infra*
-
-Algorithm/Compute split, Memory frame, Concurrency refinement, ND-general
-framework — no ad-hoc dimension shortcuts.
+* Trust differential testing alone — sampling can't cover the algorithm.
+* Cherry-pick a "simplified Triton" subset — fidelity to real Triton
+  is mandatory.
+* Hand-write proofs for every kernel — the LLM does it.
+* Formalize IEEE-754 — out of Lean scope by design; the compute layer
+  validates fp behavior empirically.
 
 :::
 
 ::::
+
+*What we do is bounded; what we don't is intentional.*
 
 
 # Two-layer architecture: Lean proof  ⟂  external testing
