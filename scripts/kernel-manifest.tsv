@@ -24,6 +24,7 @@ memory_safety_blockptr_boundary	VeriTile/Examples/MemorySafety.lean	blockPtrBoun
 memory_frame_blockptr_oob	VeriTile/Examples/MemoryFrame.lean	blockPtrOOBStore_writesWithin_checkedFootprint	frame	proven	internal	-	block pointer boundary_check	Layer-2a/#61 memory footprint extraction primitives	checked footprint for OOB store
 grid_const_store_launch	VeriTile/Examples/GridComposition.lean	gridConstStore_launched_observe_written	launch	proven	internal:#88	-	ND grid	Layer-2b ordinary whole-grid launch	GridLaunchedOrdinary smoke
 splitk_atomic_add_launch	VeriTile/Examples/GridComposition.lean	splitKAtomicAdd_launched_sum	trace	proven	internal:#88/#104	-	split-K toy grid	Minimal atomic-grid composition smoke	GridLaunchedAtomic consumer outside FA-1 backward
+grid_rmw_xchg_launch	VeriTile/Examples/GridComposition.lean	gridLaunchedRMW_xchg_two_final	trace	proven	internal:#82	-	single-cell xchg linearization	Order-sensitive RMW launcher smoke	GridLaunchedRMW consumer for two atomic_xchg events
 online_softmax	VeriTile/Examples/OnlineSoftmax.lean	online_softmax_correct_view	correct	proven	internal	-	-	Online softmax correctness	online recurrence Real proof
 rowwise_sum	VeriTile/Examples/RowWise.lean	rowWiseSum_correct_view	correct	proven	internal	-	-	Row-wise reductions	sum variant
 rowwise_max	VeriTile/Examples/RowWise.lean	rowWiseMax_correct_view	correct	proven	internal	-	-	Row-wise max	max variant

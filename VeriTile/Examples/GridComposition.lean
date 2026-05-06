@@ -182,8 +182,35 @@ theorem splitKAtomicAdd_launched_sum
   classical
   rw [hLaunch.observeAtomicCell outReg 0 hNoOrdinaryWrite]
   congr 1
-  apply Finset.sum_congr rfl
-  intro idx hidx
-  exact hContrib idx hidx
+  exact Finset.sum_congr rfl (by
+    intro idx hidx
+    exact hContrib idx hidx)
+
+/-- Order-sensitive atomic launcher smoke.
+
+If a `GridLaunchedRMW` witness linearizes two `atomic_xchg` events at one cell,
+the final cell is the second exchanged value.  This is intentionally stated over
+the generic launcher witness: kernel-specific proofs only need to construct the
+per-program runs, ordinary frames, and linearization list. -/
+theorem gridLaunchedRMW_xchg_two_final
+    {k : Kernel} {g : Grid} {s sFinal : BlockState}
+    (h : Kernel.GridLaunchedRMW k g s sFinal)
+    (cell : MemCellAddr) (old first second : MemCell)
+    (hCell : h.cell = cell)
+    (hInitial : s.mem cell.1 cell.2 = old)
+    (hLinearization :
+      h.linearization =
+        [ { cell := cell, op := RMWOp.xchg, input := first }
+        , { cell := cell, op := RMWOp.xchg, input := second } ]) :
+    sFinal.mem cell.1 cell.2 = second := by
+  have hApply := h.applyLinearized
+  rw [hCell, hInitial, hLinearization] at hApply
+  rw [RMWTrace.applyLinearized_xchg_two old first second cell] at hApply
+  injection hApply with hFinalCell
+  have hFinal : h.finalCell = second := by
+    simpa using congrArg Prod.fst hFinalCell.symm
+  have hObs := h.observeRMWCell
+  rw [hCell] at hObs
+  exact hObs.trans hFinal
 
 end VeriTile.Examples.GridComposition
