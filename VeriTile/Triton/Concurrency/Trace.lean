@@ -161,6 +161,71 @@ theorem apply_cas_failure
 
 end RMWOp
 
+namespace RMWTrace
+
+/--
+Apply a per-cell linearization list.
+
+The input list is the chosen linearization order. The returned list is in the
+same order, with `observed` / `result` fields filled by `RMWOp.apply`.
+-/
+noncomputable def applyLinearized :
+    MemCell → List RMWEvent → Option (MemCell × List RMWEvent)
+  | initial, [] => some (initial, [])
+  | initial, event :: events => do
+      let (cell', event') ← RMWOp.apply event.op initial event
+      let (final, events') ← applyLinearized cell' events
+      some (final, event' :: events')
+
+@[simp] theorem applyLinearized_nil (initial : MemCell) :
+    applyLinearized initial [] = some (initial, []) := rfl
+
+@[simp] theorem applyLinearized_cons
+    (initial next final : MemCell)
+    (event event' : RMWEvent) (events events' : List RMWEvent)
+    (hStep : RMWOp.apply event.op initial event = some (next, event'))
+    (hTail : applyLinearized next events = some (final, events')) :
+    applyLinearized initial (event :: events) =
+      some (final, event' :: events') := by
+  simp [applyLinearized, hStep, hTail]
+
+theorem applyLinearized_xchg_two
+    (old first second : MemCell) (cell : MemCellAddr) :
+    applyLinearized old
+        [ { cell := cell, op := .xchg, input := first }
+        , { cell := cell, op := .xchg, input := second } ] =
+      some (second,
+        [ { cell := cell, op := .xchg, input := first,
+            observed := some old, result := some old }
+        , { cell := cell, op := .xchg, input := second,
+            observed := some first, result := some first } ]) := by
+  simp [applyLinearized]
+
+theorem applyLinearized_cas_success
+    (old replacement : MemCell) (cell : MemCellAddr) :
+    applyLinearized old
+        [ { cell := cell, op := .cas, input := old,
+            extraInput := some replacement } ] =
+      some (replacement,
+        [ { cell := cell, op := .cas, input := old,
+            extraInput := some replacement,
+            observed := some old, result := some old } ]) := by
+  simp [applyLinearized, RMWOp.apply_cas_success]
+
+theorem applyLinearized_cas_failure
+    (old cmp replacement : MemCell) (cell : MemCellAddr)
+    (h : old ≠ cmp) :
+    applyLinearized old
+        [ { cell := cell, op := .cas, input := cmp,
+            extraInput := some replacement } ] =
+      some (old,
+        [ { cell := cell, op := .cas, input := cmp,
+            extraInput := some replacement,
+            observed := some old, result := some old } ]) := by
+  simp [applyLinearized, RMWOp.apply_cas_failure, h]
+
+end RMWTrace
+
 /--
 Memory event after projection to the algorithm layer.
 
