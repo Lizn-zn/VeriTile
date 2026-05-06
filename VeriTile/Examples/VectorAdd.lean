@@ -14,7 +14,7 @@ It exercises:
 * Tile-tile `Op.add` via `Tile.bop`.
 * `BlockState.scatter_readback` for the gather/scatter store readback.
 
-Per RP1 (`Notes/research_problem_pointer_vs_named_region.md`), the
+Per RP1 (`documents/ResearchProblemPointerRegion.md`), the
 buffers are named regions, not first-class pointers. Per the boundary-
 mask discussion, this is the **single-block aligned case**:
 `BLOCK_SIZE = N = problem length`, single program_id, no boundary

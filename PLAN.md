@@ -480,18 +480,9 @@ To make the close-rate metric reproducible:
    backward every day; production kernels heavily use atomic / async; a
    DSL that does not accept paste-in has no users.
 
-## Per-Tier implementation plans
+## Implementation plans
 
-The new roadmap advances by Tier with no fixed time window. Each new Tier
-opens with an implementation plan written via the `writing-plans` flow,
-filed under `Notes/` as `YYYY-MM-DD-tier-X-implementation.md`. Existing
-ones:
-
-- `Notes/2026-04-26-phase-a-implementation.md` (Tier 1)
-- `Notes/2026-04-29-phase-b-implementation.md` (Tier 2)
-- `Notes/2026-04-29-forloop-inv-design.md`
-- `Notes/T3_scouting.md` (full Tier 3 scouting, including mask resolution
-  and FA-1 / FA-2 algorithm analysis)
-
-Every implementation plan should reference the relevant section of this
-document for context.
+Active execution is tracked in pinned roadmap issue #91 (layered) and the
+linked per-task issues. Long-form design documents that survive an
+implementation phase are filed under [`documents/`](./documents) (e.g.
+`documents/ForLoopInvDesign.md`, `documents/DslMacroOptions.md`).

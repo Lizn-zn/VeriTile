@@ -2,8 +2,9 @@
 
 Long-form reference docs for VeriTile's embedded Triton subset, semantic
 model, and trusted-boundary policies. These are *contracts*: each describes
-what is modeled, what is not, and where the boundary sits. Implementation
-notes for in-progress or closed milestones live in [`../Notes/`](../Notes).
+what is modeled, what is not, and where the boundary sits. Historical proposals
+and research-problem notes are also colocated here under their PascalCase names
+(see [`Proposal.md`](./Proposal.md), [`ResearchProblemPointerRegion.md`](./ResearchProblemPointerRegion.md), etc.).
 
 ## Triton DSL surface
 

@@ -87,7 +87,7 @@ launch semantics。
 > 名实例化,正确性定理对所有实例化都成立。memory base 必须用 `tl.ptr($(region))`
 > 创建,或者来自 pointer-valued register;裸 `RegionName` 不是 pointer expression。
 > 设计动机见
-> [RP1](./Notes/research_problem_pointer_vs_named_region.md)。
+> [RP1](./documents/ResearchProblemPointerRegion.md)。
 
 #### 1. 给定一个原始 Triton kernel. 例如 naive softmax:
 
@@ -190,19 +190,19 @@ theorem softmax_kernels_refinement_view
 
 实施过程中需要权衡的设计决策记录在 research-problem notes 里。每条 note 说明
 问题、列举设计空间、给出推荐方案、并标注何时重新评估。本节是索引,完整讨论在
-[`Notes/`](./Notes) 下。
+[`documents/`](./documents) 下。
 
 - **RP1:指针 vs 命名 region** —— DSL 是否应该建模 first-class 指针(CUDA
   风格 `x_ptr + offsets` 作为 value),还是用静态 region 名 + 动态 offset?
   已决议:Phases A–D 全部使用命名 region。
-  → [research_problem_pointer_vs_named_region.md](./Notes/research_problem_pointer_vs_named_region.md)
+  → [ResearchProblemPointerRegion.md](./documents/ResearchProblemPointerRegion.md)
   (英文)
 
 - **RP2:地址类型 —— ℝ-统一 vs Nat-双化 `Value`** —— 运行时 `Value` 用
   统一的 ℝ 装载并在访存边界用 `realToNat` 取整,还是把 ℝ(数据)与 Nat
   (地址)分离成两个独立通道?已决议:双化;`realToNat` 删除;每个 kernel
   证明里的 `hcast` boilerplate(全库 ~40 行)随之消失。
-  → [research_problem_address_typing.md](./Notes/research_problem_address_typing.md)
+  → [ResearchProblemAddressTyping.md](./documents/ResearchProblemAddressTyping.md)
   (英文)
 
 ## 架构
@@ -300,10 +300,9 @@ VeriTile/
     WelfordKernels.lean
     FlashAttention1.lean
 
-bench/llm_eval/        Held-out 证明评测 harness
-scripts/               证明 wrapper 脚本
-documents/             项目文档
-Notes/                 Proposal, 实现笔记, 可行性研究
+bench/                 TritonBench-G v1 源 kernel + 覆盖度分析
+scripts/               证明 wrapper 脚本 + kernel manifest
+documents/             项目文档、设计笔记、提案
 PLAN_zh.md             项目路线图
 VeriTile.lean          Lean library 顶层入口
 lakefile.toml          Lake 项目定义

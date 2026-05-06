@@ -3,7 +3,7 @@ VeriTile.Triton.LoopInvariant
 
 The forLoop induction lemma family. Master lemma `forLoop_inv` (spec §4.1)
 plus ergonomics corollaries `forLoop_readout_scalar` (§4.2) and
-`forLoop_readout_tile` (§4.3). See Notes/2026-04-29-forloop-inv-design.md
+`forLoop_readout_tile` (§4.3). See documents/ForLoopInvDesign.md
 for the full interface design.
 -/
 
@@ -59,7 +59,7 @@ theorem forLoopAux_inv
     obligation showing each iteration preserves `P` (and does not error),
     the final state satisfies `P n`.
 
-    Spec: `Notes/2026-04-29-forloop-inv-design.md` §4.1 (Form 1). -/
+    Spec: `documents/ForLoopInvDesign.md` §4.1 (Form 1). -/
 theorem forLoop_inv
     {idx : RegName} {n : Nat} {body : List Stmt}
     {P : Nat → BlockState → Prop} {s_init : BlockState}

@@ -27,8 +27,8 @@ In our embedding the kernels exercised in Phase B and Phase C all use a
 **single** `forLoop` with a *multi-statement inner body* — Welford / online
 softmax / layernorm have one `forLoop` over the input tile; FA-1 forward has
 one `forLoop` over the KV blocks (the Q-block dimension is handled at the grid
-level via `pid`, not via an inner `forLoop`; see `Notes/T3_scouting.md` §R2 and
-§Q-block strategy). FA-2 in Phase D is also single-`forLoop` per program-id.
+level via `pid`, not via an inner `forLoop`). FA-2 is also single-`forLoop` per
+program-id.
 
 The lemma must therefore compose under (a) a multi-statement body and (b)
 sequentially-following statements after the loop. *Defensively*, the design

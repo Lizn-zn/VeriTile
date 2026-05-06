@@ -93,7 +93,7 @@ async copy, and whole-grid launch semantics.
 > with arbitrary buffer names, and the correctness theorem applies uniformly to
 > all instantiations. A memory base must be created with `$(region)`
 > or come from a pointer-valued register; raw region names are not pointer
-> expressions. See [RP1](./Notes/research_problem_pointer_vs_named_region.md)
+> expressions. See [RP1](./documents/ResearchProblemPointerRegion.md)
 > for the rationale.
 
 #### 1. Start with an original Triton kernel. For example, naive softmax:
@@ -267,19 +267,19 @@ Worked single-kernel correctness examples live in
 Design decisions with non-obvious tradeoffs are recorded as research-problem
 notes. Each note states the problem, surveys the design space, gives a
 recommendation, and notes when to revisit. Index here; full discussion in
-[`Notes/`](./Notes).
+[`documents/`](./documents).
 
 - **RP1: Pointers vs named regions** — should the DSL model first-class
   pointers (CUDA-style `x_ptr + offsets` as a value) or static named regions
   + dynamic offsets? Resolved: named regions throughout Phases A–D.
-  → [research_problem_pointer_vs_named_region.md](./Notes/research_problem_pointer_vs_named_region.md)
+  → [ResearchProblemPointerRegion.md](./documents/ResearchProblemPointerRegion.md)
 
 - **RP2: Address typing — ℝ-uniform vs Nat-bifurcated `Value`** — should
   the runtime `Value` use a single `ℝ` carrier with a `realToNat` floor at
   memory boundaries, or bifurcate into separate `ℝ` (data) and `Nat`
   (address) channels? Resolved: bifurcated; `realToNat` deleted; ~40 lines
   of `hcast` boilerplate dropped from kernel proofs.
-  → [research_problem_address_typing.md](./Notes/research_problem_address_typing.md)
+  → [ResearchProblemAddressTyping.md](./documents/ResearchProblemAddressTyping.md)
 
 ## Architecture
 
@@ -379,10 +379,9 @@ VeriTile/
     WelfordKernels.lean
     FlashAttention1.lean
 
-bench/llm_eval/        Held-out proof-evaluation harness
-scripts/               Proof wrapper scripts
-documents/             Focused project documentation
-Notes/                 Proposal, implementation notes, feasibility studies
+bench/                 TritonBench-G v1 source kernels + coverage analysis
+scripts/               Proof wrapper scripts + kernel manifest
+documents/             Focused project documentation, design notes, proposals
 PLAN.md                Architecture, status, and decision log; live roadmap in #91
 VeriTile.lean          Top-level Lean library entry point
 lakefile.toml          Lake project definition

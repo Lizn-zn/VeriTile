@@ -402,15 +402,8 @@ PyTorch 量级)。
    Triton 工程师日常 ship backward;production kernel 大量使用 atomic / async;
    不接受 paste-in 的 DSL 没有 user。
 
-## 各 Tier 的 implementation plan
+## Implementation plan
 
-新路线图按 Tier 推进,无固定时间窗口。每个新 Tier 启动时通过 `writing-plans` 流程
-编写 implementation plan,文档放在 `Notes/` 下,文件名 `YYYY-MM-DD-tier-X-implementation.md`。
-当前已有:
-
-- `Notes/2026-04-26-phase-a-implementation.md`(Tier 1)
-- `Notes/2026-04-29-phase-b-implementation.md`(Tier 2)
-- `Notes/2026-04-29-forloop-inv-design.md`
-- `Notes/T3_scouting.md`(Tier 3 全套 scouting,含 mask 决议、FA-1/FA-2 算法分析)
-
-每个 implementation plan 应回引本文档相关章节作为 context。
+主线执行追踪在 pinned roadmap issue #91(分层)+ 各 per-task issue。跨 phase
+仍有价值的长文档归到 [`documents/`](./documents) 下(例如
+`documents/ForLoopInvDesign.md`、`documents/DslMacroOptions.md`)。
