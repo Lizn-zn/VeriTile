@@ -87,7 +87,79 @@ def offset (event : RMWEvent) : Nat :=
 def value (event : RMWEvent) : MemCell :=
   event.input
 
+def withObservedResult (event : RMWEvent) (old : MemCell) : RMWEvent :=
+  { event with observed := some old, result := some old }
+
 end RMWEvent
+
+namespace RMWOp
+
+/--
+Apply one linearized single-cell RMW event.
+
+This is algorithm-layer semantics. In particular, CAS compares `MemCell`s by
+mathematical equality, not by a hardware bit-pattern predicate. Bit-level
+fidelity stays in the compute-gap/testing layer.
+
+For this first order-sensitive slice, `.xchg` and `.cas` are modeled directly.
+The existing `.add` proof surface remains the #66 sum theorem; `.max`, `.min`,
+and bitwise atomics are left for their own commutative-family follow-up.
+-/
+noncomputable def apply : RMWOp → MemCell → RMWEvent → Option (MemCell × RMWEvent) := by
+  classical
+  intro op old event
+  cases op with
+  | xchg =>
+      exact some (event.input, event.withObservedResult old)
+  | cas =>
+      match event.extraInput with
+      | none => exact none
+      | some replacement =>
+          let event' := event.withObservedResult old
+          if old = event.input then
+            exact some (replacement, event')
+          else
+            exact some (old, event')
+  | add => exact none
+  | max => exact none
+  | min => exact none
+
+@[simp] theorem apply_xchg (old input : MemCell) (cell : MemCellAddr) :
+    RMWOp.apply .xchg old
+        { cell := cell, op := .xchg, input := input } =
+      some (input,
+        { cell := cell, op := .xchg, input := input,
+          observed := some old, result := some old }) := rfl
+
+@[simp] theorem apply_cas_missing_replacement
+    (old cmp : MemCell) (cell : MemCellAddr) :
+    RMWOp.apply .cas old
+        { cell := cell, op := .cas, input := cmp } = none := rfl
+
+theorem apply_cas_success
+    (old replacement : MemCell) (cell : MemCellAddr) :
+    RMWOp.apply .cas old
+        { cell := cell, op := .cas, input := old,
+          extraInput := some replacement } =
+      some (replacement,
+        { cell := cell, op := .cas, input := old,
+          extraInput := some replacement,
+          observed := some old, result := some old }) := by
+  simp [apply, RMWEvent.withObservedResult]
+
+theorem apply_cas_failure
+    (old cmp replacement : MemCell) (cell : MemCellAddr)
+    (h : old ≠ cmp) :
+    RMWOp.apply .cas old
+        { cell := cell, op := .cas, input := cmp,
+          extraInput := some replacement } =
+      some (old,
+        { cell := cell, op := .cas, input := cmp,
+          extraInput := some replacement,
+          observed := some old, result := some old }) := by
+  simp [apply, RMWEvent.withObservedResult, if_neg h]
+
+end RMWOp
 
 /--
 Memory event after projection to the algorithm layer.
