@@ -18,10 +18,10 @@ def logsumexp_fwd_kernel
     ComputeKernel := triton {
   i_n = tl.program_id(0).to(tl.int64)
   i_d = tl.program_id(1).to(tl.int64)
-  o_d = i_d * B + tl.arange(0, B)
+  o_d = i_d * $(B) + tl.arange(0, $(B))
   m_d = o_d < $(D)
   b_x = tl.load(x + i_n * $(D) + o_d, mask=m_d, other=-inf)
-  tl.if $(HAS_SCALE) {
+  tl.if HAS_SCALE {
     b_x = b_x * $ℝ(scale)
   }
   b_m = tl.max(b_x, 0)

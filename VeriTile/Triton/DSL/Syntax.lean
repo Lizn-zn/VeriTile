@@ -18,6 +18,7 @@ declare_syntax_cat tritonDType
 
 -- Expressions
 syntax num : tritonExpr
+syntax scientific : tritonExpr
 -- `:max` so trailing parsers (e.g. the slicer postfix `e[:, None]`) chain
 -- on bare register identifiers without the user wrapping them in parens.
 syntax:max ident : tritonExpr
@@ -49,7 +50,6 @@ syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.logical_or(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.logical_not(" tritonExpr ")" : tritonExpr
 syntax "tl.cdiv(" tritonExpr ", " tritonExpr ")" : tritonExpr
-syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.maximum(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.minimum(" tritonExpr ", " tritonExpr ")" : tritonExpr
 -- Element-wise select. All three operands must broadcast to a common
@@ -86,12 +86,16 @@ syntax "boundary_check=" term : tritonMemKwarg
 syntax "padding_option=\"zero\"" : tritonMemKwarg
 
 syntax "axis" "=" num : tritonReduceKwarg
+syntax num : tritonReduceKwarg
 syntax "keep_dims" "=" "false" : tritonReduceKwarg
 syntax "keep_dims" "=" "true" : tritonReduceKwarg
+syntax "return_indices=True" : tritonReduceKwarg
+syntax "return_indices=False" : tritonReduceKwarg
 syntax ident "=" tritonExpr : tritonReduceKwarg
 
 syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
+syntax "tl.max(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax ident : tritonScanOp
 syntax "tl.cumsum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.cumprod(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
@@ -134,6 +138,7 @@ syntax:50 tritonExpr:51 " != " tritonExpr:51 : tritonExpr
 syntax:60 tritonExpr:60 " + " tritonExpr:61 : tritonExpr
 syntax:60 tritonExpr:60 " - " tritonExpr:61 : tritonExpr
 syntax:55 tritonExpr:55 " & " tritonExpr:56 : tritonExpr
+syntax:45 tritonExpr:46 " and " tritonExpr:46 : tritonExpr
 syntax:55 tritonExpr:55 " ^ " tritonExpr:56 : tritonExpr
 syntax:54 tritonExpr:54 " | " tritonExpr:55 : tritonExpr
 syntax:75 "~" tritonExpr:76 : tritonExpr
@@ -147,6 +152,8 @@ syntax "tl.atomic_xchg(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : 
 syntax "tl.atomic_cas(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
 
 -- Statements
+syntax ident " := " "tl.max(" tritonExpr ", " num ")" : tritonStmt
+syntax ident " = " "tl.max(" tritonExpr ", " num ")" : tritonStmt
 syntax ident " := " tritonExpr : tritonStmt
 syntax ident " = " tritonExpr : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
@@ -158,6 +165,8 @@ syntax "tl.atomic_or(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tr
 syntax "tl.atomic_xor(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.atomic_xchg(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.atomic_cas(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
+syntax ident ", " ident " = " "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonStmt
+syntax ident ", " ident " := " "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonStmt
 syntax "tl.async_copy(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.async_wait()" : tritonStmt
 syntax "tl.debug_barrier()" : tritonStmt

@@ -100,6 +100,22 @@ partial def expandCmp (expandExpr : ExprExpander) (env : Env) (ctx : String) (op
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  let b' ←
+    if a'.dtype == .nat && b'.dtype == .real then
+      match b with
+      | `(tritonExpr| $n:num) =>
+          pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none⟩
+      | _ => pure b'
+    else
+      pure b'
+  let a' ←
+    if a'.dtype == .real && b'.dtype == .nat then
+      match a with
+      | `(tritonExpr| $n:num) =>
+          pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none⟩
+      | _ => pure a'
+    else
+      pure a'
   ensureAlgorithmOnly ctx a'
   ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
@@ -147,6 +163,15 @@ partial def expandScan (expandExpr : ExprExpander) (env : Env) (ctx : String) (o
   let mut axisIdx : Nat := 0
   for kw in kwargs do
     match kw with
+    | `(tritonReduceKwarg| $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axisIdx := n.getNat
     | `(tritonReduceKwarg| axis = $n:num) =>
         if seenAxis then
           Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
@@ -177,6 +202,15 @@ partial def parseAxisOnlyKwargs (ctx : String) (dims : List (TSyntax `term))
   let mut axisIdx : Nat := 0
   for kw in kwargs do
     match kw with
+    | `(tritonReduceKwarg| $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axisIdx := n.getNat
     | `(tritonReduceKwarg| axis = $n:num) =>
         if seenAxis then
           Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
@@ -247,6 +281,15 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
   let mut axis? : Option Nat := none
   for kw in kwargs do
     match kw with
+    | `(tritonReduceKwarg| $n:num) =>
+        if seenAxis then
+          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axis? := some n.getNat
     | `(tritonReduceKwarg| axis = $n:num) =>
         if seenAxis then
           Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
@@ -265,6 +308,10 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
           Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
         seenKeepDims := Bool.true
         keepDims := Bool.true
+    | `(tritonReduceKwarg| return_indices=True) =>
+        Macro.throwError (ctx ++ ": `return_indices=True` is only supported through tuple binding")
+    | `(tritonReduceKwarg| return_indices=False) =>
+        pure ()
     | `(tritonReduceKwarg| $name:ident = $_) =>
         let nm := name.getId.toString
         if nm == "axis" || nm == "keep_dims" then

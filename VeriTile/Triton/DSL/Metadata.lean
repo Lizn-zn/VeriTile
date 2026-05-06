@@ -219,6 +219,7 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| $a:tritonExpr &  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr and $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| $a:tritonExpr ^  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| $a:tritonExpr |  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| ~$e:tritonExpr) => exprRegions assigned e

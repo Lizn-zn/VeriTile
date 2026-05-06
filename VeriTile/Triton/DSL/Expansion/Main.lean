@@ -78,6 +78,55 @@ namespace VeriTile.Triton.DSL
 
 /-! ## Expansion -/
 
+def realMathTerm (ctx : String) (e : EOut) : MacroM (TSyntax `term) := do
+  match e.dtype with
+  | .real => pure e.term
+  | .fp32 | .fp16 | .bf16 =>
+      let srcProof ← e.dtype.floatProof
+      pure (← `(Op.castFloat $srcProof FloatDType.real $e.term))
+  | _ =>
+      ensureDType .real e.dtype ctx
+      pure e.term
+
+def parseMaxReturnIndicesKwargs (dims : List (TSyntax `term))
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM Nat := do
+  let mut seenAxis : Bool := Bool.false
+  let mut seenReturn : Bool := Bool.false
+  let mut axisIdx : Nat := 0
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| $n:num) =>
+        if seenAxis then
+          Macro.throwError "tl.max return_indices: duplicate axis"
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError "tl.max return_indices: axis out of bounds"
+        axisIdx := n.getNat
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError "tl.max return_indices: duplicate axis"
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError "tl.max return_indices: axis out of bounds"
+        axisIdx := n.getNat
+    | `(tritonReduceKwarg| return_indices=True) =>
+        seenReturn := Bool.true
+    | `(tritonReduceKwarg| return_indices=False) =>
+        Macro.throwError "tl.max tuple binding requires `return_indices=True`"
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        Macro.throwError "tl.max return_indices: `keep_dims` is not supported"
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        Macro.throwError "tl.max return_indices: `keep_dims` is not supported"
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        Macro.throwError
+          ("tl.max return_indices: unsupported kwarg `" ++ name.getId.toString ++ "`")
+    | _ => Macro.throwUnsupported
+  unless seenReturn do
+    Macro.throwError "tl.max tuple binding requires `return_indices=True`"
+  unless seenAxis do
+    Macro.throwError "tl.max return_indices requires an explicit axis"
+  pure axisIdx
+
 mutual
 
 partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
@@ -111,18 +160,60 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
       | none => pure none
   | _ => pure none
 
+partial def expandWhereFromCond (env : Env) (c' : EOut)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .bool c'.dtype "tl.where condition"
+  unless a'.dtype == b'.dtype do
+    Macro.throwError "tl.where: branch dtype mismatch"
+  let nonScalars : List SInfo :=
+    ([c'.shape, a'.shape, b'.shape]).filter (fun s =>
+      match s with | .dims [] => Bool.false | _ => Bool.true)
+  let target : SInfo ←
+    match nonScalars with
+    | [] => pure (SInfo.dims [])
+    | first :: rest =>
+        for s in rest do
+          unless first.eq s do
+            Macro.throwError
+              "tl.where: non-scalar shape mismatch — all tile-shaped operands must agree (lift with tl.expand_dims if needed)"
+        pure first
+  let cTerm ← coerceShape c'.term c'.shape target "tl.where condition"
+  let aTerm ← coerceShape a'.term a'.shape target "tl.where then-branch"
+  let bTerm ← coerceShape b'.term b'.shape target "tl.where else-branch"
+  pure ⟨← `(Op.where $cTerm $aTerm $bTerm), a'.dtype, target, none⟩
+
+partial def expandBoolCondition (env : Env) (cond : TSyntax `tritonExpr) :
+    MacroM EOut := do
+  match cond with
+  | `(tritonExpr| $b:ident) =>
+      if env.any (fun entry => entry.1 == b.getId.toString) then
+        expandExpr env cond
+      else
+        let boolTerm : TSyntax `term := ⟨b.raw⟩
+        pure ⟨← `(Op.constBool $boolTerm), .bool, SInfo.scalar, none⟩
+  | _ =>
+      expandExpr env cond
+
 partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
   match methodCast? stx with
   | some (e, dt) =>
       let e' ← expandExpr env e
       let dst ← expandDType dt
-      let srcProof ← e'.dtype.floatProof
-      let dstProof ← dst.floatProof
-      pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none⟩
+      match e'.dtype, dst with
+      | .nat, .int =>
+          pure e'
+      | _, _ =>
+          let srcProof ← e'.dtype.floatProof
+          let dstProof ← dst.floatProof
+          pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none⟩
   | none =>
   match stx with
   | `(tritonExpr| $n:num) =>
       -- Bare numeric literals are `ℝ` data constants (e.g. `1` in `1 / s`).
+      pure ⟨← `(Op.const $n), .real, SInfo.scalar, none⟩
+  | `(tritonExpr| $n:scientific) =>
       pure ⟨← `(Op.const $n), .real, SInfo.scalar, none⟩
   | `(tritonExpr| $i:ident) =>
       let name := i.getId.toString
@@ -187,8 +278,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.sin $e'.term), .real, e'.shape, none⟩
   | `(tritonExpr| tl.cos($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.cos"
-      pure ⟨← `(Op.cos $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.cos" e'
+      pure ⟨← `(Op.cos $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.tan($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.tan"
@@ -232,13 +323,21 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandBoolNot expandExpr env "tl.logical_not" a
   | `(tritonExpr| tl.cdiv($a:tritonExpr, $b:tritonExpr)) => do
       expandCdiv expandExpr env a b
+  | `(tritonExpr| tl.max($e:tritonExpr, $n:num)) => do
+      expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e
+        #[← `(tritonReduceKwarg| $n:num)]
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
-      let a' ← expandExpr env a
-      let b' ← expandExpr env b
-      ensureDType .real a'.dtype "tl.max"
-      ensureDType .real b'.dtype "tl.max"
-      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "tl.max"
-      pure ⟨← `(Op.max2 $bc $a'.term $b'.term), .real, outShape, none⟩
+      match b with
+      | `(tritonExpr| $n:num) =>
+          expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) a
+            #[← `(tritonReduceKwarg| $n:num)]
+      | _ =>
+          let a' ← expandExpr env a
+          let b' ← expandExpr env b
+          ensureDType .real a'.dtype "tl.max"
+          ensureDType .real b'.dtype "tl.max"
+          let (bc, outShape) ← broadcastTerm a'.shape b'.shape "tl.max"
+          pure ⟨← `(Op.max2 $bc $a'.term $b'.term), .real, outShape, none⟩
   | `(tritonExpr| tl.maximum($a:tritonExpr, $b:tritonExpr)) => do
       expandMinMax expandExpr env "tl.maximum" (← `(Op.gt)) a b
   | `(tritonExpr| tl.minimum($a:tritonExpr, $b:tritonExpr)) => do
@@ -356,6 +455,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandCmp expandExpr env "comparison" (← `(Op.ne)) a b
   | `(tritonExpr| $a:tritonExpr & $b:tritonExpr) => do
       expandBoolOrNatBitwise expandExpr env "`&`" (← `(Op.boolAnd)) (← `(Op.bitAnd)) a b
+  | `(tritonExpr| $a:tritonExpr and $b:tritonExpr) => do
+      expandBoolBin expandExpr env "`and`" (← `(Op.boolAnd)) a b
   | `(tritonExpr| $a:tritonExpr | $b:tritonExpr) => do
       expandBoolOrNatBitwise expandExpr env "`|`" (← `(Op.boolOr)) (← `(Op.bitOr)) a b
   | `(tritonExpr| $a:tritonExpr ^ $b:tritonExpr) => do
@@ -400,35 +501,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $a:tritonExpr % $b:tritonExpr) => do
       expandIntegralArith expandExpr env "integer remainder" (← `(Op.mod)) a b
   | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) => do
-      -- All three must converge to a common shape. To stay aligned with
-      -- the same-shape `Op.where` AST node, we accept only scalar →
-      -- tile lifts here (via `coerceShape` / `Op.broadcast`). Non-scalar
-      -- rank/dim mismatches raise a macro error; the user can lift
-      -- through `tl.expand_dims` first.
       let c' ← expandExpr env c
-      let a' ← expandExpr env a
-      let b' ← expandExpr env b
-      ensureDType .bool c'.dtype "tl.where condition"
-      unless a'.dtype == b'.dtype do
-        Macro.throwError "tl.where: branch dtype mismatch"
-      -- Pick target shape: the first non-scalar among the three; require
-      -- any other non-scalars to match.
-      let nonScalars : List SInfo :=
-        ([c'.shape, a'.shape, b'.shape]).filter (fun s =>
-          match s with | .dims [] => Bool.false | _ => Bool.true)
-      let target : SInfo ←
-        match nonScalars with
-        | [] => pure (SInfo.dims [])
-        | first :: rest =>
-            for s in rest do
-              unless first.eq s do
-                Macro.throwError
-                  "tl.where: non-scalar shape mismatch — all tile-shaped operands must agree (lift with tl.expand_dims if needed)"
-            pure first
-      let cTerm ← coerceShape c'.term c'.shape target "tl.where condition"
-      let aTerm ← coerceShape a'.term a'.shape target "tl.where then-branch"
-      let bTerm ← coerceShape b'.term b'.shape target "tl.where else-branch"
-      pure ⟨← `(Op.where $cTerm $aTerm $bTerm), a'.dtype, target, none⟩
+      expandWhereFromCond env c' a b
   | `(tritonExpr| $e:tritonExpr[ : , None ]) => do
       -- `e[:, None]` — insert a unit axis at position 1: `[N] → [N, 1]`.
       expandSlicerNone expandExpr env e (axisIdx := 1)
@@ -472,7 +546,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       -- `tl.zeros([dims])` ≡ `tl.full([dims], 0)`.
       let zero ← `(tritonExpr| 0)
       expandFull expandExpr env dims.getElems zero
-  | _ => Macro.throwUnsupported
+  | _ => (Macro.throwUnsupported : MacroM EOut)
 
 end
 
@@ -547,6 +621,80 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
         ensureDType .ptr p'.dtype (opName ++ " pointer")
         mkTerms (← `(MemAccess.ptr $p'.term)) p'.shape
   match stx with
+  | `(tritonStmt| $i:ident = tl.max($e:tritonExpr, $n:num)) => do
+      let nameLit ← identAsStr i
+      let e' ← expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e
+        #[← `(tritonReduceKwarg| $n:num)]
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident := tl.max($e:tritonExpr, $n:num)) => do
+      let nameLit ← identAsStr i
+      let e' ← expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e
+        #[← `(tritonReduceKwarg| $n:num)]
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $valueName:ident, $indexName:ident = tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.max return_indices"
+      let dims := match e'.shape with | .dims ds => ds
+      let axisIdx ← parseMaxReturnIndicesKwargs dims kwargs
+      let outDims ← eraseNth dims axisIdx
+      let outShape := SInfo.dims outDims
+      let outShapeTerm ← outShape.term
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+      let valueLit ← identAsStr valueName
+      let indexLit ← identAsStr indexName
+      let valueOp ← `(Op.reduceMax (⟨$axisLit, by simp⟩) Bool.false $e'.term)
+      let indexOp ← `(Op.argMax (⟨$axisLit, by simp⟩) $e'.term)
+      let valueStmt ← `(Stmt.assign TileDType.real $outShapeTerm $valueLit $valueOp)
+      let indexStmt ← `(Stmt.assign TileDType.nat $outShapeTerm $indexLit $indexOp)
+      let valueCompute ← `(ComputeStmt.assign TileDType.real $outShapeTerm $valueLit (ComputeExpr.alg $valueOp))
+      let indexCompute ← `(ComputeStmt.assign TileDType.nat $outShapeTerm $indexLit (ComputeExpr.alg $indexOp))
+      let env' :=
+        (indexName.getId.toString, DInfo.nat, outShape) ::
+          (valueName.getId.toString, DInfo.real, outShape) :: env
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$valueStmt, $indexStmt]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$valueCompute, $indexCompute]),
+        env', Bool.false)
+  | `(tritonStmt| $valueName:ident, $indexName:ident := tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
+      let e' ← expandExpr env e
+      ensureDType .real e'.dtype "tl.max return_indices"
+      let dims := match e'.shape with | .dims ds => ds
+      let axisIdx ← parseMaxReturnIndicesKwargs dims kwargs
+      let outDims ← eraseNth dims axisIdx
+      let outShape := SInfo.dims outDims
+      let outShapeTerm ← outShape.term
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+      let valueLit ← identAsStr valueName
+      let indexLit ← identAsStr indexName
+      let valueOp ← `(Op.reduceMax (⟨$axisLit, by simp⟩) Bool.false $e'.term)
+      let indexOp ← `(Op.argMax (⟨$axisLit, by simp⟩) $e'.term)
+      let valueStmt ← `(Stmt.assign TileDType.real $outShapeTerm $valueLit $valueOp)
+      let indexStmt ← `(Stmt.assign TileDType.nat $outShapeTerm $indexLit $indexOp)
+      let valueCompute ← `(ComputeStmt.assign TileDType.real $outShapeTerm $valueLit (ComputeExpr.alg $valueOp))
+      let indexCompute ← `(ComputeStmt.assign TileDType.nat $outShapeTerm $indexLit (ComputeExpr.alg $indexOp))
+      let env' :=
+        (indexName.getId.toString, DInfo.nat, outShape) ::
+          (valueName.getId.toString, DInfo.real, outShape) :: env
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$valueStmt, $indexStmt]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$valueCompute, $indexCompute]),
+        env', Bool.false)
   | `(tritonStmt| $i:ident := tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       ensureNoAtomicKwargs "tl.atomic_xchg" kwargs
       expandAtomicRMWCore "tl.atomic_xchg" (← `(RMWOp.xchg)) (some i) p v none
@@ -641,7 +789,7 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
-      let cond' ← expandExpr env cond
+      let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
       let (algThen, computeThen, _, thenHasCompute) ← expandStmts env thenStmts.toList
@@ -650,7 +798,7 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
         env, cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
   | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) => do
-      let cond' ← expandExpr env cond
+      let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
       let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env stmts.toList
