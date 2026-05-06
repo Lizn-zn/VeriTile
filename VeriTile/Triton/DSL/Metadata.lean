@@ -26,26 +26,33 @@ private def methodCastExpr? (stx : TSyntax `tritonExpr) : Option (TSyntax `trito
 mutual
 
 /-- Collect region terms from statically visible pointer expressions. -/
-private partial def staticPtrRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
+private partial def staticPtrRegions (assigned : List String) :
+    TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
   match stx with
   | `(tritonExpr| $($r:term)) => [r]
-  | `(tritonExpr| ($e:tritonExpr)) => staticPtrRegions e
+  | `(tritonExpr| $r:ident) =>
+      if assigned.contains r.getId.toString then
+        []
+      else
+        [⟨r.raw⟩]
+  | `(tritonExpr| ($e:tritonExpr)) => staticPtrRegions assigned e
   | `(tritonExpr| $a:tritonExpr + $_b:tritonExpr) =>
-      staticPtrRegions a
+      staticPtrRegions assigned a
   | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $_:ident=$_:tritonExpr,
         $_:ident=[$_:tritonExpr,*], $_:ident=[$_:tritonExpr,*],
         $_:ident=[$_:tritonExpr,*], $_:ident=[$_:tritonExpr,*])) =>
-      staticPtrRegions p
+      staticPtrRegions assigned p
   | `(tritonExpr| tl.advance($p:tritonExpr, [$_:tritonExpr,*])) =>
-      staticPtrRegions p
+      staticPtrRegions assigned p
   | _ => []
 
 /-- Collect all region terms reachable from a `tritonExpr`. Returns `term`
     syntax - each element is the Lean term inside a `tl.load(...)`
     pointer (recursively in subexpressions). -/
-private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
+private partial def exprRegions (assigned : List String) :
+    TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
   match methodCastExpr? stx with
-  | some e => exprRegions e
+  | some e => exprRegions assigned e
   | none =>
   match stx with
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
@@ -53,316 +60,285 @@ private partial def exprRegions : TSyntax `tritonExpr → List (TSyntax `term) :
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
             match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      staticPtrRegions p ++ kwargRegions
+      staticPtrRegions assigned p ++ kwargRegions
   | `(tritonExpr| tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
             match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions v ++ kwargRegions ++ staticPtrRegions p
+      exprRegions assigned v ++ kwargRegions ++ staticPtrRegions assigned p
   | `(tritonExpr| tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
             match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions cmp ++ exprRegions v ++ kwargRegions ++ staticPtrRegions p
-  | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions e
-  | `(tritonExpr| tl.exp2($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions e
-  | `(tritonExpr| tl.log2($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions e
-  | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.sin($e:tritonExpr))         => exprRegions e
-  | `(tritonExpr| tl.math.sin($e:tritonExpr))    => exprRegions e
-  | `(tritonExpr| tl.cos($e:tritonExpr))         => exprRegions e
-  | `(tritonExpr| tl.tan($e:tritonExpr))         => exprRegions e
-  | `(tritonExpr| tl.atan($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.cosh($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.sinh($e:tritonExpr))        => exprRegions e
-  | `(tritonExpr| tl.erf($e:tritonExpr))         => exprRegions e
-  | `(tritonExpr| tl.extra.cuda.libdevice.erf($e:tritonExpr)) => exprRegions e
-  | `(tritonExpr| tl.abs($e:tritonExpr))         => exprRegions e
+      exprRegions assigned cmp ++ exprRegions assigned v ++ kwargRegions ++ staticPtrRegions assigned p
+  | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions assigned e
+  | `(tritonExpr| tl.exp2($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions assigned e
+  | `(tritonExpr| tl.log2($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions assigned e
+  | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| tl.sin($e:tritonExpr))         => exprRegions assigned e
+  | `(tritonExpr| tl.math.sin($e:tritonExpr))    => exprRegions assigned e
+  | `(tritonExpr| tl.cos($e:tritonExpr))         => exprRegions assigned e
+  | `(tritonExpr| tl.tan($e:tritonExpr))         => exprRegions assigned e
+  | `(tritonExpr| tl.atan($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| tl.cosh($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| tl.sinh($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| tl.erf($e:tritonExpr))         => exprRegions assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.erf($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| tl.abs($e:tritonExpr))         => exprRegions assigned e
   | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions a ++ exprRegions b
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.logical_or($a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions a ++ exprRegions b
-  | `(tritonExpr| tl.logical_not($e:tritonExpr)) => exprRegions e
+      exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| tl.logical_not($e:tritonExpr)) => exprRegions assigned e
   | `(tritonExpr| tl.cdiv($a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions a ++ exprRegions b
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
-      exprRegions a ++ exprRegions b
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.maximum($a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions a ++ exprRegions b
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.minimum($a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions a ++ exprRegions b
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.cumsum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
+      exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.cumprod($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
+      exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.associative_scan($e:tritonExpr, $_:tritonScanOp $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
+      exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.argmax($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
+      exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.argmin($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
+      exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.sort($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
+      exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
+      exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
-  | `(tritonExpr| tl.toReal($e:tritonExpr))      => exprRegions e
-  | `(tritonExpr| tl.cast($e:tritonExpr, $_:tritonDType)) => exprRegions e
+      exprRegions assigned e ++ kwargRegions
+  | `(tritonExpr| tl.toReal($e:tritonExpr))      => exprRegions assigned e
+  | `(tritonExpr| tl.cast($e:tritonExpr, $_:tritonDType)) => exprRegions assigned e
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions a ++ exprRegions b
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $c:tritonExpr)) =>
-      exprRegions a ++ exprRegions b ++ exprRegions c
+      exprRegions assigned a ++ exprRegions assigned b ++ exprRegions assigned c
   | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $_:ident=$base:tritonExpr,
         $_:ident=[$_parent:tritonExpr,*], $_:ident=[$_strides:tritonExpr,*],
         $_:ident=[$_offsets:tritonExpr,*], $_:ident=[$_block:tritonExpr,*])) =>
-      staticPtrRegions p ++ exprRegions base
+      staticPtrRegions assigned p ++ exprRegions assigned base
   | `(tritonExpr| tl.advance($p:tritonExpr, [$_deltas:tritonExpr,*])) =>
-      exprRegions p
+      exprRegions assigned p
   | `(tritonExpr| tl.permute($e:tritonExpr, [$_:num,*])) =>
-      exprRegions e
+      exprRegions assigned e
   | `(tritonExpr| tl.reshape($e:tritonExpr, [$dims:tritonExpr,*])) =>
-      dims.getElems.foldl (fun acc d => acc ++ exprRegions d) (exprRegions e)
+      dims.getElems.foldl (fun acc d => acc ++ exprRegions assigned d) (exprRegions assigned e)
   | `(tritonExpr| tl.view($e:tritonExpr, [$dims:tritonExpr,*])) =>
-      dims.getElems.foldl (fun acc d => acc ++ exprRegions d) (exprRegions e)
+      dims.getElems.foldl (fun acc d => acc ++ exprRegions assigned d) (exprRegions assigned e)
   | `(tritonExpr| tl.ravel($e:tritonExpr)) =>
-      exprRegions e
+      exprRegions assigned e
   | `(tritonExpr| tl.flip($e:tritonExpr, $_:num)) =>
-      exprRegions e
+      exprRegions assigned e
   | `(tritonExpr| tl.flip($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl
           (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
             match kw with
-            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
             | _ => acc) []
-      exprRegions e ++ kwargRegions
+      exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.join($a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions a ++ exprRegions b
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.split($e:tritonExpr, $_:num)) =>
-      exprRegions e
-  | `(tritonExpr| ($e:tritonExpr))               => exprRegions e
-  | `(tritonExpr| tl.program_id($e:tritonExpr))  => exprRegions e
-  | `(tritonExpr| tl.arange($e:tritonExpr))      => exprRegions e
+      exprRegions assigned e
+  | `(tritonExpr| ($e:tritonExpr))               => exprRegions assigned e
+  | `(tritonExpr| tl.program_id($e:tritonExpr))  => exprRegions assigned e
+  | `(tritonExpr| tl.arange($e:tritonExpr))      => exprRegions assigned e
   | `(tritonExpr| tl.arange($a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr <  $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr >  $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr &  $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr ^  $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr |  $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| ~$e:tritonExpr) => exprRegions e
-  | `(tritonExpr| $a:tritonExpr << $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr >> $b:tritonExpr) => exprRegions a ++ exprRegions b
+      exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr <  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr >  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr &  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr ^  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr |  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| ~$e:tritonExpr) => exprRegions assigned e
+  | `(tritonExpr| $a:tritonExpr << $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr >> $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) =>
-      staticPtrRegions stx ++ exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => exprRegions a ++ exprRegions b
-  | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => exprRegions a ++ exprRegions b
+      staticPtrRegions assigned stx ++ exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) =>
-      exprRegions c ++ exprRegions a ++ exprRegions b
-  | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions e
-  | `(tritonExpr| $e:tritonExpr[ None , : ])     => exprRegions e
-  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:tritonReduceKwarg)) => exprRegions e
-  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:num)) => exprRegions e
-  | `(tritonExpr| tl.trans($e:tritonExpr))       => exprRegions e
-  | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr)) => exprRegions v
+      exprRegions assigned c ++ exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions assigned e
+  | `(tritonExpr| $e:tritonExpr[ None , : ])     => exprRegions assigned e
+  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:tritonReduceKwarg)) => exprRegions assigned e
+  | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:num)) => exprRegions assigned e
+  | `(tritonExpr| tl.trans($e:tritonExpr))       => exprRegions assigned e
+  | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr)) => exprRegions assigned v
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*])) => []
   | _ => []
 end
 
-/-- Per-statement region split: `(input regions, output regions)`. -/
-partial def stmtRegions :
-    TSyntax `tritonStmt → List (TSyntax `term) × List (TSyntax `term) := fun stx =>
+private def memKwargRegions (assigned : List String)
+    (kwargs : TSyntaxArray `tritonMemKwarg) : List (TSyntax `term) :=
+  kwargs.foldl
+    (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
+      match kw with
+      | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
+      | _ => acc) []
+
+mutual
+
+private partial def blockRegionsWith (assigned : List String)
+    (stmts : List (TSyntax `tritonStmt)) :
+    List (TSyntax `term) × List (TSyntax `term) × List String :=
+  stmts.foldl
+    (fun (acc : List (TSyntax `term) × List (TSyntax `term) × List String) st =>
+      let (i, o, nextAssigned) := stmtRegionsWith acc.2.2 st
+      (acc.1 ++ i, acc.2.1 ++ o, nextAssigned))
+    ([], [], assigned)
+
+/-- Per-statement region split plus the assigned-register context after the statement. -/
+private partial def stmtRegionsWith (assigned : List String)
+    (stx : TSyntax `tritonStmt) :
+    List (TSyntax `term) × List (TSyntax `term) × List String :=
   match stx with
-  | `(tritonStmt| $_:ident := $e:tritonExpr) =>
-      (exprRegions e, [])
-  | `(tritonStmt| $_:ident = $e:tritonExpr) =>
-      (exprRegions e, [])
+  | `(tritonStmt| $i:ident := $e:tritonExpr) =>
+      (exprRegions assigned e, [], i.getId.toString :: assigned)
+  | `(tritonStmt| $i:ident = $e:tritonExpr) =>
+      (exprRegions assigned e, [], i.getId.toString :: assigned)
   | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_max($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_min($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_and($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_or($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_xor($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (exprRegions cmp ++ exprRegions v ++ kwargRegions, staticPtrRegions p)
+      (exprRegions assigned cmp ++ exprRegions assigned v ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.async_copy($dst:tritonExpr, $src:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      let kwargRegions : List (TSyntax `term) :=
-        kwargs.foldl
-          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
-            match kw with
-            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions val
-            | _ => acc) []
-      (staticPtrRegions src ++ exprRegions src ++ kwargRegions, staticPtrRegions dst)
+      (staticPtrRegions assigned src ++ exprRegions assigned src ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned dst, assigned)
   | `(tritonStmt| tl.async_wait()) =>
-      ([], [])
+      ([], [], assigned)
   | `(tritonStmt| tl.debug_barrier()) =>
-      ([], [])
+      ([], [], assigned)
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
-      stmts.toList.foldl
-        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
-          let (i, o) := stmtRegions st
-          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+      let (i, o, _) := blockRegionsWith assigned stmts.toList
+      (i, o, assigned)
   | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
-      stmts.toList.foldl
-        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
-          let (i, o) := stmtRegions st
-          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+      let (i, o, _) := blockRegionsWith assigned stmts.toList
+      (i, o, assigned)
   | `(tritonStmt| tl.static_range $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
-      stmts.toList.foldl
-        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
-          let (i, o) := stmtRegions st
-          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+      let (i, o, _) := blockRegionsWith assigned stmts.toList
+      (i, o, assigned)
   | `(tritonStmt| tl.static_range $_:ident in $_:num { $stmts:tritonStmt* }) =>
-      stmts.toList.foldl
-        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
-          let (i, o) := stmtRegions st
-          (acc.1 ++ i, acc.2 ++ o)) ([], [])
+      let (i, o, _) := blockRegionsWith assigned stmts.toList
+      (i, o, assigned)
   | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
-      let thenRegions := thenStmts.toList.foldl
-        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
-          let (i, o) := stmtRegions st
-          (acc.1 ++ i, acc.2 ++ o)) ([], [])
-      let elseRegions := elseStmts.toList.foldl
-        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
-          let (i, o) := stmtRegions st
-          (acc.1 ++ i, acc.2 ++ o)) ([], [])
-      (exprRegions cond ++ thenRegions.1 ++ elseRegions.1, thenRegions.2 ++ elseRegions.2)
+      let (thenIns, thenOuts, _) := blockRegionsWith assigned thenStmts.toList
+      let (elseIns, elseOuts, _) := blockRegionsWith assigned elseStmts.toList
+      (exprRegions assigned cond ++ thenIns ++ elseIns, thenOuts ++ elseOuts, assigned)
   | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) =>
-      stmts.toList.foldl
-        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) st =>
-          let (i, o) := stmtRegions st
-          (acc.1 ++ i, acc.2 ++ o)) (exprRegions cond, [])
-  | _ => ([], [])
+      let (ins, outs, _) := blockRegionsWith assigned stmts.toList
+      (exprRegions assigned cond ++ ins, outs, assigned)
+  | _ => ([], [], assigned)
+
+end
+
+/-- Per-statement region split: `(input regions, output regions)`. -/
+partial def stmtRegions (stx : TSyntax `tritonStmt) :
+    List (TSyntax `term) × List (TSyntax `term) :=
+  let (i, o, _) := stmtRegionsWith [] stx
+  (i, o)
+
+/-- Per-block region split, tracking assigned registers so bare pointer
+identifiers can be distinguished from pointer registers. -/
+partial def blockRegions (stmts : List (TSyntax `tritonStmt)) :
+    List (TSyntax `term) × List (TSyntax `term) :=
+  let (i, o, _) := blockRegionsWith [] stmts
+  (i, o)
 
 end VeriTile.Triton.DSL.Metadata

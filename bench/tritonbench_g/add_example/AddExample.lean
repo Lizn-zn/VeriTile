@@ -8,7 +8,6 @@ open VeriTile.Triton
 /-- Faithful 1:1 transcription of `add_example.py`'s `add_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python pointer args → Lean `RegionName` injected via `$(...)`.
 - Python `BLOCK_SIZE: tl.constexpr` annotation → Lean `Nat` parameter
   (the `tl.constexpr` is implicit in Lean params).
 
@@ -21,10 +20,10 @@ def add_kernel
   block_start = pid * $(BLOCK_SIZE)
   offsets = block_start + tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_elements)
-  x = tl.load($(in_ptr0) + offsets, mask=mask)
-  y = tl.load($(in_ptr1) + offsets, mask=mask)
+  x = tl.load(in_ptr0 + offsets, mask=mask)
+  y = tl.load(in_ptr1 + offsets, mask=mask)
   output = x + y
-  tl.store($(out_ptr) + offsets, output, mask=mask)
+  tl.store(out_ptr + offsets, output, mask=mask)
 }
 
 end VeriTile.Bench.TritonBenchG.AddExample

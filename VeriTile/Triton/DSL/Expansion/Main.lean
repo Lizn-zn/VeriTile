@@ -86,6 +86,13 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
   | `(tritonExpr| $($r:term)) =>
       let zero ← `(Op.constNat 0)
       pure (some ⟨r, zero, SInfo.scalar, Bool.true⟩)
+  | `(tritonExpr| $r:ident) =>
+      if env.any (fun entry => entry.1 == r.getId.toString) then
+        pure none
+      else
+        let zero ← `(Op.constNat 0)
+        let region : TSyntax `term := ⟨r.raw⟩
+        pure (some ⟨region, zero, SInfo.scalar, Bool.true⟩)
   | `(tritonExpr| ($e:tritonExpr)) =>
       expandStaticPtrExpr env e
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
@@ -676,11 +683,7 @@ macro_rules
       -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
       -- dedup (a mix of literals and Lean terms can't be statically deduped, and
       -- `Kernel.inputs/outputs` is metadata-only, so duplicates are harmless).
-      let (allIns, allOuts) := stmts.foldl
-        (fun (acc : List (TSyntax `term) × List (TSyntax `term)) s =>
-          let (i, o) := Metadata.stmtRegions s
-          (acc.1 ++ i, acc.2 ++ o))
-        ([], [])
+      let (allIns, allOuts) := Metadata.blockRegions stmts.toList
       let insArr  : Array (TSyntax `term) := allIns.toArray
       let outsArr : Array (TSyntax `term) := allOuts.toArray
       `(ComputeKernel.mk [$insArr,*] [$outsArr,*] [$computeStmtTerms,*])
