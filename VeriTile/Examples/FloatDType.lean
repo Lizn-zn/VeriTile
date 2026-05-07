@@ -75,7 +75,7 @@ theorem float_add_kernel_correct_view
       (fun idx : TileIndex [blockSize] => xs idx.1))
     (h_y : TensorView.loaded s (programTileView s yReg blockSize)
       (fun idx : TileIndex [blockSize] => ys idx.1)) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (((floatAddKernel xReg yReg outReg blockSize).eraseDType))
       (fun s0 s' =>
         s0 = s →
@@ -189,7 +189,7 @@ theorem float_softmax_reciprocal_refinement_view
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       (((floatStableSoftmaxKernel xReg yReg N).eraseDType))
       (((floatSoftmaxRecipKernel xReg yReg N).eraseDType))
       (fun s0 lhs' rhs' =>

@@ -21,19 +21,16 @@ its closed form via simp on the operational semantics. The refinement theorem
 itself is fully proven from those two lemmas plus `naive_eq_stable`.
 -/
 
-import Mathlib.Analysis.SpecialFunctions.Exp
-import Mathlib.Algebra.BigOperators.Group.Finset.Basic
-import Mathlib.Algebra.BigOperators.Field
-import Mathlib.Tactic.FieldSimp
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Softmax
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile.Triton VeriTile.Triton.TiledSoftmax
 
 /-! ## (a) Source Triton (`.py`) — for reference only
 
@@ -91,27 +88,11 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
   tl.store($(yReg) + offs, y)
 }
 
-/-! ## (c) Math denotation and equivalence -/
+/-! ## (c) Math denotation and equivalence
 
-/-- Naive softmax over a tile of length `n` in ℝ. -/
-noncomputable def naiveSoftmaxMath {n : Nat} (x : Fin n → ℝ) : Fin n → ℝ :=
-  fun i => Real.exp (x i) / ∑ j, Real.exp (x j)
-
-/-- Max-subtracted softmax over a tile of length `n` in ℝ. -/
-noncomputable def stableSoftmaxMath {n : Nat} (x : Fin n → ℝ) (m : ℝ) :
-    Fin n → ℝ :=
-  fun i => Real.exp (x i - m) / ∑ j, Real.exp (x j - m)
-
-/-- Naive and max-subtracted softmax produce the same output for any shift `m`.
-    The load-bearing mathematical fact behind the numerical-stability trick. -/
-theorem naive_eq_stable {n : Nat} (x : Fin n → ℝ) (m : ℝ) :
-    naiveSoftmaxMath x = stableSoftmaxMath x m := by
-  funext i
-  unfold naiveSoftmaxMath stableSoftmaxMath
-  simp only [Real.exp_sub]
-  rw [← Finset.sum_div]
-  have hm : Real.exp m ≠ 0 := Real.exp_ne_zero m
-  field_simp
+The reusable math denotation (`naiveSoftmaxMath`, `stableSoftmaxMath`,
+`naive_eq_stable`, `naiveSpec`, `stableSpec`, `tileMax`) lives in
+`VeriTile.Triton.Math.Softmax`. -/
 
 /-! ## (d) kernel refinement
 
@@ -138,19 +119,6 @@ We mirror it for Triton:
 * the two `softmax_*_correct` lemmas play the role of `tnum_const_O*_correct`,
 * the refinement theorem composes them via `naive_eq_stable`.
 -/
-
-/-- What `naiveSoftmaxKernel` writes at the output region's `[pid*blockSize + i]` cell. -/
-noncomputable def naiveSpec {blockSize : Nat} (xs : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
-  Real.exp (xs i) / ∑ j, Real.exp (xs j)
-
-/-- What `stableSoftmaxKernel` writes at the output region's `[pid*blockSize + i]` cell. -/
-noncomputable def stableSpec {blockSize : Nat} (xs : Fin blockSize → ℝ) (m : ℝ) (i : Fin blockSize) : ℝ :=
-  Real.exp (xs i - m) / ∑ j, Real.exp (xs j - m)
-
-/-- Max of a non-empty tile, in `Tile.reduceMax`'s form. -/
-noncomputable def tileMax {blockSize : Nat} (h : 0 < blockSize) (xs : Fin blockSize → ℝ) : ℝ :=
-  match blockSize, h, xs with
-  | _ + 1, _, xs => Finset.univ.sup' Finset.univ_nonempty xs
 
 /-- **Naive softmax kernel correctness.**
 
@@ -260,7 +228,7 @@ theorem softmax_kernels_refinement_view
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       ((naiveSoftmaxKernel xReg yReg blockSize))
       ((stableSoftmaxKernel xReg yReg blockSize))
       (fun s0 lhs' rhs' =>

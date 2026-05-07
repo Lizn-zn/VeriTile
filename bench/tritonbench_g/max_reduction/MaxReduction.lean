@@ -21,7 +21,7 @@ def max_kernel_1
   offset = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   inp_ptrs = inp + offset
   mask = offset < $(M)
-  inp_val = tl.load(inp_ptrs, mask=mask, other=-inf)
+  inp_val = tl.load(inp_ptrs, mask=mask, other=-float("inf"))
   max_val = tl.max(inp_val)
   mid_ptr = mid + pid
   tl.store(mid_ptr, max_val)
@@ -37,7 +37,7 @@ def max_kernel_2
   offset = tl.arange(0, $(BLOCK_MID))
   mid_ptrs = mid + offset
   mask = offset < $(mid_size)
-  mid_val = tl.load(mid_ptrs, mask=mask, other=-inf)
+  mid_val = tl.load(mid_ptrs, mask=mask, other=-float("inf"))
   max_val = tl.max(mid_val)
   tl.store(out, max_val)
 }
@@ -62,7 +62,7 @@ def max_kernel
   mask1 = m_offset < $(M)
   mask = m_offset[:, None] < $(M) and n_offset[None, :] < $(N)
   inp_ptrs = inp + offset
-  inp_vals = tl.load(inp_ptrs, mask=mask, other=-inf)
+  inp_vals = tl.load(inp_ptrs, mask=mask, other=-float("inf"))
   result_value, result_index := tl.max(inp_vals, axis=1, return_indices=True)
   out_value_ptrs = out_value + offset_index
   out_index_ptrs = out_index + offset_index
@@ -158,11 +158,10 @@ theorem max_kernel_1_correct
 theorem max_kernel_1_compute_correct
     (inp mid : RegionName)
     (M BLOCK_SIZE : Nat) (s : BlockState) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.OutputScalar
       (max_kernel_1 inp mid M BLOCK_SIZE)
-      (fun s0 s' =>
-        s0 = s →
-        s'.readMem mid s.pid = maxKernel1Spec s inp M BLOCK_SIZE) := by
+      s mid s.pid (maxKernel1Spec s inp M BLOCK_SIZE) := by
+  unfold ComputeCorrect.OutputScalar ComputeKernel.ExecCorrect
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
@@ -191,11 +190,10 @@ theorem max_kernel_2_correct
 theorem max_kernel_2_compute_correct
     (mid out : RegionName)
     (mid_size BLOCK_MID : Nat) (s : BlockState) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.OutputScalar
       (max_kernel_2 mid out mid_size BLOCK_MID)
-      (fun s0 s' =>
-        s0 = s →
-        s'.readMem out 0 = maxKernel2Spec s mid mid_size BLOCK_MID) := by
+      s out 0 (maxKernel2Spec s mid mid_size BLOCK_MID) := by
+  unfold ComputeCorrect.OutputScalar ComputeKernel.ExecCorrect
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
@@ -209,16 +207,14 @@ theorem max_kernel_compute_correct
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_M => maxKernelOutOffset s K BLOCK_M i))
     (hOutRegions : out_value ≠ out_index) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.OutputPairWhere
       (max_kernel inp out_value out_index M N K BLOCK_M BLOCK_N)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK_M,
-          s.pids 0 * BLOCK_M + i.val < M →
-          s'.readMem out_value (maxKernelOutOffset s K BLOCK_M i)
-              = maxKernelValueSpec s inp M N K BLOCK_M BLOCK_N i ∧
-            s'.readMemValue .nat out_index (maxKernelOutOffset s K BLOCK_M i)
-              = maxKernelIndexSpec s inp M N K BLOCK_M BLOCK_N i) := by
+      s out_value out_index
+      (maxKernelOutOffset s K BLOCK_M)
+      (fun i : Fin BLOCK_M => s.pids 0 * BLOCK_M + i.val < M)
+      (maxKernelValueSpec s inp M N K BLOCK_M BLOCK_N)
+      (maxKernelIndexSpec s inp M N K BLOCK_M BLOCK_N) := by
+  unfold ComputeCorrect.OutputPairWhere ComputeKernel.ExecCorrect
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0

@@ -371,4 +371,151 @@ theorem eval_eq_exec_of_toAlgorithm? {ck : ComputeKernel} {ak : AlgKernel}
 
 end ComputeKernel
 
+namespace ComputeCorrect
+
+/-! ## User-facing output-shape combinators -/
+
+/-- Fully general two-state correctness surface. Prefer `Post` or an `Output*`
+combinator when the theorem fixes one initial state. -/
+def General (ck : ComputeKernel) (post : ComputeKernel.AlgSpec) : Prop :=
+  ComputeKernel.ComputeCorrect ck post
+
+/-- One-run postcondition-style correctness from a fixed initial state. -/
+def Post
+    (ck : ComputeKernel) (s : BlockState) (post : BlockState → Prop) : Prop :=
+  ComputeKernel.ExecCorrect ck s post
+
+/-- A scalar Real output equals `expected` after executing `ck` from `s`. -/
+def OutputScalar
+    (ck : ComputeKernel) (s : BlockState)
+    (out : RegionName) (offset : Nat) (expected : ℝ) : Prop :=
+  ComputeKernel.ExecCorrect ck s (fun s' =>
+    s'.readMem out offset = expected)
+
+/-- A scalar Nat output equals `expected` after executing `ck` from `s`. -/
+def OutputNatScalar
+    (ck : ComputeKernel) (s : BlockState)
+    (out : RegionName) (offset : Nat) (expected : Nat) : Prop :=
+  ComputeKernel.ExecCorrect ck s (fun s' =>
+    s'.readMemValue .nat out offset = expected)
+
+/-- An ND Real tensor view matches `expected` after executing `ck` from `s`. -/
+def OutputTile {shape : TileShape}
+    (ck : ComputeKernel) (s : BlockState)
+    (view : TensorView shape) (expected : TileIndex shape → ℝ) : Prop :=
+  ComputeKernel.ExecCorrect ck s (fun s' =>
+    ∀ idx : TileIndex shape,
+      TensorView.observe (some s') view idx = some (expected idx))
+
+/-- A 1D Real tensor view matches `expected` after executing `ck` from `s`. -/
+def OutputArray {n : Nat}
+    (ck : ComputeKernel) (s : BlockState)
+    (view : TensorView [n]) (expected : Fin n → ℝ) : Prop :=
+  OutputTile ck s view (fun idx : TileIndex [n] => expected idx.1)
+
+/--
+A paired 1D value/index output matches expected values on active lanes.
+
+This is the user-facing shape for kernels such as `tl.max(...,
+return_indices=True)`: the value channel is Real memory, while the index channel
+is typed Nat memory.
+-/
+def OutputPairWhere {n : Nat}
+    (ck : ComputeKernel) (s : BlockState)
+    (valueRegion indexRegion : RegionName)
+    (offset : Fin n → Nat)
+    (active : Fin n → Prop)
+    (expectedValue : Fin n → ℝ)
+    (expectedIndex : Fin n → Nat) : Prop :=
+  ComputeKernel.ExecCorrect ck s (fun s' =>
+    ∀ i : Fin n,
+      active i →
+      s'.readMem valueRegion (offset i) = expectedValue i ∧
+      s'.readMemValue .nat indexRegion (offset i) = expectedIndex i)
+
+/-- A paired 1D value/index output matches expected values on every lane. -/
+def OutputPair {n : Nat}
+    (ck : ComputeKernel) (s : BlockState)
+    (valueRegion indexRegion : RegionName)
+    (offset : Fin n → Nat)
+    (expectedValue : Fin n → ℝ)
+    (expectedIndex : Fin n → Nat) : Prop :=
+  OutputPairWhere ck s valueRegion indexRegion offset (fun _ => True)
+    expectedValue expectedIndex
+
+end ComputeCorrect
+
+namespace ComputeRefine
+
+/-! ## User-facing output-equivalence combinators -/
+
+/-- Fully general two-state refinement surface. Prefer `Post` or an `Output*Eq`
+combinator when the theorem fixes one initial state. -/
+def General
+    (lhs rhs : ComputeKernel)
+    (rel : BlockState → BlockState → BlockState → Prop) : Prop :=
+  ComputeKernel.ComputeRefine lhs rhs rel
+
+/-- One-run postcondition-style refinement from a fixed initial state. -/
+def Post
+    (lhs rhs : ComputeKernel) (s : BlockState)
+    (rel : BlockState → BlockState → Prop) : Prop :=
+  ComputeKernel.ExecRefine lhs rhs s rel
+
+/-- Two kernels produce equal Real scalar observations after running from `s`. -/
+def OutputScalarEq
+    (lhs rhs : ComputeKernel) (s : BlockState)
+    (lhsOut : RegionName) (lhsOffset : Nat)
+    (rhsOut : RegionName) (rhsOffset : Nat) : Prop :=
+  ComputeKernel.ExecRefine lhs rhs s (fun lhs' rhs' =>
+    lhs'.readMem lhsOut lhsOffset = rhs'.readMem rhsOut rhsOffset)
+
+/-- Two kernels produce equal Nat scalar observations after running from `s`. -/
+def OutputNatScalarEq
+    (lhs rhs : ComputeKernel) (s : BlockState)
+    (lhsOut : RegionName) (lhsOffset : Nat)
+    (rhsOut : RegionName) (rhsOffset : Nat) : Prop :=
+  ComputeKernel.ExecRefine lhs rhs s (fun lhs' rhs' =>
+    lhs'.readMemValue .nat lhsOut lhsOffset =
+      rhs'.readMemValue .nat rhsOut rhsOffset)
+
+/-- Two kernels produce equal ND Real tensor-view observations. -/
+def OutputTileEq {shape : TileShape}
+    (lhs rhs : ComputeKernel) (s : BlockState)
+    (lhsView rhsView : TensorView shape) : Prop :=
+  ComputeKernel.ExecRefine lhs rhs s (fun lhs' rhs' =>
+    ∀ idx : TileIndex shape,
+      TensorView.observe (some lhs') lhsView idx =
+        TensorView.observe (some rhs') rhsView idx)
+
+/-- Two kernels produce equal 1D Real tensor-view observations. -/
+def OutputArrayEq {n : Nat}
+    (lhs rhs : ComputeKernel) (s : BlockState)
+    (lhsView rhsView : TensorView [n]) : Prop :=
+  OutputTileEq lhs rhs s lhsView rhsView
+
+/-- Two kernels produce equal paired value/index outputs on active lanes. -/
+def OutputPairEqWhere {n : Nat}
+    (lhs rhs : ComputeKernel) (s : BlockState)
+    (lhsValue lhsIndex rhsValue rhsIndex : RegionName)
+    (lhsOffset rhsOffset : Fin n → Nat)
+    (active : Fin n → Prop) : Prop :=
+  ComputeKernel.ExecRefine lhs rhs s (fun lhs' rhs' =>
+    ∀ i : Fin n,
+      active i →
+      lhs'.readMem lhsValue (lhsOffset i) =
+          rhs'.readMem rhsValue (rhsOffset i) ∧
+        lhs'.readMemValue .nat lhsIndex (lhsOffset i) =
+          rhs'.readMemValue .nat rhsIndex (rhsOffset i))
+
+/-- Two kernels produce equal paired value/index outputs on every lane. -/
+def OutputPairEq {n : Nat}
+    (lhs rhs : ComputeKernel) (s : BlockState)
+    (lhsValue lhsIndex rhsValue rhsIndex : RegionName)
+    (lhsOffset rhsOffset : Fin n → Nat) : Prop :=
+  OutputPairEqWhere lhs rhs s lhsValue lhsIndex rhsValue rhsIndex
+    lhsOffset rhsOffset (fun _ => True)
+
+end ComputeRefine
+
 end VeriTile.Triton

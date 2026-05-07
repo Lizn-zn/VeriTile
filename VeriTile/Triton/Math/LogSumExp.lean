@@ -188,6 +188,32 @@ theorem sum_exp_masked_map_eq {n D i_d : Nat} (f : Fin (n+1) → ℝ) (g : ℝ �
 
 /-! ## Tiled aggregation math -/
 
+/-- The load-bearing math identity behind stable log-sum-exp. -/
+theorem log_sum_exp_shift_invariant {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) (m : ℝ) :
+    Real.log (∑ i, Real.exp (x i)) = m + Real.log (∑ i, Real.exp (x i - m)) := by
+  have h_factor : ∀ i : Fin n, Real.exp (x i) = Real.exp m * Real.exp (x i - m) := by
+    intro i
+    rw [← Real.exp_add]
+    ring_nf
+  rw [show (∑ i, Real.exp (x i)) = ∑ i, Real.exp m * Real.exp (x i - m) from
+        Finset.sum_congr rfl (fun i _ => h_factor i)]
+  rw [← Finset.mul_sum]
+  have h_em_pos : 0 < Real.exp m := Real.exp_pos m
+  have h_sum_pos : 0 < ∑ i, Real.exp (x i - m) := by
+    apply Finset.sum_pos
+    · intro i _; exact Real.exp_pos _
+    · exact ⟨⟨0, hn⟩, Finset.mem_univ _⟩
+  rw [Real.log_mul (ne_of_gt h_em_pos) (ne_of_gt h_sum_pos)]
+  rw [Real.log_exp]
+
+/-- Direct log-sum-exp. -/
+noncomputable def directLSESpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
+  Real.log (∑ j, Real.exp (xs j))
+
+/-- Stable log-sum-exp with an arbitrary shift `m`. -/
+noncomputable def stableLSESpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) : ℝ :=
+  m + Real.log (∑ j, Real.exp (xs j - m))
+
 /-- For `i_d : Fin ((D + n) / (n+1))`, the first lane of block `i_d` is in range:
 `i_d.val * (n+1) < D`. -/
 theorem h_tail_of_lt_cdiv {n D : Nat}

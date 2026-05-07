@@ -15,11 +15,10 @@ def kernel(
 ):
     size_m_arange = tl.arange(0, SIZE_M)
     d_head_arange = tl.arange(0, D_HEAD)
-    # transpose
-    matrix_ptr = M + d_head_arange[None, :] * matrix_stridey + size_m_arange[:, None] * matrix_stridex
-    out_ptr = Out + d_head_arange[None, :] * out_stridex + size_m_arange[:, None] * out_stridey
+    matrix_ptr = M + size_m_arange[:, None] * matrix_stridex + d_head_arange[None, :] * matrix_stridey
+    out_ptr = Out + d_head_arange[:, None] * out_stridex + size_m_arange[None, :] * out_stridey
     matrix = tl.load(matrix_ptr)
-    tl.store(out_ptr, matrix)
+    tl.store(out_ptr, tl.trans(matrix))
 
 def wrapper(size_m, d_head):
     matrix = torch.randn((size_m, d_head), dtype=torch.float16, device="cuda")

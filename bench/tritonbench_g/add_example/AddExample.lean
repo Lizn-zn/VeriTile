@@ -76,7 +76,7 @@ theorem add_kernel_compute_correct
     (s : BlockState) (xs ys : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs)
     (h_y : InputLoadedAt s in_ptr1 BLOCK_SIZE ys) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (add_kernel in_ptr0 in_ptr1 out_ptr n_elements BLOCK_SIZE)
       (fun s0 s' =>
         s0 = s →

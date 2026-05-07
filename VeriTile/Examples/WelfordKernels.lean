@@ -576,7 +576,7 @@ theorem welford_kernels_refinement_view
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1))
     (h_mv : meanReg ≠ varReg) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       ((twopassWelfordKernel xReg meanReg varReg blockSize))
       ((onlineWelfordKernel xReg meanReg varReg blockSize))
       (fun s0 lhs' rhs' =>

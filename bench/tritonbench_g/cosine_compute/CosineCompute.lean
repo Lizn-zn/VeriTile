@@ -69,7 +69,7 @@ theorem cos_func_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s a BLOCK_SIZE xs) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (cos_func a b n_elements BLOCK_SIZE)
       (fun s0 s' =>
         s0 = s →

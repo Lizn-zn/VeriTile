@@ -39,19 +39,18 @@ def stable_lse_kernel(x_ptr, y_ptr, BLOCK_SIZE: tl.constexpr):
 ```
 -/
 
-import Mathlib.Analysis.SpecialFunctions.Log.Basic
-import Mathlib.Analysis.SpecialFunctions.Exp
-import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.LogSumExp
+import VeriTile.Triton.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile.Triton VeriTile.Triton.TiledLogSumExp VeriTile.Triton.TiledSoftmax
 
 /-- Direct log-sum-exp kernel: y = log(Σ exp(x)). -/
 def directLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
@@ -76,25 +75,6 @@ def stableLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel :
   tl.store($(yReg) + pid, y)
 }
 
-/-- The load-bearing math identity for `log_sum_exp_refinement`.
-    Closed by Phase A Task 1.1.B. -/
-theorem log_sum_exp_shift_invariant {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) (m : ℝ) :
-    Real.log (∑ i, Real.exp (x i)) = m + Real.log (∑ i, Real.exp (x i - m)) := by
-  have h_factor : ∀ i : Fin n, Real.exp (x i) = Real.exp m * Real.exp (x i - m) := by
-    intro i
-    rw [← Real.exp_add]
-    ring_nf
-  rw [show (∑ i, Real.exp (x i)) = ∑ i, Real.exp m * Real.exp (x i - m) from
-        Finset.sum_congr rfl (fun i _ => h_factor i)]
-  rw [← Finset.mul_sum]
-  have h_em_pos : 0 < Real.exp m := Real.exp_pos m
-  have h_sum_pos : 0 < ∑ i, Real.exp (x i - m) := by
-    apply Finset.sum_pos
-    · intro i _; exact Real.exp_pos _
-    · exact ⟨⟨0, hn⟩, Finset.mem_univ _⟩
-  rw [Real.log_mul (ne_of_gt h_em_pos) (ne_of_gt h_sum_pos)]
-  rw [Real.log_exp]
-
 /-! ## Kernel-level refinement -/
 
 /-- Read region `region` at offset `basePid` (single scalar per program_id).
@@ -102,14 +82,6 @@ theorem log_sum_exp_shift_invariant {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) (
 noncomputable def observeLSE
     (sf : Option BlockState) (region : RegionName) (basePid : Nat) : Option ℝ :=
   sf.map (·.readMem region basePid)
-
-/-- What `directLSEKernel` writes at `Y[pid]`. -/
-noncomputable def directLSESpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  Real.log (∑ j, Real.exp (xs j))
-
-/-- What `stableLSEKernel` writes at `Y[pid]`. -/
-noncomputable def stableLSESpec {N : Nat} (xs : Fin N → ℝ) (m : ℝ) : ℝ :=
-  m + Real.log (∑ j, Real.exp (xs j - m))
 
 /-- **Direct LSE kernel correctness.** Single-cell observation at Y[pid]. -/
 theorem direct_lse_correct
@@ -182,7 +154,7 @@ theorem log_sum_exp_refinement_view
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       ((directLSEKernel xReg yReg N))
       ((stableLSEKernel xReg yReg N))
       (fun s0 lhs' rhs' =>

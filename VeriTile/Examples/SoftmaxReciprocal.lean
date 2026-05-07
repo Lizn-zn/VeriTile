@@ -14,12 +14,13 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile.Triton VeriTile.Triton.TiledSoftmax
 
 /-- Stable softmax with precomputed reciprocal. Saves N-1 divisions vs
     the per-element-divide form (`stableSoftmaxKernel`). -/
@@ -114,7 +115,7 @@ theorem softmax_reciprocal_refinement_view
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       ((stableSoftmaxKernel xReg yReg N))
       ((softmaxRecipKernel xReg yReg N))
       (fun s0 lhs' rhs' =>

@@ -458,7 +458,7 @@ theorem silu_kernels_refinement_view
       (fun idx : TileIndex [blockSize] => residuals idx.1))
     (h_zRes : zReg ≠ residualReg)
     (h_siluRes : siluReg ≠ residualReg) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       ((fusedSiLUKernel xReg gateReg residualReg outReg blockSize))
       (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
       (fun s0 lhs' rhs' =>

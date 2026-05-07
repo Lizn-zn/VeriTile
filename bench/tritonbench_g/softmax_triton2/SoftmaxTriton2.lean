@@ -96,7 +96,7 @@ theorem softmax_kernel_compute_correct
     (output_ptr input_ptr : RegionName)
     (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (softmax_kernel output_ptr input_ptr input_row_stride output_row_stride
         n_cols BLOCK_SIZE)
       (fun s0 s' =>

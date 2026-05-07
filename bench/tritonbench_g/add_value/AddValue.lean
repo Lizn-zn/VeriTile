@@ -66,7 +66,7 @@ theorem puzzle1_kernel_compute_correct
     (N BLOCK_SIZE : Nat) (value : ℝ) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (puzzle1_kernel x_ptr output_ptr N BLOCK_SIZE value)
       (fun s0 s' =>
         s0 = s →

@@ -202,7 +202,7 @@ theorem logsumexp_fwd_kernel_compute_correct_full
     (xs : Fin D → ℝ)
     (h_x : ∀ j : Fin D, s.readMem x (s.pids 0 * D + j.val) = xs j)
     (h_tail : s.pids 1 * (n + 1) < D) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale)
       (fun s0 s' =>
         s0 = s →

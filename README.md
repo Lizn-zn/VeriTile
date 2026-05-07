@@ -127,9 +127,9 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
 
 #### 3. State the Lean equivalence theorem, initially leaving the proof to the LLM Agent:
 
-The user-facing surface is `ComputeKernel.ComputeRefine` — it asserts that the
-two compute kernels project to algorithm kernels that, run from the same
-initial state, satisfy the supplied observation relation.
+The user-facing surface is `ComputeRefine.*` — it asserts that the two compute
+kernels project to algorithm kernels that, run from the same initial state,
+satisfy the supplied observation relation.
 
 ```lean
 theorem softmax_kernels_refinement_view
@@ -138,7 +138,7 @@ theorem softmax_kernels_refinement_view
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
              (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       (naiveSoftmaxKernel  xReg yReg blockSize)
       (stableSoftmaxKernel xReg yReg blockSize)
       (fun s0 lhs' rhs' =>
@@ -168,7 +168,7 @@ theorem softmax_kernels_refinement_view
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
              (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       (naiveSoftmaxKernel  xReg yReg blockSize)
       (stableSoftmaxKernel xReg yReg blockSize)
       (fun s0 lhs' rhs' =>
@@ -196,7 +196,7 @@ See the full softmax example in
 Refinement is one shape of theorem (two kernels, one observation relation).
 The other shape is a single kernel against a *math reference*: prove the
 kernel observes the same value as a Lean function on every tile index.
-The user-facing surface is `ComputeKernel.ComputeCorrect`. A minimal existing
+The user-facing surface is `ComputeCorrect.*`. A minimal existing
 example is elementwise vector add: one kernel is checked against the
 mathematical spec `addSpec`.
 
@@ -207,7 +207,7 @@ theorem add_kernel_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (addKernel xReg yReg outReg blockSize)
       (fun s0 s' =>
         s0 = s →
@@ -222,11 +222,12 @@ theorem add_kernel_correct_view
 The two surfaces are deliberately parallel — `ComputeRefine` for kernel pairs,
 `ComputeCorrect` for kernel ↔ math spec. Both project through `toAlgorithm?`
 and reuse the same `Kernel.Correct` / `Kernel.Refine` proof underneath.
-Both also accept an optional `GapPolicy` (default: `.ignore`). Use
-`gap := .require contract` when the theorem should record an externally
-checked compute-to-algorithm gap; Lean proves the projected algorithm theorem
-and records the external contract, but does not prove IEEE / bit-level
-compute behavior internally.
+Both ultimately use `ComputeKernel.ComputeCorrect` / `ComputeKernel.ComputeRefine`,
+which accept an optional `GapPolicy` (default: `.ignore`). Use
+`gap := .require contract` at that lower layer when the theorem should record
+an externally checked compute-to-algorithm gap; Lean proves the projected
+algorithm theorem and records the external contract, but does not prove IEEE /
+bit-level compute behavior internally.
 
 Worked single-kernel correctness examples live in
 [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean),
@@ -256,6 +257,7 @@ Worked single-kernel correctness examples live in
 
 - [Reference docs index](./documents/README.md) — Triton subset, dtype
   erasure, GPU memory model, memory safety, concurrency boundary
+- [Correctness theorem surfaces](./documents/CorrectnessSurfaces.md)
 - [Supported Triton subset and semantic gaps](./documents/TritonSubset.md)
 - [GPU memory modeling scope](./documents/GpuMemoryModel.md)
 - [Layer-1 memory bounds safety](./documents/MemorySafety.md)

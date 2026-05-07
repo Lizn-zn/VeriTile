@@ -642,7 +642,7 @@ theorem fa1_forward_correct_4D_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((views.kernel M Bk numKVBlocks scale))
       (fun s0 s' =>
         s0 = s →
@@ -707,7 +707,7 @@ theorem fa1_forward_correct_4D_causal_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((views.causalKernel M Bk numKVBlocks scale))
       (fun s0 s' =>
         s0 = s →

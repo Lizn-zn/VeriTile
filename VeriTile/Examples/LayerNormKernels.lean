@@ -394,7 +394,7 @@ theorem layernorm_kernels_refinement_view
     (h_β : TensorView.loaded s (featureView βReg N)
       (fun idx : TileIndex [N] => βs idx.1))
     (h_yx : yReg ≠ xReg) (h_yγ : yReg ≠ γReg) (h_yβ : yReg ≠ βReg) :
-    ComputeKernel.ComputeRefine
+    ComputeRefine.General
       ((twoPassLayerNormKernel xReg γReg βReg yReg N ε))
       ((fusedLayerNormKernel xReg γReg βReg yReg N ε))
       (fun s0 lhs' rhs' =>

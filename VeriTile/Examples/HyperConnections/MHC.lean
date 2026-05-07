@@ -162,7 +162,7 @@ theorem mhcWidthConnection_correct_view
     (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
     (tau : ℝ) (s : BlockState)
     (hOutNe : resMixReg ≠ branchInReg) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (mhcWidthConnectionKernel resReg hResReg hPreReg resMixReg branchInReg
         1 1 1 0 tau)
       (fun s0 s' =>
@@ -273,7 +273,7 @@ writes:
 theorem mhcDepthConnection_correct_view
     (resMixReg branchOutReg hPostReg outReg : RegionName)
     (tau : ℝ) (s : BlockState) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (mhcDepthConnectionKernel resMixReg branchOutReg hPostReg outReg
         1 1 1 0 tau)
       (fun s0 s' =>

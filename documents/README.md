@@ -15,6 +15,10 @@ and research-problem notes are also colocated here under their PascalCase names
 
 ## Algorithm / Compute layer architecture
 
+- [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) — user-facing theorem
+  surfaces for single-kernel correctness and two-kernel refinement:
+  `ComputeCorrect.Output*`, `ComputeRefine.Output*Eq`, and their escape
+  hatches.
 - [`EraseDType.md`](./EraseDType.md) — the two-layer architecture:
   `ComputeKernel` (compute-facing AST, preserves bitcast / fp width
   spellings) projected to algorithm-layer `Kernel` via

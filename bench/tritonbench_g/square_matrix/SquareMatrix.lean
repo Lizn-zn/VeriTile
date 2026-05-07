@@ -64,7 +64,7 @@ theorem square_kernel_compute_correct
     (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputRowLoadedAt s input_ptr input_row_stride BLOCK_SIZE xs) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (square_kernel output_ptr input_ptr input_row_stride output_row_stride
         n_cols BLOCK_SIZE)
       (fun s0 s' =>

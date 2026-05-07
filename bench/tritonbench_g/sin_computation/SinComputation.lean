@@ -58,7 +58,7 @@ theorem sin_kernel_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (sin_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE)
       (fun s0 s' =>
         s0 = s →

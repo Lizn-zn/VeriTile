@@ -9,12 +9,13 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Math.Softmax
 import VeriTile.Examples.Common
 import VeriTile.Examples.SoftmaxEq
 
 namespace VeriTile.Examples
 
-open VeriTile.Triton
+open VeriTile.Triton VeriTile.Triton.TiledSoftmax
 
 def batchSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : ComputeKernel :=
   stableSoftmaxKernel xReg yReg N
@@ -416,7 +417,7 @@ theorem online_softmax_correct_view
     (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((onlineSoftmaxKernel xReg yReg N))
       (fun s0 s' =>
         s0 = s →

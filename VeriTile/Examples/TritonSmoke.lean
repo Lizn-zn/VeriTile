@@ -38,8 +38,8 @@ example (xReg yReg : RegionName) :
 
 example (xReg yReg : RegionName)
     (post : BlockState → BlockState → Prop)
-    (h : ComputeKernel.ComputeCorrect (scalarCopyKernel xReg yReg) post) :
-    ComputeKernel.ComputeCorrect (scalarCopyComputeKernel xReg yReg) post :=
+    (h : ComputeCorrect.General (scalarCopyKernel xReg yReg) post) :
+    ComputeCorrect.General (scalarCopyComputeKernel xReg yReg) post :=
   by
     simpa [scalarCopyComputeKernel, scalarCopyKernel] using h
 
@@ -205,7 +205,7 @@ example :
   rfl
 
 example (post : ComputeKernel.AlgSpec) :
-    ¬ ComputeKernel.ComputeCorrect effectMarkerSmoke post :=
+    ¬ ComputeCorrect.General effectMarkerSmoke post :=
   ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
 def asyncCopySurfaceSmoke (srcReg dstReg : RegionName) : ComputeKernel := triton {
@@ -218,7 +218,7 @@ example (srcReg dstReg : RegionName) :
   rfl
 
 example (srcReg dstReg : RegionName) (post : ComputeKernel.AlgSpec) :
-    ¬ ComputeKernel.ComputeCorrect (asyncCopySurfaceSmoke srcReg dstReg) post :=
+    ¬ ComputeCorrect.General (asyncCopySurfaceSmoke srcReg dstReg) post :=
   ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
 def asyncWaitSurfaceSmoke : ComputeKernel := triton {
@@ -231,7 +231,7 @@ example :
   rfl
 
 example (post : ComputeKernel.AlgSpec) :
-    ¬ ComputeKernel.ComputeCorrect asyncWaitSurfaceSmoke post :=
+    ¬ ComputeCorrect.General asyncWaitSurfaceSmoke post :=
   ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
 def debugBarrierSurfaceSmoke : ComputeKernel := triton {
@@ -244,7 +244,7 @@ example :
   rfl
 
 example (post : ComputeKernel.AlgSpec) :
-    ¬ ComputeKernel.ComputeCorrect debugBarrierSurfaceSmoke post :=
+    ¬ ComputeCorrect.General debugBarrierSurfaceSmoke post :=
   ComputeKernel.not_computeCorrect_of_toAlgorithm_error rfl
 
 /-- Vector-add kernel with explicit boundary mask. -/
@@ -681,7 +681,7 @@ theorem argmax2_index_store_exec_correct
 
 theorem argmax2_index_store_correct_view
     (xReg outReg : RegionName) (s : BlockState) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((argmax2IndexStoreCoreKernel xReg outReg))
       (fun s0 s' =>
         s0 = s →
@@ -704,7 +704,7 @@ theorem nat_load_store_exec_correct
 
 theorem nat_load_store_correct_view
     (idxReg outReg : RegionName) (s : BlockState) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((natLoadStoreCoreKernel idxReg outReg))
       (fun s0 s' =>
         s0 = s →
@@ -749,7 +749,7 @@ theorem indirect_load_correct_exec_view
 theorem indirect_load_correct_view
     (idxReg dataReg outReg : RegionName) (N stride : Nat)
     (s : BlockState) (i : TileIndex [N]) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((indirectLoadCoreKernel idxReg dataReg outReg N stride))
       (fun s0 s' =>
         s0 = s →

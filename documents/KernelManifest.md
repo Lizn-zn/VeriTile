@@ -40,8 +40,9 @@ proven projected test-gap blocked smoke
 
 When adding a new public example or benchmark theorem:
 
-1. Add the Lean theorem using `ComputeKernel.ComputeCorrect` or
-   `ComputeKernel.ComputeRefine` for ordinary example surfaces.
+1. Add the Lean theorem using the public `ComputeCorrect.*` or
+   `ComputeRefine.*` theorem surfaces for ordinary examples. See
+   [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md).
 2. Add one row to `scripts/kernel-manifest.tsv`.
 3. Record the source and static config precisely enough that the port is
    reproducible.

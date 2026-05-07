@@ -139,7 +139,7 @@ theorem add_kernel_compute_correct
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((addKernel xReg yReg outReg blockSize))
       (fun s0 s' =>
         s0 = s →
@@ -163,7 +163,7 @@ theorem add_kernel_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((addKernel xReg yReg outReg blockSize))
       (fun s0 s' =>
         s0 = s →
@@ -291,7 +291,7 @@ theorem add_kernel_masked_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       ((addKernelMasked xReg yReg outReg blockSize nElements))
       (fun s0 s' =>
         s0 = s →

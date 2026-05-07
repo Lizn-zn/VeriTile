@@ -73,7 +73,7 @@ theorem mul2_kernel_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE)
       (fun s0 s' =>
         s0 = s →
@@ -122,7 +122,7 @@ theorem mul2_inplace_kernel_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s ptr BLOCK_SIZE xs) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (mul2_inplace_kernel ptr n_elements BLOCK_SIZE)
       (fun s0 s' =>
         s0 = s →

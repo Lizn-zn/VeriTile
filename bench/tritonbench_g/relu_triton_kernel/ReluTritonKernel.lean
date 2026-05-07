@@ -81,7 +81,7 @@ theorem relu_kernel_compute_correct
     (N block_size : Nat) (hBlockSize : 0 < block_size)
     (s : BlockState) (xs : Fin block_size → ℝ)
     (h_x : InputLoadedAt s x_ptr block_size xs) :
-    ComputeKernel.ComputeCorrect
+    ComputeCorrect.General
       (relu_kernel x_ptr out_ptr N block_size)
       (fun s0 s' =>
         s0 = s →
