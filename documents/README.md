@@ -1,53 +1,49 @@
 # VeriTile Reference Documentation
 
-Long-form reference docs for VeriTile's embedded Triton subset, semantic
-model, and trusted-boundary policies. These are *contracts*: each describes
-what is modeled, what is not, and where the boundary sits. Historical proposals
-and research-problem notes are also colocated here under their PascalCase names
-(see [`Proposal.md`](./Proposal.md), [`ResearchProblemPointerRegion.md`](./ResearchProblemPointerRegion.md), etc.).
+Long-form reference for VeriTile's embedded Triton subset, semantic model,
+and trusted-boundary policies. Each active doc is a *contract*: what is
+modeled, what is not, where the boundary sits.
 
-## Triton DSL surface
+Closed-phase design notes and resolved research-problem records live in
+[`archive/`](./archive/) — kept as historical artifacts; not load-bearing
+for current work.
 
-- [`TritonSubset.md`](./TritonSubset.md) — supported Triton-like surface
-  syntax, semantic model, and the gaps that are not yet modeled. The
-  authoritative artifact contract for the embedded DSL.
-  - [`TritonSubset_zh.md`](./TritonSubset_zh.md) — Chinese version.
+## Active Reference Docs
 
-## Algorithm / Compute layer architecture
+Task-oriented index (mirrors the top-level [`README.md`](../README.md)
+Documentation Map):
 
-- [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) — user-facing theorem
-  surfaces for single-kernel correctness and two-kernel refinement:
-  `ComputeCorrect.Output*`, `ComputeRefine.Output*Eq`, and their escape
-  hatches.
-- [`EraseDType.md`](./EraseDType.md) — the two-layer architecture:
-  `ComputeKernel` (compute-facing AST, preserves bitcast / fp width
-  spellings) projected to algorithm-layer `Kernel` via
-  `ComputeKernel.toAlgorithm?` / `eraseDType`.
-- [`KernelManifest.md`](./KernelManifest.md) — the schema for
-  `scripts/kernel-manifest.tsv`, the canonical per-kernel registry used by
-  artifact checks and future benchmark ports.
+| Question | Doc |
+|---|---|
+| Which Triton constructs are supported? | [TritonSubset.md](./TritonSubset.md) ([中文](./TritonSubset_zh.md)) |
+| Which theorem surface should I use? | [CorrectnessSurfaces.md](./CorrectnessSurfaces.md) |
+| Naming conventions for theorem surfaces | [TheoremSurfaces.md](./TheoremSurfaces.md) |
+| How does the kernel manifest work? | [KernelManifest.md](./KernelManifest.md) |
+| How does dtype erasure work? | [EraseDType.md](./EraseDType.md) |
+| How does memory safety / framing work? | [MemorySafety.md](./MemorySafety.md) |
+| What's the GPU memory model? | [GpuMemoryModel.md](./GpuMemoryModel.md) |
+| How are atomics / async copies modeled? | [ConcurrencySemantics.md](./ConcurrencySemantics.md) |
+| ApproxGeLU midrange certified-error strategy | [ApproxGeluPhiStrategy.md](./ApproxGeluPhiStrategy.md) |
 
-## Memory model
-
-- [`GpuMemoryModel.md`](./GpuMemoryModel.md) — what "GPU memory" means in
-  VeriTile: a functional-correctness model over `BlockState.mem`,
-  `RegFile`, and `TensorView` metadata. Not a microarchitectural CUDA
-  model.
-- [`MemorySafety.md`](./MemorySafety.md) — Layer-1 bounds-safety predicate
-  (`Op.MemorySafe` / `Stmt.MemorySafe` / `Kernel.MemorySafe` /
-  `ComputeKernel.MemorySafe`) and the active-lane convention for masked
-  loads / stores.
-
-## Concurrency boundary
-
-- [`ConcurrencySemantics.md`](./ConcurrencySemantics.md) — the current
-  deterministic boundary for non-sequential GPU effects: where atomic /
-  async / barrier primitives sit relative to the proof-facing semantics
-  today, and what extensions are scoped for the long-term roadmap.
-
-## Project plan
+## Architecture / Roadmap
 
 The end-to-end project plan and roadmap live in the repo root:
 
-- [`../PLAN.md`](../PLAN.md) — English
-- [`../PLAN_zh.md`](../PLAN_zh.md) — Chinese
+- [`../PLAN.md`](../PLAN.md) — architecture, decision log, phase status
+- Live roadmap: GitHub issue
+  [`#91`](https://github.com/Lizn-zn/VeriTile/issues/91)
+
+## Archive
+
+Closed-phase notes are preserved in [`archive/`](./archive/):
+
+- `DslMacroOptions.md` — macro design exploration, decision: option C
+  (`triton { ... }` block macro). Closed.
+- `ForLoopInvDesign.md` — Phase B `forLoop_inv` interface decisions.
+  Closed; current implementation matches.
+- `ResearchProblemPointerRegion.md` — RP1: pointers vs named regions.
+  Resolved: named regions throughout.
+- `ResearchProblemAddressTyping.md` — RP2: ℝ-uniform vs Nat-bifurcated
+  `Value`. Resolved: bifurcated `Value`.
+- `Proposal.md` / `Proposal_zh.md` — initial project proposal. The
+  technical content has evolved beyond it; kept for historical context.

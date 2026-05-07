@@ -2,439 +2,157 @@
 
 **English** | [中文](README_zh.md)
 
-VeriTile is an experimental Lean 4 project for translation validation of Triton
-GPU operators and their optimizations. It aims to prove properties of Triton
-operators and equivalence between optimized and unoptimized Triton kernel pairs.
+VeriTile embeds a typed Triton-style kernel DSL in Lean 4 and proves
+correctness or refinement of those kernels against mathematical
+specifications or against each other. The implementation embeds the kernel
+language with `triton { ... }` syntax, defines an operational semantics over
+typed `Op : TileDType → TileShape → Type` terms, and exposes
+`ComputeCorrect` / `ComputeRefine` theorem surfaces for end users.
 
-The implementation approach is to embed a small Triton-style kernel language in
-Lean, define an operational semantics for the supported subset, and prove that
-individual kernels satisfy algorithmic properties or that selected kernel pairs
-produce the same observable outputs. Proofs are completed with help from an LLM
-Agent.
+Algorithmic proofs run over the erased `.real` (mathematical) channel; the
+optional `GapPolicy` records — but does not internally prove — the
+compute-to-algorithm gap (IEEE-754 / PTX / TMA / concurrency), which stays
+externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
 
-## Table of Contents
+## What VeriTile Does
 
-- [Status](#status)
-- [Environment](#environment)
-- [Quick Start](#quick-start)
-- [Other Examples](#other-examples)
-- [More Documentation](#more-documentation)
-- [Research Problems](#research-problems)
-- [Architecture](#architecture)
-- [Repository Layout](#repository-layout)
-- [Roadmap](#roadmap)
-- [License](#license)
+- **DSL**: typed Triton subset with `triton { ... }` macro, ND tile shapes,
+  reductions, masks (`mask=`/`other=`), block-pointer ops, and bare
+  `if`/`for` control flow.
+- **Theorem surfaces**: `ComputeCorrect.Output*` for kernel ↔ math
+  specification, `ComputeRefine.Output*Eq` for kernel pair equivalence.
+  Both project through `toAlgorithm?` and run on `Kernel.Correct` /
+  `Kernel.Refine` underneath.
+- **Examples**: 15 ported TritonBench-G kernels with proofs (see
+  [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
+  forward, online softmax, Welford, LayerNorm, log-sum-exp.
+- **CI gate**: `lake build` + `scripts/check-artifact.sh` (no `sorry`,
+  axiom whitelist, manifest schema, doc-drift checks) +
+  `bench/check_ports.sh`.
 
-## Status
-
-Tier 1 + Tier 2 are closed, and Tier 3-A (full FA-1 forward) has landed on
-`main` with its tag pending. See release
-[`v0.2-tier2`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.2-tier2)
-(prior milestone: [`v0.1-tier1`](https://github.com/Lizn-zn/VeriTile/releases/tag/v0.1-tier1)).
-
-Included through Tier 1 + Tier 2:
-
-- 6 closed kernel-pair refinement theorems (Tier 1 × 3 + Tier 2 × 3).
-- `forLoop` operational semantics + `forLoop_inv` master induction lemma.
-- Online softmax recurrence ≡ batch softmax (FlashAttention algorithmic
-  core, no input range precondition).
-- Welford online recurrence ≡ two-pass mean/variance.
-- LayerNorm fused single-pass kernel ≡ two-pass kernel.
-- Typed `Op : TileDType → TileShape → Type` with end-to-end typed
-  `evalOp`/`stepStmt` and a typed register file.
-- `WithBot ℝ` carrier: `tl.full((), -inf)` lowers to true `⊥`, so kernels
-  using `-inf` as a max-accumulator seed need no input-range hypothesis.
-- Triton-faithful mask semantics: `tl.load(p, mask=m, other=o)` lowers to
-  separate AST forms; `other=None` is modeled non-deterministically via
-  a per-state `undef` oracle.
-- 6 comparison operators (`<`, `<=`, `==`, `>`, `>=`, `!=`) over the
-  `.real`/`.nat` channels, producing the `.bool` channel.
-
-Tier 3-A on `main` (full FA-1 forward):
-
-- ND tile shapes and ND broadcasting, with typed `Op : TileDType → TileShape → Type`.
-- `tl.dot`, trailing-axis transpose, `tl.where`, `tl.sqrt`, reduction
-  `axis` / `keep_dims`, multi-axis `tl.program_id`, and strided-offset
-  memory helpers.
-- FA-1 v0/full-tile forward proofs over 4D strided Q/K/V/O layouts:
-  `fa1_forward_correct_4D_views` and
-  `fa1_forward_correct_4D_causal_views`.
-  Boundary-masked FA-1 v1 adds sequence-boundary, causal-boundary, D-tail,
-  and naive-reference refinement surfaces, including
-  `fa1_boundaryD_refines_naive_reference_views` and
-  `fa1_causal_boundaryD_refines_naive_reference_views`.
-- Artifact gate in CI via `scripts/check-artifact.sh`: `lake build`, no
-  `sorry`, axiom whitelist, `scripts/kernel-manifest.tsv`, and README/example
-  drift checks.
-
-The currently supported Triton subset and known semantic gaps are documented in
-[`documents/TritonSubset.md`](./documents/TritonSubset.md). Important open gaps
-include full IEEE-754 semantics, block-pointer hardware/TMA behavior, atomics,
-async copy, and whole-grid launch semantics.
-
-## Environment
-
-#### Lean and LLM Agent
-
-- Lean 4 (version `v4.29.0`) and Mathlib
-- [Claude Code CLI](https://docs.claude.com/en/docs/claude-code)
-- [`lean4-skills`](https://github.com/lean4-skills/lean4-skills), providing `/lean4:autoprove`
-
-#### Other
-
-- `jq`, used by `scripts/prove.sh` to parse JSON output
+Out of scope: IEEE-754 floating-point semantics, PTX-level codegen,
+detailed concurrency (atomics / async-copy serialization, beyond the
+projection boundary), Python wrapper execution.
 
 ## Quick Start
 
-> **Note on the DSL:** Triton kernels in VeriTile are *region-polymorphic* — every
-> kernel takes its memory regions as `RegionName` parameters and uses
-> first-class pointer expressions: `tl.load($(xReg) + offs)` /
-> `tl.store($(yReg) + offs, y)`. This means the same kernel can be instantiated
-> with arbitrary buffer names, and the correctness theorem applies uniformly to
-> all instantiations. A memory base must be created with `$(region)`
-> or come from a pointer-valued register; raw region names are not pointer
-> expressions. See [RP1](./documents/ResearchProblemPointerRegion.md)
-> for the rationale.
+### 1. Write a `ComputeKernel`
 
-#### 1. Start with an original Triton kernel. For example, naive softmax:
+Kernels are region-polymorphic: memory regions arrive as `RegionName`
+parameters; `tl.load` / `tl.store` use first-class pointer expressions.
 
 ```lean
-def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load($(xReg) + offs)
-  e    := tl.exp(x)
-  s    := tl.sum(e, axis=0)
-  y    := e / s
-  tl.store($(yReg) + offs, y)
+def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := triton {
+  pid     = tl.program_id(0)
+  offsets = pid * $(n) + tl.arange(0, $(n))
+  x       = tl.load($(xReg) + offsets)
+  y       = tl.load($(yReg) + offsets)
+  tl.store($(outReg) + offsets, x + y)
 }
 ```
 
-#### 2. Produce an optimized Triton kernel. The optimization may be generated by Claude or proposed by a human expert. For example, numerically stable softmax:
+### 2. Choose a theorem surface
+
+| Goal | Use |
+|---|---|
+| One kernel matches a 1D `Fin n → ℝ` math spec | `ComputeCorrect.OutputArray` |
+| One kernel matches an ND tensor spec | `ComputeCorrect.OutputTile` |
+| One kernel matches a scalar reduction | `ComputeCorrect.OutputScalar` |
+| Value + index output (e.g. `tl.max(..., return_indices=True)`) | `ComputeCorrect.OutputPairWhere` |
+| Two kernels produce equal observable outputs | `ComputeRefine.OutputArrayEq` (or `OutputTileEq`) |
+| Custom postcondition over the final state | `ComputeCorrect.Post` / `ComputeRefine.Post` |
+| Relation over arbitrary initial states (rare) | `ComputeCorrect.General` / `ComputeRefine.General` |
+
+Full surface guide: [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md).
+
+### 3. Prove via the projected algorithm
 
 ```lean
-def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load($(xReg) + offs)
-  m    := tl.max(x)
-  e    := tl.exp(x - m)
-  s    := tl.sum(e, axis=0)
-  y    := e / s
-  tl.store($(yReg) + offs, y)
-}
+theorem add_kernel_correct
+    (xReg yReg outReg : RegionName) (n : Nat) (hN : 0 < n)
+    (s : BlockState) (xs ys : Fin n → ℝ)
+    (h_x : TensorView.loadedArray s (programTileView s xReg n) xs)
+    (h_y : TensorView.loadedArray s (programTileView s yReg n) ys) :
+    ComputeCorrect.OutputArray
+      (addKernel xReg yReg outReg n) s
+      (programTileView s outReg n)
+      (fun i => xs i + ys i) := by
+  -- bridge to the projected algorithm kernel, then close on Real semantics
+  ...
 ```
 
-#### 3. State the Lean equivalence theorem, initially leaving the proof to the LLM Agent:
+The standard pattern: `ComputeKernel.computeCorrect_of_toAlgKernel rfl`
+discharges the projection, then `simp` reduces `exec` to the body
+recurrence; the algebraic content closes by `simp` on the spec or by
+invoking a math identity from `Mathlib`. The LLM proof wrapper
+`scripts/prove.sh` automates this loop.
 
-The user-facing surface is `ComputeRefine.*` — it asserts that the two compute
-kernels project to algorithm kernels that, run from the same initial state,
-satisfy the supplied observation relation.
+### 4. Register in the kernel manifest
 
-```lean
-theorem softmax_kernels_refinement_view
-    (xReg yReg : RegionName)
-    (blockSize : Nat) (hN : 0 < blockSize)
-    (s : BlockState) (xs : Fin blockSize → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
-             (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeRefine.General
-      (naiveSoftmaxKernel  xReg yReg blockSize)
-      (stableSoftmaxKernel xReg yReg blockSize)
-      (fun s0 lhs' rhs' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          TensorView.observe (some lhs')
-              (programTileView s yReg blockSize) idx =
-          TensorView.observe (some rhs')
-              (programTileView s yReg blockSize) idx) := by
-  sorry
-```
+Add a row to [`scripts/kernel-manifest.tsv`](./scripts/kernel-manifest.tsv)
+so `scripts/check-artifact.sh` recognizes the theorem in CI. Schema and
+naming conventions: [KernelManifest.md](./documents/KernelManifest.md),
+[TheoremSurfaces.md](./documents/TheoremSurfaces.md).
 
-#### 4. Use `scripts/prove.sh` to ask the LLM Agent to generate the proof:
+## Minimal Example
 
-```bash
-scripts/prove.sh path/to/your_refinement_theorem.lean --max-cycles 5
-```
+Elementwise vector add against the `addSpec xs ys i = xs i + ys i` math
+spec — see [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean).
 
-For the softmax refinement, the generated proof first discharges the
-compute-to-algorithm projection, then reduces each side to its specification
-and applies the math identity:
+## Refinement Example
 
-```lean
-theorem softmax_kernels_refinement_view
-    (xReg yReg : RegionName)
-    (blockSize : Nat) (hN : 0 < blockSize)
-    (s : BlockState) (xs : Fin blockSize → ℝ)
-    (h_x : TensorView.loaded s (programTileView s xReg blockSize)
-             (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeRefine.General
-      (naiveSoftmaxKernel  xReg yReg blockSize)
-      (stableSoftmaxKernel xReg yReg blockSize)
-      (fun s0 lhs' rhs' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          TensorView.observe (some lhs')
-              (programTileView s yReg blockSize) idx =
-          TensorView.observe (some rhs')
-              (programTileView s yReg blockSize) idx) := by
-  apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
-  intro s0 lhs' rhs' hL hR hs0
-  subst s0
-  intro idx
-  have hview := softmax_kernels_refinement_exec_view
-                  xReg yReg blockSize hN s xs h_x idx
-  rw [hL, hR] at hview
-  simpa using hview
-```
-
-See the full softmax example in
+Naive vs numerically-stable softmax (kernel pair refinement) — see
 [`VeriTile/Examples/SoftmaxEq.lean`](./VeriTile/Examples/SoftmaxEq.lean).
 
-## Single-kernel correctness
+## Documentation Map
 
-Refinement is one shape of theorem (two kernels, one observation relation).
-The other shape is a single kernel against a *math reference*: prove the
-kernel observes the same value as a Lean function on every tile index.
-The user-facing surface is `ComputeCorrect.*`. A minimal existing
-example is elementwise vector add: one kernel is checked against the
-mathematical spec `addSpec`.
+Task-oriented:
 
-```lean
-theorem add_kernel_correct_view
-    (xReg yReg outReg : RegionName)
-    (blockSize : Nat) (hBlockSize : 0 < blockSize)
-    (s : BlockState) (xs ys : Fin blockSize → ℝ)
-    (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
-    (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.General
-      (addKernel xReg yReg outReg blockSize)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          TensorView.observe (some s')
-              (programTileView s outReg blockSize) idx
-            = some (addSpec xs ys idx.1)) := by
-  exact add_kernel_compute_correct xReg yReg outReg blockSize hBlockSize
-    s xs ys h_x h_y
-```
-
-The two surfaces are deliberately parallel — `ComputeRefine` for kernel pairs,
-`ComputeCorrect` for kernel ↔ math spec. Both project through `toAlgorithm?`
-and reuse the same `Kernel.Correct` / `Kernel.Refine` proof underneath.
-Both ultimately use `ComputeKernel.ComputeCorrect` / `ComputeKernel.ComputeRefine`,
-which accept an optional `GapPolicy` (default: `.ignore`). Use
-`gap := .require contract` at that lower layer when the theorem should record
-an externally checked compute-to-algorithm gap; Lean proves the projected
-algorithm theorem and records the external contract, but does not prove IEEE /
-bit-level compute behavior internally.
-
-Worked single-kernel correctness examples live in
-[`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean),
-[`VeriTile/Examples/RowWise.lean`](./VeriTile/Examples/RowWise.lean),
-[`VeriTile/Examples/OnlineSoftmax.lean`](./VeriTile/Examples/OnlineSoftmax.lean).
-
-## Other Examples
-
-| File | Description |
-| --- | --- |
-| [`VeriTile/Examples/SoftmaxEq.lean`](./VeriTile/Examples/SoftmaxEq.lean) | Naive softmax vs numerically stable softmax |
-| [`VeriTile/Examples/LogSumExpEq.lean`](./VeriTile/Examples/LogSumExpEq.lean) | Direct log-sum-exp vs shift-trick log-sum-exp |
-| [`VeriTile/Examples/SoftmaxReciprocal.lean`](./VeriTile/Examples/SoftmaxReciprocal.lean) | Stable softmax division vs precomputed reciprocal |
-| [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean) | Elementwise add (multi-buffer kernel ↔ math correctness) |
-| [`VeriTile/Examples/MemorySafety.lean`](./VeriTile/Examples/MemorySafety.lean) | Layer-1 active-lane bounds safety for direct, masked, and block-pointer memory |
-| [`VeriTile/Examples/MemoryFrame.lean`](./VeriTile/Examples/MemoryFrame.lean) | Layer-2a/#61 write-footprint frame contracts and extracted direct, masked, and block-pointer store footprints |
-| [`VeriTile/Examples/GridComposition.lean`](./VeriTile/Examples/GridComposition.lean) | Layer-2b disjoint whole-grid merge over per-program write footprints |
-| [`VeriTile/Examples/FusedSiLU.lean`](./VeriTile/Examples/FusedSiLU.lean) | Fused-sigmoid MLP block vs manually-expanded `1/(1+exp(-z))` (kernel-pair refinement) |
-| [`VeriTile/Examples/WelfordKernels.lean`](./VeriTile/Examples/WelfordKernels.lean) | Online Welford vs two-pass mean/variance |
-| [`VeriTile/Examples/FlashAttention1/V0.lean`](./VeriTile/Examples/FlashAttention1/V0.lean) | FA-1 v0/full-tile forward correctness, non-causal and causal, over 4D strided layouts |
-| [`VeriTile/Examples/FlashAttention1/V1Boundary.lean`](./VeriTile/Examples/FlashAttention1/V1Boundary.lean) | FA-1 v1 boundary-mask and D-tail correctness over 4D strided layouts |
-| [`VeriTile/Examples/FlashAttention1/ScoreVariants.lean`](./VeriTile/Examples/FlashAttention1/ScoreVariants.lean) | Score-level FA-1 realism references and DSL smoke kernels for ALiBi, sliding window, and softcap |
-| [`VeriTile/Examples/FlashAttention1/NaiveKernel.lean`](./VeriTile/Examples/FlashAttention1/NaiveKernel.lean) | Executable naive FA-1 boundary kernels, correctness, and kernel-pair refinement |
-| [`VeriTile/Examples/FlashAttention1/NaiveRefinement.lean`](./VeriTile/Examples/FlashAttention1/NaiveRefinement.lean) | FA-1 v1 boundary/D-tail refinement aliases to the naive direct-attention reference |
-
-## More Documentation
-
-- [Reference docs index](./documents/README.md) — Triton subset, dtype
-  erasure, GPU memory model, memory safety, concurrency boundary
-- [Correctness theorem surfaces](./documents/CorrectnessSurfaces.md)
-- [Supported Triton subset and semantic gaps](./documents/TritonSubset.md)
-- [GPU memory modeling scope](./documents/GpuMemoryModel.md)
-- [Layer-1 memory bounds safety](./documents/MemorySafety.md)
-- [LLM proof wrapper](./scripts/README.md)
-- [LLM benchmark protocol](./bench/llm_eval/README.md)
-
-## Research Problems
-
-Design decisions with non-obvious tradeoffs are recorded as research-problem
-notes. Each note states the problem, surveys the design space, gives a
-recommendation, and notes when to revisit. Index here; full discussion in
-[`documents/`](./documents).
-
-- **RP1: Pointers vs named regions** — should the DSL model first-class
-  pointers (CUDA-style `x_ptr + offsets` as a value) or static named regions
-  + dynamic offsets? Resolved: named regions throughout Phases A–D.
-  → [ResearchProblemPointerRegion.md](./documents/ResearchProblemPointerRegion.md)
-
-- **RP2: Address typing — ℝ-uniform vs Nat-bifurcated `Value`** — should
-  the runtime `Value` use a single `ℝ` carrier with a `realToNat` floor at
-  memory boundaries, or bifurcate into separate `ℝ` (data) and `Nat`
-  (address) channels? Resolved: bifurcated; `realToNat` deleted; ~40 lines
-  of `hcast` boilerplate dropped from kernel proofs.
-  → [ResearchProblemAddressTyping.md](./documents/ResearchProblemAddressTyping.md)
-
-## Architecture
-
-The type system is the backbone of VeriTile's soundness guarantee. Every layer
-is fully typed end-to-end — there is no dynamically-tagged runtime value or
-existential wrapper anywhere in the pipeline.
-
-```text
-TileDType              TileShape                TileIndex
-(.real/.nat/.bool)     (.scalar/.vec n/.mat m n) (PUnit / Fin n / Fin m × Fin n)
-       │                       │                          │
-   TileCarrier                 │                          │
-   (ℝ / Nat / Bool)            │                          │
-       │                       │                          │
-       ▼                       ▼                          ▼
-  ┌──────────────────────────────────────────────────────────┐
-  │  structure Tile (dtype : TileDType) (shape : TileShape)  │
-  │    data : TileIndex shape → TileCarrier dtype            │
-  │  ────────────────────────────────────────────────────── │
-  │  smart ctors: Tile.scalar x, Tile.vec f, Tile.mat f      │
-  └──────────────────────────────────────────────────────────┘
-                           │
-           ┌───────────────┼───────────────┐
-           ▼               ▼               ▼
-      Tile.bop        Tile.uop        Tile.cop
-   (add/sub/mul/div)  (exp/log/σ/√)  (lt/le/eq/gt/ge/ne)
-   NumericDType dtype                  → Tile .bool out
-   Broadcast a b out
-
-  ══════════════════ AST layer ══════════════════
-
-  inductive Op : TileDType → TileShape → Type    ← indexed by dtype & shape
-    .const ℝ           : Op .real .scalar
-    .constNat Nat      : Op .nat  .scalar
-    .arange n          : Op .nat  (.vec n)
-    .add NumDType Broadcast Op Op  : Op dtype out
-    .lt  CmpDType Broadcast Op Op  : Op .bool out
-    .load region (Op .nat shape)   : Op .real shape
-    ...
-
-  inductive Stmt : Type                           ← existential boundary
-    .assign (dtype) (shape) RegName (Op dtype shape)
-    .store  region  (shape) (Op .nat shape) (Op .real shape)
-    .forLoop idx n (List Stmt)
-
-  ══════════════════ Runtime layer ══════════════════
-
-  abbrev RegFile :=
-    (dtype : TileDType) → (shape : TileShape) → RegName
-      → Option (Tile dtype shape)           ← typed lookup, no tag dispatch
-
-  structure BlockState
-    mem   : RegionName → Nat → ℝ            ← flat memory (ℝ only)
-    regs  : RegFile                          ← typed register file
-    pid   : Nat                              ← program_id
-    undef : RegionName → Nat → ℝ            ← masked-load oracle (other=None)
-
-  evalOp    : Op dtype shape → BlockState → Option (Tile dtype shape)
-  stepStmt  : Stmt → BlockState → Option BlockState     ┐
-  stepStmts : List Stmt → ...                            │ mutual
-  stepForLoopAux : ...                                   ┘
-  exec      : Kernel → BlockState → Option BlockState
-
-  ══════════════════ DSL layer ══════════════════
-
-  triton { ... }  macro
-    │  expands tritonExpr / tritonStmt syntax
-    │  into typed Op / Stmt / Kernel terms
-    │  kwargs: mask=, other=, axis=, keep_dims=
-    ▼
-  Kernel { inputs, outputs, body : List Stmt }
-```
-
-**Data-flow summary.** The DSL macro elaborates Triton-like surface syntax into
-typed `Op dtype shape` terms. `evalOp` evaluates an `Op` against a
-`BlockState` and returns `Option (Tile dtype shape)` — the same type indices
-flow through. `stepStmt` pattern-matches `Stmt` (which existentially quantifies
-`dtype` and `shape` in each constructor), immediately recovers the concrete
-indices, and calls `evalOp`. The result is stored in `RegFile`, a
-dependently-typed function indexed by `(dtype, shape, name)`. No erase-and-recover
-step is needed anywhere.
+| Question | Doc |
+|---|---|
+| Which Triton constructs are supported? | [TritonSubset.md](./documents/TritonSubset.md) |
+| Which theorem surface should I use? | [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md) |
+| How does dtype erasure work? | [EraseDType.md](./documents/EraseDType.md) |
+| How does memory safety / framing work? | [MemorySafety.md](./documents/MemorySafety.md) |
+| What's the GPU memory model? | [GpuMemoryModel.md](./documents/GpuMemoryModel.md) |
+| How are atomics / async copies modeled? | [ConcurrencySemantics.md](./documents/ConcurrencySemantics.md) |
+| How does the kernel manifest work? | [KernelManifest.md](./documents/KernelManifest.md) |
+| Naming conventions for theorem surfaces | [TheoremSurfaces.md](./documents/TheoremSurfaces.md) |
+| LLM proof wrapper | [scripts/README.md](./scripts/README.md) |
 
 ## Repository Layout
 
 ```text
 VeriTile/
-  Triton/
-    Core.lean          Kernel AST
-    Semantics.lean     Operational semantics
-    Memory.lean        Memory contracts, offsets, tensor views
-    DSL.lean           `triton { ... }` macro
-    Examples.lean      Constructor-form example
-  Examples/
-    SoftmaxEq.lean
-    LogSumExpEq.lean
-    SoftmaxReciprocal.lean
-    WelfordKernels.lean
-    FlashAttention1.lean
-
-bench/                 TritonBench-G v1 source kernels + coverage analysis
-scripts/               Proof wrapper scripts + kernel manifest
-documents/             Focused project documentation, design notes, proposals
-PLAN.md                Architecture, status, and decision log; live roadmap in #91
-VeriTile.lean          Top-level Lean library entry point
-lakefile.toml          Lake project definition
-lean-toolchain         Pinned Lean toolchain
+  Triton/                  Core AST, semantics, memory, DSL, math
+  Examples/                Worked correctness/refinement proofs
+bench/tritonbench_g/       TritonBench-G v1 ports (15 closed)
+documents/                 Design notes, subset spec, surface guide
+scripts/                   CI gate, kernel manifest, LLM proof wrapper
+verso/                     Slide deck / overview
 ```
+
+## Verification
+
+- `lake build` — typecheck + build full library and examples
+- `scripts/check-artifact.sh` — `lake build` ∧ `no sorry` ∧ axiom
+  whitelist ∧ kernel-manifest schema ∧ README/doc-term drift
+- `bench/check_ports.sh` — per-port build of the TritonBench-G ports
+
+## Environment
+
+- Lean 4 (`v4.29.0`) + Mathlib
+- [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) +
+  [`lean4-skills`](https://github.com/lean4-skills/lean4-skills)
+- `jq` (used by `scripts/prove.sh`)
 
 ## Roadmap
 
-VeriTile is a long-running project: the goal is to bring real Triton kernels
-(forward + backward + concurrency primitives + production-scale layout /
-masking / autograd) into Lean's proof scope with minimal modification. No
-fixed time windows; advances by Tier.
-
-**Closed**
-
-- **Tier 1** (`v0.1-tier1`): loop-free kernel pair × 3 + `welford_eq_two_pass`.
-- **Tier 2** (`v0.2-tier2`): streaming reductions × 3, `forLoop_inv`, Mask +
-  Bool channel, Typed Tile refactor, `WithBot ℝ` carrier.
-- **Tier 3-A** (`v0.3-tier3a` pending): FA-1 forward full coverage (non-causal,
-  strided, causal, 4D, boundary, boundaryD, score variants), ~16k lines.
-- **Horizontal infra**: Algorithm/Compute split, Float dtype erasure, Memory
-  subsystem (Bounds/Footprint/Frame), Concurrency framework (failure markers
-  + projection boundaries), ND launch + grid composition, DSL surface
-  expansion.
-
-**In progress**
-
-- **FA-1 backward** (`Backward.lean`, 1 sorry): closing the execution wiring
-  of the stripped single-block kernel. Moved from the original PLAN's P3+
-  bucket into the roadmap.
-
-**Roadmap**
-
-- Near-term: close FA-1 backward stripped main theorem, tag `v0.3-tier3a`,
-  add mask to backward.
-- Mid-term: Tier 3-B FA-2 forward + multi-block semantics + `fa1_eq_fa2`
-  headline corollary; Tier 3-C FA backward full coverage (causal +
-  multi-block + FA-2 backward); Tier 4 production-kernel batch 2 (grouped
-  GEMM, Mamba SSM, RoPE, fused-norm family, GQA / MQA / MLA).
-- Long-term: concurrency-primitive main theorems (atomic-add, async-copy
-  serialization), Python lifter prototype, ND-general closure, effect-
-  framework polish, block-pointer full coverage.
-
-**Float policy** — VeriTile can state float-facing theorems for dtype-
-annotated kernels, but algorithmic proofs stay over the erased mathematical
-`.real` kernel. The Real↔float bridge is a trusted abstraction boundary,
-supported by smoke / differential tests rather than IEEE-754 proof
-(permanently externalized).
-
-See [`PLAN.md`](./PLAN.md) for the architecture, decision log, and cross-
-cutting material. The live open roadmap is tracked in GitHub issue #91.
+Long-running project. Goal: bring real Triton kernels (forward, backward,
+concurrency, production layouts / autograd) into Lean's proof scope with
+minimal modification. Live roadmap:
+[#91](https://github.com/Lizn-zn/VeriTile/issues/91). Architecture and
+decision log: [PLAN.md](./PLAN.md).
 
 ## License
 

@@ -210,6 +210,27 @@ Audit details:
   generalized event-list linearization predicate, but does not need a global
   scheduler or timestamp map.
 
+## Grid Launchers
+
+Two relational launchers turn per-program kernel correctness into whole-grid
+correctness:
+
+- **`Kernel.GridLaunchedOrdinary k g s sFinal`** — for ordinary
+  (atomic-free) kernels. Says: starting from `s`, running `k` on every
+  grid index in `g` produces `sFinal`, with per-program writes
+  pairwise-disjoint. The composition of per-program frame writes is the
+  load-bearing fact; `mergeFrames` does the merge.
+- **`Kernel.GridLaunchedRMW k g s sFinal linearization`** — for kernels
+  that include atomic RMW operations on a single cell. Combines ordinary
+  frame writes with an explicit per-cell linearization witness. Used by
+  the atomic slice below.
+
+Lifting per-program correctness to a `ForAllProgramsSome k g s post`
+statement gives "for every grid index `idx`, exec succeeds and the
+postcondition holds with `s.withGridIndex idx`". A grid-level theorem
+typically wraps a per-program ComputeCorrect via this `ForAllProgramsSome`
+shape.
+
 ## Atomic Add Slice
 
 The first concrete atomic slice is intentionally narrow:

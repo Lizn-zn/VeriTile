@@ -405,5 +405,5 @@ PyTorch 量级)。
 ## Implementation plan
 
 主线执行追踪在 pinned roadmap issue #91(分层)+ 各 per-task issue。跨 phase
-仍有价值的长文档归到 [`documents/`](./documents) 下(例如
-`documents/ForLoopInvDesign.md`、`documents/DslMacroOptions.md`)。
+仍有价值的长文档归到 [`documents/`](./documents) 下;阶段已关闭的设计笔记
+归入 [`documents/archive/`](./documents/archive/)。

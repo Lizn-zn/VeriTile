@@ -22,19 +22,25 @@ Stmt : Type
 
 ### 控制流与 program id
 
-- `tl.program_id(axis)`,其中 `axis` 是数字字面量或 `$(n)`。
+- `tl.program_id(axis)` 与 `tl.program_id(axis=axis)`,其中 `axis` 是数字字面量或 `$(n)`。
   运行时状态保存 `pids : Nat → Nat`,所以任意 axis 都有定义。
 - `tl.for i in $(n) { ... }` 与 `tl.for i in N { ... }`。
   loop 有操作语义,证明通过 `forLoop_inv`。
 - `tl.static_range i in $(n) { ... }` 与 `tl.static_range i in N { ... }`
   是同一个 bounded-loop AST 的 surface alias。当前不建模 unroll / pipeline
   属性。
-- `tl.if cond { ... }` 和 `tl.if cond { ... } else { ... }` 支持 scalar
-  bool 条件(`Op .bool []`)。当前没有 `break` 或 `continue`;Triton 的
-  block-skipping pattern 应该通过取反 skip 条件并包住有效 body 来表示。逐元素条件选择仍使用
-  `tl.where`。
+- 块条件,两种等价 surface 写法:
+  - `if cond { ... }` 与 `if cond { ... } else { ... }`(Python 风格,这里的
+    `if` 是 DSL 块条件 token,跟 Lean term 层的 `if` 不冲突)。
+  - `tl.if cond { ... }` 与 `tl.if cond { ... } else { ... }`(显式 `tl.` 前缀,也接受)。
+
+  条件必须是 scalar bool(`Op .bool []`)。当前没有 `break` / `continue`;
+  Triton 的 block-skipping pattern 应通过取反条件并包住有效 body 表示。
+  逐元素条件选择仍用 `tl.where`。
 - 寄存器赋值:
-  `x := expr`。
+  - `x = expr` / `x := expr`(单一绑定)
+  - `x, y = e1, e2` / `x, y := e1, e2`(并行多重赋值);左右逗号项数必须一致
+  - `value, index = tl.max(..., return_indices=True)`(多返回 op 解构)
 
 ### 常量与 dtype
 
@@ -120,7 +126,7 @@ Stmt : Type
 - `tl.sigmoid`
 - `tl.sqrt`
 - `tl.tanh`
-- `tl.sin`
+- `tl.sin`、`tl.math.sin`
 - `tl.cos`
 - `tl.tan`
 - `tl.atan`
@@ -133,17 +139,22 @@ Stmt : Type
 - `tl.abs`
 
 这些都作用于 `.real` channel。`tl.abs(x)` 当前在实数语义里降为
-`tl.where(x < 0, 0 - x, x)`。`tl.extra.cuda.libdevice.erf(x)` 在算法层是
-数学 `erf(x)` 的 alias,使用标准积分定义;它不是 CUDA libdevice bit-level
-近似实现的证明,后者属于 ComputeCorrect gap contract 路径(#59)。
+`tl.where(x < 0, 0 - x, x)`。`tl.math.*` 命名空间和
+`tl.extra.cuda.libdevice.*` alias 在算法层降到同一个数学算子;它们不是
+CUDA libdevice bit-level 近似实现的证明,后者属于 ComputeCorrect gap
+contract 路径(#59)。
 
 ### Reduction
 
 - `tl.sum(x)`
 - `tl.max(x)`
-- `tl.sum(x, axis=N)`
-- `tl.max(x, axis=N)`
+- `tl.sum(x, axis=N)`、位置参形式 `tl.sum(x, N)`
+- `tl.max(x, axis=N)`、位置参形式 `tl.max(x, N)`
 - `keep_dims=true|false`
+- `tl.max(x, axis=N, return_indices=True)` 返回 (value, index) 对,只能通过
+  多重赋值绑定 `vmax, imax = tl.max(x, axis=N, return_indices=True)` 消费。
+  对应的 paired-channel 正确性 surface 用
+  [`ComputeCorrect.OutputPairWhere`](./CorrectnessSurfaces.md)。
 
 省略 `axis` 时遵循 Triton 的 `axis=None`:对所有维度做 reduction。
 显式 `axis=N` 时只 reduce 一个 axis。当前 reduction 作用于 `.real` tile。
@@ -326,16 +337,17 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | Area | Status | Coverage |
 | --- | --- | --- |
 | scalar/tile 常量 | Supported | 实数字面量、context-sensitive `$(x)`、`-inf` / `-float("inf")`、register ref |
-| program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;可通过 `GridIndex` / `Kernel.ForAllPrograms` 做 ND grid 量化,但没有 launch executor |
+| program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)` 与 `tl.program_id(axis=axis)`;可通过 `GridIndex` / `Kernel.ForAllPrograms` 做 ND grid 量化,但没有 launch executor |
 | loop | Supported | bounded `tl.for`;`tl.static_range` alias 降到同一个 loop AST |
-| conditional | Limited | scalar `tl.if cond { ... }` 与 `tl.if cond { ... } else { ... }`;没有 `break`、`continue` |
+| conditional | Limited | scalar `if cond { ... }` 与 `tl.if cond { ... }`(及 `... else { ... }`);没有 `break`、`continue` |
+| 多重赋值 | Supported | `x, y = e1, e2` 并行绑定;`value, index = tl.max(..., return_indices=True)` 多返回 op 解构 |
 | arithmetic | Supported | 同 channel numeric 上的 `+`, `-`, `*`, `/`;integer `//` / `%`;`.nat` `tl.cdiv`;pointer offset 支持 `ptr + nat` |
 | comparison | Supported | `.real` 或 `.nat` 上的 `<`, `<=`, `==`, `>`, `>=`, `!=` |
 | bool op | Supported | `tl.logical_and`、`tl.logical_or`、`tl.logical_not`,以及 `&`、`|`、`~` mask spelling |
 | Nat bitwise op | Limited | `.nat` 上的 `&`, `|`, `^`, `<<`, `>>`;暂不支持 `.nat ~` 和 signed fixed-width bitwise 语义 |
 | pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
 | unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf` |
-| reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis` / `keep_dims` |
+| reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis=`(或位置参 axis)和 `keep_dims`;`tl.max(..., return_indices=True)` 通过多重赋值返回 value/index 对 |
 | prefix scan | Limited | `.real` tile 上的 `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)`;不支持 arbitrary combine function |
 | index/order op | Limited | `.real` tile 上的 `tl.argmax`, `tl.argmin`, `tl.sort`,需要静态 `axis=N`;arg tie 返回最小 axis index,sort 升序 |
 | broadcast | Supported | ND same-dim、scalar-to-tile、dimension-`1` expansion |

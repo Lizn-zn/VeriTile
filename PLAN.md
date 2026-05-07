@@ -484,5 +484,5 @@ To make the close-rate metric reproducible:
 
 Active execution is tracked in pinned roadmap issue #91 (layered) and the
 linked per-task issues. Long-form design documents that survive an
-implementation phase are filed under [`documents/`](./documents) (e.g.
-`documents/ForLoopInvDesign.md`, `documents/DslMacroOptions.md`).
+implementation phase are filed under [`documents/`](./documents); closed-phase
+design notes live in [`documents/archive/`](./documents/archive/).

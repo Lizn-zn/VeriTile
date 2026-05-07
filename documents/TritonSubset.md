@@ -25,20 +25,30 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 
 ### Control and Program IDs
 
-- `tl.program_id(axis)` where `axis` is a numeric literal or `$(n)`.
-  The runtime state stores `pids : Nat → Nat`, so every axis is total.
+- `tl.program_id(axis)` and `tl.program_id(axis=axis)` where `axis` is a
+  numeric literal or `$(n)`. The runtime state stores `pids : Nat → Nat`,
+  so every axis is total.
 - `tl.for i in $(n) { ... }` and `tl.for i in N { ... }`.
   The loop is operationally modeled and proved through `forLoop_inv`.
 - `tl.static_range i in $(n) { ... }` and `tl.static_range i in N { ... }`
   are surface aliases for the same bounded-loop AST. Unroll and pipeline
   attributes are not modeled.
-- `tl.if cond { ... }` and `tl.if cond { ... } else { ... }` for scalar
-  boolean conditions (`Op .bool []`). There is no `break` or `continue`;
-  Triton block-skipping patterns should be written by negating the skip
-  condition and wrapping the useful body. Elementwise conditional selection
-  remains `tl.where`.
+- Block conditional, in two equivalent surface spellings:
+  - `if cond { ... }` and `if cond { ... } else { ... }` (Python-style; the
+    `if` token here is the DSL conditional, distinct from Lean's term-level `if`).
+  - `tl.if cond { ... }` and `tl.if cond { ... } else { ... }` (explicit
+    `tl.` prefix, also accepted).
+
+  The condition must be a scalar boolean (`Op .bool []`). There is no
+  `break` or `continue`; Triton block-skipping patterns should be written
+  by negating the skip condition and wrapping the useful body.
+  Elementwise conditional selection remains `tl.where`.
 - Register assignment:
-  `x := expr`.
+  - `x = expr` and `x := expr` (single binding)
+  - `x, y = e1, e2` and `x, y := e1, e2` (parallel multi-assign);
+    the comma-list lengths must match
+  - `value, index = tl.max(..., return_indices=True)`
+    (tuple-returning op binding)
 
 ### Constants and Dtypes
 
@@ -136,7 +146,7 @@ Supported channels:
 - `tl.sigmoid`
 - `tl.sqrt`
 - `tl.tanh`
-- `tl.sin`
+- `tl.sin`, `tl.math.sin`
 - `tl.cos`
 - `tl.tan`
 - `tl.atan`
@@ -150,18 +160,23 @@ Supported channels:
 
 These operate on the `.real` channel. `tl.abs(x)` is desugared to
 `tl.where(x < 0, 0 - x, x)` in the current real-valued semantics.
-`tl.extra.cuda.libdevice.erf(x)` is an algorithm-layer alias for mathematical
-`erf(x)` using the standard integral definition; it is not a proof of CUDA
-libdevice's bit-level approximation, which belongs to the ComputeCorrect gap
-contract path (#59).
+The `tl.math.*` namespace and `tl.extra.cuda.libdevice.*` aliases lower to
+the same mathematical operator at the algorithm layer; they are not proofs
+of CUDA libdevice's bit-level approximation, which belongs to the
+ComputeCorrect gap contract path (#59).
 
 ### Reductions
 
 - `tl.sum(x)`
 - `tl.max(x)`
-- `tl.sum(x, axis=N)`
-- `tl.max(x, axis=N)`
+- `tl.sum(x, axis=N)` and the positional spelling `tl.sum(x, N)`
+- `tl.max(x, axis=N)` and the positional spelling `tl.max(x, N)`
 - `keep_dims=true|false`
+- `tl.max(x, axis=N, return_indices=True)` returns a (value, index) tuple
+  consumable only via the multi-assign binding form
+  `vmax, imax = tl.max(x, axis=N, return_indices=True)`. Use
+  [`ComputeCorrect.OutputPairWhere`](./CorrectnessSurfaces.md) for the
+  paired-channel correctness surface.
 
 Omitted `axis` follows Triton's `axis=None` behavior: reduce over all
 dimensions. Explicit `axis=N` reduces one axis. Reductions are currently over
@@ -364,16 +379,17 @@ current semantic contract.
 | Area | Status | Coverage |
 | --- | --- | --- |
 | Scalar/tile constants | Supported | Real literals, context-sensitive `$(x)`, `-inf` / `-float("inf")`, register refs |
-| Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; ND grid quantification is available through `GridIndex` / `Kernel.ForAllPrograms`, but no launch executor is modeled |
+| Program IDs | Limited | `tl.program_id(axis)` and `tl.program_id(axis=axis)` for literal or antiquoted `Nat` axes; ND grid quantification is available through `GridIndex` / `Kernel.ForAllPrograms`, but no launch executor is modeled |
 | Loops | Supported | Bounded `tl.for`; `tl.static_range` alias backed by the same loop AST |
-| Conditionals | Limited | Scalar `tl.if cond { ... }` and `tl.if cond { ... } else { ... }`; no `break` or `continue` |
+| Conditionals | Limited | Scalar `if cond { ... }` and `tl.if cond { ... }` (and `... else { ... }`); no `break` or `continue` |
+| Multi-assign | Supported | `x, y = e1, e2` parallel binding; `value, index = tl.max(..., return_indices=True)` tuple-op binding |
 | Arithmetic | Supported | `+`, `-`, `*`, `/` on same-channel numeric operands; `//`, `%` on integer channels; `tl.cdiv` on `.nat`; `ptr + nat` for pointer offsets |
 | Comparisons | Supported | `<`, `<=`, `==`, `>`, `>=`, `!=` on `.real` or `.nat` |
 | Boolean ops | Supported | `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus `&`, `|`, `~` mask spellings |
 | Nat bitwise ops | Limited | `&`, `|`, `^`, `<<`, `>>` on `.nat`; no `.nat ~` and no signed fixed-width bitwise semantics yet |
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
 | Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf` |
-| Reductions | Supported | `tl.sum`, `tl.max`, optional `axis`, optional `keep_dims` over `.real` tiles |
+| Reductions | Supported | `tl.sum`, `tl.max` with optional `axis=` (or positional axis) and `keep_dims` over `.real` tiles; `tl.max(..., return_indices=True)` returns a value/index tuple via multi-assign |
 | Prefix scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` over `.real` tiles; no arbitrary combine functions |
 | Index/order ops | Limited | `tl.argmax`, `tl.argmin`, `tl.sort` over `.real` tiles with static `axis=N`; arg ties return the smallest axis index, sort is ascending |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
