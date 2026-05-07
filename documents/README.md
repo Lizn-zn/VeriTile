@@ -1,5 +1,7 @@
 # VeriTile Reference Documentation
 
+**English** | [中文](README_zh.md)
+
 Long-form reference for VeriTile's embedded Triton subset, semantic model,
 and trusted-boundary policies. Each active doc is a *contract*: what is
 modeled, what is not, where the boundary sits.
