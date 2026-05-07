@@ -598,6 +598,17 @@ and use the dtype default on mismatch. -/
         change some value = some value
         rfl
 
+@[simp] theorem writeMemTyped_nat_readMemValue_nat (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.nat)
+    (r : RegionName) (o : Nat) :
+    (s.writeMemTyped .nat region offset v).readMemValue .nat r o =
+      if r = region ∧ o = offset then v else s.readMemValue .nat r o := by
+  unfold writeMemTyped readMemValue readMemTyped
+  by_cases h : r = region ∧ o = offset
+  · rcases h with ⟨rfl, rfl⟩
+    simp
+  · simp [h]
+
 @[simp] theorem writeMem_readMem (s : BlockState) (region : RegionName)
     (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) :
     (s.writeMem region offset v).readMem r o =
@@ -821,6 +832,128 @@ theorem scatter_readback_prop_masked_nd {region : RegionName} {shape : TileShape
               (fun k => decide (P k)) h_inj i
   simp only [decide_eq_true_eq] at h
   exact h
+
+private theorem foldl_writeMemTyped_nat_masked_preserves {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → Nat) (mask : α → Bool) (o : Nat) (l : List α) :
+    ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
+      BlockState.readMemValue ((l.foldl
+          (fun acc k =>
+            if mask k then acc.writeMemTyped .nat region (offsetFn k) (valueFn k) else acc) s))
+          .nat region o
+      = s.readMemValue .nat region o := by
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s h
+    rw [List.foldl_cons]
+    have htl : ∀ k ∈ tl, mask k = true → offsetFn k ≠ o :=
+      fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
+    by_cases hmaskhd : mask hd = true
+    · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
+      simp only [hmaskhd, if_true]
+      rw [ih _ htl]
+      rw [writeMemTyped_nat_readMemValue_nat]
+      show (if region = region ∧ o = offsetFn hd then valueFn hd
+          else s.readMemValue TileDType.nat region o) =
+        s.readMemValue TileDType.nat region o
+      rw [if_neg]
+      rintro ⟨_, h_eq⟩
+      exact hhd h_eq.symm
+    · have hmaskhd' : mask hd = false := by
+        rcases hmaskFalse : mask hd
+        · rfl
+        · exact absurd hmaskFalse hmaskhd
+      simp only [hmaskhd', if_false, Bool.false_eq_true]
+      exact ih _ htl
+
+theorem scatter_readback_nat_prop_masked_nd {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → Nat) (P : TileIndex shape → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    BlockState.readMemValue ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .nat region (offsetFn k) (valueFn k) else acc) s)
+      .nat region (offsetFn i)
+    = if P i then valueFn i else s.readMemValue .nat region (offsetFn i) := by
+  let l := TileShape.allIndices shape
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  change BlockState.readMemValue ((l.foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .nat region (offsetFn k) (valueFn k) else acc) s))
+      .nat region (offsetFn i)
+    = if P i then valueFn i else s.readMemValue .nat region (offsetFn i)
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  have hl' : l = l₁ ++ i :: l₂ := by
+    simpa [l] using hl
+  rw [hl', List.foldl_append, List.foldl_cons]
+  have h_l1_not_in : ∀ k ∈ l₁, decide (P k) = true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    rw [hki] at hk
+    exact (hl1_disj i hk i (List.mem_cons_self)) rfl
+  have h_l2_not_in : ∀ k ∈ l₂, decide (P k) = true → offsetFn k ≠ offsetFn i := by
+    intro k hk _hmk heq
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  have hstep :
+      (fun (acc : BlockState) k =>
+        if P k then acc.writeMemTyped .nat region (offsetFn k) (valueFn k) else acc)
+        =
+      (fun (acc : BlockState) k =>
+        if decide (P k) then acc.writeMemTyped .nat region (offsetFn k) (valueFn k) else acc) := by
+    funext acc k
+    by_cases hk : P k <;> simp [hk]
+  rw [hstep]
+  rw [foldl_writeMemTyped_nat_masked_preserves offsetFn valueFn (fun k => decide (P k))
+    (offsetFn i) l₂ _ h_l2_not_in]
+  by_cases hPi : P i
+  · simp only [hPi, if_true]
+    rw [writeMemTyped_nat_readMemValue_nat]
+    show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _) = valueFn i
+    exact if_pos ⟨rfl, rfl⟩
+  · simp only [hPi, if_false]
+    rw [foldl_writeMemTyped_nat_masked_preserves offsetFn valueFn (fun k => decide (P k))
+      (offsetFn i) l₁]
+    exact h_l1_not_in
+
+theorem foldl_writeMemTyped_natAt_prop_masked_readMem_other_region {α : Type}
+    (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → Nat)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (R : RegionName) (off : Nat)
+    (h_other : ∀ k, k ∈ l → P k → R ≠ regionFn k) :
+    BlockState.readMem ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMemTyped .nat (regionFn k) (offsetFn k) (valueFn k) else acc) s))
+      R off
+      = s.readMem R off := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      have htl : ∀ k, k ∈ tl → P k → R ≠ regionFn k :=
+        fun k hk hPk => h_other k (List.mem_cons_of_mem hd hk) hPk
+      by_cases hhd : P hd
+      · simp only [hhd, if_true]
+        rw [ih _ htl]
+        unfold readMem
+        change (match
+            (if R = regionFn hd ∧ off = offsetFn hd then
+              MemCell.of TileDType.nat (valueFn hd)
+            else s.mem R off).readAs TileDType.real with
+          | some (some value) => value
+          | _ => 0) =
+          match (s.mem R off).readAs TileDType.real with
+          | some (some value) => value
+          | _ => 0
+        rw [if_neg]
+        rintro ⟨hR, _⟩
+        exact (h_other hd (List.mem_cons_self) hhd) hR
+      · simp only [hhd, if_false]
+        exact ih _ htl
 
 theorem scatter_readback_prop_masked_list_of_true {α : Type} {region : RegionName}
     (l : List α) (s : BlockState)
@@ -1051,7 +1184,7 @@ theorem foldl_writeMemTyped_pid {α : Type} (dtype : TileDType)
       rw [List.foldl_cons, ih]
       simp
 
-theorem foldl_writeMem_masked_regs {α : Type}
+@[simp] theorem foldl_writeMem_masked_regs {α : Type}
     (region : RegionName) (offsetFn : α → Nat)
     (valueFn : α → ℝ)
     (mask : α → Bool) (l : List α) (s : BlockState)
@@ -1068,7 +1201,24 @@ theorem foldl_writeMem_masked_regs {α : Type}
       · simp [hmask]
       · simp [hmask]
 
-theorem foldl_writeMemTyped_regs {α : Type} (dtype : TileDType)
+@[simp] theorem foldl_writeMem_prop_masked_regs {α : Type}
+    (region : RegionName) (offsetFn : α → Nat)
+    (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (dtype : TileDType) (shape : TileShape) (name : RegName) :
+    ((l.foldl
+        (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).regs
+        dtype shape name)
+      = s.regs dtype shape name := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hmask : P hd
+      · simp [hmask]
+      · simp [hmask]
+
+@[simp] theorem foldl_writeMemTyped_regs {α : Type} (dtype : TileDType)
     (region : RegionName) (offsetFn : α → Nat)
     (valueFn : α → TileCarrier dtype)
     (l : List α) (s : BlockState)
@@ -1098,7 +1248,7 @@ theorem foldl_writeMemTyped_masked_pid {α : Type} (dtype : TileDType)
       · simp [hmask]
       · simp [hmask]
 
-theorem foldl_writeMemTyped_masked_regs {α : Type} (dtype : TileDType)
+@[simp] theorem foldl_writeMemTyped_masked_regs {α : Type} (dtype : TileDType)
     (region : RegionName) (offsetFn : α → Nat)
     (valueFn : α → TileCarrier dtype)
     (mask : α → Bool) (l : List α) (s : BlockState)
@@ -1136,6 +1286,24 @@ theorem foldl_writeMemTypedAt_masked_pid {α : Type} (dtype : TileDType)
         (fun acc k =>
           if mask k then acc.writeMemTyped dtype (regionFn k) (offsetFn k) (valueFn k) else acc) s).pid)
       = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hmask : mask hd
+      · simp [hmask]
+      · simp [hmask]
+
+@[simp] theorem foldl_writeMemTypedAt_masked_regs {α : Type} (dtype : TileDType)
+    (regionFn : α → RegionName) (offsetFn : α → Nat)
+    (valueFn : α → TileCarrier dtype)
+    (mask : α → Bool) (l : List α) (s : BlockState)
+    (dtype' : TileDType) (shape : TileShape) (name : RegName) :
+    ((l.foldl
+        (fun acc k =>
+          if mask k then acc.writeMemTyped dtype (regionFn k) (offsetFn k) (valueFn k) else acc) s).regs
+        dtype' shape name)
+      = s.regs dtype' shape name := by
   induction l generalizing s with
   | nil => rfl
   | cons hd tl ih =>

@@ -5,9 +5,9 @@ import torch
 
 @triton.jit
 def sin_kernel(
-    in_ptr0,
-    out_ptr,
-    n_elements,
+    in_ptr0: tl.tensor,
+    out_ptr: tl.tensor,
+    n_elements: tl.int32,
     BLOCK_SIZE: "tl.constexpr",
 ):
     pid = tl.program_id(axis=0)

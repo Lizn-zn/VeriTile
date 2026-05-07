@@ -39,9 +39,10 @@ Stmt : Type
 ### 常量与 dtype
 
 - 实数字面量: `0`, `1`, `3.5` 等,降到 `.real` channel。
-- Nat 反引用: `$(n)`,降到 `.nat` channel。
-- Real 反引用: `$ℝ(x)`,把 Lean `ℝ` 项降到 `.real` channel。
-- `-inf` 降到 `Op.negInf`,内部表示为 `⊥ : WithBot ℝ`。
+- Lean 反引用: `$(x)` 是 context-sensitive。地址/shape/index context 降到 `.nat`;
+  data/scalar context 降到算法 data channel。
+- `-inf` 和 Lean source 里可写的 `-float("inf")` 降到 `Op.negInf`,内部表示为
+  `⊥ : WithBot ℝ`。
 - `tl.toReal(x)` 把 `.nat` 标量/tile 转成 `.real`。
 - `tl.cast(x, tl.float64|tl.float32|tl.float16|tl.bfloat16)` 改变浮点
   dtype index。当前语义里它保留底层 `WithBot ℝ` 值,不建模 rounding。
@@ -324,7 +325,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 
 | Area | Status | Coverage |
 | --- | --- | --- |
-| scalar/tile 常量 | Supported | 实数字面量、`$(n)`、`$ℝ(x)`、`-inf`、register ref |
+| scalar/tile 常量 | Supported | 实数字面量、context-sensitive `$(x)`、`-inf` / `-float("inf")`、register ref |
 | program id | Limited | literal 或 antiquoted `Nat` axis 的 `tl.program_id(axis)`;可通过 `GridIndex` / `Kernel.ForAllPrograms` 做 ND grid 量化,但没有 launch executor |
 | loop | Supported | bounded `tl.for`;`tl.static_range` alias 降到同一个 loop AST |
 | conditional | Limited | scalar `tl.if cond { ... }` 与 `tl.if cond { ... } else { ... }`;没有 `break`、`continue` |

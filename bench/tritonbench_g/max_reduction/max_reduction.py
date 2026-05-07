@@ -9,9 +9,9 @@ import triton.language as tl
 
 @triton.jit
 def max_kernel_1(
-    inp,
-    mid,
-    M,
+    inp: tl.tensor,
+    mid: tl.tensor,
+    M: tl.int32,
     BLOCK_SIZE: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -25,7 +25,7 @@ def max_kernel_1(
 
 
 @triton.jit
-def max_kernel_2(mid, out, mid_size, BLOCK_MID: tl.constexpr):
+def max_kernel_2(mid: tl.tensor, out: tl.tensor, mid_size: tl.int32, BLOCK_MID: tl.constexpr):
     offset = tl.arange(0, BLOCK_MID)
     mid_ptrs = mid + offset
     mask = offset < mid_size
@@ -56,12 +56,12 @@ def heur_block_n(args):
 )
 @triton.jit
 def max_kernel(
-    inp,
-    out_value,
-    out_index,
-    M,
-    N,
-    K,
+    inp: tl.tensor,
+    out_value: tl.tensor,
+    out_index: tl.tensor,
+    M: tl.int32,
+    N: tl.int32,
+    K: tl.int32,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
 ):

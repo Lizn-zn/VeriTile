@@ -3,10 +3,10 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def add_kernel(x_ptr,  # *Pointer* to first input vector.
-               y_ptr,  # *Pointer* to second input vector.
-               output_ptr,  # *Pointer* to output vector.
-               n_elements,  # Size of the vector.
+def add_kernel(x_ptr: tl.tensor,  # *Pointer* to first input vector.
+               y_ptr: tl.tensor,  # *Pointer* to second input vector.
+               output_ptr: tl.tensor,  # *Pointer* to output vector.
+               n_elements: tl.int32,  # Size of the vector.
                BLOCK_SIZE: tl.constexpr,  # Number of elements each program should process.
                ):
     pid = tl.program_id(axis=0)  # We use a 1D launch grid so axis is 0.

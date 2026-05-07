@@ -3,7 +3,7 @@ import triton.language as tl
 import torch
 
 @triton.jit
-def relu_kernel(x_ptr, out_ptr, N: tl.constexpr, block_size: tl.constexpr):
+def relu_kernel(x_ptr: tl.tensor, out_ptr: tl.tensor, N: tl.constexpr, block_size: tl.constexpr):
     # Get the index of the current thread
     pid = tl.program_id(0)
     block_start = pid * block_size

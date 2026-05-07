@@ -5,7 +5,7 @@ import math
 
 # Kernel function: Computes the cosine of each element in the input tensor.
 @triton.jit
-def cos_func(a, b, n_elements, BLOCK_SIZE: tl.constexpr):
+def cos_func(a: tl.tensor, b: tl.tensor, n_elements: tl.int32, BLOCK_SIZE: tl.constexpr):
     # Calculate the offset for each block and thread
     offset = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     # Determine which elements are valid within the block

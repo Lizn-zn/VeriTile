@@ -14,6 +14,20 @@ partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  let a' ←
+    if a'.dtype == .nat && b'.dtype == .real then
+      match ← expandLeanAntiquoteAs? .real a with
+      | some out => pure out
+      | none => pure a'
+    else
+      pure a'
+  let b' ←
+    if a'.dtype == .real && b'.dtype == .nat then
+      match ← expandLeanAntiquoteAs? .real b with
+      | some out => pure out
+      | none => pure b'
+    else
+      pure b'
   ensureAlgorithmOnly ctx a'
   ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
@@ -116,6 +130,20 @@ partial def expandCmp (expandExpr : ExprExpander) (env : Env) (ctx : String) (op
       | _ => pure a'
     else
       pure a'
+  let b' ←
+    if a'.dtype == .real && b'.dtype == .nat then
+      match ← expandLeanAntiquoteAs? .real b with
+      | some out => pure out
+      | none => pure b'
+    else
+      pure b'
+  let a' ←
+    if a'.dtype == .nat && b'.dtype == .real then
+      match ← expandLeanAntiquoteAs? .real a with
+      | some out => pure out
+      | none => pure a'
+    else
+      pure a'
   ensureAlgorithmOnly ctx a'
   ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
@@ -128,6 +156,20 @@ partial def expandMinMax (expandExpr : ExprExpander) (env : Env) (ctx : String) 
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  let a' ←
+    if a'.dtype == .nat && b'.dtype == .real then
+      match ← expandLeanAntiquoteAs? .real a with
+      | some out => pure out
+      | none => pure a'
+    else
+      pure a'
+  let b' ←
+    if a'.dtype == .real && b'.dtype == .nat then
+      match ← expandLeanAntiquoteAs? .real b with
+      | some out => pure out
+      | none => pure b'
+    else
+      pure b'
   ensureAlgorithmOnly ctx a'
   ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do
@@ -408,7 +450,10 @@ for `shape = []`). -/
 partial def expandFull (expandExpr : ExprExpander) (env : Env)
     (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr) :
     MacroM EOut := do
-  let v' ← expandExpr env v
+  let v' ←
+    match ← expandLeanAntiquoteAs? .real v with
+    | some out => pure out
+    | none => expandExpr env v
   -- Value must be a scalar; tile-shaped values aren't broadcast here.
   match v'.shape with
   | .dims [] => pure ()

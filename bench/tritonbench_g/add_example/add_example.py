@@ -5,10 +5,10 @@ import triton.language as tl
 
 @triton.jit
 def add_kernel(
-    in_ptr0,
-    in_ptr1,
-    out_ptr,
-    n_elements,
+    in_ptr0: tl.tensor,
+    in_ptr1: tl.tensor,
+    out_ptr: tl.tensor,
+    n_elements: tl.int32,
     BLOCK_SIZE: "tl.constexpr",
 ):
     pid = tl.program_id(axis=0)

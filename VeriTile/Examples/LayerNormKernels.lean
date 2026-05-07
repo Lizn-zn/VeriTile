@@ -34,7 +34,7 @@ def twoPassLayerNormKernel
   v      := s_d2 / tl.toReal($(N))
   γ      := tl.load($(γReg) + tl.arange($(N)))
   β      := tl.load($(βReg) + tl.arange($(N)))
-  σ_inv  := 1 / tl.sqrt(v + $ℝ(ε))
+  σ_inv  := 1 / tl.sqrt(v + $(ε))
   y      := (x - μ) * σ_inv * γ + β
   tl.store($(yReg) + offs, y)
 }
@@ -54,7 +54,7 @@ def fusedLayerNormKernel
   }
   μ       := M
   v       := S / tl.toReal($(N))
-  σ_inv   := 1 / tl.sqrt(v + $ℝ(ε))
+  σ_inv   := 1 / tl.sqrt(v + $(ε))
   -- Second pass to compute Y. The "fused" gain is that μ/var were
   -- computed in a single pass over `x`; the residual `(x − μ)` still
   -- needs the second read of x.

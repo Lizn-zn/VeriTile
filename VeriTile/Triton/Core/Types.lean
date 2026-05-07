@@ -102,7 +102,7 @@ inductive TileDType where
 /-- Lean carrier for each VeriTile tile dtype.
 
 `.real` is `WithBot ℝ` rather than `ℝ` so we can faithfully model `tl.full((),
--float('inf'))` as the bottom element. Triton attention kernels rely on `-inf`
+-float("inf"))` as the bottom element. Triton attention kernels rely on `-inf`
 as the seed of the running-max accumulator; using a finite stand-in like
 `-1e38` would either be wrong (when input data goes below `-1e38`) or require
 range preconditions on every theorem. With `WithBot ℝ`:

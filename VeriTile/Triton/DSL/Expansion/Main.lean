@@ -22,16 +22,9 @@ Conventions:
   * Memory accesses use pointer-like kernel parameters:
     `$(xReg) + offs` builds a pointer tile in pointer context, and
     `tl.load(ptr)` / `tl.store(ptr, value)` consume pointer-valued expressions.
-  * `$(<lean-term>)` antiquotes a Lean-level value; in numeric context it
-    becomes `Op.constNat`, inside `tl.arange(...)` it is fed directly as
-    the `Nat` length; in pointer context (for example `tl.load($(REGION) + i)`)
-    it is used as a `RegionName` pointer base.
-  * `$ℝ(<lean-term>)` antiquotes a Lean-level `ℝ` value into `Op.const`.
-    Symmetric with `$(t)` (which always lowers to `Op.constNat`). Used
-    when a kernel parameter has type `ℝ` (e.g. LayerNorm's `ε : ℝ`) and
-    must appear in the kernel body. Bare numeric literals (`0`, `1`,
-    `2.5`) still go to `Op.const` directly; this form is only needed
-    for non-literal `ℝ` terms.
+  * `$(<lean-term>)` is context-sensitive: address/shape/index contexts lower it
+    to `.nat`, while data/scalar contexts lower it to `.real`. Ambiguous uses
+    should be rejected instead of guessed.
   * Numeric literals become `Op.const`.
   * Statements are separated by newlines (no explicit terminator).
 
@@ -41,7 +34,7 @@ Currently supported expressions: `tl.program_id(_)`, `tl.arange(_)` /
 `tl.tan(_)`, `tl.atan(_)`, `tl.cosh(_)`, `tl.sinh(_)`, `tl.erf(_)`,
 `tl.extra.cuda.libdevice.erf(_)`, `tl.max(_)`, `tl.sum(_)`, `tl.load(ptrExpr)`,
 binary `+ - * /`, parens, identifiers, numerals, antiquotation (`$(t)` for
-`Nat` in numeric context / `RegionName` in pointer context, `$ℝ(t)` for `ℝ`).
+Lean values in typed contexts / `RegionName` in pointer context).
 Pointer arithmetic supports `ptr + nat` and `nat + ptr`.
 
 The two-argument `tl.arange(start, end)` lowers to `start + tl.arange(end - start)`
@@ -224,12 +217,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.ref $dt $sh $s), dtype, shape, none⟩
   | `(tritonExpr| $($t:term)) =>
       -- `$(...)` antiquote is the address/size channel: `Nat`.
+      -- Data/scalar contexts reinterpret the same surface form through
+      -- `expandLeanAntiquoteAs? .real` before this default is used.
       pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none⟩
-  | `(tritonExpr| $ℝ($t:term)) =>
-      -- `$ℝ(...)` antiquote is the data channel: `ℝ`. Symmetric with the
-      -- `$(t) → Op.constNat` form, used for non-literal ℝ kernel params
-      -- (e.g. LayerNorm's `ε`).
-      pure ⟨← `(Op.const $t), .real, SInfo.scalar, none⟩
   | `(tritonExpr| ($e:tritonExpr)) =>
       expandExpr env e
   | `(tritonExpr| tl.program_id($e:tritonExpr)) =>
@@ -397,6 +387,11 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none⟩
   | `(tritonExpr| -inf) =>
       pure ⟨← `(Op.negInf), .real, SInfo.scalar, none⟩
+  | `(tritonExpr| - float ($arg:term)) =>
+      let argString := toString arg.raw
+      unless argString.contains "inf" do
+        Macro.throwError "float(...): only `float(\"inf\")` is supported in Triton DSL expressions"
+      pure ⟨← `(Op.negInf), .real, SInfo.scalar, none⟩
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) => do
       expandDot expandExpr env a b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $acc:tritonExpr)) => do
@@ -485,6 +480,20 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
               pure ⟨← `(Op.ptrAdd $bc $b'.term $a'.term), .ptr, outShape, none⟩
           | _, _ =>
+              let a' ←
+                if a'.dtype == .nat && b'.dtype == .real then
+                  match ← expandLeanAntiquoteAs? .real a with
+                  | some out => pure out
+                  | none => pure a'
+                else
+                  pure a'
+              let b' ←
+                if a'.dtype == .real && b'.dtype == .nat then
+                  match ← expandLeanAntiquoteAs? .real b with
+                  | some out => pure out
+                  | none => pure b'
+                else
+                  pure b'
               unless a'.dtype == b'.dtype do
                 Macro.throwError "arithmetic: dtype mismatch"
               let np ← a'.dtype.numericProof
@@ -621,6 +630,72 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
         ensureDType .ptr p'.dtype (opName ++ " pointer")
         mkTerms (← `(MemAccess.ptr $p'.term)) p'.shape
   match stx with
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) => do
+      let lhs := #[lhs0, lhs1] ++ lhsRest
+      let rhs := #[rhs0, rhs1] ++ rhsRest
+      unless lhs.size == rhs.size do
+        Macro.throwError
+          ("multiple assignment: left side has " ++ toString lhs.size ++
+           " targets but right side has " ++ toString rhs.size ++ " values")
+      let mut algStmts : Array (TSyntax `term) := #[]
+      let mut computeStmts : Array (TSyntax `term) := #[]
+      let mut env' := env
+      let mut hasCompute := Bool.false
+      let mut expanded : Array EOut := #[]
+      for expr in rhs do
+        let e' ← expandExpr env expr
+        expanded := expanded.push e'
+        hasCompute := hasCompute || e'.computeTerm.isSome
+      for idx in [:lhs.size] do
+        let name := lhs[idx]!
+        let e' := expanded[idx]!
+        let nameLit ← identAsStr name
+        let dt ← e'.dtype.term
+        let sh ← e'.shape.term
+        let exprTerm ←
+          match e'.computeTerm with
+          | some ce => pure ce
+          | none => `(ComputeExpr.alg $e'.term)
+        algStmts := algStmts.push (← `(Stmt.assign $dt $sh $nameLit $e'.term))
+        computeStmts := computeStmts.push
+          (← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm))
+        env' := (name.getId.toString, e'.dtype, e'.shape) :: env'
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$algStmts,*]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$computeStmts,*]),
+        env', hasCompute)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* := $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) => do
+      let lhs := #[lhs0, lhs1] ++ lhsRest
+      let rhs := #[rhs0, rhs1] ++ rhsRest
+      unless lhs.size == rhs.size do
+        Macro.throwError
+          ("multiple assignment: left side has " ++ toString lhs.size ++
+           " targets but right side has " ++ toString rhs.size ++ " values")
+      let mut algStmts : Array (TSyntax `term) := #[]
+      let mut computeStmts : Array (TSyntax `term) := #[]
+      let mut env' := env
+      let mut hasCompute := Bool.false
+      let mut expanded : Array EOut := #[]
+      for expr in rhs do
+        let e' ← expandExpr env expr
+        expanded := expanded.push e'
+        hasCompute := hasCompute || e'.computeTerm.isSome
+      for idx in [:lhs.size] do
+        let name := lhs[idx]!
+        let e' := expanded[idx]!
+        let nameLit ← identAsStr name
+        let dt ← e'.dtype.term
+        let sh ← e'.shape.term
+        let exprTerm ←
+          match e'.computeTerm with
+          | some ce => pure ce
+          | none => `(ComputeExpr.alg $e'.term)
+        algStmts := algStmts.push (← `(Stmt.assign $dt $sh $nameLit $e'.term))
+        computeStmts := computeStmts.push
+          (← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm))
+        env' := (name.getId.toString, e'.dtype, e'.shape) :: env'
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$algStmts,*]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$computeStmts,*]),
+        env', hasCompute)
   | `(tritonStmt| $i:ident = tl.max($e:tritonExpr, $n:num)) => do
       let nameLit ← identAsStr i
       let e' ← expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e
@@ -801,6 +876,22 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env stmts.toList
+      pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
+        ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
+      let cond' ← expandBoolCondition env cond
+      ensureDType .bool cond'.dtype "if condition"
+      ensureShape SInfo.scalar cond'.shape "if condition"
+      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env thenStmts.toList
+      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env elseStmts.toList
+      pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
+        ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
+        env, cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
+  | `(tritonStmt| if $cond:tritonExpr { $stmts:tritonStmt* }) => do
+      let cond' ← expandBoolCondition env cond
+      ensureDType .bool cond'.dtype "if condition"
+      ensureShape SInfo.scalar cond'.shape "if condition"
       let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
         ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]), env, bodyHasCompute)

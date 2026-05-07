@@ -4,7 +4,7 @@ import triton
 import triton.language as tl
 
 @triton.jit
-def _add_kernel(A, B, C, size, BLOCK: tl.constexpr):
+def _add_kernel(A: tl.tensor, B: tl.tensor, C: tl.tensor, size: tl.int32, BLOCK: tl.constexpr):
     """add kernel."""
     prog_id = tl.program_id(0)
     offs = prog_id * BLOCK + tl.arange(0, BLOCK)

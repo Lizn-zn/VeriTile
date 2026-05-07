@@ -43,9 +43,10 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 ### Constants and Dtypes
 
 - Real literals: `0`, `1`, `3.5`, etc. lower to the `.real` channel.
-- Nat antiquotation: `$(n)` lowers to the `.nat` channel.
-- Real antiquotation: `$ℝ(x)` lowers a Lean `ℝ` term to the `.real` channel.
-- `-inf` lowers to `Op.negInf`, represented internally by `⊥ : WithBot ℝ`.
+- Lean antiquotation: `$(x)` is context-sensitive. Address/shape/index contexts
+  lower it to `.nat`; data/scalar contexts lower it to the algorithm data channel.
+- `-inf` and the Lean-source spelling `-float("inf")` lower to `Op.negInf`,
+  represented internally by `⊥ : WithBot ℝ`.
 - `tl.toReal(x)` converts a `.nat` scalar/tile to `.real`.
 - `tl.cast(x, tl.float64|tl.float32|tl.float16|tl.bfloat16)` changes the
   floating dtype index. In the current semantic model this preserves the
@@ -362,7 +363,7 @@ current semantic contract.
 
 | Area | Status | Coverage |
 | --- | --- | --- |
-| Scalar/tile constants | Supported | Real literals, `$(n)`, `$ℝ(x)`, `-inf`, register refs |
+| Scalar/tile constants | Supported | Real literals, context-sensitive `$(x)`, `-inf` / `-float("inf")`, register refs |
 | Program IDs | Limited | `tl.program_id(axis)` for literal or antiquoted `Nat` axes; ND grid quantification is available through `GridIndex` / `Kernel.ForAllPrograms`, but no launch executor is modeled |
 | Loops | Supported | Bounded `tl.for`; `tl.static_range` alias backed by the same loop AST |
 | Conditionals | Limited | Scalar `tl.if cond { ... }` and `tl.if cond { ... } else { ... }`; no `break` or `continue` |

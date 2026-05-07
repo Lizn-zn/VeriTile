@@ -1197,9 +1197,9 @@ def ifThenElseSmoke (outReg : RegionName) (P : Nat) :
     Kernel := triton {
   pid := tl.program_id(0)
   tl.if pid < $(P) {
-    tl.store($(outReg) + $(0), $ℝ(1))
+    tl.store($(outReg) + $(0), $(1))
   } else {
-    tl.store($(outReg) + $(0), $ℝ(2))
+    tl.store($(outReg) + $(0), $(2))
   }
 }
 

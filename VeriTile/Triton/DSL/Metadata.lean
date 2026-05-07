@@ -267,7 +267,19 @@ private partial def blockRegionsWith (assigned : List String)
 private partial def stmtRegionsWith (assigned : List String)
     (stx : TSyntax `tritonStmt) :
     List (TSyntax `term) × List (TSyntax `term) × List String :=
-  match stx with
+ match stx with
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) =>
+      let lhs := #[lhs0, lhs1] ++ lhsRest
+      let rhs := #[rhs0, rhs1] ++ rhsRest
+      let ins := rhs.foldl (fun acc e => acc ++ exprRegions assigned e) []
+      let nextAssigned := lhs.foldl (fun acc i => i.getId.toString :: acc) assigned
+      (ins, [], nextAssigned)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* := $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) =>
+      let lhs := #[lhs0, lhs1] ++ lhsRest
+      let rhs := #[rhs0, rhs1] ++ rhsRest
+      let ins := rhs.foldl (fun acc e => acc ++ exprRegions assigned e) []
+      let nextAssigned := lhs.foldl (fun acc i => i.getId.toString :: acc) assigned
+      (ins, [], nextAssigned)
   | `(tritonStmt| $i:ident := $e:tritonExpr) =>
       (exprRegions assigned e, [], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident = $e:tritonExpr) =>

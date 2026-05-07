@@ -47,9 +47,9 @@ def mhcWidthConnectionKernel1
   b := tl.program_id(0)
   residual := tl.load($(resReg) + b)
   h_res := tl.load($(hResReg))
-  res_mix := tl.exp(h_res / $ℝ(tau)) * residual
+  res_mix := tl.exp(h_res / $(tau)) * residual
   h_pre := tl.load($(hPreReg))
-  branch_in := tl.exp(h_pre / $ℝ(tau)) * residual
+  branch_in := tl.exp(h_pre / $(tau)) * residual
   tl.store($(resMixReg) + b, res_mix)
   tl.store($(branchInReg) + b, branch_in)
 }
@@ -87,7 +87,7 @@ def mhcWidthConnectionKernel
 
   h_res_ptrs := offs_s[:, None] * $(S) + offs_s2[None, :]
   h_res_logits := tl.load($(hResReg) + h_res_ptrs)
-  z_res := h_res_logits / $ℝ(tau)
+  z_res := h_res_logits / $(tau)
   u_res := tl.zeros([$(S)])
   v_res := tl.zeros([$(S)])
   tl.static_range iter in $(numIters) {
@@ -99,7 +99,7 @@ def mhcWidthConnectionKernel
 
   h_pre_ptrs := offs_s[:, None] * $(T) + offs_t[None, :]
   h_pre_logits := tl.load($(hPreReg) + h_pre_ptrs)
-  z_pre := h_pre_logits / $ℝ(tau)
+  z_pre := h_pre_logits / $(tau)
   u_pre := tl.zeros([$(S)])
   v_pre := tl.zeros([$(T)])
   tl.static_range iter in $(numIters) {
@@ -196,7 +196,7 @@ def mhcDepthConnectionKernel1
   res_mix := tl.load($(resMixReg) + b)
   branch_out := tl.load($(branchOutReg) + b)
   h_post := tl.load($(hPostReg))
-  branch_mix := tl.exp(h_post / $ℝ(tau)) * branch_out
+  branch_mix := tl.exp(h_post / $(tau)) * branch_out
   out := res_mix + branch_mix
   tl.store($(outReg) + b, out)
 }
@@ -230,7 +230,7 @@ def mhcDepthConnectionKernel
 
   h_post_ptrs := offs_t[:, None] * $(S) + offs_s[None, :]
   h_post_logits := tl.load($(hPostReg) + h_post_ptrs)
-  z_post := h_post_logits / $ℝ(tau)
+  z_post := h_post_logits / $(tau)
   u_post := tl.zeros([$(T)])
   v_post := tl.zeros([$(S)])
   tl.static_range iter in $(numIters) {

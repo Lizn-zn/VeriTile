@@ -26,10 +26,10 @@ def alibiScoreSmokeKernel (qReg kReg scoreReg : RegionName)
   k_ptrs := offs_n[:, None] * $(D) + offs_d[None, :]
   q      := tl.load($(qReg) + q_ptrs)
   k      := tl.load($(kReg) + k_ptrs)
-  raw    := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+  raw    := tl.dot(q, tl.trans(k)) * $(scale)
   delta  := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
   dist   := tl.max(delta, 0 - delta)
-  bias   := 0 - $ℝ(slope) * dist
+  bias   := 0 - $(slope) * dist
   scores := raw + bias
   s_ptrs := offs_m[:, None] * $(Bk) + offs_n[None, :]
   tl.store($(scoreReg) + s_ptrs, scores)
@@ -46,10 +46,10 @@ def slidingWindowScoreSmokeKernel (qReg kReg scoreReg : RegionName)
   k_ptrs := offs_n[:, None] * $(D) + offs_d[None, :]
   q      := tl.load($(qReg) + q_ptrs)
   k      := tl.load($(kReg) + k_ptrs)
-  raw    := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+  raw    := tl.dot(q, tl.trans(k)) * $(scale)
   delta  := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
   dist   := tl.max(delta, 0 - delta)
-  mask   := dist < $ℝ((window : ℝ))
+  mask   := dist < $((window : ℝ))
   scores := tl.where(mask, raw, -inf)
   s_ptrs := offs_m[:, None] * $(Bk) + offs_n[None, :]
   tl.store($(scoreReg) + s_ptrs, scores)
@@ -66,8 +66,8 @@ def softcapScoreSmokeKernel (qReg kReg scoreReg : RegionName)
   k_ptrs := offs_n[:, None] * $(D) + offs_d[None, :]
   q      := tl.load($(qReg) + q_ptrs)
   k      := tl.load($(kReg) + k_ptrs)
-  raw    := tl.dot(q, tl.trans(k)) * $ℝ(scale)
-  scores := $ℝ(softcap) * tl.tanh(raw / $ℝ(softcap))
+  raw    := tl.dot(q, tl.trans(k)) * $(scale)
+  scores := $(softcap) * tl.tanh(raw / $(softcap))
   s_ptrs := offs_m[:, None] * $(Bk) + offs_n[None, :]
   tl.store($(scoreReg) + s_ptrs, scores)
 }
@@ -93,10 +93,10 @@ def fa1ForwardKernelAlibi
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     k       := tl.load($(kReg) + k_ptrs)
     v       := tl.load($(vReg) + v_ptrs)
-    raw     := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    raw     := tl.dot(q, tl.trans(k)) * $(scale)
     delta   := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
     dist    := tl.max(delta, 0 - delta)
-    scores  := raw + (0 - $ℝ(slope) * dist)
+    scores  := raw + (0 - $(slope) * dist)
     m_block := tl.max(scores, axis = 1)
     m_new   := tl.max(m_i, m_block)
     alpha   := tl.exp(m_i - m_new)
@@ -131,10 +131,10 @@ def fa1ForwardKernelSlidingWindow
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     k       := tl.load($(kReg) + k_ptrs)
     v       := tl.load($(vReg) + v_ptrs)
-    raw     := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    raw     := tl.dot(q, tl.trans(k)) * $(scale)
     delta   := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
     dist    := tl.max(delta, 0 - delta)
-    visible := dist < $ℝ((window : ℝ))
+    visible := dist < $((window : ℝ))
     scores  := tl.where(visible, raw, -inf)
     m_block := tl.max(scores, axis = 1)
     m_new   := tl.max(m_i, m_block)
@@ -170,8 +170,8 @@ def fa1ForwardKernelSoftcap
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     k       := tl.load($(kReg) + k_ptrs)
     v       := tl.load($(vReg) + v_ptrs)
-    raw     := tl.dot(q, tl.trans(k)) * $ℝ(scale)
-    scores  := $ℝ(softcap) * tl.tanh(raw / $ℝ(softcap))
+    raw     := tl.dot(q, tl.trans(k)) * $(scale)
+    scores  := $(softcap) * tl.tanh(raw / $(softcap))
     m_block := tl.max(scores, axis = 1)
     m_new   := tl.max(m_i, m_block)
     alpha   := tl.exp(m_i - m_new)
@@ -206,12 +206,12 @@ def fa1ForwardKernelAlibiSlidingSoftcap
     v_ptrs  := offs_n[:, None] * $(D) + offs_d[None, :]
     k       := tl.load($(kReg) + k_ptrs)
     v       := tl.load($(vReg) + v_ptrs)
-    raw     := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    raw     := tl.dot(q, tl.trans(k)) * $(scale)
     delta   := tl.toReal(offs_n[None, :]) - tl.toReal(offs_m[:, None])
     dist    := tl.max(delta, 0 - delta)
-    biased  := raw + (0 - $ℝ(slope) * dist)
-    capped  := $ℝ(softcap) * tl.tanh(biased / $ℝ(softcap))
-    visible := dist < $ℝ((window : ℝ))
+    biased  := raw + (0 - $(slope) * dist)
+    capped  := $(softcap) * tl.tanh(biased / $(softcap))
+    visible := dist < $((window : ℝ))
     scores  := tl.where(visible, capped, -inf)
     m_block := tl.max(scores, axis = 1)
     m_new   := tl.max(m_i, m_block)

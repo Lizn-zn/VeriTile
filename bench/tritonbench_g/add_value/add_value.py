@@ -4,7 +4,7 @@ import torch
 
 # Triton kernel
 @triton.jit
-def puzzle1_kernel(x_ptr, output_ptr, N, BLOCK_SIZE: tl.constexpr, value):
+def puzzle1_kernel(x_ptr: tl.tensor, output_ptr: tl.tensor, N: tl.int32, BLOCK_SIZE: tl.constexpr, value: tl.float32):
     pid = tl.program_id(axis=0)
     block_start = pid * BLOCK_SIZE
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -26,7 +26,6 @@ def puzzle1(x: torch.Tensor):
 
 
 ##################################################################################################################################################
-
 
 import torch
 

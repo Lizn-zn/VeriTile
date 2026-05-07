@@ -15,7 +15,7 @@ partial def expandLoad (expandExpr : ExprExpander)
     (p : TSyntax `tritonExpr) (kwargs : TSyntaxArray `tritonMemKwarg) :
     MacroM EOut := do
   let mut maskTerm : Option (TSyntax `term × SInfo) := none
-  let mut otherTerm : Option (TSyntax `term × DInfo × SInfo) := none
+  let mut otherSyntax : Option (TSyntax `tritonExpr) := none
   let mut dtype? : Option DInfo := none
   let mut boundaryCheck? : Option (TSyntax `term) := none
   let mut padding : TSyntax `term ← `(PaddingOption.zero)
@@ -28,13 +28,13 @@ partial def expandLoad (expandExpr : ExprExpander)
     | `(tritonMemKwarg| padding_option="zero") =>
         padding := ← `(PaddingOption.zero)
     | `(tritonMemKwarg| $name:ident = $val:tritonExpr) =>
-        let val' ← expandExpr env val
         match name.getId.toString with
         | "mask"  =>
+            let val' ← expandExpr env val
             ensureDType .bool val'.dtype "tl.load mask"
             maskTerm := some (val'.term, val'.shape)
         | "other" =>
-            otherTerm := some (val'.term, val'.dtype, val'.shape)
+            otherSyntax := some val
         | unknown =>
             let msg : String :=
               "tl.load: unknown kwarg `" ++ unknown ++
@@ -51,13 +51,22 @@ partial def expandLoad (expandExpr : ExprExpander)
     | _ => Macro.throwUnsupported
   let outDType := dtype?.getD .real
   if let some boundaryCheck := boundaryCheck? then
-    if maskTerm.isSome || otherTerm.isSome then
+    if maskTerm.isSome || otherSyntax.isSome then
       Macro.throwError "tl.load: block-pointer `boundary_check` cannot be combined with `mask` or `other`"
     let p' ← expandExpr env p
     ensureDType .blockPtr p'.dtype "tl.load block pointer"
     let dt ← outDType.term
     return ⟨← `(Op.load $dt (MemAccess.blockPtr $p'.term $boundaryCheck) MaskOpt.none),
       outDType, p'.shape, none⟩
+  let otherTerm ←
+    match otherSyntax with
+    | none => pure none
+    | some other => do
+        let other' ←
+          match ← expandLeanAntiquoteAs? outDType other with
+          | some out => pure out
+          | none => expandExpr env other
+        pure (some (other'.term, other'.dtype, other'.shape))
   if let some (_, otherDType, _) := otherTerm then
     unless otherDType == outDType do
       Macro.throwError "tl.load other: dtype must match load result dtype"
@@ -143,7 +152,11 @@ partial def expandStore (expandExpr : ExprExpander)
           Macro.throwError "tl.store: duplicate `dtype=` kwarg"
         dtype? := some (← expandDType dt)
     | _ => Macro.throwUnsupported
-  let v' ← expandExpr env v
+  let storeExpected := dtype?.getD .real
+  let v' ←
+    match ← expandLeanAntiquoteAs? storeExpected v with
+    | some out => pure out
+    | none => expandExpr env v
   let valueExpr ←
     match v'.computeTerm with
     | some ce => pure ce
@@ -257,7 +270,11 @@ partial def expandAtomicAdd (expandExpr : ExprExpander)
           Macro.throwError "tl.atomic_add: duplicate `dtype=` kwarg"
         dtype? := some (← expandDType dt)
     | _ => Macro.throwUnsupported
-  let v' ← expandExpr env v
+  let atomicExpected := dtype?.getD .real
+  let v' ←
+    match ← expandLeanAntiquoteAs? atomicExpected v with
+    | some out => pure out
+    | none => expandExpr env v
   let valueExpr ←
     match v'.computeTerm with
     | some ce => pure ce

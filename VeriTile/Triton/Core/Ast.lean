@@ -22,7 +22,8 @@ Notes on individual constructors:
                 offset arithmetic, tile lengths, and program-id-derived
                 indices). See RP2 for the rationale behind separating the
                 `ℝ` and `Nat` channels.
-* `negInf` is a sentinel for `tl.full((), -inf)` used in `tl.full(... -float('inf'))`.
+* `negInf` is a sentinel for `tl.full((), -inf)` used in
+  `tl.full(... -float("inf"))`.
 * `programId axis` returns the current `tl.program_id(axis)` as a `Nat`
                     scalar. Out-of-range axes evaluate to `0` per the
                     `BlockState.pids` total-function model.
@@ -670,6 +671,34 @@ end
             Except.ok (Stmt.atomicRMW op dtype shape mem input _ mask dest :: rest')
         | Except.error e => Except.error e
     <;> cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_ifThen
+    (cond : Op .bool []) (body : List ComputeStmt) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm? (ComputeStmt.ifThen cond body :: rest) =
+      match ComputeStmt.listToAlgorithm? body, ComputeStmt.listToAlgorithm? rest with
+      | Except.ok body', Except.ok rest' => Except.ok (Stmt.ifThen cond body' :: rest')
+      | Except.error e, _ => Except.error e
+      | _, Except.error e => Except.error e := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases ComputeStmt.listToAlgorithm? body <;>
+    cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_ifThenElse
+    (cond : Op .bool []) (thenBody elseBody : List ComputeStmt)
+    (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm? (ComputeStmt.ifThenElse cond thenBody elseBody :: rest) =
+      match ComputeStmt.listToAlgorithm? thenBody,
+            ComputeStmt.listToAlgorithm? elseBody,
+            ComputeStmt.listToAlgorithm? rest with
+      | Except.ok thenBody', Except.ok elseBody', Except.ok rest' =>
+          Except.ok (Stmt.ifThenElse cond thenBody' elseBody' :: rest')
+      | Except.error e, _, _ => Except.error e
+      | _, Except.error e, _ => Except.error e
+      | _, _, Except.error e => Except.error e := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases ComputeStmt.listToAlgorithm? thenBody <;>
+    cases ComputeStmt.listToAlgorithm? elseBody <;>
+      cases ComputeStmt.listToAlgorithm? rest <;> rfl
 
 @[simp] theorem listToAlgorithm?_append :
     ∀ xs ys : List ComputeStmt,

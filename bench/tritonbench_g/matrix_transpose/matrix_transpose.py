@@ -4,12 +4,12 @@ import triton.language as tl
 
 @triton.jit
 def kernel(
-    M,
-    Out,
-    matrix_stridex,
-    matrix_stridey,
-    out_stridex,
-    out_stridey,
+    M: tl.tensor,
+    Out: tl.tensor,
+    matrix_stridex: tl.int32,
+    matrix_stridey: tl.int32,
+    out_stridex: tl.int32,
+    out_stridey: tl.int32,
     SIZE_M: tl.constexpr,
     D_HEAD: tl.constexpr,
 ):

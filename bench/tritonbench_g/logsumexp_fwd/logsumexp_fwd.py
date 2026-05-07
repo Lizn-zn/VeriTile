@@ -20,9 +20,9 @@ from typing import Optional
 })
 @triton.jit
 def logsumexp_fwd_kernel(
-    x,
-    z,
-    scale,
+    x: tl.tensor,
+    z: tl.tensor,
+    scale: tl.float32,
     D: tl.constexpr,
     B: tl.constexpr,
     HAS_SCALE: tl.constexpr

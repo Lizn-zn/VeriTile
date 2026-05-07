@@ -5,7 +5,7 @@ import triton.language as tl
 
 # Kernel function using Triton
 @triton.jit
-def kernel_function(x_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+def kernel_function(x_ptr: tl.tensor, output_ptr: tl.tensor, n_elements: tl.int32, BLOCK_SIZE: tl.constexpr):
     # x_ptr: pointer to input data
     # output_ptr: pointer to output data
     # n_elements: number of elements to process

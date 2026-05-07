@@ -1,9 +1,15 @@
 import VeriTile.Triton.Core
+import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Launch.Grid
+import VeriTile.Triton.Math.LogSumExp
+import VeriTile.Examples.Common
+import VeriTile.Examples.LogSumExpEq
 
 namespace VeriTile.Bench.TritonBenchG.LogsumexpFwd
 
-open VeriTile.Triton
+open VeriTile.Triton VeriTile.Triton.TiledLogSumExp VeriTile.Examples
 
 /-- Faithful 1:1 transcription of `logsumexp_fwd.py`'s `logsumexp_fwd_kernel`.
 
@@ -11,22 +17,244 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `D: tl.constexpr` / `B: tl.constexpr` / `HAS_SCALE: tl.constexpr` →
   Lean parameters; the `tl.constexpr` annotation is implicit on Lean params.
 - Python `if cond: body` → `tl.if cond { body }`, the DSL-side gate equivalent.
-- `scale` (Lean `ℝ` parameter) injected via `$ℝ(...)`. -/
+- `scale` (Lean `ℝ` parameter) injected via `$(...)`. -/
 def logsumexp_fwd_kernel
     (x z : RegionName)
     (D B : Nat) (HAS_SCALE : Bool) (scale : ℝ) :
     ComputeKernel := triton {
-  i_n = tl.program_id(0).to(tl.int64)
-  i_d = tl.program_id(1).to(tl.int64)
+  i_n, i_d = tl.program_id(0).to(tl.int64), tl.program_id(1).to(tl.int64)
   o_d = i_d * $(B) + tl.arange(0, $(B))
   m_d = o_d < $(D)
   b_x = tl.load(x + i_n * $(D) + o_d, mask=m_d, other=-inf)
-  tl.if HAS_SCALE {
-    b_x = b_x * $ℝ(scale)
+  if HAS_SCALE {
+    b_x = b_x * $(scale)
   }
   b_m = tl.max(b_x, 0)
   b_z = tl.log(tl.sum(tl.exp(b_x - b_m), 0)) + b_m
   tl.store(z + i_n * tl.cdiv($(D), $(B)) + i_d, b_z)
 }
+
+/-! ## Correctness
+
+The **tail block** is the last block when `D` is not divisible by `B`: pid axis-1
+takes value `i_d = ⌊D / B⌋` and satisfies `i_d * B < D < (i_d + 1) * B`.
+Some lanes are out-of-range; the kernel loads them with `other = -∞` (= `⊥`).
+
+The masked-lane semantic chain is:
+* `tl.load(..., mask=m_d, other=-inf)` → `none : WithBot ℝ` for invalid lanes
+* `tl.max(b_x, 0)` → `sup'` over the mixed tile; `withBot_sup'_partial` reduces it
+  to `↑(validLanes.sup' ...)`, a finite real
+* `tl.exp(b_x - b_m)` on an invalid lane → `exp(none - some m) = exp(none) = 0`
+* `tl.sum(..., 0)` → `↑(∑_{valid i} exp(scaled i - m))`
+* `tl.log + b_m` → `m + log(∑_{valid i} exp(scaled i - m))` -/
+
+/-! ### Whole-grid launch correctness -/
+
+/-- The Triton launch grid for `logsumexp_fwd_kernel`: one program per row and
+one program per `B`-sized block of the row. -/
+abbrev logsumexpGrid (N D B : Nat) : Grid :=
+  { dims := [N, (D + B - 1) / B] }
+
+private theorem mul_succ_lt_of_lt_cdiv {D n i : Nat}
+    (h : i < (D + n) / (n+1)) :
+    i * (n+1) < D := by
+  have hlediv : i + 1 ≤ (D + n) / (n+1) := Nat.succ_le_of_lt h
+  have hmul : (i+1) * (n+1) ≤ D + n :=
+    Nat.mul_le_of_le_div (n+1) (i+1) (D+n) hlediv
+  have hEq : (i+1) * (n+1) = i * (n+1) + (n+1) := by ring
+  rw [hEq] at hmul
+  omega
+
+private theorem logsumexpGrid_tail_lt
+    {N D n : Nat} (s : BlockState)
+    (idx : GridIndex (logsumexpGrid N D (n+1))) :
+    (s.withGridIndex idx).pids 1 * (n+1) < D := by
+  let axis1 : Fin (logsumexpGrid N D (n+1)).rank := ⟨1, by simp [Grid.rank]⟩
+  have hlt : (idx axis1).val < (D + n) / (n+1) := by
+    simpa [axis1, logsumexpGrid, Grid.dim] using (idx axis1).isLt
+  have hpid : (s.withGridIndex idx).pids 1 = (idx axis1).val := by
+    simpa [axis1] using BlockState.withGridIndex_pids_in_rank s idx axis1
+  simpa [hpid] using mul_succ_lt_of_lt_cdiv hlt
+
+private theorem logsumexpGrid_input_loaded
+    {N D n : Nat} (s : BlockState)
+    (idx : GridIndex (logsumexpGrid N D (n+1)))
+    (x : RegionName) (xs : Nat → Fin D → ℝ)
+    (h_x : ∀ i_n : Nat, ∀ j : Fin D,
+      s.readMem x (i_n * D + j.val) = xs i_n j) :
+    ∀ j : Fin D,
+      (s.withGridIndex idx).readMem x
+          ((s.withGridIndex idx).pids 0 * D + j.val) =
+        xs ((s.withGridIndex idx).pids 0) j := by
+  intro j
+  simpa [BlockState.withGridIndex, BlockState.withPids] using
+    h_x ((s.withGridIndex idx).pids 0) j
+
+/-! ### Main tail-block correctness theorem -/
+
+/-- **Tail-block correctness for `logsumexp_fwd_kernel`.**
+
+For pid `(i_n, i_d)` with at least one valid lane (`i_d * B < D`), the kernel
+writes `partialLSE_full xs i_d h_tail HAS_SCALE scale` to region `z`. Covers
+both `HAS_SCALE` branches and all mixed-tile masked-lane cases. -/
+theorem logsumexp_fwd_kernel_correct_full
+    (x z : RegionName)
+    {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (s : BlockState)
+    (xs : Fin D → ℝ)
+    (h_x : ∀ j : Fin D, s.readMem x (s.pids 0 * D + j.val) = xs j)
+    (h_tail : s.pids 1 * (n + 1) < D) :
+    (exec (logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale) s).map
+        (·.readMem z (s.pids 0 * ((D + n) / (n+1)) + s.pids 1)) =
+      some (partialLSE_full xs (s.pids 1) h_tail HAS_SCALE scale) := by
+  have h_ne : (Finset.univ : Finset (Fin (n+1))).Nonempty := Finset.univ_nonempty
+  have h_filter : (validLanes n D (s.pids 1)).Nonempty := validLanes_nonempty h_tail
+  have h_rm : ∀ (i : Fin (n+1)) (hi : s.pids 1 * (n+1) + i.val < D),
+      s.readMem x (s.pids 0 * D + (s.pids 1 * (n+1) + i.val)) =
+      xs ⟨s.pids 1 * (n+1) + i.val, hi⟩ := by
+    intro i hi; simpa using h_x ⟨s.pids 1 * (n+1) + i.val, hi⟩
+  -- Raw readMem-based lane function (definitionally equal to s.readMem x ...)
+  let rm : Fin (n+1) → ℝ := fun i =>
+    s.readMem x (s.pids 0 * D + (s.pids 1 * (n+1) + i.val))
+  -- Fold helper: rewrite s.readMem occurrences to rm
+  have h_fold : ∀ i : Fin (n+1),
+      s.readMem x (s.pids 0 * D + (s.pids 1 * (n+1) + ↑i)) = rm i := fun _ => rfl
+  rcases h_HAS_SCALE : HAS_SCALE with _ | _
+  · -- HAS_SCALE = false
+    simp [exec, logsumexp_fwd_kernel, stepStmts, stepStmt, evalOp,
+      Tile.bop, Tile.uop, Tile.cop, Tile.reduceSum, Tile.reduceSumDrop,
+      Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt]
+    simp only [h_fold]
+    erw [sup'_masked_eq h_ne h_filter rm, sum_exp_masked_eq rm]
+    simp only [WithBot.realLog_coe]
+    erw [Option.map₂_coe_coe, WithBot.unbotD_coe]
+    rw [add_comm]
+    unfold partialLSE_full scaledLane_full validLanes
+    simp only [Bool.false_eq_true, reduceIte]
+    -- Common: the two sup' (max) sides agree (after unfolding partialLSE_full, the spec uses
+    -- `validLanes.sup' ⋯ (scaledLane_full ... false scale)`, while the kernel side has
+    -- `validLanes.sup' h_filter rm`; they agree on valid lanes).
+    have h_m_eq : (validLanes n D (s.pids 1)).sup' h_filter rm =
+        (validLanes n D (s.pids 1)).sup' h_filter
+          (fun x => if h : s.pids 1 * (n+1) + x.val < D then xs ⟨s.pids 1 * (n+1) + x.val, h⟩ else 0) := by
+      apply Finset.sup'_congr h_filter rfl
+      intro i hi
+      simp only [validLanes, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+      simp only [dif_pos hi]; exact h_rm i hi
+    congr 1
+    -- log of sum of exp parts agree (the sup' part was solved by congr 1 via rfl)
+    congr 1
+    erw [h_m_eq]
+    apply Finset.sum_congr rfl
+    intro i hi
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi
+    congr 1  -- removes Real.exp, leaving subtraction equality
+    simp only [dif_pos hi]  -- simplify if h : ... on RHS
+    congr 1  -- splits a - b = c - d; denominator closes by def-eq
+    -- rm i = xs ⟨...⟩: rm is transparent so exact closes via def-eq
+    exact h_rm i hi
+  · -- HAS_SCALE = true
+    simp [exec, logsumexp_fwd_kernel, stepStmts, stepStmt, evalOp,
+      Tile.bop, Tile.uop, Tile.cop, Tile.reduceSum, Tile.reduceSumDrop,
+      Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      ComparableDType.lt]
+    simp only [h_fold]
+    erw [sup'_masked_map_eq h_ne h_filter rm (· * scale),
+         sum_exp_masked_map_eq rm (· * scale)]
+    simp only [WithBot.realLog_coe]
+    erw [Option.map₂_coe_coe, WithBot.unbotD_coe]
+    rw [add_comm]
+    unfold partialLSE_full scaledLane_full validLanes
+    simp only [reduceIte]
+    -- Common: the two sup' (max) sides agree (scaled case)
+    have h_m_eq_s : (validLanes n D (s.pids 1)).sup' h_filter (fun i => rm i * scale) =
+        (validLanes n D (s.pids 1)).sup' h_filter
+          (fun x => (if h : s.pids 1 * (n+1) + x.val < D then xs ⟨s.pids 1 * (n+1) + x.val, h⟩ else 0) * scale) := by
+      apply Finset.sup'_congr h_filter rfl
+      intro i hi
+      simp only [validLanes, Finset.mem_filter, Finset.mem_univ, true_and] at hi
+      simp only [dif_pos hi]; congr 1; exact h_rm i hi
+    congr 1
+    -- log of sum parts agree (the sup' part was solved by congr 1 via rfl)
+    congr 1
+    erw [h_m_eq_s]
+    apply Finset.sum_congr rfl
+    intro i hi
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hi
+    congr 1  -- removes Real.exp
+    simp only [dif_pos hi]
+    rw [show rm i * scale = xs ⟨s.pids 1 * (n+1) + i.val, hi⟩ * scale from by congr 1; exact h_rm i hi]
+    congr 1  -- denominators: proof irrelevance
+
+/-- **Compute-facing `ComputeCorrect` for `logsumexp_fwd_kernel`** in the
+tail-block case. This is the public wrapper around
+`logsumexp_fwd_kernel_correct_full`, so users can state the result through the
+same `ComputeCorrect` surface as the no-mask theorem. -/
+theorem logsumexp_fwd_kernel_compute_correct_full
+    (x z : RegionName)
+    {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (s : BlockState)
+    (xs : Fin D → ℝ)
+    (h_x : ∀ j : Fin D, s.readMem x (s.pids 0 * D + j.val) = xs j)
+    (h_tail : s.pids 1 * (n + 1) < D) :
+    ComputeKernel.ComputeCorrect
+      (logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale)
+      (fun s0 s' =>
+        s0 = s →
+        s'.readMem z (s.pids 0 * ((D + n) / (n+1)) + s.pids 1)
+          = partialLSE_full xs (s.pids 1) h_tail HAS_SCALE scale) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hview := logsumexp_fwd_kernel_correct_full x z n HAS_SCALE scale s xs h_x h_tail
+  rw [hExec] at hview
+  simpa using hview
+
+/-- **Whole Triton-grid correctness for `logsumexp_fwd_kernel`.**
+
+For launch grid `(N, cdiv(D, B))`, every program instance `(i_n, i_d)` writes
+the correct partial LSE for its row/block to
+`z[i_n * cdiv(D, B) + i_d]`. This theorem covers both full blocks and the tail
+block through the masked-lane theorem above. It deliberately stops at the
+Triton kernel boundary; it does not model the Python wrapper's later
+`z.logsumexp(-1)`. -/
+theorem logsumexp_fwd_kernel_grid_compute_correct
+    (x z : RegionName)
+    (N : Nat) {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (s : BlockState)
+    (xs : Nat → Fin D → ℝ)
+    (h_x : ∀ i_n : Nat, ∀ j : Fin D,
+      s.readMem x (i_n * D + j.val) = xs i_n j) :
+    Kernel.ForAllProgramsSome
+      (logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale).toAlgKernel
+      (logsumexpGrid N D (n+1))
+      s
+      (fun idx s' =>
+        let sIdx := s.withGridIndex idx
+        let h_tail := logsumexpGrid_tail_lt s idx
+        s'.readMem z (sIdx.pids 0 * ((D + n) / (n+1)) + sIdx.pids 1)
+          = partialLSE_full (xs (sIdx.pids 0)) (sIdx.pids 1) h_tail HAS_SCALE scale) := by
+  intro idx
+  let sIdx := s.withGridIndex idx
+  have h_tail : sIdx.pids 1 * (n+1) < D := logsumexpGrid_tail_lt s idx
+  have h_loaded : ∀ j : Fin D, sIdx.readMem x (sIdx.pids 0 * D + j.val) =
+      xs (sIdx.pids 0) j :=
+    logsumexpGrid_input_loaded s idx x xs h_x
+  have hview :=
+    logsumexp_fwd_kernel_correct_full x z n HAS_SCALE scale
+      sIdx (xs (sIdx.pids 0)) h_loaded h_tail
+  cases hExec : exec (logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale).toAlgKernel sIdx with
+  | none =>
+      simp [hExec] at hview
+  | some final =>
+      refine ⟨final, ?_, ?_⟩
+      · rfl
+      rw [hExec] at hview
+      simpa [sIdx, h_tail] using hview
 
 end VeriTile.Bench.TritonBenchG.LogsumexpFwd

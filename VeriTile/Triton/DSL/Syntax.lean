@@ -23,7 +23,6 @@ syntax scientific : tritonExpr
 -- on bare register identifiers without the user wrapping them in parens.
 syntax:max ident : tritonExpr
 syntax "$(" term ")" : tritonExpr
-syntax "$ℝ(" term ")" : tritonExpr
 syntax "(" tritonExpr ")" : tritonExpr
 syntax "tl.program_id(" tritonExpr ")" : tritonExpr
 syntax "tl.program_id(axis=" tritonExpr ")" : tritonExpr
@@ -60,6 +59,7 @@ syntax "tl.cast(" tritonExpr ", " tritonDType ")" : tritonExpr
 syntax "tl.bitcast(" tritonExpr ", " tritonDType ")" : tritonExpr
 syntax:max (name := tritonMethodCast) tritonExpr:max noWs "." "to" "(" tritonDType ")" : tritonExpr
 syntax "-inf" : tritonExpr
+syntax "-" "float" "(" term ")" : tritonExpr
 
 syntax "tl.float64" : tritonDType
 syntax "tl.float32" : tritonDType
@@ -152,6 +152,10 @@ syntax "tl.atomic_xchg(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : 
 syntax "tl.atomic_cas(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
 
 -- Statements
+syntax ident ", " ident (", " ident)* " := "
+  tritonExpr ", " tritonExpr (", " tritonExpr)* : tritonStmt
+syntax ident ", " ident (", " ident)* " = "
+  tritonExpr ", " tritonExpr (", " tritonExpr)* : tritonStmt
 syntax ident " := " "tl.max(" tritonExpr ", " num ")" : tritonStmt
 syntax ident " = " "tl.max(" tritonExpr ", " num ")" : tritonStmt
 syntax ident " := " tritonExpr : tritonStmt
@@ -176,6 +180,11 @@ syntax "tl.static_range " ident " in " "$(" term ")" " { " tritonStmt* " }" : tr
 syntax "tl.static_range " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "tl.if " tritonExpr " { " tritonStmt* " }" : tritonStmt
 syntax "tl.if " tritonExpr " { " tritonStmt* " }" " else " " { " tritonStmt* " }" : tritonStmt
+-- Python-style alias: `if cond { body }` (and `if-else`) without the `tl.` prefix.
+-- Within `triton { ... }` the parser is in `tritonStmt` mode, so `if` here is a
+-- DSL token, distinct from Lean's term-level `if`.
+syntax "if " tritonExpr " { " tritonStmt* " }" : tritonStmt
+syntax "if " tritonExpr " { " tritonStmt* " }" " else " " { " tritonStmt* " }" : tritonStmt
 
 -- Block (the user-facing entry point)
 syntax (name := tritonBlock) "triton " "{" tritonStmt* "}" : term

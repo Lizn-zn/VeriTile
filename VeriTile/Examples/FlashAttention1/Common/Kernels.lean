@@ -64,7 +64,7 @@ def fa1ForwardKernel
     v       := tl.load($(vReg) + v_ptrs)
 
     -- Scaled scores: [M, Bk]
-    scores  := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    scores  := tl.dot(q, tl.trans(k)) * $(scale)
 
     -- Online-softmax update.
     m_block := tl.max(scores, axis = 1)
@@ -137,7 +137,7 @@ def fa1ForwardKernelStrided
     k       := tl.load($(kReg) + k_ptrs)
     v       := tl.load($(vReg) + v_ptrs)
 
-    scores  := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    scores  := tl.dot(q, tl.trans(k)) * $(scale)
     m_block := tl.max(scores, axis = 1)
     m_new   := tl.max(m_i, m_block)
     alpha   := tl.exp(m_i - m_new)
@@ -205,7 +205,7 @@ def fa1ForwardKernelStridedCausal
     k       := tl.load($(kReg) + k_ptrs)
     v       := tl.load($(vReg) + v_ptrs)
 
-    scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    scores_raw := tl.dot(q, tl.trans(k)) * $(scale)
     causal     := offs_m[:, None] >= offs_n[None, :]
     scores     := tl.where(causal, scores_raw, -inf)
     m_block    := tl.max(scores, axis = 1)
@@ -278,7 +278,7 @@ def fa1ForwardKernelStridedBoundary
     k       := tl.load($(kReg) + k_ptrs, mask=kv_mask, other=0)
     v       := tl.load($(vReg) + v_ptrs, mask=kv_mask, other=0)
 
-    scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    scores_raw := tl.dot(q, tl.trans(k)) * $(scale)
     score_mask := (offs_m[:, None] * $(0) + offs_n[None, :]) < $(S_k)
     scores     := tl.where(score_mask, scores_raw, -inf)
     m_block    := tl.max(scores, axis = 1)
@@ -337,7 +337,7 @@ def fa1ForwardKernelStridedCausalBoundary
     k       := tl.load($(kReg) + k_ptrs, mask=kv_mask, other=0)
     v       := tl.load($(vReg) + v_ptrs, mask=kv_mask, other=0)
 
-    scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    scores_raw := tl.dot(q, tl.trans(k)) * $(scale)
     causal     := offs_m[:, None] >= offs_n[None, :]
     causal_scores := tl.where(causal, scores_raw, -inf)
     score_mask := (offs_m[:, None] * $(0) + offs_n[None, :]) < $(S_k)
@@ -409,7 +409,7 @@ def fa1ForwardKernelStridedBoundaryD
     k       := tl.load($(kReg) + k_ptrs, mask=kv_mask, other=0)
     v       := tl.load($(vReg) + v_ptrs, mask=kv_mask, other=0)
 
-    scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    scores_raw := tl.dot(q, tl.trans(k)) * $(scale)
     score_mask := (offs_m[:, None] * $(0) + offs_n[None, :]) < $(S_k)
     scores     := tl.where(score_mask, scores_raw, -inf)
     m_block    := tl.max(scores, axis = 1)
@@ -474,7 +474,7 @@ def fa1ForwardKernelStridedCausalBoundaryD
     k       := tl.load($(kReg) + k_ptrs, mask=kv_mask, other=0)
     v       := tl.load($(vReg) + v_ptrs, mask=kv_mask, other=0)
 
-    scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+    scores_raw := tl.dot(q, tl.trans(k)) * $(scale)
     causal     := offs_m[:, None] >= offs_n[None, :]
     causal_scores := tl.where(causal, scores_raw, -inf)
     score_mask := (offs_m[:, None] * $(0) + offs_n[None, :]) < $(S_k)
@@ -543,7 +543,7 @@ def fa1NaiveForwardKernelStridedBoundaryD
   k      := tl.load($(kReg) + k_ptrs, mask=kv_d_mask, other=0)
   v      := tl.load($(vReg) + v_ptrs, mask=kv_d_mask, other=0)
 
-  scores := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+  scores := tl.dot(q, tl.trans(k)) * $(scale)
   p      := tl.exp(scores)
   l      := tl.sum(p, axis = 1)
   o_acc  := tl.dot(p, v)
@@ -593,7 +593,7 @@ def fa1NaiveForwardKernelStridedCausalBoundaryD
   k      := tl.load($(kReg) + k_ptrs, mask=kv_d_mask, other=0)
   v      := tl.load($(vReg) + v_ptrs, mask=kv_d_mask, other=0)
 
-  scores_raw := tl.dot(q, tl.trans(k)) * $ℝ(scale)
+  scores_raw := tl.dot(q, tl.trans(k)) * $(scale)
   causal     := offs_m[:, None] >= offs_n[None, :]
   scores     := tl.where(causal, scores_raw, -inf)
   p          := tl.exp(scores)

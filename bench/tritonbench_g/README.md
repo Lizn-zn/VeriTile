@@ -22,7 +22,7 @@ The Lean filename is the **CamelCase form** of the directory name (e.g. `vector_
 
 A port goes through three stages, tracked per-kernel in `README.md`:
 
-1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes only: `=` → `:=`, pointer args → `RegionName` injected via `$(...)`, `tl.constexpr` annotation → Lean `Nat`/`Bool` parameter, Real Lean params → `$ℝ(...)`. The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 5 / 15.**
+1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes only: `=` → `:=`, pointer args → `RegionName` injected via `$(...)`, `tl.constexpr` annotation → Lean `Nat`/`Bool` parameter, Lean scalar params → `$(...)`. The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 15 / 15.**
 2. **Spec** — Real-valued mathematical specification of the kernel's intended output is written.
 3. **Verification** — `ComputeKernel.ComputeCorrect` / `ComputeKernel.ComputeRefine` theorem is proved and registered in `scripts/kernel-manifest.tsv`.
 
@@ -63,11 +63,18 @@ The script runs `lake env lean` against each `<KernelName>.lean` independently, 
 |---|---|---|---|
 | 2026-05-06 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 15 (Tier 1) | initial DSL ports; no specs / theorems yet |
 
+### Local modifications to vendored `.py` files
+
+The vendored `.py` files are **not** strictly byte-identical to upstream. The following modifications are applied locally to all 15 imports:
+
+- **Input type annotations on every `@triton.jit` kernel signature.** Pointer args annotated `tl.tensor`, runtime int scalars `tl.int32`, runtime float scalars `tl.float32`. `tl.constexpr` annotations from upstream are preserved as-is. These annotations are JIT-equivalent (Triton ignores non-`constexpr` Python type hints at compile time), so kernel behavior is unchanged — they exist purely as in-source documentation that aligns Python signatures with the type information the Lean ports rely on.
+
 When importing a new batch:
 
 1. Pin the upstream commit you fetched from in this table.
 2. Ensure the upstream LICENSE has not changed (currently **Apache-2.0**).
 3. Add per-file attribution headers in each `.py` (see [Licensing](#licensing) below).
+4. Apply the input-type annotations described above to each `@triton.jit` signature.
 
 ## Licensing
 
