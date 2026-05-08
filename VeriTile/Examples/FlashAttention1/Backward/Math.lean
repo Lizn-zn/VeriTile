@@ -121,6 +121,20 @@ theorem maskedProbability_exp_eq {M S D : Nat}
   · simp [h, probabilityMasked, probability, FA1Math.scaledScore]
   · simp [h, probabilityMasked, WithBot.realExp]
 
+theorem maskedProbability_exp_ite_eq {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) (j : Fin S) :
+    WithBot.realExp
+      (if visible i j then
+        some (scale * (Finset.univ.sum fun d : Fin D =>
+          Q (i, d, PUnit.unit) * K (j, d, PUnit.unit)) - LSE i)
+      else none) =
+      some (probabilityMasked visible Q K LSE scale i j) := by
+  by_cases h : visible i j
+  · simp [h, probabilityMasked, probability, FA1Math.scaledScore]
+  · simp [h, probabilityMasked, WithBot.realExp]
+
 /-- Mask-aware row correction `D_i = Σ_j P_ij · dP_ij`, with invisible lanes
 contributing zero. -/
 noncomputable def rowCorrectionMasked {M S D : Nat}
@@ -130,6 +144,42 @@ noncomputable def rowCorrectionMasked {M S D : Nat}
     (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) : ℝ :=
   Finset.univ.sum fun j : Fin S =>
     probabilityMasked visible Q K LSE scale i j * dP V dO i j
+
+/-- Row-wise masked correction bridge: the WithBot sum produced by
+`tl.sum(p * dP, axis=1)` after `tl.where(..., -inf)` equals the Real
+`rowCorrectionMasked` spec. -/
+theorem maskedRowCorrection_sum_eq {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) :
+    @Finset.sum (Fin S) (WithBot ℝ) _ Finset.univ (fun j : Fin S =>
+      (Option.map (fun p : ℝ => p * dP V dO i j)
+        (WithBot.realExp
+          (Option.map (fun a : ℝ => a - LSE i)
+            (if visible i j then
+              some (scale * (Finset.univ.sum fun d : Fin D =>
+                Q (i, d, PUnit.unit) * K (j, d, PUnit.unit)))
+            else none))) : WithBot ℝ)) =
+      ((rowCorrectionMasked visible Q K V dO LSE scale i : ℝ) : WithBot ℝ) := by
+  have hterm :
+      (fun j : Fin S =>
+        (Option.map (fun p : ℝ => p * dP V dO i j)
+          (WithBot.realExp
+            (Option.map (fun a : ℝ => a - LSE i)
+              (if visible i j then
+                some (scale * (Finset.univ.sum fun d : Fin D =>
+                  Q (i, d, PUnit.unit) * K (j, d, PUnit.unit)))
+              else none))) : WithBot ℝ)) =
+      (fun j : Fin S =>
+        (some (probabilityMasked visible Q K LSE scale i j * dP V dO i j) :
+          WithBot ℝ)) := by
+    funext j
+    rw [maskedProbability_exp_eq]
+    rfl
+  rw [hterm]
+  simp only [rowCorrectionMasked]
+  exact WithBot.sum_someTerm_eq_some (Finset.univ)
+    (fun j : Fin S => probabilityMasked visible Q K LSE scale i j * dP V dO i j)
 
 /-- Mask-aware softmax JVP. -/
 noncomputable def dSMasked {M S D : Nat}
