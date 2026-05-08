@@ -376,6 +376,33 @@ theorem fa2ScalarFragmentSummaryKernel_correct_view
     intro j _
     simp [hScores j, hValues j]
 
+/-! ## FA-2 QK score-fragment tile bridge
+
+This helper isolates the pure tile algebra behind the future executable score
+producer: `Q @ Kᵀ * scale` computes the local `[M, Bk]` score fragment.
+-/
+
+noncomputable def fa2ScoreFragmentSpec {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk, D] → ℝ)
+    (scale : ℝ) : TileIndex [M, Bk] → ℝ :=
+  fun idx =>
+    (Finset.univ.sum fun d : Fin D =>
+      Q (idx.1, d, PUnit.unit) * K (idx.2.1, d, PUnit.unit)) * scale
+
+/-- Tile-level QK score-fragment bridge for FA-2 forward. -/
+theorem fa2_score_fragment_tile_eq {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk, D] → ℝ)
+    (scale : ℝ) :
+    Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (Tile.dot [] (Tile.ofReal Q) (Tile.transpose [] (Tile.ofReal K)))
+        (Tile.scalar ((scale : ℝ) : WithBot ℝ)) =
+      Tile.ofReal (fa2ScoreFragmentSpec Q K scale) := by
+  ext idx
+  rcases idx with ⟨i, j, u⟩
+  cases u
+  simp [fa2ScoreFragmentSpec, Tile.bop, Tile.dot, Tile.transpose, Tile.ofReal,
+    NumericDType.mul]
+
 /-! ## FA-2 fused two-block scalar forward kernel surface
 
 This fuses the two fragment-summary computations and the delayed-rescale merge

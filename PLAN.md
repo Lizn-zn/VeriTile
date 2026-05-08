@@ -283,6 +283,9 @@ available through the grid-launched surface.
   same bridge at a fixed `(batch, head, query, d)` coordinate
 - `fa2ScalarFragmentSummaryKernel_correct_view` — executable one-fragment
   producer for denominator/numerator summaries consumed by the merge stage
+- `fa2_score_fragment_tile_eq` — pure tile bridge showing `Q @ Kᵀ * scale`
+  computes the local FA-2 score fragment, factoring the future executable
+  score-producer proof
 - `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
   slice fusing fragment-summary production and delayed-rescale merge into one
   DSL kernel, writing the tile-level FA-2 two-fragment spec
