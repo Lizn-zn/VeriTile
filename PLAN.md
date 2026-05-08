@@ -207,7 +207,7 @@ in-scope (see §Decision log entry 9).
   `gridLaunchedAtomic_causal_dQ_correct` — launcher-facing masked/causal
   atomic `dQ` composition surfaces
 - `fa1BackwardAtomicDQCausalKernel` — DSL kernel surface for causal
-  block-partitioned backward with atomic `dQ`; trace extraction remains next
+  block-partitioned backward with atomic `dQ`
 - `fa1BackwardAtomicDQCausalPreAtomicState` — pre-atomic boundary for the
   causal kernel prefix, matching the non-causal proof split
 - `FA1BackwardAtomicDQCausalPreAtomicFacts` — proof target bundling the causal
@@ -215,6 +215,9 @@ in-scope (see §Decision log entry 9).
 - `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution` — causal
   atomic `dQ` trace recomposition once prefix facts and tail execution are
   available
+- `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs`
+  — causal atomic `dQ` trace extraction from concrete DSL prefix inputs plus
+  tail execution
 - `causalBackward_tile_bridges_complete` — causal `dQ/dK/dV` tile-dot bridge
   bundle for the prefix proof
 - `causalBackward_block_tile_bridges_complete` — block-local causal
@@ -228,9 +231,10 @@ in-scope (see §Decision log entry 9).
 - `fa1BackwardStrippedKernel_correct` — stripped main theorem (no mask, no
   multi-block, single program-id)
 
-Next: prove the causal kernel prefix facts against the concrete DSL prefix, then
-connect that trace extraction to the launcher-facing surfaces above. Multi-block
-atomic dQ composition itself is available through the grid-launched surface.
+Next: connect the causal input-level trace extraction to the launcher-facing
+surfaces above more ergonomically and extend ordinary tail readback coverage
+for the causal block. Multi-block atomic dQ composition itself is available
+through the grid-launched surface.
 
 ## Roadmap (priority-ordered, no fixed time windows)
 
@@ -238,9 +242,10 @@ atomic dQ composition itself is available through the grid-launched surface.
 
 - Maintain closed FA-1 backward stripped theorem
 - Maintain `v0.3-tier3a` tag for forward full coverage
-- Prove masked/causal FA-1 backward kernel trace extraction against the
+- Maintain masked/causal FA-1 backward kernel trace extraction against the
   launcher-facing masked/causal `dQ` surfaces
-- Wire FA-1 backward to multi-block (after mid-term multi-block semantics)
+- Extend causal ordinary tail-store readback and keep grid-launched multi-block
+  `dQ` composition as the public multi-block surface
 
 ### Mid-term — Tier 3-B FA-2 forward + headline corollary
 

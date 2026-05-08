@@ -181,13 +181,16 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   `gridLaunchedAtomic_causal_dQ_correct` —— launcher-facing masked/causal
   atomic `dQ` composition surface
 - `fa1BackwardAtomicDQCausalKernel` —— causal block-partitioned backward +
-  atomic `dQ` 的 DSL kernel surface;下一步仍是 trace extraction
+  atomic `dQ` 的 DSL kernel surface
 - `fa1BackwardAtomicDQCausalPreAtomicState` —— causal kernel prefix 的
   pre-atomic 边界,对齐非 causal proof split
 - `FA1BackwardAtomicDQCausalPreAtomicFacts` —— causal prefix 需要证明的
   `dQ_part`、`dK_block`、`dV_block` obligations bundle
 - `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution` —— 已有
   prefix facts 和 tail execution 后,重组 causal atomic `dQ` trace 的 theorem
+- `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs`
+  —— 从 concrete DSL prefix 输入假设和 tail execution 直接抽取 causal atomic
+  `dQ` trace 的 theorem
 - `causalBackward_tile_bridges_complete` —— prefix proof 可复用的 causal
   `dQ/dK/dV` tile-dot bridge bundle
 - `causalBackward_block_tile_bridges_complete` —— atomic prefix proof 可复用的
@@ -200,9 +203,9 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `fa1BackwardStrippedKernel_correct` —— stripped 主定理(无 mask、无 multi-block、
   单 program-id)
 
-下一步:证明 causal kernel 的 prefix facts,把具体 DSL prefix 接到已有 trace
-extraction 与 launcher-facing surface。multi-block atomic dQ composition 本身已通过
-grid-launched surface 提供。
+下一步:把 causal input-level trace extraction 更顺手地接到 launcher-facing
+surface,并补 causal block 的 ordinary tail-store readback 覆盖。multi-block atomic
+dQ composition 本身已通过 grid-launched surface 提供。
 
 ## 路线图(优先级排序,无固定时间窗口)
 
@@ -210,9 +213,10 @@ grid-launched surface 提供。
 
 - 维护已闭合的 FA-1 backward stripped 主定理
 - 维护 `v0.3-tier3a` tag(forward 全套)
-- 证明 masked/causal FA-1 backward kernel trace extraction,并接到
+- 维护 masked/causal FA-1 backward kernel trace extraction,并接到
   launcher-facing masked/causal `dQ` surface
-- FA-1 backward 接入 multi-block(等中期 multi-block 语义)
+- 补 causal ordinary tail-store readback,并保持 grid-launched multi-block `dQ`
+  composition 作为 public multi-block surface
 
 ### 中期 — Tier 3-B FA-2 forward + headline corollary
 

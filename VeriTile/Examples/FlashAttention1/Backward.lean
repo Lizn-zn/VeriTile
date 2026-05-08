@@ -1274,6 +1274,65 @@ theorem fa1BackwardAtomicDQKernel_statefulTrace_blockContribution_from_inputs
       Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
   · exact hTailStep
 
+/-- Input-level causal stateful trace theorem for one block-program, modulo the
+ordinary tail execution.  The concrete causal prefix is discharged from the
+tensor input assumptions and produces the causal block contribution payload. -/
+theorem fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (tid : ThreadId) (s final : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (block : Fin numKVBlocks)
+    (hPid : s.pids 0 = block.val)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.drop 33)
+        (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale s) =
+        some final) :
+    Kernel.AtomicTraceStateful
+        (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel
+        tid s
+        ((TileShape.allIndices [M, D]).filterMap fun i =>
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+            (some (dQBlockContributionCausal Q K V dO LSE scale block i))))
+        final := by
+  let sPre : BlockState :=
+    fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale s
+  have hfacts :
+      FA1BackwardAtomicDQCausalPreAtomicFacts
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+        Q K V dO LSE scale block s :=
+    fa1BackwardAtomicDQCausalPreAtomic_facts
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  apply fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution
+    (qReg := qReg) (kReg := kReg) (vReg := vReg) (dOReg := dOReg)
+    (lseReg := lseReg) (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (scale := scale) (tid := tid) (sPre := sPre)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (block := block)
+  · exact hfacts.1
+  · exact hfacts.2.1
+  · exact hfacts.2.2.2.2.1
+  · exact hTailStep
+
 /-- Input-level stateful trace theorem for one block-program using the ordinary
 `exec = some final` surface instead of an explicit tail-step hypothesis. -/
 theorem fa1BackwardAtomicDQKernel_statefulTrace_blockContribution_from_inputs_of_exec
