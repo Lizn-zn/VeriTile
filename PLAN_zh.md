@@ -173,6 +173,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `attentionBackwardReal_eq_reverseMode` —— closed-form reverse-mode FA-1 backward
 - `attentionBackwardRealMasked_allVisible` —— 通用 mask-aware Real backward spec
   在 all-visible mask 下退化为现有非 mask spec
+- `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked` —— masked
+  multi-block `dQ` 贡献求和等于 mask-aware backward spec
 - 数学层 tile bridges:probability、`dP = dO · Vᵀ`、row correction
   `D_i = Σⱼ P_ij · dP_ij`、`dS = P * (dP - corr[:, None])`、`dV = Pᵀ · dO`、
   `dQ = dS · K · scale`、`dK = dSᵀ · Q · scale`

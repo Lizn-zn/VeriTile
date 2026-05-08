@@ -49,6 +49,22 @@ theorem softmax_jvp_identity {S : Nat}
     softmaxJacobianJVP P dPRow j = softmaxJVP P dPRow j :=
   softmax_jvp_identity_impl P dPRow j
 
+/-- Mask-aware multi-block `dQ` bridge kept in this file for the artifact
+theorem surface.  It is the math identity needed by masked atomic-dQ backward:
+block-local masked contributions sum to the closed-form masked backward `dQ`. -/
+theorem dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked
+    {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    (Finset.univ.sum fun block : Fin numKVBlocks =>
+      dQBlockContributionMasked visible Q K V dO LSE scale block idx) =
+      (attentionBackwardRealMasked visible Q K V dO LSE scale).dQ idx :=
+  dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl
+    visible Q K V dO LSE scale idx
+
 /-! ## Kernel surfaces
 
 The current verified forward kernels remain available under their existing

@@ -199,6 +199,8 @@ in-scope (see §Decision log entry 9).
   backward
 - `attentionBackwardRealMasked_allVisible` — generic mask-aware Real backward
   spec collapses to the existing non-masked spec under the all-visible mask
+- `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked` — masked
+  multi-block `dQ` contributions sum to the mask-aware backward spec
 - Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
   `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`

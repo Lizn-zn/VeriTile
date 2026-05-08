@@ -255,6 +255,46 @@ theorem dQBlockContribution_sum_eq_attentionBackwardReal {M D Bk numKVBlocks : N
   · intro j _
     rw [FA1Math.blockIndex_blockIndexEquiv]
 
+/-- Mask-aware contribution to `dQ` from one KV block. -/
+noncomputable def dQBlockContributionMasked {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [M, D]) : ℝ :=
+  scale * Finset.univ.sum fun jLocal : Fin Bk =>
+    let j : Fin (Bk * numKVBlocks) :=
+      FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) jLocal
+    dSMasked visible Q K V dO LSE scale idx.1 j * K (j, idx.2.1, PUnit.unit)
+
+/-- Summing masked block-local `dQ` contributions over all KV blocks recovers
+the mask-aware closed-form `dQ`. -/
+theorem dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl
+    {M D Bk numKVBlocks : Nat}
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    (Finset.univ.sum fun block : Fin numKVBlocks =>
+      dQBlockContributionMasked visible Q K V dO LSE scale block idx) =
+      (attentionBackwardRealMasked visible Q K V dO LSE scale).dQ idx := by
+  simp only [dQBlockContributionMasked]
+  cases idx with
+  | mk i rest =>
+      cases rest with
+      | mk d tail =>
+          cases tail
+          simp only [attentionBackwardRealMasked]
+          rw [← Finset.mul_sum]
+          congr 1
+          rw [← Finset.sum_product', Finset.univ_product_univ]
+          refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+          · intro _; simp
+          · intro j _
+            rw [FA1Math.blockIndex_blockIndexEquiv]
+
 theorem exp_sum_mul_scale_eq {ι : Type} [Fintype ι]
     (f : ι → ℝ) (scale lse : ℝ) :
     Real.exp (((Finset.univ.sum f) * scale) - lse) =
