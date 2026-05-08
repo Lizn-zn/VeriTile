@@ -390,6 +390,129 @@ theorem dV_block_tile_some_eq_attentionBackwardReal {M D Bk numKVBlocks : Nat}
   rw [Tile.dot_nil_data]
   simp [Tile.transpose, Tile.ofReal, attentionBackwardReal_dV]
 
+/-- Causal tile-level bridge for one block-local
+`dQ_part = dS_causal_block · K_block · scale`. -/
+theorem dQ_block_tile_some_eq_dQBlockContributionCausal {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [M, D]) :
+    Option.map (fun a : ℝ => a * scale)
+      ((Tile.dot []
+        (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+          let j : Fin (Bk * numKVBlocks) :=
+            FA1Math.blockIndex Bk numKVBlocks block.val
+              (by have := block.isLt; omega) idx.2.1
+          dSMasked (fun i j => decide (j.val ≤ i.val)) Q K V dO LSE scale idx.1 j)
+        (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+          let j : Fin (Bk * numKVBlocks) :=
+            FA1Math.blockIndex Bk numKVBlocks block.val
+              (by have := block.isLt; omega) idx.1
+          K (j, idx.2.1, PUnit.unit))).data idx) =
+      some (dQBlockContributionCausal Q K V dO LSE scale block idx) := by
+  rw [Tile.dot_nil_data]
+  simp [Tile.ofReal, dQBlockContributionCausal, dQBlockContributionMasked]
+  ring
+
+/-- Causal tile-level bridge for one block-local `dK_block`. -/
+theorem dK_block_tile_some_eq_attentionBackwardRealCausal {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [Bk, D]) :
+    Option.map (fun a : ℝ => a * scale)
+      ((Tile.dot []
+        (Tile.transpose []
+          (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+            let j : Fin (Bk * numKVBlocks) :=
+              FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) idx.2.1
+            dSMasked (fun i j => decide (j.val ≤ i.val)) Q K V dO LSE scale idx.1 j))
+        (Tile.ofReal Q)).data idx) =
+      some ((attentionBackwardRealCausal Q K V dO LSE scale).dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
+  rw [Tile.dot_nil_data]
+  simp [Tile.transpose, Tile.ofReal, attentionBackwardRealCausal,
+    attentionBackwardRealMasked]
+  ring
+
+/-- Causal tile-level bridge for one block-local `dV_block`. -/
+theorem dV_block_tile_some_eq_attentionBackwardRealCausal {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [Bk, D]) :
+    (Tile.dot []
+      (Tile.transpose []
+        (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+          let j : Fin (Bk * numKVBlocks) :=
+            FA1Math.blockIndex Bk numKVBlocks block.val
+              (by have := block.isLt; omega) idx.2.1
+          probabilityMasked (fun i j => decide (j.val ≤ i.val)) Q K LSE scale idx.1 j))
+      (Tile.ofReal dO)).data idx =
+      some ((attentionBackwardRealCausal Q K V dO LSE scale).dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
+  rw [Tile.dot_nil_data]
+  simp [Tile.transpose, Tile.ofReal, attentionBackwardRealCausal,
+    attentionBackwardRealMasked]
+
+/-- Bundled causal block-local bridge surface for the causal atomic backward
+prefix proof: the per-block `dQ_part`, `dK_block`, and `dV_block` tile
+computations match the causal masked Real backward semantics. -/
+theorem causalBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) :
+    (∀ idx : TileIndex [M, D],
+      Option.map (fun a : ℝ => a * scale)
+        ((Tile.dot []
+          (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+            let j : Fin (Bk * numKVBlocks) :=
+              FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) idx.2.1
+            dSMasked (fun i j => decide (j.val ≤ i.val))
+              Q K V dO LSE scale idx.1 j)
+          (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+            let j : Fin (Bk * numKVBlocks) :=
+              FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) idx.1
+            K (j, idx.2.1, PUnit.unit))).data idx) =
+        some (dQBlockContributionCausal Q K V dO LSE scale block idx)) ∧
+    (∀ idx : TileIndex [Bk, D],
+      Option.map (fun a : ℝ => a * scale)
+        ((Tile.dot []
+          (Tile.transpose []
+            (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+              let j : Fin (Bk * numKVBlocks) :=
+                FA1Math.blockIndex Bk numKVBlocks block.val
+                  (by have := block.isLt; omega) idx.2.1
+              dSMasked (fun i j => decide (j.val ≤ i.val))
+                Q K V dO LSE scale idx.1 j))
+          (Tile.ofReal Q)).data idx) =
+        some ((attentionBackwardRealCausal Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ idx : TileIndex [Bk, D],
+      (Tile.dot []
+        (Tile.transpose []
+          (Tile.ofReal fun idx : TileIndex [M, Bk] =>
+            let j : Fin (Bk * numKVBlocks) :=
+              FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) idx.2.1
+            probabilityMasked (fun i j => decide (j.val ≤ i.val))
+              Q K LSE scale idx.1 j))
+        (Tile.ofReal dO)).data idx =
+        some ((attentionBackwardRealCausal Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  exact ⟨
+    dQ_block_tile_some_eq_dQBlockContributionCausal Q K V dO LSE scale block,
+    dK_block_tile_some_eq_attentionBackwardRealCausal Q K V dO LSE scale block,
+    dV_block_tile_some_eq_attentionBackwardRealCausal Q K V dO LSE scale block⟩
+
 /-- Tile-level bridge for the stripped kernel's `dV = Pᵀ · dO`
 register computation. -/
 theorem dV_tile_eq_attentionBackwardReal {M S D : Nat}

@@ -214,6 +214,9 @@ in-scope (see §Decision log entry 9).
   prefix obligations for `dQ_part`, `dK_block`, and `dV_block`
 - `causalBackward_tile_bridges_complete` — causal `dQ/dK/dV` tile-dot bridge
   bundle for the prefix proof
+- `causalBackward_block_tile_bridges_complete` — block-local causal
+  `dQ_part`/`dK_block`/`dV_block` tile-dot bridge bundle for the atomic prefix
+  proof
 - Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
   `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`
