@@ -1266,6 +1266,109 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_vi
     mLeft mRight mMerged
     hScores.1 hValues.1 hScores.2 hValues.2 hmLeft hmRight hmMerged hlFree
 
+/-- Producer-consumer wrapper that also discharges the left/right max-register
+inputs from executable score-row max producers.  The merged max remains an
+explicit consumer-side input, matching the next composition boundary. -/
+theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producers_view
+    {M D Bk : Nat}
+    (qReg kReg vReg scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+      mLeftReg mRightReg mMergedReg outReg : RegionName)
+    (hBk : 0 < Bk)
+    (sScoreProducer sScoreLeft sScoreRight
+      sValueProducer sValueLeft sValueRight
+      sMaxLeftInput sMaxRightInput sMaxLeft sMaxRight consumer : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D])
+    (mMerged : ℝ)
+    (hScoreExecLeft :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreLeftReg M D Bk 0 scale).toAlgKernel
+          sScoreProducer =
+        some sScoreLeft)
+    (hScoreExecRight :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreRightReg M D Bk 1 scale).toAlgKernel
+          sScoreProducer =
+        some sScoreRight)
+    (hValueExecLeft :
+      exec (fa2ScalarValueFragmentKernel vReg valueLeftReg D Bk 0 idx.2.1.val).toAlgKernel
+          sValueProducer =
+        some sValueLeft)
+    (hValueExecRight :
+      exec (fa2ScalarValueFragmentKernel vReg valueRightReg D Bk 1 idx.2.1.val).toAlgKernel
+          sValueProducer =
+        some sValueRight)
+    (hMaxExecLeft :
+      exec (fa2ScalarScoreMaxKernel scoreLeftReg mLeftReg Bk).toAlgKernel
+          sMaxLeftInput =
+        some sMaxLeft)
+    (hMaxExecRight :
+      exec (fa2ScalarScoreMaxKernel scoreRightReg mRightReg Bk).toAlgKernel
+          sMaxRightInput =
+        some sMaxRight)
+    (hScorePid : consumer.pid = sScoreProducer.pid * M + idx.1.val)
+    (hValuePid : consumer.pid = sValueProducer.pid)
+    (hMaxLeftPid : consumer.pid = sMaxLeftInput.pid)
+    (hMaxRightPid : consumer.pid = sMaxRightInput.pid)
+    (hScoreLeftMem :
+      ∀ offset, consumer.readMem scoreLeftReg offset = sScoreLeft.readMem scoreLeftReg offset)
+    (hScoreRightMem :
+      ∀ offset, consumer.readMem scoreRightReg offset = sScoreRight.readMem scoreRightReg offset)
+    (hValueLeftMem :
+      ∀ offset, consumer.readMem valueLeftReg offset = sValueLeft.readMem valueLeftReg offset)
+    (hValueRightMem :
+      ∀ offset, consumer.readMem valueRightReg offset = sValueRight.readMem valueRightReg offset)
+    (hMaxLeftMem :
+      ∀ offset, consumer.readMem mLeftReg offset = sMaxLeft.readMem mLeftReg offset)
+    (hMaxRightMem :
+      ∀ offset, consumer.readMem mRightReg offset = sMaxRight.readMem mRightReg offset)
+    (hQ : ∀ qIdx : TileIndex [M, D],
+      sScoreProducer.readMem qReg
+          ((sScoreProducer.pid * M + qIdx.1.val) * D + qIdx.2.1.val) =
+        Q qIdx)
+    (hK : ∀ kIdx : TileIndex [Bk * 2, D],
+      sScoreProducer.readMem kReg (kIdx.1.val * D + kIdx.2.1.val) = K kIdx)
+    (hV : ∀ vIdx : TileIndex [Bk * 2, D],
+      sValueProducer.readMem vReg (vIdx.1.val * D + vIdx.2.1.val) = V vIdx)
+    (hScoresLeftForMax : InputLoadedAt sMaxLeftInput scoreLeftReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+    (hScoresRightForMax : InputLoadedAt sMaxRightInput scoreRightReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
+    (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
+    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarTwoBlockForwardKernel
+        scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+        mLeftReg mRightReg mMergedReg outReg Bk)
+      (initialState := consumer)
+      (write := ComputeCorrect.WriteMap.scalar outReg consumer.pid)
+      (expected := fun _ : PUnit => attentionReal Q K V scale idx) := by
+  let scoresLeft : Fin Bk → ℝ := fun j =>
+    FA1Math.scaledScore Q K scale idx.1
+      (FA1Math.blockIndex Bk 2 0 two_block0_le j)
+  let scoresRight : Fin Bk → ℝ := fun j =>
+    FA1Math.scaledScore Q K scale idx.1
+      (FA1Math.blockIndex Bk 2 1 two_block1_le j)
+  have hmLeft : consumer.readMem mLeftReg consumer.pid = tileMax hBk scoresLeft :=
+    fa2ScalarScoreMaxKernel_loaded_of_agrees
+      scoreLeftReg mLeftReg Bk hBk sMaxLeftInput sMaxLeft consumer
+      scoresLeft hMaxExecLeft hMaxLeftPid hMaxLeftMem hScoresLeftForMax
+  have hmRight : consumer.readMem mRightReg consumer.pid = tileMax hBk scoresRight :=
+    fa2ScalarScoreMaxKernel_loaded_of_agrees
+      scoreRightReg mRightReg Bk hBk sMaxRightInput sMaxRight consumer
+      scoresRight hMaxExecRight hMaxRightPid hMaxRightMem hScoresRightForMax
+  exact fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_view
+    qReg kReg vReg scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+    mLeftReg mRightReg mMergedReg outReg
+    sScoreProducer sScoreLeft sScoreRight
+    sValueProducer sValueLeft sValueRight consumer
+    Q K V scale idx (tileMax hBk scoresLeft) (tileMax hBk scoresRight) mMerged
+    hScoreExecLeft hScoreExecRight hValueExecLeft hValueExecRight
+    hScorePid hValuePid hScoreLeftMem hScoreRightMem hValueLeftMem hValueRightMem
+    hQ hK hV hmLeft hmRight hmMerged hlFree
+
 /-- 4D-facing wrapper for the fused scalar two-block FA-2 forward slice.  The
 kernel still writes one scalar output coordinate, but the theorem is stated in
 the same `(batch, head, query, d)` language as the forward user surface. -/

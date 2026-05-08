@@ -298,6 +298,10 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
   —— producer-consumer wrapper: 可执行 score 与 value producer run discharge
   scalar fused-forward consumer 的四个 score/value `InputLoadedAt` 输入,剩下
   max register 显式保留
+- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producers_view`
+  —— producer-consumer wrapper: 可执行 score、value、left/right max producer
+  run feed scalar fused-forward consumer; 只剩 merged max register 作为显式
+  composition boundary
 - `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` —— fused scalar
   two-block DSL theorem 的 4D-facing wrapper,面向固定
   `(batch, head, query, d)` 坐标

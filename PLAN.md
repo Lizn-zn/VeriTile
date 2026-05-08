@@ -335,6 +335,10 @@ available through the grid-launched surface.
   — producer-consumer wrapper: executable score and value producer runs
   discharge all four score/value `InputLoadedAt` inputs for the scalar
   fused-forward consumer, leaving max registers explicit
+- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producers_view`
+  — producer-consumer wrapper: executable score, value, and left/right max
+  producer runs feed the scalar fused-forward consumer; only the merged max
+  register remains an explicit composition boundary
 - `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` — 4D-facing wrapper of
   the fused scalar two-block DSL theorem at a fixed `(batch, head, query, d)`
   coordinate
