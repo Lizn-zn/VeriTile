@@ -182,6 +182,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   atomic `dQ` composition surface
 - `fa1BackwardAtomicDQCausalKernel` —— causal block-partitioned backward +
   atomic `dQ` 的 DSL kernel surface;下一步仍是 trace extraction
+- `fa1BackwardAtomicDQCausalPreAtomicState` —— causal kernel prefix 的
+  pre-atomic 边界,对齐非 causal proof split
 - 数学层 tile bridges:probability、`dP = dO · Vᵀ`、row correction
   `D_i = Σⱼ P_ij · dP_ij`、`dS = P * (dP - corr[:, None])`、`dV = Pᵀ · dO`、
   `dQ = dS · K · scale`、`dK = dSᵀ · Q · scale`

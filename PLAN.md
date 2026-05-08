@@ -208,6 +208,8 @@ in-scope (see §Decision log entry 9).
   atomic `dQ` composition surfaces
 - `fa1BackwardAtomicDQCausalKernel` — DSL kernel surface for causal
   block-partitioned backward with atomic `dQ`; trace extraction remains next
+- `fa1BackwardAtomicDQCausalPreAtomicState` — pre-atomic boundary for the
+  causal kernel prefix, matching the non-causal proof split
 - Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
   `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`

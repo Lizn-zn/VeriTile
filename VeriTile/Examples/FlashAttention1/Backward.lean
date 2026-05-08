@@ -273,6 +273,19 @@ def fa1BackwardAtomicDQCausalKernel
   tl.store($(dVReg) + v_block_ptrs, dV_block)
 }
 
+/-- State immediately before the `tl.atomic_add(dQ, dQ_part)` in the causal
+block-partitioned backward kernel.
+
+The causal prefix has four more assignments than the non-causal prefix:
+`scores_all_raw`, `causal_all`, `scores_block_raw`, and `causal_block`, so the
+atomic boundary is at statement index 33 rather than 29. -/
+noncomputable def fa1BackwardAtomicDQCausalPreAtomicState
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) (s : BlockState) : BlockState :=
+  (stepStmts
+    ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale).toAlgKernel.body.take 33) s).getD s
+
 /-- State immediately before the `tl.atomic_add(dQ, dQ_part)` in the
 block-partitioned backward kernel.
 
