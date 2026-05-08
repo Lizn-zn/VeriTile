@@ -494,6 +494,57 @@ theorem fa2ScoreFragmentKernel_correct_view
   intro d _
   simp [hQ (i, d, PUnit.unit), hK (j, d, PUnit.unit)]
 
+/-- Global-score view of `fa2ScoreFragmentKernel_correct_view`: when the local
+K fragment is the `keyBlock` slice of a global K tensor, the executable score
+producer writes the global `FA1Math.scaledScore` values expected by the later
+attention pipeline. -/
+theorem fa2ScoreFragmentKernel_scaledScore_correct_view
+    {M D Bk N : Nat}
+    (qReg kReg scoreReg : RegionName)
+    (keyBlock : Nat) (hKeyBlock : keyBlock < N)
+    (scale : ℝ) (s : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (hQ : ∀ idx : TileIndex [M, D],
+      s.readMem qReg
+          ((s.pid * M + idx.1.val) * D + idx.2.1.val) =
+        Q idx)
+    (hK : ∀ idx : TileIndex [Bk, D],
+      s.readMem kReg
+          ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
+        K (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
+          idx.2.1, PUnit.unit)) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScoreFragmentKernel qReg kReg scoreReg M D Bk keyBlock scale)
+      (initialState := s)
+      (write := fun idx : TileIndex [M, Bk] =>
+        some (scoreReg,
+          s.pid * (M * Bk) + idx.1.val * Bk + idx.2.1.val))
+      (expected := fun idx : TileIndex [M, Bk] =>
+        FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) idx.2.1)) := by
+  have hview := fa2ScoreFragmentKernel_correct_view
+    qReg kReg scoreReg M D Bk keyBlock scale s Q
+    (fun idx : TileIndex [Bk, D] =>
+      K (FA1Math.blockIndex Bk N keyBlock
+          (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
+        idx.2.1, PUnit.unit))
+    hQ hK
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+    ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
+    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+  rcases hview with ⟨_, hview⟩
+  simp at hview
+  intro idx
+  have hOut := hview s s' hExec rfl idx.1 idx.2.1 idx.2.2
+  have hSpec := fa2ScoreFragmentSpec_eq_scaledScore
+    Q K scale keyBlock hKeyBlock idx
+  simpa [hSpec] using hOut
+
 /-! ## FA-2 fused two-block scalar forward kernel surface
 
 This fuses the two fragment-summary computations and the delayed-rescale merge

@@ -292,6 +292,9 @@ available through the grid-launched surface.
 - `fa2ScoreFragmentKernel` — executable QK score-fragment producer surface
   (`Q_block @ K_fragmentᵀ * scale` into a contiguous score tile), with
   `fa2ScoreFragmentKernel_correct_view` proving the executable store readback
+- `fa2ScoreFragmentKernel_scaledScore_correct_view` — global-score wrapper for
+  the score producer, proving it writes the `FA1Math.scaledScore` values
+  consumed by the attention pipeline
 - `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
   slice fusing fragment-summary production and delayed-rescale merge into one
   DSL kernel, writing the tile-level FA-2 two-fragment spec
