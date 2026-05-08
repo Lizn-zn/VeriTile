@@ -289,6 +289,9 @@ available through the grid-launched surface.
 - `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` — 4D-facing wrapper of
   the fused scalar two-block DSL theorem at a fixed `(batch, head, query, d)`
   coordinate
+- `fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view` — grid-facing
+  wrapper: every program in an arbitrary launch grid may map to a 4D output
+  coordinate and writes that coordinate's `attentionReal4D`
 - `fa2_masked_sum_eq_zero_of_all_invisible` and
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` — full-mask block-skip
   denominator/numerator zero-contribution identities

@@ -11,6 +11,7 @@ refine this baseline rather than changing the user-facing spec.
 -/
 
 import VeriTile.Examples.FlashAttention1.Core
+import VeriTile.Triton.Launch.Grid
 
 namespace VeriTile.Examples
 
@@ -655,6 +656,102 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal4D_view
     hScoresLeft hValuesLeft hScoresRight hValuesRight
     hmLeft hmRight hmMerged hlFree
   simpa [attentionReal4D_slice] using hview
+
+/-- Grid-facing wrapper for the fused scalar two-block FA-2 forward slice.
+Every program instance may correspond to a different 4D output coordinate; the
+kernel writes that coordinate's `attentionReal4D` result at its scalar output
+slot. -/
+theorem fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view
+    {B H S_q D Bk : Nat} {g : Grid}
+    (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+      mLeftReg mRightReg mMergedReg outReg : RegionName)
+    (s : BlockState)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (scale : ℝ) (coord : GridIndex g → TileIndex [B, H, S_q, D])
+    (mLeft mRight mMerged : GridIndex g → ℝ)
+    (hScoresLeft : ∀ gridIdx : GridIndex g,
+      InputLoadedAt (s.withGridIndex gridIdx) scoreLeftReg Bk
+        (fun j : Fin Bk =>
+          FA1Math.scaledScore
+            (sliceBH Q (coord gridIdx).1 (coord gridIdx).2.1)
+            (sliceBH K (coord gridIdx).1 (coord gridIdx).2.1) scale
+            (coord gridIdx).2.2.1
+            (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+    (hValuesLeft : ∀ gridIdx : GridIndex g,
+      InputLoadedAt (s.withGridIndex gridIdx) valueLeftReg Bk
+        (fun j : Fin Bk =>
+          (sliceBH V (coord gridIdx).1 (coord gridIdx).2.1)
+            (FA1Math.blockIndex Bk 2 0 two_block0_le j,
+              (coord gridIdx).2.2.2.1, PUnit.unit)))
+    (hScoresRight : ∀ gridIdx : GridIndex g,
+      InputLoadedAt (s.withGridIndex gridIdx) scoreRightReg Bk
+        (fun j : Fin Bk =>
+          FA1Math.scaledScore
+            (sliceBH Q (coord gridIdx).1 (coord gridIdx).2.1)
+            (sliceBH K (coord gridIdx).1 (coord gridIdx).2.1) scale
+            (coord gridIdx).2.2.1
+            (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
+    (hValuesRight : ∀ gridIdx : GridIndex g,
+      InputLoadedAt (s.withGridIndex gridIdx) valueRightReg Bk
+        (fun j : Fin Bk =>
+          (sliceBH V (coord gridIdx).1 (coord gridIdx).2.1)
+            (FA1Math.blockIndex Bk 2 1 two_block1_le j,
+              (coord gridIdx).2.2.2.1, PUnit.unit)))
+    (hmLeft : ∀ gridIdx : GridIndex g,
+      (s.withGridIndex gridIdx).readMem mLeftReg (s.withGridIndex gridIdx).pid =
+        mLeft gridIdx)
+    (hmRight : ∀ gridIdx : GridIndex g,
+      (s.withGridIndex gridIdx).readMem mRightReg (s.withGridIndex gridIdx).pid =
+        mRight gridIdx)
+    (hmMerged : ∀ gridIdx : GridIndex g,
+      (s.withGridIndex gridIdx).readMem mMergedReg (s.withGridIndex gridIdx).pid =
+        mMerged gridIdx)
+    (hlFree : ∀ gridIdx : GridIndex g,
+      FA1Math.lFree
+          (sliceBH Q (coord gridIdx).1 (coord gridIdx).2.1)
+          (sliceBH K (coord gridIdx).1 (coord gridIdx).2.1)
+          scale 2 (le_refl 2) (coord gridIdx).2.2.1 ≠ 0) :
+    Kernel.ForAllProgramsSome
+      (fa2ScalarTwoBlockForwardKernel
+        scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+        mLeftReg mRightReg mMergedReg outReg Bk).toAlgKernel
+      g s
+      (fun gridIdx s' =>
+        s'.readMem outReg (s.withGridIndex gridIdx).pid =
+          attentionReal4D Q K V scale (coord gridIdx)) := by
+  intro gridIdx
+  let sIdx := s.withGridIndex gridIdx
+  have hview := fa2ScalarTwoBlockForwardKernel_attentionReal4D_view
+    scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+    mLeftReg mRightReg mMergedReg outReg sIdx Q K V scale
+    (coord gridIdx).1 (coord gridIdx).2.1 (coord gridIdx).2.2.1
+    (coord gridIdx).2.2.2.1
+    (mLeft gridIdx) (mRight gridIdx) (mMerged gridIdx)
+    (hScoresLeft gridIdx) (hValuesLeft gridIdx)
+    (hScoresRight gridIdx) (hValuesRight gridIdx)
+    (hmLeft gridIdx) (hmRight gridIdx) (hmMerged gridIdx)
+    (hlFree gridIdx)
+  obtain ⟨s', hExec⟩ :
+      ∃ s',
+        exec
+            (fa2ScalarTwoBlockForwardKernel
+              scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+              mLeftReg mRightReg mMergedReg outReg Bk).toAlgKernel
+            sIdx = some s' := by
+    simp [exec, fa2ScalarTwoBlockForwardKernel, stepStmts, stepStmt, evalOp,
+      Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+      NumericDType.sub, NumericDType.div, WithBot.realExp, WithBot.realDiv,
+      BlockState.writeMemTyped_real]
+  refine ⟨s', hExec, ?_⟩
+  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+    ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
+    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+  rcases hview with ⟨_, hview⟩
+  simp at hview
+  have hOut := hview sIdx s' hExec rfl PUnit.unit
+  simpa [sIdx, ComputeCorrect.WriteMap.scalar] using hOut
 
 /-! ## FA-2 merge-stage kernel surface
 

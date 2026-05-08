@@ -257,6 +257,9 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 - `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` —— fused scalar
   two-block DSL theorem 的 4D-facing wrapper,面向固定
   `(batch, head, query, d)` 坐标
+- `fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view` —— grid-facing
+  wrapper:任意 launch grid 中每个 program 可映射到一个 4D 输出坐标,并写出该坐标的
+  `attentionReal4D`
 - `fa2_masked_sum_eq_zero_of_all_invisible` 与
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` —— 全 mask block 的
   denominator/numerator 零贡献恒等式
