@@ -244,6 +244,8 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 - `fa2_two_block_forward_eq_attentionReal` —— 第一个 partitioned-forward 桥:
   two-fragment delayed-rescale FA-2 spec 等于同一 two-block KV domain 上的
   flat `attentionReal`
+- `fa2_two_block_forward_eq_attentionReal4D` —— 同一桥的 4D slice-facing
+  版本,面向固定 `(batch, head, query, d)` 坐标
 - `fa2_masked_sum_eq_zero_of_all_invisible` 与
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` —— 全 mask block 的
   denominator/numerator 零贡献恒等式

@@ -276,6 +276,8 @@ available through the grid-launched surface.
 - `fa2_two_block_forward_eq_attentionReal` — first partitioned-forward bridge:
   a two-fragment delayed-rescale FA-2 spec equals flat `attentionReal` over the
   same two-block KV domain
+- `fa2_two_block_forward_eq_attentionReal4D` — 4D slice-facing variant of the
+  same bridge at a fixed `(batch, head, query, d)` coordinate
 - `fa2_masked_sum_eq_zero_of_all_invisible` and
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` — full-mask block-skip
   denominator/numerator zero-contribution identities

@@ -265,6 +265,25 @@ theorem fa2_two_block_forward_eq_attentionReal {M D Bk : Nat}
     mul_div_mul_left _ _ (Real.exp_ne_zero (0 - mMerged))]
   exact FA1Math.oFree_div_lFree_eq_attentionReal Q K V scale idx hlFree
 
+/-- 4D slice-facing version of the two-fragment FA-2 forward bridge.  This is
+the theorem shape that later FA-2 kernels can use at a fixed
+`(batch, head, query, d)` coordinate. -/
+theorem fa2_two_block_forward_eq_attentionReal4D
+    {B H S_q D Bk : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (scale : ℝ) (b : Fin B) (h : Fin H) (i : Fin S_q) (d : Fin D)
+    (mLeft mRight mMerged : ℝ)
+    (hlFree :
+      FA1Math.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
+    fa2TwoBlockForwardSpec (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        scale mLeft mRight mMerged (i, d, PUnit.unit) =
+      attentionReal4D Q K V scale (b, h, i, d, PUnit.unit) := by
+  rw [attentionReal4D_slice]
+  exact fa2_two_block_forward_eq_attentionReal
+    (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+    scale mLeft mRight mMerged (i, d, PUnit.unit) hlFree
+
 /-! ## FA-2 merge-stage kernel surface
 
 This small kernel is the executable core of the FA-2 fragment merge.  Each
