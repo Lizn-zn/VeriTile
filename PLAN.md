@@ -206,6 +206,8 @@ in-scope (see §Decision log entry 9).
 - `gridLaunchedAtomic_masked_dQ_correct` and
   `gridLaunchedAtomic_causal_dQ_correct` — launcher-facing masked/causal
   atomic `dQ` composition surfaces
+- `fa1BackwardAtomicDQCausalKernel` — DSL kernel surface for causal
+  block-partitioned backward with atomic `dQ`; trace extraction remains next
 - Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
   `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`

@@ -219,6 +219,60 @@ def fa1BackwardAtomicDQKernel
   tl.store($(dVReg) + v_block_ptrs, dV_block)
 }
 
+/-- Causal variant of the block-partitioned FA-1 backward kernel with atomic
+`dQ` accumulation.
+
+This keeps the same proof-oriented partitioning as `fa1BackwardAtomicDQKernel`,
+but masks both the full-KV correction path and the block-local contribution
+path by `offs_m >= offs_n`.  The launcher-facing theorem
+`gridLaunchedAtomic_causal_dQ_correct` is the intended composition target once
+the trace-extraction proof for this kernel is added. -/
+def fa1BackwardAtomicDQCausalKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel := triton {
+  block_n := tl.program_id(0)
+  offs_m  := tl.arange(0, $(M))
+  offs_b  := block_n * $(Bk) + tl.arange(0, $(Bk))
+  offs_n  := tl.arange(0, $(Bk * numKVBlocks))
+  offs_d  := tl.arange(0, $(D))
+
+  q_ptrs       := offs_m[:, None] * $(D) + offs_d[None, :]
+  do_ptrs      := offs_m[:, None] * $(D) + offs_d[None, :]
+  k_block_ptrs := offs_b[:, None] * $(D) + offs_d[None, :]
+  v_block_ptrs := offs_b[:, None] * $(D) + offs_d[None, :]
+  k_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
+  v_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
+
+  q       := tl.load($(qReg) + q_ptrs)
+  dO      := tl.load($(dOReg) + do_ptrs)
+  lse     := tl.load($(lseReg) + offs_m)
+  k_block := tl.load($(kReg) + k_block_ptrs)
+  v_block := tl.load($(vReg) + v_block_ptrs)
+  k_all   := tl.load($(kReg) + k_all_ptrs)
+  v_all   := tl.load($(vReg) + v_all_ptrs)
+
+  scores_all_raw := tl.dot(q, tl.trans(k_all)) * $(scale)
+  causal_all     := offs_m[:, None] >= offs_n[None, :]
+  scores_all     := tl.where(causal_all, scores_all_raw, -inf)
+  p_all          := tl.exp(scores_all - lse[:, None])
+  dP_all         := tl.dot(dO, tl.trans(v_all))
+  corr           := tl.sum(p_all * dP_all, axis = 1)
+
+  scores_block_raw := tl.dot(q, tl.trans(k_block)) * $(scale)
+  causal_block     := offs_m[:, None] >= offs_b[None, :]
+  scores_block     := tl.where(causal_block, scores_block_raw, -inf)
+  p_block          := tl.exp(scores_block - lse[:, None])
+  dV_block         := tl.dot(tl.trans(p_block), dO)
+  dP_block         := tl.dot(dO, tl.trans(v_block))
+  dS_block         := p_block * (dP_block - corr[:, None])
+  dQ_part          := tl.dot(dS_block, k_block) * $(scale)
+  dK_block         := tl.dot(tl.trans(dS_block), q) * $(scale)
+
+  tl.atomic_add($(dQReg) + q_ptrs, dQ_part)
+  tl.store($(dKReg) + k_block_ptrs, dK_block)
+  tl.store($(dVReg) + v_block_ptrs, dV_block)
+}
+
 /-- State immediately before the `tl.atomic_add(dQ, dQ_part)` in the
 block-partitioned backward kernel.
 
