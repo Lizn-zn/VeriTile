@@ -591,6 +591,45 @@ theorem fa2ScoreFragmentKernel_scaledScore_row_loaded
     ring
   simpa [InputLoadedAt, BlockState.withPids, hAddr] using hOut
 
+/-- State-parametric row handoff from the score-fragment producer to a later
+consumer state.  If `consumer` has the scalar fused-forward program id
+`queryBlock * M + row` and agrees with the score producer final state on
+`scoreReg`, the produced row is available as the consumer's `InputLoadedAt`
+score tile. -/
+theorem fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
+    {M D Bk N : Nat}
+    (qReg kReg scoreReg : RegionName)
+    (keyBlock : Nat) (hKeyBlock : keyBlock < N)
+    (scale : ℝ) (s sScore consumer : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (row : Fin M)
+    (hExec :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreReg M D Bk keyBlock scale).toAlgKernel s =
+        some sScore)
+    (hPid : consumer.pid = s.pid * M + row.val)
+    (hScoreMem : ∀ offset, consumer.readMem scoreReg offset = sScore.readMem scoreReg offset)
+    (hQ : ∀ idx : TileIndex [M, D],
+      s.readMem qReg
+          ((s.pid * M + idx.1.val) * D + idx.2.1.val) =
+        Q idx)
+    (hK : ∀ idx : TileIndex [Bk, D],
+      s.readMem kReg
+          ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
+        K (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
+          idx.2.1, PUnit.unit)) :
+    InputLoadedAt consumer scoreReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore Q K scale row
+          (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) j)) := by
+  have hLoaded := fa2ScoreFragmentKernel_scaledScore_row_loaded
+    qReg kReg scoreReg keyBlock hKeyBlock scale s sScore Q K row hExec hQ hK
+  refine InputLoadedAt.transfer ?_ ?_ hLoaded
+  · simp [hPid]
+  · intro offset
+    simpa [BlockState.withPids] using hScoreMem offset
+
 /-! ## FA-2 fused two-block scalar forward kernel surface
 
 This fuses the two fragment-summary computations and the delayed-rescale merge

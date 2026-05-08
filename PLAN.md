@@ -298,6 +298,10 @@ available through the grid-launched surface.
 - `fa2ScoreFragmentKernel_scaledScore_row_loaded` — buffer-handoff lemma: a
   produced score row can be consumed as `InputLoadedAt` by the scalar fused
   forward program id `queryBlock * M + row`
+- `fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees` — state-parametric
+  buffer-handoff lemma: the produced score row can be consumed by any later
+  state whose scalar program id is aligned and whose score buffer agrees with
+  the producer final state
 - `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
   slice fusing fragment-summary production and delayed-rescale merge into one
   DSL kernel, writing the tile-level FA-2 two-fragment spec

@@ -263,6 +263,10 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 - `fa2ScoreFragmentKernel_scaledScore_row_loaded` —— buffer-handoff lemma:
   生产出来的 score row 可作为 scalar fused forward program id
   `queryBlock * M + row` 的 `InputLoadedAt` 输入
+- `fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees` ——
+  state-parametric buffer-handoff lemma: 生产出来的 score row 可被任意
+  scalar program id 对齐、且 score buffer 与 producer final state 一致的后续
+  state 消费
 - `fa2ScalarTwoBlockForwardKernel_correct_view` —— 可执行 scalar two-block
   slice,把 fragment summary 生产和 delayed-rescale merge 融合进一个 DSL
   kernel,写出 tile-level FA-2 two-fragment spec

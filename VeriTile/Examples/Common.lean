@@ -27,6 +27,22 @@ def InputLoadedAt (s : BlockState) (region : RegionName)
     (N : Nat) (xs : Fin N → ℝ) : Prop :=
   ∀ i : Fin N, s.readMem region (s.pid * N + i.val) = xs i
 
+/-- Transfer a one-dimensional loaded tile across states when the consumer
+state has the same `pid` and agrees with the producer on the loaded region. -/
+theorem InputLoadedAt.transfer
+    {sSrc sDst : BlockState} {region : RegionName}
+    {N : Nat} {xs : Fin N → ℝ}
+    (hPid : sDst.pid = sSrc.pid)
+    (hMem : ∀ offset, sDst.readMem region offset = sSrc.readMem region offset)
+    (hLoaded : InputLoadedAt sSrc region N xs) :
+    InputLoadedAt sDst region N xs := by
+  intro i
+  calc
+    sDst.readMem region (sDst.pid * N + i.val)
+        = sSrc.readMem region (sDst.pid * N + i.val) := hMem _
+    _ = sSrc.readMem region (sSrc.pid * N + i.val) := by rw [hPid]
+    _ = xs i := hLoaded i
+
 /-- Canonical 1D tensor view for the tile owned by the current
 `program_id(0)`: offsets `[s.pid * N, s.pid * N + N)`.
 
