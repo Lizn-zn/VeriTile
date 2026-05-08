@@ -403,6 +403,30 @@ theorem fa2_score_fragment_tile_eq {M D Bk : Nat}
   simp [fa2ScoreFragmentSpec, Tile.bop, Tile.dot, Tile.transpose, Tile.ofReal,
     NumericDType.mul]
 
+/-- Executable FA-2 QK score-fragment producer.
+
+One program computes one `[M, Bk]` score tile:
+`scores = Q_block @ K_fragmentᵀ * scale`, storing it contiguously at
+`scoreReg + pid * (M * Bk)`.  The tile algebra is already isolated in
+`fa2_score_fragment_tile_eq`; the full executable correctness proof also needs
+a prefix-state/register fact and a row-major 2D store-readback helper. -/
+def fa2ScoreFragmentKernel
+    (qReg kReg scoreReg : RegionName)
+    (M D Bk keyBlock : Nat) (scale : ℝ) : ComputeKernel := triton {
+  pid         := tl.program_id(0)
+  offs_m      := tl.arange(0, $(M))
+  offs_n_loc  := tl.arange(0, $(Bk))
+  offs_n      := $(keyBlock) * $(Bk) + offs_n_loc
+  offs_d      := tl.arange(0, $(D))
+  q_ptrs      := (pid * $(M) + offs_m)[:, None] * $(D) + offs_d[None, :]
+  k_ptrs      := offs_n[:, None] * $(D) + offs_d[None, :]
+  score_ptrs  := pid * $(M * Bk) + offs_m[:, None] * $(Bk) + offs_n_loc[None, :]
+  q           := tl.load($(qReg) + q_ptrs)
+  k           := tl.load($(kReg) + k_ptrs)
+  scores      := tl.dot(q, tl.trans(k)) * $(scale)
+  tl.store($(scoreReg) + score_ptrs, scores)
+}
+
 /-! ## FA-2 fused two-block scalar forward kernel surface
 
 This fuses the two fragment-summary computations and the delayed-rescale merge
