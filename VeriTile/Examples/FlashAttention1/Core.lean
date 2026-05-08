@@ -1,11 +1,11 @@
 /-
-VeriTile.Examples.FlashAttention1.V0
+VeriTile.Examples.FlashAttention1.Core
 
 FlashAttention-1 v0/full-tile proof surface.
 -/
 
 import VeriTile.Triton.Float
-import VeriTile.Examples.FlashAttention1.V0.Forward
+import VeriTile.Examples.FlashAttention1.Core.Forward
 
 namespace VeriTile.Examples
 
@@ -642,18 +642,16 @@ theorem fa1_forward_correct_4D_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.General
-      ((views.kernel M Bk numKVBlocks scale))
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [M, D],
-          observeTileAt
-              (some s')
-              views.outReg (views.outBlockOffset s M) idx
-            = some (attentionReal4D Q4D K4D V4D scale
-                (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
-                 ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
-                 idx.2.1, PUnit.unit))) := by
+    ComputeCorrect.Realizes
+      (kernel := views.kernel M Bk numKVBlocks scale)
+      (initialState := s)
+      (write := fun idx : TileIndex [M, D] =>
+        some (views.outReg, (views.outBlockOffset s M) idx))
+      (expected := fun idx : TileIndex [M, D] =>
+        attentionReal4D Q4D K4D V4D scale
+          (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+           ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+           idx.2.1, PUnit.unit)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
@@ -661,7 +659,7 @@ theorem fa1_forward_correct_4D_views
   have hview := fa1_forward_correct_4D_exec_views hBk hNumKVBlocks hSk
     views Q4D K4D V4D scale s hPidB hPidH hQBnd hQ4D hK4D hV4D idx
   rw [hExec] at hview
-  simpa using hview
+  simpa [observeTileAt] using hview
 
 /-- Causal FA-1 forward correctness over bundled tensor views. -/
 theorem fa1_forward_correct_4D_causal_exec_views
@@ -707,18 +705,16 @@ theorem fa1_forward_correct_4D_causal_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.General
-      ((views.causalKernel M Bk numKVBlocks scale))
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [M, D],
-          observeTileAt
-              (some s')
-              views.outReg (views.outBlockOffset s M) idx
-            = some (attentionReal4DCausal Q4D K4D V4D scale
-                (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
-                 ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
-                 idx.2.1, PUnit.unit))) := by
+    ComputeCorrect.Realizes
+      (kernel := views.causalKernel M Bk numKVBlocks scale)
+      (initialState := s)
+      (write := fun idx : TileIndex [M, D] =>
+        some (views.outReg, (views.outBlockOffset s M) idx))
+      (expected := fun idx : TileIndex [M, D] =>
+        attentionReal4DCausal Q4D K4D V4D scale
+          (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+           ⟨s.pids 0 * M + idx.1.val, by have := idx.1.isLt; omega⟩,
+           idx.2.1, PUnit.unit)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
@@ -726,7 +722,7 @@ theorem fa1_forward_correct_4D_causal_views
   have hview := fa1_forward_correct_4D_causal_exec_views hBk hNumKVBlocks hSk
     views Q4D K4D V4D scale s hPidB hPidH hQBnd hQ4D hK4D hV4D idx
   rw [hExec] at hview
-  simpa using hview
+  simpa [observeTileAt] using hview
 
 
 

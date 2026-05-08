@@ -678,6 +678,83 @@ boundary.
 :::
 
 
+# How async fits — three rooms, one final-state contract
+
+`Triton async is not reducible to pure sequential — we model it without sequentializing it.`
+
+::::cols3
+:::cardBlue
+*Front desk · DSL accepts*
+
+`tl.async_copy(...)` / `tl.async_wait()` / `tl.debug_barrier()` parse and elaborate like any other op.
+
+Each becomes a `ComputeStmt.effectMarker "tl.async_copy"` — opaque, named, carried on the AST. Triton users paste `.py` unchanged.
+
+:::
+
+:::cardOrange
+*Kitchen · algorithm layer rejects*
+
+`toAlgorithm?` on an `effectMarker` returns `Except.error (.requiresEffectProjection op)`.
+
+The pure-sequential proof chain refuses to execute async — silently sequentializing would lie about Triton's semantics. *Fidelity over cleanliness.*
+
+:::
+
+:::cardGreen
+*Side door · concurrency framework*
+
+`VeriTile/Triton/Concurrency/` builds an `EffectTrace` (memory ∪ async ∪ barrier), derives `HappensBefore`, and states correctness as `RefinesSequential concurrent sequential` on final memory.
+
+:::
+
+::::
+
+:::cardMuted
+*Four discipline conditions unlock the side door* —
+`AsyncVisibility` (every `wait` follows a `copy`),
+`BarrierDiscipline` (every `barrier.wait` follows an `arrive` of the same name),
+`OwnershipTransfer` (footprint permissions transfer cleanly),
+`NoRaceOnOwnedCells` (no concurrent writers on owned cells).
+Once these are proved, *concurrent ≡ sequential on final memory* follows by refinement.
+
+:::
+
+
+# Where the async approach comes from
+
+`Each piece is textbook — the value is composing them on production Triton kernels in Lean 4.`
+
+::::cols
+:::cardBlue
+*Building blocks · standard names*
+
+* *Concurrent Separation Logic* — O'Hearn / Brookes 2004. Permissions, ownership transfer, no-race.
+* *Fractional permissions* — Boyland 2003. Generalizes our `ExclusivePerm` to shared-read.
+* *Lamport happens-before* — 1978. Trace-order + async / barrier edges.
+* *DRF-SC theorem* — Adve 1990. Race-free programs admit a sequential-consistency reading — the shape of our `RefinesSequential`.
+* *Reduction theorems* — Lipton 1975, Cohen-Lamport 1998. `async_copy + async_wait` ↔ synchronous load/store as movers.
+
+:::
+
+:::cardOrange
+*GPU verification predecessors*
+
+* *GPUVerify* (Betts / Chong / Donaldson) — two-thread reduction + barrier invariants for CUDA.
+* *VerCors* — permission-based GPU reasoning.
+* *PUG* — CUDA verification in Boogie.
+* *IronFleet · CertiKOS · Iris-based OS verification* — algorithm layer pure-sequential, concurrency attached via refinement: the same shape we use.
+
+:::
+
+::::
+
+:::cardMuted
+*Compact label.* "Permission-based Concurrent Separation Logic + DRF-style sequentialization refinement." VeriTile's contribution is not the underlying logic — it is *applying this stack* to *real production Triton kernels* in *Lean 4*. Prior work used the same parts on toy CUDA in Boogie / Why3.
+
+:::
+
+
 # Launch — ND grid + disjoint-writes composition
 
 `VeriTile/Triton/Launch/`
@@ -752,9 +829,9 @@ single-program proofs.
 * `fa1_forward_correct` (non-causal)
 * `…_strided` / `…_strided_causal`
 * `…_4D_views` / `…_4D_causal_views`
-* `V1Boundary`: 8 boundary / D-tail variants
+* `Boundary`: 8 boundary / D-tail variants
 * `ScoreVariants`: ALiBi · sliding · softcap
-* ~16k lines, V0 + V1Boundary + ScoreVariants + Common
+* ~16k lines, Core + Boundary + ScoreVariants + Common
 
 :::
 
@@ -764,7 +841,40 @@ single-program proofs.
 * `MemorySafety`, `MemoryFrame`
 * `GridComposition` (Layer-2b)
 * `FusedSiLU` (kernel-pair refinement)
-* `FA-1 backward stripped` *(in progress, 1 sorry)*
+* `FA-1 backward stripped` + atomic dQ surface
+
+:::
+
+::::
+
+
+# User-facing theorem surface
+
+::::cols
+:::cardBlue
+*Correctness · one kernel*
+
+`ComputeCorrect.Realizes` states the observable write map of one kernel:
+
+```lean
+write : ι → Option MemCellAddr
+expected : ι → α
+```
+
+`some addr` checks a written cell; `none` is inactive.
+
+:::
+
+:::cardOrange
+*Refinement · two kernels*
+
+`ComputeRefine.Realizes` compares two write maps from the same logical output
+index:
+
+```lean
+lhsWrite rhsWrite : ι → Option MemCellAddr
+relation : ι → α → β → Prop
+```
 
 :::
 
@@ -785,8 +895,9 @@ Original Triton kernel + an optimized rewrite, both inside the embedded
 :::cardOrange
 *2 · State the theorem*
 
-Spec-side equivalence: for every tile index,
-`observe(exec(kernel₁, s)) = observe(exec(kernel₂, s))`.
+Use `ComputeCorrect.Realizes` for a kernel ↔ spec theorem, or
+`ComputeRefine.Realizes` for a kernel-pair relation. Most masked outputs use
+`WriteMap.writeIf mask addr`.
 
 :::
 
@@ -823,9 +934,9 @@ Tier: API calls, tokens, wall-clock, dollars.
 # Status — 2026-05-05
 
 :::numgrid
-* *80* — `.lean` files
-* *~42.7k* — lines of Lean
-* *0* — sorry (lib core)
+* *111* — `.lean` files under `VeriTile/`
+* *~48.2k* — lines of Lean under `VeriTile/`
+* *0* — sorry
 * *3* — Tier milestones closed
 
 :::
@@ -834,7 +945,7 @@ Tier: API calls, tokens, wall-clock, dollars.
 
 * *Tier 1* · `v0.1-tier1` — Loop-free kernel pairs × 3 + `welford_eq_two_pass`.
 * *Tier 2* · `v0.2-tier2` — Streaming reductions × 3, `forLoop_inv`, mask + bool channel, typed Tile refactor, `WithBot ℝ` carrier.
-* *Tier 3-A* · `v0.3-tier3a` (pending tag) — FA-1 forward full coverage: non-causal, strided, causal, 4D, boundary, boundaryD, score variants — ~16k lines.
+* *Tier 3-A* · `v0.3-tier3a` — FA-1 forward full coverage: non-causal, strided, causal, 4D, boundary, boundaryD, score variants — ~16k lines.
 * *Horizontal infra* — Algorithm/Compute split, float erasure, Memory subsystem, Concurrency framework, ND grid + composition, DSL expansion.
 
 
@@ -845,7 +956,7 @@ Tier: API calls, tokens, wall-clock, dollars.
 *Near-term*
 
 * Close FA-1 backward stripped (last sorry).
-* Tag `v0.3-tier3a`.
+* Maintain `v0.3-tier3a` as the Tier 3-A checkpoint tag.
 * Add mask to FA-1 backward.
 * Wire FA-1 backward to multi-block.
 

@@ -69,22 +69,22 @@ theorem cos_func_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s a BLOCK_SIZE xs) :
-    ComputeCorrect.General
-      (cos_func a b n_elements BLOCK_SIZE)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK_SIZE,
-          let addr := s.pid * BLOCK_SIZE + i.val
-          observeAt (some s') b BLOCK_SIZE s.pid i
-            = some (if addr < n_elements then Real.cos (xs i)
-                    else s.readMem b addr)) := by
+    ComputeCorrect.Realizes
+      (kernel := cos_func a b n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
+          (fun i => (b, s.pid * BLOCK_SIZE + i.val)))
+      (expected := fun i => Real.cos (xs i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro i
+  intro i hActive
   have hi := cos_func_correct a b n_elements BLOCK_SIZE
     hBlockSize s xs h_x i
   rw [hExec] at hi
-  simpa using hi
+  simp [observeAt, hActive] at hi
+  exact hi
 
 end VeriTile.Bench.TritonBenchG.CosineCompute

@@ -139,14 +139,12 @@ theorem add_kernel_compute_correct
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.General
-      ((addKernel xReg yReg outReg blockSize))
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          TensorView.observe (some s')
-              (programTileView s outReg blockSize) idx
-            = some (addSpec xs ys idx.1)) := by
+    ComputeCorrect.Realizes
+      (kernel := addKernel xReg yReg outReg blockSize)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.ofTensorView
+        (programTileView s outReg blockSize))
+      (expected := fun idx : TileIndex [blockSize] => addSpec xs ys idx.1) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
@@ -154,7 +152,8 @@ theorem add_kernel_compute_correct
   have hview := add_kernel_correct_exec_view xReg yReg outReg blockSize hBlockSize
     s xs ys h_x h_y idx
   rw [hExec] at hview
-  simpa using hview
+  simpa [ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
+    observeTileAt] using hview
 
 /-- Manifest-compatible view-level surface for `add_kernel_compute_correct`. -/
 theorem add_kernel_correct_view
@@ -163,14 +162,12 @@ theorem add_kernel_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.General
-      ((addKernel xReg yReg outReg blockSize))
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          TensorView.observe (some s')
-              (programTileView s outReg blockSize) idx
-            = some (addSpec xs ys idx.1)) := by
+    ComputeCorrect.Realizes
+      (kernel := addKernel xReg yReg outReg blockSize)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.ofTensorView
+        (programTileView s outReg blockSize))
+      (expected := fun idx : TileIndex [blockSize] => addSpec xs ys idx.1) := by
   exact add_kernel_compute_correct xReg yReg outReg blockSize hBlockSize
     s xs ys h_x h_y
 
@@ -291,23 +288,23 @@ theorem add_kernel_masked_correct_view
     (s : BlockState) (xs ys : Fin blockSize → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg blockSize) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg blockSize) ys) :
-    ComputeCorrect.General
-      ((addKernelMasked xReg yReg outReg blockSize nElements))
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          let addr := s.pid * blockSize + idx.1.val
-          TensorView.observe (some s')
-              (programTileView s outReg blockSize) idx
-            = some (if addr < nElements then xs idx.1 + ys idx.1
-                    else s.readMem outReg addr)) := by
+    ComputeCorrect.Realizes
+      (kernel := addKernelMasked xReg yReg outReg blockSize nElements)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [blockSize] =>
+          s.pid * blockSize + idx.1.val < nElements)
+        (fun idx => (outReg, s.pid * blockSize + idx.1.val)))
+      (expected := fun idx => xs idx.1 + ys idx.1) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro idx
+  intro idx hActive
   have hview := add_kernel_masked_correct_exec_view xReg yReg outReg blockSize nElements
     hBlockSize s xs ys h_x h_y idx
   rw [hExec] at hview
-  simpa using hview
+  simpa [TensorView.observe, observeTileAt, programTileView, TensorView.offset,
+    Offset.strided, hActive] using hview
 
 end VeriTile.Examples

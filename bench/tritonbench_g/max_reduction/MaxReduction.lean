@@ -158,13 +158,15 @@ theorem max_kernel_1_correct
 theorem max_kernel_1_compute_correct
     (inp mid : RegionName)
     (M BLOCK_SIZE : Nat) (s : BlockState) :
-    ComputeCorrect.OutputScalar
-      (max_kernel_1 inp mid M BLOCK_SIZE)
-      s mid s.pid (maxKernel1Spec s inp M BLOCK_SIZE) := by
-  unfold ComputeCorrect.OutputScalar ComputeKernel.ExecCorrect
+    ComputeCorrect.Realizes
+      (kernel := max_kernel_1 inp mid M BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (mid, s.pid))
+      (expected := fun _ => maxKernel1Spec s inp M BLOCK_SIZE) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
+  intro _
   exact max_kernel_1_correct inp mid M BLOCK_SIZE s s' hExec
 
 /-- Algorithm-layer correctness for `max_kernel_2`. -/
@@ -190,13 +192,15 @@ theorem max_kernel_2_correct
 theorem max_kernel_2_compute_correct
     (mid out : RegionName)
     (mid_size BLOCK_MID : Nat) (s : BlockState) :
-    ComputeCorrect.OutputScalar
-      (max_kernel_2 mid out mid_size BLOCK_MID)
-      s out 0 (maxKernel2Spec s mid mid_size BLOCK_MID) := by
-  unfold ComputeCorrect.OutputScalar ComputeKernel.ExecCorrect
+    ComputeCorrect.Realizes
+      (kernel := max_kernel_2 mid out mid_size BLOCK_MID)
+      (initialState := s)
+      (write := fun _ : PUnit => some (out, 0))
+      (expected := fun _ => maxKernel2Spec s mid mid_size BLOCK_MID) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
+  intro _
   exact max_kernel_2_correct mid out mid_size BLOCK_MID s s' hExec
 
 /-- Compute-facing cellwise correctness for the 2D value/index `max_kernel`. -/

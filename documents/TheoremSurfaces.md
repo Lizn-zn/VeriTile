@@ -5,10 +5,10 @@ public compute-facing APIs. See
 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) for the full user guide.
 
 - Single-kernel correctness against a mathematical or algorithmic spec uses
-  `ComputeCorrect.Output*`, `ComputeCorrect.Post`, or
+  `ComputeCorrect.Realizes`, `ComputeCorrect.Post`, or
   `ComputeCorrect.General`.
 - Two-kernel equivalence or rewrite refinement uses
-  `ComputeRefine.Output*Eq`, `ComputeRefine.Post`, or
+  `ComputeRefine.Realizes`, `ComputeRefine.Post`, or
   `ComputeRefine.General`.
 
 Projected algorithm lemmas may still mention `Kernel.Correct` or
@@ -23,7 +23,8 @@ should not be the exported example theorem named in
 
 Execution-only helper lemmas may use an `_exec_view` suffix and can state direct
 `exec` equalities. The public theorem should wrap that helper in
-`ComputeCorrect.*` or `ComputeRefine.*`.
+`ComputeCorrect.Realizes` or `ComputeRefine.Realizes` when it is an output
+observation theorem.
 
 Domain-specific theorem surfaces that are not ordinary single-kernel or
 two-kernel example views, such as whole-grid launch facts or specialized

@@ -1,10 +1,10 @@
 /-
-VeriTile.Examples.FlashAttention1.V1Boundary.Core
+VeriTile.Examples.FlashAttention1.Boundary.Core
 
 Split-out support for FlashAttention-1 v1 boundary proofs.
 -/
 
-import VeriTile.Examples.FlashAttention1.V1Boundary.Helpers
+import VeriTile.Examples.FlashAttention1.Boundary.Helpers
 
 namespace VeriTile.Examples
 

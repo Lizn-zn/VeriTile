@@ -154,20 +154,20 @@ theorem log_sum_exp_refinement_view
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg N)
       (fun idx : TileIndex [N] => xs idx.1)) :
-    ComputeRefine.General
-      ((directLSEKernel xReg yReg N))
-      ((stableLSEKernel xReg yReg N))
-      (fun s0 lhs' rhs' =>
-        s0 = s →
-        TensorView.observe (some lhs')
-            (scalarCellView yReg s.pid) PUnit.unit =
-        TensorView.observe (some rhs')
-            (scalarCellView yReg s.pid) PUnit.unit) := by
+    ComputeRefine.Realizes
+      (lhs := directLSEKernel xReg yReg N)
+      (rhs := stableLSEKernel xReg yReg N)
+      (initialState := s)
+      (lhsWrite := ComputeCorrect.WriteMap.scalar yReg s.pid)
+      (rhsWrite := ComputeCorrect.WriteMap.scalar yReg s.pid)
+      (relation := fun (_ : PUnit) (lhs rhs : ℝ) => lhs = rhs) := by
   apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
   have hview := log_sum_exp_refinement_exec_view xReg yReg N hN s xs h_x
   rw [hL, hR] at hview
-  simpa using hview
+  intro _
+  simpa [TensorView.observe, observeTileAt, scalarCellView, TensorView.offset,
+    Offset.strided] using hview
 
 end VeriTile.Examples

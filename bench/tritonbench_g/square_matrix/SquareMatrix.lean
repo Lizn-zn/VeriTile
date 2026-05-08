@@ -64,22 +64,22 @@ theorem square_kernel_compute_correct
     (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputRowLoadedAt s input_ptr input_row_stride BLOCK_SIZE xs) :
-    ComputeCorrect.General
-      (square_kernel output_ptr input_ptr input_row_stride output_row_stride
+    ComputeCorrect.Realizes
+      (kernel := square_kernel output_ptr input_ptr input_row_stride output_row_stride
         n_cols BLOCK_SIZE)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK_SIZE,
-          let outAddr := s.pid * output_row_stride + i.val
-          s'.readMem output_ptr outAddr
-            = if i.val < n_cols then xs i * xs i else s.readMem output_ptr outAddr) := by
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+          (fun i => (output_ptr, s.pid * output_row_stride + i.val)))
+      (expected := fun i => xs i * xs i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro i
+  intro i hActive
   have hi := square_kernel_correct output_ptr input_ptr input_row_stride
     output_row_stride n_cols BLOCK_SIZE hBlockSize s xs h_x i
   rw [hExec] at hi
-  exact Option.some.inj hi
+  simpa [hActive] using Option.some.inj hi
 
 end VeriTile.Bench.TritonBenchG.SquareMatrix

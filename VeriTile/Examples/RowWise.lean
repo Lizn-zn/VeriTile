@@ -129,19 +129,19 @@ theorem rowWiseSum_correct_view
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeCorrect.General
-      ((rowWiseSumKernel xReg yReg nCol blockSize))
-      (fun s0 s' =>
-        s0 = s →
-        TensorView.observe (some s')
-            (scalarCellView yReg s.pid) PUnit.unit
-          = some (rowWiseSumSpec xs)) := by
+    ComputeCorrect.Realizes
+      (kernel := rowWiseSumKernel xReg yReg nCol blockSize)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar yReg s.pid)
+      (expected := fun _ : PUnit => rowWiseSumSpec xs) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
   have hview := rowWiseSum_correct_exec_view xReg yReg nCol blockSize s xs h_x
   rw [hExec] at hview
-  simpa using hview
+  intro _
+  simpa [TensorView.observe, observeTileAt, scalarCellView, TensorView.offset,
+    Offset.strided] using hview
 
 /-- **Row-wise max kernel correctness.**
 
@@ -185,18 +185,18 @@ theorem rowWiseMax_correct_view
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (rowTileView s xReg nCol blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeCorrect.General
-      ((rowWiseMaxKernel xReg yReg nCol blockSize))
-      (fun s0 s' =>
-        s0 = s →
-        TensorView.observe (some s')
-            (scalarCellView yReg s.pid) PUnit.unit
-          = some (rowWiseMaxSpec hN xs)) := by
+    ComputeCorrect.Realizes
+      (kernel := rowWiseMaxKernel xReg yReg nCol blockSize)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar yReg s.pid)
+      (expected := fun _ : PUnit => rowWiseMaxSpec hN xs) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
   have hview := rowWiseMax_correct_exec_view xReg yReg nCol blockSize hN s xs h_x
   rw [hExec] at hview
-  simpa using hview
+  intro _
+  simpa [TensorView.observe, observeTileAt, scalarCellView, TensorView.offset,
+    Offset.strided] using hview
 
 end VeriTile.Examples

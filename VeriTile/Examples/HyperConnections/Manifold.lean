@@ -1,5 +1,5 @@
 /-
-VeriTile.Examples.HyperConnections.MHC
+VeriTile.Examples.HyperConnections.Manifold
 
 Fixed-rank, inference-only DSL surface for the core tensor flow of
 manifold-constrained hyper-connections.
@@ -162,25 +162,30 @@ theorem mhcWidthConnection_correct_view
     (resReg hResReg hPreReg resMixReg branchInReg : RegionName)
     (tau : ℝ) (s : BlockState)
     (hOutNe : resMixReg ≠ branchInReg) :
-    ComputeCorrect.General
-      (mhcWidthConnectionKernel resReg hResReg hPreReg resMixReg branchInReg
+    ComputeCorrect.Realizes
+      (kernel := mhcWidthConnectionKernel resReg hResReg hPreReg resMixReg branchInReg
         1 1 1 0 tau)
-      (fun s0 s' =>
-        s0 = s →
-          s'.readMem resMixReg s.pid =
-            mhcWidthConnectionResMixSpec1
-              (s.readMem resReg s.pid) (s.readMem hResReg 0) tau
-          ∧
-          s'.readMem branchInReg s.pid =
-            mhcWidthConnectionBranchInSpec1
-              (s.readMem resReg s.pid) (s.readMem hPreReg 0) tau) := by
+      (initialState := s)
+      (write := fun i : Fin 2 =>
+        some (if i.val = 0 then (resMixReg, s.pid) else (branchInReg, s.pid)))
+      (expected := fun i : Fin 2 =>
+        if i.val = 0 then
+          mhcWidthConnectionResMixSpec1
+            (s.readMem resReg s.pid) (s.readMem hResReg 0) tau
+        else
+          mhcWidthConnectionBranchInSpec1
+            (s.readMem resReg s.pid) (s.readMem hPreReg 0) tau) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
   have hview := mhcWidthConnection_exec_view
     resReg hResReg hPreReg resMixReg branchInReg tau s hOutNe
   rw [hExec] at hview
-  simpa using hview
+  have hp := Option.some.inj hview
+  intro i
+  fin_cases i
+  · simpa using congrArg Prod.fst hp
+  · simpa using congrArg Prod.snd hp
 
 /-- Scalar fixed-rank depth-side mHC core (`S = T = D = 1`, zero Sinkhorn
 iterations).
@@ -273,23 +278,24 @@ writes:
 theorem mhcDepthConnection_correct_view
     (resMixReg branchOutReg hPostReg outReg : RegionName)
     (tau : ℝ) (s : BlockState) :
-    ComputeCorrect.General
-      (mhcDepthConnectionKernel resMixReg branchOutReg hPostReg outReg
+    ComputeCorrect.Realizes
+      (kernel := mhcDepthConnectionKernel resMixReg branchOutReg hPostReg outReg
         1 1 1 0 tau)
-      (fun s0 s' =>
-        s0 = s →
-          s'.readMem outReg s.pid =
-            mhcDepthConnectionOutSpec1
-              (s.readMem resMixReg s.pid)
-              (s.readMem branchOutReg s.pid)
-              (s.readMem hPostReg 0)
-              tau) := by
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar outReg s.pid)
+      (expected := fun _ : PUnit =>
+        mhcDepthConnectionOutSpec1
+          (s.readMem resMixReg s.pid)
+          (s.readMem branchOutReg s.pid)
+          (s.readMem hPostReg 0)
+          tau) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
   have hview := mhcDepthConnection_exec_view
     resMixReg branchOutReg hPostReg outReg tau s
   rw [hExec] at hview
+  intro _
   simpa using hview
 
 end VeriTile.Examples.HyperConnections

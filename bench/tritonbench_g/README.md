@@ -24,7 +24,7 @@ A port goes through three stages, tracked per-kernel in `README.md`:
 
 1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes only: `=` → `:=`, pointer args → `RegionName` injected via `$(...)`, `tl.constexpr` annotation → Lean `Nat`/`Bool` parameter, Lean scalar params → `$(...)`. The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 15 / 15.**
 2. **Spec** — Real-valued mathematical specification of the kernel's intended output is written.
-3. **Verification** — `ComputeKernel.ComputeCorrect` / `ComputeKernel.ComputeRefine` theorem is proved and registered in `scripts/kernel-manifest.tsv`.
+3. **Verification** — `ComputeCorrect.Realizes` / `ComputeRefine.Realizes` theorem is proved and registered in `scripts/kernel-manifest.tsv`.
 
 Stage 1 is the verbatim transcription contract; reaching stage 3 (verification) requires both the DSL gap to close and a proof to land.
 

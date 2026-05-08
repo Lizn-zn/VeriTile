@@ -17,8 +17,8 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
 
 - **DSL**:typed Triton 子集,带 `triton { ... }` 宏、ND tile shape、reduction、
   mask(`mask=`/`other=`)、block-pointer 操作、`if`/`for` 控制流。
-- **定理 surface**:`ComputeCorrect.Output*`(kernel ↔ 数学规范)和
-  `ComputeRefine.Output*Eq`(kernel pair 等价)。两者都通过 `toAlgorithm?`
+- **定理 surface**:`ComputeCorrect.Realizes`(kernel ↔ 数学规范)和
+  `ComputeRefine.Realizes`(kernel pair 等价)。两者都通过 `toAlgorithm?`
   投影,底层走 `Kernel.Correct` / `Kernel.Refine`。
 - **示例**:15 个 TritonBench-G 端口及其证明
   (见 [`bench/tritonbench_g/`](./bench/tritonbench_g/)),加上
@@ -50,11 +50,9 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 
 | 目标 | 用 |
 |---|---|
-| 一个 kernel 匹配一维 `Fin n → ℝ` 数学规范 | `ComputeCorrect.OutputArray` |
-| 一个 kernel 匹配 ND tensor 规范 | `ComputeCorrect.OutputTile` |
-| 一个 kernel 匹配标量 reduction | `ComputeCorrect.OutputScalar` |
+| 一个 kernel realize 某个输出规范 | `ComputeCorrect.Realizes` |
+| 两个 kernel realize 某个输出关系 | `ComputeRefine.Realizes` |
 | 值 + 索引同时输出(如 `tl.max(..., return_indices=True)`)| `ComputeCorrect.OutputPairWhere` |
-| 两个 kernel 产生相同可观测输出 | `ComputeRefine.OutputArrayEq`(或 `OutputTileEq`)|
 | 自定义 final-state 后置条件 | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | 关系跨任意初始状态(罕见) | `ComputeCorrect.General` / `ComputeRefine.General` |
 
@@ -68,10 +66,11 @@ theorem add_kernel_correct
     (s : BlockState) (xs ys : Fin n → ℝ)
     (h_x : TensorView.loadedArray s (programTileView s xReg n) xs)
     (h_y : TensorView.loadedArray s (programTileView s yReg n) ys) :
-    ComputeCorrect.OutputArray
-      (addKernel xReg yReg outReg n) s
-      (programTileView s outReg n)
-      (fun i => xs i + ys i) := by
+    ComputeCorrect.Realizes
+      (kernel := addKernel xReg yReg outReg n)
+      (initialState := s)
+      (write := fun i : Fin n => some (outReg, s.pid * n + i.val))
+      (expected := fun i => xs i + ys i) := by
   -- 先桥接到投影后的算法 kernel,再在 Real 语义层关 goal
   ...
 ```

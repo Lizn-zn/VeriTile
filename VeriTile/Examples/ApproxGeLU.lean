@@ -95,21 +95,20 @@ theorem approx_gelu_kernel_correct_view
     (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeCorrect.General
-      ((approxGeLUKernel xReg outReg blockSize))
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          TensorView.observe (some s')
-              (programTileView s outReg blockSize) idx
-            = some (approxGeLUSpec xs idx.1)) := by
+    ComputeCorrect.Realizes
+      (kernel := approxGeLUKernel xReg outReg blockSize)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.ofTensorView
+        (programTileView s outReg blockSize))
+      (expected := fun idx : TileIndex [blockSize] => approxGeLUSpec xs idx.1) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
   intro idx
   have hview := approx_gelu_kernel_correct_exec_view xReg outReg blockSize hN s xs h_x idx
   rw [hExec] at hview
-  simpa using hview
+  simpa [ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
+    observeTileAt] using hview
 
 /-- Target error tolerance for the standard tanh/sigmoid GeLU approximation. -/
 noncomputable def approxGeLUEps : ℝ := 1 / 1000

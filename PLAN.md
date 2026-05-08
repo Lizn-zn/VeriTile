@@ -133,18 +133,18 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `(dtype, shape, name)`); `WithBot ℝ` carrier (`Op.negInf` lowers to true
   `⊥` rather than `-1e38` stand-in)
 
-### Tier 3-A — FA-1 forward full coverage ✅ (`v0.3-tier3a` pending)
+### Tier 3-A — FA-1 forward full coverage ✅ (`v0.3-tier3a`)
 
 - `fa1_forward_correct` (non-causal, single-block reasoning)
 - `fa1_forward_correct_strided` (arbitrary stride layout)
 - `fa1_forward_correct_strided_causal`
 - `fa1_forward_correct_4D` / `fa1_forward_correct_4D_causal` (`batch ×
   heads × seq × dim`)
-- `V1Boundary.lean`: 8 boundary-mask / boundaryD variants (partial KV
+- `Boundary.lean`: 8 boundary-mask / boundaryD variants (partial KV
   blocks, partial head dims)
 - `ScoreVariants.lean`: softcap / ALiBi / sliding-window / 3-way
   composition, 4 forward variant theorems
-- ~16k lines of FA-1 forward proof (V0 + V1Boundary + ScoreVariants +
+- ~16k lines of FA-1 forward proof (Core + Boundary + ScoreVariants +
   Common)
 
 ### Horizontal infra ✅ (beyond original PLAN scope, in parallel with Tiers)
@@ -180,9 +180,8 @@ The trusted bridge from Real-algorithm correctness to floating computation
 
 ### Numbers
 
-- 80 `.lean` files, ~42.7k lines
-- Whole library 0 sorry (except `FlashAttention1/Backward.lean` × 1, in
-  progress)
+- 111 `.lean` files under `VeriTile/` (~48.2k lines); 128 `.lean` files including `bench/` (~50.2k lines)
+- Whole library 0 sorry
 - `lake build` clean
 
 ## In progress
@@ -192,7 +191,7 @@ The trusted bridge from Real-algorithm correctness to floating computation
 The original PLAN listed backward as P3+ "never"; the redirect moves it
 in-scope (see §Decision log entry 9).
 
-`VeriTile/Examples/FlashAttention1/Backward.lean` (495 lines, 1 `sorry`):
+`VeriTile/Examples/FlashAttention1/Backward.lean`:
 
 - `streamingLSE_eq_lseReal` — the forward LSE store using `m_i + tl.log(l_i)`
   equals unshifted log-sum-exp (the key bridge for backward to reconstruct P)
@@ -203,9 +202,8 @@ in-scope (see §Decision log entry 9).
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`
 - `softmax_jvp_identity` — softmax JVP form
 - `strippedBackward_tile_bridges_complete` — bundled math-layer surface
-- `fa1BackwardStrippedKernel_correct` — main theorem (stripped: no mask, no
-  multi-block, single program-id); the sub-2b execution wiring is the
-  current sorry
+- `fa1BackwardStrippedKernel_correct` — stripped main theorem (no mask, no
+  multi-block, single program-id)
 
 Next: close sub-2b → add mask → add multi-block → causal backward →
 FA-2 backward.
@@ -215,7 +213,7 @@ FA-2 backward.
 ### Near-term — Tier 3-A wrap-up and backward stage 1
 
 - Close FA-1 backward stripped main theorem (last sorry)
-- Tag `v0.3-tier3a` (forward full coverage already in place)
+- Maintain `v0.3-tier3a` tag for forward full coverage
 - Add mask to FA-1 backward
 - Wire FA-1 backward to multi-block (after mid-term multi-block semantics)
 
@@ -466,8 +464,8 @@ To make the close-rate metric reproducible:
 9. **2026-05-05** — **Backward pass, Python lifter, and concurrency-
    primitive proofs moved out of P3+ and into in-scope.**
 
-   - **FA-1 backward** is already in progress (`Backward.lean` 495 lines,
-     1 sorry); near-term wrap-up target
+   - **FA-1 backward** entered the near-term roadmap and now has no sorry
+     debt in the library
    - **Python lifter** moved from P3+ to mid/long-term — Triton-user
      friendliness requires a paste-in surface, not just documentation
      correspondence

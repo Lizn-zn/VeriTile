@@ -8,16 +8,11 @@ properties of `ComputeKernel`s. Surfaces live in
 
 | Goal | Use |
 |---|---|
-| One kernel matches a 1D `Fin n → ℝ` math spec | `ComputeCorrect.OutputArray` |
-| One kernel matches an ND tensor spec | `ComputeCorrect.OutputTile` |
-| One kernel matches a Real scalar reduction | `ComputeCorrect.OutputScalar` |
-| One kernel matches a `Nat` scalar reduction | `ComputeCorrect.OutputNatScalar` |
+| One kernel realizes an output spec | `ComputeCorrect.Realizes` |
+| Two kernels realize an output relation | `ComputeRefine.Realizes` |
+| Whole-grid launch (every program writes correctly) | `Kernel.ForAllProgramsSome` (temporary; see Grid section) |
 | Value/index pair on every lane | `ComputeCorrect.OutputPair` |
 | Value/index pair on active lanes only | `ComputeCorrect.OutputPairWhere` |
-| Two kernels produce equal 1D outputs | `ComputeRefine.OutputArrayEq` |
-| Two kernels produce equal ND tensor outputs | `ComputeRefine.OutputTileEq` |
-| Two kernels produce equal Real scalar outputs | `ComputeRefine.OutputScalarEq` |
-| Two kernels produce equal `Nat` scalar outputs | `ComputeRefine.OutputNatScalarEq` |
 | Two kernels produce equal value/index pairs | `ComputeRefine.OutputPairEq` / `OutputPairEqWhere` |
 | Custom postcondition over the final state | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | Relation over arbitrary initial states (rare) | `ComputeCorrect.General` / `ComputeRefine.General` |
@@ -25,6 +20,68 @@ properties of `ComputeKernel`s. Surfaces live in
 The lower-level `ComputeKernel.ComputeCorrect` and
 `ComputeKernel.ComputeRefine` definitions remain the implementation layer.
 New example theorem statements should normally not expose those names directly.
+
+## Output Write Maps
+
+The most general output surface separates two maps over the same logical output
+index:
+
+```lean
+abbrev ComputeCorrect.WriteMap (ι : Type) := ι → Option MemCellAddr
+
+ComputeCorrect.Realizes
+  (kernel := k)
+  (initialState := s)
+  (write := write)
+  (expected := expected)
+-- post: ∀ i, match write i with
+--   | some addr => read final addr = expected i
+--   | none => True
+```
+
+`Realizes` is overloaded by the expected value type. `ℝ` specs use
+`BlockState.readMem`, `Nat` specs use `readMemValue .nat`, and `MemCell` specs
+use exact algorithm-layer cell equality. Use it when the spec is naturally a
+write-indexed written-cell contract or spans multiple regions. For common
+scalar/tensor readback theorems, the ergonomic wrappers (`OutputScalar`,
+`OutputArray`, `OutputNatScalar`) remain available.
+
+Masked stores should usually be stated with `WriteMap.writeIf`:
+
+```lean
+write := ComputeCorrect.WriteMap.writeIf
+  (fun i : Fin BLOCK_SIZE => base + i.val < N)
+  (fun i => (out, base + i.val))
+```
+
+Then the theorem states what active lanes wrote. Preservation of non-written
+addresses belongs to frame/preserve theorems.
+
+The standard proof step is:
+
+```lean
+rw [ComputeCorrect.realizes_writeIf_iff]
+```
+
+which turns the output obligation into `∀ i, mask i → read final (addr i) =
+expected i`.
+
+Whole-grid launch theorems should first expose a final-state execution surface;
+once the kernel is represented as a final-state producing `ComputeKernel`
+surface, the same `Realizes` form should describe its outputs. VeriTile does
+not keep a separate `GridOutputAt` user surface; grid execution is an execution
+concern, not a different output shape.
+
+### Grid launches today
+
+VeriTile does not yet have a whole-grid `launchExec : ComputeKernel → Grid →
+BlockState → Option BlockState`. Until it lands, grid theorems are stated in
+the per-program-local form `Kernel.ForAllProgramsSome`, which says: for every
+typed grid index, running the kernel from `s.withGridIndex idx` produces a
+state where the per-`idx` postcondition holds. See
+`logsumexp_fwd_kernel_grid_blockLSE_correct` for the canonical example. Once
+the launcher exists, grid theorems will move to `ComputeCorrect.Realizes` with
+the launch as an extra parameter; the user-facing theorem shape stays the same.
 
 ## Single-Kernel Correctness
 
@@ -55,7 +112,9 @@ ComputeCorrect.OutputArray k s view expected   -- 1D specialization
 ```
 
 `OutputArray` is the 1D `n`-shape specialization of `OutputTile` and is the
-preferred surface when the spec is naturally a `Fin n → ℝ` function.
+preferred surface when the spec is naturally a `Fin n → ℝ` function. Both are
+thin wrappers over `Realizes` through `WriteMap.ofTensorView`; they exist to
+keep tensor-view theorem statements readable.
 
 ### Value/index pair outputs
 
@@ -72,6 +131,12 @@ ComputeCorrect.OutputPairWhere k s valueRegion indexRegion offset
 Use these for kernels with paired outputs such as
 `tl.max(..., return_indices=True)`. `OutputPairWhere` is the right choice
 when masking restricts which lanes participate.
+
+These remain dedicated definitions rather than `Realizes` wrappers because the
+two channels have different readback carriers (`ℝ` for value, `Nat` for index)
+and the `Realizes` typeclass dispatches on a single carrier per call. A future
+revision could introduce a per-lane carrier typeclass to subsume them; not
+worth doing until a second heterogeneous-output kernel appears.
 
 ## Kernel Refinement
 

@@ -117,17 +117,17 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   `(dtype, shape, name)` 索引)、`WithBot ℝ` 通道载体(`Op.negInf` 求值为真正的 `⊥`
   而非 `-1e38` stand-in)
 
-### Tier 3-A — FA-1 forward 全套 ✅(待打 `v0.3-tier3a`)
+### Tier 3-A — FA-1 forward 全套 ✅(`v0.3-tier3a`)
 
 - `fa1_forward_correct`(non-causal,single-block 推理)
 - `fa1_forward_correct_strided`(任意 stride layout)
 - `fa1_forward_correct_strided_causal`
 - `fa1_forward_correct_4D` / `fa1_forward_correct_4D_causal`(`batch × heads × seq × dim`)
-- `V1Boundary.lean`:boundary-mask 与 boundaryD 的 8 个变体定理(部分 KV 块、
+- `Boundary.lean`:boundary-mask 与 boundaryD 的 8 个变体定理(部分 KV 块、
   部分头维)
 - `ScoreVariants.lean`:softcap / ALiBi / sliding-window / 三合一组合,
   4 个 forward 变体定理
-- 共 ~16k 行 FA-1 forward 证明(V0 + V1Boundary + ScoreVariants + Common)
+- 共 ~16k 行 FA-1 forward 证明(Core + Boundary + ScoreVariants + Common)
 
 ### 横向 infra ✅(超出原 PLAN scope,与 Tier 推进并行)
 
@@ -156,8 +156,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 
 ### 数据
 
-- 80 个 `.lean` 文件,~42.7k 行
-- 全库 0 sorry(除 `FlashAttention1/Backward.lean` 1 个,正在做)
+- `VeriTile/` 下 111 个 `.lean` 文件(~48.2k 行);包含 `bench/` 时 128 个 `.lean` 文件(~50.2k 行)
+- 全库 0 sorry
 - `lake build` 干净
 
 ## 进行中
@@ -166,7 +166,7 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 
 原 PLAN 把 backward 列为 P3+ 永远不做;重定向后进 in-scope(见 §决策日志 9)。
 
-`VeriTile/Examples/FlashAttention1/Backward.lean`(495 行,1 个 `sorry`):
+`VeriTile/Examples/FlashAttention1/Backward.lean`:
 
 - `streamingLSE_eq_lseReal` —— forward LSE store 用 `m_i + tl.log(l_i)` 等于
   unshifted log-sum-exp(backward 重建 P 的关键桥)
@@ -176,8 +176,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   `dQ = dS · K · scale`、`dK = dSᵀ · Q · scale`
 - `softmax_jvp_identity` —— softmax JVP 形式
 - `strippedBackward_tile_bridges_complete` —— bundled 数学层 surface
-- `fa1BackwardStrippedKernel_correct` —— 主定理(stripped:无 mask、无 multi-block、
-  单 program-id),sub-2b 执行 wiring 是当前 sorry
+- `fa1BackwardStrippedKernel_correct` —— stripped 主定理(无 mask、无 multi-block、
+  单 program-id)
 
 下一步:闭合 sub-2b → 加 mask → 加 multi-block → causal backward → FA-2 backward。
 
@@ -186,7 +186,7 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 ### 近期 — Tier 3-A 收口与 backward 第一阶段
 
 - 闭合 FA-1 backward stripped 主定理(剩 1 个 sorry)
-- 打 `v0.3-tier3a` tag(forward 全套已就位)
+- 维护 `v0.3-tier3a` tag(forward 全套)
 - FA-1 backward 加 mask
 - FA-1 backward 接入 multi-block(等中期 multi-block 语义)
 
@@ -334,7 +334,7 @@ PyTorch 量级)。
 
 - 主仓库:`github.com/Lizn-zn/VeriTile`(已公开)
 - 主分支恒可构建
-- Tier 完成时打 tag(已有 `v0.1-tier1`、`v0.2-tier2`;待打 `v0.3-tier3a`,
+- Tier 完成时打 tag(已有 `v0.1-tier1`、`v0.2-tier2`;`v0.3-tier3a`,
   之后随路线图增长)
 - 每个 release 配 release notes(新定理、新语义、benchmark 数据、scope 变化)
 - README 持续维护双语(英 + 中)
@@ -391,8 +391,7 @@ PyTorch 量级)。
 9. **2026-05-05** —— **Backward pass、Python lifter、并发原语证明 移出 P3+,
    进入 in-scope**。
 
-   - **FA-1 backward** 已经在做(`Backward.lean` 495 行,1 sorry),作为近期
-     收口目标
+   - **FA-1 backward** 已进入近期路线图,当前全库已无 sorry debt
    - **Python lifter** 从 P3+ 推进到中远期 —— Triton 用户友好度需要 paste-in 表面,
      不止文档对应
    - **并发原语证明** 当前是 failure markers + projection 边界(已搭),下一步是

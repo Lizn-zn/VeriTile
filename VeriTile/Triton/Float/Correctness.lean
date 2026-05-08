@@ -373,9 +373,9 @@ end ComputeKernel
 
 namespace ComputeCorrect
 
-/-! ## User-facing output-shape combinators -/
+/-! ## User-facing realization combinators -/
 
-/-- Fully general two-state correctness surface. Prefer `Post` or an `Output*`
+/-- Fully general two-state correctness surface. Prefer `Post` or a `Realizes`
 combinator when the theorem fixes one initial state. -/
 def General (ck : ComputeKernel) (post : ComputeKernel.AlgSpec) : Prop :=
   ComputeKernel.ComputeCorrect ck post
@@ -385,27 +385,164 @@ def Post
     (ck : ComputeKernel) (s : BlockState) (post : BlockState → Prop) : Prop :=
   ComputeKernel.ExecCorrect ck s post
 
-/-- A scalar Real output equals `expected` after executing `ck` from `s`. -/
-def OutputScalar
-    (ck : ComputeKernel) (s : BlockState)
-    (out : RegionName) (offset : Nat) (expected : ℝ) : Prop :=
-  ComputeKernel.ExecCorrect ck s (fun s' =>
-    s'.readMem out offset = expected)
+/--
+Logical output write map indexed by `ι`.
 
-/-- A scalar Nat output equals `expected` after executing `ck` from `s`. -/
+The map is intentionally state-free: it describes which memory cells are
+written by each logical output index, while the execution state is supplied
+separately to `Realizes`. A `some addr` lane is checked against `expected`; a
+`none` lane is inactive and imposes no output obligation.
+-/
+abbrev WriteMap (ι : Type) := ι → Option MemCellAddr
+
+namespace WriteMap
+
+/-- Build an output target from an existing tensor view. -/
+def ofTensorView {shape : TileShape} (view : TensorView shape) :
+    WriteMap (TileIndex shape) :=
+  fun idx => some (view.region, view.offset idx)
+
+/-- Build a scalar output target for one memory cell. -/
+def scalar (region : RegionName) (offset : Nat) : WriteMap PUnit :=
+  fun _ => some (region, offset)
+
+/-- Build a write map from a mask and an address map. -/
+def writeIf {ι : Type} (mask : ι → Prop) [DecidablePred mask]
+    (addr : ι → MemCellAddr) : WriteMap ι :=
+  fun i => if mask i then some (addr i) else none
+
+end WriteMap
+
+/--
+A contiguous 1D output tile in one memory region.
+
+Lane `i : Fin size` writes to `base + i`; the lane is active exactly when
+`base + i < bound`. This captures the common Triton pattern
+`offsets = base + tl.arange(0, BLOCK); mask = offsets < N`.
+-/
+structure TileBlock where
+  region : RegionName
+  base   : Nat
+  size   : Nat
+  bound  : Nat
+
+namespace TileBlock
+
+/-- Standard `ComputeCorrect.Realizes` write map for this block. -/
+def writes (t : TileBlock) : WriteMap (Fin t.size) :=
+  WriteMap.writeIf (fun i : Fin t.size => t.base + i.val < t.bound)
+    (fun i => (t.region, t.base + i.val))
+
+@[simp] theorem writes_apply_active (t : TileBlock) (i : Fin t.size)
+    (h : t.base + i.val < t.bound) :
+    t.writes i = some (t.region, t.base + i.val) := by
+  simp [writes, WriteMap.writeIf, h]
+
+@[simp] theorem writes_apply_inactive (t : TileBlock) (i : Fin t.size)
+    (h : ¬ t.base + i.val < t.bound) :
+    t.writes i = none := by
+  simp [writes, WriteMap.writeIf, h]
+
+end TileBlock
+
+/--
+Readable output carrier for overloaded output surfaces.
+
+The `MemCell` instance is exact algorithm-layer cell equality. The `ℝ` and
+`Nat` instances use the corresponding readback projections.
+-/
+class OutputReadable (α : Type) where
+  read : BlockState → MemCellAddr → α
+
+instance : OutputReadable MemCell where
+  read s addr := s.mem addr.1 addr.2
+
+instance : OutputReadable ℝ where
+  read s addr := s.readMem addr.1 addr.2
+
+instance : OutputReadable Nat where
+  read s addr := s.readMemValue .nat addr.1 addr.2
+
+@[simp] theorem OutputReadable.read_memcell (s : BlockState) (addr : MemCellAddr) :
+    (OutputReadable.read s addr : MemCell) = s.mem addr.1 addr.2 := rfl
+
+@[simp] theorem OutputReadable.read_real (s : BlockState) (addr : MemCellAddr) :
+    (OutputReadable.read s addr : ℝ) = s.readMem addr.1 addr.2 := rfl
+
+@[simp] theorem OutputReadable.read_nat (s : BlockState) (addr : MemCellAddr) :
+    (OutputReadable.read s addr : Nat) = s.readMemValue .nat addr.1 addr.2 := rfl
+
+/--
+Overloaded correctness-realization surface over a state-free output write map.
+
+The carrier is inferred from `expected`: `ℝ` uses `readMem`, `Nat` uses
+`readMemValue .nat`, and `MemCell` uses exact algorithm-layer cell equality.
+-/
+def Realizes {ι : Type} {α : Type} [OutputReadable α]
+    (kernel : ComputeKernel) (initialState : BlockState)
+    (write : WriteMap ι) (expected : ι → α) : Prop :=
+  ComputeKernel.ExecCorrect kernel initialState (fun s' =>
+    ∀ i : ι, match write i with
+      | some addr => OutputReadable.read s' addr = expected i
+      | none => True)
+
+@[simp] theorem realizes_writeIf_iff {ι : Type} {α : Type} [OutputReadable α]
+    (kernel : ComputeKernel) (initialState : BlockState)
+    (mask : ι → Prop) [DecidablePred mask]
+    (addr : ι → MemCellAddr) (expected : ι → α) :
+    Realizes kernel initialState (WriteMap.writeIf mask addr) expected ↔
+      ComputeKernel.ExecCorrect kernel initialState (fun s' =>
+        ∀ i : ι, mask i → OutputReadable.read s' (addr i) = expected i) := by
+  unfold Realizes WriteMap.writeIf ComputeKernel.ExecCorrect
+    ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
+    ComputeKernel.AlgorithmCorrect Kernel.Correct
+  cases hAlg : kernel.toAlgorithm? with
+  | error e =>
+      simp
+  | ok ak =>
+      simp
+      constructor
+      · intro h s0 s' hExec hs0 i hi
+        have hout := h s0 s' hExec hs0 i
+        simpa [hi] using hout
+      · intro h s0 s' hExec hs0 i
+        by_cases hi : mask i
+        · simpa [hi] using h s0 s' hExec hs0 i hi
+        · simp [hi]
+
+/-- A scalar Real output equals `expected` after executing `kernel` from `initialState`. -/
+def OutputScalar
+    (kernel : ComputeKernel) (initialState : BlockState)
+    (out : RegionName) (offset : Nat) (expected : ℝ) : Prop :=
+  Realizes kernel initialState
+    (fun _ : PUnit => some (out, offset))
+    (fun _ => expected)
+
+/-- A scalar Nat output equals `expected` after executing `kernel` from `initialState`. -/
 def OutputNatScalar
-    (ck : ComputeKernel) (s : BlockState)
+    (kernel : ComputeKernel) (initialState : BlockState)
     (out : RegionName) (offset : Nat) (expected : Nat) : Prop :=
-  ComputeKernel.ExecCorrect ck s (fun s' =>
-    s'.readMemValue .nat out offset = expected)
+  Realizes kernel initialState
+    (fun _ : PUnit => some (out, offset))
+    (fun _ => expected)
+
+@[simp] theorem OutputScalar_iff
+    (ck : ComputeKernel) (s : BlockState) (out : RegionName) (offset : Nat) (e : ℝ) :
+    OutputScalar ck s out offset e ↔
+      ComputeKernel.ExecCorrect ck s (fun s' => s'.readMem out offset = e) := by
+  simp [OutputScalar, Realizes]
+
+@[simp] theorem OutputNatScalar_iff
+    (ck : ComputeKernel) (s : BlockState) (out : RegionName) (offset : Nat) (e : Nat) :
+    OutputNatScalar ck s out offset e ↔
+      ComputeKernel.ExecCorrect ck s (fun s' => s'.readMemValue .nat out offset = e) := by
+  simp [OutputNatScalar, Realizes]
 
 /-- An ND Real tensor view matches `expected` after executing `ck` from `s`. -/
 def OutputTile {shape : TileShape}
     (ck : ComputeKernel) (s : BlockState)
     (view : TensorView shape) (expected : TileIndex shape → ℝ) : Prop :=
-  ComputeKernel.ExecCorrect ck s (fun s' =>
-    ∀ idx : TileIndex shape,
-      TensorView.observe (some s') view idx = some (expected idx))
+  Realizes ck s (WriteMap.ofTensorView view) expected
 
 /-- A 1D Real tensor view matches `expected` after executing `ck` from `s`. -/
 def OutputArray {n : Nat}
@@ -419,6 +556,13 @@ A paired 1D value/index output matches expected values on active lanes.
 This is the user-facing shape for kernels such as `tl.max(...,
 return_indices=True)`: the value channel is Real memory, while the index channel
 is typed Nat memory.
+
+Note: this is a documented heterogeneous-carrier special case. The `Realizes`
+surface dispatches on a single `α` per call; pair outputs need two readback
+types simultaneously (`ℝ` for value, `Nat` for index), so they keep a dedicated
+definition rather than routing through `Realizes`. A future revision could
+introduce a per-lane carrier typeclass to subsume this; not worth doing until
+a second heterogeneous-output kernel appears.
 -/
 def OutputPairWhere {n : Nat}
     (ck : ComputeKernel) (s : BlockState)
@@ -447,9 +591,9 @@ end ComputeCorrect
 
 namespace ComputeRefine
 
-/-! ## User-facing output-equivalence combinators -/
+/-! ## User-facing refinement realization combinators -/
 
-/-- Fully general two-state refinement surface. Prefer `Post` or an `Output*Eq`
+/-- Fully general two-state refinement surface. Prefer `Post` or a `Realizes`
 combinator when the theorem fixes one initial state. -/
 def General
     (lhs rhs : ComputeKernel)
@@ -461,6 +605,27 @@ def Post
     (lhs rhs : ComputeKernel) (s : BlockState)
     (rel : BlockState → BlockState → Prop) : Prop :=
   ComputeKernel.ExecRefine lhs rhs s rel
+
+/--
+Overloaded refinement-realization surface over state-free output write maps.
+
+The left and right kernels may write to different target cells. The carrier
+types are inferred independently from `relation`; use the same write map on
+both sides for ordinary same-buffer equivalence. Lanes where either side is
+`none` impose no output relation.
+-/
+def Realizes {ι : Type} {α β : Type}
+    [ComputeCorrect.OutputReadable α] [ComputeCorrect.OutputReadable β]
+    (lhs rhs : ComputeKernel) (initialState : BlockState)
+    (lhsWrite rhsWrite : ComputeCorrect.WriteMap ι)
+    (relation : ι → α → β → Prop) : Prop :=
+  ComputeKernel.ExecRefine lhs rhs initialState (fun lhs' rhs' =>
+    ∀ i : ι, match lhsWrite i, rhsWrite i with
+      | some lhsAddr, some rhsAddr =>
+          relation i
+            (ComputeCorrect.OutputReadable.read lhs' lhsAddr)
+            (ComputeCorrect.OutputReadable.read rhs' rhsAddr)
+      | _, _ => True)
 
 /-- Two kernels produce equal Real scalar observations after running from `s`. -/
 def OutputScalarEq

@@ -228,22 +228,22 @@ theorem softmax_kernels_refinement_view
     (blockSize : Nat) (hN : 0 < blockSize) (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : TensorView.loaded s (programTileView s xReg blockSize)
       (fun idx : TileIndex [blockSize] => xs idx.1)) :
-    ComputeRefine.General
-      ((naiveSoftmaxKernel xReg yReg blockSize))
-      ((stableSoftmaxKernel xReg yReg blockSize))
-      (fun s0 lhs' rhs' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          TensorView.observe (some lhs')
-              (programTileView s yReg blockSize) idx =
-          TensorView.observe (some rhs')
-              (programTileView s yReg blockSize) idx) := by
+    ComputeRefine.Realizes
+      (lhs := naiveSoftmaxKernel xReg yReg blockSize)
+      (rhs := stableSoftmaxKernel xReg yReg blockSize)
+      (initialState := s)
+      (lhsWrite := ComputeCorrect.WriteMap.ofTensorView
+        (programTileView s yReg blockSize))
+      (rhsWrite := ComputeCorrect.WriteMap.ofTensorView
+        (programTileView s yReg blockSize))
+      (relation := fun (_ : TileIndex [blockSize]) (lhs rhs : ℝ) => lhs = rhs) := by
   apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
   intro idx
   have hview := softmax_kernels_refinement_exec_view xReg yReg blockSize hN s xs h_x idx
   rw [hL, hR] at hview
-  simpa using hview
+  simpa [ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
+    observeTileAt] using hview
 
 end VeriTile.Examples

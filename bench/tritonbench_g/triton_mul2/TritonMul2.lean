@@ -73,22 +73,23 @@ theorem mul2_kernel_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs) :
-    ComputeCorrect.General
-      (mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK_SIZE,
-          let addr := s.pid * BLOCK_SIZE + i.val
-          observeAt (some s') out_ptr BLOCK_SIZE s.pid i
-            = some (if addr < n_elements then 2 * xs i else s.readMem out_ptr addr)) := by
+    ComputeCorrect.Realizes
+      (kernel := mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
+          (fun i => (out_ptr, s.pid * BLOCK_SIZE + i.val)))
+      (expected := fun i => 2 * xs i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro i
+  intro i hActive
   have hi := mul2_kernel_correct in_ptr0 out_ptr n_elements BLOCK_SIZE
     hBlockSize s xs h_x i
   rw [hExec] at hi
-  simpa using hi
+  simp [observeAt, hActive] at hi
+  exact hi
 
 /-- Algorithm-layer correctness for `mul2_inplace_kernel`. -/
 theorem mul2_inplace_kernel_correct
@@ -122,21 +123,22 @@ theorem mul2_inplace_kernel_compute_correct
     (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s ptr BLOCK_SIZE xs) :
-    ComputeCorrect.General
-      (mul2_inplace_kernel ptr n_elements BLOCK_SIZE)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK_SIZE,
-          let addr := s.pid * BLOCK_SIZE + i.val
-          observeAt (some s') ptr BLOCK_SIZE s.pid i
-            = some (if addr < n_elements then 2 * xs i else s.readMem ptr addr)) := by
+    ComputeCorrect.Realizes
+      (kernel := mul2_inplace_kernel ptr n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
+          (fun i => (ptr, s.pid * BLOCK_SIZE + i.val)))
+      (expected := fun i => 2 * xs i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro i
+  intro i hActive
   have hi := mul2_inplace_kernel_correct ptr n_elements BLOCK_SIZE
     hBlockSize s xs h_x i
   rw [hExec] at hi
-  simpa using hi
+  simp [observeAt, hActive] at hi
+  exact hi
 
 end VeriTile.Bench.TritonBenchG.TritonMul2

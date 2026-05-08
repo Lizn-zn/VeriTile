@@ -58,20 +58,21 @@ theorem add_kernel_compute_correct
     (s : BlockState) (as bs : Fin BLOCK → ℝ)
     (h_a : InputLoadedAt s A BLOCK as)
     (h_b : InputLoadedAt s B BLOCK bs) :
-    ComputeCorrect.General
-      (_add_kernel A B C size BLOCK)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK,
-          let addr := s.pid * BLOCK + i.val
-          observeAt (some s') C BLOCK s.pid i
-            = some (if addr < size then as i + bs i else s.readMem C addr)) := by
+    ComputeCorrect.Realizes
+      (kernel := _add_kernel A B C size BLOCK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK => s.pid * BLOCK + i.val < size)
+          (fun i => (C, s.pid * BLOCK + i.val)))
+      (expected := fun i => as i + bs i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro i
+  intro i hActive
   have hi := add_kernel_correct A B C size BLOCK hBlock s as bs h_a h_b i
   rw [hExec] at hi
-  simpa using hi
+  simp [observeAt, hActive] at hi
+  exact hi
 
 end VeriTile.Bench.TritonBenchG.VectorAdditionCustom

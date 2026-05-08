@@ -101,13 +101,66 @@ noncomputable def scaledLane_full {D : Nat} (xs : Fin D → ℝ) {n : Nat} (i_d 
   let raw := if h : i_d * (n+1) + i.val < D then xs ⟨i_d * (n+1) + i.val, h⟩ else 0
   if HAS_SCALE then raw * scale else raw
 
-/-- Spec for a tail/masked block: partial LSE over the valid lanes only. -/
+/-- Stable implementation form for a tail/masked block. User-facing block specs
+should use `blockLSE`; this definition is a proof bridge for max-shifted
+kernels. -/
 noncomputable def partialLSE_full {D : Nat} (xs : Fin D → ℝ) {n : Nat} (i_d : Nat)
     (h_tail : i_d * (n+1) < D) (HAS_SCALE : Bool) (scale : ℝ) : ℝ :=
   let vl := validLanes n D i_d
   let h_ne := validLanes_nonempty h_tail
   let m := vl.sup' h_ne (scaledLane_full xs i_d HAS_SCALE scale)
   m + Real.log (∑ i ∈ vl, Real.exp (scaledLane_full xs i_d HAS_SCALE scale i - m))
+
+/-- Standard complete row log-sum-exp over every lane in a row. -/
+noncomputable def LSE {D : Nat} (xs : Fin D → ℝ)
+    (HAS_SCALE : Bool) (scale : ℝ) : ℝ :=
+  let scaled := fun i : Fin D => if HAS_SCALE then xs i * scale else xs i
+  Real.log (∑ i, Real.exp (scaled i))
+
+/-- Standard block log-sum-exp over the valid lanes of a masked/tail block. -/
+noncomputable def blockLSE {D : Nat} (xs : Fin D → ℝ) {n : Nat} (i_d : Nat)
+    (_h_tail : i_d * (n+1) < D) (HAS_SCALE : Bool) (scale : ℝ) : ℝ :=
+  Real.log (∑ i ∈ validLanes n D i_d,
+    Real.exp (scaledLane_full xs i_d HAS_SCALE scale i))
+
+/-- Stable-form complete row log-sum-exp. This is an implementation/proof
+bridge for kernels that compute a max-shifted LSE; user-facing specs should use
+`LSE`. -/
+noncomputable def stableLSE {D : Nat} (xs : Fin D → ℝ) (hD : 0 < D)
+    (HAS_SCALE : Bool) (scale : ℝ) : ℝ :=
+  let scaled := fun i : Fin D => if HAS_SCALE then xs i * scale else xs i
+  let m := blockMax hD scaled
+  m + Real.log (∑ i, Real.exp (scaled i - m))
+
+/-- When the block size is exactly the row length and `i_d = 0`, the masked
+stable block form is the complete stable row LSE. -/
+theorem partialLSE_full_zero_self_eq_stableLSE {n : Nat}
+    (xs : Fin (n+1) → ℝ) (HAS_SCALE : Bool) (scale : ℝ) :
+    partialLSE_full (n := n) xs 0 (by simp) HAS_SCALE scale =
+      stableLSE xs (Nat.succ_pos n) HAS_SCALE scale := by
+  have h_valid : validLanes n (n+1) 0 = Finset.univ := by
+    ext i
+    simp [validLanes, Nat.lt_succ_iff.mp i.isLt]
+  have h_scaled :
+      (fun x : Fin (n+1) =>
+        if HAS_SCALE = true then
+          if (x : Nat) ≤ n then xs x * scale else 0
+        else
+          if (x : Nat) ≤ n then xs x else 0)
+      =
+      (fun x : Fin (n+1) =>
+        if HAS_SCALE = true then xs x * scale else xs x) := by
+    funext x
+    have hx : (x : Nat) ≤ n := Nat.lt_succ_iff.mp x.isLt
+    by_cases h : HAS_SCALE = true <;> simp [h, hx]
+  unfold partialLSE_full stableLSE blockMax
+  simp [h_valid, scaledLane_full, h_scaled]
+  congr 1
+  apply Finset.sum_congr rfl
+  intro x _hx
+  congr 1
+  have hx : (x : Nat) ≤ n := Nat.lt_succ_iff.mp x.isLt
+  by_cases h : HAS_SCALE = true <;> simp [h, hx]
 
 /-! ## Masked-lane arithmetic helpers -/
 
@@ -206,6 +259,15 @@ theorem log_sum_exp_shift_invariant {n : Nat} (hn : 0 < n) (x : Fin n → ℝ) (
   rw [Real.log_mul (ne_of_gt h_em_pos) (ne_of_gt h_sum_pos)]
   rw [Real.log_exp]
 
+/-- The stable max-shifted row LSE is equal to the standard mathematical LSE. -/
+theorem stableLSE_eq_LSE {D : Nat} (xs : Fin D → ℝ) (hD : 0 < D)
+    (HAS_SCALE : Bool) (scale : ℝ) :
+    stableLSE xs hD HAS_SCALE scale = LSE xs HAS_SCALE scale := by
+  unfold stableLSE LSE
+  exact (log_sum_exp_shift_invariant hD
+    (fun i : Fin D => if HAS_SCALE then xs i * scale else xs i)
+    (blockMax hD (fun i : Fin D => if HAS_SCALE then xs i * scale else xs i))).symm
+
 /-- Direct log-sum-exp. -/
 noncomputable def directLSESpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
   Real.log (∑ j, Real.exp (xs j))
@@ -247,6 +309,16 @@ theorem exp_partialLSE_full_eq_sum
   intro i _
   rw [← Real.exp_add]
   ring_nf
+
+/-- The stable block implementation form equals the standard block LSE. -/
+theorem partialLSE_full_eq_blockLSE
+    {D : Nat} (xs : Fin D → ℝ) {n : Nat} (i_d : Nat)
+    (h_tail : i_d * (n + 1) < D) (HAS_SCALE : Bool) (scale : ℝ) :
+    partialLSE_full xs i_d h_tail HAS_SCALE scale =
+      blockLSE xs i_d h_tail HAS_SCALE scale := by
+  rw [← Real.log_exp (partialLSE_full xs i_d h_tail HAS_SCALE scale)]
+  rw [exp_partialLSE_full_eq_sum xs i_d h_tail HAS_SCALE scale]
+  rfl
 
 /-- Membership in `validLanes n D i_d` is exactly the bound check. -/
 theorem mem_validLanes_iff {n D i_d : Nat} {i : Fin (n+1)} :

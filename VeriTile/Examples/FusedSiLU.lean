@@ -458,16 +458,15 @@ theorem silu_kernels_refinement_view
       (fun idx : TileIndex [blockSize] => residuals idx.1))
     (h_zRes : zReg ≠ residualReg)
     (h_siluRes : siluReg ≠ residualReg) :
-    ComputeRefine.General
-      ((fusedSiLUKernel xReg gateReg residualReg outReg blockSize))
-      (unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
-      (fun s0 lhs' rhs' =>
-        s0 = s →
-        ∀ idx : TileIndex [blockSize],
-          TensorView.observe (some lhs')
-              (programTileView s outReg blockSize) idx =
-          TensorView.observe (some rhs')
-              (programTileView s outReg blockSize) idx) := by
+    ComputeRefine.Realizes
+      (lhs := fusedSiLUKernel xReg gateReg residualReg outReg blockSize)
+      (rhs := unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize)
+      (initialState := s)
+      (lhsWrite := ComputeCorrect.WriteMap.ofTensorView
+        (programTileView s outReg blockSize))
+      (rhsWrite := ComputeCorrect.WriteMap.ofTensorView
+        (programTileView s outReg blockSize))
+      (relation := fun (_ : TileIndex [blockSize]) (lhs rhs : ℝ) => lhs = rhs) := by
   apply ComputeKernel.computeRefine_of_toAlgKernel rfl rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
@@ -476,6 +475,7 @@ theorem silu_kernels_refinement_view
     blockSize hN s xs gates residuals h_x h_g h_res h_zRes h_siluRes idx
   have hUnf := exec_unfusedSiLUKernel xReg gateReg residualReg zReg siluReg outReg blockSize s
   rw [← hUnf, hR] at hview
-  simpa [hL] using hview
+  simpa [hL, ComputeCorrect.WriteMap.ofTensorView, TensorView.observe,
+    observeTileAt] using hview
 
 end VeriTile.Examples

@@ -1,10 +1,10 @@
 /-
-VeriTile.Examples.FlashAttention1.V0.Steps
+VeriTile.Examples.FlashAttention1.Core.Steps
 
 Split-out support for FlashAttention-1 v0/full-tile proofs.
 -/
 
-import VeriTile.Examples.FlashAttention1.V0.PreLoop
+import VeriTile.Examples.FlashAttention1.Core.PreLoop
 
 namespace VeriTile.Examples
 

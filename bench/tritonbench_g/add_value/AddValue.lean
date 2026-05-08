@@ -66,22 +66,22 @@ theorem puzzle1_kernel_compute_correct
     (N BLOCK_SIZE : Nat) (value : ℝ) (hBlockSize : 0 < BLOCK_SIZE)
     (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs) :
-    ComputeCorrect.General
-      (puzzle1_kernel x_ptr output_ptr N BLOCK_SIZE value)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK_SIZE,
-          let addr := s.pid * BLOCK_SIZE + i.val
-          observeAt (some s') output_ptr BLOCK_SIZE s.pid i
-            = some (if addr < N then xs i + value
-                    else s.readMem output_ptr addr)) := by
+    ComputeCorrect.Realizes
+      (kernel := puzzle1_kernel x_ptr output_ptr N BLOCK_SIZE value)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < N)
+          (fun i => (output_ptr, s.pid * BLOCK_SIZE + i.val)))
+      (expected := fun i => xs i + value) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro i
+  intro i hActive
   have hi := puzzle1_kernel_correct x_ptr output_ptr N BLOCK_SIZE value
     hBlockSize s xs h_x i
   rw [hExec] at hi
-  simpa using hi
+  simp [observeAt, hActive] at hi
+  exact hi
 
 end VeriTile.Bench.TritonBenchG.AddValue

@@ -76,22 +76,22 @@ theorem add_kernel_compute_correct
     (s : BlockState) (xs ys : Fin BLOCK_SIZE → ℝ)
     (h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs)
     (h_y : InputLoadedAt s in_ptr1 BLOCK_SIZE ys) :
-    ComputeCorrect.General
-      (add_kernel in_ptr0 in_ptr1 out_ptr n_elements BLOCK_SIZE)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK_SIZE,
-          let addr := s.pid * BLOCK_SIZE + i.val
-          observeAt (some s') out_ptr BLOCK_SIZE s.pid i
-            = some (if addr < n_elements then xs i + ys i
-                    else s.readMem out_ptr addr)) := by
+    ComputeCorrect.Realizes
+      (kernel := add_kernel in_ptr0 in_ptr1 out_ptr n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
+          (fun i => (out_ptr, s.pid * BLOCK_SIZE + i.val)))
+      (expected := fun i => xs i + ys i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro i
+  intro i hActive
   have hi := add_kernel_correct in_ptr0 in_ptr1 out_ptr n_elements BLOCK_SIZE
     hBlockSize s xs ys h_x h_y i
   rw [hExec] at hi
-  simpa using hi
+  simp [observeAt, hActive] at hi
+  exact hi
 
 end VeriTile.Bench.TritonBenchG.AddExample

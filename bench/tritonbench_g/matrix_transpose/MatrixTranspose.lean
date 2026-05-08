@@ -76,14 +76,13 @@ theorem kernel_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [D_HEAD, SIZE_M] => outAddr out_stridex out_stridey idx)) :
-    ComputeCorrect.General
-      (kernel M Out matrix_stridex matrix_stridey out_stridex out_stridey
+    ComputeCorrect.Realizes
+      (kernel := kernel M Out matrix_stridex matrix_stridey out_stridex out_stridey
         SIZE_M D_HEAD)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [D_HEAD, SIZE_M],
-          s'.readMem Out (outAddr out_stridex out_stridey idx)
-            = s.readMem M (matrixAddr matrix_stridex matrix_stridey idx)) := by
+      (initialState := s)
+      (write := fun idx : TileIndex [D_HEAD, SIZE_M] =>
+          some (Out, outAddr out_stridex out_stridey idx))
+      (expected := fun idx => s.readMem M (matrixAddr matrix_stridex matrix_stridey idx)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0

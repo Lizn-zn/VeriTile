@@ -90,14 +90,14 @@ private theorem logsumexpGrid_input_loaded
   simpa [BlockState.withGridIndex, BlockState.withPids] using
     h_x ((s.withGridIndex idx).pids 0) j
 
-/-! ### Main tail-block correctness theorem -/
+/-! ### Private partial-block helper -/
 
 /-- **Tail-block correctness for `logsumexp_fwd_kernel`.**
 
 For pid `(i_n, i_d)` with at least one valid lane (`i_d * B < D`), the kernel
 writes `partialLSE_full xs i_d h_tail HAS_SCALE scale` to region `z`. Covers
 both `HAS_SCALE` branches and all mixed-tile masked-lane cases. -/
-theorem logsumexp_fwd_kernel_correct_full
+private theorem logsumexp_fwd_kernel_correct_full
     (x z : RegionName)
     {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
     (s : BlockState)
@@ -191,39 +191,81 @@ theorem logsumexp_fwd_kernel_correct_full
     rw [show rm i * scale = xs ⟨s.pids 1 * (n+1) + i.val, hi⟩ * scale from by congr 1; exact h_rm i hi]
     congr 1  -- denominators: proof irrelevance
 
-/-- **Compute-facing `ComputeCorrect` for `logsumexp_fwd_kernel`** in the
-tail-block case. This is the public wrapper around
-`logsumexp_fwd_kernel_correct_full`, so users can state the result through the
-same `ComputeCorrect` surface as the no-mask theorem. -/
-theorem logsumexp_fwd_kernel_compute_correct_full
+/-- **Complete row correctness for `logsumexp_fwd_kernel`.**
+
+This is the public correctness theorem for the kernel in the single-block
+configuration `D = B = n + 1` and `pid axis-1 = 0`. Under that launch shape the
+kernel writes the complete row log-sum-exp, not a per-block partial. -/
+theorem logsumexp_fwd_kernel_correct
     (x z : RegionName)
-    {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
     (s : BlockState)
-    (xs : Fin D → ℝ)
-    (h_x : ∀ j : Fin D, s.readMem x (s.pids 0 * D + j.val) = xs j)
-    (h_tail : s.pids 1 * (n + 1) < D) :
-    ComputeCorrect.General
-      (logsumexp_fwd_kernel x z D (n+1) HAS_SCALE scale)
-      (fun s0 s' =>
-        s0 = s →
-        s'.readMem z (s.pids 0 * ((D + n) / (n+1)) + s.pids 1)
-          = partialLSE_full xs (s.pids 1) h_tail HAS_SCALE scale) := by
+    (xs : Fin (n+1) → ℝ)
+    (h_x : ∀ j : Fin (n+1), s.readMem x (s.pids 0 * (n+1) + j.val) = xs j)
+    (h_pid1 : s.pids 1 = 0) :
+    (exec (logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale) s).map
+        (·.readMem z (s.pids 0)) =
+      some (LSE xs HAS_SCALE scale) := by
+  have h_tail : s.pids 1 * (n+1) < n+1 := by
+    simp [h_pid1]
+  have hview :=
+    logsumexp_fwd_kernel_correct_full x z n HAS_SCALE scale s xs h_x h_tail
+  have h_spec :
+      partialLSE_full xs (s.pids 1) h_tail HAS_SCALE scale =
+        LSE xs HAS_SCALE scale := by
+    have h_stable :
+        partialLSE_full xs (s.pids 1) h_tail HAS_SCALE scale =
+          stableLSE xs (Nat.succ_pos n) HAS_SCALE scale := by
+      simpa [h_pid1] using partialLSE_full_zero_self_eq_stableLSE xs HAS_SCALE scale
+    exact h_stable.trans (stableLSE_eq_LSE xs (Nat.succ_pos n) HAS_SCALE scale)
+  rw [h_spec] at hview
+  have h_div : (n + 1 + n) / (n + 1) = 1 := by
+    apply Nat.div_eq_of_lt_le
+    · simp
+    · omega
+  simpa [h_pid1, h_div, Nat.mul_one] using hview
+
+/-- **Compute-facing complete correctness for `logsumexp_fwd_kernel`.**
+
+The theorem is intentionally complete-row only: `D = B = n + 1`, so one Triton
+program covers the entire row and writes the standard mathematical `LSE` to
+`z[i_n]`. -/
+theorem logsumexp_fwd_kernel_compute_correct
+    (x z : RegionName)
+    (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (s : BlockState)
+    (xs : Fin (n+1) → ℝ)
+    (h_x : ∀ j : Fin (n+1), s.readMem x (s.pids 0 * (n+1) + j.val) = xs j)
+    (h_pid1 : s.pids 1 = 0) :
+    ComputeCorrect.Realizes
+      (kernel := logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale)
+      (initialState := s)
+      (write := fun _ : PUnit => some (z, s.pids 0))
+      (expected := fun _ => LSE xs HAS_SCALE scale) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  have hview := logsumexp_fwd_kernel_correct_full x z n HAS_SCALE scale s xs h_x h_tail
+  have hview :=
+    logsumexp_fwd_kernel_correct x z n HAS_SCALE scale s xs h_x h_pid1
   rw [hExec] at hview
-  simpa using hview
+  simpa [ComputeCorrect.Realizes, ComputeKernel.ExecCorrect] using hview
 
-/-- **Whole Triton-grid correctness for `logsumexp_fwd_kernel`.**
+/-- **Whole Triton-grid block-LSE correctness for `logsumexp_fwd_kernel`.**
 
 For launch grid `(N, cdiv(D, B))`, every program instance `(i_n, i_d)` writes
-the correct partial LSE for its row/block to
+the correct standard mathematical `blockLSE` for its row/block to
 `z[i_n * cdiv(D, B) + i_d]`. This theorem covers both full blocks and the tail
-block through the masked-lane theorem above. It deliberately stops at the
-Triton kernel boundary; it does not model the Python wrapper's later
-`z.logsumexp(-1)`. -/
-theorem logsumexp_fwd_kernel_grid_compute_correct
+block through the masked-lane theorem above. This is the faithful main theorem
+for the Triton kernel itself. It deliberately stops at the Triton kernel
+boundary; it does not model the Python wrapper's later
+`z.logsumexp(-1)`.
+
+Note: until VeriTile has a whole-grid `launchExec` returning a single merged
+final state, this theorem is stated in the per-program-local form
+`Kernel.ForAllProgramsSome` instead of the unified `ComputeCorrect.Realizes`
+surface. Single-program kernels in this file already use `Realizes` /
+`OutputScalar`; once the launcher lands, the grid case will move there too. -/
+theorem logsumexp_fwd_kernel_grid_blockLSE_correct
     (x z : RegionName)
     (N : Nat) {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
     (s : BlockState)
@@ -238,7 +280,8 @@ theorem logsumexp_fwd_kernel_grid_compute_correct
         let sIdx := s.withGridIndex idx
         let h_tail := logsumexpGrid_tail_lt s idx
         s'.readMem z (sIdx.pids 0 * ((D + n) / (n+1)) + sIdx.pids 1)
-          = partialLSE_full (xs (sIdx.pids 0)) (sIdx.pids 1) h_tail HAS_SCALE scale) := by
+          = blockLSE (n := n) (xs (sIdx.pids 0)) (sIdx.pids 1)
+            h_tail HAS_SCALE scale) := by
   intro idx
   let sIdx := s.withGridIndex idx
   have h_tail : sIdx.pids 1 * (n+1) < D := logsumexpGrid_tail_lt s idx
@@ -255,6 +298,8 @@ theorem logsumexp_fwd_kernel_grid_compute_correct
       refine ⟨final, ?_, ?_⟩
       · rfl
       rw [hExec] at hview
+      rw [partialLSE_full_eq_blockLSE
+        (xs (sIdx.pids 0)) (sIdx.pids 1) h_tail HAS_SCALE scale] at hview
       simpa [sIdx, h_tail] using hview
 
 end VeriTile.Bench.TritonBenchG.LogsumexpFwd

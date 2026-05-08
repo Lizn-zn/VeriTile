@@ -86,28 +86,25 @@ theorem fa1_boundaryD_refines_naive_reference_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.General
-      ((views.boundaryKernelD M Bd Bk numKVBlocks scale))
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [M, Bd],
-          ∀ hLt : s.pids 0 * M + idx.1.val < S_q,
-          ∀ hDIdx : idx.2.1.val < D,
-          observeTileAt
-              (some s')
-              views.outReg (views.outBlockOffsetD s M Bd) idx
-            = some (fa1NaiveReference4D Q4D K4D V4D scale
-                (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
-                 ⟨s.pids 0 * M + idx.1.val, hLt⟩,
-                 ⟨idx.2.1.val, hDIdx⟩, PUnit.unit))) := by
+    ComputeCorrect.Realizes
+      (kernel := views.boundaryKernelD M Bd Bk numKVBlocks scale)
+      (initialState := s)
+      (write := fun idx : { idx : TileIndex [M, Bd] //
+          s.pids 0 * M + idx.1.val < S_q ∧ idx.2.1.val < D } =>
+        some (views.outReg, (views.outBlockOffsetD s M Bd) idx.1))
+      (expected := fun idx =>
+        fa1NaiveReference4D Q4D K4D V4D scale
+          (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+           ⟨s.pids 0 * M + idx.1.1.val, idx.2.1⟩,
+           ⟨idx.1.2.1.val, idx.2.2⟩, PUnit.unit)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro idx hLt hDIdx
+  intro idx
   have hview := fa1_boundaryD_refines_naive_reference_exec_views hBk hSk hSkLe hDLe
-    views Q4D K4D V4D scale s hPidB hPidH hQ4D hK4D hV4D idx hLt hDIdx
+    views Q4D K4D V4D scale s hPidB hPidH hQ4D hK4D hV4D idx.1 idx.2.1 idx.2.2
   rw [hExec] at hview
-  simpa using hview
+  simpa [observeTileAt] using hview
 
 /-- Causal FA-1 boundary+D-tail refines the naive direct causal FA reference. -/
 theorem fa1_causal_boundaryD_refines_naive_reference_exec_views
@@ -151,27 +148,24 @@ theorem fa1_causal_boundaryD_refines_naive_reference_views
     (hQ4D : TensorView.loaded s views.qView Q4D)
     (hK4D : TensorView.loaded s views.kView K4D)
     (hV4D : TensorView.loaded s views.vView V4D) :
-    ComputeCorrect.General
-      ((views.causalBoundaryKernelD M Bd Bk numKVBlocks scale))
-      (fun s0 s' =>
-        s0 = s →
-        ∀ idx : TileIndex [M, Bd],
-          ∀ hLt : s.pids 0 * M + idx.1.val < S_q,
-          ∀ hDIdx : idx.2.1.val < D,
-          observeTileAt
-              (some s')
-              views.outReg (views.outBlockOffsetD s M Bd) idx
-            = some (fa1NaiveCausalReference4D Q4D K4D V4D scale
-                (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
-                 ⟨s.pids 0 * M + idx.1.val, hLt⟩,
-                 ⟨idx.2.1.val, hDIdx⟩, PUnit.unit))) := by
+    ComputeCorrect.Realizes
+      (kernel := views.causalBoundaryKernelD M Bd Bk numKVBlocks scale)
+      (initialState := s)
+      (write := fun idx : { idx : TileIndex [M, Bd] //
+          s.pids 0 * M + idx.1.val < S_q ∧ idx.2.1.val < D } =>
+        some (views.outReg, (views.outBlockOffsetD s M Bd) idx.1))
+      (expected := fun idx =>
+        fa1NaiveCausalReference4D Q4D K4D V4D scale
+          (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+           ⟨s.pids 0 * M + idx.1.1.val, idx.2.1⟩,
+           ⟨idx.1.2.1.val, idx.2.2⟩, PUnit.unit)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro idx hLt hDIdx
+  intro idx
   have hview := fa1_causal_boundaryD_refines_naive_reference_exec_views hBk hSk hSkLe hDLe
-    views Q4D K4D V4D scale s hPidB hPidH hQ4D hK4D hV4D idx hLt hDIdx
+    views Q4D K4D V4D scale s hPidB hPidH hQ4D hK4D hV4D idx.1 idx.2.1 idx.2.2
   rw [hExec] at hview
-  simpa using hview
+  simpa [observeTileAt] using hview
 
 end VeriTile.Examples

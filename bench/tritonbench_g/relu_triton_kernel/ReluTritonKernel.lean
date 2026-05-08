@@ -81,21 +81,22 @@ theorem relu_kernel_compute_correct
     (N block_size : Nat) (hBlockSize : 0 < block_size)
     (s : BlockState) (xs : Fin block_size → ℝ)
     (h_x : InputLoadedAt s x_ptr block_size xs) :
-    ComputeCorrect.General
-      (relu_kernel x_ptr out_ptr N block_size)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin block_size,
-          let addr := s.pid * block_size + i.val
-          observeAt (some s') out_ptr block_size s.pid i
-            = some (if s.pid = 0 ∧ addr < N then reluSpec (xs i)
-                    else s.readMem out_ptr addr)) := by
+    ComputeCorrect.Realizes
+      (kernel := relu_kernel x_ptr out_ptr N block_size)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin block_size => s.pid = 0 ∧ s.pid * block_size + i.val < N)
+          (fun i => (out_ptr, s.pid * block_size + i.val)))
+      (expected := fun i => reluSpec (xs i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  intro i
+  intro i hActive
   have hi := relu_kernel_correct x_ptr out_ptr N block_size hBlockSize s xs h_x i
   rw [hExec] at hi
-  simpa using hi
+  have hlt : i.val < N := by
+    simpa [hActive.1] using hActive.2
+  simpa [observeAt, hActive.1, hlt] using hi
 
 end VeriTile.Bench.TritonBenchG.ReluTritonKernel

@@ -1,944 +1,1436 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="utf-8" />
-<title>VeriTile — Architecture Overview</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<style>
-/* ---------- Typography & palette ---------- */
-:root {
-  --bg:      #f6f8fb;
-  --ink:     #1f2937;
-  --sub:     #4b5563;
-  --rule:    #d6dce3;
-  --card:    #ffffff;
-  --bd:      #c8d2df;
-  --code-bg: #eef1f6;
-  --blue:    #2e6fdb;
-  --green:   #129160;
-  --orange:  #c2410c;
-  --purple:  #7b3fa8;
-  --teal:    #0e7490;
-}
-html, body { background: var(--bg); }
-.remark-container { background: var(--bg); }
-.remark-slide-content {
-  background: var(--bg);
-  color: var(--ink);
-  font-family: "Inter", "Helvetica Neue", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-size: 22px;
-  line-height: 1.42;
-  padding: 36px 56px 44px 56px;
-  letter-spacing: -0.005em;
-}
-.remark-slide-content h1,
-.remark-slide-content h2,
-.remark-slide-content h3 { color: var(--ink); font-weight: 700; }
-.remark-slide-content h1 { font-size: 38px; margin: 0 0 0.15em; }
-.remark-slide-content h2 { font-size: 30px; margin: 0 0 0.4em; }
-.remark-slide-content h3 { font-size: 22px; margin: 0 0 0.3em; }
-.remark-slide-content code {
-  font-family: "JetBrains Mono", Menlo, Consolas, monospace;
-  font-size: 0.86em;
-  background: var(--code-bg);
-  padding: 1px 5px;
-  border-radius: 3px;
-}
-.remark-slide-content pre {
-  background: var(--code-bg);
-  border: 1px solid var(--bd);
-  border-radius: 6px;
-  padding: 14px 16px;
-  font-size: 16px;
-  line-height: 1.45;
-  overflow: auto;
-}
-.remark-slide-content pre code { background: none; padding: 0; font-size: 16px; }
-.remark-slide-content a { color: var(--blue); text-decoration: none; }
-.remark-slide-content ul, .remark-slide-content ol { margin: 0.2em 0 0.4em 1.1em; }
-.remark-slide-content li { margin: 0.18em 0; }
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>VeriTile : Triton, Proven</title><base href="./"><style>:root {
+    /** Typography **/
+    /* The font family used for headers, ToC entries, etc */
+    --verso-structure-font-family: "Helvetica Neue", "Segoe UI", "Roboto", Arial, sans-serif;
+    /* The font family used for body text */
+    --verso-text-font-family: "Helvetica Neue", "Segoe UI", "Roboto", Arial, sans-serif;
+    /* The font family used for code */
+    --verso-code-font-family: monospace;
 
-/* ---------- Slide chrome ---------- */
-.eyebrow {
-  font-size: 13px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  font-weight: 700;
-  color: var(--blue);
-  margin-bottom: 6px;
-}
-.rule {
-  height: 3px; width: 84px; background: var(--blue);
-  margin: 6px 0 18px 0; border-radius: 2px;
-}
-.footer {
-  position: absolute; bottom: 14px; left: 56px; right: 56px;
-  display: flex; justify-content: space-between;
-  font-size: 12px; color: var(--sub);
-}
-.footer .right { text-align: right; }
+    /** Text colors **/
+    --verso-text-color: black;
+    --verso-code-color: black;
+    --verso-structure-color: black;
 
-/* ---------- Layout helpers ---------- */
-.cols   { display: grid; gap: 14px; }
-.cols-2 { grid-template-columns: 1fr 1fr; }
-.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
-.cols-4 { grid-template-columns: repeat(4, 1fr); }
-.row    { display: flex; gap: 12px; align-items: stretch; }
+    /** Selected items (e.g. search results) */
+    --verso-selected-color: #def;
 
-/* ---------- Cards ---------- */
-.card {
-  background: var(--card);
-  border: 1px solid var(--bd);
-  border-radius: 8px;
-  padding: 14px 16px;
-  position: relative;
-}
-.card.tight { padding: 10px 12px; }
-.card.accent-blue   { border-left: 4px solid var(--blue); }
-.card.accent-green  { border-left: 4px solid var(--green); }
-.card.accent-orange { border-left: 4px solid var(--orange); }
-.card.accent-purple { border-left: 4px solid var(--purple); }
-.card.accent-teal   { border-left: 4px solid var(--teal); }
-.card .label {
-  font-size: 11px; letter-spacing: 0.10em; text-transform: uppercase;
-  font-weight: 700; margin-bottom: 6px;
-}
-.card.accent-blue   > .label { color: var(--blue); }
-.card.accent-green  > .label { color: var(--green); }
-.card.accent-orange > .label { color: var(--orange); }
-.card.accent-purple > .label { color: var(--purple); }
-.card.accent-teal   > .label { color: var(--teal); }
-.card ul { margin: 0 0 0 1.1em; }
-.card li { font-size: 16px; line-height: 1.4; margin: 4px 0; }
+    /** Message colors **/
+    /*
+    These colors are used to render Lean's feedback. They come in three severities and two
+    variants. The raw color itself is used for the text of a message of the indicated severity,
+    while the presence of such a message is indicated using the indicator color (e.g. via a
+    wavy underline or a bar in the margin).
+    */
+    --verso-info-color: black;
+    --verso-info-indicator-color: #4777ff;
+    --verso-warning-color: black;
+    --verso-warning-indicator-color: #e7a71d; /* 2.11 contrast ratio for white, 9.94 for black */
+    --verso-error-color: #cc0000;
+    --verso-error-indicator-color: #ff0000;
 
-/* ---------- Type / utility classes ---------- */
-.muted    { color: var(--sub); }
-.small    { font-size: 14px; }
-.tiny     { font-size: 12px; }
-.kbd      { font-family: "JetBrains Mono", Menlo, monospace; font-size: 0.92em; }
-.center   { text-align: center; }
-.right    { text-align: right; }
-.tag {
-  display: inline-block;
-  background: var(--blue); color: white;
-  padding: 2px 8px; border-radius: 10px;
-  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-}
-.tag.green  { background: var(--green); }
-.tag.orange { background: var(--orange); }
-.tag.purple { background: var(--purple); }
+    /** Code Highlighting **/
+    /*
+    These variables control the rendering of Lean code emitted by Verso. Each category that can be
+    highlighted supports the customization of color, weight, style, and family.
+    */
+    /* Constants (e.g. `List` or `id` or `none`) */
+    --verso-code-const-color: var(--verso-code-color);
+    --verso-code-const-weight: normal;
+    --verso-code-const-style: normal;
+    --verso-code-const-font-family: var(--verso-code-font-family);
 
-/* ---------- Pipeline / flow ---------- */
-.flow {
-  display: flex; align-items: stretch; gap: 6px;
-  margin: 10px 0;
+    /* Keywords/atoms (e.g. `for` or `def` or `induction`) */
+    --verso-code-keyword-color: var(--verso-code-color);
+    --verso-code-keyword-weight: bold;
+    --verso-code-keyword-style: normal;
+    --verso-code-keyword-font-family: var(--verso-code-font-family);
+
+    /* Local bindings (e.g. `x` in `let x := 5`) */
+    --verso-code-var-color: var(--verso-code-color);
+    --verso-code-var-weight: normal;
+    --verso-code-var-style: italic;
+    --verso-code-kw-font-family: var(--verso-code-font-family);
 }
-.flow-stage {
-  flex: 1;
-  background: var(--card);
-  border: 1px solid var(--bd);
-  border-radius: 8px;
-  padding: 10px 10px;
-  text-align: center;
-  font-size: 13px;
-  position: relative;
-}
-.flow-stage strong {
-  display: block;
-  font-family: "JetBrains Mono", Menlo, monospace;
-  font-size: 13px;
-  margin-bottom: 4px;
-  color: var(--ink);
-}
-.flow-stage .muted { font-size: 12px; }
-.flow-stage.b1 { border-top: 3px solid var(--blue); }
-.flow-stage.b2 { border-top: 3px solid var(--orange); }
-.flow-stage.b3 { border-top: 3px solid var(--green); }
-.flow-stage.b4 { border-top: 3px solid var(--purple); }
-.flow-arrow {
-  align-self: center;
-  font-size: 20px;
-  color: #9aa6b8;
-  width: 18px;
-  text-align: center;
+</style><script>
+      
+document.addEventListener("DOMContentLoaded", () => {
+    for (const m of document.querySelectorAll(".math.inline")) {
+        katex.render(m.textContent, m, {throwOnError: false, displayMode: false});
+    }
+    for (const m of document.querySelectorAll(".math.display")) {
+        katex.render(m.textContent, m, {throwOnError: false, displayMode: true});
+    }
+});
+</script>
+    
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js" integrity="sha384-zbcZAIxlvJtNE3Dp5nxLXdXtXyxwOdnILY1TDPVmKFhl4r4nSUG1r8bcFXGVa4Te" crossorigin="anonymous"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-clike.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+    <link rel="stylesheet" href="static/slides.css">
+    </head>
+  <body class="deck">
+    <main id="deck-root"><article><h1>
+          VeriTile : Triton, Proven</h1>
+        <p>
+          — Automated Verification for Triton GPU kernels in Lean 4</p>
+        <section>
+          <h2>
+            Worked Example — Stable Softmax</h2>
+          <p>
+            <code>Triton source  →  embedded in Lean 4  →  theorem proved by an LLM.</code></p>
+          <div class="cols cols-3" id="--verso-component-0">
+            <div class="card card-blue" id="--verso-component-1">
+              <p>
+                <strong>1 · Triton source</strong></p>
+              <pre>"""
+Stable Softmax (row-wise, masked).
+  x, y  : input/output ptr (N floats)
+  N     : runtime row length
+  BLOCK : compile-time block size (≥ N)
+  out   : y[i] = exp(x[i]) / Σ exp(x[j])
+    (via `y`, no return — GPU kernel)
+"""
+@triton.jit
+def softmax(x, y, N, BLOCK: tl.constexpr):
+  pid  = tl.program_id(0)
+  cols = tl.arange(0, BLOCK)
+  mask = cols &lt; N
+  offs = pid * N + cols
+  a    = tl.load(x + offs,
+    mask=(cols &lt; N), other=-float("inf"))
+  m    = tl.max(a, axis=0)
+  e    = tl.exp(a - m)
+  s    = tl.sum(e, axis=0)
+  tl.store(y + offs, e / s, mask=mask)
+</pre><p>
+                The actual <code>.py</code> kernel a Triton user ships.</p>
+              </div>
+            <div class="card card-orange" id="--verso-component-2">
+              <p>
+                <strong>2 · Embed the kernel · State the spec</strong></p>
+              <pre>/- Embed in Lean 4 — `triton { ... }` -/
+def stable_sm (xReg yReg : RegionName)
+    (N BLOCK : Nat) : Kernel := triton {
+  &lt;- paste the .py body here -&gt;
 }
 
-/* ---------- Title slide ---------- */
-.title-slide {
-  background: var(--bg);
-  padding-left: 70px;
-}
-.title-slide .left-bar {
-  position: absolute; left: 0; top: 0; bottom: 0;
-  width: 12px; background: var(--blue);
-}
-.title-slide h1 {
-  font-size: 96px; line-height: 1; margin: 0 0 8px 0; letter-spacing: -0.03em;
-}
-.title-slide .lede { font-size: 28px; color: var(--ink); }
-.title-slide .blurb { font-size: 18px; color: var(--sub); margin-top: 24px; max-width: 720px; }
-
-/* ---------- Diagrams ---------- */
-.layer-stack { display: flex; flex-direction: column; gap: 8px; }
-.layer-stack .layer {
-  background: var(--card); border: 1px solid var(--bd); border-radius: 8px;
-  padding: 10px 14px;
-}
-.layer .layer-title {
-  font-family: "JetBrains Mono", Menlo, monospace;
-  font-size: 14px; font-weight: 700;
-}
-.layer .layer-body { font-size: 14px; color: var(--sub); margin-top: 2px; }
-.layer.b1 { border-left: 4px solid var(--blue); }
-.layer.b2 { border-left: 4px solid var(--orange); }
-.layer.b3 { border-left: 4px solid var(--green); }
-.layer.b4 { border-left: 4px solid var(--purple); }
-
-.numbox {
-  background: var(--card); border: 1px solid var(--bd); border-radius: 8px;
-  padding: 18px 16px; text-align: center;
-}
-.numbox .num { font-size: 48px; font-weight: 800; line-height: 1; }
-.numbox.b1 { border-top: 4px solid var(--blue); }
-.numbox.b1 .num { color: var(--blue); }
-.numbox.b2 { border-top: 4px solid var(--orange); }
-.numbox.b2 .num { color: var(--orange); }
-.numbox.b3 { border-top: 4px solid var(--green); }
-.numbox.b3 .num { color: var(--green); }
-.numbox.b4 { border-top: 4px solid var(--purple); }
-.numbox.b4 .num { color: var(--purple); }
-.numbox .lab { font-size: 13px; color: var(--sub); margin-top: 6px; }
-
-/* ---------- Hide remark page numbers (we draw our own) ---------- */
-.remark-slide-number { display: none; }
-</style>
-</head>
-<body>
-
-<textarea id="source">
-
-name: title
-class: title-slide
-
-<div class="left-bar"></div>
-
-.eyebrow[Project overview]
-
-# VeriTile
-
-.lede[Translation validation for Triton GPU kernels, in Lean 4.]
-
-.blurb[
-Embed a small Triton-style kernel language inside Lean. Give it operational
-semantics. Then prove kernel-pair refinement and end-to-end correctness against
-mathematical specs — with an LLM agent driving the proofs.
-]
-
-<div class="footer"><span></span><span class="right">VeriTile · Architecture walkthrough</span></div>
-
----
-name: motivation
-
-.eyebrow[Motivation]
-# What VeriTile sets out to do
-<div class="rule"></div>
-
-.cols.cols-2[
-.card.accent-blue[
-.label[The problem]
-Triton powers production attention, GEMM, normalization, SSM, RoPE,
-MoE routing — and yet there is no machine-checked way to certify
-that an *optimized* Triton kernel computes the same thing as the
-naive reference.
-
-Engineers re-derive the algebra by hand for every variant, and a
-single off-by-one (`mask=`, `other=`, partial KV block, D-tail) can
-silently change results.
-]
-.card.accent-orange[
-.label[Our approach]
-- Embed a Triton-style DSL inside Lean 4.
-- Give the embedded kernel formal **operational semantics**.
-- Prove **kernel-pair refinement** and **correctness** against math specs.
-- Use an LLM agent (`scripts/prove.sh` → `/lean4:autoprove`) to drive proofs.
-]
-]
-
-<div style="height:14px"></div>
-
-.card.accent-green[
-.label[What success looks like]
-A Triton engineer pastes a real `.py` kernel, annotates a math spec, and
-VeriTile + LLM closes the proof. Output: a Lean theorem stating that the
-kernel refines its specification — for every input, every program_id, every
-tile.
-.muted[ No hand-picked toy theorems. Production kernels with real loops,
-masks, ND tiles, strided layouts. ]
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">2 / 18</span></div>
-
----
-name: north-star
-
-.eyebrow[Design principles]
-# Four axes that must advance together
-<div class="rule"></div>
-
-.cols.cols-2[
-.card.accent-blue[
-.label[1 · Real DSL surface]
-Accept the ops, control flow, memory and concurrency primitives that
-production `.py` kernels actually use — not a minimal subset.
-.muted[ DSL surface stays close to real Triton; user keeps writing
-Triton, not Lean. ]
-]
-.card.accent-orange[
-.label[2 · Production-scale algorithms]
-Full FA-1 forward + backward, FA-2, fused-norm family, grouped GEMM,
-SSM, RoPE, GQA / MQA / MLA — not 8 hand-picked theorems.
-.muted[ Every production kernel needs forward + backward + math equivalence. ]
-]
-.card.accent-green[
-.label[3 · Triton-user friendliness]
-Move the user's delta from "rewrite into the embedding" toward
-"paste-in `.py`" with near-zero changes (Python lifter is roadmap).
-]
-.card.accent-purple[
-.label[4 · Production horizontal infra]
-Algorithm/Compute split, Memory frame, Concurrency refinement,
-ND-general framework — no ad-hoc dimension shortcuts.
-]
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">3 / 18</span></div>
-
----
-name: two-layer
-
-.eyebrow[Architecture lock-in (since v0.2)]
-# Two-layer architecture: Lean proof  ⟂  external testing
-<div class="rule"></div>
-
-.cols.cols-2[
-.card.accent-blue[
-.label[Algorithm layer  ·  Lean proof]
-**`ProjectedCorrect ck post`**
-
-Real / Int / Nat semantics. No IEEE rounding, no NaN.
-- `eraseDType`: `fp32 → ℝ`, `int32 → ℤ`, `uint32 → ℕ`.
-- Computable bit-pattern decoder for `fp32` constants.
-- Existing `Kernel.Correct` proofs reused on the algorithm side.
-
-Catches **algorithm-structure bugs** — every wrong recurrence, wrong
-masking, wrong reduction is a failed Lean proof.
-]
-.card.accent-orange[
-.label[Compute layer  ·  External testing]
-**Compute-gap checking for required contracts.**
-
-`ComputeKernel` behavior ↔ projected `AlgKernel` behavior, ε-bound match.
-
-- Per-op / per-kernel `ComputeGapContract`.
-- Recorded in Lean through `GapPolicy`.
-- **Not a Lean theorem** — an externally checked bridge by design.
-
-Catches **IEEE-754 edge cases** (NaN, denormal, overflow, fast-math).
-]
-]
-
-<div style="height:6px"></div>
-
-.card[
-.label.muted[The bridge between the two layers is empirical, by design]
-IEEE-754 formalization (NaN propagation, denormals, rounding modes, hardware
-dot precision, fast-math, exception flags) is **permanently outside Lean
-proof scope**. There is no planned bridge theorem connecting compute
-execution to Lean-internal algorithm execution. *VeriTile-certified* = both
-layers green.
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">4 / 18</span></div>
-
----
-name: pipeline
-
-.eyebrow[End-to-end pipeline]
-# From paste-in kernel to machine-checked theorem
-<div class="rule"></div>
-
-<div class="flow">
-  <div class="flow-stage b1"><strong>triton { … }</strong><span class="muted">surface syntax</span></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-stage b1"><strong>DSL macro</strong><span class="muted">elaboration + typing</span></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-stage b2"><strong>ComputeKernel</strong><span class="muted">fp32 / int32 / uint32 + bitcast</span></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-stage b2"><strong>toAlgorithm?</strong><span class="muted">Except EraseDTypeError</span></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-stage b3"><strong>AlgKernel</strong><span class="muted">ℝ / ℤ / ℕ AST</span></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-stage b3"><strong>exec</strong><span class="muted">evalOp · stepStmt · forLoop_inv</span></div>
-  <div class="flow-arrow">→</div>
-  <div class="flow-stage b4"><strong>Theorem</strong><span class="muted">Correct / Refine</span></div>
-</div>
-
-<div style="height:8px"></div>
-
-**Cross-cutting subsystems plugged into the same `BlockState`:**
-
-.cols.cols-4[
-.card.accent-blue.tight[
-.label[Memory]
-Bounds · Footprint · Frame · Typing · View
-]
-.card.accent-orange.tight[
-.label[Concurrency]
-Trace · Refinement · Atomic · Discipline
-]
-.card.accent-green.tight[
-.label[Launch]
-Grid (ND program_id) · Composition (disjoint merge)
-]
-.card.accent-purple.tight[
-.label[LoopInvariant]
-`forLoop_inv` master induction lemma
-]
-]
-
-.muted.small[ Theorems stack on top of the same shared interpreter — adding a new op or kernel has bounded blast radius. ]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">5 / 18</span></div>
-
----
-name: dsl
-
-.eyebrow[Module · `VeriTile/Triton/DSL/`]
-# DSL layer — accept Triton-like surface syntax
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Input]
-- User-written `triton { … }` blocks
-- Sugars: `tl.load / tl.store / tl.dot / tl.where / tl.sum / tl.max / tl.exp / tl.arange / tl.program_id`
-- Kwargs: `mask=`, `other=`, `axis=`, `keep_dims=`
-- Region-polymorphic kernels via `$(xReg)`, `$(yReg)`
-]
-.card.accent-orange[
-.label[What we did]
-- `Syntax` + `Expansion`: macro elaborator desugars into typed `Op / Stmt`
-- `Typing`: infers `TileDType × TileShape`, inserts `NumericDType / Broadcast` evidence
-- `Metadata`: kwargs, axis, keep_dims
-- Optional well-formedness checker
-]
-.card.accent-green[
-.label[Output]
-- Typed AST: `Op : TileDType → TileShape → Type`
-- `Stmt` list (assigns, stores, forLoops)
-- A `Kernel` record `{inputs, outputs, body}`
-- Same kernel re-instantiable on any region names
-]
-]
-
-```lean
-def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
+/- Spec — if xReg holds the input xs,
+   then after running stable_sm,
+   yReg[i] equals softmax(xs)[i]
+   at every row index `i`. -/
+theorem stable_sm_correct
+  (xReg yReg : RegionName) (N BLOCK : Nat)
+  (hN : 0 &lt; N) (hBN : N ≤ BLOCK)
+  (s : BlockState) (xs : Fin N → ℝ)
+  (h : InputLoadedAt s xReg N xs) :
+  ∀ i : Fin N,
+    observeAt
+    (exec (stable_sm xReg yReg N BLOCK) s)
+    yReg N s.pid i
+    = some (softmaxSpec xs i)
+</pre><p>
+                Mechanical translation, fully automated.</p>
+              </div>
+            <div class="card card-green" id="--verso-component-3">
+              <p>
+                <strong>3 · Theorem + LLM-generated proof</strong></p>
+              <pre>/- Prove the correctness of stable sm.
+   The produced formal proof is
+   checked by Lean 4 theorem prover -/
+theorem stable_sm_correct (...) := by
+  -- 0. Open the recursion on `0 &lt; N`.
+  obtain ⟨n, rfl⟩ :=
+    Nat.exists_eq_succ_of_ne_zero hN.ne'
+  intro i
+  -- 1. Reduce the masked kernel exec at
+  --    row index `i` to its per-row spec.
+  have hRed :=
+    stable_sm_reduce_at xReg yReg
+      (n+1) BLOCK hN hBN s xs h i
+  rw [hRed]
+  -- 2. Unfold the spec helpers.
+  unfold stableSpec softmaxSpec
+  -- 3. Apply the math identity:
+  --    stable = softmax (after row-max).
+  have hEq := stable_eq_softmax xs hN
+  exact congrArg some (congrFun hEq i)
+</pre><p>
+                Agent generates the proof, fully automated.</p>
+              </div>
+            </div>
+          </section>
+        <section>
+          <h2>
+            The problem with optimizing Triton kernels today</h2>
+          <p>
+            <code>Performance up · correctness on a prayer.</code></p>
+          <div class="flow-today" id="--verso-component-4">
+            <ul>
+              <li>
+                <p>
+                  <code>.py</code> kernel</p>
+                </li>
+              <li>
+                <p>
+                  PyTorch reference</p>
+                </li>
+              <li>
+                <p>
+                  sample a few inputs</p>
+                </li>
+              <li>
+                <p>
+                  ship</p>
+                </li>
+              <li>
+                <p>
+                  silent bug?</p>
+                </li>
+              </ul>
+            </div>
+          <div class="flow-veritile" id="--verso-component-5">
+            <ul>
+              <li>
+                <p>
+                  <code>.py</code> kernel</p>
+                </li>
+              <li>
+                <p>
+                  embedded DSL</p>
+                </li>
+              <li>
+                <p>
+                  Lean theorem</p>
+                </li>
+              <li>
+                <p>
+                  ship</p>
+                </li>
+              <li>
+                <p>
+                  ✓ proven</p>
+                </li>
+              </ul>
+            </div>
+          <div class="card card-blue" id="--verso-component-6">
+            <p>
+              <strong>Workflow today</strong></p>
+            <p>
+              Triton engineers iterate fast — naive → stable → online → fused. Each
+optimization rewrites the algebra; equivalence is checked by hand, then
+by sampling a few inputs against PyTorch or <code>flash-attn</code>. Once the sample
+passes, the kernel ships.</p>
+            </div>
+          <div class="card card-orange" id="--verso-component-7">
+            <p>
+              <strong>Where bugs hide</strong></p>
+            <p>
+              A single off-by-one in <code>mask=</code> / <code>other=</code>, a partial KV block, a D-tail
+boundary, a wrong reduction axis — any of these silently changes the
+result. Sample testing can pass while the algorithm is subtly wrong on
+inputs that never get generated.</p>
+            </div>
+          <div class="card card-green" id="--verso-component-8">
+            <p>
+              <strong>What's at stake</strong></p>
+            <p>
+              Attention, GEMM, fused-norm, SSM kernels sit on the production hot path.
+A silent regression shifts downstream model behavior; debug cost is
+enormous and rollback hits real users.</p>
+            </div>
+          <div class="card card-muted" id="--verso-component-9">
+            <p>
+              <strong>This isn't a Triton problem — it's a verification gap. We close it.</strong></p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Features — what we do, what we don't</h2>
+          <p>
+            <code>Bounded by what we prove · intentional in what we leave to testing.</code></p>
+          <div class="cols cols-2" id="--verso-component-10">
+            <div class="card card-blue" id="--verso-component-11">
+              <p>
+                <strong>We do this</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <strong>Proving-ensured correctness</strong> — every optimization is a Lean theorem,
+  mechanically checked against its math reference.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Triton-faithful semantics</strong> — full <code>mask=</code> / <code>other=</code>, ND broadcasting,
+  reductions, <code>forLoop_inv</code> master induction.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Triton-user friendly DSL</strong> — <code>triton { ... }</code> reads like <code>.py</code>,
+  region-polymorphic, kwargs supported.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>LLM-driven proofs</strong> — <code>scripts/prove.sh</code> → <code>/lean4:autoprove</code>,
+  multi-cycle iteration, deep-mode escalation.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-muted" id="--verso-component-12">
+              <p>
+                <strong>We explicitly don't</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Trust differential testing alone — sampling can't cover the algorithm.</p>
+                  </li>
+                <li>
+                  <p>
+                    Cherry-pick a "simplified Triton" subset — fidelity to real Triton
+  is mandatory.</p>
+                  </li>
+                <li>
+                  <p>
+                    Hand-write proofs for every kernel — the LLM does it.</p>
+                  </li>
+                <li>
+                  <p>
+                    Formalize IEEE-754 — out of Lean scope by design; the compute layer
+  validates fp behavior empirically.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <p>
+            <strong>What we do is bounded; what we don't is intentional.</strong></p>
+          </section>
+        <section>
+          <h2>
+            Two-layer architecture: Lean proof  ⟂  external testing</h2>
+          <div class="cols cols-2" id="--verso-component-13">
+            <div class="card card-blue" id="--verso-component-14">
+              <p>
+                <strong>Algorithm layer · Lean proof</strong></p>
+              <p>
+                <code>ProjectedCorrect ck post</code></p>
+              <p>
+                Real / Int / Nat semantics. No IEEE rounding, no NaN.</p>
+              <ul>
+                <li>
+                  <p>
+                    <code>eraseDType</code>: <code>fp32 → ℝ</code>, <code>int32 → ℤ</code>, <code>uint32 → ℕ</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Computable bit-pattern decoder for <code>fp32</code> constants.</p>
+                  </li>
+                <li>
+                  <p>
+                    Existing <code>Kernel.Correct</code> proofs reused on the algorithm side.</p>
+                  </li>
+                </ul>
+              <p>
+                Catches <strong>algorithm-structure bugs</strong> — every wrong recurrence, wrong
+masking, wrong reduction is a failed Lean proof.</p>
+              </div>
+            <div class="card card-orange" id="--verso-component-15">
+              <p>
+                <strong>Compute layer · External testing</strong></p>
+              <p>
+                Compute-gap checking for required contracts.</p>
+              <p>
+                <code>ComputeKernel</code> behavior ↔ projected <code>AlgKernel</code> behavior, ε-bound match.</p>
+              <ul>
+                <li>
+                  <p>
+                    Per-op / per-kernel <code>ComputeGapContract</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Recorded in Lean through <code>GapPolicy</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Not a Lean theorem</strong> — an externally checked bridge by design.</p>
+                  </li>
+                </ul>
+              <p>
+                Catches <strong>IEEE-754 edge cases</strong> (NaN, denormal, overflow, fast-math).</p>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-16">
+            <p>
+              The bridge between the two layers is empirical, by design. IEEE-754
+formalization is permanently outside Lean proof scope. <strong>VeriTile-certified</strong>
+= both layers green.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            End-to-end pipeline</h2>
+          <p>
+            The user's <code>triton { ... }</code> source flows through seven typed stages before
+becoming a Lean theorem:</p>
+          <div class="pipeline" id="--verso-component-17">
+            <ul>
+              <li>
+                <p>
+                  <code>triton { … }</code> — surface syntax</p>
+                </li>
+              <li>
+                <p>
+                  DSL macro — elaboration + typing</p>
+                </li>
+              <li>
+                <p>
+                  <code>ComputeKernel</code> — fp32 / int32 / uint32 + bitcast</p>
+                </li>
+              <li>
+                <p>
+                  <code>toAlgorithm?</code> — <code>Except EraseDTypeError</code></p>
+                </li>
+              <li>
+                <p>
+                  <code>AlgKernel</code> — ℝ / ℤ / ℕ AST</p>
+                </li>
+              <li>
+                <p>
+                  <code>exec</code> — <code>evalOp</code> · <code>stepStmt</code> · <code>forLoop_inv</code></p>
+                </li>
+              <li>
+                <p>
+                  Theorem — <code>Correct</code> / <code>Refine</code></p>
+                </li>
+              </ul>
+            </div>
+          <p>
+            Cross-cutting subsystems plug into the same <code>BlockState</code>:</p>
+          <div class="cols cols-2" id="--verso-component-18">
+            <div class="card card-blue" id="--verso-component-19">
+              <p>
+                <strong>Memory</strong> — <code>Bounds</code> · <code>Footprint</code> · <code>Frame</code> · <code>Typing</code> · <code>View</code></p>
+              </div>
+            <div class="card card-orange" id="--verso-component-20">
+              <p>
+                <strong>Concurrency</strong> — <code>Trace</code> · <code>Refinement</code> · <code>Atomic</code> · <code>Discipline</code></p>
+              </div>
+            </div>
+          <div class="cols cols-2" id="--verso-component-21">
+            <div class="card card-green" id="--verso-component-22">
+              <p>
+                <strong>Launch</strong> — <code>Grid</code> (ND <code>program_id</code>) · <code>Composition</code> (disjoint merge)</p>
+              </div>
+            <div class="card card-purple" id="--verso-component-23">
+              <p>
+                <strong>LoopInvariant</strong> — <code>forLoop_inv</code> master induction lemma</p>
+              </div>
+            </div>
+          </section>
+        <section>
+          <h2>
+            DSL layer — accept Triton-like surface syntax</h2>
+          <p>
+            <code>VeriTile/Triton/DSL/</code></p>
+          <div class="cols cols-3" id="--verso-component-24">
+            <div class="card card-blue" id="--verso-component-25">
+              <p>
+                <strong>Input</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    User-written <code>triton { ... }</code> blocks.</p>
+                  </li>
+                <li>
+                  <p>
+                    Sugars: <code>tl.load / tl.store / tl.dot / tl.where / tl.sum / tl.max / tl.exp / tl.arange / tl.program_id</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Kwargs: <code>mask=</code>, <code>other=</code>, <code>axis=</code>, <code>keep_dims=</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Region-polymorphic kernels via <code>$(xReg)</code>, <code>$(yReg)</code>.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-26">
+              <p>
+                <strong>What we did</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>Syntax</code> + <code>Expansion</code>: macro elaborator desugars into typed <code>Op / Stmt</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>Typing</code>: infers <code>TileDType × TileShape</code>, inserts <code>NumericDType / Broadcast</code> evidence.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>Metadata</code>: kwargs, axis, <code>keep_dims</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Optional well-formedness checker.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-27">
+              <p>
+                <strong>Output</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Typed AST: <code>Op : TileDType → TileShape → Type</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>Stmt</code> list (assigns, stores, forLoops).</p>
+                  </li>
+                <li>
+                  <p>
+                    A <code>Kernel</code> record <code>{inputs, outputs, body}</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Same kernel re-instantiable on any region names.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <pre>def naiveSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : Kernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(N) + tl.arange($(N))
   x    := tl.load($(xReg) + offs)
   e    := tl.exp(x);  s := tl.sum(e);  y := e / s
   tl.store($(yReg) + offs, y)
 }
-```
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">6 / 18</span></div>
-
----
-name: core
-
-.eyebrow[Module · `VeriTile/Triton/Core/`]
-# Core AST — types, shapes, and the typed `Op`
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Input]
-- AST nodes from the DSL macro
-- User-supplied dtype: `.real / .nat / .int / .bool`
-- User-supplied shape: `.scalar / .vec n / .mat m n / ND`
-]
-.card.accent-orange[
-.label[What we did]
-- `TileDType / TileShape / TileIndex / TileCarrier`
-- `Tile` = `TileIndex shape → TileCarrier dtype`
-- `Op : TileDType → TileShape → Type` indexed by both — no existential wrapper
-- `Stmt` is the existential boundary (assign / store / forLoop)
-]
-.card.accent-green[
-.label[Output]
-- Fully-typed kernel structure used by every layer
-- Smart constructors: `Tile.scalar / Tile.vec / Tile.mat`
-- `bop / uop / cop` with `NumericDType` + `Broadcast` evidence
-- `Kernel = { inputs, outputs, body : List Stmt }`
-]
-]
-
-```lean
-inductive Op : TileDType → TileShape → Type
+</pre></section>
+        <section>
+          <h2>
+            Core AST — types, shapes, and the typed <code>Op</code></h2>
+          <p>
+            <code>VeriTile/Triton/Core/</code></p>
+          <div class="cols cols-3" id="--verso-component-28">
+            <div class="card card-blue" id="--verso-component-29">
+              <p>
+                <strong>Input</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    AST nodes from the DSL macro.</p>
+                  </li>
+                <li>
+                  <p>
+                    User-supplied dtype: <code>.real / .nat / .int / .bool</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    User-supplied shape: <code>.scalar / .vec n / .mat m n / ND</code>.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-30">
+              <p>
+                <strong>What we did</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>TileDType / TileShape / TileIndex / TileCarrier</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>Tile</code> = <code>TileIndex shape → TileCarrier dtype</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>Op : TileDType → TileShape → Type</code> indexed by both — no existential wrapper.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>Stmt</code> is the existential boundary (assign / store / forLoop).</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-31">
+              <p>
+                <strong>Output</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Fully-typed kernel structure used by every layer.</p>
+                  </li>
+                <li>
+                  <p>
+                    Smart constructors: <code>Tile.scalar / Tile.vec / Tile.mat</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>bop / uop / cop</code> with <code>NumericDType</code> + <code>Broadcast</code> evidence.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>Kernel = { inputs, outputs, body : List Stmt }</code>.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <pre>inductive Op : TileDType → TileShape → Type
   | const     (x : ℝ)                            : Op .real .scalar
   | arange    (n : Nat)                          : Op .nat  (.vec n)
   | add  {α o} (h : NumericDType α)              : Op α o → Op α o → Op α o
   | load      (region) (addr : Op .nat shape)    : Op .real shape
   | dot       …
   -- Type indices flow through every layer; no dynamic tag, no recovery step.
-```
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">7 / 18</span></div>
-
----
-name: compute-kernel
-
-.eyebrow[Module · `VeriTile/Triton/Float/` + `Core/Ast.lean`]
-# `ComputeKernel` — proof-stating surface, projects to `AlgKernel`
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Input]
-- A typed kernel that may carry `.fp32 / .int32 / .uint32` and bit-level `.const` / `.bitcast`.
-- Algorithm-side statements lift via `ComputeStmt.alg`.
-]
-.card.accent-orange[
-.label[What we did]
-- `ComputeOp` constructors: `.alg`, `.const`, `.bitcast` (width-preserving)
-- Computable `Float32Bits.decodeRat` for finite-normal binary32
-- `ck.toAlgorithm?` traverses the body via `ComputeStmt.listToAlgorithm?`
-- `GapPolicy` records whether an externally-checked compute gap is required
-]
-.card.accent-green[
-.label[Output]
-- `AlgKernel` (or `Except EraseDTypeError`)
-- `ComputeKernel.ComputeCorrect`, `ComputeKernel.ComputeRefine`, `ExecCorrect`
-- Failed projection ⇒ `False` — explicit, not silent
-- User-facing theorems ride this surface; proofs run on the `AlgKernel` side
-]
-]
-
-```lean
-def ProjectedCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
+</pre></section>
+        <section>
+          <h2>
+            <code>ComputeKernel</code> — proof-stating surface, projects to <code>AlgKernel</code></h2>
+          <p>
+            <code>VeriTile/Triton/Float/</code> + <code>VeriTile/Triton/Core/Ast.lean</code></p>
+          <div class="cols cols-3" id="--verso-component-32">
+            <div class="card card-blue" id="--verso-component-33">
+              <p>
+                <strong>Input</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    A typed kernel that may carry <code>.fp32 / .int32 / .uint32</code> and bit-level <code>.const</code> / <code>.bitcast</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Algorithm-side statements lift via <code>ComputeStmt.alg</code>.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-34">
+              <p>
+                <strong>What we did</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>ComputeOp</code> constructors: <code>.alg</code>, <code>.const</code>, <code>.bitcast</code> (width-preserving).</p>
+                  </li>
+                <li>
+                  <p>
+                    Computable <code>Float32Bits.decodeRat</code> for finite-normal binary32.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>ck.toAlgorithm?</code> traverses the body via <code>ComputeStmt.listToAlgorithm?</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>GapPolicy</code> records whether an externally-checked compute gap is required.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-35">
+              <p>
+                <strong>Output</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>AlgKernel</code> (or <code>Except EraseDTypeError</code>).</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>ComputeKernel.ComputeCorrect</code>, <code>ComputeKernel.ComputeRefine</code>, <code>ExecCorrect</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Failed projection ⇒ <code>False</code> — explicit, not silent.</p>
+                  </li>
+                <li>
+                  <p>
+                    User-facing theorems ride this surface; proofs run on the <code>AlgKernel</code> side.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <pre>def ProjectedCorrect (ck : ComputeKernel) (post : AlgSpec) : Prop :=
   match ck.toAlgorithm? with
-  | .ok ak  => Kernel.Correct ak post
-  | .error _ => False
+  | .ok ak  =&gt; Kernel.Correct ak post
+  | .error _ =&gt; False
 
 def ComputeCorrect (ck) (post) (gap : GapPolicy := .ignore) : Prop :=
-  GapPolicy.Holds gap ∧ ProjectedCorrect ck post     -- gap = .require contract → externally checked
-```
-
-.muted.small[ `ComputeKernel` is the **proof-stating** Lean AST — it lets users state theorems on fp/int kernels and have the proof flow through `toAlgorithm?` to the algorithm side. It is **not** the differential-testing pipeline; that is external (PLAN.md §Compute-gap details). ]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">8 / 18</span></div>
-
----
-name: semantics
-
-.eyebrow[Module · `VeriTile/Triton/Semantics/`]
-# Operational semantics — `evalOp`, `stepStmt`, `exec`
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Input]
-- `AlgKernel` + initial `BlockState`
-- `BlockState = mem · regs · pid · undef`
-- `regs : RegFile` dependently typed by `(dtype, shape, name)`
-]
-.card.accent-orange[
-.label[What we did]
-- `evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)`
-- `stepStmt`, `stepStmts`, `stepForLoopAux` — mutual
-- `TileOps`: scalar / vec / mat, broadcasting, reductions
-- Mask + bool channel; `tl.load(p, mask, other)` lowers to separate AST
-- `other = None` modeled by a per-state `undef` oracle
-]
-.card.accent-green[
-.label[Output]
-- `exec : AlgKernel → BlockState → Option BlockState`
-- Deterministic except for the explicit `undef` channel
-- The single source of truth used by every theorem in the project
-]
-]
-
-.card[
-.label.muted[Notable design choice]
-**`WithBot ℝ` carrier.** `tl.full((), -inf)` lowers to true `⊥` — kernels
-using `-inf` as a max-accumulator seed need **no input-range hypothesis**.
-No `-1e38` stand-in.
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">9 / 18</span></div>
-
----
-name: loopinv
-
-.eyebrow[Module · `VeriTile/Triton/LoopInvariant.lean`]
-# `forLoop_inv` — the master induction lemma
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Input]
-- A loop body of type `List Stmt`
-- A loop counter range `[0, n)`
-- An invariant `Inv : Nat → BlockState → Prop`
-- A step lemma:  `Inv k s → Inv (k+1) (run body s_with_k)`
-]
-.card.accent-orange[
-.label[What we did]
-- Bind the loop counter to an index register before each iteration — matches Triton's induction var
-- Support nested loops and early-exit `None` propagation
-- Pre-bake simp / cases lemmas to absorb the four known pitfalls
-  ( `forLoop_unfold` eagerness · `stepStmts []` non-rfl · `if_neg` in `∧` · match cascades)
-]
-.card.accent-green[
-.label[Output]
-- A reusable `forLoop_inv` theorem — the **single entry** every loop-bearing kernel proof goes through
-- Drives FA-1 forward / boundary, Welford, online-softmax, fused LayerNorm, ScoreVariants, …
-]
-]
-
-.card[
-.label.muted[Why a master lemma]
-Every Triton kernel of interest contains at least one streaming reduction.
-Without a single, well-tested loop-induction principle, every proof would
-re-invent its own recursion, and every example would re-discover the same
-four pitfalls. `forLoop_inv` makes the induction step the only thing the
-LLM agent has to discover.
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">10 / 18</span></div>
-
----
-name: memory
-
-.eyebrow[Module · `VeriTile/Triton/Memory/`]
-# Memory subsystem — bounds · footprint · frame · typing · view
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Input]
-- Kernel execution traces over a flat memory
-- Per-program region offsets and tile shapes
-- Region bounds (`RegionBounds`)
-]
-.card.accent-orange[
-.label[What we did]
-- **Bounds** — read/write OOB safety (Layer-1)
-- **Footprint** — per-kernel read/write footprints
-- **Frame** — write-footprint frame contracts; unrelated-region preservation; disjoint composition (Layer-2a)
-- **Typing** — typed memory loads (int / nat / fp regions)
-- **View** — `TensorView` / `programTileView` API for tile-level theorems
-]
-.card.accent-green[
-.label[Output]
-- Reusable memory-safety lemmas plugged into refinement proofs
-- `TensorView.observe / loaded` for stating theorems at tile level rather than at flat addresses
-- Direct, masked, and block-pointer footprints unified
-]
-]
-
-```lean
-namespace ComputeKernel
+  GapPolicy.Holds gap ∧ ProjectedCorrect ck post
+  -- gap = .require contract → externally checked
+</pre><div class="card card-muted" id="--verso-component-36">
+            <p>
+              <code>ComputeKernel</code> is the <strong>proof-stating</strong> Lean AST — it lets users state
+theorems on fp/int kernels and have the proof flow through <code>toAlgorithm?</code> to
+the algorithm side. It is <strong>not</strong> the differential-testing pipeline; that is
+external (PLAN.md §Compute-gap details).</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Operational semantics — <code>evalOp</code>, <code>stepStmt</code>, <code>exec</code></h2>
+          <p>
+            <code>VeriTile/Triton/Semantics/</code></p>
+          <div class="cols cols-3" id="--verso-component-37">
+            <div class="card card-blue" id="--verso-component-38">
+              <p>
+                <strong>Input</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>AlgKernel</code> + initial <code>BlockState</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>BlockState = mem · regs · pid · undef</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>regs : RegFile</code> dependently typed by <code>(dtype, shape, name)</code>.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-39">
+              <p>
+                <strong>What we did</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>stepStmt</code>, <code>stepStmts</code>, <code>stepForLoopAux</code> — mutual.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>TileOps</code>: scalar / vec / mat, broadcasting, reductions.</p>
+                  </li>
+                <li>
+                  <p>
+                    Mask + bool channel; <code>tl.load(p, mask, other)</code> lowers to separate AST.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>other = None</code> modeled by a per-state <code>undef</code> oracle.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-40">
+              <p>
+                <strong>Output</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>exec : AlgKernel → BlockState → Option BlockState</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Deterministic except for the explicit <code>undef</code> channel.</p>
+                  </li>
+                <li>
+                  <p>
+                    Single source of truth used by every theorem in the project.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-41">
+            <p>
+              <strong>Notable design choice — <code>WithBot ℝ</code> carrier.</strong> <code>tl.full((), -inf)</code> lowers
+to true <code>⊥</code> — kernels using <code>-inf</code> as a max-accumulator seed need <strong>no
+input-range hypothesis</strong>. No <code>-1e38</code> stand-in.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            <code>forLoop_inv</code> — the master induction lemma</h2>
+          <p>
+            <code>VeriTile/Triton/LoopInvariant.lean</code></p>
+          <div class="cols cols-3" id="--verso-component-42">
+            <div class="card card-blue" id="--verso-component-43">
+              <p>
+                <strong>Input</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    A loop body of type <code>List Stmt</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    A loop counter range <code>[0, n)</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    An invariant <code>Inv : Nat → BlockState → Prop</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    A step lemma:  <code>Inv k s → Inv (k+1) (run body s_with_k)</code>.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-44">
+              <p>
+                <strong>What we did</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Bind the loop counter to an index register before each iteration — matches Triton's induction var.</p>
+                  </li>
+                <li>
+                  <p>
+                    Support nested loops and early-exit <code>None</code> propagation.</p>
+                  </li>
+                <li>
+                  <p>
+                    Pre-bake simp / cases lemmas to absorb the four known pitfalls (<code>forLoop_unfold</code> eagerness, <code>stepStmts []</code> non-rfl, <code>if_neg</code> in <code>∧</code>, match cascades).</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-45">
+              <p>
+                <strong>Output</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    A reusable <code>forLoop_inv</code> theorem — the <strong>single entry</strong> every loop-bearing kernel proof goes through.</p>
+                  </li>
+                <li>
+                  <p>
+                    Drives FA-1 forward / boundary, Welford, online-softmax, fused LayerNorm, ScoreVariants, …</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-46">
+            <p>
+              <strong>Why a master lemma.</strong> Every Triton kernel of interest contains at least one
+streaming reduction. Without a single, well-tested loop-induction principle,
+every proof would re-invent its own recursion, and every example would
+re-discover the same four pitfalls. <code>forLoop_inv</code> makes the induction step the
+only thing the LLM agent has to discover.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Memory subsystem — bounds · footprint · frame · typing · view</h2>
+          <p>
+            <code>VeriTile/Triton/Memory/</code></p>
+          <div class="cols cols-3" id="--verso-component-47">
+            <div class="card card-blue" id="--verso-component-48">
+              <p>
+                <strong>Input</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Kernel execution traces over a flat memory.</p>
+                  </li>
+                <li>
+                  <p>
+                    Per-program region offsets and tile shapes.</p>
+                  </li>
+                <li>
+                  <p>
+                    Region bounds (<code>RegionBounds</code>).</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-49">
+              <p>
+                <strong>What we did</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <strong>Bounds</strong> — read/write OOB safety (Layer-1).</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Footprint</strong> — per-kernel read/write footprints.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Frame</strong> — write-footprint frame contracts; unrelated-region preservation; disjoint composition (Layer-2a).</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Typing</strong> — typed memory loads (int / nat / fp regions).</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>View</strong> — <code>TensorView</code> / <code>programTileView</code> API for tile-level theorems.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-50">
+              <p>
+                <strong>Output</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Reusable memory-safety lemmas plugged into refinement proofs.</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>TensorView.observe / loaded</code> for stating theorems at tile level rather than at flat addresses.</p>
+                  </li>
+                <li>
+                  <p>
+                    Direct, masked, and block-pointer footprints unified.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <pre>namespace ComputeKernel
 def MemorySafe (bounds : RegionBounds) (ck : ComputeKernel) : Prop := …
 def ExecWritesWithin (ck) (s : BlockState) (P : WriteFootprint) : Prop := …
 end ComputeKernel
-```
-
-.muted.small[ Layer-2b grid composition (next slide) builds on Layer-2a frame contracts. ]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">11 / 18</span></div>
-
----
-name: concurrency
-
-.eyebrow[Module · `VeriTile/Triton/Concurrency/`]
-# Concurrency framework — trace · refinement · discipline
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Input]
-- Kernels with atomic-add, async-copy, async-wait, debug-barrier, producer-consumer patterns
-]
-.card.accent-orange[
-.label[What we did]
-- **Trace** — vocabulary for observable concurrency events
-- **Refinement** — behavioural refinement; sequential-consistency single-layer spec
-- **Atomic** — atomic-add proof surface
-- **Discipline / ProducerConsumer** — failure markers and projection-failure correctness lemmas
-]
-.card.accent-green[
-.label[Output]
-- Generalized effect projection — concurrency primitives manifest as failure markers on the projection boundary
-- Algorithmic theorems are unaffected by reorderings under the documented discipline
-]
-]
-
-.card[
-.label.muted[Current scope vs roadmap]
-We currently support concurrency primitives via *projection boundaries* and
-*failure markers*. The atomic-add main theorem and async-copy serialization
-equivalence are roadmap items: they will move primitives **into** the proof
-chain proper rather than parking them at the boundary.
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">12 / 18</span></div>
-
----
-name: launch
-
-.eyebrow[Module · `VeriTile/Triton/Launch/`]
-# Launch — ND grid + disjoint-writes composition
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Input]
-- A per-program-id kernel + an ND grid shape
-- Per-program write footprints (from `Memory/Frame`)
-]
-.card.accent-orange[
-.label[What we did]
-- **Grid** — launch every program_id over an ND index space
-- **Composition** — assemble per-program writes into a final whole-grid memory, given a disjoint-writes proof
-- Generic `Fin shape.length` axis — no 1D / 2D shortcuts
-]
-.card.accent-green[
-.label[Output]
-- Whole-grid output state expressed as the disjoint union of per-program contributions
-- Lifts a single-program correctness proof into a full-grid correctness proof — the bridge to multi-block FA-2
-]
-]
-
-.card[
-.label.muted[Worked example]
-`Examples/GridComposition.lean` exercises the Layer-2b disjoint merge end
-to end, on the same `programTileView` API used by single-program proofs.
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">13 / 18</span></div>
-
----
-name: theorems
-
-.eyebrow[Module · `VeriTile/Examples/`]
-# Theorem library — what we actually prove
-<div class="rule"></div>
-
-.cols.cols-2[
-.card.accent-blue[
-.label[Loop-free pairs · Tier 1]
-- `softmax_kernels_refinement` (naive ↔ stable)
-- `log_sum_exp_refinement` (direct ↔ shift trick)
-- `softmax_reciprocal_refinement` (e/s ↔ inv_s · e)
-- `vector_add` (multi-buffer · math correctness)
-]
-.card.accent-orange[
-.label[Streaming reductions · Tier 2]
-- `online_softmax_recurrence_eq_batch` *(FA core)*
-- `welford_kernels_refinement`
-- `layernorm_kernels_refinement`
-- `forLoop_inv`, mask + bool channel, typed Tile, WithBot ℝ
-]
-.card.accent-green[
-.label[FA-1 forward · Tier 3-A]
-- `fa1_forward_correct` (non-causal)
-- `…_strided` / `…_strided_causal`
-- `…_4D_views` / `…_4D_causal_views`
-- `V1Boundary`: 8 boundary / D-tail variants
-- `ScoreVariants`: ALiBi · sliding · softcap
-- ~16k lines, V0 + V1Boundary + ScoreVariants + Common
-]
-.card.accent-purple[
-.label[Cross-cutting]
-- `MemorySafety`, `MemoryFrame`
-- `GridComposition` (Layer-2b)
-- `FusedSiLU` (kernel-pair refinement)
-- `FA-1 backward stripped` *(in progress, 1 sorry)*
-]
-]
-
-.muted.small.center[ Each theorem states equivalence between two embedded kernels — or between a kernel and a math spec — at every tile index. ]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">14 / 18</span></div>
-
----
-name: workflow
-
-.eyebrow[Proof workflow]
-# From a stated theorem to a closed proof
-<div class="rule"></div>
-
-.cols.cols-2[
-<div>
-.card.accent-blue[
-.label[1 · Write two kernels]
-Original Triton kernel + an optimized rewrite, both inside the embedded
-`triton { … }` DSL.
-]
-<div style="height:8px"></div>
-.card.accent-orange[
-.label[2 · State the theorem]
-Spec-side equivalence: for every tile index,
-`observe(exec(kernel₁, s)) = observe(exec(kernel₂, s))`.
-]
-<div style="height:8px"></div>
-.card.accent-green[
-.label[3 · Run scripts/prove.sh]
-Wraps `/lean4:autoprove` (Claude Code plugin). Multi-cycle iteration,
-deep-mode escalation, tactic cascades, repair patterns.
-]
-<div style="height:8px"></div>
-.card.accent-purple[
-.label[4 · CI gate: lake build]
-Whole library 0 sorry (except FA-1 backward × 1).
-Artifact gate: `lake build`, no sorry, axiom whitelist, surface check.
-]
-</div>
-
-.card[
-.label[Artifact gate · `scripts/check-artifact.sh`]
-- `lake build` clean
-- 0 sorry except FA-1 backward sub-2b
-- Axiom whitelist enforced
-- Key theorem surface preserved
-- README / example drift checks
-
-<div style="height:10px"></div>
-.label.muted[Held-out LLM bench]
-`bench/llm_eval/<tier>/` is locked **before** each Tier — measures close-rate
-without tuning the tool on the eval set.
-
-- N = 5 independent runs per held-out lemma, different random seeds
-- Cost report per Tier: API calls, tokens, wall-clock, dollars
-- Hands-off: no human prompt iteration during eval
-]
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">15 / 18</span></div>
-
----
-name: status
-
-.eyebrow[Status — 2026-05-05]
-# Where the project stands today
-<div class="rule"></div>
-
-.cols.cols-4[
-<div class="numbox b1"><div class="num">80</div><div class="lab">.lean files</div></div>
-<div class="numbox b2"><div class="num">~42.7k</div><div class="lab">lines of Lean</div></div>
-<div class="numbox b3"><div class="num">0</div><div class="lab">sorry (lib core)</div></div>
-<div class="numbox b4"><div class="num">3</div><div class="lab">Tier milestones closed</div></div>
-]
-
-<div style="height:14px"></div>
-
-<div class="layer-stack">
-  <div class="layer b1"><div class="layer-title">Tier 1 · v0.1-tier1</div><div class="layer-body">Loop-free kernel pairs × 3 + <code>welford_eq_two_pass</code>.</div></div>
-  <div class="layer b2"><div class="layer-title">Tier 2 · v0.2-tier2</div><div class="layer-body">Streaming reductions × 3, <code>forLoop_inv</code>, mask + bool channel, typed Tile refactor, WithBot ℝ carrier.</div></div>
-  <div class="layer b3"><div class="layer-title">Tier 3-A · v0.3-tier3a (pending tag)</div><div class="layer-body">FA-1 forward full coverage: non-causal, strided, causal, 4D, boundary, boundaryD, score variants — ~16k lines.</div></div>
-  <div class="layer b4"><div class="layer-title">Horizontal infra</div><div class="layer-body">Algorithm/Compute split, float erasure, Memory subsystem, Concurrency framework, ND grid + composition, DSL expansion.</div></div>
-</div>
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">16 / 18</span></div>
-
----
-name: roadmap
-
-.eyebrow[Roadmap]
-# What comes next — architecture stays, coverage grows
-<div class="rule"></div>
-
-.cols.cols-3[
-.card.accent-blue[
-.label[Near-term]
-- Close FA-1 backward stripped (last sorry)
-- Tag `v0.3-tier3a`
-- Add mask to FA-1 backward
-- Wire FA-1 backward to multi-block
-]
-.card.accent-orange[
-.label[Mid-term]
-- Tier 3-B FA-2 forward: `multiBlockExec`, delayed rescale, mask-skip — headline `fa1_eq_fa2` corollary
-- Tier 3-C FA backward full coverage
-- Tier 4 production batch: grouped GEMM, Mamba/SSM, RoPE, fused-norm family, GQA / MQA / MLA
-]
-.card.accent-green[
-.label[Long-term]
-- Concurrency primitives in the proof chain proper (atomic-add, async-copy serialization)
-- `.py` paste-in surface — Python lifter prototype
-- ND-general closure (eliminate residual 1D/2D paths)
-- Effect framework polish; full block-pointer coverage
-]
-]
-
-.muted.small.center[ No fixed time windows — VeriTile advances by Tier; main branch always builds. ]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">17 / 18</span></div>
-
----
-name: closing
-
-.eyebrow[Takeaways]
-# Why the architecture is now stable
-<div class="rule"></div>
-
-.cols.cols-2[
-.card.accent-blue[
-.label[End-to-end typed pipeline]
-`TileDType × TileShape` index every `Op`, `Tile`, `RegFile`, `evalOp`.
-No dynamic tag, no existential recovery step. The type system *is* the
-soundness backbone.
-]
-.card.accent-orange[
-.label[Two-layer split is permanent]
-Algorithm correctness in Lean (`Kernel.Correct`); IEEE-754 fidelity via
+</pre></section>
+        <section>
+          <h2>
+            Concurrency framework — trace · refinement · discipline</h2>
+          <p>
+            <code>VeriTile/Triton/Concurrency/</code></p>
+          <div class="cols cols-3" id="--verso-component-51">
+            <div class="card card-blue" id="--verso-component-52">
+              <p>
+                <strong>Input</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Kernels with atomic-add, async-copy, async-wait, debug-barrier, producer-consumer patterns.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-53">
+              <p>
+                <strong>What we did</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <strong>Trace</strong> — vocabulary for observable concurrency events.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Refinement</strong> — behavioural refinement; sequential-consistency single-layer spec.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Atomic</strong> — atomic-add proof surface.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Discipline / ProducerConsumer</strong> — failure markers and projection-failure correctness lemmas.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-54">
+              <p>
+                <strong>Output</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Generalized effect projection — concurrency primitives manifest as failure markers on the projection boundary.</p>
+                  </li>
+                <li>
+                  <p>
+                    Algorithmic theorems are unaffected by reorderings under the documented discipline.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-55">
+            <p>
+              <strong>Current scope vs roadmap.</strong> We currently support concurrency primitives via
+<strong>projection boundaries</strong> and <strong>failure markers</strong>. The atomic-add main theorem
+and async-copy serialization equivalence are roadmap items: they will move
+primitives <strong>into</strong> the proof chain proper rather than parking them at the
+boundary.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            How async fits — three rooms, one final-state contract</h2>
+          <p>
+            <code>Triton async is not reducible to pure sequential — we model it without sequentializing it.</code></p>
+          <div class="cols cols-3" id="--verso-component-56">
+            <div class="card card-blue" id="--verso-component-57">
+              <p>
+                <strong>Front desk · DSL accepts</strong></p>
+              <p>
+                <code>tl.async_copy(...)</code> / <code>tl.async_wait()</code> / <code>tl.debug_barrier()</code> parse and elaborate like any other op.</p>
+              <p>
+                Each becomes a <code>ComputeStmt.effectMarker "tl.async_copy"</code> — opaque, named, carried on the AST. Triton users paste <code>.py</code> unchanged.</p>
+              </div>
+            <div class="card card-orange" id="--verso-component-58">
+              <p>
+                <strong>Kitchen · algorithm layer rejects</strong></p>
+              <p>
+                <code>toAlgorithm?</code> on an <code>effectMarker</code> returns <code>Except.error (.requiresEffectProjection op)</code>.</p>
+              <p>
+                The pure-sequential proof chain refuses to execute async — silently sequentializing would lie about Triton's semantics. <strong>Fidelity over cleanliness.</strong></p>
+              </div>
+            <div class="card card-green" id="--verso-component-59">
+              <p>
+                <strong>Side door · concurrency framework</strong></p>
+              <p>
+                <code>VeriTile/Triton/Concurrency/</code> builds an <code>EffectTrace</code> (memory ∪ async ∪ barrier), derives <code>HappensBefore</code>, and states correctness as <code>RefinesSequential concurrent sequential</code> on final memory.</p>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-60">
+            <p>
+              <strong>Four discipline conditions unlock the side door</strong> —
+<code>AsyncVisibility</code> (every <code>wait</code> follows a <code>copy</code>),
+<code>BarrierDiscipline</code> (every <code>barrier.wait</code> follows an <code>arrive</code> of the same name),
+<code>OwnershipTransfer</code> (footprint permissions transfer cleanly),
+<code>NoRaceOnOwnedCells</code> (no concurrent writers on owned cells).
+Once these are proved, <strong>concurrent ≡ sequential on final memory</strong> follows by refinement.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Where the async approach comes from</h2>
+          <p>
+            <code>Each piece is textbook — the value is composing them on production Triton kernels in Lean 4.</code></p>
+          <div class="cols cols-2" id="--verso-component-61">
+            <div class="card card-blue" id="--verso-component-62">
+              <p>
+                <strong>Building blocks · standard names</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <strong>Concurrent Separation Logic</strong> — O'Hearn / Brookes 2004. Permissions, ownership transfer, no-race.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Fractional permissions</strong> — Boyland 2003. Generalizes our <code>ExclusivePerm</code> to shared-read.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Lamport happens-before</strong> — 1978. Trace-order + async / barrier edges.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>DRF-SC theorem</strong> — Adve 1990. Race-free programs admit a sequential-consistency reading — the shape of our <code>RefinesSequential</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Reduction theorems</strong> — Lipton 1975, Cohen-Lamport 1998. <code>async_copy + async_wait</code> ↔ synchronous load/store as movers.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-63">
+              <p>
+                <strong>GPU verification predecessors</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <strong>GPUVerify</strong> (Betts / Chong / Donaldson) — two-thread reduction + barrier invariants for CUDA.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>VerCors</strong> — permission-based GPU reasoning.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>PUG</strong> — CUDA verification in Boogie.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>IronFleet · CertiKOS · Iris-based OS verification</strong> — algorithm layer pure-sequential, concurrency attached via refinement: the same shape we use.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-64">
+            <p>
+              <strong>Compact label.</strong> "Permission-based Concurrent Separation Logic + DRF-style sequentialization refinement." VeriTile's contribution is not the underlying logic — it is <strong>applying this stack</strong> to <strong>real production Triton kernels</strong> in <strong>Lean 4</strong>. Prior work used the same parts on toy CUDA in Boogie / Why3.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Launch — ND grid + disjoint-writes composition</h2>
+          <p>
+            <code>VeriTile/Triton/Launch/</code></p>
+          <div class="cols cols-3" id="--verso-component-65">
+            <div class="card card-blue" id="--verso-component-66">
+              <p>
+                <strong>Input</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    A per-program-id kernel + an ND grid shape.</p>
+                  </li>
+                <li>
+                  <p>
+                    Per-program write footprints (from <code>Memory/Frame</code>).</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-67">
+              <p>
+                <strong>What we did</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <strong>Grid</strong> — launch every <code>program_id</code> over an ND index space.</p>
+                  </li>
+                <li>
+                  <p>
+                    <strong>Composition</strong> — assemble per-program writes into a final whole-grid memory, given a disjoint-writes proof.</p>
+                  </li>
+                <li>
+                  <p>
+                    Generic <code>Fin shape.length</code> axis — no 1D / 2D shortcuts.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-68">
+              <p>
+                <strong>Output</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Whole-grid output state expressed as the disjoint union of per-program contributions.</p>
+                  </li>
+                <li>
+                  <p>
+                    Lifts a single-program correctness proof into a full-grid correctness proof — the bridge to multi-block FA-2.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-69">
+            <p>
+              <strong>Worked example.</strong> <code>Examples/GridComposition.lean</code> exercises the Layer-2b
+disjoint merge end to end, on the same <code>programTileView</code> API used by
+single-program proofs.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Theorem library — what we actually prove</h2>
+          <p>
+            <code>VeriTile/Examples/</code></p>
+          <div class="cols cols-2" id="--verso-component-70">
+            <div class="card card-blue" id="--verso-component-71">
+              <p>
+                <strong>Loop-free pairs · Tier 1</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>softmax_kernels_refinement</code> (naive ↔ stable)</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>log_sum_exp_refinement</code> (direct ↔ shift trick)</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>softmax_reciprocal_refinement</code> (e/s ↔ <code>inv_s</code> · e)</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>vector_add</code> (multi-buffer · math correctness)</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-72">
+              <p>
+                <strong>Streaming reductions · Tier 2</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>online_softmax_recurrence_eq_batch</code> <strong>(FA core)</strong></p>
+                  </li>
+                <li>
+                  <p>
+                    <code>welford_kernels_refinement</code></p>
+                  </li>
+                <li>
+                  <p>
+                    <code>layernorm_kernels_refinement</code></p>
+                  </li>
+                <li>
+                  <p>
+                    <code>forLoop_inv</code>, mask + bool channel, typed Tile, <code>WithBot ℝ</code></p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <div class="cols cols-2" id="--verso-component-73">
+            <div class="card card-green" id="--verso-component-74">
+              <p>
+                <strong>FA-1 forward · Tier 3-A</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>fa1_forward_correct</code> (non-causal)</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>…_strided</code> / <code>…_strided_causal</code></p>
+                  </li>
+                <li>
+                  <p>
+                    <code>…_4D_views</code> / <code>…_4D_causal_views</code></p>
+                  </li>
+                <li>
+                  <p>
+                    <code>V1Boundary</code>: 8 boundary / D-tail variants</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>ScoreVariants</code>: ALiBi · sliding · softcap</p>
+                  </li>
+                <li>
+                  <p>
+                    ~16k lines, V0 + V1Boundary + ScoreVariants + Common</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-purple" id="--verso-component-75">
+              <p>
+                <strong>Cross-cutting</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    <code>MemorySafety</code>, <code>MemoryFrame</code></p>
+                  </li>
+                <li>
+                  <p>
+                    <code>GridComposition</code> (Layer-2b)</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>FusedSiLU</code> (kernel-pair refinement)</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>FA-1 backward stripped</code> <strong>(in progress, 1 sorry)</strong></p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Proof workflow</h2>
+          <div class="cols cols-2" id="--verso-component-76">
+            <div class="card card-blue" id="--verso-component-77">
+              <p>
+                <strong>1 · Write two kernels</strong></p>
+              <p>
+                Original Triton kernel + an optimized rewrite, both inside the embedded
+<code>triton { ... }</code> DSL.</p>
+              </div>
+            <div class="card card-orange" id="--verso-component-78">
+              <p>
+                <strong>2 · State the theorem</strong></p>
+              <p>
+                Spec-side equivalence: for every tile index,
+<code>observe(exec(kernel₁, s)) = observe(exec(kernel₂, s))</code>.</p>
+              </div>
+            </div>
+          <div class="cols cols-2" id="--verso-component-79">
+            <div class="card card-green" id="--verso-component-80">
+              <p>
+                <strong>3 · Run <code>scripts/prove.sh</code></strong></p>
+              <p>
+                Wraps <code>/lean4:autoprove</code> (Claude Code plugin). Multi-cycle iteration,
+deep-mode escalation, tactic cascades, repair patterns.</p>
+              </div>
+            <div class="card card-purple" id="--verso-component-81">
+              <p>
+                <strong>4 · CI gate: <code>lake build</code></strong></p>
+              <p>
+                Whole library 0 sorry (except FA-1 backward × 1). Artifact gate: <code>lake build</code>,
+no sorry, axiom whitelist, surface check.</p>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-82">
+            <p>
+              <strong>Held-out LLM bench.</strong> <code>bench/llm_eval/&lt;tier&gt;/</code> is locked <strong>before</strong> each
+Tier — measures close-rate without tuning the tool on the eval set. N = 5
+independent runs per held-out lemma, different random seeds. Cost report per
+Tier: API calls, tokens, wall-clock, dollars.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Status — 2026-05-05</h2>
+          <div class="numgrid" id="--verso-component-83">
+            <ul>
+              <li>
+                <p>
+                  <strong>80</strong> — <code>.lean</code> files</p>
+                </li>
+              <li>
+                <p>
+                  <strong>~42.7k</strong> — lines of Lean</p>
+                </li>
+              <li>
+                <p>
+                  <strong>0</strong> — sorry (lib core)</p>
+                </li>
+              <li>
+                <p>
+                  <strong>3</strong> — Tier milestones closed</p>
+                </li>
+              </ul>
+            </div>
+          <p>
+            <strong>Tiers closed.</strong></p>
+          <ul>
+            <li>
+              <p>
+                <strong>Tier 1</strong> · <code>v0.1-tier1</code> — Loop-free kernel pairs × 3 + <code>welford_eq_two_pass</code>.</p>
+              </li>
+            <li>
+              <p>
+                <strong>Tier 2</strong> · <code>v0.2-tier2</code> — Streaming reductions × 3, <code>forLoop_inv</code>, mask + bool channel, typed Tile refactor, <code>WithBot ℝ</code> carrier.</p>
+              </li>
+            <li>
+              <p>
+                <strong>Tier 3-A</strong> · <code>v0.3-tier3a</code> (pending tag) — FA-1 forward full coverage: non-causal, strided, causal, 4D, boundary, boundaryD, score variants — ~16k lines.</p>
+              </li>
+            <li>
+              <p>
+                <strong>Horizontal infra</strong> — Algorithm/Compute split, float erasure, Memory subsystem, Concurrency framework, ND grid + composition, DSL expansion.</p>
+              </li>
+            </ul>
+          </section>
+        <section>
+          <h2>
+            Roadmap</h2>
+          <div class="cols cols-3" id="--verso-component-84">
+            <div class="card card-blue" id="--verso-component-85">
+              <p>
+                <strong>Near-term</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Close FA-1 backward stripped (last sorry).</p>
+                  </li>
+                <li>
+                  <p>
+                    Tag <code>v0.3-tier3a</code>.</p>
+                  </li>
+                <li>
+                  <p>
+                    Add mask to FA-1 backward.</p>
+                  </li>
+                <li>
+                  <p>
+                    Wire FA-1 backward to multi-block.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-orange" id="--verso-component-86">
+              <p>
+                <strong>Mid-term</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Tier 3-B FA-2 forward: <code>multiBlockExec</code>, delayed rescale, mask-skip — headline <code>fa1_eq_fa2</code> corollary.</p>
+                  </li>
+                <li>
+                  <p>
+                    Tier 3-C FA backward full coverage.</p>
+                  </li>
+                <li>
+                  <p>
+                    Tier 4 production batch: grouped GEMM, Mamba/SSM, RoPE, fused-norm family, GQA / MQA / MLA.</p>
+                  </li>
+                </ul>
+              </div>
+            <div class="card card-green" id="--verso-component-87">
+              <p>
+                <strong>Long-term</strong></p>
+              <ul>
+                <li>
+                  <p>
+                    Concurrency primitives in the proof chain proper (atomic-add, async-copy serialization).</p>
+                  </li>
+                <li>
+                  <p>
+                    <code>.py</code> paste-in surface — Python lifter prototype.</p>
+                  </li>
+                <li>
+                  <p>
+                    ND-general closure (eliminate residual 1D/2D paths).</p>
+                  </li>
+                <li>
+                  <p>
+                    Effect framework polish; full block-pointer coverage.</p>
+                  </li>
+                </ul>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-88">
+            <p>
+              No fixed time windows — VeriTile advances by Tier; main branch always builds.</p>
+            </div>
+          </section>
+        <section>
+          <h2>
+            Why the architecture is now stable</h2>
+          <div class="cols cols-2" id="--verso-component-89">
+            <div class="card card-blue" id="--verso-component-90">
+              <p>
+                <strong>End-to-end typed pipeline</strong></p>
+              <p>
+                <code>TileDType × TileShape</code> index every <code>Op</code>, <code>Tile</code>, <code>RegFile</code>, <code>evalOp</code>.
+No dynamic tag, no existential recovery step. The type system <strong>is</strong> the
+soundness backbone.</p>
+              </div>
+            <div class="card card-orange" id="--verso-component-91">
+              <p>
+                <strong>Two-layer split is permanent</strong></p>
+              <p>
+                Algorithm correctness in Lean (<code>Kernel.Correct</code>); IEEE-754 fidelity via
 external testing. The two never merge by Lean theorem — by design.
-`ComputeKernel` is the in-Lean proof-stating bridge to the algorithm side
-via `toAlgorithm?`.
-]
-.card.accent-green[
-.label[Single shared interpreter]
-`evalOp / stepStmt / forLoop_inv` are reused by every theorem.
-Adding a new op or a new kernel has bounded blast radius.
-]
-.card.accent-purple[
-.label[Cross-cutting subsystems plug in cleanly]
-Memory · Concurrency · Launch attach to the same `BlockState`.
-New primitives extend the system without rewriting existing proofs.
-]
-]
+<code>ComputeKernel</code> is the in-Lean proof-stating bridge to the algorithm side
+via <code>toAlgorithm?</code>.</p>
+              </div>
+            </div>
+          <div class="cols cols-2" id="--verso-component-92">
+            <div class="card card-green" id="--verso-component-93">
+              <p>
+                <strong>Single shared interpreter</strong></p>
+              <p>
+                <code>evalOp / stepStmt / forLoop_inv</code> are reused by every theorem.
+Adding a new op or a new kernel has bounded blast radius.</p>
+              </div>
+            <div class="card card-purple" id="--verso-component-94">
+              <p>
+                <strong>Cross-cutting subsystems plug in cleanly</strong></p>
+              <p>
+                Memory · Concurrency · Launch attach to the same <code>BlockState</code>.
+New primitives extend the system without rewriting existing proofs.</p>
+              </div>
+            </div>
+          <div class="card card-muted" id="--verso-component-95">
+            <p>
+              <strong>Architecture locked since v0.2</strong> — what changes from here is theorem
+coverage, not foundations.</p>
+            </div>
+          </section>
+        </article></main><nav id="deck-nav">
+      <button id="prev" aria-label="Previous slide">◀</button><span id="counter"></span><button id="next" aria-label="Next slide">▶</button></nav>
+    <script src="static/slides.js"></script>
+    </body>
+  </html>
 
-<div style="height:8px"></div>
-
-.center[
-**Architecture locked since v0.2** — what changes from here is theorem coverage, not foundations.
-]
-
-<div class="footer"><span class="muted">VeriTile</span><span class="right muted">18 / 18</span></div>
-
-</textarea>
-
-<script src="https://remarkjs.com/downloads/remark-latest.min.js"></script>
-<script>
-var slideshow = remark.create({
-  ratio: "16:9",
-  highlightStyle: "github",
-  highlightLanguage: "lean",
-  highlightLines: true,
-  countIncrementalSlides: false,
-  navigation: { scroll: false, touch: true, click: false }
-});
-</script>
-</body>
-</html>

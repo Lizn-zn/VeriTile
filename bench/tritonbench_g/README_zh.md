@@ -30,8 +30,8 @@ Lean 文件名是目录名的 **CamelCase 形式**(例如 `vector_addition/` 包
    `$(...)`。如果 port 用了尚未 land 的 DSL surface,可能编译不过 ——
    编译失败正是 DSL surface 需要扩展的预期信号。**当前编译通过:15 / 15。**
 2. **Spec** —— 写出 kernel 预期输出的 Real-valued 数学规范。
-3. **Verification** —— 证明 `ComputeKernel.ComputeCorrect` /
-   `ComputeKernel.ComputeRefine` theorem,并登记到
+3. **Verification** —— 证明 `ComputeCorrect.Realizes` /
+   `ComputeRefine.Realizes` theorem,并登记到
    `scripts/kernel-manifest.tsv`。
 
 阶段 1 是逐字转写契约;到达阶段 3(verification)既需要 DSL gap 关闭,

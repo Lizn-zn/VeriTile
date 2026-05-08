@@ -96,21 +96,22 @@ theorem softmax_kernel_compute_correct
     (output_ptr input_ptr : RegionName)
     (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState) :
-    ComputeCorrect.General
-      (softmax_kernel output_ptr input_ptr input_row_stride output_row_stride
+    ComputeCorrect.Realizes
+      (kernel := softmax_kernel output_ptr input_ptr input_row_stride output_row_stride
         n_cols BLOCK_SIZE)
-      (fun s0 s' =>
-        s0 = s →
-        ∀ i : Fin BLOCK_SIZE,
-          let outAddr := s.pid * output_row_stride + i.val
-          s'.readMem output_ptr outAddr =
-            if i.val < n_cols then
-              softmaxSpec s input_ptr input_row_stride n_cols BLOCK_SIZE i
-            else s.readMem output_ptr outAddr) := by
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+          (fun i => (output_ptr, s.pid * output_row_stride + i.val)))
+      (expected := fun i =>
+        softmaxSpec s input_ptr input_row_stride n_cols BLOCK_SIZE i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
   subst s0
-  exact softmax_kernel_correct output_ptr input_ptr input_row_stride
-    output_row_stride n_cols BLOCK_SIZE s s' hExec
+  intro i hActive
+  have h := softmax_kernel_correct output_ptr input_ptr input_row_stride
+    output_row_stride n_cols BLOCK_SIZE s s' hExec i
+  simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.SoftmaxTriton2

@@ -5,10 +5,10 @@ API 出发。完整 user guide 见
 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md)。
 
 - 单 kernel 对照数学或算法 spec 的 correctness 用
-  `ComputeCorrect.Output*`、`ComputeCorrect.Post` 或
+  `ComputeCorrect.Realizes`、`ComputeCorrect.Post` 或
   `ComputeCorrect.General`。
 - 双 kernel 等价或 rewrite refinement 用
-  `ComputeRefine.Output*Eq`、`ComputeRefine.Post` 或
+  `ComputeRefine.Realizes`、`ComputeRefine.Post` 或
   `ComputeRefine.General`。
 
 投影后的算法 lemma 仍然可以提到 `Kernel.Correct` 或 `Kernel.Refine`,
@@ -21,8 +21,8 @@ API 出发。完整 user guide 见
 - 双 kernel refinement 定理:`<name>_refinement_view`
 
 仅供执行的 helper lemma 可以使用 `_exec_view` 后缀,允许直接陈述
-`exec` 等式。公开定理应当把这种 helper 用 `ComputeCorrect.*` 或
-`ComputeRefine.*` 包装起来。
+`exec` 等式。公开定理如果是输出观察定理,应当把这种 helper 用
+`ComputeCorrect.Realizes` 或 `ComputeRefine.Realizes` 包装起来。
 
 非普通单 kernel / 双 kernel example view 的领域专用定理 surface,
 比如 whole-grid launch 事实或 FlashAttention 专用的数学/trace 陈述,

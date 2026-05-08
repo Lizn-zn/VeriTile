@@ -4,7 +4,7 @@ VeriTile.Examples.FlashAttention1.NaiveKernel
 Executable naive FA-1 boundary kernels and correctness bridges for issue #39.
 -/
 
-import VeriTile.Examples.FlashAttention1.V1Boundary
+import VeriTile.Examples.FlashAttention1.Boundary
 
 namespace VeriTile.Examples
 
