@@ -238,6 +238,9 @@ backward. Multi-block atomic dQ is available through the grid-launched surface.
 
 - FA-2 kernel embedded via `triton { ... }` (multi-axis program_id, delayed
   rescale path, mask-skip path)
+- `fa2_delayed_rescale_sum_eq` and
+  `fa2_delayed_rescale_weighted_sum_eq` — denominator/numerator algebra for
+  block-local max normalization followed by merged-max rescaling
 - `fa_2_forward_correct` — like FA-1 forward, with: (a) sequence-length
   parallelization, (b) delayed rescaling, (c) full-mask block skip
   - Delayed rescale equivalence: `O_final / l_final` does not depend on

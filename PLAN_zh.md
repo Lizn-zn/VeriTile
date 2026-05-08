@@ -209,6 +209,9 @@ multi-block atomic dQ 已通过 grid-launched surface 提供。
 
 - FA-2 kernel 通过 `triton { ... }` 嵌入(多轴 program_id、延迟 rescale 路径、
   mask-skip 路径)
+- `fa2_delayed_rescale_sum_eq` 与
+  `fa2_delayed_rescale_weighted_sum_eq` —— block-local max 归一后再按 merged max
+  rescale 的 denominator/numerator 代数桥
 - `fa_2_forward_correct` —— 类似 FA-1 forward 的:(a) 序列长度并行化、
   (b) 延迟 rescaling、(c) 全 mask 块跳过
   - 延迟 rescale 等价:`O_final / l_final` 不依赖中间 `O` 是否每步 rescale

@@ -15,6 +15,41 @@ import VeriTile.Examples.FlashAttention1.Core
 namespace VeriTile.Examples
 
 open VeriTile.Triton
+open BigOperators
+
+/-! ## FA-2 delayed-rescale math bridges
+
+FA-2 forward computes block-local softmax fragments and rescales them when a
+larger running max is discovered.  These lemmas isolate the algebraic step:
+normalizing by a block-local max and then rescaling to the merged max is the
+same as normalizing by the merged max directly.
+-/
+
+/-- Scalar delayed-rescale identity for the softmax denominator. -/
+theorem fa2_delayed_rescale_sum_eq {ι : Type} [Fintype ι]
+    (scores : ι → ℝ) (mBlock mNew : ℝ) :
+    Real.exp (mBlock - mNew) *
+        (Finset.univ.sum fun j : ι => Real.exp (scores j - mBlock)) =
+      Finset.univ.sum fun j : ι => Real.exp (scores j - mNew) := by
+  rw [Finset.mul_sum]
+  refine Finset.sum_congr rfl ?_
+  intro j _
+  rw [← Real.exp_add]
+  congr 1
+  ring_nf
+
+/-- Weighted delayed-rescale identity for the softmax numerator. -/
+theorem fa2_delayed_rescale_weighted_sum_eq {ι : Type} [Fintype ι]
+    (scores values : ι → ℝ) (mBlock mNew : ℝ) :
+    Real.exp (mBlock - mNew) *
+        (Finset.univ.sum fun j : ι => Real.exp (scores j - mBlock) * values j) =
+      Finset.univ.sum fun j : ι => Real.exp (scores j - mNew) * values j := by
+  rw [Finset.mul_sum]
+  refine Finset.sum_congr rfl ?_
+  intro j _
+  rw [← mul_assoc, ← Real.exp_add]
+  congr 1
+  ring_nf
 
 /-- FA-2 forward baseline kernel.
 
