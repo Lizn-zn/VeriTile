@@ -179,13 +179,13 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `fa1BackwardStrippedKernel_correct` —— stripped 主定理(无 mask、无 multi-block、
   单 program-id)
 
-下一步:闭合 sub-2b → 加 mask → 加 multi-block → causal backward → FA-2 backward。
+下一步:加 mask → causal backward → FA-2 backward。multi-block atomic dQ 已通过 grid-launched surface 提供。
 
 ## 路线图(优先级排序,无固定时间窗口)
 
 ### 近期 — Tier 3-A 收口与 backward 第一阶段
 
-- 闭合 FA-1 backward stripped 主定理(剩 1 个 sorry)
+- 维护已闭合的 FA-1 backward stripped 主定理
 - 维护 `v0.3-tier3a` tag(forward 全套)
 - FA-1 backward 加 mask
 - FA-1 backward 接入 multi-block(等中期 multi-block 语义)
@@ -264,7 +264,7 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 
 | Risk | 触发信号 | Mitigation |
 |---|---|---|
-| FA-1 backward `sub-2b` 执行 wiring 长期卡住 | sorry 持续 ≥ 2 周 | `/lean4:autoprove --deep=stuck`;失败则切成更小 stripped sublemma |
+| FA-1 backward mask 或 multi-block wiring 卡住 | proof split 卡住 ≥ 2 周 | `/lean4:autoprove --deep=stuck`;失败则切成更小 stripped sublemma |
 | `multiBlockExec` 形式模型超预期复杂 | 起草 disjoint-writes 不变量时 | 限定为"每 program_id 行优先连续";通用 layout 系统不做 |
 | FA-2 multi-block 抽象超预期复杂 | 起草 `multiBlockExec` 时暴露隐藏复杂度 | 先 stripped FA-2(单 program,无 mask-skip);完整版作为后续 |
 | `tl.dot` 在 `Value.tile2D` 上 simp 表现糟糕 | FA 证明卡 simp | 自定义 simp 引理;或改 `unfold + induction` 风格 |

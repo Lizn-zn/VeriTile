@@ -556,7 +556,7 @@ theorem fa1_step
     · rw [← FA1Math.block_lNew_tile_eq Q K scale k hk]
       simp
       ext idx
-      simp only [Tile.bop, Tile.ofReal, Tile.uop,
+      simp only [Tile.bop, Tile.ofReal,
         Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
         Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
       congr 1
@@ -590,7 +590,7 @@ theorem fa1_step
     · rw [← FA1Math.block_oAcc_tile_eq Q K V scale k hk]
       simp
       ext idx
-      simp only [Tile.bop, Tile.ofReal, Tile.uop, Tile.expandDim,
+      simp only [Tile.bop, Tile.ofReal, Tile.expandDim,
         Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
         Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
         Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,
@@ -1223,7 +1223,7 @@ theorem fa1_step_strided
     · rw [← FA1Math.block_lNew_tile_eq Q K scale k hk]
       simp
       ext idx
-      simp only [Tile.bop, Tile.ofReal, Tile.uop,
+      simp only [Tile.bop, Tile.ofReal,
         Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
         Broadcast.leftIndex_nil, Broadcast.rightIndex_nil]
       congr 1
@@ -1246,7 +1246,7 @@ theorem fa1_step_strided
     · rw [← FA1Math.block_oAcc_tile_eq Q K V scale k hk]
       simp
       ext idx
-      simp only [Tile.bop, Tile.ofReal, Tile.uop, Tile.expandDim,
+      simp only [Tile.bop, Tile.ofReal, Tile.expandDim,
         Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
         Broadcast.leftIndex_consL, Broadcast.rightIndex_consL,
         Broadcast.leftIndex_nil, Broadcast.rightIndex_nil,

@@ -205,14 +205,14 @@ in-scope (see §Decision log entry 9).
 - `fa1BackwardStrippedKernel_correct` — stripped main theorem (no mask, no
   multi-block, single program-id)
 
-Next: close sub-2b → add mask → add multi-block → causal backward →
-FA-2 backward.
+Next: add mask → causal backward → FA-2 backward. Multi-block atomic dQ is
+available through the grid-launched surface.
 
 ## Roadmap (priority-ordered, no fixed time windows)
 
 ### Near-term — Tier 3-A wrap-up and backward stage 1
 
-- Close FA-1 backward stripped main theorem (last sorry)
+- Maintain closed FA-1 backward stripped theorem
 - Maintain `v0.3-tier3a` tag for forward full coverage
 - Add mask to FA-1 backward
 - Wire FA-1 backward to multi-block (after mid-term multi-block semantics)
@@ -307,7 +307,7 @@ have **moved out** of the original PLAN's P3+ list and into the roadmap
 
 | Risk | Trigger signal | Mitigation |
 |---|---|---|
-| FA-1 backward `sub-2b` execution wiring stuck long-term | sorry persists ≥ 2 weeks | `/lean4:autoprove --deep=stuck`; if that fails, split into smaller stripped sublemmas |
+| FA-1 backward mask or multi-block wiring stalls | proof split stalls ≥ 2 weeks | `/lean4:autoprove --deep=stuck`; if that fails, split into smaller stripped sublemmas |
 | `multiBlockExec` formal model more complex than expected | drafting the disjoint-writes invariant | restrict to "per program_id row-major contiguous"; no general layout system |
 | FA-2 multi-block abstraction more complex than expected | drafting `multiBlockExec` reveals hidden complexity | start with stripped FA-2 (single-program, no mask-skip); full version later |
 | `tl.dot` over `Value.tile2D` simp behaves badly | FA proof stuck on simp | custom simp lemmas; or switch to `unfold + induction` style |
