@@ -295,6 +295,29 @@ theorem dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl
           · intro j _
             rw [FA1Math.blockIndex_blockIndexEquiv]
 
+/-- Causal specialization of the mask-aware block-local `dQ` contribution. -/
+noncomputable def dQBlockContributionCausal {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [M, D]) : ℝ :=
+  dQBlockContributionMasked
+    (fun i j => decide (j.val ≤ i.val)) Q K V dO LSE scale block idx
+
+/-- Summing causal block-local `dQ` contributions over all KV blocks recovers
+the closed-form causal backward `dQ`. -/
+theorem dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal_impl
+    {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    (Finset.univ.sum fun block : Fin numKVBlocks =>
+      dQBlockContributionCausal Q K V dO LSE scale block idx) =
+      (attentionBackwardRealCausal Q K V dO LSE scale).dQ idx := by
+  simp [dQBlockContributionCausal, attentionBackwardRealCausal,
+    dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl]
+
 theorem exp_sum_mul_scale_eq {ι : Type} [Fintype ι]
     (f : ι → ℝ) (scale lse : ℝ) :
     Real.exp (((Finset.univ.sum f) * scale) - lse) =

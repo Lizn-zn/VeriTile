@@ -65,6 +65,19 @@ theorem dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked
   dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl
     visible Q K V dO LSE scale idx
 
+/-- Causal multi-block `dQ` corollary for FA-1 backward. -/
+theorem dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal
+    {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    (Finset.univ.sum fun block : Fin numKVBlocks =>
+      dQBlockContributionCausal Q K V dO LSE scale block idx) =
+      (attentionBackwardRealCausal Q K V dO LSE scale).dQ idx :=
+  dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal_impl
+    Q K V dO LSE scale idx
+
 /-! ## Kernel surfaces
 
 The current verified forward kernels remain available under their existing
