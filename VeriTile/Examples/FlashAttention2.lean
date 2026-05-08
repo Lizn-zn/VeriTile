@@ -11,11 +11,13 @@ refine this baseline rather than changing the user-facing spec.
 -/
 
 import VeriTile.Examples.FlashAttention1.Core
+import VeriTile.Triton.Math.Softmax
 import VeriTile.Triton.Launch.Grid
 
 namespace VeriTile.Examples
 
 open VeriTile.Triton
+open VeriTile.Triton.TiledSoftmax
 open BigOperators
 
 /-! ## FA-2 delayed-rescale math bridges
@@ -301,6 +303,76 @@ theorem fa1_eq_fa2_two_block_forward4D
         scale mLeft mRight mMerged (i, d, PUnit.unit) := by
   exact (fa2_two_block_forward_eq_attentionReal4D
     Q K V scale b h i d mLeft mRight mMerged hlFree).symm
+
+/-! ## FA-2 scalar score-row max producer
+
+This producer computes the row max consumed by the scalar fragment summary and
+fused scalar forward stages.
+-/
+
+def fa2ScalarScoreMaxKernel (scoreReg mReg : RegionName) (Bk : Nat) :
+    ComputeKernel := triton {
+  pid    := tl.program_id(0)
+  offs   := pid * $(Bk) + tl.arange(0, $(Bk))
+  scores := tl.load($(scoreReg) + offs)
+  m      := tl.max(scores, axis = 0)
+  tl.store($(mReg) + pid, m)
+}
+
+/-- Correctness of the executable scalar score-row max producer. -/
+theorem fa2ScalarScoreMaxKernel_correct_view
+    (scoreReg mReg : RegionName) (Bk : Nat) (hBk : 0 < Bk)
+    (s : BlockState) (scores : Fin Bk → ℝ)
+    (hScores : InputLoadedAt s scoreReg Bk scores) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarScoreMaxKernel scoreReg mReg Bk)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar mReg s.pid)
+      (expected := fun _ : PUnit => tileMax hBk scores) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hBk.ne'
+  simp [exec, fa2ScalarScoreMaxKernel, stepStmts, stepStmt, evalOp,
+        Tile.reduceMax, Tile.reduceMaxDrop, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, tileMax,
+        BlockState.writeMemTyped_real] at hExec ⊢
+  subst s'
+  intro _
+  simp [ComputeCorrect.WriteMap.scalar]
+  unfold InputLoadedAt at hScores
+  simpa [NumericDType.add, NumericDType.mul, TiledLogSumExp.blockMax, BlockState.pid] using
+    congrArg
+      (fun f : Fin (n + 1) → ℝ =>
+        Finset.univ.sup'
+          (⟨⟨0, hBk⟩, Finset.mem_univ _⟩ :
+            (Finset.univ : Finset (Fin (n + 1))).Nonempty) f)
+      (funext hScores)
+
+/-- State-parametric handoff for a score-row max producer.  If a later consumer
+state has the same scalar pid and agrees with the max producer final state on
+`mReg`, then the consumer can read the produced row max. -/
+theorem fa2ScalarScoreMaxKernel_loaded_of_agrees
+    (scoreReg mReg : RegionName) (Bk : Nat) (hBk : 0 < Bk)
+    (s sMax consumer : BlockState) (scores : Fin Bk → ℝ)
+    (hExec : exec (fa2ScalarScoreMaxKernel scoreReg mReg Bk).toAlgKernel s = some sMax)
+    (hPid : consumer.pid = s.pid)
+    (hMem : ∀ offset, consumer.readMem mReg offset = sMax.readMem mReg offset)
+    (hScores : InputLoadedAt s scoreReg Bk scores) :
+    consumer.readMem mReg consumer.pid = tileMax hBk scores := by
+  have hview := fa2ScalarScoreMaxKernel_correct_view
+    scoreReg mReg Bk hBk s scores hScores
+  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+    ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
+    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+  rcases hview with ⟨_, hview⟩
+  simp at hview
+  have hOut := hview s sMax hExec rfl PUnit.unit
+  calc
+    consumer.readMem mReg consumer.pid = sMax.readMem mReg consumer.pid := hMem _
+    _ = sMax.readMem mReg s.pid := by rw [hPid]
+    _ = tileMax hBk scores := by
+      simpa [ComputeCorrect.WriteMap.scalar] using hOut
 
 /-! ## FA-2 fragment-summary kernel surface
 

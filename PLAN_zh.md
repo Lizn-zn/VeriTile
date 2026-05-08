@@ -248,6 +248,11 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
   flat `attentionReal`
 - `fa2_two_block_forward_eq_attentionReal4D` —— 同一桥的 4D slice-facing
   版本,面向固定 `(batch, head, query, d)` 坐标
+- `fa2ScalarScoreMaxKernel_correct_view` —— 可执行 scalar score-row max
+  producer,写出 fragment-summary 和 fused scalar forward stage 消费的 row max
+- `fa2ScalarScoreMaxKernel_loaded_of_agrees` —— state-parametric
+  max-register handoff: 生产出来的 row max 可被 pid 对齐、且 max buffer 与
+  producer final state 一致的后续 scalar state 消费
 - `fa2ScalarFragmentSummaryKernel_correct_view` —— 可执行 one-fragment
   denominator/numerator summary 生产器,供 merge stage 消费
 - `fa2_score_fragment_tile_eq` —— 纯 tile bridge,证明 `Q @ Kᵀ * scale`

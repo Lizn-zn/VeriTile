@@ -281,6 +281,12 @@ available through the grid-launched surface.
   same two-block KV domain
 - `fa2_two_block_forward_eq_attentionReal4D` — 4D slice-facing variant of the
   same bridge at a fixed `(batch, head, query, d)` coordinate
+- `fa2ScalarScoreMaxKernel_correct_view` — executable scalar score-row max
+  producer, writing the row max consumed by fragment-summary and fused scalar
+  forward stages
+- `fa2ScalarScoreMaxKernel_loaded_of_agrees` — state-parametric max-register
+  handoff: a produced row max can be consumed by a later scalar state whose pid
+  is aligned and whose max buffer agrees with the producer final state
 - `fa2ScalarFragmentSummaryKernel_correct_view` — executable one-fragment
   producer for denominator/numerator summaries consumed by the merge stage
 - `fa2_score_fragment_tile_eq` — pure tile bridge showing `Q @ Kᵀ * scale`
