@@ -122,6 +122,149 @@ theorem fa2_masked_weighted_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι
       if visible j then Real.exp (scores j - m) * values j else 0) = 0 := by
   simp [hInvisible]
 
+/-! ## FA-2 two-fragment forward spec
+
+This is the first partitioned-forward spec surface: split the KV domain into
+two `Bk`-sized fragments, compute per-fragment denominator/numerator pairs
+under local maxima, then merge them with FA-2's delayed rescale.  The theorem
+below states that this two-fragment FA-2 output is exactly the flat
+`attentionReal` output over the same two-block KV domain.
+-/
+
+private theorem two_block0_le : 0 + 1 ≤ 2 := by omega
+private theorem two_block1_le : 1 + 1 ≤ 2 := by omega
+
+/-- Left-fragment denominator contribution. -/
+noncomputable def fa2TwoBlockDenomLeft {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (mBlock : ℝ) (i : Fin M) : ℝ :=
+  Finset.univ.sum fun j : Fin Bk =>
+    Real.exp
+      (FA1Math.scaledScore Q K scale i
+        (FA1Math.blockIndex Bk 2 0 two_block0_le j) - mBlock)
+
+/-- Right-fragment denominator contribution. -/
+noncomputable def fa2TwoBlockDenomRight {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (mBlock : ℝ) (i : Fin M) : ℝ :=
+  Finset.univ.sum fun j : Fin Bk =>
+    Real.exp
+      (FA1Math.scaledScore Q K scale i
+        (FA1Math.blockIndex Bk 2 1 two_block1_le j) - mBlock)
+
+/-- Left-fragment numerator contribution. -/
+noncomputable def fa2TwoBlockNumerLeft {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (mBlock : ℝ) (idx : TileIndex [M, D]) : ℝ :=
+  Finset.univ.sum fun j : Fin Bk =>
+    let key := FA1Math.blockIndex Bk 2 0 two_block0_le j
+    Real.exp (FA1Math.scaledScore Q K scale idx.1 key - mBlock) *
+      V (key, idx.2.1, PUnit.unit)
+
+/-- Right-fragment numerator contribution. -/
+noncomputable def fa2TwoBlockNumerRight {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (mBlock : ℝ) (idx : TileIndex [M, D]) : ℝ :=
+  Finset.univ.sum fun j : Fin Bk =>
+    let key := FA1Math.blockIndex Bk 2 1 two_block1_le j
+    Real.exp (FA1Math.scaledScore Q K scale idx.1 key - mBlock) *
+      V (key, idx.2.1, PUnit.unit)
+
+/-- Two-fragment FA-2 forward output for one `(query, head-dim)` coordinate. -/
+noncomputable def fa2TwoBlockForwardSpec {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (mLeft mRight mMerged : ℝ) (idx : TileIndex [M, D]) : ℝ :=
+  (Real.exp (mLeft - mMerged) *
+        fa2TwoBlockNumerLeft Q K V scale mLeft idx +
+      Real.exp (mRight - mMerged) *
+        fa2TwoBlockNumerRight Q K V scale mRight idx) /
+    (Real.exp (mLeft - mMerged) *
+        fa2TwoBlockDenomLeft Q K scale mLeft idx.1 +
+      Real.exp (mRight - mMerged) *
+        fa2TwoBlockDenomRight Q K scale mRight idx.1)
+
+private theorem fa2_two_block_denominator_common_shift {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (m : ℝ) (i : Fin M) :
+    fa2TwoBlockDenomLeft Q K scale m i +
+      fa2TwoBlockDenomRight Q K scale m i =
+      Real.exp (0 - m) * FA1Math.lFree Q K scale 2 (le_refl 2) i := by
+  rw [FA1Math.lFree_succ Q K scale 1 two_block1_le i,
+    FA1Math.lFree_succ Q K scale 0 two_block0_le i,
+    FA1Math.lFree_zero]
+  simp only [zero_add, fa2TwoBlockDenomLeft, fa2TwoBlockDenomRight]
+  rw [mul_add]
+  rw [Finset.mul_sum, Finset.mul_sum]
+  apply congrArg₂ HAdd.hAdd
+  · refine Finset.sum_congr rfl ?_
+    intro j _
+    rw [← Real.exp_add]
+    congr 1
+    ring_nf
+  · refine Finset.sum_congr rfl ?_
+    intro j _
+    rw [← Real.exp_add]
+    congr 1
+    ring_nf
+
+private theorem fa2_two_block_numerator_common_shift {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (m : ℝ) (idx : TileIndex [M, D]) :
+    fa2TwoBlockNumerLeft Q K V scale m idx +
+      fa2TwoBlockNumerRight Q K V scale m idx =
+      Real.exp (0 - m) * FA1Math.oFree Q K V scale 2 (le_refl 2) idx := by
+  rw [FA1Math.oFree_succ Q K V scale 1 two_block1_le idx,
+    FA1Math.oFree_succ Q K V scale 0 two_block0_le idx,
+    FA1Math.oFree_zero]
+  simp only [zero_add, fa2TwoBlockNumerLeft, fa2TwoBlockNumerRight]
+  rw [mul_add]
+  rw [Finset.mul_sum, Finset.mul_sum]
+  apply congrArg₂ HAdd.hAdd
+  · refine Finset.sum_congr rfl ?_
+    intro j _
+    rw [← mul_assoc, ← Real.exp_add]
+    congr 1
+    ring_nf
+  · refine Finset.sum_congr rfl ?_
+    intro j _
+    rw [← mul_assoc, ← Real.exp_add]
+    congr 1
+    ring_nf
+
+/-- Two-fragment FA-2 forward equals the flat FA-1 attention spec over the
+same two-block KV domain.  This is the partitioned-forward math bridge that
+the executable FA-2 kernel will target. -/
+theorem fa2_two_block_forward_eq_attentionReal {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (mLeft mRight mMerged : ℝ) (idx : TileIndex [M, D])
+    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    fa2TwoBlockForwardSpec Q K V scale mLeft mRight mMerged idx =
+      attentionReal Q K V scale idx := by
+  unfold fa2TwoBlockForwardSpec fa2TwoBlockDenomLeft fa2TwoBlockDenomRight
+    fa2TwoBlockNumerLeft fa2TwoBlockNumerRight
+  rw [fa2_two_fragment_attention_ratio_eq_flat
+    (scoresLeft := fun j : Fin Bk =>
+      FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk 2 0 two_block0_le j))
+    (valuesLeft := fun j : Fin Bk =>
+      V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
+    (scoresRight := fun j : Fin Bk =>
+      FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk 2 1 two_block1_le j))
+    (valuesRight := fun j : Fin Bk =>
+      V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
+    (mLeft := mLeft) (mRight := mRight) (mMerged := mMerged)]
+  change
+    (fa2TwoBlockNumerLeft Q K V scale mMerged idx +
+        fa2TwoBlockNumerRight Q K V scale mMerged idx) /
+      (fa2TwoBlockDenomLeft Q K scale mMerged idx.1 +
+        fa2TwoBlockDenomRight Q K scale mMerged idx.1) =
+      attentionReal Q K V scale idx
+  rw [fa2_two_block_numerator_common_shift Q K V scale mMerged idx,
+    fa2_two_block_denominator_common_shift Q K scale mMerged idx.1,
+    mul_div_mul_left _ _ (Real.exp_ne_zero (0 - mMerged))]
+  exact FA1Math.oFree_div_lFree_eq_attentionReal Q K V scale idx hlFree
+
 /-! ## FA-2 merge-stage kernel surface
 
 This small kernel is the executable core of the FA-2 fragment merge.  Each
