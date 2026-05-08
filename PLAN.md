@@ -339,6 +339,12 @@ available through the grid-launched surface.
   — producer-consumer wrapper: executable score, value, and left/right max
   producer runs feed the scalar fused-forward consumer; only the merged max
   register remains an explicit composition boundary
+- `fa2ScalarMergedMaxKernel_correct_view` /
+  `fa2ScalarMergedMaxKernel_loaded_of_agrees` — executable merged-max producer
+  and state-parametric handoff for the merged max register
+- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_producers_view`
+  — producer-consumer wrapper: executable score, value, left/right max, and
+  merged-max producer runs feed the scalar fused-forward consumer
 - `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` — 4D-facing wrapper of
   the fused scalar two-block DSL theorem at a fixed `(batch, head, query, d)`
   coordinate
