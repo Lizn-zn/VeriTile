@@ -51,6 +51,36 @@ theorem fa2_delayed_rescale_weighted_sum_eq {ι : Type} [Fintype ι]
   congr 1
   ring_nf
 
+/-- Two-fragment denominator merge: FA-2 can combine two block-local
+denominators by rescaling each to the merged max and adding them. -/
+theorem fa2_two_fragment_denominator_merge_eq_flat
+    {ι κ : Type} [Fintype ι] [Fintype κ]
+    (scoresLeft : ι → ℝ) (scoresRight : κ → ℝ)
+    (mLeft mRight mMerged : ℝ) :
+    Real.exp (mLeft - mMerged) *
+        (Finset.univ.sum fun j : ι => Real.exp (scoresLeft j - mLeft)) +
+      Real.exp (mRight - mMerged) *
+        (Finset.univ.sum fun j : κ => Real.exp (scoresRight j - mRight)) =
+      (Finset.univ.sum fun j : ι => Real.exp (scoresLeft j - mMerged)) +
+        (Finset.univ.sum fun j : κ => Real.exp (scoresRight j - mMerged)) := by
+  rw [fa2_delayed_rescale_sum_eq scoresLeft mLeft mMerged,
+    fa2_delayed_rescale_sum_eq scoresRight mRight mMerged]
+
+/-- Two-fragment numerator merge: FA-2 can combine two block-local weighted
+numerators by rescaling each to the merged max and adding them. -/
+theorem fa2_two_fragment_numerator_merge_eq_flat
+    {ι κ : Type} [Fintype ι] [Fintype κ]
+    (scoresLeft valuesLeft : ι → ℝ) (scoresRight valuesRight : κ → ℝ)
+    (mLeft mRight mMerged : ℝ) :
+    Real.exp (mLeft - mMerged) *
+        (Finset.univ.sum fun j : ι => Real.exp (scoresLeft j - mLeft) * valuesLeft j) +
+      Real.exp (mRight - mMerged) *
+        (Finset.univ.sum fun j : κ => Real.exp (scoresRight j - mRight) * valuesRight j) =
+      (Finset.univ.sum fun j : ι => Real.exp (scoresLeft j - mMerged) * valuesLeft j) +
+        (Finset.univ.sum fun j : κ => Real.exp (scoresRight j - mMerged) * valuesRight j) := by
+  rw [fa2_delayed_rescale_weighted_sum_eq scoresLeft valuesLeft mLeft mMerged,
+    fa2_delayed_rescale_weighted_sum_eq scoresRight valuesRight mRight mMerged]
+
 /-- Fully masked blocks contribute zero to the softmax denominator. -/
 theorem fa2_masked_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
     (visible : ι → Bool) (scores : ι → ℝ) (m : ℝ)
