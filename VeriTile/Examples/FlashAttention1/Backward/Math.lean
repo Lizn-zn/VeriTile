@@ -498,6 +498,95 @@ theorem dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal_impl
   simp [dQBlockContributionCausal, attentionBackwardRealCausal,
     dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl]
 
+/-- Raw kernel-form bridge for the causal block-local `dQ_part` computation.
+
+Unlike `dQ_block_tile_some_eq_dQBlockContributionCausal`, this theorem starts
+from the actual `tl.where`/`tl.exp`/`tl.sum` option expression emitted by the
+causal atomic kernel prefix. -/
+theorem dQ_block_kernel_tile_some_eq_dQBlockContributionCausal
+    {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [M, D]) :
+    Option.map (fun a : ℝ => a * scale)
+      (@Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ (fun jLocal : Fin Bk =>
+        Option.map
+          (fun a : ℝ =>
+            a * K (FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit))
+          (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+            (WithBot.realExp
+              (Option.map (fun a : ℝ => a - LSE idx.1)
+                (if ComparableDType.nat.ge idx.1.val (block.val * Bk + jLocal.val) =
+                    Bool.true then
+                  some ((Finset.univ.sum fun d : Fin D =>
+                    Q (idx.1, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                        (by have := block.isLt; omega) jLocal, d, PUnit.unit)) * scale)
+                else none)))
+            (Option.map
+              (fun b : ℝ =>
+                dP V dO idx.1
+                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                      (by have := block.isLt; omega) jLocal) - b)
+              (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
+                (fun j' : Fin (Bk * numKVBlocks) =>
+                  (Option.map (fun p : ℝ => p * dP V dO idx.1 j')
+                    (WithBot.realExp
+                      (Option.map (fun a : ℝ => a - LSE idx.1)
+                        (if ComparableDType.nat.ge idx.1.val j'.val = Bool.true then
+                          some ((Finset.univ.sum fun d : Fin D =>
+                            Q (idx.1, d, PUnit.unit) * K (j', d, PUnit.unit)) * scale)
+                        else none))) : WithBot ℝ))))))) =
+      some (dQBlockContributionCausal Q K V dO LSE scale block idx) := by
+  have hterm :
+      (fun jLocal : Fin Bk =>
+        Option.map
+          (fun a : ℝ =>
+            a * K (FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit))
+          (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+            (WithBot.realExp
+              (Option.map (fun a : ℝ => a - LSE idx.1)
+                (if ComparableDType.nat.ge idx.1.val (block.val * Bk + jLocal.val) =
+                    Bool.true then
+                  some ((Finset.univ.sum fun d : Fin D =>
+                    Q (idx.1, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                        (by have := block.isLt; omega) jLocal, d, PUnit.unit)) * scale)
+                else none)))
+            (Option.map
+              (fun b : ℝ =>
+                dP V dO idx.1
+                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                      (by have := block.isLt; omega) jLocal) - b)
+              (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
+                (fun j' : Fin (Bk * numKVBlocks) =>
+                  (Option.map (fun p : ℝ => p * dP V dO idx.1 j')
+                    (WithBot.realExp
+                      (Option.map (fun a : ℝ => a - LSE idx.1)
+                        (if ComparableDType.nat.ge idx.1.val j'.val = Bool.true then
+                          some ((Finset.univ.sum fun d : Fin D =>
+                            Q (idx.1, d, PUnit.unit) * K (j', d, PUnit.unit)) * scale)
+                        else none))) : WithBot ℝ)))))) =
+      (fun jLocal : Fin Bk =>
+        (some
+          (dSMasked (fun i j => decide (j.val ≤ i.val))
+            Q K V dO LSE scale idx.1
+            (FA1Math.blockIndex Bk numKVBlocks block.val
+              (by have := block.isLt; omega) jLocal) *
+            K (FA1Math.blockIndex Bk numKVBlocks block.val
+              (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit)) :
+          WithBot ℝ)) := by
+    funext jLocal
+    rw [causalBlockDS_kernel_option_eq]
+    rfl
+  rw [hterm]
+  rw [WithBot.sum_someTerm_eq_some]
+  simp [dQBlockContributionCausal, dQBlockContributionMasked]
+  ring_nf
+
 theorem exp_sum_mul_scale_eq {ι : Type} [Fintype ι]
     (f : ι → ℝ) (scale lse : ℝ) :
     Real.exp (((Finset.univ.sum f) * scale) - lse) =
