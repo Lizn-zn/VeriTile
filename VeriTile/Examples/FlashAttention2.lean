@@ -920,6 +920,65 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
       Q K V scale mLeft mRight mMerged idx hlFree
   simpa [ComputeCorrect.WriteMap.scalar, hSpec] using hOut
 
+/-- Producer-consumer wrapper for the fused scalar two-block FA-2 forward slice.
+The left/right score inputs are discharged from two executable
+`fa2ScoreFragmentKernel` producer runs plus score-buffer agreement with the
+consumer state; value buffers and max registers remain explicit consumer-side
+inputs. -/
+theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view
+    {M D Bk : Nat}
+    (qReg kReg scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+      mLeftReg mRightReg mMergedReg outReg : RegionName)
+    (sProducer sLeft sRight consumer : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D])
+    (mLeft mRight mMerged : ℝ)
+    (hExecLeft :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreLeftReg M D Bk 0 scale).toAlgKernel
+          sProducer =
+        some sLeft)
+    (hExecRight :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreRightReg M D Bk 1 scale).toAlgKernel
+          sProducer =
+        some sRight)
+    (hPid : consumer.pid = sProducer.pid * M + idx.1.val)
+    (hScoreLeftMem :
+      ∀ offset, consumer.readMem scoreLeftReg offset = sLeft.readMem scoreLeftReg offset)
+    (hScoreRightMem :
+      ∀ offset, consumer.readMem scoreRightReg offset = sRight.readMem scoreRightReg offset)
+    (hQ : ∀ qIdx : TileIndex [M, D],
+      sProducer.readMem qReg
+          ((sProducer.pid * M + qIdx.1.val) * D + qIdx.2.1.val) =
+        Q qIdx)
+    (hK : ∀ kIdx : TileIndex [Bk * 2, D],
+      sProducer.readMem kReg (kIdx.1.val * D + kIdx.2.1.val) = K kIdx)
+    (hValuesLeft : InputLoadedAt consumer valueLeftReg Bk
+      (fun j : Fin Bk =>
+        V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit)))
+    (hValuesRight : InputLoadedAt consumer valueRightReg Bk
+      (fun j : Fin Bk =>
+        V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit)))
+    (hmLeft : consumer.readMem mLeftReg consumer.pid = mLeft)
+    (hmRight : consumer.readMem mRightReg consumer.pid = mRight)
+    (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
+    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarTwoBlockForwardKernel
+        scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+        mLeftReg mRightReg mMergedReg outReg Bk)
+      (initialState := consumer)
+      (write := ComputeCorrect.WriteMap.scalar outReg consumer.pid)
+      (expected := fun _ : PUnit => attentionReal Q K V scale idx) := by
+  have hScores := fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees
+    qReg kReg scoreLeftReg scoreRightReg scale
+    sProducer sLeft sRight consumer Q K idx.1
+    hExecLeft hExecRight hPid hScoreLeftMem hScoreRightMem hQ hK
+  exact fa2ScalarTwoBlockForwardKernel_attentionReal_view
+    scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+    mLeftReg mRightReg mMergedReg outReg consumer Q K V scale idx
+    mLeft mRight mMerged
+    hScores.1 hValuesLeft hScores.2 hValuesRight hmLeft hmRight hmMerged hlFree
+
 /-- 4D-facing wrapper for the fused scalar two-block FA-2 forward slice.  The
 kernel still writes one scalar output coordinate, but the theorem is stated in
 the same `(batch, head, query, d)` language as the forward user surface. -/

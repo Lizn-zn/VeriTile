@@ -276,6 +276,10 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 - `fa2ScalarTwoBlockForwardKernel_attentionReal_view` —— 把 fused scalar
   two-block DSL kernel 接到 Q/K/V fragment score/value buffer,证明它写出
   flat `attentionReal`
+- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view` ——
+  producer-consumer wrapper: 两个可执行 score-fragment producer run
+  discharge scalar fused-forward consumer 的 left/right score 输入,剩下 value
+  buffer 和 max register 作为显式 consumer-side 假设
 - `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` —— fused scalar
   two-block DSL theorem 的 4D-facing wrapper,面向固定
   `(batch, head, query, d)` 坐标
