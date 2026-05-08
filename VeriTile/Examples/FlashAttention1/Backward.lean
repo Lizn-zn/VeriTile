@@ -1907,6 +1907,54 @@ theorem gridLaunchedAtomic_masked_dQ_correct
   rw [dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked visible Q K V dO LSE scale idx]
   simp
 
+/-- Concrete launcher-facing masked multi-block dQ theorem for the FA-1
+backward atomic kernel.  This specializes the generic masked
+`GridLaunchedAtomic` composition surface to `fa1BackwardAtomicDQKernel`, while
+leaving the kernel-specific trace-to-masked-contribution relation explicit in
+`hAtomicContrib`. -/
+theorem fa1BackwardAtomicDQKernel_gridLaunched_masked_dQ_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              dQBlockContributionMasked visible Q K V dO LSE scale block idx)) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some ((attentionBackwardRealMasked visible Q K V dO LSE scale).dQ idx) := by
+  exact gridLaunchedAtomic_masked_dQ_correct
+    (k := (fa1BackwardAtomicDQKernel
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale).toAlgKernel)
+    (dQReg := dQReg) (visible := visible) (scale := scale)
+    (s := s) (sFinal := sFinal)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
+    hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
+
 /-- Causal specialization of `gridLaunchedAtomic_masked_dQ_correct`. -/
 theorem gridLaunchedAtomic_causal_dQ_correct
     {M D Bk numKVBlocks : Nat}

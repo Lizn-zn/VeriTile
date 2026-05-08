@@ -206,6 +206,10 @@ in-scope (see §Decision log entry 9).
 - `gridLaunchedAtomic_masked_dQ_correct` and
   `gridLaunchedAtomic_causal_dQ_correct` — launcher-facing masked/causal
   atomic `dQ` composition surfaces
+- `fa1BackwardAtomicDQKernel_gridLaunched_masked_dQ_correct` — concrete
+  kernel-specific launcher-facing masked multi-block `dQ` theorem for the
+  non-causal atomic backward kernel, with trace-to-masked-contribution
+  extraction kept explicit
 - `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct` — concrete
   kernel-specific launcher-facing causal `dQ` theorem for the atomic backward
   kernel
