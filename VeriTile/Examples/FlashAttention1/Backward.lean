@@ -286,6 +286,45 @@ noncomputable def fa1BackwardAtomicDQCausalPreAtomicState
     ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale).toAlgKernel.body.take 33) s).getD s
 
+private def FA1BackwardAtomicDQCausalPreAtomicFacts
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (s : BlockState) : Prop :=
+  stepStmts
+      ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+        M D Bk numKVBlocks scale).toAlgKernel.body.take 33) s =
+    some (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale s) ∧
+  (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .nat [M, D] "q_ptrs" =
+    some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]) ∧
+  (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .nat [Bk, D] "k_block_ptrs" =
+    some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+      Tile .nat [Bk, D]) ∧
+  (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .nat [Bk, D] "v_block_ptrs" =
+    some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+      Tile .nat [Bk, D]) ∧
+  (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .real [M, D] "dQ_part" =
+    some (Tile.ofReal (dQBlockContributionCausal Q K V dO LSE scale block)) ∧
+  (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .real [Bk, D] "dK_block" =
+    some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      (attentionBackwardRealCausal Q K V dO LSE scale).dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) ∧
+  (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale s).regs .real [Bk, D] "dV_block" =
+    some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+      (attentionBackwardRealCausal Q K V dO LSE scale).dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+
 /-- State immediately before the `tl.atomic_add(dQ, dQ_part)` in the
 block-partitioned backward kernel.
 

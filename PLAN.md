@@ -210,6 +210,8 @@ in-scope (see §Decision log entry 9).
   block-partitioned backward with atomic `dQ`; trace extraction remains next
 - `fa1BackwardAtomicDQCausalPreAtomicState` — pre-atomic boundary for the
   causal kernel prefix, matching the non-causal proof split
+- `FA1BackwardAtomicDQCausalPreAtomicFacts` — proof target bundling the causal
+  prefix obligations for `dQ_part`, `dK_block`, and `dV_block`
 - Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
   `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`
