@@ -186,6 +186,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   pre-atomic 边界,对齐非 causal proof split
 - `FA1BackwardAtomicDQCausalPreAtomicFacts` —— causal prefix 需要证明的
   `dQ_part`、`dK_block`、`dV_block` obligations bundle
+- `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution` —— 已有
+  prefix facts 和 tail execution 后,重组 causal atomic `dQ` trace 的 theorem
 - `causalBackward_tile_bridges_complete` —— prefix proof 可复用的 causal
   `dQ/dK/dV` tile-dot bridge bundle
 - `causalBackward_block_tile_bridges_complete` —— atomic prefix proof 可复用的
@@ -198,9 +200,9 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `fa1BackwardStrippedKernel_correct` —— stripped 主定理(无 mask、无 multi-block、
   单 program-id)
 
-下一步:证明 masked/causal kernel 的 trace extraction,并接到上面的
-launcher-facing surface;之后同一路径扩到 FA-2 backward。multi-block atomic dQ
-composition 本身已通过 grid-launched surface 提供。
+下一步:证明 causal kernel 的 prefix facts,把具体 DSL prefix 接到已有 trace
+extraction 与 launcher-facing surface。multi-block atomic dQ composition 本身已通过
+grid-launched surface 提供。
 
 ## 路线图(优先级排序,无固定时间窗口)
 

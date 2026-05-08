@@ -212,6 +212,9 @@ in-scope (see §Decision log entry 9).
   causal kernel prefix, matching the non-causal proof split
 - `FA1BackwardAtomicDQCausalPreAtomicFacts` — proof target bundling the causal
   prefix obligations for `dQ_part`, `dK_block`, and `dV_block`
+- `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution` — causal
+  atomic `dQ` trace recomposition once prefix facts and tail execution are
+  available
 - `causalBackward_tile_bridges_complete` — causal `dQ/dK/dV` tile-dot bridge
   bundle for the prefix proof
 - `causalBackward_block_tile_bridges_complete` — block-local causal
@@ -225,9 +228,9 @@ in-scope (see §Decision log entry 9).
 - `fa1BackwardStrippedKernel_correct` — stripped main theorem (no mask, no
   multi-block, single program-id)
 
-Next: prove masked/causal kernel trace extraction against the launcher-facing
-surfaces above, then extend the same path to FA-2 backward. Multi-block atomic
-dQ composition itself is available through the grid-launched surface.
+Next: prove the causal kernel prefix facts against the concrete DSL prefix, then
+connect that trace extraction to the launcher-facing surfaces above. Multi-block
+atomic dQ composition itself is available through the grid-launched surface.
 
 ## Roadmap (priority-ordered, no fixed time windows)
 

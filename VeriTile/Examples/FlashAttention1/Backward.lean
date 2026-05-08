@@ -695,6 +695,20 @@ theorem fa1BackwardAtomicDQKernel_toAlgorithm_eq_toAlgKernel
         M D Bk numKVBlocks scale).toAlgKernel := by
   simp [fa1BackwardAtomicDQKernel, ComputeKernel.toAlgKernel]
 
+/-- The causal block-partitioned atomic-`dQ` backward kernel is also
+algorithm-projectable: the causal masks and `tl.where` remain in the
+AlgKernel surface, and the final `tl.atomic_add` is an algorithm-level atomic
+effect rather than a compute-only marker. -/
+theorem fa1BackwardAtomicDQCausalKernel_toAlgorithm_eq_toAlgKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) :
+    (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale).toAlgorithm? =
+      Except.ok
+        (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel := by
+  simp [fa1BackwardAtomicDQCausalKernel, ComputeKernel.toAlgKernel]
+
 /-- Stateful atomic trace extraction agrees with execution for the full
 atomic-`dQ` kernel.  This is the generic bridge needed before proving the
 per-program contribution formula consumed by the grid atomic-add theorem. -/
@@ -732,6 +746,25 @@ theorem fa1BackwardAtomicDQPreAtomic_traceEvents_empty
     hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem
   all_goals subst st; rfl
 
+/-- The causal pre-atomic prefix also emits no atomic trace events.  Its first
+trace-producing statement is the `tl.atomic_add` after the 33-statement
+causal register-computation prefix. -/
+theorem fa1BackwardAtomicDQCausalPreAtomic_traceEvents_empty
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ)
+    (tid : ThreadId) :
+    ∀ st ∈
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.take 33),
+      ∀ s0, Stmt.atomicTraceEvents tid s0 st = some [] := by
+  intro st hmem s0
+  simp [fa1BackwardAtomicDQCausalKernel] at hmem
+  rcases hmem with hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem |
+    hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem |
+    hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem | hmem |
+    hmem
+  all_goals subst st; rfl
+
 /-- The post-prefix tail of the block-partitioned backward kernel consists of
 the atomic `dQ` contribution followed by ordinary `dK` and `dV` stores. -/
 theorem fa1BackwardAtomicDQKernel_drop29
@@ -751,6 +784,27 @@ theorem fa1BackwardAtomicDQKernel_drop29
           (Op.ref .real [Bk, D] "dV_block") MaskOpt.none
       ] := by
   simp [fa1BackwardAtomicDQKernel]
+
+/-- The causal post-prefix tail has the same trace shape as the non-causal
+kernel: one atomic `dQ` accumulation followed by ordinary `dK` and `dV`
+stores. -/
+theorem fa1BackwardAtomicDQCausalKernel_drop33
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) :
+    (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale).toAlgKernel.body.drop 33 =
+      [
+        Stmt.atomicAdd NumericDType.real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "q_ptrs"))
+          (Op.ref .real [M, D] "dQ_part") MaskOpt.none,
+        Stmt.store .real [Bk, D]
+          (MemAccess.region dKReg (Op.ref .nat [Bk, D] "k_block_ptrs"))
+          (Op.ref .real [Bk, D] "dK_block") MaskOpt.none,
+        Stmt.store .real [Bk, D]
+          (MemAccess.region dVReg (Op.ref .nat [Bk, D] "v_block_ptrs"))
+          (Op.ref .real [Bk, D] "dV_block") MaskOpt.none
+      ] := by
+  simp [fa1BackwardAtomicDQCausalKernel]
 
 /-- Recompose the full stateful trace from the no-atomic prefix and the
 post-prefix tail. -/
@@ -774,6 +828,33 @@ theorem fa1BackwardAtomicDQKernel_statefulTrace_of_tail
         tid s trace final := by
   apply Kernel.AtomicTraceStateful_of_dropPrefix (n := 29)
   · exact fa1BackwardAtomicDQPreAtomic_traceEvents_empty
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale tid
+  · exact hPre
+  · exact hTail
+
+/-- Recompose the full causal stateful trace from the no-atomic prefix and the
+post-prefix tail. -/
+theorem fa1BackwardAtomicDQCausalKernel_statefulTrace_of_tail
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ)
+    (tid : ThreadId) (s sPre final : BlockState) (trace : Trace)
+    (hPre :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.take 33) s =
+        some sPre)
+    (hTail :
+      Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.drop 33) sPre =
+        some (trace, final)) :
+    Kernel.AtomicTraceStateful
+        (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel
+        tid s trace final := by
+  apply Kernel.AtomicTraceStateful_of_dropPrefix (n := 33)
+  · exact fa1BackwardAtomicDQCausalPreAtomic_traceEvents_empty
       qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale tid
   · exact hPre
@@ -870,6 +951,98 @@ theorem fa1BackwardAtomicDQKernel_tail_trace_blockContribution
       unfold Kernel.AtomicTraceStatefulList
       simp [hTrace, hAtomicStep, hStoresTrace]
 
+/-- Specialized causal trace surface for one block's atomic `dQ`
+contribution. -/
+theorem fa1BackwardAtomicDQCausal_atomicTraceEvents_blockContribution
+    {M D Bk numKVBlocks : Nat}
+    (dQReg : RegionName) (tid : ThreadId) (sPre : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, D] "q_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausal Q K V dO LSE scale block))) :
+    Stmt.atomicTraceEvents tid sPre
+        (Stmt.atomicAdd NumericDType.real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "q_ptrs"))
+          (Op.ref .real [M, D] "dQ_part") MaskOpt.none) =
+      some ((TileShape.allIndices [M, D]).filterMap fun i =>
+        some (Stmt.atomicTraceEvent tid dQReg
+          (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+          (some (dQBlockContributionCausal Q K V dO LSE scale block i)))) := by
+  simpa [Tile.ofReal] using
+    Stmt.atomicTraceEvents_atomicAdd_region_none_of_reg_refs
+      (hnum := NumericDType.real) (tid := tid) (s := sPre) (region := dQReg)
+      (ptrName := "q_ptrs") (valueName := "dQ_part")
+      (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D])
+      (Tile.ofReal (dQBlockContributionCausal Q K V dO LSE scale block))
+      hPtrs hVal
+
+/-- Causal tail trace once the pre-atomic registers are known.  The ordinary
+stores after the atomic statement emit no atomic events, so the tail trace is
+exactly the causal block contribution trace. -/
+theorem fa1BackwardAtomicDQCausalKernel_tail_trace_blockContribution
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (tid : ThreadId) (sPre final : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, D] "q_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausal Q K V dO LSE scale block)))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.drop 33) sPre =
+        some final) :
+    Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.drop 33) sPre =
+      some
+        ((TileShape.allIndices [M, D]).filterMap fun i =>
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+            (some (dQBlockContributionCausal Q K V dO LSE scale block i))),
+          final) := by
+  rw [fa1BackwardAtomicDQCausalKernel_drop33] at hTailStep ⊢
+  have hTrace := fa1BackwardAtomicDQCausal_atomicTraceEvents_blockContribution
+    (dQReg := dQReg) (tid := tid) (sPre := sPre)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+    (scale := scale) (block := block) hPtrs hVal
+  conv at hTailStep => lhs; unfold stepStmts
+  cases hAtomicStep :
+      stepStmt
+        (Stmt.atomicAdd NumericDType.real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "q_ptrs"))
+          (Op.ref .real [M, D] "dQ_part") MaskOpt.none) sPre with
+  | none =>
+      simp [hAtomicStep] at hTailStep
+  | some sAfterAtomic =>
+      simp [hAtomicStep] at hTailStep
+      have hStoresTrace :
+          Kernel.AtomicTraceStatefulList tid
+              [
+                Stmt.store .real [Bk, D]
+                  (MemAccess.region dKReg (Op.ref .nat [Bk, D] "k_block_ptrs"))
+                  (Op.ref .real [Bk, D] "dK_block") MaskOpt.none,
+                Stmt.store .real [Bk, D]
+                  (MemAccess.region dVReg (Op.ref .nat [Bk, D] "v_block_ptrs"))
+                  (Op.ref .real [Bk, D] "dV_block") MaskOpt.none
+              ] sAfterAtomic =
+            some ([], final) := by
+        apply Kernel.AtomicTraceStatefulList_empty_of_stepStmts
+        · intro st hmem s0
+          simp at hmem
+          rcases hmem with hmem | hmem <;> subst st <;> rfl
+        · exact hTailStep
+      unfold Kernel.AtomicTraceStatefulList
+      simp [hTrace, hAtomicStep, hStoresTrace]
+
 /-- Full-kernel stateful trace for one program once the pre-atomic register
 facts and tail execution are available. -/
 theorem fa1BackwardAtomicDQKernel_statefulTrace_blockContribution
@@ -910,6 +1083,49 @@ theorem fa1BackwardAtomicDQKernel_statefulTrace_blockContribution
     (scale := scale) (tid := tid) (sPre := sPre)
   · exact hPre
   · exact fa1BackwardAtomicDQKernel_tail_trace_blockContribution
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale tid sPre final Q K V dO LSE block hPtrs hVal hTailStep
+
+/-- Full causal-kernel stateful trace for one program once the pre-atomic
+register facts and tail execution are available. -/
+theorem fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (tid : ThreadId) (s sPre final : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (block : Fin numKVBlocks)
+    (hPre :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.take 33) s =
+        some sPre)
+    (hPtrs : sPre.regs .nat [M, D] "q_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausal Q K V dO LSE scale block)))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.drop 33) sPre =
+        some final) :
+    Kernel.AtomicTraceStateful
+        (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel
+        tid s
+        ((TileShape.allIndices [M, D]).filterMap fun i =>
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+            (some (dQBlockContributionCausal Q K V dO LSE scale block i))))
+        final := by
+  apply fa1BackwardAtomicDQCausalKernel_statefulTrace_of_tail
+    (qReg := qReg) (kReg := kReg) (vReg := vReg) (dOReg := dOReg)
+    (lseReg := lseReg) (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (M := M) (D := D) (Bk := Bk) (numKVBlocks := numKVBlocks)
+    (scale := scale) (tid := tid) (sPre := sPre)
+  · exact hPre
+  · exact fa1BackwardAtomicDQCausalKernel_tail_trace_blockContribution
       qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       scale tid sPre final Q K V dO LSE block hPtrs hVal hTailStep
 
