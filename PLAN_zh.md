@@ -253,8 +253,8 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 - `fa2_score_fragment_tile_eq` —— 纯 tile bridge,证明 `Q @ Kᵀ * scale`
   计算出局部 FA-2 score fragment,为后续可执行 score-producer proof 做分解
 - `fa2ScoreFragmentKernel` —— 可执行 QK score-fragment producer surface
-  (`Q_block @ K_fragmentᵀ * scale` 写入 contiguous score tile); correctness
-  等待 prefix-state/store-readback helper
+  (`Q_block @ K_fragmentᵀ * scale` 写入 contiguous score tile),并由
+  `fa2ScoreFragmentKernel_correct_view` 证明可执行 store readback
 - `fa2ScalarTwoBlockForwardKernel_correct_view` —— 可执行 scalar two-block
   slice,把 fragment summary 生产和 delayed-rescale merge 融合进一个 DSL
   kernel,写出 tile-level FA-2 two-fragment spec

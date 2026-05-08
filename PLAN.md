@@ -287,8 +287,8 @@ available through the grid-launched surface.
   computes the local FA-2 score fragment, factoring the future executable
   score-producer proof
 - `fa2ScoreFragmentKernel` — executable QK score-fragment producer surface
-  (`Q_block @ K_fragmentᵀ * scale` into a contiguous score tile); correctness is
-  intentionally pending the prefix-state/store-readback helper
+  (`Q_block @ K_fragmentᵀ * scale` into a contiguous score tile), with
+  `fa2ScoreFragmentKernel_correct_view` proving the executable store readback
 - `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
   slice fusing fragment-summary production and delayed-rescale merge into one
   DSL kernel, writing the tile-level FA-2 two-fragment spec

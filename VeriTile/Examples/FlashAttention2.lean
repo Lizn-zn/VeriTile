@@ -427,6 +427,53 @@ def fa2ScoreFragmentKernel
   tl.store($(scoreReg) + score_ptrs, scores)
 }
 
+/-- Correctness of the executable FA-2 score-fragment producer for one program
+instance. -/
+theorem fa2ScoreFragmentKernel_correct_view
+    (qReg kReg scoreReg : RegionName)
+    (M D Bk keyBlock : Nat) (scale : ℝ) (s : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk, D] → ℝ)
+    (hQ : ∀ idx : TileIndex [M, D],
+      s.readMem qReg
+          ((s.pid * M + idx.1.val) * D + idx.2.1.val) =
+        Q idx)
+    (hK : ∀ idx : TileIndex [Bk, D],
+      s.readMem kReg
+          ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
+        K idx) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScoreFragmentKernel qReg kReg scoreReg M D Bk keyBlock scale)
+      (initialState := s)
+      (write := fun idx : TileIndex [M, Bk] =>
+        some (scoreReg,
+          s.pid * (M * Bk) + idx.1.val * Bk + idx.2.1.val))
+      (expected := fa2ScoreFragmentSpec Q K scale) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  simp [exec, fa2ScoreFragmentKernel, stepStmts, stepStmt, evalOp, Option.bind,
+    Tile.bop, Tile.dot, Tile.transpose, NumericDType.add, NumericDType.mul,
+    BlockState.writeMemTyped_real, fa2ScoreFragmentSpec] at hExec ⊢
+  subst s'
+  intro i j
+  simp only [TileShape.dropInsertedIndex] at *
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [M, Bk] =>
+        s.pids 0 * (M * Bk) + idx.1.val * Bk + idx.2.1.val) := by
+    intro a b h
+    have hrow : Offset.rowMajor2D (rows := M) (cols := Bk)
+        (s.pids 0 * (M * Bk)) Bk a =
+        Offset.rowMajor2D (rows := M) (cols := Bk)
+          (s.pids 0 * (M * Bk)) Bk b := by
+      simpa [Offset.rowMajor2D, Offset.strided] using h
+    exact Offset.rowMajor2D_inj
+      (base := s.pids 0 * (M * Bk)) (rowStride := Bk) (le_refl Bk) hrow
+  rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, j, PUnit.unit)]
+  congr 1
+  refine Finset.sum_congr rfl ?_
+  intro d _
+  simp [hQ (i, d, PUnit.unit), hK (j, d, PUnit.unit)]
+
 /-! ## FA-2 fused two-block scalar forward kernel surface
 
 This fuses the two fragment-summary computations and the delayed-rescale merge
