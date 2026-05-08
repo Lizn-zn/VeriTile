@@ -251,6 +251,9 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
   denominator/numerator 零贡献恒等式
 - `fa2ScalarTwoFragmentMergeKernel_correct_view` —— delayed-rescale fragment
   merge 的可执行 scalar merge-stage kernel surface
+- `fa2ScalarTwoFragmentMergeKernel_attentionReal_view` —— 接到 two-block Q/K/V
+  fragment summaries 的可执行 merge-stage kernel surface,证明 scalar merge 输出
+  等于 flat `attentionReal`
 - `fa_2_forward_correct` —— 类似 FA-1 forward 的:(a) 序列长度并行化、
   (b) 延迟 rescaling、(c) 全 mask 块跳过
   - 延迟 rescale 等价:`O_final / l_final` 不依赖中间 `O` 是否每步 rescale

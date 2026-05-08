@@ -283,6 +283,9 @@ available through the grid-launched surface.
   denominator/numerator zero-contribution identities
 - `fa2ScalarTwoFragmentMergeKernel_correct_view` — executable scalar
   merge-stage kernel surface for delayed-rescale fragment merge
+- `fa2ScalarTwoFragmentMergeKernel_attentionReal_view` — executable
+  merge-stage kernel surface connected to two-block Q/K/V fragment summaries,
+  proving the scalar merge output equals flat `attentionReal`
 - `fa_2_forward_correct` — like FA-1 forward, with: (a) sequence-length
   parallelization, (b) delayed rescaling, (c) full-mask block skip
   - Delayed rescale equivalence: `O_final / l_final` does not depend on

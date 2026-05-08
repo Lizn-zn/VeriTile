@@ -386,6 +386,57 @@ theorem fa2ScalarTwoFragmentMergeKernel_correct_view
   intro _
   simpa [observeRowAt, ComputeCorrect.WriteMap.scalar] using hview
 
+/-- End-to-end scalar merge-stage theorem for a two-block FA-2 forward slice:
+if the fragment buffers contain the left/right denominator and numerator
+contributions for a Q/K/V two-block domain, the executable merge-stage kernel
+writes the flat `attentionReal` result. -/
+theorem fa2ScalarTwoFragmentMergeKernel_attentionReal_view
+    {M D Bk : Nat}
+    (mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg : RegionName)
+    (s : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D])
+    (mLeft mRight mMerged : ℝ)
+    (lLeft oLeft lRight oRight : ℝ)
+    (hmLeft : s.readMem mLeftReg s.pid = mLeft)
+    (hlLeftMem : s.readMem lLeftReg s.pid = lLeft)
+    (hoLeftMem : s.readMem oLeftReg s.pid = oLeft)
+    (hmRight : s.readMem mRightReg s.pid = mRight)
+    (hlRightMem : s.readMem lRightReg s.pid = lRight)
+    (hoRightMem : s.readMem oRightReg s.pid = oRight)
+    (hmMerged : s.readMem mMergedReg s.pid = mMerged)
+    (hlLeft :
+      lLeft = fa2TwoBlockDenomLeft Q K scale mLeft idx.1)
+    (hoLeft :
+      oLeft = fa2TwoBlockNumerLeft Q K V scale mLeft idx)
+    (hlRight :
+      lRight = fa2TwoBlockDenomRight Q K scale mRight idx.1)
+    (hoRight :
+      oRight = fa2TwoBlockNumerRight Q K V scale mRight idx)
+    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarTwoFragmentMergeKernel
+        mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar outReg s.pid)
+      (expected := fun _ : PUnit => attentionReal Q K V scale idx) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hmerge := fa2ScalarTwoFragmentMergeKernel_correct
+    mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg
+    s mLeft lLeft oLeft mRight lRight oRight mMerged
+    hmLeft hlLeftMem hoLeftMem hmRight hlRightMem hoRightMem hmMerged
+  rw [hExec] at hmerge
+  intro _
+  have hSpec :
+      fa2ScalarTwoFragmentMergeSpec mLeft lLeft oLeft mRight lRight oRight mMerged =
+        attentionReal Q K V scale idx := by
+    rw [hlLeft, hoLeft, hlRight, hoRight]
+    exact fa2_two_block_forward_eq_attentionReal
+      Q K V scale mLeft mRight mMerged idx hlFree
+  simpa [observeRowAt, ComputeCorrect.WriteMap.scalar, hSpec] using hmerge
+
 /-- FA-2 forward baseline kernel.
 
 At this stage the FA-2 module exposes the same online-softmax block recurrence
