@@ -102,6 +102,25 @@ noncomputable def probabilityMasked {M S D : Nat}
     (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) (j : Fin S) : ℝ :=
   if visible i j then probability Q K LSE scale i j else 0
 
+/-- Normal form bridge for masked logits: selecting the scaled score on
+visible lanes and `⊥` on invisible lanes, then applying `exp(score - LSE)`,
+is exactly the mask-aware probability.  This is the local semantic bridge used
+to connect `tl.where(..., -inf)` code paths to the Real masked spec. -/
+theorem maskedProbability_exp_eq {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) (j : Fin S) :
+    WithBot.realExp
+      (Option.map (fun a : ℝ => a - LSE i)
+        (if visible i j then
+          some (scale * Finset.univ.sum fun d : Fin D =>
+            Q (i, d, PUnit.unit) * K (j, d, PUnit.unit))
+        else none)) =
+      some (probabilityMasked visible Q K LSE scale i j) := by
+  by_cases h : visible i j
+  · simp [h, probabilityMasked, probability, FA1Math.scaledScore]
+  · simp [h, probabilityMasked, WithBot.realExp]
+
 /-- Mask-aware row correction `D_i = Σ_j P_ij · dP_ij`, with invisible lanes
 contributing zero. -/
 noncomputable def rowCorrectionMasked {M S D : Nat}
