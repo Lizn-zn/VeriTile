@@ -36,6 +36,13 @@ def Tile.cop {dtype a b out}
     Tile .bool out :=
   ⟨fun i => op (x.data (bc.leftIndex i)) (y.data (bc.rightIndex i))⟩
 
+@[simp] theorem Tile.cop_data {dtype a b out}
+    (op : TileCarrier dtype → TileCarrier dtype → Bool)
+    (bc : Broadcast a b out) (x : Tile dtype a) (y : Tile dtype b)
+    (i : TileIndex out) :
+    (Tile.cop op bc x y).data i =
+      op (x.data (bc.leftIndex i)) (y.data (bc.rightIndex i)) := rfl
+
 def Tile.ptrAdd {a b out}
     (bc : Broadcast a b out) (ptrs : Tile .ptr a) (offs : Tile .nat b) :
     Tile .ptr out :=

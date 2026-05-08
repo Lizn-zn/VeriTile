@@ -141,6 +141,10 @@ noncomputable def ge :
   | .int, x, y => decide (x ≥ y)
   | .nat, x, y => decide (x ≥ y)
 
+@[simp] theorem nat_ge_eq_true (x y : Nat) :
+    (ComparableDType.nat.ge x y = Bool.true) = (y ≤ x) := by
+  simp [ge]
+
 noncomputable def ne :
     ComparableDType dtype → TileCarrier dtype → TileCarrier dtype → Bool
   | .real, x, y => decide (x ≠ y)

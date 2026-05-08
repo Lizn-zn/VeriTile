@@ -217,6 +217,90 @@ theorem maskedDS_option_eq {M S D : Nat}
   rw [maskedProbability_exp_eq, maskedRowCorrection_sum_eq]
   simp [dSMasked]
 
+/-- Block-local causal specialization of `maskedDS_option_eq`.
+
+The causal atomic backward kernel builds the block-local mask as
+`block * Bk + jLocal <= i`, while the Real spec uses the global key index
+`blockIndex ... jLocal`.  This bridge identifies the two forms and packages the
+kernel expression for `dS_block` as the causal `dSMasked` spec. -/
+theorem causalBlockDS_option_eq {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (i : Fin M) (jLocal : Fin Bk) :
+    Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+      (WithBot.realExp
+        (Option.map (fun a : ℝ => a - LSE i)
+          (if block.val * Bk + jLocal.val ≤ i.val then
+            some (scale * (Finset.univ.sum fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (by have := block.isLt; omega) jLocal, d, PUnit.unit)))
+          else none)))
+      (Option.map
+        (fun b : ℝ =>
+          dP V dO i
+              (FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) jLocal) - b)
+        (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
+          (fun j' : Fin (Bk * numKVBlocks) =>
+            (Option.map (fun p : ℝ => p * dP V dO i j')
+              (WithBot.realExp
+                (Option.map (fun a : ℝ => a - LSE i)
+                  (if j'.val ≤ i.val then
+                    some (scale * (Finset.univ.sum fun d : Fin D =>
+                      Q (i, d, PUnit.unit) * K (j', d, PUnit.unit)))
+                  else none))) : WithBot ℝ)))) =
+      some (dSMasked (fun i j => decide (j.val ≤ i.val))
+        Q K V dO LSE scale i
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) jLocal)) := by
+  simpa [FA1Math.blockIndex] using
+    maskedDS_option_eq (M := M) (S := Bk * numKVBlocks) (D := D)
+      (fun (i : Fin M) (j : Fin (Bk * numKVBlocks)) => decide (j.val ≤ i.val))
+      Q K V dO LSE scale i
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) jLocal)
+
+/-- Same bridge as `causalBlockDS_option_eq`, matching the exact comparison
+normal form emitted by the kernel DSL after `tl.where(causal, ..., -inf)`.
+The DSL stores the scaled dot product as `(sum) * scale`, while the Real spec
+uses `scale * (sum)`; this lemma absorbs that syntactic difference. -/
+theorem causalBlockDS_kernel_option_eq {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (i : Fin M) (jLocal : Fin Bk) :
+    Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+      (WithBot.realExp
+        (Option.map (fun a : ℝ => a - LSE i)
+          (if ComparableDType.nat.ge i.val (block.val * Bk + jLocal.val) = Bool.true then
+            some ((Finset.univ.sum fun d : Fin D =>
+              Q (i, d, PUnit.unit) *
+                K (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (by have := block.isLt; omega) jLocal, d, PUnit.unit)) * scale)
+          else none)))
+      (Option.map
+        (fun b : ℝ =>
+          dP V dO i
+              (FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) jLocal) - b)
+        (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
+          (fun j' : Fin (Bk * numKVBlocks) =>
+            (Option.map (fun p : ℝ => p * dP V dO i j')
+              (WithBot.realExp
+                (Option.map (fun a : ℝ => a - LSE i)
+                  (if ComparableDType.nat.ge i.val j'.val = Bool.true then
+                    some ((Finset.univ.sum fun d : Fin D =>
+                      Q (i, d, PUnit.unit) * K (j', d, PUnit.unit)) * scale)
+                  else none))) : WithBot ℝ)))) =
+      some (dSMasked (fun i j => decide (j.val ≤ i.val))
+        Q K V dO LSE scale i
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) jLocal)) := by
+  simpa [ComparableDType.ge, mul_comm, FA1Math.blockIndex] using
+    causalBlockDS_option_eq Q K V dO LSE scale block i jLocal
+
 /-- Closed-form reverse-mode FA-1 backward over Real tensors with an explicit
 query/key visibility mask. -/
 noncomputable def attentionBackwardRealMasked {M S D : Nat}
