@@ -295,6 +295,9 @@ available through the grid-launched surface.
 - `fa2ScoreFragmentKernel_scaledScore_correct_view` — global-score wrapper for
   the score producer, proving it writes the `FA1Math.scaledScore` values
   consumed by the attention pipeline
+- `fa2ScoreFragmentKernel_scaledScore_row_loaded` — buffer-handoff lemma: a
+  produced score row can be consumed as `InputLoadedAt` by the scalar fused
+  forward program id `queryBlock * M + row`
 - `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
   slice fusing fragment-summary production and delayed-rescale merge into one
   DSL kernel, writing the tile-level FA-2 two-fragment spec

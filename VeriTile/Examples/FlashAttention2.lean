@@ -545,6 +545,52 @@ theorem fa2ScoreFragmentKernel_scaledScore_correct_view
     Q K scale keyBlock hKeyBlock idx
   simpa [hSpec] using hOut
 
+/-- Row handoff from the score-fragment producer to the scalar fused forward
+kernel: after producing the `[M, Bk]` score tile for query block `s.pid`, row
+`row` can be consumed as a standard `InputLoadedAt` tile by a scalar kernel
+whose `pid` is `s.pid * M + row`. -/
+theorem fa2ScoreFragmentKernel_scaledScore_row_loaded
+    {M D Bk N : Nat}
+    (qReg kReg scoreReg : RegionName)
+    (keyBlock : Nat) (hKeyBlock : keyBlock < N)
+    (scale : ℝ) (s sScore : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (row : Fin M)
+    (hExec :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreReg M D Bk keyBlock scale).toAlgKernel s =
+        some sScore)
+    (hQ : ∀ idx : TileIndex [M, D],
+      s.readMem qReg
+          ((s.pid * M + idx.1.val) * D + idx.2.1.val) =
+        Q idx)
+    (hK : ∀ idx : TileIndex [Bk, D],
+      s.readMem kReg
+          ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
+        K (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
+          idx.2.1, PUnit.unit)) :
+    InputLoadedAt
+      (sScore.withPids (fun ax => if ax = 0 then s.pid * M + row.val else sScore.pids ax))
+      scoreReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore Q K scale row
+          (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) j)) := by
+  have hview := fa2ScoreFragmentKernel_scaledScore_correct_view
+    qReg kReg scoreReg keyBlock hKeyBlock scale s Q K hQ hK
+  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+    ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
+    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+  rcases hview with ⟨_, hview⟩
+  simp at hview
+  intro j
+  have hOut := hview s sScore hExec rfl row j
+  have hAddr :
+      (s.pid * M + row.val) * Bk + j.val =
+        s.pid * (M * Bk) + row.val * Bk + j.val := by
+    ring
+  simpa [InputLoadedAt, BlockState.withPids, hAddr] using hOut
+
 /-! ## FA-2 fused two-block scalar forward kernel surface
 
 This fuses the two fragment-summary computations and the delayed-rescale merge

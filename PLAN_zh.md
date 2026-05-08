@@ -260,6 +260,9 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 - `fa2ScoreFragmentKernel_scaledScore_correct_view` —— score producer 的
   global-score wrapper,证明它写出 attention pipeline 消费的
   `FA1Math.scaledScore` 值
+- `fa2ScoreFragmentKernel_scaledScore_row_loaded` —— buffer-handoff lemma:
+  生产出来的 score row 可作为 scalar fused forward program id
+  `queryBlock * M + row` 的 `InputLoadedAt` 输入
 - `fa2ScalarTwoBlockForwardKernel_correct_view` —— 可执行 scalar two-block
   slice,把 fragment summary 生产和 delayed-rescale merge 融合进一个 DSL
   kernel,写出 tile-level FA-2 two-fragment spec
