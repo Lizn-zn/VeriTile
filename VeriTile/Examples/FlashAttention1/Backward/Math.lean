@@ -587,6 +587,51 @@ theorem dQ_block_kernel_tile_some_eq_dQBlockContributionCausal
   simp [dQBlockContributionCausal, dQBlockContributionMasked]
   ring_nf
 
+/-- Prop-if normal form of `dQ_block_kernel_tile_some_eq_dQBlockContributionCausal`.
+
+The concrete causal prefix proof simplifies `ComparableDType.nat.ge ... =
+Bool.true` into the proposition `j ≤ i`.  This wrapper keeps the expensive raw
+bridge available after that normalization. -/
+theorem dQ_block_kernel_prop_tile_some_eq_dQBlockContributionCausal
+    {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [M, D]) :
+    Option.map (fun a : ℝ => a * scale)
+      (@Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ (fun jLocal : Fin Bk =>
+        Option.map
+          (fun a : ℝ =>
+            a * K (FA1Math.blockIndex Bk numKVBlocks block.val
+                (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit))
+          (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+            (WithBot.realExp
+              (Option.map (fun a : ℝ => a - LSE idx.1)
+                (if block.val * Bk + jLocal.val ≤ idx.1.val then
+                  some ((Finset.univ.sum fun d : Fin D =>
+                    Q (idx.1, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                        (by have := block.isLt; omega) jLocal, d, PUnit.unit)) * scale)
+                else none)))
+            (Option.map
+              (fun b : ℝ =>
+                dP V dO idx.1
+                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                      (by have := block.isLt; omega) jLocal) - b)
+              (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
+                (fun j' : Fin (Bk * numKVBlocks) =>
+                  (Option.map (fun p : ℝ => p * dP V dO idx.1 j')
+                    (WithBot.realExp
+                      (Option.map (fun a : ℝ => a - LSE idx.1)
+                        (if j'.val ≤ idx.1.val then
+                          some ((Finset.univ.sum fun d : Fin D =>
+                            Q (idx.1, d, PUnit.unit) * K (j', d, PUnit.unit)) * scale)
+                        else none))) : WithBot ℝ))))))) =
+      some (dQBlockContributionCausal Q K V dO LSE scale block idx) := by
+  simpa [ComparableDType.ge] using
+    dQ_block_kernel_tile_some_eq_dQBlockContributionCausal
+      Q K V dO LSE scale block idx
+
 /-- Raw kernel-form bridge for the causal block-local `dK_block` computation. -/
 theorem dK_block_kernel_tile_some_eq_attentionBackwardRealCausal
     {M D Bk numKVBlocks : Nat}
@@ -666,6 +711,46 @@ theorem dK_block_kernel_tile_some_eq_attentionBackwardRealCausal
   simp [attentionBackwardRealCausal, attentionBackwardRealMasked]
   ring_nf
 
+/-- Prop-if normal form of `dK_block_kernel_tile_some_eq_attentionBackwardRealCausal`. -/
+theorem dK_block_kernel_prop_tile_some_eq_attentionBackwardRealCausal
+    {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [Bk, D]) :
+    Option.map (fun a : ℝ => a * scale)
+      (@Finset.sum (Fin M) (WithBot ℝ) _ Finset.univ (fun i : Fin M =>
+        Option.map (fun a : ℝ => a * Q (i, idx.2.1, PUnit.unit))
+          (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+            (WithBot.realExp
+              (Option.map (fun a : ℝ => a - LSE i)
+                (if block.val * Bk + idx.1.val ≤ i.val then
+                  some ((Finset.univ.sum fun d : Fin D =>
+                    Q (i, d, PUnit.unit) *
+                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                        (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
+                else none)))
+            (Option.map
+              (fun b : ℝ =>
+                dP V dO i
+                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                      (by have := block.isLt; omega) idx.1) - b)
+              (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
+                (fun j' : Fin (Bk * numKVBlocks) =>
+                  (Option.map (fun p : ℝ => p * dP V dO i j')
+                    (WithBot.realExp
+                      (Option.map (fun a : ℝ => a - LSE i)
+                        (if j'.val ≤ i.val then
+                          some ((Finset.univ.sum fun d : Fin D =>
+                            Q (i, d, PUnit.unit) * K (j', d, PUnit.unit)) * scale)
+                        else none))) : WithBot ℝ))))))) =
+      some ((attentionBackwardRealCausal Q K V dO LSE scale).dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
+  simpa [ComparableDType.ge] using
+    dK_block_kernel_tile_some_eq_attentionBackwardRealCausal
+      Q K V dO LSE scale block idx
+
 /-- Raw kernel-form bridge for the causal block-local `dV_block` computation. -/
 theorem dV_block_kernel_tile_some_eq_attentionBackwardRealCausal
     {M D Bk numKVBlocks : Nat}
@@ -732,6 +817,30 @@ theorem dV_block_kernel_tile_some_eq_attentionBackwardRealCausal
   rw [hterm]
   rw [WithBot.sum_someTerm_eq_some]
   simp [attentionBackwardRealCausal, attentionBackwardRealMasked]
+
+/-- Prop-if normal form of `dV_block_kernel_tile_some_eq_attentionBackwardRealCausal`. -/
+theorem dV_block_kernel_prop_tile_some_eq_attentionBackwardRealCausal
+    {M D Bk numKVBlocks : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [Bk, D]) :
+    @Finset.sum (Fin M) (WithBot ℝ) _ Finset.univ (fun i : Fin M =>
+      (Option.map (fun a : ℝ => a * dO (i, idx.2.1, PUnit.unit))
+        (WithBot.realExp
+          (Option.map (fun a : ℝ => a - LSE i)
+            (if block.val * Bk + idx.1.val ≤ i.val then
+              some ((Finset.univ.sum fun d : Fin D =>
+                Q (i, d, PUnit.unit) *
+                  K (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
+            else none))) : WithBot ℝ)) =
+      some ((attentionBackwardRealCausal Q K V dO LSE scale).dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
+  simpa [ComparableDType.ge] using
+    dV_block_kernel_tile_some_eq_attentionBackwardRealCausal
+      Q K V dO LSE scale block idx
 
 theorem exp_sum_mul_scale_eq {ι : Type} [Fintype ι]
     (f : ι → ℝ) (scale lse : ℝ) :
