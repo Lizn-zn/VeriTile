@@ -403,6 +403,26 @@ theorem fa2_score_fragment_tile_eq {M D Bk : Nat}
   simp [fa2ScoreFragmentSpec, Tile.bop, Tile.dot, Tile.transpose, Tile.ofReal,
     NumericDType.mul]
 
+/-- Local score-fragment spec agrees with the global `scaledScore` view used by
+the FA-1/FA-2 attention specs when the local key fragment is a block slice of
+the global K tensor. -/
+theorem fa2ScoreFragmentSpec_eq_scaledScore {M D Bk N : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
+    (scale : ℝ) (keyBlock : Nat) (hKeyBlock : keyBlock < N)
+    (idx : TileIndex [M, Bk]) :
+    fa2ScoreFragmentSpec
+        Q
+        (fun localIdx : TileIndex [Bk, D] =>
+          K (FA1Math.blockIndex Bk N keyBlock
+              (Nat.succ_le_iff.mpr hKeyBlock) localIdx.1,
+            localIdx.2.1, PUnit.unit))
+        scale idx =
+      FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk N keyBlock
+          (Nat.succ_le_iff.mpr hKeyBlock) idx.2.1) := by
+  unfold fa2ScoreFragmentSpec FA1Math.scaledScore
+  ring_nf
+
 /-- Executable FA-2 QK score-fragment producer.
 
 One program computes one `[M, Bk]` score tile:

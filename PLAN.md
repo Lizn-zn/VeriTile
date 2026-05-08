@@ -286,6 +286,9 @@ available through the grid-launched surface.
 - `fa2_score_fragment_tile_eq` — pure tile bridge showing `Q @ Kᵀ * scale`
   computes the local FA-2 score fragment, factoring the future executable
   score-producer proof
+- `fa2ScoreFragmentSpec_eq_scaledScore` — interface bridge showing the local
+  score-fragment spec agrees with the global `FA1Math.scaledScore` view for a
+  block slice of K
 - `fa2ScoreFragmentKernel` — executable QK score-fragment producer surface
   (`Q_block @ K_fragmentᵀ * scale` into a contiguous score tile), with
   `fa2ScoreFragmentKernel_correct_view` proving the executable store readback
