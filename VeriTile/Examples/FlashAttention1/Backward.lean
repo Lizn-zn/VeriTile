@@ -1230,6 +1230,96 @@ theorem fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct
   rw [dQBlockContribution_sum_eq_attentionBackwardReal Q K V dO LSE scale idx]
   simp [attentionBackwardReal_dQ]
 
+/-- Generic launcher-facing correctness for masked multi-block atomic `dQ`.
+
+This theorem separates the concurrency composition from the kernel-specific
+trace extraction: once a `GridLaunchedAtomic` witness says the atomic events
+contribute the masked block-local `dQ` terms, the final memory cell is the
+closed-form masked backward `dQ`. -/
+theorem gridLaunchedAtomic_masked_dQ_correct
+    {M D Bk numKVBlocks : Nat}
+    (k : Kernel) (dQReg : RegionName)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch : Kernel.GridLaunchedAtomic k g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              dQBlockContributionMasked visible Q K V dO LSE scale block idx)) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some ((attentionBackwardRealMasked visible Q K V dO LSE scale).dQ idx) := by
+  intro idx
+  simp [observeTileAt]
+  rw [hLaunch.observeAtomicCell
+    (region := dQReg) (offset := Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)
+    (hNoOrdinaryWrite := hNoOrdinaryDQ idx)]
+  rw [hInitialDQ idx, hAtomicContrib idx]
+  rw [dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked visible Q K V dO LSE scale idx]
+  simp
+
+/-- Causal specialization of `gridLaunchedAtomic_masked_dQ_correct`. -/
+theorem gridLaunchedAtomic_causal_dQ_correct
+    {M D Bk numKVBlocks : Nat}
+    (k : Kernel) (dQReg : RegionName)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch : Kernel.GridLaunchedAtomic k g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              dQBlockContributionCausal Q K V dO LSE scale block idx)) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some ((attentionBackwardRealCausal Q K V dO LSE scale).dQ idx) := by
+  intro idx
+  have hMasked := gridLaunchedAtomic_masked_dQ_correct
+    (k := k) (dQReg := dQReg)
+    (visible := fun i j => decide (j.val ≤ i.val))
+    (scale := scale) (s := s) (sFinal := sFinal)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
+    hLaunch hInitialDQ hNoOrdinaryDQ
+    (by
+      intro idx
+      rw [hAtomicContrib idx]
+      simp [dQBlockContributionCausal])
+  simpa [attentionBackwardRealCausal] using hMasked idx
+
 /-- Readback for the final three stores of the stripped backward kernel.
 
 The computational prefix establishes the pointer/value registers; this lemma

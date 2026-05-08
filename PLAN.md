@@ -203,6 +203,9 @@ in-scope (see §Decision log entry 9).
   multi-block `dQ` contributions sum to the mask-aware backward spec
 - `dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal` — causal
   specialization of the masked multi-block `dQ` bridge
+- `gridLaunchedAtomic_masked_dQ_correct` and
+  `gridLaunchedAtomic_causal_dQ_correct` — launcher-facing masked/causal
+  atomic `dQ` composition surfaces
 - Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
   `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`
