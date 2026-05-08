@@ -191,6 +191,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs`
   —— 从 concrete DSL prefix 输入假设和 tail execution 直接抽取 causal atomic
   `dQ` trace 的 theorem
+- `fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs` —— causal
+  block-local `dK`/`dV` ordinary tail-store readback
 - `causalBackward_tile_bridges_complete` —— prefix proof 可复用的 causal
   `dQ/dK/dV` tile-dot bridge bundle
 - `causalBackward_block_tile_bridges_complete` —— atomic prefix proof 可复用的
@@ -204,8 +206,7 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   单 program-id)
 
 下一步:把 causal input-level trace extraction 更顺手地接到 launcher-facing
-surface,并补 causal block 的 ordinary tail-store readback 覆盖。multi-block atomic
-dQ composition 本身已通过 grid-launched surface 提供。
+surface。multi-block atomic dQ composition 本身已通过 grid-launched surface 提供。
 
 ## 路线图(优先级排序,无固定时间窗口)
 
@@ -215,8 +216,8 @@ dQ composition 本身已通过 grid-launched surface 提供。
 - 维护 `v0.3-tier3a` tag(forward 全套)
 - 维护 masked/causal FA-1 backward kernel trace extraction,并接到
   launcher-facing masked/causal `dQ` surface
-- 补 causal ordinary tail-store readback,并保持 grid-launched multi-block `dQ`
-  composition 作为 public multi-block surface
+- 保持 grid-launched multi-block `dQ` composition 作为 public multi-block
+  surface,并改进 causal launch witness 的构造体验
 
 ### 中期 — Tier 3-B FA-2 forward + headline corollary
 

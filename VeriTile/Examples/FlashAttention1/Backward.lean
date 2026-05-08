@@ -1651,6 +1651,169 @@ theorem fa1BackwardAtomicDQKernel_tailStores_readback_from_inputs
     rw [hExecTail]
     exact hTail.2 idx
 
+set_option maxHeartbeats 1000000 in
+set_option linter.unusedSimpArgs false in
+/-- Input-level readback for the ordinary `dK`/`dV` stores of one causal
+atomic-`dQ` backward block program.  The `dQ` result is handled by the causal
+atomic trace/merge theorem; this lemma closes the ordinary tail stores for the
+same full causal kernel execution. -/
+theorem fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (s : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (block : Fin numKVBlocks)
+    (hPid : s.pids 0 = block.val)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1))
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealCausal Q K V dO LSE scale
+    let base := block.val * Bk * D
+    (∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (exec
+          (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+            M D Bk numKVBlocks scale).toAlgKernel s)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D) base D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (exec
+          (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+            M D Bk numKVBlocks scale).toAlgKernel s)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D) base D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  let sPre : BlockState :=
+    fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale s
+  let dKFn : TileIndex [Bk, D] → ℝ := fun idx =>
+    (attentionBackwardRealCausal Q K V dO LSE scale).dK
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  let dVFn : TileIndex [Bk, D] → ℝ := fun idx =>
+    (attentionBackwardRealCausal Q K V dO LSE scale).dV
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  have hfacts :
+      FA1BackwardAtomicDQCausalPreAtomicFacts
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+        Q K V dO LSE scale block s :=
+    fa1BackwardAtomicDQCausalPreAtomic_facts
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  have hTail := atomicBackward_tailStores_readback_rowMajor2D_base
+    (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (M := M) (D := D) (Bk := Bk) (base := block.val * Bk * D)
+    (s := sPre)
+    (dQPart := dQBlockContributionCausal Q K V dO LSE scale block)
+    (dKFn := dKFn) (dVFn := dVFn)
+    (hPtrsQ := hfacts.2.1)
+    (hPtrsK := hfacts.2.2.1)
+    (hPtrsV := hfacts.2.2.2.1)
+    (hValQ := hfacts.2.2.2.2.1)
+    (hValK := by
+      simpa [dKFn] using hfacts.2.2.2.2.2.1)
+    (hValV := by
+      simpa [dVFn] using hfacts.2.2.2.2.2.2)
+    hdKdV
+  have hPre :
+      stepStmts
+          ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+              M D Bk numKVBlocks scale).toAlgKernel.body.take 33) s =
+        some sPre := hfacts.1
+  have hExecTail :
+      exec
+          (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+            M D Bk numKVBlocks scale).toAlgKernel s =
+        ((stepStmt (Stmt.atomicAdd NumericDType.real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "q_ptrs"))
+          (Op.ref .real [M, D] "dQ_part") MaskOpt.none) sPre).bind fun s1 =>
+          (stepStmt (Stmt.store .real [Bk, D]
+            (MemAccess.region dKReg (Op.ref .nat [Bk, D] "k_block_ptrs"))
+            (Op.ref .real [Bk, D] "dK_block") MaskOpt.none) s1).bind fun s2 =>
+            stepStmt (Stmt.store .real [Bk, D]
+              (MemAccess.region dVReg (Op.ref .nat [Bk, D] "v_block_ptrs"))
+              (Op.ref .real [Bk, D] "dV_block") MaskOpt.none) s2) := by
+    rw [show
+        exec
+            (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+              M D Bk numKVBlocks scale).toAlgKernel s =
+          stepStmts
+            ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+              M D Bk numKVBlocks scale).toAlgKernel.body) s by
+      rfl]
+    rw [show
+        (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body =
+          ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+            M D Bk numKVBlocks scale).toAlgKernel.body.take 33) ++
+          ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+            M D Bk numKVBlocks scale).toAlgKernel.body.drop 33) by
+      exact (List.take_append_drop 33 _).symm]
+    rw [stepStmts.append_some hPre]
+    rw [fa1BackwardAtomicDQCausalKernel_drop33]
+    simp [stepStmts, stepStmt, evalOp]
+    cases hAtomic :
+        ((sPre.regs TileDType.real [M, D] "dQ_part").bind fun values =>
+          (sPre.regs TileDType.nat [M, D] "q_ptrs").bind fun offsets =>
+            some
+              (List.foldl
+                (fun acc i =>
+                  acc.writeMem dQReg (offsets.data i)
+                    (WithBot.unbotD 0
+                      (NumericDType.real.add
+                        (some (acc.readMem dQReg (offsets.data i)))
+                        (values.data i))))
+                sPre (TileShape.allIndices [M, D]))) with
+    | none =>
+        simp
+    | some s1 =>
+        cases hkStore :
+            ((s1.regs TileDType.real [Bk, D] "dK_block").bind fun values =>
+              (s1.regs TileDType.nat [Bk, D] "k_block_ptrs").bind fun offsets =>
+                some
+                  (List.foldl
+                    (fun acc i => acc.writeMem dKReg (offsets.data i)
+                      (WithBot.unbotD 0 (values.data i)))
+                    s1 (TileShape.allIndices [Bk, D]))) with
+        | none =>
+            simp [hkStore]
+        | some s2 =>
+            cases hvStore :
+                ((s2.regs TileDType.real [Bk, D] "dV_block").bind fun values =>
+                  (s2.regs TileDType.nat [Bk, D] "v_block_ptrs").bind fun offsets =>
+                    some
+                      (List.foldl
+                        (fun acc i => acc.writeMem dVReg (offsets.data i)
+                          (WithBot.unbotD 0 (values.data i)))
+                        s2 (TileShape.allIndices [Bk, D]))) with
+            | none =>
+                simp [hkStore, hvStore]
+            | some s3 =>
+                simp [hkStore, hvStore]
+  constructor
+  · intro idx
+    rw [hExecTail]
+    exact hTail.1 idx
+  · intro idx
+    rw [hExecTail]
+    exact hTail.2 idx
+
 /-- Launcher-facing grid correctness for the atomic `dQ` output cells.
 
 This is the #88 surface over the same atomic `dQ` composition theorem above:
