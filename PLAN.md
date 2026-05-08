@@ -241,6 +241,9 @@ backward. Multi-block atomic dQ is available through the grid-launched surface.
 - `fa2_delayed_rescale_sum_eq` and
   `fa2_delayed_rescale_weighted_sum_eq` — denominator/numerator algebra for
   block-local max normalization followed by merged-max rescaling
+- `fa2_masked_sum_eq_zero_of_all_invisible` and
+  `fa2_masked_weighted_sum_eq_zero_of_all_invisible` — full-mask block-skip
+  denominator/numerator zero-contribution identities
 - `fa_2_forward_correct` — like FA-1 forward, with: (a) sequence-length
   parallelization, (b) delayed rescaling, (c) full-mask block skip
   - Delayed rescale equivalence: `O_final / l_final` does not depend on

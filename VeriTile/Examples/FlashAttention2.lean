@@ -51,6 +51,22 @@ theorem fa2_delayed_rescale_weighted_sum_eq {ι : Type} [Fintype ι]
   congr 1
   ring_nf
 
+/-- Fully masked blocks contribute zero to the softmax denominator. -/
+theorem fa2_masked_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
+    (visible : ι → Bool) (scores : ι → ℝ) (m : ℝ)
+    (hInvisible : ∀ j : ι, visible j = Bool.false) :
+    (Finset.univ.sum fun j : ι =>
+      if visible j then Real.exp (scores j - m) else 0) = 0 := by
+  simp [hInvisible]
+
+/-- Fully masked blocks contribute zero to the softmax numerator. -/
+theorem fa2_masked_weighted_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
+    (visible : ι → Bool) (scores values : ι → ℝ) (m : ℝ)
+    (hInvisible : ∀ j : ι, visible j = Bool.false) :
+    (Finset.univ.sum fun j : ι =>
+      if visible j then Real.exp (scores j - m) * values j else 0) = 0 := by
+  simp [hInvisible]
+
 /-- FA-2 forward baseline kernel.
 
 At this stage the FA-2 module exposes the same online-softmax block recurrence
