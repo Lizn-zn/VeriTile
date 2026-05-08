@@ -630,6 +630,65 @@ theorem fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
   · intro offset
     simpa [BlockState.withPids] using hScoreMem offset
 
+/-- Two-block score-producer handoff for the scalar fused-forward consumer.
+This packages the left/right score-row transfer obligations into exactly the
+two `InputLoadedAt` hypotheses consumed by
+`fa2ScalarTwoBlockForwardKernel_attentionReal_view`. -/
+theorem fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees
+    {M D Bk : Nat}
+    (qReg kReg scoreLeftReg scoreRightReg : RegionName)
+    (scale : ℝ) (s sLeft sRight consumer : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * 2, D] → ℝ)
+    (row : Fin M)
+    (hExecLeft :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreLeftReg M D Bk 0 scale).toAlgKernel s =
+        some sLeft)
+    (hExecRight :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreRightReg M D Bk 1 scale).toAlgKernel s =
+        some sRight)
+    (hPid : consumer.pid = s.pid * M + row.val)
+    (hScoreLeftMem :
+      ∀ offset, consumer.readMem scoreLeftReg offset = sLeft.readMem scoreLeftReg offset)
+    (hScoreRightMem :
+      ∀ offset, consumer.readMem scoreRightReg offset = sRight.readMem scoreRightReg offset)
+    (hQ : ∀ idx : TileIndex [M, D],
+      s.readMem qReg
+          ((s.pid * M + idx.1.val) * D + idx.2.1.val) =
+        Q idx)
+    (hK : ∀ idx : TileIndex [Bk * 2, D],
+      s.readMem kReg (idx.1.val * D + idx.2.1.val) = K idx) :
+    InputLoadedAt consumer scoreLeftReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore Q K scale row
+          (FA1Math.blockIndex Bk 2 0 two_block0_le j)) ∧
+    InputLoadedAt consumer scoreRightReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore Q K scale row
+          (FA1Math.blockIndex Bk 2 1 two_block1_le j)) := by
+  have hKLeft : ∀ idx : TileIndex [Bk, D],
+      s.readMem kReg ((0 * Bk + idx.1.val) * D + idx.2.1.val) =
+        K (FA1Math.blockIndex Bk 2 0 two_block0_le idx.1,
+          idx.2.1, PUnit.unit) := by
+    intro idx
+    simpa [FA1Math.blockIndex] using
+      hK (FA1Math.blockIndex Bk 2 0 two_block0_le idx.1,
+        idx.2.1, PUnit.unit)
+  have hKRight : ∀ idx : TileIndex [Bk, D],
+      s.readMem kReg ((1 * Bk + idx.1.val) * D + idx.2.1.val) =
+        K (FA1Math.blockIndex Bk 2 1 two_block1_le idx.1,
+          idx.2.1, PUnit.unit) := by
+    intro idx
+    simpa [FA1Math.blockIndex] using
+      hK (FA1Math.blockIndex Bk 2 1 two_block1_le idx.1,
+        idx.2.1, PUnit.unit)
+  constructor
+  · exact fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
+      qReg kReg scoreLeftReg 0 (by omega) scale s sLeft consumer Q K row
+      hExecLeft hPid hScoreLeftMem hQ hKLeft
+  · exact fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
+      qReg kReg scoreRightReg 1 (by omega) scale s sRight consumer Q K row
+      hExecRight hPid hScoreRightMem hQ hKRight
+
 /-! ## FA-2 fused two-block scalar forward kernel surface
 
 This fuses the two fragment-summary computations and the delayed-rescale merge

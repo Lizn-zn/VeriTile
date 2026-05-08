@@ -302,6 +302,9 @@ available through the grid-launched surface.
   buffer-handoff lemma: the produced score row can be consumed by any later
   state whose scalar program id is aligned and whose score buffer agrees with
   the producer final state
+- `fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees` — two-block handoff
+  package: two score producer outputs discharge the left/right `InputLoadedAt`
+  score hypotheses needed by the scalar fused-forward consumer
 - `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
   slice fusing fragment-summary production and delayed-rescale merge into one
   DSL kernel, writing the tile-level FA-2 two-fragment spec
