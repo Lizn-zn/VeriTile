@@ -301,6 +301,80 @@ theorem fa1_eq_fa2_two_block_forward4D
   exact (fa2_two_block_forward_eq_attentionReal4D
     Q K V scale b h i d mLeft mRight mMerged hlFree).symm
 
+/-! ## FA-2 fragment-summary kernel surface
+
+This scalar helper is the executable producer for one fragment summary:
+given a `Bk`-lane score tile, a matching value tile for one output coordinate,
+and the fragment max `m`, it writes the denominator `l` and numerator `o`
+that the merge-stage kernel consumes.
+-/
+
+def fa2ScalarFragmentSummaryKernel
+    (scoreReg valueReg mReg lReg oReg : RegionName) (Bk : Nat) :
+    ComputeKernel := triton {
+  pid    := tl.program_id(0)
+  offs   := pid * $(Bk) + tl.arange(0, $(Bk))
+  scores := tl.load($(scoreReg) + offs)
+  values := tl.load($(valueReg) + offs)
+  m      := tl.load($(mReg) + pid)
+  w      := tl.exp(scores - m)
+  l      := tl.sum(w, axis = 0)
+  o      := tl.sum(w * values, axis = 0)
+  tl.store($(lReg) + pid, l)
+  tl.store($(oReg) + pid, o)
+}
+
+noncomputable def fa2ScalarFragmentDenom {Bk : Nat}
+    (scores : Fin Bk → ℝ) (m : ℝ) : ℝ :=
+  Finset.univ.sum fun j : Fin Bk => Real.exp (scores j - m)
+
+noncomputable def fa2ScalarFragmentNumer {Bk : Nat}
+    (scores values : Fin Bk → ℝ) (m : ℝ) : ℝ :=
+  Finset.univ.sum fun j : Fin Bk => Real.exp (scores j - m) * values j
+
+/-- The scalar fragment-summary kernel writes the fragment denominator and
+numerator consumed by the FA-2 merge stage. -/
+theorem fa2ScalarFragmentSummaryKernel_correct_view
+    (scoreReg valueReg mReg lReg oReg : RegionName) (Bk : Nat)
+    (s : BlockState) (scores values : Fin Bk → ℝ) (m : ℝ)
+    (hScores : InputLoadedAt s scoreReg Bk scores)
+    (hValues : InputLoadedAt s valueReg Bk values)
+    (hm : s.readMem mReg s.pid = m)
+    (hOutNe : lReg ≠ oReg) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarFragmentSummaryKernel scoreReg valueReg mReg lReg oReg Bk)
+      (initialState := s)
+      (write := fun ch : Fin 2 =>
+        if ch.val = 0 then some (lReg, s.pid) else some (oReg, s.pid))
+      (expected := fun ch : Fin 2 =>
+        if ch.val = 0 then fa2ScalarFragmentDenom scores m
+        else fa2ScalarFragmentNumer scores values m) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro ch
+  fin_cases ch
+  · simp [exec, fa2ScalarFragmentSummaryKernel, stepStmts, stepStmt, evalOp,
+      hm, Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+      NumericDType.sub, WithBot.realExp, fa2ScalarFragmentDenom,
+      BlockState.writeMemTyped_real] at hExec ⊢
+    subst s'
+    simp [hOutNe, TileShape.insertAxisIndex]
+    refine Finset.sum_congr rfl ?_
+    intro j _
+    simp [hScores j]
+  · simp [exec, fa2ScalarFragmentSummaryKernel, stepStmts, stepStmt, evalOp,
+      hm, Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+      NumericDType.sub, WithBot.realExp, fa2ScalarFragmentNumer,
+      BlockState.writeMemTyped_real] at hExec ⊢
+    subst s'
+    simp [TileShape.insertAxisIndex]
+    refine Finset.sum_congr rfl ?_
+    intro j _
+    simp [hScores j, hValues j]
+
 /-! ## FA-2 merge-stage kernel surface
 
 This small kernel is the executable core of the FA-2 fragment merge.  Each

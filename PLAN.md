@@ -278,6 +278,8 @@ available through the grid-launched surface.
   same two-block KV domain
 - `fa2_two_block_forward_eq_attentionReal4D` — 4D slice-facing variant of the
   same bridge at a fixed `(batch, head, query, d)` coordinate
+- `fa2ScalarFragmentSummaryKernel_correct_view` — executable one-fragment
+  producer for denominator/numerator summaries consumed by the merge stage
 - `fa2_masked_sum_eq_zero_of_all_invisible` and
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` — full-mask block-skip
   denominator/numerator zero-contribution identities
