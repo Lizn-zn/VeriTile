@@ -222,6 +222,8 @@ multi-block atomic dQ 已通过 grid-launched surface 提供。
 - `fa2_masked_sum_eq_zero_of_all_invisible` 与
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` —— 全 mask block 的
   denominator/numerator 零贡献恒等式
+- `fa2ScalarTwoFragmentMergeKernel_correct_view` —— delayed-rescale fragment
+  merge 的可执行 scalar merge-stage kernel surface
 - `fa_2_forward_correct` —— 类似 FA-1 forward 的:(a) 序列长度并行化、
   (b) 延迟 rescaling、(c) 全 mask 块跳过
   - 延迟 rescale 等价:`O_final / l_final` 不依赖中间 `O` 是否每步 rescale

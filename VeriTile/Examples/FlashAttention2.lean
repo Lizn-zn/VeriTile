@@ -122,6 +122,91 @@ theorem fa2_masked_weighted_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι
       if visible j then Real.exp (scores j - m) * values j else 0) = 0 := by
   simp [hInvisible]
 
+/-! ## FA-2 merge-stage kernel surface
+
+This small kernel is the executable core of the FA-2 fragment merge.  Each
+program reads two scalar fragments `(m, l, o)` and writes the delayed-rescale
+merge result for one output coordinate.
+-/
+
+def fa2ScalarTwoFragmentMergeKernel
+    (mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg : RegionName) :
+    ComputeKernel := triton {
+  pid     := tl.program_id(0)
+  m_left  := tl.load($(mLeftReg) + pid)
+  l_left  := tl.load($(lLeftReg) + pid)
+  o_left  := tl.load($(oLeftReg) + pid)
+  m_right := tl.load($(mRightReg) + pid)
+  l_right := tl.load($(lRightReg) + pid)
+  o_right := tl.load($(oRightReg) + pid)
+  m       := tl.load($(mMergedReg) + pid)
+  a_left  := tl.exp(m_left - m)
+  a_right := tl.exp(m_right - m)
+  l       := a_left * l_left + a_right * l_right
+  o       := (a_left * o_left + a_right * o_right) / l
+  tl.store($(outReg) + pid, o)
+}
+
+noncomputable def fa2ScalarTwoFragmentMergeSpec
+    (mLeft lLeft oLeft mRight lRight oRight mMerged : ℝ) : ℝ :=
+  let m := mMerged
+  let aLeft := Real.exp (mLeft - m)
+  let aRight := Real.exp (mRight - m)
+  (aLeft * oLeft + aRight * oRight) / (aLeft * lLeft + aRight * lRight)
+
+theorem fa2ScalarTwoFragmentMergeKernel_correct
+    (mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg : RegionName)
+    (s : BlockState)
+    (mLeft lLeft oLeft mRight lRight oRight mMerged : ℝ)
+    (hmLeft : s.readMem mLeftReg s.pid = mLeft)
+    (hlLeft : s.readMem lLeftReg s.pid = lLeft)
+    (hoLeft : s.readMem oLeftReg s.pid = oLeft)
+    (hmRight : s.readMem mRightReg s.pid = mRight)
+    (hlRight : s.readMem lRightReg s.pid = lRight)
+    (hoRight : s.readMem oRightReg s.pid = oRight)
+    (hmMerged : s.readMem mMergedReg s.pid = mMerged) :
+    observeRowAt
+        (exec (fa2ScalarTwoFragmentMergeKernel
+          mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg) s)
+        outReg s.pid =
+      some (fa2ScalarTwoFragmentMergeSpec mLeft lLeft oLeft mRight lRight oRight mMerged) := by
+  simp [observeRowAt, exec, fa2ScalarTwoFragmentMergeKernel,
+    fa2ScalarTwoFragmentMergeSpec, stepStmts, stepStmt, evalOp, hmLeft, hlLeft,
+    hoLeft, hmRight, hlRight, hoRight, hmMerged, Tile.bop, Tile.uop, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, NumericDType.div, WithBot.realExp,
+    WithBot.realAdd, WithBot.realSub, WithBot.realMul, WithBot.realDiv,
+    BlockState.writeMemTyped_real]
+
+/-- Compute-facing surface for the scalar FA-2 merge-stage kernel. -/
+theorem fa2ScalarTwoFragmentMergeKernel_correct_view
+    (mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg : RegionName)
+    (s : BlockState)
+    (mLeft lLeft oLeft mRight lRight oRight mMerged : ℝ)
+    (hmLeft : s.readMem mLeftReg s.pid = mLeft)
+    (hlLeft : s.readMem lLeftReg s.pid = lLeft)
+    (hoLeft : s.readMem oLeftReg s.pid = oLeft)
+    (hmRight : s.readMem mRightReg s.pid = mRight)
+    (hlRight : s.readMem lRightReg s.pid = lRight)
+    (hoRight : s.readMem oRightReg s.pid = oRight)
+    (hmMerged : s.readMem mMergedReg s.pid = mMerged) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarTwoFragmentMergeKernel
+        mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar outReg s.pid)
+      (expected := fun _ : PUnit =>
+        fa2ScalarTwoFragmentMergeSpec mLeft lLeft oLeft mRight lRight oRight mMerged) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hview := fa2ScalarTwoFragmentMergeKernel_correct
+    mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg
+    s mLeft lLeft oLeft mRight lRight oRight mMerged
+    hmLeft hlLeft hoLeft hmRight hlRight hoRight hmMerged
+  rw [hExec] at hview
+  intro _
+  simpa [observeRowAt, ComputeCorrect.WriteMap.scalar] using hview
+
 /-- FA-2 forward baseline kernel.
 
 At this stage the FA-2 module exposes the same online-softmax block recurrence
