@@ -291,6 +291,12 @@ available through the grid-launched surface.
 - `fa2ScalarScoreMaxKernel_loaded_of_agrees` — state-parametric max-register
   handoff: a produced row max can be consumed by a later scalar state whose pid
   is aligned and whose max buffer agrees with the producer final state
+- `fa2ScalarValueFragmentKernel_correct_view` — executable scalar
+  value-fragment staging producer for one `Bk`-lane value row at a fixed output
+  dimension
+- `fa2ScalarValueFragmentKernel_loaded_of_agrees` and
+  `fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees` — state-parametric
+  value-buffer handoff lemmas for one- and two-block scalar forward consumers
 - `fa2ScalarFragmentSummaryKernel_correct_view` — executable one-fragment
   producer for denominator/numerator summaries consumed by the merge stage
 - `fa2_score_fragment_tile_eq` — pure tile bridge showing `Q @ Kᵀ * scale`
@@ -325,6 +331,10 @@ available through the grid-launched surface.
   producer-consumer wrapper: two executable score-fragment producer runs
   discharge the scalar fused-forward consumer's left/right score inputs, leaving
   value buffers and max registers as explicit consumer-side assumptions
+- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_view`
+  — producer-consumer wrapper: executable score and value producer runs
+  discharge all four score/value `InputLoadedAt` inputs for the scalar
+  fused-forward consumer, leaving max registers explicit
 - `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` — 4D-facing wrapper of
   the fused scalar two-block DSL theorem at a fixed `(batch, head, query, d)`
   coordinate

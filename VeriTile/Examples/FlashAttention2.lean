@@ -374,6 +374,150 @@ theorem fa2ScalarScoreMaxKernel_loaded_of_agrees
     _ = tileMax hBk scores := by
       simpa [ComputeCorrect.WriteMap.scalar] using hOut
 
+/-! ## FA-2 scalar value-fragment staging producer
+
+This producer stages one `Bk`-lane value fragment for a fixed output coordinate
+dimension `d`.  It is the value-buffer counterpart to the score-fragment
+handoff used by the fused scalar consumer.
+-/
+
+def fa2ScalarValueFragmentKernel
+    (vReg valueReg : RegionName) (D Bk keyBlock d : Nat) :
+    ComputeKernel := triton {
+  pid      := tl.program_id(0)
+  offs     := tl.arange(0, $(Bk))
+  src      := (($(keyBlock) * $(Bk) + offs) * $(D)) + $(d)
+  values   := tl.load($(vReg) + src)
+  dst      := pid * $(Bk) + offs
+  tl.store($(valueReg) + dst, values)
+}
+
+/-- Correctness of the executable scalar value-fragment staging producer. -/
+theorem fa2ScalarValueFragmentKernel_correct_view
+    {D Bk N : Nat}
+    (vReg valueReg : RegionName)
+    (keyBlock : Nat) (hKeyBlock : keyBlock < N) (d : Fin D)
+    (s : BlockState) (V : TileIndex [Bk * N, D] → ℝ)
+    (hV : ∀ idx : TileIndex [Bk, D],
+      s.readMem vReg ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
+        V (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
+          idx.2.1, PUnit.unit)) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarValueFragmentKernel vReg valueReg D Bk keyBlock d.val)
+      (initialState := s)
+      (write := fun j : Fin Bk =>
+        some (valueReg, s.pid * Bk + j.val))
+      (expected := fun j : Fin Bk =>
+        V (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) j,
+          d, PUnit.unit)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  simp [exec, fa2ScalarValueFragmentKernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, NumericDType.add, NumericDType.mul,
+        BlockState.writeMemTyped_real] at hExec ⊢
+  subst s'
+  intro j
+  have hInj :
+      Function.Injective
+        (fun idx : TileIndex [Bk] => s.pid * Bk + idx.1.val) :=
+    injective_offset_singleton _
+  rw [BlockState.scatter_readback_nd _ _ _ hInj (j, PUnit.unit)]
+  have hRead := hV (j, d, PUnit.unit)
+  simpa [FA1Math.blockIndex, Nat.mul_assoc, Nat.add_assoc] using hRead
+
+/-- State-parametric handoff for a staged value fragment.  If a later consumer
+state has the same scalar pid and agrees with the value producer final state on
+`valueReg`, the staged values are available as `InputLoadedAt`. -/
+theorem fa2ScalarValueFragmentKernel_loaded_of_agrees
+    {D Bk N : Nat}
+    (vReg valueReg : RegionName)
+    (keyBlock : Nat) (hKeyBlock : keyBlock < N) (d : Fin D)
+    (s sValue consumer : BlockState) (V : TileIndex [Bk * N, D] → ℝ)
+    (hExec :
+      exec (fa2ScalarValueFragmentKernel vReg valueReg D Bk keyBlock d.val).toAlgKernel s =
+        some sValue)
+    (hPid : consumer.pid = s.pid)
+    (hMem : ∀ offset, consumer.readMem valueReg offset = sValue.readMem valueReg offset)
+    (hV : ∀ idx : TileIndex [Bk, D],
+      s.readMem vReg ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
+        V (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
+          idx.2.1, PUnit.unit)) :
+    InputLoadedAt consumer valueReg Bk
+      (fun j : Fin Bk =>
+        V (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) j,
+          d, PUnit.unit)) := by
+  have hview := fa2ScalarValueFragmentKernel_correct_view
+    vReg valueReg keyBlock hKeyBlock d s V hV
+  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+    ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
+    ComputeKernel.AlgorithmCorrect Kernel.Correct at hview
+  rcases hview with ⟨_, hview⟩
+  simp at hview
+  intro j
+  have hOut := hview s sValue hExec rfl j
+  calc
+    consumer.readMem valueReg (consumer.pid * Bk + j.val) =
+        sValue.readMem valueReg (consumer.pid * Bk + j.val) := hMem _
+    _ = sValue.readMem valueReg (s.pid * Bk + j.val) := by rw [hPid]
+    _ = V (FA1Math.blockIndex Bk N keyBlock
+            (Nat.succ_le_iff.mpr hKeyBlock) j,
+          d, PUnit.unit) := by
+      simpa using hOut
+
+/-- Two-block value-fragment handoff for the scalar fused-forward consumer. -/
+theorem fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees
+    {D Bk : Nat}
+    (vReg valueLeftReg valueRightReg : RegionName) (d : Fin D)
+    (s sLeft sRight consumer : BlockState)
+    (V : TileIndex [Bk * 2, D] → ℝ)
+    (hExecLeft :
+      exec (fa2ScalarValueFragmentKernel vReg valueLeftReg D Bk 0 d.val).toAlgKernel s =
+        some sLeft)
+    (hExecRight :
+      exec (fa2ScalarValueFragmentKernel vReg valueRightReg D Bk 1 d.val).toAlgKernel s =
+        some sRight)
+    (hPid : consumer.pid = s.pid)
+    (hValueLeftMem :
+      ∀ offset, consumer.readMem valueLeftReg offset = sLeft.readMem valueLeftReg offset)
+    (hValueRightMem :
+      ∀ offset, consumer.readMem valueRightReg offset = sRight.readMem valueRightReg offset)
+    (hV : ∀ idx : TileIndex [Bk * 2, D],
+      s.readMem vReg (idx.1.val * D + idx.2.1.val) = V idx) :
+    InputLoadedAt consumer valueLeftReg Bk
+      (fun j : Fin Bk =>
+        V (FA1Math.blockIndex Bk 2 0 two_block0_le j, d, PUnit.unit)) ∧
+    InputLoadedAt consumer valueRightReg Bk
+      (fun j : Fin Bk =>
+        V (FA1Math.blockIndex Bk 2 1 two_block1_le j, d, PUnit.unit)) := by
+  have hVLeft : ∀ idx : TileIndex [Bk, D],
+      s.readMem vReg ((0 * Bk + idx.1.val) * D + idx.2.1.val) =
+        V (FA1Math.blockIndex Bk 2 0 two_block0_le idx.1,
+          idx.2.1, PUnit.unit) := by
+    intro idx
+    simpa [FA1Math.blockIndex] using
+      hV (FA1Math.blockIndex Bk 2 0 two_block0_le idx.1,
+        idx.2.1, PUnit.unit)
+  have hVRight : ∀ idx : TileIndex [Bk, D],
+      s.readMem vReg ((1 * Bk + idx.1.val) * D + idx.2.1.val) =
+        V (FA1Math.blockIndex Bk 2 1 two_block1_le idx.1,
+          idx.2.1, PUnit.unit) := by
+    intro idx
+    simpa [FA1Math.blockIndex] using
+      hV (FA1Math.blockIndex Bk 2 1 two_block1_le idx.1,
+        idx.2.1, PUnit.unit)
+  constructor
+  · exact fa2ScalarValueFragmentKernel_loaded_of_agrees
+      vReg valueLeftReg 0 (by omega) d s sLeft consumer V
+      hExecLeft hPid hValueLeftMem hVLeft
+  · exact fa2ScalarValueFragmentKernel_loaded_of_agrees
+      vReg valueRightReg 1 (by omega) d s sRight consumer V
+      hExecRight hPid hValueRightMem hVRight
+
 /-! ## FA-2 fragment-summary kernel surface
 
 This scalar helper is the executable producer for one fragment summary:
@@ -1050,6 +1194,77 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view
     mLeftReg mRightReg mMergedReg outReg consumer Q K V scale idx
     mLeft mRight mMerged
     hScores.1 hValuesLeft hScores.2 hValuesRight hmLeft hmRight hmMerged hlFree
+
+/-- Producer-consumer wrapper that discharges both score-buffer and value-buffer
+inputs for the fused scalar two-block FA-2 forward slice from executable
+producer kernels.  Max registers remain explicit consumer-side assumptions. -/
+theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_view
+    {M D Bk : Nat}
+    (qReg kReg vReg scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+      mLeftReg mRightReg mMergedReg outReg : RegionName)
+    (sScoreProducer sScoreLeft sScoreRight
+      sValueProducer sValueLeft sValueRight consumer : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D])
+    (mLeft mRight mMerged : ℝ)
+    (hScoreExecLeft :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreLeftReg M D Bk 0 scale).toAlgKernel
+          sScoreProducer =
+        some sScoreLeft)
+    (hScoreExecRight :
+      exec (fa2ScoreFragmentKernel qReg kReg scoreRightReg M D Bk 1 scale).toAlgKernel
+          sScoreProducer =
+        some sScoreRight)
+    (hValueExecLeft :
+      exec (fa2ScalarValueFragmentKernel vReg valueLeftReg D Bk 0 idx.2.1.val).toAlgKernel
+          sValueProducer =
+        some sValueLeft)
+    (hValueExecRight :
+      exec (fa2ScalarValueFragmentKernel vReg valueRightReg D Bk 1 idx.2.1.val).toAlgKernel
+          sValueProducer =
+        some sValueRight)
+    (hScorePid : consumer.pid = sScoreProducer.pid * M + idx.1.val)
+    (hValuePid : consumer.pid = sValueProducer.pid)
+    (hScoreLeftMem :
+      ∀ offset, consumer.readMem scoreLeftReg offset = sScoreLeft.readMem scoreLeftReg offset)
+    (hScoreRightMem :
+      ∀ offset, consumer.readMem scoreRightReg offset = sScoreRight.readMem scoreRightReg offset)
+    (hValueLeftMem :
+      ∀ offset, consumer.readMem valueLeftReg offset = sValueLeft.readMem valueLeftReg offset)
+    (hValueRightMem :
+      ∀ offset, consumer.readMem valueRightReg offset = sValueRight.readMem valueRightReg offset)
+    (hQ : ∀ qIdx : TileIndex [M, D],
+      sScoreProducer.readMem qReg
+          ((sScoreProducer.pid * M + qIdx.1.val) * D + qIdx.2.1.val) =
+        Q qIdx)
+    (hK : ∀ kIdx : TileIndex [Bk * 2, D],
+      sScoreProducer.readMem kReg (kIdx.1.val * D + kIdx.2.1.val) = K kIdx)
+    (hV : ∀ vIdx : TileIndex [Bk * 2, D],
+      sValueProducer.readMem vReg (vIdx.1.val * D + vIdx.2.1.val) = V vIdx)
+    (hmLeft : consumer.readMem mLeftReg consumer.pid = mLeft)
+    (hmRight : consumer.readMem mRightReg consumer.pid = mRight)
+    (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
+    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarTwoBlockForwardKernel
+        scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+        mLeftReg mRightReg mMergedReg outReg Bk)
+      (initialState := consumer)
+      (write := ComputeCorrect.WriteMap.scalar outReg consumer.pid)
+      (expected := fun _ : PUnit => attentionReal Q K V scale idx) := by
+  have hScores := fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees
+    qReg kReg scoreLeftReg scoreRightReg scale
+    sScoreProducer sScoreLeft sScoreRight consumer Q K idx.1
+    hScoreExecLeft hScoreExecRight hScorePid hScoreLeftMem hScoreRightMem hQ hK
+  have hValues := fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees
+    vReg valueLeftReg valueRightReg idx.2.1
+    sValueProducer sValueLeft sValueRight consumer V
+    hValueExecLeft hValueExecRight hValuePid hValueLeftMem hValueRightMem hV
+  exact fa2ScalarTwoBlockForwardKernel_attentionReal_view
+    scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+    mLeftReg mRightReg mMergedReg outReg consumer Q K V scale idx
+    mLeft mRight mMerged
+    hScores.1 hValues.1 hScores.2 hValues.2 hmLeft hmRight hmMerged hlFree
 
 /-- 4D-facing wrapper for the fused scalar two-block FA-2 forward slice.  The
 kernel still writes one scalar output coordinate, but the theorem is stated in

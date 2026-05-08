@@ -256,6 +256,12 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 - `fa2ScalarScoreMaxKernel_loaded_of_agrees` —— state-parametric
   max-register handoff: 生产出来的 row max 可被 pid 对齐、且 max buffer 与
   producer final state 一致的后续 scalar state 消费
+- `fa2ScalarValueFragmentKernel_correct_view` —— 可执行 scalar
+  value-fragment staging producer,为固定输出维度写出一行 `Bk`-lane value row
+- `fa2ScalarValueFragmentKernel_loaded_of_agrees` 与
+  `fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees` ——
+  state-parametric value-buffer handoff lemmas,服务 one-/two-block scalar
+  forward consumer
 - `fa2ScalarFragmentSummaryKernel_correct_view` —— 可执行 one-fragment
   denominator/numerator summary 生产器,供 merge stage 消费
 - `fa2_score_fragment_tile_eq` —— 纯 tile bridge,证明 `Q @ Kᵀ * scale`
@@ -288,6 +294,10 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
   producer-consumer wrapper: 两个可执行 score-fragment producer run
   discharge scalar fused-forward consumer 的 left/right score 输入,剩下 value
   buffer 和 max register 作为显式 consumer-side 假设
+- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_view`
+  —— producer-consumer wrapper: 可执行 score 与 value producer run discharge
+  scalar fused-forward consumer 的四个 score/value `InputLoadedAt` 输入,剩下
+  max register 显式保留
 - `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` —— fused scalar
   two-block DSL theorem 的 4D-facing wrapper,面向固定
   `(batch, head, query, d)` 坐标
