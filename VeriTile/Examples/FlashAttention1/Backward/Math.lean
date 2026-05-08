@@ -190,6 +190,33 @@ noncomputable def dSMasked {M S D : Nat}
   probabilityMasked visible Q K LSE scale i j *
     (dP V dO i j - rowCorrectionMasked visible Q K V dO LSE scale i)
 
+/-- Masked softmax-JVP bridge for the kernel expression
+`p * (dP - corr[:, None])`. -/
+theorem maskedDS_option_eq {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (i : Fin M) (j : Fin S) :
+    Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+      (WithBot.realExp
+        (Option.map (fun a : ℝ => a - LSE i)
+          (if visible i j then
+            some (scale * (Finset.univ.sum fun d : Fin D =>
+              Q (i, d, PUnit.unit) * K (j, d, PUnit.unit)))
+          else none)))
+      (Option.map (fun b : ℝ => dP V dO i j - b)
+        (@Finset.sum (Fin S) (WithBot ℝ) _ Finset.univ (fun j' : Fin S =>
+          (Option.map (fun p : ℝ => p * dP V dO i j')
+            (WithBot.realExp
+              (Option.map (fun a : ℝ => a - LSE i)
+                (if visible i j' then
+                  some (scale * (Finset.univ.sum fun d : Fin D =>
+                    Q (i, d, PUnit.unit) * K (j', d, PUnit.unit)))
+                else none))) : WithBot ℝ)))) =
+      some (dSMasked visible Q K V dO LSE scale i j) := by
+  rw [maskedProbability_exp_eq, maskedRowCorrection_sum_eq]
+  simp [dSMasked]
+
 /-- Closed-form reverse-mode FA-1 backward over Real tensors with an explicit
 query/key visibility mask. -/
 noncomputable def attentionBackwardRealMasked {M S D : Nat}
