@@ -459,6 +459,93 @@ private theorem fa1BackwardAtomicDQPreAtomic_facts
       rw [mul_comm]
       rfl
 
+set_option maxHeartbeats 3000000 in
+set_option linter.unusedSimpArgs false in
+private theorem fa1BackwardAtomicDQCausalPreAtomic_facts
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (s : BlockState)
+    (hPid : s.pids 0 = block.val)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1)) :
+    FA1BackwardAtomicDQCausalPreAtomicFacts qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s := by
+  simp [InputAt, Offset.rowMajor2D, Offset.strided] at hQ hK hV hdO hLSE
+  have hQ0 : ∀ (i : Fin M) (d : Fin D),
+      s.readMem qReg (i.val * D + d.val) = Q (i, d, PUnit.unit) :=
+    fun i d => hQ i d PUnit.unit
+  have hK0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
+      s.readMem kReg (j.val * D + d.val) = K (j, d, PUnit.unit) :=
+    fun j d => hK j d PUnit.unit
+  have hV0 : ∀ (j : Fin (Bk * numKVBlocks)) (d : Fin D),
+      s.readMem vReg (j.val * D + d.val) = V (j, d, PUnit.unit) :=
+    fun j d => hV j d PUnit.unit
+  have hdO0 : ∀ (i : Fin M) (d : Fin D),
+      s.readMem dOReg (i.val * D + d.val) = dO (i, d, PUnit.unit) :=
+    fun i d => hdO i d PUnit.unit
+  have hKBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
+      s.readMem kReg ((block.val * Bk + jLocal.val) * D + d.val) =
+        K (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
+    intro jLocal d
+    simpa [FA1Math.blockIndex] using
+      hK0 (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) jLocal) d
+  have hVBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
+      s.readMem vReg ((block.val * Bk + jLocal.val) * D + d.val) =
+        V (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
+    intro jLocal d
+    simpa [FA1Math.blockIndex] using
+      hV0 (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) jLocal) d
+  simp [FA1BackwardAtomicDQCausalPreAtomicFacts, fa1BackwardAtomicDQCausalPreAtomicState,
+      fa1BackwardAtomicDQCausalKernel, stepStmts, stepStmt, evalOp, Option.bind, hPid,
+      hQ0, hK0, hV0, hdO0, hLSE, hKBlock, hVBlock, Offset.rowMajor2D,
+      Offset.strided, TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.ge,
+      Tile.bop, Tile.cop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim,
+      Tile.reduceSumDrop, Tile.ofReal,
+      probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq,
+      WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq, dS, rowCorrection, dP,
+      probability, FA1Math.scaledScore]
+  constructor
+  · funext idx
+    cases idx with
+    | mk j rest =>
+        cases rest with
+        | mk d tail =>
+            cases tail
+            simp [Tile.bop, Tile.expandDim, Tile.vec, Tile.scalar,
+              Offset.rowMajor2D, Offset.strided]
+            ring
+  · constructor
+    · funext i
+      simpa only [dQBlockContributionCausal, dQBlockContributionMasked] using
+        dQ_block_kernel_prop_tile_some_eq_dQBlockContributionCausal
+          Q K V dO LSE scale block i
+    · constructor
+      · funext i
+        simpa only [attentionBackwardRealCausal, attentionBackwardRealMasked] using
+          dK_block_kernel_prop_tile_some_eq_attentionBackwardRealCausal
+            Q K V dO LSE scale block i
+      · funext i
+        simpa only [attentionBackwardRealCausal, attentionBackwardRealMasked] using
+          dV_block_kernel_prop_tile_some_eq_attentionBackwardRealCausal
+            Q K V dO LSE scale block i
+
 /- #97: the expensive FA-1 backward prefix execution proof is centralized in
 `fa1BackwardAtomicDQPreAtomic_facts`; the public readback theorems below are
 now cheap projections of that single proof. -/
