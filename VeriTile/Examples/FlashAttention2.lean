@@ -375,6 +375,153 @@ theorem fa2ScalarFragmentSummaryKernel_correct_view
     intro j _
     simp [hScores j, hValues j]
 
+/-! ## FA-2 fused two-block scalar forward kernel surface
+
+This fuses the two fragment-summary computations and the delayed-rescale merge
+for one output coordinate.  It is still scalar (one output coordinate per
+program), but it is the first executable FA-2 forward slice that contains both
+fragment production and merge in one DSL kernel.
+-/
+
+def fa2ScalarTwoBlockForwardKernel
+    (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+      mLeftReg mRightReg mMergedReg outReg : RegionName)
+    (Bk : Nat) : ComputeKernel := triton {
+  pid      := tl.program_id(0)
+  offs     := pid * $(Bk) + tl.arange(0, $(Bk))
+  s_left   := tl.load($(scoreLeftReg) + offs)
+  v_left   := tl.load($(valueLeftReg) + offs)
+  s_right  := tl.load($(scoreRightReg) + offs)
+  v_right  := tl.load($(valueRightReg) + offs)
+  m_left   := tl.load($(mLeftReg) + pid)
+  m_right  := tl.load($(mRightReg) + pid)
+  m        := tl.load($(mMergedReg) + pid)
+  w_left   := tl.exp(s_left - m_left)
+  w_right  := tl.exp(s_right - m_right)
+  l_left   := tl.sum(w_left, axis = 0)
+  l_right  := tl.sum(w_right, axis = 0)
+  o_left   := tl.sum(w_left * v_left, axis = 0)
+  o_right  := tl.sum(w_right * v_right, axis = 0)
+  a_left   := tl.exp(m_left - m)
+  a_right  := tl.exp(m_right - m)
+  l        := a_left * l_left + a_right * l_right
+  o        := (a_left * o_left + a_right * o_right) / l
+  tl.store($(outReg) + pid, o)
+}
+
+noncomputable def fa2ScalarTwoBlockForwardTileSpec {Bk : Nat}
+    (scoresLeft valuesLeft scoresRight valuesRight : Fin Bk → ℝ)
+    (mLeft mRight mMerged : ℝ) : ℝ :=
+  let lLeft := fa2ScalarFragmentDenom scoresLeft mLeft
+  let lRight := fa2ScalarFragmentDenom scoresRight mRight
+  let oLeft := fa2ScalarFragmentNumer scoresLeft valuesLeft mLeft
+  let oRight := fa2ScalarFragmentNumer scoresRight valuesRight mRight
+  (Real.exp (mLeft - mMerged) * oLeft +
+      Real.exp (mRight - mMerged) * oRight) /
+    (Real.exp (mLeft - mMerged) * lLeft +
+      Real.exp (mRight - mMerged) * lRight)
+
+set_option maxHeartbeats 4000000
+
+/-- Correctness of the fused scalar two-block FA-2 forward slice against its
+tile-level score/value spec. -/
+theorem fa2ScalarTwoBlockForwardKernel_correct_view
+    (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+      mLeftReg mRightReg mMergedReg outReg : RegionName)
+    (Bk : Nat) (s : BlockState)
+    (scoresLeft valuesLeft scoresRight valuesRight : Fin Bk → ℝ)
+    (mLeft mRight mMerged : ℝ)
+    (hScoresLeft : InputLoadedAt s scoreLeftReg Bk scoresLeft)
+    (hValuesLeft : InputLoadedAt s valueLeftReg Bk valuesLeft)
+    (hScoresRight : InputLoadedAt s scoreRightReg Bk scoresRight)
+    (hValuesRight : InputLoadedAt s valueRightReg Bk valuesRight)
+    (hmLeft : s.readMem mLeftReg s.pid = mLeft)
+    (hmRight : s.readMem mRightReg s.pid = mRight)
+    (hmMerged : s.readMem mMergedReg s.pid = mMerged) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarTwoBlockForwardKernel
+        scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+        mLeftReg mRightReg mMergedReg outReg Bk)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar outReg s.pid)
+      (expected := fun _ : PUnit =>
+        fa2ScalarTwoBlockForwardTileSpec
+          scoresLeft valuesLeft scoresRight valuesRight mLeft mRight mMerged) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  have hRead :
+      exec (fa2ScalarTwoBlockForwardKernel
+        scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+        mLeftReg mRightReg mMergedReg outReg Bk) s = some s' := hExec
+  simp [exec, fa2ScalarTwoBlockForwardKernel, stepStmts, stepStmt, evalOp,
+    hmLeft, hmRight, hmMerged, Tile.bop, Tile.uop, Tile.reduceSum,
+    Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+    WithBot.realExp, WithBot.realDiv, fa2ScalarFragmentDenom,
+    fa2ScalarFragmentNumer, fa2ScalarTwoBlockForwardTileSpec,
+    BlockState.writeMemTyped_real] at hRead ⊢
+  subst s'
+  intro _
+  simp [ComputeCorrect.WriteMap.scalar, TileShape.insertAxisIndex]
+  have hOL :
+      (∑ x : Fin Bk,
+        Real.exp (s.readMem scoreLeftReg (s.pids 0 * Bk + x.val) - mLeft) *
+          s.readMem valueLeftReg (s.pids 0 * Bk + x.val)) =
+        ∑ j : Fin Bk, Real.exp (scoresLeft j - mLeft) * valuesLeft j := by
+    refine Finset.sum_congr rfl ?_
+    intro j _
+    simp [hScoresLeft j, hValuesLeft j]
+  have hOR :
+      (∑ x : Fin Bk,
+        Real.exp (s.readMem scoreRightReg (s.pids 0 * Bk + x.val) - mRight) *
+          s.readMem valueRightReg (s.pids 0 * Bk + x.val)) =
+        ∑ j : Fin Bk, Real.exp (scoresRight j - mRight) * valuesRight j := by
+    refine Finset.sum_congr rfl ?_
+    intro j _
+    simp [hScoresRight j, hValuesRight j]
+  have hLL :
+      (∑ x : Fin Bk,
+        Real.exp (s.readMem scoreLeftReg (s.pids 0 * Bk + x.val) - mLeft)) =
+        ∑ j : Fin Bk, Real.exp (scoresLeft j - mLeft) := by
+    refine Finset.sum_congr rfl ?_
+    intro j _
+    simp [hScoresLeft j]
+  have hLR :
+      (∑ x : Fin Bk,
+        Real.exp (s.readMem scoreRightReg (s.pids 0 * Bk + x.val) - mRight)) =
+        ∑ j : Fin Bk, Real.exp (scoresRight j - mRight) := by
+    refine Finset.sum_congr rfl ?_
+    intro j _
+    simp [hScoresRight j]
+  have hNum :
+      Real.exp (mLeft - mMerged) *
+          (∑ x : Fin Bk,
+            Real.exp (s.readMem scoreLeftReg (s.pids 0 * Bk + x.val) - mLeft) *
+              s.readMem valueLeftReg (s.pids 0 * Bk + x.val)) +
+        Real.exp (mRight - mMerged) *
+          (∑ x : Fin Bk,
+            Real.exp (s.readMem scoreRightReg (s.pids 0 * Bk + x.val) - mRight) *
+              s.readMem valueRightReg (s.pids 0 * Bk + x.val)) =
+        Real.exp (mLeft - mMerged) *
+          (∑ j : Fin Bk, Real.exp (scoresLeft j - mLeft) * valuesLeft j) +
+        Real.exp (mRight - mMerged) *
+          (∑ j : Fin Bk, Real.exp (scoresRight j - mRight) * valuesRight j) := by
+    rw [hOL, hOR]
+  have hDen :
+      Real.exp (mLeft - mMerged) *
+          (∑ x : Fin Bk,
+            Real.exp (s.readMem scoreLeftReg (s.pids 0 * Bk + x.val) - mLeft)) +
+        Real.exp (mRight - mMerged) *
+          (∑ x : Fin Bk,
+            Real.exp (s.readMem scoreRightReg (s.pids 0 * Bk + x.val) - mRight)) =
+        Real.exp (mLeft - mMerged) *
+          (∑ j : Fin Bk, Real.exp (scoresLeft j - mLeft)) +
+        Real.exp (mRight - mMerged) *
+          (∑ j : Fin Bk, Real.exp (scoresRight j - mRight)) := by
+    rw [hLL, hLR]
+  exact congrArg₂ (fun (num den : ℝ) => num / den) hNum hDen
+
 /-! ## FA-2 merge-stage kernel surface
 
 This small kernel is the executable core of the FA-2 fragment merge.  Each

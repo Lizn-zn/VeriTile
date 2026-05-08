@@ -280,6 +280,9 @@ available through the grid-launched surface.
   same bridge at a fixed `(batch, head, query, d)` coordinate
 - `fa2ScalarFragmentSummaryKernel_correct_view` — executable one-fragment
   producer for denominator/numerator summaries consumed by the merge stage
+- `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
+  slice fusing fragment-summary production and delayed-rescale merge into one
+  DSL kernel, writing the tile-level FA-2 two-fragment spec
 - `fa2_masked_sum_eq_zero_of_all_invisible` and
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` — full-mask block-skip
   denominator/numerator zero-contribution identities

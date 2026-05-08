@@ -248,6 +248,9 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
   版本,面向固定 `(batch, head, query, d)` 坐标
 - `fa2ScalarFragmentSummaryKernel_correct_view` —— 可执行 one-fragment
   denominator/numerator summary 生产器,供 merge stage 消费
+- `fa2ScalarTwoBlockForwardKernel_correct_view` —— 可执行 scalar two-block
+  slice,把 fragment summary 生产和 delayed-rescale merge 融合进一个 DSL
+  kernel,写出 tile-level FA-2 two-fragment spec
 - `fa2_masked_sum_eq_zero_of_all_invisible` 与
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` —— 全 mask block 的
   denominator/numerator 零贡献恒等式
