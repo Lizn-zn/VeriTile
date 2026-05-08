@@ -171,6 +171,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `streamingLSE_eq_lseReal` —— forward LSE store 用 `m_i + tl.log(l_i)` 等于
   unshifted log-sum-exp(backward 重建 P 的关键桥)
 - `attentionBackwardReal_eq_reverseMode` —— closed-form reverse-mode FA-1 backward
+- `attentionBackwardRealMasked_allVisible` —— 通用 mask-aware Real backward spec
+  在 all-visible mask 下退化为现有非 mask spec
 - 数学层 tile bridges:probability、`dP = dO · Vᵀ`、row correction
   `D_i = Σⱼ P_ij · dP_ij`、`dS = P * (dP - corr[:, None])`、`dV = Pᵀ · dO`、
   `dQ = dS · K · scale`、`dK = dSᵀ · Q · scale`
@@ -179,7 +181,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `fa1BackwardStrippedKernel_correct` —— stripped 主定理(无 mask、无 multi-block、
   单 program-id)
 
-下一步:加 mask → causal backward → FA-2 backward。multi-block atomic dQ 已通过 grid-launched surface 提供。
+下一步:把 mask-aware backward spec 接到 masked/causal kernel → FA-2 backward。
+multi-block atomic dQ 已通过 grid-launched surface 提供。
 
 ## 路线图(优先级排序,无固定时间窗口)
 
@@ -187,7 +190,7 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 
 - 维护已闭合的 FA-1 backward stripped 主定理
 - 维护 `v0.3-tier3a` tag(forward 全套)
-- FA-1 backward 加 mask
+- FA-1 backward 的 mask-aware spec 接入 masked/causal kernel
 - FA-1 backward 接入 multi-block(等中期 multi-block 语义)
 
 ### 中期 — Tier 3-B FA-2 forward + headline corollary

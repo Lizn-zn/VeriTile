@@ -197,6 +197,8 @@ in-scope (see §Decision log entry 9).
   equals unshifted log-sum-exp (the key bridge for backward to reconstruct P)
 - `attentionBackwardReal_eq_reverseMode` — closed-form reverse-mode FA-1
   backward
+- `attentionBackwardRealMasked_allVisible` — generic mask-aware Real backward
+  spec collapses to the existing non-masked spec under the all-visible mask
 - Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
   `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`
@@ -205,8 +207,8 @@ in-scope (see §Decision log entry 9).
 - `fa1BackwardStrippedKernel_correct` — stripped main theorem (no mask, no
   multi-block, single program-id)
 
-Next: add mask → causal backward → FA-2 backward. Multi-block atomic dQ is
-available through the grid-launched surface.
+Next: connect the mask-aware backward spec to masked/causal kernels → FA-2
+backward. Multi-block atomic dQ is available through the grid-launched surface.
 
 ## Roadmap (priority-ordered, no fixed time windows)
 
@@ -214,7 +216,7 @@ available through the grid-launched surface.
 
 - Maintain closed FA-1 backward stripped theorem
 - Maintain `v0.3-tier3a` tag for forward full coverage
-- Add mask to FA-1 backward
+- Connect the mask-aware FA-1 backward spec to masked/causal kernels
 - Wire FA-1 backward to multi-block (after mid-term multi-block semantics)
 
 ### Mid-term — Tier 3-B FA-2 forward + headline corollary

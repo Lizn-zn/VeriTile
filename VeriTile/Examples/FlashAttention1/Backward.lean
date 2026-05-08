@@ -33,6 +33,16 @@ theorem attentionBackwardReal_eq_reverseMode {M S D : Nat}
       reverseModeAttentionReal Q K V dO LSE scale :=
   attentionBackwardReal_eq_reverseMode_impl Q K V dO LSE scale
 
+/-- Mask-aware backward spec bridge kept in this file for the artifact theorem
+surface.  It records that the explicit visibility-mask spec is a conservative
+extension of the existing non-masked backward spec. -/
+theorem attentionBackwardRealMasked_allVisible {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    attentionBackwardRealMasked (fun _ _ => Bool.true) Q K V dO LSE scale =
+      attentionBackwardReal Q K V dO LSE scale :=
+  attentionBackwardRealMasked_allVisible_impl Q K V dO LSE scale
+
 /-- Softmax JVP identity kept in this file for the artifact theorem surface. -/
 theorem softmax_jvp_identity {S : Nat}
     (P dPRow : Fin S → ℝ) (j : Fin S) :

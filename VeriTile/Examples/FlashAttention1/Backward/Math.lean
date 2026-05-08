@@ -86,6 +86,66 @@ noncomputable def dS {M S D : Nat}
   probability Q K LSE scale i j *
     (dP V dO i j - rowCorrection Q K V dO LSE scale i)
 
+/-! ### Masked backward math surface
+
+The production backward kernels eventually need causal and sequence-boundary
+masks.  The definitions below expose the generic mask-aware Real spec while
+keeping the existing non-masked surface as the all-visible specialization.
+-/
+
+/-- Mask-aware softmax probability. Invisible entries contribute zero to all
+backward sums, matching the forward convention that masked logits behave like
+`-inf`. -/
+noncomputable def probabilityMasked {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) (j : Fin S) : ℝ :=
+  if visible i j then probability Q K LSE scale i j else 0
+
+/-- Mask-aware row correction `D_i = Σ_j P_ij · dP_ij`, with invisible lanes
+contributing zero. -/
+noncomputable def rowCorrectionMasked {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (V : TileIndex [S, D] → ℝ) (dO : TileIndex [M, D] → ℝ)
+    (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) : ℝ :=
+  Finset.univ.sum fun j : Fin S =>
+    probabilityMasked visible Q K LSE scale i j * dP V dO i j
+
+/-- Mask-aware softmax JVP. -/
+noncomputable def dSMasked {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
+    (V : TileIndex [S, D] → ℝ) (dO : TileIndex [M, D] → ℝ)
+    (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) (j : Fin S) : ℝ :=
+  probabilityMasked visible Q K LSE scale i j *
+    (dP V dO i j - rowCorrectionMasked visible Q K V dO LSE scale i)
+
+/-- Closed-form reverse-mode FA-1 backward over Real tensors with an explicit
+query/key visibility mask. -/
+noncomputable def attentionBackwardRealMasked {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    Grads M S D :=
+  { dQ := fun (i, d, _) =>
+      scale * Finset.univ.sum fun j : Fin S =>
+        dSMasked visible Q K V dO LSE scale i j * K (j, d, PUnit.unit)
+    dK := fun (j, d, _) =>
+      scale * Finset.univ.sum fun i : Fin M =>
+        dSMasked visible Q K V dO LSE scale i j * Q (i, d, PUnit.unit)
+    dV := fun (j, d, _) =>
+      Finset.univ.sum fun i : Fin M =>
+        probabilityMasked visible Q K LSE scale i j * dO (i, d, PUnit.unit) }
+
+/-- Causal specialization of the generic mask-aware backward spec. -/
+noncomputable def attentionBackwardRealCausal {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    Grads M S D :=
+  attentionBackwardRealMasked
+    (fun i j => decide (j.val ≤ i.val)) Q K V dO LSE scale
+
 /-- Closed-form reverse-mode FA-1 backward over Real tensors. -/
 noncomputable def attentionBackwardReal {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
@@ -100,6 +160,16 @@ noncomputable def attentionBackwardReal {M S D : Nat}
     dV := fun (j, d, _) =>
       Finset.univ.sum fun i : Fin M =>
         probability Q K LSE scale i j * dO (i, d, PUnit.unit) }
+
+/-- The mask-aware backward spec collapses to the existing non-masked spec
+when every query/key pair is visible. -/
+theorem attentionBackwardRealMasked_allVisible_impl {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    attentionBackwardRealMasked (fun _ _ => Bool.true) Q K V dO LSE scale =
+      attentionBackwardReal Q K V dO LSE scale := by
+  simp [attentionBackwardRealMasked, attentionBackwardReal, dSMasked, dS,
+    rowCorrectionMasked, rowCorrection, probabilityMasked]
 
 /-- Named reverse-mode spec.  Keeping this as a separate name makes the public
 theorem surface state the intended equivalence explicitly while leaving the
