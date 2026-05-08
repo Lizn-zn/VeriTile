@@ -283,6 +283,9 @@ available through the grid-launched surface.
 - `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
   slice fusing fragment-summary production and delayed-rescale merge into one
   DSL kernel, writing the tile-level FA-2 two-fragment spec
+- `fa2ScalarTwoBlockForwardKernel_attentionReal_view` — the fused scalar
+  two-block DSL kernel connected to Q/K/V fragment score/value buffers, proving
+  it writes flat `attentionReal`
 - `fa2_masked_sum_eq_zero_of_all_invisible` and
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` — full-mask block-skip
   denominator/numerator zero-contribution identities

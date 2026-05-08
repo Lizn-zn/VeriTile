@@ -522,6 +522,90 @@ theorem fa2ScalarTwoBlockForwardKernel_correct_view
     rw [hLL, hLR]
   exact congrArg₂ (fun (num den : ℝ) => num / den) hNum hDen
 
+/-- End-to-end scalar theorem for the fused two-block FA-2 forward slice: if
+the score/value buffers contain the two Q/K/V fragments for one output
+coordinate, the executable fused scalar kernel writes the flat `attentionReal`
+result. -/
+theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
+    {M D Bk : Nat}
+    (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+      mLeftReg mRightReg mMergedReg outReg : RegionName)
+    (s : BlockState)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
+    (scale : ℝ) (idx : TileIndex [M, D])
+    (mLeft mRight mMerged : ℝ)
+    (hScoresLeft : InputLoadedAt s scoreLeftReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+    (hValuesLeft : InputLoadedAt s valueLeftReg Bk
+      (fun j : Fin Bk =>
+        V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit)))
+    (hScoresRight : InputLoadedAt s scoreRightReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore Q K scale idx.1
+          (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
+    (hValuesRight : InputLoadedAt s valueRightReg Bk
+      (fun j : Fin Bk =>
+        V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit)))
+    (hmLeft : s.readMem mLeftReg s.pid = mLeft)
+    (hmRight : s.readMem mRightReg s.pid = mRight)
+    (hmMerged : s.readMem mMergedReg s.pid = mMerged)
+    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarTwoBlockForwardKernel
+        scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+        mLeftReg mRightReg mMergedReg outReg Bk)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar outReg s.pid)
+      (expected := fun _ : PUnit => attentionReal Q K V scale idx) := by
+  have hcorrect := fa2ScalarTwoBlockForwardKernel_correct_view
+    scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+    mLeftReg mRightReg mMergedReg outReg Bk s
+    (fun j : Fin Bk =>
+      FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk 2 0 two_block0_le j))
+    (fun j : Fin Bk =>
+      V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
+    (fun j : Fin Bk =>
+      FA1Math.scaledScore Q K scale idx.1
+        (FA1Math.blockIndex Bk 2 1 two_block1_le j))
+    (fun j : Fin Bk =>
+      V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
+    mLeft mRight mMerged
+    hScoresLeft hValuesLeft hScoresRight hValuesRight hmLeft hmRight hmMerged
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  unfold ComputeCorrect.Realizes ComputeKernel.ExecCorrect
+    ComputeKernel.ComputeCorrect ComputeKernel.ProjectedCorrect
+    ComputeKernel.AlgorithmCorrect Kernel.Correct at hcorrect
+  rcases hcorrect with ⟨_, hcorrect⟩
+  simp at hcorrect
+  have hOut := hcorrect s s' hExec rfl PUnit.unit
+  intro _
+  have hSpec :
+      fa2ScalarTwoBlockForwardTileSpec
+        (fun j : Fin Bk =>
+          FA1Math.scaledScore Q K scale idx.1
+            (FA1Math.blockIndex Bk 2 0 two_block0_le j))
+        (fun j : Fin Bk =>
+          V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
+        (fun j : Fin Bk =>
+          FA1Math.scaledScore Q K scale idx.1
+            (FA1Math.blockIndex Bk 2 1 two_block1_le j))
+        (fun j : Fin Bk =>
+          V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
+        mLeft mRight mMerged =
+        attentionReal Q K V scale idx := by
+    unfold fa2ScalarTwoBlockForwardTileSpec fa2ScalarFragmentDenom
+      fa2ScalarFragmentNumer
+    change fa2TwoBlockForwardSpec Q K V scale mLeft mRight mMerged idx =
+      attentionReal Q K V scale idx
+    exact fa2_two_block_forward_eq_attentionReal
+      Q K V scale mLeft mRight mMerged idx hlFree
+  simpa [ComputeCorrect.WriteMap.scalar, hSpec] using hOut
+
 /-! ## FA-2 merge-stage kernel surface
 
 This small kernel is the executable core of the FA-2 fragment merge.  Each

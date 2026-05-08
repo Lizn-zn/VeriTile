@@ -251,6 +251,9 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 - `fa2ScalarTwoBlockForwardKernel_correct_view` —— 可执行 scalar two-block
   slice,把 fragment summary 生产和 delayed-rescale merge 融合进一个 DSL
   kernel,写出 tile-level FA-2 two-fragment spec
+- `fa2ScalarTwoBlockForwardKernel_attentionReal_view` —— 把 fused scalar
+  two-block DSL kernel 接到 Q/K/V fragment score/value buffer,证明它写出
+  flat `attentionReal`
 - `fa2_masked_sum_eq_zero_of_all_invisible` 与
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` —— 全 mask block 的
   denominator/numerator 零贡献恒等式
