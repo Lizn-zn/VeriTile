@@ -606,6 +606,56 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
       Q K V scale mLeft mRight mMerged idx hlFree
   simpa [ComputeCorrect.WriteMap.scalar, hSpec] using hOut
 
+/-- 4D-facing wrapper for the fused scalar two-block FA-2 forward slice.  The
+kernel still writes one scalar output coordinate, but the theorem is stated in
+the same `(batch, head, query, d)` language as the forward user surface. -/
+theorem fa2ScalarTwoBlockForwardKernel_attentionReal4D_view
+    {B H S_q D Bk : Nat}
+    (scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+      mLeftReg mRightReg mMergedReg outReg : RegionName)
+    (s : BlockState)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (scale : ℝ) (b : Fin B) (h : Fin H) (i : Fin S_q) (d : Fin D)
+    (mLeft mRight mMerged : ℝ)
+    (hScoresLeft : InputLoadedAt s scoreLeftReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore (sliceBH Q b h) (sliceBH K b h) scale i
+          (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+    (hValuesLeft : InputLoadedAt s valueLeftReg Bk
+      (fun j : Fin Bk =>
+        (sliceBH V b h) (FA1Math.blockIndex Bk 2 0 two_block0_le j,
+          d, PUnit.unit)))
+    (hScoresRight : InputLoadedAt s scoreRightReg Bk
+      (fun j : Fin Bk =>
+        FA1Math.scaledScore (sliceBH Q b h) (sliceBH K b h) scale i
+          (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
+    (hValuesRight : InputLoadedAt s valueRightReg Bk
+      (fun j : Fin Bk =>
+        (sliceBH V b h) (FA1Math.blockIndex Bk 2 1 two_block1_le j,
+          d, PUnit.unit)))
+    (hmLeft : s.readMem mLeftReg s.pid = mLeft)
+    (hmRight : s.readMem mRightReg s.pid = mRight)
+    (hmMerged : s.readMem mMergedReg s.pid = mMerged)
+    (hlFree :
+      FA1Math.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
+    ComputeCorrect.Realizes
+      (kernel := fa2ScalarTwoBlockForwardKernel
+        scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+        mLeftReg mRightReg mMergedReg outReg Bk)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar outReg s.pid)
+      (expected := fun _ : PUnit =>
+        attentionReal4D Q K V scale (b, h, i, d, PUnit.unit)) := by
+  have hview := fa2ScalarTwoBlockForwardKernel_attentionReal_view
+    scoreLeftReg valueLeftReg scoreRightReg valueRightReg
+    mLeftReg mRightReg mMergedReg outReg s
+    (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+    scale (i, d, PUnit.unit) mLeft mRight mMerged
+    hScoresLeft hValuesLeft hScoresRight hValuesRight
+    hmLeft hmRight hmMerged hlFree
+  simpa [attentionReal4D_slice] using hview
+
 /-! ## FA-2 merge-stage kernel surface
 
 This small kernel is the executable core of the FA-2 fragment merge.  Each
