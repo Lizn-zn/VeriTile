@@ -206,6 +206,9 @@ in-scope (see §Decision log entry 9).
 - `gridLaunchedAtomic_masked_dQ_correct` and
   `gridLaunchedAtomic_causal_dQ_correct` — launcher-facing masked/causal
   atomic `dQ` composition surfaces
+- `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct` — concrete
+  kernel-specific launcher-facing causal `dQ` theorem for the atomic backward
+  kernel
 - `fa1BackwardAtomicDQCausalKernel` — DSL kernel surface for causal
   block-partitioned backward with atomic `dQ`
 - `fa1BackwardAtomicDQCausalPreAtomicState` — pre-atomic boundary for the

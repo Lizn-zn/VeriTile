@@ -1951,6 +1951,52 @@ theorem gridLaunchedAtomic_causal_dQ_correct
       simp [dQBlockContributionCausal])
   simpa [attentionBackwardRealCausal] using hMasked idx
 
+/-- Concrete launcher-facing causal dQ theorem for the FA-1 backward atomic
+kernel.  This specializes the generic causal `GridLaunchedAtomic` composition
+surface to `fa1BackwardAtomicDQCausalKernel`, so downstream users can cite the
+kernel-specific theorem instead of manually instantiating `k`. -/
+theorem fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQCausalKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              dQBlockContributionCausal Q K V dO LSE scale block idx)) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some ((attentionBackwardRealCausal Q K V dO LSE scale).dQ idx) := by
+  exact gridLaunchedAtomic_causal_dQ_correct
+    (k := (fa1BackwardAtomicDQCausalKernel
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale).toAlgKernel)
+    (dQReg := dQReg) (scale := scale) (s := s) (sFinal := sFinal)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
+    hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
+
 /-- Readback for the final three stores of the stripped backward kernel.
 
 The computational prefix establishes the pointer/value registers; this lemma

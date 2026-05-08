@@ -180,6 +180,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `gridLaunchedAtomic_masked_dQ_correct` 与
   `gridLaunchedAtomic_causal_dQ_correct` —— launcher-facing masked/causal
   atomic `dQ` composition surface
+- `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct` —— atomic backward
+  kernel 的 concrete kernel-specific launcher-facing causal `dQ` theorem
 - `fa1BackwardAtomicDQCausalKernel` —— causal block-partitioned backward +
   atomic `dQ` 的 DSL kernel surface
 - `fa1BackwardAtomicDQCausalPreAtomicState` —— causal kernel prefix 的
