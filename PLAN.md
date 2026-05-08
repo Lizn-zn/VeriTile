@@ -246,6 +246,8 @@ backward. Multi-block atomic dQ is available through the grid-launched surface.
 - `fa2_two_fragment_denominator_merge_eq_flat` and
   `fa2_two_fragment_numerator_merge_eq_flat` — two-fragment merge identities
   for FA-2 partitioned forward
+- `fa2_two_fragment_attention_ratio_eq_flat` — pointwise output ratio identity
+  for a two-fragment FA-2 merge
 - `fa2_masked_sum_eq_zero_of_all_invisible` and
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` — full-mask block-skip
   denominator/numerator zero-contribution identities

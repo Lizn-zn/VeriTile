@@ -217,6 +217,8 @@ multi-block atomic dQ 已通过 grid-launched surface 提供。
 - `fa2_two_fragment_denominator_merge_eq_flat` 与
   `fa2_two_fragment_numerator_merge_eq_flat` —— FA-2 partitioned forward 的
   two-fragment merge 恒等式
+- `fa2_two_fragment_attention_ratio_eq_flat` —— two-fragment FA-2 merge 的
+  pointwise 输出比值恒等式
 - `fa2_masked_sum_eq_zero_of_all_invisible` 与
   `fa2_masked_weighted_sum_eq_zero_of_all_invisible` —— 全 mask block 的
   denominator/numerator 零贡献恒等式

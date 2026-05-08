@@ -81,6 +81,31 @@ theorem fa2_two_fragment_numerator_merge_eq_flat
   rw [fa2_delayed_rescale_weighted_sum_eq scoresLeft valuesLeft mLeft mMerged,
     fa2_delayed_rescale_weighted_sum_eq scoresRight valuesRight mRight mMerged]
 
+/-- Two-fragment attention-output merge: the FA-2 rescale-and-merge ratio is
+the same as the flat attention ratio over both fragments.  This is the scalar
+per-output-coordinate form; vector outputs use this pointwise for each `D`
+coordinate. -/
+theorem fa2_two_fragment_attention_ratio_eq_flat
+    {ι κ : Type} [Fintype ι] [Fintype κ]
+    (scoresLeft valuesLeft : ι → ℝ) (scoresRight valuesRight : κ → ℝ)
+    (mLeft mRight mMerged : ℝ) :
+    (Real.exp (mLeft - mMerged) *
+          (Finset.univ.sum fun j : ι => Real.exp (scoresLeft j - mLeft) * valuesLeft j) +
+        Real.exp (mRight - mMerged) *
+          (Finset.univ.sum fun j : κ =>
+            Real.exp (scoresRight j - mRight) * valuesRight j)) /
+      (Real.exp (mLeft - mMerged) *
+          (Finset.univ.sum fun j : ι => Real.exp (scoresLeft j - mLeft)) +
+        Real.exp (mRight - mMerged) *
+          (Finset.univ.sum fun j : κ => Real.exp (scoresRight j - mRight))) =
+      ((Finset.univ.sum fun j : ι => Real.exp (scoresLeft j - mMerged) * valuesLeft j) +
+        (Finset.univ.sum fun j : κ => Real.exp (scoresRight j - mMerged) * valuesRight j)) /
+      ((Finset.univ.sum fun j : ι => Real.exp (scoresLeft j - mMerged)) +
+        (Finset.univ.sum fun j : κ => Real.exp (scoresRight j - mMerged))) := by
+  rw [fa2_two_fragment_numerator_merge_eq_flat scoresLeft valuesLeft scoresRight valuesRight
+      mLeft mRight mMerged,
+    fa2_two_fragment_denominator_merge_eq_flat scoresLeft scoresRight mLeft mRight mMerged]
+
 /-- Fully masked blocks contribute zero to the softmax denominator. -/
 theorem fa2_masked_sum_eq_zero_of_all_invisible {ι : Type} [Fintype ι]
     (visible : ι → Bool) (scores : ι → ℝ) (m : ℝ)
