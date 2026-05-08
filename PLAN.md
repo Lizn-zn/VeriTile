@@ -214,8 +214,9 @@ in-scope (see §Decision log entry 9).
 - `fa1BackwardStrippedKernel_correct` — stripped main theorem (no mask, no
   multi-block, single program-id)
 
-Next: connect the mask-aware backward spec to masked/causal kernels → FA-2
-backward. Multi-block atomic dQ is available through the grid-launched surface.
+Next: prove masked/causal kernel trace extraction against the launcher-facing
+surfaces above, then extend the same path to FA-2 backward. Multi-block atomic
+dQ composition itself is available through the grid-launched surface.
 
 ## Roadmap (priority-ordered, no fixed time windows)
 
@@ -223,7 +224,8 @@ backward. Multi-block atomic dQ is available through the grid-launched surface.
 
 - Maintain closed FA-1 backward stripped theorem
 - Maintain `v0.3-tier3a` tag for forward full coverage
-- Connect the mask-aware FA-1 backward spec to masked/causal kernels
+- Prove masked/causal FA-1 backward kernel trace extraction against the
+  launcher-facing masked/causal `dQ` surfaces
 - Wire FA-1 backward to multi-block (after mid-term multi-block semantics)
 
 ### Mid-term — Tier 3-B FA-2 forward + headline corollary

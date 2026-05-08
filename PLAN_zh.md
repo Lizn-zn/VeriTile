@@ -188,8 +188,9 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - `fa1BackwardStrippedKernel_correct` —— stripped 主定理(无 mask、无 multi-block、
   单 program-id)
 
-下一步:把 mask-aware backward spec 接到 masked/causal kernel → FA-2 backward。
-multi-block atomic dQ 已通过 grid-launched surface 提供。
+下一步:证明 masked/causal kernel 的 trace extraction,并接到上面的
+launcher-facing surface;之后同一路径扩到 FA-2 backward。multi-block atomic dQ
+composition 本身已通过 grid-launched surface 提供。
 
 ## 路线图(优先级排序,无固定时间窗口)
 
@@ -197,7 +198,8 @@ multi-block atomic dQ 已通过 grid-launched surface 提供。
 
 - 维护已闭合的 FA-1 backward stripped 主定理
 - 维护 `v0.3-tier3a` tag(forward 全套)
-- FA-1 backward 的 mask-aware spec 接入 masked/causal kernel
+- 证明 masked/causal FA-1 backward kernel trace extraction,并接到
+  launcher-facing masked/causal `dQ` surface
 - FA-1 backward 接入 multi-block(等中期 multi-block 语义)
 
 ### 中期 — Tier 3-B FA-2 forward + headline corollary
