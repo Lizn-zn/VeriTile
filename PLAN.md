@@ -292,6 +292,9 @@ available through the grid-launched surface.
   - Heavily reuses Tier 3-A single-program invariant tooling
 - **Headline corollary `fa1_eq_fa2`** — ~30 lines via spec transitivity
   through `standardAttentionMath`
+  - Current first slice: `fa1_eq_fa2_two_block_forward4D`, a spec-level
+    equality between flat `attentionReal4D` and delayed-rescale two-fragment
+    FA-2 output for a two-block KV domain
 
 ### Mid-term — Tier 3-C FA backward full coverage
 

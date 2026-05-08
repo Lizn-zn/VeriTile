@@ -258,6 +258,9 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
   - 块跳过正确性:全 mask 块对递推贡献为 0
   - Tier 3-A single-program invariant 工具大量复用
 - **Headline corollary `fa1_eq_fa2`** —— ~30 行,通过 spec 传递性导出
+  - 当前第一片:`fa1_eq_fa2_two_block_forward4D`,即 flat
+    `attentionReal4D` 与 two-block KV domain 上 delayed-rescale two-fragment
+    FA-2 输出之间的 spec-level 等式
 
 ### 中期 — Tier 3-C FA backward 全套
 

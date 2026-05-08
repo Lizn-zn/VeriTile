@@ -284,6 +284,23 @@ theorem fa2_two_block_forward_eq_attentionReal4D
     (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
     scale mLeft mRight mMerged (i, d, PUnit.unit) hlFree
 
+/-- Headline spec-level FA-1/FA-2 equality for the two-fragment forward
+surface: the flat FA-1 4D attention spec equals the delayed-rescale FA-2
+two-block partitioned spec at the same coordinate. -/
+theorem fa1_eq_fa2_two_block_forward4D
+    {B H S_q D Bk : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (scale : ℝ) (b : Fin B) (h : Fin H) (i : Fin S_q) (d : Fin D)
+    (mLeft mRight mMerged : ℝ)
+    (hlFree :
+      FA1Math.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
+    attentionReal4D Q K V scale (b, h, i, d, PUnit.unit) =
+      fa2TwoBlockForwardSpec (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        scale mLeft mRight mMerged (i, d, PUnit.unit) := by
+  exact (fa2_two_block_forward_eq_attentionReal4D
+    Q K V scale b h i d mLeft mRight mMerged hlFree).symm
+
 /-! ## FA-2 merge-stage kernel surface
 
 This small kernel is the executable core of the FA-2 fragment merge.  Each
