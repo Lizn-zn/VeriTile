@@ -186,6 +186,8 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   pre-atomic 边界,对齐非 causal proof split
 - `FA1BackwardAtomicDQCausalPreAtomicFacts` —— causal prefix 需要证明的
   `dQ_part`、`dK_block`、`dV_block` obligations bundle
+- `causalBackward_tile_bridges_complete` —— prefix proof 可复用的 causal
+  `dQ/dK/dV` tile-dot bridge bundle
 - 数学层 tile bridges:probability、`dP = dO · Vᵀ`、row correction
   `D_i = Σⱼ P_ij · dP_ij`、`dS = P * (dP - corr[:, None])`、`dV = Pᵀ · dO`、
   `dQ = dS · K · scale`、`dK = dSᵀ · Q · scale`

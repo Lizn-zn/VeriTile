@@ -212,6 +212,8 @@ in-scope (see §Decision log entry 9).
   causal kernel prefix, matching the non-causal proof split
 - `FA1BackwardAtomicDQCausalPreAtomicFacts` — proof target bundling the causal
   prefix obligations for `dQ_part`, `dK_block`, and `dV_block`
+- `causalBackward_tile_bridges_complete` — causal `dQ/dK/dV` tile-dot bridge
+  bundle for the prefix proof
 - Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
   `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
   `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`
