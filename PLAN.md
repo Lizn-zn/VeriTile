@@ -169,49 +169,75 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `attentionReal4D` equals delayed-rescale two-fragment FA-2 output for a
   two-block KV domain
 
-### Tier 3-C — FA-1 backward full coverage ✅
+### Tier 3-C — FA-1 backward + FA-2 backward full coverage ✅
+
+*FA-1 backward concrete kernels:*
 
 - Stripped main theorem: `fa1BackwardStrippedKernel_correct` (no mask, no
   multi-block, single program-id)
 - Multi-block atomic `dQ` composition — non-causal:
-  `fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct` (grid launcher dQ),
-  combined with ordinary `dK`/`dV` tail-store readback as
-  `fa1BackwardAtomicDQKernel_gridLaunched_backward_correct` (full
-  three-output public theorem)
+  `fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct` and full three-output
+  `fa1BackwardAtomicDQKernel_gridLaunched_backward_correct`
 - Multi-block atomic `dQ` composition — causal:
-  `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct`, combined as
+  `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct` and
   `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`
+- Boundary backward variants (parity with Tier 3-A boundary forwards):
+  `fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct`,
+  `fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct`,
+  `fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct`,
+  `fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct`
+- Score-variants backward (parity with `ScoreVariants.lean` forwards):
+  `gridLaunchedAtomic_alibi_backward_correct`,
+  `gridLaunchedAtomic_softcap_backward_correct`,
+  `gridLaunchedAtomic_slidingWindow_backward_correct`,
+  `gridLaunchedAtomic_scoreVariant_backward_correct` (generic),
+  `gridLaunchedAtomic_alibiSlidingSoftcap_backward_correct` (3-way composition)
 - Strided backward surface:
-  `fa1BackwardStrippedKernelStrided_realizes`, a compute-facing theorem that
-  derives the stride-aware input loads, math suffix, and final `dQ` / `dK` /
-  `dV` writes directly from strided input tensors.  The theorem assumes the
-  output address maps are injective and the three output regions are pairwise
-  distinct, which is necessary for arbitrary user-provided strides.
-- 4D full-sequence backward slice:
-  `fa1BackwardStrippedKernelStrided_realizes_4D_fullSequence`, the 4D
-  wrapper for the stride-aware stripped kernel when the query block covers the
-  full `S_q` axis (`M = S_q`, `program_id(0) = 0`).  This is the semantically
-  correct 4D stripped-backward form because `dK` / `dV` depend on all query
-  rows.
-- Generic launcher-facing surfaces:
-  `gridLaunchedAtomic_masked_dQ_correct` and
-  `gridLaunchedAtomic_causal_dQ_correct` for kernel-agnostic atomic
-  composition; `attentionBackwardRealMasked_allVisible` and
-  `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked` (causal
-  variant: `_Causal_…`) for the math-side multi-block bridges; full
-  arbitrary-mask `dQ`/`dK`/`dV` launcher composition as
-  `gridLaunchedAtomic_masked_backward_correct`
-- Math layer: `streamingLSE_eq_lseReal`,
-  `attentionBackwardReal_eq_reverseMode`, probability / `dP = dO · Vᵀ` /
-  row correction `D_i` / `dS = P * (dP - corr[:, None])` /
-  `dV = Pᵀ · dO` / `dQ = dS · K · scale` / `dK = dSᵀ · Q · scale` tile
-  bridges, 4D arbitrary-mask spec slicing
-  `attentionBackwardReal4DMasked_slice`, `softmax_jvp_identity`,
-  `causalBackward_tile_bridges_complete`, and the block-local
-  arbitrary-mask `_block_*` counterparts; bundled as
-  `strippedBackward_tile_bridges_complete`,
-  `maskedBackward_block_tile_bridges_complete`, and
-  `causalBackward_block_tile_bridges_complete`
+  `fa1BackwardStrippedKernelStrided_realizes`, deriving stride-aware input
+  loads, math suffix, and final `dQ` / `dK` / `dV` writes directly from
+  strided input tensors. Output-address injectivity and pairwise-distinct
+  output regions are explicit hypotheses.
+- 4D backward slices:
+  `fa1BackwardStrippedKernelStrided_realizes_4D_fullSequence`
+  (`M = S_q` / single query block) and
+  `fa1BackwardStrippedKernelStrided_realizes_4D_queryBlock`
+  (arbitrary query block index)
+- Generic kernel-agnostic launcher-facing surfaces:
+  `gridLaunchedAtomic_masked_dQ_correct`,
+  `gridLaunchedAtomic_causal_dQ_correct`,
+  `gridLaunchedAtomic_masked_backward_correct` (full arbitrary-mask
+  `dQ`/`dK`/`dV` composition)
+
+*FA-2 backward concrete kernels:*
+
+- `fa2BackwardAtomicDQKernel_gridLaunched_backward_correct` (single-block,
+  non-causal)
+- `fa2BackwardAtomicDQTwoBlockKernel_gridLaunched_backward_correct`
+  (two-block partition, non-causal)
+- `fa2BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`
+  (causal single-block)
+- `fa2BackwardAtomicDQCausalTwoBlockKernel_gridLaunched_backward_correct`
+  (causal two-block)
+
+*Headline backward corollary:*
+
+- **`fa1_backward_eq_fa2_backward`** — FA-1 and FA-2 backward share the
+  same Real mathematical target; they differ only in work partitioning
+- **`fa1_backward_eq_fa2_backward4D`** — 4D dual of the same equivalence
+
+*Math layer:* `streamingLSE_eq_lseReal`,
+`attentionBackwardReal_eq_reverseMode`,
+`attentionBackwardRealMasked_allVisible`,
+`dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked` (and causal
+counterpart), `attentionBackwardReal4DMasked_slice`, probability / `dP =
+dO · Vᵀ` / row correction `D_i` / `dS = P * (dP - corr[:, None])` /
+`dV = Pᵀ · dO` / `dQ = dS · K · scale` / `dK = dSᵀ · Q · scale` tile
+bridges, `softmax_jvp_identity`, `causalBackward_tile_bridges_complete`,
+block-local arbitrary-mask `_block_*` counterparts;
+`dQBlockContributionScoreVariant_sum_eq_attentionBackwardRealScoreVariant`;
+bundled as `strippedBackward_tile_bridges_complete`,
+`maskedBackward_block_tile_bridges_complete`,
+`causalBackward_block_tile_bridges_complete`.
 
 ### Horizontal infra ✅ (beyond original PLAN scope, in parallel with Tiers)
 
@@ -246,43 +272,46 @@ The trusted bridge from Real-algorithm correctness to floating computation
 
 ### Numbers
 
-- 112 `.lean` files under `VeriTile/` (~52.3k lines); 129 `.lean` files including `bench/` (~54.3k lines)
+- 113 `.lean` files under `VeriTile/` (~58.6k lines); 145 `.lean` files including `bench/` (~63.2k lines)
 - Whole library 0 sorry
 - `lake build` clean
-- `bench/check_ports.sh` 17/17 ok
+- `bench/check_ports.sh` 32/32 ok
 
 ## In progress
 
-### Tier 3-C ergonomic follow-ups
+### Tier 3 ergonomic follow-ups
 
-The non-causal and causal multi-block atomic-dQ launcher-facing main theorems
-are closed (see §Status Tier 3-C). The remaining work is ergonomic, not
-functional:
+All FA-1 / FA-2 forward and backward main theorems (concrete kernels +
+headline corollaries) are closed (see §Status). The remaining work is
+ergonomic, not functional:
 
 - More ergonomic construction of causal `GridLaunchedAtomic` witnesses from
   raw DSL inputs, so end users can reach
-  `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct` without
-  threading the trace-extraction lemmas by hand.
+  `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct` (and the
+  boundary / score-variant / FA-2 dual launchers) without threading the
+  trace-extraction lemmas by hand.
 - A user-facing `Realizes`-style surface for backward outputs, gated on the
   whole-grid `launchExec` landing (see §Roadmap mid-term).
+- Two-block FA-2 forward / backward bridges generalize to arbitrary block
+  counts once `multiBlockExec` lands.
 
 ## Roadmap (priority-ordered, no fixed time windows)
 
-### Near-term — Tier 3 wrap-up and release prep
+### Near-term — Tier 3 release + Tier 4 prerequisites
 
 - Cut `v0.3-tier3` release covering FA-1 forward (3-A), FA-2 forward + the
-  `fa1_eq_fa2_two_block_forward4D` headline corollary (3-B), and FA-1
-  backward (3-C: stripped + non-causal/causal launcher-facing full theorems)
+  `fa1_eq_fa2_two_block_forward4D` headline corollary (3-B), and FA-1/FA-2
+  backward + `fa1_backward_eq_fa2_backward(_4D)` headline corollary (3-C)
 - Pre-Tier-4 cleanup checklist (closed: see issue #108)
 - Causal launcher-witness ergonomics (§In progress)
 - Streaming reduction helper extraction — Tier 4 prerequisite, follow-up
   issue from #108
 
-### Mid-term — Whole-grid `multiBlockExec` and FA-2 forward closure
+### Mid-term — Whole-grid `multiBlockExec` and arbitrary-block lift
 
-Tier 3-B is closed at the two-block level (see §Status). The remaining
-forward-side work generalizes the producer-consumer chain to arbitrary block
-counts and unifies grid execution under a single launch primitive:
+Tier 3-B/C are closed at the two-block level (see §Status). The remaining
+work generalizes the producer-consumer chain to arbitrary block counts and
+unifies grid execution under a single launch primitive:
 
 - `multiBlockExec : Kernel → InitMem → Grid → FinalMem` model — runs every
   program_id (3D grid: `batch × heads × Q-blocks`), composing each program's
@@ -291,17 +320,10 @@ counts and unifies grid execution under a single launch primitive:
 - Generalize `fa2_two_block_forward_eq_attentionReal` from two blocks to
   arbitrary block counts (`fa_2_forward_correct` with block-skip + delayed
   rescale closure)
-- Lift the headline corollary `fa1_eq_fa2_two_block_forward4D` to arbitrary
-  block counts as `fa1_eq_fa2`
-
-### Mid-term — Tier 3-C closure: FA-2 backward and headline corollary
-
-FA-1 backward (stripped + non-causal/causal multi-block atomic-dQ launcher
-theorems) is closed (§Status). Remaining:
-
-- FA-2 backward (reuses multi-block semantics from `multiBlockExec`)
-- Headline corollary `fa1_backward_eq_fa2_backward` (dual to forward)
-- Causal launcher-witness ergonomics on the FA-1 backward side
+- Lift the headline corollaries `fa1_eq_fa2_two_block_forward4D` and
+  `fa1_backward_eq_fa2_backward(_4D)` to arbitrary block counts as
+  `fa1_eq_fa2` (forward) and `fa1_backward_eq_fa2_backward` over the
+  arbitrary-block FA-2 spec
 
 ### Mid-term — Tier 4 production kernel batch 2
 
@@ -517,8 +539,10 @@ To make the close-rate metric reproducible:
    primitive proofs moved out of P3+ and into in-scope.**
 
    - **FA-1 backward** entered the near-term roadmap; as of 2026-05-09 the
-     stripped, non-causal multi-block atomic-dQ, and causal multi-block
-     atomic-dQ launcher-facing main theorems are all closed (§Status Tier 3-C)
+     full FA-1 backward(stripped + non-causal/causal multi-block atomic-dQ
+     + boundary × 4 + score-variants × 5)and FA-2 backward(× 4 concrete
+     kernels)plus the headline corollary `fa1_backward_eq_fa2_backward(_4D)`
+     are all closed (§Status Tier 3-C)
    - **Python lifter** moved from P3+ to mid/long-term — Triton-user
      friendliness requires a paste-in surface, not just documentation
      correspondence
