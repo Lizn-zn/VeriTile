@@ -1970,6 +1970,61 @@ theorem fa1BackwardAtomicDQCausalPreAtomic_traceEvents_empty
     hmem
   all_goals subst st; rfl
 
+/-- The query-boundary pre-atomic prefix emits no atomic trace events. -/
+theorem fa1BackwardAtomicDQBoundaryPreAtomic_traceEvents_empty
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ)
+    (tid : ThreadId) :
+    ∀ st ∈
+        ((fa1BackwardAtomicDQBoundaryKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.take 36),
+      ∀ s0, Stmt.atomicTraceEvents tid s0 st = some [] := by
+  intro st hmem s0
+  simp [fa1BackwardAtomicDQBoundaryKernel] at hmem
+  aesop
+
+/-- The query-boundary causal pre-atomic prefix emits no atomic trace events. -/
+theorem fa1BackwardAtomicDQCausalBoundaryPreAtomic_traceEvents_empty
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ)
+    (tid : ThreadId) :
+    ∀ st ∈
+        ((fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.take 40),
+      ∀ s0, Stmt.atomicTraceEvents tid s0 st = some [] := by
+  intro st hmem s0
+  simp [fa1BackwardAtomicDQCausalBoundaryKernel] at hmem
+  aesop
+
+/-- The query-boundary D-tail pre-atomic prefix emits no atomic trace events. -/
+theorem fa1BackwardAtomicDQBoundaryDPreAtomic_traceEvents_empty
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bd Bk numKVBlocks qStart : Nat) (scale : ℝ)
+    (tid : ThreadId) :
+    ∀ st ∈
+        ((fa1BackwardAtomicDQBoundaryDKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.take 40),
+      ∀ s0, Stmt.atomicTraceEvents tid s0 st = some [] := by
+  intro st hmem s0
+  simp [fa1BackwardAtomicDQBoundaryDKernel] at hmem
+  aesop
+
+/-- The query-boundary causal D-tail pre-atomic prefix emits no atomic trace
+events. -/
+theorem fa1BackwardAtomicDQCausalBoundaryDPreAtomic_traceEvents_empty
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bd Bk numKVBlocks qStart : Nat) (scale : ℝ)
+    (tid : ThreadId) :
+    ∀ st ∈
+        ((fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.take 44),
+      ∀ s0, Stmt.atomicTraceEvents tid s0 st = some [] := by
+  intro st hmem s0
+  simp [fa1BackwardAtomicDQCausalBoundaryDKernel] at hmem
+  aesop
+
 /-- The post-prefix tail of the block-partitioned backward kernel consists of
 the atomic `dQ` contribution followed by ordinary `dK` and `dV` stores. -/
 theorem fa1BackwardAtomicDQKernel_drop29
@@ -2010,6 +2065,91 @@ theorem fa1BackwardAtomicDQCausalKernel_drop33
           (Op.ref .real [Bk, D] "dV_block") MaskOpt.none
       ] := by
   simp [fa1BackwardAtomicDQCausalKernel]
+
+/-- The query-boundary post-prefix tail has one masked atomic `dQ`
+accumulation followed by ordinary `dK` and `dV` stores. -/
+theorem fa1BackwardAtomicDQBoundaryKernel_drop36
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ) :
+    (fa1BackwardAtomicDQBoundaryKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 36 =
+      [
+        Stmt.atomicAdd NumericDType.real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "dq_ptrs"))
+          (Op.ref .real [M, D] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [M, D] "qd_mask")),
+        Stmt.store .real [Bk, D]
+          (MemAccess.region dKReg (Op.ref .nat [Bk, D] "k_block_ptrs"))
+          (Op.ref .real [Bk, D] "dK_block") MaskOpt.none,
+        Stmt.store .real [Bk, D]
+          (MemAccess.region dVReg (Op.ref .nat [Bk, D] "v_block_ptrs"))
+          (Op.ref .real [Bk, D] "dV_block") MaskOpt.none
+      ] := by
+  simp [fa1BackwardAtomicDQBoundaryKernel]
+
+/-- The query-boundary causal post-prefix tail has the same store shape as the
+non-causal boundary kernel. -/
+theorem fa1BackwardAtomicDQCausalBoundaryKernel_drop40
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ) :
+    (fa1BackwardAtomicDQCausalBoundaryKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40 =
+      [
+        Stmt.atomicAdd NumericDType.real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "dq_ptrs"))
+          (Op.ref .real [M, D] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [M, D] "qd_mask")),
+        Stmt.store .real [Bk, D]
+          (MemAccess.region dKReg (Op.ref .nat [Bk, D] "k_block_ptrs"))
+          (Op.ref .real [Bk, D] "dK_block") MaskOpt.none,
+        Stmt.store .real [Bk, D]
+          (MemAccess.region dVReg (Op.ref .nat [Bk, D] "v_block_ptrs"))
+          (Op.ref .real [Bk, D] "dV_block") MaskOpt.none
+      ] := by
+  simp [fa1BackwardAtomicDQCausalBoundaryKernel]
+
+/-- The query-boundary D-tail post-prefix tail writes padded `Bd`-wide
+`dQ`/`dK`/`dV` tiles. -/
+theorem fa1BackwardAtomicDQBoundaryDKernel_drop40
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bd Bk numKVBlocks qStart : Nat) (scale : ℝ) :
+    (fa1BackwardAtomicDQBoundaryDKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40 =
+      [
+        Stmt.atomicAdd NumericDType.real [M, Bd]
+          (MemAccess.region dQReg (Op.ref .nat [M, Bd] "dq_ptrs"))
+          (Op.ref .real [M, Bd] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [M, Bd] "qd_mask")),
+        Stmt.store .real [Bk, Bd]
+          (MemAccess.region dKReg (Op.ref .nat [Bk, Bd] "k_block_out"))
+          (Op.ref .real [Bk, Bd] "dK_block") MaskOpt.none,
+        Stmt.store .real [Bk, Bd]
+          (MemAccess.region dVReg (Op.ref .nat [Bk, Bd] "v_block_out"))
+          (Op.ref .real [Bk, Bd] "dV_block") MaskOpt.none
+      ] := by
+  simp [fa1BackwardAtomicDQBoundaryDKernel]
+
+/-- The query-boundary causal D-tail post-prefix tail writes padded `Bd`-wide
+`dQ`/`dK`/`dV` tiles. -/
+theorem fa1BackwardAtomicDQCausalBoundaryDKernel_drop44
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bd Bk numKVBlocks qStart : Nat) (scale : ℝ) :
+    (fa1BackwardAtomicDQCausalBoundaryDKernel
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 44 =
+      [
+        Stmt.atomicAdd NumericDType.real [M, Bd]
+          (MemAccess.region dQReg (Op.ref .nat [M, Bd] "dq_ptrs"))
+          (Op.ref .real [M, Bd] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [M, Bd] "qd_mask")),
+        Stmt.store .real [Bk, Bd]
+          (MemAccess.region dKReg (Op.ref .nat [Bk, Bd] "k_block_out"))
+          (Op.ref .real [Bk, Bd] "dK_block") MaskOpt.none,
+        Stmt.store .real [Bk, Bd]
+          (MemAccess.region dVReg (Op.ref .nat [Bk, Bd] "v_block_out"))
+          (Op.ref .real [Bk, Bd] "dV_block") MaskOpt.none
+      ] := by
+  simp [fa1BackwardAtomicDQCausalBoundaryDKernel]
 
 /-- Recompose the full stateful trace from the no-atomic prefix and the
 post-prefix tail. -/
@@ -2062,6 +2202,126 @@ theorem fa1BackwardAtomicDQCausalKernel_statefulTrace_of_tail
   · exact fa1BackwardAtomicDQCausalPreAtomic_traceEvents_empty
       qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale tid
+  · exact hPre
+  · exact hTail
+
+/-- Recompose the full query-boundary stateful trace from the no-atomic prefix
+and post-prefix tail. -/
+theorem fa1BackwardAtomicDQBoundaryKernel_statefulTrace_of_tail
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ)
+    (tid : ThreadId) (s sPre final : BlockState) (trace : Trace)
+    (hPre :
+      stepStmts
+        ((fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.take 36) s =
+        some sPre)
+    (hTail :
+      Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 36) sPre =
+        some (trace, final)) :
+    Kernel.AtomicTraceStateful
+        (fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel
+        tid s trace final := by
+  apply Kernel.AtomicTraceStateful_of_dropPrefix (n := 36)
+  · exact fa1BackwardAtomicDQBoundaryPreAtomic_traceEvents_empty
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bk numKVBlocks qStart scale tid
+  · exact hPre
+  · exact hTail
+
+/-- Recompose the full causal query-boundary stateful trace from the no-atomic
+prefix and post-prefix tail. -/
+theorem fa1BackwardAtomicDQCausalBoundaryKernel_statefulTrace_of_tail
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ)
+    (tid : ThreadId) (s sPre final : BlockState) (trace : Trace)
+    (hPre :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.take 40) s =
+        some sPre)
+    (hTail :
+      Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) sPre =
+        some (trace, final)) :
+    Kernel.AtomicTraceStateful
+        (fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel
+        tid s trace final := by
+  apply Kernel.AtomicTraceStateful_of_dropPrefix (n := 40)
+  · exact fa1BackwardAtomicDQCausalBoundaryPreAtomic_traceEvents_empty
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bk numKVBlocks qStart scale tid
+  · exact hPre
+  · exact hTail
+
+/-- Recompose the full query-boundary D-tail stateful trace from the no-atomic
+prefix and post-prefix tail. -/
+theorem fa1BackwardAtomicDQBoundaryDKernel_statefulTrace_of_tail
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bd Bk numKVBlocks qStart : Nat) (scale : ℝ)
+    (tid : ThreadId) (s sPre final : BlockState) (trace : Trace)
+    (hPre :
+      stepStmts
+        ((fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.take 40) s =
+        some sPre)
+    (hTail :
+      Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) sPre =
+        some (trace, final)) :
+    Kernel.AtomicTraceStateful
+        (fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel
+        tid s trace final := by
+  apply Kernel.AtomicTraceStateful_of_dropPrefix (n := 40)
+  · exact fa1BackwardAtomicDQBoundaryDPreAtomic_traceEvents_empty
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bd Bk numKVBlocks qStart scale tid
+  · exact hPre
+  · exact hTail
+
+/-- Recompose the full causal query-boundary D-tail stateful trace from the
+no-atomic prefix and post-prefix tail. -/
+theorem fa1BackwardAtomicDQCausalBoundaryDKernel_statefulTrace_of_tail
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bd Bk numKVBlocks qStart : Nat) (scale : ℝ)
+    (tid : ThreadId) (s sPre final : BlockState) (trace : Trace)
+    (hPre :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.take 44) s =
+        some sPre)
+    (hTail :
+      Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 44) sPre =
+        some (trace, final)) :
+    Kernel.AtomicTraceStateful
+        (fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel
+        tid s trace final := by
+  apply Kernel.AtomicTraceStateful_of_dropPrefix (n := 44)
+  · exact fa1BackwardAtomicDQCausalBoundaryDPreAtomic_traceEvents_empty
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bd Bk numKVBlocks qStart scale tid
   · exact hPre
   · exact hTail
 
