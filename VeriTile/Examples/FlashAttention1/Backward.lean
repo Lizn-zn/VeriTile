@@ -1731,6 +1731,18 @@ theorem fa1BackwardAtomicDQKernel_toAlgorithm_eq_toAlgKernel
         M D Bk numKVBlocks scale).toAlgKernel := by
   simp [fa1BackwardAtomicDQKernel, ComputeKernel.toAlgKernel]
 
+/-- The query-boundary block-partitioned atomic-`dQ` backward kernel is
+algorithm-projectable. -/
+theorem fa1BackwardAtomicDQBoundaryKernel_toAlgorithm_eq_toAlgKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ) :
+    (fa1BackwardAtomicDQBoundaryKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bk numKVBlocks qStart scale).toAlgorithm? =
+      Except.ok
+        (fa1BackwardAtomicDQBoundaryKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel := by
+  simp [fa1BackwardAtomicDQBoundaryKernel, ComputeKernel.toAlgKernel]
+
 /-- The causal block-partitioned atomic-`dQ` backward kernel is also
 algorithm-projectable: the causal masks and `tl.where` remain in the
 AlgKernel surface, and the final `tl.atomic_add` is an algorithm-level atomic
@@ -1744,6 +1756,19 @@ theorem fa1BackwardAtomicDQCausalKernel_toAlgorithm_eq_toAlgKernel
         (fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
           M D Bk numKVBlocks scale).toAlgKernel := by
   simp [fa1BackwardAtomicDQCausalKernel, ComputeKernel.toAlgKernel]
+
+/-- The query-boundary causal block-partitioned atomic-`dQ` backward kernel is
+algorithm-projectable. -/
+theorem fa1BackwardAtomicDQCausalBoundaryKernel_toAlgorithm_eq_toAlgKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ) :
+    (fa1BackwardAtomicDQCausalBoundaryKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bk numKVBlocks qStart scale).toAlgorithm? =
+      Except.ok
+        (fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel := by
+  simp [fa1BackwardAtomicDQCausalBoundaryKernel, ComputeKernel.toAlgKernel]
 
 /-- Stateful atomic trace extraction agrees with execution for the full
 atomic-`dQ` kernel.  This is the generic bridge needed before proving the
@@ -3111,6 +3136,96 @@ theorem gridLaunchedAtomic_boundary_backward_correct
         intro block idx
         simpa [attentionBackwardRealBoundary] using hDVBlock block idx)
 
+/-- Concrete launcher-facing boundary correctness for
+`fa1BackwardAtomicDQBoundaryKernel`.
+
+The theorem keeps the trace and ordinary-store obligations explicit, but fixes
+the kernel to the concrete query-boundary backward implementation. -/
+theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
+    {S_q D M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              dQBlockContributionBoundary qStart Q K V dO LSE scale block idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDKBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dKReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+    (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dVReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
+    let bw := attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  exact gridLaunchedAtomic_boundary_backward_correct
+    (k := (fa1BackwardAtomicDQBoundaryKernel
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bk numKVBlocks qStart scale).toAlgKernel)
+    (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (qStart := qStart) (scale := scale)
+    (s := s) (sFinal := sFinal)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
+    hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
+    owner hDKWrite hDVWrite hDKBlock hDVBlock
+
 /-- Causal-boundary specialization of
 `gridLaunchedAtomic_masked_backward_correct`. -/
 theorem gridLaunchedAtomic_causalBoundary_backward_correct
@@ -3202,6 +3317,93 @@ theorem gridLaunchedAtomic_causalBoundary_backward_correct
       (by
         intro block idx
         simpa [attentionBackwardRealCausalBoundary] using hDVBlock block idx)
+
+/-- Concrete launcher-facing causal-boundary correctness for
+`fa1BackwardAtomicDQCausalBoundaryKernel`. -/
+theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct
+    {S_q D M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDKBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dKReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+    (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dVReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
+    let bw := attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  exact gridLaunchedAtomic_causalBoundary_backward_correct
+    (k := (fa1BackwardAtomicDQCausalBoundaryKernel
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      S_q M D Bk numKVBlocks qStart scale).toAlgKernel)
+    (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (qStart := qStart) (scale := scale)
+    (s := s) (sFinal := sFinal)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
+    hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
+    owner hDKWrite hDVWrite hDKBlock hDVBlock
 
 /-- D-tail boundary specialization of
 `gridLaunchedAtomic_boundary_backward_correct`.
