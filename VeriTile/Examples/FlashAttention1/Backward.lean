@@ -3506,6 +3506,148 @@ theorem fa1BackwardStrippedKernelStrided_realizes_of_prefix
           rw [hExec] at h
           simpa [observeTileAt] using h
 
+theorem fa1BackwardStrippedKernelStrided_realizes_of_math_state
+    {M S D : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (s : BlockState)
+    (hPre :
+      stepStmts
+          ((fa1BackwardStrippedKernelStrided
+            qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+            stride_qb stride_qh stride_qs stride_qd
+            stride_kb stride_kh stride_kn stride_kd
+            stride_vb stride_vh stride_vn stride_vd
+            stride_dob stride_doh stride_dom stride_dod
+            stride_lseb stride_lseh stride_lsem
+            stride_dqb stride_dqh stride_dqs stride_dqd
+            stride_dkb stride_dkh stride_dkn stride_dkd
+            stride_dvb stride_dvh stride_dvn stride_dvd
+            scale).toAlgKernel.body.take 35) s =
+        some
+          (fa1BackwardStrippedStridedMathState qReg kReg vReg dOReg lseReg M S D
+            stride_qb stride_qh stride_qs stride_qd
+            stride_kb stride_kh stride_kn stride_kd
+            stride_vb stride_vh stride_vn stride_vd
+            stride_dob stride_doh stride_dom stride_dod
+            stride_lseb stride_lseh stride_lsem
+            stride_dqb stride_dqh stride_dqs stride_dqd
+            stride_dkb stride_dkh stride_dkn stride_dkd
+            stride_dvb stride_dvh stride_dvn stride_dvd
+            Q K V dO LSE scale s))
+    (hInjQ :
+      Function.Injective (fun idx : TileIndex [M, D] =>
+        s.pids 2 * stride_dqb + s.pids 1 * stride_dqh
+          + (s.pids 0 * M + idx.1.val) * stride_dqs
+          + idx.2.1.val * stride_dqd))
+    (hInjK :
+      Function.Injective (fun idx : TileIndex [S, D] =>
+        s.pids 2 * stride_dkb + s.pids 1 * stride_dkh
+          + idx.1.val * stride_dkn
+          + idx.2.1.val * stride_dkd))
+    (hInjV :
+      Function.Injective (fun idx : TileIndex [S, D] =>
+        s.pids 2 * stride_dvb + s.pids 1 * stride_dvh
+          + idx.1.val * stride_dvn
+          + idx.2.1.val * stride_dvd))
+    (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
+    ComputeCorrect.Realizes
+      (kernel := fa1BackwardStrippedKernelStrided
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+        stride_qb stride_qh stride_qs stride_qd
+        stride_kb stride_kh stride_kn stride_kd
+        stride_vb stride_vh stride_vn stride_vd
+        stride_dob stride_doh stride_dom stride_dod
+        stride_lseb stride_lseh stride_lsem
+        stride_dqb stride_dqh stride_dqs stride_dqd
+        stride_dkb stride_dkh stride_dkn stride_dkd
+        stride_dvb stride_dvh stride_dvn stride_dvd
+        scale)
+      (initialState := s)
+      (write :=
+        fun out : Sum (TileIndex [M, D]) (Sum (TileIndex [S, D]) (TileIndex [S, D])) =>
+          match out with
+          | .inl idx =>
+              some (dQReg,
+                s.pids 2 * stride_dqb + s.pids 1 * stride_dqh
+                  + (s.pids 0 * M + idx.1.val) * stride_dqs
+                  + idx.2.1.val * stride_dqd)
+          | .inr (.inl idx) =>
+              some (dKReg,
+                s.pids 2 * stride_dkb + s.pids 1 * stride_dkh
+                  + idx.1.val * stride_dkn
+                  + idx.2.1.val * stride_dkd)
+          | .inr (.inr idx) =>
+              some (dVReg,
+                s.pids 2 * stride_dvb + s.pids 1 * stride_dvh
+                  + idx.1.val * stride_dvn
+                  + idx.2.1.val * stride_dvd))
+      (expected :=
+        fun out : Sum (TileIndex [M, D]) (Sum (TileIndex [S, D]) (TileIndex [S, D])) =>
+          match out with
+          | .inl idx => (attentionBackwardReal Q K V dO LSE scale).dQ idx
+          | .inr (.inl idx) => (attentionBackwardReal Q K V dO LSE scale).dK idx
+          | .inr (.inr idx) => (attentionBackwardReal Q K V dO LSE scale).dV idx) := by
+  have hFacts := fa1BackwardStrippedStridedMathState_facts
+    qReg kReg vReg dOReg lseReg M S D
+    stride_qb stride_qh stride_qs stride_qd
+    stride_kb stride_kh stride_kn stride_kd
+    stride_vb stride_vh stride_vn stride_vd
+    stride_dob stride_doh stride_dom stride_dod
+    stride_lseb stride_lseh stride_lsem
+    stride_dqb stride_dqh stride_dqs stride_dqd
+    stride_dkb stride_dkh stride_dkn stride_dkd
+    stride_dvb stride_dvh stride_dvn stride_dvd
+    Q K V dO LSE scale s
+  rcases hFacts with ⟨hPtrsQ, hPtrsK, hPtrsV, hValQ, hValK, hValV⟩
+  exact fa1BackwardStrippedKernelStrided_realizes_of_prefix
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    stride_qb stride_qh stride_qs stride_qd
+    stride_kb stride_kh stride_kn stride_kd
+    stride_vb stride_vh stride_vn stride_vd
+    stride_dob stride_doh stride_dom stride_dod
+    stride_lseb stride_lseh stride_lsem
+    stride_dqb stride_dqh stride_dqs stride_dqd
+    stride_dkb stride_dkh stride_dkn stride_dkd
+    stride_dvb stride_dvh stride_dvn stride_dvd
+    scale s
+    (fa1BackwardStrippedStridedMathState qReg kReg vReg dOReg lseReg M S D
+      stride_qb stride_qh stride_qs stride_qd
+      stride_kb stride_kh stride_kn stride_kd
+      stride_vb stride_vh stride_vn stride_vd
+      stride_dob stride_doh stride_dom stride_dod
+      stride_lseb stride_lseh stride_lsem
+      stride_dqb stride_dqh stride_dqs stride_dqd
+      stride_dkb stride_dkh stride_dkn stride_dkd
+      stride_dvb stride_dvh stride_dvn stride_dvd
+      Q K V dO LSE scale s)
+    (fun idx : TileIndex [M, D] =>
+      s.pids 2 * stride_dqb + s.pids 1 * stride_dqh
+        + (s.pids 0 * M + idx.1.val) * stride_dqs
+        + idx.2.1.val * stride_dqd)
+    (fun idx : TileIndex [S, D] =>
+      s.pids 2 * stride_dkb + s.pids 1 * stride_dkh
+        + idx.1.val * stride_dkn
+        + idx.2.1.val * stride_dkd)
+    (fun idx : TileIndex [S, D] =>
+      s.pids 2 * stride_dvb + s.pids 1 * stride_dvh
+        + idx.1.val * stride_dvn
+        + idx.2.1.val * stride_dvd)
+    (attentionBackwardReal Q K V dO LSE scale).dQ
+    (attentionBackwardReal Q K V dO LSE scale).dK
+    (attentionBackwardReal Q K V dO LSE scale).dV
+    hPre hPtrsQ hPtrsK hPtrsV hValQ hValK hValV
+    hInjQ hInjK hInjV hdQdK hdQdV hdKdV
+
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false in
 
