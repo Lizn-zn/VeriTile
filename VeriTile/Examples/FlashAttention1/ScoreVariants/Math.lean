@@ -230,6 +230,18 @@ noncomputable def attentionBackwardRealScoreVariant {M S D : Nat}
 def unitScoreGrad {M S : Nat} : Fin M → Fin S → ℝ :=
   fun _ _ => 1
 
+theorem attentionBackwardRealScoreVariant_dotScore_eq_masked {M S D : Nat}
+    (visible : Fin M → Fin S → Bool)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    attentionBackwardRealScoreVariant visible (dotScore Q K scale) unitScoreGrad
+        Q K V dO LSE scale =
+      FA1Backward.attentionBackwardRealMasked visible Q K V dO LSE scale := by
+  simp [attentionBackwardRealScoreVariant, FA1Backward.attentionBackwardRealMasked,
+    dSScore, FA1Backward.dSMasked, rowCorrectionScore, FA1Backward.rowCorrectionMasked,
+    probabilityScore, FA1Backward.probabilityMasked, dPScore, FA1Backward.dP,
+    FA1Backward.probability, dotScore, unitScoreGrad, FA1Math.scaledScore]
+
 /-- Derivative of `softcap * tanh(raw / softcap)` with respect to `raw`. -/
 noncomputable def softcapScoreGrad {M S D : Nat}
     (softcap : ℝ)
