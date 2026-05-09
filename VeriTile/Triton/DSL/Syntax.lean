@@ -65,6 +65,7 @@ syntax "tl.float64" : tritonDType
 syntax "tl.float32" : tritonDType
 syntax "tl.float16" : tritonDType
 syntax "tl.bfloat16" : tritonDType
+syntax "tl.int1" : tritonDType
 syntax "tl.int8" : tritonDType
 syntax "tl.int16" : tritonDType
 syntax "tl.int32" : tritonDType
@@ -78,10 +79,11 @@ syntax "tl.uint64" : tritonDType
 syntax "tl.dot(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 
+syntax ident "=" tritonDType : tritonMemKwarg
+syntax ident " = " tritonDType : tritonMemKwarg
 -- kwarg: `name = expr`. Used for `mask=` / `other=` in tl.load / tl.store.
 syntax ident " = " tritonExpr : tritonKwarg
 syntax ident " = " tritonExpr : tritonMemKwarg
-syntax ident "=" tritonDType : tritonMemKwarg
 syntax "boundary_check=" term : tritonMemKwarg
 syntax "padding_option=\"zero\"" : tritonMemKwarg
 

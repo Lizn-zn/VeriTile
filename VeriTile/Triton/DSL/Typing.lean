@@ -129,6 +129,7 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.float32) => pure .fp32
   | `(tritonDType| tl.float16) => pure .fp16
   | `(tritonDType| tl.bfloat16) => pure .bf16
+  | `(tritonDType| tl.int1) => pure .bool
   | `(tritonDType| tl.int8) => pure .int
   | `(tritonDType| tl.int16) => pure .int
   | `(tritonDType| tl.int32) => pure .int
@@ -137,6 +138,27 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.uint16) => pure .nat
   | `(tritonDType| tl.uint32) => pure .nat
   | `(tritonDType| tl.uint64) => pure .nat
+  | _ => Macro.throwUnsupported
+
+def expandDTypeIdent (name : Name) : MacroM DInfo :=
+  match name.toString with
+  | "tl.float64" => pure .real
+  | "tl.float32" => pure .fp32
+  | "tl.float16" => pure .fp16
+  | "tl.bfloat16" => pure .bf16
+  | "tl.int1" => pure .bool
+  | "tl.int8" => pure .int
+  | "tl.int16" => pure .int
+  | "tl.int32" => pure .int
+  | "tl.int64" => pure .int
+  | "tl.uint8" => pure .nat
+  | "tl.uint16" => pure .nat
+  | "tl.uint32" => pure .nat
+  | "tl.uint64" => pure .nat
+  | _ => Macro.throwUnsupported
+
+def expandDTypeExpr : TSyntax `tritonExpr → MacroM DInfo
+  | `(tritonExpr| $name:ident) => expandDTypeIdent name.getId
   | _ => Macro.throwUnsupported
 
 def lookupEnv (env : Env) (name : String) : MacroM (DInfo × SInfo) := do
