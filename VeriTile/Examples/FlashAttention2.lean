@@ -11,6 +11,7 @@ refine this baseline rather than changing the user-facing spec.
 -/
 
 import VeriTile.Examples.FlashAttention1.Core
+import VeriTile.Examples.FlashAttention1.Backward
 import VeriTile.Triton.Math.Softmax
 import VeriTile.Triton.Launch.Grid
 
@@ -303,6 +304,46 @@ theorem fa1_eq_fa2_two_block_forward4D
         scale mLeft mRight mMerged (i, d, PUnit.unit) := by
   exact (fa2_two_block_forward_eq_attentionReal4D
     Q K V scale b h i d mLeft mRight mMerged hlFree).symm
+
+/-! ## FA-2 backward baseline
+
+The current FA-2 backward surface starts with the same Real reverse-mode
+attention semantics as FA-1.  FA-2-specific backward kernels should refine this
+baseline by changing the work partitioning, not the mathematical target.
+-/
+
+/-- FA-2 backward Real baseline for one `[M,D] × [S,D]` slice. -/
+noncomputable def fa2BackwardReal {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    FA1Backward.Grads M S D :=
+  FA1Backward.attentionBackwardReal Q K V dO LSE scale
+
+/-- FA-1 and FA-2 backward share the same Real mathematical target; they differ
+in work partitioning and scheduling. -/
+theorem fa1_backward_eq_fa2_backward {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    FA1Backward.attentionBackwardReal Q K V dO LSE scale =
+      fa2BackwardReal Q K V dO LSE scale := rfl
+
+/-- FA-2 backward Real baseline for 4D `[B,H,S,D]` tensors. -/
+noncomputable def fa2BackwardReal4D {B H S_q S_k D : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ) :
+    FA1Backward.Grads4D B H S_q S_k D :=
+  FA1Backward.attentionBackwardReal4D Q K V dO LSE scale
+
+/-- 4D FA-1/FA-2 backward baseline equivalence. -/
+theorem fa1_backward_eq_fa2_backward4D {B H S_q S_k D : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ) :
+    FA1Backward.attentionBackwardReal4D Q K V dO LSE scale =
+      fa2BackwardReal4D Q K V dO LSE scale := rfl
 
 /-! ## FA-2 scalar score-row max producer
 
