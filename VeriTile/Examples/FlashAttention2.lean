@@ -319,6 +319,13 @@ noncomputable def fa2BackwardReal {M S D : Nat}
     FA1Backward.Grads M S D :=
   FA1Backward.attentionBackwardReal Q K V dO LSE scale
 
+/-- FA-2 causal backward Real baseline for one `[M,D] × [S,D]` slice. -/
+noncomputable def fa2BackwardCausalReal {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    FA1Backward.Grads M S D :=
+  FA1Backward.attentionBackwardRealCausal Q K V dO LSE scale
+
 /-- FA-1 and FA-2 backward share the same Real mathematical target; they differ
 in work partitioning and scheduling. -/
 theorem fa1_backward_eq_fa2_backward {M S D : Nat}
@@ -326,6 +333,13 @@ theorem fa1_backward_eq_fa2_backward {M S D : Nat}
     (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
     FA1Backward.attentionBackwardReal Q K V dO LSE scale =
       fa2BackwardReal Q K V dO LSE scale := rfl
+
+/-- Causal FA-1/FA-2 backward baseline equivalence. -/
+theorem fa1_causal_backward_eq_fa2_causal_backward {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ) :
+    FA1Backward.attentionBackwardRealCausal Q K V dO LSE scale =
+      fa2BackwardCausalReal Q K V dO LSE scale := rfl
 
 /-- FA-2 backward Real baseline for 4D `[B,H,S,D]` tensors. -/
 noncomputable def fa2BackwardReal4D {B H S_q S_k D : Nat}
@@ -548,6 +562,95 @@ theorem fa2BackwardAtomicDQKernel_gridLaunched_backward_correct
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardAtomicDQKernel, fa2BackwardReal] using
     FA1Backward.fa1BackwardAtomicDQKernel_gridLaunched_backward_correct
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale s sFinal Q K V dO LSE g hLaunch hInitialDQ hNoOrdinaryDQ
+      hAtomicContrib owner hOwnerPid hQ hK hV hdO hLSE hDKWrite hDVWrite hdKdV
+
+/-- FA-2-facing spelling of the proof-oriented causal atomic `dQ` backward
+kernel. -/
+def fa2BackwardAtomicDQCausalKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
+  FA1Backward.fa1BackwardAtomicDQCausalKernel
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M D Bk numKVBlocks scale
+
+/-- Full launcher-facing FA-2 correctness for the proof-oriented causal atomic
+backward kernel. -/
+theorem fa2BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa2BackwardAtomicDQCausalKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              FA1Backward.dQBlockContributionCausal Q K V dO LSE scale block idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hOwnerPid : ∀ block, (s.withGridIndex (owner block)).pids 0 = block.val)
+    (hQ : ∀ block, InputAt (s.withGridIndex (owner block)) qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : ∀ block, InputAt (s.withGridIndex (owner block)) kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : ∀ block, InputAt (s.withGridIndex (owner block)) vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hdO : ∀ block, InputAt (s.withGridIndex (owner block)) dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : ∀ block, InputAt (shape := [M]) (s.withGridIndex (owner block)) lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1))
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := fa2BackwardCausalReal Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  simpa [fa2BackwardAtomicDQCausalKernel, fa2BackwardCausalReal] using
+    FA1Backward.fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
       qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       scale s sFinal Q K V dO LSE g hLaunch hInitialDQ hNoOrdinaryDQ
       hAtomicContrib owner hOwnerPid hQ hK hV hdO hLSE hDKWrite hDVWrite hdKdV
