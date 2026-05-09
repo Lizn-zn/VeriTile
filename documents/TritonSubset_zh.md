@@ -346,10 +346,10 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | bool op | Supported | `tl.logical_and`、`tl.logical_or`、`tl.logical_not`,以及 `&`、`|`、`~` mask spelling |
 | Nat bitwise op | Limited | `.nat` 上的 `&`, `|`, `^`, `<<`, `>>`;暂不支持 `.nat ~` 和 signed fixed-width bitwise 语义 |
 | pointwise select | Supported | `tl.where(cond, a, b)`,支持 scalar lifting,非 scalar shape 需一致 |
-| unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf` |
-| reduction | Supported | `.real` tile 上的 `tl.sum`, `tl.max`,可带 `axis=`(或位置参 axis)和 `keep_dims`;`tl.max(..., return_indices=True)` 通过多重赋值返回 value/index 对 |
-| prefix scan | Limited | `.real` tile 上的 `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)`;不支持 arbitrary combine function |
-| index/order op | Limited | `.real` tile 上的 `tl.argmax`, `tl.argmin`, `tl.sort`,需要静态 `axis=N`;arg tie 返回最小 axis index,sort 升序 |
+| unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf`;浮点 dtype tag 会在算法证明层投影到 `.real` |
+| reduction | Supported | `.real` 或浮点 tag tile 上的 `tl.sum`, `tl.max`,可带 `axis=`(或位置参 axis)和 `keep_dims`;浮点 tag 会投影到 `.real`;`tl.max(..., return_indices=True)` 通过多重赋值返回 value/index 对 |
+| prefix scan | Limited | `.real` 或浮点 tag tile 上的 `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)`;不支持 arbitrary combine function |
+| index/order op | Limited | `.real` 或浮点 tag tile 上的 `tl.argmax`, `tl.argmin`, `tl.sort`,需要静态 `axis=N`;arg tie 返回最小 axis index,sort 升序 |
 | broadcast | Supported | ND same-dim、scalar-to-tile、dimension-`1` expansion |
 | shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`,rank-1 `[:, None]` / `[None, :]`,literal-axis `tl.expand_dims` |
 | shape/view op | Limited | `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`, `tl.flip`, `tl.join`,projection-form `tl.split(x, 0|1)` |

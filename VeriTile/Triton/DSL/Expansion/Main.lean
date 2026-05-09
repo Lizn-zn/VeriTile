@@ -71,16 +71,6 @@ namespace VeriTile.Triton.DSL
 
 /-! ## Expansion -/
 
-def realMathTerm (ctx : String) (e : EOut) : MacroM (TSyntax `term) := do
-  match e.dtype with
-  | .real => pure e.term
-  | .fp32 | .fp16 | .bf16 =>
-      let srcProof ← e.dtype.floatProof
-      pure (← `(Op.castFloat $srcProof FloatDType.real $e.term))
-  | _ =>
-      ensureDType .real e.dtype ctx
-      pure e.term
-
 def parseMaxReturnIndicesKwargs (dims : List (TSyntax `term))
     (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM Nat := do
   let mut seenAxis : Bool := Bool.false
@@ -232,68 +222,68 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandArangeRange s e
   | `(tritonExpr| tl.exp($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.exp"
-      pure ⟨← `(Op.exp $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.exp" e'
+      pure ⟨← `(Op.exp $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.exp2($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.exp2"
-      pure ⟨← `(Op.exp2 $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.exp2" e'
+      pure ⟨← `(Op.exp2 $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.log($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.log"
-      pure ⟨← `(Op.log $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.log" e'
+      pure ⟨← `(Op.log $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.log2($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.log2"
-      pure ⟨← `(Op.log2 $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.log2" e'
+      pure ⟨← `(Op.log2 $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.sigmoid($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.sigmoid"
-      pure ⟨← `(Op.sigmoid $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.sigmoid" e'
+      pure ⟨← `(Op.sigmoid $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.sqrt($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.sqrt"
-      pure ⟨← `(Op.sqrt $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.sqrt" e'
+      pure ⟨← `(Op.sqrt $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.tanh($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.tanh"
-      pure ⟨← `(Op.tanh $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.tanh" e'
+      pure ⟨← `(Op.tanh $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.sin($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.sin"
-      pure ⟨← `(Op.sin $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.sin" e'
+      pure ⟨← `(Op.sin $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.math.sin($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.math.sin"
-      pure ⟨← `(Op.sin $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.math.sin" e'
+      pure ⟨← `(Op.sin $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.cos($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.cos" e'
       pure ⟨← `(Op.cos $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.tan($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.tan"
-      pure ⟨← `(Op.tan $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.tan" e'
+      pure ⟨← `(Op.tan $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.atan($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.atan"
-      pure ⟨← `(Op.atan $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.atan" e'
+      pure ⟨← `(Op.atan $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.cosh($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.cosh"
-      pure ⟨← `(Op.cosh $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.cosh" e'
+      pure ⟨← `(Op.cosh $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.sinh($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.sinh"
-      pure ⟨← `(Op.sinh $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.sinh" e'
+      pure ⟨← `(Op.sinh $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.erf($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.erf"
-      pure ⟨← `(Op.erf $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.erf" e'
+      pure ⟨← `(Op.erf $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.extra.cuda.libdevice.erf($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .real e'.dtype "tl.extra.cuda.libdevice.erf"
-      pure ⟨← `(Op.erf $e'.term), .real, e'.shape, none⟩
+      let eTerm ← realMathTerm "tl.extra.cuda.libdevice.erf" e'
+      pure ⟨← `(Op.erf $eTerm), .real, e'.shape, none⟩
   | `(tritonExpr| tl.abs($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .real e'.dtype "tl.abs"

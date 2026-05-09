@@ -388,10 +388,10 @@ current semantic contract.
 | Boolean ops | Supported | `tl.logical_and`, `tl.logical_or`, `tl.logical_not`, plus `&`, `|`, `~` mask spellings |
 | Nat bitwise ops | Limited | `&`, `|`, `^`, `<<`, `>>` on `.nat`; no `.nat ~` and no signed fixed-width bitwise semantics yet |
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
-| Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf` |
-| Reductions | Supported | `tl.sum`, `tl.max` with optional `axis=` (or positional axis) and `keep_dims` over `.real` tiles; `tl.max(..., return_indices=True)` returns a value/index tuple via multi-assign |
-| Prefix scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` over `.real` tiles; no arbitrary combine functions |
-| Index/order ops | Limited | `tl.argmax`, `tl.argmin`, `tl.sort` over `.real` tiles with static `axis=N`; arg ties return the smallest axis index, sort is ascending |
+| Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf`; floating dtype tags project to `.real` for algorithm proofs |
+| Reductions | Supported | `tl.sum`, `tl.max` with optional `axis=` (or positional axis) and `keep_dims` over `.real` or floating-tagged tiles; floating tags project to `.real`; `tl.max(..., return_indices=True)` returns a value/index tuple via multi-assign |
+| Prefix scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` over `.real` or floating-tagged tiles; no arbitrary combine functions |
+| Index/order ops | Limited | `tl.argmax`, `tl.argmin`, `tl.sort` over `.real` or floating-tagged tiles with static `axis=N`; arg ties return the smallest axis index, sort is ascending |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
 | Shape/view ops | Limited | `tl.reshape`, `tl.view`, `tl.ravel`, `tl.permute`, `tl.flip`, `tl.join`, projection-form `tl.split(x, 0|1)` |
