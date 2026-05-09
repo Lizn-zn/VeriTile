@@ -390,6 +390,31 @@ theorem AtomicTraceStatefulList_empty_of_stepStmts
           have hTail := ih hTailNoAtomic hStep
           simp [AtomicTraceStatefulList, hHeadTrace, hStepHead, hTail]
 
+/-- If a statement emits a known atomic trace and the remaining tail emits no
+atomic events, the stateful trace of the whole list is exactly the head trace.
+
+This is the common shape for proof-oriented kernels whose tail is
+`atomic_add; store; store`. -/
+theorem AtomicTraceStatefulList_traceHead_then_empty_of_stepStmts
+    {tid : ThreadId} {head : Stmt} {tail : List Stmt} {s final : BlockState}
+    {traceHead : Trace}
+    (hTraceHead : Stmt.atomicTraceEvents tid s head = some traceHead)
+    (hNoAtomicTail :
+      ∀ st ∈ tail, ∀ s0, Stmt.atomicTraceEvents tid s0 st = some [])
+    (hStep : stepStmts (head :: tail) s = some final) :
+    AtomicTraceStatefulList tid (head :: tail) s = some (traceHead, final) := by
+  conv at hStep => lhs; unfold stepStmts
+  cases hStepHead : stepStmt head s with
+  | none =>
+      simp [hStepHead] at hStep
+  | some s' =>
+      simp [hStepHead] at hStep
+      have hTailTrace :=
+        AtomicTraceStatefulList_empty_of_stepStmts
+          (tid := tid) (body := tail) (s := s') (final := final)
+          hNoAtomicTail hStep
+      simp [AtomicTraceStatefulList, hTraceHead, hStepHead, hTailTrace]
+
 theorem AtomicTraceStateful_final_eq_exec
     {k : Kernel} {tid : ThreadId} {s final : BlockState} {trace : Trace}
     (hTrace : Kernel.AtomicTraceStateful k tid s trace final) :

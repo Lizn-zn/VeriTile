@@ -2689,6 +2689,194 @@ theorem fa1BackwardAtomicDQCausalKernel_tail_trace_blockContribution
       unfold Kernel.AtomicTraceStatefulList
       simp [hTrace, hAtomicStep, hStoresTrace]
 
+/-- Boundary tail trace once the pre-atomic registers are known. -/
+theorem fa1BackwardAtomicDQBoundaryKernel_tail_trace_blockContribution
+    {S_q M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (tid : ThreadId) (sPre final : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, D] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionBoundary qStart Q K V dO LSE scale block)))
+    (hMask : sPre.regs .bool [M, D] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, D] =>
+        decide (qStart * M + idx.1.val < S_q) } : Tile .bool [M, D]))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 36) sPre =
+        some final) :
+    Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 36) sPre =
+      some
+        ((TileShape.allIndices [M, D]).filterMap fun i =>
+          if decide (qStart * M + i.1.val < S_q) then
+            some (Stmt.atomicTraceEvent tid dQReg
+              (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+              (some (dQBlockContributionBoundary qStart Q K V dO LSE scale block i)))
+          else
+            none,
+          final) := by
+  rw [fa1BackwardAtomicDQBoundaryKernel_drop36] at hTailStep ⊢
+  have hTrace := fa1BackwardAtomicDQBoundary_atomicTraceEvents_blockContribution
+    (dQReg := dQReg) (tid := tid) (sPre := sPre)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+    (scale := scale) (qStart := qStart) (block := block) hPtrs hVal hMask
+  apply Kernel.AtomicTraceStatefulList_traceHead_then_empty_of_stepStmts
+    (hTraceHead := hTrace)
+  · intro st hmem s0
+    simp at hmem
+    rcases hmem with hmem | hmem <;> subst st <;> rfl
+  · exact hTailStep
+
+/-- Causal-boundary tail trace once the pre-atomic registers are known. -/
+theorem fa1BackwardAtomicDQCausalBoundaryKernel_tail_trace_blockContribution
+    {S_q M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (tid : ThreadId) (sPre final : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, D] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block)))
+    (hMask : sPre.regs .bool [M, D] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, D] =>
+        decide (qStart * M + idx.1.val < S_q) } : Tile .bool [M, D]))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) sPre =
+        some final) :
+    Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) sPre =
+      some
+        ((TileShape.allIndices [M, D]).filterMap fun i =>
+          if decide (qStart * M + i.1.val < S_q) then
+            some (Stmt.atomicTraceEvent tid dQReg
+              (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+              (some (dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block i)))
+          else
+            none,
+          final) := by
+  rw [fa1BackwardAtomicDQCausalBoundaryKernel_drop40] at hTailStep ⊢
+  have hTrace := fa1BackwardAtomicDQCausalBoundary_atomicTraceEvents_blockContribution
+    (dQReg := dQReg) (tid := tid) (sPre := sPre)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+    (scale := scale) (qStart := qStart) (block := block) hPtrs hVal hMask
+  apply Kernel.AtomicTraceStatefulList_traceHead_then_empty_of_stepStmts
+    (hTraceHead := hTrace)
+  · intro st hmem s0
+    simp at hmem
+    rcases hmem with hmem | hmem <;> subst st <;> rfl
+  · exact hTailStep
+
+/-- Boundary D-tail tail trace once the pre-atomic registers are known. -/
+theorem fa1BackwardAtomicDQBoundaryDKernel_tail_trace_blockContribution
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (tid : ThreadId) (sPre final : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, Bd] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd⟩ : Tile .nat [M, Bd]))
+    (hVal : sPre.regs .real [M, Bd] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionBoundaryD qStart Q K V dO LSE scale block)))
+    (hMask : sPre.regs .bool [M, Bd] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D) } : Tile .bool [M, Bd]))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) sPre =
+        some final) :
+    Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) sPre =
+      some
+        ((TileShape.allIndices [M, Bd]).filterMap fun i =>
+          if decide (qStart * M + i.1.val < S_q ∧ i.2.1.val < D) then
+            some (Stmt.atomicTraceEvent tid dQReg
+              (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd i) .real
+              (some (dQBlockContributionBoundaryD qStart Q K V dO LSE scale block i)))
+          else
+            none,
+          final) := by
+  rw [fa1BackwardAtomicDQBoundaryDKernel_drop40] at hTailStep ⊢
+  have hTrace := fa1BackwardAtomicDQBoundaryD_atomicTraceEvents_blockContribution
+    (dQReg := dQReg) (tid := tid) (sPre := sPre)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+    (scale := scale) (qStart := qStart) (block := block) hPtrs hVal hMask
+  apply Kernel.AtomicTraceStatefulList_traceHead_then_empty_of_stepStmts
+    (hTraceHead := hTrace)
+  · intro st hmem s0
+    simp at hmem
+    rcases hmem with hmem | hmem <;> subst st <;> rfl
+  · exact hTailStep
+
+/-- Causal-boundary D-tail tail trace once the pre-atomic registers are known. -/
+theorem fa1BackwardAtomicDQCausalBoundaryDKernel_tail_trace_blockContribution
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (tid : ThreadId) (sPre final : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, Bd] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd⟩ : Tile .nat [M, Bd]))
+    (hVal : sPre.regs .real [M, Bd] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block)))
+    (hMask : sPre.regs .bool [M, Bd] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D) } : Tile .bool [M, Bd]))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 44) sPre =
+        some final) :
+    Kernel.AtomicTraceStatefulList tid
+        ((fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 44) sPre =
+      some
+        ((TileShape.allIndices [M, Bd]).filterMap fun i =>
+          if decide (qStart * M + i.1.val < S_q ∧ i.2.1.val < D) then
+            some (Stmt.atomicTraceEvent tid dQReg
+              (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd i) .real
+              (some (dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block i)))
+          else
+            none,
+          final) := by
+  rw [fa1BackwardAtomicDQCausalBoundaryDKernel_drop44] at hTailStep ⊢
+  have hTrace := fa1BackwardAtomicDQCausalBoundaryD_atomicTraceEvents_blockContribution
+    (dQReg := dQReg) (tid := tid) (sPre := sPre)
+    (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+    (scale := scale) (qStart := qStart) (block := block) hPtrs hVal hMask
+  apply Kernel.AtomicTraceStatefulList_traceHead_then_empty_of_stepStmts
+    (hTraceHead := hTrace)
+  · intro st hmem s0
+    simp at hmem
+    rcases hmem with hmem | hmem <;> subst st <;> rfl
+  · exact hTailStep
+
 /-- Full-kernel stateful trace for one program once the pre-atomic register
 facts and tail execution are available. -/
 theorem fa1BackwardAtomicDQKernel_statefulTrace_blockContribution
