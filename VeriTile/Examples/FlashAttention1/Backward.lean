@@ -267,6 +267,42 @@ theorem fa1BackwardStrippedKernelStrided_projectable
       scale).toAlgorithm? = Except.ok ak := by
   simp [fa1BackwardStrippedKernelStrided]
 
+theorem fa1BackwardStrippedKernelStrided_toAlgorithm_eq_toAlgKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M S D : Nat)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (scale : ℝ) :
+    (fa1BackwardStrippedKernelStrided
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+      stride_qb stride_qh stride_qs stride_qd
+      stride_kb stride_kh stride_kn stride_kd
+      stride_vb stride_vh stride_vn stride_vd
+      stride_dob stride_doh stride_dom stride_dod
+      stride_lseb stride_lseh stride_lsem
+      stride_dqb stride_dqh stride_dqs stride_dqd
+      stride_dkb stride_dkh stride_dkn stride_dkd
+      stride_dvb stride_dvh stride_dvn stride_dvd
+      scale).toAlgorithm? =
+      Except.ok (fa1BackwardStrippedKernelStrided
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+        stride_qb stride_qh stride_qs stride_qd
+        stride_kb stride_kh stride_kn stride_kd
+        stride_vb stride_vh stride_vn stride_vd
+        stride_dob stride_doh stride_dom stride_dod
+        stride_lseb stride_lseh stride_lsem
+        stride_dqb stride_dqh stride_dqs stride_dqd
+        stride_dkb stride_dkh stride_dkn stride_dkd
+        stride_dvb stride_dvh stride_dvn stride_dvd
+        scale).toAlgKernel := by
+  simp [fa1BackwardStrippedKernelStrided, ComputeKernel.toAlgKernel]
+
 /-- Block-partitioned FA-1 backward kernel with atomic `dQ` accumulation.
 
 Each program owns one KV block of size `Bk`.  It stores that block's `dK` and
@@ -852,6 +888,34 @@ noncomputable def fa1BackwardStrippedPreStoreState
   (stepStmts
     ((fa1BackwardStrippedKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M S D scale).toAlgKernel.body.take 20) s).getD s
+
+/-- State immediately before the final `dQ`/`dK`/`dV` stores of the strided
+stripped backward kernel. The first 35 statements compute registers and strided
+output pointer tiles; the remaining three statements are the stores. -/
+noncomputable def fa1BackwardStrippedStridedPreStoreState
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M S D : Nat)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (scale : ℝ) (s : BlockState) : BlockState :=
+  (stepStmts
+    ((fa1BackwardStrippedKernelStrided
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+      stride_qb stride_qh stride_qs stride_qd
+      stride_kb stride_kh stride_kn stride_kd
+      stride_vb stride_vh stride_vn stride_vd
+      stride_dob stride_doh stride_dom stride_dod
+      stride_lseb stride_lseh stride_lsem
+      stride_dqb stride_dqh stride_dqs stride_dqd
+      stride_dkb stride_dkh stride_dkn stride_dkd
+      stride_dvb stride_dvh stride_dvn stride_dvd
+      scale).toAlgKernel.body.take 35) s).getD s
 
 /-- The stripped backward kernel is fully algorithm-projectable: it contains no
 compute-only effect such as unsupported bit-level operations or async markers. -/
