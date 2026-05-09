@@ -2389,6 +2389,151 @@ theorem atomicTraceEvents_masked_rowMajor2D_real
       ({ data := active } : Tile .bool [R, C])
       hPtrs hVal hMask
 
+/-- Boundary masked trace surface for one block's atomic `dQ` contribution. -/
+theorem fa1BackwardAtomicDQBoundary_atomicTraceEvents_blockContribution
+    {S_q M D Bk numKVBlocks : Nat}
+    (dQReg : RegionName) (tid : ThreadId) (sPre : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, D] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionBoundary qStart Q K V dO LSE scale block)))
+    (hMask : sPre.regs .bool [M, D] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, D] =>
+        decide (qStart * M + idx.1.val < S_q) } : Tile .bool [M, D])) :
+    Stmt.atomicTraceEvents tid sPre
+        (Stmt.atomicAdd NumericDType.real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "dq_ptrs"))
+          (Op.ref .real [M, D] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [M, D] "qd_mask"))) =
+      some ((TileShape.allIndices [M, D]).filterMap fun i =>
+        if decide (qStart * M + i.1.val < S_q) then
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+            (some (dQBlockContributionBoundary qStart Q K V dO LSE scale block i)))
+        else
+          none) := by
+  simpa using
+    atomicTraceEvents_masked_rowMajor2D_real
+      (dQReg := dQReg) (tid := tid) (sPre := sPre)
+      (ptrName := "dq_ptrs") (valueName := "dQ_part") (maskName := "qd_mask")
+      (contribution := dQBlockContributionBoundary qStart Q K V dO LSE scale block)
+      (active := fun idx : TileIndex [M, D] => decide (qStart * M + idx.1.val < S_q))
+      hPtrs hVal hMask
+
+/-- Causal-boundary masked trace surface for one block's atomic `dQ`
+contribution. -/
+theorem fa1BackwardAtomicDQCausalBoundary_atomicTraceEvents_blockContribution
+    {S_q M D Bk numKVBlocks : Nat}
+    (dQReg : RegionName) (tid : ThreadId) (sPre : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, D] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block)))
+    (hMask : sPre.regs .bool [M, D] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, D] =>
+        decide (qStart * M + idx.1.val < S_q) } : Tile .bool [M, D])) :
+    Stmt.atomicTraceEvents tid sPre
+        (Stmt.atomicAdd NumericDType.real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "dq_ptrs"))
+          (Op.ref .real [M, D] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [M, D] "qd_mask"))) =
+      some ((TileShape.allIndices [M, D]).filterMap fun i =>
+        if decide (qStart * M + i.1.val < S_q) then
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+            (some (dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block i)))
+        else
+          none) := by
+  simpa using
+    atomicTraceEvents_masked_rowMajor2D_real
+      (dQReg := dQReg) (tid := tid) (sPre := sPre)
+      (ptrName := "dq_ptrs") (valueName := "dQ_part") (maskName := "qd_mask")
+      (contribution := dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block)
+      (active := fun idx : TileIndex [M, D] => decide (qStart * M + idx.1.val < S_q))
+      hPtrs hVal hMask
+
+/-- Boundary D-tail masked trace surface for one block's atomic `dQ`
+contribution. -/
+theorem fa1BackwardAtomicDQBoundaryD_atomicTraceEvents_blockContribution
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (dQReg : RegionName) (tid : ThreadId) (sPre : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, Bd] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd⟩ : Tile .nat [M, Bd]))
+    (hVal : sPre.regs .real [M, Bd] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionBoundaryD qStart Q K V dO LSE scale block)))
+    (hMask : sPre.regs .bool [M, Bd] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D) } : Tile .bool [M, Bd])) :
+    Stmt.atomicTraceEvents tid sPre
+        (Stmt.atomicAdd NumericDType.real [M, Bd]
+          (MemAccess.region dQReg (Op.ref .nat [M, Bd] "dq_ptrs"))
+          (Op.ref .real [M, Bd] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [M, Bd] "qd_mask"))) =
+      some ((TileShape.allIndices [M, Bd]).filterMap fun i =>
+        if decide (qStart * M + i.1.val < S_q ∧ i.2.1.val < D) then
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd i) .real
+            (some (dQBlockContributionBoundaryD qStart Q K V dO LSE scale block i)))
+        else
+          none) := by
+  simpa using
+    atomicTraceEvents_masked_rowMajor2D_real
+      (dQReg := dQReg) (tid := tid) (sPre := sPre)
+      (ptrName := "dq_ptrs") (valueName := "dQ_part") (maskName := "qd_mask")
+      (contribution := dQBlockContributionBoundaryD qStart Q K V dO LSE scale block)
+      (active := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D))
+      hPtrs hVal hMask
+
+/-- Causal-boundary D-tail masked trace surface for one block's atomic `dQ`
+contribution. -/
+theorem fa1BackwardAtomicDQCausalBoundaryD_atomicTraceEvents_blockContribution
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (dQReg : RegionName) (tid : ThreadId) (sPre : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, Bd] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd⟩ : Tile .nat [M, Bd]))
+    (hVal : sPre.regs .real [M, Bd] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block)))
+    (hMask : sPre.regs .bool [M, Bd] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D) } : Tile .bool [M, Bd])) :
+    Stmt.atomicTraceEvents tid sPre
+        (Stmt.atomicAdd NumericDType.real [M, Bd]
+          (MemAccess.region dQReg (Op.ref .nat [M, Bd] "dq_ptrs"))
+          (Op.ref .real [M, Bd] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [M, Bd] "qd_mask"))) =
+      some ((TileShape.allIndices [M, Bd]).filterMap fun i =>
+        if decide (qStart * M + i.1.val < S_q ∧ i.2.1.val < D) then
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd i) .real
+            (some (dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block i)))
+        else
+          none) := by
+  simpa using
+    atomicTraceEvents_masked_rowMajor2D_real
+      (dQReg := dQReg) (tid := tid) (sPre := sPre)
+      (ptrName := "dq_ptrs") (valueName := "dQ_part") (maskName := "qd_mask")
+      (contribution := dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block)
+      (active := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D))
+      hPtrs hVal hMask
+
 /-- Tail trace once the pre-atomic registers are known.  The two ordinary
 stores after the atomic statement emit no atomic events, so the tail trace is
 exactly the block contribution trace. -/
