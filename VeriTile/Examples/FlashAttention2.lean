@@ -350,6 +350,15 @@ noncomputable def fa2BackwardReal4D {B H S_q S_k D : Nat}
     FA1Backward.Grads4D B H S_q S_k D :=
   FA1Backward.attentionBackwardReal4D Q K V dO LSE scale
 
+/-- FA-2 causal backward Real baseline for 4D `[B,H,S,D]` tensors. -/
+noncomputable def fa2BackwardCausalReal4D {B H S_q S_k D : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ) :
+    FA1Backward.Grads4D B H S_q S_k D :=
+  FA1Backward.attentionBackwardReal4DCausal Q K V dO LSE scale
+
 /-- 4D FA-1/FA-2 backward baseline equivalence. -/
 theorem fa1_backward_eq_fa2_backward4D {B H S_q S_k D : Nat}
     (Q : TileIndex [B, H, S_q, D] → ℝ)
@@ -358,6 +367,15 @@ theorem fa1_backward_eq_fa2_backward4D {B H S_q S_k D : Nat}
     (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ) :
     FA1Backward.attentionBackwardReal4D Q K V dO LSE scale =
       fa2BackwardReal4D Q K V dO LSE scale := rfl
+
+/-- 4D causal FA-1/FA-2 backward baseline equivalence. -/
+theorem fa1_causal_backward_eq_fa2_causal_backward4D {B H S_q S_k D : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ) :
+    FA1Backward.attentionBackwardReal4DCausal Q K V dO LSE scale =
+      fa2BackwardCausalReal4D Q K V dO LSE scale := rfl
 
 /-! ### FA-2 two-block backward partition surface -/
 
