@@ -415,6 +415,94 @@ noncomputable def attentionBackwardReal4DCausal {B H S_q S_k D : Nat}
   attentionBackwardReal4DMasked
     (fun _ _ i j => decide (j.val ≤ i.val)) Q K V dO LSE scale
 
+/-! ### Boundary backward math surface -/
+
+/-- Boundary query-row visibility for a padded `M`-row query block. -/
+def queryBoundaryVisible {S_q S_k M : Nat} (qStart : Nat) :
+    Fin M → Fin S_k → Bool :=
+  fun i _ => decide (qStart * M + i.val < S_q)
+
+/-- Boundary + causal query/key visibility for a padded `M`-row query block. -/
+def queryBoundaryCausalVisible {S_q S_k M : Nat} (qStart : Nat) :
+    Fin M → Fin S_k → Bool :=
+  fun i j => decide (qStart * M + i.val < S_q ∧ j.val ≤ qStart * M + i.val)
+
+/-- Boundary-padded Q block. Out-of-range query rows are represented as zero;
+the boundary visibility predicate makes them contribute zero to all backward
+sums. -/
+noncomputable def boundaryQBlock {S_q D M : Nat} (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) : TileIndex [M, D] → ℝ :=
+  fun idx =>
+    if h : qStart * M + idx.1.val < S_q then
+      Q (⟨qStart * M + idx.1.val, h⟩, idx.2.1, PUnit.unit)
+    else
+      0
+
+/-- Boundary-padded upstream gradient block. -/
+noncomputable def boundaryDOBlock {S_q D M : Nat} (qStart : Nat)
+    (dO : TileIndex [S_q, D] → ℝ) : TileIndex [M, D] → ℝ :=
+  fun idx =>
+    if h : qStart * M + idx.1.val < S_q then
+      dO (⟨qStart * M + idx.1.val, h⟩, idx.2.1, PUnit.unit)
+    else
+      0
+
+/-- Boundary-padded LSE block. Out-of-range rows are irrelevant because
+`queryBoundaryVisible` masks them off. -/
+noncomputable def boundaryLSEBlock {S_q M : Nat} (qStart : Nat)
+    (LSE : Fin S_q → ℝ) : Fin M → ℝ :=
+  fun i =>
+    if h : qStart * M + i.val < S_q then
+      LSE ⟨qStart * M + i.val, h⟩
+    else
+      0
+
+/-- Non-causal boundary backward spec for a padded query block. -/
+noncomputable def attentionBackwardRealBoundary {S_q S_k D M : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
+    Grads M S_k D :=
+  attentionBackwardRealMasked
+    (queryBoundaryVisible (S_q := S_q) (S_k := S_k) (M := M) qStart)
+    (boundaryQBlock qStart Q) K V (boundaryDOBlock qStart dO)
+    (boundaryLSEBlock qStart LSE) scale
+
+/-- Causal boundary backward spec for a padded query block. -/
+noncomputable def attentionBackwardRealCausalBoundary {S_q S_k D M : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
+    Grads M S_k D :=
+  attentionBackwardRealMasked
+    (queryBoundaryCausalVisible (S_q := S_q) (S_k := S_k) (M := M) qStart)
+    (boundaryQBlock qStart Q) K V (boundaryDOBlock qStart dO)
+    (boundaryLSEBlock qStart LSE) scale
+
+/-- Boundary backward is the generic masked backward spec with the
+query-boundary visibility predicate. -/
+theorem attentionBackwardRealBoundary_eq_masked {S_q S_k D M : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
+    attentionBackwardRealBoundary qStart Q K V dO LSE scale =
+      attentionBackwardRealMasked
+        (queryBoundaryVisible (S_q := S_q) (S_k := S_k) (M := M) qStart)
+        (boundaryQBlock qStart Q) K V (boundaryDOBlock qStart dO)
+        (boundaryLSEBlock qStart LSE) scale := rfl
+
+/-- Causal boundary backward is the generic masked backward spec with the
+query-boundary + causal visibility predicate. -/
+theorem attentionBackwardRealCausalBoundary_eq_masked {S_q S_k D M : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
+    attentionBackwardRealCausalBoundary qStart Q K V dO LSE scale =
+      attentionBackwardRealMasked
+        (queryBoundaryCausalVisible (S_q := S_q) (S_k := S_k) (M := M) qStart)
+        (boundaryQBlock qStart Q) K V (boundaryDOBlock qStart dO)
+        (boundaryLSEBlock qStart LSE) scale := rfl
+
 /-- 4D arbitrary-mask spec, `dQ` slice equation. -/
 @[simp] theorem attentionBackwardReal4DMasked_dQ_slice {B H S_q S_k D : Nat}
     (visible : (b : Fin B) → (h : Fin H) → Fin S_q → Fin S_k → Bool)
