@@ -108,7 +108,7 @@ Required compute gaps are and remain test-backed.
 The trusted bridge from Real-algorithm correctness to floating computation
 **is the external gap checker**, not a Lean theorem.
 
-## Status (2026-05-05)
+## Status (2026-05-09)
 
 ### Tier 1 — Loop-free kernel pairs ✅ (`v0.1-tier1`)
 
@@ -147,6 +147,56 @@ The trusted bridge from Real-algorithm correctness to floating computation
 - ~16k lines of FA-1 forward proof (Core + Boundary + ScoreVariants +
   Common)
 
+### Tier 3-B — FA-2 forward + headline corollary ✅
+
+- Math identities: `fa2_delayed_rescale_sum_eq` /
+  `fa2_delayed_rescale_weighted_sum_eq` (denominator/numerator algebra),
+  `fa2_two_fragment_*_merge_eq_flat` (two-fragment merge),
+  `fa2_masked_*_zero_of_all_invisible` (full-mask block-skip)
+- Producer-consumer kernel chain:
+  `fa2ScalarScoreMaxKernel` → `fa2ScalarMergedMaxKernel` →
+  `fa2ScalarValueFragmentKernel` → `fa2ScalarFragmentSummaryKernel` →
+  `fa2ScoreFragmentKernel` → `fa2ScalarTwoBlockForwardKernel`,
+  each with `_correct_view` and state-parametric `_loaded_of_agrees`
+  handoff lemmas
+- Two-block forward bridges:
+  `fa2_two_block_forward_eq_attentionReal` (tile-level),
+  `_attentionReal4D` (4D slice), and grid-facing
+  `_forAll_attentionReal4D_view`
+- Merge-stage executable surface: `fa2ScalarTwoFragmentMergeKernel_correct_view`
+  and `_attentionReal_view`
+- **Headline corollary `fa1_eq_fa2_two_block_forward4D`** — flat
+  `attentionReal4D` equals delayed-rescale two-fragment FA-2 output for a
+  two-block KV domain
+
+### Tier 3-C — FA-1 backward full coverage ✅
+
+- Stripped main theorem: `fa1BackwardStrippedKernel_correct` (no mask, no
+  multi-block, single program-id)
+- Multi-block atomic `dQ` composition — non-causal:
+  `fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct` (grid launcher dQ),
+  combined with ordinary `dK`/`dV` tail-store readback as
+  `fa1BackwardAtomicDQKernel_gridLaunched_backward_correct` (full
+  three-output public theorem)
+- Multi-block atomic `dQ` composition — causal:
+  `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct`, combined as
+  `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`
+- Generic launcher-facing surfaces:
+  `gridLaunchedAtomic_masked_dQ_correct` and
+  `gridLaunchedAtomic_causal_dQ_correct` for kernel-agnostic atomic
+  composition; `attentionBackwardRealMasked_allVisible` and
+  `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked` (causal
+  variant: `_Causal_…`) for the math-side multi-block bridges
+- Math layer: `streamingLSE_eq_lseReal`,
+  `attentionBackwardReal_eq_reverseMode`, probability / `dP = dO · Vᵀ` /
+  row correction `D_i` / `dS = P * (dP - corr[:, None])` /
+  `dV = Pᵀ · dO` / `dQ = dS · K · scale` / `dK = dSᵀ · Q · scale` tile
+  bridges, `softmax_jvp_identity`,
+  `causalBackward_tile_bridges_complete`, and the block-local
+  `_block_*` causal counterparts; bundled as
+  `strippedBackward_tile_bridges_complete` and
+  `causalBackward_block_tile_bridges_complete`
+
 ### Horizontal infra ✅ (beyond original PLAN scope, in parallel with Tiers)
 
 - **Two-layer architecture**: `ComputeKernel` / `AlgorithmKernel` bridged by
@@ -180,209 +230,62 @@ The trusted bridge from Real-algorithm correctness to floating computation
 
 ### Numbers
 
-- 111 `.lean` files under `VeriTile/` (~48.2k lines); 128 `.lean` files including `bench/` (~50.2k lines)
+- 112 `.lean` files under `VeriTile/` (~52.3k lines); 129 `.lean` files including `bench/` (~54.3k lines)
 - Whole library 0 sorry
 - `lake build` clean
+- `bench/check_ports.sh` 17/17 ok
 
 ## In progress
 
-### FA-1 backward
+### Tier 3-C ergonomic follow-ups
 
-The original PLAN listed backward as P3+ "never"; the redirect moves it
-in-scope (see §Decision log entry 9).
+The non-causal and causal multi-block atomic-dQ launcher-facing main theorems
+are closed (see §Status Tier 3-C). The remaining work is ergonomic, not
+functional:
 
-`VeriTile/Examples/FlashAttention1/Backward.lean`:
-
-- `streamingLSE_eq_lseReal` — the forward LSE store using `m_i + tl.log(l_i)`
-  equals unshifted log-sum-exp (the key bridge for backward to reconstruct P)
-- `attentionBackwardReal_eq_reverseMode` — closed-form reverse-mode FA-1
-  backward
-- `attentionBackwardRealMasked_allVisible` — generic mask-aware Real backward
-  spec collapses to the existing non-masked spec under the all-visible mask
-- `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked` — masked
-  multi-block `dQ` contributions sum to the mask-aware backward spec
-- `dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal` — causal
-  specialization of the masked multi-block `dQ` bridge
-- `gridLaunchedAtomic_masked_dQ_correct` and
-  `gridLaunchedAtomic_causal_dQ_correct` — launcher-facing masked/causal
-  atomic `dQ` composition surfaces
-- `fa1BackwardAtomicDQKernel_gridLaunched_masked_dQ_correct` — concrete
-  kernel-specific launcher-facing masked multi-block `dQ` theorem for the
-  non-causal atomic backward kernel, with trace-to-masked-contribution
-  extraction kept explicit
-- `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct` — concrete
-  kernel-specific launcher-facing causal `dQ` theorem for the atomic backward
-  kernel
-- `fa1BackwardAtomicDQKernel_gridLaunched_backward_correct` — full
-  launcher-facing non-causal atomic backward theorem: grid-composed `dQ` plus
-  per-block ordinary `dK`/`dV` store readback from the same final state
-- `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct` — full
-  launcher-facing causal atomic backward theorem covering `dQ`, `dK`, and `dV`
-- `fa1BackwardAtomicDQCausalKernel` — DSL kernel surface for causal
-  block-partitioned backward with atomic `dQ`
-- `fa1BackwardAtomicDQCausalPreAtomicState` — pre-atomic boundary for the
-  causal kernel prefix, matching the non-causal proof split
-- `FA1BackwardAtomicDQCausalPreAtomicFacts` — proof target bundling the causal
-  prefix obligations for `dQ_part`, `dK_block`, and `dV_block`
-- `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution` — causal
-  atomic `dQ` trace recomposition once prefix facts and tail execution are
-  available
-- `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs`
-  — causal atomic `dQ` trace extraction from concrete DSL prefix inputs plus
-  tail execution
-- `fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs` — causal
-  ordinary tail-store readback for block-local `dK`/`dV`
-- `causalBackward_tile_bridges_complete` — causal `dQ/dK/dV` tile-dot bridge
-  bundle for the prefix proof
-- `causalBackward_block_tile_bridges_complete` — block-local causal
-  `dQ_part`/`dK_block`/`dV_block` tile-dot bridge bundle for the atomic prefix
-  proof
-- Math-layer tile bridges: probability, `dP = dO · Vᵀ`, row correction
-  `D_i = Σⱼ P_ij · dP_ij`, `dS = P * (dP - corr[:, None])`,
-  `dV = Pᵀ · dO`, `dQ = dS · K · scale`, `dK = dSᵀ · Q · scale`
-- `softmax_jvp_identity` — softmax JVP form
-- `strippedBackward_tile_bridges_complete` — bundled math-layer surface
-- `fa1BackwardStrippedKernel_correct` — stripped main theorem (no mask, no
-  multi-block, single program-id)
-
-Next: connect the causal input-level trace extraction to the launcher-facing
-surfaces above more ergonomically. Multi-block atomic dQ composition itself is
-available through the grid-launched surface.
+- More ergonomic construction of causal `GridLaunchedAtomic` witnesses from
+  raw DSL inputs, so end users can reach
+  `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct` without
+  threading the trace-extraction lemmas by hand.
+- A user-facing `Realizes`-style surface for backward outputs, gated on the
+  whole-grid `launchExec` landing (see §Roadmap mid-term).
 
 ## Roadmap (priority-ordered, no fixed time windows)
 
-### Near-term — Tier 3-A wrap-up and backward stage 1
+### Near-term — Tier 3 wrap-up and release prep
 
-- Maintain closed FA-1 backward stripped theorem
-- Maintain `v0.3-tier3a` tag for forward full coverage
-- Maintain masked/causal FA-1 backward kernel trace extraction against the
-  launcher-facing masked/causal `dQ` surfaces
-- Keep grid-launched multi-block `dQ` composition as the public multi-block
-  surface and improve ergonomic construction of causal launch witnesses
+- Cut `v0.3-tier3` release covering FA-1 forward (3-A), FA-2 forward + the
+  `fa1_eq_fa2_two_block_forward4D` headline corollary (3-B), and FA-1
+  backward (3-C: stripped + non-causal/causal launcher-facing full theorems)
+- Pre-Tier-4 cleanup checklist (closed: see issue #108)
+- Causal launcher-witness ergonomics (§In progress)
+- Streaming reduction helper extraction — Tier 4 prerequisite, follow-up
+  issue from #108
 
-### Mid-term — Tier 3-B FA-2 forward + headline corollary
+### Mid-term — Whole-grid `multiBlockExec` and FA-2 forward closure
 
-*Semantic extensions:*
+Tier 3-B is closed at the two-block level (see §Status). The remaining
+forward-side work generalizes the producer-consumer chain to arbitrary block
+counts and unifies grid execution under a single launch primitive:
 
 - `multiBlockExec : Kernel → InitMem → Grid → FinalMem` model — runs every
-  program_id (3D grid: `batch × heads × Q-blocks`), composing each
-  program's writes
-- Stride / layout model (per program_id row-major contiguous; no general
-  layout system)
-- Disjoint-writes lemma — for atomic-free pure-forward kernels, each
-  program's output region is disjoint, so per-program local correctness
-  composes
+  program_id (3D grid: `batch × heads × Q-blocks`), composing each program's
+  writes; promotes today's `Kernel.ForAllProgramsSome` retrofit into a
+  first-class final-state semantics
+- Generalize `fa2_two_block_forward_eq_attentionReal` from two blocks to
+  arbitrary block counts (`fa_2_forward_correct` with block-skip + delayed
+  rescale closure)
+- Lift the headline corollary `fa1_eq_fa2_two_block_forward4D` to arbitrary
+  block counts as `fa1_eq_fa2`
 
-*Kernel and theorems:*
+### Mid-term — Tier 3-C closure: FA-2 backward and headline corollary
 
-- FA-2 kernel embedded via `triton { ... }` (multi-axis program_id, delayed
-  rescale path, mask-skip path)
-- `fa2_delayed_rescale_sum_eq` and
-  `fa2_delayed_rescale_weighted_sum_eq` — denominator/numerator algebra for
-  block-local max normalization followed by merged-max rescaling
-- `fa2_two_fragment_denominator_merge_eq_flat` and
-  `fa2_two_fragment_numerator_merge_eq_flat` — two-fragment merge identities
-  for FA-2 partitioned forward
-- `fa2_two_fragment_attention_ratio_eq_flat` — pointwise output ratio identity
-  for a two-fragment FA-2 merge
-- `fa2_two_block_forward_eq_attentionReal` — first partitioned-forward bridge:
-  a two-fragment delayed-rescale FA-2 spec equals flat `attentionReal` over the
-  same two-block KV domain
-- `fa2_two_block_forward_eq_attentionReal4D` — 4D slice-facing variant of the
-  same bridge at a fixed `(batch, head, query, d)` coordinate
-- `fa2ScalarScoreMaxKernel_correct_view` — executable scalar score-row max
-  producer, writing the row max consumed by fragment-summary and fused scalar
-  forward stages
-- `fa2ScalarScoreMaxKernel_loaded_of_agrees` — state-parametric max-register
-  handoff: a produced row max can be consumed by a later scalar state whose pid
-  is aligned and whose max buffer agrees with the producer final state
-- `fa2ScalarValueFragmentKernel_correct_view` — executable scalar
-  value-fragment staging producer for one `Bk`-lane value row at a fixed output
-  dimension
-- `fa2ScalarValueFragmentKernel_loaded_of_agrees` and
-  `fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees` — state-parametric
-  value-buffer handoff lemmas for one- and two-block scalar forward consumers
-- `fa2ScalarFragmentSummaryKernel_correct_view` — executable one-fragment
-  producer for denominator/numerator summaries consumed by the merge stage
-- `fa2_score_fragment_tile_eq` — pure tile bridge showing `Q @ Kᵀ * scale`
-  computes the local FA-2 score fragment, factoring the future executable
-  score-producer proof
-- `fa2ScoreFragmentSpec_eq_scaledScore` — interface bridge showing the local
-  score-fragment spec agrees with the global `FA1Math.scaledScore` view for a
-  block slice of K
-- `fa2ScoreFragmentKernel` — executable QK score-fragment producer surface
-  (`Q_block @ K_fragmentᵀ * scale` into a contiguous score tile), with
-  `fa2ScoreFragmentKernel_correct_view` proving the executable store readback
-- `fa2ScoreFragmentKernel_scaledScore_correct_view` — global-score wrapper for
-  the score producer, proving it writes the `FA1Math.scaledScore` values
-  consumed by the attention pipeline
-- `fa2ScoreFragmentKernel_scaledScore_row_loaded` — buffer-handoff lemma: a
-  produced score row can be consumed as `InputLoadedAt` by the scalar fused
-  forward program id `queryBlock * M + row`
-- `fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees` — state-parametric
-  buffer-handoff lemma: the produced score row can be consumed by any later
-  state whose scalar program id is aligned and whose score buffer agrees with
-  the producer final state
-- `fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees` — two-block handoff
-  package: two score producer outputs discharge the left/right `InputLoadedAt`
-  score hypotheses needed by the scalar fused-forward consumer
-- `fa2ScalarTwoBlockForwardKernel_correct_view` — executable scalar two-block
-  slice fusing fragment-summary production and delayed-rescale merge into one
-  DSL kernel, writing the tile-level FA-2 two-fragment spec
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_view` — the fused scalar
-  two-block DSL kernel connected to Q/K/V fragment score/value buffers, proving
-  it writes flat `attentionReal`
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view` —
-  producer-consumer wrapper: two executable score-fragment producer runs
-  discharge the scalar fused-forward consumer's left/right score inputs, leaving
-  value buffers and max registers as explicit consumer-side assumptions
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_view`
-  — producer-consumer wrapper: executable score and value producer runs
-  discharge all four score/value `InputLoadedAt` inputs for the scalar
-  fused-forward consumer, leaving max registers explicit
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producers_view`
-  — producer-consumer wrapper: executable score, value, and left/right max
-  producer runs feed the scalar fused-forward consumer; only the merged max
-  register remains an explicit composition boundary
-- `fa2ScalarMergedMaxKernel_correct_view` /
-  `fa2ScalarMergedMaxKernel_loaded_of_agrees` — executable merged-max producer
-  and state-parametric handoff for the merged max register
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_producers_view`
-  — producer-consumer wrapper: executable score, value, left/right max, and
-  merged-max producer runs feed the scalar fused-forward consumer
-- `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` — 4D-facing wrapper of
-  the fused scalar two-block DSL theorem at a fixed `(batch, head, query, d)`
-  coordinate
-- `fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view` — grid-facing
-  wrapper: every program in an arbitrary launch grid may map to a 4D output
-  coordinate and writes that coordinate's `attentionReal4D`
-- `fa2_masked_sum_eq_zero_of_all_invisible` and
-  `fa2_masked_weighted_sum_eq_zero_of_all_invisible` — full-mask block-skip
-  denominator/numerator zero-contribution identities
-- `fa2ScalarTwoFragmentMergeKernel_correct_view` — executable scalar
-  merge-stage kernel surface for delayed-rescale fragment merge
-- `fa2ScalarTwoFragmentMergeKernel_attentionReal_view` — executable
-  merge-stage kernel surface connected to two-block Q/K/V fragment summaries,
-  proving the scalar merge output equals flat `attentionReal`
-- `fa_2_forward_correct` — like FA-1 forward, with: (a) sequence-length
-  parallelization, (b) delayed rescaling, (c) full-mask block skip
-  - Delayed rescale equivalence: `O_final / l_final` does not depend on
-    whether intermediate `O` is rescaled each step (`delayed_rescale_eq`
-    helper)
-  - Block-skip correctness: full-mask blocks contribute 0 to the recurrence
-  - Heavily reuses Tier 3-A single-program invariant tooling
-- **Headline corollary `fa1_eq_fa2`** — ~30 lines via spec transitivity
-  through `standardAttentionMath`
-  - Current first slice: `fa1_eq_fa2_two_block_forward4D`, a spec-level
-    equality between flat `attentionReal4D` and delayed-rescale two-fragment
-    FA-2 output for a two-block KV domain
+FA-1 backward (stripped + non-causal/causal multi-block atomic-dQ launcher
+theorems) is closed (§Status). Remaining:
 
-### Mid-term — Tier 3-C FA backward full coverage
-
-- FA-1 backward + mask + causal + multi-block (after stripped single-block
-  closes)
-- FA-2 backward (reuses multi-block semantics)
+- FA-2 backward (reuses multi-block semantics from `multiBlockExec`)
 - Headline corollary `fa1_backward_eq_fa2_backward` (dual to forward)
+- Causal launcher-witness ergonomics on the FA-1 backward side
 
 ### Mid-term — Tier 4 production kernel batch 2
 
@@ -440,7 +343,7 @@ have **moved out** of the original PLAN's P3+ list and into the roadmap
 
 | Risk | Trigger signal | Mitigation |
 |---|---|---|
-| FA-1 backward mask or multi-block wiring stalls | proof split stalls ≥ 2 weeks | `/lean4:autoprove --deep=stuck`; if that fails, split into smaller stripped sublemmas |
+| FA-2 backward generalization stalls | proof split stalls ≥ 2 weeks | reuse the FA-1 backward atomic-`dQ` machinery already closed; if that fails, split into smaller stripped sublemmas |
 | `multiBlockExec` formal model more complex than expected | drafting the disjoint-writes invariant | restrict to "per program_id row-major contiguous"; no general layout system |
 | FA-2 multi-block abstraction more complex than expected | drafting `multiBlockExec` reveals hidden complexity | start with stripped FA-2 (single-program, no mask-skip); full version later |
 | `tl.dot` over `Value.tile2D` simp behaves badly | FA proof stuck on simp | custom simp lemmas; or switch to `unfold + induction` style |
@@ -597,8 +500,9 @@ To make the close-rate metric reproducible:
 9. **2026-05-05** — **Backward pass, Python lifter, and concurrency-
    primitive proofs moved out of P3+ and into in-scope.**
 
-   - **FA-1 backward** entered the near-term roadmap and now has no sorry
-     debt in the library
+   - **FA-1 backward** entered the near-term roadmap; as of 2026-05-09 the
+     stripped, non-causal multi-block atomic-dQ, and causal multi-block
+     atomic-dQ launcher-facing main theorems are all closed (§Status Tier 3-C)
    - **Python lifter** moved from P3+ to mid/long-term — Triton-user
      friendliness requires a paste-in surface, not just documentation
      correspondence

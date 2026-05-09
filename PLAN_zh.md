@@ -129,6 +129,51 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   4 个 forward 变体定理
 - 共 ~16k 行 FA-1 forward 证明(Core + Boundary + ScoreVariants + Common)
 
+### Tier 3-B — FA-2 forward + headline 推论 ✅
+
+- 数学恒等式:`fa2_delayed_rescale_sum_eq` /
+  `fa2_delayed_rescale_weighted_sum_eq`(分子/分母代数)、
+  `fa2_two_fragment_*_merge_eq_flat`(两段合并)、
+  `fa2_masked_*_zero_of_all_invisible`(全 mask block-skip)
+- Producer-consumer kernel 链:
+  `fa2ScalarScoreMaxKernel` → `fa2ScalarMergedMaxKernel` →
+  `fa2ScalarValueFragmentKernel` → `fa2ScalarFragmentSummaryKernel` →
+  `fa2ScoreFragmentKernel` → `fa2ScalarTwoBlockForwardKernel`,各自带
+  `_correct_view` 与 state-parametric `_loaded_of_agrees` handoff lemmas
+- 两 block forward 桥:`fa2_two_block_forward_eq_attentionReal`(tile 层)、
+  `_attentionReal4D`(4D slice)、grid 面向的
+  `_forAll_attentionReal4D_view`
+- Merge 阶段可执行 surface:`fa2ScalarTwoFragmentMergeKernel_correct_view`
+  与 `_attentionReal_view`
+- **Headline 推论 `fa1_eq_fa2_two_block_forward4D`** —— flat
+  `attentionReal4D` 等于两段延迟 rescale FA-2 输出(在两 block KV 域上)
+
+### Tier 3-C — FA-1 backward 全套 ✅
+
+- Stripped 主定理:`fa1BackwardStrippedKernel_correct`(无 mask、无 multi-block、
+  单 program-id)
+- Multi-block atomic `dQ` 合成 —— non-causal:
+  `fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct`(grid launcher dQ),
+  与 ordinary `dK`/`dV` tail-store readback 合并为
+  `fa1BackwardAtomicDQKernel_gridLaunched_backward_correct`
+  (全三输出公共定理)
+- Multi-block atomic `dQ` 合成 —— causal:
+  `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct`,合并为
+  `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`
+- 通用 launcher-facing surface:`gridLaunchedAtomic_masked_dQ_correct` 与
+  `gridLaunchedAtomic_causal_dQ_correct`(kernel-agnostic atomic 合成);
+  `attentionBackwardRealMasked_allVisible` 与
+  `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked`(causal
+  对偶 `_Causal_…`)是数学侧 multi-block 桥
+- 数学层:`streamingLSE_eq_lseReal`、
+  `attentionBackwardReal_eq_reverseMode`、probability / `dP = dO · Vᵀ` /
+  row correction `D_i` / `dS = P * (dP - corr[:, None])` /
+  `dV = Pᵀ · dO` / `dQ = dS · K · scale` / `dK = dSᵀ · Q · scale` 张量桥;
+  `softmax_jvp_identity`、`causalBackward_tile_bridges_complete` 与
+  block-local `_block_*` causal 对偶;打包为
+  `strippedBackward_tile_bridges_complete` 与
+  `causalBackward_block_tile_bridges_complete`
+
 ### 横向 infra ✅(超出原 PLAN scope,与 Tier 推进并行)
 
 - **双层架构**:`ComputeKernel` / `AlgorithmKernel` 用 `eraseDType` 桥接;
@@ -156,193 +201,59 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 
 ### 数据
 
-- `VeriTile/` 下 111 个 `.lean` 文件(~48.2k 行);包含 `bench/` 时 128 个 `.lean` 文件(~50.2k 行)
+- `VeriTile/` 下 112 个 `.lean` 文件(~52.3k 行);包含 `bench/` 时 129 个 `.lean` 文件(~54.3k 行)
 - 全库 0 sorry
 - `lake build` 干净
+- `bench/check_ports.sh` 17/17 ok
 
 ## 进行中
 
-### FA-1 backward
+### Tier 3-C 收尾的 ergonomic 改进
 
-原 PLAN 把 backward 列为 P3+ 永远不做;重定向后进 in-scope(见 §决策日志 9)。
+non-causal 与 causal multi-block atomic-dQ launcher-facing 主定理已闭合
+(见 §状态 Tier 3-C)。剩下的工作是 ergonomic,不是功能空缺:
 
-`VeriTile/Examples/FlashAttention1/Backward.lean`:
-
-- `streamingLSE_eq_lseReal` —— forward LSE store 用 `m_i + tl.log(l_i)` 等于
-  unshifted log-sum-exp(backward 重建 P 的关键桥)
-- `attentionBackwardReal_eq_reverseMode` —— closed-form reverse-mode FA-1 backward
-- `attentionBackwardRealMasked_allVisible` —— 通用 mask-aware Real backward spec
-  在 all-visible mask 下退化为现有非 mask spec
-- `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked` —— masked
-  multi-block `dQ` 贡献求和等于 mask-aware backward spec
-- `dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal` —— masked
-  multi-block `dQ` 桥的 causal 特化
-- `gridLaunchedAtomic_masked_dQ_correct` 与
-  `gridLaunchedAtomic_causal_dQ_correct` —— launcher-facing masked/causal
-  atomic `dQ` composition surface
-- `fa1BackwardAtomicDQKernel_gridLaunched_masked_dQ_correct` —— non-causal
-  atomic backward kernel 的 concrete kernel-specific launcher-facing masked
-  multi-block `dQ` theorem,trace-to-masked-contribution extraction 仍显式保留
-- `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct` —— atomic backward
-  kernel 的 concrete kernel-specific launcher-facing causal `dQ` theorem
-- `fa1BackwardAtomicDQKernel_gridLaunched_backward_correct` —— full
-  launcher-facing non-causal atomic backward theorem: 同一个 final state 上的
-  grid-composed `dQ` 加 per-block ordinary `dK`/`dV` store readback
-- `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct` —— full
-  launcher-facing causal atomic backward theorem,覆盖 `dQ`、`dK`、`dV`
-- `fa1BackwardAtomicDQCausalKernel` —— causal block-partitioned backward +
-  atomic `dQ` 的 DSL kernel surface
-- `fa1BackwardAtomicDQCausalPreAtomicState` —— causal kernel prefix 的
-  pre-atomic 边界,对齐非 causal proof split
-- `FA1BackwardAtomicDQCausalPreAtomicFacts` —— causal prefix 需要证明的
-  `dQ_part`、`dK_block`、`dV_block` obligations bundle
-- `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution` —— 已有
-  prefix facts 和 tail execution 后,重组 causal atomic `dQ` trace 的 theorem
-- `fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs`
-  —— 从 concrete DSL prefix 输入假设和 tail execution 直接抽取 causal atomic
-  `dQ` trace 的 theorem
-- `fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs` —— causal
-  block-local `dK`/`dV` ordinary tail-store readback
-- `causalBackward_tile_bridges_complete` —— prefix proof 可复用的 causal
-  `dQ/dK/dV` tile-dot bridge bundle
-- `causalBackward_block_tile_bridges_complete` —— atomic prefix proof 可复用的
-  block-local causal `dQ_part`/`dK_block`/`dV_block` tile-dot bridge bundle
-- 数学层 tile bridges:probability、`dP = dO · Vᵀ`、row correction
-  `D_i = Σⱼ P_ij · dP_ij`、`dS = P * (dP - corr[:, None])`、`dV = Pᵀ · dO`、
-  `dQ = dS · K · scale`、`dK = dSᵀ · Q · scale`
-- `softmax_jvp_identity` —— softmax JVP 形式
-- `strippedBackward_tile_bridges_complete` —— bundled 数学层 surface
-- `fa1BackwardStrippedKernel_correct` —— stripped 主定理(无 mask、无 multi-block、
-  单 program-id)
-
-下一步:把 causal input-level trace extraction 更顺手地接到 launcher-facing
-surface。multi-block atomic dQ composition 本身已通过 grid-launched surface 提供。
+- 把 causal `GridLaunchedAtomic` witness 从 raw DSL 输入构造得更顺手,
+  让用户能直接到达
+  `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`,
+  不必手动穿引 trace-extraction 引理。
+- backward 输出的用户面 `Realizes`-风格 surface,前提是 whole-grid
+  `launchExec` 落地(见 §路线图 中期)。
 
 ## 路线图(优先级排序,无固定时间窗口)
 
-### 近期 — Tier 3-A 收口与 backward 第一阶段
+### 近期 — Tier 3 收口与 release 准备
 
-- 维护已闭合的 FA-1 backward stripped 主定理
-- 维护 `v0.3-tier3a` tag(forward 全套)
-- 维护 masked/causal FA-1 backward kernel trace extraction,并接到
-  launcher-facing masked/causal `dQ` surface
-- 保持 grid-launched multi-block `dQ` composition 作为 public multi-block
-  surface,并改进 causal launch witness 的构造体验
+- 切 `v0.3-tier3` release,覆盖 FA-1 forward(3-A)、FA-2 forward + headline
+  推论 `fa1_eq_fa2_two_block_forward4D`(3-B)、FA-1 backward(3-C:stripped
+  + non-causal/causal launcher-facing 全套)
+- Pre-Tier-4 cleanup checklist(已闭合:见 issue #108)
+- causal launcher-witness 的 ergonomic 改进(§进行中)
+- 流式 reduction helper 抽取 —— Tier 4 prerequisite,#108 的延伸 issue
 
-### 中期 — Tier 3-B FA-2 forward + headline corollary
+### 中期 — Whole-grid `multiBlockExec` 与 FA-2 forward 收口
 
-*语义扩展:*
+Tier 3-B 已在两 block 层级闭合(见 §状态)。剩下的 forward 侧工作把
+producer-consumer 链泛化到任意 block 数,并把 grid 执行统一到一个 launch
+primitive 之下:
 
-- `multiBlockExec : Kernel → InitMem → Grid → FinalMem` 模型 —— 跑遍所有 program_id
-  (3D grid:`batch × heads × Q-blocks`),组合各 program 的写入
-- Stride / layout 模型(每 program_id 行优先连续;通用 layout 系统不做)
-- Disjoint-writes 引理 —— 无 atomic 的纯前向 kernel,各 program 输出区域不相交,
-  可独立分析后再组合
+- `multiBlockExec : Kernel → InitMem → Grid → FinalMem` 模型 —— 跑遍所有
+  program_id(3D grid:`batch × heads × Q-blocks`),组合各 program 的写入;
+  把当前 `Kernel.ForAllProgramsSome` 的 retrofit 升级为一等 final-state
+  semantics
+- 把 `fa2_two_block_forward_eq_attentionReal` 从两 block 推广到任意 block
+  数(`fa_2_forward_correct`,含 block-skip + delayed rescale 收口)
+- 把 headline 推论 `fa1_eq_fa2_two_block_forward4D` 提升到任意 block 数,
+  形成 `fa1_eq_fa2`
 
-*Kernel 与定理:*
+### 中期 — Tier 3-C 收口:FA-2 backward 与 headline 推论
 
-- FA-2 kernel 通过 `triton { ... }` 嵌入(多轴 program_id、延迟 rescale 路径、
-  mask-skip 路径)
-- `fa2_delayed_rescale_sum_eq` 与
-  `fa2_delayed_rescale_weighted_sum_eq` —— block-local max 归一后再按 merged max
-  rescale 的 denominator/numerator 代数桥
-- `fa2_two_fragment_denominator_merge_eq_flat` 与
-  `fa2_two_fragment_numerator_merge_eq_flat` —— FA-2 partitioned forward 的
-  two-fragment merge 恒等式
-- `fa2_two_fragment_attention_ratio_eq_flat` —— two-fragment FA-2 merge 的
-  pointwise 输出比值恒等式
-- `fa2_two_block_forward_eq_attentionReal` —— 第一个 partitioned-forward 桥:
-  two-fragment delayed-rescale FA-2 spec 等于同一 two-block KV domain 上的
-  flat `attentionReal`
-- `fa2_two_block_forward_eq_attentionReal4D` —— 同一桥的 4D slice-facing
-  版本,面向固定 `(batch, head, query, d)` 坐标
-- `fa2ScalarScoreMaxKernel_correct_view` —— 可执行 scalar score-row max
-  producer,写出 fragment-summary 和 fused scalar forward stage 消费的 row max
-- `fa2ScalarScoreMaxKernel_loaded_of_agrees` —— state-parametric
-  max-register handoff: 生产出来的 row max 可被 pid 对齐、且 max buffer 与
-  producer final state 一致的后续 scalar state 消费
-- `fa2ScalarValueFragmentKernel_correct_view` —— 可执行 scalar
-  value-fragment staging producer,为固定输出维度写出一行 `Bk`-lane value row
-- `fa2ScalarValueFragmentKernel_loaded_of_agrees` 与
-  `fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees` ——
-  state-parametric value-buffer handoff lemmas,服务 one-/two-block scalar
-  forward consumer
-- `fa2ScalarFragmentSummaryKernel_correct_view` —— 可执行 one-fragment
-  denominator/numerator summary 生产器,供 merge stage 消费
-- `fa2_score_fragment_tile_eq` —— 纯 tile bridge,证明 `Q @ Kᵀ * scale`
-  计算出局部 FA-2 score fragment,为后续可执行 score-producer proof 做分解
-- `fa2ScoreFragmentSpec_eq_scaledScore` —— 接口桥,证明 local score-fragment
-  spec 与 block-slice K 上的全局 `FA1Math.scaledScore` view 一致
-- `fa2ScoreFragmentKernel` —— 可执行 QK score-fragment producer surface
-  (`Q_block @ K_fragmentᵀ * scale` 写入 contiguous score tile),并由
-  `fa2ScoreFragmentKernel_correct_view` 证明可执行 store readback
-- `fa2ScoreFragmentKernel_scaledScore_correct_view` —— score producer 的
-  global-score wrapper,证明它写出 attention pipeline 消费的
-  `FA1Math.scaledScore` 值
-- `fa2ScoreFragmentKernel_scaledScore_row_loaded` —— buffer-handoff lemma:
-  生产出来的 score row 可作为 scalar fused forward program id
-  `queryBlock * M + row` 的 `InputLoadedAt` 输入
-- `fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees` ——
-  state-parametric buffer-handoff lemma: 生产出来的 score row 可被任意
-  scalar program id 对齐、且 score buffer 与 producer final state 一致的后续
-  state 消费
-- `fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees` —— two-block
-  handoff package: 两个 score producer 输出可直接给出 scalar fused-forward
-  consumer 需要的 left/right `InputLoadedAt` score 假设
-- `fa2ScalarTwoBlockForwardKernel_correct_view` —— 可执行 scalar two-block
-  slice,把 fragment summary 生产和 delayed-rescale merge 融合进一个 DSL
-  kernel,写出 tile-level FA-2 two-fragment spec
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_view` —— 把 fused scalar
-  two-block DSL kernel 接到 Q/K/V fragment score/value buffer,证明它写出
-  flat `attentionReal`
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view` ——
-  producer-consumer wrapper: 两个可执行 score-fragment producer run
-  discharge scalar fused-forward consumer 的 left/right score 输入,剩下 value
-  buffer 和 max register 作为显式 consumer-side 假设
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_view`
-  —— producer-consumer wrapper: 可执行 score 与 value producer run discharge
-  scalar fused-forward consumer 的四个 score/value `InputLoadedAt` 输入,剩下
-  max register 显式保留
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producers_view`
-  —— producer-consumer wrapper: 可执行 score、value、left/right max producer
-  run feed scalar fused-forward consumer; 只剩 merged max register 作为显式
-  composition boundary
-- `fa2ScalarMergedMaxKernel_correct_view` /
-  `fa2ScalarMergedMaxKernel_loaded_of_agrees` —— 可执行 merged-max producer 和
-  merged max register 的 state-parametric handoff
-- `fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_producers_view`
-  —— producer-consumer wrapper: 可执行 score、value、left/right max 与
-  merged-max producer run feed scalar fused-forward consumer
-- `fa2ScalarTwoBlockForwardKernel_attentionReal4D_view` —— fused scalar
-  two-block DSL theorem 的 4D-facing wrapper,面向固定
-  `(batch, head, query, d)` 坐标
-- `fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view` —— grid-facing
-  wrapper:任意 launch grid 中每个 program 可映射到一个 4D 输出坐标,并写出该坐标的
-  `attentionReal4D`
-- `fa2_masked_sum_eq_zero_of_all_invisible` 与
-  `fa2_masked_weighted_sum_eq_zero_of_all_invisible` —— 全 mask block 的
-  denominator/numerator 零贡献恒等式
-- `fa2ScalarTwoFragmentMergeKernel_correct_view` —— delayed-rescale fragment
-  merge 的可执行 scalar merge-stage kernel surface
-- `fa2ScalarTwoFragmentMergeKernel_attentionReal_view` —— 接到 two-block Q/K/V
-  fragment summaries 的可执行 merge-stage kernel surface,证明 scalar merge 输出
-  等于 flat `attentionReal`
-- `fa_2_forward_correct` —— 类似 FA-1 forward 的:(a) 序列长度并行化、
-  (b) 延迟 rescaling、(c) 全 mask 块跳过
-  - 延迟 rescale 等价:`O_final / l_final` 不依赖中间 `O` 是否每步 rescale
-    (`delayed_rescale_eq` helper)
-  - 块跳过正确性:全 mask 块对递推贡献为 0
-  - Tier 3-A single-program invariant 工具大量复用
-- **Headline corollary `fa1_eq_fa2`** —— ~30 行,通过 spec 传递性导出
-  - 当前第一片:`fa1_eq_fa2_two_block_forward4D`,即 flat
-    `attentionReal4D` 与 two-block KV domain 上 delayed-rescale two-fragment
-    FA-2 输出之间的 spec-level 等式
+FA-1 backward(stripped + non-causal/causal multi-block atomic-dQ
+launcher-facing 主定理)已闭合(§状态)。剩下:
 
-### 中期 — Tier 3-C FA backward 全套
-
-- FA-1 backward + mask + causal + multi-block(在 stripped 单块闭合后展开)
-- FA-2 backward(沿用 multi-block 语义)
+- FA-2 backward(沿用 `multiBlockExec` multi-block 语义)
 - Headline corollary `fa1_backward_eq_fa2_backward`(对偶于 forward)
+- FA-1 backward 侧的 causal launcher-witness ergonomic 改进
 
 ### 中期 — Tier 4 Production kernel 第二批
 
@@ -390,7 +301,7 @@ surface。multi-block atomic dQ composition 本身已通过 grid-launched surfac
 
 | Risk | 触发信号 | Mitigation |
 |---|---|---|
-| FA-1 backward mask 或 multi-block wiring 卡住 | proof split 卡住 ≥ 2 周 | `/lean4:autoprove --deep=stuck`;失败则切成更小 stripped sublemma |
+| FA-2 backward 推广卡住 | proof split 卡住 ≥ 2 周 | 复用已闭合的 FA-1 backward atomic-`dQ` 机器;失败则切成更小 stripped sublemma |
 | `multiBlockExec` 形式模型超预期复杂 | 起草 disjoint-writes 不变量时 | 限定为"每 program_id 行优先连续";通用 layout 系统不做 |
 | FA-2 multi-block 抽象超预期复杂 | 起草 `multiBlockExec` 时暴露隐藏复杂度 | 先 stripped FA-2(单 program,无 mask-skip);完整版作为后续 |
 | `tl.dot` 在 `Value.tile2D` 上 simp 表现糟糕 | FA 证明卡 simp | 自定义 simp 引理;或改 `unfold + induction` 风格 |
@@ -517,7 +428,9 @@ PyTorch 量级)。
 9. **2026-05-05** —— **Backward pass、Python lifter、并发原语证明 移出 P3+,
    进入 in-scope**。
 
-   - **FA-1 backward** 已进入近期路线图,当前全库已无 sorry debt
+   - **FA-1 backward** 已进入近期路线图;截至 2026-05-09,stripped、
+     non-causal multi-block atomic-dQ、causal multi-block atomic-dQ 的
+     launcher-facing 主定理均已闭合(§状态 Tier 3-C)
    - **Python lifter** 从 P3+ 推进到中远期 —— Triton 用户友好度需要 paste-in 表面,
      不止文档对应
    - **并发原语证明** 当前是 failure markers + projection 边界(已搭),下一步是
