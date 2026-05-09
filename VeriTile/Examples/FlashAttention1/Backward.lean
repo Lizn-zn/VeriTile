@@ -2591,6 +2591,89 @@ theorem strippedBackward_finalStores_readback
         hValQ, hValK, hValV, Tile.ofReal, BlockState.writeMemTyped_real]
       rw [BlockState.scatter_readback_nd _ _ _ hInjV idx]
 
+/-- Offset-parametric readback for the final three stores of a stripped
+backward kernel.
+
+This is the strided counterpart of `strippedBackward_finalStores_readback`: the
+computational prefix supplies arbitrary pointer tiles for `dQ`, `dK`, and `dV`,
+and the caller supplies injectivity for each output address map. -/
+theorem strippedBackward_finalStores_readback_of_offsets
+    (dQReg dKReg dVReg : RegionName)
+    (M S D : Nat) (s : BlockState)
+    (qOff : TileIndex [M, D] → Nat)
+    (kOff vOff : TileIndex [S, D] → Nat)
+    (dQFn : TileIndex [M, D] → ℝ)
+    (dKFn dVFn : TileIndex [S, D] → ℝ)
+    (hPtrsQ : s.regs .nat [M, D] "dQ_ptrs" =
+      some (⟨qOff⟩ : Tile .nat [M, D]))
+    (hPtrsK : s.regs .nat [S, D] "dK_ptrs" =
+      some (⟨kOff⟩ : Tile .nat [S, D]))
+    (hPtrsV : s.regs .nat [S, D] "dV_ptrs" =
+      some (⟨vOff⟩ : Tile .nat [S, D]))
+    (hValQ : s.regs .real [M, D] "dQ" = some (Tile.ofReal dQFn))
+    (hValK : s.regs .real [S, D] "dK" = some (Tile.ofReal dKFn))
+    (hValV : s.regs .real [S, D] "dV" = some (Tile.ofReal dVFn))
+    (hInjQ : Function.Injective qOff)
+    (hInjK : Function.Injective kOff)
+    (hInjV : Function.Injective vOff)
+    (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        ((stepStmt (Stmt.store .real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "dQ_ptrs"))
+          (Op.ref .real [M, D] "dQ") MaskOpt.none) s).bind fun s1 =>
+          (stepStmt (Stmt.store .real [S, D]
+            (MemAccess.region dKReg (Op.ref .nat [S, D] "dK_ptrs"))
+            (Op.ref .real [S, D] "dK") MaskOpt.none) s1).bind fun s2 =>
+            stepStmt (Stmt.store .real [S, D]
+              (MemAccess.region dVReg (Op.ref .nat [S, D] "dV_ptrs"))
+              (Op.ref .real [S, D] "dV") MaskOpt.none) s2)
+        dQReg qOff idx =
+      some (dQFn idx)) ∧
+    (∀ idx : TileIndex [S, D],
+      observeTileAt
+        ((stepStmt (Stmt.store .real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "dQ_ptrs"))
+          (Op.ref .real [M, D] "dQ") MaskOpt.none) s).bind fun s1 =>
+          (stepStmt (Stmt.store .real [S, D]
+            (MemAccess.region dKReg (Op.ref .nat [S, D] "dK_ptrs"))
+            (Op.ref .real [S, D] "dK") MaskOpt.none) s1).bind fun s2 =>
+            stepStmt (Stmt.store .real [S, D]
+              (MemAccess.region dVReg (Op.ref .nat [S, D] "dV_ptrs"))
+              (Op.ref .real [S, D] "dV") MaskOpt.none) s2)
+        dKReg kOff idx =
+      some (dKFn idx)) ∧
+    (∀ idx : TileIndex [S, D],
+      observeTileAt
+        ((stepStmt (Stmt.store .real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "dQ_ptrs"))
+          (Op.ref .real [M, D] "dQ") MaskOpt.none) s).bind fun s1 =>
+          (stepStmt (Stmt.store .real [S, D]
+            (MemAccess.region dKReg (Op.ref .nat [S, D] "dK_ptrs"))
+            (Op.ref .real [S, D] "dK") MaskOpt.none) s1).bind fun s2 =>
+            stepStmt (Stmt.store .real [S, D]
+              (MemAccess.region dVReg (Op.ref .nat [S, D] "dV_ptrs"))
+              (Op.ref .real [S, D] "dV") MaskOpt.none) s2)
+        dVReg vOff idx =
+      some (dVFn idx)) := by
+  constructor
+  · intro idx
+    simp [observeTileAt, stepStmt, evalOp, hPtrsQ, hPtrsK, hPtrsV,
+      hValQ, hValK, hValV, Tile.ofReal, BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_preserves_other_region dVReg vOff dVFn dQReg hdQdV]
+    rw [BlockState.scatter_preserves_other_region dKReg kOff dKFn dQReg hdQdK]
+    rw [BlockState.scatter_readback_nd _ _ _ hInjQ idx]
+  · constructor
+    · intro idx
+      simp [observeTileAt, stepStmt, evalOp, hPtrsQ, hPtrsK, hPtrsV,
+        hValQ, hValK, hValV, Tile.ofReal, BlockState.writeMemTyped_real]
+      rw [BlockState.scatter_preserves_other_region dVReg vOff dVFn dKReg hdKdV]
+      rw [BlockState.scatter_readback_nd _ _ _ hInjK idx]
+    · intro idx
+      simp [observeTileAt, stepStmt, evalOp, hPtrsQ, hPtrsK, hPtrsV,
+        hValQ, hValK, hValV, Tile.ofReal, BlockState.writeMemTyped_real]
+      rw [BlockState.scatter_readback_nd _ _ _ hInjV idx]
+
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false in
 
