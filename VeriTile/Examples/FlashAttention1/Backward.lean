@@ -10,6 +10,7 @@ algorithm contract consumed by FA-1 backward kernels.
 
 import VeriTile.Examples.FlashAttention1.Backward.Math
 import VeriTile.Triton.Concurrency.Atomic
+import VeriTile.Triton.Float
 
 namespace VeriTile.Examples
 
@@ -2968,6 +2969,113 @@ theorem fa1BackwardStrippedKernelStrided_correct_of_prefix
     · intro idx
       rw [hExecTail]
       exact hTail.2.2 idx
+
+/-- User-facing `Realizes` wrapper for the strided stripped backward execution
+shell.
+
+The index type is a three-way output channel:
+`inl idx` observes `dQ`, `inr (inl idx)` observes `dK`, and
+`inr (inr idx)` observes `dV`.  The theorem deliberately keeps the prefix
+register facts as assumptions; the next layer proves those facts from strided
+input tensors. -/
+theorem fa1BackwardStrippedKernelStrided_realizes_of_prefix
+    {M S D : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (scale : ℝ) (s sPre : BlockState)
+    (qOff : TileIndex [M, D] → Nat)
+    (kOff vOff : TileIndex [S, D] → Nat)
+    (dQFn : TileIndex [M, D] → ℝ)
+    (dKFn dVFn : TileIndex [S, D] → ℝ)
+    (hPre :
+      stepStmts
+          ((fa1BackwardStrippedKernelStrided
+            qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+            stride_qb stride_qh stride_qs stride_qd
+            stride_kb stride_kh stride_kn stride_kd
+            stride_vb stride_vh stride_vn stride_vd
+            stride_dob stride_doh stride_dom stride_dod
+            stride_lseb stride_lseh stride_lsem
+            stride_dqb stride_dqh stride_dqs stride_dqd
+            stride_dkb stride_dkh stride_dkn stride_dkd
+            stride_dvb stride_dvh stride_dvn stride_dvd
+            scale).toAlgKernel.body.take 35) s =
+        some sPre)
+    (hPtrsQ : sPre.regs .nat [M, D] "dQ_ptrs" =
+      some (⟨qOff⟩ : Tile .nat [M, D]))
+    (hPtrsK : sPre.regs .nat [S, D] "dK_ptrs" =
+      some (⟨kOff⟩ : Tile .nat [S, D]))
+    (hPtrsV : sPre.regs .nat [S, D] "dV_ptrs" =
+      some (⟨vOff⟩ : Tile .nat [S, D]))
+    (hValQ : sPre.regs .real [M, D] "dQ" = some (Tile.ofReal dQFn))
+    (hValK : sPre.regs .real [S, D] "dK" = some (Tile.ofReal dKFn))
+    (hValV : sPre.regs .real [S, D] "dV" = some (Tile.ofReal dVFn))
+    (hInjQ : Function.Injective qOff)
+    (hInjK : Function.Injective kOff)
+    (hInjV : Function.Injective vOff)
+    (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
+    ComputeCorrect.Realizes
+      (kernel := fa1BackwardStrippedKernelStrided
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+        stride_qb stride_qh stride_qs stride_qd
+        stride_kb stride_kh stride_kn stride_kd
+        stride_vb stride_vh stride_vn stride_vd
+        stride_dob stride_doh stride_dom stride_dod
+        stride_lseb stride_lseh stride_lsem
+        stride_dqb stride_dqh stride_dqs stride_dqd
+        stride_dkb stride_dkh stride_dkn stride_dkd
+        stride_dvb stride_dvh stride_dvn stride_dvd
+        scale)
+      (initialState := s)
+      (write :=
+        fun out : Sum (TileIndex [M, D]) (Sum (TileIndex [S, D]) (TileIndex [S, D])) =>
+          match out with
+          | .inl idx => some (dQReg, qOff idx)
+          | .inr (.inl idx) => some (dKReg, kOff idx)
+          | .inr (.inr idx) => some (dVReg, vOff idx))
+      (expected :=
+        fun out : Sum (TileIndex [M, D]) (Sum (TileIndex [S, D]) (TileIndex [S, D])) =>
+          match out with
+          | .inl idx => dQFn idx
+          | .inr (.inl idx) => dKFn idx
+          | .inr (.inr idx) => dVFn idx) := by
+  have hObs := fa1BackwardStrippedKernelStrided_correct_of_prefix
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    stride_qb stride_qh stride_qs stride_qd
+    stride_kb stride_kh stride_kn stride_kd
+    stride_vb stride_vh stride_vn stride_vd
+    stride_dob stride_doh stride_dom stride_dod
+    stride_lseb stride_lseh stride_lsem
+    stride_dqb stride_dqh stride_dqs stride_dqd
+    stride_dkb stride_dkh stride_dkn stride_dkd
+    stride_dvb stride_dvh stride_dvn stride_dvd
+    scale s sPre qOff kOff vOff dQFn dKFn dVFn hPre
+    hPtrsQ hPtrsK hPtrsV hValQ hValK hValV hInjQ hInjK hInjV hdQdK hdQdV hdKdV
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0 out
+  subst s0
+  cases out with
+  | inl idx =>
+      have h := hObs.1 idx
+      rw [hExec] at h
+      simpa [observeTileAt] using h
+  | inr rest =>
+      cases rest with
+      | inl idx =>
+          have h := hObs.2.1 idx
+          rw [hExec] at h
+          simpa [observeTileAt] using h
+      | inr idx =>
+          have h := hObs.2.2 idx
+          rw [hExec] at h
+          simpa [observeTileAt] using h
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false in
