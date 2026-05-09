@@ -80,9 +80,13 @@ partial def expandLoad (expandExpr : ExprExpander)
           pure ⟨← `(Op.load $dt (MemAccess.region $r $off) MaskOpt.none), outDType, sp.shape, none⟩
       | none =>
           let p' ← expandExpr env p
-          ensureDType .ptr p'.dtype "tl.load pointer"
           let dt ← outDType.term
-          pure ⟨← `(Op.load $dt (MemAccess.ptr $p'.term) MaskOpt.none), outDType, p'.shape, none⟩
+          if p'.dtype == .blockPtr then
+            pure ⟨← `(Op.load $dt (MemAccess.blockPtr $p'.term ([] : List Nat)) MaskOpt.none),
+              outDType, p'.shape, none⟩
+          else
+            ensureDType .ptr p'.dtype "tl.load pointer"
+            pure ⟨← `(Op.load $dt (MemAccess.ptr $p'.term) MaskOpt.none), outDType, p'.shape, none⟩
   | some (m, mShape), none =>
       match ← expandStaticPtrExpr env p with
       | some sp =>

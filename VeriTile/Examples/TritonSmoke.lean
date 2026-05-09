@@ -1333,6 +1333,13 @@ def blockPointerBoundaryCopySmoke (xReg outReg : RegionName) (N B : Nat) : Compu
   tl.store(yBp, x, boundary_check=([0] : List Nat))
 }
 
+def blockPointerLoadNoBoundarySmoke (xReg outReg : RegionName) (N B : Nat) : ComputeKernel := triton {
+  xBp := tl.make_block_ptr($(xReg), base=$(0), shape=[$(N)], strides=[1], offsets=[0], block_shape=[$(B)])
+  x   := tl.load(xBp)
+  yBp := tl.make_block_ptr($(outReg), base=$(0), shape=[$(N)], strides=[1], offsets=[0], block_shape=[$(B)])
+  tl.store(yBp, x, boundary_check=([0] : List Nat))
+}
+
 def blockPointerOobLoad (xReg : RegionName) : Op .real [1] :=
   Op.load .real
     (MemAccess.blockPtr (Op.makeBlockPtr xReg 0 [0] [1] [1] [0]) [0])
