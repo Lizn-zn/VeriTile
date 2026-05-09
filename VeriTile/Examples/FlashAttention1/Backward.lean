@@ -357,6 +357,60 @@ def fa1BackwardAtomicDQKernel
   tl.store($(dVReg) + v_block_ptrs, dV_block)
 }
 
+/-- Query-boundary variant of `fa1BackwardAtomicDQKernel`.
+
+The logical query sequence has length `S_q`; this kernel computes one padded
+query block starting at `qStart * M`. Out-of-range query rows are loaded as
+zero and are masked out of the softmax/JVP paths and atomic `dQ` writes. -/
+def fa1BackwardAtomicDQBoundaryKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ) : ComputeKernel := triton {
+  block_n := tl.program_id(0)
+  offs_m  := tl.arange(0, $(M))
+  q_rows  := $(qStart) * $(M) + offs_m
+  q_mask  := q_rows < $(S_q)
+  offs_b  := block_n * $(Bk) + tl.arange(0, $(Bk))
+  offs_n  := tl.arange(0, $(Bk * numKVBlocks))
+  offs_d  := tl.arange(0, $(D))
+  d_mask  := offs_d < $(D)
+  qd_mask := q_mask[:, None] & d_mask[None, :]
+  all_mask := q_mask[:, None] & (offs_n[None, :] < $(Bk * numKVBlocks))
+  block_mask := q_mask[:, None] & (offs_b[None, :] < $(Bk * numKVBlocks))
+
+  q_ptrs       := q_rows[:, None] * $(D) + offs_d[None, :]
+  do_ptrs      := q_rows[:, None] * $(D) + offs_d[None, :]
+  dq_ptrs      := offs_m[:, None] * $(D) + offs_d[None, :]
+  k_block_ptrs := offs_b[:, None] * $(D) + offs_d[None, :]
+  v_block_ptrs := offs_b[:, None] * $(D) + offs_d[None, :]
+  k_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
+  v_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
+
+  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=$(0))
+  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=$(0))
+  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=$(0))
+  k_block := tl.load($(kReg) + k_block_ptrs)
+  v_block := tl.load($(vReg) + v_block_ptrs)
+  k_all   := tl.load($(kReg) + k_all_ptrs)
+  v_all   := tl.load($(vReg) + v_all_ptrs)
+
+  scores_all := tl.dot(q, tl.trans(k_all)) * $(scale)
+  p_all      := tl.where(all_mask, tl.exp(scores_all - lse[:, None]), 0.0)
+  dP_all     := tl.dot(dO, tl.trans(v_all))
+  corr       := tl.sum(p_all * dP_all, axis = 1)
+
+  scores_block := tl.dot(q, tl.trans(k_block)) * $(scale)
+  p_block      := tl.where(block_mask, tl.exp(scores_block - lse[:, None]), 0.0)
+  dV_block     := tl.dot(tl.trans(p_block), dO)
+  dP_block     := tl.dot(dO, tl.trans(v_block))
+  dS_block     := p_block * (dP_block - corr[:, None])
+  dQ_part      := tl.dot(dS_block, k_block) * $(scale)
+  dK_block     := tl.dot(tl.trans(dS_block), q) * $(scale)
+
+  tl.atomic_add($(dQReg) + dq_ptrs, dQ_part, mask=qd_mask)
+  tl.store($(dKReg) + k_block_ptrs, dK_block)
+  tl.store($(dVReg) + v_block_ptrs, dV_block)
+}
+
 /-- Causal variant of the block-partitioned FA-1 backward kernel with atomic
 `dQ` accumulation.
 
@@ -407,6 +461,61 @@ def fa1BackwardAtomicDQCausalKernel
   dK_block         := tl.dot(tl.trans(dS_block), q) * $(scale)
 
   tl.atomic_add($(dQReg) + q_ptrs, dQ_part)
+  tl.store($(dKReg) + k_block_ptrs, dK_block)
+  tl.store($(dVReg) + v_block_ptrs, dV_block)
+}
+
+/-- Query-boundary + causal variant of `fa1BackwardAtomicDQKernel`. -/
+def fa1BackwardAtomicDQCausalBoundaryKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (S_q M D Bk numKVBlocks qStart : Nat) (scale : ℝ) : ComputeKernel := triton {
+  block_n := tl.program_id(0)
+  offs_m  := tl.arange(0, $(M))
+  q_rows  := $(qStart) * $(M) + offs_m
+  q_mask  := q_rows < $(S_q)
+  offs_b  := block_n * $(Bk) + tl.arange(0, $(Bk))
+  offs_n  := tl.arange(0, $(Bk * numKVBlocks))
+  offs_d  := tl.arange(0, $(D))
+  d_mask  := offs_d < $(D)
+  qd_mask := q_mask[:, None] & d_mask[None, :]
+  all_mask := q_mask[:, None] & (offs_n[None, :] < $(Bk * numKVBlocks))
+  block_mask := q_mask[:, None] & (offs_b[None, :] < $(Bk * numKVBlocks))
+
+  q_ptrs       := q_rows[:, None] * $(D) + offs_d[None, :]
+  do_ptrs      := q_rows[:, None] * $(D) + offs_d[None, :]
+  dq_ptrs      := offs_m[:, None] * $(D) + offs_d[None, :]
+  k_block_ptrs := offs_b[:, None] * $(D) + offs_d[None, :]
+  v_block_ptrs := offs_b[:, None] * $(D) + offs_d[None, :]
+  k_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
+  v_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
+
+  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=$(0))
+  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=$(0))
+  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=$(0))
+  k_block := tl.load($(kReg) + k_block_ptrs)
+  v_block := tl.load($(vReg) + v_block_ptrs)
+  k_all   := tl.load($(kReg) + k_all_ptrs)
+  v_all   := tl.load($(vReg) + v_all_ptrs)
+
+  causal_all   := q_rows[:, None] >= offs_n[None, :]
+  active_all   := all_mask & causal_all
+  causal_block := q_rows[:, None] >= offs_b[None, :]
+  active_block := block_mask & causal_block
+
+  scores_all := tl.dot(q, tl.trans(k_all)) * $(scale)
+  p_all      := tl.where(active_all, tl.exp(scores_all - lse[:, None]), 0.0)
+  dP_all     := tl.dot(dO, tl.trans(v_all))
+  corr       := tl.sum(p_all * dP_all, axis = 1)
+
+  scores_block := tl.dot(q, tl.trans(k_block)) * $(scale)
+  p_block      := tl.where(active_block, tl.exp(scores_block - lse[:, None]), 0.0)
+  dV_block     := tl.dot(tl.trans(p_block), dO)
+  dP_block     := tl.dot(dO, tl.trans(v_block))
+  dS_block     := p_block * (dP_block - corr[:, None])
+  dQ_part      := tl.dot(dS_block, k_block) * $(scale)
+  dK_block     := tl.dot(tl.trans(dS_block), q) * $(scale)
+
+  tl.atomic_add($(dQReg) + dq_ptrs, dQ_part, mask=qd_mask)
   tl.store($(dKReg) + k_block_ptrs, dK_block)
   tl.store($(dVReg) + v_block_ptrs, dV_block)
 }
