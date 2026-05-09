@@ -2353,6 +2353,42 @@ theorem fa1BackwardAtomicDQ_atomicTraceEvents_blockContribution
       (Tile.ofReal (dQBlockContribution Q K V dO LSE scale block))
       hPtrs hVal
 
+/-- Row-major 2D masked atomic trace combinator for proof-oriented FA
+backward kernels.  Boundary variants instantiate `active` with their query and
+D-tail masks. -/
+theorem atomicTraceEvents_masked_rowMajor2D_real
+    {R C : Nat}
+    (dQReg : RegionName) (tid : ThreadId) (sPre : BlockState)
+    (ptrName valueName maskName : RegName)
+    (contribution : TileIndex [R, C] → ℝ)
+    (active : TileIndex [R, C] → Bool)
+    (hPtrs : sPre.regs .nat [R, C] ptrName =
+      some (⟨Offset.rowMajor2D (rows := R) (cols := C) 0 C⟩ : Tile .nat [R, C]))
+    (hVal : sPre.regs .real [R, C] valueName =
+      some (Tile.ofReal contribution))
+    (hMask : sPre.regs .bool [R, C] maskName =
+      some ({ data := active } : Tile .bool [R, C])) :
+    Stmt.atomicTraceEvents tid sPre
+        (Stmt.atomicAdd NumericDType.real [R, C]
+          (MemAccess.region dQReg (Op.ref .nat [R, C] ptrName))
+          (Op.ref .real [R, C] valueName)
+          (MaskOpt.mask (Op.ref .bool [R, C] maskName))) =
+      some ((TileShape.allIndices [R, C]).filterMap fun i =>
+        if active i then
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := R) (cols := C) 0 C i) .real
+            (some (contribution i)))
+        else
+          none) := by
+  simpa [Tile.ofReal] using
+    Stmt.atomicTraceEvents_atomicAdd_region_mask_of_reg_refs
+      (hnum := NumericDType.real) (tid := tid) (s := sPre) (region := dQReg)
+      (ptrName := ptrName) (valueName := valueName) (maskName := maskName)
+      (⟨Offset.rowMajor2D (rows := R) (cols := C) 0 C⟩ : Tile .nat [R, C])
+      (Tile.ofReal contribution)
+      ({ data := active } : Tile .bool [R, C])
+      hPtrs hVal hMask
+
 /-- Tail trace once the pre-atomic registers are known.  The two ordinary
 stores after the atomic statement emit no atomic events, so the tail trace is
 exactly the block contribution trace. -/
