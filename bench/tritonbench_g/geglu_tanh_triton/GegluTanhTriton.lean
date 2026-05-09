@@ -1,0 +1,266 @@
+import VeriTile.Triton.Core
+import VeriTile.Triton.Semantics
+import VeriTile.Triton.Float
+import VeriTile.Triton.DSL
+
+namespace VeriTile.Bench.TritonBenchG.GegluTanhTriton
+
+open VeriTile.Triton
+
+/-- Faithful transcription of `geglu_tanh_triton.py`'s
+`_geglu_tanh_forward_kernel`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `n_cols: tl.constexpr` / `BLOCK_SIZE: tl.constexpr` -> Lean `Nat`
+  parameters.
+- Python pointer mutation `a += ...` / `b += ...` / `c += ...` -> explicit
+  base pointer registers.
+- `tanh` from `triton.language.extra.libdevice` is written as `tl.tanh`.
+- Python `.to(tl.float32)` casts are omitted in the Lean DSL port because the
+  current proof-facing layer is Real-first: float tags erase before algorithmic
+  correctness is checked. -/
+def geglu_tanh_forward_kernel
+    (A B C : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  program_id = tl.program_id(0).to(tl.int64)
+  A_base = A + program_id * $(stride)
+  B_base = B + program_id * $(stride)
+  C_base = C + program_id * $(stride)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = col_offsets < $(n_cols)
+  a_row = tl.load(A_base + col_offsets, mask=mask, other=0.0)
+  b_row = tl.load(B_base + col_offsets, mask=mask, other=0.0)
+  sqrt_2_over_pi = 0.7978845608028654
+  a_cubed = a_row * a_row * a_row
+  tanh_arg = sqrt_2_over_pi * (a_row + 0.044715 * a_cubed)
+  tanh_result = tl.tanh(tanh_arg)
+  geglu_a = 0.5 * a_row * (1 + tanh_result)
+  c_row = geglu_a * b_row
+  tl.store(C_base + col_offsets, c_row, mask=mask)
+}
+
+/-- Faithful transcription of `geglu_tanh_triton.py`'s
+`_geglu_tanh_backward_kernel`.
+
+The Python kernel overwrites `a` and `b` with `da` and `db`; the Lean port keeps
+the same region arguments and makes pointer mutation explicit. -/
+def geglu_tanh_backward_kernel
+    (DC A B : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  program_id = tl.program_id(0).to(tl.int64)
+  DC_base = DC + program_id * $(stride)
+  A_base = A + program_id * $(stride)
+  B_base = B + program_id * $(stride)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = col_offsets < $(n_cols)
+  dc_row = tl.load(DC_base + col_offsets, mask=mask, other=0.0)
+  a_row = tl.load(A_base + col_offsets, mask=mask, other=0.0)
+  b_row = tl.load(B_base + col_offsets, mask=mask, other=0.0)
+  sqrt_2_over_pi = 0.7978845608028654
+  a_cubed = a_row * a_row * a_row
+  tanh_arg = sqrt_2_over_pi * (a_row + 0.044715 * a_cubed)
+  tanh_result = tl.tanh(tanh_arg)
+  geglu_a = 0.5 * a_row * (1 + tanh_result)
+  db_row = dc_row * geglu_a
+  term1 = 0.5 * (1 + tanh_result)
+  tanh_sq = tanh_result * tanh_result
+  term2 = 0.5 * a_row * (1 - tanh_sq) *
+    (sqrt_2_over_pi * (1 + 3.0 * 0.044715 * a_row * a_row))
+  da_row = dc_row * b_row * (term1 + term2)
+  tl.store(A_base + col_offsets, da_row, mask=mask)
+  tl.store(B_base + col_offsets, db_row, mask=mask)
+}
+
+noncomputable def gegluTanhArg (a : ℝ) : ℝ :=
+  (0.7978845608028654 : ℝ) * (a + (0.044715 : ℝ) * (a * a * a))
+
+noncomputable def gegluTanhCore (a : ℝ) : ℝ :=
+  (0.5 : ℝ) * a * (1 + Real.tanh (gegluTanhArg a))
+
+noncomputable def gegluTanhForwardSpec (a b : ℝ) : ℝ :=
+  gegluTanhCore a * b
+
+noncomputable def gegluTanhDBSpec (dc a : ℝ) : ℝ :=
+  dc * gegluTanhCore a
+
+noncomputable def gegluTanhDASpec (dc a b : ℝ) : ℝ :=
+  let tanhResult := Real.tanh (gegluTanhArg a)
+  let term1 := (0.5 : ℝ) * (1 + tanhResult)
+  let tanhSq := tanhResult * tanhResult
+  let term2 := (0.5 : ℝ) * a * (1 - tanhSq) *
+    ((0.7978845608028654 : ℝ) * (1 + (3.0 : ℝ) * (0.044715 : ℝ) * a * a))
+  dc * b * (term1 + term2)
+
+def gegluTanhOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
+  s.pids 0 * stride + i.val
+
+/-- Algorithm-layer correctness for `_geglu_tanh_forward_kernel`. -/
+theorem geglu_tanh_forward_kernel_correct
+    (A B C : RegionName)
+    (stride n_cols BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (as bs : Fin BLOCK_SIZE → ℝ)
+    (h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (gegluTanhOffset s stride i) = as i)
+    (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (gegluTanhOffset s stride i) = bs i)
+    (hExec : exec (geglu_tanh_forward_kernel A B C stride n_cols BLOCK_SIZE) s = some s') :
+    ∀ i : Fin BLOCK_SIZE,
+      let outAddr := gegluTanhOffset s stride i
+      s'.readMem C outAddr =
+        if i.val < n_cols then
+          gegluTanhForwardSpec (as i) (bs i)
+        else s.readMem C outAddr := by
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * stride + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [exec, geglu_tanh_forward_kernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
+  subst s'
+  simp only [gegluTanhOffset]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  by_cases hi : i.val < n_cols
+  · have ha := h_a i
+    have hb := h_b i
+    simp [gegluTanhOffset] at ha hb
+    simp [hi, gegluTanhForwardSpec, gegluTanhCore, gegluTanhArg, ha, hb]
+  · simp [hi]
+
+/-- Compute-facing correctness for `_geglu_tanh_forward_kernel`. -/
+theorem geglu_tanh_forward_kernel_compute_correct
+    (A B C : RegionName)
+    (stride n_cols BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (as bs : Fin BLOCK_SIZE → ℝ)
+    (h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (gegluTanhOffset s stride i) = as i)
+    (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (gegluTanhOffset s stride i) = bs i) :
+    ComputeCorrect.Realizes
+      (kernel := geglu_tanh_forward_kernel A B C stride n_cols BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (C, gegluTanhOffset s stride i)))
+      (expected := fun i => gegluTanhForwardSpec (as i) (bs i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [geglu_tanh_forward_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have hi := geglu_tanh_forward_kernel_correct A B C stride n_cols BLOCK_SIZE
+    s s' as bs h_a h_b hExec i
+  simp [hActive] at hi
+  exact hi
+
+/-- Algorithm-layer correctness for `_geglu_tanh_backward_kernel`.
+
+The kernel stores `A` first and `B` second. We assume `A ≠ B` so the second
+store cannot overwrite the first output channel. -/
+theorem geglu_tanh_backward_kernel_correct
+    (DC A B : RegionName)
+    (stride n_cols BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (dcs as bs : Fin BLOCK_SIZE → ℝ)
+    (hAB : A ≠ B)
+    (h_dc : ∀ i : Fin BLOCK_SIZE, s.readMem DC (gegluTanhOffset s stride i) = dcs i)
+    (h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (gegluTanhOffset s stride i) = as i)
+    (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (gegluTanhOffset s stride i) = bs i)
+    (hExec : exec (geglu_tanh_backward_kernel DC A B stride n_cols BLOCK_SIZE) s = some s') :
+    (∀ i : Fin BLOCK_SIZE,
+      let outAddr := gegluTanhOffset s stride i
+      s'.readMem A outAddr =
+        if i.val < n_cols then
+          gegluTanhDASpec (dcs i) (as i) (bs i)
+        else s.readMem A outAddr) ∧
+    (∀ i : Fin BLOCK_SIZE,
+      let outAddr := gegluTanhOffset s stride i
+      s'.readMem B outAddr =
+        if i.val < n_cols then
+          gegluTanhDBSpec (dcs i) (as i)
+        else s.readMem B outAddr) := by
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * stride + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [exec, geglu_tanh_backward_kernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt] at hExec
+  subst s'
+  constructor
+  · intro i
+    simp only [gegluTanhOffset]
+    rw [BlockState.scatter_prop_masked_preserves_other_region
+      (region := B) (R := A) (h_ne := hAB)
+      (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
+      (off := s.pids 0 * stride + i.val) (l := TileShape.allIndices [BLOCK_SIZE])]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    by_cases hi : i.val < n_cols
+    · have hdc := h_dc i
+      have ha := h_a i
+      have hb := h_b i
+      simp [gegluTanhOffset] at hdc ha hb
+      simp [hi, gegluTanhDASpec, gegluTanhArg, hdc, ha, hb]
+    · simp [hi]
+  · intro i
+    simp only [gegluTanhOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    by_cases hi : i.val < n_cols
+    · have hdc := h_dc i
+      have ha := h_a i
+      simp [gegluTanhOffset] at hdc ha
+      simp [hi, gegluTanhDBSpec, gegluTanhCore, gegluTanhArg, hdc, ha]
+    · rw [BlockState.scatter_prop_masked_preserves_other_region
+        (region := A) (R := B) (h_ne := Ne.symm hAB)
+        (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
+        (off := s.pids 0 * stride + i.val) (l := TileShape.allIndices [BLOCK_SIZE])]
+      simp [hi]
+
+/-- Compute-facing correctness for `_geglu_tanh_backward_kernel`. -/
+theorem geglu_tanh_backward_kernel_compute_correct
+    (DC A B : RegionName)
+    (stride n_cols BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (dcs as bs : Fin BLOCK_SIZE → ℝ)
+    (hAB : A ≠ B)
+    (h_dc : ∀ i : Fin BLOCK_SIZE, s.readMem DC (gegluTanhOffset s stride i) = dcs i)
+    (h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (gegluTanhOffset s stride i) = as i)
+    (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (gegluTanhOffset s stride i) = bs i) :
+    ComputeCorrect.Realizes
+      (kernel := geglu_tanh_backward_kernel DC A B stride n_cols BLOCK_SIZE)
+      (initialState := s)
+      (write := fun i : Sum (Fin BLOCK_SIZE) (Fin BLOCK_SIZE) =>
+        match i with
+        | .inl lane =>
+            if lane.val < n_cols then some (A, gegluTanhOffset s stride lane) else none
+        | .inr lane =>
+            if lane.val < n_cols then some (B, gegluTanhOffset s stride lane) else none)
+      (expected := fun i =>
+        match i with
+        | .inl lane => gegluTanhDASpec (dcs lane) (as lane) (bs lane)
+        | .inr lane => gegluTanhDBSpec (dcs lane) (as lane)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [geglu_tanh_backward_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := geglu_tanh_backward_kernel_correct DC A B stride n_cols BLOCK_SIZE
+    s s' dcs as bs hAB h_dc h_a h_b hExec
+  cases i with
+  | inl lane =>
+      by_cases hActive : lane.val < n_cols
+      · have hi := h.1 lane
+        simp [hActive] at hi ⊢
+        exact hi
+      · simp [hActive]
+  | inr lane =>
+      by_cases hActive : lane.val < n_cols
+      · have hi := h.2 lane
+        simp [hActive] at hi ⊢
+        exact hi
+      · simp [hActive]
+
+end VeriTile.Bench.TritonBenchG.GegluTanhTriton
