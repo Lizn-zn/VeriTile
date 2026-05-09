@@ -503,6 +503,58 @@ theorem attentionBackwardRealCausalBoundary_eq_masked {S_q S_k D M : Nat}
         (boundaryQBlock qStart Q) K V (boundaryDOBlock qStart dO)
         (boundaryLSEBlock qStart LSE) scale := rfl
 
+/-- D-tail boundary backward spec: compute the boundary spec at block width
+`Bd`, with logical `[*, D]` inputs zero-padded outside `D`. -/
+noncomputable def attentionBackwardRealBoundaryD {S_q S_k D Bd M : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
+    Grads M S_k Bd :=
+  attentionBackwardRealBoundary (D := Bd) qStart
+    (padHeadD (Bd := Bd) Q)
+    (padHeadD (Bd := Bd) K)
+    (padHeadD (Bd := Bd) V)
+    (padHeadD (Bd := Bd) dO)
+    LSE scale
+
+/-- D-tail causal-boundary backward spec: compute the causal-boundary spec at
+block width `Bd`, with logical `[*, D]` inputs zero-padded outside `D`. -/
+noncomputable def attentionBackwardRealCausalBoundaryD {S_q S_k D Bd M : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
+    Grads M S_k Bd :=
+  attentionBackwardRealCausalBoundary (D := Bd) qStart
+    (padHeadD (Bd := Bd) Q)
+    (padHeadD (Bd := Bd) K)
+    (padHeadD (Bd := Bd) V)
+    (padHeadD (Bd := Bd) dO)
+    LSE scale
+
+theorem attentionBackwardRealBoundaryD_eq_padded {S_q S_k D Bd M : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
+    attentionBackwardRealBoundaryD (M := M) (Bd := Bd) qStart Q K V dO LSE scale =
+      attentionBackwardRealBoundary (D := Bd) qStart
+        (padHeadD (Bd := Bd) Q)
+        (padHeadD (Bd := Bd) K)
+        (padHeadD (Bd := Bd) V)
+        (padHeadD (Bd := Bd) dO)
+        LSE scale := rfl
+
+theorem attentionBackwardRealCausalBoundaryD_eq_padded {S_q S_k D Bd M : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ) (K V : TileIndex [S_k, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ) :
+    attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd) qStart Q K V dO LSE scale =
+      attentionBackwardRealCausalBoundary (D := Bd) qStart
+        (padHeadD (Bd := Bd) Q)
+        (padHeadD (Bd := Bd) K)
+        (padHeadD (Bd := Bd) V)
+        (padHeadD (Bd := Bd) dO)
+        LSE scale := rfl
+
 /-- 4D arbitrary-mask spec, `dQ` slice equation. -/
 @[simp] theorem attentionBackwardReal4DMasked_dQ_slice {B H S_q S_k D : Nat}
     (visible : (b : Fin B) → (h : Fin H) → Fin S_q → Fin S_k → Bool)
