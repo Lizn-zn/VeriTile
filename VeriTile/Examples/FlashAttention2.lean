@@ -345,6 +345,41 @@ theorem fa1_backward_eq_fa2_backward4D {B H S_q S_k D : Nat}
     FA1Backward.attentionBackwardReal4D Q K V dO LSE scale =
       fa2BackwardReal4D Q K V dO LSE scale := rfl
 
+/-! ### FA-2 two-block backward partition surface -/
+
+/-- FA-2 two-block `dQ` partition spec: each KV block contributes a local
+`dQ` term, and the program-level `dQ` is their sum. -/
+noncomputable def fa2TwoBlockBackwardDQSpec {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * 2, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) : ℝ :=
+  Finset.univ.sum fun block : Fin 2 =>
+    FA1Backward.dQBlockContribution Q K V dO LSE scale block idx
+
+/-- The two-block FA-2 backward `dQ` partition is the same closed-form `dQ`
+as the FA-1 backward Real spec. -/
+theorem fa2_two_block_backward_dQ_eq_fa1_backward {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * 2, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    fa2TwoBlockBackwardDQSpec Q K V dO LSE scale idx =
+      (FA1Backward.attentionBackwardReal Q K V dO LSE scale).dQ idx := by
+  exact FA1Backward.dQBlockContribution_sum_eq_attentionBackwardReal
+    Q K V dO LSE scale idx
+
+/-- FA-2-facing spelling of the same two-block `dQ` theorem, targeting the
+FA-2 backward baseline name. -/
+theorem fa2_two_block_backward_dQ_eq_fa2_backward {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * 2, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    fa2TwoBlockBackwardDQSpec Q K V dO LSE scale idx =
+      (fa2BackwardReal Q K V dO LSE scale).dQ idx := by
+  exact fa2_two_block_backward_dQ_eq_fa1_backward Q K V dO LSE scale idx
+
 /-! ## FA-2 scalar score-row max producer
 
 This producer computes the row max consumed by the scalar fragment summary and
