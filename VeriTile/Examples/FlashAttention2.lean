@@ -412,6 +412,27 @@ theorem fa2_two_block_backward_dQ_eq_fa2_backward {M D Bk : Nat}
       (fa2BackwardReal Q K V dO LSE scale).dQ idx := by
   exact fa2_two_block_backward_dQ_eq_fa1_backward Q K V dO LSE scale idx
 
+/-- Causal FA-2 two-block `dQ` partition spec. -/
+noncomputable def fa2TwoBlockCausalBackwardDQSpec {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * 2, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) : ℝ :=
+  Finset.univ.sum fun block : Fin 2 =>
+    FA1Backward.dQBlockContributionCausal Q K V dO LSE scale block idx
+
+/-- The causal two-block FA-2 backward `dQ` partition is the same closed-form
+causal `dQ` as the FA-2 causal backward Real spec. -/
+theorem fa2_two_block_causal_backward_dQ_eq_fa2_causal_backward {M D Bk : Nat}
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * 2, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    fa2TwoBlockCausalBackwardDQSpec Q K V dO LSE scale idx =
+      (fa2BackwardCausalReal Q K V dO LSE scale).dQ idx := by
+  exact FA1Backward.dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal_impl
+    Q K V dO LSE scale idx
+
 /-- 4D-facing two-block FA-2 backward `dQ` partition at a fixed batch/head
 slice. -/
 noncomputable def fa2TwoBlockBackwardDQSpec4D {B H S_q D Bk : Nat}
@@ -451,6 +472,34 @@ theorem fa2_two_block_backward_dQ4D_eq_fa2_backward4D {B H S_q D Bk : Nat}
         (b, h, idx.1, idx.2.1, PUnit.unit) := by
   exact fa2_two_block_backward_dQ4D_eq_fa1_backward4D
     Q K V dO LSE scale b h idx
+
+/-- 4D-facing causal two-block FA-2 backward `dQ` partition at a fixed
+batch/head slice. -/
+noncomputable def fa2TwoBlockCausalBackwardDQSpec4D {B H S_q D Bk : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) (idx : TileIndex [S_q, D]) : ℝ :=
+  fa2TwoBlockCausalBackwardDQSpec
+    (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+    (sliceBH dO b h) (FA1Backward.sliceBHLSE LSE b h) scale idx
+
+/-- The 4D causal two-block FA-2 backward `dQ` partition agrees with the 4D
+FA-2 causal backward baseline on each batch/head slice. -/
+theorem fa2_two_block_causal_backward_dQ4D_eq_fa2_causal_backward4D
+    {B H S_q D Bk : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) (idx : TileIndex [S_q, D]) :
+    fa2TwoBlockCausalBackwardDQSpec4D Q K V dO LSE scale b h idx =
+      (fa2BackwardCausalReal4D Q K V dO LSE scale).dQ
+        (b, h, idx.1, idx.2.1, PUnit.unit) := by
+  exact fa2_two_block_causal_backward_dQ_eq_fa2_causal_backward
+    (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+    (sliceBH dO b h) (FA1Backward.sliceBHLSE LSE b h) scale idx
 
 /-- FA-2-facing spelling of the proof-oriented atomic `dQ` backward kernel.
 
