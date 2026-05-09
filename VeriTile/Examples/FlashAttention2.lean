@@ -380,6 +380,46 @@ theorem fa2_two_block_backward_dQ_eq_fa2_backward {M D Bk : Nat}
       (fa2BackwardReal Q K V dO LSE scale).dQ idx := by
   exact fa2_two_block_backward_dQ_eq_fa1_backward Q K V dO LSE scale idx
 
+/-- 4D-facing two-block FA-2 backward `dQ` partition at a fixed batch/head
+slice. -/
+noncomputable def fa2TwoBlockBackwardDQSpec4D {B H S_q D Bk : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) (idx : TileIndex [S_q, D]) : ℝ :=
+  fa2TwoBlockBackwardDQSpec
+    (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+    (sliceBH dO b h) (FA1Backward.sliceBHLSE LSE b h) scale idx
+
+/-- The 4D two-block FA-2 backward `dQ` partition agrees with the 4D FA-1
+backward baseline on each batch/head slice. -/
+theorem fa2_two_block_backward_dQ4D_eq_fa1_backward4D {B H S_q D Bk : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) (idx : TileIndex [S_q, D]) :
+    fa2TwoBlockBackwardDQSpec4D Q K V dO LSE scale b h idx =
+      (FA1Backward.attentionBackwardReal4D Q K V dO LSE scale).dQ
+        (b, h, idx.1, idx.2.1, PUnit.unit) := by
+  exact fa2_two_block_backward_dQ_eq_fa1_backward
+    (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+    (sliceBH dO b h) (FA1Backward.sliceBHLSE LSE b h) scale idx
+
+/-- FA-2-facing spelling of the 4D two-block `dQ` theorem. -/
+theorem fa2_two_block_backward_dQ4D_eq_fa2_backward4D {B H S_q D Bk : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, Bk * 2, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) (idx : TileIndex [S_q, D]) :
+    fa2TwoBlockBackwardDQSpec4D Q K V dO LSE scale b h idx =
+      (fa2BackwardReal4D Q K V dO LSE scale).dQ
+        (b, h, idx.1, idx.2.1, PUnit.unit) := by
+  exact fa2_two_block_backward_dQ4D_eq_fa1_backward4D
+    Q K V dO LSE scale b h idx
+
 /-! ## FA-2 scalar score-row max producer
 
 This producer computes the row max consumed by the scalar fragment summary and
