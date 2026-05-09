@@ -193,8 +193,9 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `dV = Pᵀ · dO` / `dQ = dS · K · scale` / `dK = dSᵀ · Q · scale` tile
   bridges, `softmax_jvp_identity`,
   `causalBackward_tile_bridges_complete`, and the block-local
-  `_block_*` causal counterparts; bundled as
-  `strippedBackward_tile_bridges_complete` and
+  arbitrary-mask `_block_*` counterparts; bundled as
+  `strippedBackward_tile_bridges_complete`,
+  `maskedBackward_block_tile_bridges_complete`, and
   `causalBackward_block_tile_bridges_complete`
 
 ### Horizontal infra ✅ (beyond original PLAN scope, in parallel with Tiers)

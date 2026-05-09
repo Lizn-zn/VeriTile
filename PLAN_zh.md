@@ -170,8 +170,9 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   row correction `D_i` / `dS = P * (dP - corr[:, None])` /
   `dV = Pᵀ · dO` / `dQ = dS · K · scale` / `dK = dSᵀ · Q · scale` 张量桥;
   `softmax_jvp_identity`、`causalBackward_tile_bridges_complete` 与
-  block-local `_block_*` causal 对偶;打包为
-  `strippedBackward_tile_bridges_complete` 与
+  block-local 任意 mask `_block_*` 对偶;打包为
+  `strippedBackward_tile_bridges_complete`、
+  `maskedBackward_block_tile_bridges_complete` 与
   `causalBackward_block_tile_bridges_complete`
 
 ### 横向 infra ✅(超出原 PLAN scope,与 Tier 推进并行)
