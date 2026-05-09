@@ -164,7 +164,9 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   `gridLaunchedAtomic_causal_dQ_correct`(kernel-agnostic atomic 合成);
   `attentionBackwardRealMasked_allVisible` 与
   `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked`(causal
-  对偶 `_Causal_…`)是数学侧 multi-block 桥
+  对偶 `_Causal_…`)是数学侧 multi-block 桥;完整任意 mask
+  `dQ`/`dK`/`dV` launcher 合成为
+  `gridLaunchedAtomic_masked_backward_correct`
 - 数学层:`streamingLSE_eq_lseReal`、
   `attentionBackwardReal_eq_reverseMode`、probability / `dP = dO · Vᵀ` /
   row correction `D_i` / `dS = P * (dP - corr[:, None])` /

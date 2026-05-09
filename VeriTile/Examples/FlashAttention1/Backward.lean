@@ -1955,6 +1955,117 @@ theorem fa1BackwardAtomicDQKernel_gridLaunched_masked_dQ_correct
     (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
     hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
 
+/-- Generic full launcher-facing correctness for arbitrary-mask atomic FA-1
+backward.  This combines masked atomic `dQ` composition with caller-supplied
+ordinary `dK`/`dV` per-block final-state readback.
+
+The theorem is kernel-agnostic: concrete masked kernels can plug in by proving
+`hDKBlock` / `hDVBlock` for each owning program frame. -/
+theorem gridLaunchedAtomic_masked_backward_correct
+    {M D Bk numKVBlocks : Nat}
+    (k : Kernel) (dQReg dKReg dVReg : RegionName)
+    (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch : Kernel.GridLaunchedAtomic k g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              dQBlockContributionMasked visible Q K V dO LSE scale block idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDKBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dKReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealMasked visible Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+    (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dVReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealMasked visible Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
+    let bw := attentionBackwardRealMasked visible Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  constructor
+  · exact gridLaunchedAtomic_masked_dQ_correct
+      (k := k) (dQReg := dQReg) (visible := visible) (scale := scale)
+      (s := s) (sFinal := sFinal)
+      (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
+      hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
+  · constructor
+    · intro block idx
+      let off := Offset.rowMajor2D (rows := Bk) (cols := D)
+        (block.val * Bk * D) D idx
+      have hMem := hLaunch.observeOrdinaryCell (owner block) dKReg off
+        (hDKWrite block idx)
+      have hRead :
+          sFinal.readMem dKReg off =
+            (hLaunch.frames (owner block)).final.readMem dKReg off := by
+        unfold BlockState.readMem
+        rw [hMem]
+      change some (sFinal.readMem dKReg off) = _
+      rw [hRead]
+      simpa [observeTileAt, off] using hDKBlock block idx
+    · intro block idx
+      let off := Offset.rowMajor2D (rows := Bk) (cols := D)
+        (block.val * Bk * D) D idx
+      have hMem := hLaunch.observeOrdinaryCell (owner block) dVReg off
+        (hDVWrite block idx)
+      have hRead :
+          sFinal.readMem dVReg off =
+            (hLaunch.frames (owner block)).final.readMem dVReg off := by
+        unfold BlockState.readMem
+        rw [hMem]
+      change some (sFinal.readMem dVReg off) = _
+      rw [hRead]
+      simpa [observeTileAt, off] using hDVBlock block idx
+
 /-- Causal specialization of `gridLaunchedAtomic_masked_dQ_correct`. -/
 theorem gridLaunchedAtomic_causal_dQ_correct
     {M D Bk numKVBlocks : Nat}

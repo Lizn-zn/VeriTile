@@ -186,7 +186,9 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `gridLaunchedAtomic_causal_dQ_correct` for kernel-agnostic atomic
   composition; `attentionBackwardRealMasked_allVisible` and
   `dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked` (causal
-  variant: `_Causal_…`) for the math-side multi-block bridges
+  variant: `_Causal_…`) for the math-side multi-block bridges; full
+  arbitrary-mask `dQ`/`dK`/`dV` launcher composition as
+  `gridLaunchedAtomic_masked_backward_correct`
 - Math layer: `streamingLSE_eq_lseReal`,
   `attentionBackwardReal_eq_reverseMode`, probability / `dP = dO · Vᵀ` /
   row correction `D_i` / `dS = P * (dP - corr[:, None])` /
