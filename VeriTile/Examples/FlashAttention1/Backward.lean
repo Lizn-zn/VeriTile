@@ -3433,6 +3433,139 @@ theorem atomicBackward_tailStores_readback_rowMajor2D_base
       BlockState.foldl_writeMem_regs]
     rw [BlockState.scatter_readback_nd _ _ _ hInj idx]
 
+theorem atomicBackward_tailStoresOnly_readback_rowMajor2D_base
+    (dKReg dVReg : RegionName)
+    (Bk C base : Nat) (s : BlockState)
+    (kPtrName vPtrName dKName dVName : RegName)
+    (dKFn dVFn : TileIndex [Bk, C] → ℝ)
+    (hPtrsK : s.regs .nat [Bk, C] kPtrName =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
+        Tile .nat [Bk, C]))
+    (hPtrsV : s.regs .nat [Bk, C] vPtrName =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
+        Tile .nat [Bk, C]))
+    (hValK : s.regs .real [Bk, C] dKName = some (Tile.ofReal dKFn))
+    (hValV : s.regs .real [Bk, C] dVName = some (Tile.ofReal dVFn))
+    (hdKdV : dKReg ≠ dVReg) :
+    (∀ idx : TileIndex [Bk, C],
+      observeTileAt
+        ((stepStmt (Stmt.store .real [Bk, C]
+          (MemAccess.region dKReg (Op.ref .nat [Bk, C] kPtrName))
+          (Op.ref .real [Bk, C] dKName) MaskOpt.none) s).bind fun s2 =>
+            stepStmt (Stmt.store .real [Bk, C]
+              (MemAccess.region dVReg (Op.ref .nat [Bk, C] vPtrName))
+              (Op.ref .real [Bk, C] dVName) MaskOpt.none) s2)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := C) base C) idx =
+      some (dKFn idx)) ∧
+    (∀ idx : TileIndex [Bk, C],
+      observeTileAt
+        ((stepStmt (Stmt.store .real [Bk, C]
+          (MemAccess.region dKReg (Op.ref .nat [Bk, C] kPtrName))
+          (Op.ref .real [Bk, C] dKName) MaskOpt.none) s).bind fun s2 =>
+            stepStmt (Stmt.store .real [Bk, C]
+              (MemAccess.region dVReg (Op.ref .nat [Bk, C] vPtrName))
+              (Op.ref .real [Bk, C] dVName) MaskOpt.none) s2)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := C) base C) idx =
+      some (dVFn idx)) := by
+  have hInj : Function.Injective
+      (Offset.rowMajor2D (rows := Bk) (cols := C) base C) :=
+    Offset.rowMajor2D_inj (base := base) (rowStride := C) (le_refl C)
+  constructor
+  · intro idx
+    simp [observeTileAt, stepStmt, evalOp, hPtrsK, hPtrsV, hValK, hValV,
+      Tile.ofReal, BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_preserves_other_region dVReg
+      (Offset.rowMajor2D (rows := Bk) (cols := C) base C) dVFn dKReg hdKdV]
+    rw [BlockState.scatter_readback_nd _ _ _ hInj idx]
+  · intro idx
+    simp [observeTileAt, stepStmt, evalOp, hPtrsK, hPtrsV, hValK, hValV,
+      Tile.ofReal, BlockState.writeMemTyped_real]
+    rw [BlockState.scatter_readback_nd _ _ _ hInj idx]
+
+theorem atomicBackward_maskedTailStores_readback_rowMajor2D_base
+    (dQReg dKReg dVReg : RegionName)
+    (R C Bk base : Nat) (s : BlockState)
+    (dQPart : TileIndex [R, C] → ℝ)
+    (active : TileIndex [R, C] → Bool)
+    (kPtrName vPtrName dKName dVName : RegName)
+    (dKFn dVFn : TileIndex [Bk, C] → ℝ)
+    (hPtrsQ : s.regs .nat [R, C] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := R) (cols := C) 0 C⟩ :
+        Tile .nat [R, C]))
+    (hMask : s.regs .bool [R, C] "qd_mask" =
+      some ({ data := active } : Tile .bool [R, C]))
+    (hValQ : s.regs .real [R, C] "dQ_part" = some (Tile.ofReal dQPart))
+    (hPtrsK : s.regs .nat [Bk, C] kPtrName =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
+        Tile .nat [Bk, C]))
+    (hPtrsV : s.regs .nat [Bk, C] vPtrName =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
+        Tile .nat [Bk, C]))
+    (hValK : s.regs .real [Bk, C] dKName = some (Tile.ofReal dKFn))
+    (hValV : s.regs .real [Bk, C] dVName = some (Tile.ofReal dVFn))
+    (hdKdV : dKReg ≠ dVReg) :
+    (∀ idx : TileIndex [Bk, C],
+      observeTileAt
+        ((stepStmt (Stmt.atomicAdd NumericDType.real [R, C]
+          (MemAccess.region dQReg (Op.ref .nat [R, C] "dq_ptrs"))
+          (Op.ref .real [R, C] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [R, C] "qd_mask"))) s).bind fun s1 =>
+          (stepStmt (Stmt.store .real [Bk, C]
+            (MemAccess.region dKReg (Op.ref .nat [Bk, C] kPtrName))
+            (Op.ref .real [Bk, C] dKName) MaskOpt.none) s1).bind fun s2 =>
+            stepStmt (Stmt.store .real [Bk, C]
+              (MemAccess.region dVReg (Op.ref .nat [Bk, C] vPtrName))
+              (Op.ref .real [Bk, C] dVName) MaskOpt.none) s2)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := C) base C) idx =
+      some (dKFn idx)) ∧
+    (∀ idx : TileIndex [Bk, C],
+      observeTileAt
+        ((stepStmt (Stmt.atomicAdd NumericDType.real [R, C]
+          (MemAccess.region dQReg (Op.ref .nat [R, C] "dq_ptrs"))
+          (Op.ref .real [R, C] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [R, C] "qd_mask"))) s).bind fun s1 =>
+          (stepStmt (Stmt.store .real [Bk, C]
+            (MemAccess.region dKReg (Op.ref .nat [Bk, C] kPtrName))
+            (Op.ref .real [Bk, C] dKName) MaskOpt.none) s1).bind fun s2 =>
+            stepStmt (Stmt.store .real [Bk, C]
+              (MemAccess.region dVReg (Op.ref .nat [Bk, C] vPtrName))
+              (Op.ref .real [Bk, C] dVName) MaskOpt.none) s2)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := C) base C) idx =
+      some (dVFn idx)) := by
+  let atomicStmt :=
+    Stmt.atomicAdd NumericDType.real [R, C]
+      (MemAccess.region dQReg (Op.ref .nat [R, C] "dq_ptrs"))
+      (Op.ref .real [R, C] "dQ_part")
+      (MaskOpt.mask (Op.ref .bool [R, C] "qd_mask"))
+  cases hAtomic : stepStmt atomicStmt s with
+  | none =>
+      simp [atomicStmt, stepStmt, evalOp, hPtrsQ, hMask, hValQ, Tile.ofReal] at hAtomic
+  | some s1 =>
+      have hPtrsK1 : s1.regs .nat [Bk, C] kPtrName =
+          some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
+            Tile .nat [Bk, C]) := by
+        rw [stepStmt_atomicAdd_regs (hnum := NumericDType.real) (h := hAtomic)]
+        exact hPtrsK
+      have hPtrsV1 : s1.regs .nat [Bk, C] vPtrName =
+          some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
+            Tile .nat [Bk, C]) := by
+        rw [stepStmt_atomicAdd_regs (hnum := NumericDType.real) (h := hAtomic)]
+        exact hPtrsV
+      have hValK1 : s1.regs .real [Bk, C] dKName = some (Tile.ofReal dKFn) := by
+        rw [stepStmt_atomicAdd_regs (hnum := NumericDType.real) (h := hAtomic)]
+        exact hValK
+      have hValV1 : s1.regs .real [Bk, C] dVName = some (Tile.ofReal dVFn) := by
+        rw [stepStmt_atomicAdd_regs (hnum := NumericDType.real) (h := hAtomic)]
+        exact hValV
+      have hTail := atomicBackward_tailStoresOnly_readback_rowMajor2D_base
+        dKReg dVReg Bk C base s1 kPtrName vPtrName dKName dVName
+        dKFn dVFn hPtrsK1 hPtrsV1 hValK1 hValV1 hdKdV
+      constructor
+      · intro idx
+        simpa [atomicStmt, hAtomic] using hTail.1 idx
+      · intro idx
+        simpa [atomicStmt, hAtomic] using hTail.2 idx
+
 set_option maxHeartbeats 1000000 in
 set_option linter.unusedSimpArgs false in
 /-- Input-level readback for the ordinary `dK`/`dV` stores of one atomic-`dQ`
