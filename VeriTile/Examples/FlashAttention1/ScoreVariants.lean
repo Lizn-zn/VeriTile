@@ -8,6 +8,7 @@ to max/exp.
 -/
 
 import VeriTile.Examples.FlashAttention1.ScoreVariants.Forward
+import VeriTile.Examples.FlashAttention1.ScoreVariants.Backward
 
 namespace VeriTile.Examples
 
