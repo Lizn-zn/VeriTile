@@ -50,39 +50,11 @@ def dequantizeActive (s : BlockState) (K N BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
   s.pids 0 * BLOCK_SIZE_K + idx.1.val < K ∧
     s.pids 1 * BLOCK_SIZE_N + idx.2.1.val < N
 
-private def bOffsetExpanded (s : BlockState) (stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
-    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) : Nat :=
-  (s.pids 0 * BLOCK_SIZE_K + idx.1.val) * stride_bk +
-    (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val) * stride_bn
-
-private def fpbOffsetExpanded
-    (s : BlockState) (stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
-    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) : Nat :=
-  (s.pids 0 * BLOCK_SIZE_K + idx.1.val) * stride_fpbk +
-    (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val) * stride_fpbn
-
-private def nOffsetExpanded (s : BlockState) (BLOCK_SIZE_N : Nat)
-    (idx : TileIndex [1, BLOCK_SIZE_N]) : Nat :=
-  s.pids 1 * BLOCK_SIZE_N + idx.2.1.val
-
-private def dequantizeActiveExpanded
-    (s : BlockState) (K N BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
-    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) : Prop :=
-  s.pids 0 * BLOCK_SIZE_K + idx.1.val < K ∧
-    s.pids 1 * BLOCK_SIZE_N + idx.2.1.val < N
-
 instance dequantizeActiveDecidable
     (s : BlockState) (K N BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
     (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) :
     Decidable (dequantizeActive s K N BLOCK_SIZE_N BLOCK_SIZE_K idx) := by
   unfold dequantizeActive
-  infer_instance
-
-private instance dequantizeActiveExpandedDecidable
-    (s : BlockState) (K N BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
-    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) :
-    Decidable (dequantizeActiveExpanded s K N BLOCK_SIZE_N BLOCK_SIZE_K idx) := by
-  unfold dequantizeActiveExpanded
   infer_instance
 
 /-- Exact dequantized value written at active tile lane `idx`. -/
@@ -93,13 +65,6 @@ noncomputable def dequantizeSpec
   s.readMem b_ptr (bOffset s stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K idx) *
     s.readMem b_scale_ptr (nOffset s BLOCK_SIZE_N idx.2.1)
 
-private noncomputable def dequantizeSpecExpanded
-    (s : BlockState) (b_ptr b_scale_ptr : RegionName)
-    (stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
-    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) : ℝ :=
-  s.readMem b_ptr (bOffsetExpanded s stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K idx) *
-    s.readMem b_scale_ptr (nOffsetExpanded s BLOCK_SIZE_N (0, idx.2.1, PUnit.unit))
-
 private noncomputable def dequantizeStoreBase
     (s : BlockState) (b_ptr b_scale_ptr : RegionName)
     (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
@@ -109,43 +74,43 @@ private noncomputable def dequantizeStoreBase
     "offs_k" .nat [BLOCK_SIZE_K] (Tile.vec fun i => i.val)).setReg
     "offs_n" .nat [BLOCK_SIZE_N] (Tile.vec fun i => i.val)).setReg
     "b_offs" .nat [BLOCK_SIZE_K, BLOCK_SIZE_N]
-      { data := fun i => bOffsetExpanded s stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K i }).setReg
+      { data := fun i => bOffset s stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K i }).setReg
     "fpb_offs" .nat [BLOCK_SIZE_K, BLOCK_SIZE_N]
-      { data := fun i => fpbOffsetExpanded s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K i }).setReg
+      { data := fun i => fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K i }).setReg
     "bs_offs" .nat [1, BLOCK_SIZE_N]
-      { data := fun i => nOffsetExpanded s BLOCK_SIZE_N i }).setReg
+      { data := fun i => nOffset s BLOCK_SIZE_N i.2.1 }).setReg
     "n_mask" .bool [1, BLOCK_SIZE_N]
-      { data := fun i => decide (nOffsetExpanded s BLOCK_SIZE_N i < N) }).setReg
+      { data := fun i => decide (nOffset s BLOCK_SIZE_N i.2.1 < N) }).setReg
     "mask" .bool [BLOCK_SIZE_K, BLOCK_SIZE_N]
-      { data := fun i => decide (dequantizeActiveExpanded s K N BLOCK_SIZE_N BLOCK_SIZE_K i) }).setReg
+      { data := fun i => decide (dequantizeActive s K N BLOCK_SIZE_N BLOCK_SIZE_K i) }).setReg
     "int_b" .real [BLOCK_SIZE_K, BLOCK_SIZE_N]
       { data := fun i =>
-          if dequantizeActiveExpanded s K N BLOCK_SIZE_N BLOCK_SIZE_K i then
-            some (s.readMem b_ptr (bOffsetExpanded s stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K i))
+          if dequantizeActive s K N BLOCK_SIZE_N BLOCK_SIZE_K i then
+            some (s.readMem b_ptr (bOffset s stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K i))
           else some (0.0 : ℝ) }).setReg
     "scale_b" .real [1, BLOCK_SIZE_N]
       { data := fun i =>
-          if nOffsetExpanded s BLOCK_SIZE_N i < N then
-            some (s.readMem b_scale_ptr (nOffsetExpanded s BLOCK_SIZE_N i))
+          if nOffset s BLOCK_SIZE_N i.2.1 < N then
+            some (s.readMem b_scale_ptr (nOffset s BLOCK_SIZE_N i.2.1))
           else some (0.0 : ℝ) }
 
 /-- Algorithm-layer correctness for `dequantize_kernel`. -/
-private theorem dequantize_kernel_correct_expanded
+theorem dequantize_kernel_correct
     (b_ptr b_scale_ptr fpb_ptr : RegionName)
     (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
     (s s' : BlockState)
     (hOutInj : Function.Injective
-      (fpbOffsetExpanded s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K))
+      (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K))
     (hExec : exec (dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
           stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K) s = some s') :
     ∀ idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N],
       s'.readMem fpb_ptr
-          (fpbOffsetExpanded s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K idx)
-        = if dequantizeActiveExpanded s K N BLOCK_SIZE_N BLOCK_SIZE_K idx then
-          dequantizeSpecExpanded s b_ptr b_scale_ptr stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K idx
+          (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K idx)
+        = if dequantizeActive s K N BLOCK_SIZE_N BLOCK_SIZE_K idx then
+          dequantizeSpec s b_ptr b_scale_ptr stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K idx
         else
           s.readMem fpb_ptr
-            (fpbOffsetExpanded s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K idx) := by
+            (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K idx) := by
   intro idx
   simp [exec, dequantize_kernel, stepStmts, stepStmt, evalOp, Option.bind,
         Tile.bop, Tile.cop, Tile.expandDim,
@@ -177,7 +142,7 @@ private theorem dequantize_kernel_correct_expanded
           else some (0.0 : ℝ)))
   have hOffsetInj : Function.Injective
       offsetFn := by
-    simpa [offsetFn, fpbOffsetExpanded] using hOutInj
+    simpa [offsetFn, fpbOffset] using hOutInj
   have hscatter := BlockState.scatter_readback_prop_masked_nd
     (region := fpb_ptr)
     (s := dequantizeStoreBase s b_ptr b_scale_ptr K N stride_bk stride_bn
@@ -186,41 +151,12 @@ private theorem dequantize_kernel_correct_expanded
     hOffsetInj idx
   by_cases hActive : active idx
   · rcases hActive with ⟨hk, hn⟩
-    simpa [offsetFn, active, valueFn, dequantizeActiveExpanded, dequantizeSpecExpanded,
-      bOffsetExpanded, fpbOffsetExpanded, nOffsetExpanded, hk, hn,
+    simpa [offsetFn, active, valueFn, dequantizeActive, dequantizeSpec,
+      bOffset, fpbOffset, nOffset, hk, hn,
       dequantizeStoreBase, TileShape.dropInsertedIndex, Bool.and_eq_true] using hscatter
-  · simpa [offsetFn, active, valueFn, dequantizeActiveExpanded, dequantizeSpecExpanded,
-      bOffsetExpanded, fpbOffsetExpanded, nOffsetExpanded, hActive,
+  · simpa [offsetFn, active, valueFn, dequantizeActive, dequantizeSpec,
+      bOffset, fpbOffset, nOffset, hActive,
       dequantizeStoreBase, TileShape.dropInsertedIndex] using hscatter
-
-/-- Algorithm-layer correctness for `dequantize_kernel`. -/
-theorem dequantize_kernel_correct
-    (b_ptr b_scale_ptr fpb_ptr : RegionName)
-    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
-    (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K))
-    (hExec : exec (dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
-          stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K) s = some s') :
-    ∀ idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N],
-      s'.readMem fpb_ptr
-          (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K idx)
-        = if dequantizeActive s K N BLOCK_SIZE_N BLOCK_SIZE_K idx then
-          dequantizeSpec s b_ptr b_scale_ptr stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K idx
-        else
-          s.readMem fpb_ptr
-            (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K idx) := by
-  intro idx
-  have hInjExpanded : Function.Injective
-      (fpbOffsetExpanded s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K) := by
-    intro a b h
-    apply hOutInj
-    simpa [fpbOffset, fpbOffsetExpanded, TileShape.dropInsertedIndex] using h
-  have h := dequantize_kernel_correct_expanded b_ptr b_scale_ptr fpb_ptr K N stride_bk
-    stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K s s' hInjExpanded hExec idx
-  simpa [fpbOffset, fpbOffsetExpanded, dequantizeActive, dequantizeActiveExpanded,
-    dequantizeSpec, dequantizeSpecExpanded, bOffset, bOffsetExpanded, nOffset,
-    nOffsetExpanded, TileShape.dropInsertedIndex] using h
 
 /-- Compute-facing correctness for `dequantize_kernel`. -/
 theorem dequantize_kernel_compute_correct

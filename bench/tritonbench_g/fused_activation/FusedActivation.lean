@@ -62,7 +62,23 @@ noncomputable def fusedActivationSpec
 def fusedActivationOffset (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pid * BLOCK_SIZE + i.val
 
-/-- Algorithm-layer correctness for `fused_add_mul_activation_kernel`. -/
+/-- Algorithm-layer correctness for `fused_add_mul_activation_kernel`.
+
+Out of scope: the `hSigmoidBranch` hypothesis requires that **exactly one** of
+`ACTIVATION_SIGMOID` / `ACTIVATION_RELU` is `true`. The Python kernel itself
+accepts every combination of the two flags, but the other two configurations
+are not modelled here:
+
+- both flags `false`: kernel performs no store; this is a vacuous wrapper
+  with no useful spec, so we omit it.
+- both flags `true`: kernel issues two consecutive masked stores at the same
+  addresses, with the RELU result overwriting the SIGMOID result. The
+  observable output is the RELU spec, but proving it requires an additional
+  store-overwrite lemma. We do not currently expose that case.
+
+If a downstream user needs either configuration, restate the theorem with the
+appropriate dedicated `hSigmoidBranch` shape and reuse the same per-branch
+proof skeleton. -/
 theorem fused_add_mul_activation_kernel_correct
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
@@ -123,7 +139,11 @@ theorem fused_add_mul_activation_kernel_correct
         ComparableDType.gt]
     · simp [hi]
 
-/-- Compute-facing correctness for `fused_add_mul_activation_kernel`. -/
+/-- Compute-facing correctness for `fused_add_mul_activation_kernel`.
+
+Inherits the same "exactly one activation flag is `true`" scope restriction
+from `fused_add_mul_activation_kernel_correct` (see its docstring for why the
+both-true / both-false configurations are out of scope). -/
 theorem fused_add_mul_activation_kernel_compute_correct
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
