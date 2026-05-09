@@ -736,6 +736,64 @@ theorem dQBlockContributionCausal_sum_eq_attentionBackwardRealCausal_impl
   simp [dQBlockContributionCausal, attentionBackwardRealCausal,
     dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl]
 
+/-! ### Boundary multi-block `dQ` bridges -/
+
+/-- Non-causal query-boundary specialization of a block-local masked `dQ`
+contribution. -/
+noncomputable def dQBlockContributionBoundary {S_q D M Bk numKVBlocks : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [M, D]) : ℝ :=
+  dQBlockContributionMasked
+    (queryBoundaryVisible (S_q := S_q) (S_k := Bk * numKVBlocks) (M := M) qStart)
+    (boundaryQBlock qStart Q) K V (boundaryDOBlock qStart dO)
+    (boundaryLSEBlock qStart LSE) scale block idx
+
+/-- Causal query-boundary specialization of a block-local masked `dQ`
+contribution. -/
+noncomputable def dQBlockContributionCausalBoundary {S_q D M Bk numKVBlocks : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (idx : TileIndex [M, D]) : ℝ :=
+  dQBlockContributionMasked
+    (queryBoundaryCausalVisible (S_q := S_q) (S_k := Bk * numKVBlocks) (M := M) qStart)
+    (boundaryQBlock qStart Q) K V (boundaryDOBlock qStart dO)
+    (boundaryLSEBlock qStart LSE) scale block idx
+
+/-- Summing boundary block-local `dQ` contributions over all KV blocks recovers
+the query-boundary closed-form `dQ`. -/
+theorem dQBlockContributionBoundary_sum_eq_attentionBackwardRealBoundary
+    {S_q D M Bk numKVBlocks : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    (Finset.univ.sum fun block : Fin numKVBlocks =>
+      dQBlockContributionBoundary qStart Q K V dO LSE scale block idx) =
+      (attentionBackwardRealBoundary qStart Q K V dO LSE scale).dQ idx := by
+  simp [dQBlockContributionBoundary, attentionBackwardRealBoundary,
+    dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl]
+
+/-- Summing causal-boundary block-local `dQ` contributions over all KV blocks
+recovers the causal query-boundary closed-form `dQ`. -/
+theorem dQBlockContributionCausalBoundary_sum_eq_attentionBackwardRealCausalBoundary
+    {S_q D M Bk numKVBlocks : Nat}
+    (qStart : Nat)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ) (scale : ℝ)
+    (idx : TileIndex [M, D]) :
+    (Finset.univ.sum fun block : Fin numKVBlocks =>
+      dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block idx) =
+      (attentionBackwardRealCausalBoundary qStart Q K V dO LSE scale).dQ idx := by
+  simp [dQBlockContributionCausalBoundary, attentionBackwardRealCausalBoundary,
+    dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl]
+
 /-- Raw kernel-form bridge for the causal block-local `dQ_part` computation.
 
 Unlike `dQ_block_tile_some_eq_dQBlockContributionCausal`, this theorem starts
