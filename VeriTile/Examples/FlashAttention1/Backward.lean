@@ -918,6 +918,99 @@ noncomputable def fa1BackwardStrippedStridedPreStoreState
       stride_dvb stride_dvh stride_dvn stride_dvd
       scale).toAlgKernel.body.take 35) s).getD s
 
+/-- State after the stride-aware stripped backward pointer setup prefix.  This is
+the first 19 statements of `fa1BackwardStrippedKernelStrided`, ending at
+`lse_ptrs` and before the first memory load. -/
+noncomputable def fa1BackwardStrippedStridedPointerState
+    (M S D : Nat)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh : Nat)
+    (stride_dkb stride_dkh : Nat)
+    (stride_dvb stride_dvh : Nat)
+    (s : BlockState) : BlockState :=
+  (((((((((((((((((((s
+    ).setReg "pid_qb" .nat [] (Tile.scalar (s.pids 0))
+    ).setReg "pid_h" .nat [] (Tile.scalar (s.pids 1))
+    ).setReg "pid_b" .nat [] (Tile.scalar (s.pids 2))
+    ).setReg "q_base_off" .nat [] (Tile.scalar (s.pids 2 * stride_qb + s.pids 1 * stride_qh))
+    ).setReg "k_base_off" .nat [] (Tile.scalar (s.pids 2 * stride_kb + s.pids 1 * stride_kh))
+    ).setReg "v_base_off" .nat [] (Tile.scalar (s.pids 2 * stride_vb + s.pids 1 * stride_vh))
+    ).setReg "do_base_off" .nat [] (Tile.scalar (s.pids 2 * stride_dob + s.pids 1 * stride_doh))
+    ).setReg "lse_base_off" .nat [] (Tile.scalar (s.pids 2 * stride_lseb + s.pids 1 * stride_lseh))
+    ).setReg "dQ_base_off" .nat [] (Tile.scalar (s.pids 2 * stride_dqb + s.pids 1 * stride_dqh))
+    ).setReg "dK_base_off" .nat [] (Tile.scalar (s.pids 2 * stride_dkb + s.pids 1 * stride_dkh))
+    ).setReg "dV_base_off" .nat [] (Tile.scalar (s.pids 2 * stride_dvb + s.pids 1 * stride_dvh))
+    ).setReg "offs_m" .nat [M] ⟨fun idx : TileIndex [M] => s.pids 0 * M + idx.1.val⟩
+    ).setReg "offs_n" .nat [S] (Tile.vec fun i : Fin S => i.val)
+    ).setReg "offs_d" .nat [D] (Tile.vec fun i : Fin D => i.val)
+    ).setReg "q_ptrs" .nat [M, D] ⟨fun idx : TileIndex [M, D] =>
+      s.pids 2 * stride_qb + s.pids 1 * stride_qh
+        + (s.pids 0 * M + idx.1.val) * stride_qs
+        + idx.2.1.val * stride_qd⟩
+    ).setReg "k_ptrs" .nat [S, D] ⟨fun idx : TileIndex [S, D] =>
+      s.pids 2 * stride_kb + s.pids 1 * stride_kh
+        + idx.1.val * stride_kn
+        + idx.2.1.val * stride_kd⟩
+    ).setReg "v_ptrs" .nat [S, D] ⟨fun idx : TileIndex [S, D] =>
+      s.pids 2 * stride_vb + s.pids 1 * stride_vh
+        + idx.1.val * stride_vn
+        + idx.2.1.val * stride_vd⟩
+    ).setReg "do_ptrs" .nat [M, D] ⟨fun idx : TileIndex [M, D] =>
+      s.pids 2 * stride_dob + s.pids 1 * stride_doh
+        + (s.pids 0 * M + idx.1.val) * stride_dom
+        + idx.2.1.val * stride_dod⟩
+    ).setReg "lse_ptrs" .nat [M] ⟨fun idx : TileIndex [M] =>
+      s.pids 2 * stride_lseb + s.pids 1 * stride_lseh
+        + (s.pids 0 * M + idx.1.val) * stride_lsem⟩
+
+set_option linter.unusedSimpArgs false in
+
+/-- The first 19 statements of the stride-aware stripped backward kernel are the
+pure pointer setup prefix. -/
+theorem fa1BackwardStrippedKernelStrided_pointer_prefix
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M S D : Nat)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (scale : ℝ) (s : BlockState) :
+    stepStmts
+        ((fa1BackwardStrippedKernelStrided
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh stride_dqs stride_dqd
+          stride_dkb stride_dkh stride_dkn stride_dkd
+          stride_dvb stride_dvh stride_dvn stride_dvd
+          scale).toAlgKernel.body.take 19) s =
+      some
+        (fa1BackwardStrippedStridedPointerState M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh
+          stride_dkb stride_dkh
+          stride_dvb stride_dvh
+          s) := by
+  simp [fa1BackwardStrippedStridedPointerState,
+    fa1BackwardStrippedKernelStrided, stepStmts, stepStmt, evalOp, Option.bind,
+    TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+    NumericDType.add, NumericDType.mul, Tile.bop, Tile.expandDim]
+
 /-- The stripped backward kernel is fully algorithm-projectable: it contains no
 compute-only effect such as unsupported bit-level operations or async markers. -/
 theorem fa1BackwardStrippedKernel_projectable
