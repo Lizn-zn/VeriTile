@@ -4359,6 +4359,209 @@ theorem fa1BackwardStrippedKernelStrided_realizes_4D_fullSequence
       hQ_inner hK_inner hV_inner hdO_inner hLSE_inner
       hInjQ' hInjK hInjV hdQdK hdQdV hdKdV
 
+/-- Map a lane in a query block to its global query-row index. -/
+def queryBlockRow {S_q M : Nat} (qPid : Nat) (hBlock : qPid * M + M ≤ S_q)
+    (i : Fin M) : Fin S_q :=
+  ⟨qPid * M + i.val,
+    Nat.lt_of_lt_of_le (Nat.add_lt_add_left i.isLt _) hBlock⟩
+
+@[simp] theorem queryBlockRow_val {S_q M : Nat} (qPid : Nat)
+    (hBlock : qPid * M + M ≤ S_q) (i : Fin M) :
+    (queryBlockRow (S_q := S_q) (M := M) qPid hBlock i).val = qPid * M + i.val :=
+  rfl
+
+/-- 4D query-block wrapper for the stride-aware stripped backward kernel.
+
+For arbitrary query block size `M`, the stripped kernel computes the exact
+local 4D backward contribution for the current `(batch, head, query-block)`
+slice.  Its `dK`/`dV` stores are the local contribution from that query block,
+not the complete 4D `dK`/`dV` over all query rows.  The full-sequence theorem
+above is the special case where this local contribution is the complete output. -/
+theorem fa1BackwardStrippedKernelStrided_realizes_4D_queryBlock
+    {B H S_q S_k D M : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (s : BlockState)
+    (hBlock : s.pids 0 * M + M ≤ S_q)
+    (hPidB : s.pids 2 < B) (hPidH : s.pids 1 < H)
+    (hQ : InputAt s qReg
+        (Offset.strided [B, H, S_q, D] [stride_qb, stride_qh, stride_qs, stride_qd] 0) Q)
+    (hK : InputAt s kReg
+        (Offset.strided [B, H, S_k, D] [stride_kb, stride_kh, stride_kn, stride_kd] 0) K)
+    (hV : InputAt s vReg
+        (Offset.strided [B, H, S_k, D] [stride_vb, stride_vh, stride_vn, stride_vd] 0) V)
+    (hdO : InputAt s dOReg
+        (Offset.strided [B, H, S_q, D] [stride_dob, stride_doh, stride_dom, stride_dod] 0) dO)
+    (hLSE : InputAt s lseReg
+        (Offset.strided [B, H, S_q] [stride_lseb, stride_lseh, stride_lsem] 0) LSE)
+    (hInjQ :
+      Function.Injective (fun idx : TileIndex [M, D] =>
+        s.pids 2 * stride_dqb + s.pids 1 * stride_dqh
+          + (s.pids 0 * M + idx.1.val) * stride_dqs
+          + idx.2.1.val * stride_dqd))
+    (hInjK :
+      Function.Injective (fun idx : TileIndex [S_k, D] =>
+        s.pids 2 * stride_dkb + s.pids 1 * stride_dkh
+          + idx.1.val * stride_dkn + idx.2.1.val * stride_dkd))
+    (hInjV :
+      Function.Injective (fun idx : TileIndex [S_k, D] =>
+        s.pids 2 * stride_dvb + s.pids 1 * stride_dvh
+          + idx.1.val * stride_dvn + idx.2.1.val * stride_dvd))
+    (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
+    ComputeCorrect.Realizes
+      (kernel := fa1BackwardStrippedKernelStrided
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S_k D
+        stride_qb stride_qh stride_qs stride_qd
+        stride_kb stride_kh stride_kn stride_kd
+        stride_vb stride_vh stride_vn stride_vd
+        stride_dob stride_doh stride_dom stride_dod
+        stride_lseb stride_lseh stride_lsem
+        stride_dqb stride_dqh stride_dqs stride_dqd
+        stride_dkb stride_dkh stride_dkn stride_dkd
+        stride_dvb stride_dvh stride_dvn stride_dvd
+        scale)
+      (initialState := s)
+      (write :=
+        fun out : Sum (TileIndex [M, D]) (Sum (TileIndex [S_k, D]) (TileIndex [S_k, D])) =>
+          match out with
+          | .inl idx =>
+              some (dQReg,
+                Offset.strided [B, H, S_q, D]
+                  [stride_dqb, stride_dqh, stride_dqs, stride_dqd] 0
+                  (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩,
+                    queryBlockRow (S_q := S_q) (M := M) (s.pids 0) hBlock idx.1,
+                    idx.2.1, PUnit.unit))
+          | .inr (.inl idx) =>
+              some (dKReg,
+                Offset.strided [B, H, S_k, D]
+                  [stride_dkb, stride_dkh, stride_dkn, stride_dkd] 0
+                  (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, idx.1, idx.2.1, PUnit.unit))
+          | .inr (.inr idx) =>
+              some (dVReg,
+                Offset.strided [B, H, S_k, D]
+                  [stride_dvb, stride_dvh, stride_dvn, stride_dvd] 0
+                  (⟨s.pids 2, hPidB⟩, ⟨s.pids 1, hPidH⟩, idx.1, idx.2.1, PUnit.unit)))
+      (expected :=
+        fun out : Sum (TileIndex [M, D]) (Sum (TileIndex [S_k, D]) (TileIndex [S_k, D])) =>
+          let b : Fin B := ⟨s.pids 2, hPidB⟩
+          let h : Fin H := ⟨s.pids 1, hPidH⟩
+          let Qblk : TileIndex [M, D] → ℝ := fun idx =>
+            Q (b, h,
+              queryBlockRow (S_q := S_q) (M := M) (s.pids 0) hBlock idx.1,
+              idx.2.1, PUnit.unit)
+          let dOblk : TileIndex [M, D] → ℝ := fun idx =>
+            dO (b, h,
+              queryBlockRow (S_q := S_q) (M := M) (s.pids 0) hBlock idx.1,
+              idx.2.1, PUnit.unit)
+          let LSEblk : Fin M → ℝ := fun i =>
+            LSE (b, h,
+              queryBlockRow (S_q := S_q) (M := M) (s.pids 0) hBlock i,
+              PUnit.unit)
+          let Kslice : TileIndex [S_k, D] → ℝ := sliceBH K b h
+          let Vslice : TileIndex [S_k, D] → ℝ := sliceBH V b h
+          match out with
+          | .inl idx =>
+              (attentionBackwardReal Qblk Kslice Vslice dOblk LSEblk scale).dQ idx
+          | .inr (.inl idx) =>
+              (attentionBackwardReal Qblk Kslice Vslice dOblk LSEblk scale).dK idx
+          | .inr (.inr idx) =>
+              (attentionBackwardReal Qblk Kslice Vslice dOblk LSEblk scale).dV idx) := by
+  let b : Fin B := ⟨s.pids 2, hPidB⟩
+  let h : Fin H := ⟨s.pids 1, hPidH⟩
+  let qRow : Fin M → Fin S_q :=
+    queryBlockRow (S_q := S_q) (M := M) (s.pids 0) hBlock
+  let Qblk : TileIndex [M, D] → ℝ := fun idx =>
+    Q (b, h, qRow idx.1, idx.2.1, PUnit.unit)
+  let dOblk : TileIndex [M, D] → ℝ := fun idx =>
+    dO (b, h, qRow idx.1, idx.2.1, PUnit.unit)
+  let LSEblk : Fin M → ℝ := fun i => LSE (b, h, qRow i, PUnit.unit)
+  have hQ_inner : InputAt s qReg
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * stride_qb + s.pids 1 * stride_qh
+          + (s.pids 0 * M + idx.1.val) * stride_qs
+          + idx.2.1.val * stride_qd)
+      Qblk := by
+    intro idx
+    obtain ⟨i, d, _⟩ := idx
+    have hRead := hQ (b, h, qRow i, d, PUnit.unit)
+    simpa [Qblk, qRow, Offset.strided, b, h] using hRead
+  have hK_inner : InputAt s kReg
+      (fun idx : TileIndex [S_k, D] =>
+        s.pids 2 * stride_kb + s.pids 1 * stride_kh
+          + idx.1.val * stride_kn + idx.2.1.val * stride_kd)
+      (sliceBH K b h) := by
+    intro idx
+    obtain ⟨j, d, _⟩ := idx
+    have hRead := hK (b, h, j, d, PUnit.unit)
+    simpa [sliceBH, Offset.strided, b, h] using hRead
+  have hV_inner : InputAt s vReg
+      (fun idx : TileIndex [S_k, D] =>
+        s.pids 2 * stride_vb + s.pids 1 * stride_vh
+          + idx.1.val * stride_vn + idx.2.1.val * stride_vd)
+      (sliceBH V b h) := by
+    intro idx
+    obtain ⟨j, d, _⟩ := idx
+    have hRead := hV (b, h, j, d, PUnit.unit)
+    simpa [sliceBH, Offset.strided, b, h] using hRead
+  have hdO_inner : InputAt s dOReg
+      (fun idx : TileIndex [M, D] =>
+        s.pids 2 * stride_dob + s.pids 1 * stride_doh
+          + (s.pids 0 * M + idx.1.val) * stride_dom
+          + idx.2.1.val * stride_dod)
+      dOblk := by
+    intro idx
+    obtain ⟨i, d, _⟩ := idx
+    have hRead := hdO (b, h, qRow i, d, PUnit.unit)
+    simpa [dOblk, qRow, Offset.strided, b, h] using hRead
+  have hLSE_inner : InputAt (shape := [M]) s lseReg
+      (fun idx : TileIndex [M] =>
+        s.pids 2 * stride_lseb + s.pids 1 * stride_lseh
+          + (s.pids 0 * M + idx.1.val) * stride_lsem)
+      (fun idx : TileIndex [M] => LSEblk idx.1) := by
+    intro idx
+    obtain ⟨i, _⟩ := idx
+    have hRead := hLSE (b, h, qRow i, PUnit.unit)
+    simpa [LSEblk, qRow, Offset.strided, b, h] using hRead
+  convert fa1BackwardStrippedKernelStrided_realizes
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      stride_qb stride_qh stride_qs stride_qd
+      stride_kb stride_kh stride_kn stride_kd
+      stride_vb stride_vh stride_vn stride_vd
+      stride_dob stride_doh stride_dom stride_dod
+      stride_lseb stride_lseh stride_lsem
+      stride_dqb stride_dqh stride_dqs stride_dqd
+      stride_dkb stride_dkh stride_dkn stride_dkd
+      stride_dvb stride_dvh stride_dvn stride_dvd
+      Qblk (sliceBH K b h) (sliceBH V b h)
+      dOblk LSEblk scale s
+      hQ_inner hK_inner hV_inner hdO_inner hLSE_inner
+      hInjQ hInjK hInjV hdQdK hdQdV hdKdV using 1
+  · funext out
+    cases out with
+    | inl idx =>
+        simp [Offset.strided, queryBlockRow, add_comm]
+    | inr rest =>
+        cases rest <;>
+          simp [Offset.strided, add_comm, add_left_comm]
+  · funext out
+    cases out with
+    | inl idx =>
+        simp [sliceBH, b, h, qRow, Qblk, dOblk, LSEblk, queryBlockRow]
+    | inr rest =>
+        cases rest <;>
+          simp [b, h, qRow, Qblk, dOblk, LSEblk, queryBlockRow]
+
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false in
 
