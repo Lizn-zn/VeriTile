@@ -185,6 +185,11 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   multi-block `dQ` theorem,trace-to-masked-contribution extraction 仍显式保留
 - `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct` —— atomic backward
   kernel 的 concrete kernel-specific launcher-facing causal `dQ` theorem
+- `fa1BackwardAtomicDQKernel_gridLaunched_backward_correct` —— full
+  launcher-facing non-causal atomic backward theorem: 同一个 final state 上的
+  grid-composed `dQ` 加 per-block ordinary `dK`/`dV` store readback
+- `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct` —— full
+  launcher-facing causal atomic backward theorem,覆盖 `dQ`、`dK`、`dV`
 - `fa1BackwardAtomicDQCausalKernel` —— causal block-partitioned backward +
   atomic `dQ` 的 DSL kernel surface
 - `fa1BackwardAtomicDQCausalPreAtomicState` —— causal kernel prefix 的

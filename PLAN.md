@@ -213,6 +213,11 @@ in-scope (see §Decision log entry 9).
 - `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct` — concrete
   kernel-specific launcher-facing causal `dQ` theorem for the atomic backward
   kernel
+- `fa1BackwardAtomicDQKernel_gridLaunched_backward_correct` — full
+  launcher-facing non-causal atomic backward theorem: grid-composed `dQ` plus
+  per-block ordinary `dK`/`dV` store readback from the same final state
+- `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct` — full
+  launcher-facing causal atomic backward theorem covering `dQ`, `dK`, and `dV`
 - `fa1BackwardAtomicDQCausalKernel` — DSL kernel surface for causal
   block-partitioned backward with atomic `dQ`
 - `fa1BackwardAtomicDQCausalPreAtomicState` — pre-atomic boundary for the
