@@ -420,6 +420,57 @@ theorem fa2_two_block_backward_dQ4D_eq_fa2_backward4D {B H S_q D Bk : Nat}
   exact fa2_two_block_backward_dQ4D_eq_fa1_backward4D
     Q K V dO LSE scale b h idx
 
+/-- FA-2-facing spelling of the proof-oriented atomic `dQ` backward kernel.
+
+The first executable FA-2 backward surface reuses the already-proved FA-1
+atomic partition kernel; FA-2-specific work partitioning should refine this
+surface rather than change the Real backward target. -/
+def fa2BackwardAtomicDQKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk numKVBlocks : Nat) (scale : ℝ) : ComputeKernel :=
+  FA1Backward.fa1BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk numKVBlocks scale
+
+/-- Launcher-facing FA-2 `dQ` correctness for the atomic backward kernel. -/
+theorem fa2BackwardAtomicDQKernel_gridLaunched_dQ_correct
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa2BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              FA1Backward.dQBlockContribution Q K V dO LSE scale block idx)) :
+    ∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some ((fa2BackwardReal Q K V dO LSE scale).dQ idx) := by
+  simpa [fa2BackwardAtomicDQKernel, fa2BackwardReal] using
+    FA1Backward.fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale s sFinal Q K V dO LSE g hLaunch
+      hInitialDQ hNoOrdinaryDQ hAtomicContrib
+
 /-! ## FA-2 scalar score-row max producer
 
 This producer computes the row max consumed by the scalar fragment summary and
