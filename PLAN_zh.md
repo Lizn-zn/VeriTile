@@ -148,7 +148,7 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - **Headline 推论 `fa1_eq_fa2_two_block_forward4D`** —— flat
   `attentionReal4D` 等于两段延迟 rescale FA-2 输出(在两 block KV 域上)
 
-### Tier 3-C — FA-1 backward 全套 ✅
+### Tier 3-C — FA-1 backward 全套 ⚠️
 
 - Stripped 主定理:`fa1BackwardStrippedKernel_correct`(无 mask、无 multi-block、
   单 program-id)
@@ -162,8 +162,10 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`
 - Strided backward surface:
   `fa1BackwardStrippedKernelStrided` 与
-  `fa1BackwardStrippedKernelStrided_projectable`;任意 stride correctness
-  是下一层 proof,还不是完整 public theorem
+  `fa1BackwardStrippedKernelStrided_projectable`;final-store shell 已暴露为
+  `fa1BackwardStrippedKernelStrided_correct_of_prefix`,compute-facing 包装为
+  `fa1BackwardStrippedKernelStrided_realizes_of_prefix`。剩余 gap 是任意
+  stride prefix proof:从 strided input tensors 直接推出这些 register facts。
 - 通用 launcher-facing surface:`gridLaunchedAtomic_masked_dQ_correct` 与
   `gridLaunchedAtomic_causal_dQ_correct`(kernel-agnostic atomic 合成);
   `attentionBackwardRealMasked_allVisible` 与

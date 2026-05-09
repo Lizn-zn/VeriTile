@@ -169,7 +169,7 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `attentionReal4D` equals delayed-rescale two-fragment FA-2 output for a
   two-block KV domain
 
-### Tier 3-C — FA-1 backward full coverage ✅
+### Tier 3-C — FA-1 backward full coverage ⚠️
 
 - Stripped main theorem: `fa1BackwardStrippedKernel_correct` (no mask, no
   multi-block, single program-id)
@@ -183,8 +183,12 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`
 - Strided backward surface:
   `fa1BackwardStrippedKernelStrided` plus
-  `fa1BackwardStrippedKernelStrided_projectable`; arbitrary-stride
-  correctness is the next proof layer, not yet the public full theorem
+  `fa1BackwardStrippedKernelStrided_projectable`; the final-store shell is
+  exposed as `fa1BackwardStrippedKernelStrided_correct_of_prefix` and the
+  compute-facing wrapper
+  `fa1BackwardStrippedKernelStrided_realizes_of_prefix`.  The remaining gap is
+  the arbitrary-stride prefix proof that derives those register facts directly
+  from strided input tensors.
 - Generic launcher-facing surfaces:
   `gridLaunchedAtomic_masked_dQ_correct` and
   `gridLaunchedAtomic_causal_dQ_correct` for kernel-agnostic atomic
