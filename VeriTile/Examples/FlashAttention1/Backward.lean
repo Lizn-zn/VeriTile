@@ -1175,6 +1175,102 @@ theorem fa1BackwardStrippedKernelStrided_load_prefix
     fa1BackwardStrippedKernelStrided, stepStmts, stepStmt, evalOp, Option.bind,
     hqPtrs, hkPtrs, hvPtrs, hdoPtrs, hlsePtrs, hRead]
 
+/-- The first 24 statements of the stride-aware stripped backward kernel are
+the pointer setup prefix followed by the five input loads. -/
+theorem fa1BackwardStrippedKernelStrided_loaded_prefix
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M S D : Nat)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (scale : ℝ) (s : BlockState) :
+    stepStmts
+        ((fa1BackwardStrippedKernelStrided
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh stride_dqs stride_dqd
+          stride_dkb stride_dkh stride_dkn stride_dkd
+          stride_dvb stride_dvh stride_dvn stride_dvd
+          scale).toAlgKernel.body.take 24) s =
+      some
+        (fa1BackwardStrippedStridedLoadedState qReg kReg vReg dOReg lseReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh
+          stride_dkb stride_dkh
+          stride_dvb stride_dvh
+          s) := by
+  rw [show
+      (fa1BackwardStrippedKernelStrided
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+        stride_qb stride_qh stride_qs stride_qd
+        stride_kb stride_kh stride_kn stride_kd
+        stride_vb stride_vh stride_vn stride_vd
+        stride_dob stride_doh stride_dom stride_dod
+        stride_lseb stride_lseh stride_lsem
+        stride_dqb stride_dqh stride_dqs stride_dqd
+        stride_dkb stride_dkh stride_dkn stride_dkd
+        stride_dvb stride_dvh stride_dvn stride_dvd
+        scale).toAlgKernel.body.take 24 =
+      ((fa1BackwardStrippedKernelStrided
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+        stride_qb stride_qh stride_qs stride_qd
+        stride_kb stride_kh stride_kn stride_kd
+        stride_vb stride_vh stride_vn stride_vd
+        stride_dob stride_doh stride_dom stride_dod
+        stride_lseb stride_lseh stride_lsem
+        stride_dqb stride_dqh stride_dqs stride_dqd
+        stride_dkb stride_dkh stride_dkn stride_dkd
+        stride_dvb stride_dvh stride_dvn stride_dvd
+        scale).toAlgKernel.body.take 19) ++
+      (((fa1BackwardStrippedKernelStrided
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+        stride_qb stride_qh stride_qs stride_qd
+        stride_kb stride_kh stride_kn stride_kd
+        stride_vb stride_vh stride_vn stride_vd
+        stride_dob stride_doh stride_dom stride_dod
+        stride_lseb stride_lseh stride_lsem
+        stride_dqb stride_dqh stride_dqs stride_dqd
+        stride_dkb stride_dkh stride_dkn stride_dkd
+        stride_dvb stride_dvh stride_dvn stride_dvd
+        scale).toAlgKernel.body.drop 19).take 5) by
+    simp [fa1BackwardStrippedKernelStrided]]
+  rw [stepStmts.append_some
+    (fa1BackwardStrippedKernelStrided_pointer_prefix
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+      stride_qb stride_qh stride_qs stride_qd
+      stride_kb stride_kh stride_kn stride_kd
+      stride_vb stride_vh stride_vn stride_vd
+      stride_dob stride_doh stride_dom stride_dod
+      stride_lseb stride_lseh stride_lsem
+      stride_dqb stride_dqh stride_dqs stride_dqd
+      stride_dkb stride_dkh stride_dkn stride_dkd
+      stride_dvb stride_dvh stride_dvn stride_dvd
+      scale s)]
+  exact fa1BackwardStrippedKernelStrided_load_prefix
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+    stride_qb stride_qh stride_qs stride_qd
+    stride_kb stride_kh stride_kn stride_kd
+    stride_vb stride_vh stride_vn stride_vd
+    stride_dob stride_doh stride_dom stride_dod
+    stride_lseb stride_lseh stride_lsem
+    stride_dqb stride_dqh stride_dqs stride_dqd
+    stride_dkb stride_dkh stride_dkn stride_dkd
+    stride_dvb stride_dvh stride_dvn stride_dvd
+    scale s
+
 theorem fa1BackwardStrippedStridedLoadedState_facts
     (qReg kReg vReg dOReg lseReg : RegionName)
     (M S D : Nat)
