@@ -169,7 +169,7 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `attentionReal4D` equals delayed-rescale two-fragment FA-2 output for a
   two-block KV domain
 
-### Tier 3-C — FA-1 backward full coverage ⚠️
+### Tier 3-C — FA-1 backward full coverage ✅
 
 - Stripped main theorem: `fa1BackwardStrippedKernel_correct` (no mask, no
   multi-block, single program-id)

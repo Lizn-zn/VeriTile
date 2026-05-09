@@ -378,7 +378,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | --- | --- | --- | --- |
 | dense elementwise kernel | Mostly supported | proof/theorem surface | 点态算术、mask、cast、pointer value 和 TensorView observation 都有;更强 dtype/memory claim 仍走 real abstraction。 |
 | softmax / reduction / LayerNorm / Welford | Supported for current examples | proof engineering | reduction、loop、mask、TensorView wrapper 都已有;新 kernel 主要是 invariant 和 theorem packaging。 |
-| FlashAttention-style dense tiled kernel | Supported for FA-1 forward subset | proof engineering + limited semantics | dot、transpose、causal/boundary mask、D-tail、4D view 已覆盖;async/shared-memory/hardware dot fidelity 仍不在当前范围内。 |
+| FlashAttention-style dense tiled kernel | Supported for FA-1 forward and FA-1 backward core surfaces | proof engineering + limited semantics | dot、transpose、causal/boundary mask、D-tail、4D view、Real backward math、atomic-`dQ` launcher composition、strided stripped backward 和 4D full-sequence backward wrapper 已覆盖;async/shared-memory/hardware dot fidelity 仍不在当前范围内。 |
 | first-class pointer expression | Limited | surface + lightweight semantics | 支持 `ptrs := $(r) + offs`、pointer register、pointer load/store、pointer offset update;没有 pointer cast/comparison/alias analysis。 |
 | block pointer / `boundary_check` | Limited | surface + sequential semantics | 支持 `tl.make_block_ptr`、`tl.advance`、zero-padded checked load、checked store-skip;没有 `order`、非 zero padding、TMA 或硬件行为。 |
 | typed floating memory | Limited | semantic abstraction | `dtype=tl.float32/fp16/bf16` 会生成 typed floating node,算法证明擦除到 real;没有 IEEE rounding。 |
