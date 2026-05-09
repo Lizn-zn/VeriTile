@@ -2738,6 +2738,237 @@ theorem strippedBackward_finalStores_readback_of_offsets
         hValQ, hValK, hValV, Tile.ofReal, BlockState.writeMemTyped_real]
       rw [BlockState.scatter_readback_nd _ _ _ hInjV idx]
 
+/-- Execution shell for the strided stripped backward kernel after its
+register-computation prefix.
+
+Once the first 35 statements have produced the pointer tiles and value tiles,
+the final three stores write exactly `dQFn`, `dKFn`, and `dVFn` through the
+provided strided output maps. The remaining proof obligation for full strided
+correctness is therefore the prefix fact establishing these register hypotheses
+from strided inputs. -/
+theorem fa1BackwardStrippedKernelStrided_correct_of_prefix
+    {M S D : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (scale : ℝ) (s sPre : BlockState)
+    (qOff : TileIndex [M, D] → Nat)
+    (kOff vOff : TileIndex [S, D] → Nat)
+    (dQFn : TileIndex [M, D] → ℝ)
+    (dKFn dVFn : TileIndex [S, D] → ℝ)
+    (hPre :
+      stepStmts
+          ((fa1BackwardStrippedKernelStrided
+            qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+            stride_qb stride_qh stride_qs stride_qd
+            stride_kb stride_kh stride_kn stride_kd
+            stride_vb stride_vh stride_vn stride_vd
+            stride_dob stride_doh stride_dom stride_dod
+            stride_lseb stride_lseh stride_lsem
+            stride_dqb stride_dqh stride_dqs stride_dqd
+            stride_dkb stride_dkh stride_dkn stride_dkd
+            stride_dvb stride_dvh stride_dvn stride_dvd
+            scale).toAlgKernel.body.take 35) s =
+        some sPre)
+    (hPtrsQ : sPre.regs .nat [M, D] "dQ_ptrs" =
+      some (⟨qOff⟩ : Tile .nat [M, D]))
+    (hPtrsK : sPre.regs .nat [S, D] "dK_ptrs" =
+      some (⟨kOff⟩ : Tile .nat [S, D]))
+    (hPtrsV : sPre.regs .nat [S, D] "dV_ptrs" =
+      some (⟨vOff⟩ : Tile .nat [S, D]))
+    (hValQ : sPre.regs .real [M, D] "dQ" = some (Tile.ofReal dQFn))
+    (hValK : sPre.regs .real [S, D] "dK" = some (Tile.ofReal dKFn))
+    (hValV : sPre.regs .real [S, D] "dV" = some (Tile.ofReal dVFn))
+    (hInjQ : Function.Injective qOff)
+    (hInjK : Function.Injective kOff)
+    (hInjV : Function.Injective vOff)
+    (hdQdK : dQReg ≠ dKReg) (hdQdV : dQReg ≠ dVReg) (hdKdV : dKReg ≠ dVReg) :
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (exec (fa1BackwardStrippedKernelStrided
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh stride_dqs stride_dqd
+          stride_dkb stride_dkh stride_dkn stride_dkd
+          stride_dvb stride_dvh stride_dvn stride_dvd
+          scale) s)
+        dQReg qOff idx =
+      some (dQFn idx)) ∧
+    (∀ idx : TileIndex [S, D],
+      observeTileAt
+        (exec (fa1BackwardStrippedKernelStrided
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh stride_dqs stride_dqd
+          stride_dkb stride_dkh stride_dkn stride_dkd
+          stride_dvb stride_dvh stride_dvn stride_dvd
+          scale) s)
+        dKReg kOff idx =
+      some (dKFn idx)) ∧
+    (∀ idx : TileIndex [S, D],
+      observeTileAt
+        (exec (fa1BackwardStrippedKernelStrided
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh stride_dqs stride_dqd
+          stride_dkb stride_dkh stride_dkn stride_dkd
+          stride_dvb stride_dvh stride_dvn stride_dvd
+          scale) s)
+        dVReg vOff idx =
+      some (dVFn idx)) := by
+  have hTail := strippedBackward_finalStores_readback_of_offsets
+    dQReg dKReg dVReg M S D
+    (s := sPre) (qOff := qOff) (kOff := kOff) (vOff := vOff)
+    (dQFn := dQFn) (dKFn := dKFn) (dVFn := dVFn)
+    hPtrsQ hPtrsK hPtrsV hValQ hValK hValV hInjQ hInjK hInjV
+    hdQdK hdQdV hdKdV
+  have hExecTail :
+      exec (fa1BackwardStrippedKernelStrided
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh stride_dqs stride_dqd
+          stride_dkb stride_dkh stride_dkn stride_dkd
+          stride_dvb stride_dvh stride_dvn stride_dvd
+          scale) s =
+        ((stepStmt (Stmt.store .real [M, D]
+          (MemAccess.region dQReg (Op.ref .nat [M, D] "dQ_ptrs"))
+          (Op.ref .real [M, D] "dQ") MaskOpt.none) sPre).bind fun s1 =>
+          (stepStmt (Stmt.store .real [S, D]
+            (MemAccess.region dKReg (Op.ref .nat [S, D] "dK_ptrs"))
+            (Op.ref .real [S, D] "dK") MaskOpt.none) s1).bind fun s2 =>
+            stepStmt (Stmt.store .real [S, D]
+              (MemAccess.region dVReg (Op.ref .nat [S, D] "dV_ptrs"))
+              (Op.ref .real [S, D] "dV") MaskOpt.none) s2) := by
+    rw [show
+        exec (fa1BackwardStrippedKernelStrided
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh stride_dqs stride_dqd
+          stride_dkb stride_dkh stride_dkn stride_dkd
+          stride_dvb stride_dvh stride_dvn stride_dvd
+          scale) s =
+          stepStmts
+            ((fa1BackwardStrippedKernelStrided
+              qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+              stride_qb stride_qh stride_qs stride_qd
+              stride_kb stride_kh stride_kn stride_kd
+              stride_vb stride_vh stride_vn stride_vd
+              stride_dob stride_doh stride_dom stride_dod
+              stride_lseb stride_lseh stride_lsem
+              stride_dqb stride_dqh stride_dqs stride_dqd
+              stride_dkb stride_dkh stride_dkn stride_dkd
+              stride_dvb stride_dvh stride_dvn stride_dvd
+              scale).toAlgKernel.body) s by
+      rfl]
+    rw [show
+        (fa1BackwardStrippedKernelStrided
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+          stride_qb stride_qh stride_qs stride_qd
+          stride_kb stride_kh stride_kn stride_kd
+          stride_vb stride_vh stride_vn stride_vd
+          stride_dob stride_doh stride_dom stride_dod
+          stride_lseb stride_lseh stride_lsem
+          stride_dqb stride_dqh stride_dqs stride_dqd
+          stride_dkb stride_dkh stride_dkn stride_dkd
+          stride_dvb stride_dvh stride_dvn stride_dvd
+          scale).toAlgKernel.body =
+          ((fa1BackwardStrippedKernelStrided
+            qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+            stride_qb stride_qh stride_qs stride_qd
+            stride_kb stride_kh stride_kn stride_kd
+            stride_vb stride_vh stride_vn stride_vd
+            stride_dob stride_doh stride_dom stride_dod
+            stride_lseb stride_lseh stride_lsem
+            stride_dqb stride_dqh stride_dqs stride_dqd
+            stride_dkb stride_dkh stride_dkn stride_dkd
+            stride_dvb stride_dvh stride_dvn stride_dvd
+            scale).toAlgKernel.body.take 35) ++
+          ((fa1BackwardStrippedKernelStrided
+            qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+            stride_qb stride_qh stride_qs stride_qd
+            stride_kb stride_kh stride_kn stride_kd
+            stride_vb stride_vh stride_vn stride_vd
+            stride_dob stride_doh stride_dom stride_dod
+            stride_lseb stride_lseh stride_lsem
+            stride_dqb stride_dqh stride_dqs stride_dqd
+            stride_dkb stride_dkh stride_dkn stride_dkd
+            stride_dvb stride_dvh stride_dvn stride_dvd
+            scale).toAlgKernel.body.drop 35) by
+      exact (List.take_append_drop 35 _).symm]
+    rw [stepStmts.append_some hPre]
+    simp [fa1BackwardStrippedKernelStrided, stepStmts, stepStmt, evalOp]
+    cases hqStore :
+        ((sPre.regs TileDType.real [M, D] "dQ").bind fun values =>
+          (sPre.regs TileDType.nat [M, D] "dQ_ptrs").bind fun offsets =>
+            some
+              (List.foldl
+                (fun acc i => acc.writeMem dQReg (offsets.data i)
+                  (WithBot.unbotD 0 (values.data i)))
+                sPre (TileShape.allIndices [M, D]))) with
+    | none =>
+        simp
+    | some s1 =>
+        cases hkStore :
+            ((s1.regs TileDType.real [S, D] "dK").bind fun values =>
+              (s1.regs TileDType.nat [S, D] "dK_ptrs").bind fun offsets =>
+                some
+                  (List.foldl
+                    (fun acc i => acc.writeMem dKReg (offsets.data i)
+                      (WithBot.unbotD 0 (values.data i)))
+                    s1 (TileShape.allIndices [S, D]))) with
+        | none =>
+            simp [hkStore]
+        | some s2 =>
+            cases hvStore :
+                ((s2.regs TileDType.real [S, D] "dV").bind fun values =>
+                  (s2.regs TileDType.nat [S, D] "dV_ptrs").bind fun offsets =>
+                    some
+                      (List.foldl
+                        (fun acc i => acc.writeMem dVReg (offsets.data i)
+                          (WithBot.unbotD 0 (values.data i)))
+                        s2 (TileShape.allIndices [S, D]))) with
+            | none =>
+                simp [hkStore, hvStore]
+            | some s3 =>
+                simp [hkStore, hvStore]
+  constructor
+  · intro idx
+    rw [hExecTail]
+    exact hTail.1 idx
+  · constructor
+    · intro idx
+      rw [hExecTail]
+      exact hTail.2.1 idx
+    · intro idx
+      rw [hExecTail]
+      exact hTail.2.2 idx
+
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false in
 
