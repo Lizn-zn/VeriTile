@@ -633,6 +633,93 @@ theorem fa2BackwardAtomicDQKernel_gridLaunched_backward_correct
       scale s sFinal Q K V dO LSE g hLaunch hInitialDQ hNoOrdinaryDQ
       hAtomicContrib owner hOwnerPid hQ hK hV hdO hLSE hDKWrite hDVWrite hdKdV
 
+/-- FA-2-facing two-block specialization of the proof-oriented atomic backward
+kernel. -/
+def fa2BackwardAtomicDQTwoBlockKernel
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M D Bk : Nat) (scale : ℝ) : ComputeKernel :=
+  fa2BackwardAtomicDQKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    M D Bk 2 scale
+
+/-- Full launcher-facing correctness for the FA-2 two-block atomic backward
+kernel. -/
+theorem fa2BackwardAtomicDQTwoBlockKernel_gridLaunched_backward_correct
+    {M D Bk : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * 2, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa2BackwardAtomicDQTwoBlockKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          fa2TwoBlockBackwardDQSpec Q K V dO LSE scale idx)
+    (owner : Fin 2 → GridIndex g)
+    (hOwnerPid : ∀ block, (s.withGridIndex (owner block)).pids 0 = block.val)
+    (hQ : ∀ block, InputAt (s.withGridIndex (owner block)) qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : ∀ block, InputAt (s.withGridIndex (owner block)) kReg
+        (Offset.rowMajor2D (rows := Bk * 2) (cols := D) 0 D) K)
+    (hV : ∀ block, InputAt (s.withGridIndex (owner block)) vReg
+        (Offset.rowMajor2D (rows := Bk * 2) (cols := D) 0 D) V)
+    (hdO : ∀ block, InputAt (s.withGridIndex (owner block)) dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : ∀ block, InputAt (shape := [M]) (s.withGridIndex (owner block)) lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1))
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := fa2BackwardReal Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin 2, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk 2 block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin 2, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk 2 block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  simpa [fa2BackwardAtomicDQTwoBlockKernel, fa2TwoBlockBackwardDQSpec] using
+    fa2BackwardAtomicDQKernel_gridLaunched_backward_correct
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale s sFinal Q K V dO LSE g hLaunch hInitialDQ hNoOrdinaryDQ
+      hAtomicContrib owner hOwnerPid hQ hK hV hdO hLSE hDKWrite hDVWrite hdKdV
+
 /-- FA-2-facing spelling of the proof-oriented causal atomic `dQ` backward
 kernel. -/
 def fa2BackwardAtomicDQCausalKernel
