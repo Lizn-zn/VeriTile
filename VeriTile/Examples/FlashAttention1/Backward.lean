@@ -1247,6 +1247,106 @@ theorem fa1BackwardStrippedStridedLoadedState_facts
   · funext idx
     simp [hLSE idx.1]
 
+/-- Explicit state after the strided stripped backward math suffix and output
+pointer construction, assuming the five input tiles have already been loaded. -/
+noncomputable def fa1BackwardStrippedStridedMathState
+    (qReg kReg vReg dOReg lseReg : RegionName)
+    (M S D : Nat)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (s : BlockState) : BlockState :=
+  let bw := attentionBackwardReal Q K V dO LSE scale
+  (((((((((((fa1BackwardStrippedStridedLoadedState qReg kReg vReg dOReg lseReg M S D
+    stride_qb stride_qh stride_qs stride_qd
+    stride_kb stride_kh stride_kn stride_kd
+    stride_vb stride_vh stride_vn stride_vd
+    stride_dob stride_doh stride_dom stride_dod
+    stride_lseb stride_lseh stride_lsem
+    stride_dqb stride_dqh
+    stride_dkb stride_dkh
+    stride_dvb stride_dvh
+    s
+    ).setReg "scores" .real [M, S] (Tile.ofReal fun idx : TileIndex [M, S] =>
+      FA1Math.scaledScore Q K scale idx.1 idx.2.1)
+    ).setReg "p" .real [M, S] (Tile.ofReal fun idx : TileIndex [M, S] =>
+      probability Q K LSE scale idx.1 idx.2.1)
+    ).setReg "dV" .real [S, D] (Tile.ofReal bw.dV)
+    ).setReg "dP" .real [M, S] (Tile.ofReal fun idx : TileIndex [M, S] =>
+      dP V dO idx.1 idx.2.1)
+    ).setReg "corr" .real [M] (Tile.ofReal fun idx : TileIndex [M] =>
+      rowCorrection Q K V dO LSE scale idx.1)
+    ).setReg "dS" .real [M, S] (Tile.ofReal fun idx : TileIndex [M, S] =>
+      dS Q K V dO LSE scale idx.1 idx.2.1)
+    ).setReg "dQ" .real [M, D] (Tile.ofReal bw.dQ)
+    ).setReg "dK" .real [S, D] (Tile.ofReal bw.dK)
+    ).setReg "dQ_ptrs" .nat [M, D] (⟨fun idx : TileIndex [M, D] =>
+      s.pids 2 * stride_dqb + s.pids 1 * stride_dqh
+        + (s.pids 0 * M + idx.1.val) * stride_dqs
+        + idx.2.1.val * stride_dqd⟩ : Tile .nat [M, D])
+    ).setReg "dK_ptrs" .nat [S, D] (⟨fun idx : TileIndex [S, D] =>
+      s.pids 2 * stride_dkb + s.pids 1 * stride_dkh
+        + idx.1.val * stride_dkn
+        + idx.2.1.val * stride_dkd⟩ : Tile .nat [S, D])
+    ).setReg "dV_ptrs" .nat [S, D] (⟨fun idx : TileIndex [S, D] =>
+      s.pids 2 * stride_dvb + s.pids 1 * stride_dvh
+        + idx.1.val * stride_dvn
+        + idx.2.1.val * stride_dvd⟩ : Tile .nat [S, D])
+
+theorem fa1BackwardStrippedStridedMathState_facts
+    (qReg kReg vReg dOReg lseReg : RegionName)
+    (M S D : Nat)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (s : BlockState) :
+    let ms := fa1BackwardStrippedStridedMathState qReg kReg vReg dOReg lseReg M S D
+      stride_qb stride_qh stride_qs stride_qd
+      stride_kb stride_kh stride_kn stride_kd
+      stride_vb stride_vh stride_vn stride_vd
+      stride_dob stride_doh stride_dom stride_dod
+      stride_lseb stride_lseh stride_lsem
+      stride_dqb stride_dqh stride_dqs stride_dqd
+      stride_dkb stride_dkh stride_dkn stride_dkd
+      stride_dvb stride_dvh stride_dvn stride_dvd
+      Q K V dO LSE scale s
+    ms.regs .nat [M, D] "dQ_ptrs" =
+      some (⟨fun idx : TileIndex [M, D] =>
+        s.pids 2 * stride_dqb + s.pids 1 * stride_dqh
+          + (s.pids 0 * M + idx.1.val) * stride_dqs
+          + idx.2.1.val * stride_dqd⟩ : Tile .nat [M, D]) ∧
+    ms.regs .nat [S, D] "dK_ptrs" =
+      some (⟨fun idx : TileIndex [S, D] =>
+        s.pids 2 * stride_dkb + s.pids 1 * stride_dkh
+          + idx.1.val * stride_dkn
+          + idx.2.1.val * stride_dkd⟩ : Tile .nat [S, D]) ∧
+    ms.regs .nat [S, D] "dV_ptrs" =
+      some (⟨fun idx : TileIndex [S, D] =>
+        s.pids 2 * stride_dvb + s.pids 1 * stride_dvh
+          + idx.1.val * stride_dvn
+          + idx.2.1.val * stride_dvd⟩ : Tile .nat [S, D]) ∧
+    ms.regs .real [M, D] "dQ" =
+      some (Tile.ofReal (attentionBackwardReal Q K V dO LSE scale).dQ) ∧
+    ms.regs .real [S, D] "dK" =
+      some (Tile.ofReal (attentionBackwardReal Q K V dO LSE scale).dK) ∧
+    ms.regs .real [S, D] "dV" =
+      some (Tile.ofReal (attentionBackwardReal Q K V dO LSE scale).dV) := by
+  simp [fa1BackwardStrippedStridedMathState]
+
 /-- The stripped backward kernel is fully algorithm-projectable: it contains no
 compute-only effect such as unsupported bit-level operations or async markers. -/
 theorem fa1BackwardStrippedKernel_projectable
