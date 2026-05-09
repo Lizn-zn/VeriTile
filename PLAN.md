@@ -187,6 +187,12 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `dV` writes directly from strided input tensors.  The theorem assumes the
   output address maps are injective and the three output regions are pairwise
   distinct, which is necessary for arbitrary user-provided strides.
+- 4D full-sequence backward slice:
+  `fa1BackwardStrippedKernelStrided_realizes_4D_fullSequence`, the 4D
+  wrapper for the stride-aware stripped kernel when the query block covers the
+  full `S_q` axis (`M = S_q`, `program_id(0) = 0`).  This is the semantically
+  correct 4D stripped-backward form because `dK` / `dV` depend on all query
+  rows.
 - Generic launcher-facing surfaces:
   `gridLaunchedAtomic_masked_dQ_correct` and
   `gridLaunchedAtomic_causal_dQ_correct` for kernel-agnostic atomic
