@@ -379,6 +379,106 @@ theorem gridLaunchedAtomic_softcap_backward_correct
       (by intro block idx; simpa [attentionBackwardRealSoftcap] using hDKBlock block idx)
       (by intro block idx; simpa [attentionBackwardRealSoftcap] using hDVBlock block idx)
 
+/-- Combined ALiBi + sliding-window + softcap specialization of
+`gridLaunchedAtomic_scoreVariant_backward_correct`. -/
+theorem gridLaunchedAtomic_alibiSlidingSoftcap_backward_correct
+    {M D Bk numKVBlocks : Nat}
+    (k : Kernel) (dQReg dKReg dVReg : RegionName)
+    (qStart window : Nat) (slope softcap scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (g : Grid)
+    (hLaunch : Kernel.GridLaunchedAtomic k g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (hAtomicContrib :
+      ∀ idx : TileIndex [M, D],
+        hLaunch.contributors.sum
+            (fun gridIdx =>
+              (hLaunch.runs gridIdx).trace.atomicAddRealSum
+                (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+          Finset.univ.sum
+            (fun block : Fin numKVBlocks =>
+              let baseScore := alibiScore qStart slope Q K scale
+              dQBlockContributionScoreVariant (slidingVisible window qStart)
+                (fun i j => softcapScore softcap (baseScore i j))
+                (softcapScoreGradOf softcap baseScore)
+                K V dO LSE scale block idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDKBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dKReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealAlibiSlidingSoftcap qStart window slope softcap
+          Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+    (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dVReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealAlibiSlidingSoftcap qStart window slope softcap
+          Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
+    let bw := attentionBackwardRealAlibiSlidingSoftcap qStart window slope softcap
+      Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  simpa [attentionBackwardRealAlibiSlidingSoftcap] using
+    gridLaunchedAtomic_scoreVariant_backward_correct
+      (k := k) (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+      (visible := slidingVisible window qStart)
+      (score := fun i j =>
+        softcapScore softcap (alibiScore qStart slope Q K scale i j))
+      (scoreGrad := softcapScoreGradOf softcap (alibiScore qStart slope Q K scale))
+      (scale := scale) (s := s) (sFinal := sFinal)
+      (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
+      hLaunch hInitialDQ hNoOrdinaryDQ
+      (by
+        intro idx
+        simpa using hAtomicContrib idx)
+      owner hDKWrite hDVWrite
+      (by
+        intro block idx
+        simpa [attentionBackwardRealAlibiSlidingSoftcap] using hDKBlock block idx)
+      (by
+        intro block idx
+        simpa [attentionBackwardRealAlibiSlidingSoftcap] using hDVBlock block idx)
+
 end FA1Score
 
 end VeriTile.Examples
