@@ -171,6 +171,7 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   `attentionBackwardReal_eq_reverseMode`、probability / `dP = dO · Vᵀ` /
   row correction `D_i` / `dS = P * (dP - corr[:, None])` /
   `dV = Pᵀ · dO` / `dQ = dS · K · scale` / `dK = dSᵀ · Q · scale` 张量桥;
+  4D 任意 mask spec 切片 `attentionBackwardReal4DMasked_slice`、
   `softmax_jvp_identity`、`causalBackward_tile_bridges_complete` 与
   block-local 任意 mask `_block_*` 对偶;打包为
   `strippedBackward_tile_bridges_complete`、

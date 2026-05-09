@@ -193,7 +193,8 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `attentionBackwardReal_eq_reverseMode`, probability / `dP = dO · Vᵀ` /
   row correction `D_i` / `dS = P * (dP - corr[:, None])` /
   `dV = Pᵀ · dO` / `dQ = dS · K · scale` / `dK = dSᵀ · Q · scale` tile
-  bridges, `softmax_jvp_identity`,
+  bridges, 4D arbitrary-mask spec slicing
+  `attentionBackwardReal4DMasked_slice`, `softmax_jvp_identity`,
   `causalBackward_tile_bridges_complete`, and the block-local
   arbitrary-mask `_block_*` counterparts; bundled as
   `strippedBackward_tile_bridges_complete`,

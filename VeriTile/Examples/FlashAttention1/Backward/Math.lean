@@ -19,6 +19,12 @@ structure Grads (M S D : Nat) where
   dK : TileIndex [S, D] → ℝ
   dV : TileIndex [S, D] → ℝ
 
+/-- Backward outputs for 4D `[B, H, S, D]` tensors. -/
+structure Grads4D (B H S_q S_k D : Nat) where
+  dQ : TileIndex [B, H, S_q, D] → ℝ
+  dK : TileIndex [B, H, S_k, D] → ℝ
+  dV : TileIndex [B, H, S_k, D] → ℝ
+
 /-- Forward-side log-sum-exp reconstructed from Q/K. -/
 noncomputable def lseReal {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
@@ -340,6 +346,150 @@ noncomputable def attentionBackwardReal {M S D : Nat}
     dV := fun (j, d, _) =>
       Finset.univ.sum fun i : Fin M =>
         probability Q K LSE scale i j * dO (i, d, PUnit.unit) }
+
+/-! ### 4D backward math surface -/
+
+/-- Slice a 4D `[B, H, S]` LSE tensor at fixed `(batch, head)`. -/
+def sliceBHLSE {B H S : Nat}
+    (LSE : TileIndex [B, H, S] → ℝ) (b : Fin B) (h : Fin H) : Fin S → ℝ :=
+  fun i => LSE (b, h, i, PUnit.unit)
+
+/-- 4D arbitrary-mask FA-1 backward Real spec. Each `(batch, head)` slice is
+independent and uses the corresponding 2D masked backward spec. -/
+noncomputable def attentionBackwardReal4DMasked {B H S_q S_k D : Nat}
+    (visible : (b : Fin B) → (h : Fin H) → Fin S_q → Fin S_k → Bool)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ) :
+    Grads4D B H S_q S_k D :=
+  { dQ := fun (b, h, i, d, _) =>
+      (attentionBackwardRealMasked
+        (visible b h)
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dQ
+        (i, d, PUnit.unit)
+    dK := fun (b, h, j, d, _) =>
+      (attentionBackwardRealMasked
+        (visible b h)
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dK
+        (j, d, PUnit.unit)
+    dV := fun (b, h, j, d, _) =>
+      (attentionBackwardRealMasked
+        (visible b h)
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dV
+        (j, d, PUnit.unit) }
+
+/-- 4D non-causal FA-1 backward Real spec. -/
+noncomputable def attentionBackwardReal4D {B H S_q S_k D : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ) :
+    Grads4D B H S_q S_k D :=
+  { dQ := fun (b, h, i, d, _) =>
+      (attentionBackwardReal
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dQ
+        (i, d, PUnit.unit)
+    dK := fun (b, h, j, d, _) =>
+      (attentionBackwardReal
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dK
+        (j, d, PUnit.unit)
+    dV := fun (b, h, j, d, _) =>
+      (attentionBackwardReal
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dV
+        (j, d, PUnit.unit) }
+
+/-- 4D causal FA-1 backward Real spec. -/
+noncomputable def attentionBackwardReal4DCausal {B H S_q S_k D : Nat}
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ) :
+    Grads4D B H S_q S_k D :=
+  attentionBackwardReal4DMasked
+    (fun _ _ i j => decide (j.val ≤ i.val)) Q K V dO LSE scale
+
+/-- 4D arbitrary-mask spec, `dQ` slice equation. -/
+@[simp] theorem attentionBackwardReal4DMasked_dQ_slice {B H S_q S_k D : Nat}
+    (visible : (b : Fin B) → (h : Fin H) → Fin S_q → Fin S_k → Bool)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) (idx : TileIndex [S_q, D]) :
+    (attentionBackwardReal4DMasked visible Q K V dO LSE scale).dQ
+        (b, h, idx.1, idx.2.1, PUnit.unit) =
+      (attentionBackwardRealMasked
+        (visible b h)
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dQ idx := rfl
+
+/-- 4D arbitrary-mask spec, `dK` slice equation. -/
+@[simp] theorem attentionBackwardReal4DMasked_dK_slice {B H S_q S_k D : Nat}
+    (visible : (b : Fin B) → (h : Fin H) → Fin S_q → Fin S_k → Bool)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) (idx : TileIndex [S_k, D]) :
+    (attentionBackwardReal4DMasked visible Q K V dO LSE scale).dK
+        (b, h, idx.1, idx.2.1, PUnit.unit) =
+      (attentionBackwardRealMasked
+        (visible b h)
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dK idx := rfl
+
+/-- 4D arbitrary-mask spec, `dV` slice equation. -/
+@[simp] theorem attentionBackwardReal4DMasked_dV_slice {B H S_q S_k D : Nat}
+    (visible : (b : Fin B) → (h : Fin H) → Fin S_q → Fin S_k → Bool)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) (idx : TileIndex [S_k, D]) :
+    (attentionBackwardReal4DMasked visible Q K V dO LSE scale).dV
+        (b, h, idx.1, idx.2.1, PUnit.unit) =
+      (attentionBackwardRealMasked
+        (visible b h)
+        (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+        (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dV idx := rfl
+
+/-- Bundled 4D arbitrary-mask slice equation for all three backward outputs. -/
+theorem attentionBackwardReal4DMasked_slice {B H S_q S_k D : Nat}
+    (visible : (b : Fin B) → (h : Fin H) → Fin S_q → Fin S_k → Bool)
+    (Q : TileIndex [B, H, S_q, D] → ℝ)
+    (K V : TileIndex [B, H, S_k, D] → ℝ)
+    (dO : TileIndex [B, H, S_q, D] → ℝ)
+    (LSE : TileIndex [B, H, S_q] → ℝ) (scale : ℝ)
+    (b : Fin B) (h : Fin H) :
+    (∀ idx : TileIndex [S_q, D],
+      (attentionBackwardReal4DMasked visible Q K V dO LSE scale).dQ
+          (b, h, idx.1, idx.2.1, PUnit.unit) =
+        (attentionBackwardRealMasked
+          (visible b h)
+          (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+          (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dQ idx) ∧
+    (∀ idx : TileIndex [S_k, D],
+      (attentionBackwardReal4DMasked visible Q K V dO LSE scale).dK
+          (b, h, idx.1, idx.2.1, PUnit.unit) =
+        (attentionBackwardRealMasked
+          (visible b h)
+          (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+          (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dK idx) ∧
+    (∀ idx : TileIndex [S_k, D],
+      (attentionBackwardReal4DMasked visible Q K V dO LSE scale).dV
+          (b, h, idx.1, idx.2.1, PUnit.unit) =
+        (attentionBackwardRealMasked
+          (visible b h)
+          (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
+          (sliceBH dO b h) (sliceBHLSE LSE b h) scale).dV idx) := by
+  exact ⟨fun _ => rfl, fun _ => rfl, fun _ => rfl⟩
 
 /-- The mask-aware backward spec collapses to the existing non-masked spec
 when every query/key pair is visible. -/
