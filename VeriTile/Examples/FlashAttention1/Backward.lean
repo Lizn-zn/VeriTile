@@ -166,6 +166,107 @@ def fa1BackwardStrippedKernel
   tl.store($(dVReg) + v_ptrs, dV)
 }
 
+/-- Strided / 4D-aware stripped FA-1 backward kernel.
+
+This is the stride-parameterized analogue of `fa1BackwardStrippedKernel`.
+Program IDs follow the forward strided convention: `program_id(0)` is the
+query block, `program_id(1)` is the head, and `program_id(2)` is the batch.
+The LSE tensor is viewed as `[B, H, S_q]`; all other tensors are viewed as
+`[B, H, S_*, D]`. -/
+def fa1BackwardStrippedKernelStrided
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M S D : Nat)
+    -- Q strides (axes [B, H, S_q, D]):
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    -- K strides (axes [B, H, S_k, D]):
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    -- V strides (axes [B, H, S_k, D]):
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    -- dO strides (axes [B, H, S_q, D]):
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    -- LSE strides (axes [B, H, S_q]):
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    -- dQ strides (axes [B, H, S_q, D]):
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    -- dK strides (axes [B, H, S_k, D]):
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    -- dV strides (axes [B, H, S_k, D]):
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (scale : ℝ) : ComputeKernel := triton {
+  pid_qb := tl.program_id(0)
+  pid_h  := tl.program_id(1)
+  pid_b  := tl.program_id(2)
+
+  q_base_off   := pid_b * $(stride_qb) + pid_h * $(stride_qh)
+  k_base_off   := pid_b * $(stride_kb) + pid_h * $(stride_kh)
+  v_base_off   := pid_b * $(stride_vb) + pid_h * $(stride_vh)
+  do_base_off  := pid_b * $(stride_dob) + pid_h * $(stride_doh)
+  lse_base_off := pid_b * $(stride_lseb) + pid_h * $(stride_lseh)
+  dQ_base_off  := pid_b * $(stride_dqb) + pid_h * $(stride_dqh)
+  dK_base_off  := pid_b * $(stride_dkb) + pid_h * $(stride_dkh)
+  dV_base_off  := pid_b * $(stride_dvb) + pid_h * $(stride_dvh)
+
+  offs_m := pid_qb * $(M) + tl.arange(0, $(M))
+  offs_n := tl.arange(0, $(S))
+  offs_d := tl.arange(0, $(D))
+
+  q_ptrs  := q_base_off + offs_m[:, None] * $(stride_qs) + offs_d[None, :] * $(stride_qd)
+  k_ptrs  := k_base_off + offs_n[:, None] * $(stride_kn) + offs_d[None, :] * $(stride_kd)
+  v_ptrs  := v_base_off + offs_n[:, None] * $(stride_vn) + offs_d[None, :] * $(stride_vd)
+  do_ptrs := do_base_off + offs_m[:, None] * $(stride_dom) + offs_d[None, :] * $(stride_dod)
+  lse_ptrs := lse_base_off + offs_m * $(stride_lsem)
+
+  q   := tl.load($(qReg) + q_ptrs)
+  k   := tl.load($(kReg) + k_ptrs)
+  v   := tl.load($(vReg) + v_ptrs)
+  dO  := tl.load($(dOReg) + do_ptrs)
+  lse := tl.load($(lseReg) + lse_ptrs)
+
+  scores := tl.dot(q, tl.trans(k)) * $(scale)
+  p      := tl.exp(scores - lse[:, None])
+  dV     := tl.dot(tl.trans(p), dO)
+  dP     := tl.dot(dO, tl.trans(v))
+  corr   := tl.sum(p * dP, axis = 1)
+  dS     := p * (dP - corr[:, None])
+  dQ     := tl.dot(dS, k) * $(scale)
+  dK     := tl.dot(tl.trans(dS), q) * $(scale)
+
+  dQ_ptrs := dQ_base_off + offs_m[:, None] * $(stride_dqs) + offs_d[None, :] * $(stride_dqd)
+  dK_ptrs := dK_base_off + offs_n[:, None] * $(stride_dkn) + offs_d[None, :] * $(stride_dkd)
+  dV_ptrs := dV_base_off + offs_n[:, None] * $(stride_dvn) + offs_d[None, :] * $(stride_dvd)
+
+  tl.store($(dQReg) + dQ_ptrs, dQ)
+  tl.store($(dKReg) + dK_ptrs, dK)
+  tl.store($(dVReg) + dV_ptrs, dV)
+}
+
+/-- The stride-aware stripped backward kernel is algorithm-projectable: it uses
+only Real/algorithm-layer operators, with no compute-only effects. -/
+theorem fa1BackwardStrippedKernelStrided_projectable
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (M S D : Nat)
+    (stride_qb stride_qh stride_qs stride_qd : Nat)
+    (stride_kb stride_kh stride_kn stride_kd : Nat)
+    (stride_vb stride_vh stride_vn stride_vd : Nat)
+    (stride_dob stride_doh stride_dom stride_dod : Nat)
+    (stride_lseb stride_lseh stride_lsem : Nat)
+    (stride_dqb stride_dqh stride_dqs stride_dqd : Nat)
+    (stride_dkb stride_dkh stride_dkn stride_dkd : Nat)
+    (stride_dvb stride_dvh stride_dvn stride_dvd : Nat)
+    (scale : ℝ) :
+    ∃ ak, (fa1BackwardStrippedKernelStrided
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M S D
+      stride_qb stride_qh stride_qs stride_qd
+      stride_kb stride_kh stride_kn stride_kd
+      stride_vb stride_vh stride_vn stride_vd
+      stride_dob stride_doh stride_dom stride_dod
+      stride_lseb stride_lseh stride_lsem
+      stride_dqb stride_dqh stride_dqs stride_dqd
+      stride_dkb stride_dkh stride_dkn stride_dkd
+      stride_dvb stride_dvh stride_dvn stride_dvd
+      scale).toAlgorithm? = Except.ok ak := by
+  simp [fa1BackwardStrippedKernelStrided]
+
 /-- Block-partitioned FA-1 backward kernel with atomic `dQ` accumulation.
 
 Each program owns one KV block of size `Bk`.  It stores that block's `dK` and

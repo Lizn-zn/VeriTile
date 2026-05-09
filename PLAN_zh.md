@@ -160,6 +160,10 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 - Multi-block atomic `dQ` 合成 —— causal:
   `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct`,合并为
   `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`
+- Strided backward surface:
+  `fa1BackwardStrippedKernelStrided` 与
+  `fa1BackwardStrippedKernelStrided_projectable`;任意 stride correctness
+  是下一层 proof,还不是完整 public theorem
 - 通用 launcher-facing surface:`gridLaunchedAtomic_masked_dQ_correct` 与
   `gridLaunchedAtomic_causal_dQ_correct`(kernel-agnostic atomic 合成);
   `attentionBackwardRealMasked_allVisible` 与

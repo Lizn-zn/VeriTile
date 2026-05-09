@@ -181,6 +181,10 @@ The trusted bridge from Real-algorithm correctness to floating computation
 - Multi-block atomic `dQ` composition — causal:
   `fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct`, combined as
   `fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct`
+- Strided backward surface:
+  `fa1BackwardStrippedKernelStrided` plus
+  `fa1BackwardStrippedKernelStrided_projectable`; arbitrary-stride
+  correctness is the next proof layer, not yet the public full theorem
 - Generic launcher-facing surfaces:
   `gridLaunchedAtomic_masked_dQ_correct` and
   `gridLaunchedAtomic_causal_dQ_correct` for kernel-agnostic atomic
