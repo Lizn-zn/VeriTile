@@ -89,11 +89,11 @@ theorem direct_lse_correct
     (N : Nat) (_hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (_h_x : InputLoadedAt s xReg N xs) :
     observeLSE (exec (directLSEKernel xReg yReg N) s) yReg s.pid
-      = some (directLSESpec xs) := by
+      = some (LSE xs Bool.false 0) := by
   simp [observeLSE, exec, directLSEKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        NumericDType.add, NumericDType.mul, directLSESpec]
+        NumericDType.add, NumericDType.mul, LSE]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
   rfl
@@ -105,14 +105,14 @@ theorem stable_lse_correct
     (N : Nat) (hN : 0 < N) (s : BlockState) (xs : Fin N → ℝ)
     (_h_x : InputLoadedAt s xReg N xs) :
     observeLSE (exec (stableLSEKernel xReg yReg N) s) yReg s.pid
-      = some (stableLSESpec xs (tileMax hN xs)) := by
+      = some (stableLSEWithShift xs (tileMax hN xs)) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   simp [observeLSE, exec, stableLSEKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
-        stableLSESpec, tileMax]
+        stableLSEWithShift, tileMax]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
   rfl
@@ -129,7 +129,8 @@ theorem log_sum_exp_refinement
   rw [direct_lse_correct xReg yReg N hN s xs h_x,
       stable_lse_correct xReg yReg N hN s xs h_x]
   congr 1
-  unfold directLSESpec stableLSESpec
+  unfold LSE stableLSEWithShift
+  simp
   exact log_sum_exp_shift_invariant hN xs (tileMax hN xs)
 
 /-- View-level surface for `log_sum_exp_refinement`. -/

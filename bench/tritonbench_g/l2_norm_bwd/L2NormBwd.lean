@@ -2,10 +2,12 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Semantics.MaskedReduction
 
 namespace VeriTile.Bench.TritonBenchG.L2NormBwd
 
 open VeriTile.Triton
+open VeriTile.Triton.TiledL2Norm
 
 /-- Faithful transcription of `l2_norm_bwd.py`'s `_l2_norm_bwd_kernel`.
 
@@ -43,6 +45,14 @@ noncomputable def l2BwdInputTile
       else
         some (0.0 : ℝ) }
 
+noncomputable def l2BwdLoad
+    (s : BlockState) (R : RegionName) (stride_x_row N BLOCK_N : Nat)
+    (idx : Fin BLOCK_N) : ℝ :=
+  if idx.val < N then
+    s.readMem R (s.pids 0 * stride_x_row + idx.val)
+  else
+    0
+
 noncomputable def l2BwdVarCarrier
     (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat) : WithBot ℝ :=
   (Tile.reduceSum (shape := [BLOCK_N]) ⟨0, by simp⟩ Bool.false
@@ -50,12 +60,47 @@ noncomputable def l2BwdVarCarrier
       (l2BwdInputTile s X stride_x_row N BLOCK_N)
       (l2BwdInputTile s X stride_x_row N BLOCK_N))).data PUnit.unit
 
+theorem l2BwdVarCarrier_eq_l2NormSqSum
+    (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat) :
+    l2BwdVarCarrier s X stride_x_row N BLOCK_N =
+      some (l2NormSqSum (l2BwdLoad s X stride_x_row N BLOCK_N)) := by
+  simp [l2BwdVarCarrier, l2BwdInputTile, Tile.reduceSum,
+    Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, Tile.bop, NumericDType.mul]
+  refine (reduceSum_masked_sq_eq_some_sum
+    (fun k : Fin BLOCK_N => s.readMem X (s.pids 0 * stride_x_row + k.val))
+    (fun k : Fin BLOCK_N => k.val < N)).trans ?_
+  congr 1
+  unfold l2NormSqSum l2BwdLoad
+  apply Finset.sum_congr rfl
+  intro k _hk
+  by_cases h : k.val < N <;> simp [h]
+
 noncomputable def l2BwdDotCarrier
     (s : BlockState) (X DY : RegionName) (stride_x_row N BLOCK_N : Nat) : WithBot ℝ :=
   (Tile.reduceSum (shape := [BLOCK_N]) ⟨0, by simp⟩ Bool.false
     (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
       (l2BwdInputTile s DY stride_x_row N BLOCK_N)
       (l2BwdInputTile s X stride_x_row N BLOCK_N))).data PUnit.unit
+
+theorem l2BwdDotCarrier_eq_l2NormDot
+    (s : BlockState) (X DY : RegionName) (stride_x_row N BLOCK_N : Nat) :
+    l2BwdDotCarrier s X DY stride_x_row N BLOCK_N =
+      some (l2NormDot
+        (l2BwdLoad s DY stride_x_row N BLOCK_N)
+        (l2BwdLoad s X stride_x_row N BLOCK_N)) := by
+  simp [l2BwdDotCarrier, l2BwdInputTile, Tile.reduceSum,
+    Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, Tile.bop, NumericDType.mul]
+  refine (reduceSum_masked_dot_eq_some_sum
+    (fun k : Fin BLOCK_N => s.readMem DY (s.pids 0 * stride_x_row + k.val))
+    (fun k : Fin BLOCK_N => s.readMem X (s.pids 0 * stride_x_row + k.val))
+    (fun k : Fin BLOCK_N => k.val < N)).trans ?_
+  congr 1
+  unfold l2NormDot l2BwdLoad
+  apply Finset.sum_congr rfl
+  intro k _hk
+  by_cases h : k.val < N <;> simp [h]
 
 noncomputable def l2BwdRstdCarrier
     (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat) (eps : ℝ) :
@@ -67,19 +112,10 @@ noncomputable def l2BwdRstdCarrier
 noncomputable def l2BwdSpec
     (s : BlockState) (X DY : RegionName)
     (stride_x_row N BLOCK_N : Nat) (eps : ℝ) (idx : Fin BLOCK_N) : ℝ :=
-  WithBot.unbotD 0
-    (Option.map₂ (fun lhs rhs => lhs - rhs)
-      (Option.map₂ (fun dy rstd => dy * rstd)
-        (some (s.readMem DY (s.pids 0 * stride_x_row + idx.val)))
-        (l2BwdRstdCarrier s X stride_x_row N BLOCK_N eps))
-      (Option.map₂ (fun coeff x => coeff * x)
-        (Option.map₂ (fun lhs rstd => lhs * rstd)
-          (Option.map₂ (fun dot invVar => dot * invVar)
-            (l2BwdDotCarrier s X DY stride_x_row N BLOCK_N)
-            (Option.map ((fun b => b⁻¹) ∘ fun a => a + eps)
-              (l2BwdVarCarrier s X stride_x_row N BLOCK_N)))
-          (l2BwdRstdCarrier s X stride_x_row N BLOCK_N eps))
-        (some (s.readMem X (s.pids 0 * stride_x_row + idx.val)))))
+  l2NormBwd
+    (l2BwdLoad s X stride_x_row N BLOCK_N)
+    (l2BwdLoad s DY stride_x_row N BLOCK_N)
+    eps idx
 
 def l2BwdOutOffset (s : BlockState) (stride_x_row : Nat) (i : Fin BLOCK_N) : Nat :=
   s.pids 0 * stride_x_row + i.val
@@ -113,10 +149,16 @@ theorem l2_norm_bwd_kernel_correct
     simp only [l2BwdOutOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
     by_cases hi : i.val < N
-    · simp [hi, l2BwdSpec, l2BwdRstdCarrier, l2BwdDotCarrier, l2BwdVarCarrier,
-            l2BwdInputTile, Tile.reduceSum, Tile.reduceSumDrop,
-            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-            WithBot.realSqrt, NumericDType.mul]
+    · have hvar := l2BwdVarCarrier_eq_l2NormSqSum s X stride_x_row N BLOCK_N
+      have hdot := l2BwdDotCarrier_eq_l2NormDot s X DY stride_x_row N BLOCK_N
+      simp [l2BwdVarCarrier, l2BwdInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        Tile.bop, NumericDType.mul] at hvar
+      simp [l2BwdDotCarrier, l2BwdInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        Tile.bop, NumericDType.mul] at hdot
+      simp [hi, l2BwdSpec, WithBot.realSqrt, l2BwdLoad, l2NormBwd, l2NormRstd]
+      erw [hvar, hdot]
       rfl
     · simp [hi]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))

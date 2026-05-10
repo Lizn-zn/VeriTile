@@ -4,6 +4,7 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Launch.Grid
 import VeriTile.Triton.Math.LogSumExp
+import VeriTile.Triton.Semantics.MaskedReduction
 import VeriTile.Examples.Common
 import VeriTile.Examples.LogSumExpEq
 
