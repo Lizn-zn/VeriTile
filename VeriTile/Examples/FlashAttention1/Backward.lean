@@ -3175,6 +3175,178 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_statefulTrace_blockContribution
       qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       scale tid sPre final Q K V dO LSE qStart block hPtrs hVal hMask hTailStep
 
+/-! ### Grid contributor aggregation helpers
+
+The public boundary launcher wrappers currently consume a single aggregated
+`hAtomicContrib` equality.  These helpers factor that equality through an
+explicit block-owner map, so callers can prove per-program trace facts and then
+assemble the aggregate contribution needed by the existing wrappers. -/
+
+theorem gridAtomicContrib_sum_of_owner
+    {g : Grid} {numKVBlocks : Nat}
+    (contributors : Finset (GridIndex g))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (contrib : Fin numKVBlocks → ℝ)
+    (traceSum : GridIndex g → ℝ)
+    (hTrace : ∀ block, traceSum (owner block) = contrib block) :
+    contributors.sum traceSum = Finset.univ.sum contrib := by
+  classical
+  subst contributors
+  rw [Finset.sum_image]
+  · exact Finset.sum_congr rfl (by intro block _; exact hTrace block)
+  · intro a _ b _ h
+    exact hOwnerInj h
+
+theorem gridAtomicContrib_boundary_of_owner
+    {S_q M D Bk numKVBlocks : Nat} {g : Grid}
+    (dQReg : RegionName)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (scale : ℝ)
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, D],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) =
+        dQBlockContributionBoundary qStart Q K V dO LSE scale block idx) :
+    ∀ idx : TileIndex [M, D],
+      hLaunch.contributors.sum
+          (fun gridIdx =>
+            (hLaunch.runs gridIdx).trace.atomicAddRealSum
+              (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+        Finset.univ.sum
+          (fun block : Fin numKVBlocks =>
+            dQBlockContributionBoundary qStart Q K V dO LSE scale block idx) := by
+  intro idx
+  exact gridAtomicContrib_sum_of_owner
+    hLaunch.contributors owner hContributors hOwnerInj
+    (fun block : Fin numKVBlocks =>
+      dQBlockContributionBoundary qStart Q K V dO LSE scale block idx)
+    (fun gridIdx =>
+      (hLaunch.runs gridIdx).trace.atomicAddRealSum
+        (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (by intro block; exact hTraceBlock block idx)
+
+theorem gridAtomicContrib_causalBoundary_of_owner
+    {S_q M D Bk numKVBlocks : Nat} {g : Grid}
+    (dQReg : RegionName)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (scale : ℝ)
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, D],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) =
+        dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block idx) :
+    ∀ idx : TileIndex [M, D],
+      hLaunch.contributors.sum
+          (fun gridIdx =>
+            (hLaunch.runs gridIdx).trace.atomicAddRealSum
+              (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx)) =
+        Finset.univ.sum
+          (fun block : Fin numKVBlocks =>
+            dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block idx) := by
+  intro idx
+  exact gridAtomicContrib_sum_of_owner
+    hLaunch.contributors owner hContributors hOwnerInj
+    (fun block : Fin numKVBlocks =>
+      dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block idx)
+    (fun gridIdx =>
+      (hLaunch.runs gridIdx).trace.atomicAddRealSum
+        (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (by intro block; exact hTraceBlock block idx)
+
+theorem gridAtomicContrib_boundaryD_of_owner
+    {S_q D Bd M Bk numKVBlocks : Nat} {g : Grid}
+    (dQReg : RegionName)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (scale : ℝ)
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, Bd],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) =
+        dQBlockContributionBoundaryD qStart Q K V dO LSE scale block idx) :
+    ∀ idx : TileIndex [M, Bd],
+      hLaunch.contributors.sum
+          (fun gridIdx =>
+            (hLaunch.runs gridIdx).trace.atomicAddRealSum
+              (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx)) =
+        Finset.univ.sum
+          (fun block : Fin numKVBlocks =>
+            dQBlockContributionBoundaryD qStart Q K V dO LSE scale block idx) := by
+  intro idx
+  exact gridAtomicContrib_sum_of_owner
+    hLaunch.contributors owner hContributors hOwnerInj
+    (fun block : Fin numKVBlocks =>
+      dQBlockContributionBoundaryD qStart Q K V dO LSE scale block idx)
+    (fun gridIdx =>
+      (hLaunch.runs gridIdx).trace.atomicAddRealSum
+        (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx))
+    (by intro block; exact hTraceBlock block idx)
+
+theorem gridAtomicContrib_causalBoundaryD_of_owner
+    {S_q D Bd M Bk numKVBlocks : Nat} {g : Grid}
+    (dQReg : RegionName)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (scale : ℝ)
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, Bd],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) =
+        dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block idx) :
+    ∀ idx : TileIndex [M, Bd],
+      hLaunch.contributors.sum
+          (fun gridIdx =>
+            (hLaunch.runs gridIdx).trace.atomicAddRealSum
+              (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx)) =
+        Finset.univ.sum
+          (fun block : Fin numKVBlocks =>
+            dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block idx) := by
+  intro idx
+  exact gridAtomicContrib_sum_of_owner
+    hLaunch.contributors owner hContributors hOwnerInj
+    (fun block : Fin numKVBlocks =>
+      dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block idx)
+    (fun gridIdx =>
+      (hLaunch.runs gridIdx).trace.atomicAddRealSum
+        (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx))
+    (by intro block; exact hTraceBlock block idx)
+
 /-- Input-level stateful trace theorem for one block-program, modulo the
 ordinary tail execution.  The pre-atomic prefix is discharged from the tensor
 input assumptions; the remaining tail execution hypothesis is what later
@@ -3541,22 +3713,14 @@ theorem atomicBackward_maskedTailStores_readback_rowMajor2D_base
   | none =>
       simp [atomicStmt, stepStmt, evalOp, hPtrsQ, hMask, hValQ, Tile.ofReal] at hAtomic
   | some s1 =>
-      have hPtrsK1 : s1.regs .nat [Bk, C] kPtrName =
-          some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
-            Tile .nat [Bk, C]) := by
-        rw [stepStmt_atomicAdd_regs (hnum := NumericDType.real) (h := hAtomic)]
-        exact hPtrsK
-      have hPtrsV1 : s1.regs .nat [Bk, C] vPtrName =
-          some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
-            Tile .nat [Bk, C]) := by
-        rw [stepStmt_atomicAdd_regs (hnum := NumericDType.real) (h := hAtomic)]
-        exact hPtrsV
-      have hValK1 : s1.regs .real [Bk, C] dKName = some (Tile.ofReal dKFn) := by
-        rw [stepStmt_atomicAdd_regs (hnum := NumericDType.real) (h := hAtomic)]
-        exact hValK
-      have hValV1 : s1.regs .real [Bk, C] dVName = some (Tile.ofReal dVFn) := by
-        rw [stepStmt_atomicAdd_regs (hnum := NumericDType.real) (h := hAtomic)]
-        exact hValV
+      have hPtrsK1 :=
+        stepStmt_atomicAdd_lift_regs (hnum := NumericDType.real) hAtomic hPtrsK
+      have hPtrsV1 :=
+        stepStmt_atomicAdd_lift_regs (hnum := NumericDType.real) hAtomic hPtrsV
+      have hValK1 :=
+        stepStmt_atomicAdd_lift_regs (hnum := NumericDType.real) hAtomic hValK
+      have hValV1 :=
+        stepStmt_atomicAdd_lift_regs (hnum := NumericDType.real) hAtomic hValV
       have hTail := atomicBackward_tailStoresOnly_readback_rowMajor2D_base
         dKReg dVReg Bk C base s1 kPtrName vPtrName dKName dVName
         dKFn dVFn hPtrsK1 hPtrsV1 hValK1 hValV1 hdKdV
@@ -3565,6 +3729,488 @@ theorem atomicBackward_maskedTailStores_readback_rowMajor2D_base
         simpa [atomicStmt, hAtomic] using hTail.1 idx
       · intro idx
         simpa [atomicStmt, hAtomic] using hTail.2 idx
+
+theorem atomicBackward_maskedTailStores_readback_rowMajor2D_of_stepStmts
+    (dQReg dKReg dVReg : RegionName)
+    (R C Bk base : Nat) (s final : BlockState)
+    (dQPart : TileIndex [R, C] → ℝ)
+    (active : TileIndex [R, C] → Bool)
+    (kPtrName vPtrName dKName dVName : RegName)
+    (dKFn dVFn : TileIndex [Bk, C] → ℝ)
+    (hPtrsQ : s.regs .nat [R, C] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := R) (cols := C) 0 C⟩ :
+        Tile .nat [R, C]))
+    (hMask : s.regs .bool [R, C] "qd_mask" =
+      some ({ data := active } : Tile .bool [R, C]))
+    (hValQ : s.regs .real [R, C] "dQ_part" = some (Tile.ofReal dQPart))
+    (hPtrsK : s.regs .nat [Bk, C] kPtrName =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
+        Tile .nat [Bk, C]))
+    (hPtrsV : s.regs .nat [Bk, C] vPtrName =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := C) base C⟩ :
+        Tile .nat [Bk, C]))
+    (hValK : s.regs .real [Bk, C] dKName = some (Tile.ofReal dKFn))
+    (hValV : s.regs .real [Bk, C] dVName = some (Tile.ofReal dVFn))
+    (hTailStep :
+      stepStmts
+        [
+          Stmt.atomicAdd NumericDType.real [R, C]
+            (MemAccess.region dQReg (Op.ref .nat [R, C] "dq_ptrs"))
+            (Op.ref .real [R, C] "dQ_part")
+            (MaskOpt.mask (Op.ref .bool [R, C] "qd_mask")),
+          Stmt.store .real [Bk, C]
+            (MemAccess.region dKReg (Op.ref .nat [Bk, C] kPtrName))
+            (Op.ref .real [Bk, C] dKName) MaskOpt.none,
+          Stmt.store .real [Bk, C]
+            (MemAccess.region dVReg (Op.ref .nat [Bk, C] vPtrName))
+            (Op.ref .real [Bk, C] dVName) MaskOpt.none
+        ] s = some final)
+    (hdKdV : dKReg ≠ dVReg) :
+    (∀ idx : TileIndex [Bk, C],
+      observeTileAt
+        (some final)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := C) base C) idx =
+      some (dKFn idx)) ∧
+    (∀ idx : TileIndex [Bk, C],
+      observeTileAt
+        (some final)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := C) base C) idx =
+      some (dVFn idx)) := by
+  have hTail := atomicBackward_maskedTailStores_readback_rowMajor2D_base
+    (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (R := R) (C := C) (Bk := Bk) (base := base) (s := s)
+    (dQPart := dQPart) (active := active)
+    (kPtrName := kPtrName) (vPtrName := vPtrName)
+    (dKName := dKName) (dVName := dVName)
+    (dKFn := dKFn) (dVFn := dVFn)
+    hPtrsQ hMask hValQ hPtrsK hPtrsV hValK hValV hdKdV
+  have hTailExec :
+      ((stepStmt (Stmt.atomicAdd NumericDType.real [R, C]
+        (MemAccess.region dQReg (Op.ref .nat [R, C] "dq_ptrs"))
+        (Op.ref .real [R, C] "dQ_part")
+        (MaskOpt.mask (Op.ref .bool [R, C] "qd_mask"))) s).bind fun s1 =>
+        (stepStmt (Stmt.store .real [Bk, C]
+          (MemAccess.region dKReg (Op.ref .nat [Bk, C] kPtrName))
+          (Op.ref .real [Bk, C] dKName) MaskOpt.none) s1).bind fun s2 =>
+          stepStmt (Stmt.store .real [Bk, C]
+            (MemAccess.region dVReg (Op.ref .nat [Bk, C] vPtrName))
+            (Op.ref .real [Bk, C] dVName) MaskOpt.none) s2) =
+        some final := by
+    cases hAtomic :
+        stepStmt (Stmt.atomicAdd NumericDType.real [R, C]
+          (MemAccess.region dQReg (Op.ref .nat [R, C] "dq_ptrs"))
+          (Op.ref .real [R, C] "dQ_part")
+          (MaskOpt.mask (Op.ref .bool [R, C] "qd_mask"))) s with
+    | none =>
+        simp [stepStmts, hAtomic] at hTailStep
+    | some s1 =>
+        cases hKStore :
+            stepStmt (Stmt.store .real [Bk, C]
+              (MemAccess.region dKReg (Op.ref .nat [Bk, C] kPtrName))
+              (Op.ref .real [Bk, C] dKName) MaskOpt.none) s1 with
+        | none =>
+            simp [stepStmts, hAtomic, hKStore] at hTailStep
+        | some s2 =>
+            cases hVStore :
+                stepStmt (Stmt.store .real [Bk, C]
+                  (MemAccess.region dVReg (Op.ref .nat [Bk, C] vPtrName))
+                  (Op.ref .real [Bk, C] dVName) MaskOpt.none) s2 with
+            | none =>
+                simp [stepStmts, hAtomic, hKStore, hVStore] at hTailStep
+            | some s3 =>
+                simp [stepStmts, hAtomic, hKStore, hVStore] at hTailStep ⊢
+                exact hTailStep
+  constructor
+  · intro idx
+    rw [← hTailExec]
+    exact hTail.1 idx
+  · intro idx
+    rw [← hTailExec]
+    exact hTail.2 idx
+
+theorem fa1BackwardAtomicDQBoundaryKernel_tailStores_readback_from_preAtomic
+    {S_q M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (sPre final : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, D] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hMask : sPre.regs .bool [M, D] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, D] =>
+        decide (qStart * M + idx.1.val < S_q) } : Tile .bool [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionBoundary qStart Q K V dO LSE scale block)))
+    (hPtrsK : sPre.regs .nat [Bk, D] "k_block_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+        Tile .nat [Bk, D]))
+    (hPtrsV : sPre.regs .nat [Bk, D] "v_block_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+        Tile .nat [Bk, D]))
+    (hValK : sPre.regs .real [Bk, D] "dK_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hValV : sPre.regs .real [Bk, D] "dV_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 36) sPre =
+        some final)
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some final)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some final)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  let dKFn : TileIndex [Bk, D] → ℝ := fun idx =>
+    (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  let dVFn : TileIndex [Bk, D] → ℝ := fun idx =>
+    (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  have hTailStep' :
+      stepStmts
+        [
+          Stmt.atomicAdd NumericDType.real [M, D]
+            (MemAccess.region dQReg (Op.ref .nat [M, D] "dq_ptrs"))
+            (Op.ref .real [M, D] "dQ_part")
+            (MaskOpt.mask (Op.ref .bool [M, D] "qd_mask")),
+          Stmt.store .real [Bk, D]
+            (MemAccess.region dKReg (Op.ref .nat [Bk, D] "k_block_ptrs"))
+            (Op.ref .real [Bk, D] "dK_block") MaskOpt.none,
+          Stmt.store .real [Bk, D]
+            (MemAccess.region dVReg (Op.ref .nat [Bk, D] "v_block_ptrs"))
+            (Op.ref .real [Bk, D] "dV_block") MaskOpt.none
+        ] sPre = some final := by
+    simpa [fa1BackwardAtomicDQBoundaryKernel_drop36] using hTailStep
+  have hTail := atomicBackward_maskedTailStores_readback_rowMajor2D_of_stepStmts
+    (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (R := M) (C := D) (Bk := Bk) (base := block.val * Bk * D)
+    (s := sPre) (final := final)
+    (dQPart := dQBlockContributionBoundary qStart Q K V dO LSE scale block)
+    (active := fun idx : TileIndex [M, D] => decide (qStart * M + idx.1.val < S_q))
+    (kPtrName := "k_block_ptrs") (vPtrName := "v_block_ptrs")
+    (dKName := "dK_block") (dVName := "dV_block")
+    (dKFn := dKFn) (dVFn := dVFn)
+    hPtrs hMask hVal hPtrsK hPtrsV
+    (by simpa [dKFn] using hValK)
+    (by simpa [dVFn] using hValV)
+    hTailStep' hdKdV
+  exact hTail
+
+theorem fa1BackwardAtomicDQCausalBoundaryKernel_tailStores_readback_from_preAtomic
+    {S_q M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (sPre final : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, D] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hMask : sPre.regs .bool [M, D] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, D] =>
+        decide (qStart * M + idx.1.val < S_q) } : Tile .bool [M, D]))
+    (hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block)))
+    (hPtrsK : sPre.regs .nat [Bk, D] "k_block_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+        Tile .nat [Bk, D]))
+    (hPtrsV : sPre.regs .nat [Bk, D] "v_block_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+        Tile .nat [Bk, D]))
+    (hValK : sPre.regs .real [Bk, D] "dK_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hValV : sPre.regs .real [Bk, D] "dV_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) sPre =
+        some final)
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some final)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some final)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  let dKFn : TileIndex [Bk, D] → ℝ := fun idx =>
+    (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  let dVFn : TileIndex [Bk, D] → ℝ := fun idx =>
+    (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  have hTailStep' :
+      stepStmts
+        [
+          Stmt.atomicAdd NumericDType.real [M, D]
+            (MemAccess.region dQReg (Op.ref .nat [M, D] "dq_ptrs"))
+            (Op.ref .real [M, D] "dQ_part")
+            (MaskOpt.mask (Op.ref .bool [M, D] "qd_mask")),
+          Stmt.store .real [Bk, D]
+            (MemAccess.region dKReg (Op.ref .nat [Bk, D] "k_block_ptrs"))
+            (Op.ref .real [Bk, D] "dK_block") MaskOpt.none,
+          Stmt.store .real [Bk, D]
+            (MemAccess.region dVReg (Op.ref .nat [Bk, D] "v_block_ptrs"))
+            (Op.ref .real [Bk, D] "dV_block") MaskOpt.none
+        ] sPre = some final := by
+    simpa [fa1BackwardAtomicDQCausalBoundaryKernel_drop40] using hTailStep
+  have hTail := atomicBackward_maskedTailStores_readback_rowMajor2D_of_stepStmts
+    (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (R := M) (C := D) (Bk := Bk) (base := block.val * Bk * D)
+    (s := sPre) (final := final)
+    (dQPart := dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block)
+    (active := fun idx : TileIndex [M, D] => decide (qStart * M + idx.1.val < S_q))
+    (kPtrName := "k_block_ptrs") (vPtrName := "v_block_ptrs")
+    (dKName := "dK_block") (dVName := "dV_block")
+    (dKFn := dKFn) (dVFn := dVFn)
+    hPtrs hMask hVal hPtrsK hPtrsV
+    (by simpa [dKFn] using hValK)
+    (by simpa [dVFn] using hValV)
+    hTailStep' hdKdV
+  exact hTail
+
+theorem fa1BackwardAtomicDQBoundaryDKernel_tailStores_readback_from_preAtomic
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (sPre final : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, Bd] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd⟩ : Tile .nat [M, Bd]))
+    (hMask : sPre.regs .bool [M, Bd] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D) } : Tile .bool [M, Bd]))
+    (hVal : sPre.regs .real [M, Bd] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionBoundaryD qStart Q K V dO LSE scale block)))
+    (hPtrsK : sPre.regs .nat [Bk, Bd] "k_block_out" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := Bd) (block.val * Bk * Bd) Bd⟩ :
+        Tile .nat [Bk, Bd]))
+    (hPtrsV : sPre.regs .nat [Bk, Bd] "v_block_out" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := Bd) (block.val * Bk * Bd) Bd⟩ :
+        Tile .nat [Bk, Bd]))
+    (hValK : sPre.regs .real [Bk, Bd] "dK_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
+        (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hValV : sPre.regs .real [Bk, Bd] "dV_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
+        (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) sPre =
+        some final)
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some final)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some final)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  let dKFn : TileIndex [Bk, Bd] → ℝ := fun idx =>
+    (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale).dK
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  let dVFn : TileIndex [Bk, Bd] → ℝ := fun idx =>
+    (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale).dV
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  have hTailStep' :
+      stepStmts
+        [
+          Stmt.atomicAdd NumericDType.real [M, Bd]
+            (MemAccess.region dQReg (Op.ref .nat [M, Bd] "dq_ptrs"))
+            (Op.ref .real [M, Bd] "dQ_part")
+            (MaskOpt.mask (Op.ref .bool [M, Bd] "qd_mask")),
+          Stmt.store .real [Bk, Bd]
+            (MemAccess.region dKReg (Op.ref .nat [Bk, Bd] "k_block_out"))
+            (Op.ref .real [Bk, Bd] "dK_block") MaskOpt.none,
+          Stmt.store .real [Bk, Bd]
+            (MemAccess.region dVReg (Op.ref .nat [Bk, Bd] "v_block_out"))
+            (Op.ref .real [Bk, Bd] "dV_block") MaskOpt.none
+        ] sPre = some final := by
+    simpa [fa1BackwardAtomicDQBoundaryDKernel_drop40] using hTailStep
+  have hTail := atomicBackward_maskedTailStores_readback_rowMajor2D_of_stepStmts
+    (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (R := M) (C := Bd) (Bk := Bk) (base := block.val * Bk * Bd)
+    (s := sPre) (final := final)
+    (dQPart := dQBlockContributionBoundaryD qStart Q K V dO LSE scale block)
+    (active := fun idx : TileIndex [M, Bd] =>
+      decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D))
+    (kPtrName := "k_block_out") (vPtrName := "v_block_out")
+    (dKName := "dK_block") (dVName := "dV_block")
+    (dKFn := dKFn) (dVFn := dVFn)
+    hPtrs hMask hVal hPtrsK hPtrsV
+    (by simpa [dKFn] using hValK)
+    (by simpa [dVFn] using hValV)
+    hTailStep' hdKdV
+  exact hTail
+
+theorem fa1BackwardAtomicDQCausalBoundaryDKernel_tailStores_readback_from_preAtomic
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (sPre final : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (qStart : Nat) (block : Fin numKVBlocks)
+    (hPtrs : sPre.regs .nat [M, Bd] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd⟩ : Tile .nat [M, Bd]))
+    (hMask : sPre.regs .bool [M, Bd] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D) } : Tile .bool [M, Bd]))
+    (hVal : sPre.regs .real [M, Bd] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block)))
+    (hPtrsK : sPre.regs .nat [Bk, Bd] "k_block_out" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := Bd) (block.val * Bk * Bd) Bd⟩ :
+        Tile .nat [Bk, Bd]))
+    (hPtrsV : sPre.regs .nat [Bk, Bd] "v_block_out" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := Bd) (block.val * Bk * Bd) Bd⟩ :
+        Tile .nat [Bk, Bd]))
+    (hValK : sPre.regs .real [Bk, Bd] "dK_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
+        (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hValV : sPre.regs .real [Bk, Bd] "dV_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
+        (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hTailStep :
+      stepStmts
+        ((fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 44) sPre =
+        some final)
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some final)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some final)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  let dKFn : TileIndex [Bk, Bd] → ℝ := fun idx =>
+    (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale).dK
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  let dVFn : TileIndex [Bk, Bd] → ℝ := fun idx =>
+    (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale).dV
+      (FA1Math.blockIndex Bk numKVBlocks block.val
+        (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
+  have hTailStep' :
+      stepStmts
+        [
+          Stmt.atomicAdd NumericDType.real [M, Bd]
+            (MemAccess.region dQReg (Op.ref .nat [M, Bd] "dq_ptrs"))
+            (Op.ref .real [M, Bd] "dQ_part")
+            (MaskOpt.mask (Op.ref .bool [M, Bd] "qd_mask")),
+          Stmt.store .real [Bk, Bd]
+            (MemAccess.region dKReg (Op.ref .nat [Bk, Bd] "k_block_out"))
+            (Op.ref .real [Bk, Bd] "dK_block") MaskOpt.none,
+          Stmt.store .real [Bk, Bd]
+            (MemAccess.region dVReg (Op.ref .nat [Bk, Bd] "v_block_out"))
+            (Op.ref .real [Bk, Bd] "dV_block") MaskOpt.none
+        ] sPre = some final := by
+    simpa [fa1BackwardAtomicDQCausalBoundaryDKernel_drop44] using hTailStep
+  have hTail := atomicBackward_maskedTailStores_readback_rowMajor2D_of_stepStmts
+    (dQReg := dQReg) (dKReg := dKReg) (dVReg := dVReg)
+    (R := M) (C := Bd) (Bk := Bk) (base := block.val * Bk * Bd)
+    (s := sPre) (final := final)
+    (dQPart := dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block)
+    (active := fun idx : TileIndex [M, Bd] =>
+      decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D))
+    (kPtrName := "k_block_out") (vPtrName := "v_block_out")
+    (dKName := "dK_block") (dVName := "dV_block")
+    (dKFn := dKFn) (dVFn := dVFn)
+    hPtrs hMask hVal hPtrsK hPtrsV
+    (by simpa [dKFn] using hValK)
+    (by simpa [dVFn] using hValV)
+    hTailStep' hdKdV
+  exact hTail
 
 set_option maxHeartbeats 1000000 in
 set_option linter.unusedSimpArgs false in
@@ -4259,7 +4905,7 @@ theorem gridLaunchedAtomic_boundary_backward_correct
 
 The theorem keeps the trace and ordinary-store obligations explicit, but fixes
 the kernel to the concrete query-boundary backward implementation. -/
-theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
+private theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
     {S_q D M Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -4343,6 +4989,215 @@ theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
     (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
     hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
     owner hDKWrite hDVWrite hDKBlock hDVBlock
+
+/-- Owner-factored variant of
+`fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct`.
+
+This removes the aggregated `hAtomicContrib` argument from the caller surface:
+the caller supplies a block-owner map and per-owner atomic contribution facts,
+which are assembled by `gridAtomicContrib_boundary_of_owner`.  Ordinary
+`dK`/`dV` readback obligations are still explicit and are handled by the next
+#109 cleanup step. -/
+private theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner
+    {S_q D M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, D],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) =
+        dQBlockContributionBoundary qStart Q K V dO LSE scale block idx)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDKBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dKReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+    (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dVReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
+    let bw := attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  exact fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    qStart scale s sFinal Q K V dO LSE g
+    hLaunch hInitialDQ hNoOrdinaryDQ
+    (gridAtomicContrib_boundary_of_owner
+      (dQReg := dQReg) (hLaunch := hLaunch)
+      (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+      qStart scale owner hContributors hOwnerInj hTraceBlock)
+    owner hDKWrite hDVWrite hDKBlock hDVBlock
+
+/-- Owner- and tail-factored variant of
+`fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct`.
+
+Compared with `_of_owner`, callers no longer provide final-frame `dK`/`dV`
+readback facts.  They provide the concrete boundary kernel's pre-atomic
+register facts plus the post-prefix tail execution for each owner frame, and
+the ordinary-store readback is derived by
+`fa1BackwardAtomicDQBoundaryKernel_tailStores_readback_from_preAtomic`. -/
+theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner_tail
+    {S_q D M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, D],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) =
+        dQBlockContributionBoundary qStart Q K V dO LSE scale block idx)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (sPre : Fin numKVBlocks → BlockState)
+    (hPtrs : ∀ block, (sPre block).regs .nat [M, D] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hMask : ∀ block, (sPre block).regs .bool [M, D] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, D] =>
+        decide (qStart * M + idx.1.val < S_q) } : Tile .bool [M, D]))
+    (hVal : ∀ block, (sPre block).regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionBoundary qStart Q K V dO LSE scale block)))
+    (hPtrsK : ∀ block, (sPre block).regs .nat [Bk, D] "k_block_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+        Tile .nat [Bk, D]))
+    (hPtrsV : ∀ block, (sPre block).regs .nat [Bk, D] "v_block_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+        Tile .nat [Bk, D]))
+    (hValK : ∀ block, (sPre block).regs .real [Bk, D] "dK_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hValV : ∀ block, (sPre block).regs .real [Bk, D] "dV_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hTailStep : ∀ block,
+      stepStmts
+        ((fa1BackwardAtomicDQBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 36) (sPre block) =
+        some (hLaunch.frames (owner block)).final)
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  refine fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    qStart scale s sFinal Q K V dO LSE g
+    hLaunch hInitialDQ hNoOrdinaryDQ owner hContributors hOwnerInj hTraceBlock
+    hDKWrite hDVWrite ?_ ?_
+  · intro block idx
+    have hTail := (fa1BackwardAtomicDQBoundaryKernel_tailStores_readback_from_preAtomic
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale (sPre block) (hLaunch.frames (owner block)).final
+      Q K V dO LSE qStart block
+      (hPtrs block) (hMask block) (hVal block)
+      (hPtrsK block) (hPtrsV block) (hValK block) (hValV block)
+      (hTailStep block) hdKdV).1 idx
+    simpa [observeTileAt] using hTail
+  · intro block idx
+    have hTail := (fa1BackwardAtomicDQBoundaryKernel_tailStores_readback_from_preAtomic
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale (sPre block) (hLaunch.frames (owner block)).final
+      Q K V dO LSE qStart block
+      (hPtrs block) (hMask block) (hVal block)
+      (hPtrsK block) (hPtrsV block) (hValK block) (hValV block)
+      (hTailStep block) hdKdV).2 idx
+    simpa [observeTileAt] using hTail
 
 /-- Causal-boundary specialization of
 `gridLaunchedAtomic_masked_backward_correct`. -/
@@ -4438,7 +5293,7 @@ theorem gridLaunchedAtomic_causalBoundary_backward_correct
 
 /-- Concrete launcher-facing causal-boundary correctness for
 `fa1BackwardAtomicDQCausalBoundaryKernel`. -/
-theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct
+private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct
     {S_q D M Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -4522,6 +5377,205 @@ theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct
     (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
     hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
     owner hDKWrite hDVWrite hDKBlock hDVBlock
+
+/-- Owner-factored variant of
+`fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct`.
+
+This removes the aggregated `hAtomicContrib` argument from the caller surface;
+ordinary `dK`/`dV` readback obligations remain explicit. -/
+private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of_owner
+    {S_q D M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, D],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) =
+        dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block idx)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDKBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dKReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+    (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
+      (hLaunch.frames (owner block)).final.readMem dVReg
+          (Offset.rowMajor2D (rows := Bk) (cols := D)
+            (block.val * Bk * D) D idx) =
+        (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
+    let bw := attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  exact fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    qStart scale s sFinal Q K V dO LSE g
+    hLaunch hInitialDQ hNoOrdinaryDQ
+    (gridAtomicContrib_causalBoundary_of_owner
+      (dQReg := dQReg) (hLaunch := hLaunch)
+      (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+      qStart scale owner hContributors hOwnerInj hTraceBlock)
+    owner hDKWrite hDVWrite hDKBlock hDVBlock
+
+/-- Owner- and tail-factored causal-boundary concrete wrapper. -/
+theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of_owner_tail
+    {S_q D M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, D],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, D],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, D],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := D) 0 D idx) =
+        dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block idx)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D idx))
+    (sPre : Fin numKVBlocks → BlockState)
+    (hPtrs : ∀ block, (sPre block).regs .nat [M, D] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]))
+    (hMask : ∀ block, (sPre block).regs .bool [M, D] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, D] =>
+        decide (qStart * M + idx.1.val < S_q) } : Tile .bool [M, D]))
+    (hVal : ∀ block, (sPre block).regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausalBoundary qStart Q K V dO LSE scale block)))
+    (hPtrsK : ∀ block, (sPre block).regs .nat [Bk, D] "k_block_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+        Tile .nat [Bk, D]))
+    (hPtrsV : ∀ block, (sPre block).regs .nat [Bk, D] "v_block_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := D) (block.val * Bk * D) D⟩ :
+        Tile .nat [Bk, D]))
+    (hValK : ∀ block, (sPre block).regs .real [Bk, D] "dK_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hValV : ∀ block, (sPre block).regs .real [Bk, D] "dV_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
+        (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hTailStep : ∀ block,
+      stepStmts
+        ((fa1BackwardAtomicDQCausalBoundaryKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) (sPre block) =
+        some (hLaunch.frames (owner block)).final)
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, D],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := D) 0 D) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
+          (block.val * Bk * D) D) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  refine fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of_owner
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    qStart scale s sFinal Q K V dO LSE g
+    hLaunch hInitialDQ hNoOrdinaryDQ owner hContributors hOwnerInj hTraceBlock
+    hDKWrite hDVWrite ?_ ?_
+  · intro block idx
+    have hTail := (fa1BackwardAtomicDQCausalBoundaryKernel_tailStores_readback_from_preAtomic
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale (sPre block) (hLaunch.frames (owner block)).final
+      Q K V dO LSE qStart block
+      (hPtrs block) (hMask block) (hVal block)
+      (hPtrsK block) (hPtrsV block) (hValK block) (hValV block)
+      (hTailStep block) hdKdV).1 idx
+    simpa [observeTileAt] using hTail
+  · intro block idx
+    have hTail := (fa1BackwardAtomicDQCausalBoundaryKernel_tailStores_readback_from_preAtomic
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale (sPre block) (hLaunch.frames (owner block)).final
+      Q K V dO LSE qStart block
+      (hPtrs block) (hMask block) (hVal block)
+      (hPtrsK block) (hPtrsV block) (hValK block) (hValV block)
+      (hTailStep block) hdKdV).2 idx
+    simpa [observeTileAt] using hTail
 
 /-- D-tail boundary specialization of
 `gridLaunchedAtomic_boundary_backward_correct`.
@@ -4621,7 +5675,7 @@ theorem gridLaunchedAtomic_boundaryD_backward_correct
 
 /-- Concrete launcher-facing D-tail boundary correctness for
 `fa1BackwardAtomicDQBoundaryDKernel`. -/
-theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
+private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
     {S_q D Bd M Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -4708,6 +5762,211 @@ theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
     (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
     hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
     owner hDKWrite hDVWrite hDKBlock hDVBlock
+
+/-- Owner-factored variant of
+`fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct`.
+
+This removes the aggregated `hAtomicContrib` argument from the caller surface;
+ordinary `dK`/`dV` readback obligations remain explicit. -/
+private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owner
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, Bd],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, Bd],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, Bd],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) =
+        dQBlockContributionBoundaryD qStart Q K V dO LSE scale block idx)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd idx))
+    (hDKBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
+      (hLaunch.frames (owner block)).final.readMem dKReg
+          (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+            (block.val * Bk * Bd) Bd idx) =
+        (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+    (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
+      (hLaunch.frames (owner block)).final.readMem dVReg
+          (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+            (block.val * Bk * Bd) Bd idx) =
+        (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
+    let bw := attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, Bd],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  exact fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    qStart scale s sFinal Q K V dO LSE g
+    hLaunch hInitialDQ hNoOrdinaryDQ
+    (gridAtomicContrib_boundaryD_of_owner
+      (dQReg := dQReg) (hLaunch := hLaunch)
+      (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+      qStart scale owner hContributors hOwnerInj hTraceBlock)
+    owner hDKWrite hDVWrite hDKBlock hDVBlock
+
+/-- Owner- and tail-factored D-tail boundary concrete wrapper. -/
+theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owner_tail
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, Bd],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, Bd],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, Bd],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) =
+        dQBlockContributionBoundaryD qStart Q K V dO LSE scale block idx)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd idx))
+    (sPre : Fin numKVBlocks → BlockState)
+    (hPtrs : ∀ block, (sPre block).regs .nat [M, Bd] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd⟩ : Tile .nat [M, Bd]))
+    (hMask : ∀ block, (sPre block).regs .bool [M, Bd] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D) } : Tile .bool [M, Bd]))
+    (hVal : ∀ block, (sPre block).regs .real [M, Bd] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionBoundaryD qStart Q K V dO LSE scale block)))
+    (hPtrsK : ∀ block, (sPre block).regs .nat [Bk, Bd] "k_block_out" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := Bd) (block.val * Bk * Bd) Bd⟩ :
+        Tile .nat [Bk, Bd]))
+    (hPtrsV : ∀ block, (sPre block).regs .nat [Bk, Bd] "v_block_out" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := Bd) (block.val * Bk * Bd) Bd⟩ :
+        Tile .nat [Bk, Bd]))
+    (hValK : ∀ block, (sPre block).regs .real [Bk, Bd] "dK_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
+        (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hValV : ∀ block, (sPre block).regs .real [Bk, Bd] "dV_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
+        (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hTailStep : ∀ block,
+      stepStmts
+        ((fa1BackwardAtomicDQBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 40) (sPre block) =
+        some (hLaunch.frames (owner block)).final)
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, Bd],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  refine fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owner
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    qStart scale s sFinal Q K V dO LSE g
+    hLaunch hInitialDQ hNoOrdinaryDQ owner hContributors hOwnerInj hTraceBlock
+    hDKWrite hDVWrite ?_ ?_
+  · intro block idx
+    have hTail := (fa1BackwardAtomicDQBoundaryDKernel_tailStores_readback_from_preAtomic
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale (sPre block) (hLaunch.frames (owner block)).final
+      Q K V dO LSE qStart block
+      (hPtrs block) (hMask block) (hVal block)
+      (hPtrsK block) (hPtrsV block) (hValK block) (hValV block)
+      (hTailStep block) hdKdV).1 idx
+    simpa [observeTileAt] using hTail
+  · intro block idx
+    have hTail := (fa1BackwardAtomicDQBoundaryDKernel_tailStores_readback_from_preAtomic
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale (sPre block) (hLaunch.frames (owner block)).final
+      Q K V dO LSE qStart block
+      (hPtrs block) (hMask block) (hVal block)
+      (hPtrsK block) (hPtrsV block) (hValK block) (hValV block)
+      (hTailStep block) hdKdV).2 idx
+    simpa [observeTileAt] using hTail
 
 /-- D-tail causal-boundary specialization of
 `gridLaunchedAtomic_causalBoundary_backward_correct`. -/
@@ -4804,7 +6063,7 @@ theorem gridLaunchedAtomic_causalBoundaryD_backward_correct
 
 /-- Concrete launcher-facing D-tail causal-boundary correctness for
 `fa1BackwardAtomicDQCausalBoundaryDKernel`. -/
-theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct
+private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct
     {S_q D Bd M Bk numKVBlocks : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
     (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
@@ -4891,6 +6150,211 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct
     (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE) (g := g)
     hLaunch hInitialDQ hNoOrdinaryDQ hAtomicContrib
     owner hDKWrite hDVWrite hDKBlock hDVBlock
+
+/-- Owner-factored variant of
+`fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct`.
+
+This removes the aggregated `hAtomicContrib` argument from the caller surface;
+ordinary `dK`/`dV` readback obligations remain explicit. -/
+private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_of_owner
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, Bd],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, Bd],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, Bd],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) =
+        dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block idx)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd idx))
+    (hDKBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
+      (hLaunch.frames (owner block)).final.readMem dKReg
+          (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+            (block.val * Bk * Bd) Bd idx) =
+        (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
+    (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
+      (hLaunch.frames (owner block)).final.readMem dVReg
+          (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+            (block.val * Bk * Bd) Bd idx) =
+        (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
+    let bw := attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, Bd],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  exact fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    qStart scale s sFinal Q K V dO LSE g
+    hLaunch hInitialDQ hNoOrdinaryDQ
+    (gridAtomicContrib_causalBoundaryD_of_owner
+      (dQReg := dQReg) (hLaunch := hLaunch)
+      (Q := Q) (K := K) (V := V) (dO := dO) (LSE := LSE)
+      qStart scale owner hContributors hOwnerInj hTraceBlock)
+    owner hDKWrite hDVWrite hDKBlock hDVBlock
+
+/-- Owner- and tail-factored causal D-tail boundary concrete wrapper. -/
+theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_of_owner_tail
+    {S_q D Bd M Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (qStart : Nat) (scale : ℝ) (s sFinal : BlockState)
+    (Q : TileIndex [S_q, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [S_q, D] → ℝ) (LSE : Fin S_q → ℝ)
+    (g : Grid)
+    (hLaunch :
+      Kernel.GridLaunchedAtomic
+        (fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel g s sFinal)
+    (hInitialDQ :
+      ∀ idx : TileIndex [M, Bd],
+        s.readMem dQReg (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) = 0)
+    (hNoOrdinaryDQ :
+      ∀ idx : TileIndex [M, Bd],
+        ¬ Kernel.GridWriteFootprint hLaunch.frames
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx))
+    (owner : Fin numKVBlocks → GridIndex g)
+    (hContributors : hLaunch.contributors = Finset.univ.image owner)
+    (hOwnerInj : Function.Injective owner)
+    (hTraceBlock : ∀ block, ∀ idx : TileIndex [M, Bd],
+      (hLaunch.runs (owner block)).trace.atomicAddRealSum
+          (dQReg, Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd idx) =
+        dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block idx)
+    (hDKWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dKReg, Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd idx))
+    (hDVWrite : ∀ block idx,
+      (hLaunch.frames (owner block)).writes
+        (dVReg, Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd idx))
+    (sPre : Fin numKVBlocks → BlockState)
+    (hPtrs : ∀ block, (sPre block).regs .nat [M, Bd] "dq_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd⟩ : Tile .nat [M, Bd]))
+    (hMask : ∀ block, (sPre block).regs .bool [M, Bd] "qd_mask" =
+      some ({ data := fun idx : TileIndex [M, Bd] =>
+        decide (qStart * M + idx.1.val < S_q ∧ idx.2.1.val < D) } : Tile .bool [M, Bd]))
+    (hVal : ∀ block, (sPre block).regs .real [M, Bd] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausalBoundaryD qStart Q K V dO LSE scale block)))
+    (hPtrsK : ∀ block, (sPre block).regs .nat [Bk, Bd] "k_block_out" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := Bd) (block.val * Bk * Bd) Bd⟩ :
+        Tile .nat [Bk, Bd]))
+    (hPtrsV : ∀ block, (sPre block).regs .nat [Bk, Bd] "v_block_out" =
+      some (⟨Offset.rowMajor2D (rows := Bk) (cols := Bd) (block.val * Bk * Bd) Bd⟩ :
+        Tile .nat [Bk, Bd]))
+    (hValK : ∀ block, (sPre block).regs .real [Bk, Bd] "dK_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
+        (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dK
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hValV : ∀ block, (sPre block).regs .real [Bk, Bd] "dV_block" =
+      some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
+        (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+          qStart Q K V dO LSE scale).dV
+          (FA1Math.blockIndex Bk numKVBlocks block.val
+            (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
+    (hTailStep : ∀ block,
+      stepStmts
+        ((fa1BackwardAtomicDQCausalBoundaryDKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          S_q M D Bd Bk numKVBlocks qStart scale).toAlgKernel.body.drop 44) (sPre block) =
+        some (hLaunch.frames (owner block)).final)
+    (hdKdV : dKReg ≠ dVReg) :
+    let bw := attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
+      qStart Q K V dO LSE scale
+    (∀ idx : TileIndex [M, Bd],
+      observeTileAt
+        (some sFinal)
+        dQReg (Offset.rowMajor2D (rows := M) (cols := Bd) 0 Bd) idx =
+      some (bw.dQ idx)) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some sFinal)
+        dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dK
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
+    (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
+      observeTileAt
+        (some sFinal)
+        dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
+          (block.val * Bk * Bd) Bd) idx =
+      some (bw.dV
+        (FA1Math.blockIndex Bk numKVBlocks block.val
+          (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
+  refine fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_of_owner
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    qStart scale s sFinal Q K V dO LSE g
+    hLaunch hInitialDQ hNoOrdinaryDQ owner hContributors hOwnerInj hTraceBlock
+    hDKWrite hDVWrite ?_ ?_
+  · intro block idx
+    have hTail := (fa1BackwardAtomicDQCausalBoundaryDKernel_tailStores_readback_from_preAtomic
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale (sPre block) (hLaunch.frames (owner block)).final
+      Q K V dO LSE qStart block
+      (hPtrs block) (hMask block) (hVal block)
+      (hPtrsK block) (hPtrsV block) (hValK block) (hValV block)
+      (hTailStep block) hdKdV).1 idx
+    simpa [observeTileAt] using hTail
+  · intro block idx
+    have hTail := (fa1BackwardAtomicDQCausalBoundaryDKernel_tailStores_readback_from_preAtomic
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale (sPre block) (hLaunch.frames (owner block)).final
+      Q K V dO LSE qStart block
+      (hPtrs block) (hMask block) (hVal block)
+      (hPtrsK block) (hPtrsV block) (hValK block) (hValV block)
+      (hTailStep block) hdKdV).2 idx
+    simpa [observeTileAt] using hTail
 
 /-- Causal specialization of `gridLaunchedAtomic_masked_dQ_correct`. -/
 theorem gridLaunchedAtomic_causal_dQ_correct

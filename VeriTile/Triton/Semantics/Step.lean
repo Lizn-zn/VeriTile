@@ -5,6 +5,7 @@ Statement stepping, kernel execution, and execution-state preservation lemmas.
 -/
 
 import VeriTile.Triton.Semantics.EvalOp
+import VeriTile.Triton.Semantics.AtomicReduction
 
 namespace VeriTile.Triton
 
@@ -285,59 +286,6 @@ end stepForLoopAux
 noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
   stepStmts k.body s
 
-private theorem foldl_atomicAddAt_pid {α : Type}
-    (dtype : TileDType) (h : NumericDType dtype)
-    (regionFn : α → RegionName) (offsetFn : α → Nat)
-    (valueFn : BlockState → α → TileCarrier dtype) (active : α → Bool)
-    (l : List α) (s : BlockState) :
-    (l.foldl
-      (fun acc i =>
-        if active i then
-          acc.writeMemTyped dtype (regionFn i) (offsetFn i)
-            (h.add (acc.readMemValue dtype (regionFn i) (offsetFn i)) (valueFn acc i))
-        else acc) s).pid = s.pid := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-      rw [List.foldl_cons]
-      by_cases hactive : active hd = true
-      · simp only [hactive, if_true]
-        rw [ih]
-        simp
-      · have hfalse : active hd = false := by
-          cases h' : active hd
-          · rfl
-          · exact False.elim (hactive h')
-        simp only [hfalse]
-        exact ih s
-
-private theorem foldl_atomicAddAt_regs {α : Type}
-    (dtype : TileDType) (h : NumericDType dtype)
-    (regionFn : α → RegionName) (offsetFn : α → Nat)
-    (valueFn : BlockState → α → TileCarrier dtype) (active : α → Bool)
-    (l : List α) (s : BlockState)
-    (dtype' : TileDType) (shape' : TileShape) (name : RegName) :
-    (l.foldl
-      (fun acc i =>
-        if active i then
-          acc.writeMemTyped dtype (regionFn i) (offsetFn i)
-            (h.add (acc.readMemValue dtype (regionFn i) (offsetFn i)) (valueFn acc i))
-        else acc) s).regs dtype' shape' name = s.regs dtype' shape' name := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-      rw [List.foldl_cons]
-      by_cases hactive : active hd = true
-      · simp only [hactive, if_true]
-        rw [ih]
-        simp
-      · have hfalse : active hd = false := by
-          cases h' : active hd
-          · rfl
-          · exact False.elim (hactive h')
-        simp only [hfalse]
-        exact ih s
-
 theorem stepStmt_atomicAdd_regs {dtype : TileDType} (hnum : NumericDType dtype)
     {shape : TileShape} {mem : MemAccess shape} {val : Op dtype shape}
     {mask : MaskOpt dtype shape} {s s' : BlockState}
@@ -463,6 +411,24 @@ theorem stepStmt_atomicAdd_regs {dtype : TileDType} (hnum : NumericDType dtype)
               (fun i : TileIndex shape =>
                 masks.data i && (ptrTile.data i).inBounds (TileShape.indexToList shape i) boundaryCheck)
               (TileShape.allIndices shape) s dtype' shape' name
+
+/-- Convenience wrapper around `stepStmt_atomicAdd_regs`: lift a register
+hypothesis from before to after an atomic-add step. The atomic step only
+writes memory, so any register `(dtype', shape', name)`'s value carries
+through unchanged.
+
+Used by FA-style backward kernels (`fa1BackwardAtomicDQ*`,
+`fa2BackwardAtomicDQ*`) where 4 register hypotheses (`q_ptrs`,
+`k_block_ptrs`, `dK_block`, `dV_block`, etc.) need to be lifted past the
+leading atomic dQ store before the tail dK/dV stores can use them. -/
+theorem stepStmt_atomicAdd_lift_regs {dtype : TileDType} (hnum : NumericDType dtype)
+    {shape : TileShape} {mem : MemAccess shape} {val : Op dtype shape}
+    {mask : MaskOpt dtype shape} {s s' : BlockState}
+    (h : stepStmt (Stmt.atomicAdd hnum shape mem val mask) s = some s')
+    {dtype' : TileDType} {shape' : TileShape} {name : RegName}
+    {t : Tile dtype' shape'} (hPre : s.regs dtype' shape' name = some t) :
+    s'.regs dtype' shape' name = some t := by
+  rw [stepStmt_atomicAdd_regs hnum h]; exact hPre
 
 mutual
 
