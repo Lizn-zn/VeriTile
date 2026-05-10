@@ -65,6 +65,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Activation
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
@@ -148,17 +149,22 @@ theorem exec_unfusedSiLUKernel
   case some s1 =>
     cases h2 : stepStmts (siluStepSilu zReg siluReg blockSize).body s1 <;> simp
 
+/-- Per-lane fused-SiLU output. Bound here to the kernel's `(xs, gates, residuals)`
+input layout; delegates the math to `Triton.TiledActivation.fusedSiLU`. -/
 noncomputable def fusedSiLUSpec {blockSize : Nat}
     (xs gates residuals : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
-  residuals i + (xs i * gates i) * Real.sigmoid (xs i * gates i)
+  Triton.TiledActivation.fusedSiLU (xs i) (gates i) (residuals i)
 
+/-- Per-lane gate output `xs i * gates i`. Pure pointwise multiply; kept local
+because there is no reusable math operator at this granularity. -/
 noncomputable def gateSpec {blockSize : Nat}
     (xs gates : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
   xs i * gates i
 
+/-- Per-lane SiLU output. Delegates to `Triton.TiledActivation.silu`. -/
 noncomputable def siluSpec {blockSize : Nat}
     (zs : Fin blockSize → ℝ) (i : Fin blockSize) : ℝ :=
-  zs i * Real.sigmoid (zs i)
+  Triton.TiledActivation.silu (zs i)
 
 theorem fused_silu_correct
     (xReg gateReg residualReg outReg : RegionName)
@@ -177,7 +183,8 @@ theorem fused_silu_correct
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, fusedSiLUKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
-        fusedSiLUSpec]
+        fusedSiLUSpec, Triton.TiledActivation.fusedSiLU,
+        Triton.TiledActivation.silu]
   unfold InputLoadedAt at _h_x _h_g _h_res
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x, _h_g, _h_res]
@@ -240,7 +247,7 @@ theorem silu_step_silu_correct
     injective_offset_singleton (s.pid * blockSize)
   simp [observeAt, exec, siluStepSilu, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
-        siluSpec]
+        siluSpec, Triton.TiledActivation.silu]
   unfold InputLoadedAt at _h_z
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_z]
@@ -389,7 +396,8 @@ theorem unfused_silu_correct
           rw [hpid2s] at hout
           simp [h_silu]
           rw [hout]
-          simp [fusedSiLUSpec, siluSpec, gateSpec]
+          simp [fusedSiLUSpec, siluSpec, gateSpec,
+                Triton.TiledActivation.fusedSiLU, Triton.TiledActivation.silu]
 
 theorem silu_kernels_refinement
     (xReg gateReg residualReg zReg siluReg outReg : RegionName)

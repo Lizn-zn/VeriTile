@@ -16,6 +16,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Math.Reduction
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
@@ -308,11 +309,14 @@ def onlineWelfordLoopBody (xReg : RegionName) (blockSize : Nat) : List Stmt :=
         (Op.mul .real .nil (Op.ref .real [] "delta")
           (Op.ref .real [] "delta2")))]
 
+/-- Per-row mean spec. Thin alias for `Triton.TiledReduction.welfordMean`. -/
 noncomputable def welfordMeanSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  twoPassMean xs
+  Triton.TiledReduction.welfordMean xs
 
+/-- Per-row population variance spec. Thin alias for
+`Triton.TiledReduction.welfordVar`. -/
 noncomputable def welfordVarSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  twoPassS xs / N
+  Triton.TiledReduction.welfordVar xs
 
 theorem twopass_welford_correct
     (xReg meanReg varReg : RegionName) (blockSize : Nat) (_hN : 0 < blockSize)
@@ -330,7 +334,8 @@ theorem twopass_welford_correct
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         Tile.natToReal, NumericDType.add,
         NumericDType.mul, NumericDType.sub, NumericDType.div,
-        welfordMeanSpec, twoPassMean]
+        welfordMeanSpec, Triton.TiledReduction.welfordMean,
+        Triton.TiledReduction.tileSum]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
     simp [_h_mv]
@@ -340,7 +345,9 @@ theorem twopass_welford_correct
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         Tile.natToReal, NumericDType.add,
         NumericDType.mul, NumericDType.sub, NumericDType.div,
-        welfordVarSpec, twoPassS, twoPassMean]
+        welfordVarSpec, Triton.TiledReduction.welfordVar,
+        Triton.TiledReduction.welfordSumSq,
+        Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
     simp [pow_two]
@@ -517,9 +524,13 @@ theorem online_welford_correct
   constructor
   · rw [hExec]
     simp [BlockState.readMem, BlockState.writeMem, h_mv, welfordMeanSpec,
-      hMeanEq]
+      Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum,
+      twoPassMean, hMeanEq]
   · rw [hExec]
-    simp [BlockState.readMem, BlockState.writeMem, welfordVarSpec, hSEq]
+    simp [BlockState.readMem, BlockState.writeMem, welfordVarSpec,
+      Triton.TiledReduction.welfordVar, Triton.TiledReduction.welfordSumSq,
+      Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum,
+      twoPassS, twoPassMean, hSEq]
 
 theorem welford_kernels_refinement
     (xReg meanReg varReg : RegionName) (blockSize : Nat) (hN : 0 < blockSize)

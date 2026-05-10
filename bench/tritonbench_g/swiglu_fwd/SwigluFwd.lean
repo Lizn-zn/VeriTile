@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Activation
 
 namespace VeriTile.Bench.TritonBenchG.SwigluFwd
 
@@ -29,9 +30,6 @@ def swiglu_fwd_kernel
   tl.store(OUT_base + cols, out, mask=cols < $(ncols))
 }
 
-noncomputable def swigluSpec (x y : ℝ) : ℝ :=
-  x * Real.sigmoid x * y
-
 def swigluOffset (s : BlockState) (stride : Nat) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
   s.pids 0 * stride + s.pids 1 * BLOCK_N + i.val
 
@@ -49,7 +47,7 @@ theorem swiglu_fwd_kernel_correct
       let outAddr := swigluOffset s stride_out_row BLOCK_N i
       s'.readMem OUT outAddr =
         if s.pids 1 * BLOCK_N + i.val < ncols then
-          swigluSpec (xs i) (ys i)
+          TiledActivation.swiglu (xs i) (ys i)
         else s.readMem OUT outAddr := by
   intro i
   have h_inj : Function.Injective
@@ -72,7 +70,8 @@ theorem swiglu_fwd_kernel_correct
   · have hx := h_x i
     have hy := h_y i
     simp [swigluOffset, Nat.add_assoc] at hx hy
-    simp [hi, swigluSpec, FloatDType.toWithBot, hx, hy]
+    simp [hi, TiledActivation.swiglu, TiledActivation.silu,
+          FloatDType.toWithBot, hx, hy]
   · simp [hi]
 
 /-- Compute-facing correctness for `_swiglu_fwd_kernel`. -/
@@ -90,7 +89,7 @@ theorem swiglu_fwd_kernel_compute_correct
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_N => s.pids 1 * BLOCK_N + i.val < ncols)
         (fun i => (OUT, swigluOffset s stride_out_row BLOCK_N i)))
-      (expected := fun i => swigluSpec (xs i) (ys i)) := by
+      (expected := fun i => TiledActivation.swiglu (xs i) (ys i)) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [swiglu_fwd_kernel]

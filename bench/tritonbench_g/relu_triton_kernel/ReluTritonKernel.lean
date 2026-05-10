@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Activation
 import VeriTile.Examples.Common
 
 namespace VeriTile.Bench.TritonBenchG.ReluTritonKernel
@@ -30,14 +31,6 @@ def relu_kernel
   }
 }
 
-/-- Algorithm-layer branch form of ReLU, matching `tl.where(x >= 0, x, 0)`. -/
-noncomputable def reluSpec (x : ℝ) : ℝ := by
-  classical
-  exact WithBot.unbotD 0
-    (if ComparableDType.real.ge (some x) (some 0) then
-      (some x : WithBot ℝ)
-    else (some 0.0 : WithBot ℝ))
-
 /-- Algorithm-layer correctness for `relu_kernel`.
 
 Only `pid = 0` writes. In that branch, active lanes write the branch-form ReLU
@@ -52,7 +45,7 @@ theorem relu_kernel_correct
       let addr := s.pid * block_size + i.val
       observeAt (exec (relu_kernel x_ptr out_ptr N block_size) s)
           out_ptr block_size s.pid i
-        = some (if s.pid = 0 ∧ addr < N then reluSpec (xs i)
+        = some (if s.pid = 0 ∧ addr < N then TiledActivation.relu (xs i)
                 else s.readMem out_ptr addr) := by
   intro i
   by_cases hpid : s.pid = 0
@@ -69,7 +62,20 @@ theorem relu_kernel_correct
     have hx0 : s.readMem x_ptr i.val = xs i := by
       simpa [hpid] using h_x i
     by_cases hi : i.val < N
-    · simp [hi, hx0, reluSpec, ComparableDType.ge]
+    · simp [hi, hx0, TiledActivation.relu]
+      split_ifs with hge
+      · -- hge : (some 0 : WithBot ℝ) ≤ some (xs i)
+        have h : (0 : ℝ) ≤ xs i :=
+          WithBot.coe_le_coe.mp (hge : (↑(0 : ℝ) : WithBot ℝ) ≤ ↑(xs i))
+        change xs i = max 0 (xs i)
+        exact (max_eq_right h).symm
+      · have h : ¬ ((0 : ℝ) ≤ xs i) := fun h' =>
+          hge (WithBot.coe_le_coe.mpr h' :
+            (↑(0 : ℝ) : WithBot ℝ) ≤ ↑(xs i))
+        rw [not_le] at h
+        change (0.0 : ℝ) = max 0 (xs i)
+        rw [max_eq_left h.le]
+        norm_num
     · simp [hi]
   · simp [observeAt, exec, relu_kernel, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.select, NumericDType.add, NumericDType.mul,
@@ -87,7 +93,7 @@ theorem relu_kernel_compute_correct
       (write := ComputeCorrect.WriteMap.writeIf
           (fun i : Fin block_size => s.pid = 0 ∧ s.pid * block_size + i.val < N)
           (fun i => (out_ptr, s.pid * block_size + i.val)))
-      (expected := fun i => reluSpec (xs i)) := by
+      (expected := fun i => TiledActivation.relu (xs i)) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0

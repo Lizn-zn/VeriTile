@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Activation
 
 namespace VeriTile.Bench.TritonBenchG.SwigluTriton
 
@@ -54,17 +55,6 @@ def swiglu_backward_kernel
   tl.store(B_base + col_offsets, db_row, mask=mask)
 }
 
-noncomputable def swigluSpec (a b : ℝ) : ℝ :=
-  a * Real.sigmoid a * b
-
-noncomputable def swigluBackwardASpec (dc a b : ℝ) : ℝ :=
-  let sig := Real.sigmoid a
-  let silu := a * sig
-  dc * (silu * (1 - sig) + sig) * b
-
-noncomputable def swigluBackwardBSpec (dc a : ℝ) : ℝ :=
-  dc * (a * Real.sigmoid a)
-
 def swigluOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pids 0 * stride + i.val
 
@@ -81,7 +71,7 @@ theorem swiglu_forward_kernel_correct
       let outAddr := swigluOffset s stride i
       s'.readMem C outAddr =
         if i.val < n_cols then
-          swigluSpec (as i) (bs i)
+          TiledActivation.swiglu (as i) (bs i)
         else s.readMem C outAddr := by
   intro i
   have h_inj : Function.Injective
@@ -100,7 +90,8 @@ theorem swiglu_forward_kernel_correct
   · have ha := h_a i
     have hb := h_b i
     simp [swigluOffset] at ha hb
-    simp [hi, swigluSpec, FloatDType.toWithBot, ha, hb]
+    simp [hi, TiledActivation.swiglu, TiledActivation.silu,
+          FloatDType.toWithBot, ha, hb]
   · simp [hi]
 
 /-- Compute-facing correctness for `_swiglu_forward_kernel`. -/
@@ -117,7 +108,7 @@ theorem swiglu_forward_kernel_compute_correct
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_SIZE => i.val < n_cols)
         (fun i => (C, swigluOffset s stride i)))
-      (expected := fun i => swigluSpec (as i) (bs i)) := by
+      (expected := fun i => TiledActivation.swiglu (as i) (bs i)) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [swiglu_forward_kernel]
@@ -147,13 +138,13 @@ theorem swiglu_backward_kernel_correct
       let outAddr := swigluOffset s stride i
       s'.readMem A outAddr =
         if i.val < n_cols then
-          swigluBackwardASpec (dcs i) (as i) (bs i)
+          TiledActivation.swigluBwdA (dcs i) (as i) (bs i)
         else s.readMem A outAddr) ∧
     (∀ i : Fin BLOCK_SIZE,
       let outAddr := swigluOffset s stride i
       s'.readMem B outAddr =
         if i.val < n_cols then
-          swigluBackwardBSpec (dcs i) (as i)
+          TiledActivation.swigluBwdB (dcs i) (as i)
         else s.readMem B outAddr) := by
   have h_inj : Function.Injective
       (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * stride + idx.1.val) := by
@@ -178,7 +169,8 @@ theorem swiglu_backward_kernel_correct
       have ha := h_a i
       have hb := h_b i
       simp [swigluOffset] at hdc ha hb
-      simp [hi, swigluBackwardASpec, hdc, ha, hb, FloatDType.toWithBot]
+      simp [hi, TiledActivation.swigluBwdA, TiledActivation.silu,
+            hdc, ha, hb, FloatDType.toWithBot]
     · simp [hi]
   · intro i
     simp only [swigluOffset]
@@ -187,7 +179,8 @@ theorem swiglu_backward_kernel_correct
     · have hdc := h_dc i
       have ha := h_a i
       simp [swigluOffset] at hdc ha
-      simp [hi, swigluBackwardBSpec, hdc, ha, FloatDType.toWithBot]
+      simp [hi, TiledActivation.swigluBwdB, TiledActivation.silu,
+            hdc, ha, FloatDType.toWithBot]
     · rw [BlockState.scatter_prop_masked_preserves_other_region
         (region := A) (R := B) (h_ne := Ne.symm hAB)
         (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
@@ -215,8 +208,8 @@ theorem swiglu_backward_kernel_compute_correct
             if lane.val < n_cols then some (B, swigluOffset s stride lane) else none)
       (expected := fun i =>
         match i with
-        | .inl lane => swigluBackwardASpec (dcs lane) (as lane) (bs lane)
-        | .inr lane => swigluBackwardBSpec (dcs lane) (as lane)) := by
+        | .inl lane => TiledActivation.swigluBwdA (dcs lane) (as lane) (bs lane)
+        | .inr lane => TiledActivation.swigluBwdB (dcs lane) (as lane)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [swiglu_backward_kernel]
   intro s0 s' hExec hs0

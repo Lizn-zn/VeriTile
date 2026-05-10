@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Activation
 
 namespace VeriTile.Bench.TritonBenchG.GegluTanhTriton
 
@@ -71,26 +72,6 @@ def geglu_tanh_backward_kernel
   tl.store(B_base + col_offsets, db_row, mask=mask)
 }
 
-noncomputable def gegluTanhArg (a : ℝ) : ℝ :=
-  (0.7978845608028654 : ℝ) * (a + (0.044715 : ℝ) * (a * a * a))
-
-noncomputable def gegluTanhCore (a : ℝ) : ℝ :=
-  (0.5 : ℝ) * a * (1 + Real.tanh (gegluTanhArg a))
-
-noncomputable def gegluTanhForwardSpec (a b : ℝ) : ℝ :=
-  gegluTanhCore a * b
-
-noncomputable def gegluTanhDBSpec (dc a : ℝ) : ℝ :=
-  dc * gegluTanhCore a
-
-noncomputable def gegluTanhDASpec (dc a b : ℝ) : ℝ :=
-  let tanhResult := Real.tanh (gegluTanhArg a)
-  let term1 := (0.5 : ℝ) * (1 + tanhResult)
-  let tanhSq := tanhResult * tanhResult
-  let term2 := (0.5 : ℝ) * a * (1 - tanhSq) *
-    ((0.7978845608028654 : ℝ) * (1 + (3.0 : ℝ) * (0.044715 : ℝ) * a * a))
-  dc * b * (term1 + term2)
-
 def gegluTanhOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pids 0 * stride + i.val
 
@@ -107,7 +88,7 @@ theorem geglu_tanh_forward_kernel_correct
       let outAddr := gegluTanhOffset s stride i
       s'.readMem C outAddr =
         if i.val < n_cols then
-          gegluTanhForwardSpec (as i) (bs i)
+          TiledActivation.geluTanhFwd (as i) (bs i)
         else s.readMem C outAddr := by
   intro i
   have h_inj : Function.Injective
@@ -125,7 +106,8 @@ theorem geglu_tanh_forward_kernel_correct
   · have ha := h_a i
     have hb := h_b i
     simp [gegluTanhOffset] at ha hb
-    simp [hi, gegluTanhForwardSpec, gegluTanhCore, gegluTanhArg, ha, hb]
+    simp [hi, TiledActivation.geluTanhFwd, TiledActivation.geluTanhCore,
+          TiledActivation.geluTanhArg, ha, hb]
   · simp [hi]
 
 /-- Compute-facing correctness for `_geglu_tanh_forward_kernel`. -/
@@ -142,7 +124,7 @@ theorem geglu_tanh_forward_kernel_compute_correct
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_SIZE => i.val < n_cols)
         (fun i => (C, gegluTanhOffset s stride i)))
-      (expected := fun i => gegluTanhForwardSpec (as i) (bs i)) := by
+      (expected := fun i => TiledActivation.geluTanhFwd (as i) (bs i)) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [geglu_tanh_forward_kernel]
@@ -172,13 +154,13 @@ theorem geglu_tanh_backward_kernel_correct
       let outAddr := gegluTanhOffset s stride i
       s'.readMem A outAddr =
         if i.val < n_cols then
-          gegluTanhDASpec (dcs i) (as i) (bs i)
+          TiledActivation.geluTanhBwdA (dcs i) (as i) (bs i)
         else s.readMem A outAddr) ∧
     (∀ i : Fin BLOCK_SIZE,
       let outAddr := gegluTanhOffset s stride i
       s'.readMem B outAddr =
         if i.val < n_cols then
-          gegluTanhDBSpec (dcs i) (as i)
+          TiledActivation.geluTanhBwdB (dcs i) (as i)
         else s.readMem B outAddr) := by
   have h_inj : Function.Injective
       (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * stride + idx.1.val) := by
@@ -203,7 +185,8 @@ theorem geglu_tanh_backward_kernel_correct
       have ha := h_a i
       have hb := h_b i
       simp [gegluTanhOffset] at hdc ha hb
-      simp [hi, gegluTanhDASpec, gegluTanhArg, hdc, ha, hb]
+      simp [hi, TiledActivation.geluTanhBwdA, TiledActivation.geluTanhArg,
+            hdc, ha, hb]
     · simp [hi]
   · intro i
     simp only [gegluTanhOffset]
@@ -212,7 +195,8 @@ theorem geglu_tanh_backward_kernel_correct
     · have hdc := h_dc i
       have ha := h_a i
       simp [gegluTanhOffset] at hdc ha
-      simp [hi, gegluTanhDBSpec, gegluTanhCore, gegluTanhArg, hdc, ha]
+      simp [hi, TiledActivation.geluTanhBwdB, TiledActivation.geluTanhCore,
+            TiledActivation.geluTanhArg, hdc, ha]
     · rw [BlockState.scatter_prop_masked_preserves_other_region
         (region := A) (R := B) (h_ne := Ne.symm hAB)
         (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
@@ -240,8 +224,8 @@ theorem geglu_tanh_backward_kernel_compute_correct
             if lane.val < n_cols then some (B, gegluTanhOffset s stride lane) else none)
       (expected := fun i =>
         match i with
-        | .inl lane => gegluTanhDASpec (dcs lane) (as lane) (bs lane)
-        | .inr lane => gegluTanhDBSpec (dcs lane) (as lane)) := by
+        | .inl lane => TiledActivation.geluTanhBwdA (dcs lane) (as lane) (bs lane)
+        | .inr lane => TiledActivation.geluTanhBwdB (dcs lane) (as lane)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [geglu_tanh_backward_kernel]
   intro s0 s' hExec hs0

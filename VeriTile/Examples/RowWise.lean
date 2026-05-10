@@ -17,6 +17,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Reduction
 import VeriTile.Examples.Common
 
 namespace VeriTile.Examples
@@ -74,17 +75,13 @@ def rowWiseMaxKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : ComputeKe
 
 /-! ## Math denotations -/
 
-/-- Mathematical row-wise sum: just the `Finset.sum` over the tile. -/
+/-- Mathematical row-wise sum. Thin alias for `Triton.TiledReduction.tileSum`. -/
 noncomputable def rowWiseSumSpec {N : Nat} (xs : Fin N → ℝ) : ℝ :=
-  ∑ i, xs i
+  Triton.TiledReduction.tileSum xs
 
-/-- Mathematical row-wise max via Mathlib's `Finset.sup'`.
-
-The non-empty hypothesis mirrors `Tile.reduceMax`, which is only defined on
-`tile (n + 1)` because `Finset.sup'` requires a non-empty index set. -/
+/-- Mathematical row-wise max. Thin alias for `Triton.TiledReduction.tileMax`. -/
 noncomputable def rowWiseMaxSpec {N : Nat} (h : 0 < N) (xs : Fin N → ℝ) : ℝ :=
-  match N, h, xs with
-  | _ + 1, _, xs => Finset.univ.sup' Finset.univ_nonempty xs
+  Triton.TiledReduction.tileMax h xs
 
 /-! ## Kernel correctness -/
 
@@ -103,7 +100,7 @@ theorem rowWiseSum_correct
         Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.mul, NumericDType.add,
-        rowWiseSumSpec]
+        rowWiseSumSpec, Triton.TiledReduction.tileSum]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
   rfl
@@ -159,7 +156,7 @@ theorem rowWiseMax_correct
         Tile.bop, Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.mul, NumericDType.add,
-        rowWiseMaxSpec]
+        rowWiseMaxSpec, Triton.TiledReduction.tileMax]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
   rfl

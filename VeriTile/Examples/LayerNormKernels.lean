@@ -14,6 +14,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Math.Reduction
 import VeriTile.Examples.Common
 import VeriTile.Examples.WelfordKernels
 
@@ -98,12 +99,28 @@ def layerNormAffineTailKernel
       ]
   ComputeKernel.fromAlgBody [xReg, γReg, βReg] [yReg] body
 
-/-- LayerNorm spec: `y_i = (x_i − μ) / √(var + ε) · γ_i + β_i`. -/
+/-- LayerNorm spec: `y_i = (x_i − μ) / √(var + ε) · γ_i + β_i`.
+
+Body uses the kernel-internal `twoPassMean`/`twoPassS` since the proof bridges
+through the running ↔ two-pass equivalence. The user-facing operator is
+`Triton.TiledReduction.layerNorm`; see `layerNormSpec_eq_layerNorm` below. -/
 noncomputable def layerNormSpec {N : Nat}
     (xs γs βs : Fin N → ℝ) (ε : ℝ) (i : Fin N) : ℝ :=
   let μ : ℝ := twoPassMean xs
   let v : ℝ := twoPassS xs / N
   (xs i - μ) / Real.sqrt (v + ε) * γs i + βs i
+
+/-- `layerNormSpec` agrees with `Triton.TiledReduction.layerNorm`; the local
+spec is a beta-η variant that exposes `twoPassMean`/`twoPassS` as named
+let-bindings to ease kernel-side proofs. -/
+theorem layerNormSpec_eq_layerNorm {N : Nat}
+    (xs γs βs : Fin N → ℝ) (ε : ℝ) (i : Fin N) :
+    layerNormSpec xs γs βs ε i =
+      Triton.TiledReduction.layerNorm xs γs βs ε i := by
+  simp [layerNormSpec, Triton.TiledReduction.layerNorm,
+        Triton.TiledReduction.welfordMean, Triton.TiledReduction.welfordVar,
+        Triton.TiledReduction.welfordSumSq, Triton.TiledReduction.tileSum,
+        twoPassMean, twoPassS]
 
 private def P_layernorm {N : Nat}
     (xs γs βs : Fin N → ℝ) (xReg γReg βReg : RegionName)
@@ -203,7 +220,8 @@ private theorem layernorm_affine_tail_correct
     injective_offset_singleton (s.pid * N)
   simp [observeAt, exec, layerNormAffineTailKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.natToReal,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, layerNormSpec,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        layerNormSpec,
         hM, hS, hpidReg, hMean, hSEq]
   unfold InputLoadedAt at hX
   unfold InputFeatureLoadedAt at hγ hβ
@@ -230,8 +248,8 @@ theorem twopass_layernorm_correct
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         Tile.natToReal,
-        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, layerNormSpec, twoPassMean,
-        twoPassS]
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        layerNormSpec, twoPassMean, twoPassS]
   unfold InputLoadedAt at _h_x
   unfold InputFeatureLoadedAt at _h_γ _h_β
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]

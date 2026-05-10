@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Activation
 
 namespace VeriTile.Bench.TritonBenchG.SwigluBackward
 
@@ -45,16 +46,6 @@ def swiglu_bwd_kernel
   }
 }
 
-noncomputable def swigluBwdDXSpec (x y dout : ℝ) : ℝ :=
-  let sig := Real.sigmoid x
-  sig * (1 + x * (1 - sig)) * y * dout
-
-noncomputable def swigluBwdDYSpec (x dout : ℝ) : ℝ :=
-  x * Real.sigmoid x * dout
-
-noncomputable def swigluBwdOutSpec (x y : ℝ) : ℝ :=
-  x * Real.sigmoid x * y
-
 def swigluOffset (s : BlockState) (stride : Nat) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
   s.pids 0 * stride + s.pids 1 * BLOCK_N + i.val
 
@@ -80,20 +71,20 @@ theorem swiglu_bwd_kernel_correct
       let outAddr := swigluOffset s stride_dx_row BLOCK_N i
       s'.readMem DX outAddr =
         if s.pids 1 * BLOCK_N + i.val < ncols then
-          swigluBwdDXSpec (xs i) (ys i) (douts i)
+          TiledActivation.swigluBwdA (douts i) (xs i) (ys i)
         else s.readMem DX outAddr) ∧
     (∀ i : Fin BLOCK_N,
       let outAddr := swigluOffset s stride_dy_row BLOCK_N i
       s'.readMem DY outAddr =
         if s.pids 1 * BLOCK_N + i.val < ncols then
-          swigluBwdDYSpec (xs i) (douts i)
+          TiledActivation.swigluBwdB (douts i) (xs i)
         else s.readMem DY outAddr) ∧
     (∀ i : Fin BLOCK_N,
       let outAddr := swigluOffset s stride_out_row BLOCK_N i
       s'.readMem OUT outAddr =
         if RECOMPUTE_OUTPUT then
           if s.pids 1 * BLOCK_N + i.val < ncols then
-            swigluBwdOutSpec (xs i) (ys i)
+            TiledActivation.swiglu (xs i) (ys i)
           else s.readMem OUT outAddr
         else s.readMem OUT outAddr) := by
   have h_inj_dx : Function.Injective
@@ -144,7 +135,9 @@ theorem swiglu_bwd_kernel_correct
         have hy := h_y i
         have hdout := h_dout i
         simp [swigluOffset, Nat.add_assoc] at hx hy hdout
-        simp [hi, swigluBwdDXSpec, hx, hy, hdout, FloatDType.toWithBot]
+        simp [hi, TiledActivation.swigluBwdA, TiledActivation.silu,
+              hx, hy, hdout, FloatDType.toWithBot]
+        ring
       · simp [hi]
     constructor
     · intro i
@@ -154,7 +147,9 @@ theorem swiglu_bwd_kernel_correct
       · have hx := h_x i
         have hdout := h_dout i
         simp [swigluOffset, Nat.add_assoc] at hx hdout
-        simp [hi, swigluBwdDYSpec, hx, hdout, FloatDType.toWithBot]
+        simp [hi, TiledActivation.swigluBwdB, TiledActivation.silu,
+              hx, hdout, FloatDType.toWithBot]
+        ring
       · rw [BlockState.scatter_prop_masked_preserves_other_region
           (region := DX) (R := DY) (h_ne := Ne.symm hDXDY)
           (P := fun idx : TileIndex [BLOCK_N] =>
@@ -200,7 +195,9 @@ theorem swiglu_bwd_kernel_correct
         have hy := h_y i
         have hdout := h_dout i
         simp [swigluOffset, Nat.add_assoc] at hx hy hdout
-        simp [hi, swigluBwdDXSpec, hx, hy, hdout, FloatDType.toWithBot]
+        simp [hi, TiledActivation.swigluBwdA, TiledActivation.silu,
+              hx, hy, hdout, FloatDType.toWithBot]
+        ring
       · simp [hi]
     constructor
     · intro i
@@ -217,7 +214,9 @@ theorem swiglu_bwd_kernel_correct
       · have hx := h_x i
         have hdout := h_dout i
         simp [swigluOffset, Nat.add_assoc] at hx hdout
-        simp [hi, swigluBwdDYSpec, hx, hdout, FloatDType.toWithBot]
+        simp [hi, TiledActivation.swigluBwdB, TiledActivation.silu,
+              hx, hdout, FloatDType.toWithBot]
+        ring
       · rw [BlockState.scatter_prop_masked_preserves_other_region
           (region := DX) (R := DY) (h_ne := Ne.symm hDXDY)
           (P := fun idx : TileIndex [BLOCK_N] =>
@@ -232,7 +231,8 @@ theorem swiglu_bwd_kernel_correct
       · have hx := h_x i
         have hy := h_y i
         simp [swigluOffset, Nat.add_assoc] at hx hy
-        simp [hi, swigluBwdOutSpec, hx, hy, FloatDType.toWithBot]
+        simp [hi, TiledActivation.swiglu, TiledActivation.silu,
+              hx, hy, FloatDType.toWithBot]
       · simp [hi]
         rw [BlockState.scatter_prop_masked_preserves_other_region
           (region := DY) (R := OUT) (h_ne := hOUTDY)
@@ -283,9 +283,9 @@ theorem swiglu_bwd_kernel_compute_correct
             else none)
       (expected := fun i =>
         match i with
-        | .inl (.inl lane) => swigluBwdDXSpec (xs lane) (ys lane) (douts lane)
-        | .inl (.inr lane) => swigluBwdDYSpec (xs lane) (douts lane)
-        | .inr lane => swigluBwdOutSpec (xs lane) (ys lane)) := by
+        | .inl (.inl lane) => TiledActivation.swigluBwdA (douts lane) (xs lane) (ys lane)
+        | .inl (.inr lane) => TiledActivation.swigluBwdB (douts lane) (xs lane)
+        | .inr lane => TiledActivation.swiglu (xs lane) (ys lane)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [swiglu_bwd_kernel]
   intro s0 s' hExec hs0
