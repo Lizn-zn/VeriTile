@@ -9,9 +9,6 @@ import Mathlib.Order.WithBot
 
 namespace VeriTile.Triton
 
-/-- Symbolic name for a memory region (input/output buffer). -/
-abbrev RegionName := String
-
 /-- Symbolic name for a register (scalar or tile variable). -/
 abbrev RegName := String
 
@@ -21,6 +18,67 @@ inductive PaddingOption where
   deriving DecidableEq, Repr
 
 /--
+Triton block-local value type.
+
+VeriTile uses "tile" rather than "tensor" for Triton program values: a scalar
+is a rank-0 tile, `tl.arange` produces a 1D tile, and future block-pointer /
+FlashAttention work will introduce 2D tiles. This avoids conflating Triton
+block-local values with framework-level tensors.
+-/
+inductive TileDType where
+  | real
+  | fp32
+  | fp16
+  | bf16
+  | int
+  | nat
+  | bool
+  | ptr
+  | blockPtr
+  deriving DecidableEq, Repr
+
+/-- Symbolic name for a memory region (input/output buffer), indexed by the
+buffer's element dtype.
+
+The phantom `d` lets the DSL recover `tl.load` / `tl.store` return dtypes
+from the region argument instead of needing a separate macro-side `dtype=`
+kwarg. Backwards compatibility: `RegionName := Region .real` keeps every
+real-typed kernel signature unchanged. Non-real kernels (e.g.
+`triton_argmax`'s `mid_index : torch.int64`) declare `Region .nat` directly.
+-/
+structure Region (d : TileDType) where
+  name : String
+  deriving DecidableEq, Repr, Hashable
+
+/-- String literals at Region call sites elaborate as a `Region` with the
+expected dtype. Existing callers that wrote `kernel "X" "Y"` keep working:
+`d` is solved from the parameter type at the call site. -/
+instance {d : TileDType} : Coe String (Region d) where
+  coe s := ⟨s⟩
+
+namespace Region
+
+/-- Cast a region's phantom dtype tag without changing its underlying name.
+Useful when bridging between layers that drop or restore element-dtype
+tracking (e.g., dynamic pointer arithmetic that erases the source region's
+dtype). -/
+@[inline] def cast {d d' : TileDType} (r : Region d) : Region d' :=
+  ⟨r.name⟩
+
+@[simp] theorem cast_name {d d' : TileDType} (r : Region d) :
+    (Region.cast (d := d) (d' := d') r).name = r.name := rfl
+
+@[simp] theorem cast_id {d : TileDType} (r : Region d) :
+    Region.cast (d := d) (d' := d) r = r := rfl
+
+end Region
+
+/-- Legacy alias. Equals `Region .real` so every existing
+`(X : RegionName)` parameter remains a real-typed region. New non-real
+kernels write `(X : Region .nat)` etc. directly. -/
+abbrev RegionName := Region .real
+
+/--
 Runtime value carried by Triton block pointers.
 
 The model is intentionally layout-explicit rather than hardware-specific:
@@ -28,6 +86,9 @@ The model is intentionally layout-explicit rather than hardware-specific:
 For a block-local index `idx`, the parent tensor coordinate is
 `offsets + idx`; the flat memory address is
 `baseOffset + Σ axis, (offsets[axis] + idx[axis]) * strides[axis]`.
+
+`region` carries `Region .real` for now; typed block pointers (real / nat /
+int element channels) are deferred to a later migration.
 -/
 structure BlockPtr where
   region : RegionName
@@ -78,26 +139,6 @@ def advance (ptr : BlockPtr) (deltas : List Nat) : BlockPtr :=
   simp [BlockPtr.inBounds, checkedInBounds, nthD]
 
 end BlockPtr
-
-/--
-Triton block-local value type.
-
-VeriTile uses "tile" rather than "tensor" for Triton program values: a scalar
-is a rank-0 tile, `tl.arange` produces a 1D tile, and future block-pointer /
-FlashAttention work will introduce 2D tiles. This avoids conflating Triton
-block-local values with framework-level tensors.
--/
-inductive TileDType where
-  | real
-  | fp32
-  | fp16
-  | bf16
-  | int
-  | nat
-  | bool
-  | ptr
-  | blockPtr
-  deriving DecidableEq, Repr
 
 /-- Lean carrier for each VeriTile tile dtype.
 
