@@ -72,9 +72,7 @@ theorem masked_add_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [exec, masked_add_kernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.cop, Tile.uop,
-        NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        Bool.and_eq_true] at hExec
+        tile_elementwise, Bool.and_eq_true] at hExec
   subst s'
   simp only [maskedAddOffset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]

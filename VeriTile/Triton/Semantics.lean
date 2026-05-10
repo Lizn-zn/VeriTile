@@ -9,3 +9,4 @@ import VeriTile.Triton.Semantics.State
 import VeriTile.Triton.Semantics.Eval
 import VeriTile.Triton.Semantics.TiledIndexing
 import VeriTile.Triton.Semantics.MaskedReduction
+import VeriTile.Triton.Semantics.BroadcastReshape

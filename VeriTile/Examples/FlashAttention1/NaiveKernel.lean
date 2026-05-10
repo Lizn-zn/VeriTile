@@ -44,11 +44,7 @@ theorem fa1NaiveDirectOut_eq_oFreeBoundary {M S D Bd : Nat}
   obtain ⟨i, d, u⟩ := idx
   cases u
   unfold fa1NaiveDirectOut
-  simp [Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.ofReal,
-        Tile.reduceSum, Tile.reduceSumDrop, Tile.expandDim,
-        NumericDType.mul, NumericDType.div,
-        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        TileShape.dropInsertedIndex,
+  simp [tile_elementwise,
         FA1MathBoundary.oFreeBoundary, FA1MathBoundary.lFreeBoundary,
         FA1MathBoundary.blockIndex?, FA1Math.scaledScore]
   congr 1
@@ -171,11 +167,7 @@ theorem fa1NaiveCausalDirectOut_eq_oFreeBoundary {M S D Bd : Nat}
   obtain ⟨i, d, u⟩ := idx
   cases u
   unfold fa1NaiveCausalDirectOut
-  simp [Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.ofReal,
-        Tile.reduceSum, Tile.reduceSumDrop, Tile.expandDim, Tile.select,
-        NumericDType.mul, NumericDType.div,
-        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-        TileShape.dropInsertedIndex]
+  simp [tile_elementwise]
   rw [sum_causal_exp_scores_mul_v_eq_some qStart
       (padHeadD (Bd := Bd) Q) (padHeadD (Bd := Bd) K)
       (padHeadD (Bd := Bd) V) scale i d]

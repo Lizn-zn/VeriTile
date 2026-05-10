@@ -75,11 +75,7 @@ theorem softmax_kernel_correct
     rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, softmax_kernel, stepStmts, stepStmt, evalOp,
-          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-          Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
-          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-          NumericDType.mul, NumericDType.sub, NumericDType.div,
-          ComparableDType.lt, hB] at hExec
+          tile_elementwise, hB] at hExec
     subst s'
     simp [BlockState.pid_eq]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]

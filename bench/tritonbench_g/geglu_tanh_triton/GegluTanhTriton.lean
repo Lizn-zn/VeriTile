@@ -97,8 +97,7 @@ theorem geglu_tanh_forward_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [exec, geglu_tanh_forward_kernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-        NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
+        tile_elementwise] at hExec
   subst s'
   simp only [gegluTanhOffset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -168,9 +167,7 @@ theorem geglu_tanh_backward_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [exec, geglu_tanh_backward_kernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-        NumericDType.add, NumericDType.mul, NumericDType.sub,
-        ComparableDType.lt] at hExec
+        tile_elementwise] at hExec
   subst s'
   constructor
   · intro i

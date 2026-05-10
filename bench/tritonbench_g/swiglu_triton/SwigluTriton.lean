@@ -80,9 +80,7 @@ theorem swiglu_forward_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [exec, swiglu_forward_kernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-        NumericDType.mul, ComparableDType.lt,
-        FloatDType.cast, FloatDType.ofWithBot] at hExec
+        tile_elementwise] at hExec
   subst s'
   simp only [swigluOffset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -90,8 +88,7 @@ theorem swiglu_forward_kernel_correct
   · have ha := h_a i
     have hb := h_b i
     simp [swigluOffset] at ha hb
-    simp [hi, TiledActivation.swiglu, TiledActivation.silu,
-          FloatDType.toWithBot, ha, hb]
+    simp [hi, TiledActivation.swiglu, TiledActivation.silu, ha, hb]
   · simp [hi]
 
 /-- Compute-facing correctness for `_swiglu_forward_kernel`. -/
@@ -152,9 +149,7 @@ theorem swiglu_backward_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [exec, swiglu_backward_kernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-        NumericDType.add, NumericDType.mul, NumericDType.sub,
-        ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot] at hExec
+        tile_elementwise] at hExec
   subst s'
   constructor
   · intro i
@@ -169,8 +164,7 @@ theorem swiglu_backward_kernel_correct
       have ha := h_a i
       have hb := h_b i
       simp [swigluOffset] at hdc ha hb
-      simp [hi, TiledActivation.swigluBwdA, TiledActivation.silu,
-            hdc, ha, hb, FloatDType.toWithBot]
+      simp [hi, TiledActivation.swigluBwdA, TiledActivation.silu, hdc, ha, hb]
     · simp [hi]
   · intro i
     simp only [swigluOffset]
@@ -179,8 +173,7 @@ theorem swiglu_backward_kernel_correct
     · have hdc := h_dc i
       have ha := h_a i
       simp [swigluOffset] at hdc ha
-      simp [hi, TiledActivation.swigluBwdB, TiledActivation.silu,
-            hdc, ha, FloatDType.toWithBot]
+      simp [hi, TiledActivation.swigluBwdB, TiledActivation.silu, hdc, ha]
     · rw [BlockState.scatter_prop_masked_preserves_other_region
         (region := A) (R := B) (h_ne := Ne.symm hAB)
         (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)

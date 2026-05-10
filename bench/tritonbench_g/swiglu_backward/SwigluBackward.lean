@@ -116,9 +116,7 @@ theorem swiglu_bwd_kernel_correct
     rfl
   cases RECOMPUTE_OUTPUT <;>
     simp [exec, swiglu_bwd_kernel, stepStmts, stepStmt, evalOp,
-          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-          NumericDType.add, NumericDType.mul, NumericDType.sub,
-          ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot] at hExec
+          tile_elementwise] at hExec
   · subst s'
     constructor
     · intro i
@@ -136,7 +134,7 @@ theorem swiglu_bwd_kernel_correct
         have hdout := h_dout i
         simp [swigluOffset, Nat.add_assoc] at hx hy hdout
         simp [hi, TiledActivation.swigluBwdA, TiledActivation.silu,
-              hx, hy, hdout, FloatDType.toWithBot]
+              hx, hy, hdout]
         ring
       · simp [hi]
     constructor
@@ -148,7 +146,7 @@ theorem swiglu_bwd_kernel_correct
         have hdout := h_dout i
         simp [swigluOffset, Nat.add_assoc] at hx hdout
         simp [hi, TiledActivation.swigluBwdB, TiledActivation.silu,
-              hx, hdout, FloatDType.toWithBot]
+              hx, hdout]
         ring
       · rw [BlockState.scatter_prop_masked_preserves_other_region
           (region := DX) (R := DY) (h_ne := Ne.symm hDXDY)
@@ -196,7 +194,7 @@ theorem swiglu_bwd_kernel_correct
         have hdout := h_dout i
         simp [swigluOffset, Nat.add_assoc] at hx hy hdout
         simp [hi, TiledActivation.swigluBwdA, TiledActivation.silu,
-              hx, hy, hdout, FloatDType.toWithBot]
+              hx, hy, hdout]
         ring
       · simp [hi]
     constructor
@@ -215,7 +213,7 @@ theorem swiglu_bwd_kernel_correct
         have hdout := h_dout i
         simp [swigluOffset, Nat.add_assoc] at hx hdout
         simp [hi, TiledActivation.swigluBwdB, TiledActivation.silu,
-              hx, hdout, FloatDType.toWithBot]
+              hx, hdout]
         ring
       · rw [BlockState.scatter_prop_masked_preserves_other_region
           (region := DX) (R := DY) (h_ne := Ne.symm hDXDY)
@@ -232,7 +230,7 @@ theorem swiglu_bwd_kernel_correct
         have hy := h_y i
         simp [swigluOffset, Nat.add_assoc] at hx hy
         simp [hi, TiledActivation.swiglu, TiledActivation.silu,
-              hx, hy, FloatDType.toWithBot]
+              hx, hy]
       · simp [hi]
         rw [BlockState.scatter_prop_masked_preserves_other_region
           (region := DY) (R := OUT) (h_ne := hOUTDY)

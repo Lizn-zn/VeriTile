@@ -57,29 +57,39 @@ unblock 的。看那个文件里的具体写法。
 如果 `rw` 能用,优先 `rw`。只有当目标里有 lambda-bound 变量 + cast/wrapper
 结构挡住直接 unification 时,才换 `erw`。
 
-## 开场 / 收尾的 `simp` 列表
+## 开场 simp:优先用 `tile_elementwise`
 
-Kernel 证明通常以一个 "kernel-exec 标准化" simp 开场:
+Kernel 证明通常以一个 "kernel-exec 标准化" simp 开场。用
+`VeriTile.Triton.Semantics.BroadcastReshape` 注册的 `tile_elementwise`
+simp set 取代以前那串 8-15 个 lemma 名:
 
 ```lean
 simp [exec, <kernel_def>, stepStmts, stepStmt, evalOp,
-      Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
-      Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
-      TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, ...,
-      ComparableDType.lt, ...] at hExec
+      tile_elementwise] at hExec
 ```
 
-这一步逐层展开 `exec → stepStmts → stepStmt → evalOp`,展开 elementwise
-的 `Tile.bop` / `Tile.uop` 算子,展开 shape 算术(`TileShape.*`),展开
-dtype 操作(`NumericDType.*`, `ComparableDType.*`)。
+`tile_elementwise` 一次性展开 `Tile.bop / Tile.cop / Tile.uop /
+Tile.ptrAdd`、reshape 算子(`Tile.expandDim / Tile.ofReal /
+Tile.natToReal / Tile.dot / Tile.transpose / Tile.select`)、reduction
+(`Tile.reduceSum* / Tile.reduceMax*`)、shape 算术(`TileShape.*`)、按
+dtype 的 projection(`NumericDType.* / IntegralDType.* /
+ComparableDType.* / FloatDType.cast / FloatDType.ofWithBot /
+FloatDType.toWithBot`)。
 
-`subst s'` 之后通常还有一个 simp 收尾,带上 per-kernel `*Spec` 和最后一层
-`WithBot.realSqrt` / `FloatDType.cast` / `FloatDType.ofWithBot` /
-`FloatDType.toWithBot`。
+要扩 set,在 `Semantics/BroadcastReshape.lean` 加 `attribute
+[tile_elementwise]` 一行(attribute 本身在 `Semantics/BroadcastReshape/Attr.lean`
+注册,因为 Lean 4 不允许在同一文件 declare + use 同一个 simp attribute)。
 
-要点: **不要每个文件重新发明 simp 列表**。新 kernel 需要额外的展开,加到
-现有 simp 列表里就行,保持文件间一致。
+`subst s'` 之后的 simp 收尾通常带 per-kernel `*Spec`。如果 `tile_elementwise`
+已经够用,收尾就是 `simp [hi, *Spec]`,不再需要额外的 dtype / tile 名字。
+
+**已有证明**: 早于 `tile_elementwise` 的 kernel 文件保留原 simp 列表,迁
+移是机械动作 —— 把 5-15 个 `Tile.*` / `NumericDType.*` /
+`ComparableDType.*` / `FloatDType.*` / `TileShape.*` 名字换成单个
+`tile_elementwise` token。完整示例见 `bench/swiglu_fwd`、
+`bench/swiglu_triton`、`bench/swiglu_backward`、`bench/geglu_tanh_triton`、
+`bench/masked_add_cuda`、`bench/fused_activation`、`bench/triton_softmax`、
+`Examples/FlashAttention1/NaiveKernel.lean`。
 
 ## `BlockState.pid_eq` 标准化
 

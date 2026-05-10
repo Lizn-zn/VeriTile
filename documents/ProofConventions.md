@@ -60,30 +60,42 @@ compound. Localize `erw` to one rewrite at a time.
 If `rw` works, prefer `rw`. Reach for `erw` when the goal has a lambda-bound
 variable + cast/wrapper structure that prevents direct unification.
 
-## Open / Close `simp` lists
+## Open `simp` lists: prefer `tile_elementwise`
 
-Kernel proofs typically open with a "kernel-exec normalization" simp:
+Kernel proofs typically open with a "kernel-exec normalization" simp. Use
+the `tile_elementwise` simp set (registered in
+`VeriTile.Triton.Semantics.BroadcastReshape`) to replace the recurring
+8-to-15-name list:
 
 ```lean
 simp [exec, <kernel_def>, stepStmts, stepStmt, evalOp,
-      Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
-      Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
-      TileShape.insertAxisIndex,
-      NumericDType.add, NumericDType.mul, ...,
-      ComparableDType.lt, ...] at hExec
+      tile_elementwise] at hExec
 ```
 
-This unfolds `exec → stepStmts → stepStmt → evalOp` step by step, plus the
-elementwise `Tile.bop` / `Tile.uop` ops, plus the shape arithmetic
-(`TileShape.*`), plus the dtype operations (`NumericDType.*`,
-`ComparableDType.*`).
+`tile_elementwise` unfolds `Tile.bop / Tile.cop / Tile.uop / Tile.ptrAdd`,
+the reshape ops (`Tile.expandDim / Tile.ofReal / Tile.natToReal / Tile.dot /
+Tile.transpose / Tile.select`), the reductions (`Tile.reduceSum* /
+Tile.reduceMax*`), shape arithmetic (`TileShape.*`), and the per-dtype
+projections (`NumericDType.* / IntegralDType.* / ComparableDType.* /
+FloatDType.cast / FloatDType.ofWithBot / FloatDType.toWithBot`).
+
+To extend the set, add `attribute [tile_elementwise]` lines in
+`Semantics/BroadcastReshape.lean` (the attribute itself is registered in a
+sibling file, `Semantics/BroadcastReshape/Attr.lean`, because Lean 4
+disallows declaring and using a simp attribute in the same file).
 
 After `subst s'`, the close usually has another simp with the per-kernel
-`*Spec` and any final layer of `WithBot.realSqrt` / `FloatDType.cast` /
-`FloatDType.ofWithBot` / `FloatDType.toWithBot`.
+`*Spec`. If `tile_elementwise` covers what the close needs, the close can
+be `simp [hi, *Spec]` with no further dtype/tile names.
 
-The point: **don't reinvent the simp list per file**. If a new kernel needs
-something extra, add it to the existing list in the same file pattern.
+**Pre-existing proofs**: kernel files that pre-date `tile_elementwise` keep
+their explicit simp list. Migrating one is mechanical: replace the 5-15
+`Tile.*` / `NumericDType.*` / `ComparableDType.*` / `FloatDType.*` /
+`TileShape.*` names with the single `tile_elementwise` token. See
+`bench/swiglu_fwd`, `bench/swiglu_triton`, `bench/swiglu_backward`,
+`bench/geglu_tanh_triton`, `bench/masked_add_cuda`, `bench/fused_activation`,
+`bench/triton_softmax`, `Examples/FlashAttention1/NaiveKernel.lean` for
+worked examples.
 
 ## `BlockState.pid_eq` normalization
 

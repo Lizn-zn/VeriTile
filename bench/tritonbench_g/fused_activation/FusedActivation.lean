@@ -110,9 +110,7 @@ theorem fused_add_mul_activation_kernel_correct
     rfl
   rcases hSigmoidBranch with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
   · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp,
-          Tile.bop, Tile.cop, Tile.uop,
-          NumericDType.add, NumericDType.mul, IntegralDType.mod,
-          ComparableDType.lt, ComparableDType.gt] at hExec
+          tile_elementwise] at hExec
     subst s'
     simp only [fusedActivationOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -124,9 +122,7 @@ theorem fused_add_mul_activation_kernel_correct
       simp [hi, fusedActivationSpec, fusedActivationInput, hx, hin, hb]
     · simp [hi]
   · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp,
-          Tile.bop, Tile.cop, Tile.uop,
-          NumericDType.add, NumericDType.mul, IntegralDType.mod,
-          ComparableDType.lt, ComparableDType.gt] at hExec
+          tile_elementwise] at hExec
     subst s'
     simp only [fusedActivationOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]

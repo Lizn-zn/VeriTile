@@ -60,9 +60,7 @@ theorem swiglu_fwd_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
     rfl
   simp [exec, swiglu_fwd_kernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-        NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        FloatDType.cast, FloatDType.ofWithBot] at hExec
+        tile_elementwise] at hExec
   subst s'
   simp only [swigluOffset, Nat.add_assoc]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -71,7 +69,7 @@ theorem swiglu_fwd_kernel_correct
     have hy := h_y i
     simp [swigluOffset, Nat.add_assoc] at hx hy
     simp [hi, TiledActivation.swiglu, TiledActivation.silu,
-          FloatDType.toWithBot, hx, hy]
+          tile_elementwise, hx, hy]
   · simp [hi]
 
 /-- Compute-facing correctness for `_swiglu_fwd_kernel`. -/
