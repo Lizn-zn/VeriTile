@@ -698,7 +698,7 @@ partial def expandExpandDims (expandExpr : ExprExpander) (env : Env)
   let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
   let outDims : List (TSyntax `term) :=
     dims.take axisIdx ++ [← `((1 : Nat))] ++ dims.drop axisIdx
-  pure ⟨← `(Op.expandDim (⟨$axisLit, by simp⟩) $e'.term),
+  pure ⟨← `(Op.expandDim (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.setAxisOne]⟩) $e'.term),
         e'.dtype, .dims outDims, none⟩
 
 /-- Lower `e[:, None]` / `e[None, :]` to `Op.expandDim` with the appropriate

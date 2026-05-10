@@ -132,8 +132,18 @@ def splitLastIndex :
 @[simp] theorem eraseAxis_head (d : Nat) (rest : TileShape) :
     eraseAxis (d :: rest) ⟨0, Nat.succ_pos _⟩ = rest := rfl
 
+@[simp] theorem eraseAxis_succ (d : Nat) (rest : TileShape) (k : Nat)
+    (h : k + 1 < (d :: rest).length) :
+    eraseAxis (d :: rest) ⟨k + 1, h⟩ =
+      d :: eraseAxis rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ := rfl
+
 @[simp] theorem setAxisOne_head (d : Nat) (rest : TileShape) :
     setAxisOne (d :: rest) ⟨0, Nat.succ_pos _⟩ = 1 :: rest := rfl
+
+@[simp] theorem setAxisOne_succ (d : Nat) (rest : TileShape) (k : Nat)
+    (h : k + 1 < (d :: rest).length) :
+    setAxisOne (d :: rest) ⟨k + 1, h⟩ =
+      d :: setAxisOne rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ := rfl
 
 @[simp] theorem reduceShape_false (shape : TileShape) (axis : Fin shape.length) :
     reduceShape shape axis false = eraseAxis shape axis := rfl

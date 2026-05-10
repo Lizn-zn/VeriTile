@@ -28,9 +28,9 @@ def log_softmax_kernel
   mask = m_offset[:, None] < $(M) and n_offset[None, :] < $(N)
   input_ptrs = input_ptr + offset
   inp = tl.load(input_ptrs, mask=mask, other=-inf).to(tl.float32)
-  row_minus_max = inp - tl.max(inp, axis=1, keep_dims=true)
+  row_minus_max = inp - tl.max(inp, axis=1)[:, None]
   numerator = tl.exp(row_minus_max)
-  denominator = tl.sum(numerator, axis=1, keep_dims=true)
+  denominator = tl.sum(numerator, axis=1)[:, None]
   softmax_output = tl.log(numerator / denominator)
   output_ptrs = output_ptr + offset
   tl.store(output_ptrs, softmax_output, mask=mask)
