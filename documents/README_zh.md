@@ -15,6 +15,8 @@ VeriTile 嵌入的 Triton 子集、语义模型,以及 trusted-boundary 策略�
 | 问题 | 文档 |
 |---|---|
 | 支持哪些 Triton 构造? | [TritonSubset.md](./TritonSubset.md) ([中文](./TritonSubset_zh.md)) |
+| 新引理 / 定义放哪一层? | [CodeOrganization_zh.md](./CodeOrganization_zh.md) |
+| Tactic 约定(含 `erw` carrier-bridge) | [ProofConventions_zh.md](./ProofConventions_zh.md) |
 | 用哪个定理 surface? | [CorrectnessSurfaces.md](./CorrectnessSurfaces.md) |
 | 定理 surface 命名规约 | [TheoremSurfaces_zh.md](./TheoremSurfaces_zh.md) |
 | Kernel manifest 怎么用? | [KernelManifest_zh.md](./KernelManifest_zh.md) |

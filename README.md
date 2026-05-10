@@ -110,6 +110,8 @@ Task-oriented:
 | Question | Doc |
 |---|---|
 | Which Triton constructs are supported? | [TritonSubset.md](./documents/TritonSubset.md) |
+| Where does my new lemma / definition belong? | [CodeOrganization.md](./documents/CodeOrganization.md) |
+| Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./documents/ProofConventions.md) |
 | Which theorem surface should I use? | [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md) |
 | How does dtype erasure work? | [EraseDType.md](./documents/EraseDType.md) |
 | How does memory safety / framing work? | [MemorySafety.md](./documents/MemorySafety.md) |
