@@ -12,7 +12,6 @@ open VeriTile.Triton
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_DMODEL_*: tl.constexpr` -> Lean `Nat` parameters.
-- `Dest_loc` is loaded through VeriTile's `.nat` memory channel.
 - The unused Python head-count and head-stride arguments are retained at the
   theorem boundary, matching the original kernel signature. -/
 def fwd_kernel_destindex_copy_kv
@@ -27,7 +26,7 @@ def fwd_kernel_destindex_copy_kv
   cur_index = tl.program_id(0)
   offs_d_nope = tl.arange(0, $(BLOCK_DMODEL_NOPE))
   offs_d_rope = tl.arange(0, $(BLOCK_DMODEL_ROPE))
-  dest_index = tl.load(Dest_loc + cur_index, dtype=tl.uint64)
+  dest_index = tl.load(Dest_loc + cur_index)
 
   kv_nope_ptrs = KV_nope + cur_index * $(stride_kv_nope_bs) +
     $(stride_kv_nope_d) * offs_d_nope[None, :]

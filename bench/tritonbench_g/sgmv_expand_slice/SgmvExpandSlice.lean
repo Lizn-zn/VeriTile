@@ -16,7 +16,12 @@ set_option linter.unusedSimpArgs false
 This captures the ADD_INPUTS=false, no-cast path after the CTA has selected a
 sequence batch, a row block, and an `n` block: load the row from the flattened
 sequence input, load the selected LoRA-B tile, reduce over K, and store the
-output slice at `cur_seq_start + row`. -/
+output slice at `cur_seq_start + row`.
+
+`m_len` keeps an explicit `dtype=tl.uint64` because it is only consumed by
+mask comparisons (`row < m_len`); the DSL's `.nat` inference covers names
+used as static-pointer offsets, but does not yet propagate `.nat` through
+comparison sites. -/
 def sgmv_expand_slice_one_row_block
     (input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens lora_indices : RegionName)
     (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
@@ -26,8 +31,8 @@ def sgmv_expand_slice_one_row_block
   pid_n = tl.program_id(1)
   cur_batch = tl.program_id(2)
   m_len = tl.load(seq_lens + cur_batch, dtype=tl.uint64)
-  cur_seq_start = tl.load(b_seq_start_loc + cur_batch, dtype=tl.uint64)
-  lora_index = tl.load(lora_indices + cur_batch, dtype=tl.uint64)
+  cur_seq_start = tl.load(b_seq_start_loc + cur_batch)
+  lora_index = tl.load(lora_indices + cur_batch)
   row = pid_m * $(BLOCK_M)
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))

@@ -26,8 +26,7 @@ def embedding_kernel_one_token
   offs_seq = start_n + $(start_nn)
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   n_ctx_mask = offs_seq < $(n_ctx)
-  token_id = tl.load(input_ids + offs_seq, mask=n_ctx_mask, other=$(vob_end_id),
-    dtype=tl.uint64)
+  token_id = tl.load(input_ids + offs_seq, mask=n_ctx_mask, other=$(vob_end_id))
   id_mask = ($(vob_start_id) <= token_id) and (token_id < $(vob_end_id))
   token_id = token_id - $(vob_start_id)
   dim_mask = offs_d < $(hiden_size)

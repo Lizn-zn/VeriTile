@@ -24,7 +24,7 @@ def decoding_cache_one_seq_block
   offs = tl.arange(0, $(BLOCK_H))
   hid = hid_block * $(BLOCK_H) + offs
   ori_seq_idx = tl.load(lengths + seq, mask=seq < $(NUM_SEQS),
-    other=$(0), dtype=tl.uint64)
+    other=$(0))
   cos_part = tl.load(cos_cache + ori_seq_idx * $(cache_stride) +
       hid * $(hidden_stride),
     mask=(seq < $(NUM_SEQS)) and (hid < $(HIDDEN_DIM)), other=0.0)

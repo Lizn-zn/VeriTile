@@ -12,7 +12,8 @@ namespace VeriTile.Triton.DSL
 
 partial def expandLoad (expandExpr : ExprExpander)
     (expandStaticPtrExpr : StaticPtrExpander) (env : Env)
-    (p : TSyntax `tritonExpr) (kwargs : TSyntaxArray `tritonMemKwarg) :
+    (p : TSyntax `tritonExpr) (kwargs : TSyntaxArray `tritonMemKwarg)
+    (defaultDType : Option DInfo := none) :
     MacroM EOut := do
   let mut maskTerm : Option (TSyntax `term × SInfo) := none
   let mut otherSyntax : Option (TSyntax `tritonExpr) := none
@@ -53,7 +54,7 @@ partial def expandLoad (expandExpr : ExprExpander)
               "`. Only `mask`, `other`, `dtype`, `boundary_check`, and `padding_option` are recognized."
             Macro.throwError msg
     | _ => Macro.throwUnsupported
-  let outDType := dtype?.getD .real
+  let outDType := dtype?.getD (defaultDType.getD .real)
   if let some boundaryCheck := boundaryCheck? then
     if maskTerm.isSome || otherSyntax.isSome then
       Macro.throwError "tl.load: block-pointer `boundary_check` cannot be combined with `mask` or `other`"

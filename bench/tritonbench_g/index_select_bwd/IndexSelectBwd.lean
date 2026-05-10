@@ -13,8 +13,6 @@ open VeriTile.Triton
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE_INDEX: tl.constexpr` / `BLOCK_SIZE_COL: tl.constexpr`
   -> Lean `Nat` parameters.
-- The index tensor is loaded with `tl.uint64`, VeriTile's `.nat` memory
-  channel for index values.
 - Python `.to(tl.float32)` on `grad_output` is erased in the algorithm layer,
   matching the existing Real-first TritonBench-G correctness policy. -/
 def index_select_cat_bwd_kernel
@@ -35,7 +33,7 @@ def index_select_cat_bwd_kernel
   grad_output = tl.load(grad_output_offsets, mask=grad_output_mask)
   grad_source_indices =
     tl.load(index_ptr + grad_output_indices,
-      mask=grad_output_indices < $(num_indices), dtype=tl.uint64)
+      mask=grad_output_indices < $(num_indices))
   grad_source_offsets =
     grad_source_ptr + grad_source_indices[:, None] * $(stride0) +
       cols[None, :] * $(stride1)

@@ -13,7 +13,6 @@ open VeriTile.Triton
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_DMODEL: tl.constexpr` / `BLOCK_HEAD: tl.constexpr` -> Lean
   `Nat` parameters.
-- `Dest_loc` is loaded through VeriTile's `.nat` memory channel.
 - The Python head-only mask is made explicitly two-dimensional with the
   tautological `offs_d < BLOCK_DMODEL` conjunct so the current DSL does not
   need to infer that broadcast. -/
@@ -25,7 +24,7 @@ def fwd_kernel_destindex_copy_kv
   cur_index = tl.program_id(0)
   offs_h = tl.arange(0, $(BLOCK_HEAD))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
-  dest_index = tl.load(Dest_loc + cur_index, dtype=tl.uint64)
+  dest_index = tl.load(Dest_loc + cur_index)
   k_ptrs = K + cur_index * $(stride_k_bs) +
     $(stride_k_h) * offs_h[:, None] + $(stride_k_d) * offs_d[None, :]
   o_ptrs = Out + dest_index * $(stride_o_bs) +

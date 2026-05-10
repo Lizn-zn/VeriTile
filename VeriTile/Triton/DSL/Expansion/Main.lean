@@ -58,6 +58,7 @@ helpers, and metadata scanning live in sibling `DSL.*` modules.
 
 import VeriTile.Triton.Core
 import VeriTile.Triton.DSL.Metadata
+import VeriTile.Triton.DSL.Inference
 import VeriTile.Triton.DSL.Expansion.Common
 import VeriTile.Triton.DSL.Expansion.Memory
 import VeriTile.Triton.DSL.Expansion.Compute
@@ -551,7 +552,7 @@ end
 
 mutual
 
-partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
+partial def expandStmt (env : Env) (pinned : List String) (stx : TSyntax `tritonStmt) :
     MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
   let unsupportedAtomic2 (op : String) (p v : TSyntax `tritonExpr) :
       MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
@@ -772,6 +773,36 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
   | `(tritonStmt| $i:ident = tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       ensureNoAtomicKwargs "tl.atomic_cas" kwargs
       expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) (some i) p cmp (some v)
+  | `(tritonStmt| $i:ident := tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      let nameLit ← identAsStr i
+      let hint : Option DInfo :=
+        if pinned.contains i.getId.toString then some .nat else none
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape) :: env,
+        e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      let nameLit ← identAsStr i
+      let hint : Option DInfo :=
+        if pinned.contains i.getId.toString then some .nat else none
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (i.getId.toString, e'.dtype, e'.shape) :: env,
+        e'.computeTerm.isSome)
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
       let nameLit ← identAsStr i
       let e' ← expandExpr env e
@@ -832,33 +863,33 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
     | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.for $i:ident in $n:num { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.static_range $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.static_range $i:ident in $n:num { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
-      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env thenStmts.toList
-      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env elseStmts.toList
+      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env pinned thenStmts.toList
+      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env pinned elseStmts.toList
       pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
         env, cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
@@ -866,15 +897,15 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env pinned stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
         ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "if condition"
       ensureShape SInfo.scalar cond'.shape "if condition"
-      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env thenStmts.toList
-      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env elseStmts.toList
+      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env pinned thenStmts.toList
+      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env pinned elseStmts.toList
       pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
         env, cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
@@ -882,19 +913,19 @@ partial def expandStmt (env : Env) (stx : TSyntax `tritonStmt) :
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "if condition"
       ensureShape SInfo.scalar cond'.shape "if condition"
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env pinned stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
         ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]), env, bodyHasCompute)
   | _ => Macro.throwUnsupported
 
-partial def expandStmts (env : Env) (stmts : List (TSyntax `tritonStmt)) :
+partial def expandStmts (env : Env) (pinned : List String) (stmts : List (TSyntax `tritonStmt)) :
     MacroM (Array (TSyntax `term) × Array (TSyntax `term) × Env × Bool) := do
   let mut algOut : Array (TSyntax `term) := #[]
   let mut computeOut : Array (TSyntax `term) := #[]
   let mut env' := env
   let mut hasCompute := Bool.false
   for st in stmts do
-    let (algTerm, computeTerm, nextEnv, stmtHasCompute) ← expandStmt env' st
+    let (algTerm, computeTerm, nextEnv, stmtHasCompute) ← expandStmt env' pinned st
     algOut := algOut.push algTerm
     computeOut := computeOut.push computeTerm
     env' := nextEnv
@@ -907,7 +938,14 @@ end
 
 macro_rules
   | `(triton { $stmts:tritonStmt* }) => do
-      let (_, computeStmtTerms, _, _) ← expandStmts [] stmts.toList
+      -- Pre-pass: scan the body for identifiers that appear in `.nat`-pinning
+      -- positions (offsets of static-ptr-add chains). The `expandStmt` cases
+      -- for `name = tl.load(p)` / `name := tl.load(p)` consult this list
+      -- when no explicit `dtype=` kwarg is given, defaulting to `.nat`
+      -- instead of `.real` so that `name` participates correctly in pointer
+      -- arithmetic downstream.
+      let pinned := Inference.collectNatPinned stmts.toList
+      let (_, computeStmtTerms, _, _) ← expandStmts [] pinned stmts.toList
       -- Auto-scan body: collect every region appearing in `tl.load(...)` (inputs)
       -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
       -- dedup (a mix of literals and Lean terms can't be statically deduped, and
