@@ -37,7 +37,7 @@ private noncomputable def foldAtomicRMWIndices
 
 private noncomputable def stepAtomicRMWRaw
     (op : RMWOp) (dtype : TileDType) (shape : TileShape)
-    (mem : MemAccess shape) (input : Op dtype shape)
+    (mem : MemAccess dtype shape) (input : Op dtype shape)
     (extraInput : Option (Op dtype shape)) (mask : MaskOpt dtype shape)
     (dest : Option RegName) (s : BlockState) : Option BlockState := do
   let inputs ← evalOp input s
@@ -82,7 +82,7 @@ private noncomputable def stepAtomicRMWRaw
 
 private noncomputable def stepAtomicRMW
     (op : RMWOp) (dtype : TileDType) (shape : TileShape)
-    (mem : MemAccess shape) (input : Op dtype shape)
+    (mem : MemAccess dtype shape) (input : Op dtype shape)
     (extraInput : Option (Op dtype shape)) (mask : MaskOpt dtype shape)
     (dest : Option RegName) (s : BlockState) : Option BlockState :=
   (stepAtomicRMWRaw op dtype shape mem input extraInput mask dest s).map
@@ -90,7 +90,7 @@ private noncomputable def stepAtomicRMW
 
 private theorem stepAtomicRMW_pid
     {op : RMWOp} {dtype : TileDType} {shape : TileShape}
-    {mem : MemAccess shape} {input : Op dtype shape}
+    {mem : MemAccess dtype shape} {input : Op dtype shape}
     {extraInput : Option (Op dtype shape)} {mask : MaskOpt dtype shape}
     {dest : Option RegName} {s s' : BlockState}
     (h : stepAtomicRMW op dtype shape mem input extraInput mask dest s = some s') :
@@ -287,7 +287,7 @@ noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
   stepStmts k.body s
 
 theorem stepStmt_atomicAdd_regs {dtype : TileDType} (hnum : NumericDType dtype)
-    {shape : TileShape} {mem : MemAccess shape} {val : Op dtype shape}
+    {shape : TileShape} {mem : MemAccess dtype shape} {val : Op dtype shape}
     {mask : MaskOpt dtype shape} {s s' : BlockState}
     (h : stepStmt (Stmt.atomicAdd hnum shape mem val mask) s = some s')
     (dtype' : TileDType) (shape' : TileShape) (name : RegName) :
@@ -422,7 +422,7 @@ Used by FA-style backward kernels (`fa1BackwardAtomicDQ*`,
 `k_block_ptrs`, `dK_block`, `dV_block`, etc.) need to be lifted past the
 leading atomic dQ store before the tail dK/dV stores can use them. -/
 theorem stepStmt_atomicAdd_lift_regs {dtype : TileDType} (hnum : NumericDType dtype)
-    {shape : TileShape} {mem : MemAccess shape} {val : Op dtype shape}
+    {shape : TileShape} {mem : MemAccess dtype shape} {val : Op dtype shape}
     {mask : MaskOpt dtype shape} {s s' : BlockState}
     (h : stepStmt (Stmt.atomicAdd hnum shape mem val mask) s = some s')
     {dtype' : TileDType} {shape' : TileShape} {name : RegName}

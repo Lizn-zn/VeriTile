@@ -240,7 +240,7 @@ termination_by op => sizeOf op
 decreasing_by all_goals (simp_wf; try omega)
 
 def MemAccess.check (ctx : CheckCtx) (dtype : TileDType) :
-    MemAccess shape → Except CheckError Unit
+    MemAccess dtype shape → Except CheckError Unit
   | .region region off => off.check ctx *> ctx.checkRegion region dtype
   | .ptr ptr => do
       let region ← ptr.ptrProvenance ctx

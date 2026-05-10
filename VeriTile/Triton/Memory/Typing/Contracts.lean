@@ -61,7 +61,7 @@ decreasing_by all_goals (simp_wf; try omega)
 
 /-- Memory-region dtype contract for memory address forms. -/
 def MemAccess.RespectsRegionTyping (Γ : RegionTyping) (dtype : TileDType) :
-    MemAccess shape → Prop
+    MemAccess dtype shape → Prop
   | .region region off => Γ region = dtype ∧ off.RespectsRegionTyping Γ
   | .ptr ptr =>
       ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ dtype

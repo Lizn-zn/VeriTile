@@ -211,15 +211,24 @@ inductive Op : TileDType → TileShape → Type where
                 (strides offsets : List Nat) →
                 Op .blockPtr blockShape
   | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
-  | load      : (dtype : TileDType) → MemAccess shape →
+  | load      : (dtype : TileDType) → MemAccess dtype shape →
                 MaskOpt dtype shape → Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
 
-/-- Memory address form shared by load and store nodes. -/
-inductive MemAccess : TileShape → Type where
-  | region : (region : RegionName) → (offset : Op .nat shape) → MemAccess shape
-  | ptr : Op .ptr shape → MemAccess shape
-  | blockPtr : Op .blockPtr shape → (boundaryCheck : List Nat) → MemAccess shape
+/-- Memory address form shared by load and store nodes.
+
+The `d` index records the access's element dtype (the channel `Op.load`
+returns / `Stmt.store` writes). Region constructors take the legacy
+`RegionName` (= `Region .real`) for now: most kernels operate on real
+buffers, and routing typed regions through the AST is staged behind the
+DSL surface (Phase 2) and the per-kernel migration (Phase 3). Phase 1
+has plumbed the typed `Region (d)` through `Op.ptrBase` /
+`Op.makeBlockPtr` only, so non-real kernels can already declare typed
+pointer-base regions. -/
+inductive MemAccess : (d : TileDType) → TileShape → Type where
+  | region : (region : RegionName) → (offset : Op .nat shape) → MemAccess d shape
+  | ptr : Op .ptr shape → MemAccess d shape
+  | blockPtr : Op .blockPtr shape → (boundaryCheck : List Nat) → MemAccess d shape
 
 /-- Optional mask/other clause for Triton memory operations. -/
 inductive MaskOpt : TileDType → TileShape → Type where
@@ -265,13 +274,13 @@ P1 Triton statements (mutating constructs).
 inductive Stmt : Type where
   | assign  : (dtype : TileDType) → (shape : TileShape) → RegName → Op dtype shape → Stmt
   | store   : (dtype : TileDType) → (shape : TileShape) →
-              MemAccess shape → (value : Op dtype shape) →
+              MemAccess dtype shape → (value : Op dtype shape) →
               (mask : MaskOpt dtype shape) → Stmt
   | atomicAdd : NumericDType dtype → (shape : TileShape) →
-              MemAccess shape → (value : Op dtype shape) →
+              MemAccess dtype shape → (value : Op dtype shape) →
               (mask : MaskOpt dtype shape) → Stmt
   | atomicRMW : RMWOp → (dtype : TileDType) → (shape : TileShape) →
-              MemAccess shape → (input : Op dtype shape) →
+              MemAccess dtype shape → (input : Op dtype shape) →
               (extraInput : Option (Op dtype shape)) →
               (mask : MaskOpt dtype shape) → (dest : Option RegName) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
@@ -498,11 +507,11 @@ inductive ComputeStmt : Type where
   | assign : (dtype : AlgDType) → (shape : TileShape) → RegName →
       ComputeExpr dtype shape → ComputeStmt
   | store : (dtype : AlgDType) → (shape : TileShape) →
-      MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
+      MemAccess dtype shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
   | atomicAdd : NumericDType dtype → (shape : TileShape) →
-      MemAccess shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
+      MemAccess dtype shape → ComputeExpr dtype shape → MaskOpt dtype shape → ComputeStmt
   | atomicRMW : RMWOp → (dtype : AlgDType) → (shape : TileShape) →
-      MemAccess shape → ComputeExpr dtype shape →
+      MemAccess dtype shape → ComputeExpr dtype shape →
       Option (ComputeExpr dtype shape) → MaskOpt dtype shape →
       Option RegName → ComputeStmt
   | effectMarker : (op : String) → ComputeStmt
@@ -560,21 +569,21 @@ end
 
 @[simp] theorem toAlgorithm?_store_alg
     (dtype : AlgDType) (shape : TileShape)
-    (mem : MemAccess shape) (value : Op dtype shape) (mask : MaskOpt dtype shape) :
+    (mem : MemAccess dtype shape) (value : Op dtype shape) (mask : MaskOpt dtype shape) :
     ComputeStmt.toAlgorithm?
         (ComputeStmt.store dtype shape mem (ComputeExpr.alg value) mask) =
       Except.ok (Stmt.store dtype shape mem value mask) := rfl
 
 @[simp] theorem toAlgorithm?_atomicAdd_alg
     {dtype : AlgDType} (h : NumericDType dtype) (shape : TileShape)
-    (mem : MemAccess shape) (value : Op dtype shape) (mask : MaskOpt dtype shape) :
+    (mem : MemAccess dtype shape) (value : Op dtype shape) (mask : MaskOpt dtype shape) :
     ComputeStmt.toAlgorithm?
         (ComputeStmt.atomicAdd h shape mem (ComputeExpr.alg value) mask) =
       Except.ok (Stmt.atomicAdd h shape mem value mask) := rfl
 
 @[simp] theorem toAlgorithm?_atomicRMW_alg
     (op : RMWOp) (dtype : AlgDType) (shape : TileShape)
-    (mem : MemAccess shape) (input : Op dtype shape)
+    (mem : MemAccess dtype shape) (input : Op dtype shape)
     (extraInput : Option (Op dtype shape)) (mask : MaskOpt dtype shape)
     (dest : Option RegName) :
     ComputeStmt.toAlgorithm?
@@ -617,7 +626,7 @@ end
 
 @[simp] theorem listToAlgorithm?_cons_store_alg
     (dtype : AlgDType) (shape : TileShape)
-    (mem : MemAccess shape) (value : Op dtype shape) (mask : MaskOpt dtype shape)
+    (mem : MemAccess dtype shape) (value : Op dtype shape) (mask : MaskOpt dtype shape)
     (rest : List ComputeStmt) :
     ComputeStmt.listToAlgorithm?
         (ComputeStmt.store dtype shape mem (ComputeExpr.alg value) mask :: rest) =
@@ -634,7 +643,7 @@ end
 
 @[simp] theorem listToAlgorithm?_cons_atomicAdd_alg
     {dtype : AlgDType} (h : NumericDType dtype) (shape : TileShape)
-    (mem : MemAccess shape) (value : Op dtype shape) (mask : MaskOpt dtype shape)
+    (mem : MemAccess dtype shape) (value : Op dtype shape) (mask : MaskOpt dtype shape)
     (rest : List ComputeStmt) :
     ComputeStmt.listToAlgorithm?
         (ComputeStmt.atomicAdd h shape mem (ComputeExpr.alg value) mask :: rest) =
@@ -651,7 +660,7 @@ end
 
 @[simp] theorem listToAlgorithm?_cons_atomicRMW_alg
     (op : RMWOp) (dtype : AlgDType) (shape : TileShape)
-    (mem : MemAccess shape) (input : Op dtype shape)
+    (mem : MemAccess dtype shape) (input : Op dtype shape)
     (extraInput : Option (Op dtype shape)) (mask : MaskOpt dtype shape)
     (dest : Option RegName) (rest : List ComputeStmt) :
     ComputeStmt.listToAlgorithm?

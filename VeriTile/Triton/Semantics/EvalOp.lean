@@ -134,7 +134,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let p ← evalOp ptr s
       some ⟨fun i => (p.data i).advance deltas⟩
   | .load dtype mem mask, s => do
-      let addr ←
+      let addr : TileIndex shape → RegionName × Nat × Bool ←
         match mem with
         | .region region off => do
             let offsets ← evalOp off s

@@ -50,10 +50,11 @@ structure Region (d : TileDType) where
   name : String
   deriving DecidableEq, Repr, Hashable
 
-/-- String literals at Region call sites elaborate as a `Region` with the
-expected dtype. Existing callers that wrote `kernel "X" "Y"` keep working:
-`d` is solved from the parameter type at the call site. -/
-instance {d : TileDType} : Coe String (Region d) where
+/-- String literals at Region call sites elaborate as `Region .real` by
+default, matching the legacy `RegionName := String` behaviour for kernels
+that don't opt into typed regions. Non-real callers construct the region
+explicitly: `(⟨"R"⟩ : Region .nat)`. -/
+instance : Coe String (Region .real) where
   coe s := ⟨s⟩
 
 namespace Region

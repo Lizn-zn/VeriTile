@@ -163,13 +163,15 @@ def Op.PointerAddressesSafe (bounds : RegionBounds) (ptr : Op .ptr shape) : Prop
       ∀ i : TileIndex shape, (ptrs.data i).2 < bounds (ptrs.data i).1
 
 /-- Child expressions inside a memory address form are memory-safe. -/
-def memAccessMemorySafe (bounds : RegionBounds) : MemAccess shape → Prop
+def memAccessMemorySafe {dtype : TileDType} (bounds : RegionBounds) :
+    MemAccess dtype shape → Prop
   | .region _ off => off.MemorySafe bounds
   | .ptr ptr => ptr.MemorySafe bounds
   | .blockPtr ptr _ => ptr.MemorySafe bounds
 
 /-- Namespace-facing wrapper for memory-address safety. -/
-abbrev MemAccess.MemorySafe (bounds : RegionBounds) (mem : MemAccess shape) : Prop :=
+abbrev MemAccess.MemorySafe {dtype : TileDType} (bounds : RegionBounds)
+    (mem : MemAccess dtype shape) : Prop :=
   memAccessMemorySafe bounds mem
 
 /-- Active memory addresses produced by a memory address form are in bounds.
@@ -177,8 +179,9 @@ abbrev MemAccess.MemorySafe (bounds : RegionBounds) (mem : MemAccess shape) : Pr
 For checked block pointers, only lanes whose `BlockPtr.inBounds` predicate is
 true need an address bound: checked OOB lanes are inactive at the memory layer
 and are handled by padding/no-op semantics. -/
-def memAccessActiveAddressSafe (bounds : RegionBounds) (mem : MemAccess shape)
-    (s : BlockState) (active : TileIndex shape → Prop) : Prop :=
+def memAccessActiveAddressSafe {dtype : TileDType} (bounds : RegionBounds)
+    (mem : MemAccess dtype shape) (s : BlockState)
+    (active : TileIndex shape → Prop) : Prop :=
   match mem with
   | .region region off =>
       ∀ offsets, evalOp off s = some offsets →
@@ -196,8 +199,9 @@ def memAccessActiveAddressSafe (bounds : RegionBounds) (mem : MemAccess shape)
               bp.address idx < bounds bp.region
 
 /-- Namespace-facing wrapper for active address bounds. -/
-abbrev MemAccess.ActiveAddressSafe (bounds : RegionBounds) (mem : MemAccess shape)
-    (s : BlockState) (active : TileIndex shape → Prop) : Prop :=
+abbrev MemAccess.ActiveAddressSafe {dtype : TileDType} (bounds : RegionBounds)
+    (mem : MemAccess dtype shape) (s : BlockState)
+    (active : TileIndex shape → Prop) : Prop :=
   memAccessActiveAddressSafe bounds mem s active
 namespace MaskOpt
 
