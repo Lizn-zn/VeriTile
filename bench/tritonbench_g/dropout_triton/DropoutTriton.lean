@@ -11,19 +11,21 @@ open VeriTile.Triton
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` → Lean `Nat` parameter.
-- `x_keep` is a 0/1 mask tensor in the Python wrapper. VeriTile represents
-  the condition as a typed `tl.int1` load, matching the established
-  `masked_add_cuda.py` port convention for Boolean mask buffers. -/
+- `x_keep_ptr` is a 0/1 mask tensor in the Python wrapper; the in-body
+  `tl.region x_keep_ptr = tl.int1` directive declares its element dtype
+  so `tl.load(x_keep_ptr + offsets)` recovers the boolean channel without
+  an explicit `dtype=` kwarg. -/
 def dropout_kernel
     (x_ptr x_keep_ptr output_ptr : RegionName)
     (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
+  tl.region x_keep_ptr = tl.int1
   pid = tl.program_id(axis=0)
   block_start = pid * $(BLOCK_SIZE)
   offsets = block_start + tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_elements)
   x = tl.load(x_ptr + offsets, mask=mask)
-  x_keep = tl.load(x_keep_ptr + offsets, mask=mask, dtype=tl.int1)
+  x_keep = tl.load(x_keep_ptr + offsets, mask=mask)
   output = tl.where(x_keep, x / (1 - $(p)), 0.0)
   tl.store(output_ptr + offsets, output, mask=mask)
 }

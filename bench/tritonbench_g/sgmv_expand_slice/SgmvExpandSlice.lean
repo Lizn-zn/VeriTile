@@ -18,19 +18,19 @@ sequence batch, a row block, and an `n` block: load the row from the flattened
 sequence input, load the selected LoRA-B tile, reduce over K, and store the
 output slice at `cur_seq_start + row`.
 
-`m_len` keeps an explicit `dtype=tl.uint64` because it is only consumed by
-mask comparisons (`row < m_len`); the DSL's `.nat` inference covers names
-used as static-pointer offsets, but does not yet propagate `.nat` through
-comparison sites. -/
+The in-body `tl.region` directive declares each int64 metadata buffer
+(`seq_lens`, `b_seq_start_loc`, `lora_indices`) so loads from them
+default to the `.nat` channel without explicit `dtype=` kwargs. -/
 def sgmv_expand_slice_one_row_block
     (input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens lora_indices : RegionName)
     (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
       cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
+  tl.region seq_lens = tl.uint64, b_seq_start_loc = tl.uint64, lora_indices = tl.uint64
   pid_m = tl.program_id(0)
   pid_n = tl.program_id(1)
   cur_batch = tl.program_id(2)
-  m_len = tl.load(seq_lens + cur_batch, dtype=tl.uint64)
+  m_len = tl.load(seq_lens + cur_batch)
   cur_seq_start = tl.load(b_seq_start_loc + cur_batch)
   lora_index = tl.load(lora_indices + cur_batch)
   row = pid_m * $(BLOCK_M)

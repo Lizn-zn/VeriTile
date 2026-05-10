@@ -15,15 +15,20 @@ set_option linter.unusedSimpArgs false
 
 The Python kernel loops over chunks of a variable-length segment. This slice
 fixes one chunk index and proves the masked vector copy from
-`old_start + chunk * BLOCK_SIZE` to `new_start + chunk * BLOCK_SIZE`. -/
+`old_start + chunk * BLOCK_SIZE` to `new_start + chunk * BLOCK_SIZE`.
+
+The in-body `tl.region` directive declares each int64 metadata buffer
+(`old_a_len`, `old_a_start`, `new_a_start`) so loads from them recover
+the `.nat` channel without explicit `dtype=` kwargs. -/
 def var_len_copy_one_chunk
     (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
     (chunk BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
+  tl.region old_a_len = tl.uint64, old_a_start = tl.uint64, new_a_start = tl.uint64
   a_id = tl.program_id(0)
-  length = tl.load(old_a_len + a_id, dtype=tl.uint64)
-  old_start = tl.load(old_a_start + a_id, dtype=tl.uint64)
-  new_start = tl.load(new_a_start + a_id, dtype=tl.uint64)
+  length = tl.load(old_a_len + a_id)
+  old_start = tl.load(old_a_start + a_id)
+  new_start = tl.load(new_a_start + a_id)
   offset = tl.arange(0, $(BLOCK_SIZE))
   chunk_base = $(chunk) * $(BLOCK_SIZE)
   v = tl.load(old_a_location + old_start + chunk_base + offset,

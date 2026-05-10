@@ -11,18 +11,24 @@ open VeriTile.Triton
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
-- Python `select_mask = tl.load(...).to(tl.int1)` is represented as a typed
-  `tl.load(..., dtype=tl.int1)`.
-- `prefix_sum_ptr` is loaded through VeriTile's `.nat` memory channel. -/
+- The in-body `tl.region` directive declares element dtypes for the
+  `select_mask_ptr` (Boolean mask buffer) and `prefix_sum_ptr` (int64
+  prefix-sum buffer). The `select_mask` load picks up `tl.int1` via the
+  region directive. The `out_offset = tl.load(prefix_sum_ptr ...) - 1`
+  binding still carries an explicit `dtype=tl.uint64` because the
+  macro's region-dtype inference fires only on the simple
+  `name = tl.load(...)` shape; deferred to a follow-up that threads
+  region-dtype info through `expandExpr`. -/
 def masked_select_kernel
     (inp_ptr select_mask_ptr prefix_sum_ptr out_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
+  tl.region select_mask_ptr = tl.int1, prefix_sum_ptr = tl.uint64
   pid = tl.program_id(axis=0)
   offsets = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_elements)
   inp = tl.load(inp_ptr + offsets, mask=mask, other=0.0)
-  select_mask = tl.load(select_mask_ptr + offsets, mask=mask, dtype=tl.int1)
+  select_mask = tl.load(select_mask_ptr + offsets, mask=mask)
   out_offset = tl.load(prefix_sum_ptr + offsets, mask=mask, other=$(0), dtype=tl.uint64) - $(1)
   tl.store(out_ptr + out_offset, inp, mask=select_mask and mask)
 }
