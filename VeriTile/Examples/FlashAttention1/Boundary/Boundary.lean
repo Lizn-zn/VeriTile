@@ -6,6 +6,8 @@ Split-out support for FlashAttention-1 v1 boundary proofs.
 
 import VeriTile.Examples.FlashAttention1.Boundary.BoundaryD
 
+set_option maxHeartbeats 800000
+
 namespace VeriTile.Examples
 
 open VeriTile.Triton

@@ -261,14 +261,18 @@ namespace BlockState
   · exact funext hpids
   · exact funext fun region => funext fun offset => hundef region offset
 
-/-- Update a single typed register. -/
+/-- Update a register binding.
+
+Triton assignment replaces the variable binding by name. Therefore writing
+`name` at a new dtype/shape clears stale slots for the same name at every other
+typed register view. -/
 def setReg (s : BlockState) (name : RegName)
     (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) : BlockState :=
   { s with regs := fun dtype' shape' name' =>
-      if hd : dtype' = dtype then
-        if hs : shape' = shape then
-          if name' = name then some (castTile hd hs v) else s.regs dtype' shape' name'
-        else s.regs dtype' shape' name'
+      if _ : name' = name then
+        if hd : dtype' = dtype then
+          if hs : shape' = shape then some (castTile hd hs v) else none
+        else none
       else s.regs dtype' shape' name' }
 
 @[simp] theorem setReg_same (s : BlockState) (name : RegName)
@@ -285,17 +289,17 @@ def setReg (s : BlockState) (name : RegName)
 
 @[simp] theorem setReg_ne_dtype (s : BlockState) (name name' : RegName)
     (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
-    (h : dtype' ≠ dtype) :
+    (hName : name' = name) (h : dtype' ≠ dtype) :
     (s.setReg name dtype shape v).regs dtype' shape' name' =
-      s.regs dtype' shape' name' := by
-  simp [setReg, h]
+      none := by
+  simp [setReg, hName, h]
 
 @[simp] theorem setReg_ne_shape (s : BlockState) (name name' : RegName)
     (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
-    (h : shape' ≠ shape) :
+    (hName : name' = name) (hDType : dtype' = dtype) (h : shape' ≠ shape) :
     (s.setReg name dtype shape v).regs dtype' shape' name' =
-      s.regs dtype' shape' name' := by
-  simp [setReg, h]
+      none := by
+  simp [setReg, hName, hDType, h]
 
 @[simp] theorem setReg_mem (s : BlockState) (name : RegName)
     (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape)

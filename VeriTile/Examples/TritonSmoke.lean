@@ -1179,6 +1179,21 @@ example :
   norm_num [stepStmt, stepStmts, evalOp, Tile.cop, ComparableDType.lt,
     BlockState.setReg]
 
+/-! ### Register rebinding semantics (issue #19)
+
+Triton assignment is name-based: rebinding `x` at a new dtype/shape clears the
+old `x` binding instead of leaving a stale typed slot behind. -/
+
+example :
+    let s : BlockState :=
+      { mem := fun _ _ => 0, regs := fun _ _ _ => none
+      , pids := fun _ => 0, undef := fun _ _ => 0 }
+    let s' := (s.setReg "x" .real [] (Tile.scalar (some (1 : ℝ) : WithBot ℝ))).setReg
+      "x" .nat [2] (Tile.vec fun i : Fin 2 => i.val)
+    s'.regs .real [] "x" = none ∧
+      s'.regs .nat [2] "x" = some (Tile.vec fun i : Fin 2 => i.val) := by
+  simp [BlockState.setReg]
+
 example :
     let s : BlockState :=
       { mem := fun _ _ => 0, regs := fun _ _ _ => none
