@@ -9,7 +9,16 @@ open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
 
-/-- Faithful transcription of `triton_argmax.py`'s `argmax_kernel_2`. -/
+/-- Faithful transcription of `triton_argmax.py`'s `argmax_kernel_2`.
+
+DSL-gap interim: `tl.load(mid_index_ptrs)` in `.py` returns int64 (the
+launch site supplies a `torch.int64` buffer for `mid_index`); VeriTile's
+region model does not carry element dtypes, and the macro's `.nat`
+inference only fires for offset-position loads. `out_val` here flows
+straight into `tl.store(out, out_val)` (store-value position), so the
+DSL has no signal to default the load to `.nat`. Until typed regions
+land (issue #115), the explicit `dtype=tl.uint64` is required to keep
+the algorithm-layer spec on the `.nat` memory channel. -/
 def argmax_kernel_2
     (mid_value mid_index out : RegionName)
     (mid_size BLOCK_MID : Nat) :
