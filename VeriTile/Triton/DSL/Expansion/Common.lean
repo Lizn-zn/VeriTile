@@ -16,6 +16,14 @@ namespace VeriTile.Triton.DSL
 def identAsStr (i : TSyntax `ident) : MacroM (TSyntax `term) :=
   pure (Syntax.mkStrLit i.getId.toString)
 
+/-- Extract a static region's identifier name from the term emitted by
+`expandStaticPtrExpr`. Returns `none` for `$(R)` antiquotes (which are
+arbitrary Lean terms, not syntactic region idents). Used by the region-
+dtype lookup in `expandLoad` / `expandStore`. -/
+def regionTermName (regionTerm : TSyntax `term) : Option String :=
+  if regionTerm.raw.isIdent then some regionTerm.raw.getId.toString
+  else none
+
 structure EOut where
   term : TSyntax `term
   dtype : DInfo

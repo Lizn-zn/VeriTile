@@ -552,7 +552,9 @@ end
 
 mutual
 
-partial def expandStmt (env : Env) (pinned : List String) (stx : TSyntax `tritonStmt) :
+partial def expandStmt (env : Env) (pinned : List String)
+    (regionDTypes : Inference.RegionDTypes) (ptrElems : Inference.PtrElems)
+    (stx : TSyntax `tritonStmt) :
     MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
   let unsupportedAtomic2 (op : String) (p v : TSyntax `tritonExpr) :
       MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
@@ -775,8 +777,25 @@ partial def expandStmt (env : Env) (pinned : List String) (stx : TSyntax `triton
       expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) (some i) p cmp (some v)
   | `(tritonStmt| $i:ident := tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       let nameLit ← identAsStr i
-      let hint : Option DInfo :=
+      -- Region-dtype declaration takes precedence over the offset-pin
+      -- inference: an explicit `region R = tl.uint64` directive states
+      -- the buffer's element type, while pin inference is a heuristic
+      -- backstop for kernels that have no directive.
+      let regionHint : Option DInfo := ←
+        match ← expandStaticPtrExpr env p with
+        | some sp =>
+            match regionTermName sp.region with
+            | some name => pure (Inference.lookupRegionDType regionDTypes name)
+            | none => pure none
+        | none =>
+            -- Bound pointer name (`p = R + offs; ... ; tl.load(p)`):
+            -- look up the propagated element-dtype.
+            match p with
+            | `(tritonExpr| $r:ident) => pure (Inference.lookupPtrElem ptrElems r.getId.toString)
+            | _ => pure none
+      let pinHint : Option DInfo :=
         if pinned.contains i.getId.toString then some .nat else none
+      let hint := regionHint.orElse (fun _ => pinHint)
       let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
       let dt ← e'.dtype.term
       let sh ← e'.shape.term
@@ -790,8 +809,21 @@ partial def expandStmt (env : Env) (pinned : List String) (stx : TSyntax `triton
         e'.computeTerm.isSome)
   | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       let nameLit ← identAsStr i
-      let hint : Option DInfo :=
+      let regionHint : Option DInfo := ←
+        match ← expandStaticPtrExpr env p with
+        | some sp =>
+            match regionTermName sp.region with
+            | some name => pure (Inference.lookupRegionDType regionDTypes name)
+            | none => pure none
+        | none =>
+            -- Bound pointer name (`p = R + offs; ... ; tl.load(p)`):
+            -- look up the propagated element-dtype.
+            match p with
+            | `(tritonExpr| $r:ident) => pure (Inference.lookupPtrElem ptrElems r.getId.toString)
+            | _ => pure none
+      let pinHint : Option DInfo :=
         if pinned.contains i.getId.toString then some .nat else none
+      let hint := regionHint.orElse (fun _ => pinHint)
       let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
       let dt ← e'.dtype.term
       let sh ← e'.shape.term
@@ -863,33 +895,33 @@ partial def expandStmt (env : Env) (pinned : List String) (stx : TSyntax `triton
     | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.for $i:ident in $n:num { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.static_range $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.static_range $i:ident in $n:num { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
-      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env pinned thenStmts.toList
-      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env pinned elseStmts.toList
+      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env pinned regionDTypes ptrElems thenStmts.toList
+      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env pinned regionDTypes ptrElems elseStmts.toList
       pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
         env, cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
@@ -897,15 +929,15 @@ partial def expandStmt (env : Env) (pinned : List String) (stx : TSyntax `triton
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env pinned stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
         ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "if condition"
       ensureShape SInfo.scalar cond'.shape "if condition"
-      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env pinned thenStmts.toList
-      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env pinned elseStmts.toList
+      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env pinned regionDTypes ptrElems thenStmts.toList
+      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env pinned regionDTypes ptrElems elseStmts.toList
       pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
         env, cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
@@ -913,19 +945,24 @@ partial def expandStmt (env : Env) (pinned : List String) (stx : TSyntax `triton
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "if condition"
       ensureShape SInfo.scalar cond'.shape "if condition"
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env pinned stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
         ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]), env, bodyHasCompute)
   | _ => Macro.throwUnsupported
 
-partial def expandStmts (env : Env) (pinned : List String) (stmts : List (TSyntax `tritonStmt)) :
+partial def expandStmts (env : Env) (pinned : List String)
+    (regionDTypes : Inference.RegionDTypes) (ptrElems : Inference.PtrElems)
+    (stmts : List (TSyntax `tritonStmt)) :
     MacroM (Array (TSyntax `term) × Array (TSyntax `term) × Env × Bool) := do
   let mut algOut : Array (TSyntax `term) := #[]
   let mut computeOut : Array (TSyntax `term) := #[]
   let mut env' := env
   let mut hasCompute := Bool.false
   for st in stmts do
-    let (algTerm, computeTerm, nextEnv, stmtHasCompute) ← expandStmt env' pinned st
+    if Inference.isRegionDirective st then
+      continue
+    let (algTerm, computeTerm, nextEnv, stmtHasCompute) ←
+      expandStmt env' pinned regionDTypes ptrElems st
     algOut := algOut.push algTerm
     computeOut := computeOut.push computeTerm
     env' := nextEnv
@@ -945,7 +982,15 @@ macro_rules
       -- instead of `.real` so that `name` participates correctly in pointer
       -- arithmetic downstream.
       let pinned := Inference.collectNatPinned stmts.toList
-      let (_, computeStmtTerms, _, _) ← expandStmts [] pinned stmts.toList
+      -- Pre-pass: collect `region <name> = <dtype>` directives so the
+      -- macro can default `tl.load(R + offs)` / `tl.store(R + offs, _)`
+      -- to the declared element dtype instead of `.real`.
+      let regionDTypes := Inference.collectRegionDTypes stmts.toList
+      -- Pre-pass: propagate region dtypes to chained pointer bindings
+      -- (`p = R + offs; ... ; tl.load(p)` recovers `R`'s dtype on the load).
+      let ptrElems := Inference.collectPtrElems regionDTypes stmts.toList
+      let (_, computeStmtTerms, _, _) ←
+        expandStmts [] pinned regionDTypes ptrElems stmts.toList
       -- Auto-scan body: collect every region appearing in `tl.load(...)` (inputs)
       -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
       -- dedup (a mix of literals and Lean terms can't be statically deduped, and

@@ -154,6 +154,18 @@ syntax "tl.atomic_xchg(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : 
 syntax "tl.atomic_cas(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
 
 -- Statements
+
+/-- In-body region dtype declaration. Lets the macro know the element
+dtype of a kernel parameter region so `tl.load(R + offs)` /
+`tl.store(R + offs, v)` can recover the dtype without an explicit
+`dtype=` kwarg. The directive itself is stripped from the emitted
+kernel body — it is metadata, not a runtime statement. Multiple
+declarations may be combined with `,`:
+
+  tl.region mid_index = tl.uint64, out = tl.uint64
+-/
+syntax "tl.region " ident " = " tritonDType ("," ident " = " tritonDType)* : tritonStmt
+
 syntax ident ", " ident (", " ident)* " := "
   tritonExpr ", " tritonExpr (", " tritonExpr)* : tritonStmt
 syntax ident ", " ident (", " ident)* " = "

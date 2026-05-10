@@ -16,10 +16,13 @@ and uses `.nat` as the default in that case.
 -/
 
 import VeriTile.Triton.DSL.Syntax
+import VeriTile.Triton.DSL.Typing
 
 open Lean
 
 namespace VeriTile.Triton.DSL.Inference
+
+open VeriTile.Triton.DSL (DInfo)
 
 /-- Walk an expression that occupies a `.nat`-required position and
 collect every identifier appearing within it. Recurses through
@@ -230,5 +233,179 @@ the load defaults to `.nat` instead of `.real`. -/
 def collectNatPinned (stmts : List (TSyntax `tritonStmt)) : List String :=
   let (pins, _) := pinsFromStmts [] stmts
   pins
+
+/-- Per-region element-dtype declarations gathered from in-body
+`region <name> : <dtype>` directives. Used by `expandLoad` /
+`expandStore` to default the access dtype from the region's declared
+element type, so kernels with non-real buffers don't need an explicit
+`dtype=` kwarg on every load. -/
+abbrev RegionDTypes := List (String × DInfo)
+
+/-- Pure syntactic mapping from a `tritonDType` token to the macro-time
+`DInfo` tag. Mirrors `VeriTile.Triton.DSL.expandDType` but operates
+outside `MacroM` so the body scanner can run without monadic plumbing. -/
+private def dtypeOfTritonDType (stx : TSyntax `tritonDType) : Option DInfo :=
+  match stx with
+  | `(tritonDType| tl.float64) => some .real
+  | `(tritonDType| tl.float32) => some .fp32
+  | `(tritonDType| tl.float16) => some .fp16
+  | `(tritonDType| tl.bfloat16) => some .bf16
+  | `(tritonDType| tl.int1) => some .bool
+  | `(tritonDType| tl.int8) => some .int
+  | `(tritonDType| tl.int16) => some .int
+  | `(tritonDType| tl.int32) => some .int
+  | `(tritonDType| tl.int64) => some .int
+  | `(tritonDType| tl.uint8) => some .nat
+  | `(tritonDType| tl.uint16) => some .nat
+  | `(tritonDType| tl.uint32) => some .nat
+  | `(tritonDType| tl.uint64) => some .nat
+  | _ => none
+
+mutual
+
+private partial def regionDTypesFromStmts
+    (stmts : List (TSyntax `tritonStmt)) : RegionDTypes :=
+  stmts.foldl
+    (fun acc st => acc ++ regionDTypesFromStmt st)
+    []
+
+private partial def regionDTypesFromStmt
+    (stx : TSyntax `tritonStmt) : RegionDTypes :=
+  match stx with
+  | `(tritonStmt| tl.region $i:ident = $dt:tritonDType $[, $iRest:ident = $dtRest:tritonDType]*) =>
+      let head : RegionDTypes :=
+        match dtypeOfTritonDType dt with
+        | some d => [(i.getId.toString, d)]
+        | none => []
+      let rest : RegionDTypes :=
+        (iRest.zip dtRest).foldl (fun acc (j, dt') =>
+          match dtypeOfTritonDType dt' with
+          | some d => acc ++ [(j.getId.toString, d)]
+          | none => acc) []
+      head ++ rest
+  | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      regionDTypesFromStmts stmts.toList
+  | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
+      regionDTypesFromStmts stmts.toList
+  | `(tritonStmt| tl.static_range $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      regionDTypesFromStmts stmts.toList
+  | `(tritonStmt| tl.static_range $_:ident in $_:num { $stmts:tritonStmt* }) =>
+      regionDTypesFromStmts stmts.toList
+  | `(tritonStmt| tl.if $_:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
+      regionDTypesFromStmts thenStmts.toList ++ regionDTypesFromStmts elseStmts.toList
+  | `(tritonStmt| tl.if $_:tritonExpr { $stmts:tritonStmt* }) =>
+      regionDTypesFromStmts stmts.toList
+  | `(tritonStmt| if $_:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
+      regionDTypesFromStmts thenStmts.toList ++ regionDTypesFromStmts elseStmts.toList
+  | `(tritonStmt| if $_:tritonExpr { $stmts:tritonStmt* }) =>
+      regionDTypesFromStmts stmts.toList
+  | _ => []
+
+end
+
+/-- Collect all `region <name> : <dtype>` directives in a kernel body.
+Returns a list of `(region_name, element_dtype)` pairs. The macro
+consults this map when defaulting the dtype of `tl.load` / `tl.store`
+accesses that target a declared region. -/
+def collectRegionDTypes (stmts : List (TSyntax `tritonStmt)) : RegionDTypes :=
+  regionDTypesFromStmts stmts
+
+/-- Look up the declared element dtype for a region by name. -/
+def lookupRegionDType (decls : RegionDTypes) (name : String) : Option DInfo :=
+  match List.find? (fun entry : String × DInfo => entry.1 == name) decls with
+  | some entry => some entry.2
+  | none => none
+
+/-- Test whether a `tritonStmt` is a region-dtype directive (so the
+expansion driver can skip emitting code for it). -/
+def isRegionDirective : TSyntax `tritonStmt → Bool := fun stx =>
+  match stx with
+  | `(tritonStmt| tl.region $_:ident = $_:tritonDType $[, $_:ident = $_:tritonDType]*) =>
+      Bool.true
+  | _ => Bool.false
+
+/-- Per-binding ptr-element-dtype propagation. When a kernel body
+binds `i = R + offset` (or chains through other already-propagated
+bindings), `i` denotes a pointer whose element dtype is `R`'s declared
+dtype. The DSL macro consults this map at `tl.load(i)` expansion to
+default the load's dtype, in addition to the static-region case. -/
+abbrev PtrElems := List (String × DInfo)
+
+/-- Walk an expression and try to determine its root static-pointer
+region's declared dtype. Returns `some d` only when the expression is
+a static-ptr-add chain rooted in a region whose dtype is known via
+`regionDTypes` or whose chained-binding name is recorded in `ptrElems`. -/
+private partial def rootedPtrDType (regionDTypes : RegionDTypes)
+    (ptrElems : PtrElems) :
+    TSyntax `tritonExpr → Option DInfo := fun stx =>
+  match stx with
+  | `(tritonExpr| ($e:tritonExpr)) => rootedPtrDType regionDTypes ptrElems e
+  | `(tritonExpr| $r:ident) =>
+      let name := r.getId.toString
+      match lookupRegionDType regionDTypes name with
+      | some d => some d
+      | none =>
+          match List.find? (fun entry : String × DInfo => entry.1 == name) ptrElems with
+          | some entry => some entry.2
+          | none => none
+  | `(tritonExpr| $a:tritonExpr + $_:tritonExpr) =>
+      rootedPtrDType regionDTypes ptrElems a
+  | _ => none
+
+mutual
+
+private partial def ptrElemsFromStmts (regionDTypes : RegionDTypes)
+    (acc : PtrElems) (stmts : List (TSyntax `tritonStmt)) : PtrElems :=
+  stmts.foldl (fun acc' st => ptrElemsFromStmt regionDTypes acc' st) acc
+
+private partial def ptrElemsFromStmt (regionDTypes : RegionDTypes)
+    (acc : PtrElems) (stx : TSyntax `tritonStmt) : PtrElems :=
+  match stx with
+  | `(tritonStmt| $i:ident := $e:tritonExpr) =>
+      match rootedPtrDType regionDTypes acc e with
+      | some d => (i.getId.toString, d) :: acc
+      | none => acc
+  | `(tritonStmt| $i:ident = $e:tritonExpr) =>
+      match rootedPtrDType regionDTypes acc e with
+      | some d => (i.getId.toString, d) :: acc
+      | none => acc
+  | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes acc stmts.toList
+  | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes acc stmts.toList
+  | `(tritonStmt| tl.static_range $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes acc stmts.toList
+  | `(tritonStmt| tl.static_range $_:ident in $_:num { $stmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes acc stmts.toList
+  | `(tritonStmt| tl.if $_:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes
+        (ptrElemsFromStmts regionDTypes acc thenStmts.toList)
+        elseStmts.toList
+  | `(tritonStmt| tl.if $_:tritonExpr { $stmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes acc stmts.toList
+  | `(tritonStmt| if $_:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes
+        (ptrElemsFromStmts regionDTypes acc thenStmts.toList)
+        elseStmts.toList
+  | `(tritonStmt| if $_:tritonExpr { $stmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes acc stmts.toList
+  | _ => acc
+
+end
+
+/-- Pre-pass: from the body and the declared region dtypes, propagate
+element dtypes to every `name = staticRegion + offset` binding (and
+chains thereof). The DSL macro consults the resulting map at
+`tl.load(name)` so the chained-pointer case recovers the same dtype as
+the direct `tl.load(staticRegion + offset)` case. -/
+def collectPtrElems (regionDTypes : RegionDTypes)
+    (stmts : List (TSyntax `tritonStmt)) : PtrElems :=
+  ptrElemsFromStmts regionDTypes [] stmts
+
+/-- Look up the propagated element dtype for a bound pointer name. -/
+def lookupPtrElem (ptrElems : PtrElems) (name : String) : Option DInfo :=
+  match List.find? (fun entry : String × DInfo => entry.1 == name) ptrElems with
+  | some entry => some entry.2
+  | none => none
 
 end VeriTile.Triton.DSL.Inference
