@@ -779,7 +779,77 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_toAlgorithm_eq_toAlgKernel
   simp [fa2BackwardAtomicDQTwoBlockPartitionKernel, ComputeKernel.toAlgKernel]
 
 /-- Atomic `dQ` contribution extraction for one program of the FA-2-specific
-two-block backward partition kernel. -/
+two-block backward partition kernel, once the post-prefix tail execution is
+known.  This proof is FA-2-local plumbing over the shared low-level FA-1 trace
+combiner rather than a direct fold of the FA-1 `from_inputs` theorem. -/
+theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_statefulTrace_blockContribution_from_inputs
+    {M D Bk : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (scale : ℝ) (tid : ThreadId) (s final : BlockState)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * 2, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ)
+    (block : Fin 2)
+    (hPid : s.pids 0 = block.val)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * 2) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * 2) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1))
+    (hTailStep :
+      stepStmts
+        ((fa2BackwardAtomicDQTwoBlockPartitionKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk scale).toAlgKernel.body.drop 29)
+        (FA1Backward.fa1BackwardAtomicDQPreAtomicState
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M D Bk 2 scale s) =
+        some final) :
+    Kernel.AtomicTraceStateful
+        (fa2BackwardAtomicDQTwoBlockPartitionKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M D Bk scale).toAlgKernel
+        tid s
+        ((TileShape.allIndices [M, D]).filterMap fun i =>
+          some (Stmt.atomicTraceEvent tid dQReg
+            (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
+            (some (FA1Backward.dQBlockContribution Q K V dO LSE scale block i))))
+        final := by
+  let sPre : BlockState :=
+    FA1Backward.fa1BackwardAtomicDQPreAtomicState
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M D Bk 2 scale s
+  have hPre :
+      stepStmts
+        ((FA1Backward.fa1BackwardAtomicDQKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk 2 scale).toAlgKernel.body.take 29) s =
+        some sPre := by
+    exact FA1Backward.fa1BackwardAtomicDQPreAtomic_step
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  have hPtrs : sPre.regs .nat [M, D] "q_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]) := by
+    exact FA1Backward.fa1BackwardAtomicDQPreAtomic_qPtrs
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  have hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (FA1Backward.dQBlockContribution Q K V dO LSE scale block)) := by
+    exact FA1Backward.fa1BackwardAtomicDQPreAtomic_dQPart
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  simpa [fa2BackwardAtomicDQTwoBlockPartitionKernel, sPre] using
+    FA1Backward.fa1BackwardAtomicDQKernel_statefulTrace_blockContribution
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale tid s sPre final Q K V dO LSE block
+      hPre hPtrs hVal (by
+        simpa [fa2BackwardAtomicDQTwoBlockPartitionKernel, sPre] using hTailStep)
+
+/-- Atomic `dQ` contribution extraction for one program of the FA-2-specific
+two-block backward partition kernel from a full `exec` fact. -/
 theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_statefulTrace_blockContribution_from_inputs_of_exec
     {M D Bk : Nat}
     (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
@@ -814,11 +884,52 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_statefulTrace_blockContributi
             (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
             (some (FA1Backward.dQBlockContribution Q K V dO LSE scale block i))))
         final := by
-  simpa [fa2BackwardAtomicDQTwoBlockPartitionKernel] using
-    FA1Backward.fa1BackwardAtomicDQKernel_statefulTrace_blockContribution_from_inputs_of_exec
-      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-      scale tid s final Q K V dO LSE block
-      hPid hQ hK hV hdO hLSE hExec
+  let sPre : BlockState :=
+    FA1Backward.fa1BackwardAtomicDQPreAtomicState
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M D Bk 2 scale s
+  have hPre :
+      stepStmts
+        ((fa2BackwardAtomicDQTwoBlockPartitionKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk scale).toAlgKernel.body.take 29) s =
+        some sPre := by
+    simpa [fa2BackwardAtomicDQTwoBlockPartitionKernel, sPre] using
+      FA1Backward.fa1BackwardAtomicDQPreAtomic_step
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+        Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  have hTailStep :
+      stepStmts
+        ((fa2BackwardAtomicDQTwoBlockPartitionKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk scale).toAlgKernel.body.drop 29) sPre =
+        some final := by
+    have hExec' := hExec
+    rw [show
+        exec
+            (fa2BackwardAtomicDQTwoBlockPartitionKernel
+              qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+              M D Bk scale).toAlgKernel s =
+          stepStmts
+            ((fa2BackwardAtomicDQTwoBlockPartitionKernel
+              qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+              M D Bk scale).toAlgKernel.body) s by
+      rfl] at hExec'
+    rw [show
+        (fa2BackwardAtomicDQTwoBlockPartitionKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk scale).toAlgKernel.body =
+          ((fa2BackwardAtomicDQTwoBlockPartitionKernel
+            qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+            M D Bk scale).toAlgKernel.body.take 29) ++
+          ((fa2BackwardAtomicDQTwoBlockPartitionKernel
+            qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+            M D Bk scale).toAlgKernel.body.drop 29) by
+      exact (List.take_append_drop 29 _).symm] at hExec'
+    rw [stepStmts.append_some hPre] at hExec'
+    exact hExec'
+  exact fa2BackwardAtomicDQTwoBlockPartitionKernel_statefulTrace_blockContribution_from_inputs
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    scale tid s final Q K V dO LSE block hPid hQ hK hV hdO hLSE hTailStep
 
 /-- Full launcher-facing correctness for the FA-2-specific two-block backward
 work-partition kernel.  The target is the existing two-block FA-2 backward
@@ -1002,11 +1113,34 @@ theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_statefulTrace_blockCont
             (Offset.rowMajor2D (rows := M) (cols := D) 0 D i) .real
             (some (FA1Backward.dQBlockContributionCausal Q K V dO LSE scale block i))))
         final := by
-  simpa [fa2BackwardAtomicDQCausalTwoBlockPartitionKernel] using
-    FA1Backward.fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution_from_inputs
+  let sPre : BlockState :=
+    FA1Backward.fa1BackwardAtomicDQCausalPreAtomicState
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M D Bk 2 scale s
+  have hPre :
+      stepStmts
+        ((FA1Backward.fa1BackwardAtomicDQCausalKernel
+          qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk 2 scale).toAlgKernel.body.take 33) s =
+        some sPre := by
+    exact FA1Backward.fa1BackwardAtomicDQCausalPreAtomic_step
       qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
-      scale tid s final Q K V dO LSE block
-      hPid hQ hK hV hdO hLSE hTailStep
+      Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  have hPtrs : sPre.regs .nat [M, D] "q_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]) := by
+    exact FA1Backward.fa1BackwardAtomicDQCausalPreAtomic_qPtrs
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  have hVal : sPre.regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (FA1Backward.dQBlockContributionCausal Q K V dO LSE scale block)) := by
+    exact FA1Backward.fa1BackwardAtomicDQCausalPreAtomic_dQPart
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE
+  simpa [fa2BackwardAtomicDQCausalTwoBlockPartitionKernel, sPre] using
+    FA1Backward.fa1BackwardAtomicDQCausalKernel_statefulTrace_blockContribution
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      scale tid s sPre final Q K V dO LSE block
+      hPre hPtrs hVal (by
+        simpa [fa2BackwardAtomicDQCausalTwoBlockPartitionKernel, sPre] using hTailStep)
 
 /-- Full launcher-facing correctness for the FA-2-specific causal two-block
 backward work-partition kernel. -/

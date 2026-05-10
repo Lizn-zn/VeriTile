@@ -910,6 +910,88 @@ private theorem fa1BackwardAtomicDQCausalPreAtomic_facts
           dV_block_kernel_prop_tile_some_eq_attentionBackwardRealCausal
             Q K V dO LSE scale block i
 
+theorem fa1BackwardAtomicDQCausalPreAtomic_step
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (s : BlockState)
+    (hPid : s.pids 0 = block.val)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1)) :
+    stepStmts
+        ((fa1BackwardAtomicDQCausalKernel qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+          M D Bk numKVBlocks scale).toAlgKernel.body.take 33) s =
+      some (fa1BackwardAtomicDQCausalPreAtomicState
+        qReg kReg vReg dOReg lseReg dQReg dKReg dVReg M D Bk numKVBlocks scale s) := by
+  exact (fa1BackwardAtomicDQCausalPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).1
+
+theorem fa1BackwardAtomicDQCausalPreAtomic_qPtrs
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (s : BlockState)
+    (hPid : s.pids 0 = block.val)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1)) :
+    (fa1BackwardAtomicDQCausalPreAtomicState
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale s).regs .nat [M, D] "q_ptrs" =
+      some (⟨Offset.rowMajor2D (rows := M) (cols := D) 0 D⟩ : Tile .nat [M, D]) := by
+  exact (fa1BackwardAtomicDQCausalPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).2.1
+
+theorem fa1BackwardAtomicDQCausalPreAtomic_dQPart
+    {M D Bk numKVBlocks : Nat}
+    (qReg kReg vReg dOReg lseReg dQReg dKReg dVReg : RegionName)
+    (Q : TileIndex [M, D] → ℝ)
+    (K V : TileIndex [Bk * numKVBlocks, D] → ℝ)
+    (dO : TileIndex [M, D] → ℝ) (LSE : Fin M → ℝ) (scale : ℝ)
+    (block : Fin numKVBlocks) (s : BlockState)
+    (hPid : s.pids 0 = block.val)
+    (hQ : InputAt s qReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) Q)
+    (hK : InputAt s kReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) K)
+    (hV : InputAt s vReg
+        (Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D) V)
+    (hdO : InputAt s dOReg
+        (Offset.rowMajor2D (rows := M) (cols := D) 0 D) dO)
+    (hLSE : InputAt (shape := [M]) s lseReg
+        (fun idx : TileIndex [M] => idx.1.val)
+        (fun idx : TileIndex [M] => LSE idx.1)) :
+    (fa1BackwardAtomicDQCausalPreAtomicState
+      qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+      M D Bk numKVBlocks scale s).regs .real [M, D] "dQ_part" =
+      some (Tile.ofReal (dQBlockContributionCausal Q K V dO LSE scale block)) := by
+  exact (fa1BackwardAtomicDQCausalPreAtomic_facts
+    qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
+    Q K V dO LSE scale block s hPid hQ hK hV hdO hLSE).2.2.2.2.1
+
 /- #97: the expensive FA-1 backward prefix execution proof is centralized in
 `fa1BackwardAtomicDQPreAtomic_facts`; the public readback theorems below are
 now cheap projections of that single proof. -/
