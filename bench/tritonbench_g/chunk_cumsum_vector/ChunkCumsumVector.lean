@@ -9,6 +9,33 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `chunk_cumsum_vector.py`'s
+`chunk_global_cumsum_vector_kernel`.
+
+The final cast targets `Z.dtype.element_ty` to mirror the block pointer
+destination dtype in Python. -/
+def chunk_cumsum_vector_surface
+    (S Z : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
+    ComputeKernel := triton {
+  i_s = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  o_i = tl.arange(0, $(BT))
+  m_s = tl.where(o_i[:, None] >= o_i[None, :], 1.0, 0.0)
+  b_z = tl.zeros([$(BS)], dtype=tl.float32)
+  for i_t in range($(0), tl.cdiv($(T), $(BT)), $(1)) {
+    p_s = tl.make_block_ptr(S + i_bh * $(s_s_h), base=$(0), shape=[$(T), $(SSize)],
+      strides=[$(s_s_t), $(s_s_d)], offsets=[i_t * $(BT), i_s * $(BS)],
+      block_shape=[$(BT), $(BS)])
+    p_z = tl.make_block_ptr(Z + i_bh * $(s_s_h), base=$(0), shape=[$(T), $(SSize)],
+      strides=[$(s_s_t), $(s_s_d)], offsets=[i_t * $(BT), i_s * $(BS)],
+      block_shape=[$(BT), $(BS)])
+    b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
+    b_c = b_z[None, :] + tl.dot(m_s, b_s)
+    tl.store(p_z, (b_c).to(Z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+    b_z += tl.sum(b_s, axis=0)
+  }
+}
+
 /-- Proof-oriented block store slice of `chunk_cumsum_vector.py`'s
 `chunk_global_cumsum_vector_kernel`.
 

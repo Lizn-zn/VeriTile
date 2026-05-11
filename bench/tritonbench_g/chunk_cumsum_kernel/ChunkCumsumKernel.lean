@@ -9,6 +9,29 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `chunk_cumsum_kernel.py`'s
+`chunk_global_cumsum_scalar_kernel`.
+
+Python writes `b_z[None]`; this surface uses scalar broadcast `b_z`, which is
+the same shape behavior in the DSL. The final cast targets `O.dtype.element_ty`
+to mirror the block pointer destination dtype. -/
+def chunk_cumsum_scalar_surface
+    (S O : RegionName) (T BT : Nat) : ComputeKernel := triton {
+  i_bh = tl.program_id(0)
+  b_z = 0.0
+  for i_t in range($(0), tl.cdiv($(T), $(BT)), $(1)) {
+    p_s = tl.make_block_ptr(S + i_bh * $(T), base=$(0), shape=[$(T)],
+      strides=[$(1)], offsets=[i_t * $(BT)], block_shape=[$(BT)])
+    p_o = tl.make_block_ptr(O + i_bh * $(T), base=$(0), shape=[$(T)],
+      strides=[$(1)], offsets=[i_t * $(BT)], block_shape=[$(BT)])
+    b_s = tl.load(p_s, boundary_check=([0] : List Nat)).to(tl.float32)
+    b_o = tl.cumsum(b_s, axis=0) + b_z
+    b_zz = tl.sum(b_s, axis=0)
+    b_z += b_zz
+    tl.store(p_o, (b_o).to(O.dtype.element_ty), boundary_check=([0] : List Nat))
+  }
+}
+
 /-- Proof-oriented block store slice of `chunk_cumsum_kernel.py`'s
 `chunk_global_cumsum_scalar_kernel`.
 
