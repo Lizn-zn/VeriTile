@@ -98,6 +98,7 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.math.rsqrt($e:tritonExpr)) => exprRegions assigned e
   | `(tritonExpr| tl.rsqrt($e:tritonExpr))      => exprRegions assigned e
   | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| tanh($e:tritonExpr))           => exprRegions assigned e
   | `(tritonExpr| tl.sin($e:tritonExpr))         => exprRegions assigned e
   | `(tritonExpr| tl.math.sin($e:tritonExpr))    => exprRegions assigned e
   | `(tritonExpr| tl.cos($e:tritonExpr))         => exprRegions assigned e

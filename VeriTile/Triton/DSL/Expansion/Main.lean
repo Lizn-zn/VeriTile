@@ -450,6 +450,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.tanh" e'
       pure ⟨← `(Op.tanh $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tanh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tanh" e'
+      pure ⟨← `(Op.tanh $eTerm), .real, e'.shape, none, none⟩
   | `(tritonExpr| tl.sin($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.sin" e'
