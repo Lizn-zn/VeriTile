@@ -7,6 +7,30 @@ namespace VeriTile.Bench.TritonBenchG.RowwiseQuantizationTriton
 
 open VeriTile.Triton
 
+/-- Real-valued surface of `rowwise_quantization_triton.py`'s
+`_quantize_rowwise`.
+
+This preserves row addressing, `tl.abs`, masked max reduction, the `output_maxs`
+store, and the scaled output expression. The CUDA `llrint` operation and final
+int8 storage are still outside the current real-valued arithmetic model, so the
+output store records the pre-rounded real value. -/
+def quantize_rowwise_real_surface
+    (x_ptr output_ptr output_maxs : RegionName)
+    (BLOCK_SIZE P2 : Nat) (scale127 : ℝ) :
+    ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  block_start = pid * $(BLOCK_SIZE)
+  arange = tl.arange(0, $(P2))
+  offsets = block_start + arange
+  row_mask = arange < $(BLOCK_SIZE)
+  x = tl.load(x_ptr + offsets, mask=row_mask)
+  abs_x = tl.abs(x)
+  max_val = tl.max(tl.where(row_mask, abs_x, 0.0), axis=0)
+  output = $(scale127) * (x / max_val)
+  tl.store(output_ptr + offsets, output, mask=row_mask)
+  tl.store(output_maxs + pid, max_val)
+}
+
 /-- Proof-oriented scaled-output store slice of `rowwise_quantization_triton.py`'s
 `_quantize_rowwise`.
 

@@ -7,7 +7,7 @@ namespace VeriTile.Bench.TritonBenchG.QuantizeGlobal
 
 open VeriTile.Triton
 
-/-- Proof-oriented arithmetic/store slice of `quantize_global.py`'s
+/-- Real-valued surface/proof-oriented arithmetic store slice of `quantize_global.py`'s
 `_quantize_global`.
 
 The upstream Triton kernel rounds `127.0 * (x * absmax_inv)` with CUDA
