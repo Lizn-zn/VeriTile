@@ -13,7 +13,7 @@ This specializes the constexpr branches to:
 - `LOG = false`
 - `MASK_TYPE = None`
 - `CAUSAL = false`
-- casts from `IS_FP16` are omitted at the algorithm layer.
+- `IS_FP16 = false`
 
 It preserves the 2D `(m, n)` program ids, strided 3D row addressing, masked
 load over the last dimension, stable softmax normalization, and masked store. -/
