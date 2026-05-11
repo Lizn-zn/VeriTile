@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented K-cache fill slice of `kv_cache_filling.py`'s
+/-- Surface transcription and proof-oriented K-cache fill slice of `kv_cache_filling.py`'s
 `_fill_kv_cache_kernel`.
 
 The full kernel computes sequence/block positions and loops over cache block
@@ -36,6 +36,34 @@ def fill_k_cache_tile
   tl.store(KCaches + block_off * $(stride_kcn) + $(BIDX) * $(stride_kcb) +
       h_off[:, None] * $(stride_kch) + d_off[None, :] * $(stride_kcd),
     k, mask=mask)
+}
+
+/-- Surface transcription of the V-cache fill side of `kv_cache_filling.py`'s
+`_fill_kv_cache_kernel`.
+
+This is the `BLOCK_DV > 0` branch paired with `fill_k_cache_tile`: after the
+sequence/block arithmetic has selected `SIDX`, `BIDX`, and `KV_BLOCK_IDX`, it
+loads one `BLOCK_H × BLOCK_DV` tile from `VStates` and stores it into
+`VCaches` under the original `num_heads/head_dim_v` mask. -/
+def fill_v_cache_tile
+    (VStates VCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_vss stride_vsh stride_vsd
+      stride_vcn stride_vcb stride_vch stride_vcd
+      stride_boff num_heads head_dim_v BLOCK_H BLOCK_DV : Nat) :
+    ComputeKernel := triton {
+  batch_id = tl.program_id(axis=0)
+  h_off = tl.arange(0, $(BLOCK_H))
+  dv_off = tl.arange(0, $(BLOCK_DV))
+  block_off = tl.load(BlockOffsets + batch_id * $(stride_boff) + $(KV_BLOCK_IDX),
+    dtype=tl.uint64)
+  maskv = (h_off[:, None] < $(num_heads)) & (dv_off[None, :] < $(head_dim_v))
+  v = tl.load(VStates + $(SIDX) * $(stride_vss) +
+      h_off[:, None] * $(stride_vsh) + dv_off[None, :] * $(stride_vsd),
+    mask=maskv, other=0.0)
+  tl.store(VCaches + block_off * $(stride_vcn) + $(BIDX) * $(stride_vcb) +
+      h_off[:, None] * $(stride_vch) + dv_off[None, :] * $(stride_vcd),
+    v, mask=maskv)
 }
 
 def headIndex (_s : BlockState) (i : Fin BLOCK_H) : Nat :=
