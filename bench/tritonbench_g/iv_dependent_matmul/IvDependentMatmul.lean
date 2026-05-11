@@ -55,6 +55,165 @@ def iv_dependent_matmul_pre_load_surface
   tl.store(c_ptrs, c, mask=c_mask)
 }
 
+/-- Surface transcription of the `type == "post_load"` scheduling path. -/
+def iv_dependent_matmul_post_load_surface
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  num_pid_n = tl.cdiv($(N), $(BLOCK_SIZE_N))
+  pid_m = pid // num_pid_n
+  pid_n = pid % num_pid_n
+  offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
+  offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+  a_ptrs = a_base
+  b_ptrs = b_base
+  accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+  for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
+    a_mask = (offs_am[:, None] >= $(0)) &
+      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
+    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
+      (offs_bn[None, :] >= $(0))
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    accumulator += tl.dot(a, b)
+    a_ptrs = a_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs = b_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_bk)
+  }
+  c = (accumulator).to(tl.float16)
+  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
+  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
+    c, mask=c_mask)
+}
+
+/-- Surface transcription of the `type == "post_pre_mixed"` scheduling path. -/
+def iv_dependent_matmul_post_pre_mixed_surface
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  num_pid_n = tl.cdiv($(N), $(BLOCK_SIZE_N))
+  pid_m = pid // num_pid_n
+  pid_n = pid % num_pid_n
+  offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
+  offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+  b_ptrs = b_base
+  accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+  for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
+    a_ptrs = a_base + k * $(BLOCK_SIZE_K) * $(stride_ak)
+    a_mask = (offs_am[:, None] >= $(0)) &
+      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
+    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
+      (offs_bn[None, :] >= $(0))
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    accumulator += tl.dot(a, b)
+    b_ptrs = b_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_bk)
+  }
+  c = (accumulator).to(tl.float16)
+  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
+  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
+    c, mask=c_mask)
+}
+
+/-- Surface transcription of the `type == "post_load_two_iters"` scheduling path. -/
+def iv_dependent_matmul_post_load_two_iters_surface
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  num_pid_n = tl.cdiv($(N), $(BLOCK_SIZE_N))
+  pid_m = pid // num_pid_n
+  pid_n = pid % num_pid_n
+  offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
+  offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+  a_ptrs = a_base
+  b_ptrs = b_base
+  a_ptrs_next = a_base + $(BLOCK_SIZE_K) * $(stride_ak)
+  b_ptrs_next = b_base + $(BLOCK_SIZE_K) * $(stride_bk)
+  accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+  for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
+    a_mask = (offs_am[:, None] >= $(0)) &
+      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
+    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
+      (offs_bn[None, :] >= $(0))
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    accumulator += tl.dot(a, b)
+    a_ptrs = a_ptrs_next
+    b_ptrs = b_ptrs_next
+    a_ptrs_next = a_base + (k + $(2)) * $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs_next = b_base + (k + $(2)) * $(BLOCK_SIZE_K) * $(stride_bk)
+  }
+  c = (accumulator).to(tl.float16)
+  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
+  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
+    c, mask=c_mask)
+}
+
+/-- Surface transcription of the `type == "post_load_three_iters"` scheduling path. -/
+def iv_dependent_matmul_post_load_three_iters_surface
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  num_pid_n = tl.cdiv($(N), $(BLOCK_SIZE_N))
+  pid_m = pid // num_pid_n
+  pid_n = pid % num_pid_n
+  offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
+  offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+  a_ptrs = a_base
+  b_ptrs = b_base
+  a_ptrs_next = a_base + $(BLOCK_SIZE_K) * $(stride_ak)
+  b_ptrs_next = b_base + $(BLOCK_SIZE_K) * $(stride_bk)
+  a_ptrs_next_next = a_base + $(2) * $(BLOCK_SIZE_K) * $(stride_ak)
+  b_ptrs_next_next = b_base + $(2) * $(BLOCK_SIZE_K) * $(stride_bk)
+  accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+  for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
+    a_mask = (offs_am[:, None] >= $(0)) &
+      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
+    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
+      (offs_bn[None, :] >= $(0))
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    accumulator += tl.dot(a, b)
+    a_ptrs = a_ptrs_next
+    b_ptrs = b_ptrs_next
+    a_ptrs_next = a_ptrs_next_next
+    b_ptrs_next = b_ptrs_next_next
+    a_ptrs_next_next = a_base + (k + $(3)) * $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs_next_next = b_base + (k + $(3)) * $(BLOCK_SIZE_K) * $(stride_bk)
+  }
+  c = (accumulator).to(tl.float16)
+  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
+  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
+    c, mask=c_mask)
+}
+
 /-- Proof-oriented masked output-store slice of `iv_dependent_matmul.py`'s
 `iv_dependent_matmul_kernel`.
 
