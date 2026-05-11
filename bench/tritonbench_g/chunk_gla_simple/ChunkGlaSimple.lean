@@ -9,6 +9,58 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `chunk_gla_simple.py`'s
+`chunk_simple_gla_fwd_kernel_o`.
+
+The Triton `order` metadata on block pointers is scheduling-only and is omitted
+in the DSL. The source cast `b_s.to(b_v.dtype)` is also unnecessary for the
+current real-valued `tl.dot` carrier, so the dot is written over the same
+values after the causal mask is applied. -/
+def chunk_gla_simple_fwd_surface
+    (Q K V H G O : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T KSize VSize BT BK BV : Nat)
+    (scale : ℝ) :
+    ComputeKernel := triton {
+  i_v = tl.program_id(axis=0)
+  i_t = tl.program_id(axis=1)
+  i_bh = tl.program_id(axis=2)
+  o_i = tl.arange(0, $(BT))
+  m_s = o_i[:, None] >= o_i[None, :]
+  b_o = tl.zeros([$(BT), $(BV)], dtype=tl.float32)
+  b_s = tl.zeros([$(BT), $(BT)], dtype=tl.float32)
+  for i_k in range($(0), tl.cdiv($(KSize), $(BK)), $(1)) {
+    p_q = tl.make_block_ptr(Q + i_bh * $(s_k_h), base=$(0),
+      shape=[$(T), $(KSize)], strides=[$(s_k_t), $(1)],
+      offsets=[i_t * $(BT), i_k * $(BK)], block_shape=[$(BT), $(BK)])
+    p_k = tl.make_block_ptr(K + i_bh * $(s_k_h), base=$(0),
+      shape=[$(KSize), $(T)], strides=[$(1), $(s_k_t)],
+      offsets=[i_k * $(BK), i_t * $(BT)], block_shape=[$(BK), $(BT)])
+    p_h = tl.make_block_ptr(H + i_bh * $(s_h_h) + i_t * $(KSize) * $(VSize),
+      base=$(0), shape=[$(KSize), $(VSize)], strides=[$(s_h_t), $(1)],
+      offsets=[i_k * $(BK), i_v * $(BV)], block_shape=[$(BK), $(BV)])
+    b_q = tl.load(p_q, boundary_check=([0, 1] : List Nat))
+    b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
+    b_h = tl.load(p_h, boundary_check=([0, 1] : List Nat))
+    b_o += tl.dot(b_q, b_h)
+    b_s += tl.dot(b_q, b_k)
+  }
+  p_g = tl.make_block_ptr(G + i_bh * $(T), base=$(0), shape=[$(T)],
+    strides=[$(1)], offsets=[i_t * $(BT)], block_shape=[$(BT)])
+  b_g = tl.load(p_g, boundary_check=([0] : List Nat))
+  b_o = b_o * tl.exp(b_g)[:, None]
+  b_s = b_s * tl.exp(b_g[:, None] - b_g[None, :])
+  b_s = tl.where(m_s, b_s, 0.0)
+  p_v = tl.make_block_ptr(V + i_bh * $(s_v_h), base=$(0),
+    shape=[$(T), $(VSize)], strides=[$(s_v_t), $(1)],
+    offsets=[i_t * $(BT), i_v * $(BV)], block_shape=[$(BT), $(BV)])
+  b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
+  b_o = (b_o + tl.dot(b_s, b_v)) * $(scale)
+  p_o = tl.make_block_ptr(O + i_bh * $(s_v_h), base=$(0),
+    shape=[$(T), $(VSize)], strides=[$(s_v_t), $(1)],
+    offsets=[i_t * $(BT), i_v * $(BV)], block_shape=[$(BT), $(BV)])
+  tl.store(p_o, (b_o).to(O.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+}
+
 /-- Proof-oriented final output-store slice of `chunk_gla_simple.py`'s
 `chunk_simple_gla_fwd_kernel_o`.
 
