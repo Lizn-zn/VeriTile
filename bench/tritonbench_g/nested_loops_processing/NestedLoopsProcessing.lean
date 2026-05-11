@@ -10,6 +10,43 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `nested_loops_processing.py`'s `nested3`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python literal loop bounds `range(0, 2)` are written as
+  `range(0, 2, 1)`.
+- Scalar constants in pointer increments are antiquoted so they are inferred
+  in the Nat offset channel. -/
+def nested3 (in_ptr out_ptr : RegionName)
+    (stride_m stride_n : Nat) : ComputeKernel := triton {
+  offs_am = tl.arange(0, 2)
+  offs_an = tl.arange(0, 2)
+  a_ptrs = in_ptr + (offs_am[:, None] * $(stride_m) +
+    offs_an[None, :] * $(stride_n))
+  offs_cm = tl.arange(0, 2)
+  offs_cn = tl.arange(0, 2)
+  c_ptrs = out_ptr + $(stride_m) * offs_cm[:, None] +
+    $(stride_n) * offs_cn[None, :]
+  for i in range(0, $(2), $(1)) {
+    a1 = tl.load(a_ptrs)
+    for j in range(0, $(2), $(1)) {
+      a_ptrs += $(2) * $(stride_n)
+      a2 = tl.load(a_ptrs)
+      for k in range(0, $(2), $(1)) {
+        a_ptrs += $(2) * $(stride_n)
+        a3 = tl.load(a_ptrs)
+        tl.store(c_ptrs, a1)
+        c_ptrs += $(2) * $(stride_n)
+        tl.store(c_ptrs, a2)
+        c_ptrs += $(2) * $(stride_n)
+        tl.store(c_ptrs, a3)
+        c_ptrs += $(2) * $(stride_n)
+      }
+    }
+    a_ptrs += $(2) * $(stride_n)
+  }
+}
+
 /-- Proof-oriented first 2x2 transfer slice of `nested_loops_processing.py`'s
 `nested3`.
 
