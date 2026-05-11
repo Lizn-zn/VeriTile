@@ -9,6 +9,40 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Real-valued surface of `quantize_copy_kv.py`'s
+`_fwd_kernel_destindex_copy_quantize_kv`.
+
+This preserves destination-indexed addressing, `tl.abs`, the per-head
+`tl.max(..., axis=1)` scale computation, value writeback, and scale writeback.
+The Python kernel casts `src_data / data_scale` to int8; this surface records
+the pre-cast real quotient because VeriTile does not yet model CUDA int8
+rounding/cast semantics. -/
+def destindex_copy_quantize_kv_real_surface
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h
+      head_num BLOCK_HEAD BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  cur_index = tl.program_id(axis=0)
+  offs_h = tl.arange(0, $(BLOCK_HEAD))
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  dest_index = tl.load(DestLoc + cur_index, dtype=tl.uint64)
+  head_mask = offs_h[:, None] < $(head_num)
+  value_mask = head_mask and (offs_d[None, :] < $(BLOCK_DMODEL))
+  src_data = tl.load(K + cur_index * $(stride_k_bs) +
+      offs_h[:, None] * $(stride_k_h) + $(stride_k_d) * offs_d[None, :],
+    mask=value_mask, other=0.0)
+  abs_data = tl.abs(src_data)
+  data_scale = tl.max(abs_data, axis=1, keep_dims = true) / 127.0
+  q_src_data = src_data / data_scale
+  o_ptrs = Out + dest_index * $(stride_o_bs) +
+    $(stride_o_h) * offs_h[:, None] + $(stride_o_d) * offs_d[None, :]
+  os_ptrs = OutScale + dest_index * $(stride_os_bs) + $(stride_os_h) * offs_h[:, None]
+  tl.store(o_ptrs, q_src_data, mask=value_mask)
+  tl.store(os_ptrs, data_scale, mask=head_mask)
+}
+
 /-- Proof-oriented q-value writeback slice of `quantize_copy_kv.py`'s
 `_fwd_kernel_destindex_copy_quantize_kv`.
 

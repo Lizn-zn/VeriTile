@@ -9,6 +9,41 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Real-valued surface of `quantize_kv_copy.py`'s grouped
+`_fwd_kernel_destindex_copy_quantize_kv`.
+
+This preserves destination-indexed grouped addressing, `tl.abs`, per-group
+scale computation, value writeback, and scale writeback. The Python kernel casts
+the quotient to int8; this surface records the pre-cast real quotient until
+VeriTile models CUDA int8 rounding/cast semantics. -/
+def destindex_copy_quantize_kv_group_real_surface
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d
+      stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
+    ComputeKernel := triton {
+  cur_index = tl.program_id(axis=0)
+  cur_head = tl.program_id(axis=1)
+  offs_g = tl.arange(0, $(BLOCK_GROUP_NUM))
+  offs_d = tl.arange(0, $(BLOCK_GROUP_DIM))
+  dest_index = tl.load(DestLoc + cur_index, dtype=tl.uint64)
+  group_mask = offs_g < $(group_size)
+  value_mask = group_mask[:, None] and (offs_d[None, :] < $(BLOCK_GROUP_DIM))
+  src_data = tl.load(K + cur_index * $(stride_k_bs) + cur_head * $(stride_k_h) +
+      offs_g[:, None] * $(stride_k_g) + offs_d[None, :] * $(stride_k_d),
+    mask=value_mask, other=0.0)
+  abs_data = tl.abs(src_data)
+  data_scale = tl.max(abs_data, axis=1) / 127.0
+  q_src_data = src_data / data_scale[:, None]
+  o_ptrs = Out + dest_index * $(stride_o_bs) + cur_head * $(stride_o_h) +
+    offs_g[:, None] * $(stride_o_g) + offs_d[None, :] * $(stride_o_d)
+  os_ptrs = OutScale + dest_index * $(stride_os_bs) + cur_head * $(stride_os_h) +
+    offs_g * $(stride_os_g)
+  tl.store(o_ptrs, q_src_data, mask=value_mask)
+  tl.store(os_ptrs, data_scale, mask=group_mask)
+}
+
 /-- Proof-oriented q-value writeback slice of `quantize_kv_copy.py`'s grouped
 `_fwd_kernel_destindex_copy_quantize_kv`.
 
