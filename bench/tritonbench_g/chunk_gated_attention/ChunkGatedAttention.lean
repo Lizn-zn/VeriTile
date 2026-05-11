@@ -37,6 +37,78 @@ def chunk_gated_attention_cum_surface
   tl.store(p_o, (b_o).to(O.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
+/-- Surface transcription of `chunk_gated_attention.py`'s
+`chunk_gated_abc_fwd_kernel_h`.
+
+The `GATEK`, `USE_INITIAL_STATE`, and `STORE_FINAL_STATE` constexpr branches
+are preserved. The source casts the gated `b_k`/`b_v` back to the loaded tile
+dtype; the current compute carrier keeps these tiles real-valued, so those
+dynamic dtype casts are omitted while the gating arithmetic and pointer layout
+are retained. -/
+def chunk_gated_attention_h_surface
+    (K V G H H0 HT : RegionName)
+    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d s_h_h s_h_t s_h_d
+      T KSize VSize TK TV BT BK BV NT : Nat)
+    (GATEK USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
+    ComputeKernel := triton {
+  i_v = tl.program_id(axis=0)
+  i_k = tl.program_id(axis=1)
+  i_bh = tl.program_id(axis=2)
+  b_h = tl.zeros([$(BK), $(BV)], dtype=tl.float32)
+  if USE_INITIAL_STATE {
+    p_h0 = tl.make_block_ptr(H0 + i_bh * $(KSize) * $(VSize), base=$(0),
+      shape=[$(KSize), $(VSize)], strides=[$(VSize), $(1)],
+      offsets=[i_k * $(BK), i_v * $(BV)], block_shape=[$(BK), $(BV)])
+    b_h += tl.load(p_h0, boundary_check=([0, 1] : List Nat)).to(tl.float32)
+  }
+  for i_t in range($(0), $(NT), $(1)) {
+    p_k = tl.make_block_ptr(K + i_bh * $(s_k_h), base=$(0),
+      shape=[$(KSize), $(T)], strides=[$(s_k_d), $(s_k_t)],
+      offsets=[i_k * $(BK), i_t * $(BT)], block_shape=[$(BK), $(BT)])
+    p_v = tl.make_block_ptr(V + i_bh * $(s_v_h), base=$(0),
+      shape=[$(T), $(VSize)], strides=[$(s_v_t), $(s_v_d)],
+      offsets=[i_t * $(BT), i_v * $(BV)], block_shape=[$(BT), $(BV)])
+    p_h = tl.make_block_ptr(H + i_bh * $(s_h_h) + i_t * $(KSize) * $(VSize),
+      base=$(0), shape=[$(KSize), $(VSize)], strides=[$(s_h_t), $(s_h_d)],
+      offsets=[i_k * $(BK), i_v * $(BV)], block_shape=[$(BK), $(BV)])
+    tl.store(p_h, (b_h).to(H.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+    b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
+    b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
+    if GATEK {
+      p_g = tl.make_block_ptr(G + i_bh * $(s_k_h), base=$(0),
+        shape=[$(KSize), $(T)], strides=[$(s_k_d), $(s_k_t)],
+        offsets=[i_k * $(BK), i_t * $(BT)], block_shape=[$(BK), $(BT)])
+      p_gn = tl.make_block_ptr(G + i_bh * $(s_k_h), base=$(0),
+        shape=[$(TK)], strides=[$(s_k_d)],
+        offsets=[(i_t * $(BT) + $(BT) - $(1)) * $(KSize) + i_k * $(BK)],
+        block_shape=[$(BK)])
+      b_gn = tl.load(p_gn, boundary_check=([0] : List Nat))
+      b_h = b_h * tl.exp(b_gn)[:, None]
+      b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
+      b_k = b_k * tl.exp(b_gn[:, None] - b_g)
+    } else {
+      p_g = tl.make_block_ptr(G + i_bh * $(s_v_h), base=$(0),
+        shape=[$(T), $(VSize)], strides=[$(s_v_t), $(s_v_d)],
+        offsets=[i_t * $(BT), i_v * $(BV)], block_shape=[$(BT), $(BV)])
+      p_gn = tl.make_block_ptr(G + i_bh * $(s_v_h), base=$(0),
+        shape=[$(TV)], strides=[$(s_v_d)],
+        offsets=[(i_t * $(BT) + $(BT) - $(1)) * $(VSize) + i_v * $(BV)],
+        block_shape=[$(BV)])
+      b_gn = tl.load(p_gn, boundary_check=([0] : List Nat))
+      b_h = b_h * tl.exp(b_gn)[None, :]
+      b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
+      b_v = b_v * tl.exp(b_gn[None, :] - b_g)
+    }
+    b_h += tl.dot(b_k, b_v)
+  }
+  if STORE_FINAL_STATE {
+    p_h = tl.make_block_ptr(HT + i_bh * $(KSize) * $(VSize), base=$(0),
+      shape=[$(KSize), $(VSize)], strides=[$(VSize), $(1)],
+      offsets=[i_k * $(BK), i_v * $(BV)], block_shape=[$(BK), $(BV)])
+    tl.store(p_h, (b_h).to(HT.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+  }
+}
+
 /-- Proof-oriented block store slice of `chunk_gated_attention.py`'s
 `chunk_gated_abc_fwd_kernel_cum`.
 
