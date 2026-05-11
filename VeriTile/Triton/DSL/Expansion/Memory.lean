@@ -29,8 +29,28 @@ private def expandLoadOtherAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
       | `(tritonExpr| $n:num) =>
           pure (some ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩)
       | _ => pure none
+  | .bool =>
+      match e with
+      | `(tritonExpr| 0) =>
+          pure (some ⟨← `(Op.constBool Bool.false), .bool, SInfo.scalar, none, none⟩)
+      | `(tritonExpr| 1) =>
+          pure (some ⟨← `(Op.constBool Bool.true), .bool, SInfo.scalar, none, none⟩)
+      | `(tritonExpr| $($t:term)) =>
+          pure (some ⟨← `(Op.constBool $t), .bool, SInfo.scalar, none, none⟩)
+      | _ => pure none
   | _ =>
       pure none
+
+private def dtypeName : DInfo → String
+  | .real => "real"
+  | .fp32 => "fp32"
+  | .fp16 => "fp16"
+  | .bf16 => "bf16"
+  | .int => "int"
+  | .nat => "nat"
+  | .bool => "bool"
+  | .ptr => "ptr"
+  | .blockPtr => "blockPtr"
 
 partial def expandLoad (expandExpr : ExprExpander)
     (expandStaticPtrExpr : StaticPtrExpander) (env : Env)
@@ -132,7 +152,9 @@ partial def expandLoad (expandExpr : ExprExpander)
         pure (some (other'.term, other'.dtype, other'.shape, other'.computeDType?))
   if let some (_, otherDType, _, _) := otherTerm then
     unless otherDType == outDType || (outDType == .fp32 && otherDType == .real) do
-      Macro.throwError "tl.load other: dtype must match load result dtype"
+      Macro.throwError
+        ("tl.load other: dtype must match load result dtype (load " ++
+          dtypeName outDType ++ ", other " ++ dtypeName otherDType ++ ")")
   match maskTerm, otherTerm with
   | none, none =>
       match staticPtr? with

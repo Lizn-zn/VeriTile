@@ -374,6 +374,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.const $n), .real, SInfo.scalar, none, none⟩
   | `(tritonExpr| $n:scientific) =>
       pure ⟨← `(Op.const $n), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| true) =>
+      pure ⟨← `(Op.constBool Bool.true), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| false) =>
+      pure ⟨← `(Op.constBool Bool.false), .bool, SInfo.scalar, none, none⟩
   | `(tritonExpr| $i:ident) =>
       let name := i.getId.toString
       let (dtype, shape) ← lookupEnv env name

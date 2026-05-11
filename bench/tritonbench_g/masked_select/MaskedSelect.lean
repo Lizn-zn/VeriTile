@@ -14,8 +14,9 @@ Allowed mechanical Lean-syntax-only changes:
 - The in-body `tl.region` directive declares element dtypes for the
   `select_mask_ptr` (Boolean mask buffer) and `prefix_sum_ptr` (int64
   prefix-sum buffer). The `select_mask` load picks up `tl.int1` via the
-  region directive; the expression-position `prefix_sum_ptr` load similarly
-  picks up `tl.uint64` before subtracting one. -/
+  region directive, with Python's inactive-lane `other=0.0`; the
+  expression-position `prefix_sum_ptr` load similarly picks up `tl.uint64`
+  before subtracting one. -/
 def masked_select_kernel
     (inp_ptr select_mask_ptr prefix_sum_ptr out_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) :
@@ -25,7 +26,7 @@ def masked_select_kernel
   offsets = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_elements)
   inp = tl.load(inp_ptr + offsets, mask=mask, other=0.0)
-  select_mask = tl.load(select_mask_ptr + offsets, mask=mask)
+  select_mask = tl.load(select_mask_ptr + offsets, mask=mask, other=0, dtype=tl.int1)
   out_offset = tl.load(prefix_sum_ptr + offsets, mask=mask, other=$(0)) - $(1)
   tl.store(out_ptr + out_offset, inp, mask=select_mask and mask)
 }
@@ -100,7 +101,13 @@ theorem masked_select_kernel_correct
   have hMaskRaw :
       s.readMemValue .bool select_mask_ptr (s.pid * BLOCK_SIZE + i.val) = Bool.true := by
     simpa [maskedSelectOffset] using hMask
-  simpa [hBoundsRaw, hMaskRaw] using
+  have hMaskMatch :
+      (match s.readMemTyped TileDType.bool select_mask_ptr
+          (s.pid * BLOCK_SIZE + i.val) with
+        | some value => value
+        | none => BlockState.defaultCarrier TileDType.bool) = Bool.true := by
+    simpa [BlockState.readMemValue] using hMaskRaw
+  simpa [hBoundsRaw, hMaskRaw, hMaskMatch] using
     (BlockState.scatter_readback_prop_masked_nd
       (region := out_ptr)
       (shape := [BLOCK_SIZE])
@@ -119,10 +126,11 @@ theorem masked_select_kernel_correct
           else
             some 0.0))
       (P := fun idx : TileIndex [BLOCK_SIZE] =>
-        (if s.pid * BLOCK_SIZE + idx.1.val < n_elements then
-            s.readMemValue .bool select_mask_ptr (s.pid * BLOCK_SIZE + idx.1.val) = Bool.true
-          else
-            BlockState.defaultCarrier TileDType.bool = Bool.true) ∧
+        (s.pid * BLOCK_SIZE + idx.1.val < n_elements ∧
+            (match s.readMemTyped TileDType.bool select_mask_ptr
+                (s.pid * BLOCK_SIZE + idx.1.val) with
+              | some value => value
+              | none => BlockState.defaultCarrier TileDType.bool) = Bool.true) ∧
           s.pid * BLOCK_SIZE + idx.1.val < n_elements)
       _ hRawInj (i, PUnit.unit))
 
