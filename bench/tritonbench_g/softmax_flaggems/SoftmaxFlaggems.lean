@@ -36,8 +36,8 @@ def softmax_kernel_non_inner_one_tile_surface
 
 This covers the inner-dimension fast path where one CTA covers a full row. It
 preserves the source kernel's row program id, masked load with `-inf`, stable
-softmax max/sum normalization, and masked store. The multi-tile online fallback
-remains future work. -/
+softmax max/sum normalization, output-dtype load cast, and masked store. The
+multi-tile online fallback remains future work. -/
 def softmax_kernel_inner_one_tile
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat) :
@@ -47,7 +47,7 @@ def softmax_kernel_inner_one_tile
   offset = pid_m * $(N) + n_offsets
   mask = n_offsets < $(N)
   input_ptrs = input_ptr + offset
-  inp = tl.load(input_ptrs, mask=mask, other=-inf)
+  inp = tl.load(input_ptrs, mask=mask, other=-inf).to(output_ptr.dtype.element_ty)
   m = tl.max(inp, axis=0)
   e = tl.exp(inp - m)
   z = tl.sum(e, axis=0)
