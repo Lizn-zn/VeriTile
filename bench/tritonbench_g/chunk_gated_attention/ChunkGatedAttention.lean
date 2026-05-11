@@ -9,6 +9,34 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `chunk_gated_attention.py`'s
+`chunk_gated_abc_fwd_kernel_cum`.
+
+This is the forward-preprocessing cumsum kernel used by `fwd_pre`: it builds the
+lower-triangular accumulation mask, loads one `[BT, BS]` tile, computes the
+chunk-local cumulative sum as a matrix product, and writes the result through a
+boundary-checked block pointer. The Triton block-pointer `order` metadata is
+scheduling-only and is omitted in the DSL. -/
+def chunk_gated_attention_cum_surface
+    (S O : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
+    ComputeKernel := triton {
+  i_s = tl.program_id(axis=0)
+  i_t = tl.program_id(axis=1)
+  i_bh = tl.program_id(axis=2)
+  o_i = tl.arange(0, $(BT))
+  m_s_bool = o_i[:, None] >= o_i[None, :]
+  m_s = tl.where(m_s_bool, 1.0, 0.0).to(tl.float32)
+  p_s = tl.make_block_ptr(S + i_bh * $(s_s_h), base=$(0),
+    shape=[$(T), $(SSize)], strides=[$(s_s_t), $(s_s_d)],
+    offsets=[i_t * $(BT), i_s * $(BS)], block_shape=[$(BT), $(BS)])
+  p_o = tl.make_block_ptr(O + i_bh * $(s_s_h), base=$(0),
+    shape=[$(T), $(SSize)], strides=[$(s_s_t), $(s_s_d)],
+    offsets=[i_t * $(BT), i_s * $(BS)], block_shape=[$(BT), $(BS)])
+  b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
+  b_o = tl.dot(m_s, b_s)
+  tl.store(p_o, (b_o).to(O.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+}
+
 /-- Proof-oriented block store slice of `chunk_gated_attention.py`'s
 `chunk_gated_abc_fwd_kernel_cum`.
 
