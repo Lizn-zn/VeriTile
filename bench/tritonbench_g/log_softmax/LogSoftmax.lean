@@ -14,8 +14,7 @@ set_option linter.unusedSimpArgs false
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_M: tl.constexpr` / `BLOCK_N: tl.constexpr` -> Lean `Nat`
-  parameters.
-- Python `.to(tl.float32)` casts are omitted at the algorithm layer. -/
+  parameters. -/
 def log_softmax_kernel
     (output_ptr input_ptr : RegionName)
     (M N K BLOCK_M BLOCK_N : Nat) :
@@ -109,7 +108,8 @@ theorem log_softmax_kernel_correct
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
             TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
             NumericDType.sub, NumericDType.div, ComparableDType.lt,
-            FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot, hBN] at hExec
+            FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+            ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, hBN] at hExec
       rw [← hExec]
       have hOffsetInj : Function.Injective
           (fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
@@ -141,7 +141,8 @@ theorem log_softmax_kernel_correct
             Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceSumKeep,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.dropInsertedIndex,
             NumericDType.add, NumericDType.mul, NumericDType.sub,
-            NumericDType.div, ComparableDType.lt, hBN] at hExec
+            NumericDType.div, ComparableDType.lt,
+            ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, hBN] at hExec
   · exact False.elim (hBM (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
 
 /-- Compute-facing correctness for `log_softmax_kernel`. -/
@@ -160,7 +161,7 @@ theorem log_softmax_kernel_compute_correct
       (expected := fun idx => logSoftmaxSpec s input_ptr M N K BLOCK_M BLOCK_N idx) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [log_softmax_kernel]
+  · simp [log_softmax_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro idx hActive
