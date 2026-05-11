@@ -47,6 +47,39 @@ def rotary_emb_q_surface
   tl.store(Q + off_q1, out1, mask=active)
 }
 
+/-- Surface transcription of the K part of `rotary_emb.py`'s `_rotary_kernel`
+under the existing one-sequence/one-head tile abstraction. -/
+def rotary_emb_k_surface
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  cur_head_index = tl.program_id(0)
+  cur_seq_index = tl.program_id(1)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  dim0 = dim * $(2)
+  dim1 = dim * $(2) + $(1)
+  active = (cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K))
+  off_k0 = cur_seq_index * $(stride_kbs) + cur_head_index * $(stride_kh) +
+    dim0 * $(stride_kd)
+  off_k1 = cur_seq_index * $(stride_kbs) + cur_head_index * $(stride_kh) +
+    dim1 * $(stride_kd)
+  off_cos0 = cur_seq_index * $(stride_cosbs) + dim0 * $(stride_cosd)
+  off_sin0 = cur_seq_index * $(stride_sinbs) + dim0 * $(stride_sind)
+  off_cos1 = cur_seq_index * $(stride_cosbs) + dim1 * $(stride_cosd)
+  off_sin1 = cur_seq_index * $(stride_sinbs) + dim1 * $(stride_sind)
+  k0 = tl.load(K + off_k0, mask=active, other=0.0)
+  k1 = tl.load(K + off_k1, mask=active, other=0.0)
+  cos0 = tl.load(Cos + off_cos0, mask=cur_seq_index < $(max_total_len), other=0.0)
+  sin0 = tl.load(Sin + off_sin0, mask=cur_seq_index < $(max_total_len), other=0.0)
+  cos1 = tl.load(Cos + off_cos1, mask=cur_seq_index < $(max_total_len), other=0.0)
+  sin1 = tl.load(Sin + off_sin1, mask=cur_seq_index < $(max_total_len), other=0.0)
+  out0 = k0 * cos0 - k1 * sin0
+  out1 = k0 * sin1 + k1 * cos1
+  tl.store(K + off_k0, out0, mask=active)
+  tl.store(K + off_k1, out1, mask=active)
+}
+
 /-- Proof-oriented Q-even-dimension slice of `rotary_emb.py`'s `_rotary_kernel`.
 
 This models the first Q store for one sequence/head program tile:
