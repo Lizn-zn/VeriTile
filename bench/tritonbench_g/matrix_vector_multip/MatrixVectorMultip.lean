@@ -13,10 +13,7 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `matrix_vector_multip.py`'s `mv_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `A_ptrs += BLOCK_M * stride_am` / `B_ptrs += BLOCK_M * stride_bm`
-  pointer mutation → address recomputed from loop variable `m`.
-- Python `.to(tl.float32)` casts are omitted at the algorithm layer.
-- Python `BLOCK_N` / `BLOCK_M: tl.constexpr` → Lean `Nat` parameters. -/
+- Python `BLOCK_N` / `BLOCK_M: tl.constexpr` -> Lean `Nat` parameters. -/
 def mv_kernel
     (A B C : RegionName)
     (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat) :
@@ -25,18 +22,20 @@ def mv_kernel
   offset_n = pid * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))[:, None]
   offset_m = tl.arange(0, $(BLOCK_M))[None, :]
   n_mask = offset_n < $(N)
-  acc = tl.zeros([$(BLOCK_N), $(BLOCK_M)])
+  A_ptrs = A + offset_n * $(stride_an) + offset_m * $(stride_am)
+  B_ptrs = B + offset_m * $(stride_bm)
+  acc = tl.zeros([$(BLOCK_N), $(BLOCK_M)], dtype=tl.float32)
   for m in range(0, $(M), $(BLOCK_M)) {
     m_mask = (m + offset_m) < $(M)
-    a = tl.load(A + offset_n * $(stride_an) + (m + offset_m) * $(stride_am),
-      mask=n_mask and m_mask, other=0.0)
-    b = tl.load(B + (m + offset_m) * $(stride_bm),
-      mask=m_mask, other=0.0)
+    a = tl.load(A_ptrs, mask=n_mask & m_mask, other=0.0).to(tl.float32)
+    b = tl.load(B_ptrs, mask=m_mask, other=0.0).to(tl.float32)
     acc = acc + a * b
+    A_ptrs += $(BLOCK_M) * $(stride_am)
+    B_ptrs += $(BLOCK_M) * $(stride_bm)
   }
   acc = tl.sum(acc, axis=1)
-  c_ptrs = C + offset_n * $(stride_cn)
-  tl.store(c_ptrs, acc[:, None], mask=n_mask)
+  C_ptrs = C + offset_n * $(stride_cn)
+  tl.store(C_ptrs, acc[:, None], mask=n_mask)
 }
 
 def nIndex (s : BlockState) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=

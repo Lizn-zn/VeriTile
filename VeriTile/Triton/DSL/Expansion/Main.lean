@@ -1166,19 +1166,34 @@ partial def expandStmt (env : Env) (pinned : List String)
         e'.computeTerm.isSome)
   | `(tritonStmt| $i:ident += $e:tritonExpr) => do
       let nameLit ← identAsStr i
-      let iExpr : TSyntax `tritonExpr := ⟨i.raw⟩
-      let sum ← `(tritonExpr| $iExpr + $e)
-      let e' ← expandExpr env sum
-      let dt ← e'.dtype.term
-      let sh ← e'.shape.term
-      let exprTerm ←
-        match e'.computeTerm with
-        | some ce => pure ce
-        | none => `(ComputeExpr.alg $e'.term)
-      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
-        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
-        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
-        e'.computeTerm.isSome)
+      let (lhsDType, lhsShape) ← lookupEnv env i.getId.toString
+      match lhsDType with
+      | .ptr =>
+          let rhs ← expandNatExpectedExpr env e
+          ensureAlgorithmOnly "`+=` pointer offset" rhs
+          let lhsShapeTerm ← lhsShape.term
+          let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
+          let (bc, outShape) ← broadcastTerm lhsShape rhs.shape "`+=` pointer offset"
+          let outShapeTerm ← outShape.term
+          let term ← `(Op.ptrAdd $bc $lhsTerm $rhs.term)
+          pure (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+            ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+            (i.getId.toString, .ptr, outShape, none) :: env,
+            Bool.false)
+      | _ =>
+          let iExpr : TSyntax `tritonExpr := ⟨i.raw⟩
+          let sum ← `(tritonExpr| $iExpr + $e)
+          let e' ← expandExpr env sum
+          let dt ← e'.dtype.term
+          let sh ← e'.shape.term
+          let exprTerm ←
+            match e'.computeTerm with
+            | some ce => pure ce
+            | none => `(ComputeExpr.alg $e'.term)
+          pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+            ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+            (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
+            e'.computeTerm.isSome)
   | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandStore expandExpr expandStaticPtrExpr env p v kwargs
   | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
