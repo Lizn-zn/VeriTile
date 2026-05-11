@@ -42,9 +42,8 @@ def chunk_gated_attention_cum_surface
 
 The `GATEK`, `USE_INITIAL_STATE`, and `STORE_FINAL_STATE` constexpr branches
 are preserved. The source casts the gated `b_k`/`b_v` back to the loaded tile
-dtype; the current compute carrier keeps these tiles real-valued, so those
-dynamic dtype casts are omitted while the gating arithmetic and pointer layout
-are retained. -/
+dtype; this surface represents those casts with `K.dtype.element_ty` and
+`V.dtype.element_ty` while retaining the gating arithmetic and pointer layout. -/
 def chunk_gated_attention_h_surface
     (K V G H H0 HT : RegionName)
     (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d s_h_h s_h_t s_h_d
@@ -85,7 +84,7 @@ def chunk_gated_attention_h_surface
       b_gn = tl.load(p_gn, boundary_check=([0] : List Nat))
       b_h = b_h * tl.exp(b_gn)[:, None]
       b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
-      b_k = b_k * tl.exp(b_gn[:, None] - b_g)
+      b_k = (b_k * tl.exp(b_gn[:, None] - b_g)).to(K.dtype.element_ty)
     } else {
       p_g = tl.make_block_ptr(G + i_bh * $(s_v_h), base=$(0),
         shape=[$(T), $(VSize)], strides=[$(s_v_t), $(s_v_d)],
@@ -97,7 +96,7 @@ def chunk_gated_attention_h_surface
       b_gn = tl.load(p_gn, boundary_check=([0] : List Nat))
       b_h = b_h * tl.exp(b_gn)[None, :]
       b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
-      b_v = b_v * tl.exp(b_gn[None, :] - b_g)
+      b_v = (b_v * tl.exp(b_gn[None, :] - b_g)).to(V.dtype.element_ty)
     }
     b_h += tl.dot(b_k, b_v)
   }
