@@ -16,8 +16,6 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
 - Python pointer mutation `Y += ...` / `X += ...` / `r += ...` -> explicit
   base pointer registers.
-- Python `tl.math.rsqrt(v)` -> `1 / tl.sqrt(v)`, equivalent at the
-  algorithm layer.
 - Python `.to(...)` casts are omitted at the algorithm layer. -/
 def rms_layernorm_forward
     (Y X W r : RegionName)
@@ -36,7 +34,7 @@ def rms_layernorm_forward
   W_row = tl.load(W + col_offsets * $(W_row_stride), mask=mask, other=0.0)
 
   row_var = tl.sum(X_row * X_row, axis=0) / $(n_cols)
-  inv_var = 1 / tl.sqrt(row_var + $(eps))
+  inv_var = tl.math.rsqrt(row_var + $(eps))
   tl.store(r_base, inv_var)
   normed = X_row * inv_var
   output = normed * W_row

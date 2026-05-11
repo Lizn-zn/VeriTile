@@ -57,6 +57,15 @@ kernel body. Used to distinguish a static pointer base (a parameter
 identifier) from a locally-bound pointer name. -/
 abbrev Assigned := List String
 
+private def addUnique (xs : List String) (x : String) : List String :=
+  if xs.contains x then xs else x :: xs
+
+private def addManyUnique (xs ys : List String) : List String :=
+  ys.foldl addUnique xs
+
+private def anyContained (needles haystack : List String) : Bool :=
+  needles.any (fun x => haystack.contains x)
+
 /-- Test whether `stx` would be recognized as a static pointer
 expression by the macro's `expandStaticPtrExpr`. Mirrors the cases there. -/
 private partial def isStaticPtr (assigned : Assigned) :
@@ -115,85 +124,254 @@ private partial def pinsFromExpr (assigned : Assigned) :
             | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ pinsFromExpr assigned val
             | _ => acc) []
         pinsFromPtrExpr assigned p ++ kwargPins
+    | `(tritonExpr| tl.make_block_ptr($_:ident=$p:tritonExpr,
+        $_:ident=($_parent:tritonExpr,*), $_:ident=($_strides:tritonExpr,*),
+        $_:ident=($_offsets:tritonExpr,*), $_:ident=($_block:tritonExpr,*))) =>
+        pinsFromPtrExpr assigned p
+    | `(tritonExpr| tl.make_block_ptr($_:ident=$p:tritonExpr,
+        $_:ident=($_parent:tritonExpr,*), $_:ident=($_strides:tritonExpr,*),
+        $_:ident=($_offsets:tritonExpr,*), $_:ident=($_block:tritonExpr,*),
+        $_:ident=($_order:num,*))) =>
+        pinsFromPtrExpr assigned p
     | _ => []
   topPins ++ belowPins
+
+/-- Assignment-level `.nat` dependencies: if the LHS is later known to
+be `.nat`, identifiers occurring in arithmetic/indexing positions on
+the RHS must also be `.nat`. -/
+private partial def natDepsFromAssignedExpr :
+    TSyntax `tritonExpr → List String := fun stx =>
+  natExprIdents stx
+
+/-- A local pointer value can be built from another pointer plus a Nat
+offset. If the LHS is later used as a pointer, the returned first list
+contains local pointer bases that also become pointer-used, and the
+second list contains Nat offsets that must be pinned. -/
+private partial def ptrDepsFromAssignedExpr (assigned : Assigned) :
+    TSyntax `tritonExpr → List String × List String := fun stx =>
+  match stx with
+  | `(tritonExpr| ($e:tritonExpr)) => ptrDepsFromAssignedExpr assigned e
+  | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) =>
+      match a with
+      | `(tritonExpr| $r:ident) =>
+          let name := r.getId.toString
+          if assigned.contains name then
+            ([name], natExprIdents b)
+          else if isStaticPtr assigned stx then
+            ([], staticPtrChainOffsets stx |>.foldl (fun acc o => acc ++ natExprIdents o) [])
+          else
+            ([], [])
+      | _ =>
+          if isStaticPtr assigned stx then
+            ([], staticPtrChainOffsets stx |>.foldl (fun acc o => acc ++ natExprIdents o) [])
+          else
+            ([], [])
+  | _ => ([], [])
+
+/-- Local identifiers used directly as memory pointers, e.g. `tl.load(p)`
+after `p = base + off`. -/
+private partial def ptrUsesFromPtrExpr (assigned : Assigned) :
+    TSyntax `tritonExpr → List String := fun stx =>
+  match stx with
+  | `(tritonExpr| ($e:tritonExpr)) => ptrUsesFromPtrExpr assigned e
+  | `(tritonExpr| $r:ident) =>
+      let name := r.getId.toString
+      if assigned.contains name then [name] else []
+  | _ => []
+
+/-- Conditional comparison dependencies. Comparisons are not always Nat
+comparisons (`cur_logits > 0` is real), so we only use these after the
+fixed point already knows at least one side is Nat. -/
+private partial def cmpDepsFromExpr :
+    TSyntax `tritonExpr → List (List String × List String) := fun stx =>
+  let cmp (a b : TSyntax `tritonExpr) :=
+    let ids := natExprIdents a ++ natExprIdents b
+    [(ids, ids)]
+  match stx with
+  | `(tritonExpr| ($e:tritonExpr)) => cmpDepsFromExpr e
+  | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => cmp a b
+  | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => cmp a b
+  | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => cmp a b
+  | `(tritonExpr| $a:tritonExpr > $b:tritonExpr) => cmp a b
+  | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => cmp a b
+  | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => cmp a b
+  | `(tritonExpr| tl.logical_and($a:tritonExpr, $b:tritonExpr)) =>
+      cmpDepsFromExpr a ++ cmpDepsFromExpr b
+  | `(tritonExpr| tl.logical_or($a:tritonExpr, $b:tritonExpr)) =>
+      cmpDepsFromExpr a ++ cmpDepsFromExpr b
+  | `(tritonExpr| $a:tritonExpr and $b:tritonExpr) =>
+      cmpDepsFromExpr a ++ cmpDepsFromExpr b
+  | _ => []
+
+private partial def directPinsFromExpr (assigned : Assigned) :
+    TSyntax `tritonExpr → List String := fun stx =>
+  match stx with
+  | `(tritonExpr| ($e:tritonExpr)) => directPinsFromExpr assigned e
+  | `(tritonExpr| tl.toReal($e:tritonExpr)) => natExprIdents e
+  | `(tritonExpr| tl.multiple_of($e:tritonExpr, $align:tritonExpr)) =>
+      directPinsFromExpr assigned e ++ directPinsFromExpr assigned align
+  | `(tritonExpr| tl.make_block_ptr($_:ident=$p:tritonExpr,
+        $_:ident=($_parent:tritonExpr,*), $_:ident=($_strides:tritonExpr,*),
+        $_:ident=($_offsets:tritonExpr,*), $_:ident=($_block:tritonExpr,*))) =>
+      pinsFromPtrExpr assigned p
+  | `(tritonExpr| tl.make_block_ptr($_:ident=$p:tritonExpr,
+        $_:ident=($_parent:tritonExpr,*), $_:ident=($_strides:tritonExpr,*),
+        $_:ident=($_offsets:tritonExpr,*), $_:ident=($_block:tritonExpr,*),
+        $_:ident=($_order:num,*))) =>
+      pinsFromPtrExpr assigned p
+  | `(tritonExpr| tl.where($c:tritonExpr, $t:tritonExpr, $f:tritonExpr)) =>
+      directPinsFromExpr assigned c ++ directPinsFromExpr assigned t ++ directPinsFromExpr assigned f
+  | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr << $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr >> $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr &  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr |  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr ^  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr and $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr <  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr == $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr >  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| ~ $e:tritonExpr) => directPinsFromExpr assigned e
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      let kwargPins :=
+        kwargs.foldl (fun (acc : List String) kw =>
+          match kw with
+          | `(tritonMemKwarg| $_:ident = $val:tritonExpr) =>
+              acc ++ directPinsFromExpr assigned val
+          | _ => acc) []
+      pinsFromPtrExpr assigned p ++ kwargPins
+  | _ => pinsFromExpr assigned stx
 
 private def memKwargPins (assigned : Assigned)
     (kwargs : TSyntaxArray `tritonMemKwarg) : List String :=
   kwargs.foldl (fun (acc : List String) kw =>
     match kw with
-    | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ pinsFromExpr assigned val
+    | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ directPinsFromExpr assigned val
     | _ => acc) []
+
+private def memKwargCmpDeps
+    (kwargs : TSyntaxArray `tritonMemKwarg) : List (List String × List String) :=
+  kwargs.foldl (fun (acc : List (List String × List String)) kw =>
+    match kw with
+    | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ cmpDepsFromExpr val
+    | _ => acc) []
+
+structure ScanInfo where
+  directPins : List String := []
+  natDeps : List (String × List String) := []
+  ptrUses : List String := []
+  ptrDeps : List (String × List String × List String) := []
+  cmpDeps : List (List String × List String) := []
+  deriving Inhabited
+
+private def ScanInfo.append (a b : ScanInfo) : ScanInfo :=
+  { directPins := a.directPins ++ b.directPins
+    natDeps := a.natDeps ++ b.natDeps
+    ptrUses := a.ptrUses ++ b.ptrUses
+    ptrDeps := a.ptrDeps ++ b.ptrDeps
+    cmpDeps := a.cmpDeps ++ b.cmpDeps }
+
+private def assignmentInfo (assigned : Assigned) (lhs : List String)
+    (rhs : List (TSyntax `tritonExpr)) : ScanInfo :=
+  let directPins := rhs.foldl (fun acc e => acc ++ directPinsFromExpr assigned e) []
+  let cmpDeps := rhs.foldl (fun acc e => acc ++ cmpDepsFromExpr e) []
+  let natDeps := (lhs.zip rhs).map (fun (l, e) => (l, natDepsFromAssignedExpr e))
+  let ptrDeps := (lhs.zip rhs).map (fun (l, e) =>
+    let (bases, offsets) := ptrDepsFromAssignedExpr assigned e
+    (l, bases, offsets))
+  { directPins := directPins, natDeps := natDeps, ptrDeps := ptrDeps, cmpDeps := cmpDeps }
 
 mutual
 
-private partial def pinsFromStmts (assigned : Assigned)
-    (stmts : List (TSyntax `tritonStmt)) : List String × Assigned :=
-  stmts.foldl
-    (fun (acc : List String × Assigned) st =>
-      let (pins, nextAssigned) := pinsFromStmt acc.2 st
-      (acc.1 ++ pins, nextAssigned))
-    ([], assigned)
+private partial def commonAssigned (base thenAssigned elseAssigned : Assigned) : Assigned :=
+  thenAssigned.filter (fun name => !(base.contains name) && elseAssigned.contains name)
 
-private partial def pinsFromStmt (assigned : Assigned)
-    (stx : TSyntax `tritonStmt) : List String × Assigned :=
+private partial def scanStmts (assigned : Assigned)
+    (stmts : List (TSyntax `tritonStmt)) : ScanInfo × Assigned :=
+  stmts.foldl
+    (fun (acc : ScanInfo × Assigned) st =>
+      let (info, nextAssigned) := scanStmt acc.2 st
+      (acc.1.append info, nextAssigned))
+    ({}, assigned)
+
+private partial def scanStmt (assigned : Assigned)
+    (stx : TSyntax `tritonStmt) : ScanInfo × Assigned :=
   match stx with
   | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) =>
-      let lhs := #[lhs0, lhs1] ++ lhsRest
+      let lhsSyntax := #[lhs0, lhs1] ++ lhsRest
+      let lhs := lhsSyntax.toList.map (fun i => i.getId.toString)
       let rhs := #[rhs0, rhs1] ++ rhsRest
-      let pins := rhs.foldl (fun acc e => acc ++ pinsFromExpr assigned e) []
-      let nextAssigned := lhs.foldl (fun acc i => i.getId.toString :: acc) assigned
-      (pins, nextAssigned)
+      let nextAssigned := lhs.foldl (fun acc i => i :: acc) assigned
+      (assignmentInfo assigned lhs rhs.toList, nextAssigned)
   | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* := $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) =>
-      let lhs := #[lhs0, lhs1] ++ lhsRest
+      let lhsSyntax := #[lhs0, lhs1] ++ lhsRest
+      let lhs := lhsSyntax.toList.map (fun i => i.getId.toString)
       let rhs := #[rhs0, rhs1] ++ rhsRest
-      let pins := rhs.foldl (fun acc e => acc ++ pinsFromExpr assigned e) []
-      let nextAssigned := lhs.foldl (fun acc i => i.getId.toString :: acc) assigned
-      (pins, nextAssigned)
+      let nextAssigned := lhs.foldl (fun acc i => i :: acc) assigned
+      (assignmentInfo assigned lhs rhs.toList, nextAssigned)
   | `(tritonStmt| $i:ident := $e:tritonExpr) =>
-      (pinsFromExpr assigned e, i.getId.toString :: assigned)
+      (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident = $e:tritonExpr) =>
-      (pinsFromExpr assigned e, i.getId.toString :: assigned)
+      (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
   | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.atomic_max($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.atomic_min($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.atomic_and($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.atomic_or($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.atomic_xor($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned p ++ pinsFromExpr assigned cmp ++
-        pinsFromExpr assigned v ++ memKwargPins assigned kwargs,
-        assigned)
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned cmp ++
+          directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr cmp ++ cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.async_copy($dst:tritonExpr, $src:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (pinsFromPtrExpr assigned dst ++ pinsFromPtrExpr assigned src ++
-        pinsFromExpr assigned src ++ memKwargPins assigned kwargs,
-        assigned)
-  | `(tritonStmt| tl.async_wait()) => ([], assigned)
-  | `(tritonStmt| tl.debug_barrier()) => ([], assigned)
+      ({ directPins := pinsFromPtrExpr assigned dst ++ pinsFromPtrExpr assigned src ++
+          directPinsFromExpr assigned src ++ memKwargPins assigned kwargs
+         ptrUses := ptrUsesFromPtrExpr assigned dst ++ ptrUsesFromPtrExpr assigned src
+         cmpDeps := cmpDepsFromExpr src ++ memKwargCmpDeps kwargs }, assigned)
+  | `(tritonStmt| tl.async_wait()) => ({}, assigned)
+  | `(tritonStmt| tl.debug_barrier()) => ({}, assigned)
   | `(tritonStmt| tl.for $i:ident in $($_:term) { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
-      let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
-      (pins, assigned)
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      (info, assigned)
   | `(tritonStmt| tl.for $i:ident in $_:num { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
+<<<<<<< Updated upstream
       let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
       (pins, assigned)
   | `(tritonStmt| for $i:ident in range(0, $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
@@ -204,42 +382,113 @@ private partial def pinsFromStmt (assigned : Assigned)
       let bodyAssigned := i.getId.toString :: assigned
       let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
       (pins, assigned)
+=======
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      (info, assigned)
+  | `(tritonStmt| for $i:ident in range(0, $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      let bodyAssigned := i.getId.toString :: assigned
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      (info, assigned)
+  | `(tritonStmt| for $i:ident in range($($_:term), $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      let bodyAssigned := i.getId.toString :: assigned
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      (info, assigned)
+  | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr, $step:tritonExpr) { $stmts:tritonStmt* }) =>
+      let bodyAssigned := i.getId.toString :: assigned
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      let rangeInfo : ScanInfo :=
+        { directPins := natExprIdents start ++ natExprIdents stop ++ natExprIdents step ++
+            directPinsFromExpr assigned start ++ directPinsFromExpr assigned stop ++
+            directPinsFromExpr assigned step
+          cmpDeps := cmpDepsFromExpr start ++ cmpDepsFromExpr stop ++ cmpDepsFromExpr step }
+      (rangeInfo.append info, assigned)
+>>>>>>> Stashed changes
   | `(tritonStmt| tl.static_range $i:ident in $($_:term) { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
-      let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
-      (pins, assigned)
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      (info, assigned)
   | `(tritonStmt| tl.static_range $i:ident in $_:num { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
-      let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
-      (pins, assigned)
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      (info, assigned)
   | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
-      let condPins := pinsFromExpr assigned cond
-      let (thenPins, _) := pinsFromStmts assigned thenStmts.toList
-      let (elsePins, _) := pinsFromStmts assigned elseStmts.toList
-      (condPins ++ thenPins ++ elsePins, assigned)
+      let (thenInfo, thenAssigned) := scanStmts assigned thenStmts.toList
+      let (elseInfo, elseAssigned) := scanStmts assigned elseStmts.toList
+      let condInfo : ScanInfo :=
+        { directPins := directPinsFromExpr assigned cond
+          cmpDeps := cmpDepsFromExpr cond }
+      (condInfo.append thenInfo |>.append elseInfo,
+        commonAssigned assigned thenAssigned elseAssigned ++ assigned)
   | `(tritonStmt| tl.if $cond:tritonExpr { $stmts:tritonStmt* }) =>
-      let condPins := pinsFromExpr assigned cond
-      let (pins, _) := pinsFromStmts assigned stmts.toList
-      (condPins ++ pins, assigned)
+      let (info, _) := scanStmts assigned stmts.toList
+      let condInfo : ScanInfo :=
+        { directPins := directPinsFromExpr assigned cond
+          cmpDeps := cmpDepsFromExpr cond }
+      (condInfo.append info, assigned)
   | `(tritonStmt| if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
-      let condPins := pinsFromExpr assigned cond
-      let (thenPins, _) := pinsFromStmts assigned thenStmts.toList
-      let (elsePins, _) := pinsFromStmts assigned elseStmts.toList
-      (condPins ++ thenPins ++ elsePins, assigned)
+      let (thenInfo, thenAssigned) := scanStmts assigned thenStmts.toList
+      let (elseInfo, elseAssigned) := scanStmts assigned elseStmts.toList
+      let condInfo : ScanInfo :=
+        { directPins := directPinsFromExpr assigned cond
+          cmpDeps := cmpDepsFromExpr cond }
+      (condInfo.append thenInfo |>.append elseInfo,
+        commonAssigned assigned thenAssigned elseAssigned ++ assigned)
   | `(tritonStmt| if $cond:tritonExpr { $stmts:tritonStmt* }) =>
-      let condPins := pinsFromExpr assigned cond
-      let (pins, _) := pinsFromStmts assigned stmts.toList
-      (condPins ++ pins, assigned)
-  | _ => ([], assigned)
+      let (info, _) := scanStmts assigned stmts.toList
+      let condInfo : ScanInfo :=
+        { directPins := directPinsFromExpr assigned cond
+          cmpDeps := cmpDepsFromExpr cond }
+      (condInfo.append info, assigned)
+  | _ => ({}, assigned)
 
 end
+
+private def propagateNatDeps (natPins : List String)
+    (deps : List (String × List String)) : List String :=
+  deps.foldl (fun acc (lhs, rhsIds) =>
+    if acc.contains lhs then addManyUnique acc rhsIds else acc) natPins
+
+private def propagateCmpDeps (natPins : List String)
+    (deps : List (List String × List String)) : List String :=
+  deps.foldl (fun acc (guards, rhsIds) =>
+    if anyContained guards acc then addManyUnique acc rhsIds else acc) natPins
+
+private def propagatePtrDeps (ptrUses natPins : List String)
+    (deps : List (String × List String × List String)) :
+    List String × List String :=
+  deps.foldl
+    (fun (acc : List String × List String) (lhs, bases, offsets) =>
+      if acc.1.contains lhs then
+        (addManyUnique acc.1 bases, addManyUnique acc.2 offsets)
+      else
+        acc)
+    (ptrUses, natPins)
+
+partial def closeInfo (info : ScanInfo) (fuel : Nat := 128) :
+    List String × List String :=
+  let rec loop (fuel : Nat) (ptrUses natPins : List String) :
+      List String × List String :=
+    match fuel with
+    | 0 => (ptrUses, natPins)
+    | fuel + 1 =>
+        let natPins1 := propagateNatDeps natPins info.natDeps
+        let natPins2 := propagateCmpDeps natPins1 info.cmpDeps
+        let (ptrUses1, natPins3) := propagatePtrDeps ptrUses natPins2 info.ptrDeps
+        if ptrUses1.length == ptrUses.length && natPins3.length == natPins.length then
+          (ptrUses1, natPins3)
+        else
+          loop fuel ptrUses1 natPins3
+  loop fuel
+    (info.ptrUses.foldl addUnique [])
+    (info.directPins.foldl addUnique [])
 
 /-- Set of identifier names that the body uses in a `.nat`-required
 position. The DSL macro consults this when expanding a `name = tl.load(p)`
 binding without an explicit `dtype=` kwarg: if `name` is in this set,
 the load defaults to `.nat` instead of `.real`. -/
 def collectNatPinned (stmts : List (TSyntax `tritonStmt)) : List String :=
-  let (pins, _) := pinsFromStmts [] stmts
+  let (info, _) := scanStmts [] stmts
+  let (_, pins) := closeInfo info
   pins
 
 /-- Per-region element-dtype declarations gathered from in-body

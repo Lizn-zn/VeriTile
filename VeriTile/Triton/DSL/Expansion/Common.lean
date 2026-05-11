@@ -37,6 +37,7 @@ structure EOut where
   dtype : DInfo
   shape : SInfo
   computeTerm : Option (TSyntax `term) := none
+  computeDType? : Option DInfo := none
   deriving Inhabited
 
 def expandLeanAntiquoteAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
@@ -54,8 +55,13 @@ def expandLeanAntiquoteAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
         | .bool => pure (← `(Op.constBool $t), .bool)
         | _ =>
             Macro.throwError
+<<<<<<< Updated upstream
               "$(...): Lean antiquotation can only be inferred as real/nat/int/bool/float in the current context"
       pure (some ⟨out.1, out.2, SInfo.scalar, none⟩)
+=======
+              "$(...): Lean antiquotation can only be inferred as real/nat/int/bool in the current context"
+      pure (some ⟨out.1, out.2, SInfo.scalar, none, none⟩)
+>>>>>>> Stashed changes
   | _ => pure none
 
 def expandLeanAntiquoteAs (dtype : DInfo) (e : TSyntax `tritonExpr) :
@@ -91,6 +97,7 @@ inductive CInfo where
 
 structure StaticPtrOut where
   region : TSyntax `term
+  regionDType? : Option DInfo := none
   offset : TSyntax `term
   shape : SInfo
   baseOnly : Bool
@@ -104,7 +111,8 @@ abbrev StmtExpansion := TSyntax `term × TSyntax `term × Env × Bool
 def methodCast? (stx : TSyntax `tritonExpr) :
     Option (TSyntax `tritonExpr × TSyntax `tritonDType) :=
   let k := stx.raw.getKind
-  if k == ``tritonMethodCast then
+  if k == ``tritonMethodCast || k == ``tritonIdentMethodCast ||
+      k == ``tritonIdentMethodCastSpaced then
     let args := stx.raw.getArgs
     if h : args.size = 5 then
       some (⟨args[0]⟩, ⟨args[3]⟩)
@@ -124,6 +132,9 @@ def natDimTerm (ctx : String) (d : TSyntax `tritonExpr) :
   match d with
   | `(tritonExpr| $($t:term)) => `(($t : Nat))
   | `(tritonExpr| $n:num) => `(($n : Nat))
+  | `(tritonExpr| $i:ident) =>
+      let t : TSyntax `term := ⟨i.raw⟩
+      `(($t : Nat))
   | _ => Macro.throwError (ctx ++ ": each entry must be a numeric literal or `$(t)` antiquote")
 
 def natListTerm (ctx : String) (dims : Array (TSyntax `tritonExpr)) :
@@ -190,6 +201,18 @@ def inferComputeSourceDType (ctx : String) (dtype : DInfo) : MacroM CInfo := do
   | _ =>
       Macro.throwError
         (ctx ++ ": source dtype must erase from a modeled 32-bit payload (`tl.uint32`, `tl.int32`, `tl.float32`)")
+
+def fp32ComputeExpr (term : TSyntax `term) : MacroM (TSyntax `term) :=
+  `(ComputeExpr.compute (ComputeOp.alg ComputeDType.fp32 $term))
+
+def fp32ComputeLoadExpr (mem mask : TSyntax `term) : MacroM (TSyntax `term) :=
+  `(ComputeExpr.compute (ComputeOp.load ComputeDType.fp32 $mem $mask))
+
+def computeAnnotated? (dtype : DInfo) (term : TSyntax `term) :
+    MacroM (Option (TSyntax `term) × Option DInfo) := do
+  match dtype with
+  | .fp32 => pure (some (← fp32ComputeExpr term), some .fp32)
+  | _ => pure (none, none)
 
 def computeLiteralPayloadTerm (dtype : CInfo) (bits : Nat) :
     MacroM (TSyntax `term) := do

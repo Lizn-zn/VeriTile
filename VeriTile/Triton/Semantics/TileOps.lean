@@ -65,6 +65,43 @@ def Tile.remap {dtype inShape outShape}
     (x : Tile dtype inShape) : Tile dtype outShape :=
   ⟨fun i => x.data (map i)⟩
 
+/-- Generic masked row load carrier: valid lanes read `load`, inactive lanes
+produce `other`. This is Triton carrier plumbing, not an operator-specific
+math bridge. -/
+def Tile.maskedRowLoad {α : Type*} {n : Nat}
+    (load : Fin n → α)
+    (active : Fin n → Prop) [DecidablePred active]
+    (other : α) (i : Fin n) : α :=
+  if active i then load i else other
+
+/-- Generic one-dimensional masked tile with `other` for inactive lanes. -/
+def Tile.maskedRowTile {dtype : TileDType} {n : Nat}
+    (load : Fin n → TileCarrier dtype)
+    (active : Fin n → Prop) [DecidablePred active]
+    (other : TileCarrier dtype) : Tile dtype [n] :=
+  ⟨fun i => Tile.maskedRowLoad load active other i.1⟩
+
+@[simp] theorem Tile.maskedRowLoad_active {α : Type*} {n : Nat}
+    (load : Fin n → α)
+    (active : Fin n → Prop) [DecidablePred active]
+    (other : α) {i : Fin n} (h : active i) :
+    Tile.maskedRowLoad load active other i = load i := by
+  simp [Tile.maskedRowLoad, h]
+
+@[simp] theorem Tile.maskedRowLoad_inactive {α : Type*} {n : Nat}
+    (load : Fin n → α)
+    (active : Fin n → Prop) [DecidablePred active]
+    (other : α) {i : Fin n} (h : ¬ active i) :
+    Tile.maskedRowLoad load active other i = other := by
+  simp [Tile.maskedRowLoad, h]
+
+@[simp] theorem Tile.maskedRowTile_data {dtype : TileDType} {n : Nat}
+    (load : Fin n → TileCarrier dtype)
+    (active : Fin n → Prop) [DecidablePred active]
+    (other : TileCarrier dtype) (i : TileIndex [n]) :
+    (Tile.maskedRowTile load active other).data i =
+      Tile.maskedRowLoad load active other i.1 := rfl
+
 def Tile.reshape {dtype inShape outShape}
     (x : Tile dtype inShape) : Tile dtype outShape :=
   let inputs := TileShape.allIndices inShape
@@ -113,6 +150,10 @@ noncomputable def WithBot.realSigmoid : WithBot ℝ → WithBot ℝ
 noncomputable def WithBot.realSqrt : WithBot ℝ → WithBot ℝ
   | none   => none             -- sqrt(-∞) undefined
   | some r => some (Real.sqrt r)
+
+noncomputable def WithBot.realRsqrt : WithBot ℝ → WithBot ℝ
+  | none   => none             -- rsqrt(-∞) undefined
+  | some r => some (1 / Real.sqrt r)
 
 noncomputable def WithBot.realTanh : WithBot ℝ → WithBot ℝ
   | none   => some (-1)        -- tanh(-∞) = -1
@@ -165,6 +206,8 @@ noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
     WithBot.realSigmoid (some r) = some (Real.sigmoid r) := rfl
 @[simp] theorem WithBot.realSqrt_some (r : ℝ) :
     WithBot.realSqrt (some r) = some (Real.sqrt r) := rfl
+@[simp] theorem WithBot.realRsqrt_some (r : ℝ) :
+    WithBot.realRsqrt (some r) = some (1 / Real.sqrt r) := rfl
 @[simp] theorem WithBot.realTanh_some (r : ℝ) :
     WithBot.realTanh (some r) = some (Real.tanh r) := rfl
 @[simp] theorem WithBot.realSin_some (r : ℝ) :
@@ -209,6 +252,8 @@ noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
     WithBot.realSigmoid ((r : ℝ) : WithBot ℝ) = (((Real.sigmoid r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realSqrt_coe (r : ℝ) :
     WithBot.realSqrt ((r : ℝ) : WithBot ℝ) = (((Real.sqrt r : ℝ)) : WithBot ℝ) := rfl
+@[simp] theorem WithBot.realRsqrt_coe (r : ℝ) :
+    WithBot.realRsqrt ((r : ℝ) : WithBot ℝ) = (((1 / Real.sqrt r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realTanh_coe (r : ℝ) :
     WithBot.realTanh ((r : ℝ) : WithBot ℝ) = (((Real.tanh r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realSin_coe (r : ℝ) :

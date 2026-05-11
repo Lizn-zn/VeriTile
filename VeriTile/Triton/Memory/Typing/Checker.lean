@@ -149,6 +149,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .log2 a => a.check ctx
   | .sigmoid a => a.check ctx
   | .sqrt a => a.check ctx
+  | .rsqrt a => a.check ctx
   | .tanh a => a.check ctx
   | .sin a => a.check ctx
   | .cos a => a.check ctx
@@ -185,6 +186,8 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .ptrAdd _ ptr off => ptr.check ctx *> off.check ctx
   | .makeBlockPtr _ _ parentShape blockShape strides offsets =>
       checkBlockPtrMetadata parentShape blockShape strides offsets
+  | .makeBlockPtrDyn _ base parentShape blockShape strides offsets =>
+      base.check ctx *> checkBlockPtrMetadata parentShape blockShape strides offsets
   | .advanceBlockPtr ptr _ => ptr.check ctx
   | .load dtype mem mask => mem.check ctx dtype *> mask.check ctx
   | .natToReal a => a.check ctx
@@ -219,7 +222,15 @@ def Op.blockPtrProvenance (ctx : CheckCtx) :
     Op dtype shape → Except CheckError RegionName
   | .makeBlockPtr region _ parentShape blockShape strides offsets => do
       checkBlockPtrMetadata parentShape blockShape strides offsets
+<<<<<<< Updated upstream
       .ok (Region.cast region)
+=======
+      .ok region
+  | .makeBlockPtrDyn region base parentShape blockShape strides offsets => do
+      base.check ctx
+      checkBlockPtrMetadata parentShape blockShape strides offsets
+      .ok region
+>>>>>>> Stashed changes
   | .advanceBlockPtr ptr _ => ptr.blockPtrProvenance ctx
   | .broadcast ptr _ => ptr.blockPtrProvenance ctx
   | .full _ ptr => ptr.blockPtrProvenance ctx
@@ -310,6 +321,15 @@ def Stmt.check (ctx : CheckCtx) : Stmt → Except CheckError CheckCtx
   | .forRange idx _ _ _ body => do
       let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
       StmtList.check ctx' body
+<<<<<<< Updated upstream
+=======
+  | .forRangeDyn idx start stop step body => do
+      start.check ctx
+      stop.check ctx
+      step.check ctx
+      let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
+      StmtList.check ctx' body
+>>>>>>> Stashed changes
   | .ifThen cond body => do
       cond.check ctx
       StmtList.check ctx body

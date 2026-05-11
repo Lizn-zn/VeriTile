@@ -15,8 +15,6 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
 - Python pointer mutation `Y += ...` / `X += ...` / `r += ...` / `mu += ...`
   -> explicit base pointer registers.
-- Python `tl.math.rsqrt(v)` -> `1 / tl.sqrt(v)`, equivalent at the
-  algorithm layer.
 - Python `.to(...)` casts are omitted at the algorithm layer.
 - Python scalar division by `n_cols` is written as division by
   `tl.toReal($(n_cols))` to make the algorithm-layer dtype explicit. -/
@@ -41,7 +39,7 @@ def layernorm_forward
   mean_X = tl.sum(X_row, axis=0) / tl.toReal($(n_cols))
   XX = X_row - mean_X
   row_var = tl.sum(XX * XX, axis=0) / tl.toReal($(n_cols))
-  inv_var = 1 / tl.sqrt(row_var + $(eps))
+  inv_var = tl.math.rsqrt(row_var + $(eps))
   tl.store(r_base, inv_var)
   tl.store(mu_base, mean_X)
   output = (XX * inv_var) * W_row + b_row

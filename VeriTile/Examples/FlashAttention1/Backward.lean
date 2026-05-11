@@ -385,9 +385,9 @@ def fa1BackwardAtomicDQBoundaryKernel
   k_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
   v_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
 
-  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=$(0))
-  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=$(0))
-  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=$(0))
+  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=0)
+  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=0)
+  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=0)
   k_block := tl.load($(kReg) + k_block_ptrs)
   v_block := tl.load($(vReg) + v_block_ptrs)
   k_all   := tl.load($(kReg) + k_all_ptrs)
@@ -489,9 +489,9 @@ def fa1BackwardAtomicDQCausalBoundaryKernel
   k_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
   v_all_ptrs   := offs_n[:, None] * $(D) + offs_d[None, :]
 
-  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=$(0))
-  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=$(0))
-  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=$(0))
+  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=0)
+  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=0)
+  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=0)
   k_block := tl.load($(kReg) + k_block_ptrs)
   v_block := tl.load($(vReg) + v_block_ptrs)
   k_all   := tl.load($(kReg) + k_all_ptrs)
@@ -552,13 +552,13 @@ def fa1BackwardAtomicDQBoundaryDKernel
   k_block_out  := offs_b[:, None] * $(Bd) + offs_d[None, :]
   v_block_out  := offs_b[:, None] * $(Bd) + offs_d[None, :]
 
-  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=$(0))
-  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=$(0))
-  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=$(0))
-  k_block := tl.load($(kReg) + k_block_in, mask=kv_block_mask, other=$(0))
-  v_block := tl.load($(vReg) + v_block_in, mask=kv_block_mask, other=$(0))
-  k_all   := tl.load($(kReg) + k_all_in, mask=kv_all_mask, other=$(0))
-  v_all   := tl.load($(vReg) + v_all_in, mask=kv_all_mask, other=$(0))
+  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=0)
+  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=0)
+  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=0)
+  k_block := tl.load($(kReg) + k_block_in, mask=kv_block_mask, other=0)
+  v_block := tl.load($(vReg) + v_block_in, mask=kv_block_mask, other=0)
+  k_all   := tl.load($(kReg) + k_all_in, mask=kv_all_mask, other=0)
+  v_all   := tl.load($(vReg) + v_all_in, mask=kv_all_mask, other=0)
 
   scores_all := tl.dot(q, tl.trans(k_all)) * $(scale)
   p_all      := tl.where(all_mask, tl.exp(scores_all - lse[:, None]), 0.0)
@@ -606,13 +606,13 @@ def fa1BackwardAtomicDQCausalBoundaryDKernel
   k_block_out  := offs_b[:, None] * $(Bd) + offs_d[None, :]
   v_block_out  := offs_b[:, None] * $(Bd) + offs_d[None, :]
 
-  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=$(0))
-  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=$(0))
-  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=$(0))
-  k_block := tl.load($(kReg) + k_block_in, mask=kv_block_mask, other=$(0))
-  v_block := tl.load($(vReg) + v_block_in, mask=kv_block_mask, other=$(0))
-  k_all   := tl.load($(kReg) + k_all_in, mask=kv_all_mask, other=$(0))
-  v_all   := tl.load($(vReg) + v_all_in, mask=kv_all_mask, other=$(0))
+  q       := tl.load($(qReg) + q_ptrs, mask=qd_mask, other=0)
+  dO      := tl.load($(dOReg) + do_ptrs, mask=qd_mask, other=0)
+  lse     := tl.load($(lseReg) + q_rows, mask=q_mask, other=0)
+  k_block := tl.load($(kReg) + k_block_in, mask=kv_block_mask, other=0)
+  v_block := tl.load($(vReg) + v_block_in, mask=kv_block_mask, other=0)
+  k_all   := tl.load($(kReg) + k_all_in, mask=kv_all_mask, other=0)
+  v_all   := tl.load($(vReg) + v_all_in, mask=kv_all_mask, other=0)
 
   causal_all   := q_rows[:, None] >= offs_n[None, :]
   active_all   := all_mask & causal_all

@@ -63,6 +63,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .log2 a, s => return Tile.uop WithBot.realLog2 (← evalOp a s)
   | .sigmoid a, s => return Tile.uop WithBot.realSigmoid (← evalOp a s)
   | .sqrt a, s => return Tile.uop WithBot.realSqrt (← evalOp a s)
+  | .rsqrt a, s => return Tile.uop WithBot.realRsqrt (← evalOp a s)
   | .tanh a, s => return Tile.uop WithBot.realTanh (← evalOp a s)
   | .sin a, s => return Tile.uop WithBot.realSin (← evalOp a s)
   | .cos a, s => return Tile.uop WithBot.realCos (← evalOp a s)
@@ -126,6 +127,15 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       some ⟨fun _ =>
         { region := Region.cast region
         , baseOffset := baseOffset
+        , parentShape := parentShape
+        , blockShape := blockShape
+        , strides := strides
+        , offsets := offsets }⟩
+  | .makeBlockPtrDyn region baseOffset parentShape blockShape strides offsets, s => do
+      let base ← evalOp baseOffset s
+      some ⟨fun _ =>
+        { region := region
+        , baseOffset := base.data PUnit.unit
         , parentShape := parentShape
         , blockShape := blockShape
         , strides := strides

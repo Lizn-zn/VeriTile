@@ -84,6 +84,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .log2 a => a.MemorySafe bounds
   | .sigmoid a => a.MemorySafe bounds
   | .sqrt a => a.MemorySafe bounds
+  | .rsqrt a => a.MemorySafe bounds
   | .tanh a => a.MemorySafe bounds
   | .sin a => a.MemorySafe bounds
   | .cos a => a.MemorySafe bounds
@@ -119,6 +120,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .ptrBase _ => True
   | .ptrAdd _ ptr off => ptr.MemorySafe bounds ∧ off.MemorySafe bounds
   | .makeBlockPtr _ _ _ _ _ _ => True
+  | .makeBlockPtrDyn _ base _ _ _ _ => base.MemorySafe bounds
   | .advanceBlockPtr ptr _ => ptr.MemorySafe bounds
   | .load _ mem mask =>
       (match mem with
@@ -240,6 +242,12 @@ def MemorySafe (bounds : RegionBounds) : Stmt → Prop
       ∀ s, mem.ActiveAddressSafe bounds s (mask.Active s)
   | .forLoop _ _ body => MemorySafeList bounds body
   | .forRange _ _ _ _ body => MemorySafeList bounds body
+<<<<<<< Updated upstream
+=======
+  | .forRangeDyn _ start stop step body =>
+      start.MemorySafe bounds ∧ stop.MemorySafe bounds ∧ step.MemorySafe bounds ∧
+        MemorySafeList bounds body
+>>>>>>> Stashed changes
   | .ifThen cond body => cond.MemorySafe bounds ∧ MemorySafeList bounds body
   | .ifThenElse cond thenBody elseBody =>
       cond.MemorySafe bounds ∧

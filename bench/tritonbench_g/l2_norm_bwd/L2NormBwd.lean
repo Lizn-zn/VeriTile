@@ -9,6 +9,8 @@ namespace VeriTile.Bench.TritonBenchG.L2NormBwd
 open VeriTile.Triton
 open VeriTile.Triton.TiledL2Norm
 
+set_option linter.unusedSimpArgs false
+
 /-- Faithful transcription of `l2_norm_bwd.py`'s `_l2_norm_bwd_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
@@ -25,12 +27,12 @@ def l2_norm_bwd_kernel
   DY_base = DY + row * $(stride_x_row)
   cols = tl.arange(0, $(BLOCK_N))
   x = tl.load(X_base + cols, mask=cols < $(N), other=0.0).to(tl.float32)
-  x = tl.where(cols < $(N), x, (0.0).to(tl.float32))
+  x = tl.where(cols < $(N), x, 0.0)
   var = tl.sum(x * x)
   rstd = 1 / tl.sqrt(var + $(eps))
   mask = cols < $(N)
   dy = tl.load(DY_base + cols, mask=cols < $(N), other=0.0).to(tl.float32)
-  dy = tl.where(cols < $(N), dy, (0.0).to(tl.float32))
+  dy = tl.where(cols < $(N), dy, 0.0)
   dx = dy * rstd - tl.sum(dy * x) * (1 / (var + $(eps))) * rstd * x
   tl.store(DX_base + cols, dx, mask=mask)
 }
@@ -144,8 +146,9 @@ theorem l2_norm_bwd_kernel_correct
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
           NumericDType.sub, NumericDType.div, ComparableDType.lt,
-          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot] at hExec
-    subst s'
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    rw [← hExec]
     simp only [l2BwdOutOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
     by_cases hi : i.val < N
@@ -177,7 +180,7 @@ theorem l2_norm_bwd_kernel_compute_correct
       (expected := fun i => l2BwdSpec s X DY stride_x_row N BLOCK_N eps i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [l2_norm_bwd_kernel]
+  · simp [l2_norm_bwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive

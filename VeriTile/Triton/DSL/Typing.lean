@@ -27,7 +27,7 @@ inductive SInfo where
   | dims : List (TSyntax `term) → SInfo
   deriving Inhabited
 
-abbrev Env := List (String × DInfo × SInfo)
+abbrev Env := List (String × DInfo × SInfo × Option DInfo)
 
 def termKey (t : TSyntax `term) : String :=
   toString t.raw
@@ -163,8 +163,13 @@ def expandDTypeExpr : TSyntax `tritonExpr → MacroM DInfo
 
 def lookupEnv (env : Env) (name : String) : MacroM (DInfo × SInfo) := do
   match env.find? (fun entry => entry.1 == name) with
-  | some (_, dtype, shape) => pure (dtype, shape)
+  | some (_, dtype, shape, _) => pure (dtype, shape)
   | none => Macro.throwError ("unknown Triton identifier `" ++ name ++ "`")
+
+def lookupComputeDType? (env : Env) (name : String) : Option DInfo :=
+  match env.find? (fun entry => entry.1 == name) with
+  | some (_, _, _, computeDType?) => computeDType?
+  | none => none
 
 def ensureDType (expected actual : DInfo) (ctx : String) : MacroM Unit := do
   unless expected == actual do

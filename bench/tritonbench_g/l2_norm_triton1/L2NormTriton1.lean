@@ -9,6 +9,8 @@ namespace VeriTile.Bench.TritonBenchG.L2NormTriton1
 open VeriTile.Triton
 open VeriTile.Triton.TiledL2Norm
 
+set_option linter.unusedSimpArgs false
+
 /-- Faithful transcription of `l2_norm_triton1.py`'s `_l2_norm_fwd_1pass_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
@@ -25,7 +27,7 @@ def l2_norm_fwd_1pass_kernel
   Y_base = Y + row * $(stride_x_row)
   cols = tl.arange(0, $(BLOCK_N))
   x = (tl.load(X_base + cols, mask=cols < $(N), other=0.0)).to(tl.float32)
-  xbar = tl.where(cols < $(N), x, (0.0).to(tl.float32))
+  xbar = tl.where(cols < $(N), x, 0.0)
   var = tl.sum(xbar * xbar, axis=0)
   rstd = 1 / tl.sqrt(var + $(eps))
   mask = cols < $(N)
@@ -109,8 +111,8 @@ theorem l2_norm_fwd_1pass_kernel_correct
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           NumericDType.add, NumericDType.mul, NumericDType.div,
-          ComparableDType.lt] at hExec
-    subst s'
+          ComparableDType.lt, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    rw [← hExec]
     simp [BlockState.pid_eq]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
     by_cases hi : i.val < N
@@ -138,7 +140,7 @@ theorem l2_norm_fwd_1pass_kernel_compute_correct
       (expected := fun i => l2Spec s X stride_x_row N BLOCK_N eps i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [l2_norm_fwd_1pass_kernel]
+  · simp [l2_norm_fwd_1pass_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive

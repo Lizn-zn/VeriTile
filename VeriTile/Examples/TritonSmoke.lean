@@ -390,6 +390,139 @@ def dtypeMaskedLoadStoreSmoke (xReg outReg : RegionName) (N : Nat) : ComputeKern
   tl.store($(outReg) + offs, x, mask=mask)
 }
 
+/-- `tl.zeros(..., dtype=tl.float32)` preserves an fp32 compute node while
+projecting to a Real algorithm tile. -/
+def zerosFp32ComputeSmoke (N : Nat) : ComputeKernel := triton {
+  z := tl.zeros([$(N)], dtype=tl.float32)
+}
+
+def fullFp32ComputeSmoke (N : Nat) : ComputeKernel := triton {
+  z := tl.full([$(N)], 1, dtype=tl.float32)
+}
+
+def fp32AccumulatorArithSmoke (N : Nat) : ComputeKernel := triton {
+  z := tl.zeros([$(N)], dtype=tl.float32)
+  y := z + 1
+}
+
+def fp32CastComputeSmoke (N : Nat) : ComputeKernel := triton {
+  z := tl.full([$(N)], 1)
+  y := tl.cast(z, tl.float32)
+}
+
+def fp32ToComputeSmoke (N : Nat) : ComputeKernel := triton {
+  z := tl.full([$(N)], 1)
+  y := (z).to(tl.float32)
+}
+
+def fp32LoadComputeSmoke (xReg : RegionName) (N : Nat) : ComputeKernel := triton {
+  offs := tl.arange(0, $(N))
+  x := tl.load($(xReg) + offs, dtype=tl.float32)
+}
+
+example (N : Nat) :
+    zerosFp32ComputeSmoke N =
+      ComputeKernel.mk [] []
+        [ComputeStmt.assign .real [N] "z"
+          (ComputeExpr.compute
+            (ComputeOp.full [N] (ComputeOp.alg .fp32 (Op.const 0))))] := by
+  rfl
+
+example (N : Nat) :
+    (zerosFp32ComputeSmoke N).toAlgorithm? =
+      Except.ok
+        (Kernel.mk [] []
+          [Stmt.assign .real [N] "z" (Op.full [N] (Op.const 0))]) := by
+  simp [zerosFp32ComputeSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  rfl
+
+example (N : Nat) :
+    fullFp32ComputeSmoke N =
+      ComputeKernel.mk [] []
+        [ComputeStmt.assign .real [N] "z"
+          (ComputeExpr.compute
+            (ComputeOp.full [N] (ComputeOp.alg .fp32 (Op.const 1))))] := by
+  rfl
+
+example (N : Nat) :
+    (fullFp32ComputeSmoke N).toAlgorithm? =
+      Except.ok
+        (Kernel.mk [] []
+          [Stmt.assign .real [N] "z" (Op.full [N] (Op.const 1))]) := by
+  simp [fullFp32ComputeSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  rfl
+
+example (N : Nat) :
+    fp32AccumulatorArithSmoke N =
+      ComputeKernel.mk [] []
+        [ ComputeStmt.assign .real [N] "z"
+            (ComputeExpr.compute
+              (ComputeOp.full [N] (ComputeOp.alg .fp32 (Op.const 0))))
+        , ComputeStmt.assign .real [N] "y"
+            (ComputeExpr.compute
+              (ComputeOp.alg .fp32
+                (Op.add NumericDType.real Broadcast.scalarR
+                  (Op.ref .real [N] "z") (Op.const 1))))] := by
+  rfl
+
+example (N : Nat) :
+    (fp32AccumulatorArithSmoke N).toAlgorithm? =
+      Except.ok
+        (Kernel.mk [] []
+          [ Stmt.assign .real [N] "z" (Op.full [N] (Op.const 0))
+          , Stmt.assign .real [N] "y"
+              (Op.add NumericDType.real Broadcast.scalarR
+                (Op.ref .real [N] "z") (Op.const 1))]) := by
+  simp [fp32AccumulatorArithSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  constructor <;> rfl
+
+example (N : Nat) :
+    fp32CastComputeSmoke N =
+      ComputeKernel.mk [] []
+        [ ComputeStmt.assign .real [N] "z"
+            (ComputeExpr.alg (Op.full [N] (Op.const 1)))
+        , ComputeStmt.assign .real [N] "y"
+            (ComputeExpr.compute
+              (ComputeOp.alg .fp32
+                (Op.castFloat FloatDType.real FloatDType.real
+                  (Op.ref .real [N] "z"))))] := by
+  rfl
+
+example (N : Nat) :
+    fp32ToComputeSmoke N =
+      ComputeKernel.mk [] []
+        [ ComputeStmt.assign .real [N] "z"
+            (ComputeExpr.alg (Op.full [N] (Op.const 1)))
+        , ComputeStmt.assign .real [N] "y"
+            (ComputeExpr.compute
+              (ComputeOp.alg .fp32
+                (Op.castFloat FloatDType.real FloatDType.real
+                  (Op.ref .real [N] "z"))))] := by
+  rfl
+
+example (xReg : RegionName) (N : Nat) :
+    fp32LoadComputeSmoke xReg N =
+      ComputeKernel.mk [xReg] []
+        [ ComputeStmt.assign .nat [N] "offs"
+            (ComputeExpr.alg (Op.arange N))
+        , ComputeStmt.assign .real [N] "x"
+            (ComputeExpr.compute
+              (ComputeOp.load .fp32
+                (MemAccess.region xReg (Op.ref .nat [N] "offs"))
+                MaskOpt.none))] := by
+  rfl
+
+example (xReg : RegionName) (N : Nat) :
+    (fp32LoadComputeSmoke xReg N).toAlgorithm? =
+      Except.ok
+        (Kernel.mk [xReg] []
+          [ Stmt.assign .nat [N] "offs" (Op.arange N)
+          , Stmt.assign .real [N] "x"
+              (Op.load ComputeDType.fp32.eraseDType
+                (MemAccess.region xReg (Op.ref .nat [N] "offs"))
+                MaskOpt.none)]) := by
+  simp [fp32LoadComputeSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Constant bit reinterpretation is accepted only when it can be projected to
 an algorithm-layer value by the computable decoder. -/
 def bitcastConstantSmoke (outReg : RegionName) : ComputeKernel := triton {
@@ -539,6 +672,26 @@ def natLoadStoreKernel (idxReg outReg : RegionName) : ComputeKernel := triton {
   idx := tl.load($(idxReg), dtype=tl.uint64)
   tl.store($(outReg), idx)
 }
+
+/-- Typed region surface: the `.nat` annotation on the region supplies the
+`tl.load` dtype, so no explicit `dtype=tl.uint64` is needed. -/
+def typedNatRegionLoadStoreKernel (idxReg : Region .nat) (outReg : RegionName) :
+    ComputeKernel := triton {
+  idx := tl.load($((idxReg : Region .nat)))
+  tl.store($(outReg), idx)
+}
+
+example (idxReg : Region .nat) (outReg : RegionName) :
+    typedNatRegionLoadStoreKernel idxReg outReg =
+      ComputeKernel.mk [idxReg] [outReg]
+        [ ComputeStmt.assign .nat [] "idx"
+            (ComputeExpr.alg
+              (Op.load .nat
+                (MemAccess.region idxReg.name (Op.constNat 0))
+                MaskOpt.none))
+        , ComputeStmt.store .nat [] (MemAccess.region outReg (Op.constNat 0))
+            (ComputeExpr.alg (Op.ref .nat [] "idx")) MaskOpt.none ] := by
+  rfl
 
 /-- `tl.uint32` is also an index-like HBM dtype and maps to VeriTile `.nat`. -/
 def uint32LoadStoreSmoke (idxReg outReg : RegionName) : ComputeKernel := triton {

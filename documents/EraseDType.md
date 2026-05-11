@@ -72,6 +72,37 @@ ComputeKernel.computeRefine_of_toAlgorithm_eq :
 This keeps projected algorithm proofs reusable while making projection success
 explicit.
 
+## DType-Preserving Compute Forms
+
+The DSL keeps concrete Triton dtype facts in the compute-facing term whenever
+the current model has a projectable representation for them. The surrounding
+`EOut` carries two views:
+
+- `term`: the projected algorithm-side `Op`.
+- `computeTerm`: the compute-facing `ComputeExpr` used by `ComputeKernel`.
+
+For fp32 forms that are projectable today, the compute view preserves the fp32
+tag while the algorithm view uses `.real`:
+
+- `tl.zeros([N], dtype=tl.float32)` and
+  `tl.full([N], value, dtype=tl.float32)` emit `ComputeOp.full` tagged fp32.
+- `tl.load(ptr, dtype=tl.float32)` emits `ComputeOp.load .fp32 ...` and
+  projects to `Op.load .real ...`.
+- `tl.cast(e, tl.float32)` and `(e).to(tl.float32)` emit a fp32 compute
+  annotation over the projected real cast.
+- Local variables assigned from these forms remember their fp32 compute dtype,
+  so later identifier references can rehydrate a compute expression.
+- Arithmetic over these fp32-annotated values propagates the fp32 annotation
+  through the compute surface while leaving the mathematical operation in the
+  projected algorithm term.
+
+This is intentionally not a full Triton dtype-promotion table. The current
+Lean model tracks the fp32 accumulator/typed-load cases needed by the
+formalized kernels and projects them to Real for proofs. Wider promotion
+semantics, fp16/bf16 rounding behavior, integer-width overflow, and hardware
+dot accumulator precision remain compute-layer gap contracts unless modeled by
+future `ComputeOp` constructors.
+
 A definition-unfolding lemma is provided for the projection:
 
 ```lean

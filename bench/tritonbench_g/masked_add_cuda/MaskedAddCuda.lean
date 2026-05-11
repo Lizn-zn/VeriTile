@@ -29,7 +29,7 @@ def masked_add_kernel
   mask = mask & ~p_mask
   p = tl.load(p_ptr + offsets, mask=mask)
   grad = tl.load(grad_ptr + offsets, mask=mask)
-  grad = grad + p * $(alpha)
+  grad += p * $(alpha)
   tl.store(grad_ptr + offsets, grad, mask=mask)
 }
 

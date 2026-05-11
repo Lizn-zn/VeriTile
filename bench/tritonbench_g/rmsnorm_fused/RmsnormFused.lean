@@ -1,6 +1,7 @@
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
+import VeriTile.Triton.Math.RMSNorm
 import VeriTile.Triton.DSL
 
 namespace VeriTile.Bench.TritonBenchG.RmsnormFused
@@ -28,20 +29,32 @@ def rms_norm_fwd_fused
   row = tl.program_id(0)
   Y_base = Y + row * $(stride)
   X_base = X + row * $(stride)
+<<<<<<< Updated upstream
   _var = tl.zeros([$(BLOCK_SIZE)])
+=======
+  _var = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+>>>>>>> Stashed changes
   for off in range(0, $(N), $(BLOCK_SIZE)) {
     cols = off + tl.arange(0, $(BLOCK_SIZE))
     x = tl.load(X_base + cols, mask=cols < $(N), other=0.0)
     x = tl.where(cols < $(N), x, 0.0)
     _var = _var + x * x
   }
+<<<<<<< Updated upstream
   var = tl.sum(_var, axis=0) / tl.toReal($(N))
+=======
+  var = tl.sum(_var, axis=0) / $(N)
+>>>>>>> Stashed changes
   rstd = 1 / tl.sqrt(var + $(eps))
   for off in range(0, $(N), $(BLOCK_SIZE)) {
     cols = off + tl.arange(0, $(BLOCK_SIZE))
     mask = cols < $(N)
     w = tl.load(W + cols, mask=mask)
+<<<<<<< Updated upstream
     x = tl.load(X_base + cols, mask=mask, other=0.0)
+=======
+    x = tl.load(X_base + cols, mask=mask, other=0.0).to(tl.float32)
+>>>>>>> Stashed changes
     x_hat = x * rstd
     y = x_hat * w
     tl.store(Y_base + cols, y, mask=mask)
@@ -57,12 +70,28 @@ def yOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
 noncomputable def rmsInputTile
     (s : BlockState) (X : RegionName) (stride N BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
-  { data := fun idx =>
-      if idx.1.val < N then
-        if idx.1.val < N then
-          some (s.readMem X (xOffset s stride idx.1))
-        else some (0.0 : ℝ)
-      else some (0.0 : ℝ) }
+  Tile.maskedRowTile
+    (fun i : Fin BLOCK_SIZE =>
+      Tile.maskedRowLoad
+        (fun k : Fin BLOCK_SIZE => some (s.readMem X (xOffset s stride k)))
+        (fun k : Fin BLOCK_SIZE => k.val < N)
+        (some (0.0 : ℝ) : WithBot ℝ)
+        i)
+    (fun i : Fin BLOCK_SIZE => i.val < N)
+    (some (0.0 : ℝ) : WithBot ℝ)
+
+noncomputable def rmsLoad
+    (s : BlockState) (X : RegionName) (stride N BLOCK_SIZE : Nat)
+    (i : Fin BLOCK_SIZE) : ℝ :=
+  Tile.maskedRowLoad
+    (fun k : Fin BLOCK_SIZE => s.readMem X (xOffset s stride k))
+    (fun k : Fin BLOCK_SIZE => k.val < N)
+    0
+    i
+
+noncomputable def rmsWeight
+    (s : BlockState) (W : RegionName) (i : Fin BLOCK_SIZE) : ℝ :=
+  s.readMem W i.val
 
 noncomputable def rmsVarCarrier
     (s : BlockState) (X : RegionName) (stride N BLOCK_SIZE : Nat) :
@@ -72,7 +101,23 @@ noncomputable def rmsVarCarrier
       (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
         (rmsInputTile s X stride N BLOCK_SIZE)
         (rmsInputTile s X stride N BLOCK_SIZE))).data PUnit.unit)
-    ((Tile.scalar N).natToReal.data PUnit.unit)
+    ((Tile.scalar (dtype := .real) (some (N : ℝ) : WithBot ℝ)).data PUnit.unit)
+
+theorem rmsVarCarrier_eq_rmsMeanSq
+    (s : BlockState) (X : RegionName) (stride N BLOCK_SIZE : Nat) :
+    rmsVarCarrier s X stride N BLOCK_SIZE =
+      some (TiledRMSNorm.rmsMeanSq (rmsLoad s X stride N BLOCK_SIZE) N) := by
+  simp [rmsVarCarrier, rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+    Tile.bop, NumericDType.mul]
+  have hsum := TiledL2Norm.reduceSum_masked_sq_eq_some_sum
+    (fun k : Fin BLOCK_SIZE => s.readMem X (xOffset s stride k))
+    (fun k : Fin BLOCK_SIZE => k.val < N)
+  refine (congrArg
+    (fun a : WithBot ℝ => Option.map (fun x : ℝ => x / (N : ℝ)) a)
+    hsum).trans ?_
+  simp [TiledRMSNorm.rmsMeanSq, TiledL2Norm.l2NormSqSum, rmsLoad,
+    Tile.maskedRowLoad]
 
 noncomputable def rmsInvCarrier
     (s : BlockState) (X : RegionName) (stride N BLOCK_SIZE : Nat)
@@ -82,7 +127,7 @@ noncomputable def rmsInvCarrier
       (Option.map (fun a => a + eps)
         (rmsVarCarrier s X stride N BLOCK_SIZE)))
 
-noncomputable def rmsnormSpec
+noncomputable def rmsnormCarrierSpec
     (s : BlockState) (X W : RegionName)
     (stride N BLOCK_SIZE : Nat) (eps : ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
   WithBot.unbotD 0
@@ -92,6 +137,28 @@ noncomputable def rmsnormSpec
         (rmsInvCarrier s X stride N BLOCK_SIZE eps))
       (some (s.readMem W i.val)))
 
+<<<<<<< Updated upstream
+=======
+noncomputable def rmsnormSpec
+    (s : BlockState) (X W : RegionName)
+    (stride N BLOCK_SIZE : Nat) (eps : ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
+  TiledRMSNorm.rmsAffine
+    (rmsLoad s X stride N BLOCK_SIZE)
+    (rmsWeight s W)
+    N eps i
+
+theorem rmsnormCarrierSpec_eq_rmsnormSpec
+    (s : BlockState) (X W : RegionName)
+    (stride N BLOCK_SIZE : Nat) (eps : ℝ) (i : Fin BLOCK_SIZE)
+    (hi : i.val < N) :
+    rmsnormCarrierSpec s X W stride N BLOCK_SIZE eps i =
+      rmsnormSpec s X W stride N BLOCK_SIZE eps i := by
+  unfold rmsnormCarrierSpec rmsnormSpec rmsInvCarrier
+  rw [rmsVarCarrier_eq_rmsMeanSq]
+  simp [TiledRMSNorm.rmsAffine, TiledRMSNorm.rmsRstd,
+    rmsLoad, rmsWeight, hi]
+
+>>>>>>> Stashed changes
 /-- Algorithm-layer correctness for the fused RMSNorm kernel under the Python
 wrapper's `N <= BLOCK_SIZE` launch precondition. -/
 theorem rms_norm_fwd_fused_correct
@@ -122,6 +189,10 @@ theorem rms_norm_fwd_fused_correct
   by_cases hB : 0 < BLOCK_SIZE
   · have hStep : BLOCK_SIZE ≠ 0 := Nat.ne_of_gt hB
     simp [exec, rms_norm_fwd_fused, stepStmts, stepStmt, evalOp,
+<<<<<<< Updated upstream
+=======
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+>>>>>>> Stashed changes
           stepForRangeAux.step_lt, stepForRangeAux.step_ge,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
@@ -132,10 +203,12 @@ theorem rms_norm_fwd_fused_correct
     simp only [yOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
     by_cases hi : i.val < N
-    · simp [hi, rmsnormSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile,
+    · rw [← rmsnormCarrierSpec_eq_rmsnormSpec s X W stride N BLOCK_SIZE eps i hi]
+      simp only [hi, ↓reduceIte]
+      simp [hi, rmsnormCarrierSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile,
             xOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-            WithBot.realSqrt, NumericDType.mul]
+            WithBot.realSqrt, NumericDType.mul, FloatDType.cast]
       rfl
     · simp [hi]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
@@ -157,7 +230,11 @@ theorem rms_norm_fwd_fused_compute_correct
       (expected := fun i => rmsnormSpec s X W stride N BLOCK_SIZE eps i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
+<<<<<<< Updated upstream
   · simp [rms_norm_fwd_fused]
+=======
+  · simp [rms_norm_fwd_fused, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+>>>>>>> Stashed changes
   intro s0 s' hExec hs0
   subst s0
   intro i hActive

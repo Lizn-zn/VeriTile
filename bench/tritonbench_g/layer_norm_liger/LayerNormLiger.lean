@@ -39,7 +39,7 @@ def layer_norm_liger_forward
   mean = tl.sum(X_row, axis=0) / tl.toReal($(n_cols))
   XX = X_row - mean
   row_var = tl.sum(XX * XX, axis=0) / tl.toReal($(n_cols))
-  inv_var = 1 / tl.sqrt(row_var + $(eps))
+  inv_var = tl.rsqrt(row_var + $(eps))
   tl.store(Mean_base, mean)
   tl.store(RSTD_base, inv_var)
   output = (XX * inv_var) * W_row + B_row

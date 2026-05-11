@@ -101,6 +101,7 @@ inductive Op : TileDType → TileShape → Type where
   | log2      : Op .real shape → Op .real shape
   | sigmoid   : Op .real shape → Op .real shape
   | sqrt      : Op .real shape → Op .real shape
+  | rsqrt     : Op .real shape → Op .real shape
   | tanh      : Op .real shape → Op .real shape
   | sin       : Op .real shape → Op .real shape
   | cos       : Op .real shape → Op .real shape
@@ -212,8 +213,17 @@ inductive Op : TileDType → TileShape → Type where
                 (parentShape : List Nat) → (blockShape : TileShape) →
                 (strides offsets : List Nat) →
                 Op .blockPtr blockShape
+<<<<<<< Updated upstream
   | advanceBlockPtr : {d : TileDType} → Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
   | load      : (dtype : TileDType) → MemAccess dtype shape →
+=======
+  | makeBlockPtrDyn : (region : RegionName) → (baseOffset : Op .nat []) →
+                (parentShape : List Nat) → (blockShape : TileShape) →
+                (strides offsets : List Nat) →
+                Op .blockPtr blockShape
+  | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
+  | load      : (dtype : TileDType) → MemAccess shape →
+>>>>>>> Stashed changes
                 MaskOpt dtype shape → Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
 
@@ -264,7 +274,12 @@ P1 Triton statements (mutating constructs).
 * `forLoop i n body` runs `body` `n` times, with the scalar register `i` bound
   to the iteration index.
 * `forRange i start stop step body` runs `body` for `i = start, start+step,
+<<<<<<< Updated upstream
   start+2*step, …` while `i < stop`. Models Python `for i in range(start, stop, step)`.
+=======
+  start+2*step, ...` while `i < stop`. This models Python
+  `for i in range(start, stop, step)`.
+>>>>>>> Stashed changes
 * `ifThen cond body` runs `body` when the scalar `cond` evaluates `true`, and
   is a no-op when `false`.
 * `ifThenElse cond thenBody elseBody` runs one of two scalar-gated statement
@@ -285,6 +300,10 @@ inductive Stmt : Type where
               (mask : MaskOpt dtype shape) → (dest : Option RegName) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | forRange : (idx : RegName) → (start stop step : Nat) → (body : List Stmt) → Stmt
+<<<<<<< Updated upstream
+=======
+  | forRangeDyn : (idx : RegName) → (start stop step : Op .nat []) → (body : List Stmt) → Stmt
+>>>>>>> Stashed changes
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
   | ifThenElse : (cond : Op .bool []) → (thenBody elseBody : List Stmt) → Stmt
 
@@ -432,6 +451,12 @@ inductive ComputeOp : ComputeDType → TileShape → Type where
       Op dtype.eraseDType shape →
       ComputeOp dtype shape
   | const : ComputeCarrier dtype → ComputeOp dtype []
+  | full : (shape : TileShape) → ComputeOp dtype [] → ComputeOp dtype shape
+  | load :
+      (dtype : ComputeDType) →
+      MemAccess shape →
+      MaskOpt dtype.eraseDType shape →
+      ComputeOp dtype shape
   | bitcast :
       (src dst : ComputeDType) →
       src.width = dst.width →
@@ -456,6 +481,8 @@ def bitcastPayload (src dst : ComputeDType) :
 def constPayload? : ComputeOp dtype [] → Option (ComputeCarrier dtype)
   | .alg _ _ => none
   | .const value => some value
+  | .full _ _ => none
+  | .load _ _ _ => none
   | .bitcast src dst _ e =>
       match constPayload? e with
       | some value => bitcastPayload src dst value
@@ -481,10 +508,28 @@ def toAlgorithm? : (op : ComputeOp dtype shape) →
     Except EraseDTypeError (Op dtype.eraseDType shape)
   | .alg _ e => Except.ok e
   | .const value => constToAlgorithm? _ value
+  | .full shape value =>
+      match toAlgorithm? value with
+      | Except.ok value' => Except.ok (Op.full shape value')
+      | Except.error err => Except.error err
+  | .load dtype mem mask => Except.ok (Op.load dtype.eraseDType mem mask)
   | .bitcast src dst h e =>
       match shape with
       | [] => constOpToAlgorithm? (.bitcast src dst h e)
       | _ => Except.error (.requiresComputeSemantics "non-scalar runtime bitcast")
+
+@[simp] theorem toAlgorithm?_full_alg
+    (dtype : ComputeDType) (shape : TileShape)
+    (value : Op dtype.eraseDType []) :
+    ComputeOp.toAlgorithm?
+        (ComputeOp.full shape (ComputeOp.alg dtype value)) =
+      Except.ok (Op.full shape value) := rfl
+
+@[simp] theorem toAlgorithm?_load
+    (dtype : ComputeDType) (mem : MemAccess shape)
+    (mask : MaskOpt dtype.eraseDType shape) :
+    ComputeOp.toAlgorithm? (ComputeOp.load dtype mem mask) =
+      Except.ok (Op.load dtype.eraseDType mem mask) := rfl
 
 end ComputeOp
 
@@ -500,6 +545,13 @@ def toAlgorithm? : ComputeExpr dtype shape → Except EraseDTypeError (Op dtype 
 
 @[simp] theorem toAlgorithm?_alg (e : Op dtype shape) :
     (ComputeExpr.alg e).toAlgorithm? = Except.ok e := rfl
+
+@[simp] theorem toAlgorithm?_compute_full_alg
+    (cdtype : ComputeDType) (shape : TileShape)
+    (value : Op cdtype.eraseDType []) :
+    (ComputeExpr.compute
+        (ComputeOp.full shape (ComputeOp.alg cdtype value))).toAlgorithm? =
+      Except.ok (Op.full shape value) := rfl
 
 end ComputeExpr
 
@@ -518,6 +570,11 @@ inductive ComputeStmt : Type where
   | effectMarker : (op : String) → ComputeStmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List ComputeStmt) → ComputeStmt
   | forRange : (idx : RegName) → (start stop step : Nat) → (body : List ComputeStmt) → ComputeStmt
+<<<<<<< Updated upstream
+=======
+  | forRangeDyn : (idx : RegName) → (start stop step : Op .nat []) →
+      (body : List ComputeStmt) → ComputeStmt
+>>>>>>> Stashed changes
   | ifThen : (cond : Op .bool []) → (body : List ComputeStmt) → ComputeStmt
   | ifThenElse : (cond : Op .bool []) →
       (thenBody elseBody : List ComputeStmt) → ComputeStmt
@@ -547,6 +604,11 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
       Except.ok (.forLoop idx n (← listToAlgorithm? body))
   | .forRange idx start stop step body => do
       Except.ok (.forRange idx start stop step (← listToAlgorithm? body))
+<<<<<<< Updated upstream
+=======
+  | .forRangeDyn idx start stop step body => do
+      Except.ok (.forRangeDyn idx start stop step (← listToAlgorithm? body))
+>>>>>>> Stashed changes
   | .ifThen cond body => do
       Except.ok (.ifThen cond (← listToAlgorithm? body))
   | .ifThenElse cond thenBody elseBody => do
@@ -628,6 +690,19 @@ end
     | Except.error e => Except.error e
   cases ComputeStmt.listToAlgorithm? rest <;> rfl
 
+@[simp] theorem listToAlgorithm?_cons_assign_compute
+    (dtype : AlgDType) (shape : TileShape) (name : RegName)
+    (e : ComputeExpr dtype shape) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm?
+        (ComputeStmt.assign dtype shape name e :: rest) =
+      match e.toAlgorithm?, ComputeStmt.listToAlgorithm? rest with
+      | Except.ok e', Except.ok rest' => Except.ok (Stmt.assign dtype shape name e' :: rest')
+      | Except.error err, _ => Except.error err
+      | _, Except.error err => Except.error err := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases e.toAlgorithm? <;>
+    cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
 @[simp] theorem listToAlgorithm?_cons_store_alg
     (dtype : AlgDType) (shape : TileShape)
     (mem : MemAccess dtype shape) (value : Op dtype shape) (mask : MaskOpt dtype shape)
@@ -644,6 +719,21 @@ end
     | Except.ok rest' => Except.ok (Stmt.store dtype shape mem value mask :: rest')
     | Except.error e => Except.error e
   cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_store_compute
+    (dtype : AlgDType) (shape : TileShape)
+    (mem : MemAccess shape) (value : ComputeExpr dtype shape)
+    (mask : MaskOpt dtype shape) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm?
+        (ComputeStmt.store dtype shape mem value mask :: rest) =
+      match value.toAlgorithm?, ComputeStmt.listToAlgorithm? rest with
+      | Except.ok value', Except.ok rest' =>
+          Except.ok (Stmt.store dtype shape mem value' mask :: rest')
+      | Except.error err, _ => Except.error err
+      | _, Except.error err => Except.error err := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases value.toAlgorithm? <;>
+    cases ComputeStmt.listToAlgorithm? rest <;> rfl
 
 @[simp] theorem listToAlgorithm?_cons_atomicAdd_alg
     {dtype : AlgDType} (h : NumericDType dtype) (shape : TileShape)
@@ -690,6 +780,45 @@ end
     ComputeStmt.listToAlgorithm? (ComputeStmt.ifThen cond body :: rest) =
       match ComputeStmt.listToAlgorithm? body, ComputeStmt.listToAlgorithm? rest with
       | Except.ok body', Except.ok rest' => Except.ok (Stmt.ifThen cond body' :: rest')
+      | Except.error e, _ => Except.error e
+      | _, Except.error e => Except.error e := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases ComputeStmt.listToAlgorithm? body <;>
+    cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_forLoop
+    (idx : RegName) (n : Nat) (body : List ComputeStmt) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm? (ComputeStmt.forLoop idx n body :: rest) =
+      match ComputeStmt.listToAlgorithm? body, ComputeStmt.listToAlgorithm? rest with
+      | Except.ok body', Except.ok rest' => Except.ok (Stmt.forLoop idx n body' :: rest')
+      | Except.error e, _ => Except.error e
+      | _, Except.error e => Except.error e := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases ComputeStmt.listToAlgorithm? body <;>
+    cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_forRange
+    (idx : RegName) (start stop step : Nat)
+    (body : List ComputeStmt) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm?
+        (ComputeStmt.forRange idx start stop step body :: rest) =
+      match ComputeStmt.listToAlgorithm? body, ComputeStmt.listToAlgorithm? rest with
+      | Except.ok body', Except.ok rest' =>
+          Except.ok (Stmt.forRange idx start stop step body' :: rest')
+      | Except.error e, _ => Except.error e
+      | _, Except.error e => Except.error e := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases ComputeStmt.listToAlgorithm? body <;>
+    cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_forRangeDyn
+    (idx : RegName) (start stop step : Op .nat [])
+    (body : List ComputeStmt) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm?
+        (ComputeStmt.forRangeDyn idx start stop step body :: rest) =
+      match ComputeStmt.listToAlgorithm? body, ComputeStmt.listToAlgorithm? rest with
+      | Except.ok body', Except.ok rest' =>
+          Except.ok (Stmt.forRangeDyn idx start stop step body' :: rest')
       | Except.error e, _ => Except.error e
       | _, Except.error e => Except.error e := by
   simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
