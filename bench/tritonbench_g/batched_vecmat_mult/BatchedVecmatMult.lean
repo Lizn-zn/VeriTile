@@ -28,7 +28,7 @@ def batched_vecmat_surface
   offsets_k = tl.arange(0, $(BLOCK_K))
   for m_inner in range($(0), $(BLOCK_M), $(1)) {
     m_offset = m_index * $(BLOCK_M) + m_inner
-    vecmat = tl.zeros([$(BLOCK_N)], dtype=tl.float32)
+    vecmat = (tl.zeros([$(BLOCK_N)], dtype=tl.float32)).to(A.dtype.element_ty)
     for k_index in range($(0), $(dim_k / BLOCK_K), $(1)) {
       k_offsets = k_index * $(BLOCK_K) + offsets_k
       a = tl.load(A + m_offset * $(dim_k) + k_offsets)
