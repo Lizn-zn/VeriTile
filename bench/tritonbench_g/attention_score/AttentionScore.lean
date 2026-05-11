@@ -9,17 +9,103 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `attention_score.py`'s `_score_kernel`.
+
+Allowed mechanical Lean-syntax-only changes:
+- `H_PER_KV` is the wrapper-computed `H // H_KV`, passed directly so the DSL
+  does not have to infer the dtype of a nested meta-division antiquote.
+- `qk_scale` is the Python `sm_scale * 1.4426950408889634` value, passed as a
+  Lean real parameter.
+- `o` is shaped as `[BLOCK_N]`, matching `tl.sum(p, axis=0)`. The Python
+  wrapper keeps `BLOCK_M == BLOCK_N`; the Lean surface makes that shape
+  dependency explicit. -/
+def attention_score_kernel
+    (Q K M Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk
+      stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh
+      H H_PER_KV N_CTX ROUND_CTX NKV_CTX
+      sliding_window_offset sliding_window_size
+      BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
+    (qk_scale : ℝ)
+    (SLIDING_WINDOW COMPLEMENT_SLIDING_WINDOW IS_EVEN_M IS_EVEN_N : Bool) :
+    ComputeKernel := triton {
+  start_n = tl.program_id(axis=0)
+  off_hz = tl.program_id(axis=1)
+  off_z = off_hz // $(H)
+  off_h = off_hz % $(H)
+  off_hkv = off_h // $(H_PER_KV)
+  q_offset = off_z * $(stride_qz) + off_h * $(stride_qh)
+  k_offset = off_z * $(stride_kz) + off_hkv * $(stride_kh)
+  m_ptrs = M + off_hz * $(ROUND_CTX) + tl.arange(0, $(BLOCK_M))
+  o = tl.zeros([$(BLOCK_N)], dtype=tl.float32)
+  Q_block_ptr = tl.make_block_ptr(base=Q + q_offset,
+    shape=($(N_CTX), $(BLOCK_DMODEL)),
+    strides=($(stride_qm), $(stride_qk)),
+    offsets=(0, 0),
+    block_shape=($(BLOCK_M), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  K_block_ptr = tl.make_block_ptr(base=K + k_offset,
+    shape=($(BLOCK_DMODEL), $(NKV_CTX)),
+    strides=($(stride_kk), $(stride_kn)),
+    offsets=(0, start_n * $(BLOCK_N)),
+    block_shape=($(BLOCK_DMODEL), $(BLOCK_N)),
+    order=(0, 1))
+  if IS_EVEN_N {
+    k = tl.load(K_block_ptr)
+  } else {
+    k = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
+  }
+  for start_m in range(0, $(ROUND_CTX), $(BLOCK_M)) {
+    start_m = tl.multiple_of(start_m, $(BLOCK_M))
+    if IS_EVEN_M {
+      q = tl.load(Q_block_ptr)
+    } else {
+      q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
+    }
+    m = tl.load(m_ptrs)
+    qk = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
+    qk += tl.dot(q, k)
+    qk = qk * $(qk_scale)
+    dist = tl.arange(0, $(BLOCK_M))[:, None] -
+      tl.arange(0, $(BLOCK_N))[None, :] + start_m -
+      start_n * $(BLOCK_N) + $(sliding_window_offset)
+    mask = (dist >= 0) & (dist < $(sliding_window_size))
+    if COMPLEMENT_SLIDING_WINDOW {
+      mask = dist >= $(sliding_window_size)
+    }
+    qk = qk - m[:, None]
+    p = tl.math.exp2(qk)
+    if SLIDING_WINDOW {
+      p = tl.where(mask, p, 0)
+    }
+    if IS_EVEN_N {
+      p = p
+    } else {
+      row_mask = (tl.arange(0, $(BLOCK_M))[:, None] +
+        tl.arange(0, $(BLOCK_N))[None, :] * $(0) + start_m) < $(N_CTX)
+      p = tl.where(row_mask, p, 0)
+    }
+    o += tl.sum(p, axis=0)
+    Q_block_ptr = tl.advance(Q_block_ptr, [$(BLOCK_M), 0])
+    m_ptrs = m_ptrs + $(BLOCK_M)
+  }
+  o_offset = off_z * $(stride_oz) + off_h * $(stride_oh)
+  o_range = tl.arange(0, $(BLOCK_N)) + start_n * $(BLOCK_N)
+  tl.store(Out + o_offset + o_range, o, mask=o_range < $(NKV_CTX))
+}
+
 /-- Proof-oriented final score-vector store slice of `attention_score.py`'s
 `_score_kernel`.
 
-The full kernel computes the score accumulator `o` from Q/K blocks, max values,
-and optional sliding-window masking. This slice starts after that reduction with
-a precomputed `Score` vector. It uses program axes `(start_n, off_z, off_h)` and
-proves the final `o_range < NKV_CTX` masked writeback into `Out`. -/
+The surface kernel above computes the score accumulator `o` from Q/K blocks,
+max values, and optional sliding-window masking. This slice starts after that
+reduction with a precomputed `Score` vector and proves the final
+`o_range < NKV_CTX` masked writeback into `Out`. -/
 def attention_score_final_store_slice
     (Score Out : RegionName)
     (stride_score_z stride_score_h stride_score_n
-      stride_oz stride_oh stride_on
+      stride_oz stride_oh
       NKV_CTX BLOCK_N : Nat) :
     ComputeKernel := triton {
   start_n = tl.program_id(axis=0)
@@ -30,7 +116,7 @@ def attention_score_final_store_slice
   score = tl.load(Score + off_z * $(stride_score_z) + off_h * $(stride_score_h) +
       o_range * $(stride_score_n), mask=o_range < $(NKV_CTX), other=0.0)
   tl.store(Out + off_z * $(stride_oz) + off_h * $(stride_oh) +
-      o_range * $(stride_on), score, mask=o_range < $(NKV_CTX))
+      o_range, score, mask=o_range < $(NKV_CTX))
 }
 
 def nIndex (s : BlockState) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
@@ -51,9 +137,9 @@ def scoreOffset
     nIndex s BLOCK_N i * stride_score_n
 
 def outOffset
-    (s : BlockState) (stride_oz stride_oh stride_on BLOCK_N : Nat)
+    (s : BlockState) (stride_oz stride_oh BLOCK_N : Nat)
     (i : Fin BLOCK_N) : Nat :=
-  s.pids 1 * stride_oz + s.pids 2 * stride_oh + nIndex s BLOCK_N i * stride_on
+  s.pids 1 * stride_oz + s.pids 2 * stride_oh + nIndex s BLOCK_N i
 
 noncomputable def scoreStoreValue
     (s : BlockState) (Score : RegionName)
@@ -69,16 +155,16 @@ noncomputable def scoreStoreValue
 theorem attention_score_final_store_slice_correct
     (Score Out : RegionName)
     (stride_score_z stride_score_h stride_score_n
-      stride_oz stride_oh stride_on
+      stride_oz stride_oh
       NKV_CTX BLOCK_N : Nat)
     (s : BlockState)
     (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_N => outOffset s stride_oz stride_oh stride_on BLOCK_N i)) :
+      (fun i : Fin BLOCK_N => outOffset s stride_oz stride_oh BLOCK_N i)) :
     ∀ i : Fin BLOCK_N,
-      let outAddr := outOffset s stride_oz stride_oh stride_on BLOCK_N i
+      let outAddr := outOffset s stride_oz stride_oh BLOCK_N i
       (exec (attention_score_final_store_slice Score Out stride_score_z
-            stride_score_h stride_score_n stride_oz stride_oh stride_on
-            NKV_CTX BLOCK_N) s).map (·.readMem Out outAddr)
+            stride_score_h stride_score_n stride_oz stride_oh NKV_CTX
+            BLOCK_N) s).map (·.readMem Out outAddr)
         = some (if active s NKV_CTX BLOCK_N i then
             scoreStoreValue s Score stride_score_z stride_score_h stride_score_n
               NKV_CTX BLOCK_N i
@@ -90,7 +176,7 @@ theorem attention_score_final_store_slice_correct
         outOffset]
   let offsetFn : TileIndex [BLOCK_N] → Nat :=
     fun idx => s.pids 1 * stride_oz + s.pids 2 * stride_oh +
-      (s.pids 0 * BLOCK_N + idx.1.val) * stride_on
+      (s.pids 0 * BLOCK_N + idx.1.val)
   let valueFn : TileIndex [BLOCK_N] → ℝ :=
     fun idx =>
       WithBot.unbotD 0
@@ -103,8 +189,8 @@ theorem attention_score_final_store_slice_correct
     fun idx => s.pids 0 * BLOCK_N + idx.1.val < NKV_CTX
   have hOffsetInj : Function.Injective offsetFn := by
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    have habFin : outOffset s stride_oz stride_oh stride_on BLOCK_N a =
-        outOffset s stride_oz stride_oh stride_on BLOCK_N b := by
+    have habFin : outOffset s stride_oz stride_oh BLOCK_N a =
+        outOffset s stride_oz stride_oh BLOCK_N b := by
       simpa [offsetFn, outOffset, nIndex] using hab
     obtain rfl : a = b := hOutInj habFin
     rfl
@@ -127,19 +213,18 @@ theorem attention_score_final_store_slice_correct
 theorem attention_score_final_store_slice_compute_correct
     (Score Out : RegionName)
     (stride_score_z stride_score_h stride_score_n
-      stride_oz stride_oh stride_on
+      stride_oz stride_oh
       NKV_CTX BLOCK_N : Nat)
     (s : BlockState)
     (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_N => outOffset s stride_oz stride_oh stride_on BLOCK_N i)) :
+      (fun i : Fin BLOCK_N => outOffset s stride_oz stride_oh BLOCK_N i)) :
     ComputeCorrect.Realizes
       (kernel := attention_score_final_store_slice Score Out stride_score_z
-        stride_score_h stride_score_n stride_oz stride_oh stride_on NKV_CTX
-        BLOCK_N)
+        stride_score_h stride_score_n stride_oz stride_oh NKV_CTX BLOCK_N)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_N => active s NKV_CTX BLOCK_N i)
-        (fun i => (Out, outOffset s stride_oz stride_oh stride_on BLOCK_N i)))
+        (fun i => (Out, outOffset s stride_oz stride_oh BLOCK_N i)))
       (expected := fun i =>
         scoreStoreValue s Score stride_score_z stride_score_h stride_score_n
           NKV_CTX BLOCK_N i) := by
@@ -150,7 +235,7 @@ theorem attention_score_final_store_slice_compute_correct
   subst s0
   intro i hActive
   have h := attention_score_final_store_slice_correct Score Out stride_score_z
-    stride_score_h stride_score_n stride_oz stride_oh stride_on NKV_CTX BLOCK_N
+    stride_score_h stride_score_n stride_oz stride_oh NKV_CTX BLOCK_N
     s hOutInj i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
