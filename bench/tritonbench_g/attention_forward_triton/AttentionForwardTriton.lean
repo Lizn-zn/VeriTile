@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `attention_forward_triton.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `attention_forward_triton.py`'s
 `_attn_fwd`.
 
 The full kernel computes a tiled attention accumulator with Q/K/V block loads,

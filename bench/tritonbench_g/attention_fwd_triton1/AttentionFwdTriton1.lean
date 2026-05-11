@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented output-store slice of `attention_fwd_triton1.py`'s
+/-- Surface transcription/proof-oriented output-store slice of `attention_fwd_triton1.py`'s
 `attention_fwd_kernel`.
 
 The full kernel iterates over time blocks, optionally stores the recurrent

@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `attention_fwd_triton3.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `attention_fwd_triton3.py`'s
 `_attn_fwd`.
 
 The full kernel runs separate streaming attention stages, including the causal
