@@ -9,6 +9,35 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `matmul_triton1.py`'s `matmul_kernel`.
+
+Python passes `m_size` but the kernel body does not use it; this surface keeps
+the signature position as `_m_size`. -/
+def matmul_triton1_surface
+    (X Y Z : RegionName)
+    (_m_size k_size n_size m_block_size k_block_size n_block_size : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  num_n_blocks = tl.cdiv($(n_size), $(n_block_size))
+  m_block = pid // num_n_blocks
+  n_block = pid % num_n_blocks
+  m_offsets = tl.arange(0, $(m_block_size)) + m_block * $(m_block_size)
+  n_offsets = tl.arange(0, $(n_block_size)) + n_block * $(n_block_size)
+  k_offsets = tl.arange(0, $(k_block_size))
+  x_ptrs = X + m_offsets[:, None] * $(k_size) + k_offsets[None, :]
+  y_ptrs = Y + k_offsets[:, None] * $(n_size) + n_offsets[None, :]
+  z_ptrs = Z + m_offsets[:, None] * $(n_size) + n_offsets[None, :]
+  z = tl.zeros([$(m_block_size), $(n_block_size)], dtype=tl.float32)
+  for kk in range($(0), $(k_size), $(k_block_size)) {
+    x_sub = tl.load(x_ptrs)
+    y_sub = tl.load(y_ptrs)
+    z += tl.dot(x_sub, y_sub)
+    x_ptrs += $(k_block_size)
+    y_ptrs += $(k_block_size) * $(n_size)
+  }
+  tl.store(z_ptrs, z)
+}
+
 /-- Proof-oriented output-store slice of `matmul_triton1.py`'s `matmul_kernel`.
 
 The full kernel maps a linear program id to an M/N tile, computes `z` in a dot loop, and stores the tile. This slice starts from a precomputed `Acc` tile

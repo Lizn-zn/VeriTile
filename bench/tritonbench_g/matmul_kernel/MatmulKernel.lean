@@ -9,6 +9,36 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `matmul_kernel.py`'s `matmul_kernel`.
+
+The Python kernel hard-codes `M = N = K = 4096` and the corresponding
+contiguous strides; this surface keeps those constants and the fused
+`tl.dot(a, b, accumulator)` loop. -/
+def matmul_kernel_surface
+    (C A B : RegionName) (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ComputeKernel := triton {
+  pid_m = tl.program_id(0)
+  pid_n = tl.program_id(1)
+  offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(4096)
+  offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(4096)
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  a_ptrs = A + offs_am[:, None] * $(4096) + offs_k[None, :] * $(1)
+  b_ptrs = B + offs_k[:, None] * $(4096) + offs_bn[None, :] * $(1)
+  accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+  for k in range($(0), tl.cdiv($(4096), $(BLOCK_SIZE_K)), $(1)) {
+    a = tl.load(a_ptrs)
+    b = tl.load(b_ptrs)
+    accumulator = tl.dot(a, b, accumulator)
+    a_ptrs += $(BLOCK_SIZE_K) * $(1)
+    b_ptrs += $(BLOCK_SIZE_K) * $(4096)
+  }
+  c = (accumulator).to(tl.float16)
+  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  c_ptrs = C + $(4096) * offs_cm[:, None] + $(1) * offs_cn[None, :]
+  tl.store(c_ptrs, c)
+}
+
 /-- Proof-oriented output-store slice of `matmul_kernel.py`'s `matmul_kernel`.
 
 The full kernel computes `accumulator = dot(A, B)` in a loop, casts it to
