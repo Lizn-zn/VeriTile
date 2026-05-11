@@ -10,6 +10,63 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `layer_norm_ops.py`'s `_layer_norm_fwd_1pass_kernel`.
+
+This preserves the forward constexpr branches for residual input,
+`RESIDUAL_OUT`, RMS-vs-layer norm, bias, `Mean`/`Rstd` side stores, and masked
+`Y` writeback. -/
+def layer_norm_fwd_1pass_surface
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row
+      N BLOCK_N : Nat)
+    (eps : ℝ)
+    (IS_RMS_NORM HAS_RESIDUAL STORE_RESIDUAL_OUT HAS_BIAS : Bool) :
+    ComputeKernel := triton {
+  row = tl.program_id(axis=0)
+  X += row * $(stride_x_row)
+  Y += row * $(stride_y_row)
+  if HAS_RESIDUAL {
+    RESIDUAL += row * $(stride_res_row)
+  }
+  if STORE_RESIDUAL_OUT {
+    RESIDUAL_OUT += row * $(stride_res_out_row)
+  }
+  cols = tl.arange(0, $(BLOCK_N))
+  mask = cols < $(N)
+  x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
+  if HAS_RESIDUAL {
+    residual = tl.load(RESIDUAL + cols, mask=mask, other=0.0).to(tl.float32)
+    x += residual
+  }
+  if STORE_RESIDUAL_OUT {
+    tl.store(RESIDUAL_OUT + cols, x, mask=mask)
+  }
+  mean = 0.0
+  x_centered = x
+  var = 0.0
+  if IS_RMS_NORM {
+    xbar = tl.where(mask, x_centered, 0.0)
+    var = tl.sum(xbar * xbar, axis=0) / $(N)
+  } else {
+    mean = tl.sum(x, axis=0) / $(N)
+    tl.store(Mean + row, mean)
+    x_centered = x - mean
+    xbar = tl.where(mask, x_centered, 0.0)
+    var = tl.sum(xbar * xbar, axis=0) / $(N)
+  }
+  rstd = 1.0 / tl.sqrt(var + $(eps))
+  tl.store(Rstd + row, rstd)
+  w = tl.load(W + cols, mask=mask).to(tl.float32)
+  x_hat = x_centered * rstd
+  if HAS_BIAS {
+    b = tl.load(B + cols, mask=mask).to(tl.float32)
+    y = x_hat * w + b
+  } else {
+    y = x_hat * w
+  }
+  tl.store(Y + cols, y, mask=mask)
+}
+
 /-- Proof-oriented RMS/no-residual/no-bias slice of `layer_norm_ops.py`'s
 `_layer_norm_fwd_1pass_kernel`.
 
