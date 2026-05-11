@@ -244,6 +244,7 @@ private partial def directPinsFromExpr (assigned : Assigned) :
   | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| ~ $e:tritonExpr) => directPinsFromExpr assigned e
+  | `(tritonExpr| - $e:tritonExpr) => directPinsFromExpr assigned e
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargPins :=
         kwargs.foldl (fun (acc : List String) kw =>

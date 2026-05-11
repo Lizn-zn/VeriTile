@@ -742,6 +742,23 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandNatBitwise expandExpr env "`>>`" (← `(Op.shiftRight)) a b
   | `(tritonExpr| ~$a:tritonExpr) => do
       expandBoolNot expandExpr env "boolean ~" a
+  | `(tritonExpr| -$a:tritonExpr) => do
+      let a' ← expandExpr env a
+      let (zeroTerm, zeroDType) ←
+        match a'.dtype with
+        | .real => pure (← `(Op.const 0.0), DInfo.real)
+        | .fp32 => pure (← `(Op.constFloat FloatDType.fp32 0.0), DInfo.fp32)
+        | .fp16 => pure (← `(Op.constFloat FloatDType.fp16 0.0), DInfo.fp16)
+        | .bf16 => pure (← `(Op.constFloat FloatDType.bf16 0.0), DInfo.bf16)
+        | .int => pure (← `(Op.constInt 0), DInfo.int)
+        | _ => Macro.throwError "unary -: dtype mismatch"
+      ensureDType zeroDType a'.dtype "unary -"
+      let np ← a'.dtype.numericProof
+      let (bc, outShape) ← broadcastTerm SInfo.scalar a'.shape "unary -"
+      let term ← `(Op.sub $np $bc $zeroTerm $a'.term)
+      let zero : EOut := ⟨zeroTerm, zeroDType, SInfo.scalar, none, none⟩
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? "unary -" term zero a'
+      pure ⟨term, a'.dtype, outShape, computeTerm?, computeDType?⟩
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
       match ← expandStaticPtrExpr env stx with
       | some sp =>

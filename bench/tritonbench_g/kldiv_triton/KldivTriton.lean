@@ -14,26 +14,22 @@ set_option linter.unusedSimpArgs false
 for the `log_target = False` constexpr branch.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python pointer mutation (`input_ptr +=`, `target_ptr +=`) →
-  explicit base-pointer registers.
-- Python `target * -1` → `0.0 - target`.
-- Python `.to(tl.int64)` cast on pid is omitted at the algorithm layer.
 - Python `log_target: tl.constexpr` → separate kernel defs per branch. -/
 def kldiv_backward_default
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  pid = tl.program_id(0)
-  input_base = input_ptr + pid * $(input_stride)
-  target_base = target_ptr + pid * $(target_stride)
+  pid = tl.program_id(0).to(tl.int64)
+  input_ptr += pid * $(input_stride)
+  target_ptr += pid * $(target_stride)
   offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_cols)
   for i in range(0, $(n_cols), $(BLOCK_SIZE)) {
     offsets = i + tl.arange(0, $(BLOCK_SIZE))
     mask = offsets < $(n_cols)
-    target = tl.load(target_base + offsets, mask=mask, other=0.0)
-    res = 0.0 - target
-    tl.store(input_base + offsets, res, mask=mask)
+    target = tl.load(target_ptr + offsets, mask=mask, other=0.0)
+    res = target * -1
+    tl.store(input_ptr + offsets, res, mask=mask)
   }
 }
 
@@ -43,17 +39,17 @@ def kldiv_backward_log_target
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  pid = tl.program_id(0)
-  input_base = input_ptr + pid * $(input_stride)
-  target_base = target_ptr + pid * $(target_stride)
+  pid = tl.program_id(0).to(tl.int64)
+  input_ptr += pid * $(input_stride)
+  target_ptr += pid * $(target_stride)
   offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_cols)
   for i in range(0, $(n_cols), $(BLOCK_SIZE)) {
     offsets = i + tl.arange(0, $(BLOCK_SIZE))
     mask = offsets < $(n_cols)
-    target = tl.load(target_base + offsets, mask=mask, other=0.0)
-    res = 0.0 - tl.exp(target)
-    tl.store(input_base + offsets, res, mask=mask)
+    target = tl.load(target_ptr + offsets, mask=mask, other=0.0)
+    res = -tl.exp(target)
+    tl.store(input_ptr + offsets, res, mask=mask)
   }
 }
 
