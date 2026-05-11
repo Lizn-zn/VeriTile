@@ -9,6 +9,37 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of the unconditional Q rotary part of
+`fused_rotary_embedding.py`'s `decoding_fused_rotary_embedding_kernel`.
+
+The full Python kernel also conditionally rotates K and fills K/V caches when
+`cur_head_idx % KV_GROUP_NUM == 0`. That branch depends on context-length
+metadata and cache block tables, so this surface covers the unconditional Q
+updates that every program instance performs: both the first and second rotary
+halves are written. -/
+def decoding_fused_rotary_embedding_q_surface
+    (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      _HEAD_DIM HALF_DIM : Nat) :
+    ComputeKernel := triton {
+  cur_head_idx = tl.program_id(axis=0)
+  cur_token_idx = tl.program_id(axis=1)
+  dim_range0 = tl.arange(0, $(HALF_DIM))
+  dim_range1 = tl.arange(0, $(HALF_DIM)) + $(HALF_DIM)
+  off_q = cur_token_idx * $(q_token_stride) + cur_head_idx * $(q_head_stride)
+  off_q0 = off_q + dim_range0 * $(head_dim_stride)
+  off_q1 = off_q + dim_range1 * $(head_dim_stride)
+  loaded_q0 = tl.load(Q + off_q0)
+  loaded_q1 = tl.load(Q + off_q1)
+  off_cos_sin = cur_token_idx * $(cos_token_stride) + dim_range0 * $(cos_stride)
+  loaded_cos = tl.load(Cos + off_cos_sin)
+  loaded_sin = tl.load(Sin + off_cos_sin)
+  out_q0 = loaded_q0 * loaded_cos - loaded_q1 * loaded_sin
+  out_q1 = loaded_q0 * loaded_sin + loaded_q1 * loaded_cos
+  tl.store(Q + off_q0, out_q0)
+  tl.store(Q + off_q1, out_q1)
+}
+
 /-- Proof-oriented Q first-half slice of `fused_rotary_embedding.py`'s
 `decoding_fused_rotary_embedding_kernel`.
 
