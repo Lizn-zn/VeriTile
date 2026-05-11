@@ -9,6 +9,80 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `cross_entropy_ops.py`'s
+`cross_entropy_fwd_kernel` for the non-ignored-label path.
+
+This preserves the block logits load, `logit_scale`, optional smoothing sum,
+LSE side store, label-in-block loss branch, optional split behavior, z-loss
+computation, and non-split `z_loss_ptr` side store. The full Python kernel also
+handles `ignored_index = -100`; that signed sentinel is not represented in this
+Nat label surface. -/
+def cross_entropy_fwd_nonignored_surface
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr : RegionName)
+    (total_classes class_start_idx n_cols n_rows logits_row_stride
+      BLOCK_SIZE : Nat)
+    (smoothing logit_scale lse_square_scale : ℝ)
+    (HAS_SMOOTHING SPLIT : Bool) :
+    ComputeKernel := triton {
+  row_idx = tl.program_id(axis=0)
+  col_block_idx = tl.program_id(axis=1)
+  logits_base = logits_ptr + row_idx * $(logits_row_stride)
+  col_offsets = col_block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
+  label_idx = tl.load(labels_ptr + row_idx, dtype=tl.uint64)
+  logits = tl.load(logits_base + col_offsets,
+    mask=col_offsets < $(n_cols), other=-inf).to(tl.float32) * $(logit_scale)
+  max_logits = tl.max(logits, axis=0)
+  sum_logits = 0.0
+  if HAS_SMOOTHING {
+    sum_logits = tl.sum(tl.where(col_offsets < $(n_cols), logits, 0.0), axis=0)
+  }
+  lse = tl.log(tl.sum(tl.exp(logits - max_logits), axis=0)) + max_logits
+  tl.store(lse_ptr + col_block_idx * $(n_rows) + row_idx, lse)
+  label_idx = label_idx - $(class_start_idx)
+  loss = 0.0
+  z_loss = 0.0
+  block_start = col_block_idx * $(BLOCK_SIZE)
+  block_end = tl.minimum($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))
+  if (label_idx >= block_start) and (label_idx < block_end) {
+    logits_label = tl.load(logits_base + label_idx) * $(logit_scale)
+    if HAS_SMOOTHING {
+      if SPLIT {
+        loss = 0.0 - $(smoothing) * sum_logits / $(total_classes) -
+          (1.0 - $(smoothing)) * logits_label
+      } else {
+        loss = lse - $(smoothing) * sum_logits / $(total_classes) -
+          (1.0 - $(smoothing)) * logits_label
+      }
+    } else {
+      if SPLIT {
+        loss = 0.0 - logits_label
+      } else {
+        loss = lse - logits_label
+      }
+    }
+  } else {
+    if HAS_SMOOTHING {
+      if SPLIT {
+        loss = $(smoothing) * (0.0 - sum_logits / $(total_classes))
+      } else {
+        loss = $(smoothing) * (lse - sum_logits / $(total_classes))
+      }
+    }
+  }
+  if SPLIT {
+    z_loss = 0.0
+  } else {
+    z_loss = $(lse_square_scale) * lse * lse
+    loss += z_loss
+  }
+  tl.store(loss_ptr + col_block_idx * $(n_rows) + row_idx, loss)
+  if SPLIT {
+    z_loss = z_loss
+  } else {
+    tl.store(z_loss_ptr + col_block_idx * $(n_rows) + row_idx, z_loss)
+  }
+}
+
 /-- Proof-oriented final-store slice of `cross_entropy_ops.py`'s
 `cross_entropy_bwd_kernel`.
 
