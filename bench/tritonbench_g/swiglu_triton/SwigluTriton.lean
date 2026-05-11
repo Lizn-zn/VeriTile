@@ -13,46 +13,43 @@ open VeriTile.Triton
 Allowed mechanical Lean-syntax-only changes:
 - Python `n_cols: tl.constexpr` / `BLOCK_SIZE: tl.constexpr` -> Lean `Nat`
   parameters.
-- Python pointer mutation `a += ...` / `b += ...` / `c += ...` -> explicit
-  base pointer registers.
 - The helper `silu(x)` is inlined as `x * tl.sigmoid(x)`. -/
 def swiglu_forward_kernel
     (A B C : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   program_id = tl.program_id(0).to(tl.int64)
-  A_base = A + program_id * $(stride)
-  B_base = B + program_id * $(stride)
-  C_base = C + program_id * $(stride)
+  A += program_id * $(stride)
+  B += program_id * $(stride)
+  C += program_id * $(stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
-  a_row = tl.load(A_base + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  b_row = tl.load(B_base + col_offsets, mask=mask, other=0.0)
+  a_row = tl.load(A + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  b_row = tl.load(B + col_offsets, mask=mask, other=0.0)
   c_row = a_row * tl.sigmoid(a_row) * b_row
-  tl.store(C_base + col_offsets, c_row, mask=mask)
+  tl.store(C + col_offsets, c_row, mask=mask)
 }
 
 /-- Faithful transcription of `swiglu_triton.py`'s `_swiglu_backward_kernel`.
 
-Allowed mechanical Lean-syntax-only changes match `swiglu_forward_kernel`: base
-pointer mutation is made explicit. -/
+Allowed mechanical Lean-syntax-only changes match `swiglu_forward_kernel`. -/
 def swiglu_backward_kernel
     (DC A B : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   program_id = tl.program_id(0).to(tl.int64)
-  DC_base = DC + program_id * $(stride)
-  A_base = A + program_id * $(stride)
-  B_base = B + program_id * $(stride)
+  DC += program_id * $(stride)
+  A += program_id * $(stride)
+  B += program_id * $(stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
-  dc_row = tl.load(DC_base + col_offsets, mask=mask, other=0.0)
-  a_row = tl.load(A_base + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  b_row = tl.load(B_base + col_offsets, mask=mask, other=0.0)
+  dc_row = tl.load(DC + col_offsets, mask=mask, other=0.0)
+  a_row = tl.load(A + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  b_row = tl.load(B + col_offsets, mask=mask, other=0.0)
   sig_a = tl.sigmoid(a_row)
   silu_a = a_row * sig_a
   db_row = dc_row * silu_a
   da_row = dc_row * (silu_a * (1 - sig_a) + sig_a) * b_row
-  tl.store(A_base + col_offsets, da_row, mask=mask)
-  tl.store(B_base + col_offsets, db_row, mask=mask)
+  tl.store(A + col_offsets, da_row, mask=mask)
+  tl.store(B + col_offsets, db_row, mask=mask)
 }
 
 def swigluOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
@@ -80,7 +77,7 @@ theorem swiglu_forward_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [exec, swiglu_forward_kernel, stepStmts, stepStmt, evalOp,
-        tile_elementwise] at hExec
+        tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   subst s'
   simp only [swigluOffset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -108,7 +105,7 @@ theorem swiglu_forward_kernel_compute_correct
       (expected := fun i => TiledActivation.swiglu (as i) (bs i)) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [swiglu_forward_kernel]
+  · simp [swiglu_forward_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive
@@ -149,7 +146,7 @@ theorem swiglu_backward_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
   simp [exec, swiglu_backward_kernel, stepStmts, stepStmt, evalOp,
-        tile_elementwise] at hExec
+        tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   subst s'
   constructor
   · intro i
@@ -204,7 +201,7 @@ theorem swiglu_backward_kernel_compute_correct
         | .inl lane => TiledActivation.swigluBwdA (dcs lane) (as lane) (bs lane)
         | .inr lane => TiledActivation.swigluBwdB (dcs lane) (as lane)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [swiglu_backward_kernel]
+  · simp [swiglu_backward_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i
