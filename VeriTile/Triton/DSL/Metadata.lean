@@ -82,6 +82,7 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions assigned e
   | `(tritonExpr| tl.exp2($e:tritonExpr))        => exprRegions assigned e
   | `(tritonExpr| tl.math.exp2($e:tritonExpr))   => exprRegions assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.pow($e:tritonExpr, $_:num)) => exprRegions assigned e
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions assigned e
   | `(tritonExpr| tl.log2($e:tritonExpr))        => exprRegions assigned e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions assigned e

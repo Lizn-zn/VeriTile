@@ -13,8 +13,6 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `rmsnorm_triton.py`'s `rmsnorm_triton`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `tl.extra.cuda.libdevice.pow(x.to(tl.float32), 2)` is written as
-  `xf * xf` after binding `xf = x.to(tl.float32)`.
 - Python `N_SIZE: tl.constexpr` / `eps: tl.constexpr` / `BLOCK_N_SIZE: tl.constexpr`
   -> Lean `Nat` / `ℝ` parameters. -/
 def rmsnorm_triton
@@ -32,8 +30,7 @@ def rmsnorm_triton
     offs_n = block_n_start_idx + block_N
     x_ptr_mask = offs_n < $(N_SIZE)
     x = tl.load(x_ptr + offs_m + offs_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
-    xf = x.to(tl.float32)
-    var = var + xf * xf
+    var += tl.extra.cuda.libdevice.pow((x).to(tl.float32), 2)
   }
   var = tl.sum(var, axis=0) / $(N_SIZE)
   rstd = tl.math.rsqrt(var + $(eps))
@@ -41,7 +38,7 @@ def rmsnorm_triton
     offs_n = block_n_start_idx + block_N
     x_ptr_mask = offs_n < $(N_SIZE)
     rms_w = tl.load(rms_w_ptr + offs_n * $(stride_rms_w), mask=x_ptr_mask)
-    x = tl.load(x_ptr + offs_m + offs_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
+    x = tl.load(x_ptr + offs_m + offs_n * $(stride_x_k), mask=x_ptr_mask, other=0.0).to(tl.float32)
     x_hat = x * rstd
     out = x_hat * rms_w
     out_off = pid_batch * $(stride_out_batch) + pid_m * $(stride_out_m) +
