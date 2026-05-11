@@ -9,6 +9,37 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Real-valued surface of `quant_transpose_kernel.py`'s
+`_quantize_global_transpose`.
+
+This preserves the grouped one-dimensional program-id schedule, masked load,
+global scale, transposed store addressing, and masked writeback. CUDA `llrint`
+and int8 casting are intentionally omitted; the stored value is the pre-cast
+real. -/
+def quantize_global_transpose_real_surface
+    (A AbsmaxInv B : RegionName)
+    (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N GROUP_M : Nat)
+    (scale127 : ℝ) :
+    ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  grid_m = tl.cdiv($(M), $(BLOCK_M))
+  grid_n = tl.cdiv($(N), $(BLOCK_N))
+  width = $(GROUP_M) * grid_n
+  group_id = pid // width
+  group_size = tl.minimum(grid_m - group_id * $(GROUP_M), $(GROUP_M))
+  pid_m = group_id * $(GROUP_M) + (pid % group_size)
+  pid_n = (pid % width) // group_size
+  rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  rn = pid_n * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
+  mask = (rm[:, None] < $(M)) and (rn[None, :] < $(N))
+  a = tl.load(A + rm[:, None] * $(stride_am) + rn[None, :] * $(stride_an),
+    mask=mask, other=0.0)
+  absmax_inv = tl.load(AbsmaxInv)
+  output = $(scale127) * (a * absmax_inv)
+  tl.store(B + rm[:, None] * $(stride_bm) + rn[None, :] * $(stride_bn),
+    output, mask=mask)
+}
+
 /-- Proof-oriented scaled-store tile slice of `quant_transpose_kernel.py`'s
 `_quantize_global_transpose`.
 
