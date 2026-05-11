@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented first output-block store slice of
+/-- Surface transcription/proof-oriented first output-block store slice of
 `block_sparse_attn.py`'s `block_sparse_attention_kernel`.
 
 The full kernel walks a CSR sparse layout and accumulates one or two D blocks.
@@ -35,6 +35,35 @@ def block_sparse_attn_output_store_slice
       mask=mask, other=0.0)
   tl.store(Out + off_b * $(stride_ob) + off_h * $(stride_oh) +
       offs_m[:, None] * $(stride_om) + offs_d[None, :], acc, mask=mask)
+}
+
+/-- Surface transcription of the second output-block store in
+`block_sparse_attn.py`'s `block_sparse_attention_kernel`.
+
+The benchmark uses `NUM_D_BLOCKS = 2`, so Python stores `acc2` at
+`out_ptrs + BLOCK_D` after the first output block. This slice starts from a
+precomputed second-block `Acc2` tile and preserves the same row mask and
+batch/head decomposition as the first store. -/
+def block_sparse_attn_output_store_second_slice
+    (Acc2 Out : RegionName)
+    (num_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(axis=0)
+  off_bh = tl.program_id(axis=1)
+  off_h = off_bh % $(num_heads)
+  off_b = off_bh // $(num_heads)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_d = tl.arange(0, $(BLOCK_D))
+  mask = (offs_m[:, None] < $(total_seq_len)) & (offs_d[None, :] < $(BLOCK_D))
+  acc2 = tl.load(Acc2 + off_b * $(stride_acc_b) + off_h * $(stride_acc_h) +
+      offs_m[:, None] * $(stride_acc_m) + offs_d[None, :] * $(stride_acc_d),
+      mask=mask, other=0.0)
+  tl.store(Out + off_b * $(stride_ob) + off_h * $(stride_oh) +
+      offs_m[:, None] * $(stride_om) + $(BLOCK_D) + offs_d[None, :],
+    acc2, mask=mask)
 }
 
 def offH (s : BlockState) (num_heads : Nat) : Nat :=
