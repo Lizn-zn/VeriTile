@@ -11,30 +11,27 @@ open VeriTile.Triton VeriTile.Examples
 /-- Faithful transcription of `mean_reduction.py`'s `mean_dim_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `X = X + pid * N` / `Mean = Mean + pid` pointer mutation →
-  explicit `X_base` / `Mean_base` base-pointer registers.
 - Python `[:, None]` / `[None, :]` dimension annotations preserved.
-- Python `.to(tl.float32)` casts are omitted at the algorithm layer.
 - Python `BLOCK_M` / `BLOCK_N: tl.constexpr` → Lean `Nat` parameters. -/
 def mean_dim_kernel
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) :
     ComputeKernel := triton {
   pid = tl.program_id(0) * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))[:, None]
-  X_base = X + pid * $(N)
-  Mean_base = Mean + pid
+  X = X + pid * $(N)
+  Mean = Mean + pid
   row_mask = pid < $(M)
-  _mean = tl.zeros([$(BLOCK_M), $(BLOCK_N)])
+  _mean = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
   for off in range(0, $(N), $(BLOCK_N)) {
     cols = off + tl.arange(0, $(BLOCK_N))[None, :]
     col_mask = cols < $(N)
     mask = row_mask and col_mask
-    a = tl.load(X_base + cols, mask=mask, other=0.0)
-    _mean = _mean + a
+    a = tl.load(X + cols, mask, other=0.0).to(tl.float32)
+    _mean += a
   }
   mean = tl.sum(_mean, axis=1) / $(N)
   mean = mean[:, None]
-  tl.store(Mean_base, mean, mask=row_mask)
+  tl.store(Mean, mean, row_mask)
 }
 
 def meanOutOffset (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=

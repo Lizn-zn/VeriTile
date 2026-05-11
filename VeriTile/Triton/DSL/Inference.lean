@@ -341,10 +341,20 @@ private partial def scanStmt (assigned : Assigned)
       (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident = $e:tritonExpr) =>
       (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
-  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++
+            directPinsFromExpr assigned mask ++ memKwargPins assigned kwargs
          ptrUses := ptrUsesFromPtrExpr assigned p
-         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs }, assigned)
+         cmpDeps := cmpDepsFromExpr v ++ cmpDepsFromExpr mask ++ memKwargCmpDeps kwargs }, assigned)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $kw0:tritonMemKwarg $[, $kwargs:tritonMemKwarg]*)) =>
+      let kwargs' := #[kw0] ++ kwargs
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs'
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v ++ memKwargCmpDeps kwargs' }, assigned)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr)) =>
+      ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v
+         ptrUses := ptrUsesFromPtrExpr assigned p
+         cmpDeps := cmpDepsFromExpr v }, assigned)
   | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++ memKwargPins assigned kwargs
          ptrUses := ptrUsesFromPtrExpr assigned p

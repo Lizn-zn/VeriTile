@@ -1260,8 +1260,12 @@ partial def expandStmt (env : Env) (pinned : List String)
             ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
             (name, .ptr, outShape, none) :: env,
             Bool.false)
-  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
-      expandStore expandExpr expandStaticPtrExpr env p v kwargs
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      expandStore expandExpr expandStaticPtrExpr env p v kwargs (positionalMask := some mask)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $kw0:tritonMemKwarg $[, $kwargs:tritonMemKwarg]*)) => do
+      expandStore expandExpr expandStaticPtrExpr env p v (#[kw0] ++ kwargs)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr)) => do
+      expandStore expandExpr expandStaticPtrExpr env p v #[]
   | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandAtomicAdd expandExpr expandStaticPtrExpr env p v kwargs
   | `(tritonStmt| tl.atomic_max($p:tritonExpr, $v:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>

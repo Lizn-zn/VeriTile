@@ -179,9 +179,16 @@ partial def expandLoad (expandExpr : ExprExpander)
 
 partial def expandStore (expandExpr : ExprExpander)
     (expandStaticPtrExpr : StaticPtrExpander) (env : Env)
-    (p v : TSyntax `tritonExpr) (kwargs : TSyntaxArray `tritonMemKwarg) :
+    (p v : TSyntax `tritonExpr) (kwargs : TSyntaxArray `tritonMemKwarg)
+    (positionalMask : Option (TSyntax `tritonExpr) := none) :
     MacroM StmtExpansion := do
   let mut maskTerm : Option (TSyntax `term × SInfo) := none
+  match positionalMask with
+  | none => pure ()
+  | some mask => do
+      let mask' ← expandExpr env mask
+      ensureDType .bool mask'.dtype "tl.store mask"
+      maskTerm := some (mask'.term, mask'.shape)
   let mut dtype? : Option DInfo := none
   let mut boundaryCheck? : Option (TSyntax `term) := none
   for kw in kwargs do
@@ -215,6 +222,8 @@ partial def expandStore (expandExpr : ExprExpander)
     | `(tritonMemKwarg| $name:ident = $kval:tritonExpr) =>
         match name.getId.getString! with
         | "mask"  =>
+            if maskTerm.isSome then
+              Macro.throwError "tl.store: duplicate `mask=` kwarg"
             let kval' ← expandExpr env kval
             ensureDType .bool kval'.dtype "tl.store mask"
             maskTerm := some (kval'.term, kval'.shape)

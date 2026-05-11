@@ -318,8 +318,15 @@ private partial def stmtRegionsWith (assigned : List String)
       (exprRegions assigned e, [], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident += $e:tritonExpr) =>
       (exprRegions assigned e, [], i.getId.toString :: assigned)
-  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
-      (exprRegions assigned v ++ memKwargRegions assigned kwargs,
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      (exprRegions assigned v ++ exprRegions assigned mask ++ memKwargRegions assigned kwargs,
+        staticPtrRegions assigned p, assigned)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $kw0:tritonMemKwarg $[, $kwargs:tritonMemKwarg]*)) =>
+      let kwargs' := #[kw0] ++ kwargs
+      (exprRegions assigned v ++ memKwargRegions assigned kwargs',
+        staticPtrRegions assigned p, assigned)
+  | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr)) =>
+      (exprRegions assigned v,
         staticPtrRegions assigned p, assigned)
   | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       (exprRegions assigned v ++ memKwargRegions assigned kwargs,
