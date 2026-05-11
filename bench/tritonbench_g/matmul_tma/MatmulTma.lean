@@ -9,6 +9,55 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `matmul_tma.py`'s `matmul_tma_load_store` with
+`OUTPUT_F16 = false`.
+
+The Python wrapper's transpose cases are represented by the strides passed to
+the same kernel, so no separate transpose-specific surface is needed. The TMA
+`order` tuple is scheduling metadata and is not represented by the current
+block-pointer DSL. -/
+def matmul_tma_load_store_surface
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    ComputeKernel := triton {
+  a_block_ptr = tl.make_block_ptr(A, base=$(0), shape=[$(M), $(K)],
+    strides=[$(stride_am), $(stride_ak)], offsets=[$(0), $(0)],
+    block_shape=[$(BLOCK_M), $(BLOCK_K)])
+  b_block_ptr = tl.make_block_ptr(B, base=$(0), shape=[$(K), $(N)],
+    strides=[$(stride_bk), $(stride_bn)], offsets=[$(0), $(0)],
+    block_shape=[$(BLOCK_K), $(BLOCK_N)])
+  c_block_ptr = tl.make_block_ptr(C, base=$(0), shape=[$(M), $(N)],
+    strides=[$(stride_cm), $(stride_cn)], offsets=[$(0), $(0)],
+    block_shape=[$(BLOCK_M), $(BLOCK_N)])
+  a = tl.load(a_block_ptr)
+  b = tl.load(b_block_ptr)
+  c = (tl.dot(a, b)).to(C.dtype.element_ty)
+  tl.store(c_block_ptr, c, boundary_check=([0, 1] : List Nat))
+}
+
+/-- Surface transcription of `matmul_tma.py`'s `matmul_tma_load_store` with
+`OUTPUT_F16 = true`. -/
+def matmul_tma_load_store_f16_surface
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    ComputeKernel := triton {
+  a_block_ptr = tl.make_block_ptr(A, base=$(0), shape=[$(M), $(K)],
+    strides=[$(stride_am), $(stride_ak)], offsets=[$(0), $(0)],
+    block_shape=[$(BLOCK_M), $(BLOCK_K)])
+  b_block_ptr = tl.make_block_ptr(B, base=$(0), shape=[$(K), $(N)],
+    strides=[$(stride_bk), $(stride_bn)], offsets=[$(0), $(0)],
+    block_shape=[$(BLOCK_K), $(BLOCK_N)])
+  c_block_ptr = tl.make_block_ptr(C, base=$(0), shape=[$(M), $(N)],
+    strides=[$(stride_cm), $(stride_cn)], offsets=[$(0), $(0)],
+    block_shape=[$(BLOCK_M), $(BLOCK_N)])
+  a = tl.load(a_block_ptr)
+  b = tl.load(b_block_ptr)
+  c = (tl.dot(a, b)).to(C.dtype.element_ty)
+  tl.store(c_block_ptr, c, boundary_check=([0, 1] : List Nat))
+}
+
 /-- Proof-oriented output-store slice of `matmul_tma.py`'s `matmul_kernel`.
 
 The full kernel uses Triton block pointers/TMA loads, computes the dot product, optionally converts the result, and stores the tile. This slice starts from a precomputed `Acc` tile
