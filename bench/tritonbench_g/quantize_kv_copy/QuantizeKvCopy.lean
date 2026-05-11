@@ -14,13 +14,14 @@ set_option linter.unusedSimpArgs false
 
 This preserves destination-indexed grouped addressing, `tl.abs`, per-group
 scale computation, value writeback, and scale writeback. The Python kernel casts
-the quotient to int8; this surface records the pre-cast real quotient until
-VeriTile models CUDA int8 rounding/cast semantics. -/
+the scale to `OutScale.dtype.element_ty`; that cast is represented explicitly.
+The final quotient cast to int8 remains recorded as the pre-cast real quotient
+until VeriTile models CUDA int8 rounding/cast semantics. -/
 def destindex_copy_quantize_kv_group_real_surface
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g stride_k_d
       stride_o_bs stride_o_h stride_o_g stride_o_d
-      stride_os_bs stride_os_h stride_os_g
+      stride_os_bs stride_os_h _stride_os_g
       group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
     ComputeKernel := triton {
   cur_index = tl.program_id(axis=0)
@@ -34,12 +35,12 @@ def destindex_copy_quantize_kv_group_real_surface
       offs_g[:, None] * $(stride_k_g) + offs_d[None, :] * $(stride_k_d),
     mask=value_mask, other=0.0)
   abs_data = tl.abs(src_data)
-  data_scale = tl.max(abs_data, axis=1) / 127.0
+  data_scale = (tl.max(abs_data, axis=1) / 127.0).to(OutScale.dtype.element_ty)
   q_src_data = src_data / data_scale[:, None]
   o_ptrs = Out + dest_index * $(stride_o_bs) + cur_head * $(stride_o_h) +
     offs_g[:, None] * $(stride_o_g) + offs_d[None, :] * $(stride_o_d)
   os_ptrs = OutScale + dest_index * $(stride_os_bs) + cur_head * $(stride_os_h) +
-    offs_g * $(stride_os_g)
+    offs_g
   tl.store(o_ptrs, q_src_data, mask=value_mask)
   tl.store(os_ptrs, data_scale, mask=group_mask)
 }
@@ -56,7 +57,7 @@ def destindex_copy_quantize_kv_group_value_store_slice
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g stride_k_d
       stride_o_bs stride_o_h stride_o_g stride_o_d
-      stride_os_bs stride_os_h stride_os_g
+      stride_os_bs stride_os_h _stride_os_g
       group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
     ComputeKernel := triton {
   cur_index = tl.program_id(axis=0)
@@ -69,7 +70,7 @@ def destindex_copy_quantize_kv_group_value_store_slice
       offs_g[:, None] * $(stride_k_g) + offs_d[None, :] * $(stride_k_d),
     mask=mask, other=0.0)
   data_scale = tl.load(OutScale + dest_index * $(stride_os_bs) +
-      cur_head * $(stride_os_h) + offs_g * $(stride_os_g),
+      cur_head * $(stride_os_h) + offs_g,
     mask=offs_g < $(group_size), other=1.0)
   q_src_data = src_data / data_scale[:, None]
   tl.store(Out + dest_index * $(stride_o_bs) + cur_head * $(stride_o_h) +
@@ -113,10 +114,10 @@ def outOffset
 
 def scaleOffset
     (s : BlockState) (DestLoc : RegionName)
-    (stride_os_bs stride_os_h stride_os_g : Nat)
+    (stride_os_bs stride_os_h _stride_os_g : Nat)
     (idx : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM]) : Nat :=
   destIndex s DestLoc * stride_os_bs + s.pids 1 * stride_os_h +
-    groupIndex s idx.1 * stride_os_g
+    groupIndex s idx.1
 
 noncomputable def quantizeKvCopyGroupValueSpec
     (s : BlockState) (K DestLoc OutScale : RegionName)
@@ -179,7 +180,7 @@ theorem destindex_copy_quantize_kv_group_value_store_slice_correct
               ((match s.readMemTyped TileDType.nat DestLoc (s.pids 0) with
                 | some value => value
                 | none => BlockState.defaultCarrier TileDType.nat) * stride_os_bs +
-                s.pids 1 * stride_os_h + idx.1.val * stride_os_g))
+                s.pids 1 * stride_os_h + idx.1.val))
           else some (1.0 : ℝ)))
   let P : TileIndex [BLOCK_GROUP_NUM, BLOCK_GROUP_DIM] → Prop :=
     fun idx => idx.1.val < group_size
