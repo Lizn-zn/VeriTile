@@ -10,6 +10,39 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `fast_rope_embedding.py`'s `_rope_embedding`.
+
+`backwardSign = 1.0` represents `BACKWARD_PASS = false`; `backwardSign = -1.0`
+represents `BACKWARD_PASS = true`, where Python negates `sin1`. The body
+preserves the fixed four-head group loop and both rotary-pair stores. -/
+def rope_embedding_surface
+    (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (backwardSign : ℝ) :
+    ComputeKernel := triton {
+  row_position = tl.program_id(0)
+  group_head_position = tl.program_id(1)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  half_head_dim = $(head_dim / 2)
+  mask = col_offsets < $(head_dim / 2)
+  sin1 = tl.load(sin + (row_position % $(seqlen)) * $(sin_row_stride) +
+    half_head_dim * $(0) + col_offsets, mask=mask, other=0.0)
+  cos1 = tl.load(cos + (row_position % $(seqlen)) * $(cos_row_stride) +
+    half_head_dim * $(0) + col_offsets, mask=mask, other=0.0)
+  sin1 = sin1 * $(backwardSign)
+  head_start = group_head_position * $(4)
+  head_end = tl.minimum(head_start + $(4), $(n_heads))
+  for k in range(head_start, head_end, $(1)) {
+    offs_q1 = row_position * $(Q_row_stride) + k * $(head_dim) + col_offsets
+    offs_q2 = row_position * $(Q_row_stride) + k * $(head_dim) +
+      col_offsets + half_head_dim
+    Q1 = tl.load(Q + offs_q1, mask=mask, other=0.0).to(tl.float32)
+    Q2 = tl.load(Q + offs_q2, mask=mask, other=0.0).to(tl.float32)
+    tl.store(Q + offs_q1, Q1 * cos1 - Q2 * sin1, mask=mask)
+    tl.store(Q + offs_q2, Q2 * cos1 + Q1 * sin1, mask=mask)
+  }
+}
+
 /-- Proof-oriented forward first-half slice of `fast_rope_embedding.py`'s
 `_rope_embedding`.
 
