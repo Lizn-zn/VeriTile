@@ -9,6 +9,67 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of the no-`seq_idx`, non-causal path of
+`bmm_chunk_fwd.py`'s `_bmm_chunk_fwd_kernel`.
+
+The public benchmark exercises this path for both grouped and non-grouped
+inputs. The source kernel's runtime `dot_dtype` cast is not represented here:
+current `tl.dot` typing in the DSL is real-valued, so the `a`/`b` loads remain
+in the compute carrier while the loop shape, masks, pointer advances, and final
+destination dtype cast are preserved. The `HAS_SEQ_IDX` path uses signed
+sentinels (`other = -1` and `other = -2`), and the causal path uses an early return; those are
+not collapsed into this surface. -/
+def bmm_chunk_fwd_no_seq_surface
+    (A B Out : RegionName)
+    (seqlen chunk_size K ngroups
+      stride_a_batch stride_a_seqlen stride_a_head stride_ak
+      stride_b_batch stride_b_seqlen stride_b_head stride_bk
+      stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ComputeKernel := triton {
+  pid_b = tl.program_id(axis=1)
+  pid_ch = tl.program_id(axis=2)
+  pid_c = pid_ch // $(ngroups)
+  pid_h = pid_ch - pid_c * $(ngroups)
+  num_pid_n = tl.cdiv($(chunk_size), $(BLOCK_SIZE_N))
+  pid_m = tl.program_id(axis=0) // num_pid_n
+  pid_n = tl.program_id(axis=0) % num_pid_n
+
+  a_base = A + pid_b * $(stride_a_batch) +
+    pid_c * $(chunk_size) * $(stride_a_seqlen) + pid_h * $(stride_a_head)
+  b_base = B + pid_b * $(stride_b_batch) +
+    pid_c * $(chunk_size) * $(stride_b_seqlen) + pid_h * $(stride_b_head)
+
+  offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  a_ptrs = a_base + offs_m[:, None] * $(stride_a_seqlen) +
+    offs_k[None, :] * $(stride_ak)
+  b_ptrs = b_base + offs_k[:, None] * $(stride_bk) +
+    offs_n[None, :] * $(stride_b_seqlen)
+  chunk_size_limit = tl.minimum($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
+
+  acc = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+  for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
+    a_mask = (offs_m[:, None] < chunk_size_limit) &
+      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
+    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
+      (offs_n[None, :] < chunk_size_limit)
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    acc += tl.dot(a, b)
+    a_ptrs += $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs += $(BLOCK_SIZE_K) * $(stride_bk)
+  }
+
+  out = (acc).to(Out.dtype.element_ty)
+  out_ptrs = Out + pid_b * $(stride_out_batch) +
+    pid_c * $(stride_out_chunk) + pid_h * $(stride_out_head) +
+    $(stride_outm) * offs_m[:, None] + offs_n[None, :] * $(stride_outn)
+  out_mask = (offs_m[:, None] < $(chunk_size)) & (offs_n[None, :] < $(chunk_size))
+  tl.store(out_ptrs, out, mask=out_mask)
+}
+
 /-- Proof-oriented final output-store slice of `bmm_chunk_fwd.py`'s
 `_bmm_chunk_fwd_kernel`.
 
