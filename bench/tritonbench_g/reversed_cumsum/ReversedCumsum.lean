@@ -9,12 +9,13 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented block store slice of `reversed_cumsum.py`'s
+/-- Proof-oriented block store surface slice of `reversed_cumsum.py`'s
 `chunk_global_reversed_cumsum_vector_kernel`.
 
 The full kernel computes a per-feature reversed chunk cumsum tile. This slice starts from
 a precomputed `BC` tile for one `(i_s, i_bh, i_t)` block and proves the
-boundary-checked writeback into `Z`. -/
+boundary-checked writeback into `Z`. The full reverse traversal still needs
+signed negative-step range support for `range(tl.cdiv(T, BT) - 1, -1, -1)`. -/
 def reversed_cumsum_store_slice
     (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
     ComputeKernel := triton {

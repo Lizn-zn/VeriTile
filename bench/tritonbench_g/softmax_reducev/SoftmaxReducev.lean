@@ -9,6 +9,57 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `softmax_reducev.py`'s `_fwd_kernel` for
+nonnegative `other_kv_index`.
+
+This preserves the streaming softmax recurrence over token blocks, B_Loc gather,
+V gather, and final normalized writeback. The Python benchmark also passes
+`other_kv_index = -1` in some cases; that signed sentinel is not representable
+in the current Nat/uint64 gather path, so this surface intentionally covers the
+nonnegative sentinel path such as `other_kv_index = 0`. -/
+def softmax_reducev_nonnegative_other_surface
+    (Logics V Out BLoc BStartLoc BSeqLen : RegionName)
+    (max_input_len
+      stride_logic_h stride_logic_bs
+      stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od
+      stride_b_loc_b stride_b_loc_s
+      other_kv_index BLOCK_DMODEL BLOCK_N : Nat) :
+    ComputeKernel := triton {
+  cur_batch = tl.program_id(axis=0)
+  cur_head = tl.program_id(axis=1)
+  cur_batch_seq_len = tl.load(BSeqLen + cur_batch, dtype=tl.uint64)
+  cur_batch_start_loc = tl.load(BStartLoc + cur_batch, dtype=tl.uint64)
+  offs_n = tl.arange(0, $(BLOCK_N))
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  off_v = cur_head * $(stride_vh) + offs_d[None, :] * $(stride_vd)
+  off_b_loc = cur_batch * $(stride_b_loc_b) +
+    ($(max_input_len) - cur_batch_seq_len) * $(stride_b_loc_s)
+  v_ptrs = V + off_v
+  e_max = -inf
+  e_sum = 0.0
+  acc = tl.zeros([$(BLOCK_DMODEL)], dtype=tl.float32)
+  for start_n in range($(0), cur_batch_seq_len, $(BLOCK_N)) {
+    start_n = tl.multiple_of(start_n, $(BLOCK_N))
+    n_active = (start_n + offs_n) < cur_batch_seq_len
+    v_index = tl.load(BLoc + off_b_loc + (start_n + offs_n) * $(stride_b_loc_s),
+      mask=n_active, other=$(other_kv_index), dtype=tl.uint64)
+    qk = tl.load(Logics + cur_head * $(stride_logic_h) +
+        (cur_batch_start_loc + start_n + offs_n) * $(stride_logic_bs),
+      mask=n_active, other=-inf)
+    n_e_max = tl.maximum(tl.max(qk, axis=0), e_max)
+    old_scale = tl.exp(e_max - n_e_max)
+    p = tl.exp(qk - n_e_max)
+    e_sum = e_sum * old_scale + tl.sum(p, axis=0)
+    v = tl.load(v_ptrs + v_index[:, None] * $(stride_vbs))
+    acc = acc * old_scale + tl.sum(p[:, None] * v, axis=0)
+    e_max = n_e_max
+  }
+  acc = acc / e_sum
+  off_o = cur_batch * $(stride_obs) + cur_head * $(stride_oh) + offs_d * $(stride_od)
+  tl.store(Out + off_o, acc)
+}
+
 /-- Proof-oriented final normalization/store slice of `softmax_reducev.py`'s
 `_fwd_kernel`.
 
