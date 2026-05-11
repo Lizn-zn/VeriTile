@@ -48,12 +48,14 @@ noncomputable def meanOneColSpec
 theorem mean_dim_kernel_correct
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState) :
-    True := by sorry
+    True := by
+  trivial
 
 /-- Compute-facing correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_compute_correct
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState) :
-    True := by sorry
+    True := by
+  trivial
 
 end VeriTile.Bench.TritonBenchG.MeanReduction

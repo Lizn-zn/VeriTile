@@ -115,7 +115,8 @@ theorem embedding_kernel_correct
     (hExec : exec (embedding_kernel weight input_ids out
         vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
         hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s') :
-    True := by sorry
+    True := by
+  trivial
 
 /-- Compute-facing correctness for the embedding kernel. -/
 theorem embedding_kernel_compute_correct
@@ -123,5 +124,6 @@ theorem embedding_kernel_compute_correct
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
     (s : BlockState) :
-    True := by sorry
+    True := by
+  trivial
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel

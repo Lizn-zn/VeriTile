@@ -927,12 +927,6 @@ partial def expandStmt (env : Env) (pinned : List String)
       ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
       (dest.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
       e'.computeTerm.isSome)
-  let expandLoadAssign (dest : Ident) (p : TSyntax `tritonExpr)
-      (kwargs : TSyntaxArray `tritonMemKwarg) :
-      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
-    let hint ← loadDTypeHint dest p
-    let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
-    emitAssign dest e'
   let expandLoadSubAssign (dest : Ident) (p : TSyntax `tritonExpr)
       (kwargs : TSyntaxArray `tritonMemKwarg) (rhs : TSyntax `tritonExpr) :
       MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do

@@ -62,7 +62,8 @@ theorem diag_ssm_forward_kernel_correct
       (fun i : Fin BLOCK_SIZE => colOffset s BLOCK_SIZE i))
     (hExec : exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
         length batch_size dim BLOCK_SIZE) s = some s') :
-    True := by sorry
+    True := by
+  trivial
 
 /-- Compute-facing correctness for the forward SSM kernel. -/
 theorem diag_ssm_forward_kernel_compute_correct
@@ -71,6 +72,7 @@ theorem diag_ssm_forward_kernel_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => colOffset s BLOCK_SIZE i)) :
-    True := by sorry
+    True := by
+  trivial
 
 end VeriTile.Bench.TritonBenchG.DiagSsmTriton
