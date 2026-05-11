@@ -9,6 +9,43 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `matmul_triton2.py`'s `matmul_kernel`. -/
+def matmul_triton2_surface
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  num_pid_m = tl.cdiv($(M), $(BLOCK_SIZE_M))
+  num_pid_n = tl.cdiv($(N), $(BLOCK_SIZE_N))
+  num_pid_in_group = $(GROUP_SIZE_M) * num_pid_n
+  group_id = pid // num_pid_in_group
+  first_pid_m = group_id * $(GROUP_SIZE_M)
+  group_size_m = tl.minimum(num_pid_m - first_pid_m, $(GROUP_SIZE_M))
+  pid_m = first_pid_m + (pid % group_size_m)
+  pid_n = (pid % num_pid_in_group) // group_size_m
+  offs_am = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_bn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  a_ptrs = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+  b_ptrs = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+  accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+  for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
+    a_mask = (offs_am[:, None] >= $(0)) and
+      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
+    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) and
+      (offs_bn[None, :] >= $(0))
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    accumulator += tl.dot(a, b)
+    a_ptrs += $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs += $(BLOCK_SIZE_K) * $(stride_bk)
+  }
+  c_ptrs = C + offs_am[:, None] * $(stride_cm) + offs_bn[None, :] * $(stride_cn)
+  c_mask = (offs_am[:, None] < $(M)) & (offs_bn[None, :] < $(N))
+  tl.store(c_ptrs, accumulator, mask=c_mask)
+}
+
 /-- Proof-oriented masked output-store slice of `matmul_triton2.py`'s
 `matmul_kernel`.
 
