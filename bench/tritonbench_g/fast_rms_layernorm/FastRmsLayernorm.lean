@@ -14,8 +14,8 @@ set_option maxHeartbeats 5000000
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
-- Python `normed.to(W_row.dtype)` is omitted because the DSL does not yet
-  support local-value dtype projection targets. -/
+- Python `normed.to(W_row.dtype)` is represented with the source-region
+  element dtype `W.dtype.element_ty`, which is the dtype of `W_row`. -/
 def rms_layernorm_forward
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols : Nat)
@@ -36,7 +36,38 @@ def rms_layernorm_forward
   inv_var = tl.math.rsqrt(row_var + $(eps))
   tl.store(r, inv_var)
   normed = X_row * inv_var
+  normed = (normed).to(W.dtype.element_ty)
   output = normed * W_row
+  tl.store(Y + col_offsets, output, mask=mask)
+}
+
+/-- Faithful transcription of `fast_rms_layernorm.py`'s
+`_gemma_rms_layernorm_forward`.
+
+The Python kernel accepts `W_row_stride` but loads `W + col_offsets`, so this
+surface preserves that stride-free weight access. -/
+def gemma_rms_layernorm_forward
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = col_offsets < $(n_cols)
+
+  Y += row_idx * $(Y_row_stride)
+  X += row_idx * $(X_row_stride)
+  r += row_idx * $(r_row_stride)
+
+  X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  W_row = tl.load(W + col_offsets, mask=mask, other=0.0).to(tl.float32)
+
+  row_var = tl.sum(X_row * X_row, axis=0) / $(n_cols)
+  inv_var = tl.math.rsqrt(row_var + $(eps))
+  tl.store(r, inv_var)
+  normed = X_row * inv_var
+  output = normed * (W_row + 1.0)
+
   tl.store(Y + col_offsets, output, mask=mask)
 }
 
@@ -77,6 +108,17 @@ noncomputable def rmsLayernormYSpec
         (some (s.readMem X (s.pid * X_row_stride + idx.val)))
         (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
       (some (s.readMem W (idx.val * W_row_stride))))
+
+noncomputable def gemmaRmsLayernormYSpec
+    (s : BlockState) (X W : RegionName)
+    (X_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (idx : Fin BLOCK_SIZE) : ℝ :=
+  WithBot.unbotD 0
+    (Option.map₂ (fun scaled w => scaled * (w + 1.0))
+      (Option.map₂ (fun x inv => x * inv)
+        (some (s.readMem X (s.pid * X_row_stride + idx.val)))
+        (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
+      (some (s.readMem W idx.val)))
 
 def yOutOffset (s : BlockState) (Y_row_stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pid * Y_row_stride + i.val
@@ -153,6 +195,82 @@ theorem rms_layernorm_forward_y_compute_correct
   intro i hActive
   have h := rms_layernorm_forward_y_correct Y X W r Y_row_stride X_row_stride
     W_row_stride r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hOutInj hExec i
+  simpa [hActive] using h
+
+/-- Executed-state correctness for the `Y` output of
+`_gemma_rms_layernorm_forward`. -/
+theorem gemma_rms_layernorm_forward_y_correct
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRegions : Y ≠ r)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i))
+    (hExec : exec (gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+          r_row_stride n_cols eps BLOCK_SIZE) s = some s') :
+    ∀ i : Fin BLOCK_SIZE,
+      s'.readMem Y (yOutOffset s Y_row_stride i) =
+        if i.val < n_cols then
+          gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i
+        else s.readMem Y (yOutOffset s Y_row_stride i) := by
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * Y_row_stride + idx.1.val) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [yOutOffset] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOutOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    by_cases hi : i.val < n_cols
+    · simp [hi, gemmaRmsLayernormYSpec, rmsInvVarCarrier, rmsSumCarrier,
+            rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            WithBot.realRsqrt, NumericDType.mul]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hRegions]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the `Y` output of
+`_gemma_rms_layernorm_forward`. -/
+theorem gemma_rms_layernorm_forward_y_compute_correct
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hRegions : Y ≠ r)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
+    ComputeCorrect.Realizes
+      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (Y, yOutOffset s Y_row_stride i)))
+      (expected := fun i =>
+        gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [gemma_rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := gemma_rms_layernorm_forward_y_correct Y X W r Y_row_stride X_row_stride
+    r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hOutInj hExec i
   simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.FastRmsLayernorm
