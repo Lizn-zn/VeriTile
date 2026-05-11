@@ -24,21 +24,21 @@ side-output store, weight multiply, and masked `Y` output store. -/
 def layer_norm_fwd_rms_one_block
     (X Y W Rstd : RegionName)
     (stride_x_row stride_y_row N BLOCK_N : Nat) (eps : ℝ) :
-    ComputeKernel := triton {
+  ComputeKernel := triton {
   row = tl.program_id(0)
-  X_base = X + row * $(stride_x_row)
-  Y_base = Y + row * $(stride_y_row)
+  X += row * $(stride_x_row)
+  Y += row * $(stride_y_row)
   cols = tl.arange(0, $(BLOCK_N))
-  x = tl.load(X_base + cols, mask=cols < $(N), other=0.0)
+  x = tl.load(X + cols, mask=cols < $(N), other=0.0).to(tl.float32)
   xbar = tl.where(cols < $(N), x, 0.0)
-  var = tl.sum(xbar * xbar, axis=0) / tl.toReal($(N))
+  var = tl.sum(xbar * xbar, axis=0) / $(N)
   rstd = 1 / tl.sqrt(var + $(eps))
   tl.store(Rstd + row, rstd)
   mask = cols < $(N)
-  w = tl.load(W + cols, mask=mask)
+  w = tl.load(W + cols, mask=mask).to(tl.float32)
   x_hat = x * rstd
   y = x_hat * w
-  tl.store(Y_base + cols, y, mask=mask)
+  tl.store(Y + cols, y, mask=mask)
 }
 
 def xOffset (s : BlockState) (stride_x_row : Nat) (i : Fin BLOCK_N) : Nat :=
@@ -60,12 +60,11 @@ noncomputable def rmsInputTile
 noncomputable def rmsVarCarrier
     (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat) :
     WithBot ℝ :=
-  Option.map₂ (fun a n => a / n)
+  Option.map (fun a => a / (N : ℝ))
     ((Tile.reduceSum (shape := [BLOCK_N]) ⟨0, by simp⟩ Bool.false
       (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
         (rmsInputTile s X stride_x_row N BLOCK_N)
         (rmsInputTile s X stride_x_row N BLOCK_N))).data PUnit.unit)
-    ((Tile.scalar N).natToReal.data PUnit.unit)
 
 noncomputable def rmsInvCarrier
     (s : BlockState) (X : RegionName) (stride_x_row N BLOCK_N : Nat)
@@ -118,7 +117,9 @@ theorem layer_norm_fwd_rms_one_block_y_correct
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
-          NumericDType.div, ComparableDType.lt] at hExec
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [yOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -150,7 +151,7 @@ theorem layer_norm_fwd_rms_one_block_y_compute_correct
       (expected := fun i => rmsYSpec s X W stride_x_row N BLOCK_N eps i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [layer_norm_fwd_rms_one_block]
+  · simp [layer_norm_fwd_rms_one_block, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive
