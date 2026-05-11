@@ -14,25 +14,22 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `l2_norm_triton1.py`'s `_l2_norm_fwd_1pass_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `BLOCK_N: tl.constexpr` → Lean `Nat` parameter.
-- Python pointer `X += row * stride_x_row` / `Y += row * stride_x_row` →
-  explicit `X_base` / `Y_base` registers; this is the same address expression
-  without mutating the pointer argument name. -/
+- Python `BLOCK_N: tl.constexpr` → Lean `Nat` parameter. -/
 def l2_norm_fwd_1pass_kernel
     (X Y : RegionName)
     (stride_x_row N : Nat) (eps : ℝ) (BLOCK_N : Nat) :
     ComputeKernel := triton {
   row = tl.program_id(0)
-  X_base = X + row * $(stride_x_row)
-  Y_base = Y + row * $(stride_x_row)
+  X += row * $(stride_x_row)
+  Y += row * $(stride_x_row)
   cols = tl.arange(0, $(BLOCK_N))
-  x = (tl.load(X_base + cols, mask=cols < $(N), other=0.0)).to(tl.float32)
+  x = tl.load(X + cols, mask=cols < $(N), other=0.0).to(tl.float32)
   xbar = tl.where(cols < $(N), x, 0.0)
   var = tl.sum(xbar * xbar, axis=0)
   rstd = 1 / tl.sqrt(var + $(eps))
   mask = cols < $(N)
   y = x * rstd
-  tl.store(Y_base + cols, y, mask=mask)
+  tl.store(Y + cols, y, mask=mask)
 }
 
 noncomputable def l2InputTile

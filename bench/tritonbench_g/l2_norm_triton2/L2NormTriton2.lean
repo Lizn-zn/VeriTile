@@ -17,16 +17,16 @@ def l2_norm_fwd_1pass_kernel
     (stride_x_row N : Nat) (eps : ℝ) (BLOCK_N : Nat) :
     ComputeKernel := triton {
   row = tl.program_id(0)
-  X_base = X + row * $(stride_x_row)
-  Y_base = Y + row * $(stride_x_row)
+  X += row * $(stride_x_row)
+  Y += row * $(stride_x_row)
   cols = tl.arange(0, $(BLOCK_N))
-  x = tl.load(X_base + cols, mask=cols < $(N), other=0.0).to(tl.float32)
+  x = tl.load(X + cols, mask=cols < $(N), other=0.0).to(tl.float32)
   xbar = tl.where(cols < $(N), x, 0.0)
   var = tl.sum(xbar * xbar, axis=0)
   rstd = 1 / tl.sqrt(var + $(eps))
   mask = cols < $(N)
   y = x * rstd
-  tl.store(Y_base + cols, y, mask=mask)
+  tl.store(Y + cols, y, mask=mask)
 }
 
 /-- Faithful transcription of `l2_norm_triton2.py`'s `_l2_norm_bwd_kernel`. -/
@@ -35,19 +35,19 @@ def l2_norm_bwd_kernel
     (stride_x_row N : Nat) (eps : ℝ) (BLOCK_N : Nat) :
     ComputeKernel := triton {
   row = tl.program_id(0)
-  X_base = X + row * $(stride_x_row)
-  DX_base = DX + row * $(stride_x_row)
-  DY_base = DY + row * $(stride_x_row)
+  X += row * $(stride_x_row)
+  DX += row * $(stride_x_row)
+  DY += row * $(stride_x_row)
   cols = tl.arange(0, $(BLOCK_N))
-  x = tl.load(X_base + cols, mask=cols < $(N), other=0.0).to(tl.float32)
+  x = tl.load(X + cols, mask=cols < $(N), other=0.0).to(tl.float32)
   x = tl.where(cols < $(N), x, 0.0)
   var = tl.sum(x * x)
   rstd = 1 / tl.sqrt(var + $(eps))
   mask = cols < $(N)
-  dy = tl.load(DY_base + cols, mask=cols < $(N), other=0.0).to(tl.float32)
+  dy = tl.load(DY + cols, mask=cols < $(N), other=0.0).to(tl.float32)
   dy = tl.where(cols < $(N), dy, 0.0)
   dx = dy * rstd - tl.sum(dy * x) * (1 / (var + $(eps))) * rstd * x
-  tl.store(DX_base + cols, dx, mask=mask)
+  tl.store(DX + cols, dx, mask=mask)
 }
 
 noncomputable def l2InputTile
