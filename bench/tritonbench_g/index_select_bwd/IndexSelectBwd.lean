@@ -13,8 +13,8 @@ open VeriTile.Triton
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE_INDEX: tl.constexpr` / `BLOCK_SIZE_COL: tl.constexpr`
   -> Lean `Nat` parameters.
-- Python `.to(tl.float32)` on `grad_output` is erased in the algorithm layer,
-  matching the existing Real-first TritonBench-G correctness policy. -/
+- Python `.to(tl.float32)` on `grad_output` is represented explicitly in the
+  Compute layer; the algorithm-layer theorem observes its Real projection. -/
 def index_select_cat_bwd_kernel
     (grad_source_ptr index_ptr grad_output_ptr : RegionName)
     (_num_rows num_indices num_cols stride0 stride1
@@ -30,7 +30,7 @@ def index_select_cat_bwd_kernel
   grad_output_mask =
     (grad_output_indices[:, None] < $(num_indices)) and
       (cols[None, :] < $(num_cols))
-  grad_output = tl.load(grad_output_offsets, mask=grad_output_mask)
+  grad_output = (tl.load(grad_output_offsets, mask=grad_output_mask)).to(tl.float32)
   grad_source_indices =
     tl.load(index_ptr + grad_output_indices,
       mask=grad_output_indices < $(num_indices))
@@ -110,7 +110,8 @@ theorem index_select_cat_bwd_kernel_correct
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         BlockState.readMemValue, Option.bind, Option.map,
-        TileShape.insertAxis, TileShape.dropInsertedIndex]
+        TileShape.insertAxis, TileShape.dropInsertedIndex,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   have hRawInj : Function.Injective
       (fun idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL] =>
         (if s.pids 0 * BLOCK_SIZE_INDEX + idx.1.val < num_indices then
@@ -211,7 +212,8 @@ theorem index_select_cat_bwd_kernel_compute_correct
           (gradOutputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [index_select_cat_bwd_kernel]
+  · simp [index_select_cat_bwd_kernel, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro idx hActive
