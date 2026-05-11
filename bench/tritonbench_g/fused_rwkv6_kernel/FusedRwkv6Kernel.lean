@@ -14,9 +14,8 @@ set_option linter.unusedSimpArgs false
 
 The public benchmark calls the wrapper with `reverse = false`. The reverse path
 updates pointers by `-K`/`-V`, which requires signed pointer movement and is not
-encoded here. Dynamic fp32/destination dtype casts are omitted where the current
-compute carrier is already real-valued; final stores still cast to the target
-region element dtype. -/
+encoded here. The source fp32 load casts and final destination dtype casts are
+represented explicitly. -/
 def fused_recurrent_rwkv6_fwd_surface
     (Q KReg VReg W U O H0 HT : RegionName)
     (s_k_h s_v_h B H T K V BK BV : Nat) (scale : ℝ)
@@ -42,14 +41,14 @@ def fused_recurrent_rwkv6_fwd_surface
   if USE_INITIAL_STATE {
     p_h0 = H0 + i_bh * $(K) * $(V) +
       offs_k[None, :] * $(V) + offs_v[:, None]
-    b_h += tl.load(p_h0, mask=mask_kv, other=0.0)
+    b_h += tl.load(p_h0, mask=mask_kv, other=0.0).to(tl.float32)
   }
-  b_u = tl.load(p_u, mask=mask_bk, other=0.0)
+  b_u = tl.load(p_u, mask=mask_bk, other=0.0).to(tl.float32)
   for _i in range($(0), $(T), $(1)) {
-    b_k = tl.load(p_k, mask=mask_bk, other=0.0)
-    b_v = tl.load(p_v, mask=mask_bv, other=0.0)
-    b_q = tl.load(p_q, mask=mask_bk, other=0.0) * $(scale)
-    b_w = tl.exp(tl.load(p_w, mask=mask_bk, other=0.0))
+    b_k = tl.load(p_k, mask=mask_bk, other=0.0).to(tl.float32)
+    b_v = tl.load(p_v, mask=mask_bv, other=0.0).to(tl.float32)
+    b_q = tl.load(p_q, mask=mask_bk, other=0.0).to(tl.float32) * $(scale)
+    b_w = tl.exp(tl.load(p_w, mask=mask_bk, other=0.0).to(tl.float32))
     b_kv = b_k[None, :] * b_v[:, None]
     b_o = (b_h + b_kv * b_u[None, :]) * b_q[None, :]
     b_o = tl.sum(b_o, axis=1)
