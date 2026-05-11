@@ -283,7 +283,9 @@ def fifth_order_bwd_surface
 The full source kernel writes eleven fifth-order spherical harmonics channels.
 This slice covers the common coordinate/block pointer arithmetic, masked
 coordinate loads, the `Y00` fifth-order polynomial, and the first strided output
-store. Remaining channels and backward gradients are future work. -/
+store. The full forward and backward surfaces above cover the remaining
+channels and gradient writeback; this kernel remains as the proved
+single-channel projection. -/
 def fifth_order_fwd_y00
     (coord_ptr output_ptr : RegionName)
     (block_size coord_numel output_numel col_offset output_stride : Nat) :
