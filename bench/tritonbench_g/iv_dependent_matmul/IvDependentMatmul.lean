@@ -9,6 +9,52 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of the `type == "pre_load"` path of
+`iv_dependent_matmul.py`'s `iv_dependent_matmul_kernel`.
+
+The Python benchmark exercises five scheduling modes controlled by a string
+constexpr. This surface covers the canonical pre-load mode: each loop iteration
+recomputes the A/B pointers from `k`, loads the current K block, accumulates
+`tl.dot`, casts the result to fp16 like the source, and performs the final
+masked store. The remaining scheduling modes are intentionally split out rather
+than encoded as a string-valued branch in the DSL. -/
+def iv_dependent_matmul_pre_load_surface
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  num_pid_n = tl.cdiv($(N), $(BLOCK_SIZE_N))
+  pid_m = pid // num_pid_n
+  pid_n = pid % num_pid_n
+
+  offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
+  offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+
+  accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+  for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
+    a_ptrs = a_base + k * $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs = b_base + k * $(BLOCK_SIZE_K) * $(stride_bk)
+    a_mask = (offs_am[:, None] >= $(0)) &
+      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
+    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
+      (offs_bn[None, :] >= $(0))
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    accumulator += tl.dot(a, b)
+  }
+
+  c = (accumulator).to(tl.float16)
+  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  c_ptrs = C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :]
+  c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
+  tl.store(c_ptrs, c, mask=c_mask)
+}
+
 /-- Proof-oriented masked output-store slice of `iv_dependent_matmul.py`'s
 `iv_dependent_matmul_kernel`.
 
