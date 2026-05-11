@@ -900,6 +900,18 @@ partial def expandStmt (env : Env) (pinned : List String)
       let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range(0, $($stop:term), $($step:term)) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forRange $nameLit 0 $stop $step [$algBody,*]),
+        ← `(ComputeStmt.forRange $nameLit 0 $stop $step [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range($($start:term), $($stop:term), $($step:term)) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forRange $nameLit $start $stop $step [$algBody,*]),
+        ← `(ComputeStmt.forRange $nameLit $start $stop $step [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.static_range $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env

@@ -174,6 +174,7 @@ def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
         | some extra => extra.RespectsRegionTyping Γ) ∧
       mask.RespectsRegionTyping Γ
   | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
+  | .forRange _ _ _ _ body => StmtList.RespectsRegionTyping Γ body
   | .ifThen cond body =>
       cond.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body
   | .ifThenElse cond thenBody elseBody =>

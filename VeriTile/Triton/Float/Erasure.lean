@@ -175,6 +175,8 @@ def Stmt.eraseDType : Stmt → Stmt
         input.eraseDType (extraInput.map Op.eraseDType) mask.eraseDType dest
   | .forLoop idx n body =>
       .forLoop idx n (Stmt.eraseDTypeList body)
+  | .forRange idx start stop step body =>
+      .forRange idx start stop step (Stmt.eraseDTypeList body)
   | .ifThen cond body =>
       .ifThen cond.eraseDType (Stmt.eraseDTypeList body)
   | .ifThenElse cond thenBody elseBody =>

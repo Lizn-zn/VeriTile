@@ -318,17 +318,23 @@ private partial def stmtRegionsWith (assigned : List String)
       ([], [], assigned)
   | `(tritonStmt| tl.debug_barrier()) =>
       ([], [], assigned)
-  | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
-      let (i, o, _) := blockRegionsWith assigned stmts.toList
+  | `(tritonStmt| tl.for $idx:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
       (i, o, assigned)
-  | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
-      let (i, o, _) := blockRegionsWith assigned stmts.toList
+  | `(tritonStmt| tl.for $idx:ident in $_:num { $stmts:tritonStmt* }) =>
+      let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
       (i, o, assigned)
-  | `(tritonStmt| tl.static_range $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
-      let (i, o, _) := blockRegionsWith assigned stmts.toList
+  | `(tritonStmt| for $idx:ident in range(0, $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
       (i, o, assigned)
-  | `(tritonStmt| tl.static_range $_:ident in $_:num { $stmts:tritonStmt* }) =>
-      let (i, o, _) := blockRegionsWith assigned stmts.toList
+  | `(tritonStmt| for $idx:ident in range($($_:term), $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
+      (i, o, assigned)
+  | `(tritonStmt| tl.static_range $idx:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
+      (i, o, assigned)
+  | `(tritonStmt| tl.static_range $idx:ident in $_:num { $stmts:tritonStmt* }) =>
+      let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
       (i, o, assigned)
   | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
       let (thenIns, thenOuts, _) := blockRegionsWith assigned thenStmts.toList

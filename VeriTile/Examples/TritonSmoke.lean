@@ -1392,4 +1392,19 @@ theorem blockPointerOobStore_observe_unchanged (outReg : RegionName)
         PUnit.unit := by
   simp [blockPointerOobStore_skips]
 
+/-! ### `for ... in range(start, stop, step)` smoke tests -/
+
+def rangeAccumKernel (xReg : RegionName) (N BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  acc = 0
+  for off in range(0, $(N), $(BLOCK_SIZE)) {
+    x = tl.load(xReg + off)
+    acc = acc + x
+  }
+  tl.store(xReg + pid, acc)
+}
+
+#check rangeAccumKernel
+
 end VeriTile.Examples.TritonSmoke

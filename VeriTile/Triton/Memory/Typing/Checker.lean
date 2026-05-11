@@ -307,6 +307,9 @@ def Stmt.check (ctx : CheckCtx) : Stmt → Except CheckError CheckCtx
   | .forLoop idx _ body => do
       let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
       StmtList.check ctx' body
+  | .forRange idx _ _ _ body => do
+      let ctx' ← ctx.setReg idx (pointerEntry .nat [] none none)
+      StmtList.check ctx' body
   | .ifThen cond body => do
       cond.check ctx
       StmtList.check ctx body

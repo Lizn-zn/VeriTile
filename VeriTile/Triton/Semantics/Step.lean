@@ -185,6 +185,8 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       stepAtomicRMW op dtype shape mem input extraInput mask dest s
   | .forLoop idx n body, s =>
       stepForLoopAux idx 0 n body s
+  | .forRange idx start stop step body, s =>
+      stepForRangeAux idx start stop step body s
   | .ifThen cond body, s => do
       let c ← evalOp cond s
       if c.data PUnit.unit then stepStmts body s else some s
@@ -193,11 +195,10 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       if c.data PUnit.unit then stepStmts thenBody s else stepStmts elseBody s
 termination_by st _ => (sizeOf st, 0)
 decreasing_by
-  all_goals (try (simp_wf; omega))
-  simp_wf
-  have h : 0 < sizeOf idx := by
-    cases idx; simp
-  omega
+  all_goals simp_wf
+  all_goals (try omega)
+  all_goals (have : 0 < sizeOf idx := by cases idx; simp)
+  all_goals omega
 
 noncomputable def stepStmts : List Stmt → BlockState → Option BlockState
   | [], s => some s
@@ -218,6 +219,19 @@ noncomputable def stepForLoopAux
         | none => none
       else some s
 termination_by _ => (sizeOf body + 1, n - start)
+decreasing_by all_goals omega
+
+noncomputable def stepForRangeAux
+    (idx : RegName) (cur stop step : Nat) (body : List Stmt) :
+    BlockState → Option BlockState
+  | s =>
+      if step = 0 then some s
+      else if cur < stop then
+        match stepStmts body (s.setReg idx .nat [] (Tile.scalar cur)) with
+        | some s' => stepForRangeAux idx (cur + step) stop step body s'
+        | none => none
+      else some s
+termination_by _ => (sizeOf body + 1, stop - cur)
 decreasing_by all_goals omega
 
 end
@@ -282,6 +296,36 @@ namespace stepForLoopAux
   rfl
 
 end stepForLoopAux
+
+namespace stepForRangeAux
+
+@[simp] theorem step_zero_step {idx} {cur stop} {body} {s} :
+    stepForRangeAux idx cur stop 0 body s = some s := by
+  unfold stepForRangeAux
+  simp
+
+@[simp] theorem step_ge {idx} {cur stop step} {body} {s}
+    (hstep : step ≠ 0) (h : stop ≤ cur) :
+    stepForRangeAux idx cur stop step body s = some s := by
+  unfold stepForRangeAux
+  simp [hstep, Nat.not_lt.mpr h]
+
+@[simp] theorem step_lt {idx} {cur stop step} {body} {s}
+    (hstep : step ≠ 0) (h : cur < stop) :
+    stepForRangeAux idx cur stop step body s
+      = (stepStmts body (s.setReg idx .nat [] (Tile.scalar cur))).bind
+          (stepForRangeAux idx (cur + step) stop step body) := by
+  conv_lhs => unfold stepForRangeAux
+  simp [hstep, h]
+  cases hbody : stepStmts body (s.setReg idx .nat [] (Tile.scalar cur)) <;> rfl
+
+@[simp] theorem forRange_unfold {idx} {start stop step} {body} {s} :
+    stepStmt (.forRange idx start stop step body) s
+      = stepForRangeAux idx start stop step body s := by
+  unfold stepStmt
+  rfl
+
+end stepForRangeAux
 
 noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
   stepStmts k.body s
@@ -686,6 +730,9 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
   case forLoop idx n body =>
     simp at h
     exact stepForLoopAux_pid h
+  case forRange idx start stop step body =>
+    simp at h
+    exact stepForRangeAux_pid h
   case ifThen cond body =>
     cases hcond : evalOp cond s with
     | none => simp [stepStmt, hcond] at h
@@ -734,6 +781,25 @@ theorem stepForLoopAux_pid {idx : RegName} {start n : Nat}
   · have hge : n ≤ start := Nat.le_of_not_gt hlt
     rw [stepForLoopAux.step_ge hge] at h
     simp_all
+
+theorem stepForRangeAux_pid {idx : RegName} {cur stop step : Nat}
+    {body : List Stmt} {s s' : BlockState}
+    (h : stepForRangeAux idx cur stop step body s = some s') :
+    s'.pid = s.pid := by
+  by_cases hstep : step = 0
+  · subst hstep
+    rw [stepForRangeAux.step_zero_step] at h
+    simp_all
+  · by_cases hlt : cur < stop
+    · rw [stepForRangeAux.step_lt hstep hlt] at h
+      cases hbody : stepStmts body (s.setReg idx .nat [] (Tile.scalar cur)) <;>
+        simp [hbody] at h
+      rename_i mid
+      exact (stepForRangeAux_pid h).trans
+        ((stepStmts_pid hbody).trans (BlockState.setReg_pid s idx .nat [] (Tile.scalar cur)))
+    · have hge : stop ≤ cur := Nat.le_of_not_gt hlt
+      rw [stepForRangeAux.step_ge hstep hge] at h
+      simp_all
 
 end
 

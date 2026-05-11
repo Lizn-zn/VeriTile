@@ -239,6 +239,7 @@ def MemorySafe (bounds : RegionBounds) : Stmt → Prop
       mask.MemorySafe bounds ∧
       ∀ s, mem.ActiveAddressSafe bounds s (mask.Active s)
   | .forLoop _ _ body => MemorySafeList bounds body
+  | .forRange _ _ _ _ body => MemorySafeList bounds body
   | .ifThen cond body => cond.MemorySafe bounds ∧ MemorySafeList bounds body
   | .ifThenElse cond thenBody elseBody =>
       cond.MemorySafe bounds ∧

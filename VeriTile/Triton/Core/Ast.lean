@@ -263,6 +263,8 @@ P1 Triton statements (mutating constructs).
   concurrency trace layer, not by pretending these operations are commutative.
 * `forLoop i n body` runs `body` `n` times, with the scalar register `i` bound
   to the iteration index.
+* `forRange i start stop step body` runs `body` for `i = start, start+step,
+  start+2*step, …` while `i < stop`. Models Python `for i in range(start, stop, step)`.
 * `ifThen cond body` runs `body` when the scalar `cond` evaluates `true`, and
   is a no-op when `false`.
 * `ifThenElse cond thenBody elseBody` runs one of two scalar-gated statement
@@ -282,6 +284,7 @@ inductive Stmt : Type where
               (extraInput : Option (Op dtype shape)) →
               (mask : MaskOpt dtype shape) → (dest : Option RegName) → Stmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
+  | forRange : (idx : RegName) → (start stop step : Nat) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
   | ifThenElse : (cond : Op .bool []) → (thenBody elseBody : List Stmt) → Stmt
 
@@ -514,6 +517,7 @@ inductive ComputeStmt : Type where
       Option RegName → ComputeStmt
   | effectMarker : (op : String) → ComputeStmt
   | forLoop : (idx : RegName) → (n : Nat) → (body : List ComputeStmt) → ComputeStmt
+  | forRange : (idx : RegName) → (start stop step : Nat) → (body : List ComputeStmt) → ComputeStmt
   | ifThen : (cond : Op .bool []) → (body : List ComputeStmt) → ComputeStmt
   | ifThenElse : (cond : Op .bool []) →
       (thenBody elseBody : List ComputeStmt) → ComputeStmt
@@ -541,6 +545,8 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
       Except.error (.requiresEffectProjection op)
   | .forLoop idx n body => do
       Except.ok (.forLoop idx n (← listToAlgorithm? body))
+  | .forRange idx start stop step body => do
+      Except.ok (.forRange idx start stop step (← listToAlgorithm? body))
   | .ifThen cond body => do
       Except.ok (.ifThen cond (← listToAlgorithm? body))
   | .ifThenElse cond thenBody elseBody => do
@@ -704,8 +710,33 @@ end
       | _, _, Except.error e => Except.error e := by
   simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
   cases ComputeStmt.listToAlgorithm? thenBody <;>
-    cases ComputeStmt.listToAlgorithm? elseBody <;>
+      cases ComputeStmt.listToAlgorithm? elseBody <;>
       cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_forLoop
+    (idx : RegName) (n : Nat) (body : List ComputeStmt) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm? (ComputeStmt.forLoop idx n body :: rest) =
+      match ComputeStmt.listToAlgorithm? body, ComputeStmt.listToAlgorithm? rest with
+      | Except.ok body', Except.ok rest' => Except.ok (Stmt.forLoop idx n body' :: rest')
+      | Except.error e, _ => Except.error e
+      | _, Except.error e => Except.error e := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases ComputeStmt.listToAlgorithm? body <;>
+    cases ComputeStmt.listToAlgorithm? rest <;> rfl
+
+@[simp] theorem listToAlgorithm?_cons_forRange
+    (idx : RegName) (start stop step : Nat)
+    (body : List ComputeStmt) (rest : List ComputeStmt) :
+    ComputeStmt.listToAlgorithm?
+        (ComputeStmt.forRange idx start stop step body :: rest) =
+      match ComputeStmt.listToAlgorithm? body, ComputeStmt.listToAlgorithm? rest with
+      | Except.ok body', Except.ok rest' =>
+          Except.ok (Stmt.forRange idx start stop step body' :: rest')
+      | Except.error e, _ => Except.error e
+      | _, Except.error e => Except.error e := by
+  simp only [ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?]
+  cases ComputeStmt.listToAlgorithm? body <;>
+    cases ComputeStmt.listToAlgorithm? rest <;> rfl
 
 @[simp] theorem listToAlgorithm?_append :
     ∀ xs ys : List ComputeStmt,

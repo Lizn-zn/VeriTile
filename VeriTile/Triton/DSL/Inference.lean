@@ -196,6 +196,14 @@ private partial def pinsFromStmt (assigned : Assigned)
       let bodyAssigned := i.getId.toString :: assigned
       let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
       (pins, assigned)
+  | `(tritonStmt| for $i:ident in range(0, $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      let bodyAssigned := i.getId.toString :: assigned
+      let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
+      (pins, assigned)
+  | `(tritonStmt| for $i:ident in range($($_:term), $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      let bodyAssigned := i.getId.toString :: assigned
+      let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
+      (pins, assigned)
   | `(tritonStmt| tl.static_range $i:ident in $($_:term) { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
       let (pins, _) := pinsFromStmts bodyAssigned stmts.toList

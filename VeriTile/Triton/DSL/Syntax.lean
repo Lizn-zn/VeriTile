@@ -190,6 +190,8 @@ syntax "tl.async_wait()" : tritonStmt
 syntax "tl.debug_barrier()" : tritonStmt
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt
+syntax "for " ident " in " "range(0, " "$(" term ")" ", " "$(" term ")" ")" " { " tritonStmt* " }" : tritonStmt
+syntax "for " ident " in " "range(" "$(" term ")" ", " "$(" term ")" ", " "$(" term ")" ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.static_range " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.static_range " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "tl.if " tritonExpr " { " tritonStmt* " }" : tritonStmt
