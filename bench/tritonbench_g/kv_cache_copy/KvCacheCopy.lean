@@ -10,6 +10,37 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of the K-cache store in `kv_cache_copy.py`'s
+`_copy_to_kvcache_seqlen1_kernel` for one `split_x` partition.
+
+The Python kernel iterates `split_x in tl.static_range(HEAD_DIM // KCACHE_X)`.
+This surface fixes that partition as `SPLIT_X`, loads the corresponding K
+dimension block, and stores it into either the old layout (`SPLIT_X=0`,
+`KCACHE_X=HEAD_DIM`) or the new split layout. -/
+def copy_to_kcache_one_xblock
+    (K KCache BLOCK_TABLES : RegionName)
+    (LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
+      stride_kt stride_kh stride_kd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs
+      stride_bts stride_btb HEAD_DIM KCACHE_X : Nat) :
+    ComputeKernel := triton {
+  cur_seq_idx = tl.program_id(axis=0)
+  cur_kv_head_idx = tl.program_id(axis=1)
+  range_x = tl.arange(0, $(KCACHE_X))
+  offsets_dmodel_x_partition = $(SPLIT_X) * $(KCACHE_X) + range_x
+  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
+    $(LAST_BLOCK_IDX) * $(stride_btb), dtype=tl.uint64)
+  k = tl.load(K + cur_seq_idx * $(stride_kt) +
+      cur_kv_head_idx * $(stride_kh) +
+      offsets_dmodel_x_partition * $(stride_kd),
+    mask=offsets_dmodel_x_partition < $(HEAD_DIM), other=0.0)
+  tl.store(KCache + block_id * $(stride_kcb) +
+      cur_kv_head_idx * $(stride_kch) +
+      $(SPLIT_X) * $(stride_kcsplit_x) +
+      $(OFFSET_LAST_BLOCK) * $(stride_kcs) + range_x,
+    k, mask=offsets_dmodel_x_partition < $(HEAD_DIM))
+}
+
 /-- Proof-oriented V-cache one-dimension-block slice of `kv_cache_copy.py`'s
 `_copy_to_kvcache_seqlen1_kernel`.
 
