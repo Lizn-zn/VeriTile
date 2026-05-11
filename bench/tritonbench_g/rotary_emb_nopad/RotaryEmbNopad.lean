@@ -41,6 +41,39 @@ def rotary_embedding_q_surface
   tl.store(Q + off_q1, out_q1, mask=active)
 }
 
+/-- Surface transcription of the conditional K part of
+`rotary_emb_nopad.py`'s `rotary_embedding_kernel` under the existing
+one-token-block abstraction. -/
+def rotary_embedding_k_surface
+    (K Cos Sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS : Nat) :
+    ComputeKernel := triton {
+  cur_head_idx = tl.program_id(axis=0)
+  cur_token_block_idx = tl.program_id(axis=1)
+  handle_kv = (cur_head_idx % $(KV_GROUP_NUM)) == $(0)
+  if handle_kv {
+    k_head_idx = cur_head_idx // $(KV_GROUP_NUM)
+    token = cur_token_block_idx * $(BLOCK_TOKENS)
+    dim = tl.arange(0, $(HEAD_HALF))
+    dim1 = dim + $(HEAD_HALF)
+    active = token < $(q_total_tokens)
+    off_cos_sin = token * $(cos_token_stride) + dim * $(cos_stride)
+    loaded_cos = tl.load(Cos + off_cos_sin, mask=active, other=0.0)
+    loaded_sin = tl.load(Sin + off_cos_sin, mask=active, other=0.0)
+    off_k0 = token * $(k_token_stride) + k_head_idx * $(k_head_stride) +
+      dim * $(head_dim_stride)
+    off_k1 = token * $(k_token_stride) + k_head_idx * $(k_head_stride) +
+      dim1 * $(head_dim_stride)
+    loaded_k0 = tl.load(K + off_k0, mask=active, other=0.0)
+    loaded_k1 = tl.load(K + off_k1, mask=active, other=0.0)
+    out_k0 = loaded_k0 * loaded_cos - loaded_k1 * loaded_sin
+    out_k1 = loaded_k0 * loaded_sin + loaded_k1 * loaded_cos
+    tl.store(K + off_k0, out_k0, mask=active)
+    tl.store(K + off_k1, out_k1, mask=active)
+  }
+}
+
 /-- Proof-oriented Q first-half slice of `rotary_emb_nopad.py`'s
 `rotary_embedding_kernel`.
 
