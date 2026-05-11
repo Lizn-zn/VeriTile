@@ -12,13 +12,13 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of the no-`seq_idx`, non-causal path of
 `bmm_chunk_fwd.py`'s `_bmm_chunk_fwd_kernel`.
 
-The public benchmark exercises this path for both grouped and non-grouped
-inputs. The source kernel's runtime `dot_dtype` cast is not represented here:
-current `tl.dot` typing in the DSL is real-valued, so the `a`/`b` loads remain
-in the compute carrier while the loop shape, masks, pointer advances, and final
-destination dtype cast are preserved. The `HAS_SEQ_IDX` path uses signed
-sentinels (`other = -1` and `other = -2`), and the causal path uses an early return; those are
-not collapsed into this surface. -/
+The public benchmark also exercises `HAS_SEQ_IDX` and causal cases; those are
+not collapsed into this surface. `HAS_SEQ_IDX` loads use signed sentinels
+(`other = -1` and `other = -2`), and the causal path uses an early return. The
+source kernel's runtime `dot_dtype` cast is not represented here: current
+`tl.dot` typing in the DSL is real-valued, so the `a`/`b` loads remain in the
+compute carrier while the loop shape, masks, pointer advances, and final
+destination dtype cast are preserved. -/
 def bmm_chunk_fwd_no_seq_surface
     (A B Out : RegionName)
     (seqlen chunk_size K ngroups
