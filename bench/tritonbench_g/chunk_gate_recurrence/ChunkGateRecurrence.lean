@@ -9,6 +9,51 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `chunk_gate_recurrence.py`'s `_fwd_recurrence`.
+
+The optional `last_kv` argument is represented by `HAS_LAST_KV`. The backward
+kernel walks the chunk dimension in reverse with pointer decrements, so it is
+kept separate from this forward surface. -/
+def chunk_gate_recurrence_fwd_surface
+    (S D O LastKV : RegionName)
+    (_NUM_HEAD NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
+    (HAS_LAST_KV : Bool) :
+    ComputeKernel := triton {
+  offset_bh = tl.program_id(axis=0)
+  offset_d = tl.program_id(axis=1)
+  offset_s = tl.program_id(axis=2)
+  offs_k = tl.arange(0, $(BLOCK_MODEL_K))
+  offs_v = tl.arange(0, $(BLOCK_MODEL_V))
+  S_ptr = S + offset_bh * $(NUM_BLOCK) * $(D_MODEL_K) * $(D_MODEL_V) +
+    offset_d * $(D_MODEL_V) * $(BLOCK_MODEL_K) +
+    offs_k[:, None] * $(D_MODEL_V) + offset_s * $(BLOCK_MODEL_V) +
+    offs_v[None, :]
+  O_ptr = O + offset_bh * $(NUM_BLOCK) * $(D_MODEL_K) * $(D_MODEL_V) +
+    offset_d * $(D_MODEL_V) * $(BLOCK_MODEL_K) +
+    offs_k[:, None] * $(D_MODEL_V) + offset_s * $(BLOCK_MODEL_V) +
+    offs_v[None, :]
+  acc = tl.zeros([$(BLOCK_MODEL_K), $(BLOCK_MODEL_V)], dtype=tl.float32)
+  if HAS_LAST_KV {
+    last_kv_ptr = LastKV + offset_bh * $(D_MODEL_K) * $(D_MODEL_V) +
+      offset_d * $(D_MODEL_V) * $(BLOCK_MODEL_K) +
+      offs_k[:, None] * $(D_MODEL_V) + offset_s * $(BLOCK_MODEL_V) +
+      offs_v[None, :]
+    acc += tl.load(last_kv_ptr).to(tl.float32)
+  }
+  tl.store(O_ptr, (acc).to(O.dtype.element_ty))
+  O_ptr += $(D_MODEL_K) * $(D_MODEL_V)
+  D_ptr = D + offset_bh * $(NUM_BLOCK)
+  for _i in range($(0), $(NUM_BLOCK) - $(1), $(1)) {
+    d_i = tl.load(D_ptr)
+    S_i = tl.load(S_ptr)
+    acc = acc * d_i + S_i
+    tl.store(O_ptr, (acc).to(O.dtype.element_ty))
+    D_ptr += $(1)
+    S_ptr += $(D_MODEL_K) * $(D_MODEL_V)
+    O_ptr += $(D_MODEL_K) * $(D_MODEL_V)
+  }
+}
+
 /-- Proof-oriented forward recurrence tile-store slice of
 `chunk_gate_recurrence.py`'s `_fwd_recurrence`.
 
