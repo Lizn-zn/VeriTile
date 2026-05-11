@@ -10,6 +10,36 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `batched_vecmat_mult.py`'s `batched_vecmat_kernel`.
+
+The Python wrapper asserts that `M`, `N`, and `K` are divisible by their block
+sizes, so this surface keeps the same unmasked block loads and stores. The
+Python body vectorizes the `block_m` rows and writes the reduction as
+`tl.broadcast(a, b)` followed by `tl.trans(tl.sum(..., axis=2))`; this spells
+out the same computation as an explicit `block_m` loop because the current DSL
+only has rank-1-to-rank-2 slice insertion syntax. -/
+def batched_vecmat_surface
+    (A B output : RegionName)
+    (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    ComputeKernel := triton {
+  m_index = tl.program_id(axis=0)
+  n_index = tl.program_id(axis=1)
+  offsets_n = n_index * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
+  offsets_k = tl.arange(0, $(BLOCK_K))
+  for m_inner in range($(0), $(BLOCK_M), $(1)) {
+    m_offset = m_index * $(BLOCK_M) + m_inner
+    vecmat = tl.zeros([$(BLOCK_N)], dtype=tl.float32)
+    for k_index in range($(0), $(dim_k / BLOCK_K), $(1)) {
+      k_offsets = k_index * $(BLOCK_K) + offsets_k
+      a = tl.load(A + m_offset * $(dim_k) + k_offsets)
+      b = tl.load(B + m_offset * $(dim_n) * $(dim_k) +
+        offsets_n[:, None] * $(dim_k) + k_offsets[None, :])
+      vecmat += tl.sum(a[None, :] * b, axis=1)
+    }
+    tl.store(output + m_offset * $(dim_n) + offsets_n, vecmat)
+  }
+}
+
 /-- Proof-oriented one-`m`, one-`n`-block slice of
 `batched_vecmat_mult.py`'s `batched_vecmat_kernel`.
 
