@@ -10,6 +10,56 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of the `BACKWARD_PASS=True` branch of
+`rope_backward_transform.py`'s `_triton_rope`.
+
+Allowed mechanical Lean-syntax-only changes:
+- `PAD_HALF` is Python's `pad_hd // 2`.
+- `HEAD_HALF` is Python's `hd // 2`.
+- Casts to `sin_row.dtype` are represented as fp32 casts in the current
+  surface dtype model. -/
+def triton_rope_backward
+    (Q K COS SIN : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl n_qh n_kh hd pad_n_qh pad_n_kh PAD_HALF HEAD_HALF : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  q_ptr = Q + pid * $(q_row_stride)
+  k_ptr = K + pid * $(k_row_stride)
+  cos_row_idx = pid % $(sl)
+  cos_base = COS + cos_row_idx * $(cos_row_stride)
+  sin_base = SIN + cos_row_idx * $(sin_row_stride)
+  cos_offsets = tl.arange(0, $(PAD_HALF))
+  cos_mask = cos_offsets < $(HEAD_HALF)
+  cos_row = tl.load(cos_base + cos_offsets, mask=cos_mask, other=0.0)
+  sin_row = tl.load(sin_base + cos_offsets, mask=cos_mask, other=0.0)
+  q_heads = tl.arange(0, $(pad_n_qh))
+  k_heads = tl.arange(0, $(pad_n_kh))
+  dims = tl.arange(0, $(PAD_HALF))
+  first_half_q_offsets = q_heads[:, None] * $(hd) + dims[None, :]
+  first_half_k_offsets = k_heads[:, None] * $(hd) + dims[None, :]
+  first_q_mask = (q_heads[:, None] < $(n_qh)) & (dims[None, :] < $(HEAD_HALF))
+  first_k_mask = (k_heads[:, None] < $(n_kh)) & (dims[None, :] < $(HEAD_HALF))
+  q_tile_1 = tl.load(q_ptr + first_half_q_offsets, mask=first_q_mask,
+    other=0.0).to(tl.float32)
+  k_tile_1 = tl.load(k_ptr + first_half_k_offsets, mask=first_k_mask,
+    other=0.0).to(tl.float32)
+  second_half_q_offsets = first_half_q_offsets + $(HEAD_HALF)
+  second_half_k_offsets = first_half_k_offsets + $(HEAD_HALF)
+  q_tile_2 = tl.load(q_ptr + second_half_q_offsets, mask=first_q_mask,
+    other=0.0).to(tl.float32)
+  k_tile_2 = tl.load(k_ptr + second_half_k_offsets, mask=first_k_mask,
+    other=0.0).to(tl.float32)
+  new_q_tile_1 = q_tile_1 * cos_row[None, :] + q_tile_2 * sin_row[None, :]
+  new_q_tile_2 = q_tile_2 * cos_row[None, :] - q_tile_1 * sin_row[None, :]
+  new_k_tile_1 = k_tile_1 * cos_row[None, :] + k_tile_2 * sin_row[None, :]
+  new_k_tile_2 = k_tile_2 * cos_row[None, :] - k_tile_1 * sin_row[None, :]
+  tl.store(q_ptr + first_half_q_offsets, new_q_tile_1, mask=first_q_mask)
+  tl.store(q_ptr + second_half_q_offsets, new_q_tile_2, mask=first_q_mask)
+  tl.store(k_ptr + first_half_k_offsets, new_k_tile_1, mask=first_k_mask)
+  tl.store(k_ptr + second_half_k_offsets, new_k_tile_2, mask=first_k_mask)
+}
+
 /-- Proof-oriented one-Q-head first-half backward slice of
 `rope_backward_transform.py`'s `_triton_rope`.
 
