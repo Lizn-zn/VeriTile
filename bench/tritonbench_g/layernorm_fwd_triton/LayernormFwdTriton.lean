@@ -14,9 +14,6 @@ set_option linter.unusedSimpArgs false
 `_layer_norm_fwd_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python pointer mutation (`X +=`, `Y +=`, `W +=`) → explicit base-pointer
-  registers.
-- Python `.to(...)` casts are omitted at the algorithm layer.
 - Python `N` / `BLOCK_SIZE: tl.constexpr` → Lean `Nat` parameters.
 - The Python `stride_x_hd`, `stride_y_hd`, and `stride_w_hd` parameters are not
   used by the source kernel body, so this translation omits them. -/
@@ -24,36 +21,36 @@ def layernorm_fwd_triton
     (X W Y : RegionName)
     (stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn : Nat)
     (N BLOCK_SIZE : Nat) (eps : ℝ) :
-    ComputeKernel := triton {
+  ComputeKernel := triton {
   Seq = tl.program_id(0)
   H = tl.program_id(1)
-  X_base = X + Seq * $(stride_x_N) + H * $(stride_x_hn)
-  Y_base = Y + Seq * $(stride_y_N) + H * $(stride_y_hn)
-  W_base = W + H * $(stride_w_hn)
-  _mean = tl.zeros([$(BLOCK_SIZE)])
+  X += Seq * $(stride_x_N) + H * $(stride_x_hn)
+  Y += Seq * $(stride_y_N) + H * $(stride_y_hn)
+  W += H * $(stride_w_hn)
+  _mean = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
   for off in range(0, $(N), $(BLOCK_SIZE)) {
     cols = off + tl.arange(0, $(BLOCK_SIZE))
-    a = tl.load(X_base + cols, mask=cols < $(N), other=0.0)
-    _mean = _mean + a
+    a = tl.load(X + cols, mask=cols < $(N), other=0.0).to(tl.float32)
+    _mean += a
   }
-  mean = tl.sum(_mean, axis=0) / tl.toReal($(N))
-  _var = tl.zeros([$(BLOCK_SIZE)])
+  mean = tl.sum(_mean, axis=0) / $(N)
+  _var = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
   for off in range(0, $(N), $(BLOCK_SIZE)) {
     cols = off + tl.arange(0, $(BLOCK_SIZE))
-    x = tl.load(X_base + cols, mask=cols < $(N), other=0.0)
+    x = tl.load(X + cols, mask=cols < $(N), other=0.0).to(tl.float32)
     x = tl.where(cols < $(N), x - mean, 0.0)
-    _var = _var + x * x
+    _var += x * x
   }
-  var = tl.sum(_var, axis=0) / tl.toReal($(N))
+  var = tl.sum(_var, axis=0) / $(N)
   rstd = 1 / tl.sqrt(var + $(eps))
   for off in range(0, $(N), $(BLOCK_SIZE)) {
     cols = off + tl.arange(0, $(BLOCK_SIZE))
     mask = cols < $(N)
-    w = tl.load(W_base + cols, mask=mask)
-    x = tl.load(X_base + cols, mask=mask, other=0.0)
+    w = tl.load(W + cols, mask=mask).to(tl.float32)
+    x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
     x_hat = (x - mean) * rstd
     y = x_hat * w
-    tl.store(Y_base + cols, y, mask=mask)
+    tl.store(Y + cols, (y).to(X.dtype.element_ty), mask=mask)
   }
 }
 
@@ -81,11 +78,10 @@ noncomputable def layernormMeanCarrier
     (s : BlockState) (X : RegionName)
     (stride_x_N stride_x_hn N BLOCK_SIZE : Nat) :
     WithBot ℝ :=
-  Option.map₂ (fun a n => a / n)
+  Option.map (fun a => a / (N : ℝ))
     ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
       (layernormInputTile s X stride_x_N stride_x_hn N BLOCK_SIZE)).data
         PUnit.unit)
-    ((Tile.scalar N).natToReal.data PUnit.unit)
 
 noncomputable def layernormCenteredTile
     (s : BlockState) (X : RegionName)
@@ -104,13 +100,12 @@ noncomputable def layernormVarCarrier
     (s : BlockState) (X : RegionName)
     (stride_x_N stride_x_hn N BLOCK_SIZE : Nat) :
     WithBot ℝ :=
-  Option.map₂ (fun a n => a / n)
+  Option.map (fun a => a / (N : ℝ))
     ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
       (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
         (layernormCenteredTile s X stride_x_N stride_x_hn N BLOCK_SIZE)
         (layernormCenteredTile s X stride_x_N stride_x_hn N BLOCK_SIZE))).data
         PUnit.unit)
-    ((Tile.scalar N).natToReal.data PUnit.unit)
 
 noncomputable def layernormInvVarCarrier
     (s : BlockState) (X : RegionName)
