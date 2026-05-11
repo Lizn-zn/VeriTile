@@ -13,8 +13,8 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
 - Python `mask_ptr is not None` -> Lean `HAS_MASK : Bool` constexpr gate.
 - Python `-float("inf")` -> DSL literal `-inf`.
-- Python `.to(tl.float32)` casts are erased in the algorithm layer, matching
-  VeriTile's Real-first correctness policy. -/
+- Python `.to(tl.float32)` casts are represented explicitly in the Compute
+  layer; the algorithm-layer theorem observes their Real projection. -/
 def softmax_kernel
     (output_ptr input_ptr mask_ptr : RegionName)
     (row_stride n_cols BLOCK_SIZE : Nat) (HAS_MASK : Bool) :
@@ -23,11 +23,11 @@ def softmax_kernel
   row_start_ptr = input_ptr + row_idx * $(row_stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   input_ptrs = row_start_ptr + col_offsets
-  row = tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-inf)
+  row = (tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-inf)).to(tl.float32)
   row_minus_max = row - tl.max(row, axis=0)
   if HAS_MASK {
     mask_ptrs = mask_ptr + row_idx * $(row_stride) + col_offsets
-    mask_row = tl.load(mask_ptrs, mask=col_offsets < $(n_cols), other=0.0)
+    mask_row = (tl.load(mask_ptrs, mask=col_offsets < $(n_cols), other=0.0)).to(tl.float32)
     row_minus_max = row_minus_max + mask_row
   }
   numerator = tl.exp(row_minus_max)
@@ -105,7 +105,8 @@ theorem softmax_kernel_correct
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
             NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
-            ComparableDType.lt, hB] at hExec
+            ComparableDType.lt, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+            FloatDType.cast, hB] at hExec
     · subst s'
       simp [BlockState.pid_eq]
       rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -144,7 +145,7 @@ theorem softmax_kernel_compute_correct
         softmaxSpec s input_ptr mask_ptr row_stride n_cols BLOCK_SIZE HAS_MASK i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [softmax_kernel]
+  · simp [softmax_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive
