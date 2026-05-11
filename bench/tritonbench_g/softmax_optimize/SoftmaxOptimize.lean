@@ -7,13 +7,14 @@ namespace VeriTile.Bench.TritonBenchG.SoftmaxOptimize
 
 open VeriTile.Triton
 
-/-- Proof-oriented one-tile specialization of `softmax_optimize.py`'s
-`softmax_kernel_online_v2`.
+/-- Surface transcription of `softmax_optimize.py`'s
+`softmax_kernel_online_v2` for the one-tile benchmark path.
 
-The source kernel implements a multi-tile online softmax. This slice captures
-the `N <= TILE_N` case, where the dynamic loop structure collapses to one
-masked row tile: load with `-inf`, compute stable softmax, and store the row.
-The online recurrence over multiple tiles remains future work. -/
+The wrapper sets `TILE_N = min(4096, next_power_of_2(N))`; the benchmark cases
+use `N ∈ {128, 512, 1024}`, so `N <= TILE_N` and the dynamic online loops
+collapse to one masked row tile. This surface keeps that tested path: load with
+`-inf`, compute stable softmax, and store the row. The online recurrence over
+multiple tiles remains future work. -/
 def softmax_kernel_online_v2_one_tile
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat) :
