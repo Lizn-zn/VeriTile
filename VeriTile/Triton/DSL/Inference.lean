@@ -117,6 +117,13 @@ private partial def pinsFromExpr (assigned : Assigned) :
   let belowPins :=
     match stx with
     | `(tritonExpr| ($e:tritonExpr)) => pinsFromExpr assigned e
+    | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+        let kwargPins :=
+          kwargs.foldl (fun (acc : List String) kw =>
+            match kw with
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ pinsFromExpr assigned val
+            | _ => acc) []
+        pinsFromPtrExpr assigned p ++ pinsFromExpr assigned mask ++ kwargPins
     | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
         let kwargPins :=
           kwargs.foldl (fun (acc : List String) kw =>
@@ -245,6 +252,14 @@ private partial def directPinsFromExpr (assigned : Assigned) :
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| ~ $e:tritonExpr) => directPinsFromExpr assigned e
   | `(tritonExpr| - $e:tritonExpr) => directPinsFromExpr assigned e
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      let kwargPins :=
+        kwargs.foldl (fun (acc : List String) kw =>
+          match kw with
+          | `(tritonMemKwarg| $_:ident = $val:tritonExpr) =>
+              acc ++ directPinsFromExpr assigned val
+          | _ => acc) []
+      pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned mask ++ kwargPins
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargPins :=
         kwargs.foldl (fun (acc : List String) kw =>

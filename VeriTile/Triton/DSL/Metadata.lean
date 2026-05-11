@@ -55,6 +55,14 @@ private partial def exprRegions (assigned : List String) :
   | some e => exprRegions assigned e
   | none =>
   match stx with
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonMemKwarg) =>
+            match kw with
+            | `(tritonMemKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
+            | _ => acc) []
+      staticPtrRegions assigned p ++ exprRegions assigned mask ++ kwargRegions
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargRegions : List (TSyntax `term) :=
         kwargs.foldl

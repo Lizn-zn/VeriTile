@@ -35,9 +35,16 @@ private def expandLoadOtherAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
 partial def expandLoad (expandExpr : ExprExpander)
     (expandStaticPtrExpr : StaticPtrExpander) (env : Env)
     (p : TSyntax `tritonExpr) (kwargs : TSyntaxArray `tritonMemKwarg)
-    (defaultDType : Option DInfo := none) :
+    (defaultDType : Option DInfo := none)
+    (positionalMask : Option (TSyntax `tritonExpr) := none) :
     MacroM EOut := do
   let mut maskTerm : Option (TSyntax `term × SInfo) := none
+  match positionalMask with
+  | none => pure ()
+  | some mask => do
+      let mask' ← expandExpr env mask
+      ensureDType .bool mask'.dtype "tl.load mask"
+      maskTerm := some (mask'.term, mask'.shape)
   let mut otherSyntax : Option (TSyntax `tritonExpr) := none
   let mut dtype? : Option DInfo := none
   let mut boundaryCheck? : Option (TSyntax `term) := none

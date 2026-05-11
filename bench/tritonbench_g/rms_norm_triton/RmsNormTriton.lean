@@ -10,28 +10,23 @@ open VeriTile.Triton
 /-- Faithful transcription of `rms_norm_triton.py`'s `rms_norm_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `BLOCK_SIZE: tl.constexpr` → Lean `Nat` parameter.
-- Python pointer mutation `Y += ...` / `X += ...` → explicit base pointer
-  registers.
-- Python `to(Y.dtype.element_ty)` is omitted at the algorithm layer; VeriTile's
-  AlgorithmCorrect path models floating arithmetic over `ℝ`, with dtype
-  roundoff deferred to ComputeCorrect gap testing. -/
+- Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter. -/
 def rms_norm_kernel
     (Y X W : RegionName)
     (y_stride_r y_stride_c x_stride_r x_stride_c N : Nat)
     (eps : ℝ) (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   pid = tl.program_id(0)
-  Y_base = Y + pid * $(y_stride_r)
-  X_base = X + pid * $(x_stride_r)
+  Y += pid * $(y_stride_r)
+  X += pid * $(x_stride_r)
+  mask = tl.arange(0, $(BLOCK_SIZE)) < $(N)
   cols = tl.arange(0, $(BLOCK_SIZE))
-  mask = cols < $(N)
-  x = tl.load(X_base + cols * $(x_stride_c), mask=mask, other=0.0).to(tl.float32)
+  x = tl.load(X + cols * $(x_stride_c), mask, other=0.0).to(tl.float32)
   var = tl.sum(x * x, axis=0) / $(N)
   rrms = 1 / tl.sqrt(var + $(eps))
-  w = tl.load(W + cols, mask=mask, other=0.0)
-  y = x * rrms * w
-  tl.store(Y_base + cols * $(y_stride_c), y, mask=mask)
+  w = tl.load(W + tl.arange(0, $(BLOCK_SIZE)), mask=mask, other=0.0)
+  y = (x * rrms).to(Y.dtype.element_ty) * w
+  tl.store(Y + cols * $(y_stride_c), y, mask=mask)
 }
 
 noncomputable def rmsInputTile
@@ -107,6 +102,7 @@ theorem rms_norm_kernel_correct
     rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, rms_norm_kernel, stepStmts, stepStmt, evalOp,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -141,7 +137,7 @@ theorem rms_norm_kernel_compute_correct
       (expected := fun i => rmsNormSpec s X W x_stride_r x_stride_c N BLOCK_SIZE eps i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [rms_norm_kernel]
+  · simp [rms_norm_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive
