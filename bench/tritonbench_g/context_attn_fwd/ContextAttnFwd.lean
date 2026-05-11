@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `context_attn_fwd.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `context_attn_fwd.py`'s
 `_fwd_kernel`.
 
 The full kernel computes PPL int8-KV context attention. This slice starts from a precomputed `Acc` tile and proves the

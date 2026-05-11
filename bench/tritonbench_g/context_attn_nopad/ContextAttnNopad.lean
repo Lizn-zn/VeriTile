@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `context_attn_nopad.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `context_attn_nopad.py`'s
 `_fwd_kernel`.
 
 The full kernel computes causal context attention with Q/K/V tiled loads and a

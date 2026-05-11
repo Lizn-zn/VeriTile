@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `context_attn_llama.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `context_attn_llama.py`'s
 `_fwd_kernel`.
 
 The full kernel computes grouped-KV causal context attention using

@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `context_attn_bloom.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `context_attn_bloom.py`'s
 `_fwd_kernel`.
 
 The full kernel computes BLOOM-style context attention with `Req_to_tokens` and

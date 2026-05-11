@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `context_attn_mistral.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `context_attn_mistral.py`'s
 `_fwd_kernel`.
 
 The full kernel computes sliding-window causal context attention. This slice
