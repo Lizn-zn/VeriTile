@@ -54,6 +54,30 @@ def matmul_autotune_no_activation_surface
   tl.store(c_ptrs, c, mask=c_mask)
 }
 
+/-- Surface transcription of the `ACTIVATION == "leaky_relu"` tail of
+`matmul_triton_autotune.py`'s `matmul_kernel`.
+
+This starts from a precomputed float32 accumulator tile, applies Python's
+`leaky_relu(accumulator)`, performs the output cast annotation, and preserves
+the grouped output addressing and mask. -/
+def matmul_autotune_leaky_relu_tail_surface
+    (Acc C : RegionName)
+    (M N stride_accm stride_accn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
+    ComputeKernel := triton {
+  pid_m = tl.program_id(axis=0)
+  pid_n = tl.program_id(axis=1)
+  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  accumulator = tl.load(Acc + $(stride_accm) * offs_cm[:, None] +
+    $(stride_accn) * offs_cn[None, :])
+  accumulator = tl.where(accumulator >= 0.0, accumulator, 0.01 * accumulator)
+  c = (accumulator).to(tl.float16)
+  c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
+  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
+    c, mask=c_mask)
+}
+
 /-- Proof-oriented masked output-store slice of `matmul_triton_autotune.py`'s
 `matmul_kernel`.
 
