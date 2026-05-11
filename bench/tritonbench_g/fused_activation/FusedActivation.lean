@@ -15,7 +15,6 @@ Allowed mechanical Lean-syntax-only changes:
   Lean parameters.
 - Python `activation == "sigmoid"` / `"relu"` -> one-hot Lean constexpr gates
   `ACTIVATION_SIGMOID` / `ACTIVATION_RELU`.
-- Python positional `tl.load(..., mask)` -> explicit `mask=mask`.
 - Python `eviction_policy='evict_last'` is omitted because it is a cache hint
   with no algorithm-layer effect. -/
 def fused_add_mul_activation_kernel
@@ -27,17 +26,17 @@ def fused_add_mul_activation_kernel
   index = xoffset + tl.arange(0, $(BLOCK_SIZE))
   mask = index < $(xnumel)
   bias_index = index % $(num_weights)
-  tmp0 = tl.load(x_ptr + index, mask=mask)
-  tmp1 = tl.load(bias_ptr + bias_index, mask=mask)
-  tmp3 = tl.load(in_ptr + index, mask=mask)
+  tmp0 = tl.load(x_ptr + index, mask)
+  tmp1 = tl.load(bias_ptr + bias_index, mask)
+  tmp3 = tl.load(in_ptr + index, mask)
   activ_input = $(multiplier) * tmp3 + tmp0 + tmp1
   if ACTIVATION_SIGMOID {
     ma_result = tl.sigmoid(activ_input)
-    tl.store(x_ptr + index, ma_result, mask=mask)
+    tl.store(x_ptr + index, ma_result, mask)
   }
   if ACTIVATION_RELU {
     ma_result = tl.maximum(0, activ_input)
-    tl.store(x_ptr + index, ma_result, mask=mask)
+    tl.store(x_ptr + index, ma_result, mask)
   }
 }
 
