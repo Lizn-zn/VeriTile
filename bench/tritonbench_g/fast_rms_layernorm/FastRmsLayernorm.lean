@@ -14,9 +14,8 @@ set_option maxHeartbeats 5000000
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
-- Python pointer mutation `Y += ...` / `X += ...` / `r += ...` -> explicit
-  base pointer registers.
-- Python `.to(...)` casts are omitted at the algorithm layer. -/
+- Python `normed.to(W_row.dtype)` is omitted because the DSL does not yet
+  support local-value dtype projection targets. -/
 def rms_layernorm_forward
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols : Nat)
@@ -26,19 +25,19 @@ def rms_layernorm_forward
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
 
-  Y_base = Y + row_idx * $(Y_row_stride)
-  X_base = X + row_idx * $(X_row_stride)
-  r_base = r + row_idx * $(r_row_stride)
+  Y += row_idx * $(Y_row_stride)
+  X += row_idx * $(X_row_stride)
+  r += row_idx * $(r_row_stride)
 
-  X_row = tl.load(X_base + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
   W_row = tl.load(W + col_offsets * $(W_row_stride), mask=mask, other=0.0)
 
   row_var = tl.sum(X_row * X_row, axis=0) / $(n_cols)
   inv_var = tl.math.rsqrt(row_var + $(eps))
-  tl.store(r_base, inv_var)
+  tl.store(r, inv_var)
   normed = X_row * inv_var
   output = normed * W_row
-  tl.store(Y_base + col_offsets, output, mask=mask)
+  tl.store(Y + col_offsets, output, mask=mask)
 }
 
 noncomputable def rmsInputTile
@@ -59,9 +58,9 @@ noncomputable def rmsSumCarrier
 noncomputable def rmsInvVarCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) : WithBot ℝ :=
-  Option.map (fun b => b⁻¹)
-    (WithBot.realSqrt (Option.map ((fun a => a + eps) ∘ fun a => a / (n_cols : ℝ))
-      (rmsSumCarrier s X X_row_stride n_cols BLOCK_SIZE)))
+  WithBot.realRsqrt
+    (Option.map ((fun a => a + eps) ∘ fun a => a / (n_cols : ℝ))
+      (rmsSumCarrier s X X_row_stride n_cols BLOCK_SIZE))
 
 noncomputable def rmsInvVarSpec
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
@@ -115,7 +114,8 @@ theorem rms_layernorm_forward_y_correct
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
           NumericDType.div, ComparableDType.lt, FloatDType.cast,
-          FloatDType.ofWithBot, FloatDType.toWithBot] at hExec
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [yOutOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -123,7 +123,7 @@ theorem rms_layernorm_forward_y_correct
     · simp [hi, rmsLayernormYSpec, rmsInvVarCarrier, rmsSumCarrier,
             rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-            WithBot.realSqrt, NumericDType.mul]
+            WithBot.realRsqrt, NumericDType.mul]
       rfl
     · simp [hi, BlockState.writeMem_readMem, hRegions]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
@@ -147,7 +147,7 @@ theorem rms_layernorm_forward_y_compute_correct
         rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols BLOCK_SIZE eps i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [rms_layernorm_forward]
+  · simp [rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive
