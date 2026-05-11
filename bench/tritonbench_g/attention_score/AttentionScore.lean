@@ -92,7 +92,8 @@ def attention_score_kernel
   }
   o_offset = off_z * $(stride_oz) + off_h * $(stride_oh)
   o_range = tl.arange(0, $(BLOCK_N)) + start_n * $(BLOCK_N)
-  tl.store(Out + o_offset + o_range, o, mask=o_range < $(NKV_CTX))
+  tl.store(Out + o_offset + o_range, (o).to(Out.dtype.element_ty),
+    mask=o_range < $(NKV_CTX))
 }
 
 /-- Proof-oriented final score-vector store slice of `attention_score.py`'s
