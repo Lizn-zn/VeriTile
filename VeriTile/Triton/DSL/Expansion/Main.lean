@@ -702,9 +702,6 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let p' ← expandExpr env p
       ensureDType .blockPtr p'.dtype "tl.advance pointer"
       let (deltasTerm, _) ← natListTerm "tl.advance offsets" deltas
-<<<<<<< Updated upstream
-      pure ⟨← `(Op.advanceBlockPtr (d := TileDType.real) $p'.term $deltasTerm), .blockPtr, p'.shape, none⟩
-=======
       pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape, none, none⟩
   | `(tritonExpr| tl.advance($p:tritonExpr, $offsetsKw:ident=($deltas:tritonExpr,*))) => do
       unless offsetsKw.getId.toString == "offsets" do
@@ -713,7 +710,6 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       ensureDType .blockPtr p'.dtype "tl.advance pointer"
       let (deltasTerm, _) ← natListTerm "tl.advance offsets" deltas
       pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape, none, none⟩
->>>>>>> Stashed changes
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandLoad expandExpr expandStaticPtrExpr env p kwargs
   | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => do
@@ -746,11 +742,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       match ← expandStaticPtrExpr env stx with
       | some sp =>
           let (bc, _) ← broadcastTerm SInfo.scalar sp.shape "pointer arithmetic"
-<<<<<<< Updated upstream
-          pure ⟨← `(Op.ptrAdd (d := TileDType.real) $bc (Op.ptrBase $sp.region) $sp.offset), .ptr, sp.shape, none⟩
-=======
           pure ⟨← `(Op.ptrAdd $bc (Op.ptrBase $sp.region) $sp.offset), .ptr, sp.shape, none, none⟩
->>>>>>> Stashed changes
       | none =>
           let a' ← expandExpr env a
           let b' ← expandExpr env b
@@ -759,20 +751,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               ensureAlgorithmOnly "pointer arithmetic" a'
               ensureAlgorithmOnly "pointer arithmetic" b'
               let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
-<<<<<<< Updated upstream
-              pure ⟨← `(Op.ptrAdd (d := TileDType.real) $bc $a'.term $b'.term), .ptr, outShape, none⟩
-=======
               pure ⟨← `(Op.ptrAdd $bc $a'.term $b'.term), .ptr, outShape, none, none⟩
->>>>>>> Stashed changes
           | .nat, .ptr =>
               ensureAlgorithmOnly "pointer arithmetic" a'
               ensureAlgorithmOnly "pointer arithmetic" b'
               let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
-<<<<<<< Updated upstream
-              pure ⟨← `(Op.ptrAdd (d := TileDType.real) $bc $b'.term $a'.term), .ptr, outShape, none⟩
-=======
               pure ⟨← `(Op.ptrAdd $bc $b'.term $a'.term), .ptr, outShape, none, none⟩
->>>>>>> Stashed changes
           | _, _ =>
               expandArith expandExpr env "arithmetic" (← `(Op.add)) a b
   | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
@@ -825,15 +809,6 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandJoin expandExpr env a b
   | `(tritonExpr| tl.split($e:tritonExpr, $side:num)) => do
       expandSplit expandExpr env e side.getNat
-<<<<<<< Updated upstream
-  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
-      let dtypeHint ← extractDTypeKwarg kwargs
-      expandFull expandExpr env dims.getElems v dtypeHint
-  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*] $[, $kwargs:tritonMemKwarg]*)) => do
-      let dtypeHint ← extractDTypeKwarg kwargs
-      let zero ← `(tritonExpr| 0)
-      expandFull expandExpr env dims.getElems zero dtypeHint
-=======
   | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr)) => do
       expandFull expandExpr env dims.getElems v
   | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr, $name:ident=$dt:tritonDType)) => do
@@ -850,7 +825,6 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
         Macro.throwError
           ("tl.zeros: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
       expandComputeZeros expandExpr env dims.getElems dt
->>>>>>> Stashed changes
   | _ => (Macro.throwUnsupported : MacroM EOut)
 
 end
@@ -951,7 +925,7 @@ partial def expandStmt (env : Env) (pinned : List String)
       | none => `(ComputeExpr.alg $e'.term)
     pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
       ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
-      (dest.getId.toString, e'.dtype, e'.shape) :: env,
+      (dest.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
       e'.computeTerm.isSome)
   let expandLoadAssign (dest : Ident) (p : TSyntax `tritonExpr)
       (kwargs : TSyntaxArray `tritonMemKwarg) :
@@ -1133,11 +1107,6 @@ partial def expandStmt (env : Env) (pinned : List String)
   | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*) - $rhs:tritonExpr) => do
       expandLoadSubAssign i p kwargs rhs
   | `(tritonStmt| $i:ident := tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
-<<<<<<< Updated upstream
-      expandLoadAssign i p kwargs
-  | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
-      expandLoadAssign i p kwargs
-=======
       let nameLit ← identAsStr i
       let hint : Option DInfo :=
         if pinned.contains i.getId.toString then some .nat else none
@@ -1167,7 +1136,6 @@ partial def expandStmt (env : Env) (pinned : List String)
         ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
         (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
         e'.computeTerm.isSome)
->>>>>>> Stashed changes
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
       let nameLit ← identAsStr i
       let e' ←
@@ -1250,51 +1218,26 @@ partial def expandStmt (env : Env) (pinned : List String)
         ← `(ComputeStmt.effectMarker "tl.debug_barrier"), env, Bool.true)
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
-<<<<<<< Updated upstream
-      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
-=======
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
->>>>>>> Stashed changes
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.for $i:ident in $n:num { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
-<<<<<<< Updated upstream
-      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
-=======
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
->>>>>>> Stashed changes
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| for $i:ident in range(0, $($stop:term), $($step:term)) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
-<<<<<<< Updated upstream
-      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
-=======
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
->>>>>>> Stashed changes
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forRange $nameLit 0 $stop $step [$algBody,*]),
         ← `(ComputeStmt.forRange $nameLit 0 $stop $step [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| for $i:ident in range($($start:term), $($stop:term), $($step:term)) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
-<<<<<<< Updated upstream
-      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
-      pure (← `(Stmt.forRange $nameLit $start $stop $step [$algBody,*]),
-        ← `(ComputeStmt.forRange $nameLit $start $stop $step [$computeBody,*]), env, bodyHasCompute)
-  | `(tritonStmt| tl.static_range $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
-      let nameLit ← identAsStr i
-      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
-=======
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forRange $nameLit $start $stop $step [$algBody,*]),
         ← `(ComputeStmt.forRange $nameLit $start $stop $step [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr, $step:tritonExpr) { $stmts:tritonStmt* }) => do
@@ -1306,41 +1249,30 @@ partial def expandStmt (env : Env) (pinned : List String)
       ensureShape SInfo.scalar stop'.shape "range stop"
       ensureShape SInfo.scalar step'.shape "range step"
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forRangeDyn $nameLit $start'.term $stop'.term $step'.term [$algBody,*]),
         ← `(ComputeStmt.forRangeDyn $nameLit $start'.term $stop'.term $step'.term [$computeBody,*]),
         env, bodyHasCompute)
   | `(tritonStmt| tl.static_range $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
->>>>>>> Stashed changes
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.static_range $i:ident in $n:num { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
-<<<<<<< Updated upstream
-      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
-=======
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned stmts.toList
->>>>>>> Stashed changes
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
         ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
-<<<<<<< Updated upstream
-      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env pinned regionDTypes ptrElems thenStmts.toList
-      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env pinned regionDTypes ptrElems elseStmts.toList
-=======
       let thenBaseEnv := env
-      let (algThen, computeThen, thenEnv, thenHasCompute) ← expandStmts env pinned thenStmts.toList
-      let (algElse, computeElse, elseEnv, elseHasCompute) ← expandStmts env pinned elseStmts.toList
+      let (algThen, computeThen, thenEnv, thenHasCompute) ← expandStmts env pinned regionDTypes ptrElems thenStmts.toList
+      let (algElse, computeElse, elseEnv, elseHasCompute) ← expandStmts env pinned regionDTypes ptrElems elseStmts.toList
       let nextEnv := mergeBranchEnv thenBaseEnv thenEnv elseEnv
->>>>>>> Stashed changes
       pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
         nextEnv,
@@ -1356,13 +1288,8 @@ partial def expandStmt (env : Env) (pinned : List String)
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "if condition"
       ensureShape SInfo.scalar cond'.shape "if condition"
-<<<<<<< Updated upstream
-      let (algThen, computeThen, _, thenHasCompute) ← expandStmts env pinned regionDTypes ptrElems thenStmts.toList
-      let (algElse, computeElse, _, elseHasCompute) ← expandStmts env pinned regionDTypes ptrElems elseStmts.toList
-=======
-      let (algThen, computeThen, thenEnv, thenHasCompute) ← expandStmts env pinned thenStmts.toList
-      let (algElse, computeElse, elseEnv, elseHasCompute) ← expandStmts env pinned elseStmts.toList
->>>>>>> Stashed changes
+      let (algThen, computeThen, thenEnv, thenHasCompute) ← expandStmts env pinned regionDTypes ptrElems thenStmts.toList
+      let (algElse, computeElse, elseEnv, elseHasCompute) ← expandStmts env pinned regionDTypes ptrElems elseStmts.toList
       pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
         mergeBranchEnv env thenEnv elseEnv,

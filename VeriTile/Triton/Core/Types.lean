@@ -86,6 +86,9 @@ abbrev RegionName := Region .real
 instance {d : TileDType} : Coe RegionName (Region d) where
   coe r := Region.cast r
 
+instance {d : TileDType} : CoeOut (Region d) RegionName where
+  coe r := Region.cast r
+
 /--
 Runtime value carried by Triton block pointers.
 
@@ -148,49 +151,6 @@ def advance (ptr : BlockPtr) (deltas : List Nat) : BlockPtr :=
 
 end BlockPtr
 
-<<<<<<< Updated upstream
-=======
-/--
-Triton block-local value type.
-
-VeriTile uses "tile" rather than "tensor" for Triton program values: a scalar
-is a rank-0 tile, `tl.arange` produces a 1D tile, and future block-pointer /
-FlashAttention work will introduce 2D tiles. This avoids conflating Triton
-block-local values with framework-level tensors.
--/
-inductive TileDType where
-  | real
-  | fp32
-  | fp16
-  | bf16
-  | int
-  | nat
-  | bool
-  | ptr
-  | blockPtr
-  deriving DecidableEq, Repr
-
-/-- Phantom-typed memory region name.
-
-The runtime representation remains a plain `RegionName`; the phantom dtype is
-only a DSL/proof-surface annotation used to infer typed memory operations. -/
-structure Region (dtype : TileDType) where
-  name : RegionName
-  deriving DecidableEq, Repr
-
-namespace Region
-
-@[simp] theorem eta {dtype : TileDType} (r : Region dtype) :
-    Region.mk r.name = r := by
-  cases r
-  rfl
-
-end Region
-
-instance {dtype : TileDType} : CoeOut (Region dtype) RegionName where
-  coe r := r.name
-
->>>>>>> Stashed changes
 /-- Lean carrier for each VeriTile tile dtype.
 
 `.real` is `WithBot ℝ` rather than `ℝ` so we can faithfully model `tl.full((),

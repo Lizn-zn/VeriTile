@@ -29,32 +29,20 @@ def rms_norm_fwd_fused
   row = tl.program_id(0)
   Y_base = Y + row * $(stride)
   X_base = X + row * $(stride)
-<<<<<<< Updated upstream
-  _var = tl.zeros([$(BLOCK_SIZE)])
-=======
   _var = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
->>>>>>> Stashed changes
   for off in range(0, $(N), $(BLOCK_SIZE)) {
     cols = off + tl.arange(0, $(BLOCK_SIZE))
-    x = tl.load(X_base + cols, mask=cols < $(N), other=0.0)
+    x = tl.load(X_base + cols, mask=cols < $(N), other=0.0).to(tl.float32)
     x = tl.where(cols < $(N), x, 0.0)
     _var = _var + x * x
   }
-<<<<<<< Updated upstream
-  var = tl.sum(_var, axis=0) / tl.toReal($(N))
-=======
   var = tl.sum(_var, axis=0) / $(N)
->>>>>>> Stashed changes
   rstd = 1 / tl.sqrt(var + $(eps))
   for off in range(0, $(N), $(BLOCK_SIZE)) {
     cols = off + tl.arange(0, $(BLOCK_SIZE))
     mask = cols < $(N)
     w = tl.load(W + cols, mask=mask)
-<<<<<<< Updated upstream
-    x = tl.load(X_base + cols, mask=mask, other=0.0)
-=======
     x = tl.load(X_base + cols, mask=mask, other=0.0).to(tl.float32)
->>>>>>> Stashed changes
     x_hat = x * rstd
     y = x_hat * w
     tl.store(Y_base + cols, y, mask=mask)
@@ -137,8 +125,6 @@ noncomputable def rmsnormCarrierSpec
         (rmsInvCarrier s X stride N BLOCK_SIZE eps))
       (some (s.readMem W i.val)))
 
-<<<<<<< Updated upstream
-=======
 noncomputable def rmsnormSpec
     (s : BlockState) (X W : RegionName)
     (stride N BLOCK_SIZE : Nat) (eps : ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
@@ -158,7 +144,6 @@ theorem rmsnormCarrierSpec_eq_rmsnormSpec
   simp [TiledRMSNorm.rmsAffine, TiledRMSNorm.rmsRstd,
     rmsLoad, rmsWeight, hi]
 
->>>>>>> Stashed changes
 /-- Algorithm-layer correctness for the fused RMSNorm kernel under the Python
 wrapper's `N <= BLOCK_SIZE` launch precondition. -/
 theorem rms_norm_fwd_fused_correct
@@ -189,10 +174,7 @@ theorem rms_norm_fwd_fused_correct
   by_cases hB : 0 < BLOCK_SIZE
   · have hStep : BLOCK_SIZE ≠ 0 := Nat.ne_of_gt hB
     simp [exec, rms_norm_fwd_fused, stepStmts, stepStmt, evalOp,
-<<<<<<< Updated upstream
-=======
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
->>>>>>> Stashed changes
           stepForRangeAux.step_lt, stepForRangeAux.step_ge,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
@@ -230,11 +212,7 @@ theorem rms_norm_fwd_fused_compute_correct
       (expected := fun i => rmsnormSpec s X W stride N BLOCK_SIZE eps i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-<<<<<<< Updated upstream
-  · simp [rms_norm_fwd_fused]
-=======
   · simp [rms_norm_fwd_fused, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
->>>>>>> Stashed changes
   intro s0 s' hExec hs0
   subst s0
   intro i hActive

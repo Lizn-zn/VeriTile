@@ -497,7 +497,7 @@ partial def expandFull (expandExpr : ExprExpander) (env : Env)
       if v''.dtype == .real && hint != .real then
         let srcProof ← DInfo.floatProof .real
         let dstProof ← hint.floatProof
-        pure ⟨← `(Op.castFloat $srcProof $dstProof $v''.term), hint, v''.shape, none⟩
+        pure ⟨← `(Op.castFloat $srcProof $dstProof $v''.term), hint, v''.shape, none, none⟩
       else pure v''
     else pure v''
   -- Value must be a scalar; tile-shaped values aren't broadcast here.

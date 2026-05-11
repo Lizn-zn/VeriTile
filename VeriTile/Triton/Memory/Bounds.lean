@@ -242,12 +242,9 @@ def MemorySafe (bounds : RegionBounds) : Stmt → Prop
       ∀ s, mem.ActiveAddressSafe bounds s (mask.Active s)
   | .forLoop _ _ body => MemorySafeList bounds body
   | .forRange _ _ _ _ body => MemorySafeList bounds body
-<<<<<<< Updated upstream
-=======
   | .forRangeDyn _ start stop step body =>
       start.MemorySafe bounds ∧ stop.MemorySafe bounds ∧ step.MemorySafe bounds ∧
         MemorySafeList bounds body
->>>>>>> Stashed changes
   | .ifThen cond body => cond.MemorySafe bounds ∧ MemorySafeList bounds body
   | .ifThenElse cond thenBody elseBody =>
       cond.MemorySafe bounds ∧

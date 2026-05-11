@@ -131,18 +131,12 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .split side a => .split side a.eraseDType
   | .expandDim axis a => .expandDim axis a.eraseDType
   | .ptrBase region => .ptrBase region
-  | @Op.ptrAdd a b out d bc ptr off =>
-      @Op.ptrAdd a b out (VeriTile.Triton.eraseDType d) bc ptr.eraseDType off.eraseDType
+  | .ptrAdd bc ptr off => .ptrAdd bc ptr.eraseDType off.eraseDType
   | .makeBlockPtr region baseOffset parentShape blockShape strides offsets =>
       .makeBlockPtr region baseOffset parentShape blockShape strides offsets
-<<<<<<< Updated upstream
-  | @Op.advanceBlockPtr shape d ptr deltas =>
-      @Op.advanceBlockPtr shape (VeriTile.Triton.eraseDType d) ptr.eraseDType deltas
-=======
   | .makeBlockPtrDyn region baseOffset parentShape blockShape strides offsets =>
       .makeBlockPtrDyn region baseOffset.eraseDType parentShape blockShape strides offsets
   | .advanceBlockPtr ptr deltas => .advanceBlockPtr ptr.eraseDType deltas
->>>>>>> Stashed changes
   | .load dtype mem mask => .load (VeriTile.Triton.eraseDType dtype) mem.eraseDType mask.eraseDType
   | .natToReal a => .natToReal a.eraseDType
 termination_by e => sizeOf e
@@ -184,12 +178,9 @@ def Stmt.eraseDType : Stmt → Stmt
       .forLoop idx n (Stmt.eraseDTypeList body)
   | .forRange idx start stop step body =>
       .forRange idx start stop step (Stmt.eraseDTypeList body)
-<<<<<<< Updated upstream
-=======
   | .forRangeDyn idx start stop step body =>
       .forRangeDyn idx start.eraseDType stop.eraseDType step.eraseDType
         (Stmt.eraseDTypeList body)
->>>>>>> Stashed changes
   | .ifThen cond body =>
       .ifThen cond.eraseDType (Stmt.eraseDTypeList body)
   | .ifThenElse cond thenBody elseBody =>

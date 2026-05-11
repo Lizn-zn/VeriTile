@@ -13,16 +13,10 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `rmsnorm_triton.py`'s `rmsnorm_triton`.
 
 Allowed mechanical Lean-syntax-only changes:
-<<<<<<< Updated upstream
-- Python `tl.extra.cuda.libdevice.pow(x.to(tl.float32), 2)` → `x * x`.
-- Python `tl.math.rsqrt(v)` → `1 / tl.sqrt(v)`.
-=======
 - Python `tl.extra.cuda.libdevice.pow(x.to(tl.float32), 2)` is written as
-  `x * x`.
->>>>>>> Stashed changes
-- Python `.to(tl.float32)` casts are omitted at the algorithm layer.
+  `xf * xf` after binding `xf = x.to(tl.float32)`.
 - Python `N_SIZE: tl.constexpr` / `eps: tl.constexpr` / `BLOCK_N_SIZE: tl.constexpr`
-  → Lean `Nat` / `ℝ` parameters. -/
+  -> Lean `Nat` / `ℝ` parameters. -/
 def rmsnorm_triton
     (x_ptr rms_w_ptr output_ptr : RegionName)
     (stride_x_batch stride_x_m stride_x_k stride_rms_w
@@ -33,16 +27,16 @@ def rmsnorm_triton
   pid_m = tl.program_id(1)
   offs_m = pid_batch * $(stride_x_batch) + pid_m * $(stride_x_m)
   block_N = tl.arange(0, $(BLOCK_N_SIZE))
-<<<<<<< Updated upstream
-  var = tl.zeros([$(BLOCK_N_SIZE)])
+  var = tl.zeros([$(BLOCK_N_SIZE)], dtype=tl.float32)
   for block_n_start_idx in range(0, $(N_SIZE), $(BLOCK_N_SIZE)) {
     offs_n = block_n_start_idx + block_N
     x_ptr_mask = offs_n < $(N_SIZE)
     x = tl.load(x_ptr + offs_m + offs_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
-    var = var + x * x
+    xf = x.to(tl.float32)
+    var = var + xf * xf
   }
-  var = tl.sum(var, axis=0) / tl.toReal($(N_SIZE))
-  rstd = 1 / tl.sqrt(var + $(eps))
+  var = tl.sum(var, axis=0) / $(N_SIZE)
+  rstd = tl.math.rsqrt(var + $(eps))
   for block_n_start_idx in range(0, $(N_SIZE), $(BLOCK_N_SIZE)) {
     offs_n = block_n_start_idx + block_N
     x_ptr_mask = offs_n < $(N_SIZE)
@@ -54,19 +48,6 @@ def rmsnorm_triton
       offs_n * $(stride_out_k)
     tl.store(output_ptr + out_off, out, mask=x_ptr_mask)
   }
-=======
-  x_ptr_mask = block_N < $(N_SIZE)
-  x_for_var = tl.load(x_ptr + offs_m + block_N * $(stride_x_k), mask=x_ptr_mask, other=0.0)
-  var = tl.sum(x_for_var * x_for_var, axis=0) / tl.toReal($(N_SIZE))
-  rstd = tl.math.rsqrt(var + $(eps))
-  rms_w = tl.load(rms_w_ptr + block_N * $(stride_rms_w), mask=x_ptr_mask)
-  x = tl.load(x_ptr + offs_m + block_N * $(stride_x_k), mask=x_ptr_mask, other=0.0)
-  x_hat = x * rstd
-  out = x_hat * rms_w
-  out_off = pid_batch * $(stride_out_batch) + pid_m * $(stride_out_m) +
-    block_N * $(stride_out_k)
-  tl.store(output_ptr + out_off, out, mask=x_ptr_mask)
->>>>>>> Stashed changes
 }
 
 def xOffset

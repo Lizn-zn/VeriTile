@@ -147,15 +147,10 @@ syntax "tl.flip(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.join(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.split(" tritonExpr ", " num ")" : tritonExpr
 
-<<<<<<< Updated upstream
-syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
-syntax "tl.zeros(" "[" tritonExpr,* "]" ("," tritonMemKwarg)* ")" : tritonExpr
-=======
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ")" : tritonExpr
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ", " ident "=" tritonDType ")" : tritonExpr
->>>>>>> Stashed changes
 
 syntax:50 tritonExpr:51 " < "  tritonExpr:51 : tritonExpr
 syntax:50 tritonExpr:51 " <= " tritonExpr:51 : tritonExpr
@@ -220,10 +215,7 @@ syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "for " ident " in " "range(0, " "$(" term ")" ", " "$(" term ")" ")" " { " tritonStmt* " }" : tritonStmt
 syntax "for " ident " in " "range(" "$(" term ")" ", " "$(" term ")" ", " "$(" term ")" ")" " { " tritonStmt* " }" : tritonStmt
-<<<<<<< Updated upstream
-=======
 syntax "for " ident " in " "range(" tritonExpr ", " tritonExpr ", " tritonExpr ")" " { " tritonStmt* " }" : tritonStmt
->>>>>>> Stashed changes
 syntax "tl.static_range " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.static_range " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "tl.if " tritonExpr " { " tritonStmt* " }" : tritonStmt

@@ -187,15 +187,12 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       stepForLoopAux idx 0 n body s
   | .forRange idx start stop step body, s =>
       stepForRangeAux idx start stop step body s
-<<<<<<< Updated upstream
-=======
   | .forRangeDyn idx start stop step body, s => do
       let start' ← evalOp start s
       let stop' ← evalOp stop s
       let step' ← evalOp step s
       stepForRangeAux idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
         (step'.data PUnit.unit) body s
->>>>>>> Stashed changes
   | .ifThen cond body, s => do
       let c ← evalOp cond s
       if c.data PUnit.unit then stepStmts body s else some s
@@ -334,8 +331,6 @@ namespace stepForRangeAux
   unfold stepStmt
   rfl
 
-<<<<<<< Updated upstream
-=======
 @[simp] theorem forRangeDyn_unfold {idx} {start stop step} {body} {s} :
     stepStmt (.forRangeDyn idx start stop step body) s
       = (evalOp start s).bind (fun start' =>
@@ -346,7 +341,6 @@ namespace stepForRangeAux
   unfold stepStmt
   rfl
 
->>>>>>> Stashed changes
 end stepForRangeAux
 
 noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
@@ -755,8 +749,6 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
   case forRange idx start stop step body =>
     simp at h
     exact stepForRangeAux_pid h
-<<<<<<< Updated upstream
-=======
   case forRangeDyn idx start stop step body =>
     cases hstart : evalOp start s with
     | none => simp [hstart] at h
@@ -769,7 +761,6 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
         | some stepTile =>
           simp [hstart, hstop, hstep] at h
           exact stepForRangeAux_pid h
->>>>>>> Stashed changes
   case ifThen cond body =>
     cases hcond : evalOp cond s with
     | none => simp [stepStmt, hcond] at h

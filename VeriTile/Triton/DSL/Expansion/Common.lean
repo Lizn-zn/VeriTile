@@ -55,13 +55,8 @@ def expandLeanAntiquoteAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
         | .bool => pure (← `(Op.constBool $t), .bool)
         | _ =>
             Macro.throwError
-<<<<<<< Updated upstream
               "$(...): Lean antiquotation can only be inferred as real/nat/int/bool/float in the current context"
-      pure (some ⟨out.1, out.2, SInfo.scalar, none⟩)
-=======
-              "$(...): Lean antiquotation can only be inferred as real/nat/int/bool in the current context"
       pure (some ⟨out.1, out.2, SInfo.scalar, none, none⟩)
->>>>>>> Stashed changes
   | _ => pure none
 
 def expandLeanAntiquoteAs (dtype : DInfo) (e : TSyntax `tritonExpr) :

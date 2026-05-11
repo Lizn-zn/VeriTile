@@ -13,17 +13,9 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `rmsnorm_implementation.py`'s `rmsnorm_triton`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `xf = x.to(tl.float32)` casts are omitted at the algorithm layer.
-<<<<<<< Updated upstream
-- Python `x / std` is written as `x * (1 / tl.sqrt(var + eps))`.
 - Python `N_SIZE: tl.constexpr` / `eps: tl.constexpr` / `BLOCK_N_SIZE: tl.constexpr`
-  → Lean `Nat` / `ℝ` parameters. -/
+  -> Lean `Nat` / `ℝ` parameters. -/
 def rmsnorm_implementation
-=======
-- Python `N_SIZE: tl.constexpr` / `BLOCK_N_SIZE: tl.constexpr` -> Lean `Nat`
-  parameters. -/
-def rmsnorm_implementation_one_block
->>>>>>> Stashed changes
     (x_ptr rms_w_ptr out_ptr : RegionName)
     (stride_x_batch stride_x_m stride_x_k stride_rms_w
       stride_out_batch stride_out_m stride_out_k : Nat)
@@ -33,15 +25,15 @@ def rmsnorm_implementation_one_block
   pid_m = tl.program_id(1)
   offset_m = pid_batch * $(stride_x_batch) + pid_m * $(stride_x_m)
   block_n_size = tl.arange(0, $(BLOCK_N_SIZE))
-<<<<<<< Updated upstream
-  var = tl.zeros([$(BLOCK_N_SIZE)])
+  var = tl.zeros([$(BLOCK_N_SIZE)], dtype=tl.float32)
   for block_n_strart_ptr in range(0, $(N_SIZE), $(BLOCK_N_SIZE)) {
     offset_n = block_n_strart_ptr + block_n_size
     x_ptr_mask = offset_n < $(N_SIZE)
     x = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
-    var = var + x * x
+    xf = x.to(tl.float32)
+    var = var + xf * xf
   }
-  var = tl.sum(var, axis=0) / tl.toReal($(N_SIZE))
+  var = tl.sum(var, axis=0) / $(N_SIZE)
   std = tl.sqrt(var + $(eps))
   for block_n_strart_ptr in range(0, $(N_SIZE), $(BLOCK_N_SIZE)) {
     offset_n = block_n_strart_ptr + block_n_size
@@ -54,20 +46,6 @@ def rmsnorm_implementation_one_block
       offset_n * $(stride_out_k)
     tl.store(out_ptr + out_offset, out, mask=x_ptr_mask)
   }
-=======
-  offset_n = block_n_size
-  x_ptr_mask = offset_n < $(N_SIZE)
-  x_for_var = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
-  var = tl.sum(x_for_var * x_for_var, axis=0) / tl.toReal($(N_SIZE))
-  std = tl.sqrt(var + $(eps))
-  rms_w_offset = tl.load(rms_w_ptr + offset_n * $(stride_rms_w), mask=x_ptr_mask)
-  x = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
-  x_new = x / std
-  out = x_new * rms_w_offset
-  out_offset = pid_batch * $(stride_out_batch) + pid_m * $(stride_out_m) +
-    offset_n * $(stride_out_k)
-  tl.store(out_ptr + out_offset, out, mask=x_ptr_mask)
->>>>>>> Stashed changes
 }
 
 def xOffset

@@ -371,18 +371,6 @@ private partial def scanStmt (assigned : Assigned)
       (info, assigned)
   | `(tritonStmt| tl.for $i:ident in $_:num { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
-<<<<<<< Updated upstream
-      let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
-      (pins, assigned)
-  | `(tritonStmt| for $i:ident in range(0, $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
-      let bodyAssigned := i.getId.toString :: assigned
-      let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
-      (pins, assigned)
-  | `(tritonStmt| for $i:ident in range($($_:term), $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
-      let bodyAssigned := i.getId.toString :: assigned
-      let (pins, _) := pinsFromStmts bodyAssigned stmts.toList
-      (pins, assigned)
-=======
       let (info, _) := scanStmts bodyAssigned stmts.toList
       (info, assigned)
   | `(tritonStmt| for $i:ident in range(0, $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
@@ -402,7 +390,6 @@ private partial def scanStmt (assigned : Assigned)
             directPinsFromExpr assigned step
           cmpDeps := cmpDepsFromExpr start ++ cmpDepsFromExpr stop ++ cmpDepsFromExpr step }
       (rangeInfo.append info, assigned)
->>>>>>> Stashed changes
   | `(tritonStmt| tl.static_range $i:ident in $($_:term) { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
       let (info, _) := scanStmts bodyAssigned stmts.toList

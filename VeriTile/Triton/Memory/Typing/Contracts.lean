@@ -45,13 +45,9 @@ lightweight layer, like pointer registers.
 -/
 def Op.BlockPointerRegionHasDType (Γ : RegionTyping) (dtype : TileDType) :
     Op exprDType shape → Prop
-<<<<<<< Updated upstream
   | .makeBlockPtr region _ _ _ _ _ => Γ (Region.cast region) = dtype
-=======
-  | .makeBlockPtr region _ _ _ _ _ => Γ region = dtype
   | .makeBlockPtrDyn region base _ _ _ _ =>
       Γ region = dtype ∧ base.RespectsRegionTyping Γ
->>>>>>> Stashed changes
   | .advanceBlockPtr ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
   | .broadcast ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
   | .full _ ptr => ptr.BlockPointerRegionHasDType Γ dtype
@@ -183,12 +179,9 @@ def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
       mask.RespectsRegionTyping Γ
   | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
   | .forRange _ _ _ _ body => StmtList.RespectsRegionTyping Γ body
-<<<<<<< Updated upstream
-=======
   | .forRangeDyn _ start stop step body =>
       start.RespectsRegionTyping Γ ∧ stop.RespectsRegionTyping Γ ∧
         step.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body
->>>>>>> Stashed changes
   | .ifThen cond body =>
       cond.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body
   | .ifThenElse cond thenBody elseBody =>
