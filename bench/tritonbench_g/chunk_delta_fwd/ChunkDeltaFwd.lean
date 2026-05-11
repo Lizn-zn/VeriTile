@@ -12,10 +12,10 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `chunk_delta_fwd.py`'s
 `chunk_delta_rule_fwd_kernel_h`.
 
-The source uses dynamic tile-dtype casts around the two dot products. VeriTile's
-current dot carrier is real-valued, so those casts are omitted while preserving
-the nested `NT`/`ceil(BT/BC)` loop structure, state stores, `v_new` stores, and
-optional initial/final state branches. -/
+The source uses dynamic tile-dtype casts around the two dot products; this
+surface represents them with `KReg.dtype.element_ty`, the dtype of loaded
+`b_k`, while preserving the nested `NT`/`ceil(BT/BC)` loop structure, state
+stores, `v_new` stores, and optional initial/final state branches. -/
 def chunk_delta_rule_fwd_h_surface
     (KReg VReg DReg VNew HOut InitialState FinalState : RegionName)
     (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
@@ -58,10 +58,10 @@ def chunk_delta_rule_fwd_h_surface
       b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
       b_d = tl.load(p_d, boundary_check=([0, 1] : List Nat))
       b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
-      b_v = b_v - tl.dot(b_d, b_h)
+      b_v = b_v - tl.dot(b_d, (b_h).to(KReg.dtype.element_ty))
       tl.store(p_v_new, (b_v).to(VNew.dtype.element_ty),
         boundary_check=([0, 1] : List Nat))
-      b_h_cumsum += tl.dot(b_k, b_v)
+      b_h_cumsum += tl.dot(b_k, (b_v).to(KReg.dtype.element_ty))
     }
     b_h += b_h_cumsum
   }
