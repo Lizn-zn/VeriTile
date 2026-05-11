@@ -10,6 +10,37 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of the Q part of `rotary_emb_nopad.py`'s
+`rotary_embedding_kernel` under the existing one-token-block abstraction.
+
+This writes both rotary halves for Q. The conditional K branch and the separate
+cache-writing v2 kernel remain separate surfaces/future work. -/
+def rotary_embedding_q_surface
+    (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat) :
+    ComputeKernel := triton {
+  cur_head_idx = tl.program_id(axis=0)
+  cur_token_block_idx = tl.program_id(axis=1)
+  token = cur_token_block_idx * $(BLOCK_TOKENS)
+  dim = tl.arange(0, $(HEAD_HALF))
+  dim1 = dim + $(HEAD_HALF)
+  active = (cur_head_idx < $(Q_HEAD_NUM)) and (token < $(q_total_tokens))
+  off_cos_sin = token * $(cos_token_stride) + dim * $(cos_stride)
+  loaded_cos = tl.load(Cos + off_cos_sin, mask=token < $(q_total_tokens), other=0.0)
+  loaded_sin = tl.load(Sin + off_cos_sin, mask=token < $(q_total_tokens), other=0.0)
+  off_q0 = token * $(q_token_stride) + cur_head_idx * $(q_head_stride) +
+    dim * $(head_dim_stride)
+  off_q1 = token * $(q_token_stride) + cur_head_idx * $(q_head_stride) +
+    dim1 * $(head_dim_stride)
+  loaded_q0 = tl.load(Q + off_q0, mask=active, other=0.0)
+  loaded_q1 = tl.load(Q + off_q1, mask=active, other=0.0)
+  out_q0 = loaded_q0 * loaded_cos - loaded_q1 * loaded_sin
+  out_q1 = loaded_q0 * loaded_sin + loaded_q1 * loaded_cos
+  tl.store(Q + off_q0, out_q0, mask=active)
+  tl.store(Q + off_q1, out_q1, mask=active)
+}
+
 /-- Proof-oriented Q first-half slice of `rotary_emb_nopad.py`'s
 `rotary_embedding_kernel`.
 
