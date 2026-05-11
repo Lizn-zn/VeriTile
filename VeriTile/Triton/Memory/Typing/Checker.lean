@@ -192,7 +192,7 @@ termination_by op => sizeOf op
 decreasing_by all_goals (simp_wf; try omega)
 
 def Op.ptrProvenance (ctx : CheckCtx) : Op dtype shape → Except CheckError RegionName
-  | .ptrBase region => .ok region
+  | .ptrBase region => .ok (Region.cast region)
   | .ptrAdd _ ptr off => do
       let region ← ptr.ptrProvenance ctx
       off.check ctx
@@ -219,7 +219,7 @@ def Op.blockPtrProvenance (ctx : CheckCtx) :
     Op dtype shape → Except CheckError RegionName
   | .makeBlockPtr region _ parentShape blockShape strides offsets => do
       checkBlockPtrMetadata parentShape blockShape strides offsets
-      .ok region
+      .ok (Region.cast region)
   | .advanceBlockPtr ptr _ => ptr.blockPtrProvenance ctx
   | .broadcast ptr _ => ptr.blockPtrProvenance ctx
   | .full _ ptr => ptr.blockPtrProvenance ctx
@@ -241,7 +241,7 @@ decreasing_by all_goals (simp_wf; try omega)
 
 def MemAccess.check (ctx : CheckCtx) (dtype : TileDType) :
     MemAccess dtype shape → Except CheckError Unit
-  | .region region off => off.check ctx *> ctx.checkRegion region dtype
+  | .region region off => off.check ctx *> ctx.checkRegion (Region.cast region) dtype
   | .ptr ptr => do
       let region ← ptr.ptrProvenance ctx
       ctx.checkRegion region dtype

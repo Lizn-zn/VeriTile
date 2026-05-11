@@ -21,8 +21,16 @@ def identAsStr (i : TSyntax `ident) : MacroM (TSyntax `term) :=
 arbitrary Lean terms, not syntactic region idents). Used by the region-
 dtype lookup in `expandLoad` / `expandStore`. -/
 def regionTermName (regionTerm : TSyntax `term) : Option String :=
-  if regionTerm.raw.isIdent then some regionTerm.raw.getId.toString
-  else none
+  let rec go (fuel : Nat) (stx : Syntax) : Option String :=
+    match fuel with
+    | 0 => none
+    | fuel + 1 =>
+        if stx.isIdent then
+          some stx.getId.toString
+        else
+          let args := stx.getArgs
+          if args.size == 1 then go fuel args[0]! else none
+  go 16 regionTerm.raw
 
 structure EOut where
   term : TSyntax `term

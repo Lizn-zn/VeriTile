@@ -644,7 +644,7 @@ def indirectLoadCoreKernel (idxReg dataReg outReg : RegionName)
       [Stmt.store .real [N] (MemAccess.region outReg (Op.arange N))
         (Op.load .real
           (MemAccess.ptr
-            (Op.ptrAdd Broadcast.scalarL
+            (Op.ptrAdd (d := .real) Broadcast.scalarL
               (Op.ptrBase dataReg)
                 (Op.mul NumericDType.nat Broadcast.scalarR
                   (Op.load .nat (MemAccess.region idxReg (Op.arange N)) MaskOpt.none)
@@ -802,7 +802,8 @@ def registerConflictKernel : ComputeKernel :=
 def pointerWhereConflictKernel : ComputeKernel :=
   let body : List Stmt :=
     [ Stmt.assign .ptr [] "p"
-        (Op.where (Op.constBool Bool.true) (Op.ptrBase "x") (Op.ptrBase "y")) ]
+        (Op.where (Op.constBool Bool.true)
+          (Op.ptrBase (d := .real) "x") (Op.ptrBase (d := .real) "y")) ]
   ComputeKernel.fromAlgBody [] [] body
 
 def checkerValidPointerStoreKernel (xReg outReg : RegionName) : ComputeKernel :=
@@ -811,7 +812,7 @@ def checkerValidPointerStoreKernel (xReg outReg : RegionName) : ComputeKernel :=
     , Stmt.assign .real [4] "x"
         (Op.load .real (MemAccess.region xReg (Op.ref .nat [4] "offs")) MaskOpt.none)
     , Stmt.assign .ptr [4] "outPtrs"
-        (Op.ptrAdd Broadcast.scalarL (Op.ptrBase outReg) (Op.ref .nat [4] "offs"))
+        (Op.ptrAdd (d := .real) Broadcast.scalarL (Op.ptrBase outReg) (Op.ref .nat [4] "offs"))
     , Stmt.store .real [4]
         (MemAccess.ptr (Op.ref .ptr [4] "outPtrs"))
         (Op.ref .real [4] "x")
@@ -836,7 +837,7 @@ def blockPointerRefKernel (xReg : RegionName) : ComputeKernel :=
     [ Stmt.assign .blockPtr [1] "bp"
         (Op.makeBlockPtr xReg 0 [8] [1] [1] [0])
     , Stmt.assign .blockPtr [1] "bp2"
-        (Op.advanceBlockPtr (Op.ref .blockPtr [1] "bp") [1])
+        (Op.advanceBlockPtr (d := .real) (Op.ref .blockPtr [1] "bp") [1])
     , Stmt.store .real [1]
         (MemAccess.blockPtr (Op.ref .blockPtr [1] "bp2") [0])
         (Op.full [1] (Op.const 1))

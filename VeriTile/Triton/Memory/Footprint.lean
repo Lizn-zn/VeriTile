@@ -191,7 +191,8 @@ theorem storeAddressesWithin_region_unmasked {shape : TileShape} {dtype : TileDT
     (offsets : Tile .nat shape) (hOffsets : evalOp off s = some offsets) :
     Stmt.StoreAddressesWithin
       (WriteFootprint.tileImage region (fun i => offsets.data i))
-      s (.region region off) (MaskOpt.none : MaskOpt dtype shape) := by
+      s (.region (d := dtype) (Region.cast (d' := dtype) region) off)
+        (MaskOpt.none : MaskOpt dtype shape) := by
   intro offsets' hOffsets' i
   have hEq : offsets' = offsets := Option.some.inj (hOffsets'.symm.trans hOffsets)
   subst hEq
@@ -206,7 +207,8 @@ theorem storeAddressesWithin_region_mask {shape : TileShape}
     Stmt.StoreAddressesWithin
       (WriteFootprint.activeTileImage region
         (fun i => offsets.data i) (fun i => masks.data i = true))
-      s (.region region off) (.mask maskOp : MaskOpt dtype shape) := by
+      s (.region (d := dtype) (Region.cast (d' := dtype) region) off)
+        (.mask maskOp : MaskOpt dtype shape) := by
   intro masks' hMasks' offsets' hOffsets' i hActive
   have hm : masks' = masks := Option.some.inj (hMasks'.symm.trans hMasks)
   have ho : offsets' = offsets := Option.some.inj (hOffsets'.symm.trans hOffsets)
@@ -223,7 +225,8 @@ theorem storeAddressesWithin_region_maskOther {shape : TileShape}
     Stmt.StoreAddressesWithin
       (WriteFootprint.activeTileImage region
         (fun i => offsets.data i) (fun i => masks.data i = true))
-      s (.region region off) (.maskOther maskOp other : MaskOpt dtype shape) := by
+      s (.region (d := dtype) (Region.cast (d' := dtype) region) off)
+        (.maskOther maskOp other : MaskOpt dtype shape) := by
   intro masks' hMasks' offsets' hOffsets' i hActive
   have hm : masks' = masks := Option.some.inj (hMasks'.symm.trans hMasks)
   have ho : offsets' = offsets := Option.some.inj (hOffsets'.symm.trans hOffsets)

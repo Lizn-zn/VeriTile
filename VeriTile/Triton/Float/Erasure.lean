@@ -130,10 +130,12 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .split side a => .split side a.eraseDType
   | .expandDim axis a => .expandDim axis a.eraseDType
   | .ptrBase region => .ptrBase region
-  | .ptrAdd bc ptr off => .ptrAdd bc ptr.eraseDType off.eraseDType
+  | @Op.ptrAdd a b out d bc ptr off =>
+      @Op.ptrAdd a b out (VeriTile.Triton.eraseDType d) bc ptr.eraseDType off.eraseDType
   | .makeBlockPtr region baseOffset parentShape blockShape strides offsets =>
       .makeBlockPtr region baseOffset parentShape blockShape strides offsets
-  | .advanceBlockPtr ptr deltas => .advanceBlockPtr ptr.eraseDType deltas
+  | @Op.advanceBlockPtr shape d ptr deltas =>
+      @Op.advanceBlockPtr shape (VeriTile.Triton.eraseDType d) ptr.eraseDType deltas
   | .load dtype mem mask => .load (VeriTile.Triton.eraseDType dtype) mem.eraseDType mask.eraseDType
   | .natToReal a => .natToReal a.eraseDType
 termination_by e => sizeOf e
@@ -145,7 +147,8 @@ region's phantom dtype is independent of the access dtype, so we keep
 the region unchanged and only erase the offset / payload pointers. -/
 def MemAccess.eraseDType :
     MemAccess dtype shape → MemAccess (VeriTile.Triton.eraseDType dtype) shape
-  | .region region off => .region region off.eraseDType
+  | .region region off =>
+      .region (Region.cast (d' := VeriTile.Triton.eraseDType dtype) region) off.eraseDType
   | .ptr ptr => .ptr ptr.eraseDType
   | .blockPtr ptr boundaryCheck => .blockPtr ptr.eraseDType boundaryCheck
 termination_by mem => sizeOf mem
@@ -190,10 +193,10 @@ decreasing_by all_goals (simp_wf; try omega)
 end
 
 @[simp] theorem MemAccess.eraseDType_region
-    {dtype : TileDType} (region : RegionName) (off : Op .nat shape) :
+    {dtype : TileDType} (region : Region dtype) (off : Op .nat shape) :
     (MemAccess.region (d := dtype) region off).eraseDType =
       MemAccess.region (d := VeriTile.Triton.eraseDType dtype)
-        region off.eraseDType := by
+        (Region.cast (d' := VeriTile.Triton.eraseDType dtype) region) off.eraseDType := by
   rw [MemAccess.eraseDType.eq_def]
 
 @[simp] theorem MemAccess.eraseDType_ptr {dtype : TileDType}

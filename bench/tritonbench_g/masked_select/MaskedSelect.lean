@@ -14,11 +14,8 @@ Allowed mechanical Lean-syntax-only changes:
 - The in-body `tl.region` directive declares element dtypes for the
   `select_mask_ptr` (Boolean mask buffer) and `prefix_sum_ptr` (int64
   prefix-sum buffer). The `select_mask` load picks up `tl.int1` via the
-  region directive. The `out_offset = tl.load(prefix_sum_ptr ...) - 1`
-  binding still carries an explicit `dtype=tl.uint64` because the
-  macro's region-dtype inference fires only on the simple
-  `name = tl.load(...)` shape; deferred to a follow-up that threads
-  region-dtype info through `expandExpr`. -/
+  region directive; the expression-position `prefix_sum_ptr` load similarly
+  picks up `tl.uint64` before subtracting one. -/
 def masked_select_kernel
     (inp_ptr select_mask_ptr prefix_sum_ptr out_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) :
@@ -29,7 +26,7 @@ def masked_select_kernel
   mask = offsets < $(n_elements)
   inp = tl.load(inp_ptr + offsets, mask=mask, other=0.0)
   select_mask = tl.load(select_mask_ptr + offsets, mask=mask)
-  out_offset = tl.load(prefix_sum_ptr + offsets, mask=mask, other=$(0), dtype=tl.uint64) - $(1)
+  out_offset = tl.load(prefix_sum_ptr + offsets, mask=mask, other=$(0)) - $(1)
   tl.store(out_ptr + out_offset, inp, mask=select_mask and mask)
 }
 

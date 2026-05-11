@@ -72,12 +72,19 @@ dtype). -/
 @[simp] theorem cast_id {d : TileDType} (r : Region d) :
     Region.cast (d := d) (d' := d) r = r := rfl
 
+@[simp] theorem cast_cast {d d' d'' : TileDType} (r : Region d) :
+    Region.cast (d := d') (d' := d'') (Region.cast (d := d) (d' := d') r) =
+      Region.cast (d := d) (d' := d'') r := rfl
+
 end Region
 
 /-- Legacy alias. Equals `Region .real` so every existing
 `(X : RegionName)` parameter remains a real-typed region. New non-real
 kernels write `(X : Region .nat)` etc. directly. -/
 abbrev RegionName := Region .real
+
+instance {d : TileDType} : Coe RegionName (Region d) where
+  coe r := Region.cast r
 
 /--
 Runtime value carried by Triton block pointers.

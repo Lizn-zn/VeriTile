@@ -424,7 +424,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let p' ← expandExpr env p
       ensureDType .blockPtr p'.dtype "tl.advance pointer"
       let (deltasTerm, _) ← natListTerm "tl.advance offsets" deltas
-      pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape, none⟩
+      pure ⟨← `(Op.advanceBlockPtr (d := TileDType.real) $p'.term $deltasTerm), .blockPtr, p'.shape, none⟩
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandLoad expandExpr expandStaticPtrExpr env p kwargs
   | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => do
@@ -457,7 +457,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       match ← expandStaticPtrExpr env stx with
       | some sp =>
           let (bc, _) ← broadcastTerm SInfo.scalar sp.shape "pointer arithmetic"
-          pure ⟨← `(Op.ptrAdd $bc (Op.ptrBase $sp.region) $sp.offset), .ptr, sp.shape, none⟩
+          pure ⟨← `(Op.ptrAdd (d := TileDType.real) $bc (Op.ptrBase $sp.region) $sp.offset), .ptr, sp.shape, none⟩
       | none =>
           let a' ← expandExpr env a
           let b' ← expandExpr env b
@@ -466,10 +466,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           match a'.dtype, b'.dtype with
           | .ptr, .nat =>
               let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
-              pure ⟨← `(Op.ptrAdd $bc $a'.term $b'.term), .ptr, outShape, none⟩
+              pure ⟨← `(Op.ptrAdd (d := TileDType.real) $bc $a'.term $b'.term), .ptr, outShape, none⟩
           | .nat, .ptr =>
               let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
-              pure ⟨← `(Op.ptrAdd $bc $b'.term $a'.term), .ptr, outShape, none⟩
+              pure ⟨← `(Op.ptrAdd (d := TileDType.real) $bc $b'.term $a'.term), .ptr, outShape, none⟩
           | _, _ =>
               let a' ←
                 if a'.dtype == .nat && b'.dtype == .real then
@@ -622,6 +622,54 @@ partial def expandStmt (env : Env) (pinned : List String)
         let p' ← expandExpr env p
         ensureDType .ptr p'.dtype (opName ++ " pointer")
         mkTerms (← `(MemAccess.ptr $p'.term)) p'.shape
+  let loadDTypeHint (dest : Ident) (p : TSyntax `tritonExpr) : MacroM (Option DInfo) := do
+    let regionHint : Option DInfo ←
+      match ← expandStaticPtrExpr env p with
+      | some sp =>
+          match regionTermName sp.region with
+          | some name => pure (Inference.lookupRegionDType regionDTypes name)
+          | none => pure none
+      | none =>
+          match p with
+          | `(tritonExpr| $r:ident) => pure (Inference.lookupPtrElem ptrElems r.getId.toString)
+          | _ => pure none
+    let pinHint : Option DInfo :=
+      if pinned.contains dest.getId.toString then some .nat else none
+    pure (regionHint.orElse (fun _ => pinHint))
+  let emitAssign (dest : Ident) (e' : EOut) : MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    let nameLit ← identAsStr dest
+    let dt ← e'.dtype.term
+    let sh ← e'.shape.term
+    let exprTerm ←
+      match e'.computeTerm with
+      | some ce => pure ce
+      | none => `(ComputeExpr.alg $e'.term)
+    pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+      ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+      (dest.getId.toString, e'.dtype, e'.shape) :: env,
+      e'.computeTerm.isSome)
+  let expandLoadAssign (dest : Ident) (p : TSyntax `tritonExpr)
+      (kwargs : TSyntaxArray `tritonMemKwarg) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    let hint ← loadDTypeHint dest p
+    let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
+    emitAssign dest e'
+  let expandLoadSubAssign (dest : Ident) (p : TSyntax `tritonExpr)
+      (kwargs : TSyntaxArray `tritonMemKwarg) (rhs : TSyntax `tritonExpr) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    let hint ← loadDTypeHint dest p
+    let load' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
+    ensureAlgorithmOnly "arithmetic" load'
+    let rhs' ←
+      match ← expandLeanAntiquoteAs? load'.dtype rhs with
+      | some out => pure out
+      | none => expandExpr env rhs
+    ensureAlgorithmOnly "arithmetic" rhs'
+    ensureDType load'.dtype rhs'.dtype "arithmetic"
+    let np ← load'.dtype.numericProof
+    let (bc, outShape) ← broadcastTerm load'.shape rhs'.shape "arithmetic"
+    let term ← `(Op.sub $np $bc $load'.term $rhs'.term)
+    emitAssign dest { term := term, dtype := load'.dtype, shape := outShape, computeTerm := none }
   match stx with
   | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) => do
       let lhs := #[lhs0, lhs1] ++ lhsRest
@@ -775,66 +823,14 @@ partial def expandStmt (env : Env) (pinned : List String)
   | `(tritonStmt| $i:ident = tl.atomic_cas($p:tritonExpr, $cmp:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       ensureNoAtomicKwargs "tl.atomic_cas" kwargs
       expandAtomicRMWCore "tl.atomic_cas" (← `(RMWOp.cas)) (some i) p cmp (some v)
+  | `(tritonStmt| $i:ident := tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*) - $rhs:tritonExpr) => do
+      expandLoadSubAssign i p kwargs rhs
+  | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*) - $rhs:tritonExpr) => do
+      expandLoadSubAssign i p kwargs rhs
   | `(tritonStmt| $i:ident := tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
-      let nameLit ← identAsStr i
-      -- Region-dtype declaration takes precedence over the offset-pin
-      -- inference: an explicit `region R = tl.uint64` directive states
-      -- the buffer's element type, while pin inference is a heuristic
-      -- backstop for kernels that have no directive.
-      let regionHint : Option DInfo := ←
-        match ← expandStaticPtrExpr env p with
-        | some sp =>
-            match regionTermName sp.region with
-            | some name => pure (Inference.lookupRegionDType regionDTypes name)
-            | none => pure none
-        | none =>
-            -- Bound pointer name (`p = R + offs; ... ; tl.load(p)`):
-            -- look up the propagated element-dtype.
-            match p with
-            | `(tritonExpr| $r:ident) => pure (Inference.lookupPtrElem ptrElems r.getId.toString)
-            | _ => pure none
-      let pinHint : Option DInfo :=
-        if pinned.contains i.getId.toString then some .nat else none
-      let hint := regionHint.orElse (fun _ => pinHint)
-      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
-      let dt ← e'.dtype.term
-      let sh ← e'.shape.term
-      let exprTerm ←
-        match e'.computeTerm with
-        | some ce => pure ce
-        | none => `(ComputeExpr.alg $e'.term)
-      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
-        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
-        (i.getId.toString, e'.dtype, e'.shape) :: env,
-        e'.computeTerm.isSome)
+      expandLoadAssign i p kwargs
   | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
-      let nameLit ← identAsStr i
-      let regionHint : Option DInfo := ←
-        match ← expandStaticPtrExpr env p with
-        | some sp =>
-            match regionTermName sp.region with
-            | some name => pure (Inference.lookupRegionDType regionDTypes name)
-            | none => pure none
-        | none =>
-            -- Bound pointer name (`p = R + offs; ... ; tl.load(p)`):
-            -- look up the propagated element-dtype.
-            match p with
-            | `(tritonExpr| $r:ident) => pure (Inference.lookupPtrElem ptrElems r.getId.toString)
-            | _ => pure none
-      let pinHint : Option DInfo :=
-        if pinned.contains i.getId.toString then some .nat else none
-      let hint := regionHint.orElse (fun _ => pinHint)
-      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
-      let dt ← e'.dtype.term
-      let sh ← e'.shape.term
-      let exprTerm ←
-        match e'.computeTerm with
-        | some ce => pure ce
-        | none => `(ComputeExpr.alg $e'.term)
-      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
-        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
-        (i.getId.toString, e'.dtype, e'.shape) :: env,
-        e'.computeTerm.isSome)
+      expandLoadAssign i p kwargs
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
       let nameLit ← identAsStr i
       let e' ← expandExpr env e

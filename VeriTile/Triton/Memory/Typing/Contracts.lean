@@ -19,7 +19,7 @@ values in this lightweight layer, so they impose no region constraint here.
 -/
 def Op.PointerRegionsHaveDType (Γ : RegionTyping) (dtype : TileDType) :
     Op exprDType shape → Prop
-  | .ptrBase region => Γ region = dtype
+  | .ptrBase region => Γ (Region.cast region) = dtype
   | .ptrAdd _ ptr off =>
       ptr.PointerRegionsHaveDType Γ dtype ∧ off.RespectsRegionTyping Γ
   | .broadcast ptr _ =>
@@ -45,7 +45,7 @@ lightweight layer, like pointer registers.
 -/
 def Op.BlockPointerRegionHasDType (Γ : RegionTyping) (dtype : TileDType) :
     Op exprDType shape → Prop
-  | .makeBlockPtr region _ _ _ _ _ => Γ region = dtype
+  | .makeBlockPtr region _ _ _ _ _ => Γ (Region.cast region) = dtype
   | .advanceBlockPtr ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
   | .broadcast ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
   | .full _ ptr => ptr.BlockPointerRegionHasDType Γ dtype
@@ -62,7 +62,7 @@ decreasing_by all_goals (simp_wf; try omega)
 /-- Memory-region dtype contract for memory address forms. -/
 def MemAccess.RespectsRegionTyping (Γ : RegionTyping) (dtype : TileDType) :
     MemAccess dtype shape → Prop
-  | .region region off => Γ region = dtype ∧ off.RespectsRegionTyping Γ
+  | .region region off => Γ (Region.cast region) = dtype ∧ off.RespectsRegionTyping Γ
   | .ptr ptr =>
       ptr.RespectsRegionTyping Γ ∧ ptr.PointerRegionsHaveDType Γ dtype
   | .blockPtr ptr _ =>

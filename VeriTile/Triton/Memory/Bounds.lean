@@ -133,7 +133,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
         match mem with
         | .region region off =>
             ∀ offsets, evalOp off s = some offsets →
-              ∀ i : TileIndex shape, mask.Active s i → offsets.data i < bounds region
+              ∀ i : TileIndex shape, mask.Active s i → offsets.data i < bounds (Region.cast region)
         | .ptr ptr =>
             ∀ ptrs, evalOp ptr s = some ptrs →
               ∀ i : TileIndex shape,
@@ -185,7 +185,7 @@ def memAccessActiveAddressSafe {dtype : TileDType} (bounds : RegionBounds)
   match mem with
   | .region region off =>
       ∀ offsets, evalOp off s = some offsets →
-        ∀ i : TileIndex shape, active i → offsets.data i < bounds region
+        ∀ i : TileIndex shape, active i → offsets.data i < bounds (Region.cast region)
   | .ptr ptr =>
       Op.PointerAddressesSafeOn bounds ptr s active
   | .blockPtr ptr boundaryCheck =>

@@ -58,7 +58,7 @@ private noncomputable def stepAtomicRMWRaw
     match mem with
     | .region region off => do
         let offsets ← evalOp off s
-        foldAtomicRMWIndices op (fun _ => region) (fun i => offsets.data i)
+        foldAtomicRMWIndices op (fun _ => Region.cast region) (fun i => offsets.data i)
           (fun i => inputs.data i) extraFn active (TileShape.allIndices shape) s
           (fun _ => BlockState.defaultCarrier dtype)
     | .ptr ptr => do
@@ -123,7 +123,7 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
           let offsets ← evalOp off s
           some ((TileShape.allIndices shape).foldl
             (fun acc i =>
-              if active i then acc.writeMemTyped dtype region (offsets.data i) (writeValue i)
+              if active i then acc.writeMemTyped dtype (Region.cast region) (offsets.data i) (writeValue i)
               else acc) s)
       | .ptr ptr => do
           let ptrs ← evalOp ptr s
@@ -160,8 +160,8 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
           some ((TileShape.allIndices shape).foldl
             (fun acc i =>
               if active i then
-                acc.writeMemTyped dtype region (offsets.data i)
-                  (atomicValue acc region (offsets.data i) i)
+                acc.writeMemTyped dtype (Region.cast region) (offsets.data i)
+                  (atomicValue acc (Region.cast region) (offsets.data i) i)
               else acc) s)
       | .ptr ptr => do
           let ptrs ← evalOp ptr s
@@ -307,7 +307,7 @@ theorem stepStmt_atomicAdd_regs {dtype : TileDType} (hnum : NumericDType dtype)
           cases h
           simpa using
             foldl_atomicAddAt_regs dtype hnum
-              (fun _ : TileIndex shape => region)
+              (fun _ : TileIndex shape => Region.cast region)
               (fun i : TileIndex shape => offsets.data i)
               (fun _ i => values.data i)
               (fun _ : TileIndex shape => true)
@@ -345,7 +345,7 @@ theorem stepStmt_atomicAdd_regs {dtype : TileDType} (hnum : NumericDType dtype)
           cases h
           simpa using
             foldl_atomicAddAt_regs dtype hnum
-              (fun _ : TileIndex shape => region)
+              (fun _ : TileIndex shape => Region.cast region)
               (fun i : TileIndex shape => offsets.data i)
               (fun _ i => values.data i)
               (fun i : TileIndex shape => masks.data i)
@@ -383,7 +383,7 @@ theorem stepStmt_atomicAdd_regs {dtype : TileDType} (hnum : NumericDType dtype)
           cases h
           simpa using
             foldl_atomicAddAt_regs dtype hnum
-              (fun _ : TileIndex shape => region)
+              (fun _ : TileIndex shape => Region.cast region)
               (fun i : TileIndex shape => offsets.data i)
               (fun _ i => values.data i)
               (fun i : TileIndex shape => masks.data i)
@@ -459,7 +459,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
             rename_i offsets
             cases h
             simpa [BlockState.pid] using
-              BlockState.foldl_writeMemTyped_pid dtype region
+              BlockState.foldl_writeMemTyped_pid dtype (Region.cast region)
                 (fun i : TileIndex shape => offsets.data i)
                 (fun i : TileIndex shape => values.data i)
                 (TileShape.allIndices shape) s
@@ -494,7 +494,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
             rename_i offsets
             cases h
             simpa [BlockState.pid] using
-              BlockState.foldl_writeMemTyped_masked_pid dtype region
+              BlockState.foldl_writeMemTyped_masked_pid dtype (Region.cast region)
                 (fun i : TileIndex shape => offsets.data i)
                 (fun i : TileIndex shape => values.data i)
                 (fun i : TileIndex shape => masks.data i)
@@ -531,7 +531,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
             rename_i offsets
             cases h
             simpa [BlockState.pid] using
-              BlockState.foldl_writeMemTyped_masked_pid dtype region
+              BlockState.foldl_writeMemTyped_masked_pid dtype (Region.cast region)
                 (fun i : TileIndex shape => offsets.data i)
                 (fun i : TileIndex shape => values.data i)
                 (fun i : TileIndex shape => masks.data i)
@@ -575,7 +575,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
             cases h
             simpa [BlockState.pid] using
               foldl_atomicAddAt_pid dtype hnum
-                (fun _ : TileIndex shape => region)
+                (fun _ : TileIndex shape => Region.cast region)
                 (fun i : TileIndex shape => offsets.data i)
                 (fun _ i => values.data i)
                 (fun _ : TileIndex shape => true)
@@ -613,7 +613,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
             cases h
             simpa [BlockState.pid] using
               foldl_atomicAddAt_pid dtype hnum
-                (fun _ : TileIndex shape => region)
+                (fun _ : TileIndex shape => Region.cast region)
                 (fun i : TileIndex shape => offsets.data i)
                 (fun _ i => values.data i)
                 (fun i : TileIndex shape => masks.data i)
@@ -651,7 +651,7 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
             cases h
             simpa [BlockState.pid] using
               foldl_atomicAddAt_pid dtype hnum
-                (fun _ : TileIndex shape => region)
+                (fun _ : TileIndex shape => Region.cast region)
                 (fun i : TileIndex shape => offsets.data i)
                 (fun _ i => values.data i)
                 (fun i : TileIndex shape => masks.data i)

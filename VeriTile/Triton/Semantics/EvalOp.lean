@@ -117,14 +117,14 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .remap _ map a, s => return Tile.remap map (← evalOp a s)
   | .join a b, s => return Tile.join (← evalOp a s) (← evalOp b s)
   | .split side a, s => return Tile.split side (← evalOp a s)
-  | .ptrBase region, _ => some (Tile.scalar (region, 0))
+  | .ptrBase region, _ => some (Tile.scalar (Region.cast region, 0))
   | .ptrAdd bc ptr off, s => do
       let ptrs ← evalOp ptr s
       let offs ← evalOp off s
       some (Tile.ptrAdd bc ptrs offs)
   | .makeBlockPtr region baseOffset parentShape blockShape strides offsets, _ =>
       some ⟨fun _ =>
-        { region := region
+        { region := Region.cast region
         , baseOffset := baseOffset
         , parentShape := parentShape
         , blockShape := blockShape
@@ -138,7 +138,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
         match mem with
         | .region region off => do
             let offsets ← evalOp off s
-            some fun i => (region, offsets.data i, true)
+            some fun i => (Region.cast region, offsets.data i, true)
         | .ptr ptr => do
             let ptrs ← evalOp ptr s
             some fun i =>

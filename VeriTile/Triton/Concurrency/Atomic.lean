@@ -102,7 +102,7 @@ noncomputable def atomicTraceEvents (tid : ThreadId) (s : BlockState) : Stmt →
           let offsets ← evalOp off s
           some <| (TileShape.allIndices shape).filterMap fun i =>
             if active i then
-              some (atomicTraceEvent tid region (offsets.data i) dtype (values.data i))
+              some (atomicTraceEvent tid (Region.cast region) (offsets.data i) dtype (values.data i))
             else
               none
       | .ptr ptr => do
@@ -134,7 +134,7 @@ noncomputable def atomicTraceEvents (tid : ThreadId) (s : BlockState) : Stmt →
         match mem with
         | .region region off => do
             let offsets ← evalOp off s
-            foldAtomicRMWTraceIndices tid op (fun _ => region) (fun i => offsets.data i)
+            foldAtomicRMWTraceIndices tid op (fun _ => Region.cast region) (fun i => offsets.data i)
               (fun i => inputs.data i) extraFn active (TileShape.allIndices shape) s
         | .ptr ptr => do
             let ptrs ← evalOp ptr s
@@ -164,7 +164,9 @@ theorem atomicTraceEvents_atomicAdd_region_none
     (hOffsets : evalOp off s = some offsets)
     (hValues : evalOp value s = some values) :
     Stmt.atomicTraceEvents tid s
-        (Stmt.atomicAdd hnum shape (MemAccess.region region off) value MaskOpt.none) =
+        (Stmt.atomicAdd hnum shape
+          (MemAccess.region (d := dtype) (Region.cast (d' := dtype) region) off)
+          value MaskOpt.none) =
       some ((TileShape.allIndices shape).filterMap fun i =>
         some (Stmt.atomicTraceEvent tid region (offsets.data i) dtype (values.data i))) := by
   simp [atomicTraceEvents, evalMask, hOffsets, hValues]
@@ -196,7 +198,8 @@ theorem atomicTraceEvents_atomicAdd_region_none_of_reg_refs
     (hValues : s.regs dtype shape valueName = some values) :
     Stmt.atomicTraceEvents tid s
         (Stmt.atomicAdd hnum shape
-          (MemAccess.region region (Op.ref .nat shape ptrName))
+          (MemAccess.region (d := dtype) (Region.cast (d' := dtype) region)
+            (Op.ref .nat shape ptrName))
           (Op.ref dtype shape valueName) MaskOpt.none) =
       some ((TileShape.allIndices shape).filterMap fun i =>
         some (Stmt.atomicTraceEvent tid region (offsets.data i) dtype (values.data i))) := by
@@ -219,7 +222,8 @@ theorem atomicTraceEvents_atomicAdd_region_mask_of_reg_refs
     (hMasks : s.regs .bool shape maskName = some masks) :
     Stmt.atomicTraceEvents tid s
         (Stmt.atomicAdd hnum shape
-          (MemAccess.region region (Op.ref .nat shape ptrName))
+          (MemAccess.region (d := dtype) (Region.cast (d' := dtype) region)
+            (Op.ref .nat shape ptrName))
           (Op.ref dtype shape valueName)
           (MaskOpt.mask (Op.ref .bool shape maskName))) =
       some ((TileShape.allIndices shape).filterMap fun i =>

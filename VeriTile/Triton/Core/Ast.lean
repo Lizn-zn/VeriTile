@@ -9,6 +9,8 @@ import VeriTile.Triton.Core.Shape
 
 namespace VeriTile.Triton
 
+set_option linter.unusedVariables false
+
 /-
 P1 Triton expressions.
 
@@ -204,13 +206,13 @@ inductive Op : TileDType → TileShape → Type where
                 (axis : Fin (shape.length + 1)) →
                 Op dtype shape →
                 Op dtype (TileShape.insertAxis shape axis 1)
-  | ptrBase   : (region : RegionName) → Op .ptr []
-  | ptrAdd    : Broadcast a b out → Op .ptr a → Op .nat b → Op .ptr out
-  | makeBlockPtr : (region : RegionName) → (baseOffset : Nat) →
+  | ptrBase   : {d : TileDType} → (region : Region d) → Op .ptr []
+  | ptrAdd    : {d : TileDType} → Broadcast a b out → Op .ptr a → Op .nat b → Op .ptr out
+  | makeBlockPtr : {d : TileDType} → (region : Region d) → (baseOffset : Nat) →
                 (parentShape : List Nat) → (blockShape : TileShape) →
                 (strides offsets : List Nat) →
                 Op .blockPtr blockShape
-  | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
+  | advanceBlockPtr : {d : TileDType} → Op .blockPtr shape → (offsetDeltas : List Nat) → Op .blockPtr shape
   | load      : (dtype : TileDType) → MemAccess dtype shape →
                 MaskOpt dtype shape → Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
@@ -218,17 +220,13 @@ inductive Op : TileDType → TileShape → Type where
 /-- Memory address form shared by load and store nodes.
 
 The `d` index records the access's element dtype (the channel `Op.load`
-returns / `Stmt.store` writes). Region constructors take the legacy
-`RegionName` (= `Region .real`) for now: most kernels operate on real
-buffers, and routing typed regions through the AST is staged behind the
-DSL surface (Phase 2) and the per-kernel migration (Phase 3). Phase 1
-has plumbed the typed `Region (d)` through `Op.ptrBase` /
-`Op.makeBlockPtr` only, so non-real kernels can already declare typed
-pointer-base regions. -/
+returns / `Stmt.store` writes). Direct regions carry the same phantom dtype.
+Pointer and block-pointer carriers keep their flat runtime dtype tags, but
+their constructors carry the element dtype as an implicit phantom argument. -/
 inductive MemAccess : (d : TileDType) → TileShape → Type where
-  | region : (region : RegionName) → (offset : Op .nat shape) → MemAccess d shape
-  | ptr : Op .ptr shape → MemAccess d shape
-  | blockPtr : Op .blockPtr shape → (boundaryCheck : List Nat) → MemAccess d shape
+  | region : (region : Region d) → (offset : Op .nat shape) → MemAccess d shape
+  | ptr : {d : TileDType} → Op .ptr shape → MemAccess d shape
+  | blockPtr : {d : TileDType} → Op .blockPtr shape → (boundaryCheck : List Nat) → MemAccess d shape
 
 /-- Optional mask/other clause for Triton memory operations. -/
 inductive MaskOpt : TileDType → TileShape → Type where
