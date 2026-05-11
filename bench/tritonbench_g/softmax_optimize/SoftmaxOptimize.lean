@@ -13,8 +13,8 @@ open VeriTile.Triton
 The wrapper sets `TILE_N = min(4096, next_power_of_2(N))`; the benchmark cases
 use `N ∈ {128, 512, 1024}`, so `N <= TILE_N` and the dynamic online loops
 collapse to one masked row tile. This surface keeps that tested path: load with
-`-inf`, compute stable softmax, and store the row. The online recurrence over
-multiple tiles remains future work. -/
+`-inf`, cast to the output element dtype, compute stable softmax, and store the
+row. The online recurrence over multiple tiles remains future work. -/
 def softmax_kernel_online_v2_one_tile
     (output_ptr input_ptr : RegionName)
     (N TILE_N : Nat) :
@@ -24,7 +24,7 @@ def softmax_kernel_online_v2_one_tile
   offset = pid_m * $(N) + n_offsets
   mask = n_offsets < $(N)
   input_ptrs = input_ptr + offset
-  inp = tl.load(input_ptrs, mask=mask, other=-inf)
+  inp = tl.load(input_ptrs, mask=mask, other=-inf).to(output_ptr.dtype.element_ty)
   m = tl.max(inp, axis=0)
   e = tl.exp(inp - m)
   z = tl.sum(e, axis=0)
