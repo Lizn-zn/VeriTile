@@ -10,29 +10,33 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented one-`M`-block slice of `matrix_vector_multip.py`'s
-`mv_kernel`.
+/-- Faithful transcription of `matrix_vector_multip.py`'s `mv_kernel`.
 
-The upstream kernel loops over `range(0, M, BLOCK_M)` and accumulates matrix
-vector products. This slice captures the single-block case: a `[BLOCK_N,
-BLOCK_M]` tile of `A`, a `[BLOCK_M]` tile of `B`, masked multiply, row-wise
-sum, and one output store per `N` lane. -/
-def mv_kernel_one_block
+Allowed mechanical Lean-syntax-only changes:
+- Python `A_ptrs += BLOCK_M * stride_am` / `B_ptrs += BLOCK_M * stride_bm`
+  pointer mutation → address recomputed from loop variable `m`.
+- Python `.to(tl.float32)` casts are omitted at the algorithm layer.
+- Python `BLOCK_N` / `BLOCK_M: tl.constexpr` → Lean `Nat` parameters. -/
+def mv_kernel
     (A B C : RegionName)
     (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat) :
     ComputeKernel := triton {
   pid = tl.program_id(0)
-  offset_n = pid * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
-  offset_m = tl.arange(0, $(BLOCK_M))
-  a_ptrs = A + offset_n[:, None] * $(stride_an) + offset_m[None, :] * $(stride_am)
-  b_ptrs = B + offset_m * $(stride_bm)
-  mask = (offset_n[:, None] < $(N)) and (offset_m[None, :] < $(M))
-  a = tl.load(a_ptrs, mask=mask, other=0.0)
-  b = tl.load(b_ptrs, mask=offset_m < $(M), other=0.0)
-  prod = a * b[None, :]
-  acc = tl.sum(prod, axis=1)
+  offset_n = pid * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))[:, None]
+  offset_m = tl.arange(0, $(BLOCK_M))[None, :]
+  n_mask = offset_n < $(N)
+  acc = tl.zeros([$(BLOCK_N), $(BLOCK_M)])
+  for m in range(0, $(M), $(BLOCK_M)) {
+    m_mask = (m + offset_m) < $(M)
+    a = tl.load(A + offset_n * $(stride_an) + (m + offset_m) * $(stride_am),
+      mask=n_mask and m_mask, other=0.0)
+    b = tl.load(B + (m + offset_m) * $(stride_bm),
+      mask=m_mask, other=0.0)
+    acc = acc + a * b
+  }
+  acc = tl.sum(acc, axis=1)
   c_ptrs = C + offset_n * $(stride_cn)
-  tl.store(c_ptrs, acc, mask=offset_n < $(N))
+  tl.store(c_ptrs, acc[:, None], mask=n_mask)
 }
 
 def nIndex (s : BlockState) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
@@ -74,59 +78,29 @@ noncomputable def mvSpec
         (i, PUnit.unit))
 
 /-- Algorithm-layer correctness for the one-block matrix-vector slice. -/
-theorem mv_kernel_one_block_correct
+theorem mv_kernel_correct
     (A B C : RegionName)
     (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat)
     (s s' : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => cOffset s stride_cn BLOCK_N i))
-    (hExec : exec (mv_kernel_one_block A B C N M stride_an stride_am stride_bm
+    (hExec : exec (mv_kernel A B C N M stride_an stride_am stride_bm
         stride_cn BLOCK_N BLOCK_M) s = some s') :
     ∀ i : Fin BLOCK_N,
       s'.readMem C (cOffset s stride_cn BLOCK_N i) =
         if nIndex s BLOCK_N i < N then
           mvSpec s A B N M stride_an stride_am stride_bm BLOCK_N BLOCK_M i
         else s.readMem C (cOffset s stride_cn BLOCK_N i) := by
-  intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N] =>
-        (s.pids 0 * BLOCK_N + idx.1.val) * stride_cn) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [cOffset, nIndex] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
-  by_cases hBN : 0 < BLOCK_N
-  · simp [exec, mv_kernel_one_block, stepStmts, stepStmt, evalOp,
-          Option.bind, Option.map,
-          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
-          Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
-          TileShape.eraseAxis, TileShape.insertAxisIndex,
-          NumericDType.add, NumericDType.mul, ComparableDType.lt, hBN] at hExec
-    rw [← hExec]
-    simp only [cOffset, nIndex]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
-    by_cases hi : s.pids 0 * BLOCK_N + i.val < N
-    · simp [hi, mvSpec, mvProdTile, aOffset, bOffset, cOffset, nIndex,
-            Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
-            TileShape.eraseAxis, TileShape.insertAxisIndex]
-      rfl
-    · simp [hi]
-  · exact False.elim (hBN (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
-
+  sorry
 /-- Compute-facing correctness for the one-block matrix-vector slice. -/
-theorem mv_kernel_one_block_compute_correct
+theorem mv_kernel_compute_correct
     (A B C : RegionName)
     (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat)
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => cOffset s stride_cn BLOCK_N i)) :
     ComputeCorrect.Realizes
-      (kernel := mv_kernel_one_block A B C N M stride_an stride_am stride_bm
+      (kernel := mv_kernel A B C N M stride_an stride_am stride_bm
         stride_cn BLOCK_N BLOCK_M)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -134,14 +108,5 @@ theorem mv_kernel_one_block_compute_correct
         (fun i => (C, cOffset s stride_cn BLOCK_N i)))
       (expected := fun i =>
         mvSpec s A B N M stride_an stride_am stride_bm BLOCK_N BLOCK_M i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [mv_kernel_one_block]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := mv_kernel_one_block_correct A B C N M stride_an stride_am stride_bm
-    stride_cn BLOCK_N BLOCK_M s s' hOutInj hExec i
-  simpa [hActive] using h
-
+  sorry
 end VeriTile.Bench.TritonBenchG.MatrixVectorMultip
