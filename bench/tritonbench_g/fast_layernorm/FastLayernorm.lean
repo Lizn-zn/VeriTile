@@ -12,12 +12,7 @@ set_option maxHeartbeats 5000000
 /-- Faithful transcription of `fast_layernorm.py`'s `layernorm_forward`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
-- Python pointer mutation `Y += ...` / `X += ...` / `r += ...` / `mu += ...`
-  -> explicit base pointer registers.
-- Python `.to(...)` casts are omitted at the algorithm layer.
-- Python scalar division by `n_cols` is written as division by
-  `tl.toReal($(n_cols))` to make the algorithm-layer dtype explicit. -/
+- Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter. -/
 def layernorm_forward
     (Y X W bias r mu : RegionName)
     (Y_row_stride X_row_stride n_cols : Nat)
@@ -27,23 +22,23 @@ def layernorm_forward
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
 
-  Y_base = Y + row_idx * $(Y_row_stride)
-  X_base = X + row_idx * $(X_row_stride)
-  r_base = r + row_idx
-  mu_base = mu + row_idx
+  Y += row_idx * $(Y_row_stride)
+  X += row_idx * $(X_row_stride)
+  r += row_idx
+  mu += row_idx
 
-  X_row = tl.load(X_base + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  W_row = tl.load(W + col_offsets, mask=mask, other=0.0)
-  b_row = tl.load(bias + col_offsets, mask=mask, other=0.0)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  W_row = tl.load(W + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  b_row = tl.load(bias + col_offsets, mask=mask, other=0.0).to(tl.float32)
 
-  mean_X = tl.sum(X_row, axis=0) / tl.toReal($(n_cols))
+  mean_X = tl.sum(X_row, axis=0) / $(n_cols)
   XX = X_row - mean_X
-  row_var = tl.sum(XX * XX, axis=0) / tl.toReal($(n_cols))
+  row_var = tl.sum(XX * XX, axis=0) / $(n_cols)
   inv_var = tl.math.rsqrt(row_var + $(eps))
-  tl.store(r_base, inv_var)
-  tl.store(mu_base, mean_X)
+  tl.store(r, inv_var)
+  tl.store(mu, mean_X)
   output = (XX * inv_var) * W_row + b_row
-  tl.store(Y_base + col_offsets, output, mask=mask)
+  tl.store(Y + col_offsets, output, mask=mask)
 }
 
 noncomputable def layernormInputTile
@@ -56,10 +51,9 @@ noncomputable def layernormInputTile
 noncomputable def layernormMeanCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
     WithBot ℝ :=
-  Option.map₂ (fun a n => a / n)
+  Option.map (fun a => a / (n_cols : ℝ))
     ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
       (layernormInputTile s X X_row_stride n_cols BLOCK_SIZE)).data PUnit.unit)
-    ((Tile.scalar n_cols).natToReal.data PUnit.unit)
 
 noncomputable def layernormCenteredTile
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
@@ -72,20 +66,18 @@ noncomputable def layernormCenteredTile
 noncomputable def layernormVarCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
     WithBot ℝ :=
-  Option.map₂ (fun a n => a / n)
+  Option.map (fun a => a / (n_cols : ℝ))
     ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
       (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
         (layernormCenteredTile s X X_row_stride n_cols BLOCK_SIZE)
         (layernormCenteredTile s X X_row_stride n_cols BLOCK_SIZE))).data PUnit.unit)
-    ((Tile.scalar n_cols).natToReal.data PUnit.unit)
 
 noncomputable def layernormInvVarCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
     (eps : ℝ) : WithBot ℝ :=
-  Option.map (fun b => b⁻¹)
-    (WithBot.realSqrt
-      (Option.map (fun a => a + eps)
-        (layernormVarCarrier s X X_row_stride n_cols BLOCK_SIZE)))
+  WithBot.realRsqrt
+    (Option.map (fun a => a + eps)
+      (layernormVarCarrier s X X_row_stride n_cols BLOCK_SIZE))
 
 noncomputable def layernormYSpec
     (s : BlockState) (X W bias : RegionName)
@@ -138,7 +130,8 @@ theorem layernorm_forward_y_correct
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
           NumericDType.sub, NumericDType.div, ComparableDType.lt,
-          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot] at hExec
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [yOutOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -147,7 +140,7 @@ theorem layernorm_forward_y_correct
             layernormCenteredTile, layernormMeanCarrier, layernormInputTile,
             Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
             TileShape.eraseAxis, TileShape.insertAxisIndex,
-            WithBot.realSqrt, NumericDType.mul]
+            WithBot.realRsqrt, NumericDType.mul]
       rfl
     · simp [hi, BlockState.writeMem_readMem, hYr, hYmu]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
@@ -171,7 +164,7 @@ theorem layernorm_forward_y_compute_correct
         layernormYSpec s X W bias X_row_stride n_cols BLOCK_SIZE eps i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [layernorm_forward]
+  · simp [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive
