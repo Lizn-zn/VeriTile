@@ -10,6 +10,31 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `var_len_copy.py`'s `var_len_copy_kernel_triton`.
+
+Allowed mechanical Lean-syntax-only change:
+- The Python test creates the start/length metadata as `int32`; the current
+  pointer-offset path consumes the metadata as a Nat channel, so the `tl.region`
+  directives use unsigned integer metadata for those three buffers. -/
+def var_len_copy_kernel_triton
+    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  tl.region old_a_len = tl.uint64, old_a_start = tl.uint64, new_a_start = tl.uint64
+  a_id = tl.program_id(0)
+  length = tl.load(old_a_len + a_id)
+  old_start = tl.load(old_a_start + a_id)
+  new_start = tl.load(new_a_start + a_id)
+  old_offset = tl.arange(0, $(BLOCK_SIZE))
+  new_offset = tl.arange(0, $(BLOCK_SIZE))
+  for i in range($(0), length, $(BLOCK_SIZE)) {
+    v = tl.load(old_a_location + old_start + i + old_offset,
+      mask=old_offset < length, other=0.0)
+    tl.store(new_a_location + new_start + i + new_offset, v,
+      mask=new_offset < length)
+  }
+}
+
 /-- Proof-oriented one-chunk slice of `var_len_copy.py`'s
 `var_len_copy_kernel_triton`.
 
@@ -32,9 +57,9 @@ def var_len_copy_one_chunk
   offset = tl.arange(0, $(BLOCK_SIZE))
   chunk_base = $(chunk) * $(BLOCK_SIZE)
   v = tl.load(old_a_location + old_start + chunk_base + offset,
-    mask=chunk_base + offset < length, other=0.0)
+    mask=offset < length, other=0.0)
   tl.store(new_a_location + new_start + chunk_base + offset, v,
-    mask=chunk_base + offset < length)
+    mask=offset < length)
 }
 
 def preStoreState
@@ -52,7 +77,7 @@ def preStoreState
     (Tile.scalar (chunk * BLOCK_SIZE))
   s6.setReg "v" TileDType.real [BLOCK_SIZE]
     { data := fun i =>
-      if chunk * BLOCK_SIZE + i.1.val < s.readMemValue .nat old_a_len (s.pids 0) then
+      if i.1.val < s.readMemValue .nat old_a_len (s.pids 0) then
         some (s.readMem old_a_location
           (s.readMemValue .nat old_a_start (s.pids 0) + chunk * BLOCK_SIZE + i.1.val))
       else some (0.0 : ℝ) }
@@ -69,9 +94,9 @@ def oldStart (s : BlockState) (old_a_start : RegionName) : Nat :=
 def newStart (s : BlockState) (new_a_start : RegionName) : Nat :=
   s.readMemValue .nat new_a_start (s.pids 0)
 
-def active (s : BlockState) (old_a_len : RegionName) (chunk BLOCK_SIZE : Nat)
+def active (s : BlockState) (old_a_len : RegionName) (_chunk BLOCK_SIZE : Nat)
     (i : Fin BLOCK_SIZE) : Prop :=
-  laneOffset chunk BLOCK_SIZE i < segmentLength s old_a_len
+  i.val < segmentLength s old_a_len
 
 instance activeDecidable
     (s : BlockState) (old_a_len : RegionName) (chunk BLOCK_SIZE : Nat)
@@ -136,15 +161,13 @@ theorem var_len_copy_one_chunk_correct
             idx.1.val)
         (valueFn := fun idx : TileIndex [BLOCK_SIZE] =>
           WithBot.unbotD 0
-            (if chunk * BLOCK_SIZE + idx.1.val <
-                s.readMemValue .nat old_a_len (s.pids 0) then
+            (if idx.1.val < s.readMemValue .nat old_a_len (s.pids 0) then
               some (s.readMem old_a_location
                 (s.readMemValue .nat old_a_start (s.pids 0) +
                   chunk * BLOCK_SIZE + idx.1.val))
             else some (0.0 : ℝ)))
         (P := fun idx : TileIndex [BLOCK_SIZE] =>
-          chunk * BLOCK_SIZE + idx.1.val <
-            s.readMemValue .nat old_a_len (s.pids 0))
+          idx.1.val < s.readMemValue .nat old_a_len (s.pids 0))
         hRawInj (i, PUnit.unit))
     simp [preStoreState, BlockState.readMemValue] at hScatter
     simp only [destOffset, sourceOffset, active, segmentLength, oldStart,
