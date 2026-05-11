@@ -10,6 +10,54 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `layer_norm_liger.py`'s
+`_layer_norm_backward_kernel`.
+
+This preserves the row-block loop, `DX` writeback, accumulated `DW`/`DB`
+partials, pointer increments, and target dtype casts. -/
+def layer_norm_liger_backward_surface
+    (X W Mean RSTD DX DW DB DY : RegionName)
+    (stride_x stride_dx stride_dw stride_db stride_dy
+      n_rows n_cols rows_per_program BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row_block_id = tl.program_id(axis=0)
+  row_start = row_block_id * $(rows_per_program)
+  row_end = tl.minimum((row_block_id + $(1)) * $(rows_per_program), $(n_rows))
+  cols = tl.arange(0, $(BLOCK_SIZE))
+  mask = cols < $(n_cols)
+  dw_row = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  db_row = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  X += row_start * $(stride_x)
+  Mean += row_start
+  RSTD += row_start
+  DX += row_start * $(stride_dx)
+  DY += row_start * $(stride_dy)
+  for _row in range(row_start, row_end, $(1)) {
+    x = tl.load(X + cols, mask=mask, other=0.0)
+    w = tl.load(W + cols, mask=mask, other=0.0)
+    dy = tl.load(DY + cols, mask=mask, other=0.0)
+    mean = tl.load(Mean)
+    rstd = tl.load(RSTD)
+    x_hat = (x - mean) * rstd
+    wdy = w * dy
+    c1 = tl.sum(x_hat * wdy, axis=0) / $(n_cols)
+    c2 = tl.sum(wdy, axis=0) / $(n_cols)
+    dx = (wdy - (x_hat * c1 + c2)) * rstd
+    tl.store(DX + cols, (dx).to(DX.dtype.element_ty), mask=mask)
+    dw_row += dy * x_hat
+    db_row += dy
+    X += $(stride_x)
+    Mean += $(1)
+    RSTD += $(1)
+    DX += $(stride_dx)
+    DY += $(stride_dy)
+  }
+  tl.store(DW + row_block_id * $(stride_dw) + cols,
+    (dw_row).to(DW.dtype.element_ty), mask=mask)
+  tl.store(DB + row_block_id * $(stride_db) + cols,
+    (db_row).to(DB.dtype.element_ty), mask=mask)
+}
+
 /-- Proof-oriented forward slice of `layer_norm_liger.py`'s
 `_layer_norm_forward_kernel`.
 
