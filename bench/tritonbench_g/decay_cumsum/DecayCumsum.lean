@@ -9,14 +9,79 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `decay_cumsum.py`'s `fwd_decay_cumsum`.
+
+This preserves the program-id decomposition, row base pointers, `BK` lane mask,
+float32 accumulator, per-row cumulative update by `inv_ln2`, output dtype cast,
+and `DK` pointer increments through the `BT` loop. -/
+def fwd_decay_cumsum_surface
+    (G GO : RegionName)
+    (s_qk_h DK BT BK : Nat) :
+    ComputeKernel := triton {
+  i_k = tl.program_id(axis=0)
+  i_c = tl.program_id(axis=1)
+  i_bh = tl.program_id(axis=2)
+  offs = tl.arange(0, $(BK))
+  p_g = G + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
+  p_go = GO + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
+  cum_decay = tl.zeros([$(BK)], dtype=tl.float32)
+  mask = (i_k * $(BK) + offs) < $(DK)
+  for _i in range($(0), $(BT), $(1)) {
+    g_val = tl.load(p_g, mask=mask, other=0.0).to(tl.float32)
+    cum_decay += g_val * 1.44269504
+    tl.store(p_go, (cum_decay).to(GO.dtype.element_ty), mask=mask)
+    p_g += $(DK)
+    p_go += $(DK)
+  }
+}
+
+/-- Surface transcription of `decay_cumsum.py`'s `prepare_qg_kg`.
+
+This preserves the shared q/k/g row addressing, masked loads, `last_decay`
+load, exp2 decay factors, `scale` multiplication for `qg`, dtype-cast stores,
+and `DK` pointer increments through the `BT` loop. The backward kernel in the
+same Python file still needs signed negative-step loop support because it uses
+`range(BT-1, -1, -1)` and pointer decrements. -/
+def prepare_qg_kg_surface
+    (Q K G QG KG : RegionName)
+    (s_qk_h DK BT BK : Nat)
+    (scale : ℝ) :
+    ComputeKernel := triton {
+  i_k = tl.program_id(axis=0)
+  i_c = tl.program_id(axis=1)
+  i_bh = tl.program_id(axis=2)
+  offs = tl.arange(0, $(BK))
+  p_q = Q + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
+  p_g = G + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
+  p_k = K + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
+  p_qg = QG + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
+  p_kg = KG + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
+  mask = (i_k * $(BK) + offs) < $(DK)
+  last_decay = tl.load(G + i_bh * $(s_qk_h) +
+    (i_c * $(BT) + $(BT) - $(1)) * $(DK) + i_k * $(BK) + offs)
+  for _i in range($(0), $(BT), $(1)) {
+    q_val = tl.load(p_q, mask=mask, other=0.0)
+    k_val = tl.load(p_k, mask=mask, other=0.0)
+    g_val = tl.load(p_g, mask=mask, other=0.0).to(tl.float32)
+    q_val = q_val * tl.math.exp2(g_val) * $(scale)
+    k_val = k_val * tl.math.exp2(last_decay - g_val)
+    tl.store(p_kg, (k_val).to(KG.dtype.element_ty), mask=mask)
+    tl.store(p_qg, (q_val).to(QG.dtype.element_ty), mask=mask)
+    p_q += $(DK)
+    p_g += $(DK)
+    p_k += $(DK)
+    p_kg += $(DK)
+    p_qg += $(DK)
+  }
+}
+
 /-- Proof-oriented masked qg writeback slice of `decay_cumsum.py`'s
 `prepare_qg_kg`.
 
-The full kernel computes `tl.math.exp2(_g) * scale` inside a `BT` loop and also
-writes `kg`. VeriTile's current arithmetic layer does not model that exp2
-operation directly, so this slice fixes one loop row `t_rel`, starts from a
-precomputed `QDecay` multiplier, and proves the masked `qg = q * decay`
-writeback over the `BK` vector. -/
+The full forward surface above records the exp2/scale computation and the `kg`
+writeback. This slice fixes one loop row `t_rel`, starts from a precomputed
+`QDecay` multiplier, and proves the masked `qg = q * decay` writeback over the
+`BK` vector. -/
 def prepare_qg_decay_store_slice
     (Q QDecay QG : RegionName)
     (s_qk_h DK t_rel BT BK : Nat) :
