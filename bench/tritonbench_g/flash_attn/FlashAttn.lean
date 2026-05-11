@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `flash_attn.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `flash_attn.py`'s
 `_fwd_kernel`.
 
 The full kernel streams over K/V blocks, computes a numerically stable attention
@@ -32,6 +32,25 @@ def flash_attn_output_store_slice
   tl.store(O + off_bs_head * $(stride_q_head) +
       offs_m[:, None] * $(stride_o_seqlen) + offs_d[None, :] * $(stride_o_dim),
       out_buffer)
+}
+
+/-- Surface transcription of `flash_attn.py`'s final `L` vector store.
+
+The full kernel computes the streaming row max and denominator, then stores
+`max + tl.math.log2(denom)` into `L + off_bs_head * SEQLEN + off_m`. This
+surface starts from precomputed `Max` and `Denom` row tiles and preserves that
+addressing. -/
+def flash_attn_l_store_slice
+    (Max Denom L : RegionName)
+    (stride_max_h stride_max_m stride_den_h stride_den_m
+      SEQLEN BLOCK_M : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(axis=0)
+  off_bs_head = tl.program_id(axis=1)
+  off_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  max_row = tl.load(Max + off_bs_head * $(stride_max_h) + off_m * $(stride_max_m))
+  denom = tl.load(Denom + off_bs_head * $(stride_den_h) + off_m * $(stride_den_m))
+  tl.store(L + off_bs_head * $(SEQLEN) + off_m, max_row + tl.log2(denom))
 }
 
 def mIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
