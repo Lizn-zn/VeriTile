@@ -1407,4 +1407,25 @@ def rangeAccumKernel (xReg : RegionName) (N BLOCK_SIZE : Nat) :
 
 #check rangeAccumKernel
 
+/-! ### `dtype=tl.float32` on `tl.zeros` / `tl.full` smoke tests -/
+
+def fp32ZerosKernel (xReg : RegionName) (N BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  _var = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  x = tl.load(xReg + pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))).to(tl.float32)
+  _var = _var + x * x
+  tl.store(xReg + pid, tl.sum(_var, axis=0))
+}
+
+def fp32FullKernel (outReg : RegionName) (N : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  v = tl.full([$(N)], 1.0, dtype=tl.float32)
+  tl.store(outReg + pid * $(N) + tl.arange(0, $(N)), v)
+}
+
+#check fp32ZerosKernel
+#check fp32FullKernel
+
 end VeriTile.Examples.TritonSmoke

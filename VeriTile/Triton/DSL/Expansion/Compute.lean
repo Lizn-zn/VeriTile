@@ -449,12 +449,22 @@ tile). The shape list may be any rank including empty (which degenerates
 to the scalar value itself, matching `Op.full shape (Op.const v) = v`
 for `shape = []`). -/
 partial def expandFull (expandExpr : ExprExpander) (env : Env)
-    (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr) :
+    (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr)
+    (dtypeHint : Option DInfo := none) :
     MacroM EOut := do
-  let v' ←
-    match ← expandLeanAntiquoteAs? .real v with
+  let targetDType := dtypeHint.getD .real
+  let v'' ←
+    match ← expandLeanAntiquoteAs? targetDType v with
     | some out => pure out
     | none => expandExpr env v
+  let v' ←
+    if let some hint := dtypeHint then
+      if v''.dtype == .real && hint != .real then
+        let srcProof ← DInfo.floatProof .real
+        let dstProof ← hint.floatProof
+        pure ⟨← `(Op.castFloat $srcProof $dstProof $v''.term), hint, v''.shape, none⟩
+      else pure v''
+    else pure v''
   -- Value must be a scalar; tile-shaped values aren't broadcast here.
   match v'.shape with
   | .dims [] => pure ()

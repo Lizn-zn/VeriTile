@@ -127,8 +127,8 @@ syntax "tl.flip(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.join(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.split(" tritonExpr ", " num ")" : tritonExpr
 
-syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ")" : tritonExpr
-syntax "tl.zeros(" "[" tritonExpr,* "]" ")" : tritonExpr
+syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
+syntax "tl.zeros(" "[" tritonExpr,* "]" ("," tritonMemKwarg)* ")" : tritonExpr
 
 syntax:50 tritonExpr:51 " < "  tritonExpr:51 : tritonExpr
 syntax:50 tritonExpr:51 " <= " tritonExpr:51 : tritonExpr

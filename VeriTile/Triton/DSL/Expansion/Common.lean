@@ -46,12 +46,15 @@ def expandLeanAntiquoteAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
       let out ←
         match dtype with
         | .real => pure (← `(Op.const $t), .real)
+        | .fp32 => pure (← `(Op.constFloat FloatDType.fp32 $t), .fp32)
+        | .fp16 => pure (← `(Op.constFloat FloatDType.fp16 $t), .fp16)
+        | .bf16 => pure (← `(Op.constFloat FloatDType.bf16 $t), .bf16)
         | .nat => pure (← `(Op.constNat $t), .nat)
         | .int => pure (← `(Op.constInt $t), .int)
         | .bool => pure (← `(Op.constBool $t), .bool)
         | _ =>
             Macro.throwError
-              "$(...): Lean antiquotation can only be inferred as real/nat/int/bool in the current context"
+              "$(...): Lean antiquotation can only be inferred as real/nat/int/bool/float in the current context"
       pure (some ⟨out.1, out.2, SInfo.scalar, none⟩)
   | _ => pure none
 

@@ -72,6 +72,16 @@ namespace VeriTile.Triton.DSL
 
 /-! ## Expansion -/
 
+def extractDTypeKwarg (kwargs : TSyntaxArray `tritonMemKwarg) :
+    MacroM (Option DInfo) := do
+  for kw in kwargs do
+    match kw with
+    | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
+        if name.getId.toString == "dtype" then
+          return some (← expandDType dt)
+    | _ => pure ()
+  return none
+
 def parseMaxReturnIndicesKwargs (dims : List (TSyntax `term))
     (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM Nat := do
   let mut seenAxis : Bool := Bool.false
@@ -540,12 +550,13 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandJoin expandExpr env a b
   | `(tritonExpr| tl.split($e:tritonExpr, $side:num)) => do
       expandSplit expandExpr env e side.getNat
-  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr)) => do
-      expandFull expandExpr env dims.getElems v
-  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*])) => do
-      -- `tl.zeros([dims])` ≡ `tl.full([dims], 0)`.
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
+      let dtypeHint ← extractDTypeKwarg kwargs
+      expandFull expandExpr env dims.getElems v dtypeHint
+  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*] $[, $kwargs:tritonMemKwarg]*)) => do
+      let dtypeHint ← extractDTypeKwarg kwargs
       let zero ← `(tritonExpr| 0)
-      expandFull expandExpr env dims.getElems zero
+      expandFull expandExpr env dims.getElems zero dtypeHint
   | _ => (Macro.throwUnsupported : MacroM EOut)
 
 end
