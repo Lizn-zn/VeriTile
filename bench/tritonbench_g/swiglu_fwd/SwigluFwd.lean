@@ -11,23 +11,21 @@ open VeriTile.Triton
 /-- Faithful transcription of `swiglu_fwd.py`'s `_swiglu_fwd_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `BLOCK_N: tl.constexpr` → Lean `Nat` parameter.
-- Python pointer mutation `X += ...` / `Y += ...` / `OUT += ...` →
-  explicit base pointer registers. -/
+- Python `BLOCK_N: tl.constexpr` → Lean `Nat` parameter. -/
 def swiglu_fwd_kernel
     (X Y OUT : RegionName)
     (stride_x_row stride_y_row stride_out_row ncols BLOCK_N : Nat) :
     ComputeKernel := triton {
   row = tl.program_id(0)
   start_col = tl.program_id(1) * $(BLOCK_N)
-  X_base = X + row * $(stride_x_row)
-  Y_base = Y + row * $(stride_y_row)
-  OUT_base = OUT + row * $(stride_out_row)
+  X += row * $(stride_x_row)
+  Y += row * $(stride_y_row)
+  OUT += row * $(stride_out_row)
   cols = start_col + tl.arange(0, $(BLOCK_N))
-  x = tl.load(X_base + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
-  y = tl.load(Y_base + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
+  x = tl.load(X + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
+  y = tl.load(Y + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
   out = x * tl.sigmoid(x) * y
-  tl.store(OUT_base + cols, out, mask=cols < $(ncols))
+  tl.store(OUT + cols, out, mask=cols < $(ncols))
 }
 
 def swigluOffset (s : BlockState) (stride : Nat) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
@@ -60,7 +58,7 @@ theorem swiglu_fwd_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
     rfl
   simp [exec, swiglu_fwd_kernel, stepStmts, stepStmt, evalOp,
-        tile_elementwise] at hExec
+        tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   subst s'
   simp only [swigluOffset, Nat.add_assoc]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -90,7 +88,7 @@ theorem swiglu_fwd_kernel_compute_correct
       (expected := fun i => TiledActivation.swiglu (xs i) (ys i)) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [swiglu_fwd_kernel]
+  · simp [swiglu_fwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i hActive
