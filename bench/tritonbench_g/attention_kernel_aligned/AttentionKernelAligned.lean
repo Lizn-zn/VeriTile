@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of
+/-- Surface transcription/proof-oriented final output-store slice of
 `attention_kernel_aligned.py`'s `_fwd_kernel_aligned`.
 
 The full kernel computes relative-position-biased attention with aligned Q/K/V

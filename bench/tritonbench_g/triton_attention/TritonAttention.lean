@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented forward output-store slice of
+/-- Surface transcription/proof-oriented forward output-store slice of
 `triton_attention.py`'s `_fwd_kernel`.
 
 The Python kernel writes `acc` through a block pointer with

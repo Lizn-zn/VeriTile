@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of `attn_fwd_causal.py`'s
+/-- Surface transcription/proof-oriented final output-store slice of `attn_fwd_causal.py`'s
 `_attn_fwd`.
 
 The full kernel runs staged causal attention forward loops. This slice starts after those stages have produced a
