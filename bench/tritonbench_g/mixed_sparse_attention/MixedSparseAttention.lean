@@ -9,12 +9,15 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented final output-store slice of
+/-- Surface transcription/proof-oriented final output-store slice of
 `mixed_sparse_attention.py`'s `_triton_mixed_sparse_attn_fwd_kernel`.
 
 The full kernel combines block-sparse and column-sparse attention updates. This
 slice starts from a precomputed normalized `Acc` tile and proves the final
-`seqlens`-masked writeback into `Out`. -/
+`seqlens`-masked writeback into `Out`. The kernel-level early return for
+`start_m * BLOCK_M >= seqlen` is represented at this surface by the same
+all-false row mask; the sparse block/column softmax loops remain separate
+modeling work. -/
 def mixed_sparse_attention_output_store_slice
     (Acc Seqlens Out : RegionName)
     (H
