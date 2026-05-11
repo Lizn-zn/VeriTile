@@ -14,8 +14,9 @@ set_option linter.unusedSimpArgs false
 
 This preserves destination-indexed addressing, `tl.abs`, the per-head
 `tl.max(..., axis=1)` scale computation, value writeback, and scale writeback.
-The Python kernel casts `src_data / data_scale` to int8; this surface records
-the pre-cast real quotient because VeriTile does not yet model CUDA int8
+The Python kernel casts the scale to fp16 before broadcasting it; that cast is
+represented explicitly. The final `src_data / data_scale` cast to int8 remains
+recorded as the pre-cast quotient because VeriTile does not yet model CUDA int8
 rounding/cast semantics. -/
 def destindex_copy_quantize_kv_real_surface
     (K DestLoc Out OutScale : RegionName)
@@ -34,7 +35,7 @@ def destindex_copy_quantize_kv_real_surface
       offs_h[:, None] * $(stride_k_h) + $(stride_k_d) * offs_d[None, :],
     mask=value_mask, other=0.0)
   abs_data = tl.abs(src_data)
-  data_scale = tl.max(abs_data, axis=1, keep_dims = true) / 127.0
+  data_scale = ((tl.max(abs_data, axis=1) / 127.0).to(tl.float16))[:, None]
   q_src_data = src_data / data_scale
   o_ptrs = Out + dest_index * $(stride_o_bs) +
     $(stride_o_h) * offs_h[:, None] + $(stride_o_d) * offs_d[None, :]
