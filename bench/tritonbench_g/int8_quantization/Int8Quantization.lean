@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Proof-oriented scaled-store slice of `int8_quantization.py`'s
+/-- Real-valued surface/proof-oriented scaled-store slice of `int8_quantization.py`'s
 `q_kernel_per_block_int8` / `k_kernel_per_block_int8`.
 
 The upstream kernels compute a per-block max scale, divide each element by that
@@ -17,7 +17,11 @@ scale, round to int8, and store the result. VeriTile's current arithmetic layer
 models real tiles, so this slice starts from a precomputed per-block scale in
 `Scale`, keeps the original row mask, and proves the scaled matrix writeback
 before the backend-specific rounding/cast step. The `preScale` parameter is
-`C**-0.5 * 1.44269504` for q and `1` for k. -/
+`C**-0.5 * 1.44269504` for q and `1` for k.
+
+A full surface that computes `tl.max(tl.abs(x))` over symbolic `[BLK, C]`
+blocks currently hits the DSL/proof support gap for symbolic 2D reductions, and
+the final `to(tl.int8)` rounding/cast remains backend-specific. -/
 def per_block_int8_scaled_store_slice
     (X XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) (preScale : ℝ) :
