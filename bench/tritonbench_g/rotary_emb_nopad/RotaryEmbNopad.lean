@@ -11,10 +11,12 @@ set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
 /-- Surface transcription of the Q part of `rotary_emb_nopad.py`'s
-`rotary_embedding_kernel` under the existing one-token-block abstraction.
+`rotary_embedding_kernel`.
 
-This writes both rotary halves for Q. The conditional K branch and the separate
-cache-writing v2 kernel remain separate surfaces/future work. -/
+This writes both rotary halves for Q over the full
+`[BLOCK_TOKENS, HEAD_HALF]` token/dimension tile. The conditional K branch is
+represented by `rotary_embedding_k_surface`; the separate cache-writing v2
+kernel remains future work. -/
 def rotary_embedding_q_surface
     (Q Cos Sin : RegionName)
     (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
@@ -22,17 +24,21 @@ def rotary_embedding_q_surface
     ComputeKernel := triton {
   cur_head_idx = tl.program_id(axis=0)
   cur_token_block_idx = tl.program_id(axis=1)
-  token = cur_token_block_idx * $(BLOCK_TOKENS)
+  tokens_range = cur_token_block_idx * $(BLOCK_TOKENS) + tl.arange(0, $(BLOCK_TOKENS))
   dim = tl.arange(0, $(HEAD_HALF))
   dim1 = dim + $(HEAD_HALF)
-  active = (cur_head_idx < $(Q_HEAD_NUM)) and (token < $(q_total_tokens))
-  off_cos_sin = token * $(cos_token_stride) + dim * $(cos_stride)
-  loaded_cos = tl.load(Cos + off_cos_sin, mask=token < $(q_total_tokens), other=0.0)
-  loaded_sin = tl.load(Sin + off_cos_sin, mask=token < $(q_total_tokens), other=0.0)
-  off_q0 = token * $(q_token_stride) + cur_head_idx * $(q_head_stride) +
-    dim * $(head_dim_stride)
-  off_q1 = token * $(q_token_stride) + cur_head_idx * $(q_head_stride) +
-    dim1 * $(head_dim_stride)
+  token_dim_mask = (tokens_range[:, None] < $(q_total_tokens)) and
+    (dim[None, :] < $(HEAD_HALF))
+  active = (cur_head_idx < $(Q_HEAD_NUM)) and token_dim_mask
+  off_cos_sin = tokens_range[:, None] * $(cos_token_stride) + dim[None, :] * $(cos_stride)
+  loaded_cos = tl.load(Cos + off_cos_sin,
+    mask=token_dim_mask, other=0.0)
+  loaded_sin = tl.load(Sin + off_cos_sin,
+    mask=token_dim_mask, other=0.0)
+  off_q0 = tokens_range[:, None] * $(q_token_stride) + cur_head_idx * $(q_head_stride) +
+    dim[None, :] * $(head_dim_stride)
+  off_q1 = tokens_range[:, None] * $(q_token_stride) + cur_head_idx * $(q_head_stride) +
+    dim1[None, :] * $(head_dim_stride)
   loaded_q0 = tl.load(Q + off_q0, mask=active, other=0.0)
   loaded_q1 = tl.load(Q + off_q1, mask=active, other=0.0)
   out_q0 = loaded_q0 * loaded_cos - loaded_q1 * loaded_sin
@@ -42,8 +48,8 @@ def rotary_embedding_q_surface
 }
 
 /-- Surface transcription of the conditional K part of
-`rotary_emb_nopad.py`'s `rotary_embedding_kernel` under the existing
-one-token-block abstraction. -/
+`rotary_emb_nopad.py`'s `rotary_embedding_kernel` over the full
+`[BLOCK_TOKENS, HEAD_HALF]` token/dimension tile. -/
 def rotary_embedding_k_surface
     (K Cos Sin : RegionName)
     (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
@@ -54,17 +60,18 @@ def rotary_embedding_k_surface
   handle_kv = (cur_head_idx % $(KV_GROUP_NUM)) == $(0)
   if handle_kv {
     k_head_idx = cur_head_idx // $(KV_GROUP_NUM)
-    token = cur_token_block_idx * $(BLOCK_TOKENS)
+    tokens_range = cur_token_block_idx * $(BLOCK_TOKENS) + tl.arange(0, $(BLOCK_TOKENS))
     dim = tl.arange(0, $(HEAD_HALF))
     dim1 = dim + $(HEAD_HALF)
-    active = token < $(q_total_tokens)
-    off_cos_sin = token * $(cos_token_stride) + dim * $(cos_stride)
+    active = (tokens_range[:, None] < $(q_total_tokens)) and
+      (dim[None, :] < $(HEAD_HALF))
+    off_cos_sin = tokens_range[:, None] * $(cos_token_stride) + dim[None, :] * $(cos_stride)
     loaded_cos = tl.load(Cos + off_cos_sin, mask=active, other=0.0)
     loaded_sin = tl.load(Sin + off_cos_sin, mask=active, other=0.0)
-    off_k0 = token * $(k_token_stride) + k_head_idx * $(k_head_stride) +
-      dim * $(head_dim_stride)
-    off_k1 = token * $(k_token_stride) + k_head_idx * $(k_head_stride) +
-      dim1 * $(head_dim_stride)
+    off_k0 = tokens_range[:, None] * $(k_token_stride) + k_head_idx * $(k_head_stride) +
+      dim[None, :] * $(head_dim_stride)
+    off_k1 = tokens_range[:, None] * $(k_token_stride) + k_head_idx * $(k_head_stride) +
+      dim1[None, :] * $(head_dim_stride)
     loaded_k0 = tl.load(K + off_k0, mask=active, other=0.0)
     loaded_k1 = tl.load(K + off_k1, mask=active, other=0.0)
     out_k0 = loaded_k0 * loaded_cos - loaded_k1 * loaded_sin
