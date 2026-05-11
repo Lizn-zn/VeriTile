@@ -20,21 +20,20 @@ runtime precondition. Under the precondition both `range(0, N, BLOCK_SIZE)`
 loops execute exactly the `off = 0` iteration.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `.to(tl.float32)` casts are omitted at the algorithm layer.
 - Python `N: tl.constexpr` / `BLOCK_SIZE: tl.constexpr` -> Lean `Nat`
   parameters. -/
 def rms_norm_fwd_fused
     (X Y W : RegionName) (stride N BLOCK_SIZE : Nat) (eps : ℝ) :
     ComputeKernel := triton {
   row = tl.program_id(0)
-  Y_base = Y + row * $(stride)
-  X_base = X + row * $(stride)
+  Y += row * $(stride)
+  X += row * $(stride)
   _var = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
   for off in range(0, $(N), $(BLOCK_SIZE)) {
     cols = off + tl.arange(0, $(BLOCK_SIZE))
-    x = tl.load(X_base + cols, mask=cols < $(N), other=0.0).to(tl.float32)
+    x = tl.load(X + cols, mask=cols < $(N), other=0.0).to(tl.float32)
     x = tl.where(cols < $(N), x, 0.0)
-    _var = _var + x * x
+    _var += x * x
   }
   var = tl.sum(_var, axis=0) / $(N)
   rstd = 1 / tl.sqrt(var + $(eps))
@@ -42,10 +41,10 @@ def rms_norm_fwd_fused
     cols = off + tl.arange(0, $(BLOCK_SIZE))
     mask = cols < $(N)
     w = tl.load(W + cols, mask=mask)
-    x = tl.load(X_base + cols, mask=mask, other=0.0).to(tl.float32)
+    x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
     x_hat = x * rstd
     y = x_hat * w
-    tl.store(Y_base + cols, y, mask=mask)
+    tl.store(Y + cols, y, mask=mask)
   }
 }
 

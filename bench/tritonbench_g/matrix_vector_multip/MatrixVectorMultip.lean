@@ -29,7 +29,7 @@ def mv_kernel
     m_mask = (m + offset_m) < $(M)
     a = tl.load(A_ptrs, mask=n_mask & m_mask, other=0.0).to(tl.float32)
     b = tl.load(B_ptrs, mask=m_mask, other=0.0).to(tl.float32)
-    acc = acc + a * b
+    acc += a * b
     A_ptrs += $(BLOCK_M) * $(stride_am)
     B_ptrs += $(BLOCK_M) * $(stride_bm)
   }

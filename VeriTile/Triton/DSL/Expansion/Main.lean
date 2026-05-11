@@ -1102,8 +1102,7 @@ partial def expandStmt (env : Env) (pinned : List String)
       expandLoadSubAssign i p kwargs rhs
   | `(tritonStmt| $i:ident := tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       let nameLit ← identAsStr i
-      let hint : Option DInfo :=
-        if pinned.contains i.getId.toString then some .nat else none
+      let hint ← loadDTypeHint i p
       let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
       let dt ← e'.dtype.term
       let sh ← e'.shape.term
@@ -1117,8 +1116,7 @@ partial def expandStmt (env : Env) (pinned : List String)
         e'.computeTerm.isSome)
   | `(tritonStmt| $i:ident = tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       let nameLit ← identAsStr i
-      let hint : Option DInfo :=
-        if pinned.contains i.getId.toString then some .nat else none
+      let hint ← loadDTypeHint i p
       let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := hint)
       let dt ← e'.dtype.term
       let sh ← e'.shape.term
@@ -1166,34 +1164,79 @@ partial def expandStmt (env : Env) (pinned : List String)
         e'.computeTerm.isSome)
   | `(tritonStmt| $i:ident += $e:tritonExpr) => do
       let nameLit ← identAsStr i
-      let (lhsDType, lhsShape) ← lookupEnv env i.getId.toString
-      match lhsDType with
-      | .ptr =>
+      let name := i.getId.toString
+      if env.any (fun entry => entry.1 == name) then
+        let (lhsDType, lhsShape) ← lookupEnv env name
+        match lhsDType with
+        | .ptr =>
+            let rhs ← expandNatExpectedExpr env e
+            ensureAlgorithmOnly "`+=` pointer offset" rhs
+            let lhsShapeTerm ← lhsShape.term
+            let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
+            let (bc, outShape) ← broadcastTerm lhsShape rhs.shape "`+=` pointer offset"
+            let outShapeTerm ← outShape.term
+            let term ← `(Op.ptrAdd $bc $lhsTerm $rhs.term)
+            pure (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+              ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+              (name, .ptr, outShape, none) :: env,
+              Bool.false)
+        | _ =>
+            let lhsShapeTerm ← lhsShape.term
+            let lhsDTypeTerm ← lhsDType.term
+            let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
+            let lhsComputeDType? := lookupComputeDType? env name
+            let lhsComputeTerm? ←
+              match lhsComputeDType? with
+              | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+              | some _ =>
+                  Macro.throwError
+                    ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+              | none => pure none
+            let lhs : EOut :=
+              { term := lhsTerm, dtype := lhsDType, shape := lhsShape,
+                computeTerm := lhsComputeTerm?, computeDType? := lhsComputeDType? }
+            let rhs0 ← expandExpr env e
+            let rhs ←
+              if lhs.dtype == .real && rhs0.dtype == .nat then
+                match ← expandLeanAntiquoteAs? .real e with
+                | some out => pure out
+                | none => pure rhs0
+              else
+                pure rhs0
+            let (lhs, rhs) ← coerceRealArithOperands "`+=`" lhs rhs
+            ensureComputeArithComposable "`+=` lhs" lhs
+            ensureComputeArithComposable "`+=` rhs" rhs
+            unless lhs.dtype == rhs.dtype do
+              Macro.throwError "`+=`: dtype mismatch"
+            let np ← lhs.dtype.numericProof
+            let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`+=`"
+            let eTerm ← `(Op.add $np $bc $lhs.term $rhs.term)
+            let (computeTerm?, computeDType?) ← fp32ComputeArith? "`+=`" eTerm lhs rhs
+            let e' : EOut :=
+              { term := eTerm, dtype := lhs.dtype, shape := outShape,
+                computeTerm := computeTerm?, computeDType? := computeDType? }
+            let dt ← e'.dtype.term
+            let sh ← e'.shape.term
+            let exprTerm ←
+              match e'.computeTerm with
+              | some ce => pure ce
+              | none => `(ComputeExpr.alg $e'.term)
+            pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+              ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+              (name, e'.dtype, e'.shape, e'.computeDType?) :: env,
+              e'.computeTerm.isSome)
+      else
           let rhs ← expandNatExpectedExpr env e
           ensureAlgorithmOnly "`+=` pointer offset" rhs
-          let lhsShapeTerm ← lhsShape.term
-          let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
-          let (bc, outShape) ← broadcastTerm lhsShape rhs.shape "`+=` pointer offset"
+          let region : TSyntax `term := ⟨i.raw⟩
+          let lhsTerm ← `(Op.ptrBase $region)
+          let (bc, outShape) ← broadcastTerm SInfo.scalar rhs.shape "`+=` pointer offset"
           let outShapeTerm ← outShape.term
           let term ← `(Op.ptrAdd $bc $lhsTerm $rhs.term)
           pure (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
             ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
-            (i.getId.toString, .ptr, outShape, none) :: env,
+            (name, .ptr, outShape, none) :: env,
             Bool.false)
-      | _ =>
-          let iExpr : TSyntax `tritonExpr := ⟨i.raw⟩
-          let sum ← `(tritonExpr| $iExpr + $e)
-          let e' ← expandExpr env sum
-          let dt ← e'.dtype.term
-          let sh ← e'.shape.term
-          let exprTerm ←
-            match e'.computeTerm with
-            | some ce => pure ce
-            | none => `(ComputeExpr.alg $e'.term)
-          pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
-            ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
-            (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
-            e'.computeTerm.isSome)
   | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandStore expandExpr expandStaticPtrExpr env p v kwargs
   | `(tritonStmt| tl.atomic_add($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
