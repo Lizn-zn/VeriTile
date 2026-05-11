@@ -13,10 +13,10 @@ open VeriTile.Triton
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_N: tl.constexpr` / `RECOMPUTE_OUTPUT: tl.constexpr` -> Lean
   parameters.
-- Python pointer mutation `X += ...` / `Y += ...` / ... -> explicit base
-  pointer registers.
-- `OUT_base` is computed unconditionally; the store using it remains guarded by
-  `RECOMPUTE_OUTPUT`, so this does not change memory behavior. -/
+- Python `OUT += ...` is guarded by `RECOMPUTE_OUTPUT`; this proof-oriented
+  port hoists the pointer update because the DSL does not yet propagate
+  conditional pointer mutations into the nested store expansion. The only use
+  of `OUT` remains guarded by `RECOMPUTE_OUTPUT`. -/
 def swiglu_bwd_kernel
     (X Y DOUT OUT DX DY : RegionName)
     (stride_x_row stride_y_row stride_dout_row stride_out_row
@@ -25,24 +25,24 @@ def swiglu_bwd_kernel
     ComputeKernel := triton {
   row = tl.program_id(0)
   start_col = tl.program_id(1) * $(BLOCK_N)
-  X_base = X + row * $(stride_x_row)
-  Y_base = Y + row * $(stride_y_row)
-  DOUT_base = DOUT + row * $(stride_dout_row)
-  OUT_base = OUT + row * $(stride_out_row)
-  DX_base = DX + row * $(stride_dx_row)
-  DY_base = DY + row * $(stride_dy_row)
+  X += row * $(stride_x_row)
+  Y += row * $(stride_y_row)
+  DOUT += row * $(stride_dout_row)
+  OUT += row * $(stride_out_row)
+  DX += row * $(stride_dx_row)
+  DY += row * $(stride_dy_row)
   cols = start_col + tl.arange(0, $(BLOCK_N))
-  x = tl.load(X_base + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
-  y = tl.load(Y_base + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
-  dout = tl.load(DOUT_base + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
+  x = tl.load(X + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
+  y = tl.load(Y + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
+  dout = tl.load(DOUT + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
   x_sigmoid = tl.sigmoid(x)
   dx = x_sigmoid * (1 + x * (1 - x_sigmoid)) * y * dout
   dy = x * x_sigmoid * dout
-  tl.store(DX_base + cols, dx, mask=cols < $(ncols))
-  tl.store(DY_base + cols, dy, mask=cols < $(ncols))
+  tl.store(DX + cols, dx, mask=cols < $(ncols))
+  tl.store(DY + cols, dy, mask=cols < $(ncols))
   if RECOMPUTE_OUTPUT {
     out = x * x_sigmoid * y
-    tl.store(OUT_base + cols, out, mask=cols < $(ncols))
+    tl.store(OUT + cols, out, mask=cols < $(ncols))
   }
 }
 
@@ -116,7 +116,7 @@ theorem swiglu_bwd_kernel_correct
     rfl
   cases RECOMPUTE_OUTPUT <;>
     simp [exec, swiglu_bwd_kernel, stepStmts, stepStmt, evalOp,
-          tile_elementwise] at hExec
+          tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   · subst s'
     constructor
     · intro i
@@ -285,7 +285,7 @@ theorem swiglu_bwd_kernel_compute_correct
         | .inl (.inr lane) => TiledActivation.swigluBwdB (douts lane) (xs lane)
         | .inr lane => TiledActivation.swiglu (xs lane) (ys lane)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [swiglu_bwd_kernel]
+  · simp [swiglu_bwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro i
