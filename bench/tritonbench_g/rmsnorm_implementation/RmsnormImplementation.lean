@@ -29,7 +29,7 @@ def rmsnorm_implementation
   for block_n_strart_ptr in range(0, $(N_SIZE), $(BLOCK_N_SIZE)) {
     offset_n = block_n_strart_ptr + block_n_size
     x_ptr_mask = offset_n < $(N_SIZE)
-    x = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
+    x = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0)
     xf = (x).to(tl.float32)
     var = var + xf * xf
   }
@@ -39,7 +39,7 @@ def rmsnorm_implementation
     offset_n = block_n_strart_ptr + block_n_size
     x_ptr_mask = offset_n < $(N_SIZE)
     rms_w_offset = tl.load(rms_w_ptr + offset_n * $(stride_rms_w), mask=x_ptr_mask)
-    x = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
+    x = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0)
     x_new = x / std
     out = x_new * rms_w_offset
     out_offset = pid_batch * $(stride_out_batch) + pid_m * $(stride_out_m) +
@@ -69,7 +69,7 @@ noncomputable def rmsInputTile
       if idx.1.val < N_SIZE then
         some (s.readMem x_ptr
           (xOffset s stride_x_batch stride_x_m stride_x_k idx.1))
-      else some (0.0 : ℝ) }
+      else some (0 : ℝ) }
 
 noncomputable def rmsVarCarrier
     (s : BlockState) (x_ptr : RegionName)
