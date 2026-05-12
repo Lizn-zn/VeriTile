@@ -135,6 +135,7 @@ theorem layernorm_fwd_triton_correct
     (stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn
       N BLOCK_SIZE : Nat)
     (eps : ℝ) (s s' : BlockState)
+    (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s stride_y_N stride_y_hn i))
     (hExec : exec (layernorm_fwd_triton X W Y
@@ -146,13 +147,50 @@ theorem layernorm_fwd_triton_correct
           layernormYSpec s X W stride_x_N stride_x_hn stride_w_hn
             N BLOCK_SIZE eps i
         else s.readMem Y (yOffset s stride_y_N stride_y_hn i) := by
-  sorry
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE] =>
+        s.pids 0 * stride_y_N + s.pids 1 * stride_y_hn + idx.1.val) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [yOffset] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hB : 0 < BLOCK_SIZE
+  · have hStep : BLOCK_SIZE ≠ 0 := Nat.ne_of_gt hB
+    simp [exec, layernorm_fwd_triton, stepStmts, stepStmt, evalOp,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          stepForRangeAux.step_lt, stepForRangeAux.step_ge,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.sub,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt, hNpos, hNle,
+          Nat.not_lt.mpr hNle, hStep] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp only [hi, ↓reduceIte]
+      simp [hi, layernormYSpec, layernormInvVarCarrier, layernormVarCarrier,
+            layernormCenteredTile, layernormMeanCarrier, layernormInputTile,
+            xOffset, wOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            WithBot.realSqrt, NumericDType.add, NumericDType.sub,
+            NumericDType.mul, NumericDType.div, FloatDType.cast]
+      rfl
+    · simp [hi]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 /-- Compute-facing correctness for the one-block layernorm forward slice. -/
 theorem layernorm_fwd_triton_compute_correct
     (X W Y : RegionName)
     (stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn
       N BLOCK_SIZE : Nat)
     (eps : ℝ) (s : BlockState)
+    (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s stride_y_N stride_y_hn i)) :
     ComputeCorrect.Realizes
@@ -166,5 +204,14 @@ theorem layernorm_fwd_triton_compute_correct
       (expected := fun i =>
         layernormYSpec s X W stride_x_N stride_x_hn stride_w_hn
           N BLOCK_SIZE eps i) := by
-  sorry
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layernorm_fwd_triton, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := layernorm_fwd_triton_correct X W Y
+    stride_x_N stride_x_hn stride_y_N stride_y_hn stride_w_hn
+    N BLOCK_SIZE eps s s' hNpos hNle hOutInj hExec i
+  simpa [hActive] using h
 end VeriTile.Bench.TritonBenchG.LayernormFwdTriton
