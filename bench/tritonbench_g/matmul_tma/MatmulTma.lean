@@ -14,22 +14,22 @@ set_option linter.unusedSimpArgs false
 
 The Python wrapper's transpose cases are represented by the strides passed to
 the same kernel, so no separate transpose-specific surface is needed. The TMA
-`order` tuple is scheduling metadata and is not represented by the current
-block-pointer DSL. -/
+`order` tuple is scheduling metadata; the DSL accepts it at the surface and
+erases it into the same block-pointer AST. -/
 def matmul_tma_load_store_surface
     (A B C : RegionName)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
-  a_block_ptr = tl.make_block_ptr(A, base=$(0), shape=[$(M), $(K)],
-    strides=[$(stride_am), $(stride_ak)], offsets=[$(0), $(0)],
-    block_shape=[$(BLOCK_M), $(BLOCK_K)])
-  b_block_ptr = tl.make_block_ptr(B, base=$(0), shape=[$(K), $(N)],
-    strides=[$(stride_bk), $(stride_bn)], offsets=[$(0), $(0)],
-    block_shape=[$(BLOCK_K), $(BLOCK_N)])
-  c_block_ptr = tl.make_block_ptr(C, base=$(0), shape=[$(M), $(N)],
-    strides=[$(stride_cm), $(stride_cn)], offsets=[$(0), $(0)],
-    block_shape=[$(BLOCK_M), $(BLOCK_N)])
+  a_block_ptr = tl.make_block_ptr(base=A, shape=($(M), $(K)),
+    strides=($(stride_am), $(stride_ak)), offsets=($(0), $(0)),
+    block_shape=($(BLOCK_M), $(BLOCK_K)), order=(1, 0))
+  b_block_ptr = tl.make_block_ptr(base=B, shape=($(K), $(N)),
+    strides=($(stride_bk), $(stride_bn)), offsets=($(0), $(0)),
+    block_shape=($(BLOCK_K), $(BLOCK_N)), order=(0, 1))
+  c_block_ptr = tl.make_block_ptr(base=C, shape=($(M), $(N)),
+    strides=($(stride_cm), $(stride_cn)), offsets=($(0), $(0)),
+    block_shape=($(BLOCK_M), $(BLOCK_N)), order=(1, 0))
   a = tl.load(a_block_ptr)
   b = tl.load(b_block_ptr)
   c = tl.dot(a, b)
@@ -43,15 +43,15 @@ def matmul_tma_load_store_f16_surface
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_M BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
-  a_block_ptr = tl.make_block_ptr(A, base=$(0), shape=[$(M), $(K)],
-    strides=[$(stride_am), $(stride_ak)], offsets=[$(0), $(0)],
-    block_shape=[$(BLOCK_M), $(BLOCK_K)])
-  b_block_ptr = tl.make_block_ptr(B, base=$(0), shape=[$(K), $(N)],
-    strides=[$(stride_bk), $(stride_bn)], offsets=[$(0), $(0)],
-    block_shape=[$(BLOCK_K), $(BLOCK_N)])
-  c_block_ptr = tl.make_block_ptr(C, base=$(0), shape=[$(M), $(N)],
-    strides=[$(stride_cm), $(stride_cn)], offsets=[$(0), $(0)],
-    block_shape=[$(BLOCK_M), $(BLOCK_N)])
+  a_block_ptr = tl.make_block_ptr(base=A, shape=($(M), $(K)),
+    strides=($(stride_am), $(stride_ak)), offsets=($(0), $(0)),
+    block_shape=($(BLOCK_M), $(BLOCK_K)), order=(1, 0))
+  b_block_ptr = tl.make_block_ptr(base=B, shape=($(K), $(N)),
+    strides=($(stride_bk), $(stride_bn)), offsets=($(0), $(0)),
+    block_shape=($(BLOCK_K), $(BLOCK_N)), order=(0, 1))
+  c_block_ptr = tl.make_block_ptr(base=C, shape=($(M), $(N)),
+    strides=($(stride_cm), $(stride_cn)), offsets=($(0), $(0)),
+    block_shape=($(BLOCK_M), $(BLOCK_N)), order=(1, 0))
   a = tl.load(a_block_ptr)
   b = tl.load(b_block_ptr)
   c = (tl.dot(a, b)).to(tl.float16)
