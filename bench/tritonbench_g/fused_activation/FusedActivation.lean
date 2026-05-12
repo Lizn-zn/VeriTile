@@ -13,12 +13,12 @@ open VeriTile.Triton
 Allowed mechanical Lean-syntax-only changes:
 - Python `num_weights/xnumel/multiplier/activation/BLOCK_SIZE: tl.constexpr` ->
   Lean parameters.
-- Python `activation == "sigmoid"` / `"relu"` -> one-hot Lean constexpr gates
-  `ACTIVATION_SIGMOID` / `ACTIVATION_RELU`. -/
+- Python `activation == "sigmoid"` / `elif activation == "relu"` -> Lean
+  constexpr gate `ACTIVATION_SIGMOID`; `false` selects the ReLU branch. -/
 def fused_add_mul_activation_kernel
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
-    (multiplier : ℝ) (ACTIVATION_SIGMOID ACTIVATION_RELU : Bool) :
+    (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool) :
     ComputeKernel := triton {
   xoffset = tl.program_id(0) * $(BLOCK_SIZE)
   index = xoffset + tl.arange(0, $(BLOCK_SIZE))
@@ -30,12 +30,10 @@ def fused_add_mul_activation_kernel
   activ_input = $(multiplier) * tmp3 + tmp0 + tmp1
   if ACTIVATION_SIGMOID {
     ma_result = tl.sigmoid(activ_input)
-    tl.store(x_ptr + index, ma_result, mask)
-  }
-  if ACTIVATION_RELU {
+  } else {
     ma_result = tl.maximum(0, activ_input)
-    tl.store(x_ptr + index, ma_result, mask)
   }
+  tl.store(x_ptr + index, ma_result, mask)
 }
 
 noncomputable def fusedActivationInput
@@ -59,27 +57,11 @@ noncomputable def fusedActivationSpec
 def fusedActivationOffset (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pid * BLOCK_SIZE + i.val
 
-/-- Algorithm-layer correctness for `fused_add_mul_activation_kernel`.
-
-Out of scope: the `hSigmoidBranch` hypothesis requires that **exactly one** of
-`ACTIVATION_SIGMOID` / `ACTIVATION_RELU` is `true`. The Python kernel itself
-accepts every combination of the two flags, but the other two configurations
-are not modelled here:
-
-- both flags `false`: kernel performs no store; this is a vacuous wrapper
-  with no useful spec, so we omit it.
-- both flags `true`: kernel issues two consecutive masked stores at the same
-  addresses, with the RELU result overwriting the SIGMOID result. The
-  observable output is the RELU spec, but proving it requires an additional
-  store-overwrite lemma. We do not currently expose that case.
-
-If a downstream user needs either configuration, restate the theorem with the
-appropriate dedicated `hSigmoidBranch` shape and reuse the same per-branch
-proof skeleton. -/
+/-- Algorithm-layer correctness for `fused_add_mul_activation_kernel`. -/
 theorem fused_add_mul_activation_kernel_correct
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
-    (multiplier : ℝ) (ACTIVATION_SIGMOID ACTIVATION_RELU : Bool)
+    (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool)
     (s s' : BlockState)
     (xs inputs : Fin BLOCK_SIZE → ℝ)
     (biases : Fin BLOCK_SIZE → ℝ)
@@ -89,10 +71,8 @@ theorem fused_add_mul_activation_kernel_correct
       s.readMem in_ptr (fusedActivationOffset s BLOCK_SIZE i) = inputs i)
     (h_bias : ∀ i : Fin BLOCK_SIZE,
       s.readMem bias_ptr ((fusedActivationOffset s BLOCK_SIZE i) % num_weights) = biases i)
-    (hSigmoidBranch : ACTIVATION_SIGMOID = Bool.true ∧ ACTIVATION_RELU = Bool.false ∨
-      ACTIVATION_SIGMOID = Bool.false ∧ ACTIVATION_RELU = Bool.true)
     (hExec : exec (fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
-          num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID ACTIVATION_RELU) s = some s') :
+          num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID) s = some s') :
     ∀ i : Fin BLOCK_SIZE,
       let outAddr := fusedActivationOffset s BLOCK_SIZE i
       s'.readMem x_ptr outAddr =
@@ -105,7 +85,23 @@ theorem fused_add_mul_activation_kernel_correct
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  rcases hSigmoidBranch with ⟨rfl, rfl⟩ | ⟨rfl, rfl⟩
+  cases ACTIVATION_SIGMOID
+  · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp,
+          tile_elementwise] at hExec
+    subst s'
+    simp only [fusedActivationOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    by_cases hi : s.pid * BLOCK_SIZE + i.val < xnumel
+    · have hx := h_x i
+      have hin := h_in i
+      have hb := h_bias i
+      simp [fusedActivationOffset] at hx hin hb
+      by_cases hlt : multiplier * inputs i + xs i + biases i < 0
+      · simp [hi, fusedActivationSpec, fusedActivationInput, hx, hin, hb,
+          ComparableDType.gt]
+      · simp [hi, fusedActivationSpec, fusedActivationInput, hx, hin, hb,
+          ComparableDType.gt]
+    · simp [hi]
   · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp,
           tile_elementwise] at hExec
     subst s'
@@ -118,29 +114,12 @@ theorem fused_add_mul_activation_kernel_correct
       simp [fusedActivationOffset] at hx hin hb
       simp [hi, fusedActivationSpec, fusedActivationInput, hx, hin, hb]
     · simp [hi]
-  · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp,
-          tile_elementwise] at hExec
-    subst s'
-    simp only [fusedActivationOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
-    by_cases hi : s.pid * BLOCK_SIZE + i.val < xnumel
-    · have hx := h_x i
-      have hin := h_in i
-      have hb := h_bias i
-      simp [fusedActivationOffset] at hx hin hb
-      simp [hi, fusedActivationSpec, fusedActivationInput, hx, hin, hb,
-        ComparableDType.gt]
-    · simp [hi]
 
-/-- Compute-facing correctness for `fused_add_mul_activation_kernel`.
-
-Inherits the same "exactly one activation flag is `true`" scope restriction
-from `fused_add_mul_activation_kernel_correct` (see its docstring for why the
-both-true / both-false configurations are out of scope). -/
+/-- Compute-facing correctness for `fused_add_mul_activation_kernel`. -/
 theorem fused_add_mul_activation_kernel_compute_correct
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
-    (multiplier : ℝ) (ACTIVATION_SIGMOID ACTIVATION_RELU : Bool)
+    (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool)
     (s : BlockState)
     (xs inputs : Fin BLOCK_SIZE → ℝ)
     (biases : Fin BLOCK_SIZE → ℝ)
@@ -149,12 +128,10 @@ theorem fused_add_mul_activation_kernel_compute_correct
     (h_in : ∀ i : Fin BLOCK_SIZE,
       s.readMem in_ptr (fusedActivationOffset s BLOCK_SIZE i) = inputs i)
     (h_bias : ∀ i : Fin BLOCK_SIZE,
-      s.readMem bias_ptr ((fusedActivationOffset s BLOCK_SIZE i) % num_weights) = biases i)
-    (hSigmoidBranch : ACTIVATION_SIGMOID = Bool.true ∧ ACTIVATION_RELU = Bool.false ∨
-      ACTIVATION_SIGMOID = Bool.false ∧ ACTIVATION_RELU = Bool.true) :
+      s.readMem bias_ptr ((fusedActivationOffset s BLOCK_SIZE i) % num_weights) = biases i) :
     ComputeCorrect.Realizes
       (kernel := fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
-        num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID ACTIVATION_RELU)
+        num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
           (fun i : Fin BLOCK_SIZE => fusedActivationOffset s BLOCK_SIZE i < xnumel)
@@ -168,8 +145,8 @@ theorem fused_add_mul_activation_kernel_compute_correct
   subst s0
   intro i hActive
   have h := fused_add_mul_activation_kernel_correct x_ptr bias_ptr in_ptr
-    num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID ACTIVATION_RELU
-    s s' xs inputs biases h_x h_in h_bias hSigmoidBranch hExec i
+    num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID
+    s s' xs inputs biases h_x h_in h_bias hExec i
   simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.FusedActivation
