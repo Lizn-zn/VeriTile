@@ -77,7 +77,7 @@ def chunk_gate_recurrence_forward_store_slice
   tl.store(O + offset_bh * $(NUM_BLOCK) * $(D_MODEL_K) * $(D_MODEL_V) +
       offset_d * $(D_MODEL_V) * $(BLOCK_MODEL_K) +
       offs_k[:, None] * $(D_MODEL_V) + offset_s * $(BLOCK_MODEL_V) +
-      offs_v[None, :], acc)
+      offs_v[None, :], (acc).to(O.dtype.element_ty))
 }
 
 def kIndex (idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V]) : Nat :=
