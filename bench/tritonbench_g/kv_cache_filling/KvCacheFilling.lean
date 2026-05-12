@@ -25,7 +25,7 @@ int4 packing semantics, plus the quant helpers' `tl.float32` scale/zero-point
 intermediates, which are still listed as TritonBench-G dtype/packing gaps in
 `tritonbench_coverage.md`. -/
 def fill_k_cache_tile
-    (KStates KCaches BlockOffsets : RegionName)
+    (KStates KCaches : RegionName) (BlockOffsets : Region .nat)
     (SIDX BIDX KV_BLOCK_IDX
       stride_kss stride_ksh stride_ksd
       stride_kcn stride_kcb stride_kch stride_kcd
@@ -34,8 +34,7 @@ def fill_k_cache_tile
   batch_id = tl.program_id(axis=0)
   h_off = tl.arange(0, $(BLOCK_H))
   d_off = tl.arange(0, $(BLOCK_D))
-  block_off = tl.load(BlockOffsets + batch_id * $(stride_boff) + $(KV_BLOCK_IDX),
-    dtype=tl.uint64)
+  block_off = tl.load($((BlockOffsets : Region .nat)) + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
   mask = (h_off[:, None] < $(num_heads)) & (d_off[None, :] < $(head_dim))
   k = tl.load(KStates + $(SIDX) * $(stride_kss) +
       h_off[:, None] * $(stride_ksh) + d_off[None, :] * $(stride_ksd),
@@ -53,7 +52,7 @@ sequence/block arithmetic has selected `SIDX`, `BIDX`, and `KV_BLOCK_IDX`, it
 loads one `BLOCK_H × BLOCK_DV` tile from `VStates` and stores it into
 `VCaches` under the original `num_heads/head_dim_v` mask. -/
 def fill_v_cache_tile
-    (VStates VCaches BlockOffsets : RegionName)
+    (VStates VCaches : RegionName) (BlockOffsets : Region .nat)
     (SIDX BIDX KV_BLOCK_IDX
       stride_vss stride_vsh stride_vsd
       stride_vcn stride_vcb stride_vch stride_vcd
@@ -62,8 +61,7 @@ def fill_v_cache_tile
   batch_id = tl.program_id(axis=0)
   h_off = tl.arange(0, $(BLOCK_H))
   dv_off = tl.arange(0, $(BLOCK_DV))
-  block_off = tl.load(BlockOffsets + batch_id * $(stride_boff) + $(KV_BLOCK_IDX),
-    dtype=tl.uint64)
+  block_off = tl.load($((BlockOffsets : Region .nat)) + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
   maskv = (h_off[:, None] < $(num_heads)) & (dv_off[None, :] < $(head_dim_v))
   v = tl.load(VStates + $(SIDX) * $(stride_vss) +
       h_off[:, None] * $(stride_vsh) + dv_off[None, :] * $(stride_vsd),

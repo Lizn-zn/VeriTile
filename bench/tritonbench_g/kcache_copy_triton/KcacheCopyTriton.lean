@@ -20,7 +20,7 @@ K-cache store. The `n_tokens > 1` path needs negative `cur_token_shift`
 arithmetic before the copy and remains outside the current Nat-only pointer
 surface. -/
 def copy_to_kcache_seqlen_n1_surface
-    (K KCache BLOCK_TABLES seq_lengths : RegionName)
+    (K KCache : RegionName) (BLOCK_TABLES seq_lengths : Region .nat)
     (stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
       stride_kcs stride_bts stride_btb block_size KCACHE_X : Nat) :
     ComputeKernel := triton {
@@ -28,10 +28,10 @@ def copy_to_kcache_seqlen_n1_surface
   cur_seq_idx = cur_token_idx
   cur_kv_head_idx = tl.program_id(axis=1)
   split_x_idx = tl.program_id(axis=2)
-  past_kv_seq_len = tl.load(seq_lengths + cur_seq_idx, dtype=tl.uint64) - $(1)
+  past_kv_seq_len = tl.load($((seq_lengths : Region .nat)) + cur_seq_idx) - $(1)
   last_bt_block_idx = past_kv_seq_len // $(block_size)
-  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
-    last_bt_block_idx * $(stride_btb), dtype=tl.uint64)
+  block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +
+    last_bt_block_idx * $(stride_btb))
   offset_last_block = past_kv_seq_len % $(block_size)
   offsets_dmodel = split_x_idx * $(KCACHE_X) + tl.arange(0, $(KCACHE_X))
   k = tl.load(K + cur_token_idx * $(stride_kt) +
@@ -50,7 +50,7 @@ modulo. This slice starts after that arithmetic has selected the cache slot:
 load the block id from `BLOCK_TABLES`, load one contiguous K split-x block, and
 store it into `KCache`. -/
 def copy_to_kcache_split_x_block
-    (K KCache BLOCK_TABLES : RegionName)
+    (K KCache : RegionName) (BLOCK_TABLES : Region .nat)
     (LAST_BLOCK_IDX OFFSET_LAST_BLOCK
       stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
       stride_kcs stride_bts stride_btb KCACHE_X : Nat) :
@@ -60,8 +60,8 @@ def copy_to_kcache_split_x_block
   cur_kv_head_idx = tl.program_id(1)
   split_x_idx = tl.program_id(2)
   offsets_dmodel = split_x_idx * $(KCACHE_X) + tl.arange(0, $(KCACHE_X))
-  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
-    $(LAST_BLOCK_IDX) * $(stride_btb), dtype=tl.uint64)
+  block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +
+    $(LAST_BLOCK_IDX) * $(stride_btb))
   k = tl.load(K + cur_token_idx * $(stride_kt) +
     cur_kv_head_idx * $(stride_kh) + offsets_dmodel * $(stride_kd))
   tl.store(KCache + block_id * $(stride_kcb) +

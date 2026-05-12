@@ -18,7 +18,7 @@ This surface fixes that partition as `SPLIT_X`, loads the corresponding K
 dimension block, and stores it into either the old layout (`SPLIT_X=0`,
 `KCACHE_X=HEAD_DIM`) or the new split layout. -/
 def copy_to_kcache_one_xblock
-    (K KCache BLOCK_TABLES : RegionName)
+    (K KCache : RegionName) (BLOCK_TABLES : Region .nat)
     (LAST_BLOCK_IDX OFFSET_LAST_BLOCK SPLIT_X
       stride_kt stride_kh stride_kd
       stride_kcb stride_kch stride_kcsplit_x stride_kcs
@@ -28,8 +28,8 @@ def copy_to_kcache_one_xblock
   cur_kv_head_idx = tl.program_id(axis=1)
   range_x = tl.arange(0, $(KCACHE_X))
   offsets_dmodel_x_partition = $(SPLIT_X) * $(KCACHE_X) + range_x
-  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
-    $(LAST_BLOCK_IDX) * $(stride_btb), dtype=tl.uint64)
+  block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +
+    $(LAST_BLOCK_IDX) * $(stride_btb))
   k = tl.load(K + cur_seq_idx * $(stride_kt) +
       cur_kv_head_idx * $(stride_kh) +
       offsets_dmodel_x_partition * $(stride_kd),
@@ -48,7 +48,7 @@ This captures the V side after sequence/block arithmetic has selected the cache
 slot: load the block id from `BLOCK_TABLES`, load a V head block, and store it
 into `VCache`. -/
 def copy_to_vcache_one_dblock
-    (V VCache BLOCK_TABLES : RegionName)
+    (V VCache : RegionName) (BLOCK_TABLES : Region .nat)
     (LAST_BLOCK_IDX OFFSET_LAST_BLOCK
       stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
       stride_bts stride_btb HEAD_DIM BLOCK_D : Nat) :
@@ -56,8 +56,8 @@ def copy_to_vcache_one_dblock
   cur_seq_idx = tl.program_id(0)
   cur_kv_head_idx = tl.program_id(1)
   d = tl.arange(0, $(BLOCK_D))
-  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
-    $(LAST_BLOCK_IDX) * $(stride_btb), dtype=tl.uint64)
+  block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +
+    $(LAST_BLOCK_IDX) * $(stride_btb))
   v = tl.load(V + cur_seq_idx * $(stride_vt) +
       cur_kv_head_idx * $(stride_vh) + d * $(stride_vd),
     mask=d < $(HEAD_DIM), other=0.0)
@@ -74,17 +74,17 @@ This keeps the Python decode path's `context_lengths[cur_seq_idx] - 1`, block
 division/modulo, block-table lookup, V load, and V-cache store for one
 dimension block. -/
 def copy_to_vcache_seqlen1_dblock
-    (V VCache BLOCK_TABLES context_lengths : RegionName)
+    (V VCache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
     (stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
       stride_bts stride_btb block_size HEAD_DIM BLOCK_D : Nat) :
     ComputeKernel := triton {
   cur_seq_idx = tl.program_id(0)
   cur_kv_head_idx = tl.program_id(1)
   d = tl.arange(0, $(BLOCK_D))
-  past_kv_seq_len = tl.load(context_lengths + cur_seq_idx, dtype=tl.uint64) - $(1)
+  past_kv_seq_len = tl.load($((context_lengths : Region .nat)) + cur_seq_idx) - $(1)
   last_bt_block_idx = past_kv_seq_len // $(block_size)
-  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
-    last_bt_block_idx * $(stride_btb), dtype=tl.uint64)
+  block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +
+    last_bt_block_idx * $(stride_btb))
   offset_last_block = past_kv_seq_len % $(block_size)
   v = tl.load(V + cur_seq_idx * $(stride_vt) +
       cur_kv_head_idx * $(stride_vh) + d * $(stride_vd),
