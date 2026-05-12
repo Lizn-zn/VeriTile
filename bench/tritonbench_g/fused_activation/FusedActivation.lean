@@ -14,9 +14,7 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `num_weights/xnumel/multiplier/activation/BLOCK_SIZE: tl.constexpr` ->
   Lean parameters.
 - Python `activation == "sigmoid"` / `"relu"` -> one-hot Lean constexpr gates
-  `ACTIVATION_SIGMOID` / `ACTIVATION_RELU`.
-- Python `eviction_policy='evict_last'` is omitted because it is a cache hint
-  with no algorithm-layer effect. -/
+  `ACTIVATION_SIGMOID` / `ACTIVATION_RELU`. -/
 def fused_add_mul_activation_kernel
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
@@ -27,7 +25,7 @@ def fused_add_mul_activation_kernel
   mask = index < $(xnumel)
   bias_index = index % $(num_weights)
   tmp0 = tl.load(x_ptr + index, mask)
-  tmp1 = tl.load(bias_ptr + bias_index, mask)
+  tmp1 = tl.load(bias_ptr + bias_index, mask, eviction_policy="evict_last")
   tmp3 = tl.load(in_ptr + index, mask)
   activ_input = $(multiplier) * tmp3 + tmp0 + tmp1
   if ACTIVATION_SIGMOID {

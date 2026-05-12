@@ -103,6 +103,7 @@ syntax "boundary_check=(" term ")" : tritonMemKwarg
 syntax "boundary_check=([" num,* "]" ":" term ")" : tritonMemKwarg
 syntax "boundary_check=(" num,* ")" : tritonMemKwarg
 syntax "padding_option=\"zero\"" : tritonMemKwarg
+syntax "eviction_policy=\"evict_last\"" : tritonMemKwarg
 
 syntax "axis" "=" num : tritonReduceKwarg
 syntax num : tritonReduceKwarg

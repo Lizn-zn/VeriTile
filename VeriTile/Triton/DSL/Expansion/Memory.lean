@@ -89,11 +89,13 @@ partial def expandLoad (expandExpr : ExprExpander)
         boundaryCheck? := some (← numArrayAsNatListTerm axes)
     | `(tritonMemKwarg| padding_option="zero") =>
         padding := ← `(PaddingOption.zero)
+    | `(tritonMemKwarg| eviction_policy="evict_last") =>
+        pure ()
     | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
         unless name.getId.getString! == "dtype" do
           Macro.throwError
             ("tl.load: unknown kwarg `" ++ name.getId.toString ++
-             "`. Only `mask`, `other`, `dtype`, `boundary_check`, and `padding_option` are recognized.")
+             "`. Only `mask`, `other`, `dtype`, `boundary_check`, `padding_option`, and `eviction_policy` are recognized.")
         if dtype?.isSome then
           Macro.throwError "tl.load: duplicate `dtype=` kwarg"
         dtype? := some (← expandDType dt)
@@ -112,7 +114,7 @@ partial def expandLoad (expandExpr : ExprExpander)
         | unknown =>
             let msg : String :=
               "tl.load: unknown kwarg `" ++ unknown ++
-              "`. Only `mask`, `other`, `dtype`, `boundary_check`, and `padding_option` are recognized."
+              "`. Only `mask`, `other`, `dtype`, `boundary_check`, `padding_option`, and `eviction_policy` are recognized."
             Macro.throwError msg
     | _ => Macro.throwUnsupported
   let explicitOrDefaultDType := dtype?.orElse (fun _ => defaultDType)
