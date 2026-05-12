@@ -33,7 +33,7 @@ def attn_fwd_triton_final_store_slice
   acc = tl.load(Acc + off_z * $(stride_acc_z) + off_h * $(stride_acc_h) +
       offs_m[:, None] * $(stride_acc_m) + offs_k[None, :] * $(stride_acc_k),
       mask=mask, other=0.0)
-  tl.store(Out + off_z * $(stride_qz) + off_h * $(stride_qh) +
+  tl.store(Out + off_z.to(tl.int64) * $(stride_qz) + off_h.to(tl.int64) * $(stride_qh) +
       offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk),
       (acc).to(Out.dtype.element_ty), mask=mask)
 }
