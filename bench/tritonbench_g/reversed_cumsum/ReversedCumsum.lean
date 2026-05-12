@@ -32,7 +32,7 @@ def reversed_cumsum_single_block_surface
   b_c = tl.dot(m_s, b_s)
   tl.store(Z + i_bh * $(s_s_h) +
       offs_t[:, None] * $(s_s_t) + offs_s[None, :] * $(s_s_d),
-    b_c, mask=mask)
+    (b_c).to(Z.dtype.element_ty), mask=mask)
 }
 
 /-- Proof-oriented block store surface slice of `reversed_cumsum.py`'s
@@ -54,7 +54,7 @@ def reversed_cumsum_store_slice
   b_c = tl.load(BC + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
       offs_s[None, :] * $(s_s_d), mask=mask, other=0.0)
   tl.store(Z + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
-      offs_s[None, :] * $(s_s_d), b_c, mask=mask)
+      offs_s[None, :] * $(s_s_d), (b_c).to(Z.dtype.element_ty), mask=mask)
 }
 
 def tIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
