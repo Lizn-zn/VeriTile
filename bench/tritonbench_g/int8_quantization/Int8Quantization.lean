@@ -9,7 +9,59 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Real-valued surface/proof-oriented scaled-store slice of `int8_quantization.py`'s
+/-- Surface transcription of `int8_quantization.py`'s `q_kernel_per_block_int8`.
+
+The `preScale` parameter represents Python's `C**-0.5 * 1.44269504` factor.
+The final `to(tl.int8)` is preserved as a surface dtype annotation while the
+algorithm carrier records the rounded real-valued expression. -/
+def q_kernel_per_block_int8_surface
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat) (preScale : ℝ) :
+    ComputeKernel := triton {
+  off_b = tl.program_id(axis=1)
+  off_blk = tl.program_id(axis=0)
+  x_offset = off_b * $(L) * $(C)
+  offs_m = off_blk * $(BLK) + tl.arange(0, $(BLK))
+  offs_k = tl.arange(0, $(C))
+  x_ptrs = X + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
+  x_int8_ptrs = XInt8 + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
+  scale_ptrs = Scale + off_b * $(scale_stride) + off_blk
+  x = tl.load(x_ptrs, mask=offs_m[:, None] < $(L))
+  x *= $(preScale)
+  scale = tl.max(tl.abs(x)) / 127.0
+  x_int8 = x / scale
+  x_int8 += 0.5 * tl.where(x_int8 >= 0.0, 1.0, -1.0)
+  x_int8 = (x_int8).to(tl.int8)
+  tl.store(x_int8_ptrs, x_int8, mask=offs_m[:, None] < $(L))
+  tl.store(scale_ptrs, scale)
+}
+
+/-- Surface transcription of `int8_quantization.py`'s `k_kernel_per_block_int8`.
+
+The final `to(tl.int8)` is preserved as a surface dtype annotation while the
+algorithm carrier records the rounded real-valued expression. -/
+def k_kernel_per_block_int8_surface
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat) :
+    ComputeKernel := triton {
+  off_b = tl.program_id(axis=1)
+  off_blk = tl.program_id(axis=0)
+  x_offset = off_b * $(L) * $(C)
+  offs_m = off_blk * $(BLK) + tl.arange(0, $(BLK))
+  offs_k = tl.arange(0, $(C))
+  x_ptrs = X + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
+  x_int8_ptrs = XInt8 + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
+  scale_ptrs = Scale + off_b * $(scale_stride) + off_blk
+  x = tl.load(x_ptrs, mask=offs_m[:, None] < $(L))
+  scale = tl.max(tl.abs(x)) / 127.0
+  x_int8 = x / scale
+  x_int8 += 0.5 * tl.where(x_int8 >= 0.0, 1.0, -1.0)
+  x_int8 = (x_int8).to(tl.int8)
+  tl.store(x_int8_ptrs, x_int8, mask=offs_m[:, None] < $(L))
+  tl.store(scale_ptrs, scale)
+}
+
+/-- Proof-oriented scaled-store slice of `int8_quantization.py`'s
 `q_kernel_per_block_int8` / `k_kernel_per_block_int8`.
 
 The upstream kernels compute a per-block max scale, divide each element by that
@@ -17,11 +69,7 @@ scale, round to int8, and store the result. VeriTile's current arithmetic layer
 models real tiles, so this slice starts from a precomputed per-block scale in
 `Scale`, keeps the original row mask, and proves the scaled matrix writeback
 before the backend-specific rounding/cast step. The `preScale` parameter is
-`C**-0.5 * 1.44269504` for q and `1` for k.
-
-A full surface that computes `tl.max(tl.abs(x))` over symbolic `[BLK, C]`
-blocks currently hits the DSL/proof support gap for symbolic 2D reductions, and
-the final `to(tl.int8)` rounding/cast remains backend-specific. -/
+`C**-0.5 * 1.44269504` for q and `1` for k. -/
 def per_block_int8_scaled_store_slice
     (X XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) (preScale : ℝ) :

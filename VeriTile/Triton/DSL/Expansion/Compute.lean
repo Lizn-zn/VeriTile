@@ -437,15 +437,17 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
   | none =>
       -- `axis = None` (Triton default): reduce over all dimensions.
       -- Two regimes, because `keep_dims` changes how the rank evolves:
-      --   * `keep_dims = false`: each call drops the front axis; emit
-      --     `dims.length` nested calls with `axis = 0`.
+      --   * `keep_dims = false`: each call drops the last remaining axis. This
+      --     still reduces every dimension, and keeps the intermediate shapes
+      --     syntactically reducible (`[M, N] -> [M] -> []`) so the generated
+      --     `Fin shape.length` proof closes by `simp`.
       --   * `keep_dims = true`: rank is preserved; emit calls with
       --     `axis = 0, 1, …, dims.length - 1` so every axis is reduced.
       let mut term := eTerm
       for j in [:dims.length] do
-        let axisIdx := if keepDims then j else 0
+        let axisIdx := if keepDims then j else (dims.length - 1 - j)
         let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
-        term ← `($op (⟨$axisLit, by simp⟩) $kdLit $term)
+        term ← `($op (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.reduceShape]⟩) $kdLit $term)
       let outDims : List (TSyntax `term) ←
         if keepDims then
           let oneLit : TSyntax `term ← `((1 : Nat))
