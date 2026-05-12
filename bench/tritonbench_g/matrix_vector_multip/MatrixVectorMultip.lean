@@ -38,6 +38,27 @@ def mv_kernel
   tl.store(C_ptrs, acc[:, None], mask=n_mask)
 }
 
+/-- Proof-oriented one-`BLOCK_M` slice of `matrix_vector_multip.py`'s
+`mv_kernel`.
+
+The full surface loops over `M` in `BLOCK_M` chunks. This slice captures the
+single-block path used by the bundled tests (`M = 3` and `M = 16`, while the
+autotune choices have `BLOCK_M >= 32`): load one A tile and one B tile, reduce
+over `BLOCK_M`, and write one C block. -/
+def mv_kernel_one_block
+    (A B C : RegionName)
+    (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  offset_n = pid * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
+  offset_m = tl.arange(0, $(BLOCK_M))
+  a = tl.load(A + offset_n[:, None] * $(stride_an) + offset_m[None, :] * $(stride_am),
+    mask=(offset_n[:, None] < $(N)) and (offset_m[None, :] < $(M)), other=0.0).to(tl.float32)
+  b = tl.load(B + offset_m * $(stride_bm), mask=offset_m < $(M), other=0.0).to(tl.float32)
+  acc = tl.sum(a * b[None, :], axis=1)
+  tl.store(C + offset_n * $(stride_cn), acc, mask=offset_n < $(N))
+}
+
 def nIndex (s : BlockState) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
   s.pid * BLOCK_N + i.val
 
@@ -77,29 +98,61 @@ noncomputable def mvSpec
         (i, PUnit.unit))
 
 /-- Algorithm-layer correctness for the one-block matrix-vector slice. -/
-theorem mv_kernel_correct
+theorem mv_kernel_one_block_correct
     (A B C : RegionName)
     (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat)
     (s s' : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => cOffset s stride_cn BLOCK_N i))
-    (hExec : exec (mv_kernel A B C N M stride_an stride_am stride_bm
+    (hExec : exec (mv_kernel_one_block A B C N M stride_an stride_am stride_bm
         stride_cn BLOCK_N BLOCK_M) s = some s') :
     ∀ i : Fin BLOCK_N,
       s'.readMem C (cOffset s stride_cn BLOCK_N i) =
         if nIndex s BLOCK_N i < N then
           mvSpec s A B N M stride_an stride_am stride_bm BLOCK_N BLOCK_M i
         else s.readMem C (cOffset s stride_cn BLOCK_N i) := by
-  sorry
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N] =>
+        (s.pids 0 * BLOCK_N + idx.1.val) * stride_cn) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [cOffset, nIndex] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hBN : 0 < BLOCK_N
+  · simp [exec, mv_kernel_one_block, stepStmts, stepStmt, evalOp,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          Option.bind, Option.map,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.mul, ComparableDType.lt, hBN] at hExec
+    rw [← hExec]
+    simp only [cOffset, nIndex]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj
+      (i, PUnit.unit)]
+    by_cases hi : s.pids 0 * BLOCK_N + i.val < N
+    · simp [hi, mvSpec, mvProdTile, aOffset, bOffset, cOffset, nIndex,
+            Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+            TileShape.eraseAxis, TileShape.insertAxisIndex]
+      rfl
+    · simp [hi]
+  · exact False.elim (hBN (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
 /-- Compute-facing correctness for the one-block matrix-vector slice. -/
-theorem mv_kernel_compute_correct
+theorem mv_kernel_one_block_compute_correct
     (A B C : RegionName)
     (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat)
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => cOffset s stride_cn BLOCK_N i)) :
     ComputeCorrect.Realizes
-      (kernel := mv_kernel A B C N M stride_an stride_am stride_bm
+      (kernel := mv_kernel_one_block A B C N M stride_an stride_am stride_bm
         stride_cn BLOCK_N BLOCK_M)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -107,5 +160,13 @@ theorem mv_kernel_compute_correct
         (fun i => (C, cOffset s stride_cn BLOCK_N i)))
       (expected := fun i =>
         mvSpec s A B N M stride_an stride_am stride_bm BLOCK_N BLOCK_M i) := by
-  sorry
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [mv_kernel_one_block, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := mv_kernel_one_block_correct A B C N M stride_an stride_am stride_bm
+    stride_cn BLOCK_N BLOCK_M s s' hOutInj hExec i
+  simpa [hActive] using h
 end VeriTile.Bench.TritonBenchG.MatrixVectorMultip
