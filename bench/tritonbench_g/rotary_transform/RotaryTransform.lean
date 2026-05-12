@@ -14,8 +14,9 @@ set_option linter.unusedSimpArgs false
 non-conjugate branch of `rotary_transform.py`'s `rotary_kernel`.
 
 This keeps the full `[BLOCK_M, BLOCK_K / 2]` tile shape of the Python branch and
-writes both `o0` and `o1`. The proof below focuses on the one-row `o0`
-projection of this surface. -/
+writes both `o0` and `o1`; the Python row-block early return is represented as
+an active-block guard. The proof below focuses on the one-row `o0` projection
+of this surface. -/
 def rotary_kernel_non_interleaved
     (OUT X COS SIN : RegionName)
     (SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
@@ -26,30 +27,32 @@ def rotary_kernel_non_interleaved
   pid_m = tl.program_id(axis=0)
   pid_batch = tl.program_id(axis=1)
   pid_head = tl.program_id(axis=2)
-  rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
-  rm_cs = rm + $(SEQLEN_OFFSETS)
-  rk_half = tl.arange(0, $(BLOCK_HALF))
   x_base = X + pid_batch * $(stride_x_batch) + pid_head * $(stride_x_nheads)
   out_base = OUT + pid_batch * $(stride_out_batch) + pid_head * $(stride_out_nheads)
-  mask_rot = (rm_cs[:, None] < $(seqlen_ro)) &
-    (rk_half[None, :] < $(rotary_dim_half))
-  mask_x = (rm[:, None] < $(seqlen)) & (rk_half[None, :] < $(rotary_dim_half))
-  cos = tl.load(COS + rm_cs[:, None] * $(rotary_dim_half) + rk_half[None, :],
-    mask=mask_rot, other=1.0).to(tl.float32)
-  sin = tl.load(SIN + rm_cs[:, None] * $(rotary_dim_half) + rk_half[None, :],
-    mask=mask_rot, other=0.0).to(tl.float32)
-  x0 = tl.load(x_base + rm[:, None] * $(stride_x_seqlen) +
-      rk_half[None, :] * $(stride_x_headdim),
-    mask=mask_x, other=0.0).to(tl.float32)
-  x1 = tl.load(x_base + rm[:, None] * $(stride_x_seqlen) +
-      (rk_half[None, :] + $(rotary_dim_half)) * $(stride_x_headdim),
-    mask=mask_x, other=0.0).to(tl.float32)
-  o0 = x0 * cos - x1 * sin
-  o1 = x0 * sin + x1 * cos
-  out_ptrs = out_base + rm[:, None] * $(stride_out_seqlen) +
-    rk_half[None, :] * $(stride_out_headdim)
-  tl.store(out_ptrs, o0, mask=mask_x)
-  tl.store(out_ptrs + $(rotary_dim_half) * $(stride_out_headdim), o1, mask=mask_x)
+  if pid_m * $(BLOCK_M) < $(seqlen) {
+    rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+    rm_cs = rm + $(SEQLEN_OFFSETS)
+    rk_half = tl.arange(0, $(BLOCK_HALF))
+    mask_rot = (rm_cs[:, None] < $(seqlen_ro)) &
+      (rk_half[None, :] < $(rotary_dim_half))
+    mask_x = (rm[:, None] < $(seqlen)) & (rk_half[None, :] < $(rotary_dim_half))
+    cos = tl.load(COS + rm_cs[:, None] * $(rotary_dim_half) + rk_half[None, :],
+      mask=mask_rot, other=1.0).to(tl.float32)
+    sin = tl.load(SIN + rm_cs[:, None] * $(rotary_dim_half) + rk_half[None, :],
+      mask=mask_rot, other=0.0).to(tl.float32)
+    x0 = tl.load(x_base + rm[:, None] * $(stride_x_seqlen) +
+        rk_half[None, :] * $(stride_x_headdim),
+      mask=mask_x, other=0.0).to(tl.float32)
+    x1 = tl.load(x_base + rm[:, None] * $(stride_x_seqlen) +
+        (rk_half[None, :] + $(rotary_dim_half)) * $(stride_x_headdim),
+      mask=mask_x, other=0.0).to(tl.float32)
+    o0 = x0 * cos - x1 * sin
+    o1 = x0 * sin + x1 * cos
+    out_ptrs = out_base + rm[:, None] * $(stride_out_seqlen) +
+      rk_half[None, :] * $(stride_out_headdim)
+    tl.store(out_ptrs, o0, mask=mask_x)
+    tl.store(out_ptrs + $(rotary_dim_half) * $(stride_out_headdim), o1, mask=mask_x)
+  }
 }
 
 /-- Proof-oriented one-row first-half slice of `rotary_transform.py`'s
