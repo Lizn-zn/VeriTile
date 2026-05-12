@@ -153,6 +153,7 @@ syntax "tl.flip(" tritonExpr ", " num ")" : tritonExpr
 syntax "tl.flip(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.join(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.split(" tritonExpr ", " num ")" : tritonExpr
+syntax "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonExpr
 
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ")" : tritonExpr
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
@@ -198,6 +199,10 @@ declarations may be combined with `,`:
 -/
 syntax "tl.region " ident " = " tritonDType ("," ident " = " tritonDType)* : tritonStmt
 
+syntax ident ", " ident " = " "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonStmt
+syntax ident ", " ident " := " "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonStmt
+syntax ident ", " "_" " = " "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonStmt
+syntax ident ", " "_" " := " "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonStmt
 syntax ident ", " ident (", " ident)* " := "
   tritonExpr ", " tritonExpr (", " tritonExpr)* : tritonStmt
 syntax ident ", " ident (", " ident)* " = "

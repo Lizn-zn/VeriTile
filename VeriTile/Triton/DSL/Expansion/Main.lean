@@ -1076,6 +1076,116 @@ partial def expandStmt (env : Env) (pinned : List String)
       pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$valueStmt, $indexStmt]),
         ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$valueCompute, $indexCompute]),
         env', Bool.false)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident = tl.broadcast($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      let aOut ←
+        if a'.shape.eq b'.shape then
+          pure a'
+        else
+          let aDims := match a'.shape with | .dims ds => ds
+          let bDims := match b'.shape with | .dims ds => ds
+          if aDims.length + 1 == bDims.length && termListEq aDims (bDims.drop 1) then
+            expandExpandDims expandExpr env a (axisIdx := 0)
+          else
+            Macro.throwError "tl.broadcast tuple: only same-rank or one leading broadcast axis is supported"
+      let mkAssign (name : Ident) (e' : EOut) : MacroM (TSyntax `term × TSyntax `term) := do
+        let nameLit ← identAsStr name
+        let dt ← e'.dtype.term
+        let sh ← e'.shape.term
+        let exprTerm ←
+          match e'.computeTerm with
+          | some ce => pure ce
+          | none => `(ComputeExpr.alg $e'.term)
+        pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+          ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm))
+      let (aStmt, aCompute) ← mkAssign lhs0 aOut
+      let (bStmt, bCompute) ← mkAssign lhs1 b'
+      let env' :=
+        (lhs1.getId.toString, b'.dtype, b'.shape, b'.computeDType?) ::
+        (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$aStmt, $bStmt]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$aCompute, $bCompute]),
+        env', aOut.computeTerm.isSome || b'.computeTerm.isSome)
+  | `(tritonStmt| $lhs0:ident, _ = tl.broadcast($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      let aOut ←
+        if a'.shape.eq b'.shape then
+          pure a'
+        else
+          let aDims := match a'.shape with | .dims ds => ds
+          let bDims := match b'.shape with | .dims ds => ds
+          if aDims.length + 1 == bDims.length && termListEq aDims (bDims.drop 1) then
+            expandExpandDims expandExpr env a (axisIdx := 0)
+          else
+            Macro.throwError "tl.broadcast tuple: only same-rank or one leading broadcast axis is supported"
+      let nameLit ← identAsStr lhs0
+      let dt ← aOut.dtype.term
+      let sh ← aOut.shape.term
+      let exprTerm ←
+        match aOut.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $aOut.term)
+      let stmt ← `(Stmt.assign $dt $sh $nameLit $aOut.term)
+      let compute ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm)
+      let env' := (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
+      pure (stmt, compute, env', aOut.computeTerm.isSome)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident := tl.broadcast($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      let aOut ←
+        if a'.shape.eq b'.shape then
+          pure a'
+        else
+          let aDims := match a'.shape with | .dims ds => ds
+          let bDims := match b'.shape with | .dims ds => ds
+          if aDims.length + 1 == bDims.length && termListEq aDims (bDims.drop 1) then
+            expandExpandDims expandExpr env a (axisIdx := 0)
+          else
+            Macro.throwError "tl.broadcast tuple: only same-rank or one leading broadcast axis is supported"
+      let mkAssign (name : Ident) (e' : EOut) : MacroM (TSyntax `term × TSyntax `term) := do
+        let nameLit ← identAsStr name
+        let dt ← e'.dtype.term
+        let sh ← e'.shape.term
+        let exprTerm ←
+          match e'.computeTerm with
+          | some ce => pure ce
+          | none => `(ComputeExpr.alg $e'.term)
+        pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+          ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm))
+      let (aStmt, aCompute) ← mkAssign lhs0 aOut
+      let (bStmt, bCompute) ← mkAssign lhs1 b'
+      let env' :=
+        (lhs1.getId.toString, b'.dtype, b'.shape, b'.computeDType?) ::
+        (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$aStmt, $bStmt]),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$aCompute, $bCompute]),
+        env', aOut.computeTerm.isSome || b'.computeTerm.isSome)
+  | `(tritonStmt| $lhs0:ident, _ := tl.broadcast($a:tritonExpr, $b:tritonExpr)) => do
+      let a' ← expandExpr env a
+      let b' ← expandExpr env b
+      let aOut ←
+        if a'.shape.eq b'.shape then
+          pure a'
+        else
+          let aDims := match a'.shape with | .dims ds => ds
+          let bDims := match b'.shape with | .dims ds => ds
+          if aDims.length + 1 == bDims.length && termListEq aDims (bDims.drop 1) then
+            expandExpandDims expandExpr env a (axisIdx := 0)
+          else
+            Macro.throwError "tl.broadcast tuple: only same-rank or one leading broadcast axis is supported"
+      let nameLit ← identAsStr lhs0
+      let dt ← aOut.dtype.term
+      let sh ← aOut.shape.term
+      let exprTerm ←
+        match aOut.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $aOut.term)
+      let stmt ← `(Stmt.assign $dt $sh $nameLit $aOut.term)
+      let compute ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm)
+      let env' := (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
+      pure (stmt, compute, env', aOut.computeTerm.isSome)
   | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) => do
       let lhs := #[lhs0, lhs1] ++ lhsRest
       let rhs := #[rhs0, rhs1] ++ rhsRest

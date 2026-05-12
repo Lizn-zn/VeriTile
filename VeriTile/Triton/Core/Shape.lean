@@ -230,6 +230,21 @@ def dropInsertedIndex :
     insertAxis (d :: rest) ⟨k + 1, h⟩ n =
       d :: insertAxis rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ n := rfl
 
+@[simp] theorem length_insertAxis
+    (shape : TileShape) (axis : Fin (shape.length + 1)) (n : Nat) :
+    (insertAxis shape axis n).length = shape.length + 1 := by
+  induction shape with
+  | nil =>
+      cases axis
+      rfl
+  | cons d rest ih =>
+      cases axis with
+      | mk k hk =>
+          cases k with
+          | zero => rfl
+          | succ k =>
+              simp [insertAxis, ih]
+
 /-- Generic head-case rewrite, useful when `shape` is abstract (the
 per-cons simp lemmas above already fire when `shape` is a concrete
 list). -/

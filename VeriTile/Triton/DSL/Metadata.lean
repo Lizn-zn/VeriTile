@@ -266,6 +266,8 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:tritonReduceKwarg)) => exprRegions assigned e
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:num)) => exprRegions assigned e
   | `(tritonExpr| tl.trans($e:tritonExpr))       => exprRegions assigned e
+  | `(tritonExpr| tl.broadcast($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr)) => exprRegions assigned v
   | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr, $_name:ident=$_dt:tritonDType)) =>
       exprRegions assigned v

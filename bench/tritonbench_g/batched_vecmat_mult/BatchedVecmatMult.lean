@@ -17,30 +17,33 @@ sizes, so this surface keeps the same unmasked block loads and stores. The
 Python body vectorizes the `block_m` rows and writes the reduction as
 `tl.broadcast(a, b)` followed by `tl.trans(tl.sum(..., axis=2))`.
 
-Known surface blocker: this full surface is not yet line-for-line faithful.
-The current DSL cannot spell Python's `tl.broadcast(a, b)` tuple return or
-rank-3 insertion form for `a[:, None, :]`, so the surface uses an explicit
-`block_m` loop. See `bench/tritonbench_g/proof_blockers.md`. -/
+Allowed mechanical Lean-syntax-only changes:
+- Python rank-3 slices like `[None, :, None]` are represented with
+  `tl.expand_dims(..., axis)` calls. -/
 def batched_vecmat_surface
     (A B output : RegionName)
     (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
   m_index = tl.program_id(axis=0)
   n_index = tl.program_id(axis=1)
+  offsets_m = m_index * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offsets_n = n_index * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
   offsets_k = tl.arange(0, $(BLOCK_K))
-  for m_inner in range($(0), $(BLOCK_M), $(1)) {
-    m_offset = m_index * $(BLOCK_M) + m_inner
-    vecmat = (tl.zeros([$(BLOCK_N)], dtype=tl.float32)).to(A.dtype.element_ty)
-    for k_index in range($(0), $(dim_k / BLOCK_K), $(1)) {
-      k_offsets = k_index * $(BLOCK_K) + offsets_k
-      a = tl.load(A + m_offset * $(dim_k) + k_offsets)
-      b = tl.load(B + m_offset * $(dim_n) * $(dim_k) +
-        offsets_n[:, None] * $(dim_k) + k_offsets[None, :])
-      vecmat += tl.sum(a[None, :] * b, axis=1)
-    }
-    tl.store(output + m_offset * $(dim_n) + offsets_n, vecmat)
+  output_tile = offsets_m[:, None] * $(dim_n) + offsets_n[None, :]
+  vecmat = (tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)).to(A.dtype.element_ty)
+  k_blocks = $(dim_k) // $(BLOCK_K)
+  for k_index in range($(0), k_blocks, $(1)) {
+    k_offsets = k_index * $(BLOCK_K) + offsets_k
+    a_tile = offsets_m[:, None] * $(dim_k) + k_offsets[None, :]
+    a = tl.load(A + a_tile)
+    b_tile = tl.expand_dims(tl.expand_dims(offsets_m, 0), 2) * $(dim_n) * $(dim_k) +
+      tl.expand_dims(tl.expand_dims(offsets_n, 1), 2) * $(dim_k) +
+      tl.expand_dims(tl.expand_dims(k_offsets, 0), 0)
+    b = tl.load(B + b_tile)
+    expanded_a, _ = tl.broadcast(a, b)
+    vecmat += tl.trans(tl.sum(expanded_a * b, axis=2))
   }
+  tl.store(output + output_tile, vecmat)
 }
 
 /-- Proof-oriented one-`m`, one-`n`-block slice of
