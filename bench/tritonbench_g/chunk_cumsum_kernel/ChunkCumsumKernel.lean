@@ -16,9 +16,9 @@ Python writes `b_z[None]`; this surface uses scalar broadcast `b_z`, which is
 the same shape behavior in the DSL. The final cast targets `O.dtype.element_ty`
 to mirror the block pointer destination dtype. -/
 def chunk_cumsum_scalar_surface
-    (S O : RegionName) (T BT : Nat) : ComputeKernel := triton {
+  (S O : RegionName) (T BT : Nat) : ComputeKernel := triton {
   i_bh = tl.program_id(0)
-  b_z = 0.0
+  b_z = tl.zeros([], dtype=tl.float32)
   for i_t in range($(0), tl.cdiv($(T), $(BT)), $(1)) {
     p_s = tl.make_block_ptr(S + i_bh * $(T), base=$(0), shape=[$(T)],
       strides=[$(1)], offsets=[i_t * $(BT)], block_shape=[$(BT)])
