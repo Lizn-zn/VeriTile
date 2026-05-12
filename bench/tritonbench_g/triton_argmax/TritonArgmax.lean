@@ -16,10 +16,9 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` / `INT64_INDEX: tl.constexpr` -> Lean
   parameters. -/
 def argmax_kernel_1
-    (inp mid_value mid_index : RegionName)
+    (inp mid_value : RegionName) (mid_index : Region .nat)
     (M BLOCK_SIZE : Nat) (INT64_INDEX : Bool := Bool.false) :
     ComputeKernel := triton {
-  tl.region mid_index = tl.uint64
   pid = tl.program_id(0)
   if INT64_INDEX {
     pid = (pid).to(tl.int64)
@@ -32,31 +31,28 @@ def argmax_kernel_1
   local_index0 = local_index
   max_index = local_index0 + pid * $(BLOCK_SIZE)
   mid_value_ptr = mid_value + pid
-  max_index_ptr = mid_index + pid
+  max_index_ptr = $((mid_index : Region .nat)) + pid
   tl.store(mid_value_ptr, max_val)
   tl.store(max_index_ptr, max_index)
 }
 
 /-- Faithful transcription of `triton_argmax.py`'s `argmax_kernel_2`.
 
-`mid_index` and `out` carry int64 element data in the launch site
-(`torch.int64` buffers); the in-body `tl.region` directive declares
-the element dtype so `tl.load(mid_index_ptrs)` recovers `.nat`
-without an explicit `dtype=` kwarg. The directive itself is metadata
-— it is stripped from the emitted kernel body. -/
+`mid_index` and `out` are typed Nat regions matching the launch site's
+`torch.int64` buffers, so their `tl.load` / `tl.store` calls do not need
+extra `dtype=` kwargs. -/
 def argmax_kernel_2
-    (mid_value mid_index out : RegionName)
+    (mid_value : RegionName) (mid_index out : Region .nat)
     (mid_size BLOCK_MID : Nat) :
     ComputeKernel := triton {
-  tl.region mid_index = tl.uint64, out = tl.uint64
   offset = tl.arange(0, $(BLOCK_MID))
   mid_ptrs = mid_value + offset
   mask = offset < $(mid_size)
   mid_val = tl.load(mid_ptrs, mask=mask, other=-float("inf"))
   index_val = tl.argmax(mid_val, axis=0)
-  mid_index_ptrs = mid_index + index_val
+  mid_index_ptrs = $((mid_index : Region .nat)) + index_val
   out_val = tl.load(mid_index_ptrs)
-  tl.store(out, out_val)
+  tl.store($((out : Region .nat)), out_val)
 }
 
 /-- Faithful transcription of `triton_argmax.py`'s dim-specific
@@ -69,13 +65,12 @@ Known remaining dtype gap: Python initializes `max_values` with
 through the later comparison/update, so this surface keeps the algorithm-layer
 Real initializer while preserving the control/dataflow shape. Python also
 initializes `argmax_values` with `dtype=tl.int64`; this is represented by the
-Nat/index carrier expression `tl.arange(...) * 0` plus the `out_index = tl.uint64`
-region declaration on the store target. -/
+Nat/index carrier expression `tl.arange(...) * 0` plus a typed Nat output
+region. -/
 def argmax_kernel
-    (inp out_index : RegionName)
+    (inp : RegionName) (out_index : Region .nat)
     (M N K BLOCK_M BLOCK_N : Nat) (INT64_INDEX : Bool := Bool.false) :
     ComputeKernel := triton {
-  tl.region out_index = tl.uint64
   pid_m = tl.program_id(0)
   pid_k = tl.program_id(1)
   if INT64_INDEX {
@@ -99,7 +94,7 @@ def argmax_kernel
     argmax_values = tl.where(update, start_n + local_argmax0, argmax_values)
   }
   offset_index = m_offset * $(K) + pid_k
-  out_index_ptrs = out_index + offset_index
+  out_index_ptrs = $((out_index : Region .nat)) + offset_index
   mask1 = m_offset < $(M)
   tl.store(out_index_ptrs, argmax_values, mask=mask1)
 }

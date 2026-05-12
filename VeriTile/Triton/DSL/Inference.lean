@@ -605,6 +605,24 @@ dtype. The DSL macro consults this map at `tl.load(i)` expansion to
 default the load's dtype, in addition to the static-region case. -/
 abbrev PtrElems := List (String × DInfo)
 
+private def typedRegionTermDType? (r : TSyntax `term) : Option DInfo :=
+  match r with
+  | `(($_:term : Region .real)) => some DInfo.real
+  | `(($_:term : Region .fp32)) => some DInfo.fp32
+  | `(($_:term : Region .fp16)) => some DInfo.fp16
+  | `(($_:term : Region .bf16)) => some DInfo.bf16
+  | `(($_:term : Region .int)) => some DInfo.int
+  | `(($_:term : Region .nat)) => some DInfo.nat
+  | `(($_:term : Region .bool)) => some DInfo.bool
+  | `(($_:term : Region TileDType.real)) => some DInfo.real
+  | `(($_:term : Region TileDType.fp32)) => some DInfo.fp32
+  | `(($_:term : Region TileDType.fp16)) => some DInfo.fp16
+  | `(($_:term : Region TileDType.bf16)) => some DInfo.bf16
+  | `(($_:term : Region TileDType.int)) => some DInfo.int
+  | `(($_:term : Region TileDType.nat)) => some DInfo.nat
+  | `(($_:term : Region TileDType.bool)) => some DInfo.bool
+  | _ => none
+
 /-- Walk an expression and try to determine its root static-pointer
 region's declared dtype. Returns `some d` only when the expression is
 a static-ptr-add chain rooted in a region whose dtype is known via
@@ -613,6 +631,7 @@ private partial def rootedPtrDType (regionDTypes : RegionDTypes)
     (ptrElems : PtrElems) :
     TSyntax `tritonExpr → Option DInfo := fun stx =>
   match stx with
+  | `(tritonExpr| $($r:term)) => typedRegionTermDType? r
   | `(tritonExpr| ($e:tritonExpr)) => rootedPtrDType regionDTypes ptrElems e
   | `(tritonExpr| $r:ident) =>
       let name := r.getId.toString

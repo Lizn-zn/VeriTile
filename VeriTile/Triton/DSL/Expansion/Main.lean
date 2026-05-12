@@ -146,8 +146,7 @@ private def typedRegionAntiquote? (r : TSyntax `term) :
     | _ => pure none
   let some dtype := dtype?
     | pure none
-  let regionTerm ← `(Region.name $r)
-  pure (some (regionTerm, dtype))
+  pure (some (r, dtype))
 
 mutual
 
