@@ -13,17 +13,17 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `token_softmax_bloom.py`'s
 `_fwd_kernel_token_softmax`.
 
-The metadata loads use `dtype=tl.uint64` because the loaded sequence length and
-start offset feed pointer arithmetic in the Compute layer. -/
+The metadata buffers are typed Nat regions so their `tl.load` calls do not need
+extra `dtype=` kwargs. -/
 def token_softmax_surface
-    (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName)
+    (Logics : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (Prob_Out : RegionName)
     (stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   cur_batch = tl.program_id(0)
   cur_head = tl.program_id(1)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
-  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch, dtype=tl.uint64)
-  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch, dtype=tl.uint64)
+  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
+  cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
   row = tl.load(Logics + cur_head * $(stride_logic_h) +
       (cur_batch_in_all_start_index + col_offsets) * $(stride_logic_bs),
     mask=col_offsets < cur_batch_seq_len, other=-inf).to(tl.float32)
@@ -43,15 +43,15 @@ The full kernel computes the row softmax with max/exp/sum reductions. This
 slice starts from a precomputed `Softmax` region and proves the masked
 destination writeback using `B_Start_Loc` and `B_Seqlen`. -/
 def token_softmax_final_store_slice
-    (Softmax B_Start_Loc B_Seqlen Prob_Out : RegionName)
+    (Softmax : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (Prob_Out : RegionName)
     (stride_softmax_h stride_softmax_bs stride_prob_h stride_prob_bs
       BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   cur_batch = tl.program_id(axis=0)
   cur_head = tl.program_id(axis=1)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
-  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch, dtype=tl.uint64)
-  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch, dtype=tl.uint64)
+  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
+  cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
   softmax_output = tl.load(Softmax + cur_head * $(stride_softmax_h) +
       (cur_batch_in_all_start_index + col_offsets) * $(stride_softmax_bs),
     mask=col_offsets < cur_batch_seq_len, other=0.0)
