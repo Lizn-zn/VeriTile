@@ -9,17 +9,16 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `fast_ce_loss.py`'s `_cross_entropy_forward` for
-the single-chunk, non-ignored-label path.
+/-- Surface transcription of `fast_ce_loss.py`'s `_cross_entropy_forward`.
 
 This covers the path used by the benchmark's small-vocabulary tests: masked
 logits load, optional logit scaling, optional softcapping via `tl.tanh`, stable
-logsumexp, label gather, loss store, and logsumexp store. The `label_idx =
--100` sentinel branch and Python's `tl.int32` label cast are signed-integer
-control flow and are not represented in this Nat label surface. -/
-def cross_entropy_forward_nonignored_surface
+logsumexp, label gather, loss store, and logsumexp store. Python's hard-coded
+`label_idx = -100` sentinel is represented by the Nat `ignored_index`
+parameter in this surface. -/
+def cross_entropy_forward_surface
     (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .nat)
-    (VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)
+    (ignored_index VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
@@ -38,29 +37,32 @@ def cross_entropy_forward_nonignored_surface
   logits = (logits).to(tl.float32)
   c = tl.max(logits, axis=0)
   logsumexp = c + tl.log(tl.sum(tl.exp(logits - c), axis=0))
-  x = tl.load(logits_base + label_idx)
-  if DO_LOGIT_SCALING {
-    x = $(LOGIT_SCALE) * x
+  if label_idx != $(ignored_index) {
+    x = tl.load(logits_base + label_idx)
+    if DO_LOGIT_SCALING {
+      x = $(LOGIT_SCALE) * x
+    }
+    if DO_SOFTCAPPING {
+      x = $(SOFTCAP) * tl.tanh(x / $(SOFTCAP))
+    }
+    loss = logsumexp - (x).to(tl.float32)
+  } else {
+    loss = 0.0
   }
-  if DO_SOFTCAPPING {
-    x = $(SOFTCAP) * tl.tanh(x / $(SOFTCAP))
-  }
-  loss = logsumexp - (x).to(tl.float32)
   tl.store(logsumexp_ptr + row_idx, logsumexp)
   tl.store(loss_ptr + row_idx, loss)
 }
 
-/-- Surface transcription of `fast_ce_loss.py`'s `_cross_entropy_backward` for
-the non-ignored-label path.
+/-- Surface transcription of `fast_ce_loss.py`'s `_cross_entropy_backward`.
 
 This preserves the block logits load, optional logit scaling, optional softcap
 transform and derivative factor, softmax-minus-one update at the label, and
-final masked in-place gradient writeback. The ignored-label branch uses the
-signed sentinel `-100` plus Python's `tl.int32` label cast and remains outside
-this Nat label surface. -/
-def cross_entropy_backward_nonignored_surface
+final masked in-place gradient writeback. Python's hard-coded `label_idx =
+-100` sentinel is represented by the Nat `ignored_index` parameter in this
+surface. -/
+def cross_entropy_backward_surface
     (logits_ptr dloss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .nat)
-    (VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE : Nat)
+    (ignored_index VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
@@ -71,7 +73,11 @@ def cross_entropy_backward_nonignored_surface
   col_offsets = block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
   label_idx = tl.load($((labels_ptr : Region .nat)) + row_idx)
-  dloss = tl.load(dloss_base)
+  if label_idx != $(ignored_index) {
+    dloss = tl.load(dloss_base)
+  } else {
+    dloss = 0.0
+  }
   x = tl.load(logits_base + col_offsets, mask=mask, other=-inf)
   if DO_LOGIT_SCALING {
     x = x * $(LOGIT_SCALE)
