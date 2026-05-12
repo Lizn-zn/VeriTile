@@ -50,7 +50,7 @@ def token_attn_mistral_surface
       mask=v_mask, other=0.0)
     acc += tl.sum(p_value[:, None] * v_value, axis=0)
   }
-  acc = (acc).to(tl.float32)
+  acc = (acc).to(Out.dtype.element_ty)
   off_o = cur_batch * $(stride_obs) + cur_head * $(stride_oh) + offs_d * $(stride_od)
   out_ptrs = Out + off_o
   tl.store(out_ptrs, acc)
@@ -74,7 +74,7 @@ def token_attn_mistral_final_store_slice
   acc = tl.load(Acc + cur_batch * $(stride_acc_bs) + cur_head * $(stride_acc_h) +
       offs_d * $(stride_acc_d))
   tl.store(Out + cur_batch * $(stride_obs) + cur_head * $(stride_oh) +
-      offs_d * $(stride_od), acc)
+      offs_d * $(stride_od), (acc).to(Out.dtype.element_ty))
 }
 
 def dIndex (_s : BlockState) (i : Fin BLOCK_DMODEL) : Nat :=
