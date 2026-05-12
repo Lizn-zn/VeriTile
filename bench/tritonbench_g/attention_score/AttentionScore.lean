@@ -35,8 +35,8 @@ def attention_score_kernel
   off_z = off_hz // $(H)
   off_h = off_hz % $(H)
   off_hkv = off_h // $(H_PER_KV)
-  q_offset = off_z * $(stride_qz) + off_h * $(stride_qh)
-  k_offset = off_z * $(stride_kz) + off_hkv * $(stride_kh)
+  q_offset = off_z.to(tl.int64) * $(stride_qz) + off_h.to(tl.int64) * $(stride_qh)
+  k_offset = off_z.to(tl.int64) * $(stride_kz) + off_hkv.to(tl.int64) * $(stride_kh)
   m_ptrs = M + off_hz * $(ROUND_CTX) + tl.arange(0, $(BLOCK_M))
   o = tl.zeros([$(BLOCK_N)], dtype=tl.float32)
   Q_block_ptr = tl.make_block_ptr(base=Q + q_offset,
@@ -94,7 +94,7 @@ def attention_score_kernel
     Q_block_ptr = tl.advance(Q_block_ptr, [$(BLOCK_M), 0])
     m_ptrs = m_ptrs + $(BLOCK_M)
   }
-  o_offset = off_z * $(stride_oz) + off_h * $(stride_oh)
+  o_offset = off_z.to(tl.int64) * $(stride_oz) + off_h.to(tl.int64) * $(stride_oh)
   o_range = tl.arange(0, $(BLOCK_N)) + start_n * $(BLOCK_N)
   tl.store(Out + o_offset + o_range, (o).to(Out.dtype.element_ty),
     mask=o_range < $(NKV_CTX))
