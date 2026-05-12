@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of the active-LoRA path in
+/-- Surface transcription of
 `lora_expand_gemv.py`'s `_bgmv_expand_kernel`.
 
 This covers the `EVEN_K` load branch, `tl.cdiv` split length, output-block

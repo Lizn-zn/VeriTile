@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of the active-LoRA path in `sgmv_expand_slice.py`'s
+/-- Surface transcription of `sgmv_expand_slice.py`'s
 `_sgmv_expand_slice_kernel`.
 
 This keeps the CTA decomposition, sequence metadata loads, LoRA index gather,
