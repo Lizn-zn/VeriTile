@@ -12,10 +12,7 @@ open VeriTile.Triton
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_DMODEL: tl.constexpr` / `BLOCK_HEAD: tl.constexpr` -> Lean
-  `Nat` parameters.
-- The Python head-only mask is made explicitly two-dimensional with the
-  tautological `offs_d < BLOCK_DMODEL` conjunct so the current DSL does not
-  need to infer that broadcast. -/
+  `Nat` parameters. -/
 def fwd_kernel_destindex_copy_kv
     (K Dest_loc Out : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
@@ -29,11 +26,8 @@ def fwd_kernel_destindex_copy_kv
     $(stride_k_h) * offs_h[:, None] + $(stride_k_d) * offs_d[None, :]
   o_ptrs = Out + dest_index * $(stride_o_bs) +
     $(stride_o_h) * offs_h[:, None] + $(stride_o_d) * offs_d[None, :]
-  k = tl.load(k_ptrs,
-    mask=(offs_h[:, None] < $(head_num)) and (offs_d[None, :] < $(BLOCK_DMODEL)),
-    other=0.0)
-  tl.store(o_ptrs, k,
-    mask=(offs_h[:, None] < $(head_num)) and (offs_d[None, :] < $(BLOCK_DMODEL)))
+  k = tl.load(k_ptrs, mask=offs_h[:, None] < $(head_num), other=0.0)
+  tl.store(o_ptrs, k, mask=offs_h[:, None] < $(head_num))
 }
 
 def headIndex (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
@@ -56,12 +50,12 @@ def outAddr
     (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
   destBase s Dest_loc * stride_o_bs + stride_o_h * headIndex idx + stride_o_d * dimIndex idx
 
-def active (head_num BLOCK_DMODEL : Nat) (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Prop :=
-  headIndex idx < head_num ∧ dimIndex idx < BLOCK_DMODEL
+def active (head_num : Nat) (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Prop :=
+  headIndex idx < head_num
 
-instance activeDecidable (head_num BLOCK_DMODEL : Nat)
+instance activeDecidable (head_num : Nat)
     (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) :
-    Decidable (active head_num BLOCK_DMODEL idx) := by
+    Decidable (active head_num idx) := by
   unfold active
   infer_instance
 
@@ -80,7 +74,7 @@ theorem fwd_kernel_destindex_copy_kv_correct
           head_num BLOCK_DMODEL BLOCK_HEAD) s).map
           (fun s' => s'.readMem Out
             (outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx))
-        = some (if active head_num BLOCK_DMODEL idx then
+        = some (if active head_num idx then
             s.readMem K (sourceAddr s stride_k_bs stride_k_h stride_k_d idx)
           else
             s.readMem Out (outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)) := by
@@ -101,8 +95,7 @@ theorem fwd_kernel_destindex_copy_kv_correct
   simp [active, outAddr, sourceAddr, destBase, headIndex, dimIndex,
         BlockState.pid_eq, BlockState.readMemValue]
   by_cases hHead : idx.1.val < head_num
-  · have hDim : idx.2.1.val < BLOCK_DMODEL := idx.2.1.isLt
-    simpa [hHead, hDim] using
+  · simpa [hHead] using
       (BlockState.scatter_readback_prop_masked_nd
         (region := Out)
         (shape := [BLOCK_HEAD, BLOCK_DMODEL])
@@ -113,13 +106,13 @@ theorem fwd_kernel_destindex_copy_kv_correct
             stride_o_h * i.1.val + stride_o_d * i.2.1.val)
         (valueFn := fun i : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
           WithBot.unbotD 0
-            (if i.1.val < head_num ∧ i.2.1.val < BLOCK_DMODEL then
+            (if i.1.val < head_num then
               some (s.readMem K
                 (s.pids 0 * stride_k_bs + stride_k_h * i.1.val +
                   stride_k_d * i.2.1.val))
             else some 0.0))
         (P := fun i : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
-          i.1.val < head_num ∧ i.2.1.val < BLOCK_DMODEL)
+          i.1.val < head_num)
         _ hRawInj idx)
   · simpa [hHead] using
       (BlockState.scatter_readback_prop_masked_nd
@@ -132,13 +125,13 @@ theorem fwd_kernel_destindex_copy_kv_correct
             stride_o_h * i.1.val + stride_o_d * i.2.1.val)
         (valueFn := fun i : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
           WithBot.unbotD 0
-            (if i.1.val < head_num ∧ i.2.1.val < BLOCK_DMODEL then
+            (if i.1.val < head_num then
               some (s.readMem K
                 (s.pids 0 * stride_k_bs + stride_k_h * i.1.val +
                   stride_k_d * i.2.1.val))
             else some 0.0))
         (P := fun i : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
-          i.1.val < head_num ∧ i.2.1.val < BLOCK_DMODEL)
+          i.1.val < head_num)
         _ hRawInj idx)
 
 /-- Executed-state form of `fwd_kernel_destindex_copy_kv_correct`. -/
@@ -156,7 +149,7 @@ theorem fwd_kernel_destindex_copy_kv_correct_of_exec
         head_num BLOCK_DMODEL BLOCK_HEAD) s = some s') :
     ∀ idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL],
       s'.readMem Out (outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)
-        = if active head_num BLOCK_DMODEL idx then
+        = if active head_num idx then
             s.readMem K (sourceAddr s stride_k_bs stride_k_h stride_k_d idx)
           else
             s.readMem Out (outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx) := by
@@ -182,7 +175,7 @@ theorem fwd_kernel_destindex_copy_kv_compute_correct
         head_num BLOCK_DMODEL BLOCK_HEAD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] => active head_num BLOCK_DMODEL idx)
+        (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] => active head_num idx)
         (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
           (Out, outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)))
       (expected := fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
