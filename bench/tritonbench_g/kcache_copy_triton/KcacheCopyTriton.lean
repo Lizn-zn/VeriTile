@@ -93,6 +93,162 @@ def kCacheOffset
     s.pids 1 * stride_kch + s.pids 2 * stride_kcsplit_x +
     OFFSET_LAST_BLOCK * stride_kcs + dimIndex i
 
+def n1PastKvSeqLen (s : BlockState) (seq_lengths : RegionName) : Nat :=
+  s.readMemValue .nat seq_lengths (s.pids 0) - 1
+
+def n1LastBlockIdx (s : BlockState) (seq_lengths : RegionName)
+    (block_size : Nat) : Nat :=
+  n1PastKvSeqLen s seq_lengths / block_size
+
+def n1OffsetLastBlock (s : BlockState) (seq_lengths : RegionName)
+    (block_size : Nat) : Nat :=
+  n1PastKvSeqLen s seq_lengths % block_size
+
+def n1BlockId (s : BlockState) (BLOCK_TABLES seq_lengths : RegionName)
+    (stride_bts stride_btb block_size : Nat) : Nat :=
+  s.readMemValue .nat BLOCK_TABLES
+    (s.pids 0 * stride_bts + n1LastBlockIdx s seq_lengths block_size * stride_btb)
+
+def n1KCacheOffset
+    (s : BlockState) (BLOCK_TABLES seq_lengths : RegionName)
+    (stride_kcb stride_kch stride_kcsplit_x stride_kcs
+      stride_bts stride_btb block_size : Nat)
+    (i : Fin KCACHE_X) : Nat :=
+  n1BlockId s BLOCK_TABLES seq_lengths stride_bts stride_btb block_size * stride_kcb +
+    s.pids 1 * stride_kch + s.pids 2 * stride_kcsplit_x +
+    n1OffsetLastBlock s seq_lengths block_size * stride_kcs + dimIndex i
+
+/-- Algorithm-layer correctness for the `n_tokens = 1` K-cache copy surface.
+
+This theorem covers the Python decode path's dynamic `seq_lengths` read, block
+index division, offset modulo, block-table lookup, and split-x K-cache store. -/
+theorem copy_to_kcache_seqlen_n1_surface_correct
+    (K KCache BLOCK_TABLES seq_lengths : RegionName)
+    (stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
+      stride_kcs stride_bts stride_btb block_size KCACHE_X : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin KCACHE_X =>
+        n1KCacheOffset s BLOCK_TABLES seq_lengths stride_kcb stride_kch
+          stride_kcsplit_x stride_kcs stride_bts stride_btb block_size i))
+    (hExec : exec (copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES
+        seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
+        stride_kcsplit_x stride_kcs stride_bts stride_btb block_size KCACHE_X)
+        s = some s') :
+    ∀ i : Fin KCACHE_X,
+      s'.readMem KCache
+          (n1KCacheOffset s BLOCK_TABLES seq_lengths stride_kcb stride_kch
+            stride_kcsplit_x stride_kcs stride_bts stride_btb block_size i) =
+        s.readMem K (kSourceOffset s stride_kt stride_kh stride_kd KCACHE_X i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [KCACHE_X] =>
+        s.readMemValue .nat BLOCK_TABLES
+            (s.pids 0 * stride_bts +
+              ((s.readMemValue .nat seq_lengths (s.pids 0) - 1) / block_size) *
+                stride_btb) * stride_kcb +
+          s.pids 1 * stride_kch + s.pids 2 * stride_kcsplit_x +
+          ((s.readMemValue .nat seq_lengths (s.pids 0) - 1) % block_size) *
+            stride_kcs + idx.1.val) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [n1KCacheOffset, n1BlockId, n1LastBlockIdx, n1OffsetLastBlock,
+        n1PastKvSeqLen, blockId, dimIndex, BlockState.readMemValue] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hX : 0 < KCACHE_X
+  · simp [exec, copy_to_kcache_seqlen_n1_surface, stepStmts, stepStmt, evalOp,
+          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          IntegralDType.floorDiv, IntegralDType.mod, BlockState.readMemValue, hX]
+        at hExec
+    rw [← hExec]
+    have hScatter :=
+      (BlockState.scatter_readback_prop_masked_nd
+        (region := KCache)
+        (shape := [KCACHE_X])
+        (s := (((((((((s.setReg "cur_token_idx" TileDType.nat []
+              (Tile.scalar (s.pids 0)))
+          |>.setReg "cur_seq_idx" TileDType.nat [] (Tile.scalar (s.pids 0)))
+          |>.setReg "cur_kv_head_idx" TileDType.nat [] (Tile.scalar (s.pids 1)))
+          |>.setReg "split_x_idx" TileDType.nat [] (Tile.scalar (s.pids 2)))
+          |>.setReg "past_kv_seq_len" TileDType.nat []
+            (Tile.scalar (s.readMemValue .nat seq_lengths (s.pids 0) - 1)))
+          |>.setReg "last_bt_block_idx" TileDType.nat []
+            (Tile.scalar ((s.readMemValue .nat seq_lengths (s.pids 0) - 1) /
+              block_size)))
+          |>.setReg "block_id" TileDType.nat []
+            (Tile.scalar (s.readMemValue .nat BLOCK_TABLES
+              (s.pids 0 * stride_bts +
+                ((s.readMemValue .nat seq_lengths (s.pids 0) - 1) / block_size) *
+                  stride_btb))))
+          |>.setReg "offset_last_block" TileDType.nat []
+            (Tile.scalar ((s.readMemValue .nat seq_lengths (s.pids 0) - 1) %
+              block_size)))
+          |>.setReg "offsets_dmodel" TileDType.nat [KCACHE_X]
+            { data := fun i => s.pids 2 * KCACHE_X + i.1.val })
+          |>.setReg "k" TileDType.real [KCACHE_X]
+            { data := fun i =>
+              some (s.readMem K
+                (s.pids 0 * stride_kt + s.pids 1 * stride_kh +
+                  (s.pids 2 * KCACHE_X + i.1.val) * stride_kd)) })
+        (offsetFn := fun idx : TileIndex [KCACHE_X] =>
+          s.readMemValue .nat BLOCK_TABLES
+              (s.pids 0 * stride_bts +
+                ((s.readMemValue .nat seq_lengths (s.pids 0) - 1) / block_size) *
+                  stride_btb) * stride_kcb +
+            s.pids 1 * stride_kch + s.pids 2 * stride_kcsplit_x +
+            ((s.readMemValue .nat seq_lengths (s.pids 0) - 1) % block_size) *
+              stride_kcs + idx.1.val)
+        (valueFn := fun idx : TileIndex [KCACHE_X] =>
+          WithBot.unbotD 0
+            (some (s.readMem K
+              (s.pids 0 * stride_kt + s.pids 1 * stride_kh +
+                (s.pids 2 * KCACHE_X + idx.1.val) * stride_kd))))
+        (P := fun _idx : TileIndex [KCACHE_X] => True)
+        hRawInj (i, PUnit.unit))
+    simp [BlockState.readMemValue] at hScatter
+    simpa [n1KCacheOffset, n1BlockId, n1LastBlockIdx, n1OffsetLastBlock,
+      n1PastKvSeqLen, kSourceOffset, dimIndex, BlockState.readMemValue] using hScatter
+  · exact False.elim (hX (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the `n_tokens = 1` K-cache copy surface. -/
+theorem copy_to_kcache_seqlen_n1_surface_compute_correct
+    (K KCache BLOCK_TABLES seq_lengths : RegionName)
+    (stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
+      stride_kcs stride_bts stride_btb block_size KCACHE_X : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin KCACHE_X =>
+        n1KCacheOffset s BLOCK_TABLES seq_lengths stride_kcb stride_kch
+          stride_kcsplit_x stride_kcs stride_bts stride_btb block_size i)) :
+    ComputeCorrect.Realizes
+      (kernel := copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES
+        seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
+        stride_kcsplit_x stride_kcs stride_bts stride_btb block_size KCACHE_X)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin KCACHE_X => True)
+        (fun i => (KCache,
+          n1KCacheOffset s BLOCK_TABLES seq_lengths stride_kcb stride_kch
+            stride_kcsplit_x stride_kcs stride_bts stride_btb block_size i)))
+      (expected := fun i =>
+        s.readMem K (kSourceOffset s stride_kt stride_kh stride_kd KCACHE_X i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [copy_to_kcache_seqlen_n1_surface]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i _hActive
+  exact copy_to_kcache_seqlen_n1_surface_correct K KCache BLOCK_TABLES
+    seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
+    stride_kcsplit_x stride_kcs stride_bts stride_btb block_size KCACHE_X
+    s s' hOutInj hExec i
+
 /-- Algorithm-layer correctness for the K-cache split-x copy slice. -/
 theorem copy_to_kcache_split_x_block_correct
     (K KCache BLOCK_TABLES : RegionName)
