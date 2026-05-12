@@ -13,9 +13,7 @@ set_option maxHeartbeats 5000000
 `_rms_layernorm_forward`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
-- Python `normed.to(W_row.dtype)` is represented with the source-region
-  element dtype `W.dtype.element_ty`, which is the dtype of `W_row`. -/
+- Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter. -/
 def rms_layernorm_forward
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols : Nat)
@@ -36,7 +34,7 @@ def rms_layernorm_forward
   inv_var = tl.math.rsqrt(row_var + $(eps))
   tl.store(r, inv_var)
   normed = X_row * inv_var
-  normed = (normed).to(W.dtype.element_ty)
+  normed = (normed).to(W_row.dtype)
   output = normed * W_row
   tl.store(Y + col_offsets, output, mask=mask)
 }

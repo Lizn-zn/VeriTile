@@ -41,15 +41,15 @@ def triton_rope_forward
   first_q_mask = (q_heads[:, None] < $(n_qh)) & (dims[None, :] < $(HEAD_HALF))
   first_k_mask = (k_heads[:, None] < $(n_kh)) & (dims[None, :] < $(HEAD_HALF))
   q_tile_1 = tl.load(q_ptr + first_half_q_offsets, mask=first_q_mask,
-    other=0).to(SIN.dtype.element_ty)
+    other=0).to(sin_row.dtype)
   k_tile_1 = tl.load(k_ptr + first_half_k_offsets, mask=first_k_mask,
-    other=0).to(SIN.dtype.element_ty)
+    other=0).to(sin_row.dtype)
   second_half_q_offsets = first_half_q_offsets + $(HEAD_HALF)
   second_half_k_offsets = first_half_k_offsets + $(HEAD_HALF)
   q_tile_2 = tl.load(q_ptr + second_half_q_offsets, mask=first_q_mask,
-    other=0).to(SIN.dtype.element_ty)
+    other=0).to(sin_row.dtype)
   k_tile_2 = tl.load(k_ptr + second_half_k_offsets, mask=first_k_mask,
-    other=0).to(SIN.dtype.element_ty)
+    other=0).to(sin_row.dtype)
   new_q_tile_1 = q_tile_1 * cos_row[None, :] - q_tile_2 * sin_row[None, :]
   new_q_tile_2 = q_tile_2 * cos_row[None, :] + q_tile_1 * sin_row[None, :]
   new_k_tile_1 = k_tile_1 * cos_row[None, :] - k_tile_2 * sin_row[None, :]
@@ -77,9 +77,9 @@ def rope_transform_q0_head
   cos_base = COS + $(COS_ROW_IDX) * $(cos_row_stride)
   sin_base = SIN + $(COS_ROW_IDX) * $(sin_row_stride)
   q0 = tl.load(q_base + dim,
-    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(SIN.dtype.element_ty)
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(sin_row.dtype)
   q1 = tl.load(q_base + dim + $(HEAD_HALF),
-    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(SIN.dtype.element_ty)
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(sin_row.dtype)
   cos_row = tl.load(cos_base + dim, mask=dim < $(HEAD_HALF), other=0)
   sin_row = tl.load(sin_base + dim, mask=dim < $(HEAD_HALF), other=0)
   out = q0 * cos_row - q1 * sin_row

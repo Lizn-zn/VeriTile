@@ -365,7 +365,10 @@ partial def natOffsetsWithBaseAdd (env : Env) (ctx : String)
 
 partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
   if stx.raw.getKind == ``tritonMethodCastElementTy ||
+      stx.raw.getKind == ``tritonMethodCastDTypeIdent ||
       stx.raw.getKind == ``tritonMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdentSpaced ||
       stx.raw.getKind == ``tritonIdentMethodCastElementTyIdent ||
       stx.raw.getKind == ``tritonIdentMethodCastElementTyIdentSpaced then
     let args := stx.raw.getArgs
