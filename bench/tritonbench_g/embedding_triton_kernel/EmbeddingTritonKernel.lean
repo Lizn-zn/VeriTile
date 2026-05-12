@@ -9,6 +9,7 @@ open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Faithful transcription of `embedding_triton_kernel.py`'s
 `embedding_kernel`.
@@ -45,68 +46,70 @@ def embedding_kernel
   }
 }
 
-def seqIndex (s : BlockState) (start_nn : Nat) : Nat :=
-  s.pids 0 + start_nn
+def seqIndex (s : BlockState) (BLOCK_N start_nn : Nat) : Nat :=
+  s.pids 0 * BLOCK_N + start_nn
 
 def dimIndex (i : Fin BLOCK_DMODEL) : Nat :=
   i.val
 
-def tokenRaw (s : BlockState) (input_ids : RegionName) (start_nn : Nat) : Nat :=
-  s.readMemValue .nat input_ids (seqIndex s start_nn)
+def tokenRaw
+    (s : BlockState) (input_ids : RegionName) (BLOCK_N start_nn : Nat) : Nat :=
+  s.readMemValue .nat input_ids (seqIndex s BLOCK_N start_nn)
 
 def tokenIndex
-    (s : BlockState) (input_ids : RegionName) (vob_start_id start_nn : Nat) : Nat :=
-  tokenRaw s input_ids start_nn - vob_start_id
+    (s : BlockState) (input_ids : RegionName)
+    (vob_start_id BLOCK_N start_nn : Nat) : Nat :=
+  tokenRaw s input_ids BLOCK_N start_nn - vob_start_id
 
-def outOffset (s : BlockState) (stride_out_seq start_nn : Nat)
+def outOffset (s : BlockState) (stride_out_seq BLOCK_N start_nn : Nat)
     (i : Fin BLOCK_DMODEL) : Nat :=
-  seqIndex s start_nn * stride_out_seq + dimIndex i
+  seqIndex s BLOCK_N start_nn * stride_out_seq + dimIndex i
 
 def weightOffset
     (s : BlockState) (input_ids : RegionName)
-    (vob_start_id stride_weight_seq start_nn : Nat)
+    (vob_start_id stride_weight_seq BLOCK_N start_nn : Nat)
     (i : Fin BLOCK_DMODEL) : Nat :=
-  tokenIndex s input_ids vob_start_id start_nn * stride_weight_seq + dimIndex i
+  tokenIndex s input_ids vob_start_id BLOCK_N start_nn * stride_weight_seq + dimIndex i
 
 def active
     (s : BlockState) (input_ids : RegionName)
-    (vob_start_id vob_end_id n_ctx hiden_size start_nn BLOCK_DMODEL : Nat)
+    (vob_start_id vob_end_id n_ctx hiden_size BLOCK_N start_nn BLOCK_DMODEL : Nat)
     (i : Fin BLOCK_DMODEL) : Prop :=
-  seqIndex s start_nn < n_ctx ∧
-    vob_start_id ≤ tokenRaw s input_ids start_nn ∧
-    tokenRaw s input_ids start_nn < vob_end_id ∧
+  seqIndex s BLOCK_N start_nn < n_ctx ∧
+    vob_start_id ≤ tokenRaw s input_ids BLOCK_N start_nn ∧
+    tokenRaw s input_ids BLOCK_N start_nn < vob_end_id ∧
     dimIndex i < hiden_size
 
 def storeActive
-    (s : BlockState) (n_ctx hiden_size start_nn BLOCK_DMODEL : Nat)
+    (s : BlockState) (n_ctx hiden_size BLOCK_N start_nn BLOCK_DMODEL : Nat)
     (i : Fin BLOCK_DMODEL) : Prop :=
-  seqIndex s start_nn < n_ctx ∧ dimIndex i < hiden_size
+  seqIndex s BLOCK_N start_nn < n_ctx ∧ dimIndex i < hiden_size
 
 instance activeDecidable
     (s : BlockState) (input_ids : RegionName)
-    (vob_start_id vob_end_id n_ctx hiden_size start_nn BLOCK_DMODEL : Nat)
+    (vob_start_id vob_end_id n_ctx hiden_size BLOCK_N start_nn BLOCK_DMODEL : Nat)
     (i : Fin BLOCK_DMODEL) :
-    Decidable (active s input_ids vob_start_id vob_end_id n_ctx hiden_size
+    Decidable (active s input_ids vob_start_id vob_end_id n_ctx hiden_size BLOCK_N
       start_nn BLOCK_DMODEL i) := by
   unfold active
   infer_instance
 
 instance storeActiveDecidable
-    (s : BlockState) (n_ctx hiden_size start_nn BLOCK_DMODEL : Nat)
+    (s : BlockState) (n_ctx hiden_size BLOCK_N start_nn BLOCK_DMODEL : Nat)
     (i : Fin BLOCK_DMODEL) :
-    Decidable (storeActive s n_ctx hiden_size start_nn BLOCK_DMODEL i) := by
+    Decidable (storeActive s n_ctx hiden_size BLOCK_N start_nn BLOCK_DMODEL i) := by
   unfold storeActive
   infer_instance
 
 noncomputable def embeddingSpec
     (s : BlockState) (weight input_ids : RegionName)
-    (vob_start_id vob_end_id stride_weight_seq start_nn BLOCK_DMODEL : Nat)
+    (vob_start_id vob_end_id stride_weight_seq BLOCK_N start_nn BLOCK_DMODEL : Nat)
     (i : Fin BLOCK_DMODEL) : ℝ :=
   WithBot.unbotD 0
-    (if vob_start_id ≤ tokenRaw s input_ids start_nn ∧
-        tokenRaw s input_ids start_nn < vob_end_id then
+    (if vob_start_id ≤ tokenRaw s input_ids BLOCK_N start_nn ∧
+        tokenRaw s input_ids BLOCK_N start_nn < vob_end_id then
       some (s.readMem weight
-        (weightOffset s input_ids vob_start_id stride_weight_seq start_nn i))
+        (weightOffset s input_ids vob_start_id stride_weight_seq BLOCK_N start_nn i))
     else
       some (0.0 : ℝ))
 
