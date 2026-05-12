@@ -17,12 +17,12 @@ This keeps the CTA decomposition, sequence metadata loads, LoRA index gather,
 K-block dot-product loop with the `EVEN_K` load branch, optional `CAST_TYPE`,
 optional `ADD_INPUTS`, and final masked store.
 `tl.max_contiguous` is a layout hint; the DSL accepts it at the surface and
-erases it into the same value expression. The Python early returns for
-`pid_m * BLOCK_M > M` and `lora_index == -1` are not represented because the
-current DSL lacks kernel-level `return` and the LoRA sentinel is signed. -/
-def sgmv_expand_slice_active_surface
+erases it into the same value expression. Python's early returns for
+`pid_m * BLOCK_M > M` and signed `lora_index == -1` are represented by guards;
+the signed LoRA sentinel is carried as a Nat `ignored_lora_index` parameter. -/
+def sgmv_expand_slice_surface
     (input_ptr lora_ptr out_ptr : RegionName) (b_seq_start_loc seq_lens lora_indices : Region .nat)
-    (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
+    (ignored_lora_index N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
       cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat)
     (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
@@ -32,49 +32,53 @@ def sgmv_expand_slice_active_surface
   pid_m = pid // cta_n_num
   pid_n = pid % cta_n_num
   m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
-  lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
-  cur_seq_start = tl.load($((b_seq_start_loc : Region .nat)) + cur_batch)
-  offset_m = tl.arange(0, $(BLOCK_M)) + pid_m * $(BLOCK_M)
-  offset_n = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N)
-  offset_k = tl.arange(0, $(BLOCK_K))
-  ram = tl.max_contiguous(tl.multiple_of(offset_m % m_len, $(BLOCK_M)), $(BLOCK_M))
-  rbn = tl.max_contiguous(tl.multiple_of(offset_n % $(N), $(BLOCK_N)), $(BLOCK_N))
-  a_ptr = input_ptr + cur_seq_start * $(xm_stride) +
-    ram[:, None] * $(xm_stride) + offset_k[None, :] * $(xk_stride)
-  b_ptr = lora_ptr + $(l0_stride) * lora_index +
-    offset_k[:, None] * $(lora_n_stride) + rbn[None, :] * $(lora_k_stride)
-  accumulator = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
-  for k_iter in range($(0), tl.cdiv($(K), $(BLOCK_K)), $(1)) {
-    if EVEN_K {
-      tiled_a = tl.load(a_ptr)
-      tiled_b = tl.load(b_ptr)
-    } else {
-      tiled_a = tl.load(a_ptr,
-        mask=offset_k[None, :] < $(K) - k_iter * $(BLOCK_K), other=0)
-      tiled_b = tl.load(b_ptr,
-        mask=offset_k[:, None] < $(K) - k_iter * $(BLOCK_K), other=0)
+  if pid_m * $(BLOCK_M) <= m_len {
+    lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
+    if lora_index != $(ignored_lora_index) {
+      cur_seq_start = tl.load($((b_seq_start_loc : Region .nat)) + cur_batch)
+      offset_m = tl.arange(0, $(BLOCK_M)) + pid_m * $(BLOCK_M)
+      offset_n = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N)
+      offset_k = tl.arange(0, $(BLOCK_K))
+      ram = tl.max_contiguous(tl.multiple_of(offset_m % m_len, $(BLOCK_M)), $(BLOCK_M))
+      rbn = tl.max_contiguous(tl.multiple_of(offset_n % $(N), $(BLOCK_N)), $(BLOCK_N))
+      a_ptr = input_ptr + cur_seq_start * $(xm_stride) +
+        ram[:, None] * $(xm_stride) + offset_k[None, :] * $(xk_stride)
+      b_ptr = lora_ptr + $(l0_stride) * lora_index +
+        offset_k[:, None] * $(lora_n_stride) + rbn[None, :] * $(lora_k_stride)
+      accumulator = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
+      for k_iter in range($(0), tl.cdiv($(K), $(BLOCK_K)), $(1)) {
+        if EVEN_K {
+          tiled_a = tl.load(a_ptr)
+          tiled_b = tl.load(b_ptr)
+        } else {
+          tiled_a = tl.load(a_ptr,
+            mask=offset_k[None, :] < $(K) - k_iter * $(BLOCK_K), other=0)
+          tiled_b = tl.load(b_ptr,
+            mask=offset_k[:, None] < $(K) - k_iter * $(BLOCK_K), other=0)
+        }
+        if CAST_TYPE {
+          tiled_a = (tiled_a).to(lora_ptr.dtype.element_ty)
+        }
+        accumulator += tl.dot(tiled_a, tiled_b)
+        a_ptr += $(BLOCK_K) * $(xk_stride)
+        b_ptr += $(BLOCK_K) * $(lora_n_stride)
+      }
+      tiled_c = (accumulator).to(lora_ptr.dtype.element_ty)
+      offset_cm = cur_seq_start + tl.arange(0, $(BLOCK_M)) + pid_m * $(BLOCK_M)
+      offset_cn = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N) + $(slice_offset)
+      c_ptr = out_ptr + offset_cm[:, None] * $(cm_stride) +
+        offset_cn[None, :] * $(cn_stride)
+      m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
+      seq_limit = cur_seq_start + m_len
+      c_mask = (offset_cm[:, None] < seq_limit) and
+        ((offset_cn[None, :] - $(slice_offset)) < $(N))
+      if ADD_INPUTS {
+        tiled_out = tl.load(c_ptr, mask=c_mask)
+        tiled_c += tiled_out
+      }
+      tl.store(c_ptr, tiled_c, mask=c_mask)
     }
-    if CAST_TYPE {
-      tiled_a = (tiled_a).to(lora_ptr.dtype.element_ty)
-    }
-    accumulator += tl.dot(tiled_a, tiled_b)
-    a_ptr += $(BLOCK_K) * $(xk_stride)
-    b_ptr += $(BLOCK_K) * $(lora_n_stride)
   }
-  tiled_c = (accumulator).to(lora_ptr.dtype.element_ty)
-  offset_cm = cur_seq_start + tl.arange(0, $(BLOCK_M)) + pid_m * $(BLOCK_M)
-  offset_cn = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N) + $(slice_offset)
-  c_ptr = out_ptr + offset_cm[:, None] * $(cm_stride) +
-    offset_cn[None, :] * $(cn_stride)
-  m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
-  seq_limit = cur_seq_start + m_len
-  c_mask = (offset_cm[:, None] < seq_limit) and
-    ((offset_cn[None, :] - $(slice_offset)) < $(N))
-  if ADD_INPUTS {
-    tiled_out = tl.load(c_ptr, mask=c_mask)
-    tiled_c += tiled_out
-  }
-  tl.store(c_ptr, tiled_c, mask=c_mask)
 }
 
 /-- Proof-oriented one-row, one-output-block slice of `sgmv_expand_slice.py`'s
