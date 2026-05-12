@@ -34,18 +34,18 @@ def bmm_chunk_bwd_surface
   pid_m = tl.program_id(axis=0) // num_pid_n
   pid_n = tl.program_id(axis=0) % num_pid_n
 
-  a_base = A + pid_b * $(stride_a_batch) +
+  A += pid_b * $(stride_a_batch) +
     pid_c * $(chunk_size) * $(stride_a_seqlen) + pid_h * $(stride_a_head)
-  dout_base = Dout + pid_b * $(stride_dout_batch) +
+  Dout += pid_b * $(stride_dout_batch) +
     pid_c * $(stride_dout_chunk) + pid_h * $(stride_dout_head)
 
   offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
   offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
   offs_cs = tl.arange(0, $(BLOCK_SIZE_CS))
-  dout_ptrs = dout_base +
+  dout_ptrs = Dout +
     offs_m[:, None] * $(stride_dout_csize_n) +
     offs_cs[None, :] * $(stride_dout_csize_m)
-  a_ptrs = a_base +
+  a_ptrs = A +
     offs_cs[:, None] * $(stride_a_seqlen) +
     offs_n[None, :] * $(stride_ak)
   chunk_size_limit = tl.minimum($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
@@ -64,9 +64,9 @@ def bmm_chunk_bwd_surface
   }
 
   if HAS_RESIDUAL {
-    res_base = Res + pid_b * $(stride_res_batch) +
+    Res += pid_b * $(stride_res_batch) +
       pid_c * $(chunk_size) * $(stride_res_seqlen) + pid_h * $(stride_res_head)
-    res_ptrs = res_base +
+    res_ptrs = Res +
       offs_m[:, None] * $(stride_res_seqlen) +
       offs_n[None, :] * $(stride_res_k)
     res_mask = (offs_m[:, None] < chunk_size_limit) & (offs_n[None, :] < $(K))
@@ -75,9 +75,9 @@ def bmm_chunk_bwd_surface
   }
 
   db = (acc).to(Db.dtype.element_ty)
-  db_ptrs = Db + pid_b * $(stride_db_batch) +
-    pid_c * $(chunk_size) * $(stride_db_seqlen) + pid_h * $(stride_db_head) +
-    offs_m[:, None] * $(stride_db_seqlen) + offs_n[None, :] * $(stride_db_k)
+  Db += pid_b * $(stride_db_batch) +
+    pid_c * $(chunk_size) * $(stride_db_seqlen) + pid_h * $(stride_db_head)
+  db_ptrs = Db + offs_m[:, None] * $(stride_db_seqlen) + offs_n[None, :] * $(stride_db_k)
   db_mask = (offs_m[:, None] < chunk_size_limit) & (offs_n[None, :] < $(K))
   tl.store(db_ptrs, db, mask=db_mask)
 }

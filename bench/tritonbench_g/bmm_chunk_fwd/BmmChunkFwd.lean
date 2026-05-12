@@ -35,17 +35,17 @@ def bmm_chunk_fwd_no_seq_surface
   pid_m = tl.program_id(axis=0) // num_pid_n
   pid_n = tl.program_id(axis=0) % num_pid_n
 
-  a_base = A + pid_b * $(stride_a_batch) +
+  A += pid_b * $(stride_a_batch) +
     pid_c * $(chunk_size) * $(stride_a_seqlen) + pid_h * $(stride_a_head)
-  b_base = B + pid_b * $(stride_b_batch) +
+  B += pid_b * $(stride_b_batch) +
     pid_c * $(chunk_size) * $(stride_b_seqlen) + pid_h * $(stride_b_head)
 
   offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
   offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))
-  a_ptrs = a_base + offs_m[:, None] * $(stride_a_seqlen) +
+  a_ptrs = A + offs_m[:, None] * $(stride_a_seqlen) +
     offs_k[None, :] * $(stride_ak)
-  b_ptrs = b_base + offs_k[:, None] * $(stride_bk) +
+  b_ptrs = B + offs_k[:, None] * $(stride_bk) +
     offs_n[None, :] * $(stride_b_seqlen)
   chunk_size_limit = tl.minimum($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
 
@@ -63,9 +63,9 @@ def bmm_chunk_fwd_no_seq_surface
   }
 
   out = (acc).to(Out.dtype.element_ty)
-  out_ptrs = Out + pid_b * $(stride_out_batch) +
-    pid_c * $(stride_out_chunk) + pid_h * $(stride_out_head) +
-    $(stride_outm) * offs_m[:, None] + offs_n[None, :] * $(stride_outn)
+  Out += pid_b * $(stride_out_batch) +
+    pid_c * $(stride_out_chunk) + pid_h * $(stride_out_head)
+  out_ptrs = Out + $(stride_outm) * offs_m[:, None] + offs_n[None, :] * $(stride_outn)
   out_mask = (offs_m[:, None] < $(chunk_size)) & (offs_n[None, :] < $(chunk_size))
   tl.store(out_ptrs, out, mask=out_mask)
 }
