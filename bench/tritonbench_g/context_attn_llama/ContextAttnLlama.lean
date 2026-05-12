@@ -19,7 +19,8 @@ decomposition, `B_Start_Loc`, and the prompt-cache-adjusted sequence length.
 The inner `tl.float32` `m_i/l_i/acc` streaming-softmax loop and request-token
 gathers are outside this slice. -/
 def context_attn_llama_final_store_slice
-    (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
+    (Acc : RegionName) (B_Start_Loc B_Seqlen B_Prompt_Cache_Len : Region .nat)
+    (Out : RegionName)
     (H
       stride_acc_b stride_acc_h stride_acc_m stride_acc_d
       stride_obs stride_oh stride_od
@@ -29,9 +30,9 @@ def context_attn_llama_final_store_slice
   cur_bh = tl.program_id(axis=1)
   cur_batch = cur_bh // $(H)
   cur_head = cur_bh % $(H)
-  prompt_cache_len = tl.load(B_Prompt_Cache_Len + cur_batch, dtype=tl.uint64)
-  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch, dtype=tl.uint64) - prompt_cache_len
-  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch, dtype=tl.uint64)
+  prompt_cache_len = tl.load($((B_Prompt_Cache_Len : Region .nat)) + cur_batch)
+  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch) - prompt_cache_len
+  cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   mask = (offs_m[:, None] < cur_batch_seq_len) & (offs_d[None, :] < $(BLOCK_DMODEL))
