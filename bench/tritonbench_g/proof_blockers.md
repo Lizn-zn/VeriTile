@@ -25,3 +25,14 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - Blocker: correctness needs a recurrence invariant across `tl.for t in length`
   for the state update `s = s * Lambda + x`, with a spec for every stored time
   step, not only the first update.
+
+## `batched_vecmat_mult.py`
+
+- File: `batched_vecmat_mult/BatchedVecmatMult.lean`
+- Blocker: the full surface is not line-for-line faithful. Python uses
+  `tl.broadcast(a, b)` and `tl.trans(tl.sum(..., axis=2))`; the current Lean
+  surface rewrites this into an explicit `block_m` loop because the DSL does
+  not yet support the tuple-return `tl.broadcast` spelling or rank-3
+  `a[:, None, :]` insertion needed to preserve the Python body exactly.
+- Existing proof covers only `batched_vecmat_one_row_block`, a proof-oriented
+  one-row slice.

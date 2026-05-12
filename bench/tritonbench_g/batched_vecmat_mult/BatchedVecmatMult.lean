@@ -15,9 +15,12 @@ set_option linter.unusedSimpArgs false
 The Python wrapper asserts that `M`, `N`, and `K` are divisible by their block
 sizes, so this surface keeps the same unmasked block loads and stores. The
 Python body vectorizes the `block_m` rows and writes the reduction as
-`tl.broadcast(a, b)` followed by `tl.trans(tl.sum(..., axis=2))`; this spells
-out the same computation as an explicit `block_m` loop because the current DSL
-only has rank-1-to-rank-2 slice insertion syntax. -/
+`tl.broadcast(a, b)` followed by `tl.trans(tl.sum(..., axis=2))`.
+
+Known surface blocker: this full surface is not yet line-for-line faithful.
+The current DSL cannot spell Python's `tl.broadcast(a, b)` tuple return or
+rank-3 insertion form for `a[:, None, :]`, so the surface uses an explicit
+`block_m` loop. See `bench/tritonbench_g/proof_blockers.md`. -/
 def batched_vecmat_surface
     (A B output : RegionName)
     (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) :

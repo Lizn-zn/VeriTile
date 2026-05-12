@@ -358,7 +358,7 @@ RNG + concurrency + FP8 + int4 + FP4 全部落地,剩下 28 个 Hard 降到 ≤ 
 | `int8_matmul_kernel.py` | Soft | int_dot | autotune, num_stages, static_print |
 | `int8_matmul_quantization.py` | Soft | atomic_add, int_dot | autotune, num_stages |
 | `int_scaled_matmul.py` | Soft | int_dot | num_stages, tf32_hint, contig_hint |
-| `batched_vecmat_mult.py` | OK | — | num_stages |
+| `batched_vecmat_mult.py` | Soft | surface_blocker: 不支持 tl.broadcast/rank-3 insertion；仅有单行证明切片 | num_stages |
 | `bgmv_expand_slice.py` | OK | — | — |
 | `bmm_chunk_bwd.py` | OK | — | autotune, num_stages |
 | `bmm_chunk_fwd.py` | OK | — | autotune, num_stages |
