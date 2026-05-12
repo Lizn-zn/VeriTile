@@ -42,22 +42,24 @@ def layer_norm_fwd_1pass_surface
     tl.store(RESIDUAL_OUT + cols, x, mask=mask)
   }
   mean = 0.0
-  x_centered = x
   var = 0.0
-  if IS_RMS_NORM {
-    xbar = tl.where(mask, x_centered, 0.0)
-    var = tl.sum(xbar * xbar, axis=0) / $(N)
-  } else {
+  if not IS_RMS_NORM {
     mean = tl.sum(x, axis=0) / $(N)
     tl.store(Mean + row, mean)
-    x_centered = x - mean
-    xbar = tl.where(mask, x_centered, 0.0)
+    xbar = tl.where(mask, x - mean, 0.0)
+    var = tl.sum(xbar * xbar, axis=0) / $(N)
+  } else {
+    xbar = tl.where(mask, x, 0.0)
     var = tl.sum(xbar * xbar, axis=0) / $(N)
   }
   rstd = 1 / tl.sqrt(var + $(eps))
   tl.store(Rstd + row, rstd)
   w = tl.load(W + cols, mask=mask).to(tl.float32)
-  x_hat = x_centered * rstd
+  if not IS_RMS_NORM {
+    x_hat = (x - mean) * rstd
+  } else {
+    x_hat = x * rstd
+  }
   if HAS_BIAS {
     b = tl.load(B + cols, mask=mask).to(tl.float32)
     y = x_hat * w + b

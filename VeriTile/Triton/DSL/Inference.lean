@@ -26,7 +26,7 @@ open VeriTile.Triton.DSL (DInfo)
 
 /-- Walk an expression that occupies a `.nat`-required position and
 collect every identifier appearing within it. Recurses through
-arithmetic (`+ - * / // % << >> & | ^ ~`), parens, and the unit-axis
+arithmetic (`+ - * / // % << >> & | ^ ~ not`), parens, and the unit-axis
 indexing forms `e[: , None]` / `e[None , :]` plus `tl.expand_dims`.
 Stops at antiquotations (`$(...)`), `tl.load`, `tl.cast`, and any other
 constructor whose result type is fixed independently. -/
@@ -46,6 +46,7 @@ partial def natExprIdents : TSyntax `tritonExpr → List String := fun stx =>
   | `(tritonExpr| $a:tritonExpr |  $b:tritonExpr) => natExprIdents a ++ natExprIdents b
   | `(tritonExpr| $a:tritonExpr ^  $b:tritonExpr) => natExprIdents a ++ natExprIdents b
   | `(tritonExpr| ~ $e:tritonExpr) => natExprIdents e
+  | `(tritonExpr| not $e:tritonExpr) => natExprIdents e
   | `(tritonExpr| $e:tritonExpr[ : , None ]) => natExprIdents e
   | `(tritonExpr| $e:tritonExpr[ None , : ]) => natExprIdents e
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:tritonReduceKwarg)) => natExprIdents e
@@ -253,6 +254,7 @@ private partial def directPinsFromExpr (assigned : Assigned) :
   | `(tritonExpr| $a:tritonExpr >= $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr != $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| ~ $e:tritonExpr) => directPinsFromExpr assigned e
+  | `(tritonExpr| not $e:tritonExpr) => directPinsFromExpr assigned e
   | `(tritonExpr| - $e:tritonExpr) => directPinsFromExpr assigned e
   | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargPins :=

@@ -297,6 +297,12 @@ partial def expandBoolCondition (env : Env) (cond : TSyntax `tritonExpr) :
       else
         let boolTerm : TSyntax `term := ⟨b.raw⟩
         pure ⟨← `(Op.constBool $boolTerm), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| not $b:ident) =>
+      if env.any (fun entry => entry.1 == b.getId.toString) then
+        expandExpr env cond
+      else
+        let boolTerm : TSyntax `term := ⟨b.raw⟩
+        pure ⟨← `(Op.boolNot (Op.constBool $boolTerm)), .bool, SInfo.scalar, none, none⟩
   | _ =>
       expandExpr env cond
 
@@ -813,6 +819,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandNatBitwise expandExpr env "`>>`" (← `(Op.shiftRight)) a b
   | `(tritonExpr| ~$a:tritonExpr) => do
       expandBoolNot expandExpr env "boolean ~" a
+  | `(tritonExpr| not $a:tritonExpr) => do
+      expandBoolNot expandExpr env "boolean not" a
   | `(tritonExpr| -$a:tritonExpr) => do
       let a' ← expandExpr env a
       let (zeroTerm, zeroDType) ←
