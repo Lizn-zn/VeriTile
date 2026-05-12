@@ -14,8 +14,6 @@ set_option linter.unusedSimpArgs false
 Allowed mechanical Lean-syntax-only changes:
 - `H_PER_KV` is the wrapper-computed `H // H_KV`, passed directly so the DSL
   does not have to infer the dtype of a nested meta-division antiquote.
-- `qk_scale` is the Python `sm_scale * 1.4426950408889634` value, passed as a
-  Lean real parameter.
 - `o` is shaped as `[BLOCK_N]`, matching `tl.sum(p, axis=0)`. The Python
   wrapper keeps `BLOCK_M == BLOCK_N`; the Lean surface makes that shape
   dependency explicit. -/
@@ -27,7 +25,7 @@ def attention_score_kernel
       H H_PER_KV N_CTX ROUND_CTX NKV_CTX
       sliding_window_offset sliding_window_size
       BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
-    (qk_scale : ℝ)
+    (sm_scale : ℝ)
     (SLIDING_WINDOW COMPLEMENT_SLIDING_WINDOW IS_EVEN_M IS_EVEN_N : Bool) :
     ComputeKernel := triton {
   start_n = tl.program_id(axis=0)
@@ -35,8 +33,8 @@ def attention_score_kernel
   off_z = off_hz // $(H)
   off_h = off_hz % $(H)
   off_hkv = off_h // $(H_PER_KV)
-  q_offset = off_z.to(tl.int64) * $(stride_qz) + off_h.to(tl.int64) * $(stride_qh)
-  k_offset = off_z.to(tl.int64) * $(stride_kz) + off_hkv.to(tl.int64) * $(stride_kh)
+  q_offset = (off_z).to(tl.int64) * $(stride_qz) + (off_h).to(tl.int64) * $(stride_qh)
+  k_offset = (off_z).to(tl.int64) * $(stride_kz) + (off_hkv).to(tl.int64) * $(stride_kh)
   m_ptrs = M + off_hz * $(ROUND_CTX) + tl.arange(0, $(BLOCK_M))
   o = tl.zeros([$(BLOCK_N)], dtype=tl.float32)
   Q_block_ptr = tl.make_block_ptr(base=Q + q_offset,
@@ -56,7 +54,11 @@ def attention_score_kernel
   } else {
     k = tl.load(K_block_ptr, boundary_check=(0, 1), padding_option="zero")
   }
-  for start_m in range(0, $(ROUND_CTX), $(BLOCK_M)) {
+  lo = 0
+  hi = $(ROUND_CTX)
+  qk_scale = $((sm_scale : ℝ))
+  qk_scale *= 1.4426950408889634
+  for start_m in range(lo, hi, $(BLOCK_M)) {
     start_m = tl.multiple_of(start_m, $(BLOCK_M))
     if IS_EVEN_M {
       q = tl.load(Q_block_ptr)
@@ -66,7 +68,7 @@ def attention_score_kernel
     m = tl.load(m_ptrs)
     qk = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
     qk += tl.dot(q, k)
-    qk = qk * $(qk_scale)
+    qk = qk * qk_scale
     mask = tl.full([$(BLOCK_M), $(BLOCK_N)], false)
     if SLIDING_WINDOW {
       dist = tl.arange(0, $(BLOCK_M))[:, None] -
@@ -94,7 +96,7 @@ def attention_score_kernel
     Q_block_ptr = tl.advance(Q_block_ptr, [$(BLOCK_M), 0])
     m_ptrs = m_ptrs + $(BLOCK_M)
   }
-  o_offset = off_z.to(tl.int64) * $(stride_oz) + off_h.to(tl.int64) * $(stride_oh)
+  o_offset = (off_z).to(tl.int64) * $(stride_oz) + (off_h).to(tl.int64) * $(stride_oh)
   o_range = tl.arange(0, $(BLOCK_N)) + start_n * $(BLOCK_N)
   tl.store(Out + o_offset + o_range, (o).to(Out.dtype.element_ty),
     mask=o_range < $(NKV_CTX))

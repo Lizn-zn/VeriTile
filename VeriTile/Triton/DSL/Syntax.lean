@@ -218,6 +218,7 @@ syntax ident " = " "tl.max(" tritonExpr ", " num ")" : tritonStmt
 syntax ident " := " tritonExpr : tritonStmt
 syntax ident " = " tritonExpr : tritonStmt
 syntax ident " += " tritonExpr : tritonStmt
+syntax ident " *= " tritonExpr : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ")" : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ", " tritonMemKwarg ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt

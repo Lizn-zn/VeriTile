@@ -1569,7 +1569,16 @@ def rangeAccumKernel (xReg : RegionName) (N BLOCK_SIZE : Nat) :
   tl.store(xReg + pid, acc)
 }
 
+def mulAssignKernel (xReg : RegionName) (scale N : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  x = tl.load(xReg + pid)
+  x *= $(scale)
+  tl.store(xReg + pid * $(N), x)
+}
+
 #check rangeAccumKernel
+#check mulAssignKernel
 
 /-! ### `dtype=tl.float32` on `tl.zeros` / `tl.full` smoke tests -/
 

@@ -343,6 +343,10 @@ private partial def scanStmt (assigned : Assigned)
       (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident = $e:tritonExpr) =>
       (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
+  | `(tritonStmt| $i:ident += $e:tritonExpr) =>
+      (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
+  | `(tritonStmt| $i:ident *= $e:tritonExpr) =>
+      (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
   | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       ({ directPins := pinsFromPtrExpr assigned p ++ directPinsFromExpr assigned v ++
             directPinsFromExpr assigned mask ++ memKwargPins assigned kwargs

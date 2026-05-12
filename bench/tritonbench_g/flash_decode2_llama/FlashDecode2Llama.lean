@@ -14,8 +14,7 @@ set_option linter.unusedSimpArgs false
 
 The Python body passes but does not use `stride_mid_od`, `stride_mid_o_es`, or
 `stride_od`; this surface preserves that addressing behavior and keeps those
-signature positions underscored. `acc *= old_scale` is written as an explicit
-assignment because the DSL has no `*=` statement form. -/
+signature positions underscored. -/
 def flash_decode2_llama_surface
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum O : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os _stride_mid_od
@@ -37,7 +36,7 @@ def flash_decode2_llama_surface
     tlogic = tl.load(Mid_O_LogExpSum + offs_logic + block_seq_n)
     new_max_logic = tl.maximum(tlogic, max_logic)
     old_scale = tl.exp(max_logic - new_max_logic)
-    acc = acc * old_scale
+    acc *= old_scale
     exp_logic = tl.exp(tlogic - new_max_logic)
     acc += exp_logic * tv
     sum_exp = sum_exp * old_scale + exp_logic

@@ -16,8 +16,6 @@ set_option linter.unusedSimpArgs false
 Mechanical differences from Python:
 - metadata/gather buffers are typed Nat regions so their loads do not need
   extra `dtype=` kwargs;
-- `att_value *= sm_scale` is written as an explicit reassignment because the DSL
-  has `+=` but no `*=` statement form;
 - the K load mask is expanded with a tautological D-axis condition to match the
   `[BLOCK_N, BLOCK_DMODEL]` pointer tile shape. -/
 def token_attn_llama2_surface
@@ -52,7 +50,7 @@ def token_attn_llama2_surface
       offs_d[None, :] * $(stride_kd)
     k = tl.load(K + off_k, mask=k_mask, other=0.0)
     att_value = tl.sum(q[None, :] * k, axis=1)
-    att_value = att_value * $(sm_scale)
+    att_value *= $((sm_scale : ℝ))
     off_o = cur_head * $(att_stride_h) +
       (cur_batch_in_all_start_index + offs_n) * $(att_stride_bs)
     tl.store(Att_Out + off_o, att_value, mask=offs_n_new < cur_batch_end_index)

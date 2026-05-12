@@ -337,6 +337,8 @@ private partial def stmtRegionsWith (assigned : List String)
       (exprRegions assigned e, [], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident += $e:tritonExpr) =>
       (exprRegions assigned e, [], i.getId.toString :: assigned)
+  | `(tritonStmt| $i:ident *= $e:tritonExpr) =>
+      (exprRegions assigned e, [], i.getId.toString :: assigned)
   | `(tritonStmt| tl.store($p:tritonExpr, $v:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       (exprRegions assigned v ++ exprRegions assigned mask ++ memKwargRegions assigned kwargs,
         staticPtrRegions assigned p, assigned)
