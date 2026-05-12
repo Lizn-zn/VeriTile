@@ -24,7 +24,7 @@ def cross_entropy_forward_nonignored_surface
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
   row_idx = tl.program_id(axis=0)
-  logits_base = logits_ptr + row_idx * $(logits_row_stride)
+  logits_base = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
   label_idx = tl.load(labels_ptr + row_idx, dtype=tl.uint64)
@@ -65,7 +65,7 @@ def cross_entropy_backward_nonignored_surface
     ComputeKernel := triton {
   row_idx = tl.program_id(axis=0)
   block_idx = tl.program_id(axis=1)
-  logits_base = logits_ptr + row_idx * $(logits_row_stride)
+  logits_base = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   dloss_base = dloss_ptr + row_idx * $(dloss_row_stride)
   col_offsets = block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)

@@ -25,7 +25,7 @@ def cross_entropy_fwd_nonignored_surface
     ComputeKernel := triton {
   row_idx = tl.program_id(axis=0)
   col_block_idx = tl.program_id(axis=1)
-  logits_base = logits_ptr + row_idx * $(logits_row_stride)
+  logits_base = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   col_offsets = col_block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   label_idx = tl.load(labels_ptr + row_idx, dtype=tl.uint64)
   logits = tl.load(logits_base + col_offsets,
