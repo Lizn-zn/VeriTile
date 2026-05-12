@@ -28,7 +28,8 @@ def attention_kernel_final_store_slice
   acc = tl.load(Acc + off_hz * $(stride_acc_h) +
       offs_m[:, None] * $(stride_acc_m) + offs_k[None, :] * $(stride_acc_k))
   tl.store(Out + off_hz * $(stride_oh) +
-      offs_m[:, None] * $(stride_om) + offs_k[None, :] * $(stride_on), acc)
+      offs_m[:, None] * $(stride_om) + offs_k[None, :] * $(stride_on),
+      (acc).to(Out.dtype.element_ty))
 }
 
 def mIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=

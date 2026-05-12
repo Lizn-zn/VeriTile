@@ -38,7 +38,7 @@ def mixed_sparse_attention_output_store_slice
       mask=mask, other=0.0)
   tl.store(Out + off_z * $(stride_qz) + off_h * $(stride_qh) +
       offs_m[:, None] * $(stride_om) + offs_d[None, :] * $(stride_ok),
-      acc, mask=mask)
+      (acc).to(Out.dtype.element_ty), mask=mask)
 }
 
 def offZ (s : BlockState) (H : Nat) : Nat :=

@@ -26,7 +26,7 @@ def triton_attention_forward_output_store_slice
   acc = tl.load(Acc + offs_m[:, None] * $(BLOCK_DMODEL) + offs_d[None, :],
     mask=mask, other=0.0)
   tl.store(Out + (offs_m[:, None] + $(hzRowOffset)) * $(stride_om) +
-      offs_d[None, :] * $(stride_on), acc, mask=mask)
+      offs_d[None, :] * $(stride_on), (acc).to(Out.dtype.element_ty), mask=mask)
 }
 
 def rowIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
