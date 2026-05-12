@@ -214,10 +214,14 @@ def coerceShape (e : TSyntax `term) (src target : SInfo) (ctx : String) :
   if src.eq target then
     pure e
   else
+    let (bc, outShape) ← broadcastTerm src target ctx
+    ensureShape target outShape ctx
     match src with
     | SInfo.dims [] =>
         let st ← target.term
         `(Op.broadcast $e $st)
-    | _ => Macro.throwError (ctx ++ ": cannot broadcast non-scalar to target shape")
+    | _ =>
+        let st ← target.term
+        `(Op.remap $st (Broadcast.leftIndex $bc) $e)
 
 end VeriTile.Triton.DSL

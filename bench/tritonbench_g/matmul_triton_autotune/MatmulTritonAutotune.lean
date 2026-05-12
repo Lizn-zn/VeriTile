@@ -36,12 +36,8 @@ def matmul_autotune_no_activation_surface
   b_ptrs = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
-    a_mask = (offs_am[:, None] >= $(0)) and
-      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
-    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) and
-      (offs_bn[None, :] >= $(0))
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
-    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K), other=0.0)
+    b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K), other=0.0)
     accumulator = tl.dot(a, b, accumulator)
     a_ptrs += $(BLOCK_SIZE_K) * $(stride_ak)
     b_ptrs += $(BLOCK_SIZE_K) * $(stride_bk)
