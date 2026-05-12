@@ -10,7 +10,13 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Faithful transcription of `rmsnorm_fused_llama.py`'s `_rms_norm_fwd_fused`.
+/-- Faithful `forRange` transcription of `rmsnorm_fused_llama.py`'s
+`_rms_norm_fwd_fused`.
+
+The Python wrapper fixes `BLOCK_SIZE = 16384` after checking `N <= BLOCK_SIZE`,
+so the correctness theorem below proves the loop-shaped kernel under that
+runtime precondition. Under the precondition both `range(0, N, BLOCK_SIZE)`
+loops execute exactly the `off = 0` iteration.
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `N` / `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameters. -/
@@ -35,7 +41,7 @@ def rms_norm_fwd_fused_llama
     x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
     x_hat = x * rstd
     y = x_hat * w
-    tl.store(Y + cols, (y).to(tl.float16), mask=mask)
+    tl.store(Y + cols, (y).to(Y.dtype.element_ty), mask=mask)
   }
 }
 
@@ -61,7 +67,7 @@ noncomputable def rmsVarCarrier
       (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
         (rmsInputTile s X stride N BLOCK_SIZE)
         (rmsInputTile s X stride N BLOCK_SIZE))).data PUnit.unit)
-    ((Tile.scalar N).natToReal.data PUnit.unit)
+    ((Tile.scalar (dtype := .real) (some (N : ℝ) : WithBot ℝ)).data PUnit.unit)
 
 noncomputable def rmsInvCarrier
     (s : BlockState) (X : RegionName) (stride N BLOCK_SIZE : Nat)
@@ -71,7 +77,7 @@ noncomputable def rmsInvCarrier
       (Option.map (fun a => a + eps)
         (rmsVarCarrier s X stride N BLOCK_SIZE)))
 
-noncomputable def rmsnormSpec
+noncomputable def rmsnormCarrierSpec
     (s : BlockState) (X W : RegionName)
     (stride N BLOCK_SIZE : Nat) (eps : ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
   WithBot.unbotD 0
@@ -81,11 +87,17 @@ noncomputable def rmsnormSpec
         (rmsInvCarrier s X stride N BLOCK_SIZE eps))
       (some (s.readMem W i.val)))
 
-/-- Algorithm-layer correctness for the Llama RMSNorm kernel. -/
+noncomputable def rmsnormSpec
+    (s : BlockState) (X W : RegionName)
+    (stride N BLOCK_SIZE : Nat) (eps : ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
+  rmsnormCarrierSpec s X W stride N BLOCK_SIZE eps i
+
+/-- Algorithm-layer correctness for the Llama RMSNorm kernel under the Python
+wrapper's `N <= BLOCK_SIZE` launch precondition. -/
 theorem rms_norm_fwd_fused_llama_correct
     (X Y W : RegionName) (stride N BLOCK_SIZE : Nat) (eps : ℝ)
     (s s' : BlockState)
-    (hNle : N ≤ BLOCK_SIZE)
+    (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s stride i))
     (hExec : exec (rms_norm_fwd_fused_llama X Y W stride N BLOCK_SIZE eps)
@@ -95,13 +107,47 @@ theorem rms_norm_fwd_fused_llama_correct
         if i.val < N then
           rmsnormSpec s X W stride N BLOCK_SIZE eps i
         else s.readMem Y (yOffset s stride i) := by
-  sorry
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * stride + idx.1.val) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [yOffset] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hB : 0 < BLOCK_SIZE
+  · have hStep : BLOCK_SIZE ≠ 0 := Nat.ne_of_gt hB
+    simp [exec, rms_norm_fwd_fused_llama, stepStmts, stepStmt, evalOp,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          stepForRangeAux.step_lt, stepForRangeAux.step_ge,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, hNpos, hNle,
+          Nat.not_lt.mpr hNle, hStep] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp only [hi, ↓reduceIte]
+      simp [hi, rmsnormSpec, rmsnormCarrierSpec, rmsInvCarrier, rmsVarCarrier,
+            rmsInputTile, xOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            WithBot.realSqrt, NumericDType.mul, FloatDType.cast]
+      rfl
+    · simp [hi]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
-/-- Compute-facing correctness for the Llama RMSNorm kernel. -/
+/-- Compute-facing correctness for the Llama RMSNorm kernel under the Python
+wrapper's `N <= BLOCK_SIZE` launch precondition. -/
 theorem rms_norm_fwd_fused_llama_compute_correct
     (X Y W : RegionName) (stride N BLOCK_SIZE : Nat) (eps : ℝ)
     (s : BlockState)
-    (hNle : N ≤ BLOCK_SIZE)
+    (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s stride i)) :
     ComputeCorrect.Realizes
@@ -111,6 +157,14 @@ theorem rms_norm_fwd_fused_llama_compute_correct
         (fun i : Fin BLOCK_SIZE => i.val < N)
         (fun i => (Y, yOffset s stride i)))
       (expected := fun i => rmsnormSpec s X W stride N BLOCK_SIZE eps i) := by
-  sorry
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rms_norm_fwd_fused_llama, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := rms_norm_fwd_fused_llama_correct X Y W stride N BLOCK_SIZE eps
+    s s' hNpos hNle hOutInj hExec i
+  simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.RmsnormFusedLlama
