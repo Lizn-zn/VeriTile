@@ -54,7 +54,7 @@ def layer_norm_fwd_1pass_surface
     xbar = tl.where(mask, x_centered, 0.0)
     var = tl.sum(xbar * xbar, axis=0) / $(N)
   }
-  rstd = 1.0 / tl.sqrt(var + $(eps))
+  rstd = 1 / tl.sqrt(var + $(eps))
   tl.store(Rstd + row, rstd)
   w = tl.load(W + cols, mask=mask).to(tl.float32)
   x_hat = x_centered * rstd
