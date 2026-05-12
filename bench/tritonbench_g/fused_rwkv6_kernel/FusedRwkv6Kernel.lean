@@ -55,7 +55,7 @@ def fused_recurrent_rwkv6_fwd_surface
     b_o = tl.sum(b_o, axis=1)
     b_h = b_h * b_w[None, :]
     b_h += b_kv
-    tl.store(p_o, (b_o).to(O.dtype.element_ty), mask=mask_bv)
+    tl.store(p_o, (b_o).to(p_o.dtype.element_ty), mask=mask_bv)
     p_q += $(K)
     p_k += $(K)
     p_o += $(V)
@@ -65,7 +65,7 @@ def fused_recurrent_rwkv6_fwd_surface
   if STORE_FINAL_STATE {
     p_ht = HT + i_bh * $(K) * $(V) +
       offs_k[None, :] * $(V) + offs_v[:, None]
-    tl.store(p_ht, (b_h).to(HT.dtype.element_ty), mask=mask_kv)
+    tl.store(p_ht, (b_h).to(p_ht.dtype.element_ty), mask=mask_kv)
   }
 }
 

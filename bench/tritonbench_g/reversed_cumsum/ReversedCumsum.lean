@@ -32,7 +32,7 @@ def reversed_cumsum_single_block_surface
     offsets=($(0), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
   b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
   b_c = tl.dot(m_s, b_s, allow_tf32=false)
-  tl.store(p_z, (b_c).to(Z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+  tl.store(p_z, (b_c).to(p_z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
 /-- Proof-oriented block store surface slice of `reversed_cumsum.py`'s

@@ -36,14 +36,14 @@ def fused_recurrent_hgrn_fwd_surface
     b_x = tl.load(p_x, mask=mask, other=0).to(tl.float32)
     b_g = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     b_h = b_g * b_h + b_x
-    tl.store(p_o, (b_h).to(O.dtype.element_ty), mask=mask)
+    tl.store(p_o, (b_h).to(p_o.dtype.element_ty), mask=mask)
     p_x += $(D)
     p_g += $(D)
     p_o += $(D)
   }
   if STORE_FINAL_STATE {
     p_ht = HT + i_bh * $(D) + o_d
-    tl.store(p_ht, (b_h).to(HT.dtype.element_ty), mask=mask)
+    tl.store(p_ht, (b_h).to(p_ht.dtype.element_ty), mask=mask)
   }
 }
 

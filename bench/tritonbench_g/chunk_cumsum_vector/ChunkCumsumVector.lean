@@ -12,8 +12,7 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `chunk_cumsum_vector.py`'s
 `chunk_global_cumsum_vector_kernel`.
 
-The final cast targets `Z.dtype.element_ty` to mirror the block pointer
-destination dtype in Python. -/
+The final cast targets the block pointer destination dtype in Python. -/
 def chunk_cumsum_vector_surface
     (S Z : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
     ComputeKernel := triton {
@@ -31,7 +30,7 @@ def chunk_cumsum_vector_surface
       block_shape=($(BT), $(BS)), order=(1, 0))
     b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
     b_c = b_z[None, :] + tl.dot(m_s, b_s, allow_tf32=false)
-    tl.store(p_z, (b_c).to(Z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+    tl.store(p_z, (b_c).to(p_z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
     b_z += tl.sum(b_s, axis=0)
   }
 }

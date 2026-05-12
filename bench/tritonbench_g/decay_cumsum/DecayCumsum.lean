@@ -12,8 +12,8 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `decay_cumsum.py`'s `fwd_decay_cumsum`.
 
 This preserves the program-id decomposition, row base pointers, `BK` lane mask,
-float32 accumulator, per-row cumulative update by `inv_ln2`, output dtype cast,
-and `DK` pointer increments through the `BT` loop. -/
+float32 accumulator, per-row cumulative update by `inv_ln2`, block-pointer
+element dtype cast, and `DK` pointer increments through the `BT` loop. -/
 def fwd_decay_cumsum_surface
     (G GO : RegionName)
     (s_qk_h DK BT BK : Nat) :
@@ -29,7 +29,7 @@ def fwd_decay_cumsum_surface
   for _i in range($(0), $(BT), $(1)) {
     g_val = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     cum_decay += g_val * 1.44269504
-    tl.store(p_go, (cum_decay).to(GO.dtype.element_ty), mask=mask)
+    tl.store(p_go, (cum_decay).to(p_go.dtype.element_ty), mask=mask)
     p_g += $(DK)
     p_go += $(DK)
   }
@@ -65,8 +65,8 @@ def prepare_qg_kg_surface
     g_val = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     q_val = q_val * tl.math.exp2(g_val) * $(scale)
     k_val = k_val * tl.math.exp2(last_decay - g_val)
-    tl.store(p_kg, (k_val).to(KG.dtype.element_ty), mask=mask)
-    tl.store(p_qg, (q_val).to(QG.dtype.element_ty), mask=mask)
+    tl.store(p_kg, (k_val).to(p_kg.dtype.element_ty), mask=mask)
+    tl.store(p_qg, (q_val).to(p_qg.dtype.element_ty), mask=mask)
     p_q += $(DK)
     p_g += $(DK)
     p_k += $(DK)

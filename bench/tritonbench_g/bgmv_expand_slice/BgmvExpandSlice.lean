@@ -30,7 +30,7 @@ def bgmv_expand_slice_one_block_surface
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))
   tiled_a = tl.load(input_ptr + cur_batch * $(xm_stride) + offset_k * $(xk_stride),
-    mask=offset_k < $(K), other=0.0)
+    mask=offset_k < $(K), other=0)
   if CAST_TYPE {
     tiled_a = (tiled_a).to(lora_ptr.dtype.element_ty)
   }
