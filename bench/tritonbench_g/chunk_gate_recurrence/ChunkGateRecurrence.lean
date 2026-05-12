@@ -40,14 +40,14 @@ def chunk_gate_recurrence_fwd_surface
       offs_v[None, :]
     acc += tl.load(last_kv_ptr).to(tl.float32)
   }
-  tl.store(O_ptr, (acc).to(O.dtype.element_ty))
+  tl.store(O_ptr, (acc).to(O_ptr.dtype.element_ty))
   O_ptr += $(D_MODEL_K) * $(D_MODEL_V)
   D_ptr = D + offset_bh * $(NUM_BLOCK)
   for _i in range($(0), $(NUM_BLOCK) - $(1), $(1)) {
     d_i = tl.load(D_ptr)
     S_i = tl.load(S_ptr)
     acc = acc * d_i + S_i
-    tl.store(O_ptr, (acc).to(O.dtype.element_ty))
+    tl.store(O_ptr, (acc).to(O_ptr.dtype.element_ty))
     D_ptr += $(1)
     S_ptr += $(D_MODEL_K) * $(D_MODEL_V)
     O_ptr += $(D_MODEL_K) * $(D_MODEL_V)
