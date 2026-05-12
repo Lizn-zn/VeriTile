@@ -24,16 +24,15 @@ def reversed_cumsum_single_block_surface
   i_bh = tl.program_id(axis=1)
   o_i = tl.arange(0, $(BT))
   m_s = tl.where(o_i[:, None] <= o_i[None, :], 1.0, 0.0)
-  offs_t = tl.arange(0, $(BT))
-  offs_s = i_s * $(BS) + tl.arange(0, $(BS))
-  mask = (offs_t[:, None] < $(T)) & (offs_s[None, :] < $(SSize))
-  b_s = tl.load(SReg + i_bh * $(s_s_h) +
-      offs_t[:, None] * $(s_s_t) + offs_s[None, :] * $(s_s_d),
-    mask=mask, other=0.0).to(tl.float32)
+  p_s = tl.make_block_ptr(base=SReg + i_bh * $(s_s_h),
+    shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
+    offsets=($(0), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
+  p_z = tl.make_block_ptr(base=Z + i_bh * $(s_s_h),
+    shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
+    offsets=($(0), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
+  b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
   b_c = tl.dot(m_s, b_s, allow_tf32=false)
-  tl.store(Z + i_bh * $(s_s_h) +
-      offs_t[:, None] * $(s_s_t) + offs_s[None, :] * $(s_s_d),
-    (b_c).to(Z.dtype.element_ty), mask=mask)
+  tl.store(p_z, (b_c).to(Z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
 /-- Proof-oriented block store surface slice of `reversed_cumsum.py`'s
