@@ -16,8 +16,8 @@ The full kernel computes a recurrent attention tile `o`. This slice starts from
 a precomputed `OAcc` tile and proves the masked writeback into `Out`. The Python
 kernel uses a row-only mask; the DSL spelling adds a trivially true column
 component so the mask has the same `[BLOCK, BLOCK_MODEL]` shape as the store.
-The full forward recurrent `kv` loop and the backward kernels' negative-step
-loops remain separate modeling work. -/
+The full forward recurrent `kv` loop, its `tl.float32` Q/K/V casts, and the
+backward kernels' negative-step loops remain separate modeling work. -/
 def lightning_attention_forward_store_slice
     (OAcc Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat) :
     ComputeKernel := triton {

@@ -16,7 +16,7 @@ The full kernel walks a CSR sparse layout and accumulates one or two D blocks.
 This slice starts from a precomputed first-block `Acc` tile and proves the final
 masked writeback into `Out`, preserving the source `off_bh` decomposition and
 `offs_m < total_seq_len` row mask. The CSR `tl.int32` row/column index casts,
-fp32 online-softmax accumulator, and `p.to(Q.dtype.element_ty)` dot input cast
+`tl.float32` online-softmax accumulator, and `p.to(Q.dtype.element_ty)` dot input cast
 belong to the omitted sparse-attention loop that produces `Acc`. -/
 def block_sparse_attn_output_store_slice
     (Acc Out : RegionName)

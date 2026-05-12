@@ -18,8 +18,8 @@ input-feature loops, masked input/weight loads, dot accumulation, and final
 masked output store. The Python benchmark's padded case uses
 `h - padding_height` / `w - padding_width`, which can be negative before the
 mask; that signed offset path remains outside the current Nat pointer surface.
-The `fp16` cast and `allow_tf32` knob are also omitted here because the tests use
-the default fp32 path. -/
+The `tl.float16` cast and `allow_tf32` knob are also omitted here because the
+tests use the default fp32 path. -/
 def conv2d_forward_no_padding_surface
     (Input Weight Output : RegionName)
     (batch_dim in_feat_dim in_height in_width out_feat_dim out_height out_width

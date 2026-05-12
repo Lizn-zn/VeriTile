@@ -15,8 +15,8 @@ the single-chunk, non-ignored-label path.
 This covers the path used by the benchmark's small-vocabulary tests: masked
 logits load, optional logit scaling, optional softcapping via `tl.tanh`, stable
 logsumexp, label gather, loss store, and logsumexp store. The `label_idx =
--100` sentinel branch is signed-integer control flow and is not represented in
-this Nat label surface. -/
+-100` sentinel branch and Python's `tl.int32` label cast are signed-integer
+control flow and are not represented in this Nat label surface. -/
 def cross_entropy_forward_nonignored_surface
     (logits_ptr loss_ptr logsumexp_ptr labels_ptr : RegionName)
     (VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)
@@ -56,7 +56,8 @@ the non-ignored-label path.
 This preserves the block logits load, optional logit scaling, optional softcap
 transform and derivative factor, softmax-minus-one update at the label, and
 final masked in-place gradient writeback. The ignored-label branch uses the
-signed sentinel `-100` and remains outside this Nat label surface. -/
+signed sentinel `-100` plus Python's `tl.int32` label cast and remains outside
+this Nat label surface. -/
 def cross_entropy_backward_nonignored_surface
     (logits_ptr dloss_ptr logsumexp_ptr labels_ptr : RegionName)
     (VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE : Nat)

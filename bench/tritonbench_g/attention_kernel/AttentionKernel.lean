@@ -14,7 +14,8 @@ set_option linter.unusedSimpArgs false
 
 The full kernel computes relative-position-biased attention with Q/K/V block
 pointers and a streaming softmax. This slice starts after `acc = acc / l_i` with
-a precomputed `Acc` tile and proves the unmasked block writeback into `Out`. -/
+a precomputed `Acc` tile and proves the unmasked block writeback into `Out`.
+The inner `tl.float32` online-softmax state is outside this slice. -/
 def attention_kernel_final_store_slice
     (Acc Out : RegionName)
     (stride_acc_h stride_acc_m stride_acc_k

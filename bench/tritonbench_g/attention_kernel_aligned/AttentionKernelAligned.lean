@@ -14,7 +14,8 @@ set_option linter.unusedSimpArgs false
 
 The full kernel computes relative-position-biased attention with aligned Q/K/V
 block pointers. This slice starts from a precomputed normalized `Acc` tile and
-proves the final unmasked block-pointer writeback into `Out`. -/
+proves the final unmasked block-pointer writeback into `Out`. The inner
+`tl.float32` online-softmax state is outside this slice. -/
 def attention_kernel_aligned_final_store_slice
     (Acc Out : RegionName)
     (stride_acc_h stride_acc_m stride_acc_k
