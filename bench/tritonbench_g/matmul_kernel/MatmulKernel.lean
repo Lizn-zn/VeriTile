@@ -55,7 +55,7 @@ def matmul_output_store_slice
   acc = tl.load(Acc + $(stride_accm) * offs_cm[:, None] +
     $(stride_accn) * offs_cn[None, :])
   tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
-    acc)
+    (acc).to(C.dtype.element_ty))
 }
 
 def rowIndex (s : BlockState) (BLOCK_SIZE_M : Nat) (i : Fin BLOCK_SIZE_M) : Nat :=

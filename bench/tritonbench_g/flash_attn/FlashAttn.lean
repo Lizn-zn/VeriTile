@@ -31,7 +31,7 @@ def flash_attn_output_store_slice
       offs_m[:, None] * $(stride_buf_m) + offs_d[None, :] * $(stride_buf_d))
   tl.store(O + off_bs_head * $(stride_q_head) +
       offs_m[:, None] * $(stride_o_seqlen) + offs_d[None, :] * $(stride_o_dim),
-      out_buffer)
+      (out_buffer).to(O.dtype.element_ty))
 }
 
 /-- Surface transcription of `flash_attn.py`'s final `L` vector store.

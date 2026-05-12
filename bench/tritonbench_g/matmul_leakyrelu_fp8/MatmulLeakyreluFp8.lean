@@ -106,7 +106,7 @@ def matmul_masked_output_store_slice
     $(stride_accn) * offs_cn[None, :])
   c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
   tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
-    acc, mask=c_mask)
+    (acc).to(C.dtype.element_ty), mask=c_mask)
 }
 
 def rowIndex (s : BlockState) (BLOCK_SIZE_M : Nat) (i : Fin BLOCK_SIZE_M) : Nat :=
