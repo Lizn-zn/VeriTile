@@ -76,11 +76,11 @@ def rope_backward_q0_head
   cos_base = COS + $(COS_ROW_IDX) * $(cos_row_stride)
   sin_base = SIN + $(COS_ROW_IDX) * $(sin_row_stride)
   q0 = tl.load(q_base + dim,
-    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0.0)
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(SIN.dtype.element_ty)
   q1 = tl.load(q_base + dim + $(HEAD_HALF),
-    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0.0)
-  cos_row = tl.load(cos_base + dim, mask=dim < $(HEAD_HALF), other=0.0)
-  sin_row = tl.load(sin_base + dim, mask=dim < $(HEAD_HALF), other=0.0)
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(SIN.dtype.element_ty)
+  cos_row = tl.load(cos_base + dim, mask=dim < $(HEAD_HALF), other=0)
+  sin_row = tl.load(sin_base + dim, mask=dim < $(HEAD_HALF), other=0)
   out = q0 * cos_row + q1 * sin_row
   tl.store(q_base + dim, out,
     mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)))

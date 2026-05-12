@@ -1573,7 +1573,7 @@ def rangeAccumKernel (xReg : RegionName) (N BLOCK_SIZE : Nat) :
 
 /-! ### `dtype=tl.float32` on `tl.zeros` / `tl.full` smoke tests -/
 
-def fp32ZerosKernel (xReg : RegionName) (N BLOCK_SIZE : Nat) :
+def fp32ZerosKernel (xReg : RegionName) (_N BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   pid = tl.program_id(0)
   _var = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
