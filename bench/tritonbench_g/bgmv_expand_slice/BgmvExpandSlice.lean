@@ -10,47 +10,56 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of the active-LoRA one-output-block path in
+/-- Surface transcription of the active-LoRA path in
 `bgmv_expand_slice.py`'s `_bgmv_expand_slice_kernel`.
 
-This covers the body after `lora_index != -1`, including the optional
-`CAST_TYPE` conversion and `ADD_INPUTS` accumulation branch. The Python early
-return for signed sentinel `lora_index == -1` is not represented here because
-the current pointer-offset path uses Nat indices and the DSL has no kernel-level
-`return` statement. -/
-def bgmv_expand_slice_one_block_surface
+This covers the body after `lora_index != -1`, including the `EVEN_K` load
+branch, `tl.cdiv` split length, output-block loop, optional `CAST_TYPE`
+conversion, and `ADD_INPUTS` accumulation branch. The Python early return for
+signed sentinel `lora_index == -1` is not represented here because the current
+pointer-offset path uses Nat indices and the DSL has no kernel-level `return`
+statement. -/
+def bgmv_expand_slice_active_surface
     (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .nat)
-    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K : Nat)
-    (ADD_INPUTS CAST_TYPE : Bool) :
+    (N K xm_stride xk_stride l0_stride lora_k_stride
+      lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K SPLIT_N : Nat)
+    (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
   pid_sn = tl.program_id(axis=0)
   cur_batch = tl.program_id(axis=1)
   lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))
-  tiled_a = tl.load(input_ptr + cur_batch * $(xm_stride) + offset_k * $(xk_stride),
-    mask=offset_k < $(K), other=0)
+  if EVEN_K {
+    tiled_a = tl.load(input_ptr + cur_batch * $(xm_stride) + offset_k * $(xk_stride))
+  } else {
+    tiled_a = tl.load(input_ptr + cur_batch * $(xm_stride) + offset_k * $(xk_stride),
+      mask=offset_k < $(K), other=0)
+  }
+  split_n_length = tl.cdiv($(N), $(SPLIT_N))
   if CAST_TYPE {
     tiled_a = (tiled_a).to(lora_ptr.dtype.element_ty)
   }
   b_ptr = lora_ptr + $(l0_stride) * lora_index +
-    pid_sn * $(split_n_length) * $(lora_k_stride)
-  c_ptr = out_ptr + cur_batch * $(cm_stride) + pid_sn * $(split_n_length) +
+    pid_sn * split_n_length * $(lora_k_stride)
+  c_ptr = out_ptr + cur_batch * $(cm_stride) + pid_sn * split_n_length +
     $(slice_offset) * $(cn_stride)
-  current_n = offset_n
-  c_mask = current_n < $(split_n_length)
-  tiled_b = tl.load(
-    b_ptr + current_n[:, None] * $(lora_k_stride) +
-      offset_k[None, :] * $(lora_n_stride),
-    mask=(current_n[:, None] < $(split_n_length)) and (offset_k[None, :] < $(K)),
-    other=0.0)
-  accumulator = tl.sum(tiled_a[None, :] * tiled_b, axis=1)
-  if ADD_INPUTS {
-    tiled_out = tl.load(c_ptr + current_n * $(cn_stride), mask=c_mask)
-    accumulator += tiled_out
+  for n in range($(0), split_n_length, $(BLOCK_N)) {
+    current_n = n + offset_n
+    c_mask = current_n < split_n_length
+    tiled_b = tl.load(
+      b_ptr + current_n[:, None] * $(lora_k_stride) +
+        offset_k[None, :] * $(lora_n_stride),
+      mask=(current_n[:, None] < split_n_length) and (offset_k[None, :] < $(K)),
+      other=0.0)
+    if ADD_INPUTS {
+      tiled_out = tl.load(c_ptr + current_n * $(cn_stride), mask=c_mask)
+      accumulator = tl.sum(tiled_a[None, :] * tiled_b, axis=1) + tiled_out
+    } else {
+      accumulator = tl.sum(tiled_a[None, :] * tiled_b, axis=1)
+    }
+    tl.store(c_ptr + current_n * $(cn_stride), accumulator, mask=c_mask)
   }
-  tl.store(c_ptr + current_n * $(cn_stride), accumulator, mask=c_mask)
 }
 
 /-- Proof-oriented one-output-block slice of `bgmv_expand_slice.py`'s
