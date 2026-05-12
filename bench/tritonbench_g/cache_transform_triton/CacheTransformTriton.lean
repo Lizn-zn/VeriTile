@@ -93,6 +93,173 @@ def cacheOffset
     (cache_stride hidden_stride BLOCK_H : Nat) (i : Fin BLOCK_H) : Nat :=
   sourceSeq s lengths * cache_stride + hidIndex s BLOCK_H i * hidden_stride
 
+def rowIndex (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
+  s.pids 0 * BLOCK_SIZE + i.val
+
+def decodeOutOffset
+    (s : BlockState) (cache_stride hidden_stride BLOCK_SIZE : Nat)
+    (idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM]) : Nat :=
+  rowIndex s BLOCK_SIZE idx.1 * cache_stride + idx.2.1.val * hidden_stride
+
+def decodeCacheOffset
+    (s : BlockState) (lengths : RegionName)
+    (cache_stride hidden_stride BLOCK_SIZE : Nat)
+    (idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM]) : Nat :=
+  s.readMemValue .nat lengths (rowIndex s BLOCK_SIZE idx.1) * cache_stride +
+    idx.2.1.val * hidden_stride
+
+def decodeActive (s : BlockState) (NUM_SEQS BLOCK_SIZE : Nat)
+    (idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM]) : Prop :=
+  rowIndex s BLOCK_SIZE idx.1 < NUM_SEQS
+
+instance decodeActiveDecidable
+    (s : BlockState) (NUM_SEQS BLOCK_SIZE : Nat)
+    (idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM]) :
+    Decidable (decodeActive s NUM_SEQS BLOCK_SIZE idx) := by
+  unfold decodeActive
+  infer_instance
+
+/-- Algorithm-layer correctness for the full decoding cache-copy surface. -/
+theorem decoding_cache_kernel_correct
+    (cos_cache sin_cache lengths cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hRegion : cos_output ≠ sin_output)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+        decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx))
+    (hExec : exec (decoding_cache_kernel cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
+        s = some s') :
+    (∀ idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM],
+      s'.readMem cos_output
+          (decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx) =
+        if decodeActive s NUM_SEQS BLOCK_SIZE idx then
+          s.readMem cos_cache
+            (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)
+        else
+          s.readMem cos_output
+            (decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)) ∧
+    (∀ idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM],
+      s'.readMem sin_output
+          (decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx) =
+        if decodeActive s NUM_SEQS BLOCK_SIZE idx then
+          s.readMem sin_cache
+            (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)
+        else
+          s.readMem sin_output
+            (decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)) := by
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+        (s.pids 0 * BLOCK_SIZE + idx.1.val) * cache_stride +
+          idx.2.1.val * hidden_stride) := by
+    intro a b h
+    exact hOutInj (by
+      simpa [decodeOutOffset, rowIndex] using h)
+  by_cases hB : 0 < BLOCK_SIZE
+  · by_cases hH : 0 < HIDDEN_DIM
+    · simp [exec, decoding_cache_kernel, stepStmts, stepStmt, evalOp,
+            Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+            Tile.expandDim, Tile.uop, NumericDType.add, NumericDType.mul,
+            ComparableDType.lt, TileShape.dropInsertedIndex,
+            BlockState.readMemValue, hB, hH] at hExec
+      subst s'
+      constructor
+      · intro idx
+        simp only [decodeOutOffset, rowIndex]
+        rw [BlockState.scatter_prop_masked_preserves_other_region
+          (region := sin_output) (R := cos_output) (h_ne := hRegion)
+          (P := fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+            s.pids 0 * BLOCK_SIZE + idx.1.val < NUM_SEQS)
+          (off := (s.pids 0 * BLOCK_SIZE + idx.1.val) * cache_stride +
+            idx.2.1.val * hidden_stride)
+          (l := TileShape.allIndices [BLOCK_SIZE, HIDDEN_DIM])]
+        rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj idx]
+        by_cases hActive : s.pids 0 * BLOCK_SIZE + idx.1.val < NUM_SEQS
+        · simp [decodeActive, decodeCacheOffset, decodeOutOffset, rowIndex,
+                BlockState.readMemValue, hActive]
+        · simp [decodeActive, rowIndex, hActive]
+      · intro idx
+        simp only [decodeOutOffset, rowIndex]
+        rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj idx]
+        by_cases hActive : s.pids 0 * BLOCK_SIZE + idx.1.val < NUM_SEQS
+        · simp [decodeActive, decodeCacheOffset, decodeOutOffset, rowIndex,
+                BlockState.readMemValue, hActive]
+        · rw [BlockState.scatter_prop_masked_preserves_other_region
+            (region := cos_output) (R := sin_output) (h_ne := Ne.symm hRegion)
+            (P := fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+              s.pids 0 * BLOCK_SIZE + idx.1.val < NUM_SEQS)
+            (off := (s.pids 0 * BLOCK_SIZE + idx.1.val) * cache_stride +
+              idx.2.1.val * hidden_stride)
+            (l := TileShape.allIndices [BLOCK_SIZE, HIDDEN_DIM])]
+          simp [decodeActive, rowIndex, hActive]
+    · constructor
+      · intro idx
+        exact False.elim (hH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
+      · intro idx
+        exact False.elim (hH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
+  · constructor
+    · intro idx
+      exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
+    · intro idx
+      exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
+
+/-- Compute-facing correctness for the full decoding cache-copy surface. -/
+theorem decoding_cache_kernel_compute_correct
+    (cos_cache sin_cache lengths cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegion : cos_output ≠ sin_output)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+        decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)) :
+    ComputeCorrect.Realizes
+      (kernel := decoding_cache_kernel cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
+      (initialState := s)
+      (write := fun i : Sum (TileIndex [BLOCK_SIZE, HIDDEN_DIM])
+          (TileIndex [BLOCK_SIZE, HIDDEN_DIM]) =>
+        match i with
+        | .inl idx =>
+            if decodeActive s NUM_SEQS BLOCK_SIZE idx then
+              some (cos_output, decodeOutOffset s cache_stride hidden_stride
+                BLOCK_SIZE idx)
+            else none
+        | .inr idx =>
+            if decodeActive s NUM_SEQS BLOCK_SIZE idx then
+              some (sin_output, decodeOutOffset s cache_stride hidden_stride
+                BLOCK_SIZE idx)
+            else none)
+      (expected := fun i =>
+        match i with
+        | .inl idx =>
+            s.readMem cos_cache
+              (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)
+        | .inr idx =>
+            s.readMem sin_cache
+              (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [decoding_cache_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := decoding_cache_kernel_correct cos_cache sin_cache lengths cos_output
+    sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE s s'
+    hRegion hOutInj hExec
+  cases i with
+  | inl idx =>
+      by_cases hActive : decodeActive s NUM_SEQS BLOCK_SIZE idx
+      · have hi := h.1 idx
+        simp [hActive] at hi ⊢
+        exact hi
+      · simp [hActive]
+  | inr idx =>
+      by_cases hActive : decodeActive s NUM_SEQS BLOCK_SIZE idx
+      · have hi := h.2 idx
+        simp [hActive] at hi ⊢
+        exact hi
+      · simp [hActive]
+
 /-- Algorithm-layer correctness for the one-sequence decoding cache copy. -/
 theorem decoding_cache_one_seq_block_correct
     (cos_cache sin_cache lengths cos_output sin_output : RegionName)
