@@ -16,7 +16,6 @@ set_option linter.unusedSimpArgs false
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_N` / `BLOCK_NN` / `BLOCK_DMODEL` / `hiden_size: tl.constexpr`
   → Lean `Nat` parameters.
-- Python `tl.multiple_of(start_nn, BLOCK_NN)` is a codegen hint and is omitted.
 - Python `[:, None]` / `[None, :]` dimension annotations preserved. -/
 def embedding_kernel
     (weight input_ids out : RegionName)
@@ -27,6 +26,7 @@ def embedding_kernel
   offs_nn = start_n + tl.arange(0, $(BLOCK_NN))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   for start_nn in range(0, $(BLOCK_N), $(BLOCK_NN)) {
+    start_nn = tl.multiple_of(start_nn, $(BLOCK_NN))
     offs_seq = start_nn + offs_nn
     n_ctx_mask = offs_seq < $(n_ctx)
     token_ids = tl.load(input_ids + offs_seq, mask=n_ctx_mask, other=$(vob_end_id))
