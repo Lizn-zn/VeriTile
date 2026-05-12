@@ -18,7 +18,7 @@ logsumexp, label gather, loss store, and logsumexp store. The `label_idx =
 -100` sentinel branch and Python's `tl.int32` label cast are signed-integer
 control flow and are not represented in this Nat label surface. -/
 def cross_entropy_forward_nonignored_surface
-    (logits_ptr loss_ptr logsumexp_ptr labels_ptr : RegionName)
+    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .nat)
     (VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
@@ -27,7 +27,7 @@ def cross_entropy_forward_nonignored_surface
   logits_base = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
-  label_idx = tl.load(labels_ptr + row_idx, dtype=tl.uint64)
+  label_idx = tl.load($((labels_ptr : Region .nat)) + row_idx)
   logits = tl.load(logits_base + col_offsets, mask=mask, other=-inf)
   if DO_LOGIT_SCALING {
     logits = $(LOGIT_SCALE) * logits
@@ -59,7 +59,7 @@ final masked in-place gradient writeback. The ignored-label branch uses the
 signed sentinel `-100` plus Python's `tl.int32` label cast and remains outside
 this Nat label surface. -/
 def cross_entropy_backward_nonignored_surface
-    (logits_ptr dloss_ptr logsumexp_ptr labels_ptr : RegionName)
+    (logits_ptr dloss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .nat)
     (VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
@@ -70,7 +70,7 @@ def cross_entropy_backward_nonignored_surface
   dloss_base = dloss_ptr + row_idx * $(dloss_row_stride)
   col_offsets = block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
-  label_idx = tl.load(labels_ptr + row_idx, dtype=tl.uint64)
+  label_idx = tl.load($((labels_ptr : Region .nat)) + row_idx)
   dloss = tl.load(dloss_base)
   x = tl.load(logits_base + col_offsets, mask=mask, other=-inf)
   if DO_LOGIT_SCALING {

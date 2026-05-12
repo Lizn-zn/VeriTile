@@ -18,7 +18,7 @@ computation, and non-split `z_loss_ptr` side store. The full Python kernel also
 handles `ignored_index`; that signed sentinel is not represented in this Nat
 label surface. -/
 def cross_entropy_fwd_nonignored_surface
-    (loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr : RegionName)
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .nat)
     (total_classes class_start_idx n_cols n_rows logits_row_stride
       BLOCK_SIZE : Nat)
     (smoothing logit_scale lse_square_scale : ℝ)
@@ -28,7 +28,7 @@ def cross_entropy_fwd_nonignored_surface
   col_block_idx = tl.program_id(axis=1)
   logits_base = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   col_offsets = col_block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
-  label_idx = tl.load(labels_ptr + row_idx, dtype=tl.uint64)
+  label_idx = tl.load($((labels_ptr : Region .nat)) + row_idx)
   logits = tl.load(logits_base + col_offsets,
     mask=col_offsets < $(n_cols), other=-inf).to(tl.float32) * $(logit_scale)
   max_logits = tl.max(logits, axis=0)
