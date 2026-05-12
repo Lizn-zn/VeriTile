@@ -28,12 +28,18 @@ private def expandLoadOtherAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
       match e with
       | `(tritonExpr| $n:num) =>
           pure (some ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩)
+      | `(tritonExpr| 0.0) =>
+          pure (some ⟨← `(Op.constNat 0), .nat, SInfo.scalar, none, none⟩)
       | _ => pure none
   | .bool =>
       match e with
       | `(tritonExpr| 0) =>
           pure (some ⟨← `(Op.constBool Bool.false), .bool, SInfo.scalar, none, none⟩)
       | `(tritonExpr| 1) =>
+          pure (some ⟨← `(Op.constBool Bool.true), .bool, SInfo.scalar, none, none⟩)
+      | `(tritonExpr| 0.0) =>
+          pure (some ⟨← `(Op.constBool Bool.false), .bool, SInfo.scalar, none, none⟩)
+      | `(tritonExpr| 1.0) =>
           pure (some ⟨← `(Op.constBool Bool.true), .bool, SInfo.scalar, none, none⟩)
       | `(tritonExpr| $($t:term)) =>
           pure (some ⟨← `(Op.constBool $t), .bool, SInfo.scalar, none, none⟩)
