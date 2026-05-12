@@ -13,9 +13,7 @@ set_option linter.unusedSimpArgs false
 `fused_recurrent_hgrn_fwd_kernel`.
 
 The forward recurrence is a regular `0..T` loop and is represented directly,
-including the optional initial-state load and final-state store. The backward
-kernel iterates `range(T - 1, -1, -1)`, which requires signed negative-step loop
-support and is intentionally not folded into this forward surface. -/
+including the optional initial-state load and final-state store. -/
 def fused_recurrent_hgrn_fwd_surface
     (X G O H0 HT : RegionName) (T D BD : Nat)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
@@ -44,6 +42,48 @@ def fused_recurrent_hgrn_fwd_surface
   if STORE_FINAL_STATE {
     p_ht = HT + i_bh * $(D) + o_d
     tl.store(p_ht, (b_h).to(p_ht.dtype.element_ty), mask=mask)
+  }
+}
+
+/-- Surface transcription of `fused_recurrent_hgrn.py`'s
+`fused_recurrent_hgrn_bwd_kernel`.
+
+The Python kernel uses `range(T - 1, -1, -1)` and pointer decrements. This DSL
+surface preserves the reverse logical order with `i = T - 1 - j` and recomputes
+the per-iteration pointers from `i`. -/
+def fused_recurrent_hgrn_bwd_surface
+    (G O H0 DX DG DO : RegionName) (T D BD : Nat)
+    (USE_INITIAL_STATE : Bool) :
+    ComputeKernel := triton {
+  i_d = tl.program_id(axis=0)
+  i_bh = tl.program_id(axis=1)
+  o_d = i_d * $(BD) + tl.arange(0, $(BD))
+  mask = o_d < $(D)
+  b_dh = tl.zeros([$(BD)], dtype=tl.float32)
+  for j in range($(0), $(T), $(1)) {
+    i = $(T) - $(1) - j
+    p_g = G + (i_bh * $(T) + i) * $(D) + o_d
+    p_dx = DX + (i_bh * $(T) + i) * $(D) + o_d
+    p_dg = DG + (i_bh * $(T) + i) * $(D) + o_d
+    p_do = DO + (i_bh * $(T) + i) * $(D) + o_d
+    b_g = tl.load(p_g, mask=mask, other=0).to(tl.float32)
+    b_do = tl.load(p_do, mask=mask, other=0).to(tl.float32)
+    if i > 0 {
+      p_o = O + (i_bh * $(T) + i - $(1)) * $(D) + o_d
+      b_o = tl.load(p_o, mask=mask, other=0).to(tl.float32)
+    } else {
+      if USE_INITIAL_STATE {
+        b_o = tl.load(H0 + i_bh * $(D) + o_d, mask=mask, other=0).to(tl.float32)
+      } else {
+        b_o = tl.zeros([$(BD)], dtype=tl.float32)
+      }
+    }
+    b_dh = b_dh + b_do
+    b_dx = b_dh
+    b_dg = b_dh * b_o
+    b_dh = b_dh * b_g
+    tl.store(p_dx, (b_dx).to(p_dx.dtype.element_ty), mask=mask)
+    tl.store(p_dg, (b_dg).to(p_dg.dtype.element_ty), mask=mask)
   }
 }
 
