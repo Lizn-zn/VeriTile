@@ -24,6 +24,9 @@ For each item, check:
 - [x] `kldiv_compute.py`  
   Lean: `bench/tritonbench_g/kldiv_compute/KldivCompute.lean`
 
+- [x] `swiglu_fwd.py`  
+  Lean: `bench/tritonbench_g/swiglu_fwd/SwigluFwd.lean`
+
 - [ ] `logsumexp_fwd.py`  
   Lean: `bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean`
 
@@ -65,9 +68,3 @@ For each item, check:
   Lean: `bench/tritonbench_g/vector_addition_custom/VectorAdditionCustom.lean`
 
 ## Checked But Not Ported
-
-- [ ] `swiglu_fwd.py`  
-  Status: not ported. The faithful kernel has `.to(tl.float32)` followed by
-  `tl.sigmoid`; current unary math expansion accepts the `.real` algorithm
-  channel but not `.fp32` as the direct input dtype. This should be handled as a
-  dtype-surface gap before ticking the kernel in issue #106.
