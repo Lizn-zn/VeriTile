@@ -10,22 +10,16 @@ open VeriTile.Triton
 /-- Faithful transcription of `masked_add_cuda.py`'s `masked_add_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
-- Python `p_mask = tl.load(...).to(tl.int1)` is represented by declaring
-  `p_mask_ptr : tl.int1` in the in-body `tl.region` directive, which the
-  macro consults to default the `tl.load(p_mask_ptr + ...)` dtype to the
-  Boolean/mask channel. The `.to(tl.int1)` cast is folded into the load's
-  channel selection. -/
+- Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter. -/
 def masked_add_kernel
     (grad_ptr p_ptr p_mask_ptr : RegionName)
     (n_elements : Nat) (alpha : ℝ) (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  tl.region p_mask_ptr = tl.int1
   pid = tl.program_id(axis=0)
   block_start = pid * $(BLOCK_SIZE)
   offsets = block_start + tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_elements)
-  p_mask = tl.load(p_mask_ptr + offsets, mask=mask)
+  p_mask = tl.load(p_mask_ptr + offsets, mask=mask).to(tl.int1)
   mask = mask & ~p_mask
   p = tl.load(p_ptr + offsets, mask=mask)
   grad = tl.load(grad_ptr + offsets, mask=mask)

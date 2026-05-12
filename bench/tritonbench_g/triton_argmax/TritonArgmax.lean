@@ -14,26 +14,23 @@ set_option maxHeartbeats 5000000
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` / `INT64_INDEX: tl.constexpr` -> Lean
-  parameters.
-- Python's optional `pid.to(tl.int64)` is not emitted as a separate node:
-  VeriTile's address/index carrier is `Nat`, and the existing cast erasure for
-  index arithmetic keeps this path identical at the algorithm layer.
-- Python's `tl.max(..., return_indices=True)` is spelled as paired `tl.max`
-  and `tl.argmax` expressions, which produce the same value/index channels in
-  the current DSL. -/
+  parameters. -/
 def argmax_kernel_1
     (inp mid_value mid_index : RegionName)
-    (M BLOCK_SIZE : Nat) (_INT64_INDEX : Bool := Bool.false) :
+    (M BLOCK_SIZE : Nat) (INT64_INDEX : Bool := Bool.false) :
     ComputeKernel := triton {
   tl.region mid_index = tl.uint64
   pid = tl.program_id(0)
+  if INT64_INDEX {
+    pid = (pid).to(tl.int64)
+  }
   offset = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   inp_ptrs = inp + offset
   mask = offset < $(M)
   inp_val = tl.load(inp_ptrs, mask=mask, other=-float("inf"))
-  max_val = tl.max(inp_val, axis=0)
-  local_index = tl.argmax(inp_val, axis=0)
-  max_index = local_index + pid * $(BLOCK_SIZE)
+  max_val, local_index := tl.max(inp_val, axis=0, return_indices=True)
+  local_index0 = local_index
+  max_index = local_index0 + pid * $(BLOCK_SIZE)
   mid_value_ptr = mid_value + pid
   max_index_ptr = mid_index + pid
   tl.store(mid_value_ptr, max_val)
@@ -66,8 +63,6 @@ def argmax_kernel_2
 `argmax_kernel`.
 
 The Python kernel accumulates only argmax indices for each `(m, k)` lane.
-The `INT64_INDEX` program-id casts are erased for the same reason as in
-`argmax_kernel_1`: VeriTile's index carrier is already `Nat`.
 
 Known remaining dtype gap: Python initializes `max_values` with
 `dtype=tl.float32`; the current DSL cannot compose a compute-only fp32 `tl.full`
@@ -78,11 +73,15 @@ Nat/index carrier expression `tl.arange(...) * 0` plus the `out_index = tl.uint6
 region declaration on the store target. -/
 def argmax_kernel
     (inp out_index : RegionName)
-    (M N K BLOCK_M BLOCK_N : Nat) (_INT64_INDEX : Bool := Bool.false) :
+    (M N K BLOCK_M BLOCK_N : Nat) (INT64_INDEX : Bool := Bool.false) :
     ComputeKernel := triton {
   tl.region out_index = tl.uint64
   pid_m = tl.program_id(0)
   pid_k = tl.program_id(1)
+  if INT64_INDEX {
+    pid_m = (pid_m).to(tl.int64)
+    pid_k = (pid_k).to(tl.int64)
+  }
   m_offset = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   max_values = tl.full([$(BLOCK_M)], -inf)
   argmax_values = tl.arange(0, $(BLOCK_M)) * $(0)
@@ -92,10 +91,12 @@ def argmax_kernel
     mask = m_offset[:, None] < $(M) and n_offset[None, :] < $(N)
     inp_ptrs = inp + offset
     inp_vals = tl.load(inp_ptrs, mask=mask, other=-float("inf"))
-    local_max, local_argmax := tl.max(inp_vals, axis=1, return_indices=True)
+    local_max, local_argmax := tl.max(inp_vals, 1,
+      return_indices=True, return_indices_tie_break_left=True)
+    local_argmax0 = local_argmax
     update = local_max > max_values
     max_values = tl.where(update, local_max, max_values)
-    argmax_values = tl.where(update, start_n + local_argmax, argmax_values)
+    argmax_values = tl.where(update, start_n + local_argmax0, argmax_values)
   }
   offset_index = m_offset * $(K) + pid_k
   out_index_ptrs = out_index + offset_index
