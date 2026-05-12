@@ -58,9 +58,12 @@ def argmax_kernel_2
 /-- Faithful transcription of `triton_argmax.py`'s dim-specific
 `argmax_kernel`.
 
-The Python `argmax_values` tile is an `int64` index tile; this surface keeps it
-as a Nat tile because all produced indices are nonnegative and `out_index` is a
-typed Nat region. -/
+Known surface blocker: Python initializes `argmax_values` with `dtype=tl.int64`.
+The values are nonnegative indices, but a faithful signed `int64` tile would
+require a Nat-to-Int cast for `start_n + local_argmax` inside `tl.where`.
+VeriTile currently has typed Int literals/arithmetic but no algorithm-level
+Nat-to-Int cast operator, so this surface keeps the index accumulator as
+`tl.uint64` / Nat and stores into the typed Nat output region. -/
 def argmax_kernel
     (inp : RegionName) (out_index : Region .nat)
     (M N K BLOCK_M BLOCK_N : Nat) (INT64_INDEX : Bool := Bool.false) :
