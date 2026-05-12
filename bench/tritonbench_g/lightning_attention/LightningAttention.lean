@@ -8,17 +8,17 @@ namespace VeriTile.Bench.TritonBenchG.LightningAttention
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Surface transcription of `lightning_attention.py`'s `_fwd_kernel`.
 
-This covers the full forward recurrent tile loop. The Python line `off_bh % h`
-is a no-op expression statement and is intentionally not represented because
-the DSL has no bare expression statement form. -/
+This covers the full forward recurrent tile loop. -/
 def lightning_attention_forward_surface
     (Q K V Out : RegionName)
-    (_b _h n d e BLOCK NUM_BLOCK BLOCK_MODEL : Nat) :
+    (_b h n d e BLOCK NUM_BLOCK BLOCK_MODEL : Nat) :
     ComputeKernel := triton {
   off_bh = tl.program_id(axis=0)
+  off_bh % $(h)
   off_e = tl.program_id(axis=1)
   qk_offset = off_bh * $(n) * $(d)
   v_offset = off_bh * $(n) * $(e)

@@ -215,6 +215,7 @@ syntax ident ", " ident (", " ident)* " := "
   tritonExpr ", " tritonExpr (", " tritonExpr)* : tritonStmt
 syntax ident ", " ident (", " ident)* " = "
   tritonExpr ", " tritonExpr (", " tritonExpr)* : tritonStmt
+syntax ident " % " tritonExpr : tritonStmt
 syntax ident " := " "tl.max(" tritonExpr ", " num ")" : tritonStmt
 syntax ident " = " "tl.max(" tritonExpr ", " num ")" : tritonStmt
 syntax ident " := " tritonExpr : tritonStmt

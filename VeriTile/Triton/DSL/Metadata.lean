@@ -333,6 +333,8 @@ private partial def stmtRegionsWith (assigned : List String)
       let ins := rhs.foldl (fun acc e => acc ++ exprRegions assigned e) []
       let nextAssigned := lhs.foldl (fun acc i => i.getId.toString :: acc) assigned
       (ins, [], nextAssigned)
+  | `(tritonStmt| $_i:ident % $e:tritonExpr) =>
+      (exprRegions assigned e, [], assigned)
   | `(tritonStmt| $i:ident := $e:tritonExpr) =>
       (exprRegions assigned e, [], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident = $e:tritonExpr) =>

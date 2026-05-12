@@ -1373,6 +1373,12 @@ partial def expandStmt (env : Env) (pinned : List String)
         ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
         (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
         e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident % $e:tritonExpr) => do
+      discard <| expandExpr env (← `(tritonExpr| $i:ident % $e:tritonExpr))
+      let alg ← `(Stmt.ifThen (Op.constBool Bool.true) ([] : List Stmt))
+      let compTerm ←
+        `(ComputeStmt.ifThen (Op.constBool Bool.true) ([] : List ComputeStmt))
+      pure (alg, compTerm, env, Bool.false)
   | `(tritonStmt| $i:ident := $e:tritonExpr) => do
       let nameLit ← identAsStr i
       let e' ←

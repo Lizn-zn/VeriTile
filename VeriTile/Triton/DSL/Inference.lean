@@ -341,6 +341,10 @@ private partial def scanStmt (assigned : Assigned)
       let rhs := #[rhs0, rhs1] ++ rhsRest
       let nextAssigned := lhs.foldl (fun acc i => i :: acc) assigned
       (assignmentInfo assigned lhs rhs.toList, nextAssigned)
+  | `(tritonStmt| $_i:ident % $e:tritonExpr) =>
+      ({ directPins := directPinsFromExpr assigned e
+         ptrUses := []
+         cmpDeps := cmpDepsFromExpr e }, assigned)
   | `(tritonStmt| $i:ident := $e:tritonExpr) =>
       (assignmentInfo assigned [i.getId.toString] [e], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident = $e:tritonExpr) =>
