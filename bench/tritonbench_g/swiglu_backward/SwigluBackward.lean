@@ -32,9 +32,9 @@ def swiglu_bwd_kernel
   DX += row * $(stride_dx_row)
   DY += row * $(stride_dy_row)
   cols = start_col + tl.arange(0, $(BLOCK_N))
-  x = tl.load(X + cols, mask=cols < $(ncols), other=0).to(tl.float32)
-  y = tl.load(Y + cols, mask=cols < $(ncols), other=0).to(tl.float32)
-  dout = tl.load(DOUT + cols, mask=cols < $(ncols), other=0).to(tl.float32)
+  x = tl.load(X + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
+  y = tl.load(Y + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
+  dout = tl.load(DOUT + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
   x_sigmoid = tl.sigmoid(x)
   dx = x_sigmoid * (1 + x * (1 - x_sigmoid)) * y * dout
   dy = x * x_sigmoid * dout
