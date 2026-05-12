@@ -26,9 +26,9 @@ def rope_embedding_surface
   half_head_dim = $(head_dim / 2)
   mask = col_offsets < $(head_dim / 2)
   sin1 = tl.load(sin + (row_position % $(seqlen)) * $(sin_row_stride) +
-    half_head_dim * $(0) + col_offsets, mask=mask, other=0.0)
+    half_head_dim * $(0) + col_offsets, mask=mask, other=0)
   cos1 = tl.load(cos + (row_position % $(seqlen)) * $(cos_row_stride) +
-    half_head_dim * $(0) + col_offsets, mask=mask, other=0.0)
+    half_head_dim * $(0) + col_offsets, mask=mask, other=0)
   sin1 = sin1 * $(backwardSign)
   head_start = group_head_position * $(ROPE_GROUP_SIZE)
   head_end = tl.minimum(head_start + $(ROPE_GROUP_SIZE), $(n_heads))
@@ -36,8 +36,8 @@ def rope_embedding_surface
     offs_q1 = row_position * $(Q_row_stride) + k * $(head_dim) + col_offsets
     offs_q2 = row_position * $(Q_row_stride) + k * $(head_dim) +
       col_offsets + half_head_dim
-    Q1 = tl.load(Q + offs_q1, mask=mask, other=0.0).to(tl.float32)
-    Q2 = tl.load(Q + offs_q2, mask=mask, other=0.0).to(tl.float32)
+    Q1 = tl.load(Q + offs_q1, mask=mask, other=0).to(sin1.dtype)
+    Q2 = tl.load(Q + offs_q2, mask=mask, other=0).to(sin1.dtype)
     tl.store(Q + offs_q1, Q1 * cos1 - Q2 * sin1, mask=mask)
     tl.store(Q + offs_q2, Q2 * cos1 + Q1 * sin1, mask=mask)
   }
@@ -60,15 +60,15 @@ def rope_embedding_forward_first_half
   half_head_dim = $(head_dim / 2)
   mask = col_offsets < $(head_dim / 2)
   sin1 = tl.load(sin + (row_position % $(seqlen)) * $(sin_row_stride) + col_offsets,
-    mask=mask, other=0.0)
+    mask=mask, other=0)
   cos1 = tl.load(cos + (row_position % $(seqlen)) * $(cos_row_stride) + col_offsets,
-    mask=mask, other=0.0)
+    mask=mask, other=0)
   head_start = group_head_position * $(ROPE_GROUP_SIZE)
   offs_q1 = row_position * $(Q_row_stride) + head_start * $(head_dim) + col_offsets
   offs_q2 = row_position * $(Q_row_stride) + head_start * $(head_dim) +
     col_offsets + $(head_dim / 2)
-  Q1 = tl.load(Q + offs_q1, mask=mask, other=0.0)
-  Q2 = tl.load(Q + offs_q2, mask=mask, other=0.0)
+  Q1 = tl.load(Q + offs_q1, mask=mask, other=0).to(sin1.dtype)
+  Q2 = tl.load(Q + offs_q2, mask=mask, other=0).to(sin1.dtype)
   out = Q1 * cos1 - Q2 * sin1
   tl.store(Q + offs_q1, out, mask=mask and head_start < $(n_heads))
 }

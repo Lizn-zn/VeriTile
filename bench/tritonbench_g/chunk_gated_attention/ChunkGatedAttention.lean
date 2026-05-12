@@ -35,16 +35,15 @@ def chunk_gated_attention_cum_surface
     offsets=(i_t * $(BT), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
   b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
   b_o = tl.dot(m_s, b_s, allow_tf32=false)
-  tl.store(p_o, (b_o).to(O.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+  tl.store(p_o, (b_o).to(p_o.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
 /-- Surface transcription of `chunk_gated_attention.py`'s
 `chunk_gated_abc_fwd_kernel_h`.
 
 The `GATEK`, `USE_INITIAL_STATE`, and `STORE_FINAL_STATE` constexpr branches
-are preserved. The source casts the gated `b_k`/`b_v` back to the loaded tile
-dtype; this surface represents those casts with `K.dtype.element_ty` and
-`V.dtype.element_ty` while retaining the gating arithmetic and pointer layout. -/
+are preserved, including the local-tile dtype casts on gated `b_k`/`b_v` and
+the block-pointer element dtype casts on state stores. -/
 def chunk_gated_attention_h_surface
     (K V G H H0 HT : RegionName)
     (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d s_h_h s_h_t s_h_d
@@ -71,7 +70,7 @@ def chunk_gated_attention_h_surface
     p_h = tl.make_block_ptr(base=H + i_bh * $(s_h_h) + i_t * $(KSize) * $(VSize),
       shape=($(KSize), $(VSize)), strides=($(s_h_t), $(s_h_d)),
       offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
-    tl.store(p_h, (b_h).to(H.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+    tl.store(p_h, (b_h).to(p_h.dtype.element_ty), boundary_check=([0, 1] : List Nat))
     b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
     b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
     if GATEK {
@@ -85,7 +84,7 @@ def chunk_gated_attention_h_surface
       b_gn = tl.load(p_gn, boundary_check=([0] : List Nat))
       b_h = b_h * tl.exp(b_gn)[:, None]
       b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
-      b_k = (b_k * tl.exp(b_gn[:, None] - b_g)).to(K.dtype.element_ty)
+      b_k = (b_k * tl.exp(b_gn[:, None] - b_g)).to(b_k.dtype)
     } else {
       p_g = tl.make_block_ptr(base=G + i_bh * $(s_v_h),
         shape=($(T), $(VSize)), strides=($(s_v_t), $(s_v_d)),
@@ -97,7 +96,7 @@ def chunk_gated_attention_h_surface
       b_gn = tl.load(p_gn, boundary_check=([0] : List Nat))
       b_h = b_h * tl.exp(b_gn)[None, :]
       b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
-      b_v = (b_v * tl.exp(b_gn[None, :] - b_g)).to(V.dtype.element_ty)
+      b_v = (b_v * tl.exp(b_gn[None, :] - b_g)).to(b_v.dtype)
     }
     b_h += tl.dot(b_k, b_v, allow_tf32=false)
   }
@@ -105,7 +104,7 @@ def chunk_gated_attention_h_surface
     p_h = tl.make_block_ptr(base=HT + i_bh * $(KSize) * $(VSize),
       shape=($(KSize), $(VSize)), strides=($(VSize), $(1)),
       offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
-    tl.store(p_h, (b_h).to(HT.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+    tl.store(p_h, (b_h).to(p_h.dtype.element_ty), boundary_check=([0, 1] : List Nat))
   }
 }
 

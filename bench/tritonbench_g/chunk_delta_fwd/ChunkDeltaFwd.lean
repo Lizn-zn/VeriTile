@@ -12,10 +12,10 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `chunk_delta_fwd.py`'s
 `chunk_delta_rule_fwd_kernel_h`.
 
-The source uses dynamic tile-dtype casts around the two dot products; this
-surface represents them with `KReg.dtype.element_ty`, the dtype of loaded
-`b_k`, while preserving the nested `NT`/`ceil(BT/BC)` loop structure, state
-stores, `v_new` stores, and optional initial/final state branches. -/
+The source uses dynamic tile-dtype casts around the two dot products and
+block-pointer element dtype casts on stores; this surface preserves those forms
+alongside the nested `NT`/`ceil(BT/BC)` loop structure and optional
+initial/final state branches. -/
 def chunk_delta_rule_fwd_h_surface
     (KReg VReg DReg VNew HOut InitialState FinalState : RegionName)
     (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
@@ -36,7 +36,7 @@ def chunk_delta_rule_fwd_h_surface
     p_h = tl.make_block_ptr(base=HOut + i_bh * $(s_h_h) + i_t * $(K) * $(V),
       shape=($(K), $(V)), strides=($(s_h_t), $(1)),
       offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
-    tl.store(p_h, (b_h).to(HOut.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+    tl.store(p_h, (b_h).to(p_h.dtype.element_ty), boundary_check=([0, 1] : List Nat))
     b_h_cumsum = tl.zeros([$(BK), $(BV)], dtype=tl.float32)
     for i_c in range($(0), tl.cdiv($(BT), $(BC)), $(1)) {
       p_k = tl.make_block_ptr(base=KReg + i_bh * $(s_qk_h),
@@ -58,10 +58,10 @@ def chunk_delta_rule_fwd_h_surface
       b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
       b_d = tl.load(p_d, boundary_check=([0, 1] : List Nat))
       b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
-      b_v = b_v - tl.dot(b_d, (b_h).to(KReg.dtype.element_ty), allow_tf32=false)
-      tl.store(p_v_new, (b_v).to(VNew.dtype.element_ty),
+      b_v = b_v - tl.dot(b_d, (b_h).to(b_k.dtype), allow_tf32=false)
+      tl.store(p_v_new, (b_v).to(p_v_new.dtype.element_ty),
         boundary_check=([0, 1] : List Nat))
-      b_h_cumsum += tl.dot(b_k, (b_v).to(KReg.dtype.element_ty), allow_tf32=false)
+      b_h_cumsum += tl.dot(b_k, (b_v).to(b_k.dtype), allow_tf32=false)
     }
     b_h += b_h_cumsum
   }
@@ -69,7 +69,7 @@ def chunk_delta_rule_fwd_h_surface
     p_ht = tl.make_block_ptr(base=FinalState + i_bh * $(K) * $(V),
       shape=($(K), $(V)), strides=($(V), $(1)),
       offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
-    tl.store(p_ht, (b_h).to(FinalState.dtype.element_ty),
+    tl.store(p_ht, (b_h).to(p_ht.dtype.element_ty),
       boundary_check=([0, 1] : List Nat))
   }
 }

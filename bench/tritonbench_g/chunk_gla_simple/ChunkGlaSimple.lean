@@ -52,11 +52,11 @@ def chunk_gla_simple_fwd_surface
     shape=($(T), $(VSize)), strides=($(s_v_t), $(1)),
     offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
   b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
-  b_o = (b_o + tl.dot((b_s).to(V.dtype.element_ty), b_v, allow_tf32=false)) * $(scale)
+  b_o = (b_o + tl.dot((b_s).to(b_v.dtype), b_v, allow_tf32=false)) * $(scale)
   p_o = tl.make_block_ptr(base=O + i_bh * $(s_v_h),
     shape=($(T), $(VSize)), strides=($(s_v_t), $(1)),
     offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
-  tl.store(p_o, (b_o).to(O.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+  tl.store(p_o, (b_o).to(p_o.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
 /-- Proof-oriented final output-store slice of `chunk_gla_simple.py`'s

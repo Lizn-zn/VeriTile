@@ -27,7 +27,9 @@ def ksoftmax_forward_qk_surface
   }
   x = tl.load(x_ptrs, mask=io_mask, other=-inf)
   if CAUSAL {
-    x = tl.where(k > n, -inf, x)
+    off = -inf
+    off = (off).to(x.dtype)
+    x = tl.where(k > n, off, x)
   }
   mask_ptrs = Mask + n * $(stride_m) + k
   add_mask = tl.load(mask_ptrs, mask=io_mask, other=-inf)
@@ -68,7 +70,9 @@ def ksoftmax_forward_bk_surface
   }
   x = tl.load(x_ptrs, mask=io_mask, other=-inf)
   if CAUSAL {
-    x = tl.where(k > n, -inf, x)
+    off = -inf
+    off = (off).to(x.dtype)
+    x = tl.where(k > n, off, x)
   }
   mask_ptrs = Mask + m * $(stride_m) + k
   add_mask = tl.load(mask_ptrs, mask=io_mask, other=-inf)
@@ -110,8 +114,10 @@ def ksoftmax_backward_surface
   g = tl.load(grad_out_ptrs, mask=io_mask, other=0.0)
   o = tl.load(out_ptrs, mask=io_mask, other=0.0)
   if CAUSAL {
-    g = tl.where(k > n, 0.0, g)
-    o = tl.where(k > n, 0.0, o)
+    zero = 0.0
+    zero = (zero).to(g.dtype)
+    g = tl.where(k > n, zero, g)
+    o = tl.where(k > n, zero, o)
   }
   if LOG {
     s = tl.sum(g, axis=0)
