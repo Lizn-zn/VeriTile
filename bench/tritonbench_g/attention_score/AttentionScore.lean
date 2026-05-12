@@ -98,7 +98,7 @@ def attention_score_kernel
   }
   o_offset = (off_z).to(tl.int64) * $(stride_oz) + (off_h).to(tl.int64) * $(stride_oh)
   o_range = tl.arange(0, $(BLOCK_N)) + start_n * $(BLOCK_N)
-  tl.store(Out + o_offset + o_range, (o).to(Out.dtype.element_ty),
+  tl.store(Out + o_offset + o_range, (o).to(Out.type.element_ty),
     mask=o_range < $(NKV_CTX))
 }
 
