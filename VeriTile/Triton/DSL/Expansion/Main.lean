@@ -416,6 +416,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
             ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
       | none =>
           pure ⟨term, dtype, shape, none, none⟩
+  | `(tritonExpr| $(($t:term : ℝ))) =>
+      pure ⟨← `(Op.const $t), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Real))) =>
+      pure ⟨← `(Op.const $t), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Nat))) =>
+      pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
   | `(tritonExpr| $($t:term)) =>
       -- `$(...)` antiquote is the address/size channel: `Nat`.
       -- Data/scalar contexts reinterpret the same surface form through
@@ -814,7 +820,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
       expandArith expandExpr env "arithmetic" (← `(Op.sub)) a b
   | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => do
-      expandArith expandExpr env "arithmetic" (← `(Op.mul)) a b
+      match ← expandBoolMaskMul? expandExpr env a b with
+      | some out => pure out
+      | none => expandArith expandExpr env "arithmetic" (← `(Op.mul)) a b
   | `(tritonExpr| $a:tritonExpr / $b:tritonExpr) => do
       expandArith expandExpr env "arithmetic" (← `(Op.div)) a b
   | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => do

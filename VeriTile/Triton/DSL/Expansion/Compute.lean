@@ -67,6 +67,34 @@ partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (
   let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx algTerm a' b'
   pure ⟨algTerm, a'.dtype, outShape, computeTerm?, computeDType?⟩
 
+partial def expandBoolMaskMul? (expandExpr : ExprExpander) (env : Env)
+    (a b : TSyntax `tritonExpr) : MacroM (Option EOut) := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  let mk (cond val : EOut) : MacroM EOut := do
+    ensureDType .bool cond.dtype "bool mask multiplication condition"
+    ensureComputeArithComposable "bool mask multiplication" val
+    ensureDType .real val.dtype "bool mask multiplication value"
+    let (_, outShape) ← broadcastTerm cond.shape val.shape "bool mask multiplication"
+    let condTerm ← coerceShape cond.term cond.shape outShape "bool mask multiplication condition"
+    let valTerm ← coerceShape val.term val.shape outShape "bool mask multiplication value"
+    let zeroTerm ← coerceShape (← `(Op.const 0)) SInfo.scalar outShape
+      "bool mask multiplication zero"
+    let algTerm ← `(Op.where $condTerm $valTerm $zeroTerm)
+    let computeTerm? ←
+      match val.computeDType? with
+      | some .fp32 => pure (some (← fp32ComputeExpr algTerm))
+      | some _ =>
+          Macro.throwError "bool mask multiplication: only fp32 compute annotations are supported"
+      | none => pure none
+    pure ⟨algTerm, .real, outShape, computeTerm?, val.computeDType?⟩
+  match a'.dtype, b'.dtype with
+  | .bool, .real => pure (some (← mk a' b'))
+  | .real, .bool => pure (some (← mk b' a'))
+  | .bool, _ | _, .bool =>
+      Macro.throwError "bool mask multiplication currently supports Bool * Real only"
+  | _, _ => pure none
+
 partial def expandIntegralArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
