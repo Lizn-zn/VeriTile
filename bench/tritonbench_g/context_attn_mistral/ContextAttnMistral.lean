@@ -15,7 +15,9 @@ set_option linter.unusedSimpArgs false
 The full kernel computes sliding-window causal context attention. This slice
 starts from a precomputed `Acc` tile and proves the final masked writeback into
 `Out`, preserving the source address shape using `B_Start_Loc`, `B_Seqlen`,
-`cur_batch`, `cur_head`, and `start_m`. -/
+`cur_batch`, `cur_head`, and `start_m`. The inner `tl.float32`
+streaming-softmax accumulator and sliding-window score masks are outside this
+slice. -/
 def context_attn_mistral_final_store_slice
     (Acc B_Start_Loc B_Seqlen Out : RegionName)
     (stride_acc_b stride_acc_h stride_acc_m stride_acc_d

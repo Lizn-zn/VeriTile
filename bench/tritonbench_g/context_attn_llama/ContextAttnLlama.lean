@@ -15,7 +15,9 @@ set_option linter.unusedSimpArgs false
 The full kernel computes grouped-KV causal context attention using
 `Req_to_tokens`. This slice starts from a precomputed `Acc` tile and proves the
 final masked writeback into `Out`, preserving the fused `cur_bh` program-id
-decomposition, `B_Start_Loc`, and the prompt-cache-adjusted sequence length. -/
+decomposition, `B_Start_Loc`, and the prompt-cache-adjusted sequence length.
+The inner `tl.float32` `m_i/l_i/acc` streaming-softmax loop and request-token
+gathers are outside this slice. -/
 def context_attn_llama_final_store_slice
     (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
     (H

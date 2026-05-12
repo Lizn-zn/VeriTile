@@ -12,9 +12,12 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription/proof-oriented final output-store slice of `context_attn_fwd.py`'s
 `_fwd_kernel`.
 
-The full kernel computes PPL int8-KV context attention. This slice starts from a precomputed `Acc` tile and proves the
-final masked writeback into `Out`, preserving the fused `cur_bh` program-id
-decomposition, `B_Start_Loc`, and the prompt-cache-adjusted sequence length. -/
+The full kernel computes PPL int8-KV context attention. This slice starts from
+a precomputed `Acc` tile and proves the final masked writeback into `Out`,
+preserving the fused `cur_bh` program-id decomposition, `B_Start_Loc`, and the
+prompt-cache-adjusted sequence length. The inner `tl.float32`
+streaming-softmax accumulator and int8-KV dequantization are outside this
+slice. -/
 def context_attn_fwd_final_store_slice
     (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
     (H

@@ -15,7 +15,8 @@ set_option linter.unusedSimpArgs false
 The full kernel computes causal context attention with Q/K/V tiled loads and a
 streaming softmax. This slice starts from a precomputed `Acc` tile and proves
 the final masked writeback into `Out`, preserving the source address shape using
-`B_Start_Loc`, `B_Seqlen`, `cur_batch`, `cur_head`, and `start_m`. -/
+`B_Start_Loc`, `B_Seqlen`, `cur_batch`, `cur_head`, and `start_m`. The inner
+`tl.float32` `m_i/l_i/acc` recurrence is outside this slice. -/
 def context_attn_nopad_final_store_slice
     (Acc B_Start_Loc B_Seqlen Out : RegionName)
     (stride_acc_b stride_acc_h stride_acc_m stride_acc_d

@@ -15,7 +15,9 @@ set_option linter.unusedSimpArgs false
 The full kernel computes BLOOM-style context attention with `Req_to_tokens` and
 head-dimension padding. This slice starts from a precomputed `Acc` tile and
 proves the final masked writeback into `Out`, preserving both source masks:
-`offs_m < cur_batch_seq_len` and `offs_d < head_dim`. -/
+`offs_m < cur_batch_seq_len` and `offs_d < head_dim`. The inner `tl.float32`
+`m_i/l_i/acc` streaming-softmax loop and request-token gathers are outside this
+slice. -/
 def context_attn_bloom_final_store_slice
     (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
     (head_dim
