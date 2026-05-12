@@ -14,17 +14,18 @@ set_option linter.unusedSimpArgs false
 `decoding_cache_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- `lengths` is declared as unsigned metadata so loaded sequence indices can be
-  used in pointer arithmetic. -/
+- `lengths` is a typed Lean Nat region so its `tl.load` call does not need an
+  extra `dtype=` kwarg. -/
 def decoding_cache_kernel
-    (cos_cache sin_cache lengths cos_output sin_output : RegionName)
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat)
+    (cos_output sin_output : RegionName)
     (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  tl.region lengths = tl.uint64
   pid = tl.program_id(axis=0)
   idx = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   hid = tl.arange(0, $(HIDDEN_DIM))
-  ori_seq_idx = tl.load(lengths + idx, mask=idx < $(NUM_SEQS), other=None)
+  ori_seq_idx = tl.load($((lengths : Region .nat)) + idx,
+    mask=idx < $(NUM_SEQS), other=None)
   mask = idx[:, None] + hid[None, :] * $(0) < $(NUM_SEQS)
   cos_cache_part = tl.load(cos_cache + ori_seq_idx[:, None] * $(cache_stride) +
       hid[None, :] * $(hidden_stride), mask=mask, other=0.0)

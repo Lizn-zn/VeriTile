@@ -21,20 +21,19 @@ modulo offsets directly. The Python early returns for
 `pid_m * BLOCK_M > M` and `lora_index == -1` are not represented because the
 current DSL lacks kernel-level `return` and the LoRA sentinel is signed. -/
 def sgmv_expand_slice_active_surface
-    (input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens lora_indices : RegionName)
+    (input_ptr lora_ptr out_ptr : RegionName) (b_seq_start_loc seq_lens lora_indices : Region .nat)
     (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
       cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat)
     (ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
-  tl.region seq_lens = tl.uint64, b_seq_start_loc = tl.uint64, lora_indices = tl.uint64
   pid = tl.program_id(axis=0)
   cur_batch = tl.program_id(axis=1)
   cta_n_num = tl.cdiv($(N), $(BLOCK_N))
   pid_m = pid // cta_n_num
   pid_n = pid % cta_n_num
-  m_len = tl.load(seq_lens + cur_batch, dtype=tl.uint64)
-  lora_index = tl.load(lora_indices + cur_batch, dtype=tl.uint64)
-  cur_seq_start = tl.load(b_seq_start_loc + cur_batch, dtype=tl.uint64)
+  m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
+  lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
+  cur_seq_start = tl.load($((b_seq_start_loc : Region .nat)) + cur_batch)
   offset_m = tl.arange(0, $(BLOCK_M)) + pid_m * $(BLOCK_M)
   offset_n = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N)
   offset_k = tl.arange(0, $(BLOCK_K))
@@ -60,6 +59,7 @@ def sgmv_expand_slice_active_surface
   offset_cn = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N) + $(slice_offset)
   c_ptr = out_ptr + offset_cm[:, None] * $(cm_stride) +
     offset_cn[None, :] * $(cn_stride)
+  m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
   seq_limit = cur_seq_start + m_len
   c_mask = (offset_cm[:, None] < seq_limit) and
     ((offset_cn[None, :] - $(slice_offset)) < $(N))
@@ -78,21 +78,19 @@ sequence batch, a row block, and an `n` block: load the row from the flattened
 sequence input, load the selected LoRA-B tile, reduce over K, and store the
 output slice at `cur_seq_start + row`.
 
-The in-body `tl.region` directive declares each int64 metadata buffer
-(`seq_lens`, `b_seq_start_loc`, `lora_indices`) so loads from them
-default to the `.nat` channel without explicit `dtype=` kwargs. -/
+The metadata buffers are typed Nat regions so loads from them default to the
+`.nat` channel without explicit `dtype=` kwargs. -/
 def sgmv_expand_slice_one_row_block
-    (input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens lora_indices : RegionName)
+    (input_ptr lora_ptr out_ptr : RegionName) (b_seq_start_loc seq_lens lora_indices : Region .nat)
     (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
       cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
-  tl.region seq_lens = tl.uint64, b_seq_start_loc = tl.uint64, lora_indices = tl.uint64
   pid_m = tl.program_id(0)
   pid_n = tl.program_id(1)
   cur_batch = tl.program_id(2)
-  m_len = tl.load(seq_lens + cur_batch)
-  cur_seq_start = tl.load(b_seq_start_loc + cur_batch)
-  lora_index = tl.load(lora_indices + cur_batch)
+  m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
+  cur_seq_start = tl.load($((b_seq_start_loc : Region .nat)) + cur_batch)
+  lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
   row = pid_m * $(BLOCK_M)
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))

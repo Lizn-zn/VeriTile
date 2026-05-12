@@ -13,23 +13,23 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `var_len_copy.py`'s `var_len_copy_kernel_triton`.
 
 Allowed mechanical Lean-syntax-only change:
-- The Python test creates the start/length metadata as `int32`; the current
-  pointer-offset path consumes the metadata as a Nat channel, so the `tl.region`
-  directives use unsigned integer metadata for those three buffers. -/
+- The Python test creates the start/length metadata as `int32`; the Lean
+  parameters type those metadata buffers as Nat regions so their `tl.load`
+  calls do not need extra `dtype=` kwargs. -/
 def var_len_copy_kernel_triton
-    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (old_a_start old_a_len : Region .nat) (old_a_location : RegionName)
+    (new_a_start : Region .nat) (new_a_location : RegionName)
     (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  tl.region old_a_len = tl.uint64, old_a_start = tl.uint64, new_a_start = tl.uint64
   a_id = tl.program_id(0)
-  length = tl.load(old_a_len + a_id)
-  old_start = tl.load(old_a_start + a_id)
-  new_start = tl.load(new_a_start + a_id)
+  length = tl.load($((old_a_len : Region .nat)) + a_id)
+  old_start = tl.load($((old_a_start : Region .nat)) + a_id)
+  new_start = tl.load($((new_a_start : Region .nat)) + a_id)
   old_offset = tl.arange(0, $(BLOCK_SIZE))
   new_offset = tl.arange(0, $(BLOCK_SIZE))
   for i in range($(0), length, $(BLOCK_SIZE)) {
     v = tl.load(old_a_location + old_start + i + old_offset,
-      mask=old_offset < length, other=0.0)
+      mask=old_offset < length)
     tl.store(new_a_location + new_start + i + new_offset, v,
       mask=new_offset < length)
   }
@@ -42,22 +42,21 @@ The Python kernel loops over chunks of a variable-length segment. This slice
 fixes one chunk index and proves the masked vector copy from
 `old_start + chunk * BLOCK_SIZE` to `new_start + chunk * BLOCK_SIZE`.
 
-The in-body `tl.region` directive declares each int64 metadata buffer
-(`old_a_len`, `old_a_start`, `new_a_start`) so loads from them recover
-the `.nat` channel without explicit `dtype=` kwargs. -/
+The metadata buffers are typed Nat regions so loads from them recover the
+`.nat` channel without explicit `dtype=` kwargs. -/
 def var_len_copy_one_chunk
-    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (old_a_start old_a_len : Region .nat) (old_a_location : RegionName)
+    (new_a_start : Region .nat) (new_a_location : RegionName)
     (chunk BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  tl.region old_a_len = tl.uint64, old_a_start = tl.uint64, new_a_start = tl.uint64
   a_id = tl.program_id(0)
-  length = tl.load(old_a_len + a_id)
-  old_start = tl.load(old_a_start + a_id)
-  new_start = tl.load(new_a_start + a_id)
+  length = tl.load($((old_a_len : Region .nat)) + a_id)
+  old_start = tl.load($((old_a_start : Region .nat)) + a_id)
+  new_start = tl.load($((new_a_start : Region .nat)) + a_id)
   offset = tl.arange(0, $(BLOCK_SIZE))
   chunk_base = $(chunk) * $(BLOCK_SIZE)
   v = tl.load(old_a_location + old_start + chunk_base + offset,
-    mask=offset < length, other=0.0)
+    mask=offset < length)
   tl.store(new_a_location + new_start + chunk_base + offset, v,
     mask=offset < length)
 }
@@ -80,7 +79,8 @@ def preStoreState
       if i.1.val < s.readMemValue .nat old_a_len (s.pids 0) then
         some (s.readMem old_a_location
           (s.readMemValue .nat old_a_start (s.pids 0) + chunk * BLOCK_SIZE + i.1.val))
-      else some (0.0 : ℝ) }
+      else some (s.undef old_a_location
+          (s.readMemValue .nat old_a_start (s.pids 0) + chunk * BLOCK_SIZE + i.1.val)) }
 
 def laneOffset (chunk BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   chunk * BLOCK_SIZE + i.val
@@ -165,11 +165,13 @@ theorem var_len_copy_one_chunk_correct
               some (s.readMem old_a_location
                 (s.readMemValue .nat old_a_start (s.pids 0) +
                   chunk * BLOCK_SIZE + idx.1.val))
-            else some (0.0 : ℝ)))
+            else some (s.undef old_a_location
+                (s.readMemValue .nat old_a_start (s.pids 0) +
+                  chunk * BLOCK_SIZE + idx.1.val))))
         (P := fun idx : TileIndex [BLOCK_SIZE] =>
           idx.1.val < s.readMemValue .nat old_a_len (s.pids 0))
         hRawInj (i, PUnit.unit))
-    simp [preStoreState, BlockState.readMemValue] at hScatter
+    simp [preStoreState, BlockState.readMemValue, Region.cast] at hScatter
     simp only [destOffset, sourceOffset, active, segmentLength, oldStart,
       newStart, laneOffset, BlockState.readMemValue]
     rw [hScatter]
