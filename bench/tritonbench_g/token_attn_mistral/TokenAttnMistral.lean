@@ -12,9 +12,8 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `token_attn_mistral.py`'s
 `_fwd_kernel_token_att2`.
 
-Mechanical differences from Python:
-- metadata/gather buffers are typed Nat regions so their loads do not need
-  extra `dtype=` kwargs. -/
+Typed-region note: metadata/gather buffers are `Region .nat`, matching their
+index role without adding source-level `dtype=` kwargs. -/
 def token_attn_mistral_surface
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (_B_Start_Loc : RegionName)

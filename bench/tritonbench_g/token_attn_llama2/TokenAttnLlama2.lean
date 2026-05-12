@@ -13,9 +13,8 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `token_attn_llama2.py`'s
 `_fwd_kernel_token_att1`.
 
-Mechanical differences from Python:
-- metadata/gather buffers are typed Nat regions so their loads do not need
-  extra `dtype=` kwargs. -/
+Typed-region note: metadata/gather buffers are `Region .nat`, matching their
+index role without adding source-level `dtype=` kwargs. -/
 def token_attn_llama2_surface
     (Q K : RegionName) (B_Loc B_Start_Loc B_Seqlen : Region .nat)
     (Att_Out : RegionName)
