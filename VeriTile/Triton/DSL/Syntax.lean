@@ -73,6 +73,7 @@ syntax:max (name := tritonMethodCastElementTyIdent) tritonExpr:max noWs "." "to"
 syntax:max (name := tritonIdentMethodCastElementTyIdent) ident noWs "." "to" "(" ident "." ident "." ident ")" : tritonExpr
 syntax (name := tritonIdentMethodCastElementTyIdentSpaced) ident "." "to" "(" ident "." ident "." ident ")" : tritonExpr
 syntax "tl.multiple_of(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.max_contiguous" "(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "-inf" : tritonExpr
 syntax "-" "float" "(" term ")" : tritonExpr
 

@@ -16,8 +16,8 @@ set_option linter.unusedSimpArgs false
 This keeps the CTA decomposition, sequence metadata loads, LoRA index gather,
 K-block dot-product loop for the `EVEN_K=true` path used by the benchmark,
 optional `CAST_TYPE`, optional `ADD_INPUTS`, and final masked store.
-`tl.max_contiguous` is a layout hint and is omitted; the loads use the same
-modulo offsets directly. The Python early returns for
+`tl.max_contiguous` is a layout hint; the DSL accepts it at the surface and
+erases it into the same value expression. The Python early returns for
 `pid_m * BLOCK_M > M` and `lora_index == -1` are not represented because the
 current DSL lacks kernel-level `return` and the LoRA sentinel is signed. -/
 def sgmv_expand_slice_active_surface
@@ -37,8 +37,8 @@ def sgmv_expand_slice_active_surface
   offset_m = tl.arange(0, $(BLOCK_M)) + pid_m * $(BLOCK_M)
   offset_n = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N)
   offset_k = tl.arange(0, $(BLOCK_K))
-  ram = tl.multiple_of(offset_m % m_len, $(BLOCK_M))
-  rbn = tl.multiple_of(offset_n % $(N), $(BLOCK_N))
+  ram = tl.max_contiguous(tl.multiple_of(offset_m % m_len, $(BLOCK_M)), $(BLOCK_M))
+  rbn = tl.max_contiguous(tl.multiple_of(offset_n % $(N), $(BLOCK_N)), $(BLOCK_N))
   a_ptr = input_ptr + cur_seq_start * $(xm_stride) +
     ram[:, None] * $(xm_stride) + offset_k[None, :] * $(xk_stride)
   b_ptr = lora_ptr + $(l0_stride) * lora_index +

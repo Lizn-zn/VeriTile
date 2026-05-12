@@ -589,6 +589,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape, none, none⟩
   | `(tritonExpr| tl.multiple_of($e:tritonExpr, $_align:tritonExpr)) => do
       expandExpr env e
+  | `(tritonExpr| tl.max_contiguous($e:tritonExpr, $_align:tritonExpr)) => do
+      expandExpr env e
   | `(tritonExpr| tl.bitcast($e:tritonExpr, $dt:tritonDType)) => do
       let dst ← expandComputeDType dt
       let dstTerm ← dst.term

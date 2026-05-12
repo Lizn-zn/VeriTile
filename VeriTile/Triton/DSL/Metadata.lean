@@ -190,6 +190,8 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.cast($e:tritonExpr, $_:tritonDType)) => exprRegions assigned e
   | `(tritonExpr| tl.multiple_of($e:tritonExpr, $align:tritonExpr)) =>
       exprRegions assigned e ++ exprRegions assigned align
+  | `(tritonExpr| tl.max_contiguous($e:tritonExpr, $align:tritonExpr)) =>
+      exprRegions assigned e ++ exprRegions assigned align
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $c:tritonExpr)) =>

@@ -219,6 +219,8 @@ private partial def directPinsFromExpr (assigned : Assigned) :
   | `(tritonExpr| tl.toReal($e:tritonExpr)) => natExprIdents e
   | `(tritonExpr| tl.multiple_of($e:tritonExpr, $align:tritonExpr)) =>
       directPinsFromExpr assigned e ++ directPinsFromExpr assigned align
+  | `(tritonExpr| tl.max_contiguous($e:tritonExpr, $align:tritonExpr)) =>
+      directPinsFromExpr assigned e ++ directPinsFromExpr assigned align
   | `(tritonExpr| tl.make_block_ptr($_:ident=$p:tritonExpr,
         $_:ident=($_parent:tritonExpr,*), $_:ident=($_strides:tritonExpr,*),
         $_:ident=($_offsets:tritonExpr,*), $_:ident=($_block:tritonExpr,*))) =>
