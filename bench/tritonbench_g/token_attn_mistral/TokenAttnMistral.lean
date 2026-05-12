@@ -14,9 +14,7 @@ set_option linter.unusedSimpArgs false
 
 Mechanical differences from Python:
 - metadata/gather buffers are typed Nat regions so their loads do not need
-  extra `dtype=` kwargs;
-- the `v_value` mask is expanded with a tautological D-axis condition to match
-  the `[BLOCK_N, BLOCK_DMODEL]` pointer tile shape. -/
+  extra `dtype=` kwargs. -/
 def token_attn_mistral_surface
     (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (_B_Start_Loc : RegionName)
@@ -47,10 +45,9 @@ def token_attn_mistral_surface
       start_n * $(stride_req_to_tokens_s),
       mask=(start_n + offs_n + cur_batch_start_index) < cur_batch_seq_len,
       other=$(0))
-    v_mask = ((start_n + offs_n[:, None] + cur_batch_start_index) < cur_batch_seq_len) and
-      (offs_d[None, :] >= $(0))
     v_value = tl.load(V + v_offs + v_loc[:, None] * $(stride_vbs),
-      mask=v_mask, other=0.0)
+      mask=(start_n + offs_n[:, None] + cur_batch_start_index) < cur_batch_seq_len,
+      other=0.0)
     acc += tl.sum(p_value[:, None] * v_value, axis=0)
   }
   acc = (acc).to(Out.dtype.element_ty)

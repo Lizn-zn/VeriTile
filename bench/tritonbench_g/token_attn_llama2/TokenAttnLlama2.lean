@@ -15,9 +15,7 @@ set_option linter.unusedSimpArgs false
 
 Mechanical differences from Python:
 - metadata/gather buffers are typed Nat regions so their loads do not need
-  extra `dtype=` kwargs;
-- the K load mask is expanded with a tautological D-axis condition to match the
-  `[BLOCK_N, BLOCK_DMODEL]` pointer tile shape. -/
+  extra `dtype=` kwargs. -/
 def token_attn_llama2_surface
     (Q K : RegionName) (B_Loc B_Start_Loc B_Seqlen : Region .nat)
     (Att_Out : RegionName)
@@ -44,11 +42,9 @@ def token_attn_llama2_surface
     k_loc = tl.load($((B_Loc : Region .nat)) + $(stride_b_loc_b) * cur_batch +
       $(stride_b_loc_s) * offs_n_new,
       mask=offs_n_new < cur_batch_end_index, other=$(0))
-    k_mask = (offs_n_new[:, None] < cur_batch_end_index) and
-      (offs_d[None, :] >= $(0))
     off_k = k_loc[:, None] * $(stride_kbs) + cur_kv_head * $(stride_kh) +
       offs_d[None, :] * $(stride_kd)
-    k = tl.load(K + off_k, mask=k_mask, other=0.0)
+    k = tl.load(K + off_k, mask=offs_n_new[:, None] < cur_batch_end_index, other=0.0)
     att_value = tl.sum(q[None, :] * k, axis=1)
     att_value *= $((sm_scale : ℝ))
     off_o = cur_head * $(att_stride_h) +
