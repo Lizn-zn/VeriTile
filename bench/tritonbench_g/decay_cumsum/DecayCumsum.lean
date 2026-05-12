@@ -95,7 +95,7 @@ def prepare_qg_decay_store_slice
   q = tl.load(Q + base + offs, mask=mask, other=0.0)
   decay = tl.load(QDecay + base + offs, mask=mask, other=0.0)
   qg = q * decay
-  tl.store(QG + base + offs, qg, mask=mask)
+  tl.store(QG + base + offs, (qg).to(QG.dtype.element_ty), mask=mask)
 }
 
 def elemIndex (s : BlockState) (BK : Nat) (i : Fin BK) : Nat :=
