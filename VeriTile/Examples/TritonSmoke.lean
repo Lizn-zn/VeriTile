@@ -721,6 +721,17 @@ def int8Int16LoadStoreSmoke (idx8Reg idx16Reg out8Reg out16Reg : RegionName) : C
   tl.store($(out16Reg), idx16)
 }
 
+/-- Nat index expression cast into the signed `.int` value channel inside `tl.where`.
+This covers argmax-style `tl.int64` index accumulators whose source indices are
+nonnegative Nat lanes. -/
+def natToIntWhereSmoke (outReg : Region .int) (N : Nat) : ComputeKernel := triton {
+  offs := tl.arange(0, $(N))
+  zeros := tl.full([$(N)], dtype=tl.int64, value=$(0))
+  take := offs < $(N)
+  idx := tl.where(take, (offs).to(tl.int64), zeros)
+  tl.store($((outReg : Region .int)) + offs, idx)
+}
+
 /-- Masked integer HBM load with a Nat `other=` value. -/
 def uint64MaskedLoadStoreSmoke (idxReg outReg : RegionName) : ComputeKernel := triton {
   mask := $(0) < $(0)
