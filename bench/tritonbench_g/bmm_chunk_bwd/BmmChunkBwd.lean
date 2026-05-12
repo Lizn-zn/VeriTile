@@ -70,7 +70,7 @@ def bmm_chunk_bwd_surface
       offs_m[:, None] * $(stride_res_seqlen) +
       offs_n[None, :] * $(stride_res_k)
     res_mask = (offs_m[:, None] < chunk_size_limit) & (offs_n[None, :] < $(K))
-    res = tl.load(res_ptrs, mask=res_mask, other=0.0).to(tl.float32)
+    res = tl.load(res_ptrs, mask=res_mask).to(tl.float32)
     acc += res
   }
 
