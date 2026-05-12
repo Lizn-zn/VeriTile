@@ -106,10 +106,11 @@ def sgmv_expand_slice_one_row_block
       ((pid_n * $(BLOCK_N) + offset_n)[None, :] < $(N)),
     other=0.0)
   accumulator = tl.sum(tiled_a[:, None] * tiled_b, axis=0)
+  tiled_c = (accumulator).to(lora_ptr.dtype.element_ty)
   out_n = pid_n * $(BLOCK_N) + offset_n + $(slice_offset)
   tl.store(out_ptr + (cur_seq_start + row) * $(cm_stride) +
       out_n * $(cn_stride),
-    accumulator, mask=(row < m_len) and
+    tiled_c, mask=(row < m_len) and
       (pid_n * $(BLOCK_N) + offset_n < $(N)))
 }
 
