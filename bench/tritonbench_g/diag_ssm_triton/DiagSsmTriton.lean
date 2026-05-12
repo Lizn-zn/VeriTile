@@ -9,6 +9,7 @@ open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Faithful transcription of `diag_ssm_triton.py`'s
 `diag_ssm_forward_kernel`.
@@ -35,6 +36,43 @@ def diag_ssm_forward_kernel
     s = s * Lambda + x
     tl.store(y_ptr + offsets, s, mask=mask)
   }
+}
+
+/-- Faithful transcription of `diag_ssm_triton.py`'s
+`diag_ssm_backward_kernel` for the real-valued path.
+
+The source rewrites reverse traversal as `for i in range(length); t = length -
+1 - i`, which is preserved here. Python initializes with
+`tl.zeros_like(Lambda)`; current DSL spells that same tile shape as
+`tl.zeros([BLOCK_SIZE], dtype=tl.float32)`. -/
+def diag_ssm_backward_kernel
+    (s_ptr lambda_ptr y_ptr grad_s_ptr grad_x_ptr grad_lambda_ptr grad_y_ptr :
+      RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  col_idx = tl.program_id(0) * $(BLOCK_SIZE)
+  col_offsets = col_idx + tl.arange(0, $(BLOCK_SIZE))
+  mask = col_offsets < $(batch_size * dim)
+  Lambda = tl.load(lambda_ptr + col_offsets % $(dim), mask=mask, other=0)
+  grad_s = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  grad_Lambda = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  for i in range(0, $(length), $(1)) {
+    t = $(length) - $(1) - i
+    offsets = t * $(batch_size * dim) + col_offsets
+    grad_y = tl.load(grad_y_ptr + offsets, mask=mask, other=0)
+    if t > 0 {
+      s = tl.load(y_ptr + (offsets - $(batch_size * dim)), mask=mask, other=0)
+    } else {
+      s = tl.load(s_ptr + col_offsets, mask=mask, other=0)
+    }
+    grad_s = grad_y + grad_s
+    grad_x = grad_s
+    grad_Lambda += grad_s * s
+    grad_s = grad_s * Lambda
+    tl.store(grad_x_ptr + offsets, grad_x, mask=mask)
+  }
+  tl.store(grad_s_ptr + col_offsets, grad_s, mask=mask)
+  tl.store(grad_lambda_ptr + col_offsets, grad_Lambda, mask=mask)
 }
 
 def colOffset (st : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
