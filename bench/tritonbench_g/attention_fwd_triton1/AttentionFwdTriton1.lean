@@ -15,7 +15,9 @@ set_option linter.unusedSimpArgs false
 The full kernel iterates over time blocks, optionally stores the recurrent
 state `b_h`, computes `b_o`, and stores it through `p_o`. This slice represents
 one loop iteration with program axes `(i_bh, i_block)`, starts from a precomputed
-`BO` tile, and proves the unmasked `p_o` block writeback into `O`. -/
+`BO` tile, and proves the unmasked `p_o` block writeback into `O`. The
+`tl.float32` recurrent state initializer and dot-loop that produce `BO` are
+outside this slice. -/
 def attention_fwd_triton1_output_store_slice
     (BO O : RegionName)
     (stride_bo_bh stride_bo_t stride_bo_d

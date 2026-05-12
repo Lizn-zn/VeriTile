@@ -16,7 +16,8 @@ The full kernel streams over K/V blocks, computes a numerically stable attention
 accumulator, and also writes the log-sum-exp vector `L`. This slice starts after
 `out_buffer = out_buffer / denom[:, None]` with a precomputed `OutBuffer` tile
 and proves the final unmasked `O_block_ptr` writeback. It preserves the source
-base offset, which is derived from `stride_q_head`. -/
+base offset, which is derived from `stride_q_head`. The inner `tl.float32`
+online-softmax state and K/V dot loop are outside this slice. -/
 def flash_attn_output_store_slice
     (OutBuffer O : RegionName)
     (stride_buf_h stride_buf_m stride_buf_d

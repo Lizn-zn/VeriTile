@@ -18,7 +18,8 @@ quantization scales, and a streaming softmax reduction. This slice starts after
 masked writeback into `Out`. It preserves the source program-id decomposition
 and the source store mask `(offs_m < N_CTX) & (offs_k < 96)`. The source forms
 `O_block_ptr` with the Q strides, so this slice names those as the output store
-strides. -/
+strides. The inner `tl.float32` accumulator and `p.to(tl.float16)` dot-input
+cast are outside this slice. -/
 def attention_forward_triton_final_store_slice
     (Acc Out : RegionName)
     (H N_CTX HEAD_ACTIVE

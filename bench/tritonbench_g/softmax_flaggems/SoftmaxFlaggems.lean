@@ -12,7 +12,9 @@ open VeriTile.Triton
 
 This covers the `K > 1` forward path used when the softmax dimension is not the
 innermost physical dimension: each CTA handles one `(m, k-block)`, loads the
-`[TILE_N, TILE_K]` tile, reduces along `N`, and stores the normalized tile. -/
+`[TILE_N, TILE_K]` tile, reduces along `N`, and stores the normalized tile.
+The multi-tile fallback's `tl.float32` running `m/z` state is outside this
+specialized surface. -/
 def softmax_kernel_non_inner_one_tile_surface
     (output_ptr input_ptr : RegionName)
     (N K TILE_N TILE_K : Nat) :

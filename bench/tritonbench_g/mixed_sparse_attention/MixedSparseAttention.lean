@@ -17,7 +17,7 @@ slice starts from a precomputed normalized `Acc` tile and proves the final
 `seqlens`-masked writeback into `Out`. The kernel-level early return for
 `start_m * BLOCK_M >= seqlen` is represented at this surface by the same
 all-false row mask; the sparse block/column softmax loops remain separate
-modeling work. -/
+modeling work, including their `tl.float32` accumulators. -/
 def mixed_sparse_attention_output_store_slice
     (Acc Seqlens Out : RegionName)
     (H

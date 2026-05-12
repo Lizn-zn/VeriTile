@@ -15,7 +15,8 @@ set_option linter.unusedSimpArgs false
 The full kernel runs staged attention forward loops. This slice starts after those stages have produced a
 precomputed normalized `Acc` tile and proves the final masked writeback into
 `Out`, preserving the source store address and mask
-`(offs_m < N_CTX) & (offs_k < 96)`. -/
+`(offs_m < N_CTX) & (offs_k < 96)`. The inner `tl.float32` accumulator and
+`p.to(tl.float16)` dot-input cast are outside this slice. -/
 def attn_fwd_triton_final_store_slice
     (Acc Out : RegionName)
     (H N_CTX HEAD_ACTIVE

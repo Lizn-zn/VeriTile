@@ -14,7 +14,8 @@ set_option linter.unusedSimpArgs false
 
 The Python kernel writes `acc` through a block pointer with
 `boundary_check=(0, 1)`. This slice spells the same write as explicit pointer
-arithmetic and an explicit two-axis boundary mask. -/
+arithmetic and an explicit two-axis boundary mask. The inner `tl.float32`
+streaming-softmax accumulator is outside this slice. -/
 def triton_attention_forward_output_store_slice
     (Acc Out : RegionName) (hzRowOffset D0 stride_om stride_on BLOCK_M BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {

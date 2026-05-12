@@ -17,7 +17,9 @@ products, quantization scales, and a streaming softmax. This slice starts after
 `acc = acc / l_i[:, None]` with a precomputed `Acc` tile and proves the final
 masked writeback into `Out`, preserving the source mask
 `(offs_m < N_CTX) & (offs_k < 96)`. The source forms `O_block_ptr` from the Q
-strides, so this slice names those as the output store strides. -/
+strides, so this slice names those as the output store strides. The inner
+`tl.float32` accumulator and `p.to(tl.float16)` dot-input cast are outside this
+slice. -/
 def attention_fwd_triton2_final_store_slice
     (Acc Out : RegionName)
     (H N_CTX HEAD_ACTIVE
