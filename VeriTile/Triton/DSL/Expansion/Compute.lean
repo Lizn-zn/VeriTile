@@ -454,15 +454,31 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
           pure []
       pure ⟨term, .real, SInfo.dims outDims, none, none⟩
 
-/-- Lower a `tl.dot(a, b)` to `Op.dot a b`. Both operands must be rank-2
-real tiles whose inner dim agrees syntactically (same dim term). The
-result shape is `[outerDim a, innerDim b]`. -/
+/-- Lower a `tl.dot(a, b)` to `Op.dot a b`.
+
+Algorithm-layer dot is real-valued. If the surface operands were explicitly
+cast to fp32/fp16/bf16, first project those float tiles back to real so the
+cast remains visible in the operand term before the dot. -/
 partial def expandDot (expandExpr : ExprExpander) (env : Env)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
-  let a' ← expandExpr env a
-  let b' ← expandExpr env b
-  ensureDType .real a'.dtype "tl.dot"
-  ensureDType .real b'.dtype "tl.dot"
+  let a0 ← expandExpr env a
+  let b0 ← expandExpr env b
+  let a' ←
+    match a0.dtype with
+    | .real => pure a0
+    | .fp32 | .fp16 | .bf16 =>
+        pure { a0 with term := ← realMathTerm "tl.dot lhs" a0, dtype := .real }
+    | _ =>
+        ensureDType .real a0.dtype "tl.dot"
+        pure a0
+  let b' ←
+    match b0.dtype with
+    | .real => pure b0
+    | .fp32 | .fp16 | .bf16 =>
+        pure { b0 with term := ← realMathTerm "tl.dot rhs" b0, dtype := .real }
+    | _ =>
+        ensureDType .real b0.dtype "tl.dot"
+        pure b0
   -- Both operands must be rank ≥ 2 (the trailing two dims are the matmul);
   -- any leading dims form a shared `batch` prefix that must agree
   -- syntactically. The inner dim `K` is the last of `a` / first-of-trailing

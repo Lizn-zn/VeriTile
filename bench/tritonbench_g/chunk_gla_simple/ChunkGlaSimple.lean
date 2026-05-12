@@ -13,10 +13,7 @@ set_option linter.unusedSimpArgs false
 `chunk_simple_gla_fwd_kernel_o`.
 
 The Triton `order` metadata on block pointers is scheduling-only; the DSL
-accepts it at the surface and erases it into the same block-pointer AST. The
-source cast `b_s.to(b_v.dtype)` is also unnecessary for the current real-valued
-`tl.dot` carrier, so the dot is written over the same values after the causal
-mask is applied. -/
+accepts it at the surface and erases it into the same block-pointer AST. -/
 def chunk_gla_simple_fwd_surface
     (Q K V H G O : RegionName)
     (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T KSize VSize BT BK BV : Nat)
@@ -55,7 +52,7 @@ def chunk_gla_simple_fwd_surface
     shape=($(T), $(VSize)), strides=($(s_v_t), $(1)),
     offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
   b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
-  b_o = (b_o + tl.dot(b_s, b_v, allow_tf32=false)) * $(scale)
+  b_o = (b_o + tl.dot((b_s).to(V.dtype.element_ty), b_v, allow_tf32=false)) * $(scale)
   p_o = tl.make_block_ptr(base=O + i_bh * $(s_v_h),
     shape=($(T), $(VSize)), strides=($(s_v_t), $(1)),
     offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
