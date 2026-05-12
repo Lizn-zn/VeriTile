@@ -1467,6 +1467,58 @@ partial def expandStmt (env : Env) (pinned : List String)
             ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
             (name, .ptr, outShape, none) :: env,
             Bool.false)
+  | `(tritonStmt| $i:ident -= $e:tritonExpr) => do
+      let nameLit ← identAsStr i
+      let name := i.getId.toString
+      unless env.any (fun entry => entry.1 == name) do
+        Macro.throwError ("`-=`: unknown identifier `" ++ name ++ "`")
+      let (lhsDType, lhsShape) ← lookupEnv env name
+      if lhsDType == .ptr || lhsDType == .blockPtr then
+        Macro.throwError "`-=`: pointer subtraction is not supported"
+      let lhsShapeTerm ← lhsShape.term
+      let lhsDTypeTerm ← lhsDType.term
+      let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
+      let lhsComputeDType? := lookupComputeDType? env name
+      let lhsComputeTerm? ←
+        match lhsComputeDType? with
+        | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some _ =>
+            Macro.throwError
+              ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+        | none => pure none
+      let lhs : EOut :=
+        { term := lhsTerm, dtype := lhsDType, shape := lhsShape,
+          computeTerm := lhsComputeTerm?, computeDType? := lhsComputeDType? }
+      let rhs0 ← expandExpr env e
+      let rhs ←
+        if lhs.dtype == .real && rhs0.dtype == .nat then
+          match ← expandLeanAntiquoteAs? .real e with
+          | some out => pure out
+          | none => pure rhs0
+        else
+          pure rhs0
+      let (lhs, rhs) ← coerceRealArithOperands "`-=`" lhs rhs
+      ensureComputeArithComposable "`-=` lhs" lhs
+      ensureComputeArithComposable "`-=` rhs" rhs
+      unless lhs.dtype == rhs.dtype do
+        Macro.throwError "`-=`: dtype mismatch"
+      let np ← lhs.dtype.numericProof
+      let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`-=`"
+      let eTerm ← `(Op.sub $np $bc $lhs.term $rhs.term)
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? "`-=`" eTerm lhs rhs
+      let e' : EOut :=
+        { term := eTerm, dtype := lhs.dtype, shape := outShape,
+          computeTerm := computeTerm?, computeDType? := computeDType? }
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (name, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
   | `(tritonStmt| $i:ident *= $e:tritonExpr) => do
       let nameLit ← identAsStr i
       let name := i.getId.toString
