@@ -41,14 +41,15 @@ def fused_recurrent_rwkv6_fwd_surface
   if USE_INITIAL_STATE {
     p_h0 = H0 + i_bh * $(K) * $(V) +
       offs_k[None, :] * $(V) + offs_v[:, None]
-    b_h += tl.load(p_h0, mask=mask_kv, other=0.0).to(tl.float32)
+    b_h += tl.load(p_h0, mask=mask_kv, other=0).to(tl.float32)
   }
-  b_u = tl.load(p_u, mask=mask_bk, other=0.0).to(tl.float32)
+  b_u = tl.load(p_u, mask=mask_bk, other=0).to(tl.float32)
   for _i in range($(0), $(T), $(1)) {
-    b_k = tl.load(p_k, mask=mask_bk, other=0.0).to(tl.float32)
-    b_v = tl.load(p_v, mask=mask_bv, other=0.0).to(tl.float32)
-    b_q = tl.load(p_q, mask=mask_bk, other=0.0).to(tl.float32) * $(scale)
-    b_w = tl.exp(tl.load(p_w, mask=mask_bk, other=0.0).to(tl.float32))
+    b_k = tl.load(p_k, mask=mask_bk, other=0).to(tl.float32)
+    b_v = tl.load(p_v, mask=mask_bv, other=0).to(tl.float32)
+    b_q = tl.load(p_q, mask=mask_bk, other=0).to(tl.float32) * $(scale)
+    b_w = tl.load(p_w, mask=mask_bk, other=0).to(tl.float32)
+    b_w = tl.exp(b_w)
     b_kv = b_k[None, :] * b_v[:, None]
     b_o = (b_h + b_kv * b_u[None, :]) * b_q[None, :]
     b_o = tl.sum(b_o, axis=1)
