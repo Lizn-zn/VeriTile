@@ -58,7 +58,7 @@ def chunk_delta_rule_fwd_h_surface
       b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
       b_d = tl.load(p_d, boundary_check=([0, 1] : List Nat))
       b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
-      b_v = b_v - tl.dot(b_d, (b_h).to(b_k.dtype), allow_tf32=false)
+      b_v -= tl.dot(b_d, (b_h).to(b_k.dtype), allow_tf32=false)
       tl.store(p_v_new, (b_v).to(p_v_new.dtype.element_ty),
         boundary_check=([0, 1] : List Nat))
       b_h_cumsum += tl.dot(b_k, (b_v).to(b_k.dtype), allow_tf32=false)

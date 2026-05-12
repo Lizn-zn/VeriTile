@@ -31,7 +31,7 @@ def rmsnorm_implementation
     x_ptr_mask = offset_n < $(N_SIZE)
     x = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
     xf = (x).to(tl.float32)
-    var = var + xf * xf
+    var += xf * xf
   }
   var = tl.sum(var, axis=0) / $(N_SIZE)
   std = tl.sqrt(var + $(eps))
