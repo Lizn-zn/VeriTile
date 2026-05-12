@@ -67,6 +67,34 @@ def copy_to_vcache_one_dblock
     v, mask=d < $(HEAD_DIM))
 }
 
+/-- Surface transcription of the V-cache store in `kv_cache_copy.py`'s
+`_copy_to_kvcache_seqlen1_kernel`.
+
+This keeps the Python decode path's `context_lengths[cur_seq_idx] - 1`, block
+division/modulo, block-table lookup, V load, and V-cache store for one
+dimension block. -/
+def copy_to_vcache_seqlen1_dblock
+    (V VCache BLOCK_TABLES context_lengths : RegionName)
+    (stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
+      stride_bts stride_btb block_size HEAD_DIM BLOCK_D : Nat) :
+    ComputeKernel := triton {
+  cur_seq_idx = tl.program_id(0)
+  cur_kv_head_idx = tl.program_id(1)
+  d = tl.arange(0, $(BLOCK_D))
+  past_kv_seq_len = tl.load(context_lengths + cur_seq_idx, dtype=tl.uint64) - $(1)
+  last_bt_block_idx = past_kv_seq_len // $(block_size)
+  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
+    last_bt_block_idx * $(stride_btb), dtype=tl.uint64)
+  offset_last_block = past_kv_seq_len % $(block_size)
+  v = tl.load(V + cur_seq_idx * $(stride_vt) +
+      cur_kv_head_idx * $(stride_vh) + d * $(stride_vd),
+    mask=d < $(HEAD_DIM), other=0.0)
+  tl.store(VCache + block_id * $(stride_vcb) +
+      cur_kv_head_idx * $(stride_vch) + offset_last_block * $(stride_vcs) +
+      d * $(stride_vcd),
+    v, mask=d < $(HEAD_DIM))
+}
+
 def dimIndex (i : Fin BLOCK_D) : Nat :=
   i.val
 
@@ -255,6 +283,177 @@ def vCacheOffset
   blockId s BLOCK_TABLES LAST_BLOCK_IDX stride_bts stride_btb * stride_vcb +
     s.pids 1 * stride_vch + OFFSET_LAST_BLOCK * stride_vcs +
     dimIndex i * stride_vcd
+
+def seqlen1PastKvSeqLen (s : BlockState) (context_lengths : RegionName) : Nat :=
+  s.readMemValue .nat context_lengths (s.pids 0) - 1
+
+def seqlen1LastBlockIdx (s : BlockState) (context_lengths : RegionName)
+    (block_size : Nat) : Nat :=
+  seqlen1PastKvSeqLen s context_lengths / block_size
+
+def seqlen1OffsetLastBlock (s : BlockState) (context_lengths : RegionName)
+    (block_size : Nat) : Nat :=
+  seqlen1PastKvSeqLen s context_lengths % block_size
+
+def seqlen1BlockId (s : BlockState) (BLOCK_TABLES context_lengths : RegionName)
+    (stride_bts stride_btb block_size : Nat) : Nat :=
+  s.readMemValue .nat BLOCK_TABLES
+    (s.pids 0 * stride_bts +
+      seqlen1LastBlockIdx s context_lengths block_size * stride_btb)
+
+def seqlen1VCacheOffset
+    (s : BlockState) (BLOCK_TABLES context_lengths : RegionName)
+    (stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb
+      block_size : Nat)
+    (i : Fin BLOCK_D) : Nat :=
+  seqlen1BlockId s BLOCK_TABLES context_lengths stride_bts stride_btb block_size *
+      stride_vcb +
+    s.pids 1 * stride_vch +
+    seqlen1OffsetLastBlock s context_lengths block_size * stride_vcs +
+    dimIndex i * stride_vcd
+
+/-- Algorithm-layer correctness for the V-cache seqlen=1 copy surface. -/
+theorem copy_to_vcache_seqlen1_dblock_correct
+    (V VCache BLOCK_TABLES context_lengths : RegionName)
+    (stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
+      stride_bts stride_btb block_size HEAD_DIM BLOCK_D : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_D =>
+        seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb stride_vch
+          stride_vcs stride_vcd stride_bts stride_btb block_size i))
+    (hExec : exec (copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
+        context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
+        stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM BLOCK_D)
+        s = some s') :
+    ∀ i : Fin BLOCK_D,
+      s'.readMem VCache
+          (seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb
+            stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size i) =
+        if active HEAD_DIM i then
+          s.readMem V (vSourceOffset s stride_vt stride_vh stride_vd i)
+        else
+          s.readMem VCache
+            (seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb
+              stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_D] =>
+        s.readMemValue .nat BLOCK_TABLES
+            (s.pids 0 * stride_bts +
+              ((s.readMemValue .nat context_lengths (s.pids 0) - 1) / block_size) *
+                stride_btb) * stride_vcb +
+          s.pids 1 * stride_vch +
+          ((s.readMemValue .nat context_lengths (s.pids 0) - 1) % block_size) *
+            stride_vcs + idx.1.val * stride_vcd) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [seqlen1VCacheOffset, seqlen1BlockId, seqlen1LastBlockIdx,
+        seqlen1OffsetLastBlock, seqlen1PastKvSeqLen, dimIndex,
+        BlockState.readMemValue] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hBD : 0 < BLOCK_D
+  · simp [exec, copy_to_vcache_seqlen1_dblock, stepStmts, stepStmt, evalOp,
+          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+          BlockState.readMemValue, hBD] at hExec
+    rw [← hExec]
+    let st : BlockState :=
+      s.setReg "cur_seq_idx" TileDType.nat [] (Tile.scalar (s.pids 0))
+        |>.setReg "cur_kv_head_idx" TileDType.nat [] (Tile.scalar (s.pids 1))
+        |>.setReg "d" TileDType.nat [BLOCK_D] (Tile.vec fun i => i.val)
+        |>.setReg "past_kv_seq_len" TileDType.nat []
+          (Tile.scalar (s.readMemValue .nat context_lengths (s.pids 0) - 1))
+        |>.setReg "last_bt_block_idx" TileDType.nat []
+          (Tile.scalar ((s.readMemValue .nat context_lengths (s.pids 0) - 1) /
+            block_size))
+        |>.setReg "block_id" TileDType.nat []
+          (Tile.scalar (s.readMemValue .nat BLOCK_TABLES
+            (s.pids 0 * stride_bts +
+              ((s.readMemValue .nat context_lengths (s.pids 0) - 1) /
+                block_size) * stride_btb)))
+        |>.setReg "offset_last_block" TileDType.nat []
+          (Tile.scalar ((s.readMemValue .nat context_lengths (s.pids 0) - 1) %
+            block_size))
+        |>.setReg "v" TileDType.real [BLOCK_D]
+          { data := fun i =>
+            if i.1.val < HEAD_DIM then
+              some (s.readMem V
+                (s.pids 0 * stride_vt + s.pids 1 * stride_vh +
+                  i.1.val * stride_vd))
+            else some (0.0 : ℝ) }
+    have hScatter :=
+      (BlockState.scatter_readback_prop_masked_nd
+        (region := VCache)
+        (shape := [BLOCK_D])
+        (s := st)
+        (offsetFn := fun idx : TileIndex [BLOCK_D] =>
+          s.readMemValue .nat BLOCK_TABLES
+              (s.pids 0 * stride_bts +
+                ((s.readMemValue .nat context_lengths (s.pids 0) - 1) / block_size) *
+                  stride_btb) * stride_vcb +
+            s.pids 1 * stride_vch +
+            ((s.readMemValue .nat context_lengths (s.pids 0) - 1) % block_size) *
+              stride_vcs + idx.1.val * stride_vcd)
+        (valueFn := fun idx : TileIndex [BLOCK_D] =>
+          WithBot.unbotD 0
+            (if idx.1.val < HEAD_DIM then
+              some (s.readMem V
+                (s.pids 0 * stride_vt + s.pids 1 * stride_vh +
+                  idx.1.val * stride_vd))
+            else some (0.0 : ℝ)))
+        (P := fun idx : TileIndex [BLOCK_D] => idx.1.val < HEAD_DIM)
+        hRawInj (i, PUnit.unit))
+    simp [BlockState.readMemValue] at hScatter
+    have hScatter' := by
+      simpa [st] using hScatter
+    simp only [active, vSourceOffset, seqlen1VCacheOffset, seqlen1BlockId,
+      seqlen1LastBlockIdx, seqlen1OffsetLastBlock, seqlen1PastKvSeqLen,
+      dimIndex, BlockState.readMemValue]
+    by_cases hi : i.val < HEAD_DIM
+    · simpa [hi] using hScatter'
+    · simpa [hi] using hScatter'
+  · exact False.elim (hBD (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the V-cache seqlen=1 copy surface. -/
+theorem copy_to_vcache_seqlen1_dblock_compute_correct
+    (V VCache BLOCK_TABLES context_lengths : RegionName)
+    (stride_vt stride_vh stride_vd stride_vcb stride_vch stride_vcs stride_vcd
+      stride_bts stride_btb block_size HEAD_DIM BLOCK_D : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_D =>
+        seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb stride_vch
+          stride_vcs stride_vcd stride_bts stride_btb block_size i)) :
+    ComputeCorrect.Realizes
+      (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
+        context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
+        stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM BLOCK_D)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_D => active HEAD_DIM i)
+        (fun i => (VCache,
+          seqlen1VCacheOffset s BLOCK_TABLES context_lengths stride_vcb
+            stride_vch stride_vcs stride_vcd stride_bts stride_btb block_size i)))
+      (expected := fun i =>
+        s.readMem V (vSourceOffset s stride_vt stride_vh stride_vd i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [copy_to_vcache_seqlen1_dblock]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := copy_to_vcache_seqlen1_dblock_correct V VCache BLOCK_TABLES
+    context_lengths stride_vt stride_vh stride_vd stride_vcb stride_vch
+    stride_vcs stride_vcd stride_bts stride_btb block_size HEAD_DIM BLOCK_D
+    s s' hOutInj hExec i
+  simpa [hActive] using h
 
 /-- Algorithm-layer correctness for the V-cache copy slice. -/
 theorem copy_to_vcache_one_dblock_correct
