@@ -38,9 +38,10 @@ def bgmv_expand_one_block_surface
     pid_sn * $(split_n_length) * $(lora_k_stride)
   c_ptr = out_ptr + cur_batch * $(cm_stride) + pid_sn * $(split_n_length)
   current_n = offset_n
+  current_n_c = tl.max_contiguous(current_n, $(BLOCK_N))
   c_mask = current_n < $(split_n_length)
   tiled_b = tl.load(
-    b_ptr + current_n[:, None] * $(lora_k_stride) +
+    b_ptr + current_n_c[:, None] * $(lora_k_stride) +
       offset_k[None, :] * $(lora_n_stride),
     mask=(current_n[:, None] < $(split_n_length)) and (offset_k[None, :] < $(K)),
     other=0.0)
