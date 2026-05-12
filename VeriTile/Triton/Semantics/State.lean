@@ -613,6 +613,17 @@ and use the dtype default on mismatch. -/
     simp
   · simp [h]
 
+@[simp] theorem writeMemTyped_int_readMemValue_int (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.int)
+    (r : RegionName) (o : Nat) :
+    (s.writeMemTyped .int region offset v).readMemValue .int r o =
+      if r = region ∧ o = offset then v else s.readMemValue .int r o := by
+  unfold writeMemTyped readMemValue readMemTyped
+  by_cases h : r = region ∧ o = offset
+  · rcases h with ⟨rfl, rfl⟩
+    simp
+  · simp [h]
+
 @[simp] theorem writeMem_readMem (s : BlockState) (region : RegionName)
     (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) :
     (s.writeMem region offset v).readMem r o =

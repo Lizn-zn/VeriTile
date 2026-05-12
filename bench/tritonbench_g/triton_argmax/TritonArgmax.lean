@@ -16,7 +16,7 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` / `INT64_INDEX: tl.constexpr` -> Lean
   parameters. -/
 def argmax_kernel_1
-    (inp mid_value : RegionName) (mid_index : Region .nat)
+    (inp mid_value : RegionName) (mid_index : Region .int)
     (M BLOCK_SIZE : Nat) (INT64_INDEX : Bool := Bool.false) :
     ComputeKernel := triton {
   pid = tl.program_id(0)
@@ -31,18 +31,18 @@ def argmax_kernel_1
   local_index0 = local_index
   max_index = local_index0 + pid * $(BLOCK_SIZE)
   mid_value_ptr = mid_value + pid
-  max_index_ptr = $((mid_index : Region .nat)) + pid
+  max_index_ptr = $((mid_index : Region .int)) + pid
   tl.store(mid_value_ptr, max_val)
   tl.store(max_index_ptr, max_index)
 }
 
 /-- Faithful transcription of `triton_argmax.py`'s `argmax_kernel_2`.
 
-`mid_index` and `out` are typed Nat regions matching the launch site's
+`mid_index` and `out` are typed Int regions matching the launch site's
 `torch.int64` buffers, so their `tl.load` / `tl.store` calls do not need
 extra `dtype=` kwargs. -/
 def argmax_kernel_2
-    (mid_value : RegionName) (mid_index out : Region .nat)
+    (mid_value : RegionName) (mid_index out : Region .int)
     (mid_size BLOCK_MID : Nat) :
     ComputeKernel := triton {
   offset = tl.arange(0, $(BLOCK_MID))
@@ -50,22 +50,18 @@ def argmax_kernel_2
   mask = offset < $(mid_size)
   mid_val = tl.load(mid_ptrs, mask=mask, other=-float("inf"))
   index_val = tl.argmax(mid_val, axis=0)
-  mid_index_ptrs = $((mid_index : Region .nat)) + index_val
+  mid_index_ptrs = $((mid_index : Region .int)) + index_val
   out_val = tl.load(mid_index_ptrs)
-  tl.store($((out : Region .nat)), out_val)
+  tl.store($((out : Region .int)), out_val)
 }
 
 /-- Faithful transcription of `triton_argmax.py`'s dim-specific
 `argmax_kernel`.
 
-Known surface blocker: Python initializes `argmax_values` with `dtype=tl.int64`.
-The values are nonnegative indices, but a faithful signed `int64` tile would
-require a Nat-to-Int cast for `start_n + local_argmax` inside `tl.where`.
-VeriTile currently has typed Int literals/arithmetic but no algorithm-level
-Nat-to-Int cast operator, so this surface keeps the index accumulator as
-`tl.uint64` / Nat and stores into the typed Nat output region. -/
+The `out_index` region is typed Int, matching the launch site's `torch.int64`
+buffer. -/
 def argmax_kernel
-    (inp : RegionName) (out_index : Region .nat)
+    (inp : RegionName) (out_index : Region .int)
     (M N K BLOCK_M BLOCK_N : Nat) (INT64_INDEX : Bool := Bool.false) :
     ComputeKernel := triton {
   pid_m = tl.program_id(0)
@@ -76,7 +72,7 @@ def argmax_kernel
   }
   m_offset = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   max_values = tl.full([$(BLOCK_M)], dtype=tl.float32, value=-inf)
-  argmax_values = tl.full([$(BLOCK_M)], value=$(0), dtype=tl.uint64)
+  argmax_values = tl.full([$(BLOCK_M)], dtype=tl.int64, value=$(0))
   for start_n in range($(0), $(N), $(BLOCK_N)) {
     n_offset = start_n + tl.arange(0, $(BLOCK_N))
     offset = m_offset[:, None] * $(N) * $(K) + n_offset[None, :] * $(K) + pid_k
@@ -87,10 +83,10 @@ def argmax_kernel
       return_indices=True, return_indices_tie_break_left=True)
     update = local_max > max_values
     max_values = tl.where(update, local_max, max_values)
-    argmax_values = tl.where(update, start_n + local_argmax, argmax_values)
+    argmax_values = tl.where(update, (start_n + local_argmax).to(tl.int64), argmax_values)
   }
   offset_index = m_offset * $(K) + pid_k
-  out_index_ptrs = $((out_index : Region .nat)) + offset_index
+  out_index_ptrs = $((out_index : Region .int)) + offset_index
   mask1 = m_offset < $(M)
   tl.store(out_index_ptrs, argmax_values, mask=mask1)
 }
@@ -107,8 +103,8 @@ noncomputable def argmaxKernel2IndexOffset
     (argmaxKernel2InputTile s mid_value mid_size BLOCK_MID)).data PUnit.unit
 
 noncomputable def argmaxKernel2Spec
-    (s : BlockState) (mid_value mid_index : RegionName) (mid_size BLOCK_MID : Nat) : Nat :=
-  s.readMemValue .nat mid_index
+    (s : BlockState) (mid_value mid_index : RegionName) (mid_size BLOCK_MID : Nat) : Int :=
+  s.readMemValue .int mid_index
     (argmaxKernel2IndexOffset s mid_value mid_size BLOCK_MID)
 
 /-- Compute-facing correctness for `argmax_kernel_2`. -/
@@ -134,13 +130,13 @@ theorem argmax_kernel_2_compute_correct
           argmaxKernel2Spec, argmaxKernel2IndexOffset,
           argmaxKernel2InputTile, hB] at hExec ⊢
     cases hExec
-    simp [BlockState.writeMemTyped_nat_readMemValue_nat]
+    simp [BlockState.writeMemTyped_int_readMemValue_int]
   · simp [exec, argmax_kernel_2, stepStmts, stepStmt, evalOp, Option.bind,
           Tile.cop, Tile.ptrAdd, Tile.argMaxDrop, Tile.argBestDrop,
           TileShape.axisDim, TileShape.eraseAxis, ComparableDType.lt,
           argmaxKernel2Spec, argmaxKernel2IndexOffset,
           hB] at hExec ⊢
     cases hExec
-    simp [BlockState.writeMemTyped_nat_readMemValue_nat]
+    simp
 
 end VeriTile.Bench.TritonBenchG.TritonArgmax

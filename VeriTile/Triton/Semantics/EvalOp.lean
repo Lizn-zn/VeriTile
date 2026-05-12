@@ -28,6 +28,9 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .castFloat src dst a, s => do
       let va ← evalOp a s
       some ⟨fun i => src.cast dst (va.data i)⟩
+  | .castNatToInt a, s => do
+      let va ← evalOp a s
+      some ⟨fun i => Int.ofNat (va.data i)⟩
   | .add h bc a b, s => do
       let va ← evalOp a s
       let vb ← evalOp b s

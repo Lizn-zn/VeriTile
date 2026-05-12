@@ -94,6 +94,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .broadcast e _ => e.RespectsRegionTyping Γ
   | .full _ e => e.RespectsRegionTyping Γ
   | .castFloat _ _ e => e.RespectsRegionTyping Γ
+  | .castNatToInt e => e.RespectsRegionTyping Γ
   | .add _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .sub _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .mul _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ

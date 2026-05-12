@@ -253,6 +253,22 @@ partial def expandWhereFromCond (env : Env) (c' : EOut)
   let a' ← expandExpr env a
   let b' ← expandExpr env b
   ensureDType .bool c'.dtype "tl.where condition"
+  let expandNatToIntBranch (e : TSyntax `tritonExpr) (out : EOut) : MacroM EOut := do
+    match methodCast? e with
+    | some (_inner, dt) =>
+        let dst ← expandDType dt
+        if out.dtype == .nat && dst == .int then
+          pure ⟨← `(Op.castNatToInt $out.term), .int, out.shape, none, none⟩
+        else
+          pure out
+    | none => pure out
+  let (a', b') ←
+    if a'.dtype == b'.dtype then
+      pure (a', b')
+    else
+      let aCast ← expandNatToIntBranch a a'
+      let bCast ← expandNatToIntBranch b b'
+      pure (aCast, bCast)
   unless a'.dtype == b'.dtype do
     Macro.throwError "tl.where: branch dtype mismatch"
   let nonScalars : List SInfo :=

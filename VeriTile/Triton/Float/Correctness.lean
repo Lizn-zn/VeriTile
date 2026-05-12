@@ -463,6 +463,9 @@ instance : OutputReadable ℝ where
 instance : OutputReadable Nat where
   read s addr := s.readMemValue .nat addr.1 addr.2
 
+instance : OutputReadable Int where
+  read s addr := s.readMemValue .int addr.1 addr.2
+
 @[simp] theorem OutputReadable.read_memcell (s : BlockState) (addr : MemCellAddr) :
     (OutputReadable.read s addr : MemCell) = s.mem addr.1 addr.2 := rfl
 
@@ -471,6 +474,9 @@ instance : OutputReadable Nat where
 
 @[simp] theorem OutputReadable.read_nat (s : BlockState) (addr : MemCellAddr) :
     (OutputReadable.read s addr : Nat) = s.readMemValue .nat addr.1 addr.2 := rfl
+
+@[simp] theorem OutputReadable.read_int (s : BlockState) (addr : MemCellAddr) :
+    (OutputReadable.read s addr : Int) = s.readMemValue .int addr.1 addr.2 := rfl
 
 /--
 Overloaded correctness-realization surface over a state-free output write map.
