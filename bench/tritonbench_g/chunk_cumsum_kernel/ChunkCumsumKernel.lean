@@ -46,7 +46,7 @@ def chunk_cumsum_scalar_store_slice
   offs_t = i_t * $(BT) + tl.arange(0, $(BT))
   mask = offs_t < $(T)
   b_o = tl.load(BO + i_bh * $(T) + offs_t, mask=mask, other=0.0)
-  tl.store(O + i_bh * $(T) + offs_t, b_o, mask=mask)
+  tl.store(O + i_bh * $(T) + offs_t, (b_o).to(O.dtype.element_ty), mask=mask)
 }
 
 def tIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
