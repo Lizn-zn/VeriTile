@@ -12,7 +12,11 @@ open VeriTile.Triton VeriTile.Examples
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `[:, None]` / `[None, :]` dimension annotations preserved.
-- Python `BLOCK_M` / `BLOCK_N: tl.constexpr` → Lean `Nat` parameters. -/
+- Python `BLOCK_M` / `BLOCK_N: tl.constexpr` → Lean `Nat` parameters.
+
+Known proof blocker: see `bench/tritonbench_g/proof_blockers.md`. The current
+file still lacks a real `ComputeCorrect.Realizes` theorem for the full
+`for off in range(0, N, BLOCK_N)` accumulation. -/
 def mean_dim_kernel
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) :

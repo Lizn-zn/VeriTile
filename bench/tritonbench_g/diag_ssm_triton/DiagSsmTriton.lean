@@ -15,7 +15,11 @@ set_option linter.unusedSimpArgs false
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` → Lean `Nat` parameter.
-- Python `length`, `batch_size`, `dim` → Lean `Nat` parameters. -/
+- Python `length`, `batch_size`, `dim` → Lean `Nat` parameters.
+
+Known proof blocker: see `bench/tritonbench_g/proof_blockers.md`. The current
+file still lacks a real `ComputeCorrect.Realizes` theorem for the recurrence
+across `tl.for t in length`. -/
 def diag_ssm_forward_kernel
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) :

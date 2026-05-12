@@ -16,7 +16,11 @@ set_option linter.unusedSimpArgs false
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_N` / `BLOCK_NN` / `BLOCK_DMODEL` / `hiden_size: tl.constexpr`
   → Lean `Nat` parameters.
-- Python `[:, None]` / `[None, :]` dimension annotations preserved. -/
+- Python `[:, None]` / `[None, :]` dimension annotations preserved.
+
+Known proof blocker: see `bench/tritonbench_g/proof_blockers.md`. The current
+file still lacks a real `ComputeCorrect.Realizes` theorem for the full
+`range(0, BLOCK_N, BLOCK_NN)` embedding loop. -/
 def embedding_kernel
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
