@@ -72,7 +72,10 @@ The `INT64_INDEX` program-id casts are erased for the same reason as in
 Known remaining dtype gap: Python initializes `max_values` with
 `dtype=tl.float32`; the current DSL cannot compose a compute-only fp32 `tl.full`
 through the later comparison/update, so this surface keeps the algorithm-layer
-Real initializer while preserving the control/dataflow shape. -/
+Real initializer while preserving the control/dataflow shape. Python also
+initializes `argmax_values` with `dtype=tl.int64`; this is represented by the
+Nat/index carrier expression `tl.arange(...) * 0` plus the `out_index = tl.uint64`
+region declaration on the store target. -/
 def argmax_kernel
     (inp out_index : RegionName)
     (M N K BLOCK_M BLOCK_N : Nat) (_INT64_INDEX : Bool := Bool.false) :
