@@ -19,14 +19,14 @@ return for signed sentinel `lora_index == -1` is not represented here because
 the current pointer-offset path uses Nat indices and the DSL has no kernel-level
 `return` statement. -/
 def bgmv_expand_slice_one_block_surface
-    (input_ptr lora_ptr out_ptr lora_indices : RegionName)
+    (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .nat)
     (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
       lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K : Nat)
     (ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
   pid_sn = tl.program_id(axis=0)
   cur_batch = tl.program_id(axis=1)
-  lora_index = tl.load(lora_indices + cur_batch, dtype=tl.uint64)
+  lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))
   tiled_a = tl.load(input_ptr + cur_batch * $(xm_stride) + offset_k * $(xk_stride),
@@ -60,13 +60,13 @@ This captures the ADD_INPUTS=false, no-cast path for one `n` block: load one
 input vector, load one LoRA-B tile selected by the batch's LoRA index, reduce
 over K, and store the resulting output slice. -/
 def bgmv_expand_slice_one_block
-    (input_ptr lora_ptr out_ptr lora_indices : RegionName)
+    (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .nat)
     (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
       lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
   pid_sn = tl.program_id(0)
   cur_batch = tl.program_id(1)
-  lora_index = tl.load(lora_indices + cur_batch, dtype=tl.uint64)
+  lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))
   tiled_a = tl.load(input_ptr + cur_batch * $(xm_stride) + offset_k * $(xk_stride),

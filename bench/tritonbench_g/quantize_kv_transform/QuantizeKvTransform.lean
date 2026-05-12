@@ -18,7 +18,7 @@ Python kernel casts the scale to `OutScale.dtype.element_ty`; that cast is
 represented explicitly. The final quotient cast to int8 remains recorded as the
 pre-cast real quotient until VeriTile models CUDA int8 rounding/cast semantics. -/
 def destindex_copy_quantize_kv_transform_real_surface
-    (K DestLoc Out OutScale : RegionName)
+    (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
       stride_o_bs stride_o_h stride_o_d
       stride_os_bs stride_os_h
@@ -27,7 +27,7 @@ def destindex_copy_quantize_kv_transform_real_surface
   cur_index = tl.program_id(axis=0)
   offs_h = tl.arange(0, $(BLOCK_HEAD))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
-  dest_index = tl.load(DestLoc + cur_index, dtype=tl.uint64)
+  dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
   mask = (offs_h[:, None] < $(head_num)) and (offs_d[None, :] < $(head_dim))
   src_data = tl.load(K + cur_index * $(stride_k_bs) +
       offs_h[:, None] * $(stride_k_h) + $(stride_k_d) * offs_d[None, :],
@@ -51,7 +51,7 @@ precomputed per-head scale in `OutScale`, preserves the source
 `head_num/head_dim` mask, and proves the destination-indexed value writeback in
 VeriTile's real-tile arithmetic layer. -/
 def destindex_copy_quantize_kv_transform_value_store_slice
-    (K DestLoc Out OutScale : RegionName)
+    (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
       stride_o_bs stride_o_h stride_o_d
       stride_os_bs stride_os_h
@@ -60,7 +60,7 @@ def destindex_copy_quantize_kv_transform_value_store_slice
   cur_index = tl.program_id(axis=0)
   offs_h = tl.arange(0, $(BLOCK_HEAD))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
-  dest_index = tl.load(DestLoc + cur_index, dtype=tl.uint64)
+  dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
   mask = (offs_h[:, None] < $(head_num)) & (offs_d[None, :] < $(head_dim))
   src_data = tl.load(K + cur_index * $(stride_k_bs) +
       offs_h[:, None] * $(stride_k_h) + $(stride_k_d) * offs_d[None, :],

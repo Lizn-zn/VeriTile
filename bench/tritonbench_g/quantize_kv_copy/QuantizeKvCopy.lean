@@ -18,7 +18,7 @@ the scale to `OutScale.dtype.element_ty`; that cast is represented explicitly.
 The final quotient cast to int8 remains recorded as the pre-cast real quotient
 until VeriTile models CUDA int8 rounding/cast semantics. -/
 def destindex_copy_quantize_kv_group_real_surface
-    (K DestLoc Out OutScale : RegionName)
+    (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g stride_k_d
       stride_o_bs stride_o_h stride_o_g stride_o_d
       stride_os_bs stride_os_h _stride_os_g
@@ -28,7 +28,7 @@ def destindex_copy_quantize_kv_group_real_surface
   cur_head = tl.program_id(axis=1)
   offs_g = tl.arange(0, $(BLOCK_GROUP_NUM))
   offs_d = tl.arange(0, $(BLOCK_GROUP_DIM))
-  dest_index = tl.load(DestLoc + cur_index, dtype=tl.uint64)
+  dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
   group_mask = offs_g < $(group_size)
   value_mask = group_mask[:, None] and (offs_d[None, :] < $(BLOCK_GROUP_DIM))
   src_data = tl.load(K + cur_index * $(stride_k_bs) + cur_head * $(stride_k_h) +
@@ -54,7 +54,7 @@ values and scales. This slice starts from a precomputed per-group scale in
 `OutScale` and proves the destination-indexed grouped value writeback in
 VeriTile's real-tile arithmetic layer. -/
 def destindex_copy_quantize_kv_group_value_store_slice
-    (K DestLoc Out OutScale : RegionName)
+    (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g stride_k_d
       stride_o_bs stride_o_h stride_o_g stride_o_d
       stride_os_bs stride_os_h _stride_os_g
@@ -64,7 +64,7 @@ def destindex_copy_quantize_kv_group_value_store_slice
   cur_head = tl.program_id(axis=1)
   offs_g = tl.arange(0, $(BLOCK_GROUP_NUM))
   offs_d = tl.arange(0, $(BLOCK_GROUP_DIM))
-  dest_index = tl.load(DestLoc + cur_index, dtype=tl.uint64)
+  dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
   mask = (offs_g[:, None] < $(group_size)) & (offs_d[None, :] < $(BLOCK_GROUP_DIM))
   src_data = tl.load(K + cur_index * $(stride_k_bs) + cur_head * $(stride_k_h) +
       offs_g[:, None] * $(stride_k_g) + offs_d[None, :] * $(stride_k_d),
