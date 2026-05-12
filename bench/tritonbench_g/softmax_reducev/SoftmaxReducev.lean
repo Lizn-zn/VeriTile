@@ -15,7 +15,7 @@ nonnegative `other_kv_index`.
 This preserves the streaming softmax recurrence over token blocks, B_Loc gather,
 V gather, and final normalized writeback. The Python benchmark also passes
 `other_kv_index = -1` in some cases; that signed sentinel is not representable
-in the current Nat/uint64 gather path, so this surface intentionally covers the
+in the current Nat gather-address path, so this surface intentionally covers the
 nonnegative sentinel path such as `other_kv_index = 0`. -/
 def softmax_reducev_nonnegative_other_surface
     (Logics V Out : RegionName) (BLoc BStartLoc BSeqLen : Region .nat)

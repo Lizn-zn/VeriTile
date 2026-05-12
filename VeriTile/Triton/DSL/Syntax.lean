@@ -198,7 +198,7 @@ dtype of a kernel parameter region so `tl.load(R + offs)` /
 kernel body — it is metadata, not a runtime statement. Multiple
 declarations may be combined with `,`:
 
-  tl.region mid_index = tl.uint64, out = tl.uint64
+  tl.region mid_index = tl.int64, out = tl.int64
 -/
 syntax "tl.region " ident " = " tritonDType ("," ident " = " tritonDType)* : tritonStmt
 
