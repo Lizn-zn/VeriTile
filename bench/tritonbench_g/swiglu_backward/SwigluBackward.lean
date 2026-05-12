@@ -12,11 +12,7 @@ open VeriTile.Triton
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_N: tl.constexpr` / `RECOMPUTE_OUTPUT: tl.constexpr` -> Lean
-  parameters.
-- Python `OUT += ...` is guarded by `RECOMPUTE_OUTPUT`; this proof-oriented
-  port hoists the pointer update because the DSL does not yet propagate
-  conditional pointer mutations into the nested store expansion. The only use
-  of `OUT` remains guarded by `RECOMPUTE_OUTPUT`. -/
+  parameters. -/
 def swiglu_bwd_kernel
     (X Y DOUT OUT DX DY : RegionName)
     (stride_x_row stride_y_row stride_dout_row stride_out_row
@@ -28,7 +24,9 @@ def swiglu_bwd_kernel
   X += row * $(stride_x_row)
   Y += row * $(stride_y_row)
   DOUT += row * $(stride_dout_row)
-  OUT += row * $(stride_out_row)
+  if RECOMPUTE_OUTPUT {
+    OUT += row * $(stride_out_row)
+  }
   DX += row * $(stride_dx_row)
   DY += row * $(stride_dy_row)
   cols = start_col + tl.arange(0, $(BLOCK_N))
