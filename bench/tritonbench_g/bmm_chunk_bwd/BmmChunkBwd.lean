@@ -8,13 +8,15 @@ namespace VeriTile.Bench.TritonBenchG.BmmChunkBwd
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Surface transcription of `bmm_chunk_bwd.py`'s `_bmm_chunk_bwd_kernel`.
 
-The Python wrapper casts `dout` and `a` to a runtime `dot_dtype` constexpr.
-Current `tl.dot` typing in the DSL is real-valued, so this surface keeps those
-loads in the compute carrier while preserving the loop structure, masks,
-pointer advances, residual branch, and final destination dtype cast. -/
+The Python wrapper casts `dout` and `a` to a runtime `dot_dtype` constexpr. This
+surface preserves those casts as dtype annotations; current `tl.dot` typing in
+the DSL still evaluates through the algorithm carrier while preserving the loop
+structure, masks, pointer advances, residual branch, and final destination dtype
+cast. -/
 def bmm_chunk_bwd_surface
     (A Dout Db Res : RegionName)
     (seqlen chunk_size K ngroups
@@ -24,6 +26,7 @@ def bmm_chunk_bwd_surface
       stride_db_batch stride_db_seqlen stride_db_head stride_db_k
       stride_res_batch stride_res_seqlen stride_res_head stride_res_k
       BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS : Nat)
+    (dot_dtype : TileDType)
     (HAS_RESIDUAL : Bool) :
     ComputeKernel := triton {
   pid_b = tl.program_id(axis=1)
@@ -56,8 +59,8 @@ def bmm_chunk_bwd_surface
       (offs_cs[None, :] < chunk_size_limit - cs * $(BLOCK_SIZE_CS))
     a_mask = (offs_cs[:, None] < chunk_size_limit - cs * $(BLOCK_SIZE_CS)) &
       (offs_n[None, :] < $(K))
-    dout = tl.load(dout_ptrs, mask=dout_mask, other=0.0)
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+    dout = tl.load(dout_ptrs, mask=dout_mask, other=0.0).to(dot_dtype)
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0).to(dot_dtype)
     acc += tl.dot(dout, a)
     dout_ptrs += $(BLOCK_SIZE_CS) * $(stride_dout_csize_m)
     a_ptrs += $(BLOCK_SIZE_CS) * $(stride_a_seqlen)

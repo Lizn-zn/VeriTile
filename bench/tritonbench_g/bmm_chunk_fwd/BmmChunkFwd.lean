@@ -8,6 +8,7 @@ namespace VeriTile.Bench.TritonBenchG.BmmChunkFwd
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Surface transcription of
 `bmm_chunk_fwd.py`'s `_bmm_chunk_fwd_kernel`.
@@ -15,10 +16,11 @@ set_option linter.unusedSimpArgs false
 This covers both `HAS_SEQ_IDX=false` and `HAS_SEQ_IDX=true`; the sequence-index
 loads use an `Int` region so the Python `other=-1` / `other=-2` sentinels are
 represented directly. The causal early-return is represented as a guard around
-the active body. The source kernel's runtime `dot_dtype` cast is not represented
-here: current `tl.dot` typing in the DSL is real-valued, so the `a`/`b` loads
-remain in the compute carrier while the loop shape, masks, pointer advances,
-optional sequence filter, and final destination dtype cast are preserved. -/
+the active body. The source kernel's runtime `dot_dtype` cast is preserved as a
+surface dtype annotation on the `a`/`b` loads; current `tl.dot` typing in the DSL
+still evaluates through the algorithm carrier while the loop shape, masks,
+pointer advances, optional sequence filter, and final destination dtype cast are
+preserved. -/
 def bmm_chunk_fwd_surface
     (A B Out : RegionName) (SeqIdx : Region .int)
     (seqlen chunk_size K ngroups
@@ -27,6 +29,7 @@ def bmm_chunk_fwd_surface
       stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
       stride_seq_idx_batch stride_seq_idx_seqlen
       BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (dot_dtype : TileDType)
     (IS_CAUSAL HAS_SEQ_IDX : Bool) :
     ComputeKernel := triton {
   pid_b = tl.program_id(axis=1)
@@ -64,8 +67,8 @@ def bmm_chunk_fwd_surface
       (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
     b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
       (offs_n[None, :] < chunk_size_limit)
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
-    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    a = tl.load(a_ptrs, mask=a_mask, other=0.0).to(dot_dtype)
+    b = tl.load(b_ptrs, mask=b_mask, other=0.0).to(dot_dtype)
     acc += tl.dot(a, b)
     a_ptrs += $(BLOCK_SIZE_K) * $(stride_ak)
     b_ptrs += $(BLOCK_SIZE_K) * $(stride_bk)
