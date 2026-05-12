@@ -60,7 +60,8 @@ def fused_recurrent_hgrn_output_store_slice
   offs_d = i_d * $(BD) + tl.arange(0, $(BD))
   mask = offs_d < $(D)
   b_h = tl.load(BH + i_bh * $(D) + offs_d, mask=mask, other=0.0)
-  tl.store(O + (i_bh * $(T) + $(i_t)) * $(D) + offs_d, b_h, mask=mask)
+  tl.store(O + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
+    (b_h).to(O.dtype.element_ty), mask=mask)
 }
 
 def dIndex (s : BlockState) (BD : Nat) (i : Fin BD) : Nat :=
