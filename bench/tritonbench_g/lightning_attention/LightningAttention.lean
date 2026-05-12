@@ -54,10 +54,7 @@ def lightning_attention_forward_surface
 `lightning_attention.py`'s `_fwd_kernel`.
 
 The full kernel computes a recurrent attention tile `o`. This slice starts from
-a precomputed `OAcc` tile and proves the masked writeback into `Out`. The Python
-kernel uses a row-only mask; the DSL spelling adds a trivially true column
-component so the mask has the same `[BLOCK, BLOCK_MODEL]` shape as the store.
-The full forward recurrent `kv` loop is represented above by
+a precomputed `OAcc` tile and proves the masked writeback into `Out`. The full forward recurrent `kv` loop is represented above by
 `lightning_attention_forward_surface`; the backward kernels' negative-step loops
 remain separate modeling work. -/
 def lightning_attention_forward_store_slice
@@ -67,7 +64,7 @@ def lightning_attention_forward_store_slice
   off_e = tl.program_id(axis=1)
   off_block = tl.program_id(axis=2) * $(BLOCK) + tl.arange(0, $(BLOCK))
   offs_e = tl.arange(0, $(BLOCK_MODEL))
-  mask = (off_block[:, None] < $(n)) & (offs_e[None, :] < $(BLOCK_MODEL))
+  mask = off_block[:, None] < $(n)
   o = tl.load(OAcc + off_bh * $(n) * $(e) +
       off_block[:, None] * $(e) + off_e * $(BLOCK_MODEL) + offs_e[None, :],
       mask=mask, other=0.0)
@@ -118,7 +115,8 @@ theorem lightning_attention_forward_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, lightning_attention_forward_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.expandDim, Tile.ptrAdd,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.remap,
+        Tile.expandDim, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         rowIndex, colIndex, active, tileOffset, TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BLOCK, BLOCK_MODEL] → Nat :=
