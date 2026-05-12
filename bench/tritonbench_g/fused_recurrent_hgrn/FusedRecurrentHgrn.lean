@@ -48,9 +48,9 @@ def fused_recurrent_hgrn_fwd_surface
 /-- Surface transcription of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_bwd_kernel`.
 
-The Python kernel uses `range(T - 1, -1, -1)` and pointer decrements. This DSL
-surface preserves the reverse logical order with `i = T - 1 - j` and recomputes
-the per-iteration pointers from `i`. -/
+The Python kernel traverses time in reverse and decrements pointers. This DSL
+surface preserves that reverse logical order with `i = T - 1 - j` and
+recomputes the per-iteration pointers from `i`. -/
 def fused_recurrent_hgrn_bwd_surface
     (G O H0 DX DG DO : RegionName) (T D BD : Nat)
     (USE_INITIAL_STATE : Bool) :

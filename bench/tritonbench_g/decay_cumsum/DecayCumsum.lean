@@ -75,8 +75,8 @@ def prepare_qg_kg_surface
 
 /-- Surface transcription of `decay_cumsum.py`'s `bwd_decay_global_cumsum`.
 
-The Python kernel traverses `range(BT-1, -1, -1)` and decrements pointers. This
-surface preserves the reverse logical order with `t = BT - 1 - j` and
+The Python kernel traverses the chunk in reverse and decrements pointers. This
+surface preserves that reverse logical order with `t = BT - 1 - j` and
 recomputes each per-iteration pointer from `t`. Python initializes `last_g`
 during the first reverse iteration; this surface loads the same last row before
 the loop. -/
