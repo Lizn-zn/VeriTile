@@ -85,9 +85,7 @@ def attention_score_kernel
     if SLIDING_WINDOW {
       p = tl.where(mask, p, 0)
     }
-    if IS_EVEN_N {
-      p = p
-    } else {
+    if not IS_EVEN_N {
       row_mask = (tl.arange(0, $(BLOCK_M))[:, None] +
         tl.arange(0, $(BLOCK_N))[None, :] * $(0) + start_m) < $(N_CTX)
       p = tl.where(row_mask, p, 0)
