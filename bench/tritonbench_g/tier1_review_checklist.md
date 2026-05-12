@@ -36,7 +36,7 @@ For each item, check:
 - [x] `max_reduction.py`  
   Lean: `bench/tritonbench_g/max_reduction/MaxReduction.lean`
 
-- [ ] `mul_exponent_compensator.py`  
+- [x] `mul_exponent_compensator.py`  
   Lean: `bench/tritonbench_g/mul_exponent_compensator/MulExponentCompensator.lean`
 
 - [ ] `relu_triton_kernel.py`  
