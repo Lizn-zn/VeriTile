@@ -39,31 +39,31 @@ For each item, check:
 - [x] `mul_exponent_compensator.py`  
   Lean: `bench/tritonbench_g/mul_exponent_compensator/MulExponentCompensator.lean`
 
-- [ ] `relu_triton_kernel.py`  
+- [x] `relu_triton_kernel.py`  
   Lean: `bench/tritonbench_g/relu_triton_kernel/ReluTritonKernel.lean`
 
-- [ ] `sin_computation.py`  
+- [x] `sin_computation.py`  
   Lean: `bench/tritonbench_g/sin_computation/SinComputation.lean`
 
-- [ ] `sin_kernel.py`  
+- [x] `sin_kernel.py`  
   Lean: `bench/tritonbench_g/sin_kernel/SinKernel.lean`
 
-- [ ] `softmax_triton1.py`  
+- [x] `softmax_triton1.py`  
   Lean: `bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean`
 
-- [ ] `softmax_triton2.py`  
+- [x] `softmax_triton2.py`  
   Lean: `bench/tritonbench_g/softmax_triton2/SoftmaxTriton2.lean`
 
-- [ ] `square_matrix.py`  
+- [x] `square_matrix.py`  
   Lean: `bench/tritonbench_g/square_matrix/SquareMatrix.lean`
 
-- [ ] `triton_mul2.py`  
+- [x] `triton_mul2.py`  
   Lean: `bench/tritonbench_g/triton_mul2/TritonMul2.lean`
 
-- [ ] `vector_addition.py`  
+- [x] `vector_addition.py`  
   Lean: `bench/tritonbench_g/vector_addition/VectorAddition.lean`
 
-- [ ] `vector_addition_custom.py`  
+- [x] `vector_addition_custom.py`  
   Lean: `bench/tritonbench_g/vector_addition_custom/VectorAdditionCustom.lean`
 
 ## Checked But Not Ported
