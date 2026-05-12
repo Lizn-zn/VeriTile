@@ -16,7 +16,8 @@ This is the forward-preprocessing cumsum kernel used by `fwd_pre`: it builds the
 lower-triangular accumulation mask, loads one `[BT, BS]` tile, computes the
 chunk-local cumulative sum as a matrix product, and writes the result through a
 boundary-checked block pointer. The Triton block-pointer `order` metadata is
-scheduling-only and is omitted in the DSL. -/
+scheduling-only; the DSL accepts it at the surface and erases it into the same
+block-pointer AST. -/
 def chunk_gated_attention_cum_surface
     (S O : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
     ComputeKernel := triton {
@@ -26,12 +27,12 @@ def chunk_gated_attention_cum_surface
   o_i = tl.arange(0, $(BT))
   m_s_bool = o_i[:, None] >= o_i[None, :]
   m_s = tl.where(m_s_bool, 1.0, 0.0).to(tl.float32)
-  p_s = tl.make_block_ptr(S + i_bh * $(s_s_h), base=$(0),
-    shape=[$(T), $(SSize)], strides=[$(s_s_t), $(s_s_d)],
-    offsets=[i_t * $(BT), i_s * $(BS)], block_shape=[$(BT), $(BS)])
-  p_o = tl.make_block_ptr(O + i_bh * $(s_s_h), base=$(0),
-    shape=[$(T), $(SSize)], strides=[$(s_s_t), $(s_s_d)],
-    offsets=[i_t * $(BT), i_s * $(BS)], block_shape=[$(BT), $(BS)])
+  p_s = tl.make_block_ptr(base=S + i_bh * $(s_s_h),
+    shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
+    offsets=(i_t * $(BT), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
+  p_o = tl.make_block_ptr(base=O + i_bh * $(s_s_h),
+    shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
+    offsets=(i_t * $(BT), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
   b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
   b_o = tl.dot(m_s, b_s)
   tl.store(p_o, (b_o).to(O.dtype.element_ty), boundary_check=([0, 1] : List Nat))
@@ -55,44 +56,44 @@ def chunk_gated_attention_h_surface
   i_bh = tl.program_id(axis=2)
   b_h = tl.zeros([$(BK), $(BV)], dtype=tl.float32)
   if USE_INITIAL_STATE {
-    p_h0 = tl.make_block_ptr(H0 + i_bh * $(KSize) * $(VSize), base=$(0),
-      shape=[$(KSize), $(VSize)], strides=[$(VSize), $(1)],
-      offsets=[i_k * $(BK), i_v * $(BV)], block_shape=[$(BK), $(BV)])
+    p_h0 = tl.make_block_ptr(base=H0 + i_bh * $(KSize) * $(VSize),
+      shape=($(KSize), $(VSize)), strides=($(VSize), $(1)),
+      offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
     b_h += tl.load(p_h0, boundary_check=([0, 1] : List Nat)).to(tl.float32)
   }
   for i_t in range($(0), $(NT), $(1)) {
-    p_k = tl.make_block_ptr(K + i_bh * $(s_k_h), base=$(0),
-      shape=[$(KSize), $(T)], strides=[$(s_k_d), $(s_k_t)],
-      offsets=[i_k * $(BK), i_t * $(BT)], block_shape=[$(BK), $(BT)])
-    p_v = tl.make_block_ptr(V + i_bh * $(s_v_h), base=$(0),
-      shape=[$(T), $(VSize)], strides=[$(s_v_t), $(s_v_d)],
-      offsets=[i_t * $(BT), i_v * $(BV)], block_shape=[$(BT), $(BV)])
-    p_h = tl.make_block_ptr(H + i_bh * $(s_h_h) + i_t * $(KSize) * $(VSize),
-      base=$(0), shape=[$(KSize), $(VSize)], strides=[$(s_h_t), $(s_h_d)],
-      offsets=[i_k * $(BK), i_v * $(BV)], block_shape=[$(BK), $(BV)])
+    p_k = tl.make_block_ptr(base=K + i_bh * $(s_k_h),
+      shape=($(KSize), $(T)), strides=($(s_k_d), $(s_k_t)),
+      offsets=(i_k * $(BK), i_t * $(BT)), block_shape=($(BK), $(BT)), order=(0, 1))
+    p_v = tl.make_block_ptr(base=V + i_bh * $(s_v_h),
+      shape=($(T), $(VSize)), strides=($(s_v_t), $(s_v_d)),
+      offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
+    p_h = tl.make_block_ptr(base=H + i_bh * $(s_h_h) + i_t * $(KSize) * $(VSize),
+      shape=($(KSize), $(VSize)), strides=($(s_h_t), $(s_h_d)),
+      offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
     tl.store(p_h, (b_h).to(H.dtype.element_ty), boundary_check=([0, 1] : List Nat))
     b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
     b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
     if GATEK {
-      p_g = tl.make_block_ptr(G + i_bh * $(s_k_h), base=$(0),
-        shape=[$(KSize), $(T)], strides=[$(s_k_d), $(s_k_t)],
-        offsets=[i_k * $(BK), i_t * $(BT)], block_shape=[$(BK), $(BT)])
-      p_gn = tl.make_block_ptr(G + i_bh * $(s_k_h), base=$(0),
-        shape=[$(TK)], strides=[$(s_k_d)],
-        offsets=[(i_t * $(BT) + $(BT) - $(1)) * $(KSize) + i_k * $(BK)],
-        block_shape=[$(BK)])
+      p_g = tl.make_block_ptr(base=G + i_bh * $(s_k_h),
+        shape=($(KSize), $(T)), strides=($(s_k_d), $(s_k_t)),
+        offsets=(i_k * $(BK), i_t * $(BT)), block_shape=($(BK), $(BT)), order=(0, 1))
+      p_gn = tl.make_block_ptr(base=G + i_bh * $(s_k_h),
+        shape=($(TK)), strides=($(s_k_d)),
+        offsets=((i_t * $(BT) + $(BT) - $(1)) * $(KSize) + i_k * $(BK)),
+        block_shape=($(BK)), order=(0))
       b_gn = tl.load(p_gn, boundary_check=([0] : List Nat))
       b_h = b_h * tl.exp(b_gn)[:, None]
       b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
       b_k = (b_k * tl.exp(b_gn[:, None] - b_g)).to(K.dtype.element_ty)
     } else {
-      p_g = tl.make_block_ptr(G + i_bh * $(s_v_h), base=$(0),
-        shape=[$(T), $(VSize)], strides=[$(s_v_t), $(s_v_d)],
-        offsets=[i_t * $(BT), i_v * $(BV)], block_shape=[$(BT), $(BV)])
-      p_gn = tl.make_block_ptr(G + i_bh * $(s_v_h), base=$(0),
-        shape=[$(TV)], strides=[$(s_v_d)],
-        offsets=[(i_t * $(BT) + $(BT) - $(1)) * $(VSize) + i_v * $(BV)],
-        block_shape=[$(BV)])
+      p_g = tl.make_block_ptr(base=G + i_bh * $(s_v_h),
+        shape=($(T), $(VSize)), strides=($(s_v_t), $(s_v_d)),
+        offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
+      p_gn = tl.make_block_ptr(base=G + i_bh * $(s_v_h),
+        shape=($(TV)), strides=($(s_v_d)),
+        offsets=((i_t * $(BT) + $(BT) - $(1)) * $(VSize) + i_v * $(BV)),
+        block_shape=($(BV)), order=(0))
       b_gn = tl.load(p_gn, boundary_check=([0] : List Nat))
       b_h = b_h * tl.exp(b_gn)[None, :]
       b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
@@ -101,9 +102,9 @@ def chunk_gated_attention_h_surface
     b_h += tl.dot(b_k, b_v)
   }
   if STORE_FINAL_STATE {
-    p_h = tl.make_block_ptr(HT + i_bh * $(KSize) * $(VSize), base=$(0),
-      shape=[$(KSize), $(VSize)], strides=[$(VSize), $(1)],
-      offsets=[i_k * $(BK), i_v * $(BV)], block_shape=[$(BK), $(BV)])
+    p_h = tl.make_block_ptr(base=HT + i_bh * $(KSize) * $(VSize),
+      shape=($(KSize), $(VSize)), strides=($(VSize), $(1)),
+      offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
     tl.store(p_h, (b_h).to(HT.dtype.element_ty), boundary_check=([0, 1] : List Nat))
   }
 }
