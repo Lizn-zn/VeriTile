@@ -937,6 +937,21 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
         Macro.throwError
           ("tl.zeros: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
       expandComputeZeros expandExpr env dims.getElems dt
+  | `(tritonExpr| tl.zeros_like($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let zero ←
+        match e'.dtype with
+        | .real => `(Op.const 0.0)
+        | .fp32 => `(Op.constFloat FloatDType.fp32 0.0)
+        | .fp16 => `(Op.constFloat FloatDType.fp16 0.0)
+        | .bf16 => `(Op.constFloat FloatDType.bf16 0.0)
+        | .nat => `(Op.constNat 0)
+        | .int => `(Op.constInt 0)
+        | .bool => `(Op.constBool Bool.false)
+        | .ptr | .blockPtr =>
+            Macro.throwError "tl.zeros_like: pointer-valued tensors are not supported"
+      let shape ← e'.shape.term
+      pure ⟨← `(Op.full $shape $zero), e'.dtype, e'.shape, none, none⟩
   | _ => (Macro.throwUnsupported : MacroM EOut)
 
 end

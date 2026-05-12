@@ -290,6 +290,7 @@ private partial def exprRegions (assigned : List String) :
       exprRegions assigned v
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*])) => []
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*], $_name:ident=$_dt:tritonDType)) => []
+  | `(tritonExpr| tl.zeros_like($e:tritonExpr)) => exprRegions assigned e
   | _ => []
 end
 

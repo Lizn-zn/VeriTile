@@ -42,9 +42,7 @@ def diag_ssm_forward_kernel
 `diag_ssm_backward_kernel` for the real-valued path.
 
 The source rewrites reverse traversal as `for i in range(length); t = length -
-1 - i`, which is preserved here. Python initializes with
-`tl.zeros_like(Lambda)`; current DSL spells that same tile shape as
-`tl.zeros([BLOCK_SIZE], dtype=tl.float32)`. -/
+1 - i`, which is preserved here. -/
 def diag_ssm_backward_kernel
     (s_ptr lambda_ptr y_ptr grad_s_ptr grad_x_ptr grad_lambda_ptr grad_y_ptr :
       RegionName)
@@ -54,8 +52,8 @@ def diag_ssm_backward_kernel
   col_offsets = col_idx + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(batch_size * dim)
   Lambda = tl.load(lambda_ptr + col_offsets % $(dim), mask=mask, other=0)
-  grad_s = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
-  grad_Lambda = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  grad_s = tl.zeros_like(Lambda)
+  grad_Lambda = tl.zeros_like(Lambda)
   for i in range(0, $(length), $(1)) {
     t = $(length) - $(1) - i
     offsets = t * $(batch_size * dim) + col_offsets
@@ -107,10 +105,7 @@ def diag_ssm_forward_kernel_complex
 }
 
 /-- Faithful transcription of `diag_ssm_triton.py`'s
-`diag_ssm_backward_kernel_complex`.
-
-As above, Python `tl.zeros_like` initializers are represented with explicit
-`tl.zeros([BLOCK_SIZE], dtype=tl.float32)` tiles. -/
+`diag_ssm_backward_kernel_complex`. -/
 def diag_ssm_backward_kernel_complex
     (s_ptr lambda_ptr y_ptr grad_s_ptr grad_x_ptr grad_lambda_ptr grad_y_ptr :
       RegionName)
@@ -123,10 +118,10 @@ def diag_ssm_backward_kernel_complex
     mask=mask, other=0)
   lambda_imag = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2) + $(1),
     mask=mask, other=0)
-  grad_s_real = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
-  grad_s_imag = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
-  grad_lambda_real = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
-  grad_lambda_imag = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  grad_s_real = tl.zeros_like(lambda_real)
+  grad_s_imag = tl.zeros_like(lambda_imag)
+  grad_lambda_real = tl.zeros_like(lambda_real)
+  grad_lambda_imag = tl.zeros_like(lambda_imag)
   for i in range(0, $(length), $(1)) {
     t = $(length) - $(1) - i
     offsets = (t * $(batch_size * dim) + col_offsets) * $(2)
