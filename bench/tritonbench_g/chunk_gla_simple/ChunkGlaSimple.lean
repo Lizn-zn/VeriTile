@@ -42,8 +42,8 @@ def chunk_gla_simple_fwd_surface
     b_q = tl.load(p_q, boundary_check=([0, 1] : List Nat))
     b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
     b_h = tl.load(p_h, boundary_check=([0, 1] : List Nat))
-    b_o += tl.dot(b_q, b_h)
-    b_s += tl.dot(b_q, b_k)
+    b_o += tl.dot(b_q, b_h, allow_tf32=false)
+    b_s += tl.dot(b_q, b_k, allow_tf32=false)
   }
   p_g = tl.make_block_ptr(base=G + i_bh * $(T), shape=($(T)),
     strides=($(1)), offsets=(i_t * $(BT)), block_shape=($(BT)), order=(0))
@@ -55,7 +55,7 @@ def chunk_gla_simple_fwd_surface
     shape=($(T), $(VSize)), strides=($(s_v_t), $(1)),
     offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
   b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
-  b_o = (b_o + tl.dot(b_s, b_v)) * $(scale)
+  b_o = (b_o + tl.dot(b_s, b_v, allow_tf32=false)) * $(scale)
   p_o = tl.make_block_ptr(base=O + i_bh * $(s_v_h),
     shape=($(T), $(VSize)), strides=($(s_v_t), $(1)),
     offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))

@@ -194,6 +194,14 @@ private partial def exprRegions (assigned : List String) :
       exprRegions assigned e ++ exprRegions assigned align
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
+            | _ => acc) []
+      exprRegions assigned a ++ exprRegions assigned b ++ kwargRegions
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $c:tritonExpr)) =>
       exprRegions assigned a ++ exprRegions assigned b ++ exprRegions assigned c
   | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $_:ident=$base:tritonExpr,

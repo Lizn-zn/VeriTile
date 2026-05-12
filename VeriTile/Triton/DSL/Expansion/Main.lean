@@ -639,6 +639,11 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.negInf), .real, SInfo.scalar, none, none⟩
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) => do
       expandDot expandExpr env a b
+  | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr $[, $_kwargs:tritonReduceKwarg]*)) => do
+      -- Triton dot kwargs such as `allow_tf32` and `out_dtype` are execution
+      -- hints for the current real-valued carrier, so the compute semantics
+      -- erase them.
+      expandDot expandExpr env a b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $acc:tritonExpr)) => do
       -- Fused accumulator form: `tl.dot(a, b, acc) ≡ acc + tl.dot(a, b)`.
       -- Both `tl.dot(a, b)` and `acc` have shape `[M, N]`; their `+` uses

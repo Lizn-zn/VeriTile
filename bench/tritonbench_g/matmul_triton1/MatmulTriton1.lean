@@ -31,7 +31,7 @@ def matmul_triton1_surface
   for kk in range($(0), $(k_size), $(k_block_size)) {
     x_sub = tl.load(x_ptrs)
     y_sub = tl.load(y_ptrs)
-    z += tl.dot(x_sub, y_sub)
+    z += tl.dot(x_sub, y_sub, allow_tf32=false)
     x_ptrs += $(k_block_size)
     y_ptrs += $(k_block_size) * $(n_size)
   }

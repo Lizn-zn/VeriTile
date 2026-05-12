@@ -34,7 +34,7 @@ def chunk_gated_attention_cum_surface
     shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
     offsets=(i_t * $(BT), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
   b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
-  b_o = tl.dot(m_s, b_s)
+  b_o = tl.dot(m_s, b_s, allow_tf32=false)
   tl.store(p_o, (b_o).to(O.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
@@ -99,7 +99,7 @@ def chunk_gated_attention_h_surface
       b_g = tl.load(p_g, boundary_check=([0, 1] : List Nat))
       b_v = (b_v * tl.exp(b_gn[None, :] - b_g)).to(V.dtype.element_ty)
     }
-    b_h += tl.dot(b_k, b_v)
+    b_h += tl.dot(b_k, b_v, allow_tf32=false)
   }
   if STORE_FINAL_STATE {
     p_h = tl.make_block_ptr(base=HT + i_bh * $(KSize) * $(VSize),

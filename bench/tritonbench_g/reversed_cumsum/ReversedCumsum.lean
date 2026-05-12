@@ -15,7 +15,8 @@ set_option linter.unusedSimpArgs false
 When the time dimension fits in one `BT` tile, the Python reverse traversal has
 one iteration with `b_z = 0`. This surface preserves the triangular mask
 `o_i[:, None] <= o_i[None, :]`, the boundary-checked input load, the
-`tl.dot(m_s, b_s)` reversed cumulative sum, and the boundary-checked store. -/
+`tl.dot(m_s, b_s, allow_tf32=false)` reversed cumulative sum, and the
+boundary-checked store. -/
 def reversed_cumsum_single_block_surface
     (SReg Z : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
     ComputeKernel := triton {
@@ -29,7 +30,7 @@ def reversed_cumsum_single_block_surface
   b_s = tl.load(SReg + i_bh * $(s_s_h) +
       offs_t[:, None] * $(s_s_t) + offs_s[None, :] * $(s_s_d),
     mask=mask, other=0.0).to(tl.float32)
-  b_c = tl.dot(m_s, b_s)
+  b_c = tl.dot(m_s, b_s, allow_tf32=false)
   tl.store(Z + i_bh * $(s_s_h) +
       offs_t[:, None] * $(s_s_t) + offs_s[None, :] * $(s_s_d),
     (b_c).to(Z.dtype.element_ty), mask=mask)

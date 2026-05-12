@@ -30,7 +30,7 @@ def chunk_cumsum_vector_surface
       strides=[$(s_s_t), $(s_s_d)], offsets=[i_t * $(BT), i_s * $(BS)],
       block_shape=[$(BT), $(BS)])
     b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
-    b_c = b_z[None, :] + tl.dot(m_s, b_s)
+    b_c = b_z[None, :] + tl.dot(m_s, b_s, allow_tf32=false)
     tl.store(p_z, (b_c).to(Z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
     b_z += tl.sum(b_s, axis=0)
   }

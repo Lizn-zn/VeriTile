@@ -93,6 +93,7 @@ syntax "tl.uint64" : tritonDType
 
 -- Block-level matrix multiply.
 syntax "tl.dot(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.dot(" tritonExpr ", " tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 
 syntax ident "=" tritonDType : tritonMemKwarg
@@ -113,6 +114,7 @@ syntax "keep_dims" "=" "false" : tritonReduceKwarg
 syntax "keep_dims" "=" "true" : tritonReduceKwarg
 syntax "return_indices=True" : tritonReduceKwarg
 syntax "return_indices=False" : tritonReduceKwarg
+syntax "out_dtype=" tritonDType : tritonReduceKwarg
 syntax ident "=" tritonExpr : tritonReduceKwarg
 
 syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
