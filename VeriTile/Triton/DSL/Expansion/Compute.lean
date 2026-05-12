@@ -30,6 +30,14 @@ def fp32ComputeArith? (ctx : String) (algTerm : TSyntax `term) (a b : EOut) :
       Macro.throwError
         (ctx ++ ": only fp32 compute arithmetic annotations are supported")
 
+def ensureComputeCmpComposable (ctx : String) (e : EOut) : MacroM Unit := do
+  match e.computeTerm, e.computeDType? with
+  | some _, some .fp32 => pure ()
+  | some _, _ =>
+      Macro.throwError
+        (ctx ++ ": compute-only expressions without a composable fp32 annotation must be assigned or stored directly before algorithm-layer composition")
+  | none, _ => pure ()
+
 partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
@@ -167,8 +175,8 @@ partial def expandCmp (expandExpr : ExprExpander) (env : Env) (ctx : String) (op
       | none => pure a'
     else
       pure a'
-  ensureAlgorithmOnly ctx a'
-  ensureAlgorithmOnly ctx b'
+  ensureComputeCmpComposable ctx a'
+  ensureComputeCmpComposable ctx b'
   unless a'.dtype == b'.dtype do
     Macro.throwError (ctx ++ ": dtype mismatch")
   let cp ← a'.dtype.comparableProof
@@ -193,15 +201,17 @@ partial def expandMinMax (expandExpr : ExprExpander) (env : Env) (ctx : String) 
       | none => pure b'
     else
       pure b'
-  ensureAlgorithmOnly ctx a'
-  ensureAlgorithmOnly ctx b'
+  ensureComputeArithComposable ctx a'
+  ensureComputeArithComposable ctx b'
   unless a'.dtype == b'.dtype do
     Macro.throwError (ctx ++ ": dtype mismatch")
   let cp ← a'.dtype.comparableProof
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
   let aTerm ← coerceShape a'.term a'.shape outShape (ctx ++ " lhs")
   let bTerm ← coerceShape b'.term b'.shape outShape (ctx ++ " rhs")
-  pure ⟨← `(Op.where ($cmp $cp $bc $a'.term $b'.term) $aTerm $bTerm), a'.dtype, outShape, none, none⟩
+  let algTerm ← `(Op.where ($cmp $cp $bc $a'.term $b'.term) $aTerm $bTerm)
+  let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx algTerm a' b'
+  pure ⟨algTerm, a'.dtype, outShape, computeTerm?, computeDType?⟩
 
 partial def expandScanOp : TSyntax `tritonScanOp → MacroM (TSyntax `term)
   | `(tritonScanOp| $name:ident) =>

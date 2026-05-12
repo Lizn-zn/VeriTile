@@ -46,10 +46,10 @@ def chunked_cumsum_fwd_surface
     offs_c[None, :] * $(stride_dA_cs_csize)
   chunk_size_limit = tl.minimum($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
   active_limit = (offs_h[:, None] < $(nheads)) & (offs_c[None, :] < chunk_size_limit)
-  dt = tl.load(dt_ptrs, mask=active_limit, other=0.0)
+  dt = tl.load(dt_ptrs, mask=active_limit, other=0.0).to(tl.float32)
   if HAS_DT_BIAS {
     dt_bias = tl.load(DtBias + offs_h * $(stride_dt_bias_head),
-      mask=offs_h < $(nheads), other=0.0)
+      mask=offs_h < $(nheads), other=0.0).to(tl.float32)
     dt += dt_bias[:, None]
   }
   if DT_SOFTPLUS {
@@ -59,7 +59,7 @@ def chunked_cumsum_fwd_surface
   dt = tl.where(active_limit, dt, 0.0)
   dt_store_mask = (offs_h[:, None] < $(nheads)) & (offs_c[None, :] < $(chunk_size))
   tl.store(dt_out_ptrs, dt, mask=dt_store_mask)
-  a = tl.load(A_ptrs, mask=offs_h < $(nheads), other=0.0)
+  a = tl.load(A_ptrs, mask=offs_h < $(nheads), other=0.0).to(tl.float32)
   dA = dt * a[:, None]
   dA_cs = tl.cumsum(dA, axis=1)
   tl.store(dA_cs_ptrs, dA_cs, mask=dt_store_mask)
