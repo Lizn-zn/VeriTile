@@ -27,7 +27,7 @@ def fwd_decay_cumsum_surface
   cum_decay = tl.zeros([$(BK)], dtype=tl.float32)
   mask = (i_k * $(BK) + offs) < $(DK)
   for _i in range($(0), $(BT), $(1)) {
-    g_val = tl.load(p_g, mask=mask, other=0.0).to(tl.float32)
+    g_val = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     cum_decay += g_val * 1.44269504
     tl.store(p_go, (cum_decay).to(GO.dtype.element_ty), mask=mask)
     p_g += $(DK)
@@ -60,9 +60,9 @@ def prepare_qg_kg_surface
   last_decay = tl.load(G + i_bh * $(s_qk_h) +
     (i_c * $(BT) + $(BT) - $(1)) * $(DK) + i_k * $(BK) + offs)
   for _i in range($(0), $(BT), $(1)) {
-    q_val = tl.load(p_q, mask=mask, other=0.0)
-    k_val = tl.load(p_k, mask=mask, other=0.0)
-    g_val = tl.load(p_g, mask=mask, other=0.0).to(tl.float32)
+    q_val = tl.load(p_q, mask=mask, other=0)
+    k_val = tl.load(p_k, mask=mask, other=0)
+    g_val = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     q_val = q_val * tl.math.exp2(g_val) * $(scale)
     k_val = k_val * tl.math.exp2(last_decay - g_val)
     tl.store(p_kg, (k_val).to(KG.dtype.element_ty), mask=mask)

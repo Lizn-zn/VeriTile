@@ -29,8 +29,8 @@ def rms_layernorm_forward
   X += row_idx * $(X_row_stride)
   r += row_idx * $(r_row_stride)
 
-  X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  W_row = tl.load(W + col_offsets * $(W_row_stride), mask=mask, other=0.0)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0).to(tl.float32)
+  W_row = tl.load(W + col_offsets * $(W_row_stride), mask=mask, other=0)
 
   row_var = tl.sum(X_row * X_row, axis=0) / $(n_cols)
   inv_var = tl.math.rsqrt(row_var + $(eps))
@@ -59,8 +59,8 @@ def gemma_rms_layernorm_forward
   X += row_idx * $(X_row_stride)
   r += row_idx * $(r_row_stride)
 
-  X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  W_row = tl.load(W + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0).to(tl.float32)
+  W_row = tl.load(W + col_offsets, mask=mask, other=0).to(tl.float32)
 
   row_var = tl.sum(X_row * X_row, axis=0) / $(n_cols)
   inv_var = tl.math.rsqrt(row_var + $(eps))
@@ -89,9 +89,9 @@ def rms_layernorm_backward
   X += row_idx * $(X_row_stride)
   r += row_idx * $(r_row_stride)
 
-  dY_row = tl.load(dY + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  W_row = tl.load(W + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  dY_row = tl.load(dY + col_offsets, mask=mask, other=0).to(tl.float32)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0).to(tl.float32)
+  W_row = tl.load(W + col_offsets, mask=mask, other=0).to(tl.float32)
 
   inv_var = tl.load(r).to(tl.float32)
   normed = X_row * inv_var
@@ -117,9 +117,9 @@ def gemma_rms_layernorm_backward
   X += row_idx * $(X_row_stride)
   r += row_idx * $(r_row_stride)
 
-  dY_row = tl.load(dY + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  W_row = tl.load(W + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  dY_row = tl.load(dY + col_offsets, mask=mask, other=0).to(tl.float32)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0).to(tl.float32)
+  W_row = tl.load(W + col_offsets, mask=mask, other=0).to(tl.float32)
 
   inv_var = tl.load(r).to(tl.float32)
   normed = X_row * inv_var
@@ -135,7 +135,7 @@ noncomputable def rmsInputTile
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
       let off := s.pid * X_row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem X off) else some (0.0 : ℝ) }
+      if idx.1.val < n_cols then some (s.readMem X off) else some (0 : ℝ) }
 
 noncomputable def rmsSumCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
@@ -187,9 +187,9 @@ noncomputable def rmsBackwardDYTile
       Option.map₂ (fun dy w => dy * (w + if GEMMA then 1.0 else 0.0))
         (if idx.1.val < n_cols then
           some (s.readMem dY (s.pid * dY_row_stride + idx.1.val))
-        else some (0.0 : ℝ))
+        else some (0 : ℝ))
         (if idx.1.val < n_cols then some (s.readMem W idx.1.val)
-        else some (0.0 : ℝ)) }
+        else some (0 : ℝ)) }
 
 noncomputable def rmsBackwardDYTilePlain
     (s : BlockState) (dY W : RegionName)
@@ -199,9 +199,9 @@ noncomputable def rmsBackwardDYTilePlain
       Option.map₂ (fun dy w => dy * w)
         (if idx.1.val < n_cols then
           some (s.readMem dY (s.pid * dY_row_stride + idx.1.val))
-        else some (0.0 : ℝ))
+        else some (0 : ℝ))
         (if idx.1.val < n_cols then some (s.readMem W idx.1.val)
-        else some (0.0 : ℝ)) }
+        else some (0 : ℝ)) }
 
 noncomputable def rmsBackwardDYTileGemma
     (s : BlockState) (dY W : RegionName)
@@ -211,10 +211,10 @@ noncomputable def rmsBackwardDYTileGemma
       Option.map₂ (fun dy w => dy * w)
         (if idx.1.val < n_cols then
           some (s.readMem dY (s.pid * dY_row_stride + idx.1.val))
-        else some (0.0 : ℝ))
+        else some (0 : ℝ))
         (Option.map (fun w => w + 1.0)
           (if idx.1.val < n_cols then some (s.readMem W idx.1.val)
-          else some (0.0 : ℝ))) }
+          else some (0 : ℝ))) }
 
 noncomputable def rmsBackwardNormedTile
     (s : BlockState) (X r : RegionName)
@@ -224,7 +224,7 @@ noncomputable def rmsBackwardNormedTile
       Option.map (fun x => x * s.readMem r (s.pid * r_row_stride))
         (if idx.1.val < n_cols then
           some (s.readMem X (s.pid * X_row_stride + idx.1.val))
-        else some (0.0 : ℝ)) }
+        else some (0 : ℝ)) }
 
 noncomputable def rmsBackwardRowSumCarrier
     (s : BlockState) (dY X W r : RegionName)

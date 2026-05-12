@@ -23,8 +23,8 @@ def swiglu_forward_kernel
   C += program_id * $(stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
-  a_row = tl.load(A + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  b_row = tl.load(B + col_offsets, mask=mask, other=0.0)
+  a_row = tl.load(A + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(B + col_offsets, mask=mask, other=0)
   c_row = a_row * tl.sigmoid(a_row) * b_row
   tl.store(C + col_offsets, c_row, mask=mask)
 }
@@ -41,9 +41,9 @@ def swiglu_backward_kernel
   B += program_id * $(stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
-  dc_row = tl.load(DC + col_offsets, mask=mask, other=0.0)
-  a_row = tl.load(A + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  b_row = tl.load(B + col_offsets, mask=mask, other=0.0)
+  dc_row = tl.load(DC + col_offsets, mask=mask, other=0)
+  a_row = tl.load(A + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(B + col_offsets, mask=mask, other=0)
   sig_a = tl.sigmoid(a_row)
   silu_a = a_row * sig_a
   db_row = dc_row * silu_a

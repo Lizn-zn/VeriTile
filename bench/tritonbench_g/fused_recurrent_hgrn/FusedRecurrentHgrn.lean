@@ -30,11 +30,11 @@ def fused_recurrent_hgrn_fwd_surface
   b_h = tl.zeros([$(BD)], dtype=tl.float32)
   if USE_INITIAL_STATE {
     p_h0 = H0 + i_bh * $(D) + o_d
-    b_h += tl.load(p_h0, mask=mask, other=0.0).to(tl.float32)
+    b_h += tl.load(p_h0, mask=mask, other=0).to(tl.float32)
   }
   for _i in range($(0), $(T), $(1)) {
-    b_x = tl.load(p_x, mask=mask, other=0.0).to(tl.float32)
-    b_g = tl.load(p_g, mask=mask, other=0.0).to(tl.float32)
+    b_x = tl.load(p_x, mask=mask, other=0).to(tl.float32)
+    b_g = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     b_h = b_g * b_h + b_x
     tl.store(p_o, (b_h).to(O.dtype.element_ty), mask=mask)
     p_x += $(D)

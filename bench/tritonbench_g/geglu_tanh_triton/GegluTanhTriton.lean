@@ -25,8 +25,8 @@ def geglu_tanh_forward_kernel
   C += program_id * $(stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
-  a_row = tl.load(A + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  b_row = tl.load(B + col_offsets, mask=mask, other=0.0)
+  a_row = tl.load(A + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(B + col_offsets, mask=mask, other=0)
   sqrt_2_over_pi = 0.7978845608028654
   a_cubed = a_row * a_row * a_row
   tanh_arg = sqrt_2_over_pi * (a_row + 0.044715 * a_cubed)
@@ -50,9 +50,9 @@ def geglu_tanh_backward_kernel
   B += program_id * $(stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
-  dc_row = tl.load(DC + col_offsets, mask=mask, other=0.0)
-  a_row = tl.load(A + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  b_row = tl.load(B + col_offsets, mask=mask, other=0.0)
+  dc_row = tl.load(DC + col_offsets, mask=mask, other=0)
+  a_row = tl.load(A + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(B + col_offsets, mask=mask, other=0)
   sqrt_2_over_pi = 0.7978845608028654
   a_cubed = a_row * a_row * a_row
   tanh_arg = sqrt_2_over_pi * (a_row + 0.044715 * a_cubed)

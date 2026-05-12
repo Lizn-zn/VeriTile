@@ -80,9 +80,9 @@ def layer_norm_liger_forward
   Mean += row_idx * $(Mean_row_stride)
   RSTD += row_idx * $(RSTD_row_stride)
 
-  X_row = tl.load(X + col_offsets, mask=mask, other=0.0)
-  W_row = tl.load(W + col_offsets, mask=mask, other=0.0)
-  B_row = tl.load(B + col_offsets, mask=mask, other=0.0)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0)
+  W_row = tl.load(W + col_offsets, mask=mask, other=0)
+  B_row = tl.load(B + col_offsets, mask=mask, other=0)
 
   mean = tl.sum(X_row, axis=0) / $(n_cols)
   XX = X_row - mean
@@ -106,7 +106,7 @@ noncomputable def layernormInputTile
   { data := fun idx =>
       if idx.1.val < n_cols then
         some (s.readMem X (xOffset s X_row_stride idx.1))
-      else some (0.0 : ℝ) }
+      else some (0 : ℝ) }
 
 noncomputable def layernormMeanCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :

@@ -27,7 +27,7 @@ def softmax_kernel
   row_minus_max = row - tl.max(row, axis=0)
   if HAS_MASK {
     mask_ptrs = mask_ptr + row_idx * $(row_stride) + col_offsets
-    mask_row = (tl.load(mask_ptrs, mask=col_offsets < $(n_cols), other=0.0)).to(tl.float32)
+    mask_row = (tl.load(mask_ptrs, mask=col_offsets < $(n_cols), other=0)).to(tl.float32)
     row_minus_max = row_minus_max + mask_row
   }
   numerator = tl.exp(row_minus_max)
@@ -49,14 +49,14 @@ noncomputable def softmaxInputTile
       if idx.1.val < n_cols then some (s.readMem input_ptr off) else none }
 
 /-- Optional additive mask tile. Inactive lanes are `0`, matching
-`tl.load(..., other=0.0)`, but the final store is still masked by `n_cols`. -/
+`tl.load(..., other=0)`, but the final store is still masked by `n_cols`. -/
 noncomputable def softmaxMaskTile
     (s : BlockState) (mask_ptr : RegionName)
     (row_stride n_cols BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
       let off := s.pid * row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem mask_ptr off) else some 0.0 }
+      if idx.1.val < n_cols then some (s.readMem mask_ptr off) else some 0 }
 
 /-- Exact stable-softmax value computed by `softmax_kernel` at lane `idx`,
 including the optional additive mask path from `softmax_triton3.py`. -/
