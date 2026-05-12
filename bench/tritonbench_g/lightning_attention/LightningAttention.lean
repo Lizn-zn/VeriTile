@@ -9,6 +9,47 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `lightning_attention.py`'s `_fwd_kernel`.
+
+This covers the full forward recurrent tile loop. The Python line `off_bh % h`
+is a no-op expression statement and is intentionally not represented because
+the DSL has no bare expression statement form. -/
+def lightning_attention_forward_surface
+    (Q K V Out : RegionName)
+    (_b _h n d e BLOCK NUM_BLOCK BLOCK_MODEL : Nat) :
+    ComputeKernel := triton {
+  off_bh = tl.program_id(axis=0)
+  off_e = tl.program_id(axis=1)
+  qk_offset = off_bh * $(n) * $(d)
+  v_offset = off_bh * $(n) * $(e)
+  o_offset = off_bh * $(n) * $(e)
+  e_offset = off_e * $(BLOCK_MODEL)
+  Q_block_ptr = Q + qk_offset + tl.arange(0, $(d))[None, :]
+  K_trans_block_ptr = K + qk_offset + tl.arange(0, $(d))[:, None]
+  V_block_ptr = V + v_offset + e_offset + tl.arange(0, $(BLOCK_MODEL))[None, :]
+  O_block_ptr = Out + o_offset + e_offset + tl.arange(0, $(BLOCK_MODEL))[None, :]
+  off_block = tl.arange(0, $(BLOCK))
+  index = off_block[:, None] - off_block[None, :]
+  kv = tl.zeros([$(d), $(BLOCK_MODEL)], dtype=tl.float32)
+  for i in range($(0), $(NUM_BLOCK), $(1)) {
+    q = tl.load(Q_block_ptr + off_block[:, None] * $(d),
+      mask=off_block[:, None] < $(n), other=0.0).to(tl.float32)
+    k_trans = tl.load(K_trans_block_ptr + off_block[None, :] * $(d),
+      mask=off_block[None, :] < $(n), other=0.0).to(tl.float32)
+    v = tl.load(V_block_ptr + off_block[:, None] * $(e),
+      mask=off_block[:, None] < $(n), other=0.0).to(tl.float32)
+    qk = tl.dot(q, k_trans)
+    qk = tl.where(index >= 0, qk, 0)
+    o_intra = tl.dot(qk, v)
+    o_inter = tl.dot(q, kv)
+    o = o_intra + o_inter
+    tl.store(O_block_ptr + off_block[:, None] * $(e),
+      (o).to(O_block_ptr.dtype.element_ty), mask=off_block[:, None] < $(n))
+    kv += tl.dot(k_trans, v)
+    off_block += $(BLOCK)
+  }
+}
+
 /-- Surface transcription/proof-oriented forward output-store slice of
 `lightning_attention.py`'s `_fwd_kernel`.
 
@@ -16,8 +57,9 @@ The full kernel computes a recurrent attention tile `o`. This slice starts from
 a precomputed `OAcc` tile and proves the masked writeback into `Out`. The Python
 kernel uses a row-only mask; the DSL spelling adds a trivially true column
 component so the mask has the same `[BLOCK, BLOCK_MODEL]` shape as the store.
-The full forward recurrent `kv` loop, its `tl.float32` Q/K/V casts, and the
-backward kernels' negative-step loops remain separate modeling work. -/
+The full forward recurrent `kv` loop is represented above by
+`lightning_attention_forward_surface`; the backward kernels' negative-step loops
+remain separate modeling work. -/
 def lightning_attention_forward_store_slice
     (OAcc Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat) :
     ComputeKernel := triton {
