@@ -75,6 +75,90 @@ def diag_ssm_backward_kernel
   tl.store(grad_lambda_ptr + col_offsets, grad_Lambda, mask=mask)
 }
 
+/-- Faithful transcription of `diag_ssm_triton.py`'s
+`diag_ssm_forward_kernel_complex`.
+
+The Python tuple assignment `s_real, s_imag = new_s_real, new_s_imag` is
+spelled as two scalar-tile assignments in the DSL. -/
+def diag_ssm_forward_kernel_complex
+    (s_ptr x_ptr y_ptr lambda_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  col_idx = tl.program_id(0) * $(BLOCK_SIZE)
+  col_offsets = col_idx + tl.arange(0, $(BLOCK_SIZE))
+  mask = col_offsets < $(batch_size * dim)
+  s_real = tl.load(s_ptr + col_offsets * $(2), mask=mask, other=0)
+  s_imag = tl.load(s_ptr + col_offsets * $(2) + $(1), mask=mask, other=0)
+  lambda_real = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2),
+    mask=mask, other=0)
+  lambda_imag = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2) + $(1),
+    mask=mask, other=0)
+  for t in range(0, $(length), $(1)) {
+    offsets = (t * $(batch_size * dim) + col_offsets) * $(2)
+    x_real = tl.load(x_ptr + offsets, mask=mask, other=0)
+    x_imag = tl.load(x_ptr + offsets + $(1), mask=mask, other=0)
+    new_s_real = s_real * lambda_real - s_imag * lambda_imag + x_real
+    new_s_imag = s_real * lambda_imag + s_imag * lambda_real + x_imag
+    tl.store(y_ptr + offsets, new_s_real, mask=mask)
+    tl.store(y_ptr + offsets + $(1), new_s_imag, mask=mask)
+    s_real = new_s_real
+    s_imag = new_s_imag
+  }
+}
+
+/-- Faithful transcription of `diag_ssm_triton.py`'s
+`diag_ssm_backward_kernel_complex`.
+
+As above, Python `tl.zeros_like` initializers are represented with explicit
+`tl.zeros([BLOCK_SIZE], dtype=tl.float32)` tiles. -/
+def diag_ssm_backward_kernel_complex
+    (s_ptr lambda_ptr y_ptr grad_s_ptr grad_x_ptr grad_lambda_ptr grad_y_ptr :
+      RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  col_idx = tl.program_id(0) * $(BLOCK_SIZE)
+  col_offsets = col_idx + tl.arange(0, $(BLOCK_SIZE))
+  mask = col_offsets < $(batch_size * dim)
+  lambda_real = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2),
+    mask=mask, other=0)
+  lambda_imag = tl.load(lambda_ptr + (col_offsets % $(dim)) * $(2) + $(1),
+    mask=mask, other=0)
+  grad_s_real = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  grad_s_imag = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  grad_lambda_real = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  grad_lambda_imag = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
+  for i in range(0, $(length), $(1)) {
+    t = $(length) - $(1) - i
+    offsets = (t * $(batch_size * dim) + col_offsets) * $(2)
+    grad_y_real = tl.load(grad_y_ptr + offsets, mask=mask, other=0)
+    grad_y_imag = -tl.load(grad_y_ptr + offsets + $(1), mask=mask, other=0)
+    if t > 0 {
+      s_real = tl.load(y_ptr + (offsets - $(2 * batch_size * dim)),
+        mask=mask, other=0)
+      s_imag = tl.load(y_ptr + (offsets - $(2 * batch_size * dim) + $(1)),
+        mask=mask, other=0)
+    } else {
+      s_real = tl.load(s_ptr + $(2) * col_offsets, mask=mask, other=0)
+      s_imag = tl.load(s_ptr + $(2) * col_offsets + $(1), mask=mask, other=0)
+    }
+    grad_s_real = grad_y_real + grad_s_real
+    grad_s_imag = grad_y_imag + grad_s_imag
+    grad_x_real = grad_s_real
+    grad_x_imag = grad_s_imag
+    grad_lambda_real += grad_s_real * s_real - grad_s_imag * s_imag
+    grad_lambda_imag += grad_s_real * s_imag + grad_s_imag * s_real
+    grad_s_real = grad_x_real * lambda_real - grad_x_imag * lambda_imag
+    grad_s_imag = grad_x_real * lambda_imag + grad_x_imag * lambda_real
+    tl.store(grad_x_ptr + offsets, grad_x_real, mask=mask)
+    tl.store(grad_x_ptr + offsets + $(1), -grad_x_imag, mask=mask)
+  }
+  tl.store(grad_s_ptr + col_offsets * $(2), grad_s_real, mask=mask)
+  tl.store(grad_s_ptr + col_offsets * $(2) + $(1), -grad_s_imag, mask=mask)
+  tl.store(grad_lambda_ptr + col_offsets * $(2), grad_lambda_real, mask=mask)
+  tl.store(grad_lambda_ptr + col_offsets * $(2) + $(1), -grad_lambda_imag,
+    mask=mask)
+}
+
 def colOffset (st : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   st.pids 0 * BLOCK_SIZE + i.val
 
