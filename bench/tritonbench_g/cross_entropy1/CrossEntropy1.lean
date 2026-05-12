@@ -31,7 +31,6 @@ def cross_entropy_fwd_surface
   logits = tl.load(logits_base + col_offsets,
     mask=col_offsets < $(n_cols), other=-inf).to(tl.float32)
   max_logits = tl.max(logits, axis=0)
-  sum_logits = 0.0
   if HAS_SMOOTHING {
     sum_logits = tl.sum(tl.where(col_offsets < $(n_cols), logits, 0.0), axis=0)
   }

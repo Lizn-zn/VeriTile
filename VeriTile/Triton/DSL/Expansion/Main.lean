@@ -1619,9 +1619,11 @@ partial def expandStmt (env : Env) (pinned : List String)
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "tl.if condition"
       ensureShape SInfo.scalar cond'.shape "tl.if condition"
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env pinned regionDTypes ptrElems stmts.toList
+      let (algBody, computeBody, bodyEnv, bodyHasCompute) ← expandStmts env pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
-        ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]), env, bodyHasCompute)
+        ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]),
+        mergeBranchEnv env bodyEnv env,
+        bodyHasCompute)
   | `(tritonStmt| if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "if condition"
@@ -1636,9 +1638,11 @@ partial def expandStmt (env : Env) (pinned : List String)
       let cond' ← expandBoolCondition env cond
       ensureDType .bool cond'.dtype "if condition"
       ensureShape SInfo.scalar cond'.shape "if condition"
-      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts env pinned regionDTypes ptrElems stmts.toList
+      let (algBody, computeBody, bodyEnv, bodyHasCompute) ← expandStmts env pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
-        ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]), env, bodyHasCompute)
+        ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]),
+        mergeBranchEnv env bodyEnv env,
+        bodyHasCompute)
   | _ => Macro.throwUnsupported
 
 partial def expandStmts (env : Env) (pinned : List String)
