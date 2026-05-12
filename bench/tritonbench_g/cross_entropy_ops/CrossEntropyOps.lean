@@ -10,16 +10,16 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 
 /-- Surface transcription of `cross_entropy_ops.py`'s
-`cross_entropy_fwd_kernel` for the non-ignored-label path.
+`cross_entropy_fwd_kernel`.
 
 This preserves the block logits load, `logit_scale`, optional smoothing sum,
 LSE side store, label-in-block loss branch, optional split behavior, z-loss
-computation, and non-split `z_loss_ptr` side store. The full Python kernel also
-handles `ignored_index = -100`; that signed sentinel is not represented in this
-Nat label surface. -/
-def cross_entropy_fwd_nonignored_surface
+computation, and non-split `z_loss_ptr` side store. The signed
+`ignored_index = -100` wrapper default is not represented in this Nat label
+surface; the kernel control-flow branch is preserved for Nat sentinels. -/
+def cross_entropy_fwd_surface
     (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .nat)
-    (total_classes class_start_idx n_cols n_rows logits_row_stride
+    (ignored_index total_classes class_start_idx n_cols n_rows logits_row_stride
       BLOCK_SIZE : Nat)
     (smoothing logit_scale lse_square_scale : ℝ)
     (HAS_SMOOTHING SPLIT : Bool) :
@@ -38,47 +38,50 @@ def cross_entropy_fwd_nonignored_surface
   }
   lse = tl.log(tl.sum(tl.exp(logits - max_logits), axis=0)) + max_logits
   tl.store(lse_ptr + col_block_idx * $(n_rows) + row_idx, lse)
-  label_idx = label_idx - $(class_start_idx)
-  loss = 0.0
-  z_loss = 0.0
-  block_start = col_block_idx * $(BLOCK_SIZE)
-  block_end = tl.minimum($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))
-  if (label_idx >= block_start) and (label_idx < block_end) {
-    logits_label = tl.load(logits_base + label_idx) * $(logit_scale)
-    if HAS_SMOOTHING {
-      if SPLIT {
-        loss = 0.0 - $(smoothing) * sum_logits / $(total_classes) -
-          (1.0 - $(smoothing)) * logits_label
-      } else {
-        loss = lse - $(smoothing) * sum_logits / $(total_classes) -
-          (1.0 - $(smoothing)) * logits_label
-      }
-    } else {
-      if SPLIT {
-        loss = 0.0 - logits_label
-      } else {
-        loss = lse - logits_label
-      }
-    }
-  } else {
-    if HAS_SMOOTHING {
-      if SPLIT {
-        loss = $(smoothing) * (0.0 - sum_logits / $(total_classes))
-      } else {
-        loss = $(smoothing) * (lse - sum_logits / $(total_classes))
-      }
-    }
-  }
-  if SPLIT {
+  if label_idx == $(ignored_index) {
+    loss = 0.0
     z_loss = 0.0
   } else {
-    z_loss = $(lse_square_scale) * lse * lse
-    loss += z_loss
+    label_idx = label_idx - $(class_start_idx)
+    block_start = col_block_idx * $(BLOCK_SIZE)
+    block_end = tl.minimum($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))
+    if (label_idx >= block_start) and (label_idx < block_end) {
+      logits_label = tl.load(logits_base + label_idx) * $(logit_scale)
+      if HAS_SMOOTHING {
+        if SPLIT {
+          loss = 0.0 - $(smoothing) * sum_logits / $(total_classes) -
+            (1.0 - $(smoothing)) * logits_label
+        } else {
+          loss = lse - $(smoothing) * sum_logits / $(total_classes) -
+            (1.0 - $(smoothing)) * logits_label
+        }
+      } else {
+        if SPLIT {
+          loss = 0.0 - logits_label
+        } else {
+          loss = lse - logits_label
+        }
+      }
+    } else {
+      if HAS_SMOOTHING {
+        if SPLIT {
+          loss = $(smoothing) * (0.0 - sum_logits / $(total_classes))
+        } else {
+          loss = $(smoothing) * (lse - sum_logits / $(total_classes))
+        }
+      } else {
+        loss = 0.0
+      }
+    }
+    if not SPLIT {
+      z_loss = $(lse_square_scale) * lse * lse
+      loss += z_loss
+    } else {
+      z_loss = 0.0
+    }
   }
   tl.store(loss_ptr + col_block_idx * $(n_rows) + row_idx, loss)
-  if SPLIT {
-    z_loss = z_loss
-  } else {
+  if not SPLIT {
     tl.store(z_loss_ptr + col_block_idx * $(n_rows) + row_idx, z_loss)
   }
 }
