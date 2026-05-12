@@ -9,23 +9,26 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of the no-`seq_idx`, non-causal path of
+/-- Surface transcription of the non-causal path of
 `bmm_chunk_fwd.py`'s `_bmm_chunk_fwd_kernel`.
 
-The public benchmark also exercises `HAS_SEQ_IDX` and causal cases; those are
-not collapsed into this surface. `HAS_SEQ_IDX` loads use signed sentinels
-(`other = -1` and `other = -2`), and the causal path uses an early return. The
-source kernel's runtime `dot_dtype` cast is not represented here: current
-`tl.dot` typing in the DSL is real-valued, so the `a`/`b` loads remain in the
-compute carrier while the loop shape, masks, pointer advances, and final
-destination dtype cast are preserved. -/
-def bmm_chunk_fwd_no_seq_surface
-    (A B Out : RegionName)
+This covers both `HAS_SEQ_IDX=false` and `HAS_SEQ_IDX=true`; the sequence-index
+loads use an `Int` region so the Python `other=-1` / `other=-2` sentinels are
+represented directly. The causal early-return path remains separate because the
+surface has no early-return statement. The source kernel's runtime `dot_dtype`
+cast is not represented here: current `tl.dot` typing in the DSL is real-valued,
+so the `a`/`b` loads remain in the compute carrier while the loop shape, masks,
+pointer advances, optional sequence filter, and final destination dtype cast are
+preserved. -/
+def bmm_chunk_fwd_surface
+    (A B Out : RegionName) (SeqIdx : Region .int)
     (seqlen chunk_size K ngroups
       stride_a_batch stride_a_seqlen stride_a_head stride_ak
       stride_b_batch stride_b_seqlen stride_b_head stride_bk
       stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
-      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+      stride_seq_idx_batch stride_seq_idx_seqlen
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (HAS_SEQ_IDX : Bool) :
     ComputeKernel := triton {
   pid_b = tl.program_id(axis=1)
   pid_ch = tl.program_id(axis=2)
@@ -39,6 +42,8 @@ def bmm_chunk_fwd_no_seq_surface
     pid_c * $(chunk_size) * $(stride_a_seqlen) + pid_h * $(stride_a_head)
   B += pid_b * $(stride_b_batch) +
     pid_c * $(chunk_size) * $(stride_b_seqlen) + pid_h * $(stride_b_head)
+  seq_idx_base = pid_b * $(stride_seq_idx_batch) +
+    pid_c * $(chunk_size) * $(stride_seq_idx_seqlen)
 
   offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
   offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
@@ -62,6 +67,15 @@ def bmm_chunk_fwd_no_seq_surface
     b_ptrs += $(BLOCK_SIZE_K) * $(stride_bk)
   }
 
+  if HAS_SEQ_IDX {
+    seq_idx_m = tl.load($((SeqIdx : Region .int)) + seq_idx_base +
+      offs_m * $(stride_seq_idx_seqlen),
+      mask=offs_m < chunk_size_limit, other=-1)
+    seq_idx_n = tl.load($((SeqIdx : Region .int)) + seq_idx_base +
+      offs_n * $(stride_seq_idx_seqlen),
+      mask=offs_n < chunk_size_limit, other=-2)
+    acc = tl.where(seq_idx_m[:, None] == seq_idx_n[None, :], acc, 0.0)
+  }
   out = (acc).to(Out.dtype.element_ty)
   Out += pid_b * $(stride_out_batch) +
     pid_c * $(stride_out_chunk) + pid_h * $(stride_out_head)
