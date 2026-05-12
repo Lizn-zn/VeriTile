@@ -67,12 +67,16 @@ def attention_score_kernel
     qk = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
     qk += tl.dot(q, k)
     qk = qk * $(qk_scale)
-    dist = tl.arange(0, $(BLOCK_M))[:, None] -
-      tl.arange(0, $(BLOCK_N))[None, :] + start_m -
-      start_n * $(BLOCK_N) + $(sliding_window_offset)
-    mask = (dist >= 0) & (dist < $(sliding_window_size))
-    if COMPLEMENT_SLIDING_WINDOW {
-      mask = dist >= $(sliding_window_size)
+    mask = tl.full([$(BLOCK_M), $(BLOCK_N)], false)
+    if SLIDING_WINDOW {
+      dist = tl.arange(0, $(BLOCK_M))[:, None] -
+        tl.arange(0, $(BLOCK_N))[None, :] + start_m -
+        start_n * $(BLOCK_N) + $(sliding_window_offset)
+      if COMPLEMENT_SLIDING_WINDOW {
+        mask = dist >= $(sliding_window_size)
+      } else {
+        mask = (dist >= 0) & (dist < $(sliding_window_size))
+      }
     }
     qk = qk - m[:, None]
     p = tl.math.exp2(qk)
