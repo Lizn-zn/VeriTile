@@ -13,13 +13,11 @@ set_option linter.unusedSimpArgs false
 `_quantize_global_transpose`.
 
 This preserves the grouped one-dimensional program-id schedule, masked load,
-global scale, transposed store addressing, and masked writeback. CUDA `llrint`
-and int8 casting are intentionally omitted; the stored value is the pre-cast
-real. -/
+global scale, CUDA `llrint` surface operation, transposed store addressing, and
+masked writeback. The algorithm carrier records the pre-cast real value. -/
 def quantize_global_transpose_real_surface
     (A AbsmaxInv B : RegionName)
-    (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N GROUP_M : Nat)
-    (scale127 : ℝ) :
+    (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N GROUP_M : Nat) :
     ComputeKernel := triton {
   pid = tl.program_id(axis=0)
   grid_m = tl.cdiv($(M), $(BLOCK_M))
@@ -35,7 +33,7 @@ def quantize_global_transpose_real_surface
   a = tl.load(A + rm[:, None] * $(stride_am) + rn[None, :] * $(stride_an),
     mask=mask, other=0.0)
   absmax_inv = tl.load(AbsmaxInv)
-  output = $(scale127) * (a * absmax_inv)
+  output = tl.extra.cuda.libdevice.llrint(127.0 * (a * absmax_inv))
   tl.store(B + rm[:, None] * $(stride_bm) + rn[None, :] * $(stride_bn),
     output, mask=mask)
 }

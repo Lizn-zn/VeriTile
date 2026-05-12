@@ -413,6 +413,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       match e'.dtype, dst with
       | .nat, .int =>
           pure e'
+      | _, .int =>
+          pure e'
       | _, .fp32 =>
           let srcProof ← e'.dtype.floatProof
           let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
@@ -647,6 +649,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       let dst ← expandDType dt
       match dst with
+      | .int =>
+          pure e'
       | .fp32 =>
           let srcProof ← e'.dtype.floatProof
           let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
@@ -655,6 +659,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           let srcProof ← e'.dtype.floatProof
           let dstProof ← dst.floatProof
           pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none, none⟩
+  | `(tritonExpr| tl.extra.cuda.libdevice.llrint($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      pure e'
   | `(tritonExpr| -inf) =>
       pure ⟨← `(Op.negInf), .real, SInfo.scalar, none, none⟩
   | `(tritonExpr| - float ($arg:term)) =>

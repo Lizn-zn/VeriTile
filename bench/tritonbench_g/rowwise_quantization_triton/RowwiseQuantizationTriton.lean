@@ -11,12 +11,11 @@ open VeriTile.Triton
 `_quantize_rowwise`.
 
 This preserves row addressing, `tl.abs`, masked max reduction, the `output_maxs`
-store, and the scaled output expression. The CUDA `llrint` operation and final
-int8 storage are still outside the current real-valued arithmetic model, so the
-output store records the pre-rounded real value. -/
+store, CUDA `llrint` surface operation, and the scaled output expression. The
+algorithm carrier records the pre-cast real value. -/
 def quantize_rowwise_real_surface
     (x_ptr output_ptr output_maxs : RegionName)
-    (BLOCK_SIZE P2 : Nat) (scale127 : ℝ) :
+    (BLOCK_SIZE P2 : Nat) :
     ComputeKernel := triton {
   pid = tl.program_id(axis=0)
   block_start = pid * $(BLOCK_SIZE)
@@ -26,7 +25,7 @@ def quantize_rowwise_real_surface
   x = tl.load(x_ptr + offsets, mask=row_mask)
   abs_x = tl.abs(x)
   max_val = tl.max(tl.where(row_mask, abs_x, 0.0), axis=0)
-  output = $(scale127) * (x / max_val)
+  output = tl.extra.cuda.libdevice.llrint(127.0 * (x / max_val))
   tl.store(output_ptr + offsets, output, mask=row_mask)
   tl.store(output_maxs + pid, max_val)
 }

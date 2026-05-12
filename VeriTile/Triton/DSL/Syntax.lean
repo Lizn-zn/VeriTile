@@ -65,6 +65,7 @@ syntax "tl.where(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "tl.cast(" tritonExpr ", " tritonDType ")" : tritonExpr
 syntax "tl.bitcast(" tritonExpr ", " tritonDType ")" : tritonExpr
+syntax "tl.extra.cuda.libdevice.llrint(" tritonExpr ")" : tritonExpr
 syntax:max (name := tritonMethodCastDTypeIdent) tritonExpr:max noWs "." "to" "(" ident "." ident ")" : tritonExpr
 syntax:max (name := tritonIdentMethodCastDTypeIdent) ident noWs "." "to" "(" ident "." ident ")" : tritonExpr
 syntax (name := tritonIdentMethodCastDTypeIdentSpaced) ident "." "to" "(" ident "." ident ")" : tritonExpr

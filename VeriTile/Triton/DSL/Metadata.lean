@@ -188,6 +188,8 @@ private partial def exprRegions (assigned : List String) :
       exprRegions assigned e ++ kwargRegions
   | `(tritonExpr| tl.toReal($e:tritonExpr))      => exprRegions assigned e
   | `(tritonExpr| tl.cast($e:tritonExpr, $_:tritonDType)) => exprRegions assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.llrint($e:tritonExpr)) =>
+      exprRegions assigned e
   | `(tritonExpr| tl.multiple_of($e:tritonExpr, $align:tritonExpr)) =>
       exprRegions assigned e ++ exprRegions assigned align
   | `(tritonExpr| tl.max_contiguous($e:tritonExpr, $align:tritonExpr)) =>

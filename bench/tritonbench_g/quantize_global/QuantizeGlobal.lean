@@ -7,13 +7,29 @@ namespace VeriTile.Bench.TritonBenchG.QuantizeGlobal
 
 open VeriTile.Triton
 
-/-- Real-valued surface/proof-oriented arithmetic store slice of `quantize_global.py`'s
+/-- Surface transcription of `quantize_global.py`'s `_quantize_global`.
+
+The CUDA `llrint` operation is preserved as a surface operation; the algorithm
+carrier records the pre-cast real value. -/
+def quantize_global_surface
+    (x_ptr absmax_inv_ptr output_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  block_start = pid * $(BLOCK_SIZE)
+  offsets = block_start + tl.arange(0, $(BLOCK_SIZE))
+  mask = offsets < $(n_elements)
+  x = tl.load(x_ptr + offsets, mask=mask)
+  absmax_inv = tl.load(absmax_inv_ptr)
+  output = tl.extra.cuda.libdevice.llrint(127.0 * (x * absmax_inv))
+  tl.store(output_ptr + offsets, output, mask=mask)
+}
+
+/-- Proof-oriented arithmetic store slice of `quantize_global.py`'s
 `_quantize_global`.
 
-The upstream Triton kernel rounds `127.0 * (x * absmax_inv)` with CUDA
-`llrint` and stores it as int8. VeriTile's current arithmetic layer models real
-tiles, so this slice proves the masked vector addressing and scaled value before
-the backend-specific rounding/cast step. -/
+This slice proves the masked vector addressing and scaled value before the
+backend-specific rounding/cast step. -/
 def quantize_global_scaled_store_slice
     (x_ptr absmax_inv_ptr output_ptr : RegionName)
     (n_elements BLOCK_SIZE : Nat) (scale127 : ℝ) :
