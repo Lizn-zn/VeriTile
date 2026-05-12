@@ -28,7 +28,7 @@ def attention_fwd_triton1_output_store_slice
   b_o = tl.load(BO + i_bh * $(stride_bo_bh) +
       offs_t[:, None] * $(stride_bo_t) + offs_d[None, :] * $(stride_bo_d))
   tl.store(O + i_bh * $(s_qh) + offs_t[:, None] * $(s_qt) +
-      offs_d[None, :] * $(s_qd), b_o)
+      offs_d[None, :] * $(s_qd), (b_o).to(O.dtype.element_ty))
 }
 
 def tIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=

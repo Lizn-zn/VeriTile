@@ -35,7 +35,7 @@ def attn_fwd_triton_final_store_slice
       mask=mask, other=0.0)
   tl.store(Out + off_z * $(stride_qz) + off_h * $(stride_qh) +
       offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk),
-      acc, mask=mask)
+      (acc).to(Out.dtype.element_ty), mask=mask)
 }
 
 def offZ (s : BlockState) (H : Nat) : Nat :=
