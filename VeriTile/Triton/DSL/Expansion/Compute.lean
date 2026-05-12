@@ -558,6 +558,8 @@ partial def expandFull (expandExpr : ExprExpander) (env : Env)
 partial def expandComputeFull (expandExpr : ExprExpander) (env : Env)
     (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr)
     (dt : TSyntax `tritonDType) : MacroM EOut := do
+  if (← expandDType dt) != .fp32 then
+    return ← expandFull expandExpr env dims v (dtypeHint := some (← expandDType dt))
   let value ←
     match ← expandLeanAntiquoteAs? .real v with
     | some out => pure out

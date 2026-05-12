@@ -156,6 +156,8 @@ syntax "tl.split(" tritonExpr ", " num ")" : tritonExpr
 
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ")" : tritonExpr
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
+syntax "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonDType ", " ident "=" tritonExpr ")" : tritonExpr
+syntax "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ", " ident "=" tritonDType ")" : tritonExpr
 

@@ -269,6 +269,12 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr)) => exprRegions assigned v
   | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $v:tritonExpr, $_name:ident=$_dt:tritonDType)) =>
       exprRegions assigned v
+  | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $_dtypeName:ident=$_dt:tritonDType,
+      $_valueName:ident=$v:tritonExpr)) =>
+      exprRegions assigned v
+  | `(tritonExpr| tl.full([$_dims:tritonExpr,*], $_valueName:ident=$v:tritonExpr,
+      $_dtypeName:ident=$_dt:tritonDType)) =>
+      exprRegions assigned v
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*])) => []
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*], $_name:ident=$_dt:tritonDType)) => []
   | _ => []

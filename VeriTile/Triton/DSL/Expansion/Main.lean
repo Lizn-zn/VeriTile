@@ -155,11 +155,15 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
   match stx with
   | `(tritonExpr| $n:num) =>
       pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩
-  | `(tritonExpr| $($t:term)) =>
-      pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
   | `(tritonExpr| $i:ident) =>
-      if env.any (fun entry => entry.1 == i.getId.toString) then
-        let name := i.getId.toString
+      let rawName := i.getId.toString
+      let userName := i.getId.getString!
+      let erasedName := i.getId.eraseMacroScopes.toString
+      if env.any (fun entry => entry.1 == rawName || entry.1 == userName || entry.1 == erasedName) then
+        let name :=
+          if env.any (fun entry => entry.1 == rawName) then rawName
+          else if env.any (fun entry => entry.1 == userName) then userName
+          else erasedName
         let (dtype, shape) ← lookupEnv env name
         ensureDType .nat dtype "nat expression"
         let s ← identAsStr i
@@ -168,6 +172,8 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
       else
         let t : TSyntax `term := ⟨i.raw⟩
         pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $($t:term)) =>
+      pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
   | `(tritonExpr| ($e:tritonExpr)) =>
       expandNatExpectedExpr env e
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
@@ -216,7 +222,10 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
       | none =>
           pure (some ⟨r, none, zero, SInfo.scalar, Bool.true⟩)
   | `(tritonExpr| $r:ident) =>
-      if env.any (fun entry => entry.1 == r.getId.toString) then
+      let rawName := r.getId.toString
+      let userName := r.getId.getString!
+      let erasedName := r.getId.eraseMacroScopes.toString
+      if env.any (fun entry => entry.1 == rawName || entry.1 == userName || entry.1 == erasedName) then
         pure none
       else
         let zero ← `(Op.constNat 0)
@@ -875,6 +884,16 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
         Macro.throwError
           ("tl.full: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
       expandComputeFull expandExpr env dims.getElems v dt
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $dtypeName:ident=$dt:tritonDType,
+      $valueName:ident=$v:tritonExpr)) => do
+      unless dtypeName.getId.getString! == "dtype" && valueName.getId.getString! == "value" do
+        Macro.throwError "tl.full: expected kwargs `dtype=` and `value=`"
+      expandComputeFull expandExpr env dims.getElems v dt
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $valueName:ident=$v:tritonExpr,
+      $dtypeName:ident=$dt:tritonDType)) => do
+      unless valueName.getId.getString! == "value" && dtypeName.getId.getString! == "dtype" do
+        Macro.throwError "tl.full: expected kwargs `value=` and `dtype=`"
+      expandComputeFull expandExpr env dims.getElems v dt
   | `(tritonExpr| tl.zeros([$dims:tritonExpr,*])) => do
       -- `tl.zeros([dims])` ≡ `tl.full([dims], 0)`.
       let zero ← `(tritonExpr| 0)
@@ -1021,7 +1040,11 @@ partial def expandStmt (env : Env) (pinned : List String)
       let valueCompute ← `(ComputeStmt.assign TileDType.real $outShapeTerm $valueLit (ComputeExpr.alg $valueOp))
       let indexCompute ← `(ComputeStmt.assign TileDType.nat $outShapeTerm $indexLit (ComputeExpr.alg $indexOp))
       let env' :=
-        (indexName.getId.toString, DInfo.nat, outShape, none) ::
+        (indexName.getId.eraseMacroScopes.toString, DInfo.nat, outShape, none) ::
+        (indexName.getId.getString!, DInfo.nat, outShape, none) ::
+          (indexName.getId.toString, DInfo.nat, outShape, none) ::
+          (valueName.getId.eraseMacroScopes.toString, DInfo.real, outShape, none) ::
+          (valueName.getId.getString!, DInfo.real, outShape, none) ::
           (valueName.getId.toString, DInfo.real, outShape, none) :: env
       pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$valueStmt, $indexStmt]),
         ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$valueCompute, $indexCompute]),
@@ -1044,7 +1067,11 @@ partial def expandStmt (env : Env) (pinned : List String)
       let valueCompute ← `(ComputeStmt.assign TileDType.real $outShapeTerm $valueLit (ComputeExpr.alg $valueOp))
       let indexCompute ← `(ComputeStmt.assign TileDType.nat $outShapeTerm $indexLit (ComputeExpr.alg $indexOp))
       let env' :=
-        (indexName.getId.toString, DInfo.nat, outShape, none) ::
+        (indexName.getId.eraseMacroScopes.toString, DInfo.nat, outShape, none) ::
+        (indexName.getId.getString!, DInfo.nat, outShape, none) ::
+          (indexName.getId.toString, DInfo.nat, outShape, none) ::
+          (valueName.getId.eraseMacroScopes.toString, DInfo.real, outShape, none) ::
+          (valueName.getId.getString!, DInfo.real, outShape, none) ::
           (valueName.getId.toString, DInfo.real, outShape, none) :: env
       pure (← `(Stmt.ifThen (Op.constBool Bool.true) [$valueStmt, $indexStmt]),
         ← `(ComputeStmt.ifThen (Op.constBool Bool.true) [$valueCompute, $indexCompute]),

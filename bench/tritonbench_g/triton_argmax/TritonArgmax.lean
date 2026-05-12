@@ -58,15 +58,9 @@ def argmax_kernel_2
 /-- Faithful transcription of `triton_argmax.py`'s dim-specific
 `argmax_kernel`.
 
-The Python kernel accumulates only argmax indices for each `(m, k)` lane.
-
-Known remaining dtype gap: Python initializes `max_values` with
-`dtype=tl.float32`; the current DSL cannot compose a compute-only fp32 `tl.full`
-through the later comparison/update, so this surface keeps the algorithm-layer
-Real initializer while preserving the control/dataflow shape. Python also
-initializes `argmax_values` with `dtype=tl.int64`; this is represented by the
-Nat/index carrier expression `tl.arange(...) * 0` plus a typed Nat output
-region. -/
+The Python `argmax_values` tile is an `int64` index tile; this surface keeps it
+as a Nat tile because all produced indices are nonnegative and `out_index` is a
+typed Nat region. -/
 def argmax_kernel
     (inp : RegionName) (out_index : Region .nat)
     (M N K BLOCK_M BLOCK_N : Nat) (INT64_INDEX : Bool := Bool.false) :
@@ -78,8 +72,8 @@ def argmax_kernel
     pid_k = (pid_k).to(tl.int64)
   }
   m_offset = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
-  max_values = tl.full([$(BLOCK_M)], -inf)
-  argmax_values = tl.arange(0, $(BLOCK_M)) * $(0)
+  max_values = tl.full([$(BLOCK_M)], dtype=tl.float32, value=-inf)
+  argmax_values = tl.full([$(BLOCK_M)], value=$(0), dtype=tl.uint64)
   for start_n in range($(0), $(N), $(BLOCK_N)) {
     n_offset = start_n + tl.arange(0, $(BLOCK_N))
     offset = m_offset[:, None] * $(N) * $(K) + n_offset[None, :] * $(K) + pid_k
@@ -88,10 +82,9 @@ def argmax_kernel
     inp_vals = tl.load(inp_ptrs, mask=mask, other=-float("inf"))
     local_max, local_argmax := tl.max(inp_vals, 1,
       return_indices=True, return_indices_tie_break_left=True)
-    local_argmax0 = local_argmax
     update = local_max > max_values
     max_values = tl.where(update, local_max, max_values)
-    argmax_values = tl.where(update, start_n + local_argmax0, argmax_values)
+    argmax_values = tl.where(update, start_n + local_argmax, argmax_values)
   }
   offset_index = m_offset * $(K) + pid_k
   out_index_ptrs = $((out_index : Region .nat)) + offset_index
