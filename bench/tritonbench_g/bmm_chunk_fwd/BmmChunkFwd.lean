@@ -9,17 +9,16 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of the non-causal path of
+/-- Surface transcription of
 `bmm_chunk_fwd.py`'s `_bmm_chunk_fwd_kernel`.
 
 This covers both `HAS_SEQ_IDX=false` and `HAS_SEQ_IDX=true`; the sequence-index
 loads use an `Int` region so the Python `other=-1` / `other=-2` sentinels are
-represented directly. The causal early-return path remains separate because the
-surface has no early-return statement. The source kernel's runtime `dot_dtype`
-cast is not represented here: current `tl.dot` typing in the DSL is real-valued,
-so the `a`/`b` loads remain in the compute carrier while the loop shape, masks,
-pointer advances, optional sequence filter, and final destination dtype cast are
-preserved. -/
+represented directly. The causal early-return is represented as a guard around
+the active body. The source kernel's runtime `dot_dtype` cast is not represented
+here: current `tl.dot` typing in the DSL is real-valued, so the `a`/`b` loads
+remain in the compute carrier while the loop shape, masks, pointer advances,
+optional sequence filter, and final destination dtype cast are preserved. -/
 def bmm_chunk_fwd_surface
     (A B Out : RegionName) (SeqIdx : Region .int)
     (seqlen chunk_size K ngroups
@@ -28,7 +27,7 @@ def bmm_chunk_fwd_surface
       stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
       stride_seq_idx_batch stride_seq_idx_seqlen
       BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
-    (HAS_SEQ_IDX : Bool) :
+    (IS_CAUSAL HAS_SEQ_IDX : Bool) :
     ComputeKernel := triton {
   pid_b = tl.program_id(axis=1)
   pid_ch = tl.program_id(axis=2)
@@ -37,6 +36,11 @@ def bmm_chunk_fwd_surface
   num_pid_n = tl.cdiv($(chunk_size), $(BLOCK_SIZE_N))
   pid_m = tl.program_id(axis=0) // num_pid_n
   pid_n = tl.program_id(axis=0) % num_pid_n
+  active_block = true
+  if IS_CAUSAL {
+    active_block = pid_n * $(BLOCK_SIZE_N) < (pid_m + $(1)) * $(BLOCK_SIZE_M)
+  }
+  if active_block {
 
   A += pid_b * $(stride_a_batch) +
     pid_c * $(chunk_size) * $(stride_a_seqlen) + pid_h * $(stride_a_head)
@@ -82,6 +86,7 @@ def bmm_chunk_fwd_surface
   out_ptrs = Out + $(stride_outm) * offs_m[:, None] + offs_n[None, :] * $(stride_outn)
   out_mask = (offs_m[:, None] < $(chunk_size)) & (offs_n[None, :] < $(chunk_size))
   tl.store(out_ptrs, out, mask=out_mask)
+  }
 }
 
 /-- Proof-oriented final output-store slice of `bmm_chunk_fwd.py`'s
