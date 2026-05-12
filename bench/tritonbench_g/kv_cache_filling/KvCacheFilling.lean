@@ -16,7 +16,13 @@ The full kernel computes sequence/block positions and loops over cache block
 slots. This slice starts after that arithmetic has selected `SIDX`, `BIDX`, and
 `KV_BLOCK_IDX`: load a block offset from `BlockOffsets`, load a
 `BLOCK_H × BLOCK_D` K tile from `KStates`, and store it into `KCaches` under the
-original `num_heads/head_dim` mask. -/
+original `num_heads/head_dim` mask.
+
+This file covers the Python wrapper's `quant_policy = 0` path. The
+`_fill_kv_cache_quant_kernel` paths for `quant_policy = 4/8` are intentionally
+not represented here yet: they require fixed-width `tl.uint8` rounding and
+int4 packing semantics, which are still listed as TritonBench-G dtype/packing
+gaps in `tritonbench_coverage.md`. -/
 def fill_k_cache_tile
     (KStates KCaches BlockOffsets : RegionName)
     (SIDX BIDX KV_BLOCK_IDX
