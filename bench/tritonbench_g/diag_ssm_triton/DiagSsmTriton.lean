@@ -27,11 +27,11 @@ def diag_ssm_forward_kernel
   col_idx = tl.program_id(0) * $(BLOCK_SIZE)
   col_offsets = col_idx + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(batch_size * dim)
-  s = tl.load(s_ptr + col_offsets, mask=mask, other=0.0)
-  Lambda = tl.load(lambda_ptr + col_offsets % $(dim), mask=mask, other=0.0)
+  s = tl.load(s_ptr + col_offsets, mask=mask, other=0)
+  Lambda = tl.load(lambda_ptr + col_offsets % $(dim), mask=mask, other=0)
   tl.for t in $(length) {
     offsets = t * $(batch_size * dim) + col_offsets
-    x = tl.load(x_ptr + offsets, mask=mask, other=0.0)
+    x = tl.load(x_ptr + offsets, mask=mask, other=0)
     s = s * Lambda + x
     tl.store(y_ptr + offsets, s, mask=mask)
   }
