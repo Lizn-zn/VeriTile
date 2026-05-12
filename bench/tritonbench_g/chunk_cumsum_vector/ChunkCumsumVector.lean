@@ -23,12 +23,12 @@ def chunk_cumsum_vector_surface
   m_s = tl.where(o_i[:, None] >= o_i[None, :], 1.0, 0.0)
   b_z = tl.zeros([$(BS)], dtype=tl.float32)
   for i_t in range($(0), tl.cdiv($(T), $(BT)), $(1)) {
-    p_s = tl.make_block_ptr(S + i_bh * $(s_s_h), base=$(0), shape=[$(T), $(SSize)],
-      strides=[$(s_s_t), $(s_s_d)], offsets=[i_t * $(BT), i_s * $(BS)],
-      block_shape=[$(BT), $(BS)])
-    p_z = tl.make_block_ptr(Z + i_bh * $(s_s_h), base=$(0), shape=[$(T), $(SSize)],
-      strides=[$(s_s_t), $(s_s_d)], offsets=[i_t * $(BT), i_s * $(BS)],
-      block_shape=[$(BT), $(BS)])
+    p_s = tl.make_block_ptr(base=S + i_bh * $(s_s_h), shape=($(T), $(SSize)),
+      strides=($(s_s_t), $(s_s_d)), offsets=(i_t * $(BT), i_s * $(BS)),
+      block_shape=($(BT), $(BS)), order=(1, 0))
+    p_z = tl.make_block_ptr(base=Z + i_bh * $(s_s_h), shape=($(T), $(SSize)),
+      strides=($(s_s_t), $(s_s_d)), offsets=(i_t * $(BT), i_s * $(BS)),
+      block_shape=($(BT), $(BS)), order=(1, 0))
     b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
     b_c = b_z[None, :] + tl.dot(m_s, b_s, allow_tf32=false)
     tl.store(p_z, (b_c).to(Z.dtype.element_ty), boundary_check=([0, 1] : List Nat))

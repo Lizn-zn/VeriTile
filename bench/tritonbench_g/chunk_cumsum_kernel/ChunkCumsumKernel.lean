@@ -20,10 +20,10 @@ def chunk_cumsum_scalar_surface
   i_bh = tl.program_id(0)
   b_z = tl.zeros([], dtype=tl.float32)
   for i_t in range($(0), tl.cdiv($(T), $(BT)), $(1)) {
-    p_s = tl.make_block_ptr(S + i_bh * $(T), base=$(0), shape=[$(T)],
-      strides=[$(1)], offsets=[i_t * $(BT)], block_shape=[$(BT)])
-    p_o = tl.make_block_ptr(O + i_bh * $(T), base=$(0), shape=[$(T)],
-      strides=[$(1)], offsets=[i_t * $(BT)], block_shape=[$(BT)])
+    p_s = tl.make_block_ptr(base=S + i_bh * $(T), shape=($(T)),
+      strides=($(1)), offsets=(i_t * $(BT)), block_shape=($(BT)), order=(0))
+    p_o = tl.make_block_ptr(base=O + i_bh * $(T), shape=($(T)),
+      strides=($(1)), offsets=(i_t * $(BT)), block_shape=($(BT)), order=(0))
     b_s = tl.load(p_s, boundary_check=([0] : List Nat)).to(tl.float32)
     b_o = tl.cumsum(b_s, axis=0) + b_z
     b_zz = tl.sum(b_s, axis=0)
