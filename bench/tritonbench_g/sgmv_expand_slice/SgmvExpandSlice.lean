@@ -14,8 +14,8 @@ set_option linter.unusedSimpArgs false
 `_sgmv_expand_slice_kernel`.
 
 This keeps the CTA decomposition, sequence metadata loads, LoRA index gather,
-K-block dot-product loop for the `EVEN_K=true` path used by the benchmark,
-optional `CAST_TYPE`, optional `ADD_INPUTS`, and final masked store.
+K-block dot-product loop with the `EVEN_K` load branch, optional `CAST_TYPE`,
+optional `ADD_INPUTS`, and final masked store.
 `tl.max_contiguous` is a layout hint; the DSL accepts it at the surface and
 erases it into the same value expression. The Python early returns for
 `pid_m * BLOCK_M > M` and `lora_index == -1` are not represented because the
@@ -24,7 +24,7 @@ def sgmv_expand_slice_active_surface
     (input_ptr lora_ptr out_ptr : RegionName) (b_seq_start_loc seq_lens lora_indices : Region .nat)
     (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
       cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat)
-    (ADD_INPUTS CAST_TYPE : Bool) :
+    (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
   pid = tl.program_id(axis=0)
   cur_batch = tl.program_id(axis=1)
@@ -45,8 +45,15 @@ def sgmv_expand_slice_active_surface
     offset_k[:, None] * $(lora_n_stride) + rbn[None, :] * $(lora_k_stride)
   accumulator = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
   for k_iter in range($(0), tl.cdiv($(K), $(BLOCK_K)), $(1)) {
-    tiled_a = tl.load(a_ptr)
-    tiled_b = tl.load(b_ptr)
+    if EVEN_K {
+      tiled_a = tl.load(a_ptr)
+      tiled_b = tl.load(b_ptr)
+    } else {
+      tiled_a = tl.load(a_ptr,
+        mask=offset_k[None, :] < $(K) - k_iter * $(BLOCK_K), other=0)
+      tiled_b = tl.load(b_ptr,
+        mask=offset_k[:, None] < $(K) - k_iter * $(BLOCK_K), other=0)
+    }
     if CAST_TYPE {
       tiled_a = (tiled_a).to(lora_ptr.dtype.element_ty)
     }
