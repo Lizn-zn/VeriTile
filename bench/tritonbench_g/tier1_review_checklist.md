@@ -27,14 +27,13 @@ For each item, check:
 - [x] `swiglu_fwd.py`  
   Lean: `bench/tritonbench_g/swiglu_fwd/SwigluFwd.lean`
 
-- [ ] `logsumexp_fwd.py`  
+- [x] `logsumexp_fwd.py`  
   Lean: `bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean`
 
-- [ ] `matrix_transpose.py`  
-  Lean: `bench/tritonbench_g/matrix_transpose/MatrixTranspose.lean`  
-  Note: rewritten to the direct `tl.trans(matrix)` transpose form.
+- [x] `matrix_transpose.py`  
+  Lean: `bench/tritonbench_g/matrix_transpose/MatrixTranspose.lean`
 
-- [ ] `max_reduction.py`  
+- [x] `max_reduction.py`  
   Lean: `bench/tritonbench_g/max_reduction/MaxReduction.lean`
 
 - [ ] `mul_exponent_compensator.py`  
