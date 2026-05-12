@@ -19,7 +19,7 @@ slice starts from a precomputed normalized `Acc` tile and proves the final
 all-false row mask; the sparse block/column softmax loops remain separate
 modeling work, including their `tl.float32` accumulators. -/
 def mixed_sparse_attention_output_store_slice
-    (Acc Seqlens Out : RegionName)
+    (Acc : RegionName) (Seqlens : Region .nat) (Out : RegionName)
     (H
       stride_acc_z stride_acc_h stride_acc_m stride_acc_d
       stride_qz stride_qh stride_om stride_ok
@@ -29,7 +29,7 @@ def mixed_sparse_attention_output_store_slice
   off_hz = tl.program_id(axis=1)
   off_z = off_hz // $(H)
   off_h = off_hz % $(H)
-  seqlen = tl.load(Seqlens + off_z, dtype=tl.uint64)
+  seqlen = tl.load($((Seqlens : Region .nat)) + off_z)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   mask = (offs_m[:, None] < seqlen) & (offs_d[None, :] < $(BLOCK_DMODEL))

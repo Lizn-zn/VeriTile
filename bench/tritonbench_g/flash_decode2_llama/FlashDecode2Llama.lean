@@ -17,14 +17,14 @@ The Python body passes but does not use `stride_mid_od`, `stride_mid_o_es`, or
 signature positions underscored. `acc *= old_scale` is written as an explicit
 assignment because the DSL has no `*=` statement form. -/
 def flash_decode2_llama_surface
-    (B_Seqlen Mid_O Mid_O_LogExpSum O : RegionName)
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum O : RegionName)
     (stride_mid_ob stride_mid_oh stride_mid_os _stride_mid_od
       stride_mid_o_eb stride_mid_o_eh _stride_mid_o_es stride_obs stride_oh _stride_od
       BLOCK_SEQ BLOCK_DMODEL : Nat) : ComputeKernel := triton {
   cur_batch = tl.program_id(0)
   cur_head = tl.program_id(1)
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
-  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch, dtype=tl.uint64)
+  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
   block_n_size = tl.where(cur_batch_seq_len <= $(0), $(0),
     cur_batch_seq_len + $(BLOCK_SEQ) - $(1)) // $(BLOCK_SEQ)
   sum_exp = 0.0
