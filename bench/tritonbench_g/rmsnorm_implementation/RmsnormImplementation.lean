@@ -30,7 +30,7 @@ def rmsnorm_implementation
     offset_n = block_n_strart_ptr + block_n_size
     x_ptr_mask = offset_n < $(N_SIZE)
     x = tl.load(x_ptr + offset_m + offset_n * $(stride_x_k), mask=x_ptr_mask, other=0.0)
-    xf = x.to(tl.float32)
+    xf = (x).to(tl.float32)
     var = var + xf * xf
   }
   var = tl.sum(var, axis=0) / $(N_SIZE)
@@ -94,16 +94,25 @@ noncomputable def rmsInvCarrier
         (rmsVarCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
           N_SIZE BLOCK_N_SIZE)))
 
+noncomputable def rmsStdCarrier
+    (s : BlockState) (x_ptr : RegionName)
+    (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat)
+    (eps : ℝ) : WithBot ℝ :=
+  WithBot.realSqrt
+    (Option.map (fun a => a + eps)
+      (rmsVarCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
+        N_SIZE BLOCK_N_SIZE))
+
 noncomputable def rmsnormSpec
     (s : BlockState) (x_ptr rms_w_ptr : RegionName)
     (stride_x_batch stride_x_m stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE : Nat)
     (eps : ℝ) (i : Fin BLOCK_N_SIZE) : ℝ :=
   WithBot.unbotD 0
     (Option.map₂ (fun scaled w => scaled * w)
-      (Option.map₂ (fun x inv => x * inv)
+      (Option.map₂ (fun x std => x / std)
         (some (s.readMem x_ptr
           (xOffset s stride_x_batch stride_x_m stride_x_k i)))
-        (rmsInvCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
+        (rmsStdCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
           N_SIZE BLOCK_N_SIZE eps))
       (some (s.readMem rms_w_ptr (wOffset stride_rms_w i))))
 
@@ -113,6 +122,7 @@ theorem rmsnorm_implementation_correct
     (stride_x_batch stride_x_m stride_x_k stride_rms_w
       stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
     (eps : ℝ) (s s' : BlockState)
+    (hNpos : 0 < N_SIZE) (hNle : N_SIZE ≤ BLOCK_N_SIZE)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N_SIZE =>
         outOffset s stride_out_batch stride_out_m stride_out_k i))
@@ -128,13 +138,50 @@ theorem rmsnorm_implementation_correct
             stride_rms_w N_SIZE BLOCK_N_SIZE eps i
         else s.readMem out_ptr
           (outOffset s stride_out_batch stride_out_m stride_out_k i) := by
-  sorry
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N_SIZE] =>
+        s.pids 0 * stride_out_batch + s.pids 1 * stride_out_m +
+          idx.1.val * stride_out_k) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [outOffset] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hB : 0 < BLOCK_N_SIZE
+  · have hStep : BLOCK_N_SIZE ≠ 0 := Nat.ne_of_gt hB
+    simp [exec, rmsnorm_implementation, stepStmts, stepStmt, evalOp,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          stepForRangeAux.step_lt, stepForRangeAux.step_ge,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, hNpos, hNle,
+          Nat.not_lt.mpr hNle, hStep] at hExec
+    subst s'
+    simp only [outOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    by_cases hi : i.val < N_SIZE
+    · simp only [hi, ↓reduceIte]
+      simp [hi, rmsnormSpec, rmsStdCarrier, rmsVarCarrier, rmsInputTile,
+            xOffset, wOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            WithBot.realSqrt, Tile.natToReal, NumericDType.mul, NumericDType.div,
+            FloatDType.cast]
+      rfl
+    · simp [hi]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 /-- Compute-facing correctness for the one-block RMSNorm implementation slice. -/
 theorem rmsnorm_implementation_compute_correct
     (x_ptr rms_w_ptr out_ptr : RegionName)
     (stride_x_batch stride_x_m stride_x_k stride_rms_w
       stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
     (eps : ℝ) (s : BlockState)
+    (hNpos : 0 < N_SIZE) (hNle : N_SIZE ≤ BLOCK_N_SIZE)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_N_SIZE =>
         outOffset s stride_out_batch stride_out_m stride_out_k i)) :
@@ -150,5 +197,15 @@ theorem rmsnorm_implementation_compute_correct
       (expected := fun i =>
         rmsnormSpec s x_ptr rms_w_ptr stride_x_batch stride_x_m stride_x_k
           stride_rms_w N_SIZE BLOCK_N_SIZE eps i) := by
-  sorry
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rmsnorm_implementation, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := rmsnorm_implementation_correct x_ptr rms_w_ptr out_ptr
+    stride_x_batch stride_x_m stride_x_k stride_rms_w
+    stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps
+    s s' hNpos hNle hOutInj hExec i
+  simpa [hActive] using h
 end VeriTile.Bench.TritonBenchG.RmsnormImplementation
