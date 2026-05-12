@@ -41,6 +41,16 @@ private def expandLoadOtherAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
   | _ =>
       pure none
 
+private partial def isNoneSyntax (stx : Syntax) : Bool :=
+  match stx with
+  | Syntax.atom _ val => val == "None"
+  | Syntax.ident _ _ name _ => name == `None
+  | Syntax.node _ _ args => args.any isNoneSyntax
+  | _ => Bool.false
+
+private def isNoneExpr (e : TSyntax `tritonExpr) : Bool :=
+  isNoneSyntax e.raw
+
 private def dtypeName : DInfo → String
   | .real => "real"
   | .fp32 => "fp32"
@@ -143,15 +153,19 @@ partial def expandLoad (expandExpr : ExprExpander)
     let p' ← expandExpr env p
     ensureDType .blockPtr p'.dtype "tl.load block pointer"
     return ← mkLoadOut (← `(MemAccess.blockPtr $p'.term $boundaryCheck)) (← `(MaskOpt.none)) p'.shape
+  let otherIsNone := otherSyntax.any isNoneExpr
   let otherTerm ←
     match otherSyntax with
     | none => pure none
     | some other => do
-        let other' ←
-          match ← expandLoadOtherAs? outDType other with
-          | some out => pure out
-          | none => expandExpr env other
-        pure (some (other'.term, other'.dtype, other'.shape, other'.computeDType?))
+        if isNoneExpr other then
+          pure none
+        else do
+          let other' ←
+            match ← expandLoadOtherAs? outDType other with
+            | some out => pure out
+            | none => expandExpr env other
+          pure (some (other'.term, other'.dtype, other'.shape, other'.computeDType?))
   if let some (_, otherDType, _, _) := otherTerm then
     unless otherDType == outDType || (outDType == .fp32 && otherDType == .real) do
       Macro.throwError
@@ -159,6 +173,9 @@ partial def expandLoad (expandExpr : ExprExpander)
           dtypeName outDType ++ ", other " ++ dtypeName otherDType ++ ")")
   match maskTerm, otherTerm with
   | none, none =>
+      if otherIsNone then
+        Macro.throwError
+          "tl.load: `other=None` requires `mask=`. (Triton: `other` is meaningful only when some lanes are masked off.)"
       match staticPtr? with
       | some sp =>
           let r := sp.region

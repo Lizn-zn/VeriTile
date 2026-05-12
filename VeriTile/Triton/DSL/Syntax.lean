@@ -21,6 +21,7 @@ syntax num : tritonExpr
 syntax scientific : tritonExpr
 syntax "true" : tritonExpr
 syntax "false" : tritonExpr
+syntax "None" : tritonExpr
 -- `:max` so trailing parsers (e.g. the slicer postfix `e[:, None]`) chain
 -- on bare register identifiers without the user wrapping them in parens.
 syntax:max ident : tritonExpr

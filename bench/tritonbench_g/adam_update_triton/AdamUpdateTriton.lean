@@ -41,10 +41,8 @@ def update_fn_kernel
 /-- Proof-oriented `exp_avg` update slice of `adam_update_triton.py`'s
 `update_fn_kernel`.
 
-The full kernel also updates `p` through the Python/Triton idiom
-`update_sign * can_update`, where `can_update` is boolean. The current DSL
-does not coerce bool tiles as numeric masks in arithmetic, so this first slice
-captures the per-element momentum update and masked store surface. -/
+The full surface above covers the `p` update. This proof slice focuses on the
+per-element momentum update and masked `exp_avg` store. -/
 def update_fn_kernel_exp_avg_slice
     (grad_ptr exp_avg_ptr : RegionName)
     (beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) :
