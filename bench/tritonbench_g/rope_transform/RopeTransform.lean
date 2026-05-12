@@ -31,8 +31,8 @@ def triton_rope_forward
   sin_base = SIN + cos_row_idx * $(sin_row_stride)
   cos_offsets = tl.arange(0, $(PAD_HALF))
   cos_mask = cos_offsets < $(HEAD_HALF)
-  cos_row = tl.load(cos_base + cos_offsets, mask=cos_mask, other=0.0)
-  sin_row = tl.load(sin_base + cos_offsets, mask=cos_mask, other=0.0)
+  cos_row = tl.load(cos_base + cos_offsets, mask=cos_mask, other=0)
+  sin_row = tl.load(sin_base + cos_offsets, mask=cos_mask, other=0)
   q_heads = tl.arange(0, $(pad_n_qh))
   k_heads = tl.arange(0, $(pad_n_kh))
   dims = tl.arange(0, $(PAD_HALF))
@@ -41,15 +41,15 @@ def triton_rope_forward
   first_q_mask = (q_heads[:, None] < $(n_qh)) & (dims[None, :] < $(HEAD_HALF))
   first_k_mask = (k_heads[:, None] < $(n_kh)) & (dims[None, :] < $(HEAD_HALF))
   q_tile_1 = tl.load(q_ptr + first_half_q_offsets, mask=first_q_mask,
-    other=0.0).to(tl.float32)
+    other=0).to(SIN.dtype.element_ty)
   k_tile_1 = tl.load(k_ptr + first_half_k_offsets, mask=first_k_mask,
-    other=0.0).to(tl.float32)
+    other=0).to(SIN.dtype.element_ty)
   second_half_q_offsets = first_half_q_offsets + $(HEAD_HALF)
   second_half_k_offsets = first_half_k_offsets + $(HEAD_HALF)
   q_tile_2 = tl.load(q_ptr + second_half_q_offsets, mask=first_q_mask,
-    other=0.0).to(tl.float32)
+    other=0).to(SIN.dtype.element_ty)
   k_tile_2 = tl.load(k_ptr + second_half_k_offsets, mask=first_k_mask,
-    other=0.0).to(tl.float32)
+    other=0).to(SIN.dtype.element_ty)
   new_q_tile_1 = q_tile_1 * cos_row[None, :] - q_tile_2 * sin_row[None, :]
   new_q_tile_2 = q_tile_2 * cos_row[None, :] + q_tile_1 * sin_row[None, :]
   new_k_tile_1 = k_tile_1 * cos_row[None, :] - k_tile_2 * sin_row[None, :]
