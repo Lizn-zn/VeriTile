@@ -84,6 +84,17 @@ noncomputable def meanMaskedAccumulatorSpec
         else
           0) }
 
+noncomputable def meanChunkLoadSpec
+    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat) :
+    Tile .real [BLOCK_M, BLOCK_N] :=
+  { data := fun idx =>
+      some
+        (if meanRowActive s M BLOCK_M idx.1 ∧ off + idx.2.1.val < N then
+          s.readMem X (meanOutOffset s BLOCK_M idx.1 * N +
+            (off + idx.2.1.val))
+        else
+          0) }
+
 noncomputable def meanFromAccumulatorSpec
     (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat)
     (i : Fin BLOCK_M) : ℝ :=
@@ -252,6 +263,25 @@ theorem meanMaskedAccumulatorSpec_active
     (meanMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N off).data idx =
       some (meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1) := by
   simp [meanMaskedAccumulatorSpec, hrow]
+
+theorem meanMaskedAccumulatorSpec_step_add
+    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
+    (hOff : off % BLOCK_N = 0) :
+    meanMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N (off + BLOCK_N) =
+      { data := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+          some
+            (WithBot.unbotD 0
+                ((meanMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N off).data idx) +
+              WithBot.unbotD 0
+                ((meanChunkLoadSpec s X M N BLOCK_M BLOCK_N off).data idx)) } := by
+  ext idx
+  by_cases hrow : meanRowActive s M BLOCK_M idx.1
+  · by_cases hcol : off + idx.2.1.val < N
+    · simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, hrow, hcol,
+        meanLanePrefix_step s X N BLOCK_M BLOCK_N off idx.1 idx.2.1 hOff]
+    · simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, hrow, hcol,
+        meanLanePrefix_step s X N BLOCK_M BLOCK_N off idx.1 idx.2.1 hOff]
+  · simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, hrow]
 
 private theorem sum_range_eq_sum_fin (N : Nat) (f : Nat → ℝ) :
     (Finset.range N).sum f =

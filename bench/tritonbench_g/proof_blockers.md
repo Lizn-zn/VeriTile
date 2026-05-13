@@ -16,11 +16,14 @@ the named algorithm postconditions.
   and the intended `_mean` loop accumulator via `meanLanePrefix` /
   `meanAccumulatorSpec`. Because the loop body masks inactive rows, the actual
   loop invariant must use `meanMaskedAccumulatorSpec`; its zero, step, and
-  active-row projection lemmas are proved locally. Its final active-row readout
-  bridge is proved by `meanFromMaskedAccumulatorSpec_eq_meanSpec`. The pure
-  lane-step fact is proved as `meanLanePrefix_step` and lifted to the
-  accumulator tile by `meanAccumulatorSpec_step`; the bridge from the final
-  accumulator to the row-wise sum is proved by
+  active-row projection lemmas are proved locally. The per-iteration masked
+  load tile is captured by `meanChunkLoadSpec`, with
+  `meanMaskedAccumulatorSpec_step_add` matching the actual `_mean += a` update.
+  The final active-row readout bridge is proved by
+  `meanFromMaskedAccumulatorSpec_eq_meanSpec`. The pure lane-step fact is
+  proved as `meanLanePrefix_step` and lifted to the accumulator tile by
+  `meanAccumulatorSpec_step`; the bridge from the final accumulator to the
+  row-wise sum is proved by
   `meanFromAccumulatorSpec_eq_meanSpec`. The theorem target is fixed as
   `mean_dim_kernel_correct_target`, but the theorem is still a placeholder
   until this accumulator invariant is connected to the actual loop body with
