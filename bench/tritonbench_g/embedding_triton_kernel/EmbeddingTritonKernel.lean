@@ -113,6 +113,61 @@ noncomputable def embeddingSpec
     else
       some (0.0 : ℝ))
 
+def seqLaneIndex
+    (s : BlockState) (BLOCK_N start_nn : Nat) (lane : Fin BLOCK_NN) : Nat :=
+  s.pids 0 * BLOCK_N + start_nn + lane.val
+
+def tokenRaw2D
+    (s : BlockState) (input_ids : RegionName)
+    (BLOCK_N start_nn : Nat) (lane : Fin BLOCK_NN) : Nat :=
+  s.readMemValue .nat input_ids (seqLaneIndex s BLOCK_N start_nn lane)
+
+def tokenIndex2D
+    (s : BlockState) (input_ids : RegionName)
+    (vob_start_id BLOCK_N start_nn : Nat) (lane : Fin BLOCK_NN) : Nat :=
+  tokenRaw2D s input_ids BLOCK_N start_nn lane - vob_start_id
+
+def outOffset2D
+    (s : BlockState) (stride_out_seq BLOCK_N start_nn : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL]) : Nat :=
+  seqLaneIndex s BLOCK_N start_nn idx.1 * stride_out_seq + dimIndex idx.2.1
+
+def weightOffset2D
+    (s : BlockState) (input_ids : RegionName)
+    (vob_start_id stride_weight_seq BLOCK_N start_nn : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL]) : Nat :=
+  tokenIndex2D s input_ids vob_start_id BLOCK_N start_nn idx.1 *
+      stride_weight_seq +
+    dimIndex idx.2.1
+
+def storeActive2D
+    (s : BlockState) (n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL]) : Prop :=
+  seqLaneIndex s BLOCK_N start_nn idx.1 < n_ctx ∧
+    dimIndex idx.2.1 < hiden_size
+
+instance storeActive2DDecidable
+    (s : BlockState) (n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL]) :
+    Decidable (storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+      BLOCK_DMODEL idx) := by
+  unfold storeActive2D
+  infer_instance
+
+noncomputable def embeddingSpec2D
+    (s : BlockState) (weight input_ids : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq BLOCK_N start_nn
+      BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL]) : ℝ :=
+  WithBot.unbotD 0
+    (if vob_start_id ≤ tokenRaw2D s input_ids BLOCK_N start_nn idx.1 ∧
+        tokenRaw2D s input_ids BLOCK_N start_nn idx.1 < vob_end_id then
+      some (s.readMem weight
+        (weightOffset2D s input_ids vob_start_id stride_weight_seq BLOCK_N
+          start_nn idx))
+    else
+      some (0.0 : ℝ))
+
 /-- Algorithm-layer correctness for the embedding kernel. -/
 theorem embedding_kernel_correct
     (weight input_ids out : RegionName)

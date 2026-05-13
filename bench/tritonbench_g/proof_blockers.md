@@ -9,8 +9,9 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - File: `mean_reduction/MeanReduction.lean`
 - Blocker: correctness needs a full row-wise sum invariant across
   `for off in range(0, N, BLOCK_N)`.
-- Current local spec only describes the first column and is not sufficient for
-  the Triton kernel's mean over all reduced columns.
+- Current local spec now describes the full row mean via `meanInputTile` /
+  `meanCarrier` / `meanSpec`, but the theorem is still a placeholder until the
+  loop invariant is proved.
 
 ## `embedding_triton_kernel.py`
 
@@ -18,6 +19,9 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - Blocker: correctness needs a `forRange` invariant across
   `range(0, BLOCK_N, BLOCK_NN)` and a two-dimensional write map for all
   `(sequence, dmodel)` lanes written by the loop.
+- Current local spec now includes the per-iteration two-dimensional
+  `BLOCK_NN × BLOCK_DMODEL` write target via `outOffset2D` / `embeddingSpec2D`,
+  but the theorem is still a placeholder until the loop invariant is proved.
 
 ## `diag_ssm_triton.py`
 
