@@ -27,10 +27,10 @@ def copy_to_kcache_seqlen_n1_surface
       stride_kcs _stride_kcx stride_bts stride_btb block_size _n_tokens
       _HEAD_DIM KCACHE_X : Nat) :
     ComputeKernel := triton {
-  cur_token_idx = tl.program_id(axis=0)
+  cur_token_idx = tl.program_id(0)
   cur_seq_idx = cur_token_idx
-  cur_kv_head_idx = tl.program_id(axis=1)
-  split_x_idx = tl.program_id(axis=2)
+  cur_kv_head_idx = tl.program_id(1)
+  split_x_idx = tl.program_id(2)
   past_kv_seq_len = tl.load($((seq_lengths : Region .nat)) + cur_seq_idx) - $(1)
   last_bt_block_idx = past_kv_seq_len // $(block_size)
   block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +

@@ -22,8 +22,8 @@ def batched_vecmat_surface
     (A B output : RegionName)
     (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
-  m_index = tl.program_id(axis=0)
-  n_index = tl.program_id(axis=1)
+  m_index = tl.program_id(0)
+  n_index = tl.program_id(1)
   offsets_m = m_index * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offsets_n = n_index * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
   offsets_k = tl.arange(0, $(BLOCK_K))
