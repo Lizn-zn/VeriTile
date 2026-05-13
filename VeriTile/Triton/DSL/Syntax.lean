@@ -139,6 +139,8 @@ syntax "tl.sort(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 
 syntax "tl.load(" tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
 syntax "tl.load(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonExpr
+syntax "tl.load(" tritonExpr ("," tritonMemKwarg)* ")" noWs "." "to" "(" tritonDType ")" : tritonExpr
+syntax "tl.load(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" noWs "." "to" "(" tritonDType ")" : tritonExpr
 syntax "tl.make_block_ptr(" tritonExpr ", " ident "=" tritonExpr ", " ident "=" "[" tritonExpr,*
   "]" ", " ident "=" "[" tritonExpr,* "]" ", " ident "=" "[" tritonExpr,* "]"
   ", " ident "=" "[" tritonExpr,* "]" ")" : tritonExpr

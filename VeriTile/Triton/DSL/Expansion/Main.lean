@@ -160,10 +160,7 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
       stx.raw.getKind == ``tritonIdentMethodCastElementTyIdent ||
       stx.raw.getKind == ``tritonIdentMethodCastElementTyIdentSpaced then
     let args := stx.raw.getArgs
-    if h : args.size = 5 then
-      let e : TSyntax `tritonExpr := ⟨args[0]⟩
-      expandNatExpectedExpr env e
-    else if h : args.size = 6 then
+    if h : 0 < args.size then
       let e : TSyntax `tritonExpr := ⟨args[0]⟩
       expandNatExpectedExpr env e
     else
@@ -245,9 +242,21 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
   | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       expandLoad expandExpr expandStaticPtrExpr env p kwargs
         (defaultDType := some .nat) (some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
+      let dst ← expandDType dt
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some dst) (some mask)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       expandLoad expandExpr expandStaticPtrExpr env p kwargs
         (defaultDType := some .nat)
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
+      let dst ← expandDType dt
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some dst)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
   | _ => do
       let e' ← expandExpr env stx
       ensureDType .nat e'.dtype "nat expression"
@@ -424,11 +433,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       stx.raw.getKind == ``tritonIdentMethodCastElementTyIdent ||
       stx.raw.getKind == ``tritonIdentMethodCastElementTyIdentSpaced then
     let args := stx.raw.getArgs
-    if h : args.size = 5 then
-      let e : TSyntax `tritonExpr := ⟨args[0]⟩
-      let e' ← expandExpr env e
-      pure e'
-    else if h : args.size = 6 then
+    if h : 0 < args.size then
       let e : TSyntax `tritonExpr := ⟨args[0]⟩
       let e' ← expandExpr env e
       pure e'
@@ -867,8 +872,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.advanceBlockPtr $p'.term $deltasTerm), .blockPtr, p'.shape, none, none⟩
   | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandLoad expandExpr expandStaticPtrExpr env p kwargs (positionalMask := some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
+      let dst ← expandDType dt
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some dst) (positionalMask := some mask)
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandLoad expandExpr expandStaticPtrExpr env p kwargs
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
+      let dst ← expandDType dt
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := some dst)
   | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => do
       expandCmp expandExpr env "comparison" (← `(Op.lt)) a b
   | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => do
@@ -1225,7 +1237,19 @@ partial def expandStmt (env : Env) (pinned : List String)
       let some (envName, lhsDType, lhsShape, lhsComputeDType?) :=
           env.find? (fun entry =>
             entry.1 == rawName || entry.1 == userName || entry.1 == erasedName)
-        | Macro.throwUnsupported
+        | do
+            let nameLit ← identAsStr dest
+            let rhs' ← expandNatExpectedExpr env rhs
+            ensureAlgorithmOnly "pointer rebind assignment" rhs'
+            let region : TSyntax `term := ⟨old.raw⟩
+            let lhsTerm ← `(Op.ptrBase $region)
+            let (bc, outShape) ← broadcastTerm SInfo.scalar rhs'.shape "pointer rebind assignment"
+            let outShapeTerm ← outShape.term
+            let term ← `(Op.ptrAdd $bc $lhsTerm $rhs'.term)
+            return (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+              ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+              (dest.getId.toString, .ptr, outShape, none) :: env,
+              Bool.false)
       let nameLit : TSyntax `term := Syntax.mkStrLit envName
       let lhsShapeTerm ← lhsShape.term
       let lhsDTypeTerm ← lhsDType.term

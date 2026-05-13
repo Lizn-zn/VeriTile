@@ -28,7 +28,7 @@ def cross_entropy_fwd_surface
   col_offsets = col_block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   label_idx = tl.load($((labels_ptr : Region .int)) + row_idx)
   logits = tl.load(logits_ptr + col_offsets,
-    mask=col_offsets < $(n_cols), other=-inf).to(tl.float32) * $(logit_scale)
+    mask=col_offsets < $(n_cols), other=-float("inf")).to(tl.float32) * $(logit_scale)
   max_logits = tl.max(logits, 0)
   if HAS_SMOOTHING {
     sum_logits = tl.sum(tl.where(col_offsets < $(n_cols), logits, 0.0), 0)
