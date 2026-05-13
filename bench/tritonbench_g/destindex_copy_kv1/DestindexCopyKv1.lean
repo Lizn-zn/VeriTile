@@ -27,10 +27,10 @@ def fwd_kernel_destindex_copy_kv
   o_ptrs = Out + dest_index * $(stride_o_bs) +
     $(stride_o_h) * offs_h[:, None] + $(stride_o_d) * offs_d[None, :]
   k = tl.load(k_ptrs,
-    mask=(offs_h[:, None] < $(head_num)) and (offs_d[None, :] < $(head_dim)),
+    mask=(offs_h[:, None] < $(head_num)) & (offs_d[None, :] < $(head_dim)),
     other=0.0)
   tl.store(o_ptrs, k,
-    mask=(offs_h[:, None] < $(head_num)) and (offs_d[None, :] < $(head_dim)))
+    mask=(offs_h[:, None] < $(head_num)) & (offs_d[None, :] < $(head_dim)))
 }
 
 def headIndex (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
