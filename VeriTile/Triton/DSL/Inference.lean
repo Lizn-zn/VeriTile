@@ -24,6 +24,13 @@ namespace VeriTile.Triton.DSL.Inference
 
 open VeriTile.Triton.DSL (DInfo)
 
+private def dottedToBaseName? (i : TSyntax `ident) : Option String :=
+  let name := i.getId.eraseMacroScopes.toString
+  if name.endsWith ".to" then
+    some (name.dropEnd 3).toString
+  else
+    none
+
 /-- Walk an expression that occupies a `.nat`-required position and
 collect every identifier appearing within it. Recurses through
 arithmetic (`+ - * / // % << >> & | ^ ~ not`), parens, and the unit-axis
@@ -31,6 +38,15 @@ indexing forms `e[: , None]` / `e[None , :]` plus `tl.expand_dims`.
 Stops at antiquotations (`$(...)`), `tl.load`, `tl.cast`, and any other
 constructor whose result type is fixed independently. -/
 partial def natExprIdents : TSyntax `tritonExpr → List String := fun stx =>
+  if stx.raw.getKind == ``VeriTile.Triton.DSL.tritonDottedIdentMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 4 then
+      let i : TSyntax `ident := ⟨args[0]⟩
+      match dottedToBaseName? i with
+      | some name => [name]
+      | none => []
+    else []
+  else
   match stx with
   | `(tritonExpr| $r:ident) => [r.getId.toString]
   | `(tritonExpr| ($e:tritonExpr)) => natExprIdents e
@@ -261,6 +277,16 @@ private partial def cmpDepsFromExpr :
 
 private partial def directPinsFromExpr (assigned : Assigned) :
     TSyntax `tritonExpr → List String := fun stx =>
+  if stx.raw.getKind == ``VeriTile.Triton.DSL.tritonDottedIdentMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 4 then
+      let i : TSyntax `ident := ⟨args[0]⟩
+      match dottedToBaseName? i with
+      | some name =>
+          if assigned.contains name then [name] else []
+      | none => []
+    else []
+  else
   if stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCast ||
       stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCastDTypeIdent ||
       stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCastElementTy ||

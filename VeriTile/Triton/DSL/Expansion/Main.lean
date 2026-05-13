@@ -148,10 +148,38 @@ private def typedRegionAntiquote? (r : TSyntax `term) :
     | pure none
   pure (some (r, dtype))
 
+private def expandIdentRefByName (env : Env) (name : String) : MacroM EOut := do
+  let (dtype, shape) ← lookupEnv env name
+  let s : TSyntax `term := Syntax.mkStrLit name
+  let dt ← dtype.term
+  let sh ← shape.term
+  let term ← `(Op.ref $dt $sh $s)
+  match lookupComputeDType? env name with
+  | some .fp32 =>
+      pure ⟨term, dtype, shape, some (← fp32ComputeExpr term), some .fp32⟩
+  | some _ =>
+      Macro.throwError
+        ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+  | none =>
+      pure ⟨term, dtype, shape, none, none⟩
+
 mutual
 
 partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
     MacroM EOut := do
+  if stx.raw.getKind == ``tritonDottedIdentMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 4 then
+      let i : TSyntax `ident := ⟨args[0]⟩
+      match dottedToBaseName? i with
+      | some name =>
+          let e' ← expandIdentRefByName env name
+          ensureDType .nat e'.dtype "nat expression"
+          pure e'
+      | none => Macro.throwUnsupported
+    else
+      Macro.throwUnsupported
+  else
   if stx.raw.getKind == ``tritonMethodCastElementTy ||
       stx.raw.getKind == ``tritonMethodCastDTypeIdent ||
       stx.raw.getKind == ``tritonMethodCastElementTyIdent ||
@@ -445,6 +473,32 @@ partial def natOffsetsWithBaseAdd (env : Env) (ctx : String)
   pure (← listTerm staticOffsets.toList, ← sumOps dynamicAdds.toList)
 
 partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
+  if stx.raw.getKind == ``tritonDottedIdentMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 4 then
+      let i : TSyntax `ident := ⟨args[0]⟩
+      let dt : TSyntax `tritonDType := ⟨args[2]⟩
+      match dottedToBaseName? i with
+      | some name =>
+          let e' ← expandIdentRefByName env name
+          let dst ← expandDType dt
+          match dst with
+          | .bool =>
+              Macro.throwError "tl.cast: Bool casts are only supported directly on tl.load"
+          | .nat => pure e'
+          | .int => pure e'
+          | .fp32 =>
+              let srcProof ← e'.dtype.floatProof
+              let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
+          | _ =>
+              let srcProof ← e'.dtype.floatProof
+              let dstProof ← dst.floatProof
+              pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none, none⟩
+      | none => Macro.throwUnsupported
+    else
+      Macro.throwUnsupported
+  else
   if stx.raw.getKind == ``tritonMethodCastElementTy ||
       stx.raw.getKind == ``tritonMethodCastDTypeIdent ||
       stx.raw.getKind == ``tritonMethodCastElementTyIdent ||

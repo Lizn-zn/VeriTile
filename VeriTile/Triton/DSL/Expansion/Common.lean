@@ -112,6 +112,19 @@ abbrev StaticPtrExpander := Env → TSyntax `tritonExpr → MacroM (Option Stati
 
 abbrev StmtExpansion := TSyntax `term × TSyntax `term × Env × Bool
 
+def dottedToBaseName? (i : TSyntax `ident) : Option String :=
+  let name := i.getId.eraseMacroScopes.toString
+  if name.endsWith ".to" then
+    some (name.dropEnd 3).toString
+  else
+    none
+
+def dottedToBaseIdent? (i : TSyntax `ident) : Option (TSyntax `tritonExpr) :=
+  match dottedToBaseName? i with
+  | some base =>
+    some ⟨mkIdentFrom i (Name.mkSimple base)⟩
+  | none => none
+
 def methodCast? (stx : TSyntax `tritonExpr) :
     Option (TSyntax `tritonExpr × TSyntax `tritonDType) :=
   let k := stx.raw.getKind
@@ -122,6 +135,15 @@ def methodCast? (stx : TSyntax `tritonExpr) :
       some (⟨args[0]⟩, ⟨args[3]⟩)
     else if h : args.size = 6 then
       some (⟨args[0]⟩, ⟨args[4]⟩)
+    else
+      none
+  else if k == ``tritonDottedIdentMethodCast then
+    let args := stx.raw.getArgs
+    if h : args.size = 4 then
+      let i : TSyntax `ident := ⟨args[0]⟩
+      match dottedToBaseIdent? i with
+      | some e => some (e, ⟨args[2]⟩)
+      | none => none
     else
       none
   else
