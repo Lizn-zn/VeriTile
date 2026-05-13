@@ -539,6 +539,21 @@ theorem meanLoopInvariant_to_scatter_alg_post
   meanStoreFromMaskedAccumulator_alg_post_default s0 stBase X Mean M N
     BLOCK_M BLOCK_N off hBLOCK_N hoff
 
+def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
+  [ .assign .real [BLOCK_M] "mean"
+      (.div NumericDType.real Broadcast.scalarR
+        (.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false
+          (.ref .real [BLOCK_M, BLOCK_N] "_mean"))
+        (.const (N : ℝ)))
+  , .assign .real [BLOCK_M, 1] "mean"
+      (.expandDim (⟨1, by simp⟩ : Fin ([BLOCK_M].length + 1))
+        (.ref .real [BLOCK_M] "mean"))
+  , .store .real [BLOCK_M, 1]
+      (.ptr (.ref .ptr [BLOCK_M, 1] "Mean"))
+      (.ref .real [BLOCK_M, 1] "mean")
+      (.mask (.ref .bool [BLOCK_M, 1] "row_mask"))
+  ]
+
 theorem mean_dim_kernel_compute_correct_of_algorithm
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
