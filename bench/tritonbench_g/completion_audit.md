@@ -10,6 +10,8 @@ surface.
 - Python/Lean file coverage: `find bench/tritonbench_g -maxdepth 2 -name '*.py'`
   and the matching Lean query both report 141 files.
 - Build gate: `lake build` succeeds.
+- Per-port source elaboration gate: `bench/check_ports.sh` reports
+  `TritonBench-G ports: 141 ok, 0 fail`.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports only the three algorithm-layer blocker theorems below.
