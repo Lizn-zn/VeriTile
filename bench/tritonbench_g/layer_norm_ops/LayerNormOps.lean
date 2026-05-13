@@ -32,28 +32,28 @@ def layer_norm_fwd_1pass_surface
     RESIDUAL_OUT += row * $(stride_res_out_row)
   }
   cols = tl.arange(0, $(BLOCK_N))
-  mask = cols < $(N)
-  x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
+  x = tl.load(X + cols, mask=cols < $(N), other=0.0).to(tl.float32)
   if HAS_RESIDUAL {
-    residual = tl.load(RESIDUAL + cols, mask=mask, other=0.0).to(tl.float32)
+    residual = tl.load(RESIDUAL + cols, mask=cols < $(N), other=0.0).to(tl.float32)
     x += residual
   }
   if STORE_RESIDUAL_OUT {
-    tl.store(RESIDUAL_OUT + cols, x, mask=mask)
+    tl.store(RESIDUAL_OUT + cols, x, mask=cols < $(N))
   }
   mean = 0.0
   var = 0.0
   if not IS_RMS_NORM {
     mean = tl.sum(x, axis=0) / $(N)
     tl.store(Mean + row, mean)
-    xbar = tl.where(mask, x - mean, 0.0)
+    xbar = tl.where(cols < $(N), x - mean, 0.0)
     var = tl.sum(xbar * xbar, axis=0) / $(N)
   } else {
-    xbar = tl.where(mask, x, 0.0)
+    xbar = tl.where(cols < $(N), x, 0.0)
     var = tl.sum(xbar * xbar, axis=0) / $(N)
   }
   rstd = 1 / tl.sqrt(var + $(eps))
   tl.store(Rstd + row, rstd)
+  mask = cols < $(N)
   w = tl.load(W + cols, mask=mask).to(tl.float32)
   if not IS_RMS_NORM {
     x_hat = (x - mean) * rstd
