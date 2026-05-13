@@ -11,15 +11,13 @@ set_option linter.unusedSimpArgs false
 
 /-- Surface transcription of `attention_score.py`'s `_score_kernel`.
 
-Allowed mechanical Lean-syntax-only changes:
-- `o` is shaped as `[BLOCK_N]`, matching `tl.sum(p, axis=0)`. The Python
-  wrapper keeps `BLOCK_M == BLOCK_N`; the Lean surface makes that shape
-  dependency explicit. -/
+This surface keeps the wrapper invariant `BLOCK_M == BLOCK_N` explicit by
+shaping `o` as `[BLOCK_N]`, matching `tl.sum(p, axis=0)`. -/
 def attention_score_kernel
     (Q K M Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
       stride_kz stride_kh stride_kn stride_kk
-      stride_oz stride_oh
+      stride_oz stride_oh _stride_on
       H H_KV N_CTX ROUND_CTX NKV_CTX
       sliding_window_offset sliding_window_size
       BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
@@ -92,7 +90,8 @@ def attention_score_kernel
   }
   o_offset = (off_z).to(tl.int64) * $(stride_oz) + (off_h).to(tl.int64) * $(stride_oh)
   o_range = tl.arange(0, $(BLOCK_N)) + start_n * $(BLOCK_N)
-  tl.store(Out + o_offset + o_range, (o).to(Out.type.element_ty),
+  o_ptrs = Out + o_offset + o_range
+  tl.store(o_ptrs, (o).to(Out.type.element_ty),
     mask=o_range < $(NKV_CTX))
 }
 
