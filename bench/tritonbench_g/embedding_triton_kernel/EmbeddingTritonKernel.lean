@@ -258,6 +258,22 @@ instance embeddingPrefixWrittenDecidable
   unfold embeddingPrefixWritten
   infer_instance
 
+theorem not_embeddingChunkToFullIndex_written_before
+    (start_nn BLOCK_NN : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (h : start_nn + idx.1.val < BLOCK_N) :
+    ¬ embeddingPrefixWritten start_nn
+      (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
+  unfold embeddingPrefixWritten embeddingChunkToFullIndex
+  omega
+
+theorem embeddingChunkToFullIndex_written_after
+    (start_nn BLOCK_NN : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (h : start_nn + idx.1.val < BLOCK_N) :
+    embeddingPrefixWritten (start_nn + BLOCK_NN)
+      (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
+  unfold embeddingPrefixWritten embeddingChunkToFullIndex
+  omega
+
 def embeddingPrefixActive
     (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL off : Nat)
     (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Prop :=
