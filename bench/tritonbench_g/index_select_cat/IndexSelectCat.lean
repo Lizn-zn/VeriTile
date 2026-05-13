@@ -14,13 +14,13 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE_INDEX: tl.constexpr` / `BLOCK_SIZE_COL: tl.constexpr`
   → Lean `Nat` parameters. -/
 def index_select_cat_fwd_kernel
-    (output_ptr source_ptr index_ptr : RegionName)
+    (output_ptr source_ptr : RegionName) (index_ptr : Region .nat)
     (num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat) :
     ComputeKernel := triton {
   pid0 = tl.program_id(axis=0)
   pid1 = tl.program_id(axis=1)
   indices = pid0 * $(BLOCK_SIZE_INDEX) + tl.arange(0, $(BLOCK_SIZE_INDEX))
-  rows = tl.load(index_ptr + indices, mask=indices < $(num_indices))
+  rows = tl.load($((index_ptr : Region .nat)) + indices, mask=indices < $(num_indices))
   cols = pid1 * $(BLOCK_SIZE_COL) + tl.arange(0, $(BLOCK_SIZE_COL))
   source_offsets = source_ptr + rows[:, None] * $(stride0) + cols[None, :] * $(stride1)
   mask = (indices[:, None] < $(num_indices)) and (cols[None, :] < $(num_cols))
@@ -61,7 +61,7 @@ instance activeDecidable
 
 /-- Algorithm-layer cellwise correctness for `index_select_cat_fwd_kernel`. -/
 theorem index_select_cat_fwd_kernel_correct
-    (output_ptr source_ptr index_ptr : RegionName)
+    (output_ptr source_ptr : RegionName) (index_ptr : Region .nat)
     (num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
     (s : BlockState)
     (hOutInj : Function.Injective
@@ -99,7 +99,7 @@ theorem index_select_cat_fwd_kernel_correct
 
 /-- Executed-state form of `index_select_cat_fwd_kernel_correct`. -/
 theorem index_select_cat_fwd_kernel_correct_of_exec
-    (output_ptr source_ptr index_ptr : RegionName)
+    (output_ptr source_ptr : RegionName) (index_ptr : Region .nat)
     (num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
     (s : BlockState)
     (hOutInj : Function.Injective
