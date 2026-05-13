@@ -53,9 +53,9 @@ def bgmv_expand_slice_surface
         mask=b_ptr_mask, other=0.0)
       if ADD_INPUTS {
         tiled_out = tl.load(c_ptr + current_n * $(cn_stride), mask=c_mask)
-        accumulator = tl.sum(tiled_a[None, :] * tiled_b, 1) + tiled_out
+        accumulator = tl.sum(tiled_a * tiled_b, 1) + tiled_out
       } else {
-        accumulator = tl.sum(tiled_a[None, :] * tiled_b, 1)
+        accumulator = tl.sum(tiled_a * tiled_b, 1)
       }
       tl.store(c_ptr + current_n * $(cn_stride), accumulator, mask=c_mask)
     }

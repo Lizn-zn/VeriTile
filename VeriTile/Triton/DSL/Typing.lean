@@ -196,6 +196,15 @@ def broadcastTerm (a b : SInfo) (ctx : String) :
   | SInfo.dims [], SInfo.dims (_ :: _) => pure (← `(Broadcast.scalarL), b)
   | SInfo.dims (_ :: _), SInfo.dims [] => pure (← `(Broadcast.scalarR), a)
   | SInfo.dims (ad :: ads), SInfo.dims (bd :: bds) =>
+      if (ad :: ads).length < (bd :: bds).length then
+        let (subBc, subShape) ← broadcastTerm (SInfo.dims (ad :: ads)) (SInfo.dims bds) ctx
+        match subShape with
+        | SInfo.dims outRest => pure (← `(Broadcast.leadL $subBc), SInfo.dims (bd :: outRest))
+      else if (ad :: ads).length > (bd :: bds).length then
+        let (subBc, subShape) ← broadcastTerm (SInfo.dims ads) (SInfo.dims (bd :: bds)) ctx
+        match subShape with
+        | SInfo.dims outRest => pure (← `(Broadcast.leadR $subBc), SInfo.dims (ad :: outRest))
+      else
       let (subBc, subShape) ← broadcastTerm (SInfo.dims ads) (SInfo.dims bds) ctx
       if termKey ad == termKey bd then
         match subShape with

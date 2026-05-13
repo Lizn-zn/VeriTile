@@ -354,6 +354,8 @@ inductive Broadcast : TileShape → TileShape → TileShape → Type where
   | consSame : Broadcast a b c → Broadcast (n :: a) (n :: b) (n :: c)
   | consL    : Broadcast a b c → Broadcast (1 :: a) (n :: b) (n :: c)
   | consR    : Broadcast a b c → Broadcast (n :: a) (1 :: b) (n :: c)
+  | leadL    : Broadcast a b c → Broadcast a (n :: b) (n :: c)
+  | leadR    : Broadcast a b c → Broadcast (n :: a) b (n :: c)
 
 namespace Broadcast
 
@@ -366,6 +368,8 @@ def leftIndex {a b out : TileShape} :
   | .consSame bc, i => (i.1, leftIndex bc i.2)
   | .consL bc, i => (⟨0, Nat.succ_pos 0⟩, leftIndex bc i.2)
   | .consR bc, i => (i.1, leftIndex bc i.2)
+  | .leadL bc, i => leftIndex bc i.2
+  | .leadR bc, i => (i.1, leftIndex bc i.2)
 
 /-- Evaluate the output index back into each input index for a broadcast. -/
 def rightIndex {a b out : TileShape} :
@@ -376,6 +380,8 @@ def rightIndex {a b out : TileShape} :
   | .consSame bc, i => (i.1, rightIndex bc i.2)
   | .consL bc, i => (i.1, rightIndex bc i.2)
   | .consR bc, i => (⟨0, Nat.succ_pos 0⟩, rightIndex bc i.2)
+  | .leadL bc, i => (i.1, rightIndex bc i.2)
+  | .leadR bc, i => rightIndex bc i.2
 
 /-! ### `simp` equation lemmas for `leftIndex` / `rightIndex`
 
@@ -408,6 +414,16 @@ kernel proofs uniformly reduce broadcast indexing one cons-case at a time. -/
     leftIndex (.consR bc : Broadcast (n :: a) (1 :: b) (n :: c)) i =
       (i.1, leftIndex bc i.2) := rfl
 
+@[simp] theorem leftIndex_leadL {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    leftIndex (.leadL bc : Broadcast a (n :: b) (n :: c)) i =
+      leftIndex bc i.2 := rfl
+
+@[simp] theorem leftIndex_leadR {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    leftIndex (.leadR bc : Broadcast (n :: a) b (n :: c)) i =
+      (i.1, leftIndex bc i.2) := rfl
+
 @[simp] theorem rightIndex_nil (i : TileIndex []) :
     rightIndex (.nil : Broadcast [] [] []) i = PUnit.unit := rfl
 
@@ -431,6 +447,16 @@ kernel proofs uniformly reduce broadcast indexing one cons-case at a time. -/
     (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
     rightIndex (.consR bc : Broadcast (n :: a) (1 :: b) (n :: c)) i =
       (⟨0, Nat.succ_pos 0⟩, rightIndex bc i.2) := rfl
+
+@[simp] theorem rightIndex_leadL {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    rightIndex (.leadL bc : Broadcast a (n :: b) (n :: c)) i =
+      (i.1, rightIndex bc i.2) := rfl
+
+@[simp] theorem rightIndex_leadR {a b c : TileShape}
+    (bc : Broadcast a b c) (i : TileIndex (n :: c)) :
+    rightIndex (.leadR bc : Broadcast (n :: a) b (n :: c)) i =
+      rightIndex bc i.2 := rfl
 
 end Broadcast
 

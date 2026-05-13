@@ -405,6 +405,14 @@ def fp32AccumulatorArithSmoke (N : Nat) : ComputeKernel := triton {
   y := z + 1
 }
 
+def rightAlignedBroadcastSmoke (M K : Nat) : ComputeKernel := triton {
+  row := tl.arange(0, $(M))
+  col := tl.arange(0, $(K))
+  a := col
+  b := row[:, None] + col[None, :]
+  c := a * b
+}
+
 def fp32CastComputeSmoke (N : Nat) : ComputeKernel := triton {
   z := tl.full([$(N)], 1)
   y := tl.cast(z, tl.float32)
