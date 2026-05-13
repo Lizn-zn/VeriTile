@@ -201,6 +201,26 @@ noncomputable def diagSsmStateTile
       some (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
         BLOCK_SIZE idx.1 t) }
 
+noncomputable def diagSsmMaskedStateTile
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat) : Tile .real [BLOCK_SIZE] :=
+  { data := fun idx =>
+      if active st batch_size dim BLOCK_SIZE idx.1 then
+        some (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE idx.1 t)
+      else
+        some (0.0 : ℝ) }
+
+theorem diagSsmMaskedStateTile_active
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat) (i : Fin BLOCK_SIZE)
+    (hi : active st batch_size dim BLOCK_SIZE i) :
+    (diagSsmMaskedStateTile st s_ptr x_ptr lambda_ptr batch_size dim
+      BLOCK_SIZE t).data i =
+      some (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE i t) := by
+  simp [diagSsmMaskedStateTile, hi]
+
 @[simp] theorem diagSsmStateAfter_zero
     (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
     (batch_size dim BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) :
