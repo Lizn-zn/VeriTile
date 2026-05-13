@@ -7,6 +7,10 @@ surface.
 
 ## Evidence Checked
 
+- Directory coverage: `find bench/tritonbench_g -mindepth 1 -maxdepth 1 -type d`
+  reports 184 work directories. Of these, 141 currently contain a `.py` /
+  `.lean` port pair; the remaining 43 are README-only scaffolds and are not
+  counted as completed ports by this audit.
 - Python/Lean file coverage: `find bench/tritonbench_g -maxdepth 2 -name '*.py'`
   and the matching Lean query both report 141 files.
 - Build gate: `lake build` succeeds.
