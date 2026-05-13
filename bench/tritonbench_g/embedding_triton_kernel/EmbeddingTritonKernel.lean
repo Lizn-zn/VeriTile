@@ -218,6 +218,29 @@ noncomputable def embeddingSpecFull
     else
       some (0.0 : ℝ))
 
+def embeddingPrefixWritten
+    (off : Nat) (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Prop :=
+  idx.1.val < off
+
+instance embeddingPrefixWrittenDecidable
+    (off : Nat) (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) :
+    Decidable (embeddingPrefixWritten off idx) := by
+  unfold embeddingPrefixWritten
+  infer_instance
+
+def embeddingPrefixActive
+    (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL off : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Prop :=
+  embeddingPrefixWritten off idx ∧
+    storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx
+
+instance embeddingPrefixActiveDecidable
+    (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL off : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) :
+    Decidable (embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL off idx) := by
+  unfold embeddingPrefixActive
+  infer_instance
+
 /-- Algorithm-layer correctness for the embedding kernel. -/
 theorem embedding_kernel_correct
     (weight input_ids out : RegionName)

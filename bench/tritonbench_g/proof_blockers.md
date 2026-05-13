@@ -24,8 +24,10 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - Current local spec now includes both the per-iteration
   `BLOCK_NN × BLOCK_DMODEL` target (`outOffset2D` / `embeddingSpec2D`) and the
   full `BLOCK_N × BLOCK_DMODEL` post-loop target (`outOffsetFull` /
-  `embeddingSpecFull`), but the theorem is still a placeholder until the
-  per-chunk write invariant is instantiated with `forRange_inv`.
+  `embeddingSpecFull`), with `embeddingPrefixActive` identifying the lanes
+  already written after a prefix of chunks, but the theorem is still a
+  placeholder until the per-chunk write invariant is instantiated with
+  `forRange_inv`.
 
 ## `diag_ssm_triton.py`
 
