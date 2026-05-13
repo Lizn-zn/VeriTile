@@ -1641,4 +1641,16 @@ def scalarNoneKernel (outReg : RegionName) (N : Nat) : ComputeKernel := triton {
 
 #check scalarNoneKernel
 
+/-! ### Rank-3 `None` dimension insertion -/
+
+def rank3NoneKernel (outReg : RegionName) (M N K : Nat) : ComputeKernel := triton {
+  offs_m = tl.arange(0, $(M))
+  offs_n = tl.arange(0, $(N))
+  offs_k = tl.arange(0, $(K))
+  tile = offs_m[None, :, None] + offs_n[:, None, None] + offs_k[None, None, :]
+  tl.store(outReg + tile, tile)
+}
+
+#check rank3NoneKernel
+
 end VeriTile.Examples.TritonSmoke

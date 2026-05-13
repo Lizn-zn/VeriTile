@@ -913,6 +913,31 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $e:tritonExpr[ None ]) => do
       -- `e[None]` — insert a unit axis at position 0: `[] → [1]`.
       expandExpandDims expandExpr env e (axisIdx := 0)
+  | `(tritonExpr| $e:tritonExpr[ : , None , None ]) => do
+      -- `e[:, None, None]` — `[N] → [N, 1, 1]`.
+      let e1 ← expandExpandDims expandExpr env e (axisIdx := 1)
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit "2"⟩
+      let dims := match e1.shape with | .dims ds => ds
+      let outDims : List (TSyntax `term) :=
+        dims.take 2 ++ [← `((1 : Nat))] ++ dims.drop 2
+      pure ⟨← `(Op.expandDim (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.setAxisOne]⟩) $e1.term),
+        e1.dtype, .dims outDims, e1.computeTerm, e1.computeDType?⟩
+  | `(tritonExpr| $e:tritonExpr[ None , : , None ]) => do
+      let e1 ← expandExpandDims expandExpr env e (axisIdx := 0)
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit "2"⟩
+      let dims := match e1.shape with | .dims ds => ds
+      let outDims : List (TSyntax `term) :=
+        dims.take 2 ++ [← `((1 : Nat))] ++ dims.drop 2
+      pure ⟨← `(Op.expandDim (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.setAxisOne]⟩) $e1.term),
+        e1.dtype, .dims outDims, e1.computeTerm, e1.computeDType?⟩
+  | `(tritonExpr| $e:tritonExpr[ None , None , : ]) => do
+      let e1 ← expandExpandDims expandExpr env e (axisIdx := 0)
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit "0"⟩
+      let dims := match e1.shape with | .dims ds => ds
+      let outDims : List (TSyntax `term) :=
+        [← `((1 : Nat))] ++ dims
+      pure ⟨← `(Op.expandDim (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.setAxisOne]⟩) $e1.term),
+        e1.dtype, .dims outDims, e1.computeTerm, e1.computeDType?⟩
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $kw:tritonReduceKwarg)) => do
       match kw with
       | `(tritonReduceKwarg| axis = $n:num) =>

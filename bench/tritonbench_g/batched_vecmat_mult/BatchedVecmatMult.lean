@@ -17,9 +17,7 @@ sizes, so this surface keeps the same unmasked block loads and stores. The
 Python body vectorizes the `block_m` rows and writes the reduction as
 `tl.broadcast(a, b)` followed by `tl.trans(tl.sum(..., axis=2))`.
 
-Allowed mechanical Lean-syntax-only changes:
-- Python rank-3 slices like `[None, :, None]` are represented with
-  `tl.expand_dims(..., axis)` calls. -/
+Allowed mechanical Lean-syntax-only changes apply. -/
 def batched_vecmat_surface
     (A B output : RegionName)
     (dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) :
@@ -36,9 +34,8 @@ def batched_vecmat_surface
     k_offsets = k_index * $(BLOCK_K) + offsets_k
     a_tile = offsets_m[:, None] * $(dim_k) + k_offsets[None, :]
     a = tl.load(A + a_tile)
-    b_tile = tl.expand_dims(tl.expand_dims(offsets_m, 0), 2) * $(dim_n) * $(dim_k) +
-      tl.expand_dims(tl.expand_dims(offsets_n, 1), 2) * $(dim_k) +
-      tl.expand_dims(tl.expand_dims(k_offsets, 0), 0)
+    b_tile = offsets_m[None, :, None] * $(dim_n) * $(dim_k) +
+      offsets_n[:, None, None] * $(dim_k) + k_offsets[None, None, :]
     b = tl.load(B + b_tile)
     expanded_a, _ = tl.broadcast(a, b)
     vecmat += tl.trans(tl.sum(expanded_a * b, axis=2))

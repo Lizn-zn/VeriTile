@@ -50,6 +50,9 @@ partial def natExprIdents : TSyntax `tritonExpr → List String := fun stx =>
   | `(tritonExpr| $e:tritonExpr[ : , None ]) => natExprIdents e
   | `(tritonExpr| $e:tritonExpr[ None , : ]) => natExprIdents e
   | `(tritonExpr| $e:tritonExpr[ None ]) => natExprIdents e
+  | `(tritonExpr| $e:tritonExpr[ : , None , None ]) => natExprIdents e
+  | `(tritonExpr| $e:tritonExpr[ None , : , None ]) => natExprIdents e
+  | `(tritonExpr| $e:tritonExpr[ None , None , : ]) => natExprIdents e
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:tritonReduceKwarg)) => natExprIdents e
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:num)) => natExprIdents e
   | _ => []
@@ -291,6 +294,9 @@ private partial def directPinsFromExpr (assigned : Assigned) :
   | `(tritonExpr| not $e:tritonExpr) => directPinsFromExpr assigned e
   | `(tritonExpr| - $e:tritonExpr) => directPinsFromExpr assigned e
   | `(tritonExpr| $e:tritonExpr[ None ]) => directPinsFromExpr assigned e
+  | `(tritonExpr| $e:tritonExpr[ : , None , None ]) => directPinsFromExpr assigned e
+  | `(tritonExpr| $e:tritonExpr[ None , : , None ]) => directPinsFromExpr assigned e
+  | `(tritonExpr| $e:tritonExpr[ None , None , : ]) => directPinsFromExpr assigned e
   | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       let kwargPins :=
         kwargs.foldl (fun (acc : List String) kw =>
