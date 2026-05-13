@@ -22,7 +22,7 @@ def layer_norm_fwd_1pass_surface
     (eps : ℝ)
     (IS_RMS_NORM HAS_RESIDUAL STORE_RESIDUAL_OUT HAS_BIAS : Bool) :
     ComputeKernel := triton {
-  row = tl.program_id(axis=0)
+  row = tl.program_id(0)
   X += row * $(stride_x_row)
   Y += row * $(stride_y_row)
   if HAS_RESIDUAL {

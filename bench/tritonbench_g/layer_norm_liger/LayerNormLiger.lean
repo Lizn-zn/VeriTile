@@ -20,7 +20,7 @@ def layer_norm_liger_backward_surface
     (stride_x stride_dx stride_dw stride_db stride_dy
       n_rows n_cols rows_per_program BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  row_block_id = tl.program_id(axis=0)
+  row_block_id = tl.program_id(0)
   row_start = row_block_id * $(rows_per_program)
   row_end = tl.minimum((row_block_id + $(1)) * $(rows_per_program), $(n_rows))
   cols = tl.arange(0, $(BLOCK_SIZE))
