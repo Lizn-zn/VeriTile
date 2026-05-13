@@ -17,13 +17,13 @@ noncomputable def exponentCompensator : ℝ :=
 
 Allowed mechanical Lean-syntax-only changes:
 - Python local constexpr literal `2.0 ** (127 - 15)` is represented by the
-  Lean constant `exponentCompensator` and injected with `$(_)`.
+  Lean constant `exponentCompensator` and injected as a real scalar antiquote.
 - Python `BLOCK_SIZE: tl.constexpr` → Lean `Nat` parameter. -/
 noncomputable def mul_kernel
     (src dst : RegionName)
     (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  exponent_compensator = $(exponentCompensator)
+  exponent_compensator = $((exponentCompensator : ℝ))
   idxs = tl.program_id(0) * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   x = tl.load(src + idxs)
   y = x * exponent_compensator
