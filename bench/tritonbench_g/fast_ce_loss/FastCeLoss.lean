@@ -19,7 +19,7 @@ def cross_entropy_forward_surface
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
-  row_idx = tl.program_id(axis=0)
+  row_idx = tl.program_id(0)
   logits_ptr += row_idx * ($(logits_row_stride)).to(tl.int64)
   loss_ptr += row_idx
   logsumexp_ptr += row_idx
@@ -32,7 +32,7 @@ def cross_entropy_forward_surface
     logits = $(LOGIT_SCALE) * logits
   }
   if DO_SOFTCAPPING {
-    logits = $(SOFTCAP) * tl.tanh(logits / $(SOFTCAP))
+    logits = $(SOFTCAP) * triton_tanh(logits / $(SOFTCAP))
   }
   logits = (logits).to(tl.float32)
   c = tl.max(logits, axis=0)
@@ -43,7 +43,7 @@ def cross_entropy_forward_surface
       x = $(LOGIT_SCALE) * x
     }
     if DO_SOFTCAPPING {
-      x = $(SOFTCAP) * tl.tanh(x / $(SOFTCAP))
+      x = $(SOFTCAP) * triton_tanh(x / $(SOFTCAP))
     }
     loss = logsumexp - (x).to(tl.float32)
   } else {
@@ -64,8 +64,8 @@ def chunked_cross_entropy_forward_surface
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
-  row_idx = tl.program_id(axis=0)
-  chunk_idx = tl.program_id(axis=1)
+  row_idx = tl.program_id(0)
+  chunk_idx = tl.program_id(1)
   logits_ptr += row_idx * ($(logits_row_stride)).to(tl.int64)
   loss_ptr += row_idx
   logsumexp_ptr += row_idx * $(N_CHUNKS) + chunk_idx
@@ -78,7 +78,7 @@ def chunked_cross_entropy_forward_surface
     logits = $(LOGIT_SCALE) * logits
   }
   if DO_SOFTCAPPING {
-    logits = $(SOFTCAP) * tl.tanh(logits / $(SOFTCAP))
+    logits = $(SOFTCAP) * triton_tanh(logits / $(SOFTCAP))
   }
   logits = (logits).to(tl.float32)
   c = tl.max(logits, axis=0)
@@ -90,7 +90,7 @@ def chunked_cross_entropy_forward_surface
         x = $(LOGIT_SCALE) * x
       }
       if DO_SOFTCAPPING {
-        x = $(SOFTCAP) * tl.tanh(x / $(SOFTCAP))
+        x = $(SOFTCAP) * triton_tanh(x / $(SOFTCAP))
       }
       loss = -1.0 * (x).to(tl.float32)
     } else {
@@ -106,15 +106,16 @@ def chunked_cross_entropy_forward_surface
 This preserves the block logits load, optional logit scaling, optional softcap
 transform and derivative factor, softmax-minus-one update at the label, and
 final masked in-place gradient writeback. Python's hard-coded
-`label_idx != -100` sentinel is preserved as the literal `-100`. -/
+`label_idx != -100` sentinel is preserved as the literal `-100`. Python's
+local name `partial` is written `partial_` because `partial` is a Lean keyword. -/
 def cross_entropy_backward_surface
     (logits_ptr dloss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
     (VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
-  row_idx = tl.program_id(axis=0)
-  block_idx = tl.program_id(axis=1)
+  row_idx = tl.program_id(0)
+  block_idx = tl.program_id(1)
   logits_ptr += row_idx * ($(logits_row_stride)).to(tl.int64)
   dloss_ptr += row_idx * $(dloss_row_stride)
   col_offsets = block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
@@ -129,10 +130,9 @@ def cross_entropy_backward_surface
   if DO_LOGIT_SCALING {
     x = x * $(LOGIT_SCALE)
   }
-  softcap_tanh = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)
   if DO_SOFTCAPPING {
-    softcap_tanh = tl.tanh(x / $(SOFTCAP))
-    x = $(SOFTCAP) * softcap_tanh
+    partial_ = triton_tanh(x / $(SOFTCAP))
+    x = $(SOFTCAP) * partial_
   }
   logsumexp = tl.load(logsumexp_ptr + row_idx)
   y = tl.exp((x).to(tl.float32) - logsumexp)
@@ -141,7 +141,7 @@ def cross_entropy_backward_surface
     y = y * $(LOGIT_SCALE)
   }
   if DO_SOFTCAPPING {
-    y = y * (1.0 - softcap_tanh * softcap_tanh)
+    y = y * (1.0 - partial_ * partial_)
   }
   tl.store(logits_ptr + col_offsets, dloss * y, mask=mask)
 }
@@ -158,8 +158,8 @@ def cross_entropy_backward_store_slice
     (VOCAB_SIZE logits_row_stride dloss_row_stride grad_row_stride
       BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  row_idx = tl.program_id(axis=0)
-  block_idx = tl.program_id(axis=1)
+  row_idx = tl.program_id(0)
+  block_idx = tl.program_id(1)
   col_offsets = block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
   dloss = tl.load(dloss_ptr + row_idx * $(dloss_row_stride))

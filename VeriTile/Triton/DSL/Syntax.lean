@@ -43,6 +43,7 @@ syntax "tl.sqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.math.rsqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.rsqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.tanh(" tritonExpr ")" : tritonExpr
+syntax "triton_tanh(" tritonExpr ")" : tritonExpr
 syntax "tanh(" tritonExpr ")" : tritonExpr
 syntax "tl.sin(" tritonExpr ")" : tritonExpr
 syntax "tl.math.sin(" tritonExpr ")" : tritonExpr

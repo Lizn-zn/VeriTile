@@ -568,6 +568,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.tanh" e'
       pure ⟨← `(Op.tanh $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| triton_tanh($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "triton_tanh" e'
+      pure ⟨← `(Op.tanh $eTerm), .real, e'.shape, none, none⟩
   | `(tritonExpr| tanh($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tanh" e'
@@ -1426,10 +1430,13 @@ partial def expandStmt (env : Env) (pinned : List String)
         match e'.computeTerm with
         | some ce => pure ce
         | none => `(ComputeExpr.alg $e'.term)
+      let env' :=
+        (i.getId.eraseMacroScopes.toString, e'.dtype, e'.shape, e'.computeDType?) ::
+        (i.getId.getString!, e'.dtype, e'.shape, e'.computeDType?) ::
+        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env
       pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
         ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
-        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
-        e'.computeTerm.isSome)
+        env', e'.computeTerm.isSome)
   | `(tritonStmt| $i:ident := tl.max($e:tritonExpr, $n:num)) => do
       let nameLit ← identAsStr i
       let e' ← expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e
@@ -1440,10 +1447,13 @@ partial def expandStmt (env : Env) (pinned : List String)
         match e'.computeTerm with
         | some ce => pure ce
         | none => `(ComputeExpr.alg $e'.term)
+      let env' :=
+        (i.getId.eraseMacroScopes.toString, e'.dtype, e'.shape, e'.computeDType?) ::
+        (i.getId.getString!, e'.dtype, e'.shape, e'.computeDType?) ::
+        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env
       pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
         ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
-        (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
-        e'.computeTerm.isSome)
+        env', e'.computeTerm.isSome)
   | `(tritonStmt| $i:ident := tl.atomic_xchg($p:tritonExpr, $v:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       ensureNoAtomicKwargs "tl.atomic_xchg" kwargs
       expandAtomicRMWCore "tl.atomic_xchg" (← `(RMWOp.xchg)) (some i) p v none
