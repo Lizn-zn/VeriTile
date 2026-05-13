@@ -27,9 +27,8 @@ def argmax_kernel_1
   inp_ptrs = inp + offset
   mask = offset < $(M)
   inp_val = tl.load(inp_ptrs, mask=mask, other=-float("inf"))
-  max_val, local_index := tl.max(inp_val, axis=0, return_indices=True)
-  local_index0 = local_index
-  max_index = local_index0 + pid * $(BLOCK_SIZE)
+  max_val, max_index = tl.max(inp_val, axis=0, return_indices=True)
+  max_index = max_index + pid * $(BLOCK_SIZE)
   mid_value_ptr = mid_value + pid
   max_index_ptr = $((mid_index : Region .int)) + pid
   tl.store(mid_value_ptr, max_val)

@@ -193,7 +193,7 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
           else erasedName
         let (dtype, shape) ← lookupEnv env name
         ensureDType .nat dtype "nat expression"
-        let s ← identAsStr i
+        let s : TSyntax `term := Syntax.mkStrLit name
         let sh ← shape.term
         pure ⟨← `(Op.ref TileDType.nat $sh $s), .nat, shape, none, none⟩
       else
@@ -481,9 +481,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| false) =>
       pure ⟨← `(Op.constBool Bool.false), .bool, SInfo.scalar, none, none⟩
   | `(tritonExpr| $i:ident) =>
-      let name := i.getId.toString
+      let rawName := i.getId.toString
+      let userName := i.getId.getString!
+      let erasedName := i.getId.eraseMacroScopes.toString
+      let name :=
+        if env.any (fun entry => entry.1 == rawName) then rawName
+        else if env.any (fun entry => entry.1 == userName) then userName
+        else erasedName
       let (dtype, shape) ← lookupEnv env name
-      let s ← identAsStr i
+      let s : TSyntax `term := Syntax.mkStrLit name
       let dt ← dtype.term
       let sh ← shape.term
       let term ← `(Op.ref $dt $sh $s)
@@ -1192,6 +1198,74 @@ partial def expandStmt (env : Env) (pinned : List String)
     let (bc, outShape) ← broadcastTerm load'.shape rhs'.shape "arithmetic"
     let term ← `(Op.sub $np $bc $load'.term $rhs'.term)
     emitAssign dest { term := term, dtype := load'.dtype, shape := outShape, computeTerm := none }
+  let expandSelfAddAssign (dest old : Ident) (rhs : TSyntax `tritonExpr) :
+      MacroM (TSyntax `term × TSyntax `term × Env × Bool) := do
+    if dest.getId.getString! != old.getId.getString! then
+      let full : TSyntax `tritonExpr ← `(tritonExpr| $old:ident + $rhs:tritonExpr)
+      let e' ←
+        if pinned.contains dest.getId.toString then
+          expandNatExpectedExpr env full
+        else
+          expandExpr env full
+      emitAssign dest e'
+    else
+      let rawName := old.getId.toString
+      let userName := old.getId.getString!
+      let erasedName := old.getId.eraseMacroScopes.toString
+      let some (envName, lhsDType, lhsShape, lhsComputeDType?) :=
+          env.find? (fun entry =>
+            entry.1 == rawName || entry.1 == userName || entry.1 == erasedName)
+        | Macro.throwUnsupported
+      let nameLit : TSyntax `term := Syntax.mkStrLit envName
+      let lhsShapeTerm ← lhsShape.term
+      let lhsDTypeTerm ← lhsDType.term
+      let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
+      let lhsComputeTerm? ←
+        match lhsComputeDType? with
+        | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some _ =>
+            Macro.throwError
+              ("identifier `" ++ envName ++ "` has unsupported compute dtype annotation")
+        | none => pure none
+      let lhs : EOut :=
+        { term := lhsTerm, dtype := lhsDType, shape := lhsShape,
+          computeTerm := lhsComputeTerm?, computeDType? := lhsComputeDType? }
+      let rhs0 ←
+        if lhsDType == .nat then
+          expandNatExpectedExpr env rhs
+        else
+          expandExpr env rhs
+      let rhs' ←
+        if lhs.dtype == .real && rhs0.dtype == .nat then
+          match ← expandLeanAntiquoteAs? .real rhs with
+          | some out => pure out
+          | none => pure rhs0
+        else
+          pure rhs0
+      let (lhs, rhs') ← coerceNatIntOperands "self add assignment" lhs rhs'
+      let (lhs, rhs') ← coerceRealArithOperands "self add assignment" lhs rhs'
+      ensureComputeArithComposable "self add assignment lhs" lhs
+      ensureComputeArithComposable "self add assignment rhs" rhs'
+      unless lhs.dtype == rhs'.dtype do
+        Macro.throwError "self add assignment: dtype mismatch"
+      let np ← lhs.dtype.numericProof
+      let (bc, outShape) ← broadcastTerm lhs.shape rhs'.shape "self add assignment"
+      let eTerm ← `(Op.add $np $bc $lhs.term $rhs'.term)
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? "self add assignment" eTerm lhs rhs'
+      let e' : EOut :=
+        { term := eTerm, dtype := lhs.dtype, shape := outShape,
+          computeTerm := computeTerm?, computeDType? := computeDType? }
+      let dt ← e'.dtype.term
+      let sh ← e'.shape.term
+      let exprTerm ←
+        match e'.computeTerm with
+        | some ce => pure ce
+        | none => `(ComputeExpr.alg $e'.term)
+      pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
+        ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
+        (dest.getId.toString, e'.dtype, e'.shape, e'.computeDType?) ::
+          (envName, e'.dtype, e'.shape, e'.computeDType?) :: env,
+        e'.computeTerm.isSome)
   match stx with
   | `(tritonStmt| $valueName:ident, $indexName:ident = tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
       let e' ← expandExpr env e
@@ -1501,6 +1575,10 @@ partial def expandStmt (env : Env) (pinned : List String)
         ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
         (i.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
         e'.computeTerm.isSome)
+  | `(tritonStmt| $i:ident = $j:ident + $rhs:tritonExpr) => do
+      expandSelfAddAssign i j rhs
+  | `(tritonStmt| $i:ident := $j:ident + $rhs:tritonExpr) => do
+      expandSelfAddAssign i j rhs
   | `(tritonStmt| $i:ident % $e:tritonExpr) => do
       discard <| expandExpr env (← `(tritonExpr| $i:ident % $e:tritonExpr))
       let alg ← `(Stmt.ifThen (Op.constBool Bool.true) ([] : List Stmt))

@@ -330,6 +330,24 @@ private partial def stmtRegionsWith (assigned : List String)
     (stx : TSyntax `tritonStmt) :
     List (TSyntax `term) × List (TSyntax `term) × List String :=
  match stx with
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident = tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
+            | _ => acc) []
+      let nextAssigned := lhs1.getId.toString :: lhs0.getId.toString :: assigned
+      (exprRegions assigned e ++ kwargRegions, [], nextAssigned)
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident := tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) =>
+      let kwargRegions : List (TSyntax `term) :=
+        kwargs.foldl
+          (fun (acc : List (TSyntax `term)) (kw : TSyntax `tritonReduceKwarg) =>
+            match kw with
+            | `(tritonReduceKwarg| $_:ident = $val:tritonExpr) => acc ++ exprRegions assigned val
+            | _ => acc) []
+      let nextAssigned := lhs1.getId.toString :: lhs0.getId.toString :: assigned
+      (exprRegions assigned e ++ kwargRegions, [], nextAssigned)
   | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) =>
       let lhs := #[lhs0, lhs1] ++ lhsRest
       let rhs := #[rhs0, rhs1] ++ rhsRest
