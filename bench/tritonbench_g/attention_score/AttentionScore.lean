@@ -69,7 +69,6 @@ def attention_score_kernel
     qk = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
     qk += tl.dot(q, k)
     qk = qk * qk_scale
-    mask = tl.full([$(BLOCK_M), $(BLOCK_N)], false)
     if SLIDING_WINDOW {
       dist = tl.arange(0, $(BLOCK_M))[:, None] -
         tl.arange(0, $(BLOCK_N))[None, :] + start_m -
@@ -86,9 +85,8 @@ def attention_score_kernel
       p = tl.where(mask, p, 0)
     }
     if not IS_EVEN_N {
-      row_mask = (tl.arange(0, $(BLOCK_M))[:, None] +
-        tl.arange(0, $(BLOCK_N))[None, :] * $(0) + start_m) < $(N_CTX)
-      p = tl.where(row_mask, p, 0)
+      p = tl.where(((tl.arange(0, $(BLOCK_M)) + start_m) < $(N_CTX))[:, None],
+        p, 0)
     }
     o += tl.sum(p, axis=0)
     Q_block_ptr = tl.advance(Q_block_ptr, [$(BLOCK_M), 0])

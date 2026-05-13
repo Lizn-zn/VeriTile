@@ -304,18 +304,8 @@ partial def expandWhereFromCond (env : Env) (c' : EOut)
       pure (aCast, bCast)
   unless a'.dtype == b'.dtype do
     Macro.throwError "tl.where: branch dtype mismatch"
-  let nonScalars : List SInfo :=
-    ([c'.shape, a'.shape, b'.shape]).filter (fun s =>
-      match s with | .dims [] => Bool.false | _ => Bool.true)
-  let target : SInfo ←
-    match nonScalars with
-    | [] => pure (SInfo.dims [])
-    | first :: rest =>
-        for s in rest do
-          unless first.eq s do
-            Macro.throwError
-              "tl.where: non-scalar shape mismatch — all tile-shaped operands must agree (lift with tl.expand_dims if needed)"
-        pure first
+  let (_, valueShape) ← broadcastTerm a'.shape b'.shape "tl.where branches"
+  let (_, target) ← broadcastTerm c'.shape valueShape "tl.where condition"
   let cTerm ← coerceShape c'.term c'.shape target "tl.where condition"
   let aTerm ← coerceShape a'.term a'.shape target "tl.where then-branch"
   let bTerm ← coerceShape b'.term b'.shape target "tl.where else-branch"
@@ -1735,7 +1725,7 @@ partial def expandStmt (env : Env) (pinned : List String)
       let (algBody, computeBody, bodyEnv, bodyHasCompute) ← expandStmts env pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
         ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]),
-        mergeBranchEnv env bodyEnv env,
+        bodyEnv,
         bodyHasCompute)
   | `(tritonStmt| if $cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) => do
       let cond' ← expandBoolCondition env cond
@@ -1754,7 +1744,7 @@ partial def expandStmt (env : Env) (pinned : List String)
       let (algBody, computeBody, bodyEnv, bodyHasCompute) ← expandStmts env pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.ifThen $cond'.term [$algBody,*]),
         ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]),
-        mergeBranchEnv env bodyEnv env,
+        bodyEnv,
         bodyHasCompute)
   | _ => Macro.throwUnsupported
 
