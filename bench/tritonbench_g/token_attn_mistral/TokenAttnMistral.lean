@@ -47,7 +47,7 @@ def token_attn_mistral_surface
     v_value = tl.load(V + v_offs + v_loc[:, None] * $(stride_vbs),
       mask=(start_n + offs_n[:, None] + cur_batch_start_index) < cur_batch_seq_len,
       other=0.0)
-    acc += tl.sum(p_value[:, None] * v_value, axis=0)
+    acc += tl.sum(p_value[:, None] * v_value, 0)
   }
   acc = (acc).to(Out.dtype.element_ty)
   off_o = cur_batch * $(stride_obs) + cur_head * $(stride_oh) + offs_d * $(stride_od)

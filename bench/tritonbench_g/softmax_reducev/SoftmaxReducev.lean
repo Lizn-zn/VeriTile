@@ -48,12 +48,12 @@ def softmax_reducev_nonnegative_other_surface
     qk = tl.load(Logics + cur_head * $(stride_logic_h) +
         (cur_batch_start_loc + start_n + offs_n) * $(stride_logic_bs),
       mask=n_active, other=-inf)
-    n_e_max = tl.maximum(tl.max(qk, axis=0), e_max)
+    n_e_max = tl.maximum(tl.max(qk, 0), e_max)
     old_scale = tl.exp(e_max - n_e_max)
     p = tl.exp(qk - n_e_max)
-    e_sum = e_sum * old_scale + tl.sum(p, axis=0)
+    e_sum = e_sum * old_scale + tl.sum(p, 0)
     v = tl.load(v_ptrs + v_index[:, None] * $(stride_vbs))
-    acc = acc * old_scale + tl.sum(p[:, None] * v, axis=0)
+    acc = acc * old_scale + tl.sum(p[:, None] * v, 0)
     e_max = n_e_max
   }
   acc = acc / e_sum

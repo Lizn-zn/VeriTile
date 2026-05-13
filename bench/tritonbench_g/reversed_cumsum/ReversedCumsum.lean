@@ -61,7 +61,7 @@ def reversed_cumsum_surface
     b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
     b_c = b_z[None, :] + tl.dot(m_s, b_s, allow_tf32=false)
     tl.store(p_z, (b_c).to(p_z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
-    b_z += tl.sum(b_s, axis=0)
+    b_z += tl.sum(b_s, 0)
   }
 }
 
