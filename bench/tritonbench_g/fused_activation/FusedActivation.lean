@@ -21,7 +21,7 @@ def fused_add_mul_activation_kernel
     (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool) :
     ComputeKernel := triton {
   xoffset = tl.program_id(0) * $(BLOCK_SIZE)
-  index = xoffset + tl.arange(0, $(BLOCK_SIZE))
+  index = xoffset + tl.arange(0, $(BLOCK_SIZE))[:]
   mask = index < $(xnumel)
   bias_index = index % $(num_weights)
   tmp0 = tl.load(x_ptr + index, mask)

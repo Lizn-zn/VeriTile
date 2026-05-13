@@ -733,6 +733,11 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       unless argString.contains "inf" do
         Macro.throwError "float(...): only `float(\"inf\")` is supported in Triton DSL expressions"
       pure ⟨← `(Op.negInf), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| float ($arg:term)) =>
+      let argString := toString arg.raw
+      unless argString.contains "-inf" do
+        Macro.throwError "float(...): only `float(\"-inf\")` is supported in Triton DSL expressions"
+      pure ⟨← `(Op.negInf), .real, SInfo.scalar, none, none⟩
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr)) => do
       expandDot expandExpr env a b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr $[, $_kwargs:tritonReduceKwarg]*)) => do

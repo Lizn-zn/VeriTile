@@ -84,6 +84,7 @@ syntax "tl.multiple_of(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.max_contiguous" "(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "-inf" : tritonExpr
 syntax "-" "float" "(" term ")" : tritonExpr
+syntax "float" "(" term ")" : tritonExpr
 
 syntax "tl.float64" : tritonDType
 syntax "tl.float32" : tritonDType

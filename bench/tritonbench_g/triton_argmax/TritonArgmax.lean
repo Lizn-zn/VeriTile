@@ -70,8 +70,8 @@ def argmax_kernel
     pid_k = (pid_k).to(tl.int64)
   }
   m_offset = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
-  max_values = tl.full([$(BLOCK_M)], dtype=tl.float32, value=-inf)
-  argmax_values = tl.full([$(BLOCK_M)], dtype=tl.int64, value=$(0))
+  max_values = tl.full([$(BLOCK_M)], dtype=tl.float32, value=float("-inf"))
+  argmax_values = tl.full([$(BLOCK_M)], dtype=tl.int64, value=0)
   for start_n in range($(0), $(N), $(BLOCK_N)) {
     n_offset = start_n + tl.arange(0, $(BLOCK_N))
     offset = m_offset[:, None] * $(N) * $(K) + n_offset[None, :] * $(K) + pid_k

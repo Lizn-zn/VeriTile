@@ -24,7 +24,7 @@ def batched_vecmat_surface
     ComputeKernel := triton {
   m_index = tl.program_id(0)
   n_index = tl.program_id(1)
-  output_tile = (m_index * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))[:])[:, None] * $(dim_n) +
+  output_tile = (m_index * $(BLOCK_M) + tl.arange(0, $(BLOCK_M)))[:, None] * $(dim_n) +
     (n_index * $(BLOCK_N) + tl.arange(0, $(BLOCK_N)))[None, :]
   vecmat = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=A.dtype.element_ty)
   k_blocks = $(dim_k) // $(BLOCK_K)

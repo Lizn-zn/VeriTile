@@ -562,9 +562,28 @@ partial def expandFull (expandExpr : ExprExpander) (env : Env)
     MacroM EOut := do
   let targetDType := dtypeHint.getD .real
   let v'' ←
-    match ← expandLeanAntiquoteAs? targetDType v with
-    | some out => pure out
-    | none => expandExpr env v
+    match dtypeHint with
+    | some .nat =>
+        match v with
+        | `(tritonExpr| $n:num) =>
+            pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩
+        | _ =>
+            match ← expandLeanAntiquoteAs? targetDType v with
+            | some out => pure out
+            | none => expandExpr env v
+    | some .int =>
+        match v with
+        | `(tritonExpr| $n:num) =>
+            let t : TSyntax `term := ⟨Syntax.mkNumLit (toString n.getNat)⟩
+            pure ⟨← `(Op.constInt ($t : Int)), .int, SInfo.scalar, none, none⟩
+        | _ =>
+            match ← expandLeanAntiquoteAs? targetDType v with
+            | some out => pure out
+            | none => expandExpr env v
+    | _ =>
+        match ← expandLeanAntiquoteAs? targetDType v with
+        | some out => pure out
+        | none => expandExpr env v
   let v' ←
     if let some hint := dtypeHint then
       if v''.dtype == .real && hint != .real then
