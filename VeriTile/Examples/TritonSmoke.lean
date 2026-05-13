@@ -1670,4 +1670,17 @@ def dynRange2Kernel (outReg : RegionName) (bounds : Region .nat) : ComputeKernel
 
 #check dynRange2Kernel
 
+/-! ### Bool antiquote for constexpr conditions -/
+
+def boolAntiquoteKernel (outReg : RegionName) (N : Nat) : ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  if $((N >= 2 : Bool)) {
+    tl.store(outReg + pid, 1.0)
+  } else {
+    tl.store(outReg + pid, 0.0)
+  }
+}
+
+#check boolAntiquoteKernel
+
 end VeriTile.Examples.TritonSmoke

@@ -478,6 +478,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.const $t), .real, SInfo.scalar, none, none⟩
   | `(tritonExpr| $(($t:term : Real))) =>
       pure ⟨← `(Op.const $t), .real, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Bool))) =>
+      pure ⟨← `(Op.constBool $t), .bool, SInfo.scalar, none, none⟩
   | `(tritonExpr| $(($t:term : Nat))) =>
       pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
   | `(tritonExpr| $($t:term)) =>
