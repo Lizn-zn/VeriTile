@@ -19,7 +19,9 @@ surface.
 - Mechanical audit gate: `bench/audit_tritonbench_g.sh` reports
   `TritonBench-G audit gates passed`, covering Python/Lean count matching,
   port elaboration, placeholder-proof scanning, and correctness-surface
-  scanning.
+  scanning. It also checks that compiled ports do not still advertise README
+  `TODO` status and that Python `.to(tl.float32)` casts missing from Lean are
+  covered by an explicit documented slice/scope note.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.

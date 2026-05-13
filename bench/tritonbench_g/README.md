@@ -59,9 +59,11 @@ bench/check_ports.sh vector_addition softmax_triton1
 
 The script runs `lake env lean` against each `<KernelName>.lean` independently, reports per-kernel pass/fail, and exits non-zero on any failure (CI-friendly).
 The audit script wraps this port-build gate with Python/Lean count matching,
-placeholder-proof scanning, and correctness-surface scanning. It is a mechanical
-gate only; line-by-line faithfulness still follows [`review_criteria.md`](./review_criteria.md),
-and unresolved proof obligations remain tracked in [`proof_blockers.md`](./proof_blockers.md).
+placeholder-proof scanning, correctness-surface scanning, compiled-port README
+status checks, and a documented-scope check for Python `.to(tl.float32)` casts
+that are outside a Lean proof slice. It is a mechanical gate only; line-by-line
+faithfulness still follows [`review_criteria.md`](./review_criteria.md), and
+unresolved proof obligations remain tracked in [`proof_blockers.md`](./proof_blockers.md).
 
 ## Provenance
 

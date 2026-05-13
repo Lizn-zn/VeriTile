@@ -56,6 +56,58 @@ else
   printf 'ok correctness surface scan\n'
 fi
 
+stale_readmes=()
+while IFS= read -r readme; do
+  dir="${readme%/README.md}"
+  if find "${dir}" -maxdepth 1 -name '*.lean' | rg -q . &&
+      rg -q 'Status: TODO' "${readme}"; then
+    stale_readmes+=("${readme}")
+  fi
+done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name 'README.md' | sort)
+
+while IFS= read -r readme; do
+  dir="${readme%/README_zh.md}"
+  if find "${dir}" -maxdepth 1 -name '*.lean' | rg -q . &&
+      rg -q '状态:TODO' "${readme}"; then
+    stale_readmes+=("${readme}")
+  fi
+done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name 'README_zh.md' | sort)
+
+if [ "${#stale_readmes[@]}" -gt 0 ]; then
+  printf 'FAIL compiled ports with TODO README status:\n'
+  printf '  %s\n' "${stale_readmes[@]}"
+  failures=$((failures + 1))
+else
+  printf 'ok compiled-port README status scan\n'
+fi
+
+undocumented_cast_gaps=()
+while IFS= read -r py_file; do
+  if ! rg -q '\.to\(tl\.float32\)' "${py_file}"; then
+    continue
+  fi
+  dir="${py_file%/*}"
+  lean_file="$(find "${dir}" -maxdepth 1 -name '*.lean' | head -n 1)"
+  if [ -z "${lean_file}" ]; then
+    continue
+  fi
+  if rg -q '\.to\(tl\.float32\)|to\(tl\.float32\)|\.to\(tl.float32\)|to\(tl.float32\)' "${lean_file}"; then
+    continue
+  fi
+  if rg -q 'outside this|quant_policy = 0|unquantized path|quant_policy.*4/8' "${lean_file}"; then
+    continue
+  fi
+  undocumented_cast_gaps+=("${py_file} -> ${lean_file}")
+done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name '*.py' | sort)
+
+if [ "${#undocumented_cast_gaps[@]}" -gt 0 ]; then
+  printf 'FAIL .to(tl.float32) missing from Lean without documented slice/scope:\n'
+  printf '  %s\n' "${undocumented_cast_gaps[@]}"
+  failures=$((failures + 1))
+else
+  printf 'ok documented float32 cast coverage scan\n'
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi
