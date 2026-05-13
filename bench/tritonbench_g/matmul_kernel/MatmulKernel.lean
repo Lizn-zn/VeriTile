@@ -17,8 +17,8 @@ contiguous strides; this surface keeps those constants and the fused
 def matmul_kernel_surface
     (C A B : RegionName) (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
     ComputeKernel := triton {
-  pid_m = tl.program_id(0)
-  pid_n = tl.program_id(1)
+  pid_m = tl.program_id(axis=0)
+  pid_n = tl.program_id(axis=1)
   offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(4096)
   offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(4096)
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))

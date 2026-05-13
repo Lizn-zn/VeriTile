@@ -68,9 +68,9 @@ def rotary_kernel_o0_row
       stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
       BLOCK_M BLOCK_HALF : Nat) :
     ComputeKernel := triton {
-  pid_m = tl.program_id(0)
-  pid_batch = tl.program_id(1)
-  pid_head = tl.program_id(2)
+  pid_m = tl.program_id(axis=0)
+  pid_batch = tl.program_id(axis=1)
+  pid_head = tl.program_id(axis=2)
   rm = pid_m * $(BLOCK_M)
   rm_cs = rm + $(SEQLEN_OFFSETS)
   rk_half = tl.arange(0, $(BLOCK_HALF))

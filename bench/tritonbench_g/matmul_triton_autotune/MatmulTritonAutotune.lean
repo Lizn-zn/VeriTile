@@ -19,7 +19,7 @@ def matmul_autotune_no_activation_surface
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat) :
     ComputeKernel := triton {
-  pid = tl.program_id(0)
+  pid = tl.program_id(axis=0)
   num_pid_m = tl.cdiv($(M), $(BLOCK_SIZE_M))
   num_pid_n = tl.cdiv($(N), $(BLOCK_SIZE_N))
   num_pid_in_group = $(GROUP_SIZE_M) * num_pid_n
@@ -56,7 +56,7 @@ def matmul_autotune_leaky_relu_surface
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
       BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat) :
     ComputeKernel := triton {
-  pid = tl.program_id(0)
+  pid = tl.program_id(axis=0)
   num_pid_m = tl.cdiv($(M), $(BLOCK_SIZE_M))
   num_pid_n = tl.cdiv($(N), $(BLOCK_SIZE_N))
   num_pid_in_group = $(GROUP_SIZE_M) * num_pid_n

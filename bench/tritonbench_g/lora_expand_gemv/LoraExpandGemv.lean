@@ -72,8 +72,8 @@ def bgmv_expand_one_block
     (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
       lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
-  pid_sn = tl.program_id(0)
-  cur_batch = tl.program_id(1)
+  pid_sn = tl.program_id(axis=0)
+  cur_batch = tl.program_id(axis=1)
   lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))

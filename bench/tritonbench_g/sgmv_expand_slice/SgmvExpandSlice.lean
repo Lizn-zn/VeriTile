@@ -97,9 +97,9 @@ def sgmv_expand_slice_one_row_block
     (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
       cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat) :
     ComputeKernel := triton {
-  pid_m = tl.program_id(0)
-  pid_n = tl.program_id(1)
-  cur_batch = tl.program_id(2)
+  pid_m = tl.program_id(axis=0)
+  pid_n = tl.program_id(axis=1)
+  cur_batch = tl.program_id(axis=2)
   m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
   cur_seq_start = tl.load($((b_seq_start_loc : Region .nat)) + cur_batch)
   lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
