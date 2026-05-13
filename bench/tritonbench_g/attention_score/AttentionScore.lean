@@ -12,8 +12,6 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `attention_score.py`'s `_score_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
-- `H_PER_KV` is the wrapper-computed `H // H_KV`, passed directly so the DSL
-  does not have to infer the dtype of a nested meta-division antiquote.
 - `o` is shaped as `[BLOCK_N]`, matching `tl.sum(p, axis=0)`. The Python
   wrapper keeps `BLOCK_M == BLOCK_N`; the Lean surface makes that shape
   dependency explicit. -/
@@ -22,7 +20,7 @@ def attention_score_kernel
     (stride_qz stride_qh stride_qm stride_qk
       stride_kz stride_kh stride_kn stride_kk
       stride_oz stride_oh
-      H H_PER_KV N_CTX ROUND_CTX NKV_CTX
+      H H_KV N_CTX ROUND_CTX NKV_CTX
       sliding_window_offset sliding_window_size
       BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
     (sm_scale : ℝ)
@@ -32,7 +30,7 @@ def attention_score_kernel
   off_hz = tl.program_id(axis=1)
   off_z = off_hz // $(H)
   off_h = off_hz % $(H)
-  off_hkv = off_h // $(H_PER_KV)
+  off_hkv = off_h // ($(H) // $(H_KV))
   q_offset = (off_z).to(tl.int64) * $(stride_qz) + (off_h).to(tl.int64) * $(stride_qh)
   k_offset = (off_z).to(tl.int64) * $(stride_kz) + (off_hkv).to(tl.int64) * $(stride_kh)
   m_ptrs = M + off_hz * $(ROUND_CTX) + tl.arange(0, $(BLOCK_M))
