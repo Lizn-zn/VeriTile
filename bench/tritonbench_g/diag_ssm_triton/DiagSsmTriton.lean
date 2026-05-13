@@ -174,6 +174,25 @@ noncomputable def diagSsmSpec
   st.readMem s_ptr off * st.readMem lambda_ptr (IntegralDType.nat.mod off dim) +
     st.readMem x_ptr off
 
+def timeOffset
+    (st : BlockState) (batch_size dim BLOCK_SIZE t : Nat)
+    (i : Fin BLOCK_SIZE) : Nat :=
+  t * (batch_size * dim) + colOffset st BLOCK_SIZE i
+
+noncomputable def diagSsmStateAfter
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat → ℝ
+  | 0 => st.readMem s_ptr (colOffset st BLOCK_SIZE i)
+  | t + 1 =>
+      diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE i t *
+          st.readMem lambda_ptr (IntegralDType.nat.mod (colOffset st BLOCK_SIZE i) dim) +
+        st.readMem x_ptr (timeOffset st batch_size dim BLOCK_SIZE t i)
+
+noncomputable def diagSsmForwardSpec
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE : Nat) (t : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
+  diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE i (t + 1)
+
 /-- Algorithm-layer correctness for the forward SSM kernel. -/
 theorem diag_ssm_forward_kernel_correct
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
