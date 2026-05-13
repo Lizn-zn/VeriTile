@@ -9,22 +9,19 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `triton_conv2d_fwd.py`'s `conv2d_forward_kernel`
-for the no-padding path.
+/-- Surface transcription of `triton_conv2d_fwd.py`'s `conv2d_forward_kernel`.
 
 This preserves the grouped launch, flattened batch/height/width indexing,
 group-local input/output feature offsets, nested kernel-height/kernel-width/
 input-feature loops, masked input/weight loads, dot accumulation, and final
-masked output store. The Python benchmark's padded case uses
-`h - padding_height` / `w - padding_width`, which can be negative before the
-mask; that signed offset path remains outside the current Nat pointer surface. -/
-def conv2d_forward_no_padding_surface
+masked output store. -/
+def conv2d_forward_surface
     (Input Weight Output : RegionName)
     (batch_dim in_feat_dim in_height in_width out_feat_dim out_height out_width
       input_batch_stride input_in_feat_stride input_height_stride input_width_stride
       weight_out_feat_stride weight_in_feat_stride weight_height_stride weight_width_stride
       output_batch_stride output_out_feat_stride output_height_stride output_width_stride
-      kernel_height kernel_width stride_height stride_width groups
+      kernel_height kernel_width stride_height stride_width padding_height padding_width groups
       BLOCK_BHW BLOCK_IN_FEAT BLOCK_OUT_FEAT : Nat) (_fp16 _tf32 : Bool) :
     ComputeKernel := triton {
   batch_height_width_pid = tl.program_id(axis=0)
@@ -50,8 +47,10 @@ def conv2d_forward_no_padding_surface
     for w in range($(0), $(kernel_width), $(1)) {
       for c in range($(0), in_group_dim, $(BLOCK_IN_FEAT)) {
         input_feat_offset = c + tl.arange(0, $(BLOCK_IN_FEAT))
-        input_height_offset = h + $(stride_height) * output_height_offset
-        input_width_offset = w + $(stride_width) * output_width_offset
+        input_height_offset = h - $((padding_height : Int)) +
+          $(stride_height) * output_height_offset
+        input_width_offset = w - $((padding_width : Int)) +
+          $(stride_width) * output_width_offset
         curr_input = input_base +
           ($(input_in_feat_stride) * input_feat_offset)[None, :] +
           ($(input_height_stride) * input_height_offset)[:, None] +
@@ -61,12 +60,14 @@ def conv2d_forward_no_padding_surface
           $(weight_height_stride) * h + $(weight_width_stride) * w
         input_mask = (batch_offset[:, None] < $(batch_dim)) &
           (input_feat_offset[None, :] < in_group_dim) &
+          ($((0 : Int)) <= input_height_offset[:, None]) &
           (input_height_offset[:, None] < $(in_height)) &
+          ($((0 : Int)) <= input_width_offset[:, None]) &
           (input_width_offset[:, None] < $(in_width))
         weight_mask = (input_feat_offset[:, None] < in_group_dim) &
           (output_feat_offset[None, :] < out_group_dim)
-        input_block = tl.load(curr_input, mask=input_mask, other=0.0)
-        weight_block = tl.load(curr_weight, mask=weight_mask, other=0.0)
+        input_block = tl.load(curr_input, mask=input_mask)
+        weight_block = tl.load(curr_weight, mask=weight_mask)
         if _fp16 {
           input_block = (input_block).to(tl.float16)
           weight_block = (weight_block).to(tl.float16)
