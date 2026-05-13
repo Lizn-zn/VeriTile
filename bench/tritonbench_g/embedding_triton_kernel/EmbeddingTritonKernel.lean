@@ -630,6 +630,50 @@ theorem embeddingCurrentChunkScatter_preserve_old
           (hLaneBound lane hlane) hOld heq.symm)
       (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) st
 
+theorem embeddingLoopInvariant_step_of_current_chunk_scatter
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn : Nat)
+    (hPrev :
+      embeddingLoopInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL start_nn st)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s0 stride_out_seq BLOCK_N idx))
+    (hLaneBound :
+      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane →
+          start_nn + lane.1.val < BLOCK_N) :
+    embeddingLoopInvariant s0 weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL (start_nn + BLOCK_NN)
+      ((TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]).foldl
+        (fun acc lane =>
+          if storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+              BLOCK_DMODEL lane then
+            acc.writeMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
+              (embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+                stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
+          else
+            acc)
+        st) := by
+  apply embeddingLoopInvariant_step_of_chunk_write s0 st
+  · exact hPrev
+  · intro oldIdx hOldActive
+    exact embeddingCurrentChunkScatter_preserve_old s0 st weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn oldIdx hOutInj hOldActive.1
+      hLaneBound
+  · intro idx hStore
+    exact embeddingCurrentChunkScatter_write s0 st weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn idx hStore
+      (embeddingCurrentChunkNoCollision_of_full_injective s0 stride_out_seq n_ctx
+        hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx hOutInj
+        (hLaneBound idx hStore) hLaneBound)
+
 def embedding_kernel_correct_target
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx

@@ -82,9 +82,11 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   premise from full `outOffsetFull` injectivity plus chunk-bound coverage.
   `embeddingCurrentChunkScatter_preserve_old` covers old-prefix preservation for
   the current-chunk scatter using the generic
-  `BlockState.scatter_prop_masked_preserves_other_offset` helper. Remaining
-  store-side work is matching the DSL-expanded store to that scatter shape. The
-  theorem target is fixed as
+  `BlockState.scatter_prop_masked_preserves_other_offset` helper.
+  `embeddingLoopInvariant_step_of_current_chunk_scatter` packages these pieces
+  into the next-prefix invariant for the concrete current-chunk scatter state.
+  Remaining store-side work is matching the DSL-expanded store to that scatter
+  shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until that
   chunk step is instantiated with the actual loop body via

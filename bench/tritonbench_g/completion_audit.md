@@ -105,7 +105,9 @@ These files must not be counted complete yet:
     `embeddingCurrentChunkNoCollision_of_full_injective` deriving its
     no-collision premise from full output injectivity plus chunk-bound coverage.
     `embeddingCurrentChunkScatter_preserve_old` covers old-prefix preservation
-    for that current-chunk scatter.
+    for that current-chunk scatter, and
+    `embeddingLoopInvariant_step_of_current_chunk_scatter` packages the scatter
+    state into the next-prefix invariant.
   - Remaining proof: instantiate the per-chunk write invariant with
     `forRange_inv` under `outOffsetFull` injectivity, including the concrete
     loop-body store.
