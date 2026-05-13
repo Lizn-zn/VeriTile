@@ -249,6 +249,16 @@ theorem outOffset2D_eq_full
   simp [outOffset2D, outOffsetFull, embeddingChunkToFullIndex,
     seqLaneIndex, fullSeqIndex]
 
+theorem storeActive2D_iff_full
+    (s : BlockState) (n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (h : start_nn + idx.1.val < BLOCK_N) :
+    storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx ↔
+      storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL
+        (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
+  simp [storeActive2D, storeActiveFull, embeddingChunkToFullIndex,
+    seqLaneIndex, fullSeqIndex]
+
 def embeddingPrefixWritten
     (off : Nat) (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Prop :=
   idx.1.val < off
