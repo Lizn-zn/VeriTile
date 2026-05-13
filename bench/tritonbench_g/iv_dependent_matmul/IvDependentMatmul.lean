@@ -31,13 +31,15 @@ def iv_dependent_matmul_pre_load_surface
   offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
   offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))
-  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
-  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+    A = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+    B = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+    a_ptrs = A
+    b_ptrs = B
 
-  accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
-  for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
-    a_ptrs = a_base + k * $(BLOCK_SIZE_K) * $(stride_ak)
-    b_ptrs = b_base + k * $(BLOCK_SIZE_K) * $(stride_bk)
+    accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
+    for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
+      a_ptrs = A + k * $(BLOCK_SIZE_K) * $(stride_ak)
+      b_ptrs = B + k * $(BLOCK_SIZE_K) * $(stride_bk)
     a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
       other=0.0)
     b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K),
@@ -66,10 +68,10 @@ def iv_dependent_matmul_post_load_surface
   offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
   offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))
-  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
-  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
-  a_ptrs = a_base
-  b_ptrs = b_base
+    A = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+    B = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+    a_ptrs = A
+    b_ptrs = B
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
     a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
@@ -77,8 +79,8 @@ def iv_dependent_matmul_post_load_surface
     b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K),
       other=0.0)
     accumulator += tl.dot(a, b)
-    a_ptrs = a_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_ak)
-    b_ptrs = b_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_bk)
+      a_ptrs = A + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_ak)
+      b_ptrs = B + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_bk)
   }
   c = (accumulator).to(tl.float16)
   offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
@@ -101,18 +103,19 @@ def iv_dependent_matmul_post_pre_mixed_surface
   offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
   offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))
-  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
-  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
-  b_ptrs = b_base
+    A = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+    B = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+    a_ptrs = A
+    b_ptrs = B
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
-    a_ptrs = a_base + k * $(BLOCK_SIZE_K) * $(stride_ak)
+      a_ptrs = A + k * $(BLOCK_SIZE_K) * $(stride_ak)
     a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
       other=0.0)
     b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K),
       other=0.0)
     accumulator += tl.dot(a, b)
-    b_ptrs = b_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_bk)
+      b_ptrs = B + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_bk)
   }
   c = (accumulator).to(tl.float16)
   offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
@@ -135,12 +138,12 @@ def iv_dependent_matmul_post_load_two_iters_surface
   offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
   offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))
-  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
-  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
-  a_ptrs = a_base
-  b_ptrs = b_base
-  a_ptrs_next = a_base + $(BLOCK_SIZE_K) * $(stride_ak)
-  b_ptrs_next = b_base + $(BLOCK_SIZE_K) * $(stride_bk)
+    A = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+    B = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+    a_ptrs = A
+    b_ptrs = B
+    a_ptrs_next = A + $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs_next = B + $(BLOCK_SIZE_K) * $(stride_bk)
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
     a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
@@ -150,8 +153,8 @@ def iv_dependent_matmul_post_load_two_iters_surface
     accumulator += tl.dot(a, b)
     a_ptrs = a_ptrs_next
     b_ptrs = b_ptrs_next
-    a_ptrs_next = a_base + (k + $(2)) * $(BLOCK_SIZE_K) * $(stride_ak)
-    b_ptrs_next = b_base + (k + $(2)) * $(BLOCK_SIZE_K) * $(stride_bk)
+      a_ptrs_next = A + (k + $(2)) * $(BLOCK_SIZE_K) * $(stride_ak)
+      b_ptrs_next = B + (k + $(2)) * $(BLOCK_SIZE_K) * $(stride_bk)
   }
   c = (accumulator).to(tl.float16)
   offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
@@ -174,14 +177,14 @@ def iv_dependent_matmul_post_load_three_iters_surface
   offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(M)
   offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(N)
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))
-  a_base = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
-  b_base = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
-  a_ptrs = a_base
-  b_ptrs = b_base
-  a_ptrs_next = a_base + $(BLOCK_SIZE_K) * $(stride_ak)
-  b_ptrs_next = b_base + $(BLOCK_SIZE_K) * $(stride_bk)
-  a_ptrs_next_next = a_base + $(2) * $(BLOCK_SIZE_K) * $(stride_ak)
-  b_ptrs_next_next = b_base + $(2) * $(BLOCK_SIZE_K) * $(stride_bk)
+    A = A + offs_am[:, None] * $(stride_am) + offs_k[None, :] * $(stride_ak)
+    B = B + offs_k[:, None] * $(stride_bk) + offs_bn[None, :] * $(stride_bn)
+    a_ptrs = A
+    b_ptrs = B
+    a_ptrs_next = A + $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs_next = B + $(BLOCK_SIZE_K) * $(stride_bk)
+    a_ptrs_next_next = A + $(2) * $(BLOCK_SIZE_K) * $(stride_ak)
+    b_ptrs_next_next = B + $(2) * $(BLOCK_SIZE_K) * $(stride_bk)
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
     a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
@@ -193,8 +196,8 @@ def iv_dependent_matmul_post_load_three_iters_surface
     b_ptrs = b_ptrs_next
     a_ptrs_next = a_ptrs_next_next
     b_ptrs_next = b_ptrs_next_next
-    a_ptrs_next_next = a_base + (k + $(3)) * $(BLOCK_SIZE_K) * $(stride_ak)
-    b_ptrs_next_next = b_base + (k + $(3)) * $(BLOCK_SIZE_K) * $(stride_bk)
+      a_ptrs_next_next = A + (k + $(3)) * $(BLOCK_SIZE_K) * $(stride_ak)
+      b_ptrs_next_next = B + (k + $(3)) * $(BLOCK_SIZE_K) * $(stride_bk)
   }
   c = (accumulator).to(tl.float16)
   offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
