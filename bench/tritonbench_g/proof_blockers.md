@@ -11,8 +11,9 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   `for off in range(0, N, BLOCK_N)`.
 - Current local spec now describes the full row mean via `meanSpec` as a
   `Fin N` sum over the original row, matching all `off` iterations together,
-  but the theorem is still a placeholder until the kernel-specific accumulator
-  invariant is instantiated with `forRange_inv`.
+  and the intended `_mean` loop accumulator via `meanLanePrefix` /
+  `meanAccumulatorSpec`, but the theorem is still a placeholder until that
+  accumulator invariant is instantiated with `forRange_inv`.
 
 ## `embedding_triton_kernel.py`
 

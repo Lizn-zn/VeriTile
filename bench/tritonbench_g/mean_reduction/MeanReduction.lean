@@ -52,6 +52,24 @@ noncomputable def meanSpec
   ((Finset.univ : Finset (Fin N)).sum fun j =>
     s.readMem X (meanOutOffset s BLOCK_M i * N + j.val)) / (N : ℝ)
 
+noncomputable def meanLanePrefix
+    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat)
+    (i : Fin BLOCK_M) (j : Fin BLOCK_N) : ℝ :=
+  ((Finset.range off).filter fun col => col < N ∧ col % BLOCK_N = j.val).sum
+    fun col => s.readMem X (meanOutOffset s BLOCK_M i * N + col)
+
+noncomputable def meanAccumulatorSpec
+    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat) :
+    Tile .real [BLOCK_M, BLOCK_N] :=
+  { data := fun idx =>
+      some (meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1) }
+
+noncomputable def meanFromAccumulatorSpec
+    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat)
+    (i : Fin BLOCK_M) : ℝ :=
+  ((Finset.univ : Finset (Fin BLOCK_N)).sum fun j =>
+    meanLanePrefix s X N BLOCK_M BLOCK_N off i j) / (N : ℝ)
+
 /-- Algorithm-layer correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_correct
     (X Mean : RegionName)
