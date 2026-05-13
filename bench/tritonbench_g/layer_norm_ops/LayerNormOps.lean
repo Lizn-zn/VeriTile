@@ -55,13 +55,15 @@ def layer_norm_fwd_1pass_surface
   tl.store(Rstd + row, rstd)
   mask = cols < $(N)
   w = tl.load(W + cols, mask=mask).to(tl.float32)
+  if HAS_BIAS {
+    b = tl.load(B + cols, mask=mask).to(tl.float32)
+  }
   if not IS_RMS_NORM {
     x_hat = (x - mean) * rstd
   } else {
     x_hat = x * rstd
   }
   if HAS_BIAS {
-    b = tl.load(B + cols, mask=mask).to(tl.float32)
     y = x_hat * w + b
   } else {
     y = x_hat * w
