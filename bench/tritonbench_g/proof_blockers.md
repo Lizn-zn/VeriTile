@@ -46,12 +46,15 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `meanLoopInvariant_to_scatter_alg_post` packages a final loop invariant plus
   the scatter state into `mean_dim_kernel_alg_post`. The concrete post-loop AST
   is named `meanPostLoop`, matching the `tl.sum` / `[:, None]` / `tl.store`
-  suffix emitted by the DSL. The theorem target is fixed as
+  suffix emitted by the DSL. `meanPostLoop_step_alg_post` now consumes the
+  actual `stepStmts (meanPostLoop ...)` execution from registers containing the
+  final `_mean`, `Mean` pointer tile, and `row_mask`, and returns
+  `mean_dim_kernel_alg_post`. The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
   accumulator invariant is connected to the actual loop body with `forRange_inv`
-  and the concrete execution of `meanPostLoop` is connected to the expanded
-  scatter bridge. The compute-facing
+  and the kernel prefix is split so the final loop invariant feeds
+  `meanPostLoop_step_alg_post`. The compute-facing
   wrapper is discharged once that algorithm-layer
   postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.

@@ -601,6 +601,33 @@ def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
       (.mask (.ref .bool [BLOCK_M, 1] "row_mask"))
   ]
 
+theorem meanPostLoop_step_alg_post
+    (s0 st st' : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N off : Nat)
+    (hAcc :
+      st.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+        some (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off))
+    (hMean :
+      st.regs .ptr [BLOCK_M, 1] "Mean" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          (Mean, meanOutOffset s0 BLOCK_M idx.1) })
+    (hMask :
+      st.regs .bool [BLOCK_M, 1] "row_mask" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          meanRowActive s0 M BLOCK_M idx.1 })
+    (hStep : stepStmts (meanPostLoop N BLOCK_M BLOCK_N) st = some st')
+    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
+    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0 st' := by
+  unfold meanPostLoop at hStep
+  simp [stepStmts, stepStmt, evalOp, hAcc, hMean, hMask, Tile.bop,
+    Tile.expandDim, TileShape.dropInsertedIndex, Broadcast.scalarR,
+    NumericDType.div, BlockState.setReg, Option.bind, Option.map] at hStep
+  subst st'
+  simpa [Tile.expandDim, TileShape.dropInsertedIndex, Tile.bop,
+    Broadcast.scalarR, NumericDType.div] using
+    meanStoreFromExpandedMaskedAccumulator_alg_post s0 _ X Mean M N
+      BLOCK_M BLOCK_N off hBLOCK_N hoff
+
 theorem mean_dim_kernel_compute_correct_of_algorithm
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)

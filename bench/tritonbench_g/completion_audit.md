@@ -89,9 +89,13 @@ These files must not be counted complete yet:
     `meanOutOffset_injective_col1` and
     `meanStoreFromExpandedMaskedAccumulator_alg_post` now cover the actual
     expanded `[BLOCK_M, 1]` store shape emitted after `mean[:, None]`.
+    `meanPostLoop_step_alg_post` consumes the actual
+    `stepStmts (meanPostLoop ...)` execution from the final accumulator and
+    store-register assumptions.
   - Remaining proof: prove the concrete loop body produces the `_mean =
-    old + chunkLoad` register update, instantiate `forRange_inv`, then connect
-    the concrete execution of `meanPostLoop` to the expanded scatter bridge.
+    old + chunkLoad` register update, instantiate `forRange_inv`, then split
+    the kernel prefix so the final loop invariant feeds
+    `meanPostLoop_step_alg_post`.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.
