@@ -2025,6 +2025,36 @@ partial def expandStmt (env : Env) (pinned : List String)
       pure (← `(Stmt.forRangeDyn $nameLit $start'.term $stop'.term $one [$algBody,*]),
         ← `(ComputeStmt.forRangeDyn $nameLit $start'.term $stop'.term $one [$computeBody,*]),
         env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range($start:tritonExpr, -$stop:tritonExpr, -$step:tritonExpr) { $stmts:tritonStmt* }) => do
+      let _ := stop
+      let nameLit ← identAsStr i
+      let name := i.getId.toString
+      let revName := "__rev_" ++ name
+      let revNameLit : TSyntax `term := Syntax.mkStrLit revName
+      let start' ← expandNatExpectedExpr env start
+      let step' ← expandNatExpectedExpr env step
+      ensureShape SInfo.scalar start'.shape "reverse range start"
+      ensureShape SInfo.scalar step'.shape "reverse range step"
+      let bodyEnv :=
+        (name, DInfo.nat, SInfo.scalar, none) ::
+        (revName, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ←
+        expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
+      let zero ← `(Op.constNat 0)
+      let one ← `(Op.constNat 1)
+      let count ←
+        `(Op.add NumericDType.nat Broadcast.nil
+            (Op.div NumericDType.nat Broadcast.nil $start'.term $step'.term) $one)
+      let revRef ← `(Op.ref TileDType.nat [] $revNameLit)
+      let stride ← `(Op.mul NumericDType.nat Broadcast.nil $revRef $step'.term)
+      let idxTerm ← `(Op.sub NumericDType.nat Broadcast.nil $start'.term $stride)
+      let idxAssign ← `(Stmt.assign TileDType.nat [] $nameLit $idxTerm)
+      let computeIdxAssign ←
+        `(ComputeStmt.assign TileDType.nat [] $nameLit (ComputeExpr.alg $idxTerm))
+      pure (← `(Stmt.forRangeDyn $revNameLit $zero $count $one [$idxAssign, $algBody,*]),
+        ← `(ComputeStmt.forRangeDyn $revNameLit $zero $count $one
+              [$computeIdxAssign, $computeBody,*]),
+        env, bodyHasCompute)
   | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr, $step:tritonExpr) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let start' ← expandNatExpectedExpr env start

@@ -75,10 +75,8 @@ def prepare_qg_kg_surface
 
 /-- Surface transcription of `decay_cumsum.py`'s `bwd_decay_global_cumsum`.
 
-The Python kernel traverses the chunk in reverse and decrements pointers. This
-surface preserves that reverse logical order with `t = BT - 1 - j` and
-preserves the reverse pointer decrements. The loop index uses `t = BT - 1 - j`
-because negative-step ranges are not yet represented in the DSL. -/
+The Python kernel traverses the chunk in reverse and decrements pointers; the
+DSL surface preserves that reverse range and pointer movement directly. -/
 def bwd_decay_global_cumsum_surface
     (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
     (s_qk_h DK BT BK : Nat) :
@@ -98,8 +96,7 @@ def bwd_decay_global_cumsum_surface
   cum_grad_dg = tl.zeros([$(BK)], dtype=tl.float32)
   mask = (i_k * $(BK) + offs) < $(DK)
   last_g = tl.zeros([$(BK)], dtype=tl.float32)
-  for j in range($(0), $(BT), $(1)) {
-    t = $(BT) - $(1) - j
+  for t in range($(BT) - $(1), -$(1), -$(1)) {
     g_val = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     if t == $(BT) - $(1) {
       last_g = g_val

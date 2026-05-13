@@ -1720,4 +1720,14 @@ def pointerDecrementKernel (outReg : Region .real) (N : Nat) : ComputeKernel := 
 
 #check pointerDecrementKernel
 
+def reverseRangeKernel (outReg : Region .nat) (N : Nat) : ComputeKernel := triton {
+  ptr = outReg + ($(N) - $(1))
+  for i in range($(N) - $(1), -$(1), -$(1)) {
+    tl.store(ptr, i)
+    ptr -= $(1)
+  }
+}
+
+#check reverseRangeKernel
+
 end VeriTile.Examples.TritonSmoke

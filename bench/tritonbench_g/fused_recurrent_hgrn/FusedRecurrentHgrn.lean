@@ -48,9 +48,8 @@ def fused_recurrent_hgrn_fwd_surface
 /-- Surface transcription of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_bwd_kernel`.
 
-The Python kernel traverses time in reverse and decrements pointers. This DSL
-surface preserves the pointer decrements and uses `i = T - 1 - j` for the
-reverse logical index. -/
+The Python kernel traverses time in reverse and decrements pointers; the DSL
+surface preserves that reverse range and pointer movement directly. -/
 def fused_recurrent_hgrn_bwd_surface
     (G O H0 DX DG DO : RegionName) (T D BD : Nat)
     (USE_INITIAL_STATE : Bool) :
@@ -65,8 +64,7 @@ def fused_recurrent_hgrn_bwd_surface
   p_dg = DG + (i_bh * $(T) + $(T) - $(1)) * $(D) + o_d
   p_do = DO + (i_bh * $(T) + $(T) - $(1)) * $(D) + o_d
   b_dh = tl.zeros([$(BD)], dtype=tl.float32)
-  for j in range($(0), $(T), $(1)) {
-    i = $(T) - $(1) - j
+  for i in range($(T) - $(1), -$(1), -$(1)) {
     b_g = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     b_do = tl.load(p_do, mask=mask, other=0).to(tl.float32)
     if i > 0 {
