@@ -26,7 +26,7 @@ def logsumexp_fwd_kernel
   i_n, i_d = tl.program_id(0).to(tl.int64), tl.program_id(1).to(tl.int64)
   o_d = i_d * $(B) + tl.arange(0, $(B))
   m_d = o_d < $(D)
-  b_x = tl.load(x + i_n * $(D) + o_d, mask=m_d, other=-inf)
+  b_x = tl.load(x + i_n * $(D) + o_d, mask=m_d, other=-float("inf"))
   if HAS_SCALE {
     b_x = b_x * $(scale)
   }
@@ -42,7 +42,7 @@ takes value `i_d = ⌊D / B⌋` and satisfies `i_d * B < D < (i_d + 1) * B`.
 Some lanes are out-of-range; the kernel loads them with `other = -∞` (= `⊥`).
 
 The masked-lane semantic chain is:
-* `tl.load(..., mask=m_d, other=-inf)` → `none : WithBot ℝ` for invalid lanes
+* `tl.load(..., mask=m_d, other=-float("inf"))` → `none : WithBot ℝ` for invalid lanes
 * `tl.max(b_x, 0)` → `sup'` over the mixed tile; `withBot_sup'_partial` reduces it
   to `↑(validLanes.sup' ...)`, a finite real
 * `tl.exp(b_x - b_m)` on an invalid lane → `exp(none - some m) = exp(none) = 0`

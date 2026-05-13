@@ -12,7 +12,6 @@ open VeriTile.Triton
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter.
 - Python `mask_ptr is not None` -> Lean `HAS_MASK : Bool` constexpr gate.
-- Python `-float("inf")` -> DSL literal `-inf`.
 - Python `.to(tl.float32)` casts are represented explicitly in the Compute
   layer; the algorithm-layer theorem observes their Real projection. -/
 def softmax_kernel
@@ -23,7 +22,7 @@ def softmax_kernel
   row_start_ptr = input_ptr + row_idx * $(row_stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   input_ptrs = row_start_ptr + col_offsets
-  row = (tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-inf)).to(tl.float32)
+  row = (tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-float("inf"))).to(tl.float32)
   row_minus_max = row - tl.max(row, axis=0)
   if HAS_MASK {
     mask_ptrs = (mask_ptr + (row_idx * $(row_stride))) + col_offsets
@@ -39,7 +38,7 @@ def softmax_kernel
 }
 
 /-- Masked input row tile used by `softmax_kernel`. Masked lanes are `⊥`,
-matching `other=-inf`. -/
+matching `other=-float("inf")`. -/
 noncomputable def softmaxInputTile
     (s : BlockState) (input_ptr : RegionName)
     (row_stride n_cols BLOCK_SIZE : Nat) :

@@ -24,7 +24,7 @@ def softmax_kernel_online_v2_one_tile
   offset = pid_m * $(N) + n_offsets
   mask = n_offsets < $(N)
   input_ptrs = input_ptr + offset
-  inp = tl.load(input_ptrs, mask=mask, other=-inf).to(output_ptr.dtype.element_ty)
+  inp = (tl.load(input_ptrs, mask=mask, other=-float("inf"))).to(output_ptr.dtype.element_ty)
   m = tl.max(inp, 0)
   e = tl.exp(inp - m)
   z = tl.sum(e, 0)

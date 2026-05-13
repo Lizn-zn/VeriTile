@@ -102,7 +102,7 @@ noncomputable def maxKernel2Spec
   | none => 0
 
 /-- Input tile for the 2D value/index max kernel. Masked lanes are `⊥`,
-matching `other=-inf`. -/
+matching `other=-float("inf")`. -/
 noncomputable def maxKernelInputTile
     (s : BlockState) (inp : RegionName)
     (M N K BLOCK_M BLOCK_N : Nat) :

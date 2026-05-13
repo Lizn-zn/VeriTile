@@ -19,7 +19,7 @@ def softmax_kernel
   row_start_ptr = input_ptr + row_idx * $(input_row_stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   input_ptrs = row_start_ptr + col_offsets
-  row = tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-inf)
+  row = tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-float("inf"))
   row_minus_max = row - tl.max(row, axis=0)
   numerator = tl.exp(row_minus_max)
   denominator = tl.sum(numerator, axis=0)
@@ -30,7 +30,7 @@ def softmax_kernel
 }
 
 /-- Masked input row tile used by `softmax_kernel`. Masked lanes are `⊥`,
-matching `other=-inf`. -/
+matching `other=-float("inf")`. -/
 noncomputable def softmaxInputTile
     (s : BlockState) (input_ptr : RegionName)
     (input_row_stride n_cols BLOCK_SIZE : Nat) :

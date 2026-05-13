@@ -24,9 +24,9 @@ def token_softmax_surface
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
   cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
-  row = tl.load(Logics + cur_head * $(stride_logic_h) +
+  row = (tl.load(Logics + cur_head * $(stride_logic_h) +
       (cur_batch_in_all_start_index + col_offsets) * $(stride_logic_bs),
-    mask=col_offsets < cur_batch_seq_len, other=-inf).to(tl.float32)
+    mask=col_offsets < cur_batch_seq_len, other=-float("inf"))).to(tl.float32)
   row_minus_max = row - tl.max(row, axis=0)
   numerator = tl.exp(row_minus_max)
   denominator = tl.sum(numerator, axis=0)

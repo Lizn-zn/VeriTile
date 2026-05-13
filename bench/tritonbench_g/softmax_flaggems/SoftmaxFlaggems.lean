@@ -25,7 +25,7 @@ def softmax_kernel_non_inner_one_tile_surface
   n_offsets = tl.arange(0, $(TILE_N))
   offset = pid_m * $(N) * $(K) + n_offsets[:, None] * $(K) + k_offsets[None, :]
   mask = (n_offsets[:, None] < $(N)) and (k_offsets[None, :] < $(K))
-  inp = tl.load(input_ptr + offset, mask=mask, other=-inf)
+  inp = tl.load(input_ptr + offset, mask=mask, other=-float("inf"))
   m = tl.max(inp, 0)
   e = tl.exp(inp - m[None, :])
   z = tl.sum(e, 0)
@@ -49,7 +49,7 @@ def softmax_kernel_inner_one_tile
   offset = pid_m * $(N) + n_offsets
   mask = n_offsets < $(N)
   input_ptrs = input_ptr + offset
-  inp = tl.load(input_ptrs, mask=mask, other=-inf).to(output_ptr.dtype.element_ty)
+  inp = (tl.load(input_ptrs, mask=mask, other=-float("inf"))).to(output_ptr.dtype.element_ty)
   m = tl.max(inp, axis=0)
   e = tl.exp(inp - m)
   z = tl.sum(e, axis=0)

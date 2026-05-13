@@ -26,7 +26,7 @@ def log_softmax_kernel
   offset = m_offset[:, None] * $(N) * $(K) + n_offset[None, :] * $(K) + pid_k
   mask = m_offset[:, None] < $(M) and n_offset[None, :] < $(N)
   input_ptrs = input_ptr + offset
-  inp = tl.load(input_ptrs, mask=mask, other=-inf).to(tl.float32)
+  inp = (tl.load(input_ptrs, mask=mask, other=-float("inf"))).to(tl.float32)
   row_minus_max = inp - tl.max(inp, axis=1)[:, None]
   numerator = tl.exp(row_minus_max)
   denominator = tl.sum(numerator, axis=1)[:, None]

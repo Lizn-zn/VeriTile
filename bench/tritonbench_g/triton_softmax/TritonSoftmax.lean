@@ -11,7 +11,7 @@ open VeriTile.Triton
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` → Lean `Nat` parameter.
-- Python `-float('inf')` → DSL literal `-inf`. -/
+-/
 def softmax_kernel
     (output_ptr input_ptr : RegionName)
     (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat) :
@@ -20,7 +20,7 @@ def softmax_kernel
   row_start_ptr = input_ptr + row_idx * $(input_row_stride)
   out_row_start_ptr = output_ptr + row_idx * $(output_row_stride)
   row = tl.load(row_start_ptr + tl.arange(0, $(BLOCK_SIZE)),
-    mask=tl.arange(0, $(BLOCK_SIZE)) < $(n_cols), other=-inf)
+    mask=tl.arange(0, $(BLOCK_SIZE)) < $(n_cols), other=-float("inf"))
   row_max = tl.max(row, axis=0)
   numerator = tl.exp(row - row_max)
   denominator = tl.sum(numerator, axis=0)
@@ -30,7 +30,7 @@ def softmax_kernel
 }
 
 /-- Masked input row tile used by `softmax_kernel`. Masked lanes are `⊥`,
-matching `other=-inf`. -/
+matching `other=-float("inf")`. -/
 noncomputable def softmaxInputTile
     (s : BlockState) (input_ptr : RegionName)
     (input_row_stride n_cols BLOCK_SIZE : Nat) :

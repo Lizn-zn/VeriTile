@@ -20,7 +20,7 @@ def square_kernel
   row_start_ptr = input_ptr + row_idx * $(input_row_stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   input_ptrs = row_start_ptr + col_offsets
-  row = tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-inf)
+  row = tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-float("inf"))
   square_output = row * row
   output_row_start_ptr = output_ptr + row_idx * $(output_row_stride)
   output_ptrs = output_row_start_ptr + col_offsets

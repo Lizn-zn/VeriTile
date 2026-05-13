@@ -27,7 +27,7 @@ def cross_entropy_forward_surface
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
   label_idx = (tl.load(labels_ptr)).to(tl.int32)
-  logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-inf)
+  logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf"))
   if DO_LOGIT_SCALING {
     logits = $(LOGIT_SCALE) * logits
   }
@@ -73,7 +73,7 @@ def chunked_cross_entropy_forward_surface
   col_offsets = chunk_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
   label_idx = (tl.load(labels_ptr)).to(tl.int32)
-  logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-inf)
+  logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf"))
   if DO_LOGIT_SCALING {
     logits = $(LOGIT_SCALE) * logits
   }
@@ -126,7 +126,7 @@ def cross_entropy_backward_surface
   } else {
     dloss = 0.0
   }
-  x = tl.load(logits_ptr + col_offsets, mask=mask, other=-inf)
+  x = tl.load(logits_ptr + col_offsets, mask=mask, other=-float("inf"))
   if DO_LOGIT_SCALING {
     x = x * $(LOGIT_SCALE)
   }
