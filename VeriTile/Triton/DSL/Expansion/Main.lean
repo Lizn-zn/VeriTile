@@ -481,13 +481,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| false) =>
       pure ⟨← `(Op.constBool Bool.false), .bool, SInfo.scalar, none, none⟩
   | `(tritonExpr| $i:ident) =>
-      let rawName := i.getId.toString
-      let userName := i.getId.getString!
-      let erasedName := i.getId.eraseMacroScopes.toString
-      let name :=
-        if env.any (fun entry => entry.1 == rawName) then rawName
-        else if env.any (fun entry => entry.1 == userName) then userName
-        else erasedName
+      let name := i.getId.toString
       let (dtype, shape) ← lookupEnv env name
       let s ← identAsStr i
       let dt ← dtype.term
@@ -1177,8 +1171,6 @@ partial def expandStmt (env : Env) (pinned : List String)
       | none => `(ComputeExpr.alg $e'.term)
     pure (← `(Stmt.assign $dt $sh $nameLit $e'.term),
       ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm),
-      (dest.getId.eraseMacroScopes.toString, e'.dtype, e'.shape, e'.computeDType?) ::
-      (dest.getId.getString!, e'.dtype, e'.shape, e'.computeDType?) ::
       (dest.getId.toString, e'.dtype, e'.shape, e'.computeDType?) :: env,
       e'.computeTerm.isSome)
   let expandLoadSubAssign (dest : Ident) (p : TSyntax `tritonExpr)
