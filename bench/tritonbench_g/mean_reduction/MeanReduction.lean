@@ -721,6 +721,52 @@ theorem meanLoopBody_step_accumulator_update
     norm_num
     rfl
 
+theorem meanLoopBody_step_preserves_context
+    (s0 st st' : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N off : Nat)
+    (hAcc :
+      st.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+        some (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off))
+    (hX :
+      st.regs .ptr [BLOCK_M, 1] "X" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          (X, meanOutOffset s0 BLOCK_M idx.1 * N) })
+    (hMean :
+      st.regs .ptr [BLOCK_M, 1] "Mean" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          (Mean, meanOutOffset s0 BLOCK_M idx.1) })
+    (hRow :
+      st.regs .bool [BLOCK_M, 1] "row_mask" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          meanRowActive s0 M BLOCK_M idx.1 })
+    (hStep :
+      stepStmts (meanLoopBody N BLOCK_M BLOCK_N)
+        (st.setReg "off" .nat [] (Tile.scalar off)) = some st') :
+    st'.regs .ptr [BLOCK_M, 1] "X" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          (X, meanOutOffset s0 BLOCK_M idx.1 * N) } ∧
+      st'.regs .ptr [BLOCK_M, 1] "Mean" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          (Mean, meanOutOffset s0 BLOCK_M idx.1) } ∧
+      st'.regs .bool [BLOCK_M, 1] "row_mask" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          meanRowActive s0 M BLOCK_M idx.1 } ∧
+      (∀ offset, st'.readMem X offset = st.readMem X offset) := by
+  unfold meanLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, hAcc, hX, hRow, Tile.bop, Tile.cop,
+    Tile.expandDim, TileShape.dropInsertedIndex, Tile.ptrAdd,
+    NumericDType.add, ComparableDType.lt, Option.bind, meanOutOffset,
+    meanRowActive] at hStep
+  subst st'
+  constructor
+  · exact hX
+  · constructor
+    · simp [hMean]
+    · constructor
+      · simp [hRow]
+      · intro offset
+        rfl
+
 def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .real [BLOCK_M] "mean"
       (.div NumericDType.real Broadcast.scalarR

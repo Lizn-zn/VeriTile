@@ -98,7 +98,8 @@ These files must not be counted complete yet:
     execution facts: zero `_mean`, expanded `X` / `Mean` pointer tiles, and
     `row_mask`. `meanLoopBody_step_accumulator_update` proves that the actual
     projected loop body produces the `_mean = old + meanChunkLoadSpec`
-    register update.
+    register update. `meanLoopBody_step_preserves_context` proves the same
+    body preserves `X`, `Mean`, `row_mask`, and reads from `X`.
   - Remaining proof: instantiate `forRange_inv`, then feed the final loop
     invariant into
     `meanPostLoop_step_alg_post`.

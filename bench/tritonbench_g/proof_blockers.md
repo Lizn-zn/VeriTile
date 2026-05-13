@@ -59,6 +59,9 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   projected five-statement loop body execution and produces the `_mean =
   old + meanChunkLoadSpec` register update required by
   `meanLoopInvariant_step_of_accumulator_update`.
+  `meanLoopBody_step_preserves_context` proves the same body preserves the
+  `X` / `Mean` pointer tiles, `row_mask`, and reads from `X`, allowing those
+  facts to be threaded through the `forRange_inv` predicate.
   The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
