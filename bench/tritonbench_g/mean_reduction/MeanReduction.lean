@@ -666,6 +666,61 @@ def meanLoopBody (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
         (.ref .real [BLOCK_M, BLOCK_N] "a"))
   ]
 
+theorem meanLoopBody_step_accumulator_update
+    (s0 st st' : BlockState) (X : RegionName)
+    (M N BLOCK_M BLOCK_N off : Nat)
+    (hAcc :
+      st.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+        some (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off))
+    (hX :
+      st.regs .ptr [BLOCK_M, 1] "X" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          (X, meanOutOffset s0 BLOCK_M idx.1 * N) })
+    (hRow :
+      st.regs .bool [BLOCK_M, 1] "row_mask" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          meanRowActive s0 M BLOCK_M idx.1 })
+    (hRead : ∀ offset, st.readMem X offset = s0.readMem X offset)
+    (hStep :
+      stepStmts (meanLoopBody N BLOCK_M BLOCK_N)
+        (st.setReg "off" .nat [] (Tile.scalar off)) = some st') :
+    st'.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+      some
+        { data := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+            some
+              (WithBot.unbotD 0
+                  ((meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off).data idx) +
+                WithBot.unbotD 0
+                  ((meanChunkLoadSpec s0 X M N BLOCK_M BLOCK_N off).data idx)) } := by
+  unfold meanLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, hAcc, hX, hRow, Tile.bop, Tile.cop,
+    Tile.expandDim, TileShape.dropInsertedIndex, Tile.ptrAdd,
+    NumericDType.add, ComparableDType.lt, Option.bind, meanOutOffset,
+    meanRowActive] at hStep
+  subst st'
+  simp [BlockState.setReg]
+  ext idx
+  by_cases hmask :
+      meanOutOffset s0 BLOCK_M idx.1 < M ∧ off + idx.2.1.val < N
+  · rcases hmask with ⟨hrow, hcol⟩
+    have hrow' : s0.pids 0 * BLOCK_M + idx.1.val < M := by
+      simpa [meanOutOffset] using hrow
+    have hread' :
+        st.readMem X ((s0.pids 0 * BLOCK_M + idx.1.val) * N +
+            (off + idx.2.1.val)) =
+          s0.readMem X ((s0.pids 0 * BLOCK_M + idx.1.val) * N +
+            (off + idx.2.1.val)) :=
+      hRead _
+    simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, meanRowActive, hcol,
+      hrow', hread', meanOutOffset]
+  · have hmask' :
+        ¬(s0.pids 0 * BLOCK_M + idx.1.val < M ∧ off + idx.2.1.val < N) := by
+      simpa [meanOutOffset] using hmask
+    simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, meanRowActive, hmask',
+      meanOutOffset]
+    norm_num
+    rfl
+
 def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .real [BLOCK_M] "mean"
       (.div NumericDType.real Broadcast.scalarR

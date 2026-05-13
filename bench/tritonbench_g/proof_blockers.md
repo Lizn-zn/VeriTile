@@ -55,12 +55,15 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   split is the actual `toAlgKernel.body`. `meanPreLoop_step_regs` proves the
   concrete pre-loop execution facts needed by the loop and post-loop bridges:
   zero-initialized `_mean`, the expanded `X` / `Mean` pointer tiles, and
-  `row_mask`.
+  `row_mask`. `meanLoopBody_step_accumulator_update` consumes the actual
+  projected five-statement loop body execution and produces the `_mean =
+  old + meanChunkLoadSpec` register update required by
+  `meanLoopInvariant_step_of_accumulator_update`.
   The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
-  accumulator invariant is connected to the actual loop body with `forRange_inv`
-  and the final loop invariant is fed into `meanPostLoop_step_alg_post`. The compute-facing
+  loop-body step is threaded through `forRange_inv` and the final loop
+  invariant is fed into `meanPostLoop_step_alg_post`. The compute-facing
   wrapper is discharged once that algorithm-layer
   postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.

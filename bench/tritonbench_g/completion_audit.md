@@ -96,10 +96,11 @@ These files must not be counted complete yet:
     `mean_dim_kernel_toAlg_body` proves that this split is the actual
     `toAlgKernel.body`. `meanPreLoop_step_regs` proves the concrete pre-loop
     execution facts: zero `_mean`, expanded `X` / `Mean` pointer tiles, and
-    `row_mask`.
-  - Remaining proof: prove the concrete loop body produces the `_mean =
-    old + chunkLoad` register update, instantiate `forRange_inv`, then feed
-    the final loop invariant into
+    `row_mask`. `meanLoopBody_step_accumulator_update` proves that the actual
+    projected loop body produces the `_mean = old + meanChunkLoadSpec`
+    register update.
+  - Remaining proof: instantiate `forRange_inv`, then feed the final loop
+    invariant into
     `meanPostLoop_step_alg_post`.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
