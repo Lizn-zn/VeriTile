@@ -18,14 +18,14 @@ def attention_score_kernel
     (stride_qz stride_qh stride_qm stride_qk
       stride_kz stride_kh stride_kn stride_kk
       stride_oz stride_oh _stride_on
-      H H_KV N_CTX ROUND_CTX NKV_CTX
+      _Z H H_KV N_CTX ROUND_CTX NKV_CTX
       sliding_window_offset sliding_window_size
       BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
     (sm_scale : ℝ)
     (SLIDING_WINDOW COMPLEMENT_SLIDING_WINDOW IS_EVEN_M IS_EVEN_N : Bool) :
     ComputeKernel := triton {
-  start_n = tl.program_id(axis=0)
-  off_hz = tl.program_id(axis=1)
+  start_n = tl.program_id(0)
+  off_hz = tl.program_id(1)
   off_z = off_hz // $(H)
   off_h = off_hz % $(H)
   off_hkv = off_h // ($(H) // $(H_KV))
@@ -85,7 +85,7 @@ def attention_score_kernel
         p, 0)
     }
     o += tl.sum(p, axis=0)
-    Q_block_ptr = tl.advance(Q_block_ptr, [$(BLOCK_M), 0])
+    Q_block_ptr = tl.advance(Q_block_ptr, offsets=($(BLOCK_M), 0))
     m_ptrs = m_ptrs + $(BLOCK_M)
   }
   o_offset = (off_z).to(tl.int64) * $(stride_oz) + (off_h).to(tl.int64) * $(stride_oh)
