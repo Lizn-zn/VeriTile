@@ -270,6 +270,24 @@ theorem meanMaskedAccumulatorSpec_active
       some (meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1) := by
   simp [meanMaskedAccumulatorSpec, hrow]
 
+theorem meanChunkLoadSpec_active
+    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_N])
+    (hrow : meanRowActive s M BLOCK_M idx.1)
+    (hcol : off + idx.2.1.val < N) :
+    (meanChunkLoadSpec s X M N BLOCK_M BLOCK_N off).data idx =
+      some (s.readMem X (meanOutOffset s BLOCK_M idx.1 * N +
+        (off + idx.2.1.val))) := by
+  simp [meanChunkLoadSpec, hrow, hcol]
+
+theorem meanChunkLoadSpec_inactive
+    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_N])
+    (hmask : ¬(meanRowActive s M BLOCK_M idx.1 ∧ off + idx.2.1.val < N)) :
+    (meanChunkLoadSpec s X M N BLOCK_M BLOCK_N off).data idx =
+      some 0 := by
+  simp [meanChunkLoadSpec, hmask]
+
 def meanLoopInvariant
     (s0 : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N : Nat)
     (off : Nat) (st : BlockState) : Prop :=

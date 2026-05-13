@@ -31,7 +31,9 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   final `meanSpec`. The pure lane-step fact is proved as `meanLanePrefix_step`
   and lifted to the accumulator tile by `meanAccumulatorSpec_step`; the bridge
   from the final accumulator to the row-wise sum is proved by
-  `meanFromAccumulatorSpec_eq_meanSpec`. The theorem target is fixed as
+  `meanFromAccumulatorSpec_eq_meanSpec`. `meanChunkLoadSpec_active` and
+  `meanChunkLoadSpec_inactive` expose the masked-load tile shape needed to
+  match `a = tl.load(..., mask, other=0.0)`. The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
   accumulator invariant is connected to the actual loop body with
