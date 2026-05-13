@@ -363,6 +363,16 @@ theorem embeddingPrefixActive_final_of_storeActive
     embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL BLOCK_N idx := by
   exact ⟨by simp [embeddingPrefixWritten], hidx⟩
 
+theorem embeddingPrefixActive_of_storeActive_of_final
+    (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL final : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL])
+    (hfinal : BLOCK_N ≤ final)
+    (hidx : storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx) :
+    embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL final idx := by
+  exact ⟨by
+    unfold embeddingPrefixWritten
+    exact Nat.lt_of_lt_of_le idx.1.isLt hfinal, hidx⟩
+
 theorem embeddingLoopInvariant_step_of_chunk_write
     (s0 st st' : BlockState) (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
@@ -481,6 +491,23 @@ theorem embeddingLoopInvariant_to_alg_post
   exact hInv idx
     (embeddingPrefixActive_final_of_storeActive s0 n_ctx hiden_size
       BLOCK_N BLOCK_DMODEL idx hidx)
+
+theorem embeddingLoopInvariant_to_alg_post_of_final
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN final : Nat)
+    (hfinal : BLOCK_N ≤ final)
+    (hInv :
+      embeddingLoopInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL final st) :
+    embedding_kernel_alg_post weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s0 st := by
+  intro idx hidx
+  exact hInv idx
+    (embeddingPrefixActive_of_storeActive_of_final s0 n_ctx hiden_size
+      BLOCK_N BLOCK_DMODEL final idx hfinal hidx)
 
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)

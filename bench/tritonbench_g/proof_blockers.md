@@ -54,10 +54,14 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `storeActive2D_iff_full`. The `forRange_inv` predicate is now named
   `embeddingLoopInvariant`, with `embeddingLoopInvariant_zero` covering the
   vacuous prefix and `embeddingLoopInvariant_to_alg_post` bridging a completed
-  prefix to `embedding_kernel_alg_post`. The chunk step is factored as
-  `embeddingLoopInvariant_step_of_chunk_write`, which combines old-prefix
-  preservation with the current `BLOCK_NN × BLOCK_DMODEL` write map to produce
-  the next prefix invariant. The theorem target is fixed as
+  prefix to `embedding_kernel_alg_post`. The variant
+  `embeddingLoopInvariant_to_alg_post_of_final` now consumes the actual
+  `forRange_inv` conclusion `BLOCK_N ≤ final`, so the final readout bridge no
+  longer requires the loop offset to stop definitionally at exactly `BLOCK_N`.
+  The chunk step is factored as `embeddingLoopInvariant_step_of_chunk_write`,
+  which combines old-prefix preservation with the current
+  `BLOCK_NN × BLOCK_DMODEL` write map to produce the next prefix invariant. The
+  theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until that
   chunk step is instantiated with the actual loop body via

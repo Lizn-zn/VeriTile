@@ -87,8 +87,11 @@ These files must not be counted complete yet:
   - Public correctness theorem exposes this algorithm-layer postcondition as an
     explicit hypothesis; there is no `True` / `trivial` placeholder.
   - Current local proof infrastructure includes `embeddingLoopInvariant`,
-    `embeddingLoopInvariant_zero`, `embeddingLoopInvariant_step_of_chunk_write`,
-    and `embeddingLoopInvariant_to_alg_post`.
+  `embeddingLoopInvariant_zero`, `embeddingLoopInvariant_step_of_chunk_write`,
+    `embeddingLoopInvariant_to_alg_post`, and
+    `embeddingLoopInvariant_to_alg_post_of_final`. The final bridge now accepts
+    the `forRange_inv` shape `BLOCK_N ≤ final` rather than requiring a
+    definitionally exact final offset.
   - Remaining proof: instantiate the per-chunk write invariant with
     `forRange_inv` under `outOffsetFull` injectivity.
 
