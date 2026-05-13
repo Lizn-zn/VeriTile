@@ -119,7 +119,9 @@ These files must not be counted complete yet:
     active unfold lemmas are named `diagSsmForwardOutOffset_currentTime`,
     `diagSsmForwardSpecAt_currentTime`, and
     `diagSsmForwardActive_currentTime`; current-time masked scatter readback is
-    bridged by `diagSsmForwardCurrentTimeScatter_write`.
+    bridged by `diagSsmForwardCurrentTimeScatter_write`, with
+    `diagSsmForwardCurrentTimeNoCollision_of_out_injective` deriving its
+    no-collision premise from the full output injectivity hypothesis.
   - Remaining proof: instantiate the recurrence invariant with `forLoop_inv`
     under full `diagSsmForwardOutOffset` injectivity, including old-time
     preservation and the concrete loop-body store/register update.

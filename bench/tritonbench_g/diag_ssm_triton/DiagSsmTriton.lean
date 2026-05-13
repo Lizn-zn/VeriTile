@@ -474,6 +474,34 @@ theorem diagSsmForwardCurrentTimeScatter_write
       hactive
       (fun lane hlane heq => hNoCollision lane hlane heq)
 
+theorem diagSsmForwardCurrentTimeNoCollision_of_out_injective
+    {length : Nat}
+    (st0 : BlockState) (batch_size dim BLOCK_SIZE t : Nat)
+    (i : Fin BLOCK_SIZE) (ht : t < length)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx)) :
+    ∀ lane : TileIndex [BLOCK_SIZE],
+      active st0 batch_size dim BLOCK_SIZE lane.1 →
+        timeOffset st0 batch_size dim BLOCK_SIZE t lane.1 =
+          timeOffset st0 batch_size dim BLOCK_SIZE t i →
+        lane = ((i, PUnit.unit) : TileIndex [BLOCK_SIZE]) := by
+  intro lane _hactive heq
+  have hFull :
+      ((⟨t, ht⟩ : Fin length), lane.1, PUnit.unit) =
+        ((⟨t, ht⟩ : Fin length), i, PUnit.unit) := by
+    apply hOutInj
+    simpa [diagSsmForwardOutOffset_currentTime] using heq
+  have hLane : lane.1 = i := by
+    have h := congrArg
+      (fun idx : TileIndex [length, BLOCK_SIZE] => idx.2.1) hFull
+    simpa using h
+  cases lane with
+  | mk laneHead laneTail =>
+      cases laneTail
+      cases hLane
+      rfl
+
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=
