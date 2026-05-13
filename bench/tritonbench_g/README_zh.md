@@ -25,10 +25,10 @@ Lean 文件名是目录名的 **CamelCase 形式**(例如 `vector_addition/` 包
 
 1. **DSL port** —— `<KernelName>.lean` 是上游 `.py` kernel 的
    **忠实 1:1 转写** 到 `triton { ... }` 语法。仅允许机械的 Lean 语法
-   修改:`=` → `:=`,pointer 参数 → 通过 `$(...)` 注入的 `RegionName`,
-   `tl.constexpr` 标注 → Lean `Nat`/`Bool` 参数,Lean scalar 参数 →
-   `$(...)`。如果 port 用了尚未 land 的 DSL surface,可能编译不过 ——
-   编译失败正是 DSL surface 需要扩展的预期信号。**当前编译通过:15 / 15。**
+   修改见 [`review_criteria_zh.md`](./review_criteria_zh.md)。如果 port 用了
+   尚未 land 的 DSL surface,可能编译不过 —— 编译失败正是 DSL surface 需要
+   扩展的预期信号。**当前编译通过:141 / 141 个 port pair;184 个工作目录中
+   另外 43 个还是 README-only scaffold,不计为已完成 port。**
 2. **Spec** —— 写出 kernel 预期输出的 Real-valued 数学规范。
 3. **Verification** —— 证明 `ComputeCorrect.Realizes` /
    `ComputeRefine.Realizes` theorem,并登记到
@@ -37,22 +37,19 @@ Lean 文件名是目录名的 **CamelCase 形式**(例如 `vector_addition/` 包
 阶段 1 是逐字转写契约;到达阶段 3(verification)既需要 DSL gap 关闭,
 也需要 proof 落地。
 
-## 阻塞忠实 port 的 DSL gap
+## 当前审计状态
 
-当前 15 个转写浮出的不同 surface gap(每个 port 的 docstring 也记录
-自己的原因)。关闭其中任何一个,就能解锁旁边列出的 port:
+当前 sweep 见 [`completion_audit.md`](./completion_audit.md)。
+`bench/check_ports.sh` 编译所有 Python/Lean port pair,当前报告
+`TritonBench-G ports: 141 ok, 0 fail`。placeholder proof 扫描
+`rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
+当前无匹配。
 
-| Gap | 受影响的 port |
-|---|---|
-| `tl.program_id(axis=0)` 关键字形式 | `add_example`、`add_value`、`sin_computation`、`triton_mul2`、`vector_addition` |
-| `tl.max(x, 0)` positional-axis 形式 | `logsumexp_fwd` |
-| `tl.max(..., return_indices=True)` 元组返回 + 多绑定 `a, b := ...` | `max_reduction`(只第三个 kernel;前两个能编)|
-| 在 `tl.where` / 算术里直接写实数字面量 `0` / `0.0` | `relu_triton_kernel` |
-| `tl.math.*`(libdevice)namespace | `sin_kernel` |
-| `(x).to(tl.float32)` algorithm-layer cast | `cosine_compute` |
-
-修这些是 L3 operator-coverage 工作;在 #15 / #86 surface gap 下跟踪。
-每个 gap 关闭后跑 `bench/check_ports.sh` 把受影响 port 翻绿。
+剩余非绿色项是 proof obligation,不是 DSL 转写失败。它们列在
+[`proof_blockers.md`](./proof_blockers.md):`mean_reduction`、
+`embedding_triton_kernel`、`diag_ssm_triton` 的 forward real path 仍把
+algorithm-layer postcondition 显式暴露出来,直到 loop invariant 接到具体
+loop body。
 
 ## 构建
 
@@ -63,23 +60,34 @@ Lean 文件名是目录名的 **CamelCase 形式**(例如 `vector_addition/` 包
 # 当前所有已 port 的 kernel
 bench/check_ports.sh
 
+# 当前 TritonBench-G sweep 的机械审计 gate
+bench/audit_tritonbench_g.sh
+
 # 按 kernel name 子集
 bench/check_ports.sh vector_addition softmax_triton1
 ```
 
 脚本对每个 `<KernelName>.lean` 独立跑 `lake env lean`,报告 per-kernel
 pass/fail,任何失败时退出非零(CI-friendly)。
+审计脚本在 port-build gate 外还检查 Python/Lean 数量、placeholder proof、
+correctness surface、已编译 port 的 README 状态、`.to(tl.float32)` 覆盖、
+Lean-only `tl.load(..., dtype=...)`、`keep_dims` 替换、`+=` 覆盖、
+`rsqrt` 保留、Lean-only `tl.where`、`tl.*(...)` 调用集合和顺序、kernel
+控制流计数,以及顶层 statement lhs 顺序。它是机械 gate;逐行忠实性仍以
+[`review_criteria_zh.md`](./review_criteria_zh.md) 为准,未完成证明仍见
+[`proof_blockers.md`](./proof_blockers.md)。
 
 ## Provenance
 
 | 导入日期 | 上游 commit | Kernel | 备注 |
 |---|---|---|---|
 | 2026-05-06 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 15(Tier 1)| 初始 DSL port;暂无 spec / theorem |
+| 2026-05-13 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 141 port pair | 当前已审计 port 集;剩余 proof obligation 见 `completion_audit.md` |
 
 ### 对 vendored `.py` 文件的本地修改
 
 vendored `.py` 文件 **不是** 与上游严格逐字节相同。下列修改在所有
-15 个导入上本地应用:
+已导入文件上本地应用:
 
 - **每个 `@triton.jit` kernel 签名上的输入类型标注。** Pointer 参数标注
   `tl.tensor`,运行时 int 标量 `tl.int32`,运行时 float 标量 `tl.float32`。
@@ -108,7 +116,7 @@ license;Apache-2.0 → MIT vendoring 在 attribution 之下被允许。
 # Upstream license: Apache-2.0 (see https://github.com/thunlp/TritonBench/blob/main/LICENSE)
 ```
 
-当前 15 个导入未带这些 header(commit `eab9b81`);回填是 open work。
+初始导入未带这些 header(commit `eab9b81`);回填是 open work。
 
 ## 添加 kernel
 
