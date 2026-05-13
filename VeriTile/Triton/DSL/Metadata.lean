@@ -343,6 +343,10 @@ private partial def stmtRegionsWith (assigned : List String)
       (ins, [], nextAssigned)
   | `(tritonStmt| $_i:ident % $e:tritonExpr) =>
       (exprRegions assigned e, [], assigned)
+  | `(tritonStmt| $i:ident := tl.max($e:tritonExpr, $_n:num)) =>
+      (exprRegions assigned e, [], i.getId.toString :: assigned)
+  | `(tritonStmt| $i:ident = tl.max($e:tritonExpr, $_n:num)) =>
+      (exprRegions assigned e, [], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident := $e:tritonExpr) =>
       (exprRegions assigned e, [], i.getId.toString :: assigned)
   | `(tritonStmt| $i:ident = $e:tritonExpr) =>

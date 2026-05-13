@@ -35,8 +35,8 @@ def cross_entropy_forward_surface
     logits = $(SOFTCAP) * triton_tanh(logits / $(SOFTCAP))
   }
   logits = (logits).to(tl.float32)
-  c = tl.max(logits, axis=0)
-  logsumexp = c + tl.log(tl.sum(tl.exp(logits - c), axis=0))
+  c = tl.max(logits, 0)
+  logsumexp = c + tl.log(tl.sum(tl.exp(logits - c), 0))
   if label_idx != $((-100 : Int)) {
     x = tl.load(logits_ptr + label_idx)
     if DO_LOGIT_SCALING {
@@ -81,8 +81,8 @@ def chunked_cross_entropy_forward_surface
     logits = $(SOFTCAP) * triton_tanh(logits / $(SOFTCAP))
   }
   logits = (logits).to(tl.float32)
-  c = tl.max(logits, axis=0)
-  logsumexp = c + tl.log(tl.sum(tl.exp(logits - c), axis=0))
+  c = tl.max(logits, 0)
+  logsumexp = c + tl.log(tl.sum(tl.exp(logits - c), 0))
   if chunk_idx == 0 {
     if label_idx != $((-100 : Int)) {
       x = (tl.load(logits_ptr + label_idx)).to(tl.float32)
