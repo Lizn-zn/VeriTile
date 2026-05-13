@@ -83,6 +83,13 @@ theorem meanAccumulatorSpec_zero
   ext idx
   simp [meanAccumulatorSpec, Tile.zeros]
 
+theorem meanChunkLane_mod
+    (off BLOCK_N : Nat) (j : Fin BLOCK_N) (hOff : off % BLOCK_N = 0) :
+    (off + j.val) % BLOCK_N = j.val := by
+  rw [Nat.add_mod]
+  rw [hOff]
+  simp [Nat.mod_eq_of_lt j.isLt]
+
 private theorem sum_range_eq_sum_fin (N : Nat) (f : Nat → ℝ) :
     (Finset.range N).sum f =
       (Finset.univ : Finset (Fin N)).sum (fun j => f j.val) := by
