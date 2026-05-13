@@ -124,4 +124,67 @@ theorem forLoop_readout_tile
   obtain ⟨s_final, h_eq, hP⟩ := forLoop_inv h_init h_step
   exact ⟨s_final, h_eq, h_readout _ hP⟩
 
+/-- Auxiliary invariant principle for `forRange`.
+
+The loop counter advances by an arbitrary positive `step`, so the final counter
+is not definitionally `stop`; it is the first reached counter with
+`stop ≤ final`. The invariant is therefore indexed by the current counter and
+the conclusion exposes that final counter existentially. -/
+theorem forRangeAux_inv
+    {idx : RegName} {stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop}
+    (hstep : step ≠ 0)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s') :
+    ∀ cur s, P cur s →
+      ∃ final s_final,
+        stepForRangeAux idx cur stop step body s = some s_final ∧
+        stop ≤ final ∧ P final s_final := by
+  have hstep_pos : 0 < step := Nat.pos_of_ne_zero hstep
+  have key :
+      ∀ k cur s, stop - cur = k → P cur s →
+        ∃ final s_final,
+          stepForRangeAux idx cur stop step body s = some s_final ∧
+          stop ≤ final ∧ P final s_final := by
+    intro k
+    induction k using Nat.strong_induction_on with
+    | h k ih =>
+      intro cur s hk hP
+      by_cases hdone : stop ≤ cur
+      · refine ⟨cur, s, ?_, hdone, hP⟩
+        exact stepForRangeAux.step_ge hstep hdone
+      · have hlt : cur < stop := Nat.lt_of_not_ge hdone
+        obtain ⟨s', h_body, hP'⟩ := h_step cur s hlt hP
+        have hmeasure : stop - (cur + step) < k := by omega
+        obtain ⟨final, s_final, h_aux, hfinal, hPfinal⟩ :=
+          ih (stop - (cur + step)) hmeasure (cur + step) s' rfl hP'
+        refine ⟨final, s_final, ?_, hfinal, hPfinal⟩
+        rw [stepForRangeAux.step_lt hstep hlt]
+        rw [h_body]
+        exact h_aux
+  intro cur s hP
+  exact key (stop - cur) cur s rfl hP
+
+/-- Master invariant principle for static `forRange`. -/
+theorem forRange_inv
+    {idx : RegName} {start stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    (hstep : step ≠ 0)
+    (h_init : P start s_init)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s') :
+    ∃ final s_final,
+      stepStmt (.forRange idx start stop step body) s_init = some s_final ∧
+      stop ≤ final ∧ P final s_final := by
+  obtain ⟨final, s_final, h_aux, hfinal, hP⟩ :=
+    forRangeAux_inv hstep h_step start s_init h_init
+  refine ⟨final, s_final, ?_, hfinal, hP⟩
+  simpa [stepForRangeAux.forRange_unfold] using h_aux
+
 end VeriTile.Triton
