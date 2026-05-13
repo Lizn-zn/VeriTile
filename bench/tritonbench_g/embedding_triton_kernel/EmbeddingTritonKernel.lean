@@ -35,11 +35,11 @@ def embedding_kernel
     offs_seq = start_nn + offs_nn
     n_ctx_mask = offs_seq < $(n_ctx)
     token_ids = tl.load(input_ids + offs_seq, mask=n_ctx_mask, other=$(vob_end_id))
-    id_mask = ($(vob_start_id) <= token_ids) and (token_ids < $(vob_end_id))
-    token_ids = token_ids - $(vob_start_id)
-    dim_mask = offs_d < $(hiden_size)
-    load_mask = id_mask[:, None] and dim_mask[None, :]
-    store_mask = n_ctx_mask[:, None] and dim_mask[None, :]
+      id_mask = (token_ids >= $(vob_start_id)) & (token_ids < $(vob_end_id))
+      token_ids = token_ids - $(vob_start_id)
+      dim_mask = offs_d < $(hiden_size)
+      load_mask = id_mask[:, None] & dim_mask[None, :]
+      store_mask = n_ctx_mask[:, None] & dim_mask[None, :]
     vecs = tl.load(weight + token_ids[:, None] * $(stride_weight_seq) + offs_d[None, :],
       mask=load_mask, other=0.0)
     tl.store(out + offs_seq[:, None] * $(stride_out_seq) + offs_d[None, :], vecs, mask=store_mask)
