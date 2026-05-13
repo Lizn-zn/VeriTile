@@ -63,18 +63,19 @@ def bmm_chunk_fwd_surface
 
   acc = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
-    a_mask = (offs_m[:, None] < chunk_size_limit) &
-      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
-    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
-      (offs_n[None, :] < chunk_size_limit)
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0).to(dot_dtype)
-    b = tl.load(b_ptrs, mask=b_mask, other=0.0).to(dot_dtype)
+    a = tl.load(a_ptrs, mask=(offs_m[:, None] < chunk_size_limit) &
+      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K)), other=0.0).to(dot_dtype)
+    b = tl.load(b_ptrs, mask=(offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
+      (offs_n[None, :] < chunk_size_limit), other=0.0).to(dot_dtype)
     acc += tl.dot(a, b)
     a_ptrs += $(BLOCK_SIZE_K) * $(stride_ak)
     b_ptrs += $(BLOCK_SIZE_K) * $(stride_bk)
   }
 
+  offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
   if HAS_SEQ_IDX {
+    chunk_size_limit = min($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
     seq_idx_m = tl.load($((SeqIdx : Region .int)) + seq_idx_base +
       offs_m * $(stride_seq_idx_seqlen),
       mask=offs_m < chunk_size_limit, other=-1)
@@ -87,8 +88,8 @@ def bmm_chunk_fwd_surface
   Out += pid_b * $(stride_out_batch) +
     pid_c * $(stride_out_chunk) + pid_h * $(stride_out_head)
   out_ptrs = Out + $(stride_outm) * offs_m[:, None] + offs_n[None, :] * $(stride_outn)
-  out_mask = (offs_m[:, None] < $(chunk_size)) & (offs_n[None, :] < $(chunk_size))
-  tl.store(out_ptrs, out, mask=out_mask)
+  tl.store(out_ptrs, out, mask=(offs_m[:, None] < $(chunk_size)) &
+    (offs_n[None, :] < $(chunk_size)))
   }
 }
 

@@ -55,25 +55,27 @@ def bmm_chunk_bwd_surface
 
   acc = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for cs in range($(0), tl.cdiv(chunk_size_limit, $(BLOCK_SIZE_CS)), $(1)) {
-    dout_mask = (offs_m[:, None] < $(chunk_size)) &
-      (offs_cs[None, :] < chunk_size_limit - cs * $(BLOCK_SIZE_CS))
-    a_mask = (offs_cs[:, None] < chunk_size_limit - cs * $(BLOCK_SIZE_CS)) &
-      (offs_n[None, :] < $(K))
-    dout = tl.load(dout_ptrs, mask=dout_mask, other=0.0).to(dot_dtype)
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0).to(dot_dtype)
+    dout = tl.load(dout_ptrs, mask=(offs_m[:, None] < $(chunk_size)) &
+      (offs_cs[None, :] < chunk_size_limit - cs * $(BLOCK_SIZE_CS)),
+      other=0.0).to(dot_dtype)
+    a = tl.load(a_ptrs,
+      mask=(offs_cs[:, None] < chunk_size_limit - cs * $(BLOCK_SIZE_CS)) &
+        (offs_n[None, :] < $(K)), other=0.0).to(dot_dtype)
     acc += tl.dot(dout, a)
     dout_ptrs += $(BLOCK_SIZE_CS) * $(stride_dout_csize_m)
     a_ptrs += $(BLOCK_SIZE_CS) * $(stride_a_seqlen)
   }
 
+  offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
   if HAS_RESIDUAL {
     Res += pid_b * $(stride_res_batch) +
       pid_c * $(chunk_size) * $(stride_res_seqlen) + pid_h * $(stride_res_head)
     res_ptrs = Res +
       offs_m[:, None] * $(stride_res_seqlen) +
       offs_n[None, :] * $(stride_res_k)
-    res_mask = (offs_m[:, None] < chunk_size_limit) & (offs_n[None, :] < $(K))
-    res = tl.load(res_ptrs, mask=res_mask).to(tl.float32)
+    res = tl.load(res_ptrs, mask=(offs_m[:, None] < chunk_size_limit) &
+      (offs_n[None, :] < $(K))).to(tl.float32)
     acc += res
   }
 
@@ -81,8 +83,8 @@ def bmm_chunk_bwd_surface
   Db += pid_b * $(stride_db_batch) +
     pid_c * $(chunk_size) * $(stride_db_seqlen) + pid_h * $(stride_db_head)
   db_ptrs = Db + offs_m[:, None] * $(stride_db_seqlen) + offs_n[None, :] * $(stride_db_k)
-  db_mask = (offs_m[:, None] < chunk_size_limit) & (offs_n[None, :] < $(K))
-  tl.store(db_ptrs, db, mask=db_mask)
+  tl.store(db_ptrs, db, mask=(offs_m[:, None] < chunk_size_limit) &
+    (offs_n[None, :] < $(K)))
 }
 
 /-- Proof-oriented final `db` store slice of `bmm_chunk_bwd.py`'s
