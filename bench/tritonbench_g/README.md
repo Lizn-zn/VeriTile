@@ -64,8 +64,10 @@ status checks, and a documented-scope check for Python `.to(tl.float32)` casts
 that are outside a Lean proof slice. It also rejects Lean-only
 `tl.load(..., dtype=...)` annotations and `keep_dims` reduction substitutions,
 and it requires Python `+=` updates missing from Lean to be covered by a
-documented slice or branch/surface scope. Upstream `rsqrt` calls are also
-checked for preservation, and Lean-only `tl.where` statements are rejected.
+documented slice or branch/surface scope, including a normalized left-hand-side
+check for pointer names such as `a_ptr` versus `A`. Upstream `rsqrt` calls are
+also checked for preservation, and Lean-only `tl.where` statements are
+rejected.
 It is a mechanical gate only; line-by-line faithfulness still follows
 [`review_criteria.md`](./review_criteria.md), and unresolved proof obligations
 remain tracked in [`proof_blockers.md`](./proof_blockers.md).

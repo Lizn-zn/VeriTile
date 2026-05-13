@@ -26,10 +26,11 @@ surface.
   substitutions, both of which are must-fix deviations under
   `review_criteria.md`. It also flags Python `+=` statements missing from Lean
   unless the Lean port documents that the update is outside a proof slice or
-  branch/surface specialization, and it checks that upstream `rsqrt` calls are
-  preserved rather than rewritten as reciprocal square roots. It also rejects
-  Lean-only `tl.where` statements, another must-fix "extra statement" pattern
-  in `review_criteria.md`.
+  branch/surface specialization; this includes a normalized left-hand-side
+  check that treats names like `a_ptr` and `A` as the same pointer. It checks
+  that upstream `rsqrt` calls are preserved rather than rewritten as reciprocal
+  square roots. It also rejects Lean-only `tl.where` statements, another
+  must-fix "extra statement" pattern in `review_criteria.md`.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.

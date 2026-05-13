@@ -149,6 +149,60 @@ else
   printf 'ok documented += coverage scan\n'
 fi
 
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+)
+
+def norm(name: str) -> str:
+    name = name.lower()
+    for suffix in ("_pointer", "_ptrs", "_ptr"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    py_lhs = {
+        norm(match.group(1))
+        for match in re.finditer(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\+=", py_file.read_text(), re.M)
+    }
+    if not py_lhs:
+        continue
+    lean_text = lean_file.read_text()
+    lean_lhs = {
+        norm(match.group(1))
+        for match in re.finditer(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\+=", lean_text, re.M)
+    }
+    missing = sorted(py_lhs - lean_lhs)
+    if missing and not any(marker in lean_text.lower() for marker in scope_markers):
+        failures.append((py_file, lean_file, missing))
+
+if failures:
+    for py_file, lean_file, missing in failures:
+        print(f"{py_file} -> {lean_file}: missing += lhs {', '.join(missing)}")
+    sys.exit(1)
+PY
+then
+  printf 'ok normalized += lhs coverage scan\n'
+else
+  printf 'FAIL normalized += lhs coverage scan\n'
+  failures=$((failures + 1))
+fi
+
 rsqrt_gaps=()
 while IFS= read -r py_file; do
   if ! rg -q 'tl(\.math)?\.rsqrt|rsqrt' "${py_file}"; then
