@@ -277,6 +277,16 @@ def meanLoopInvariant
     st.regs .real [BLOCK_M, BLOCK_N] "_mean" =
       some (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off)
 
+theorem meanLoopInvariant_init_of_zero_reg
+    (s0 st : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N : Nat)
+    (hReg :
+      st.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+        some { data := fun _ : TileIndex [BLOCK_M, BLOCK_N] => some 0 }) :
+    meanLoopInvariant s0 X M N BLOCK_M BLOCK_N 0 st := by
+  constructor
+  · simp
+  · simpa [meanMaskedAccumulatorSpec_zero] using hReg
+
 theorem meanMaskedAccumulatorSpec_step_add
     (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
     (hOff : off % BLOCK_N = 0) :

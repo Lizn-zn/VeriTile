@@ -20,6 +20,7 @@ the named algorithm postconditions.
   load tile is captured by `meanChunkLoadSpec`, with
   `meanMaskedAccumulatorSpec_step_add` matching the actual `_mean += a` update.
   The `forRange_inv` predicate is now named `meanLoopInvariant`, with
+  `meanLoopInvariant_init_of_zero_reg` covering the zero-initialized entry and
   `meanLoopInvariant_step_of_accumulator_update` reducing the loop step to the
   concrete register update produced by the body. The final active-row readout
   bridge is proved by
