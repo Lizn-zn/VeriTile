@@ -165,6 +165,9 @@ syntax:max tritonExpr:max noWs "[" "None" "]" : tritonExpr
 syntax:max tritonExpr:max noWs "[" ":" "," "None" "," "None" "]" : tritonExpr
 syntax:max tritonExpr:max noWs "[" "None" "," ":" "," "None" "]" : tritonExpr
 syntax:max tritonExpr:max noWs "[" "None" "," "None" "," ":" "]" : tritonExpr
+syntax:max tritonExpr:max noWs "[" ":" "," "None" "," ":" "]" : tritonExpr
+syntax:max tritonExpr:max noWs "[" "None" "," ":" "," ":" "]" : tritonExpr
+syntax:max tritonExpr:max noWs "[" ":" "," ":" "," "None" "]" : tritonExpr
 syntax "tl.expand_dims(" tritonExpr ", " tritonReduceKwarg ")" : tritonExpr
 syntax "tl.expand_dims(" tritonExpr ", " num ")" : tritonExpr
 

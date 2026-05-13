@@ -1105,6 +1105,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
         [← `((1 : Nat))] ++ dims
       pure ⟨← `(Op.expandDim (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.setAxisOne]⟩) $e1.term),
         e1.dtype, .dims outDims, e1.computeTerm, e1.computeDType?⟩
+  | `(tritonExpr| $e:tritonExpr[ : , None , : ]) => do
+      -- `e[:, None, :]` — insert a unit axis in the middle of a rank-2 tile.
+      expandExpandDims expandExpr env e (axisIdx := 1)
+  | `(tritonExpr| $e:tritonExpr[ None , : , : ]) => do
+      -- `e[None, :, :]` — add a leading unit axis to a rank-2 tile.
+      expandExpandDims expandExpr env e (axisIdx := 0)
+  | `(tritonExpr| $e:tritonExpr[ : , : , None ]) => do
+      -- `e[:, :, None]` — add a trailing unit axis to a rank-2 tile.
+      expandExpandDims expandExpr env e (axisIdx := 2)
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $kw:tritonReduceKwarg)) => do
       match kw with
       | `(tritonReduceKwarg| axis = $n:num) =>

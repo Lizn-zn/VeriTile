@@ -282,6 +282,9 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| $e:tritonExpr[ : ])          => exprRegions assigned e
   | `(tritonExpr| $e:tritonExpr[ : , None ])     => exprRegions assigned e
   | `(tritonExpr| $e:tritonExpr[ None , : ])     => exprRegions assigned e
+  | `(tritonExpr| $e:tritonExpr[ : , None , : ]) => exprRegions assigned e
+  | `(tritonExpr| $e:tritonExpr[ None , : , : ]) => exprRegions assigned e
+  | `(tritonExpr| $e:tritonExpr[ : , : , None ]) => exprRegions assigned e
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:tritonReduceKwarg)) => exprRegions assigned e
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:num)) => exprRegions assigned e
   | `(tritonExpr| tl.trans($e:tritonExpr))       => exprRegions assigned e

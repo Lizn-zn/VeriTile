@@ -1661,6 +1661,17 @@ def rank3NoneKernel (outReg : RegionName) (M N K : Nat) : ComputeKernel := trito
 
 #check rank3NoneKernel
 
+def rank2MiddleNoneKernel (outReg : RegionName) (M K : Nat) : ComputeKernel := triton {
+  offs_m = tl.arange(0, $(M))
+  offs_k = tl.arange(0, $(K))
+  tile2 = offs_m[:, None] + offs_k[None, :]
+  tile3 = tile2[:, None, :]
+  out_ptrs = outReg + offs_m[:, None, None] * $(K) + offs_k[None, None, :]
+  tl.store(out_ptrs, tile3)
+}
+
+#check rank2MiddleNoneKernel
+
 /-! ### Python two-argument dynamic `range(start, stop)` -/
 
 def dynRange2Kernel (outReg : RegionName) (bounds : Region .nat) : ComputeKernel := triton {
