@@ -1709,4 +1709,15 @@ def intSentinelKernel (outReg : RegionName) (labels : Region .int) (ignored : In
 
 #check intSentinelKernel
 
+/-! ### Pointer decrement -/
+
+def pointerDecrementKernel (outReg : Region .real) (N : Nat) : ComputeKernel := triton {
+  ptr = outReg + $(N)
+  ptr -= $(N)
+  x = tl.load(ptr)
+  tl.store(outReg, x)
+}
+
+#check pointerDecrementKernel
+
 end VeriTile.Examples.TritonSmoke
