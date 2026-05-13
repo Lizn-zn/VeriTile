@@ -14,8 +14,10 @@ the named algorithm postconditions.
 - Current local spec now describes the full row mean via `meanSpec` as a
   `Fin N` sum over the original row, matching all `off` iterations together,
   and the intended `_mean` loop accumulator via `meanLanePrefix` /
-  `meanAccumulatorSpec`. The pure lane-step fact is now proved as
-  `meanLanePrefix_step` and lifted to the accumulator tile by
+  `meanAccumulatorSpec`. Because the loop body masks inactive rows, the actual
+  loop invariant must use `meanMaskedAccumulatorSpec`; its zero, step, and
+  active-row projection lemmas are proved locally. The pure lane-step fact is
+  proved as `meanLanePrefix_step` and lifted to the accumulator tile by
   `meanAccumulatorSpec_step`; the bridge from the final accumulator to the
   row-wise sum is proved by `meanFromAccumulatorSpec_eq_meanSpec`. The theorem
   target is fixed as `mean_dim_kernel_correct_target`, but the theorem is still
