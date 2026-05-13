@@ -16,7 +16,9 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   row-wise sum is proved by `meanFromAccumulatorSpec_eq_meanSpec`; the theorem
   target is fixed as `mean_dim_kernel_correct_target`, but the theorem is still
   a placeholder until the accumulator invariant itself is instantiated with
-  `forRange_inv`.
+  `forRange_inv`. The compute-facing wrapper is discharged once that
+  algorithm-layer postcondition is available via
+  `mean_dim_kernel_compute_correct_of_algorithm`.
 
 ## `embedding_triton_kernel.py`
 
@@ -32,7 +34,9 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   `outOffset2D_eq_full` and `embeddingSpec2D_eq_full`; the theorem target is
   fixed as `embedding_kernel_correct_target`, but the theorem is still a
   placeholder until the per-chunk write invariant is instantiated with
-  `forRange_inv`.
+  `forRange_inv`. The compute-facing wrapper is discharged once that
+  algorithm-layer postcondition is available via
+  `embedding_kernel_compute_correct_of_algorithm`.
 
 ## `diag_ssm_triton.py`
 
@@ -47,3 +51,6 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   stores to the recurrence state. The theorem target is fixed as
   `diag_ssm_forward_kernel_correct_target`, but the theorem is still a
   placeholder until the recurrence invariant is instantiated with `forLoop_inv`.
+  The compute-facing wrapper is discharged once that algorithm-layer
+  postcondition is available via
+  `diag_ssm_forward_kernel_compute_correct_of_algorithm`.
