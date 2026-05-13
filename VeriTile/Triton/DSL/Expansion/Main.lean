@@ -491,6 +491,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.constBool $t), .bool, SInfo.scalar, none, none⟩
   | `(tritonExpr| $(($t:term : Nat))) =>
       pure ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $(($t:term : Int))) =>
+      pure ⟨← `(Op.constInt $t), .int, SInfo.scalar, none, none⟩
   | `(tritonExpr| $($t:term)) =>
       -- `$(...)` antiquote is the address/size channel: `Nat`.
       -- Data/scalar contexts reinterpret the same surface form through

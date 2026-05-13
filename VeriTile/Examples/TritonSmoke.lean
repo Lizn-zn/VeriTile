@@ -1693,4 +1693,20 @@ def helperExprKernel (outReg : RegionName) (N BLOCK : Nat) : ComputeKernel := tr
 
 #check helperExprKernel
 
+/-! ### Int antiquote and signed sentinels -/
+
+def intSentinelKernel (outReg : RegionName) (labels : Region .int) (ignored : Int) :
+    ComputeKernel := triton {
+  row = tl.program_id(axis=0)
+  label = tl.load($((labels : Region .int)) + row)
+  if label == $((ignored : Int)) {
+    tl.store(outReg + row, 0.0)
+  } else {
+    label -= $((1 : Int))
+    tl.store(outReg + row, 1.0)
+  }
+}
+
+#check intSentinelKernel
+
 end VeriTile.Examples.TritonSmoke
