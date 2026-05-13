@@ -70,6 +70,19 @@ noncomputable def meanFromAccumulatorSpec
   ((Finset.univ : Finset (Fin BLOCK_N)).sum fun j =>
     meanLanePrefix s X N BLOCK_M BLOCK_N off i j) / (N : ℝ)
 
+@[simp] theorem meanLanePrefix_zero
+    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N : Nat)
+    (i : Fin BLOCK_M) (j : Fin BLOCK_N) :
+    meanLanePrefix s X N BLOCK_M BLOCK_N 0 i j = 0 := by
+  simp [meanLanePrefix]
+
+theorem meanAccumulatorSpec_zero
+    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N : Nat) :
+    meanAccumulatorSpec s X N BLOCK_M BLOCK_N 0 =
+      Tile.zeros .real [BLOCK_M, BLOCK_N] := by
+  ext idx
+  simp [meanAccumulatorSpec, Tile.zeros]
+
 private theorem sum_range_eq_sum_fin (N : Nat) (f : Nat → ℝ) :
     (Finset.range N).sum f =
       (Finset.univ : Finset (Fin N)).sum (fun j => f j.val) := by
