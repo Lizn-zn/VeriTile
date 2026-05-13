@@ -1653,4 +1653,20 @@ def rank3NoneKernel (outReg : RegionName) (M N K : Nat) : ComputeKernel := trito
 
 #check rank3NoneKernel
 
+/-! ### Python two-argument dynamic `range(start, stop)` -/
+
+def dynRange2Kernel (outReg : RegionName) (bounds : Region .nat) : ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  start_i = tl.load(bounds + pid)
+  end_i = tl.load(bounds + pid + $(1))
+  acc = tl.zeros([], dtype=tl.float32)
+  for i in range(start_i, end_i) {
+    x = tl.load(outReg + i)
+    acc += x
+  }
+  tl.store(outReg + pid, acc)
+}
+
+#check dynRange2Kernel
+
 end VeriTile.Examples.TritonSmoke

@@ -466,6 +466,14 @@ private partial def scanStmt (assigned : Assigned)
       let bodyAssigned := i.getId.toString :: assigned
       let (info, _) := scanStmts bodyAssigned stmts.toList
       (info, assigned)
+  | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr) { $stmts:tritonStmt* }) =>
+      let bodyAssigned := i.getId.toString :: assigned
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      let rangeInfo : ScanInfo :=
+        { directPins := natExprIdents start ++ natExprIdents stop ++
+            directPinsFromExpr assigned start ++ directPinsFromExpr assigned stop
+          cmpDeps := cmpDepsFromExpr start ++ cmpDepsFromExpr stop }
+      (rangeInfo.append info, assigned)
   | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr, $step:tritonExpr) { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
       let (info, _) := scanStmts bodyAssigned stmts.toList
