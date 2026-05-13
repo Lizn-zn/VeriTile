@@ -314,7 +314,8 @@ theorem diag_ssm_forward_kernel_correct
     (length batch_size dim BLOCK_SIZE : Nat)
     (s s' : BlockState)
     (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => colOffset s BLOCK_SIZE i))
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx))
     (hExec : exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
         length batch_size dim BLOCK_SIZE) s = some s') :
     True := by
@@ -326,7 +327,8 @@ theorem diag_ssm_forward_kernel_compute_correct
     (length batch_size dim BLOCK_SIZE : Nat)
     (s : BlockState)
     (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => colOffset s BLOCK_SIZE i)) :
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx)) :
     True := by
   trivial
 

@@ -357,6 +357,9 @@ theorem embedding_kernel_correct
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
     (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s stride_out_seq BLOCK_N idx))
     (hExec : exec (embedding_kernel weight input_ids out
         vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
         hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s') :
@@ -368,7 +371,10 @@ theorem embedding_kernel_compute_correct
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
-    (s : BlockState) :
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s stride_out_seq BLOCK_N idx)) :
     True := by
   trivial
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
