@@ -218,6 +218,36 @@ noncomputable def embeddingSpecFull
     else
       some (0.0 : ℝ))
 
+def embeddingChunkToFullIndex
+    (start_nn : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (h : start_nn + idx.1.val < BLOCK_N) : TileIndex [BLOCK_N, BLOCK_DMODEL] :=
+  (⟨start_nn + idx.1.val, h⟩, idx.2)
+
+theorem embeddingSpec2D_eq_full
+    (s : BlockState) (weight input_ids : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq BLOCK_N start_nn
+      BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (h : start_nn + idx.1.val < BLOCK_N) :
+    embeddingSpec2D s weight input_ids vob_start_id vob_end_id
+        stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx =
+      embeddingSpecFull s weight input_ids vob_start_id vob_end_id
+        stride_weight_seq BLOCK_N BLOCK_DMODEL
+        (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
+  simp [embeddingSpec2D, embeddingSpecFull, embeddingChunkToFullIndex,
+    tokenRaw2D, tokenRawFull, seqLaneIndex, fullSeqIndex,
+    weightOffset2D, weightOffsetFull, tokenIndex2D, tokenIndexFull]
+
+theorem outOffset2D_eq_full
+    (s : BlockState) (stride_out_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (h : start_nn + idx.1.val < BLOCK_N) :
+    outOffset2D s stride_out_seq BLOCK_N start_nn idx =
+      outOffsetFull s stride_out_seq BLOCK_N
+        (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
+  simp [outOffset2D, outOffsetFull, embeddingChunkToFullIndex,
+    seqLaneIndex, fullSeqIndex]
+
 def embeddingPrefixWritten
     (off : Nat) (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Prop :=
   idx.1.val < off
