@@ -29,11 +29,9 @@ def destindex_copy_quantize_kv_group_real_surface
   offs_g = tl.arange(0, $(BLOCK_GROUP_NUM))
   offs_d = tl.arange(0, $(BLOCK_GROUP_DIM))
   dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
-  group_mask = offs_g < $(group_size)
-  value_mask = group_mask[:, None] and (offs_d[None, :] < $(BLOCK_GROUP_DIM))
   src_data = tl.load(K + cur_index * $(stride_k_bs) + cur_head * $(stride_k_h) +
       offs_g[:, None] * $(stride_k_g) + offs_d[None, :] * $(stride_k_d),
-    mask=value_mask, other=0.0)
+    mask=offs_g[:, None] < $(group_size), other=0.0)
   abs_data = tl.abs(src_data)
   data_scale = (tl.max(abs_data, axis=1) / 127.0).to(OutScale.dtype.element_ty)
   q_src_data = (src_data / data_scale[:, None]).to(tl.int8)
@@ -41,8 +39,8 @@ def destindex_copy_quantize_kv_group_real_surface
     offs_g[:, None] * $(stride_o_g) + offs_d[None, :] * $(stride_o_d)
   os_ptrs = OutScale + dest_index * $(stride_os_bs) + cur_head * $(stride_os_h) +
     offs_g
-  tl.store(o_ptrs, q_src_data, mask=value_mask)
-  tl.store(os_ptrs, data_scale, mask=group_mask)
+  tl.store(o_ptrs, q_src_data, mask=offs_g[:, None] < $(group_size))
+  tl.store(os_ptrs, data_scale, mask=offs_g < $(group_size))
 }
 
 /-- Proof-oriented q-value writeback slice of `quantize_kv_copy.py`'s grouped

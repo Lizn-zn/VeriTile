@@ -28,19 +28,17 @@ def destindex_copy_quantize_kv_real_surface
   offs_h = tl.arange(0, $(BLOCK_HEAD))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
-  head_mask = offs_h[:, None] < $(head_num)
-  value_mask = head_mask and (offs_d[None, :] < $(BLOCK_DMODEL))
   src_data = tl.load(K + cur_index * $(stride_k_bs) +
       offs_h[:, None] * $(stride_k_h) + $(stride_k_d) * offs_d[None, :],
-    mask=value_mask, other=0.0)
+    mask=offs_h[:, None] < $(head_num), other=0.0)
   abs_data = tl.abs(src_data)
   data_scale = ((tl.max(abs_data, axis=1) / 127.0).to(tl.float16))[:, None]
   q_src_data = (src_data / data_scale).to(tl.int8)
   o_ptrs = Out + dest_index * $(stride_o_bs) +
     $(stride_o_h) * offs_h[:, None] + $(stride_o_d) * offs_d[None, :]
   os_ptrs = OutScale + dest_index * $(stride_os_bs) + $(stride_os_h) * offs_h[:, None]
-  tl.store(o_ptrs, q_src_data, mask=value_mask)
-  tl.store(os_ptrs, data_scale, mask=head_mask)
+  tl.store(o_ptrs, q_src_data, mask=offs_h[:, None] < $(head_num))
+  tl.store(os_ptrs, data_scale, mask=offs_h[:, None] < $(head_num))
 }
 
 /-- Proof-oriented q-value writeback slice of `quantize_copy_kv.py`'s
