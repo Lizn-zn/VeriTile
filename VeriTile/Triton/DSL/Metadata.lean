@@ -94,6 +94,7 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.log($e:tritonExpr))         => exprRegions assigned e
   | `(tritonExpr| tl.log2($e:tritonExpr))        => exprRegions assigned e
   | `(tritonExpr| tl.sigmoid($e:tritonExpr))     => exprRegions assigned e
+  | `(tritonExpr| silu($e:tritonExpr))           => exprRegions assigned e
   | `(tritonExpr| tl.sqrt($e:tritonExpr))        => exprRegions assigned e
   | `(tritonExpr| tl.math.rsqrt($e:tritonExpr)) => exprRegions assigned e
   | `(tritonExpr| tl.rsqrt($e:tritonExpr))      => exprRegions assigned e

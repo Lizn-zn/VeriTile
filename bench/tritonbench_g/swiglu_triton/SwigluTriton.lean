@@ -12,8 +12,7 @@ open VeriTile.Triton
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `n_cols: tl.constexpr` / `BLOCK_SIZE: tl.constexpr` -> Lean `Nat`
-  parameters.
-- The helper `silu(x)` is inlined as `x * tl.sigmoid(x)`. -/
+  parameters. -/
 def swiglu_forward_kernel
     (A B C : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
@@ -25,7 +24,7 @@ def swiglu_forward_kernel
   mask = col_offsets < $(n_cols)
   a_row = tl.load(A + col_offsets, mask=mask, other=0).to(tl.float32)
   b_row = tl.load(B + col_offsets, mask=mask, other=0)
-  c_row = a_row * tl.sigmoid(a_row) * b_row
+  c_row = silu(a_row) * b_row
   tl.store(C + col_offsets, c_row, mask=mask)
 }
 

@@ -543,6 +543,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.sigmoid" e'
       pure ⟨← `(Op.sigmoid $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| silu($e:tritonExpr)) =>
+      expandExpr env (← `(tritonExpr| $e * tl.sigmoid($e)))
   | `(tritonExpr| tl.sqrt($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.sqrt" e'
