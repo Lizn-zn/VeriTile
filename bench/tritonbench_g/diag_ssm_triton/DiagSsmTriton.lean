@@ -217,6 +217,21 @@ noncomputable def diagSsmStateTile
         st.readMem x_ptr (timeOffset st batch_size dim BLOCK_SIZE t i) := by
   rfl
 
+theorem diagSsmStateTile_succ
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat) :
+    diagSsmStateTile st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE (t + 1) =
+      { data := fun idx =>
+          some
+            (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
+                BLOCK_SIZE idx.1 t *
+              st.readMem lambda_ptr
+                (IntegralDType.nat.mod (colOffset st BLOCK_SIZE idx.1) dim) +
+              st.readMem x_ptr
+                (timeOffset st batch_size dim BLOCK_SIZE t idx.1)) } := by
+  ext idx
+  simp [diagSsmStateTile]
+
 def diagSsmForwardOutOffset
     (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
     (idx : TileIndex [length, BLOCK_SIZE]) : Nat :=
