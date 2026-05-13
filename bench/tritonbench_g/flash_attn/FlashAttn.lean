@@ -24,8 +24,8 @@ def flash_attn_output_store_slice
       stride_q_head stride_o_seqlen stride_o_dim
       BLOCK_M DIM : Nat) :
     ComputeKernel := triton {
-  start_m = tl.program_id(axis=0)
-  off_bs_head = tl.program_id(axis=1)
+  start_m = tl.program_id(0)
+  off_bs_head = tl.program_id(1)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offs_d = tl.arange(0, $(DIM))
   out_buffer = tl.load(OutBuffer + off_bs_head * $(stride_buf_h) +
@@ -46,8 +46,8 @@ def flash_attn_l_store_slice
     (stride_max_h stride_max_m stride_den_h stride_den_m
       SEQLEN BLOCK_M : Nat) :
     ComputeKernel := triton {
-  start_m = tl.program_id(axis=0)
-  off_bs_head = tl.program_id(axis=1)
+  start_m = tl.program_id(0)
+  off_bs_head = tl.program_id(1)
   off_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   max_row = tl.load(Max + off_bs_head * $(stride_max_h) + off_m * $(stride_max_m))
   denom = tl.load(Denom + off_bs_head * $(stride_den_h) + off_m * $(stride_den_m))

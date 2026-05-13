@@ -19,7 +19,7 @@ streaming-softmax accumulator is outside this slice. -/
 def triton_attention_forward_output_store_slice
     (Acc Out : RegionName) (hzRowOffset D0 stride_om stride_on BLOCK_M BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
-  start_m = tl.program_id(axis=0)
+  start_m = tl.program_id(0)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   mask = (offs_m[:, None] + $(hzRowOffset) < $(D0)) &

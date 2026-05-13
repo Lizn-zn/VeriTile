@@ -19,9 +19,9 @@ def chunk_gate_recurrence_fwd_surface
     (_NUM_HEAD NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
     (HAS_LAST_KV : Bool) :
     ComputeKernel := triton {
-  offset_bh = tl.program_id(axis=0)
-  offset_d = tl.program_id(axis=1)
-  offset_s = tl.program_id(axis=2)
+  offset_bh = tl.program_id(0)
+  offset_d = tl.program_id(1)
+  offset_s = tl.program_id(2)
   offs_k = tl.arange(0, $(BLOCK_MODEL_K))
   offs_v = tl.arange(0, $(BLOCK_MODEL_V))
   S_ptr = S + offset_bh * $(NUM_BLOCK) * $(D_MODEL_K) * $(D_MODEL_V) +
@@ -65,9 +65,9 @@ def chunk_gate_recurrence_forward_store_slice
     (Acc O : RegionName)
     (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat) :
     ComputeKernel := triton {
-  offset_bh = tl.program_id(axis=0)
-  offset_d = tl.program_id(axis=1)
-  offset_s = tl.program_id(axis=2)
+  offset_bh = tl.program_id(0)
+  offset_d = tl.program_id(1)
+  offset_s = tl.program_id(2)
   offs_k = tl.arange(0, $(BLOCK_MODEL_K))
   offs_v = tl.arange(0, $(BLOCK_MODEL_V))
   acc = tl.load(Acc + offset_bh * $(D_MODEL_K) * $(D_MODEL_V) +

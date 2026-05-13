@@ -35,8 +35,8 @@ def block_sparse_attention_kernel
     ComputeKernel := triton {
   tl.static_print("block_sparse_attention_kernel")
   q_seq_len = $(total_seq_len)
-  start_m = tl.program_id(axis=0)
-  off_bh = tl.program_id(axis=1)
+  start_m = tl.program_id(0)
+  off_bh = tl.program_id(1)
   off_h = off_bh % $(num_heads)
   off_b = off_bh // $(num_heads)
   head_groups = $(num_heads) // $(num_kv_heads)
@@ -156,8 +156,8 @@ def block_sparse_attn_output_store_slice
       stride_ob stride_oh stride_om
       BLOCK_M BLOCK_D : Nat) :
     ComputeKernel := triton {
-  start_m = tl.program_id(axis=0)
-  off_bh = tl.program_id(axis=1)
+  start_m = tl.program_id(0)
+  off_bh = tl.program_id(1)
   off_h = off_bh % $(num_heads)
   off_b = off_bh // $(num_heads)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
@@ -184,8 +184,8 @@ def block_sparse_attn_output_store_second_slice
       stride_ob stride_oh stride_om
       BLOCK_M BLOCK_D : Nat) :
     ComputeKernel := triton {
-  start_m = tl.program_id(axis=0)
-  off_bh = tl.program_id(axis=1)
+  start_m = tl.program_id(0)
+  off_bh = tl.program_id(1)
   off_h = off_bh % $(num_heads)
   off_b = off_bh // $(num_heads)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))

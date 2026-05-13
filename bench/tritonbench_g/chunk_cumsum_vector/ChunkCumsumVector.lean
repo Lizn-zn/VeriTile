@@ -44,9 +44,9 @@ boundary-checked writeback into `Z`. -/
 def chunk_cumsum_vector_store_slice
     (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
     ComputeKernel := triton {
-  i_s = tl.program_id(axis=0)
-  i_bh = tl.program_id(axis=1)
-  i_t = tl.program_id(axis=2)
+  i_s = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  i_t = tl.program_id(2)
   offs_t = i_t * $(BT) + tl.arange(0, $(BT))
   offs_s = i_s * $(BS) + tl.arange(0, $(BS))
   mask = (offs_t[:, None] < $(T)) & (offs_s[None, :] < $(S))

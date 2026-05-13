@@ -46,8 +46,8 @@ def matmul_output_store_slice
     (C Acc : RegionName)
     (stride_cm stride_cn stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
     ComputeKernel := triton {
-  pid_m = tl.program_id(axis=0)
-  pid_n = tl.program_id(axis=1)
+  pid_m = tl.program_id(0)
+  pid_n = tl.program_id(1)
   offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
   offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
   acc = tl.load(Acc + $(stride_accm) * offs_cm[:, None] +

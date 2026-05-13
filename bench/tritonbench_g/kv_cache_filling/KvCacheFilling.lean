@@ -23,8 +23,8 @@ def fill_kv_cache_kernel_surface
       stride_kcd stride_vcn stride_vcb stride_vch stride_vcd stride_boff
       BLOCK BLOCK_D BLOCK_DV BLOCK_H : Nat) :
     ComputeKernel := triton {
-  batch_id = tl.program_id(axis=0)
-  block_id = tl.program_id(axis=1)
+  batch_id = tl.program_id(0)
+  block_id = tl.program_id(1)
   h_off = tl.arange(0, $(BLOCK_H))
   d_off = tl.arange(0, $(BLOCK_D))
   q_startloc = tl.load($((QStartLoc : Region .nat)) + batch_id)
@@ -89,7 +89,7 @@ def fill_k_cache_tile
       stride_kcn stride_kcb stride_kch stride_kcd
       stride_boff num_heads head_dim BLOCK_H BLOCK_D : Nat) :
     ComputeKernel := triton {
-  batch_id = tl.program_id(axis=0)
+  batch_id = tl.program_id(0)
   h_off = tl.arange(0, $(BLOCK_H))
   d_off = tl.arange(0, $(BLOCK_D))
   block_off = tl.load($((BlockOffsets : Region .nat)) + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
@@ -116,7 +116,7 @@ def fill_v_cache_tile
       stride_vcn stride_vcb stride_vch stride_vcd
       stride_boff num_heads head_dim_v BLOCK_H BLOCK_DV : Nat) :
     ComputeKernel := triton {
-  batch_id = tl.program_id(axis=0)
+  batch_id = tl.program_id(0)
   h_off = tl.arange(0, $(BLOCK_H))
   dv_off = tl.arange(0, $(BLOCK_DV))
   block_off = tl.load($((BlockOffsets : Region .nat)) + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))

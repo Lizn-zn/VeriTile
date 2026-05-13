@@ -24,9 +24,9 @@ def conv2d_forward_surface
       kernel_height kernel_width stride_height stride_width padding_height padding_width groups
       BLOCK_BHW BLOCK_IN_FEAT BLOCK_OUT_FEAT : Nat) (_fp16 _tf32 : Bool) :
     ComputeKernel := triton {
-  batch_height_width_pid = tl.program_id(axis=0)
-  out_feat_pid = tl.program_id(axis=1)
-  group_pid = tl.program_id(axis=2)
+  batch_height_width_pid = tl.program_id(0)
+  out_feat_pid = tl.program_id(1)
+  group_pid = tl.program_id(2)
   in_group_dim = $(in_feat_dim) // $(groups)
   out_group_dim = $(out_feat_dim) // $(groups)
   batch_height_width_offset =
@@ -101,9 +101,9 @@ def conv2d_output_store_slice
       output_batch_stride output_out_feat_stride output_height_stride output_width_stride
       acc_bhw_stride acc_feat_stride BLOCK_BHW BLOCK_OUT_FEAT : Nat) :
     ComputeKernel := triton {
-  batch_height_width_pid = tl.program_id(axis=0)
-  out_feat_pid = tl.program_id(axis=1)
-  group_pid = tl.program_id(axis=2)
+  batch_height_width_pid = tl.program_id(0)
+  out_feat_pid = tl.program_id(1)
+  group_pid = tl.program_id(2)
   batch_height_width_offset =
     batch_height_width_pid * $(BLOCK_BHW) + tl.arange(0, $(BLOCK_BHW))
   batch_height_offset = batch_height_width_offset // $(out_width)

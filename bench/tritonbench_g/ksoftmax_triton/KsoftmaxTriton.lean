@@ -17,8 +17,8 @@ def ksoftmax_forward_qk_surface
     (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
     (LOG CAUSAL IS_FP16 : Bool) :
     ComputeKernel := triton {
-  m = tl.program_id(axis=0)
-  n = tl.program_id(axis=1)
+  m = tl.program_id(0)
+  n = tl.program_id(1)
   k = tl.arange(0, $(DEPTH))
   x_ptrs = X + m * $(stride_xm) + n * $(stride_xn) + k
   io_mask = k < $(K)
@@ -60,8 +60,8 @@ def ksoftmax_forward_bk_surface
     (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
     (LOG CAUSAL IS_FP16 : Bool) :
     ComputeKernel := triton {
-  m = tl.program_id(axis=0)
-  n = tl.program_id(axis=1)
+  m = tl.program_id(0)
+  n = tl.program_id(1)
   k = tl.arange(0, $(DEPTH))
   x_ptrs = X + m * $(stride_xm) + n * $(stride_xn) + k
   io_mask = k < $(K)
@@ -102,8 +102,8 @@ def ksoftmax_backward_surface
     (stride_bm stride_bn stride_gm stride_gn stride_om stride_on K DEPTH : Nat)
     (LOG CAUSAL IS_FP16 : Bool) :
     ComputeKernel := triton {
-  m = tl.program_id(axis=0)
-  n = tl.program_id(axis=1)
+  m = tl.program_id(0)
+  n = tl.program_id(1)
   k = tl.arange(0, $(DEPTH))
   grad_out_ptrs = GradOut + m * $(stride_gm) + n * $(stride_gn) + k
   out_ptrs = Out + m * $(stride_om) + n * $(stride_on) + k

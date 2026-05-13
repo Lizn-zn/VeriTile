@@ -25,8 +25,8 @@ def mixed_sparse_attention_output_store_slice
       stride_qz stride_qh stride_om stride_ok
       BLOCK_M BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
-  start_m = tl.program_id(axis=0)
-  off_hz = tl.program_id(axis=1)
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
   off_z = off_hz // $(H)
   off_h = off_hz % $(H)
   seqlen = tl.load($((Seqlens : Region .nat)) + off_z)

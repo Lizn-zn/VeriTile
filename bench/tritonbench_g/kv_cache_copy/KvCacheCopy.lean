@@ -24,8 +24,8 @@ def copy_to_kcache_one_xblock
       stride_kcb stride_kch stride_kcsplit_x stride_kcs
       stride_bts stride_btb HEAD_DIM KCACHE_X : Nat) :
     ComputeKernel := triton {
-  cur_seq_idx = tl.program_id(axis=0)
-  cur_kv_head_idx = tl.program_id(axis=1)
+  cur_seq_idx = tl.program_id(0)
+  cur_kv_head_idx = tl.program_id(1)
   range_x = tl.arange(0, $(KCACHE_X))
   offsets_dmodel_x_partition = $(SPLIT_X) * $(KCACHE_X) + range_x
   block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +

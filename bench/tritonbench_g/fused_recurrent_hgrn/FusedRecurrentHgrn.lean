@@ -18,8 +18,8 @@ def fused_recurrent_hgrn_fwd_surface
     (X G O H0 HT : RegionName) (T D BD : Nat)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
     ComputeKernel := triton {
-  i_d = tl.program_id(axis=0)
-  i_bh = tl.program_id(axis=1)
+  i_d = tl.program_id(0)
+  i_bh = tl.program_id(1)
   o_d = i_d * $(BD) + tl.arange(0, $(BD))
   mask = o_d < $(D)
   p_x = X + i_bh * $(T) * $(D) + o_d
@@ -55,8 +55,8 @@ def fused_recurrent_hgrn_bwd_surface
     (G O H0 DX DG DO : RegionName) (T D BD : Nat)
     (USE_INITIAL_STATE : Bool) :
     ComputeKernel := triton {
-  i_d = tl.program_id(axis=0)
-  i_bh = tl.program_id(axis=1)
+  i_d = tl.program_id(0)
+  i_bh = tl.program_id(1)
   o_d = i_d * $(BD) + tl.arange(0, $(BD))
   mask = o_d < $(D)
   b_dh = tl.zeros([$(BD)], dtype=tl.float32)
@@ -95,8 +95,8 @@ iteration's `p_o` writeback from a precomputed `BH` vector into `O`. -/
 def fused_recurrent_hgrn_output_store_slice
     (BH O : RegionName) (i_t T D BD : Nat) :
     ComputeKernel := triton {
-  i_d = tl.program_id(axis=0)
-  i_bh = tl.program_id(axis=1)
+  i_d = tl.program_id(0)
+  i_bh = tl.program_id(1)
   offs_d = i_d * $(BD) + tl.arange(0, $(BD))
   mask = offs_d < $(D)
   b_h = tl.load(BH + i_bh * $(D) + offs_d, mask=mask, other=0.0)

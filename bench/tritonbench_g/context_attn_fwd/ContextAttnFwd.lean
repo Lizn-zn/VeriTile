@@ -26,8 +26,8 @@ def context_attn_fwd_final_store_slice
       stride_obs stride_oh stride_od
       BLOCK_M BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
-  start_m = tl.program_id(axis=0)
-  cur_bh = tl.program_id(axis=1)
+  start_m = tl.program_id(0)
+  cur_bh = tl.program_id(1)
   cur_batch = cur_bh // $(H)
   cur_head = cur_bh % $(H)
   prompt_cache_len = tl.load($((B_Prompt_Cache_Len : Region .nat)) + cur_batch)

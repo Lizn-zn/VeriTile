@@ -19,9 +19,9 @@ def chunk_gla_simple_fwd_surface
     (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T KSize VSize BT BK BV : Nat)
     (scale : ℝ) :
     ComputeKernel := triton {
-  i_v = tl.program_id(axis=0)
-  i_t = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_v = tl.program_id(0)
+  i_t = tl.program_id(1)
+  i_bh = tl.program_id(2)
   o_i = tl.arange(0, $(BT))
   m_s = o_i[:, None] >= o_i[None, :]
   b_o = tl.zeros([$(BT), $(BV)], dtype=tl.float32)
@@ -68,9 +68,9 @@ into `O`. -/
 def chunk_gla_simple_output_store_slice
     (BO O : RegionName) (s_v_h s_v_t T V BT BV : Nat) :
     ComputeKernel := triton {
-  i_v = tl.program_id(axis=0)
-  i_t = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_v = tl.program_id(0)
+  i_t = tl.program_id(1)
+  i_bh = tl.program_id(2)
   offs_t = i_t * $(BT) + tl.arange(0, $(BT))
   offs_v = i_v * $(BV) + tl.arange(0, $(BV))
   mask = (offs_t[:, None] < $(T)) & (offs_v[None, :] < $(V))

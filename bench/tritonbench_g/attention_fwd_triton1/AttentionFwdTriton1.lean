@@ -23,8 +23,8 @@ def attention_fwd_triton1_output_store_slice
     (stride_bo_bh stride_bo_t stride_bo_d
       s_qh s_qt s_qd BT BD : Nat) :
     ComputeKernel := triton {
-  i_bh = tl.program_id(axis=0)
-  i = tl.program_id(axis=1)
+  i_bh = tl.program_id(0)
+  i = tl.program_id(1)
   offs_t = i * $(BT) + tl.arange(0, $(BT))
   offs_d = tl.arange(0, $(BD))
   b_o = tl.load(BO + i_bh * $(stride_bo_bh) +

@@ -47,8 +47,8 @@ def token_softmax_final_store_slice
     (stride_softmax_h stride_softmax_bs stride_prob_h stride_prob_bs
       BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  cur_batch = tl.program_id(axis=0)
-  cur_head = tl.program_id(axis=1)
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
   cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)

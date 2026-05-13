@@ -19,7 +19,7 @@ def quantize_global_transpose_real_surface
     (A AbsmaxInv B : RegionName)
     (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N GROUP_M : Nat) :
     ComputeKernel := triton {
-  pid = tl.program_id(axis=0)
+  pid = tl.program_id(0)
   grid_m = tl.cdiv($(M), $(BLOCK_M))
   grid_n = tl.cdiv($(N), $(BLOCK_N))
   width = $(GROUP_M) * grid_n
@@ -52,8 +52,8 @@ def quantize_global_transpose_scaled_store_slice
     (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N : Nat)
     (scale127 : ℝ) :
     ComputeKernel := triton {
-  pid_m = tl.program_id(axis=0)
-  pid_n = tl.program_id(axis=1)
+  pid_m = tl.program_id(0)
+  pid_n = tl.program_id(1)
   rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   rn = pid_n * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
   mask = (rm[:, None] < $(M)) & (rn[None, :] < $(N))

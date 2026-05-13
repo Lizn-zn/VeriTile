@@ -60,8 +60,8 @@ def flash_decode2_phi_final_store_slice
       stride_obs stride_oh stride_od
       BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
-  cur_batch = tl.program_id(axis=0)
-  cur_head = tl.program_id(axis=1)
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   mask = offs_d < $(head_dim)
   final = tl.load(Final + cur_batch * $(stride_final_b) +

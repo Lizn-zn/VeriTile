@@ -22,8 +22,8 @@ def attention_kernel_aligned_final_store_slice
       stride_oh stride_om stride_on
       BLOCK_M BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
-  start_m = tl.program_id(axis=0)
-  off_hz = tl.program_id(axis=1)
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offs_k = tl.arange(0, $(BLOCK_DMODEL))
   acc = tl.load(Acc + off_hz * $(stride_acc_h) +

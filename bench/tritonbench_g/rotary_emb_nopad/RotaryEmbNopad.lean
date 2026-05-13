@@ -22,8 +22,8 @@ def rotary_embedding_q_surface
     (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
       q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat) :
     ComputeKernel := triton {
-  cur_head_idx = tl.program_id(axis=0)
-  cur_token_block_idx = tl.program_id(axis=1)
+  cur_head_idx = tl.program_id(0)
+  cur_token_block_idx = tl.program_id(1)
   tokens_range = cur_token_block_idx * $(BLOCK_TOKENS) + tl.arange(0, $(BLOCK_TOKENS))
   dim = tl.arange(0, $(HEAD_HALF))
   dim1 = dim + $(HEAD_HALF)
@@ -55,8 +55,8 @@ def rotary_embedding_k_surface
     (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
       q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS : Nat) :
     ComputeKernel := triton {
-  cur_head_idx = tl.program_id(axis=0)
-  cur_token_block_idx = tl.program_id(axis=1)
+  cur_head_idx = tl.program_id(0)
+  cur_token_block_idx = tl.program_id(1)
   handle_kv = (cur_head_idx % $(KV_GROUP_NUM)) == $(0)
   if handle_kv {
     k_head_idx = cur_head_idx // $(KV_GROUP_NUM)
@@ -95,9 +95,9 @@ def fused_rotary_embedding_v2_surface
       cached_stride bts_stride btb_stride block_size q_total_tokens
       Q_HEAD_NUM HEAD_HALF : Nat) :
     ComputeKernel := triton {
-  block_head_index = tl.program_id(axis=0)
+  block_head_index = tl.program_id(0)
   if block_head_index < $(Q_HEAD_NUM) {
-    block_token_index = tl.program_id(axis=1)
+    block_token_index = tl.program_id(1)
     dim = tl.arange(0, $(HEAD_HALF))
     dim1 = dim + $(HEAD_HALF)
 

@@ -22,8 +22,8 @@ def decoding_fused_rotary_embedding_q_surface
     (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
       _HEAD_DIM HALF_DIM : Nat) :
     ComputeKernel := triton {
-  cur_head_idx = tl.program_id(axis=0)
-  cur_token_idx = tl.program_id(axis=1)
+  cur_head_idx = tl.program_id(0)
+  cur_token_idx = tl.program_id(1)
   dim_range0 = tl.arange(0, $(HALF_DIM))
   dim_range1 = tl.arange(0, $(HALF_DIM)) + $(HALF_DIM)
   off_q = cur_token_idx * $(q_token_stride) + cur_head_idx * $(q_head_stride)
@@ -51,8 +51,8 @@ def decoding_fused_rotary_embedding_q_first_half
     (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
       HALF_DIM : Nat) :
     ComputeKernel := triton {
-  cur_head_idx = tl.program_id(axis=0)
-  cur_token_idx = tl.program_id(axis=1)
+  cur_head_idx = tl.program_id(0)
+  cur_token_idx = tl.program_id(1)
   dim_range0 = tl.arange(0, $(HALF_DIM))
   dim_range1 = tl.arange(0, $(HALF_DIM)) + $(HALF_DIM)
   off_q = cur_token_idx * $(q_token_stride) + cur_head_idx * $(q_head_stride)

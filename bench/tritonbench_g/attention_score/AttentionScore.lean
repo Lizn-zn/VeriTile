@@ -108,9 +108,9 @@ def attention_score_final_store_slice
       stride_oz stride_oh
       NKV_CTX BLOCK_N : Nat) :
     ComputeKernel := triton {
-  start_n = tl.program_id(axis=0)
-  off_z = tl.program_id(axis=1)
-  off_h = tl.program_id(axis=2)
+  start_n = tl.program_id(0)
+  off_z = tl.program_id(1)
+  off_h = tl.program_id(2)
   offs_n = tl.arange(0, $(BLOCK_N))
   o_range = start_n * $(BLOCK_N) + offs_n
   score = tl.load(Score + off_z * $(stride_score_z) + off_h * $(stride_score_h) +

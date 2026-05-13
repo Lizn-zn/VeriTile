@@ -39,8 +39,8 @@ into `O`. -/
 def chunk_cumsum_scalar_store_slice
     (BO O : RegionName) (T BT : Nat) :
     ComputeKernel := triton {
-  i_bh = tl.program_id(axis=0)
-  i_t = tl.program_id(axis=1)
+  i_bh = tl.program_id(0)
+  i_t = tl.program_id(1)
   offs_t = i_t * $(BT) + tl.arange(0, $(BT))
   mask = offs_t < $(T)
   b_o = tl.load(BO + i_bh * $(T) + offs_t, mask=mask, other=0.0)

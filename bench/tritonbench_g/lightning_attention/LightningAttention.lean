@@ -17,9 +17,9 @@ def lightning_attention_forward_surface
     (Q K V Out : RegionName)
     (_b h n d e BLOCK NUM_BLOCK BLOCK_MODEL : Nat) :
     ComputeKernel := triton {
-  off_bh = tl.program_id(axis=0)
+  off_bh = tl.program_id(0)
   off_bh % $(h)
-  off_e = tl.program_id(axis=1)
+  off_e = tl.program_id(1)
   qk_offset = off_bh * $(n) * $(d)
   v_offset = off_bh * $(n) * $(e)
   o_offset = off_bh * $(n) * $(e)
@@ -60,9 +60,9 @@ remain separate modeling work. -/
 def lightning_attention_forward_store_slice
     (OAcc Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat) :
     ComputeKernel := triton {
-  off_bh = tl.program_id(axis=0)
-  off_e = tl.program_id(axis=1)
-  off_block = tl.program_id(axis=2) * $(BLOCK) + tl.arange(0, $(BLOCK))
+  off_bh = tl.program_id(0)
+  off_e = tl.program_id(1)
+  off_block = tl.program_id(2) * $(BLOCK) + tl.arange(0, $(BLOCK))
   offs_e = tl.arange(0, $(BLOCK_MODEL))
   mask = off_block[:, None] < $(n)
   o = tl.load(OAcc + off_bh * $(n) * $(e) +

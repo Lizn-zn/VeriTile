@@ -18,8 +18,8 @@ def q_kernel_per_block_int8_surface
     (X XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) (preScale : ℝ) :
     ComputeKernel := triton {
-  off_b = tl.program_id(axis=1)
-  off_blk = tl.program_id(axis=0)
+  off_b = tl.program_id(1)
+  off_blk = tl.program_id(0)
   x_offset = off_b * $(L) * $(C)
   offs_m = off_blk * $(BLK) + tl.arange(0, $(BLK))
   offs_k = tl.arange(0, $(C))
@@ -44,8 +44,8 @@ def k_kernel_per_block_int8_surface
     (X XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) :
     ComputeKernel := triton {
-  off_b = tl.program_id(axis=1)
-  off_blk = tl.program_id(axis=0)
+  off_b = tl.program_id(1)
+  off_blk = tl.program_id(0)
   x_offset = off_b * $(L) * $(C)
   offs_m = off_blk * $(BLK) + tl.arange(0, $(BLK))
   offs_k = tl.arange(0, $(C))
@@ -74,8 +74,8 @@ def per_block_int8_scaled_store_slice
     (X XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) (preScale : ℝ) :
     ComputeKernel := triton {
-  off_blk = tl.program_id(axis=0)
-  off_b = tl.program_id(axis=1)
+  off_blk = tl.program_id(0)
+  off_b = tl.program_id(1)
   x_offset = off_b * $(L) * $(C)
   offs_m = off_blk * $(BLK) + tl.arange(0, $(BLK))
   offs_k = tl.arange(0, $(C))

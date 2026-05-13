@@ -18,9 +18,9 @@ def fwd_decay_cumsum_surface
     (G GO : RegionName)
     (s_qk_h DK BT BK : Nat) :
     ComputeKernel := triton {
-  i_k = tl.program_id(axis=0)
-  i_c = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_k = tl.program_id(0)
+  i_c = tl.program_id(1)
+  i_bh = tl.program_id(2)
   offs = tl.arange(0, $(BK))
   p_g = G + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
   p_go = GO + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
@@ -45,9 +45,9 @@ def prepare_qg_kg_surface
     (s_qk_h DK BT BK : Nat)
     (scale : ℝ) :
     ComputeKernel := triton {
-  i_k = tl.program_id(axis=0)
-  i_c = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_k = tl.program_id(0)
+  i_c = tl.program_id(1)
+  i_bh = tl.program_id(2)
   offs = tl.arange(0, $(BK))
   p_q = Q + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
   p_g = G + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
@@ -84,9 +84,9 @@ def bwd_decay_global_cumsum_surface
     (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
     (s_qk_h DK BT BK : Nat) :
     ComputeKernel := triton {
-  i_k = tl.program_id(axis=0)
-  i_c = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_k = tl.program_id(0)
+  i_c = tl.program_id(1)
+  i_bh = tl.program_id(2)
   offs = tl.arange(0, $(BK))
   mask = (i_k * $(BK) + offs) < $(DK)
   last_base = i_bh * $(s_qk_h) + i_k * $(BK) + offs +
@@ -126,9 +126,9 @@ def prepare_qg_decay_store_slice
     (Q QDecay QG : RegionName)
     (s_qk_h DK t_rel BT BK : Nat) :
     ComputeKernel := triton {
-  i_k = tl.program_id(axis=0)
-  i_c = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_k = tl.program_id(0)
+  i_c = tl.program_id(1)
+  i_bh = tl.program_id(2)
   offs = tl.arange(0, $(BK))
   base = i_bh * $(s_qk_h) + (i_c * $(BT) + $(t_rel)) * $(DK) + i_k * $(BK)
   mask = (i_k * $(BK) + offs) < $(DK)

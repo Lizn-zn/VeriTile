@@ -21,9 +21,9 @@ def fused_recurrent_rwkv6_fwd_surface
     (s_k_h s_v_h B H T K V BK BV : Nat) (scale : ℝ)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
     ComputeKernel := triton {
-  i_v = tl.program_id(axis=0)
-  i_k = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
   i_h = i_bh % $(H)
   offs_k = i_k * $(BK) + tl.arange(0, $(BK))
   offs_v = i_v * $(BV) + tl.arange(0, $(BV))
@@ -78,9 +78,9 @@ precomputed `BO` vector into the five-dimensional partial-output buffer `O`. -/
 def fused_recurrent_rwkv6_output_store_slice
     (BO O : RegionName) (timeOffset B H T V BV : Nat) :
     ComputeKernel := triton {
-  i_v = tl.program_id(axis=0)
-  i_k = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
   offs_v = i_v * $(BV) + tl.arange(0, $(BV))
   mask = offs_v < $(V)
   b_o = tl.load(BO + i_bh * $(V) + offs_v, mask=mask, other=0.0)

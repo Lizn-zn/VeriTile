@@ -22,9 +22,9 @@ def chunk_delta_rule_fwd_h_surface
       _H T K V BT BC BK BV NT : Nat)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
     ComputeKernel := triton {
-  i_k = tl.program_id(axis=0)
-  i_v = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_k = tl.program_id(0)
+  i_v = tl.program_id(1)
+  i_bh = tl.program_id(2)
   b_h = tl.zeros([$(BK), $(BV)], dtype=tl.float32)
   if USE_INITIAL_STATE {
     p_h0 = tl.make_block_ptr(base=InitialState + i_bh * $(K) * $(V),
@@ -85,9 +85,9 @@ def chunk_delta_fwd_h_store_slice
     (BH HOut : RegionName)
     (i_t s_h_h s_h_t K V BK BV : Nat) :
     ComputeKernel := triton {
-  i_k = tl.program_id(axis=0)
-  i_v = tl.program_id(axis=1)
-  i_bh = tl.program_id(axis=2)
+  i_k = tl.program_id(0)
+  i_v = tl.program_id(1)
+  i_bh = tl.program_id(2)
   offs_k = i_k * $(BK) + tl.arange(0, $(BK))
   offs_v = i_v * $(BV) + tl.arange(0, $(BV))
   mask = (offs_k[:, None] < $(K)) & (offs_v[None, :] < $(V))

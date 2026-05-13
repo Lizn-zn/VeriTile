@@ -65,9 +65,9 @@ def token_attn_llama2_score_store_slice
     (max_input_len att_value_stride_h att_value_stride_bs
       att_stride_h att_stride_bs BLOCK_N : Nat) :
     ComputeKernel := triton {
-  cur_batch = tl.program_id(axis=0)
-  cur_head = tl.program_id(axis=1)
-  start_n = tl.program_id(axis=2)
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  start_n = tl.program_id(2)
   offs_n = start_n * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
   cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
   cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)

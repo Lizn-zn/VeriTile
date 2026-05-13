@@ -26,8 +26,8 @@ def softmax_reducev_nonnegative_other_surface
       stride_b_loc_b stride_b_loc_s
       other_kv_index BLOCK_DMODEL BLOCK_N : Nat) :
     ComputeKernel := triton {
-  cur_batch = tl.program_id(axis=0)
-  cur_head = tl.program_id(axis=1)
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
   cur_batch_seq_len = tl.load($((BSeqLen : Region .nat)) + cur_batch)
   cur_batch_start_loc = tl.load($((BStartLoc : Region .nat)) + cur_batch)
   offs_n = tl.arange(0, $(BLOCK_N))
@@ -75,8 +75,8 @@ def softmax_reducev_final_store_slice
       stride_obs stride_oh stride_od
       BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
-  cur_batch = tl.program_id(axis=0)
-  cur_head = tl.program_id(axis=1)
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   e_sum = tl.load(ESum + cur_batch * $(stride_es_bs) + cur_head * $(stride_es_h))
   acc = tl.load(Acc + cur_batch * $(stride_acc_bs) + cur_head * $(stride_acc_h) +
