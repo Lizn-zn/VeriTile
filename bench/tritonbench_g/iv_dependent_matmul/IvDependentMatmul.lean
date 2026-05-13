@@ -38,12 +38,10 @@ def iv_dependent_matmul_pre_load_surface
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
     a_ptrs = a_base + k * $(BLOCK_SIZE_K) * $(stride_ak)
     b_ptrs = b_base + k * $(BLOCK_SIZE_K) * $(stride_bk)
-    a_mask = (offs_am[:, None] >= $(0)) &
-      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
-    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
-      (offs_bn[None, :] >= $(0))
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
-    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
+    b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
     accumulator += tl.dot(a, b)
   }
 
@@ -74,12 +72,10 @@ def iv_dependent_matmul_post_load_surface
   b_ptrs = b_base
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
-    a_mask = (offs_am[:, None] >= $(0)) &
-      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
-    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
-      (offs_bn[None, :] >= $(0))
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
-    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
+    b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
     accumulator += tl.dot(a, b)
     a_ptrs = a_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_ak)
     b_ptrs = b_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_bk)
@@ -111,12 +107,10 @@ def iv_dependent_matmul_post_pre_mixed_surface
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
     a_ptrs = a_base + k * $(BLOCK_SIZE_K) * $(stride_ak)
-    a_mask = (offs_am[:, None] >= $(0)) &
-      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
-    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
-      (offs_bn[None, :] >= $(0))
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
-    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
+    b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
     accumulator += tl.dot(a, b)
     b_ptrs = b_base + (k + $(1)) * $(BLOCK_SIZE_K) * $(stride_bk)
   }
@@ -149,12 +143,10 @@ def iv_dependent_matmul_post_load_two_iters_surface
   b_ptrs_next = b_base + $(BLOCK_SIZE_K) * $(stride_bk)
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
-    a_mask = (offs_am[:, None] >= $(0)) &
-      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
-    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
-      (offs_bn[None, :] >= $(0))
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
-    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
+    b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
     accumulator += tl.dot(a, b)
     a_ptrs = a_ptrs_next
     b_ptrs = b_ptrs_next
@@ -192,12 +184,10 @@ def iv_dependent_matmul_post_load_three_iters_surface
   b_ptrs_next_next = b_base + $(2) * $(BLOCK_SIZE_K) * $(stride_bk)
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for k in range($(0), tl.cdiv($(K), $(BLOCK_SIZE_K)), $(1)) {
-    a_mask = (offs_am[:, None] >= $(0)) &
-      (offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K))
-    b_mask = (offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K)) &
-      (offs_bn[None, :] >= $(0))
-    a = tl.load(a_ptrs, mask=a_mask, other=0.0)
-    b = tl.load(b_ptrs, mask=b_mask, other=0.0)
+    a = tl.load(a_ptrs, mask=offs_k[None, :] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
+    b = tl.load(b_ptrs, mask=offs_k[:, None] < $(K) - k * $(BLOCK_SIZE_K),
+      other=0.0)
     accumulator += tl.dot(a, b)
     a_ptrs = a_ptrs_next
     b_ptrs = b_ptrs_next
