@@ -156,16 +156,21 @@ def mean_dim_kernel_correct_target
       (fun i => (Mean, meanOutOffset s BLOCK_M i)))
     (expected := fun i => meanSpec s X N BLOCK_M i)
 
+def mean_dim_kernel_alg_post
+    (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat) (s s' : BlockState) : Prop :=
+  ∀ i : Fin BLOCK_M,
+    meanOutOffset s BLOCK_M i < M →
+    s'.readMem Mean (meanOutOffset s BLOCK_M i) =
+      meanSpec s X N BLOCK_M i
+
 theorem mean_dim_kernel_compute_correct_of_algorithm
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
     (hAlg :
       ∀ s',
         exec (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N) s = some s' →
-        ∀ i : Fin BLOCK_M,
-          meanOutOffset s BLOCK_M i < M →
-          s'.readMem Mean (meanOutOffset s BLOCK_M i) =
-            meanSpec s X N BLOCK_M i) :
+        mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s s') :
     mean_dim_kernel_correct_target X Mean M N BLOCK_M BLOCK_N s := by
   unfold mean_dim_kernel_correct_target
   rw [ComputeCorrect.realizes_writeIf_iff]

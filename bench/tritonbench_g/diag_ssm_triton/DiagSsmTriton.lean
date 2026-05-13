@@ -279,6 +279,16 @@ def diag_ssm_forward_kernel_correct_target
     (expected := fun idx =>
       diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx)
 
+def diag_ssm_forward_kernel_alg_post
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (s s' : BlockState) : Prop :=
+  ∀ idx : TileIndex [length, BLOCK_SIZE],
+    diagSsmForwardActive s batch_size dim BLOCK_SIZE idx →
+    s'.readMem y_ptr
+        (diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx) =
+      diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx
+
 theorem diag_ssm_forward_kernel_compute_correct_of_algorithm
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState)
@@ -286,12 +296,8 @@ theorem diag_ssm_forward_kernel_compute_correct_of_algorithm
       ∀ s',
         exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
           length batch_size dim BLOCK_SIZE) s = some s' →
-        ∀ idx : TileIndex [length, BLOCK_SIZE],
-          diagSsmForwardActive s batch_size dim BLOCK_SIZE idx →
-          s'.readMem y_ptr
-              (diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx) =
-            diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim
-              BLOCK_SIZE idx) :
+        diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr
+          length batch_size dim BLOCK_SIZE s s') :
     diag_ssm_forward_kernel_correct_target s_ptr x_ptr lambda_ptr y_ptr
       length batch_size dim BLOCK_SIZE s := by
   unfold diag_ssm_forward_kernel_correct_target

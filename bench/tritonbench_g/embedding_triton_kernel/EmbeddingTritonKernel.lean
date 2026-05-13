@@ -316,6 +316,17 @@ def embedding_kernel_correct_target
       embeddingSpecFull s weight input_ids vob_start_id vob_end_id
         stride_weight_seq BLOCK_N BLOCK_DMODEL idx)
 
+def embedding_kernel_alg_post
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (s s' : BlockState) : Prop :=
+  ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+    storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx →
+    s'.readMem out (outOffsetFull s stride_out_seq BLOCK_N idx) =
+      embeddingSpecFull s weight input_ids vob_start_id vob_end_id
+        stride_weight_seq BLOCK_N BLOCK_DMODEL idx
+
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
@@ -326,11 +337,9 @@ theorem embedding_kernel_compute_correct_of_algorithm
         exec (embedding_kernel weight input_ids out
           vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
           hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s' →
-        ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
-          storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx →
-          s'.readMem out (outOffsetFull s stride_out_seq BLOCK_N idx) =
-            embeddingSpecFull s weight input_ids vob_start_id vob_end_id
-              stride_weight_seq BLOCK_N BLOCK_DMODEL idx) :
+        embedding_kernel_alg_post weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s s') :
     embedding_kernel_correct_target weight input_ids out
       vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s := by
