@@ -16,14 +16,16 @@ the named algorithm postconditions.
   and the intended `_mean` loop accumulator via `meanLanePrefix` /
   `meanAccumulatorSpec`. Because the loop body masks inactive rows, the actual
   loop invariant must use `meanMaskedAccumulatorSpec`; its zero, step, and
-  active-row projection lemmas are proved locally. The pure lane-step fact is
-  proved as `meanLanePrefix_step` and lifted to the accumulator tile by
-  `meanAccumulatorSpec_step`; the bridge from the final accumulator to the
-  row-wise sum is proved by `meanFromAccumulatorSpec_eq_meanSpec`. The theorem
-  target is fixed as `mean_dim_kernel_correct_target`, but the theorem is still
-  a placeholder until this accumulator invariant is connected to the actual
-  loop body with `forRange_inv`. The compute-facing wrapper is discharged once
-  that algorithm-layer postcondition is available via
+  active-row projection lemmas are proved locally. Its final active-row readout
+  bridge is proved by `meanFromMaskedAccumulatorSpec_eq_meanSpec`. The pure
+  lane-step fact is proved as `meanLanePrefix_step` and lifted to the
+  accumulator tile by `meanAccumulatorSpec_step`; the bridge from the final
+  accumulator to the row-wise sum is proved by
+  `meanFromAccumulatorSpec_eq_meanSpec`. The theorem target is fixed as
+  `mean_dim_kernel_correct_target`, but the theorem is still a placeholder
+  until this accumulator invariant is connected to the actual loop body with
+  `forRange_inv`. The compute-facing wrapper is discharged once that
+  algorithm-layer postcondition is available via
   `mean_dim_kernel_compute_correct_of_algorithm`.
 
 ## `embedding_triton_kernel.py`

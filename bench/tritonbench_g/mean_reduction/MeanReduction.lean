@@ -90,6 +90,15 @@ noncomputable def meanFromAccumulatorSpec
   ((Finset.univ : Finset (Fin BLOCK_N)).sum fun j =>
     meanLanePrefix s X N BLOCK_M BLOCK_N off i j) / (N : ℝ)
 
+noncomputable def meanFromMaskedAccumulatorSpec
+    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
+    (i : Fin BLOCK_M) : ℝ :=
+  ((Finset.univ : Finset (Fin BLOCK_N)).sum fun j =>
+    if meanRowActive s M BLOCK_M i then
+      meanLanePrefix s X N BLOCK_M BLOCK_N off i j
+    else
+      0) / (N : ℝ)
+
 @[simp] theorem meanLanePrefix_zero
     (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N : Nat)
     (i : Fin BLOCK_M) (j : Fin BLOCK_N) :
@@ -297,6 +306,15 @@ theorem meanFromAccumulatorSpec_eq_meanSpec
   unfold meanFromAccumulatorSpec meanSpec meanLanePrefix
   rw [sum_lane_prefix_eq_sum_range N BLOCK_N off hBLOCK_N hoff]
   rw [sum_range_eq_sum_fin]
+
+theorem meanFromMaskedAccumulatorSpec_eq_meanSpec
+    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
+    (i : Fin BLOCK_M) (hrow : meanRowActive s M BLOCK_M i)
+    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
+    meanFromMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N off i =
+      meanSpec s X N BLOCK_M i := by
+  simpa [meanFromMaskedAccumulatorSpec, hrow, meanFromAccumulatorSpec] using
+    meanFromAccumulatorSpec_eq_meanSpec s X N BLOCK_M BLOCK_N off i hBLOCK_N hoff
 
 def mean_dim_kernel_correct_target
     (X Mean : RegionName)
