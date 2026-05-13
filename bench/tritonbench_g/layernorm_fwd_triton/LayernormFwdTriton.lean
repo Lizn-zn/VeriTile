@@ -162,14 +162,26 @@ theorem layernorm_fwd_triton_correct
     rfl
   by_cases hB : 0 < BLOCK_SIZE
   · have hStep : BLOCK_SIZE ≠ 0 := Nat.ne_of_gt hB
-    simp [exec, layernorm_fwd_triton, stepStmts, stepStmt, evalOp,
-          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    simp [layernorm_fwd_triton, ComputeKernel.toAlgKernel,
+          ComputeKernel.toAlgorithm?, ComputeStmt.listToAlgorithm?,
+          ComputeStmt.toAlgorithm?, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?, Except.bind, Bind.bind, pure, Pure.pure] at hExec
+    simp only [exec, stepStmts, stepStmt, evalOp,
           stepForRangeAux.step_lt, stepForRangeAux.step_ge,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.sub,
           NumericDType.mul, NumericDType.div, ComparableDType.lt, hNpos, hNle,
           Nat.not_lt.mpr hNle, hStep] at hExec
+    simp [stepForRangeAux.step_lt hStep hNpos,
+          stepForRangeAux.step_ge hStep hNle] at hExec
+    simp only [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop, Tile.ptrAdd,
+          Tile.uop, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.sub, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, hNpos, hNle,
+          Nat.not_lt.mpr hNle, hStep] at hExec
+    simp [BlockState.setReg] at hExec
     subst s'
     simp only [yOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
@@ -182,7 +194,7 @@ theorem layernorm_fwd_triton_correct
             WithBot.realSqrt, NumericDType.add, NumericDType.sub,
             NumericDType.mul, NumericDType.div, FloatDType.cast]
       rfl
-    · simp [hi]
+    · simp [hi, BlockState.readMem]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 /-- Compute-facing correctness for the one-block layernorm forward slice. -/
 theorem layernorm_fwd_triton_compute_correct
