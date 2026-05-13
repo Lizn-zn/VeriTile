@@ -70,6 +70,60 @@ noncomputable def meanFromAccumulatorSpec
   ((Finset.univ : Finset (Fin BLOCK_N)).sum fun j =>
     meanLanePrefix s X N BLOCK_M BLOCK_N off i j) / (N : ℝ)
 
+private theorem sum_range_eq_sum_fin (N : Nat) (f : Nat → ℝ) :
+    (Finset.range N).sum f =
+      (Finset.univ : Finset (Fin N)).sum (fun j => f j.val) := by
+  classical
+  apply Finset.sum_bij (fun n hn => (⟨n, by simpa using hn⟩ : Fin N))
+  · intro _ _
+    exact Finset.mem_univ _
+  · intro _ _ _ _ h
+    exact Fin.ext_iff.mp h
+  · intro j _
+    refine ⟨j.val, Finset.mem_range.mpr j.isLt, ?_⟩
+    simp
+  · intro _ _
+    simp
+
+private theorem sum_lane_prefix_eq_sum_range
+    (N BLOCK_N off : Nat) (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off)
+    (f : Nat → ℝ) :
+    ((Finset.univ : Finset (Fin BLOCK_N)).sum fun j =>
+      ((Finset.range off).filter fun col => col < N ∧ col % BLOCK_N = j.val).sum f) =
+    (Finset.range N).sum f := by
+  classical
+  let g : Nat → Fin BLOCK_N := fun col =>
+    ⟨col % BLOCK_N, Nat.mod_lt col hBLOCK_N⟩
+  have hinner : ∀ j : Fin BLOCK_N,
+      ((Finset.range off).filter fun col => col < N ∧ col % BLOCK_N = j.val).sum f =
+      (((Finset.range off).filter fun col => col < N).filter fun col => g col = j).sum f := by
+    intro j
+    apply Finset.sum_congr
+    · ext col
+      simp [g, Fin.ext_iff, and_left_comm, and_assoc]
+    · intro _ _
+      rfl
+  rw [Finset.sum_congr rfl (fun j _ => hinner j)]
+  rw [Finset.sum_fiberwise]
+  have hfilter : (Finset.range off).filter (fun col => col < N) = Finset.range N := by
+    ext col
+    simp only [Finset.mem_filter, Finset.mem_range]
+    constructor
+    · intro h
+      exact h.2
+    · intro h
+      exact ⟨Nat.lt_of_lt_of_le h hoff, h⟩
+  rw [hfilter]
+
+theorem meanFromAccumulatorSpec_eq_meanSpec
+    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat)
+    (i : Fin BLOCK_M) (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
+    meanFromAccumulatorSpec s X N BLOCK_M BLOCK_N off i =
+      meanSpec s X N BLOCK_M i := by
+  unfold meanFromAccumulatorSpec meanSpec meanLanePrefix
+  rw [sum_lane_prefix_eq_sum_range N BLOCK_N off hBLOCK_N hoff]
+  rw [sum_range_eq_sum_fin]
+
 /-- Algorithm-layer correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_correct
     (X Mean : RegionName)
