@@ -28,7 +28,7 @@ def batched_vecmat_surface
   offsets_n = n_index * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
   offsets_k = tl.arange(0, $(BLOCK_K))
   output_tile = offsets_m[:, None] * $(dim_n) + offsets_n[None, :]
-  vecmat = (tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)).to(A.dtype.element_ty)
+  vecmat = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=A.dtype.element_ty)
   k_blocks = $(dim_k) // $(BLOCK_K)
   for k_index in range($(0), k_blocks, $(1)) {
     k_offsets = k_index * $(BLOCK_K) + offsets_k

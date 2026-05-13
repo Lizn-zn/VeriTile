@@ -296,6 +296,7 @@ private partial def exprRegions (assigned : List String) :
       $_dtypeName:ident=$_dt:tritonDType)) =>
       exprRegions assigned v
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*])) => []
+  | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*], $_name:ident=$_dt:term)) => []
   | `(tritonExpr| tl.zeros([$_dims:tritonExpr,*], $_name:ident=$_dt:tritonDType)) => []
   | `(tritonExpr| tl.zeros_like($e:tritonExpr)) => exprRegions assigned e
   | _ => []

@@ -174,6 +174,7 @@ syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" tritonDTyp
 syntax "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonDType ", " ident "=" tritonExpr ")" : tritonExpr
 syntax "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ")" : tritonExpr
+syntax (priority := high) "tl.zeros(" "[" tritonExpr,* "]" ", " ident "=" term ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ", " ident "=" tritonDType ")" : tritonExpr
 syntax "tl.zeros_like(" tritonExpr ")" : tritonExpr
 

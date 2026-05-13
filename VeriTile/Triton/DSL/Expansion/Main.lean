@@ -1038,6 +1038,13 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
         Macro.throwError
           ("tl.zeros: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
       expandComputeZeros expandExpr env dims.getElems dt
+  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*], $name:ident=$dt:term)) => do
+      let dtString := toString dt.raw
+      unless name.getId.getString! == "dtype" &&
+          dtString.contains "dtype" && dtString.contains "element_ty" do
+        Macro.throwError "tl.zeros: expected `dtype=<ptr>.dtype.element_ty`"
+      let zero ← `(tritonExpr| 0)
+      expandFull expandExpr env dims.getElems zero
   | `(tritonExpr| tl.zeros_like($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let zero ←
