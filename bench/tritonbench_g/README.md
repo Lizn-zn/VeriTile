@@ -22,26 +22,25 @@ The Lean filename is the **CamelCase form** of the directory name (e.g. `vector_
 
 A port goes through three stages, tracked per-kernel in `README.md`:
 
-1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes only: `=` → `:=`, pointer args → `RegionName` injected via `$(...)`, `tl.constexpr` annotation → Lean `Nat`/`Bool` parameter, Lean scalar params → `$(...)`. The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 15 / 15.**
+1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes are documented in [`review_criteria.md`](./review_criteria.md). The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 141 / 141 port pairs; 43 of the 184 work directories are README-only scaffolds and are not counted as completed ports.**
 2. **Spec** — Real-valued mathematical specification of the kernel's intended output is written.
 3. **Verification** — `ComputeCorrect.Realizes` / `ComputeRefine.Realizes` theorem is proved and registered in `scripts/kernel-manifest.tsv`.
 
 Stage 1 is the verbatim transcription contract; reaching stage 3 (verification) requires both the DSL gap to close and a proof to land.
 
-## DSL gaps blocking faithful ports
+## Current audit state
 
-Distinct surface gaps surfaced by the current 15 transcriptions (each port's docstring also records its own reason). Closing any one of these unblocks the ports listed alongside it:
+The current sweep is tracked in [`completion_audit.md`](./completion_audit.md).
+`bench/check_ports.sh` compiles every Python/Lean port pair and currently
+reports `TritonBench-G ports: 141 ok, 0 fail`. The placeholder scan
+`rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
+currently reports no matches.
 
-| Gap | Affected ports |
-|---|---|
-| `tl.program_id(axis=0)` keyword form | `add_example`, `add_value`, `sin_computation`, `triton_mul2`, `vector_addition` |
-| `tl.max(x, 0)` positional-axis form | `logsumexp_fwd` |
-| `tl.max(..., return_indices=True)` tuple return + multi-binding `a, b := ...` | `max_reduction` (third kernel only; first two compile) |
-| Real literal `0` / `0.0` written directly inside `tl.where` / arithmetic | `relu_triton_kernel` |
-| `tl.math.*` (libdevice) namespace | `sin_kernel` |
-| `(x).to(tl.float32)` algorithm-layer cast | `cosine_compute` |
-
-Fixing these is L3 operator-coverage work; track under #15 / #86 surfaced gaps. Re-run `bench/check_ports.sh` after each gap closes to flip the affected ports green.
+The remaining non-green items are proof obligations, not DSL transcription
+failures. They are listed in [`proof_blockers.md`](./proof_blockers.md):
+`mean_reduction`, `embedding_triton_kernel`, and the forward real path of
+`diag_ssm_triton` expose their algorithm-layer postconditions explicitly until
+their loop invariants are connected to the concrete loop bodies.
 
 ## Build
 
@@ -62,10 +61,11 @@ The script runs `lake env lean` against each `<KernelName>.lean` independently, 
 | Date imported | Upstream commit | Kernels | Notes |
 |---|---|---|---|
 | 2026-05-06 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 15 (Tier 1) | initial DSL ports; no specs / theorems yet |
+| 2026-05-13 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 141 port pairs | current audited port set; see `completion_audit.md` for remaining proof obligations |
 
 ### Local modifications to vendored `.py` files
 
-The vendored `.py` files are **not** strictly byte-identical to upstream. The following modifications are applied locally to all 15 imports:
+The vendored `.py` files are **not** strictly byte-identical to upstream. The following modifications may be applied locally to imported files:
 
 - **Input type annotations on every `@triton.jit` kernel signature.** Pointer args annotated `tl.tensor`, runtime int scalars `tl.int32`, runtime float scalars `tl.float32`. `tl.constexpr` annotations from upstream are preserved as-is. These annotations are JIT-equivalent (Triton ignores non-`constexpr` Python type hints at compile time), so kernel behavior is unchanged — they exist purely as in-source documentation that aligns Python signatures with the type information the Lean ports rely on.
 
@@ -88,7 +88,7 @@ Each vendored `.py` file should carry an attribution header similar to:
 # Upstream license: Apache-2.0 (see https://github.com/thunlp/TritonBench/blob/main/LICENSE)
 ```
 
-The current 15 imports landed without these headers (commit `eab9b81`); back-filling them is open work.
+The initial imports landed without these headers (commit `eab9b81`); back-filling them is open work.
 
 ## Adding a kernel
 
