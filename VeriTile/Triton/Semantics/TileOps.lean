@@ -51,6 +51,14 @@ def Tile.ptrAdd {a b out}
     let o := offs.data (bc.rightIndex i)
     (p.1, p.2 + o)⟩
 
+def Tile.ptrSub {a b out}
+    (bc : Broadcast a b out) (ptrs : Tile .ptr a) (offs : Tile .nat b) :
+    Tile .ptr out :=
+  ⟨fun i =>
+    let p := ptrs.data (bc.leftIndex i)
+    let o := offs.data (bc.rightIndex i)
+    (p.1, p.2 - o)⟩
+
 def Tile.uop {dtype shape} (op : TileCarrier dtype → TileCarrier dtype)
     (x : Tile dtype shape) : Tile dtype shape :=
   ⟨fun i => op (x.data i)⟩

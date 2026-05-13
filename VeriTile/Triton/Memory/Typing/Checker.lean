@@ -186,6 +186,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .expandDim _ a => a.check ctx
   | .ptrBase _ => .ok ()
   | .ptrAdd _ ptr off => ptr.check ctx *> off.check ctx
+  | .ptrSub _ ptr off => ptr.check ctx *> off.check ctx
   | .makeBlockPtr _ _ parentShape blockShape strides offsets =>
       checkBlockPtrMetadata parentShape blockShape strides offsets
   | .makeBlockPtrDyn _ base parentShape blockShape strides offsets =>
@@ -199,6 +200,10 @@ decreasing_by all_goals (simp_wf; try omega)
 def Op.ptrProvenance (ctx : CheckCtx) : Op dtype shape → Except CheckError RegionName
   | .ptrBase region => .ok (Region.cast region)
   | .ptrAdd _ ptr off => do
+      let region ← ptr.ptrProvenance ctx
+      off.check ctx
+      .ok region
+  | .ptrSub _ ptr off => do
       let region ← ptr.ptrProvenance ctx
       off.check ctx
       .ok region

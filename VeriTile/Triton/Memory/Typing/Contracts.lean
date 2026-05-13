@@ -22,6 +22,8 @@ def Op.PointerRegionsHaveDType (Γ : RegionTyping) (dtype : TileDType) :
   | .ptrBase region => Γ (Region.cast region) = dtype
   | .ptrAdd _ ptr off =>
       ptr.PointerRegionsHaveDType Γ dtype ∧ off.RespectsRegionTyping Γ
+  | .ptrSub _ ptr off =>
+      ptr.PointerRegionsHaveDType Γ dtype ∧ off.RespectsRegionTyping Γ
   | .broadcast ptr _ =>
       ptr.PointerRegionsHaveDType Γ dtype
   | .full _ ptr =>
@@ -149,6 +151,8 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .expandDim _ a => a.RespectsRegionTyping Γ
   | .ptrBase _ => True
   | .ptrAdd _ ptr off =>
+      ptr.RespectsRegionTyping Γ ∧ off.RespectsRegionTyping Γ
+  | .ptrSub _ ptr off =>
       ptr.RespectsRegionTyping Γ ∧ off.RespectsRegionTyping Γ
   | .makeBlockPtr _ _ _ _ _ _ => True
   | .makeBlockPtrDyn _ base _ _ _ _ => base.RespectsRegionTyping Γ

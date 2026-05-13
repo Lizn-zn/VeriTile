@@ -49,8 +49,8 @@ def fused_recurrent_hgrn_fwd_surface
 `fused_recurrent_hgrn_bwd_kernel`.
 
 The Python kernel traverses time in reverse and decrements pointers. This DSL
-surface preserves that reverse logical order with `i = T - 1 - j` and
-recomputes the per-iteration pointers from `i`. -/
+surface preserves the pointer decrements and uses `i = T - 1 - j` for the
+reverse logical index. -/
 def fused_recurrent_hgrn_bwd_surface
     (G O H0 DX DG DO : RegionName) (T D BD : Nat)
     (USE_INITIAL_STATE : Bool) :
@@ -59,17 +59,17 @@ def fused_recurrent_hgrn_bwd_surface
   i_bh = tl.program_id(1)
   o_d = i_d * $(BD) + tl.arange(0, $(BD))
   mask = o_d < $(D)
+  p_g = G + (i_bh * $(T) + $(T) - $(1)) * $(D) + o_d
+  p_o = O + (i_bh * $(T) + $(T) - $(2)) * $(D) + o_d
+  p_dx = DX + (i_bh * $(T) + $(T) - $(1)) * $(D) + o_d
+  p_dg = DG + (i_bh * $(T) + $(T) - $(1)) * $(D) + o_d
+  p_do = DO + (i_bh * $(T) + $(T) - $(1)) * $(D) + o_d
   b_dh = tl.zeros([$(BD)], dtype=tl.float32)
   for j in range($(0), $(T), $(1)) {
     i = $(T) - $(1) - j
-    p_g = G + (i_bh * $(T) + i) * $(D) + o_d
-    p_dx = DX + (i_bh * $(T) + i) * $(D) + o_d
-    p_dg = DG + (i_bh * $(T) + i) * $(D) + o_d
-    p_do = DO + (i_bh * $(T) + i) * $(D) + o_d
     b_g = tl.load(p_g, mask=mask, other=0).to(tl.float32)
     b_do = tl.load(p_do, mask=mask, other=0).to(tl.float32)
     if i > 0 {
-      p_o = O + (i_bh * $(T) + i - $(1)) * $(D) + o_d
       b_o = tl.load(p_o, mask=mask, other=0).to(tl.float32)
     } else {
       if USE_INITIAL_STATE {
@@ -84,6 +84,11 @@ def fused_recurrent_hgrn_bwd_surface
     b_dh = b_dh * b_g
     tl.store(p_dx, (b_dx).to(p_dx.dtype.element_ty), mask=mask)
     tl.store(p_dg, (b_dg).to(p_dg.dtype.element_ty), mask=mask)
+    p_g -= $(D)
+    p_o -= $(D)
+    p_dx -= $(D)
+    p_dg -= $(D)
+    p_do -= $(D)
   }
 }
 

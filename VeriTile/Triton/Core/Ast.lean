@@ -211,6 +211,7 @@ inductive Op : TileDType → TileShape → Type where
                 Op dtype (TileShape.insertAxis shape axis 1)
   | ptrBase   : {d : TileDType} → (region : Region d) → Op .ptr []
   | ptrAdd    : Broadcast a b out → Op .ptr a → Op .nat b → Op .ptr out
+  | ptrSub    : Broadcast a b out → Op .ptr a → Op .nat b → Op .ptr out
   | makeBlockPtr : {d : TileDType} → (region : Region d) → (baseOffset : Nat) →
                 (parentShape : List Nat) → (blockShape : TileShape) →
                 (strides offsets : List Nat) →

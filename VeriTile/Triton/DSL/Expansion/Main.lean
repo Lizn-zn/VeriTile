@@ -1829,8 +1829,21 @@ partial def expandStmt (env : Env) (pinned : List String)
       unless env.any (fun entry => entry.1 == name) do
         Macro.throwError ("`-=`: unknown identifier `" ++ name ++ "`")
       let (lhsDType, lhsShape) ← lookupEnv env name
-      if lhsDType == .ptr || lhsDType == .blockPtr then
-        Macro.throwError "`-=`: pointer subtraction is not supported"
+      if lhsDType == .ptr then
+        let rhs ← expandNatExpectedExpr env e
+        ensureAlgorithmOnly "`-=` pointer offset" rhs
+        let lhsShapeTerm ← lhsShape.term
+        let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
+        let (bc, outShape) ← broadcastTerm lhsShape rhs.shape "`-=` pointer offset"
+        let outShapeTerm ← outShape.term
+        let term ← `(Op.ptrSub $bc $lhsTerm $rhs.term)
+        pure (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+          ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+          (name, .ptr, outShape, none) :: env,
+          Bool.false)
+      else if lhsDType == .blockPtr then
+        Macro.throwError "`-=`: block pointer subtraction is not supported"
+      else
       let lhsShapeTerm ← lhsShape.term
       let lhsDTypeTerm ← lhsDType.term
       let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)

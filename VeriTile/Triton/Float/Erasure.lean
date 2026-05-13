@@ -134,6 +134,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .expandDim axis a => .expandDim axis a.eraseDType
   | .ptrBase region => .ptrBase region
   | .ptrAdd bc ptr off => .ptrAdd bc ptr.eraseDType off.eraseDType
+  | .ptrSub bc ptr off => .ptrSub bc ptr.eraseDType off.eraseDType
   | .makeBlockPtr region baseOffset parentShape blockShape strides offsets =>
       .makeBlockPtr region baseOffset parentShape blockShape strides offsets
   | .makeBlockPtrDyn region baseOffset parentShape blockShape strides offsets =>

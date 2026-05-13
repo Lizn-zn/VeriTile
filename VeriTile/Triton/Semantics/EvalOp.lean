@@ -129,6 +129,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let ptrs ← evalOp ptr s
       let offs ← evalOp off s
       some (Tile.ptrAdd bc ptrs offs)
+  | .ptrSub bc ptr off, s => do
+      let ptrs ← evalOp ptr s
+      let offs ← evalOp off s
+      some (Tile.ptrSub bc ptrs offs)
   | .makeBlockPtr region baseOffset parentShape blockShape strides offsets, _ =>
       some ⟨fun _ =>
         { region := Region.cast region

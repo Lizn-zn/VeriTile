@@ -121,6 +121,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .expandDim _ a => a.MemorySafe bounds
   | .ptrBase _ => True
   | .ptrAdd _ ptr off => ptr.MemorySafe bounds ∧ off.MemorySafe bounds
+  | .ptrSub _ ptr off => ptr.MemorySafe bounds ∧ off.MemorySafe bounds
   | .makeBlockPtr _ _ _ _ _ _ => True
   | .makeBlockPtrDyn _ base _ _ _ _ => base.MemorySafe bounds
   | .advanceBlockPtr ptr _ => ptr.MemorySafe bounds
