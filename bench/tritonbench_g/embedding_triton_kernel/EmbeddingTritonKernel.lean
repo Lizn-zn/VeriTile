@@ -506,6 +506,48 @@ theorem embeddingLoopInvariant_step_of_chunk_write
           stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL chunkIdx hBound
     rw [← hOut, hWrite chunkIdx hStore2D, hSpec]
 
+theorem embeddingCurrentChunkScatter_write
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (hactive :
+      storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+        BLOCK_DMODEL idx)
+    (hNoCollision :
+      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane →
+          outOffset2D s0 stride_out_seq BLOCK_N start_nn lane =
+            outOffset2D s0 stride_out_seq BLOCK_N start_nn idx →
+          lane = idx) :
+    ((TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]).foldl
+        (fun acc lane =>
+          if storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+              BLOCK_DMODEL lane then
+            acc.writeMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
+              (embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+                stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
+          else
+            acc)
+        st).readMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn idx) =
+      embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+        stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx := by
+  exact
+    BlockState.scatter_readback_prop_masked_nd_of_true
+      (region := out)
+      (s := st)
+      (offsetFn := fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
+      (valueFn := fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+          stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
+      (P := fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane)
+      idx hactive
+      (fun lane hlane heq => hNoCollision lane hlane heq)
+
 def embedding_kernel_correct_target
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx

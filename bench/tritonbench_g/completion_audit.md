@@ -97,9 +97,11 @@ These files must not be counted complete yet:
     definitionally exact final offset. Old-prefix/current-chunk disjointness is
     factored into `embeddingPrefixIndex_ne_currentChunk` and
     `embeddingOldPrefix_outOffset_ne_currentChunk`; aligned chunk coverage is
-    captured by `embeddingChunkLane_lt_of_aligned_start`.
+    captured by `embeddingChunkLane_lt_of_aligned_start`; current-chunk masked
+    scatter readback is bridged by `embeddingCurrentChunkScatter_write`.
   - Remaining proof: instantiate the per-chunk write invariant with
-    `forRange_inv` under `outOffsetFull` injectivity.
+    `forRange_inv` under `outOffsetFull` injectivity, including old-prefix
+    preservation and the concrete loop-body store.
 
 - `diag_ssm_triton/DiagSsmTriton.lean`
   - Kernel body is faithful.
