@@ -334,6 +334,35 @@ instance embeddingPrefixActiveDecidable
     ¬ embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL 0 idx := by
   simp [embeddingPrefixActive]
 
+def embeddingLoopInvariant
+    (s0 : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL : Nat)
+    (off : Nat) (st : BlockState) : Prop :=
+  ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+    embeddingPrefixActive s0 n_ctx hiden_size BLOCK_N BLOCK_DMODEL off idx →
+      st.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N idx) =
+        embeddingSpecFull s0 weight input_ids vob_start_id vob_end_id
+          stride_weight_seq BLOCK_N BLOCK_DMODEL idx
+
+theorem embeddingLoopInvariant_zero
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL : Nat) :
+    embeddingLoopInvariant s0 weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL 0 st := by
+  intro idx hidx
+  exact False.elim ((not_embeddingPrefixActive_zero s0 n_ctx hiden_size
+    BLOCK_N BLOCK_DMODEL idx) hidx)
+
+theorem embeddingPrefixActive_final_of_storeActive
+    (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL])
+    (hidx : storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx) :
+    embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL BLOCK_N idx := by
+  exact ⟨by simp [embeddingPrefixWritten], hidx⟩
+
 def embedding_kernel_correct_target
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
@@ -361,6 +390,22 @@ def embedding_kernel_alg_post
     s'.readMem out (outOffsetFull s stride_out_seq BLOCK_N idx) =
       embeddingSpecFull s weight input_ids vob_start_id vob_end_id
         stride_weight_seq BLOCK_N BLOCK_DMODEL idx
+
+theorem embeddingLoopInvariant_to_alg_post
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (hInv :
+      embeddingLoopInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL BLOCK_N st) :
+    embedding_kernel_alg_post weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s0 st := by
+  intro idx hidx
+  exact hInv idx
+    (embeddingPrefixActive_final_of_storeActive s0 n_ctx hiden_size
+      BLOCK_N BLOCK_DMODEL idx hidx)
 
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)

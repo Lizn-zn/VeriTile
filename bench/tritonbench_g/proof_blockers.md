@@ -47,7 +47,10 @@ the named algorithm postconditions.
   `embeddingSpecFull`), with `embeddingPrefixActive` identifying the lanes
   already written after a prefix of chunks. The chunk-to-full bridges are
   `outOffset2D_eq_full`, `embeddingSpec2D_eq_full`, and
-  `storeActive2D_iff_full`; the theorem target is fixed as
+  `storeActive2D_iff_full`. The `forRange_inv` predicate is now named
+  `embeddingLoopInvariant`, with `embeddingLoopInvariant_zero` covering the
+  vacuous prefix and `embeddingLoopInvariant_to_alg_post` bridging a completed
+  prefix to `embedding_kernel_alg_post`; the theorem target is fixed as
   `embedding_kernel_correct_target`, but the theorem is still a placeholder
   until the per-chunk write invariant is instantiated with `forRange_inv` under
   the full `outOffsetFull` injectivity assumption. The compute-facing wrapper
