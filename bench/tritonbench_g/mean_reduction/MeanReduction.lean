@@ -270,6 +270,13 @@ theorem meanMaskedAccumulatorSpec_active
       some (meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1) := by
   simp [meanMaskedAccumulatorSpec, hrow]
 
+def meanLoopInvariant
+    (s0 : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N : Nat)
+    (off : Nat) (st : BlockState) : Prop :=
+  off % BLOCK_N = 0 ∧
+    st.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+      some (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off)
+
 theorem meanMaskedAccumulatorSpec_step_add
     (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
     (hOff : off % BLOCK_N = 0) :
@@ -288,6 +295,24 @@ theorem meanMaskedAccumulatorSpec_step_add
     · simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, hrow, hcol,
         meanLanePrefix_step s X N BLOCK_M BLOCK_N off idx.1 idx.2.1 hOff]
   · simp [meanMaskedAccumulatorSpec, meanChunkLoadSpec, hrow]
+
+theorem meanLoopInvariant_step_of_accumulator_update
+    (s0 st' : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
+    (hOff : off % BLOCK_N = 0)
+    (hUpdate :
+      st'.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+        some
+          { data := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+              some
+                (WithBot.unbotD 0
+                    ((meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off).data idx) +
+                  WithBot.unbotD 0
+                    ((meanChunkLoadSpec s0 X M N BLOCK_M BLOCK_N off).data idx)) }) :
+    meanLoopInvariant s0 X M N BLOCK_M BLOCK_N (off + BLOCK_N) st' := by
+  constructor
+  · exact meanLoopOffset_mod_step off BLOCK_N hOff
+  · simpa [meanMaskedAccumulatorSpec_step_add s0 X M N BLOCK_M BLOCK_N off hOff]
+      using hUpdate
 
 private theorem sum_range_eq_sum_fin (N : Nat) (f : Nat → ℝ) :
     (Finset.range N).sum f =

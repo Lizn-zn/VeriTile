@@ -19,7 +19,10 @@ the named algorithm postconditions.
   active-row projection lemmas are proved locally. The per-iteration masked
   load tile is captured by `meanChunkLoadSpec`, with
   `meanMaskedAccumulatorSpec_step_add` matching the actual `_mean += a` update.
-  The final active-row readout bridge is proved by
+  The `forRange_inv` predicate is now named `meanLoopInvariant`, with
+  `meanLoopInvariant_step_of_accumulator_update` reducing the loop step to the
+  concrete register update produced by the body. The final active-row readout
+  bridge is proved by
   `meanFromMaskedAccumulatorSpec_eq_meanSpec`. The pure lane-step fact is
   proved as `meanLanePrefix_step` and lifted to the accumulator tile by
   `meanAccumulatorSpec_step`; the bridge from the final accumulator to the
