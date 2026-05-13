@@ -14,12 +14,13 @@ the named algorithm postconditions.
 - Current local spec now describes the full row mean via `meanSpec` as a
   `Fin N` sum over the original row, matching all `off` iterations together,
   and the intended `_mean` loop accumulator via `meanLanePrefix` /
-  `meanAccumulatorSpec`. The pure bridge from the final accumulator to the
+  `meanAccumulatorSpec`. The pure lane-step fact is now proved as
+  `meanLanePrefix_step`, and the bridge from the final accumulator to the
   row-wise sum is proved by `meanFromAccumulatorSpec_eq_meanSpec`; the theorem
   target is fixed as `mean_dim_kernel_correct_target`, but the theorem is still
-  a placeholder until the accumulator invariant itself is instantiated with
-  `forRange_inv`. The compute-facing wrapper is discharged once that
-  algorithm-layer postcondition is available via
+  a placeholder until this accumulator invariant is connected to the actual
+  loop body with `forRange_inv`. The compute-facing wrapper is discharged once
+  that algorithm-layer postcondition is available via
   `mean_dim_kernel_compute_correct_of_algorithm`.
 
 ## `embedding_triton_kernel.py`

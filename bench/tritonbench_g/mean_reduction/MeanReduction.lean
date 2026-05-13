@@ -105,6 +105,74 @@ theorem meanChunkLane_not_mem_current
       (fun col => col < N ∧ col % BLOCK_N = j.val) := by
   simp
 
+theorem meanLanePrefix_step
+    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat)
+    (i : Fin BLOCK_M) (j : Fin BLOCK_N)
+    (hOff : off % BLOCK_N = 0) :
+    meanLanePrefix s X N BLOCK_M BLOCK_N (off + BLOCK_N) i j =
+      meanLanePrefix s X N BLOCK_M BLOCK_N off i j +
+        if off + j.val < N then
+          s.readMem X (meanOutOffset s BLOCK_M i * N + (off + j.val))
+        else
+          0 := by
+  classical
+  let pred : Nat → Prop := fun col => col < N ∧ col % BLOCK_N = j.val
+  let f : Nat → ℝ := fun col => s.readMem X (meanOutOffset s BLOCK_M i * N + col)
+  have hunique :
+      ∀ col, off ≤ col → col < off + BLOCK_N → col % BLOCK_N = j.val →
+        col = off + j.val := by
+    intro col hle hlt hmod
+    obtain ⟨k, rfl⟩ := Nat.exists_eq_add_of_le hle
+    have hklt : k < BLOCK_N := by omega
+    have hmodk : (off + k) % BLOCK_N = k := by
+      rw [Nat.add_mod, hOff, Nat.mod_eq_of_lt hklt]
+      simpa using Nat.mod_eq_of_lt hklt
+    rw [hmodk] at hmod
+    omega
+  by_cases hjN : off + j.val < N
+  · have hset :
+        (Finset.range (off + BLOCK_N)).filter pred =
+          insert (off + j.val) ((Finset.range off).filter pred) := by
+      ext col
+      simp only [Finset.mem_filter, Finset.mem_range, Finset.mem_insert]
+      constructor
+      · intro h
+        by_cases hltOff : col < off
+        · exact Or.inr ⟨hltOff, h.2⟩
+        · exact Or.inl (hunique col (Nat.le_of_not_gt hltOff) h.1 h.2.2)
+      · intro h
+        rcases h with h | h
+        · subst h
+          exact ⟨by omega, hjN, meanChunkLane_mod off BLOCK_N j hOff⟩
+        · exact ⟨by omega, h.2⟩
+    unfold meanLanePrefix
+    simp [hjN]
+    change ((Finset.range (off + BLOCK_N)).filter pred).sum f =
+      ((Finset.range off).filter pred).sum f + f (off + j.val)
+    rw [hset]
+    rw [Finset.sum_insert]
+    · ring
+    · exact meanChunkLane_not_mem_current N off BLOCK_N j
+  · have hset :
+        (Finset.range (off + BLOCK_N)).filter pred =
+          (Finset.range off).filter pred := by
+      ext col
+      simp only [Finset.mem_filter, Finset.mem_range]
+      constructor
+      · intro h
+        by_cases hltOff : col < off
+        · exact ⟨hltOff, h.2⟩
+        · have hcol : col = off + j.val :=
+            hunique col (Nat.le_of_not_gt hltOff) h.1 h.2.2
+          omega
+      · intro h
+        exact ⟨by omega, h.2⟩
+    unfold meanLanePrefix
+    simp [hjN]
+    change ((Finset.range (off + BLOCK_N)).filter pred).sum f =
+      ((Finset.range off).filter pred).sum f
+    rw [hset]
+
 private theorem sum_range_eq_sum_fin (N : Nat) (f : Nat → ℝ) :
     (Finset.range N).sum f =
       (Finset.univ : Finset (Fin N)).sum (fun j => f j.val) := by
