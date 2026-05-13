@@ -104,10 +104,10 @@ These files must not be counted complete yet:
     `meanLoopContextInvariant_step_of_body` package the strengthened predicate,
     initialization, and body preservation needed by `forRange_inv`.
     `meanLoopContextInvariant_body_step_exists` packages the step in
-    `forRange_inv`'s existential shape.
-  - Remaining proof: instantiate `forRange_inv`, then feed the final loop
-    invariant into
-    `meanPostLoop_step_alg_post`.
+    `forRange_inv`'s existential shape. `meanForRange_context_of_preloop`
+    instantiates `forRange_inv` for the actual projected `forRange`.
+  - Remaining proof: feed the final loop invariant into
+    `meanPostLoop_step_alg_post`, then compose the full projected body split.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.

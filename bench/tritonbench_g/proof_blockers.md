@@ -67,12 +67,14 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `meanLoopContextInvariant_step_of_body` prove its pre-loop initialization and
   per-iteration preservation. `meanLoopContextInvariant_body_step_exists`
   packages the loop-body step in the existential shape required by
-  `forRange_inv`.
+  `forRange_inv`. `meanForRange_context_of_preloop` instantiates `forRange_inv`
+  for the actual projected `forRange "off"` statement after the pre-loop and
+  returns the final strengthened invariant.
   The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
-  remaining algorithm-layer postcondition as an explicit hypothesis until this
-  strengthened predicate is instantiated with `forRange_inv` and the final loop
-  invariant is fed into `meanPostLoop_step_alg_post`. The compute-facing
+  remaining algorithm-layer postcondition as an explicit hypothesis until the
+  final loop invariant is fed into `meanPostLoop_step_alg_post` and composed
+  with the full projected body split. The compute-facing
   wrapper is discharged once that algorithm-layer
   postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.

@@ -851,6 +851,40 @@ theorem meanLoopContextInvariant_body_step_exists
       exact meanLoopContextInvariant_step_of_body s0 st st' X Mean M N
         BLOCK_M BLOCK_N off ⟨hInv, hX, hMean, hRow, hRead⟩ hStep
 
+theorem meanForRange_context_of_preloop
+    (s0 stPre stLoop : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat)
+    (hStepNe : BLOCK_N ≠ 0)
+    (hPre :
+      stepStmts (meanPreLoop X Mean M N BLOCK_M BLOCK_N) s0 = some stPre)
+    (hLoop :
+      stepStmt (.forRange "off" 0 N BLOCK_N (meanLoopBody N BLOCK_M BLOCK_N))
+        stPre = some stLoop) :
+    ∃ final,
+      N ≤ final ∧
+        meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N final stLoop := by
+  have hInit :
+      meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N 0 stPre :=
+    meanLoopContextInvariant_init_of_preloop s0 stPre X Mean M N BLOCK_M
+      BLOCK_N hPre
+  obtain ⟨final, stFinal, hFor, hFinal, hCtx⟩ :=
+    forRange_inv
+      (idx := "off") (start := 0) (stop := N) (step := BLOCK_N)
+      (body := meanLoopBody N BLOCK_M BLOCK_N)
+      (P := meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N)
+      (s_init := stPre)
+      hStepNe hInit
+      (by
+        intro off st hlt hCtx
+        exact meanLoopContextInvariant_body_step_exists s0 st X Mean M N
+          BLOCK_M BLOCK_N off hCtx)
+  have hEq : stFinal = stLoop := by
+    rw [hLoop] at hFor
+    injection hFor with h
+    exact h.symm
+  subst hEq
+  exact ⟨final, hFinal, hCtx⟩
+
 def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .real [BLOCK_M] "mean"
       (.div NumericDType.real Broadcast.scalarR
