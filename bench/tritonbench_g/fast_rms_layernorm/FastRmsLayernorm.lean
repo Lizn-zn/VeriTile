@@ -76,7 +76,8 @@ The Python kernel accepts `dW`/`dW_row_stride` but does not write `dW`; this
 surface preserves the in-place `dY` writeback. -/
 def rms_layernorm_backward
     (dY X W r _dW : RegionName)
-    (dY_row_stride X_row_stride r_row_stride _dW_row_stride n_cols : Nat)
+    (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride
+      n_cols : Nat)
     (_eps : ℝ) (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   row_idx = tl.program_id(0)
@@ -104,7 +105,8 @@ def rms_layernorm_backward
 `_rms_layernorm_backward` for `GEMMA = true`. -/
 def gemma_rms_layernorm_backward
     (dY X W r _dW : RegionName)
-    (dY_row_stride X_row_stride r_row_stride _dW_row_stride n_cols : Nat)
+    (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride
+      n_cols : Nat)
     (_eps : ℝ) (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   row_idx = tl.program_id(0)
@@ -461,12 +463,13 @@ theorem gemma_rms_layernorm_forward_y_compute_correct
 `_rms_layernorm_backward` with `GEMMA = false`. -/
 theorem rms_layernorm_backward_dy_correct
     (dY X W r _dW : RegionName)
-    (dY_row_stride X_row_stride r_row_stride _dW_row_stride n_cols BLOCK_SIZE : Nat)
+    (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride
+      n_cols BLOCK_SIZE : Nat)
     (_eps : ℝ) (s s' : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => dyOutOffset s dY_row_stride i))
     (hExec : exec (rms_layernorm_backward dY X W r _dW dY_row_stride X_row_stride
-          r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE) s = some s') :
+          _W_row_stride r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE) s = some s') :
     ∀ i : Fin BLOCK_SIZE,
       s'.readMem dY (dyOutOffset s dY_row_stride i) =
         if i.val < n_cols then
@@ -509,13 +512,14 @@ theorem rms_layernorm_backward_dy_correct
 `_rms_layernorm_backward` with `GEMMA = false`. -/
 theorem rms_layernorm_backward_dy_compute_correct
     (dY X W r _dW : RegionName)
-    (dY_row_stride X_row_stride r_row_stride _dW_row_stride n_cols BLOCK_SIZE : Nat)
+    (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride
+      n_cols BLOCK_SIZE : Nat)
     (_eps : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => dyOutOffset s dY_row_stride i)) :
     ComputeCorrect.Realizes
       (kernel := rms_layernorm_backward dY X W r _dW dY_row_stride X_row_stride
-        r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE)
+        _W_row_stride r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_SIZE => i.val < n_cols)
@@ -530,19 +534,21 @@ theorem rms_layernorm_backward_dy_compute_correct
   subst s0
   intro i hActive
   have h := rms_layernorm_backward_dy_correct dY X W r _dW dY_row_stride X_row_stride
-    r_row_stride _dW_row_stride n_cols BLOCK_SIZE _eps s s' hOutInj hExec i
+    _W_row_stride r_row_stride _dW_row_stride n_cols BLOCK_SIZE _eps s s'
+    hOutInj hExec i
   simpa [hActive] using h
 
 /-- Executed-state correctness for the in-place `dY` output of
 `_rms_layernorm_backward` with `GEMMA = true`. -/
 theorem gemma_rms_layernorm_backward_dy_correct
     (dY X W r _dW : RegionName)
-    (dY_row_stride X_row_stride r_row_stride _dW_row_stride n_cols BLOCK_SIZE : Nat)
+    (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride
+      n_cols BLOCK_SIZE : Nat)
     (_eps : ℝ) (s s' : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => dyOutOffset s dY_row_stride i))
     (hExec : exec (gemma_rms_layernorm_backward dY X W r _dW dY_row_stride X_row_stride
-          r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE) s = some s') :
+          _W_row_stride r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE) s = some s') :
     ∀ i : Fin BLOCK_SIZE,
       s'.readMem dY (dyOutOffset s dY_row_stride i) =
         if i.val < n_cols then
@@ -585,13 +591,14 @@ theorem gemma_rms_layernorm_backward_dy_correct
 `_rms_layernorm_backward` with `GEMMA = true`. -/
 theorem gemma_rms_layernorm_backward_dy_compute_correct
     (dY X W r _dW : RegionName)
-    (dY_row_stride X_row_stride r_row_stride _dW_row_stride n_cols BLOCK_SIZE : Nat)
+    (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride
+      n_cols BLOCK_SIZE : Nat)
     (_eps : ℝ) (s : BlockState)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => dyOutOffset s dY_row_stride i)) :
     ComputeCorrect.Realizes
       (kernel := gemma_rms_layernorm_backward dY X W r _dW dY_row_stride X_row_stride
-        r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE)
+        _W_row_stride r_row_stride _dW_row_stride n_cols _eps BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_SIZE => i.val < n_cols)
@@ -606,7 +613,8 @@ theorem gemma_rms_layernorm_backward_dy_compute_correct
   subst s0
   intro i hActive
   have h := gemma_rms_layernorm_backward_dy_correct dY X W r _dW dY_row_stride X_row_stride
-    r_row_stride _dW_row_stride n_cols BLOCK_SIZE _eps s s' hOutInj hExec i
+    _W_row_stride r_row_stride _dW_row_stride n_cols BLOCK_SIZE _eps s s'
+    hOutInj hExec i
   simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.FastRmsLayernorm
