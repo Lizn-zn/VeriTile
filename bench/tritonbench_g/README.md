@@ -50,11 +50,18 @@ These ports are intentionally **not** part of the main library glob in `lakefile
 # all currently-ported kernels
 bench/check_ports.sh
 
+# mechanical audit gates for the current TritonBench-G sweep
+bench/audit_tritonbench_g.sh
+
 # subset by kernel name
 bench/check_ports.sh vector_addition softmax_triton1
 ```
 
 The script runs `lake env lean` against each `<KernelName>.lean` independently, reports per-kernel pass/fail, and exits non-zero on any failure (CI-friendly).
+The audit script wraps this port-build gate with Python/Lean count matching,
+placeholder-proof scanning, and correctness-surface scanning. It is a mechanical
+gate only; line-by-line faithfulness still follows [`review_criteria.md`](./review_criteria.md),
+and unresolved proof obligations remain tracked in [`proof_blockers.md`](./proof_blockers.md).
 
 ## Provenance
 

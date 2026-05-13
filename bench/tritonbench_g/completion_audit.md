@@ -16,6 +16,10 @@ surface.
 - Build gate: `lake build` succeeds.
 - Per-port source elaboration gate: `bench/check_ports.sh` reports
   `TritonBench-G ports: 141 ok, 0 fail`.
+- Mechanical audit gate: `bench/audit_tritonbench_g.sh` reports
+  `TritonBench-G audit gates passed`, covering Python/Lean count matching,
+  port elaboration, placeholder-proof scanning, and correctness-surface
+  scanning.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.
