@@ -27,7 +27,8 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   `BLOCK_NN × BLOCK_DMODEL` target (`outOffset2D` / `embeddingSpec2D`) and the
   full `BLOCK_N × BLOCK_DMODEL` post-loop target (`outOffsetFull` /
   `embeddingSpecFull`), with `embeddingPrefixActive` identifying the lanes
-  already written after a prefix of chunks, but the theorem is still a
+  already written after a prefix of chunks. The chunk-to-full bridges are
+  `outOffset2D_eq_full` and `embeddingSpec2D_eq_full`; the theorem is still a
   placeholder until the per-chunk write invariant is instantiated with
   `forRange_inv`.
 
@@ -40,5 +41,6 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - Current local spec now includes the recurrence target via `diagSsmStateAfter`
   / `diagSsmForwardSpec`, a state-register target via `diagSsmStateTile`, plus
   the full `(time, column)` write target via `diagSsmForwardOutOffset` /
-  `diagSsmForwardSpecAt`, but the theorem is still a placeholder until the
+  `diagSsmForwardSpecAt`, with `diagSsmForwardSpecAt_eq_stateTile` bridging
+  stores to the recurrence state. The theorem is still a placeholder until the
   recurrence invariant is instantiated with `forLoop_inv`.
