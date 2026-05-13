@@ -314,6 +314,129 @@ else
   failures=$((failures + 1))
 fi
 
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+
+def python_kernel_body(text: str) -> str:
+    lines = text.splitlines()
+    def_i = None
+    pending_jit = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("@triton.jit"):
+            pending_jit = True
+            continue
+        if pending_jit and stripped.startswith("def "):
+            def_i = i
+            break
+        if pending_jit and stripped and not stripped.startswith("@"):
+            pending_jit = False
+    if def_i is None:
+        for i, line in enumerate(lines):
+            if line.lstrip().startswith("def "):
+                def_i = i
+                break
+    if def_i is None:
+        return text
+
+    start = None
+    parens = 0
+    for i in range(def_i, len(lines)):
+        line = lines[i]
+        parens += line.count("(") - line.count(")")
+        if parens <= 0 and line.rstrip().endswith(":"):
+            start = i + 1
+            break
+    if start is None:
+        return text
+
+    body = []
+    for line in lines[start:]:
+        if line and not line.startswith((" ", "\t")):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+def lean_triton_body(text: str) -> str:
+    idx = text.find("triton {")
+    if idx < 0:
+        return text
+    start = text.find("{", idx)
+    depth = 0
+    out = []
+    for ch in text[start:]:
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth >= 1:
+            out.append(ch)
+    return "".join(out)
+
+def strip_python_comments(text: str) -> str:
+    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
+def python_control_counts(text: str) -> tuple[int, int, int]:
+    body = strip_python_comments(python_kernel_body(text))
+    return (
+        len(re.findall(r"^\s*for\s+", body, re.M)),
+        len(re.findall(r"^\s*while\s+", body, re.M)),
+        len(re.findall(r"^\s*if\s+", body, re.M)),
+    )
+
+def lean_control_counts(text: str) -> tuple[int, int, int]:
+    body = lean_triton_body(text)
+    return (
+        len(re.findall(r"^\s*(for\s+|tl\.for\s+)", body, re.M)),
+        len(re.findall(r"^\s*while\s+", body, re.M)),
+        len(re.findall(r"^\s*if\s+", body, re.M)),
+    )
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    py_counts = python_control_counts(py_file.read_text())
+    lean_text = lean_file.read_text()
+    lean_counts = lean_control_counts(lean_text)
+    if py_counts != lean_counts and not any(marker in lean_text.lower() for marker in scope_markers):
+        failures.append((py_file, lean_file, py_counts, lean_counts))
+
+if failures:
+    for py_file, lean_file, py_counts, lean_counts in failures:
+        print(
+            f"{py_file} -> {lean_file}: control-flow count mismatch "
+            f"python(for,while,if)={py_counts} lean(for,while,if)={lean_counts}"
+        )
+    sys.exit(1)
+PY
+then
+  printf 'ok kernel control-flow surface scan\n'
+else
+  printf 'FAIL kernel control-flow surface scan\n'
+  failures=$((failures + 1))
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi

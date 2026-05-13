@@ -33,6 +33,9 @@ surface.
   must-fix "extra statement" pattern in `review_criteria.md`. Finally, it
   compares the Python and Lean `tl.*(...)` call surfaces and requires any
   missing or extra call to be covered by an explicit slice/specialization note.
+  It also compares `for` / `while` / `if` counts inside the Python
+  `@triton.jit` kernel body and Lean `triton { ... }` body to catch
+  unannotated control-flow rewrites.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.
