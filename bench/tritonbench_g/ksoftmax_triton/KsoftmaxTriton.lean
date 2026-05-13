@@ -23,7 +23,7 @@ def ksoftmax_forward_qk_surface
   x_ptrs = X + m * $(stride_xm) + n * $(stride_xn) + k
   io_mask = k < $(K)
   if CAUSAL {
-    io_mask = io_mask and (k <= n)
+    io_mask = io_mask & (k <= n)
   }
   x = tl.load(x_ptrs, mask=io_mask, other=-inf)
   if CAUSAL {
@@ -66,7 +66,7 @@ def ksoftmax_forward_bk_surface
   x_ptrs = X + m * $(stride_xm) + n * $(stride_xn) + k
   io_mask = k < $(K)
   if CAUSAL {
-    io_mask = io_mask and (k <= n)
+    io_mask = io_mask & (k <= n)
   }
   x = tl.load(x_ptrs, mask=io_mask, other=-inf)
   if CAUSAL {
@@ -109,7 +109,7 @@ def ksoftmax_backward_surface
   out_ptrs = Out + m * $(stride_om) + n * $(stride_on) + k
   io_mask = k < $(K)
   if CAUSAL {
-    io_mask = io_mask and (k <= n)
+    io_mask = io_mask & (k <= n)
   }
   g = tl.load(grad_out_ptrs, mask=io_mask, other=0.0)
   o = tl.load(out_ptrs, mask=io_mask, other=0.0)

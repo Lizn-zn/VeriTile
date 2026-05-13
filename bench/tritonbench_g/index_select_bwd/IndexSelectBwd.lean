@@ -28,7 +28,7 @@ def index_select_cat_bwd_kernel
     grad_output_ptr + grad_output_indices[:, None] * $(stride0) +
       cols[None, :] * $(stride1)
   grad_output_mask =
-    (grad_output_indices[:, None] < $(num_indices)) and
+    (grad_output_indices[:, None] < $(num_indices)) &
       (cols[None, :] < $(num_cols))
   grad_output = (tl.load(grad_output_offsets, mask=grad_output_mask)).to(tl.float32)
   grad_source_indices =

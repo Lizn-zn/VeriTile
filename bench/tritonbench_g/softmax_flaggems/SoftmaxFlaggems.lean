@@ -24,7 +24,7 @@ def softmax_kernel_non_inner_one_tile_surface
   k_offsets = pid_k * $(TILE_K) + tl.arange(0, $(TILE_K))
   n_offsets = tl.arange(0, $(TILE_N))
   offset = pid_m * $(N) * $(K) + n_offsets[:, None] * $(K) + k_offsets[None, :]
-  mask = (n_offsets[:, None] < $(N)) and (k_offsets[None, :] < $(K))
+  mask = (n_offsets[:, None] < $(N)) & (k_offsets[None, :] < $(K))
   inp = tl.load(input_ptr + offset, mask=mask, other=-float("inf"))
   m = tl.max(inp, 0)
   e = tl.exp(inp - m[None, :])
@@ -72,7 +72,7 @@ def softmax_backward_kernel_non_inner_one_tile_surface
   offsets_k = pid_k * $(TILE_K) + tl.arange(0, $(TILE_K))
   offsets_n = tl.arange(0, $(TILE_N))
   offsets = pid_m * $(N) * $(K) + offsets_n[:, None] * $(K) + offsets_k[None, :]
-  mask = (offsets_n[:, None] < $(N)) and (offsets_k[None, :] < $(K))
+  mask = (offsets_n[:, None] < $(N)) & (offsets_k[None, :] < $(K))
   out_tile = tl.load(out_ptr + offsets, mask=mask)
   out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask)
   scale = tl.sum(out_tile * out_grad_tile, axis=0)
@@ -93,7 +93,7 @@ def softmax_backward_kernel_inner_one_tile_surface
   m_offsets = pid_m * $(TILE_M) + tl.arange(0, $(TILE_M))
   n_offsets = tl.arange(0, $(TILE_N))
   offsets = m_offsets[:, None] * $(N) + n_offsets[None, :]
-  mask = (m_offsets[:, None] < $(M)) and (n_offsets[None, :] < $(N))
+  mask = (m_offsets[:, None] < $(M)) & (n_offsets[None, :] < $(N))
   out_tile = tl.load(out_ptr + offsets, mask=mask)
   out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask)
   scale = tl.sum(out_tile * out_grad_tile, axis=1)
