@@ -32,13 +32,14 @@ def chunk_gate_recurrence_fwd_surface
     offset_d * $(D_MODEL_V) * $(BLOCK_MODEL_K) +
     offs_k[:, None] * $(D_MODEL_V) + offset_s * $(BLOCK_MODEL_V) +
     offs_v[None, :]
-  acc = tl.zeros([$(BLOCK_MODEL_K), $(BLOCK_MODEL_V)], dtype=tl.float32)
   if HAS_LAST_KV {
     last_kv_ptr = LastKV + offset_bh * $(D_MODEL_K) * $(D_MODEL_V) +
       offset_d * $(D_MODEL_V) * $(BLOCK_MODEL_K) +
       offs_k[:, None] * $(D_MODEL_V) + offset_s * $(BLOCK_MODEL_V) +
       offs_v[None, :]
-    acc += tl.load(last_kv_ptr).to(tl.float32)
+    acc = tl.load(last_kv_ptr).to(tl.float32)
+  } else {
+    acc = tl.zeros([$(BLOCK_MODEL_K), $(BLOCK_MODEL_V)], dtype=tl.float32)
   }
   tl.store(O_ptr, (acc).to(O_ptr.dtype.element_ty))
   O_ptr += $(D_MODEL_K) * $(D_MODEL_V)
