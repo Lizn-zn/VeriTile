@@ -1078,6 +1078,30 @@ theorem scatter_prop_masked_preserves_other_region {α : Type}
       exact h_ne h_R
     · simp [hP]
 
+theorem scatter_prop_masked_preserves_other_offset {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (off : Nat)
+    (h_ne : ∀ k, P k → offsetFn k ≠ off) :
+    ∀ (l : List α) (s : BlockState),
+      ((l.foldl
+        (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+        s).readMem region off) = s.readMem region off := by
+  intro l
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s
+    rw [List.foldl_cons, ih]
+    by_cases hP : P hd
+    · simp only [hP, if_true]
+      rw [writeMem_readMem]
+      show (if region = region ∧ off = offsetFn hd then valueFn hd else s.readMem region off)
+          = s.readMem region off
+      rw [if_neg]
+      rintro ⟨_, h_off⟩
+      exact h_ne hd hP h_off.symm
+    · simp [hP]
+
 @[simp] theorem foldl_writeMem_regs {α : Type}
     (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
     (l : List α) (s : BlockState) (dtype : TileDType) (shape : TileShape)

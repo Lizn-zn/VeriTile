@@ -502,6 +502,44 @@ theorem diagSsmForwardCurrentTimeNoCollision_of_out_injective
       cases hLane
       rfl
 
+theorem diagSsmForwardCurrentTimeScatter_preserve_old
+    {length : Nat}
+    (st0 st : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat)
+    (idx : TileIndex [length, BLOCK_SIZE])
+    (ht : t < length) (hOld : idx.1.val < t)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx)) :
+    ((TileShape.allIndices [BLOCK_SIZE]).foldl
+        (fun acc lane =>
+          if active st0 batch_size dim BLOCK_SIZE lane.1 then
+            acc.writeMem y_ptr
+              (timeOffset st0 batch_size dim BLOCK_SIZE t lane.1)
+              (diagSsmForwardSpec st0 s_ptr x_ptr lambda_ptr batch_size dim
+                BLOCK_SIZE t lane.1)
+          else
+            acc)
+        st).readMem y_ptr
+          (diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx) =
+      st.readMem y_ptr
+        (diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx) := by
+  exact
+    BlockState.scatter_prop_masked_preserves_other_offset
+      y_ptr
+      (fun lane : TileIndex [BLOCK_SIZE] =>
+        timeOffset st0 batch_size dim BLOCK_SIZE t lane.1)
+      (fun lane : TileIndex [BLOCK_SIZE] =>
+        diagSsmForwardSpec st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE t lane.1)
+      (fun lane : TileIndex [BLOCK_SIZE] =>
+        active st0 batch_size dim BLOCK_SIZE lane.1)
+      (diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx)
+      (fun lane _hactive heq =>
+        diagSsmForwardOutOffset_ne_currentTime st0 batch_size dim BLOCK_SIZE t
+          idx lane.1 hOutInj ht hOld heq.symm)
+      (TileShape.allIndices [BLOCK_SIZE]) st
+
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=

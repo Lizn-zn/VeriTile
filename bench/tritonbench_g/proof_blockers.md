@@ -124,9 +124,11 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   scatter readback fact needed for the loop body's `tl.store`, and
   `diagSsmForwardCurrentTimeNoCollision_of_out_injective` derives its lane
   no-collision premise from full `diagSsmForwardOutOffset` injectivity. The
-  remaining store-side work is proving old-time preservation and matching the
-  concrete DSL-expanded store to that scatter shape. The theorem surface now
-  requires full `diagSsmForwardOutOffset` injectivity over `(time, column)`
-  indices. The compute-facing wrapper is discharged once that algorithm-layer
-  postcondition is supplied via
+  generic semantic helper `BlockState.scatter_prop_masked_preserves_other_offset`
+  and the local theorem `diagSsmForwardCurrentTimeScatter_preserve_old` cover
+  old-time preservation for the current-time scatter. The remaining store-side
+  work is matching the concrete DSL-expanded store to that scatter shape. The
+  theorem surface now requires full `diagSsmForwardOutOffset` injectivity over
+  `(time, column)` indices. The compute-facing wrapper is discharged once that
+  algorithm-layer postcondition is supplied via
   `diag_ssm_forward_kernel_compute_correct_of_algorithm`.
