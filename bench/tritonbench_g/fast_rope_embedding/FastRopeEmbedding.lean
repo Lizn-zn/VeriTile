@@ -12,13 +12,12 @@ set_option linter.unusedSimpArgs false
 
 /-- Surface transcription of `fast_rope_embedding.py`'s `_rope_embedding`.
 
-`backwardSign = 1.0` represents `BACKWARD_PASS = false`; `backwardSign = -1.0`
-represents `BACKWARD_PASS = true`, where Python negates `sin1`. The body
-preserves the fixed four-head group loop and both rotary-pair stores. -/
+The body preserves the fixed four-head group loop, the `BACKWARD_PASS` branch,
+and both rotary-pair stores. -/
 def rope_embedding_surface
     (Q cos sin : RegionName)
     (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
-      BLOCK_SIZE : Nat) (backwardSign : ℝ) :
+      BLOCK_SIZE : Nat) (BACKWARD_PASS : Bool) :
     ComputeKernel := triton {
   row_position = tl.program_id(0)
   group_head_position = tl.program_id(1)
@@ -29,7 +28,9 @@ def rope_embedding_surface
     half_head_dim * $(0) + col_offsets, mask=mask, other=0)
   cos1 = tl.load(cos + (row_position % $(seqlen)) * $(cos_row_stride) +
     half_head_dim * $(0) + col_offsets, mask=mask, other=0)
-  sin1 = sin1 * $(backwardSign)
+  if BACKWARD_PASS {
+    sin1 = -sin1
+  }
   head_start = group_head_position * $(4)
   head_end = min(head_start + $(4), $(n_heads))
   for k in range(head_start, head_end, $(1)) {
