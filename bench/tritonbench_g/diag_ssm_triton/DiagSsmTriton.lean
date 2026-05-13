@@ -240,6 +240,16 @@ noncomputable def diagSsmForwardSpecAt
   diagSsmForwardSpec st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE
     idx.1.val idx.2.1
 
+theorem diagSsmForwardSpecAt_eq_stateTile
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE : Nat)
+    (idx : TileIndex [length, BLOCK_SIZE]) :
+    diagSsmForwardSpecAt st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx =
+      WithBot.unbotD 0
+        ((diagSsmStateTile st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE
+          (idx.1.val + 1)).data idx.2.1) := by
+  simp [diagSsmForwardSpecAt, diagSsmForwardSpec, diagSsmStateTile]
+
 /-- Algorithm-layer correctness for the forward SSM kernel. -/
 theorem diag_ssm_forward_kernel_correct
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
