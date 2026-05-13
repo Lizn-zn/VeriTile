@@ -343,6 +343,45 @@ theorem embeddingOldPrefix_outOffset_ne_currentChunk
     (BLOCK_DMODEL := BLOCK_DMODEL) start_nn BLOCK_NN oldIdx curIdx hCur hOld
     (hOutInj hEqFull)
 
+theorem embeddingCurrentChunkNoCollision_of_full_injective
+    (s : BlockState) (stride_out_seq n_ctx hiden_size BLOCK_N start_nn
+      BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s stride_out_seq BLOCK_N idx))
+    (hIdxBound : start_nn + idx.1.val < BLOCK_N)
+    (hLaneBound :
+      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane →
+          start_nn + lane.1.val < BLOCK_N) :
+    ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+        BLOCK_DMODEL lane →
+        outOffset2D s stride_out_seq BLOCK_N start_nn lane =
+          outOffset2D s stride_out_seq BLOCK_N start_nn idx →
+        lane = idx := by
+  intro lane hlane heq
+  have hLaneBound' := hLaneBound lane hlane
+  have hLaneOut := outOffset2D_eq_full s stride_out_seq BLOCK_N start_nn
+    BLOCK_NN BLOCK_DMODEL lane hLaneBound'
+  have hIdxOut := outOffset2D_eq_full s stride_out_seq BLOCK_N start_nn
+    BLOCK_NN BLOCK_DMODEL idx hIdxBound
+  have hFullEq :
+      embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn lane hLaneBound' =
+        embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx hIdxBound := by
+    apply hOutInj
+    simpa [hLaneOut, hIdxOut] using heq
+  apply Prod.ext
+  · apply Fin.ext
+    have hval := congrArg
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => idx.1.val) hFullEq
+    simpa [embeddingChunkToFullIndex] using Nat.add_left_cancel hval
+  · have htail := congrArg
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => idx.2) hFullEq
+    simpa [embeddingChunkToFullIndex] using htail
+
 theorem embeddingChunkLane_lt_of_aligned_start
     (BLOCK_N BLOCK_NN chunks k start_nn : Nat)
     (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])

@@ -98,7 +98,9 @@ These files must not be counted complete yet:
     factored into `embeddingPrefixIndex_ne_currentChunk` and
     `embeddingOldPrefix_outOffset_ne_currentChunk`; aligned chunk coverage is
     captured by `embeddingChunkLane_lt_of_aligned_start`; current-chunk masked
-    scatter readback is bridged by `embeddingCurrentChunkScatter_write`.
+    scatter readback is bridged by `embeddingCurrentChunkScatter_write`, with
+    `embeddingCurrentChunkNoCollision_of_full_injective` deriving its
+    no-collision premise from full output injectivity plus chunk-bound coverage.
   - Remaining proof: instantiate the per-chunk write invariant with
     `forRange_inv` under `outOffsetFull` injectivity, including old-prefix
     preservation and the concrete loop-body store.

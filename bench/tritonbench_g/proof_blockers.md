@@ -74,9 +74,11 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   which combines old-prefix preservation with the current
   `BLOCK_NN × BLOCK_DMODEL` write map to produce the next prefix invariant.
   `embeddingCurrentChunkScatter_write` provides the current-chunk masked scatter
-  readback fact needed for the concrete `tl.store`; remaining store-side work is
-  old-prefix preservation plus matching the DSL-expanded store to that scatter
-  shape. The theorem target is fixed as
+  readback fact needed for the concrete `tl.store`, and
+  `embeddingCurrentChunkNoCollision_of_full_injective` derives its no-collision
+  premise from full `outOffsetFull` injectivity plus chunk-bound coverage.
+  Remaining store-side work is old-prefix preservation plus matching the
+  DSL-expanded store to that scatter shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until that
   chunk step is instantiated with the actual loop body via
