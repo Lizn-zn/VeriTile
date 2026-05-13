@@ -39,14 +39,22 @@ def rotary_embedding_q_surface
   off_q1 = tokens_range[:, None, None] * $(q_token_stride) +
     cur_head_idx * $(q_head_stride) +
     dim_range1[None, None, :] * $(head_dim_stride)
-  active = (cur_head_idx < $(Q_HEAD_NUM)) and
-    (tokens_range[:, None, None] < $(q_total_tokens))
-  loaded_q0 = tl.load(Q + off_q0, mask=active, other=0.0)
-  loaded_q1 = tl.load(Q + off_q1, mask=active, other=0.0)
+  loaded_q0 = tl.load(Q + off_q0,
+    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens)),
+    other=0.0)
+  loaded_q1 = tl.load(Q + off_q1,
+    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens)),
+    other=0.0)
   out_q0 = loaded_q0 * loaded_cos[:, None, :] - loaded_q1 * loaded_sin[:, None, :]
   out_q1 = loaded_q0 * loaded_sin[:, None, :] + loaded_q1 * loaded_cos[:, None, :]
-  tl.store(Q + off_q0, out_q0, mask=active)
-  tl.store(Q + off_q1, out_q1, mask=active)
+  tl.store(Q + off_q0, out_q0,
+    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens)))
+  tl.store(Q + off_q1, out_q1,
+    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens)))
 }
 
 /-- Surface transcription of the conditional K part of
@@ -77,13 +85,16 @@ def rotary_embedding_k_surface
     off_k1 = tokens_range[:, None, None] * $(k_token_stride) +
       k_head_idx * $(k_head_stride) +
       dim_range1[None, None, :] * $(head_dim_stride)
-    active = tokens_range[:, None, None] < $(q_total_tokens)
-    loaded_k0 = tl.load(K + off_k0, mask=active, other=0.0)
-    loaded_k1 = tl.load(K + off_k1, mask=active, other=0.0)
+    loaded_k0 = tl.load(K + off_k0,
+      mask=tokens_range[:, None, None] < $(q_total_tokens), other=0.0)
+    loaded_k1 = tl.load(K + off_k1,
+      mask=tokens_range[:, None, None] < $(q_total_tokens), other=0.0)
     out_k0 = loaded_k0 * loaded_cos[:, None, :] - loaded_k1 * loaded_sin[:, None, :]
     out_k1 = loaded_k0 * loaded_sin[:, None, :] + loaded_k1 * loaded_cos[:, None, :]
-    tl.store(K + off_k0, out_k0, mask=active)
-    tl.store(K + off_k1, out_k1, mask=active)
+    tl.store(K + off_k0, out_k0,
+      mask=tokens_range[:, None, None] < $(q_total_tokens))
+    tl.store(K + off_k1, out_k1,
+      mask=tokens_range[:, None, None] < $(q_total_tokens))
   }
 }
 
@@ -122,9 +133,10 @@ def fused_rotary_embedding_v2_surface
     loaded_k1 = tl.load(K + off_k1)
 
     off_cos_sin = block_token_index * $(cos_token_stride) + dim * $(cos_stride)
-    cos_mask = block_token_index < $(q_total_tokens)
-    loaded_cos = tl.load(Cos + off_cos_sin, mask=cos_mask, other=0.0)
-    loaded_sin = tl.load(Sin + off_cos_sin, mask=cos_mask, other=0.0)
+    loaded_cos = tl.load(Cos + off_cos_sin,
+      mask=block_token_index < $(q_total_tokens), other=0.0)
+    loaded_sin = tl.load(Sin + off_cos_sin,
+      mask=block_token_index < $(q_total_tokens), other=0.0)
 
     out_q0 = loaded_q0 * loaded_cos - loaded_q1 * loaded_sin
     out_q1 = loaded_q0 * loaded_sin + loaded_q1 * loaded_cos
