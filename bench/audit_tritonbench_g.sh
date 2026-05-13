@@ -249,6 +249,71 @@ else
   printf 'ok no Lean-only tl.where statements\n'
 fi
 
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+call_re = re.compile(r"\btl(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s*\(")
+ignored = {
+    "tl.constexpr",
+    "tl.float32",
+    "tl.float64",
+    "tl.int32",
+    "tl.int64",
+    "tl.uint32",
+    "tl.uint64",
+    "tl.tensor",
+    "tl.for",
+}
+
+def calls(text: str) -> set[str]:
+    return {
+        match.group(0).split("(", 1)[0].strip()
+        for match in call_re.finditer(text)
+        if match.group(0).split("(", 1)[0].strip() not in ignored
+    }
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    py_calls = calls(py_file.read_text())
+    lean_text = lean_file.read_text()
+    lean_calls = calls(lean_text)
+    missing = sorted(py_calls - lean_calls)
+    extra = sorted(lean_calls - py_calls)
+    if (missing or extra) and not any(marker in lean_text.lower() for marker in scope_markers):
+        failures.append((py_file, lean_file, missing, extra))
+
+if failures:
+    for py_file, lean_file, missing, extra in failures:
+        if missing:
+            print(f"{py_file} -> {lean_file}: missing tl calls {', '.join(missing)}")
+        if extra:
+            print(f"{lean_file} -> {py_file}: extra tl calls {', '.join(extra)}")
+    sys.exit(1)
+PY
+then
+  printf 'ok tl.* call surface scan\n'
+else
+  printf 'FAIL tl.* call surface scan\n'
+  failures=$((failures + 1))
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi

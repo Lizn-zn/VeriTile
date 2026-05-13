@@ -30,7 +30,9 @@ surface.
   check that treats names like `a_ptr` and `A` as the same pointer. It checks
   that upstream `rsqrt` calls are preserved rather than rewritten as reciprocal
   square roots. It also rejects Lean-only `tl.where` statements, another
-  must-fix "extra statement" pattern in `review_criteria.md`.
+  must-fix "extra statement" pattern in `review_criteria.md`. Finally, it
+  compares the Python and Lean `tl.*(...)` call surfaces and requires any
+  missing or extra call to be covered by an explicit slice/specialization note.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.

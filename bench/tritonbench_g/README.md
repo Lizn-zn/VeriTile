@@ -67,7 +67,9 @@ and it requires Python `+=` updates missing from Lean to be covered by a
 documented slice or branch/surface scope, including a normalized left-hand-side
 check for pointer names such as `a_ptr` versus `A`. Upstream `rsqrt` calls are
 also checked for preservation, and Lean-only `tl.where` statements are
-rejected.
+rejected. The same audit compares Python and Lean `tl.*(...)` call surfaces and
+requires any missing or extra call to be covered by an explicit
+slice/specialization note.
 It is a mechanical gate only; line-by-line faithfulness still follows
 [`review_criteria.md`](./review_criteria.md), and unresolved proof obligations
 remain tracked in [`proof_blockers.md`](./proof_blockers.md).
