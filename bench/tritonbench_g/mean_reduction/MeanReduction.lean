@@ -91,6 +91,20 @@ theorem meanChunkLane_mod
   rw [hOff]
   simp [Nat.mod_eq_of_lt j.isLt]
 
+theorem meanChunkLane_mem_next
+    (N off BLOCK_N : Nat) (j : Fin BLOCK_N)
+    (hOff : off % BLOCK_N = 0) (hjN : off + j.val < N) :
+    off + j.val ∈ (Finset.range (off + BLOCK_N)).filter
+      (fun col => col < N ∧ col % BLOCK_N = j.val) := by
+  simp [hjN]
+  exact meanChunkLane_mod off BLOCK_N j hOff
+
+theorem meanChunkLane_not_mem_current
+    (N off BLOCK_N : Nat) (j : Fin BLOCK_N) :
+    off + j.val ∉ (Finset.range off).filter
+      (fun col => col < N ∧ col % BLOCK_N = j.val) := by
+  simp
+
 private theorem sum_range_eq_sum_fin (N : Nat) (f : Nat → ℝ) :
     (Finset.range N).sum f =
       (Finset.univ : Finset (Fin N)).sum (fun j => f j.val) := by
