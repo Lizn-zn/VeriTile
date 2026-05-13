@@ -84,6 +84,15 @@ def coerceRealArithOperands (ctx : String) (a b : EOut) : MacroM (EOut × EOut) 
   | _, _ =>
       pure (a, b)
 
+def coerceNatIntOperands (_ctx : String) (a b : EOut) : MacroM (EOut × EOut) := do
+  match a.dtype, b.dtype with
+  | .nat, .int =>
+      pure ({ a with term := ← `(Op.castNatToInt $a.term), dtype := .int }, b)
+  | .int, .nat =>
+      pure (a, { b with term := ← `(Op.castNatToInt $b.term), dtype := .int })
+  | _, _ =>
+      pure (a, b)
+
 inductive CInfo where
   | uint32
   | int32

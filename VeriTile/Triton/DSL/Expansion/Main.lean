@@ -278,7 +278,14 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
       match ← expandStaticPtrExpr env a with
       | some p =>
-          let b' ← expandNatExpectedExpr env b
+          let b0 ← expandExpr env b
+          let b' ←
+            if b0.dtype == .int then
+              pure { b0 with term := ← `(Op.castIntToNat $b0.term), dtype := .nat }
+            else if b0.dtype == .nat then
+              pure b0
+            else
+              expandNatExpectedExpr env b
           if p.baseOnly then
             pure (some ⟨p.region, p.regionDType?, b'.term, b'.shape, Bool.false⟩)
           else
@@ -897,11 +904,21 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               ensureAlgorithmOnly "pointer arithmetic" b'
               let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
               pure ⟨← `(Op.ptrAdd $bc $a'.term $b'.term), .ptr, outShape, none, none⟩
+          | .ptr, .int =>
+              ensureAlgorithmOnly "pointer arithmetic" a'
+              ensureAlgorithmOnly "pointer arithmetic" b'
+              let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
+              pure ⟨← `(Op.ptrAdd $bc $a'.term (Op.castIntToNat $b'.term)), .ptr, outShape, none, none⟩
           | .nat, .ptr =>
               ensureAlgorithmOnly "pointer arithmetic" a'
               ensureAlgorithmOnly "pointer arithmetic" b'
               let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
               pure ⟨← `(Op.ptrAdd $bc $b'.term $a'.term), .ptr, outShape, none, none⟩
+          | .int, .ptr =>
+              ensureAlgorithmOnly "pointer arithmetic" a'
+              ensureAlgorithmOnly "pointer arithmetic" b'
+              let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
+              pure ⟨← `(Op.ptrAdd $bc $b'.term (Op.castIntToNat $a'.term)), .ptr, outShape, none, none⟩
           | _, _ =>
               expandArith expandExpr env "arithmetic" (← `(Op.add)) a b
   | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do

@@ -56,6 +56,7 @@ partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (
       | none => pure b'
     else
       pure b'
+  let (a', b') ← coerceNatIntOperands ctx a' b'
   let (a', b') ← coerceRealArithOperands ctx a' b'
   ensureComputeArithComposable ctx a'
   ensureComputeArithComposable ctx b'
@@ -203,6 +204,7 @@ partial def expandCmp (expandExpr : ExprExpander) (env : Env) (ctx : String) (op
       | none => pure a'
     else
       pure a'
+  let (a', b') ← coerceNatIntOperands ctx a' b'
   ensureComputeCmpComposable ctx a'
   ensureComputeCmpComposable ctx b'
   unless a'.dtype == b'.dtype do
@@ -243,6 +245,7 @@ partial def expandMinMax (expandExpr : ExprExpander) (env : Env) (ctx : String) 
       | none => pure b'
     else
       pure b'
+  let (a', b') ← coerceNatIntOperands ctx a' b'
   ensureComputeArithComposable ctx a'
   ensureComputeArithComposable ctx b'
   unless a'.dtype == b'.dtype do
