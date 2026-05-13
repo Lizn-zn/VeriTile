@@ -622,7 +622,8 @@ theorem meanPreLoop_step_regs
           (Mean, meanOutOffset s BLOCK_M idx.1) } ∧
       st.regs .bool [BLOCK_M, 1] "row_mask" =
         some { data := fun idx : TileIndex [BLOCK_M, 1] =>
-          meanRowActive s M BLOCK_M idx.1 } := by
+          meanRowActive s M BLOCK_M idx.1 } ∧
+      (∀ offset, st.readMem X offset = s.readMem X offset) := by
   unfold meanPreLoop at hStep
   simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
     TileShape.dropInsertedIndex, Tile.ptrAdd, NumericDType.add,
@@ -634,9 +635,12 @@ theorem meanPreLoop_step_regs
     · simp [meanOutOffset]
     · constructor
       · simp [meanOutOffset]
-      · simp [Tile.cop, ComparableDType.lt, meanOutOffset, meanRowActive]
-        funext idx
-        rfl
+      · constructor
+        · simp [Tile.cop, ComparableDType.lt, meanOutOffset, meanRowActive]
+          funext idx
+          rfl
+        · intro offset
+          rfl
 
 def meanLoopBody (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .nat [1, BLOCK_N] "cols"
@@ -766,6 +770,62 @@ theorem meanLoopBody_step_preserves_context
       · simp [hRow]
       · intro offset
         rfl
+
+def meanLoopContextInvariant
+    (s0 : BlockState) (X Mean : RegionName) (M N BLOCK_M BLOCK_N : Nat)
+    (off : Nat) (st : BlockState) : Prop :=
+  meanLoopInvariant s0 X M N BLOCK_M BLOCK_N off st ∧
+    st.regs .ptr [BLOCK_M, 1] "X" =
+      some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+        (X, meanOutOffset s0 BLOCK_M idx.1 * N) } ∧
+    st.regs .ptr [BLOCK_M, 1] "Mean" =
+      some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+        (Mean, meanOutOffset s0 BLOCK_M idx.1) } ∧
+    st.regs .bool [BLOCK_M, 1] "row_mask" =
+      some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+        meanRowActive s0 M BLOCK_M idx.1 } ∧
+    (∀ offset, st.readMem X offset = s0.readMem X offset)
+
+theorem meanLoopContextInvariant_init_of_preloop
+    (s0 st : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat)
+    (hStep :
+      stepStmts (meanPreLoop X Mean M N BLOCK_M BLOCK_N) s0 = some st) :
+    meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N 0 st := by
+  rcases meanPreLoop_step_regs s0 st X Mean M N BLOCK_M BLOCK_N hStep with
+    ⟨hZero, hX, hMean, hRow, hRead⟩
+  exact ⟨meanLoopInvariant_init_of_zero_reg s0 st X M N BLOCK_M BLOCK_N hZero,
+    hX, hMean, hRow, hRead⟩
+
+theorem meanLoopContextInvariant_step_of_body
+    (s0 st st' : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N off : Nat)
+    (hCtx : meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N off st)
+    (hStep :
+      stepStmts (meanLoopBody N BLOCK_M BLOCK_N)
+        (st.setReg "off" .nat [] (Tile.scalar off)) = some st') :
+    meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N
+      (off + BLOCK_N) st' := by
+  rcases hCtx with ⟨hInv, hX, hMean, hRow, hRead⟩
+  have hUpdate :
+      st'.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+        some
+          { data := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+              some
+                (WithBot.unbotD 0
+                    ((meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off).data idx) +
+                  WithBot.unbotD 0
+                    ((meanChunkLoadSpec s0 X M N BLOCK_M BLOCK_N off).data idx)) } :=
+    meanLoopBody_step_accumulator_update s0 st st' X M N BLOCK_M BLOCK_N off
+      hInv.2 hX hRow hRead hStep
+  rcases meanLoopBody_step_preserves_context s0 st st' X Mean M N BLOCK_M
+      BLOCK_N off hInv.2 hX hMean hRow hStep with
+    ⟨hX', hMean', hRow', hReadStep⟩
+  refine ⟨?_, hX', hMean', hRow', ?_⟩
+  · exact meanLoopInvariant_step_of_accumulator_update s0 st' X M N BLOCK_M
+      BLOCK_N off hInv.1 hUpdate
+  · intro offset
+    rw [hReadStep offset, hRead offset]
 
 def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .real [BLOCK_M] "mean"

@@ -62,10 +62,14 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `meanLoopBody_step_preserves_context` proves the same body preserves the
   `X` / `Mean` pointer tiles, `row_mask`, and reads from `X`, allowing those
   facts to be threaded through the `forRange_inv` predicate.
+  `meanLoopContextInvariant` packages this strengthened predicate;
+  `meanLoopContextInvariant_init_of_preloop` and
+  `meanLoopContextInvariant_step_of_body` prove its pre-loop initialization and
+  per-iteration preservation.
   The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
-  loop-body step is threaded through `forRange_inv` and the final loop
+  strengthened predicate is instantiated with `forRange_inv` and the final loop
   invariant is fed into `meanPostLoop_step_alg_post`. The compute-facing
   wrapper is discharged once that algorithm-layer
   postcondition is supplied via

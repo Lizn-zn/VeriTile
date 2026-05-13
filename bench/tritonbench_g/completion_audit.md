@@ -100,6 +100,9 @@ These files must not be counted complete yet:
     projected loop body produces the `_mean = old + meanChunkLoadSpec`
     register update. `meanLoopBody_step_preserves_context` proves the same
     body preserves `X`, `Mean`, `row_mask`, and reads from `X`.
+    `meanLoopContextInvariant`, `meanLoopContextInvariant_init_of_preloop`, and
+    `meanLoopContextInvariant_step_of_body` package the strengthened predicate,
+    initialization, and body preservation needed by `forRange_inv`.
   - Remaining proof: instantiate `forRange_inv`, then feed the final loop
     invariant into
     `meanPostLoop_step_alg_post`.
