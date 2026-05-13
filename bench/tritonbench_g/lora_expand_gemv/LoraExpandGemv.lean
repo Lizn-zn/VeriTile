@@ -45,12 +45,12 @@ def bgmv_expand_surface
     for n in range($(0), split_n_length, $(BLOCK_N)) {
       current_n = n + offset_n
       current_n_c = tl.max_contiguous(current_n, $(BLOCK_N))
+      b_ptr_mask = (current_n[:, None] < split_n_length) and (offset_k[None, :] < $(K))
       c_mask = current_n < split_n_length
       tiled_b = tl.load(
         b_ptr + current_n_c[:, None] * $(lora_k_stride) +
           offset_k[None, :] * $(lora_n_stride),
-        mask=(current_n[:, None] < split_n_length) and (offset_k[None, :] < $(K)),
-        other=0.0)
+        mask=b_ptr_mask, other=0.0)
       if ADD_INPUTS {
         tiled_out = tl.load(c_ptr + current_n * $(cn_stride), mask=c_mask)
         accumulator = tl.sum(tiled_a[None, :] * tiled_b, 1) + tiled_out
