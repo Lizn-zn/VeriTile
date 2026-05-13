@@ -1279,6 +1279,19 @@ partial def expandStmt (env : Env) (pinned : List String)
               (dest.getId.toString, .ptr, outShape, none) :: env,
               Bool.false)
       let nameLit : TSyntax `term := Syntax.mkStrLit envName
+      if lhsDType == .ptr then
+        let rhs' ← expandNatExpectedExpr env rhs
+        ensureAlgorithmOnly "pointer rebind assignment" rhs'
+        let lhsShapeTerm ← lhsShape.term
+        let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
+        let (bc, outShape) ← broadcastTerm lhsShape rhs'.shape "pointer rebind assignment"
+        let outShapeTerm ← outShape.term
+        let term ← `(Op.ptrAdd $bc $lhsTerm $rhs'.term)
+        return (← `(Stmt.assign TileDType.ptr $outShapeTerm $nameLit $term),
+          ← `(ComputeStmt.assign TileDType.ptr $outShapeTerm $nameLit (ComputeExpr.alg $term)),
+          (dest.getId.toString, .ptr, outShape, none) ::
+            (envName, .ptr, outShape, none) :: env,
+          Bool.false)
       let lhsShapeTerm ← lhsShape.term
       let lhsDTypeTerm ← lhsDType.term
       let lhsTerm ← `(Op.ref $lhsDTypeTerm $lhsShapeTerm $nameLit)
