@@ -827,6 +827,30 @@ theorem meanLoopContextInvariant_step_of_body
   · intro offset
     rw [hReadStep offset, hRead offset]
 
+theorem meanLoopContextInvariant_body_step_exists
+    (s0 st : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N off : Nat)
+    (hCtx : meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N off st) :
+    ∃ st',
+      stepStmts (meanLoopBody N BLOCK_M BLOCK_N)
+        (st.setReg "off" .nat [] (Tile.scalar off)) = some st' ∧
+      meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N
+        (off + BLOCK_N) st' := by
+  rcases hCtx with ⟨hInv, hX, hMean, hRow, hRead⟩
+  cases hStep :
+      stepStmts (meanLoopBody N BLOCK_M BLOCK_N)
+        (st.setReg "off" .nat [] (Tile.scalar off)) with
+  | none =>
+      unfold meanLoopBody at hStep
+      simp [stepStmts, stepStmt, evalOp, hInv.2, hX, hRow, Tile.bop, Tile.cop,
+        Tile.expandDim, TileShape.dropInsertedIndex, Tile.ptrAdd,
+        NumericDType.add, ComparableDType.lt, Option.bind, meanOutOffset,
+        meanRowActive] at hStep
+  | some st' =>
+      refine ⟨st', rfl, ?_⟩
+      exact meanLoopContextInvariant_step_of_body s0 st st' X Mean M N
+        BLOCK_M BLOCK_N off ⟨hInv, hX, hMean, hRow, hRead⟩ hStep
+
 def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .real [BLOCK_M] "mean"
       (.div NumericDType.real Broadcast.scalarR

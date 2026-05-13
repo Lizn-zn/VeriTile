@@ -65,7 +65,9 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `meanLoopContextInvariant` packages this strengthened predicate;
   `meanLoopContextInvariant_init_of_preloop` and
   `meanLoopContextInvariant_step_of_body` prove its pre-loop initialization and
-  per-iteration preservation.
+  per-iteration preservation. `meanLoopContextInvariant_body_step_exists`
+  packages the loop-body step in the existential shape required by
+  `forRange_inv`.
   The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this

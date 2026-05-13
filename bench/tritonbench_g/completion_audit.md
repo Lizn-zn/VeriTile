@@ -103,6 +103,8 @@ These files must not be counted complete yet:
     `meanLoopContextInvariant`, `meanLoopContextInvariant_init_of_preloop`, and
     `meanLoopContextInvariant_step_of_body` package the strengthened predicate,
     initialization, and body preservation needed by `forRange_inv`.
+    `meanLoopContextInvariant_body_step_exists` packages the step in
+    `forRange_inv`'s existential shape.
   - Remaining proof: instantiate `forRange_inv`, then feed the final loop
     invariant into
     `meanPostLoop_step_alg_post`.
