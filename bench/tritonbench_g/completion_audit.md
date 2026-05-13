@@ -81,10 +81,11 @@ These files must not be counted complete yet:
     `meanStoreFromMaskedAccumulator_alg_post`, with
     `meanOutOffset_injective` and
     `meanStoreFromMaskedAccumulator_alg_post_default` packaging the row-output
-    no-collision side.
+    no-collision side; `meanLoopInvariant_to_scatter_alg_post` packages a final
+    loop invariant plus scatter state into the algorithm postcondition.
   - Remaining proof: prove the concrete loop body produces the `_mean =
     old + chunkLoad` register update, instantiate `forRange_inv`, then connect
-    the concrete post-loop DSL statements to the final scatter bridge.
+    the concrete post-loop DSL statements to the final scatter shape.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.
