@@ -187,4 +187,50 @@ theorem forRange_inv
   refine ⟨final, s_final, ?_, hfinal, hP⟩
   simpa [stepForRangeAux.forRange_unfold] using h_aux
 
+/-- Scalar-register readout corollary for static `forRange`. -/
+theorem forRange_readout_scalar
+    {idx outReg : RegName} {start stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    {f : Nat → ℝ}
+    (hstep : step ≠ 0)
+    (h_init : P start s_init)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s')
+    (h_readout :
+      ∀ final s, stop ≤ final → P final s →
+        s.regs .real [] outReg = some (Tile.scalar (f final))) :
+    ∃ final s_final,
+      stepStmt (.forRange idx start stop step body) s_init = some s_final ∧
+      stop ≤ final ∧
+      s_final.regs .real [] outReg = some (Tile.scalar (f final)) := by
+  obtain ⟨final, s_final, h_eq, hfinal, hP⟩ :=
+    forRange_inv hstep h_init h_step
+  exact ⟨final, s_final, h_eq, hfinal, h_readout final s_final hfinal hP⟩
+
+/-- Tile-register readout corollary for static `forRange`. -/
+theorem forRange_readout_tile
+    {idx outReg : RegName} {start stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    {len : Nat} {f : Nat → Fin len → WithBot ℝ}
+    (hstep : step ≠ 0)
+    (h_init : P start s_init)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s')
+    (h_readout :
+      ∀ final s, stop ≤ final → P final s →
+        s.regs .real [len] outReg = some (Tile.vec (f final))) :
+    ∃ final s_final,
+      stepStmt (.forRange idx start stop step body) s_init = some s_final ∧
+      stop ≤ final ∧
+      s_final.regs .real [len] outReg = some (Tile.vec (f final)) := by
+  obtain ⟨final, s_final, h_eq, hfinal, hP⟩ :=
+    forRange_inv hstep h_init h_step
+  exact ⟨final, s_final, h_eq, hfinal, h_readout final s_final hfinal hP⟩
+
 end VeriTile.Triton
