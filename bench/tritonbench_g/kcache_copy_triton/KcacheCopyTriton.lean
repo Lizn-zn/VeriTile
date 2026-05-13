@@ -18,11 +18,14 @@ For `n_tokens = 1`, Python treats `cur_token_idx` as the sequence id and uses
 that block-table lookup, offset-within-block computation, split-x K load, and
 K-cache store. The `n_tokens > 1` path needs negative `cur_token_shift`
 arithmetic before the copy and remains outside the current Nat-only pointer
-surface. -/
+surface. Python's unused `stride_kcx` and `HEAD_DIM` arguments are retained as
+ignored parameters; `n_tokens` is fixed to the documented decode value `1` in
+the proofs. -/
 def copy_to_kcache_seqlen_n1_surface
     (K KCache : RegionName) (BLOCK_TABLES seq_lengths : Region .nat)
     (stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
-      stride_kcs stride_bts stride_btb block_size KCACHE_X : Nat) :
+      stride_kcs _stride_kcx stride_bts stride_btb block_size _n_tokens
+      _HEAD_DIM KCACHE_X : Nat) :
     ComputeKernel := triton {
   cur_token_idx = tl.program_id(axis=0)
   cur_seq_idx = cur_token_idx
@@ -133,7 +136,8 @@ theorem copy_to_kcache_seqlen_n1_surface_correct
           stride_kcsplit_x stride_kcs stride_bts stride_btb block_size i))
     (hExec : exec (copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES
         seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
-        stride_kcsplit_x stride_kcs stride_bts stride_btb block_size KCACHE_X)
+        stride_kcsplit_x stride_kcs 0 stride_bts stride_btb block_size 1 0
+        KCACHE_X)
         s = some s') :
     ∀ i : Fin KCACHE_X,
       s'.readMem KCache
@@ -229,7 +233,8 @@ theorem copy_to_kcache_seqlen_n1_surface_compute_correct
     ComputeCorrect.Realizes
       (kernel := copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES
         seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
-        stride_kcsplit_x stride_kcs stride_bts stride_btb block_size KCACHE_X)
+        stride_kcsplit_x stride_kcs 0 stride_bts stride_btb block_size 1 0
+        KCACHE_X)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun _i : Fin KCACHE_X => True)
