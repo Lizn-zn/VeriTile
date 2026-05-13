@@ -193,6 +193,30 @@ noncomputable def diagSsmForwardSpec
     (batch_size dim BLOCK_SIZE : Nat) (t : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
   diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE i (t + 1)
 
+def diagSsmForwardOutOffset
+    (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
+    (idx : TileIndex [length, BLOCK_SIZE]) : Nat :=
+  timeOffset st batch_size dim BLOCK_SIZE idx.1.val idx.2.1
+
+def diagSsmForwardActive
+    (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
+    (idx : TileIndex [length, BLOCK_SIZE]) : Prop :=
+  active st batch_size dim BLOCK_SIZE idx.2.1
+
+instance diagSsmForwardActiveDecidable
+    (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
+    (idx : TileIndex [length, BLOCK_SIZE]) :
+    Decidable (diagSsmForwardActive st batch_size dim BLOCK_SIZE idx) := by
+  unfold diagSsmForwardActive
+  infer_instance
+
+noncomputable def diagSsmForwardSpecAt
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE : Nat)
+    (idx : TileIndex [length, BLOCK_SIZE]) : ℝ :=
+  diagSsmForwardSpec st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE
+    idx.1.val idx.2.1
+
 /-- Algorithm-layer correctness for the forward SSM kernel. -/
 theorem diag_ssm_forward_kernel_correct
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
