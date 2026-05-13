@@ -25,10 +25,10 @@ def cross_entropy_fwd_surface
     ComputeKernel := triton {
   row_idx = tl.program_id(axis=0)
   col_block_idx = tl.program_id(axis=1)
-  logits_base = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
+  logits_ptr = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   col_offsets = col_block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   label_idx = tl.load($((labels_ptr : Region .nat)) + row_idx)
-  logits = tl.load(logits_base + col_offsets,
+  logits = tl.load(logits_ptr + col_offsets,
     mask=col_offsets < $(n_cols), other=-inf).to(tl.float32)
   max_logits = tl.max(logits, axis=0)
   if HAS_SMOOTHING {
@@ -42,7 +42,7 @@ def cross_entropy_fwd_surface
     label_idx -= $(class_start_idx)
     if (label_idx >= col_block_idx * $(BLOCK_SIZE)) and
         (label_idx < tl.minimum($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))) {
-      logits_label = tl.load(logits_base + label_idx)
+      logits_label = tl.load(logits_ptr + label_idx)
       if HAS_SMOOTHING {
         if SPLIT {
           loss = 0.0 - $(smoothing) * sum_logits / $(total_classes) -
