@@ -85,13 +85,12 @@ def layer_norm_liger_forward
   B_row = tl.load(B + col_offsets, mask=mask, other=0)
 
   mean = tl.sum(X_row, axis=0) / $(n_cols)
-  XX = X_row - mean
-  row_var = tl.sum(XX * XX, axis=0) / $(n_cols)
-  inv_var = tl.rsqrt(row_var + $(eps))
+  var = tl.sum((X_row - mean) * (X_row - mean), axis=0) / $(n_cols)
+  rstd = tl.rsqrt(var + $(eps))
   tl.store(Mean, mean)
-  tl.store(RSTD, inv_var)
-  output = (XX * inv_var) * W_row + B_row
-  tl.store(Y + col_offsets, output, mask=mask)
+  tl.store(RSTD, rstd)
+  Y_row = (X_row - mean) * rstd * W_row + B_row
+  tl.store(Y + col_offsets, Y_row, mask=mask)
 }
 
 def xOffset (s : BlockState) (X_row_stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
