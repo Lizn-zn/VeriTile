@@ -21,7 +21,10 @@ surface.
   port elaboration, placeholder-proof scanning, and correctness-surface
   scanning. It also checks that compiled ports do not still advertise README
   `TODO` status and that Python `.to(tl.float32)` casts missing from Lean are
-  covered by an explicit documented slice/scope note.
+  covered by an explicit documented slice/scope note. The same gate rejects
+  Lean-only `tl.load(..., dtype=...)` annotations and `keep_dims` reduction
+  substitutions, both of which are must-fix deviations under
+  `review_criteria.md`.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.

@@ -108,6 +108,20 @@ else
   printf 'ok documented float32 cast coverage scan\n'
 fi
 
+if rg -n 'tl\.load\([^\n]*dtype\s*=' bench/tritonbench_g -g '*.lean'; then
+  printf 'FAIL Lean tl.load dtype annotations found; review_criteria.md only permits them when present upstream\n'
+  failures=$((failures + 1))
+else
+  printf 'ok no Lean-only tl.load dtype annotations\n'
+fi
+
+if rg -n 'keep_dims\s*=\s*true|keepDims|keep_dims' bench/tritonbench_g -g '*.lean'; then
+  printf 'FAIL keep_dims-style reduction found; review_criteria.md requires source-shape-preserving syntax\n'
+  failures=$((failures + 1))
+else
+  printf 'ok no keep_dims reduction substitutions\n'
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi
