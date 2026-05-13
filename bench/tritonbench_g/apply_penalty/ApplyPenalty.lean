@@ -13,9 +13,9 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `apply_penalty.py`'s
 `_fwd_kernel_apply_penalty`.
 
-`p_token_counts` is loaded as a Nat channel and explicitly projected with
-`tl.toReal`, matching Triton's integer-to-float promotion in
-`batch_ids_count * cur_freqency`. -/
+`p_token_counts` is loaded as a Nat channel; the DSL infers the
+integer-to-float promotion in `batch_ids_count * cur_freqency`, matching the
+Python surface expression without adding an explicit cast. -/
 def apply_penalty
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
