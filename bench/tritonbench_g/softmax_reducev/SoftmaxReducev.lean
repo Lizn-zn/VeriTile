@@ -41,13 +41,12 @@ def softmax_reducev_nonnegative_other_surface
   acc = tl.zeros([$(BLOCK_DMODEL)], dtype=tl.float32)
   for start_n in range($(0), cur_batch_seq_len, $(BLOCK_N)) {
     start_n = tl.multiple_of(start_n, $(BLOCK_N))
-    n_active = (start_n + offs_n) < cur_batch_seq_len
     v_index = tl.load($((BLoc : Region .nat)) + off_b_loc +
       (start_n + offs_n) * $(stride_b_loc_s),
-      mask=n_active, other=$(other_kv_index))
+      mask=(start_n + offs_n) < cur_batch_seq_len, other=$(other_kv_index))
     qk = tl.load(Logics + cur_head * $(stride_logic_h) +
         (cur_batch_start_loc + start_n + offs_n) * $(stride_logic_bs),
-      mask=n_active, other=-inf)
+      mask=start_n + offs_n < cur_batch_seq_len, other=-inf)
     n_e_max = tl.maximum(tl.max(qk, 0), e_max)
     old_scale = tl.exp(e_max - n_e_max)
     p = tl.exp(qk - n_e_max)
@@ -58,7 +57,8 @@ def softmax_reducev_nonnegative_other_surface
   }
   acc = acc / e_sum
   off_o = cur_batch * $(stride_obs) + cur_head * $(stride_oh) + offs_d * $(stride_od)
-  tl.store(Out + off_o, acc)
+  out_ptrs = Out + off_o
+  tl.store(out_ptrs, acc)
 }
 
 /-- Proof-oriented final normalization/store slice of `softmax_reducev.py`'s
