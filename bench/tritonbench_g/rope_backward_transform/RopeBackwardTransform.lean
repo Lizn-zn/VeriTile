@@ -15,9 +15,7 @@ set_option linter.unusedSimpArgs false
 
 Allowed mechanical Lean-syntax-only changes:
 - `PAD_HALF` is Python's `pad_hd // 2`.
-- `HEAD_HALF` is Python's `hd // 2`.
-- Casts to `sin_row.dtype` are represented as fp32 casts in the current
-  surface dtype model. -/
+- `HEAD_HALF` is Python's `hd // 2`. -/
 def triton_rope_backward
     (Q K COS SIN : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
