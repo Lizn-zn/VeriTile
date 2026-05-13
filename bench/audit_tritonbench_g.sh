@@ -149,6 +149,29 @@ else
   printf 'ok documented += coverage scan\n'
 fi
 
+rsqrt_gaps=()
+while IFS= read -r py_file; do
+  if ! rg -q 'tl(\.math)?\.rsqrt|rsqrt' "${py_file}"; then
+    continue
+  fi
+  dir="${py_file%/*}"
+  lean_file="$(find "${dir}" -maxdepth 1 -name '*.lean' | head -n 1)"
+  if [ -z "${lean_file}" ]; then
+    continue
+  fi
+  if ! rg -q 'tl(\.math)?\.rsqrt|rsqrt' "${lean_file}"; then
+    rsqrt_gaps+=("${py_file} -> ${lean_file}")
+  fi
+done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name '*.py' | sort)
+
+if [ "${#rsqrt_gaps[@]}" -gt 0 ]; then
+  printf 'FAIL Python rsqrt missing from Lean:\n'
+  printf '  %s\n' "${rsqrt_gaps[@]}"
+  failures=$((failures + 1))
+else
+  printf 'ok rsqrt preservation scan\n'
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi
