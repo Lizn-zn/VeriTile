@@ -18,10 +18,7 @@ Allowed mechanical Lean-syntax-only changes:
 - The Python `tl.static_print(f"...")` f-string payload is represented by a
   fixed debug string; `tl.static_print` is a compile-time/no-op DSL marker.
 - `if NUM_D_BLOCKS >= 2:` is represented as the equivalent Bool antiquote
-  `if $((NUM_D_BLOCKS >= 2 : Bool))`.
-- `tl.zeros(...) - float("inf")` is represented as `tl.zeros(...) + -inf`
-  because the DSL currently has a direct `-inf` sentinel but no positive
-  infinity value. -/
+  `if $((NUM_D_BLOCKS >= 2 : Bool))`. -/
 def block_sparse_attention_kernel
     (out Q K V : RegionName)
     (layout_csr_row_indices layout_csr_col_indices : Region .nat)
@@ -53,7 +50,7 @@ def block_sparse_attention_kernel
   q_ptrs = Q + off_q
   k_ptrs = K + off_k
   v_ptrs = V + off_v
-  m_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) + -inf
+  m_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) - float("inf")
   l_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32)
   acc = tl.zeros([$(BLOCK_M), $(BLOCK_D)], dtype=tl.float32)
   if $((NUM_D_BLOCKS >= 2 : Bool)) {
@@ -96,7 +93,7 @@ def block_sparse_attention_kernel
       qk += tl.dot(q2, k)
     }
     qk *= $(softmax_scale)
-    qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0, -inf)
+    qk += tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), 0, float("-inf"))
     m_ij = tl.max(qk, 1)
     p = tl.exp(qk - m_ij[:, None])
     l_ij = tl.sum(p, 1)

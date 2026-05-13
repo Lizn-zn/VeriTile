@@ -945,6 +945,11 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               pure ⟨← `(Op.ptrAdd $bc $b'.term (Op.castIntToNat $a'.term)), .ptr, outShape, none, none⟩
           | _, _ =>
               expandArith expandExpr env "arithmetic" (← `(Op.add)) a b
+  | `(tritonExpr| $a:tritonExpr - float ($arg:term)) => do
+      let argString := toString arg.raw
+      unless argString.contains "inf" && !argString.contains "-inf" do
+        Macro.throwError "float(...): subtraction shorthand only supports `float(\"inf\")`"
+      expandExpr env (← `(tritonExpr| $a:tritonExpr + -inf))
   | `(tritonExpr| $a:tritonExpr - $b:tritonExpr) => do
       expandArith expandExpr env "arithmetic" (← `(Op.sub)) a b
   | `(tritonExpr| $a:tritonExpr * $b:tritonExpr) => do
