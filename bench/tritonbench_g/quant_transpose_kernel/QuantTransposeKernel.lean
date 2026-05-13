@@ -29,13 +29,16 @@ def quantize_global_transpose_real_surface
   pid_n = (pid % width) // group_size
   rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   rn = pid_n * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
-  mask = (rm[:, None] < $(M)) and (rn[None, :] < $(N))
-  a = tl.load(A + rm[:, None] * $(stride_am) + rn[None, :] * $(stride_an),
-    mask=mask, other=0.0)
+  A = A + (rm[:, None] * $(stride_am) + rn[None, :] * $(stride_an))
+  mask = (rm < $(M))[:, None] & (rn < $(N))[None, :]
+  a = tl.load(A, mask=mask)
   absmax_inv = tl.load(AbsmaxInv)
+  rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  rn = pid_n * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
+  B = B + (rm[:, None] * $(stride_bm) + rn[None, :] * $(stride_bn))
+  mask = (rm < $(M))[:, None] & (rn < $(N))[None, :]
   output = tl.extra.cuda.libdevice.llrint(127.0 * (a * absmax_inv))
-  tl.store(B + rm[:, None] * $(stride_bm) + rn[None, :] * $(stride_bn),
-    output, mask=mask)
+  tl.store(B, output, mask=mask)
 }
 
 /-- Proof-oriented scaled-store tile slice of `quant_transpose_kernel.py`'s
