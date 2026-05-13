@@ -54,7 +54,8 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `meanPostLoop` components, and `mean_dim_kernel_toAlg_body` proves that this
   split is the actual `toAlgKernel.body`. `meanPreLoop_step_regs` proves the
   concrete pre-loop execution facts needed by the loop and post-loop bridges:
-  zero-initialized `_mean`, the expanded `Mean` pointer tile, and `row_mask`.
+  zero-initialized `_mean`, the expanded `X` / `Mean` pointer tiles, and
+  `row_mask`.
   The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
