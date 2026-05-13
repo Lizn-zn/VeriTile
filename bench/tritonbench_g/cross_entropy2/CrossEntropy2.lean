@@ -41,7 +41,7 @@ def cross_entropy_fwd_surface
   } else {
     label_idx -= $((class_start_idx : Int))
     if (label_idx >= col_block_idx * $(BLOCK_SIZE)) and
-        (label_idx < tl.minimum($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))) {
+        (label_idx < min($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))) {
       logits_label = tl.load(logits_ptr + label_idx) * $(logit_scale)
       if HAS_SMOOTHING {
         if SPLIT {

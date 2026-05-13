@@ -31,7 +31,7 @@ def rope_embedding_surface
     half_head_dim * $(0) + col_offsets, mask=mask, other=0)
   sin1 = sin1 * $(backwardSign)
   head_start = group_head_position * $(ROPE_GROUP_SIZE)
-  head_end = tl.minimum(head_start + $(ROPE_GROUP_SIZE), $(n_heads))
+  head_end = min(head_start + $(ROPE_GROUP_SIZE), $(n_heads))
   for k in range(head_start, head_end, $(1)) {
     offs_q1 = row_position * $(Q_row_stride) + k * $(head_dim) + col_offsets
     offs_q2 = row_position * $(Q_row_stride) + k * $(head_dim) +

@@ -22,7 +22,7 @@ def layer_norm_liger_backward_surface
     ComputeKernel := triton {
   row_block_id = tl.program_id(0)
   row_start = row_block_id * $(rows_per_program)
-  row_end = tl.minimum((row_block_id + $(1)) * $(rows_per_program), $(n_rows))
+  row_end = min((row_block_id + $(1)) * $(rows_per_program), $(n_rows))
   cols = tl.arange(0, $(BLOCK_SIZE))
   mask = cols < $(n_cols)
   dw_row = tl.zeros([$(BLOCK_SIZE)], dtype=tl.float32)

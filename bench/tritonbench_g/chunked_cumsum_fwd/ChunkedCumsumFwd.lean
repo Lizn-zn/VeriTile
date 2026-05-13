@@ -44,7 +44,7 @@ def chunked_cumsum_fwd_surface
     offs_c[None, :] * $(stride_dt_out_csize)
   dA_cs_ptrs = dA_cumsum_base + offs_h[:, None] * $(stride_dA_cs_head) +
     offs_c[None, :] * $(stride_dA_cs_csize)
-  chunk_size_limit = tl.minimum($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
+  chunk_size_limit = min($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
   active_limit = (offs_h[:, None] < $(nheads)) & (offs_c[None, :] < chunk_size_limit)
   dt = tl.load(dt_ptrs, mask=active_limit, other=0.0).to(tl.float32)
   if HAS_DT_BIAS {

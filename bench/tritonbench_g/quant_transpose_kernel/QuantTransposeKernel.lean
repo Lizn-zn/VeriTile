@@ -24,7 +24,7 @@ def quantize_global_transpose_real_surface
   grid_n = tl.cdiv($(N), $(BLOCK_N))
   width = $(GROUP_M) * grid_n
   group_id = pid // width
-  group_size = tl.minimum(grid_m - group_id * $(GROUP_M), $(GROUP_M))
+  group_size = min(grid_m - group_id * $(GROUP_M), $(GROUP_M))
   pid_m = group_id * $(GROUP_M) + (pid % group_size)
   pid_n = (pid % width) // group_size
   rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))

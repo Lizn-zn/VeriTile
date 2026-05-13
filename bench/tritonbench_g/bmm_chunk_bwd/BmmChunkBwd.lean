@@ -51,7 +51,7 @@ def bmm_chunk_bwd_surface
   a_ptrs = A +
     offs_cs[:, None] * $(stride_a_seqlen) +
     offs_n[None, :] * $(stride_ak)
-  chunk_size_limit = tl.minimum($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
+  chunk_size_limit = min($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
 
   acc = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
   for cs in range($(0), tl.cdiv(chunk_size_limit, $(BLOCK_SIZE_CS)), $(1)) {
