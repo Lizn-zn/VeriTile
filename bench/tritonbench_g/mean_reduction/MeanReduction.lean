@@ -433,7 +433,7 @@ def mean_dim_kernel_correct_target
 
 def mean_dim_kernel_alg_post
     (X Mean : RegionName)
-    (M N BLOCK_M BLOCK_N : Nat) (s s' : BlockState) : Prop :=
+    (M N BLOCK_M _BLOCK_N : Nat) (s s' : BlockState) : Prop :=
   ∀ i : Fin BLOCK_M,
     meanOutOffset s BLOCK_M i < M →
     s'.readMem Mean (meanOutOffset s BLOCK_M i) =
@@ -458,9 +458,13 @@ theorem mean_dim_kernel_compute_correct_of_algorithm
 /-- Algorithm-layer correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_correct
     (X Mean : RegionName)
-    (M N BLOCK_M BLOCK_N : Nat) (s : BlockState) :
-    True := by
-  trivial
+    (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
+    (hAlg :
+      ∀ s',
+        exec (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N) s = some s' →
+        mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s s') :
+    mean_dim_kernel_correct_target X Mean M N BLOCK_M BLOCK_N s :=
+  mean_dim_kernel_compute_correct_of_algorithm X Mean M N BLOCK_M BLOCK_N s hAlg
 
 /-- Compute-facing correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_compute_correct

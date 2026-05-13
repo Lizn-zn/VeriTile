@@ -3,8 +3,9 @@
 These kernels currently have faithful-looking surface translations but do not
 yet have a real `ComputeCorrect.Realizes` theorem. They must not be counted as
 complete until the algorithm-layer blocker below is discharged or linked to a
-GitHub issue. The compute-facing wrappers for these files already reduce to
-the named algorithm postconditions.
+GitHub issue. The public `*_correct` surfaces no longer contain `True` /
+`trivial` placeholders; they expose the remaining algorithm-layer obligation as
+an explicit hypothesis and reduce it to the named algorithm postconditions.
 
 ## `mean_reduction.py`
 
@@ -31,10 +32,11 @@ the named algorithm postconditions.
   and lifted to the accumulator tile by `meanAccumulatorSpec_step`; the bridge
   from the final accumulator to the row-wise sum is proved by
   `meanFromAccumulatorSpec_eq_meanSpec`. The theorem target is fixed as
-  `mean_dim_kernel_correct_target`, but the theorem is still a placeholder
-  until this accumulator invariant is connected to the actual loop body with
+  `mean_dim_kernel_correct_target`, and the public theorem exposes the
+  remaining algorithm-layer postcondition as an explicit hypothesis until this
+  accumulator invariant is connected to the actual loop body with
   `forRange_inv`. The compute-facing wrapper is discharged once that
-  algorithm-layer postcondition is available via
+  algorithm-layer postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.
 
 ## `embedding_triton_kernel.py`
@@ -56,11 +58,12 @@ the named algorithm postconditions.
   `embeddingLoopInvariant_step_of_chunk_write`, which combines old-prefix
   preservation with the current `BLOCK_NN × BLOCK_DMODEL` write map to produce
   the next prefix invariant. The theorem target is fixed as
-  `embedding_kernel_correct_target`, but the theorem is still a placeholder
-  until that chunk step is instantiated with the actual loop body via
+  `embedding_kernel_correct_target`, and the public theorem exposes the
+  remaining algorithm-layer postcondition as an explicit hypothesis until that
+  chunk step is instantiated with the actual loop body via
   `forRange_inv` under the full `outOffsetFull` injectivity assumption. The
   compute-facing wrapper is discharged once that algorithm-layer postcondition
-  is available via
+  is supplied via
   `embedding_kernel_compute_correct_of_algorithm`.
 
 ## `diag_ssm_triton.py`
@@ -80,10 +83,11 @@ the named algorithm postconditions.
   register/write update, and `diagSsmForwardLoopInvariant_to_alg_post`
   bridging a completed loop to `diag_ssm_forward_kernel_alg_post`. The theorem
   target is fixed as
-  `diag_ssm_forward_kernel_correct_target`, but the theorem is still a
-  placeholder until that recurrence invariant is instantiated with the actual
-  loop body via `forLoop_inv`. The theorem surface now requires full
+  `diag_ssm_forward_kernel_correct_target`, and the public theorem exposes the
+  remaining algorithm-layer postcondition as an explicit hypothesis until that
+  recurrence invariant is instantiated with the actual loop body via
+  `forLoop_inv`. The theorem surface now requires full
   `diagSsmForwardOutOffset` injectivity over `(time, column)` indices. The
   compute-facing wrapper is discharged once that algorithm-layer postcondition
-  is available via
+  is supplied via
   `diag_ssm_forward_kernel_compute_correct_of_algorithm`.

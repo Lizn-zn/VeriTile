@@ -511,15 +511,24 @@ theorem embedding_kernel_correct
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
-    (s s' : BlockState)
+    (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
         outOffsetFull s stride_out_seq BLOCK_N idx))
-    (hExec : exec (embedding_kernel weight input_ids out
-        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-        hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s') :
-    True := by
-  trivial
+    (hAlg :
+      ∀ s',
+        exec (embedding_kernel weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s' →
+        embedding_kernel_alg_post weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s s') :
+    embedding_kernel_correct_target weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s :=
+  embedding_kernel_compute_correct_of_algorithm weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+    hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s hAlg
 
 /-- Compute-facing correctness for the embedding kernel. -/
 theorem embedding_kernel_compute_correct
