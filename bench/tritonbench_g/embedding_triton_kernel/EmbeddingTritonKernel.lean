@@ -303,6 +303,46 @@ theorem not_embeddingChunkToFullIndex_written_before
       (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
   simp [embeddingPrefixWritten, embeddingChunkToFullIndex]
 
+theorem embeddingPrefixIndex_ne_currentChunk
+    (start_nn BLOCK_NN : Nat)
+    (oldIdx : TileIndex [BLOCK_N, BLOCK_DMODEL])
+    (curIdx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (hCur : start_nn + curIdx.1.val < BLOCK_N)
+    (hOld : embeddingPrefixWritten start_nn oldIdx) :
+    oldIdx ≠ embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn curIdx hCur := by
+  intro hEq
+  have hOldLt : oldIdx.1.val < start_nn := by
+    simpa [embeddingPrefixWritten] using hOld
+  have hCurGe :
+      start_nn ≤
+        (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn curIdx hCur).1.val := by
+    simp [embeddingChunkToFullIndex]
+  rw [hEq] at hOldLt
+  omega
+
+theorem embeddingOldPrefix_outOffset_ne_currentChunk
+    (s : BlockState) (stride_out_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
+    (oldIdx : TileIndex [BLOCK_N, BLOCK_DMODEL])
+    (curIdx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s stride_out_seq BLOCK_N idx))
+    (hCur : start_nn + curIdx.1.val < BLOCK_N)
+    (hOld : embeddingPrefixWritten start_nn oldIdx) :
+    outOffsetFull s stride_out_seq BLOCK_N oldIdx ≠
+      outOffset2D s stride_out_seq BLOCK_N start_nn curIdx := by
+  intro hEq
+  have hOut := outOffset2D_eq_full s stride_out_seq BLOCK_N start_nn BLOCK_NN
+    BLOCK_DMODEL curIdx hCur
+  have hEqFull :
+      outOffsetFull s stride_out_seq BLOCK_N oldIdx =
+        outOffsetFull s stride_out_seq BLOCK_N
+          (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn curIdx hCur) := by
+    simpa [hOut] using hEq
+  exact embeddingPrefixIndex_ne_currentChunk (BLOCK_N := BLOCK_N)
+    (BLOCK_DMODEL := BLOCK_DMODEL) start_nn BLOCK_NN oldIdx curIdx hCur hOld
+    (hOutInj hEqFull)
+
 theorem embeddingChunkToFullIndex_written_after
     (start_nn BLOCK_NN : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
     (h : start_nn + idx.1.val < BLOCK_N) :

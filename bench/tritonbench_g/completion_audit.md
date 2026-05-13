@@ -91,7 +91,9 @@ These files must not be counted complete yet:
     `embeddingLoopInvariant_to_alg_post`, and
     `embeddingLoopInvariant_to_alg_post_of_final`. The final bridge now accepts
     the `forRange_inv` shape `BLOCK_N ≤ final` rather than requiring a
-    definitionally exact final offset.
+    definitionally exact final offset. Old-prefix/current-chunk disjointness is
+    factored into `embeddingPrefixIndex_ne_currentChunk` and
+    `embeddingOldPrefix_outOffset_ne_currentChunk`.
   - Remaining proof: instantiate the per-chunk write invariant with
     `forRange_inv` under `outOffsetFull` injectivity.
 

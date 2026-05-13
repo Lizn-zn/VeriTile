@@ -58,6 +58,10 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `embeddingLoopInvariant_to_alg_post_of_final` now consumes the actual
   `forRange_inv` conclusion `BLOCK_N ≤ final`, so the final readout bridge no
   longer requires the loop offset to stop definitionally at exactly `BLOCK_N`.
+  The old-prefix/current-chunk disjointness lemmas
+  `embeddingPrefixIndex_ne_currentChunk` and
+  `embeddingOldPrefix_outOffset_ne_currentChunk` are available for deriving
+  the preservation side of the chunk step from the concrete `tl.store`.
   The chunk step is factored as `embeddingLoopInvariant_step_of_chunk_write`,
   which combines old-prefix preservation with the current
   `BLOCK_NN × BLOCK_DMODEL` write map to produce the next prefix invariant. The
