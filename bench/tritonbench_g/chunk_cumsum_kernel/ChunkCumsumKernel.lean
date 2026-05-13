@@ -12,9 +12,7 @@ set_option linter.unusedSimpArgs false
 /-- Surface transcription of `chunk_cumsum_kernel.py`'s
 `chunk_global_cumsum_scalar_kernel`.
 
-Python writes `b_z[None]`; this surface uses scalar broadcast `b_z`, which is
-the same shape behavior in the DSL. The final cast targets the block pointer
-destination dtype. -/
+The final cast targets the block pointer destination dtype. -/
 def chunk_cumsum_scalar_surface
   (S O : RegionName) (T BT : Nat) : ComputeKernel := triton {
   i_bh = tl.program_id(0)
@@ -25,7 +23,7 @@ def chunk_cumsum_scalar_surface
     p_o = tl.make_block_ptr(base=O + i_bh * $(T), shape=($(T)),
       strides=($(1)), offsets=(i_t * $(BT)), block_shape=($(BT)), order=(0))
     b_s = tl.load(p_s, boundary_check=([0] : List Nat)).to(tl.float32)
-    b_o = tl.cumsum(b_s, axis=0) + b_z
+    b_o = tl.cumsum(b_s, axis=0) + b_z[None]
     b_zz = tl.sum(b_s, axis=0)
     b_z += b_zz
     tl.store(p_o, (b_o).to(p_o.dtype.element_ty), boundary_check=([0] : List Nat))

@@ -910,6 +910,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| $e:tritonExpr[ None , : ]) => do
       -- `e[None, :]` — insert a unit axis at position 0: `[N] → [1, N]`.
       expandSlicerNone expandExpr env e (axisIdx := 0)
+  | `(tritonExpr| $e:tritonExpr[ None ]) => do
+      -- `e[None]` — insert a unit axis at position 0: `[] → [1]`.
+      expandExpandDims expandExpr env e (axisIdx := 0)
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $kw:tritonReduceKwarg)) => do
       match kw with
       | `(tritonReduceKwarg| axis = $n:num) =>

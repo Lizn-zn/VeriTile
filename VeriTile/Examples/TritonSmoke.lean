@@ -1629,4 +1629,16 @@ def castedNatLoadWhereKernel
 #check castedNatLoadOffsetKernel
 #check castedNatLoadWhereKernel
 
+/-! ### Scalar `e[None]` dimension insertion -/
+
+def scalarNoneKernel (outReg : RegionName) (N : Nat) : ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  z = tl.zeros([], dtype=tl.float32)
+  offs = tl.arange(0, $(N))
+  vals = z[None]
+  tl.store(outReg + pid * $(N) + offs, vals)
+}
+
+#check scalarNoneKernel
+
 end VeriTile.Examples.TritonSmoke
