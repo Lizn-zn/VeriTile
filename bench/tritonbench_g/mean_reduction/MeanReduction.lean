@@ -469,6 +469,21 @@ theorem meanOutOffset_injective
     cases b.2
     rfl
 
+theorem meanOutOffset_injective_col1
+    (s : BlockState) (BLOCK_M : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [BLOCK_M, 1] => meanOutOffset s BLOCK_M idx.1) := by
+  intro a b h
+  apply Prod.ext
+  · apply Fin.ext
+    simpa [meanOutOffset] using Nat.add_left_cancel h
+  · apply Prod.ext
+    · apply Fin.ext
+      omega
+    · cases a.2.2
+      cases b.2.2
+      rfl
+
 theorem meanStoreFromMaskedAccumulator_alg_post
     (s0 stBase : BlockState) (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N off : Nat)
@@ -538,6 +553,38 @@ theorem meanLoopInvariant_to_scatter_alg_post
         stBase) :=
   meanStoreFromMaskedAccumulator_alg_post_default s0 stBase X Mean M N
     BLOCK_M BLOCK_N off hBLOCK_N hoff
+
+theorem meanStoreFromExpandedMaskedAccumulator_alg_post
+    (s0 stBase : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N off : Nat)
+    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
+    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0
+      ((TileShape.allIndices [BLOCK_M, 1]).foldl
+        (fun acc idx =>
+          if meanRowActive s0 M BLOCK_M idx.1 then
+            acc.writeMem Mean (meanOutOffset s0 BLOCK_M idx.1)
+              (WithBot.unbotD 0
+                ((Tile.expandDim
+                  (⟨1, by simp⟩ : Fin ([BLOCK_M].length + 1))
+                  (Tile.bop NumericDType.real.div Broadcast.scalarR
+                    (Tile.reduceSumDrop
+                      (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
+                      (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off))
+                    (Tile.scalar (some (N : ℝ) : WithBot ℝ)))).data idx)
+              )
+          else
+            acc)
+        stBase) := by
+  intro i hi
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+    (meanOutOffset_injective_col1 s0 BLOCK_M)
+    ((i, ⟨0, by omega⟩, PUnit.unit) : TileIndex [BLOCK_M, 1])]
+  simp [meanRowActive, hi, Tile.expandDim, TileShape.eraseAxis,
+    TileShape.dropInsertedIndex, Tile.bop, Broadcast.scalarR, NumericDType.div]
+  simpa [TileShape.axisDim, TileShape.insertAxisIndex,
+    meanMaskedAccumulatorSpec, meanFromMaskedAccumulatorSpec, meanRowActive, hi] using
+    meanFromMaskedAccumulatorSpec_eq_meanSpec s0 X M N BLOCK_M BLOCK_N off i
+      (by simpa [meanRowActive] using hi) hBLOCK_N hoff
 
 def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .real [BLOCK_M] "mean"

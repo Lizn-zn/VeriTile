@@ -86,9 +86,12 @@ These files must not be counted complete yet:
     no-collision side; `meanLoopInvariant_to_scatter_alg_post` packages a final
     loop invariant plus scatter state into the algorithm postcondition. The
     concrete post-loop AST suffix is named `meanPostLoop`.
+    `meanOutOffset_injective_col1` and
+    `meanStoreFromExpandedMaskedAccumulator_alg_post` now cover the actual
+    expanded `[BLOCK_M, 1]` store shape emitted after `mean[:, None]`.
   - Remaining proof: prove the concrete loop body produces the `_mean =
     old + chunkLoad` register update, instantiate `forRange_inv`, then connect
-    `meanPostLoop` to the final scatter shape.
+    the concrete execution of `meanPostLoop` to the expanded scatter bridge.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.

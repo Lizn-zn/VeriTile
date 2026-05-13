@@ -39,6 +39,10 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   available. `meanOutOffset_injective` discharges the row-output no-collision
   side, and `meanStoreFromMaskedAccumulator_alg_post_default` packages the final
   scatter bridge without an external injectivity premise.
+  `meanOutOffset_injective_col1` and
+  `meanStoreFromExpandedMaskedAccumulator_alg_post` cover the real DSL store
+  shape after `mean = mean[:, None]`, so the post-loop scatter bridge no longer
+  relies on the idealized `[BLOCK_M]` shape only.
   `meanLoopInvariant_to_scatter_alg_post` packages a final loop invariant plus
   the scatter state into `mean_dim_kernel_alg_post`. The concrete post-loop AST
   is named `meanPostLoop`, matching the `tl.sum` / `[:, None]` / `tl.store`
@@ -46,7 +50,8 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
   accumulator invariant is connected to the actual loop body with `forRange_inv`
-  and `meanPostLoop` is aligned with the scatter shape. The compute-facing
+  and the concrete execution of `meanPostLoop` is connected to the expanded
+  scatter bridge. The compute-facing
   wrapper is discharged once that algorithm-layer
   postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.
