@@ -235,9 +235,18 @@ theorem embeddingSpec2D_eq_full
       embeddingSpecFull s weight input_ids vob_start_id vob_end_id
         stride_weight_seq BLOCK_N BLOCK_DMODEL
         (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
-  simp [embeddingSpec2D, embeddingSpecFull, embeddingChunkToFullIndex,
-    tokenRaw2D, tokenRawFull, seqLaneIndex, fullSeqIndex,
-    weightOffset2D, weightOffsetFull, tokenIndex2D, tokenIndexFull]
+  have hseq :
+      seqLaneIndex s BLOCK_N start_nn idx.1 =
+        fullSeqIndex s BLOCK_N
+          (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h).1 := by
+    simp [seqLaneIndex, fullSeqIndex, embeddingChunkToFullIndex]
+    omega
+  have hdim :
+      dimIndex idx.2.1 =
+        dimIndex (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h).2.1 := by
+    simp [embeddingChunkToFullIndex]
+  simp [embeddingSpec2D, embeddingSpecFull, tokenRaw2D, tokenRawFull,
+    weightOffset2D, weightOffsetFull, tokenIndex2D, tokenIndexFull, hseq, hdim]
 
 theorem outOffset2D_eq_full
     (s : BlockState) (stride_out_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
@@ -246,8 +255,17 @@ theorem outOffset2D_eq_full
     outOffset2D s stride_out_seq BLOCK_N start_nn idx =
       outOffsetFull s stride_out_seq BLOCK_N
         (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
-  simp [outOffset2D, outOffsetFull, embeddingChunkToFullIndex,
-    seqLaneIndex, fullSeqIndex]
+  have hseq :
+      seqLaneIndex s BLOCK_N start_nn idx.1 =
+        fullSeqIndex s BLOCK_N
+          (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h).1 := by
+    simp [seqLaneIndex, fullSeqIndex, embeddingChunkToFullIndex]
+    omega
+  have hdim :
+      dimIndex idx.2.1 =
+        dimIndex (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h).2.1 := by
+    simp [embeddingChunkToFullIndex]
+  simp [outOffset2D, outOffsetFull, hseq, hdim]
 
 theorem storeActive2D_iff_full
     (s : BlockState) (n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
@@ -256,8 +274,17 @@ theorem storeActive2D_iff_full
     storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx ↔
       storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL
         (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
-  simp [storeActive2D, storeActiveFull, embeddingChunkToFullIndex,
-    seqLaneIndex, fullSeqIndex]
+  have hseq :
+      seqLaneIndex s BLOCK_N start_nn idx.1 =
+        fullSeqIndex s BLOCK_N
+          (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h).1 := by
+    simp [seqLaneIndex, fullSeqIndex, embeddingChunkToFullIndex]
+    omega
+  have hdim :
+      dimIndex idx.2.1 =
+        dimIndex (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h).2.1 := by
+    simp [embeddingChunkToFullIndex]
+  simp [storeActive2D, storeActiveFull, hseq, hdim]
 
 def embeddingPrefixWritten
     (off : Nat) (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Prop :=
@@ -274,16 +301,14 @@ theorem not_embeddingChunkToFullIndex_written_before
     (h : start_nn + idx.1.val < BLOCK_N) :
     ¬ embeddingPrefixWritten start_nn
       (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
-  unfold embeddingPrefixWritten embeddingChunkToFullIndex
-  omega
+  simp [embeddingPrefixWritten, embeddingChunkToFullIndex]
 
 theorem embeddingChunkToFullIndex_written_after
     (start_nn BLOCK_NN : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
     (h : start_nn + idx.1.val < BLOCK_N) :
     embeddingPrefixWritten (start_nn + BLOCK_NN)
       (embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn idx h) := by
-  unfold embeddingPrefixWritten embeddingChunkToFullIndex
-  omega
+  simp [embeddingPrefixWritten, embeddingChunkToFullIndex]
 
 def embeddingPrefixActive
     (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL off : Nat)

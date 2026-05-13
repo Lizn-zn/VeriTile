@@ -216,7 +216,7 @@ theorem diagSsmMaskedStateTile_active
     (batch_size dim BLOCK_SIZE t : Nat) (i : Fin BLOCK_SIZE)
     (hi : active st batch_size dim BLOCK_SIZE i) :
     (diagSsmMaskedStateTile st s_ptr x_ptr lambda_ptr batch_size dim
-      BLOCK_SIZE t).data i =
+      BLOCK_SIZE t).data (i, PUnit.unit) =
       some (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
         BLOCK_SIZE i t) := by
   simp [diagSsmMaskedStateTile, hi]
@@ -253,16 +253,19 @@ theorem diagSsmStateTile_succ
   simp [diagSsmStateTile]
 
 def diagSsmForwardOutOffset
+    {length : Nat}
     (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
     (idx : TileIndex [length, BLOCK_SIZE]) : Nat :=
   timeOffset st batch_size dim BLOCK_SIZE idx.1.val idx.2.1
 
 def diagSsmForwardActive
+    {length : Nat}
     (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
     (idx : TileIndex [length, BLOCK_SIZE]) : Prop :=
   active st batch_size dim BLOCK_SIZE idx.2.1
 
 instance diagSsmForwardActiveDecidable
+    {length : Nat}
     (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
     (idx : TileIndex [length, BLOCK_SIZE]) :
     Decidable (diagSsmForwardActive st batch_size dim BLOCK_SIZE idx) := by
@@ -270,6 +273,7 @@ instance diagSsmForwardActiveDecidable
   infer_instance
 
 noncomputable def diagSsmForwardSpecAt
+    {length : Nat}
     (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
     (batch_size dim BLOCK_SIZE : Nat)
     (idx : TileIndex [length, BLOCK_SIZE]) : ℝ :=
@@ -277,13 +281,14 @@ noncomputable def diagSsmForwardSpecAt
     idx.1.val idx.2.1
 
 theorem diagSsmForwardSpecAt_eq_stateTile
+    {length : Nat}
     (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
     (batch_size dim BLOCK_SIZE : Nat)
     (idx : TileIndex [length, BLOCK_SIZE]) :
     diagSsmForwardSpecAt st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx =
       WithBot.unbotD 0
         ((diagSsmStateTile st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE
-          (idx.1.val + 1)).data idx.2.1) := by
+          (idx.1.val + 1)).data (idx.2.1, PUnit.unit)) := by
   simp [diagSsmForwardSpecAt, diagSsmForwardSpec, diagSsmStateTile]
 
 def diag_ssm_forward_kernel_correct_target
@@ -294,9 +299,11 @@ def diag_ssm_forward_kernel_correct_target
       length batch_size dim BLOCK_SIZE)
     (initialState := s)
     (write := ComputeCorrect.WriteMap.writeIf
-      (diagSsmForwardActive s batch_size dim BLOCK_SIZE)
-      (fun idx => (y_ptr, diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx)))
-    (expected := fun idx =>
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardActive s batch_size dim BLOCK_SIZE idx)
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        (y_ptr, diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx)))
+    (expected := fun idx : TileIndex [length, BLOCK_SIZE] =>
       diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx)
 
 def diag_ssm_forward_kernel_alg_post

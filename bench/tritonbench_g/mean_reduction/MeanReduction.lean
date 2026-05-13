@@ -80,9 +80,9 @@ noncomputable def meanFromAccumulatorSpec
 theorem meanAccumulatorSpec_zero
     (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N : Nat) :
     meanAccumulatorSpec s X N BLOCK_M BLOCK_N 0 =
-      Tile.zeros .real [BLOCK_M, BLOCK_N] := by
+      { data := fun _ : TileIndex [BLOCK_M, BLOCK_N] => some 0 } := by
   ext idx
-  simp [meanAccumulatorSpec, Tile.zeros]
+  simp [meanAccumulatorSpec]
 
 theorem meanChunkLane_mod
     (off BLOCK_N : Nat) (j : Fin BLOCK_N) (hOff : off % BLOCK_N = 0) :
