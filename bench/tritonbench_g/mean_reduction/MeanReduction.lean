@@ -173,6 +173,22 @@ theorem meanLanePrefix_step
       ((Finset.range off).filter pred).sum f
     rw [hset]
 
+theorem meanAccumulatorSpec_step
+    (s : BlockState) (X : RegionName) (N BLOCK_M BLOCK_N off : Nat)
+    (hOff : off % BLOCK_N = 0) :
+    meanAccumulatorSpec s X N BLOCK_M BLOCK_N (off + BLOCK_N) =
+      { data := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+          some
+            (meanLanePrefix s X N BLOCK_M BLOCK_N off idx.1 idx.2.1 +
+              if off + idx.2.1.val < N then
+                s.readMem X (meanOutOffset s BLOCK_M idx.1 * N +
+                  (off + idx.2.1.val))
+              else
+                0) } := by
+  ext idx
+  simp [meanAccumulatorSpec, meanLanePrefix_step s X N BLOCK_M BLOCK_N off
+    idx.1 idx.2.1 hOff]
+
 private theorem sum_range_eq_sum_fin (N : Nat) (f : Nat → ℝ) :
     (Finset.range N).sum f =
       (Finset.univ : Finset (Fin N)).sum (fun j => f j.val) := by

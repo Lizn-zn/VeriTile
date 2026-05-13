@@ -15,8 +15,9 @@ the named algorithm postconditions.
   `Fin N` sum over the original row, matching all `off` iterations together,
   and the intended `_mean` loop accumulator via `meanLanePrefix` /
   `meanAccumulatorSpec`. The pure lane-step fact is now proved as
-  `meanLanePrefix_step`, and the bridge from the final accumulator to the
-  row-wise sum is proved by `meanFromAccumulatorSpec_eq_meanSpec`; the theorem
+  `meanLanePrefix_step` and lifted to the accumulator tile by
+  `meanAccumulatorSpec_step`; the bridge from the final accumulator to the
+  row-wise sum is proved by `meanFromAccumulatorSpec_eq_meanSpec`. The theorem
   target is fixed as `mean_dim_kernel_correct_target`, but the theorem is still
   a placeholder until this accumulator invariant is connected to the actual
   loop body with `forRange_inv`. The compute-facing wrapper is discharged once
