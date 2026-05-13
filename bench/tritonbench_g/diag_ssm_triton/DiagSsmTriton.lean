@@ -193,6 +193,29 @@ noncomputable def diagSsmForwardSpec
     (batch_size dim BLOCK_SIZE : Nat) (t : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
   diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE i (t + 1)
 
+noncomputable def diagSsmStateTile
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat) : Tile .real [BLOCK_SIZE] :=
+  { data := fun idx =>
+      some (diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE idx.1 t) }
+
+@[simp] theorem diagSsmStateAfter_zero
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) :
+    diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE i 0 =
+      st.readMem s_ptr (colOffset st BLOCK_SIZE i) := by
+  rfl
+
+@[simp] theorem diagSsmStateAfter_succ
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat) (i : Fin BLOCK_SIZE) :
+    diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE i (t + 1) =
+      diagSsmStateAfter st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE i t *
+          st.readMem lambda_ptr (IntegralDType.nat.mod (colOffset st BLOCK_SIZE i) dim) +
+        st.readMem x_ptr (timeOffset st batch_size dim BLOCK_SIZE t i) := by
+  rfl
+
 def diagSsmForwardOutOffset
     (st : BlockState) (batch_size dim BLOCK_SIZE : Nat)
     (idx : TileIndex [length, BLOCK_SIZE]) : Nat :=

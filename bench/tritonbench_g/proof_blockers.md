@@ -38,7 +38,7 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   for the state update `s = s * Lambda + x`, with a spec for every stored time
   step, not only the first update.
 - Current local spec now includes the recurrence target via `diagSsmStateAfter`
-  / `diagSsmForwardSpec`, plus the full `(time, column)` write target via
-  `diagSsmForwardOutOffset` / `diagSsmForwardSpecAt`, but the theorem is still
-  a placeholder until the recurrence invariant is instantiated with
-  `forLoop_inv`.
+  / `diagSsmForwardSpec`, a state-register target via `diagSsmStateTile`, plus
+  the full `(time, column)` write target via `diagSsmForwardOutOffset` /
+  `diagSsmForwardSpecAt`, but the theorem is still a placeholder until the
+  recurrence invariant is instantiated with `forLoop_inv`.
