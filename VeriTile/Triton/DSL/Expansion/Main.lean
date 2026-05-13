@@ -310,8 +310,19 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
       ensureDType .nat e'.dtype "nat expression"
       pure e'
 
+private partial def valueTypedAntiquote? (stx : TSyntax `tritonExpr) : MacroM Bool := do
+  match stx with
+  | `(tritonExpr| $(($_:term : Nat))) => pure Bool.true
+  | `(tritonExpr| $(($_:term : Int))) => pure Bool.true
+  | `(tritonExpr| $(($_:term : Bool))) => pure Bool.true
+  | `(tritonExpr| $(($_:term : ℝ))) => pure Bool.true
+  | `(tritonExpr| $(($_:term : Real))) => pure Bool.true
+  | _ => pure Bool.false
+
 partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
     MacroM (Option StaticPtrOut) := do
+  if ← valueTypedAntiquote? stx then
+    return none
   match stx with
   | `(tritonExpr| $($r:term)) =>
       let zero ← `(Op.constNat 0)
@@ -325,7 +336,7 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
       let userName := r.getId.getString!
       let erasedName := r.getId.eraseMacroScopes.toString
       if env.any (fun entry => entry.1 == rawName || entry.1 == userName || entry.1 == erasedName) then
-        pure none
+        pure (none : Option StaticPtrOut)
       else
         let zero ← `(Op.constNat 0)
         let region : TSyntax `term := ⟨r.raw⟩
@@ -351,8 +362,8 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
             let bTerm := b'.term
             let nextOff ← `(Op.add NumericDType.nat $bc $off $bTerm)
             pure (some ⟨p.region, p.regionDType?, nextOff, outShape, Bool.false⟩)
-      | none => pure none
-  | _ => pure none
+      | none => pure (none : Option StaticPtrOut)
+  | _ => pure (none : Option StaticPtrOut)
 
 partial def expandWhereFromCond (env : Env) (c' : EOut)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do

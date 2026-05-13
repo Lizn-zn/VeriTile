@@ -29,6 +29,11 @@ mutual
 private partial def staticPtrRegions (assigned : List String) :
     TSyntax `tritonExpr → List (TSyntax `term) := fun stx =>
   match stx with
+  | `(tritonExpr| $(($_:term : Nat))) => []
+  | `(tritonExpr| $(($_:term : Int))) => []
+  | `(tritonExpr| $(($_:term : Bool))) => []
+  | `(tritonExpr| $(($_:term : ℝ))) => []
+  | `(tritonExpr| $(($_:term : Real))) => []
   | `(tritonExpr| $($r:term)) => [r]
   | `(tritonExpr| $r:ident) =>
       if assigned.contains r.getId.toString then

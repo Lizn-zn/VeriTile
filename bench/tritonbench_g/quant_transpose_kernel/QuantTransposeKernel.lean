@@ -20,8 +20,8 @@ def quantize_global_transpose_real_surface
     (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N GROUP_M : Nat) :
     ComputeKernel := triton {
   pid = tl.program_id(0)
-  grid_m = tl.cdiv($(M), $(BLOCK_M))
-  grid_n = tl.cdiv($(N), $(BLOCK_N))
+  grid_m = ($((M : Nat)) + $((BLOCK_M : Nat)) - $((1 : Nat))) // $((BLOCK_M : Nat))
+  grid_n = ($((N : Nat)) + $((BLOCK_N : Nat)) - $((1 : Nat))) // $((BLOCK_N : Nat))
   width = $(GROUP_M) * grid_n
   group_id = pid // width
   group_size = min(grid_m - group_id * $(GROUP_M), $(GROUP_M))
