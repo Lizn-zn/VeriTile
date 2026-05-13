@@ -290,6 +290,39 @@ theorem diagSsmForwardSpecAt_eq_stateTile
           (idx.1.val + 1)).data (idx.2.1, PUnit.unit)) := by
   simp [diagSsmForwardSpecAt, diagSsmForwardSpec, diagSsmStateTile]
 
+theorem diagSsmForwardIndex_ne_currentTime
+    {length : Nat} (idx : TileIndex [length, BLOCK_SIZE])
+    (t : Nat) (i : Fin BLOCK_SIZE)
+    (ht : t < length) (hOld : idx.1.val < t) :
+    idx ≠ ((⟨t, ht⟩ : Fin length), i, PUnit.unit) := by
+  intro hEq
+  have htime : idx.1.val = t := by
+    have h := congrArg (fun idx : TileIndex [length, BLOCK_SIZE] => idx.1.val) hEq
+    simpa using h
+  omega
+
+theorem diagSsmForwardOutOffset_ne_currentTime
+    {length : Nat}
+    (st : BlockState) (batch_size dim BLOCK_SIZE t : Nat)
+    (idx : TileIndex [length, BLOCK_SIZE]) (i : Fin BLOCK_SIZE)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset st batch_size dim BLOCK_SIZE idx))
+    (ht : t < length) (hOld : idx.1.val < t) :
+    diagSsmForwardOutOffset st batch_size dim BLOCK_SIZE idx ≠
+      timeOffset st batch_size dim BLOCK_SIZE t i := by
+  intro hEq
+  have hCurrent :
+      diagSsmForwardOutOffset st batch_size dim BLOCK_SIZE
+          ((⟨t, ht⟩ : Fin length), i, PUnit.unit) =
+        timeOffset st batch_size dim BLOCK_SIZE t i := by
+    rfl
+  have hEqIdx :
+      idx = ((⟨t, ht⟩ : Fin length), i, PUnit.unit) := by
+    apply hOutInj
+    simpa [hCurrent] using hEq
+  exact diagSsmForwardIndex_ne_currentTime idx t i ht hOld hEqIdx
+
 def diagSsmForwardLoopInvariant
     (st0 : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (t : Nat) (st : BlockState) : Prop :=

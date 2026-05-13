@@ -107,7 +107,9 @@ These files must not be counted complete yet:
   - Current local proof infrastructure includes
     `diagSsmForwardLoopInvariant`, `diagSsmForwardLoopInvariant_zero`,
     `diagSsmForwardLoopInvariant_step_of_time_write`, and
-    `diagSsmForwardLoopInvariant_to_alg_post`.
+    `diagSsmForwardLoopInvariant_to_alg_post`. Old-time/current-time
+    disjointness is factored into `diagSsmForwardIndex_ne_currentTime` and
+    `diagSsmForwardOutOffset_ne_currentTime`.
   - Remaining proof: instantiate the recurrence invariant with `forLoop_inv`
     under full `diagSsmForwardOutOffset` injectivity.
 

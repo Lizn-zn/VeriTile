@@ -97,7 +97,11 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `diag_ssm_forward_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until that
   recurrence invariant is instantiated with the actual loop body via
-  `forLoop_inv`. The theorem surface now requires full
+  `forLoop_inv`. The old-time/current-time disjointness lemmas
+  `diagSsmForwardIndex_ne_currentTime` and
+  `diagSsmForwardOutOffset_ne_currentTime` are available for deriving the
+  preservation side of the time-step write from the concrete `tl.store`. The
+  theorem surface now requires full
   `diagSsmForwardOutOffset` injectivity over `(time, column)` indices. The
   compute-facing wrapper is discharged once that algorithm-layer postcondition
   is supplied via
