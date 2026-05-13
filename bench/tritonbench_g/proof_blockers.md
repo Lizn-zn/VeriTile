@@ -104,7 +104,12 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `diagSsmForwardOutOffset_ne_currentTime` are available for deriving the
   preservation side of the time-step write from the concrete `tl.store`.
   `diagSsmMaskedStateTile_succ` exposes the register-update shape needed to
-  match `s = s * Lambda + x` on active lanes. The theorem surface now requires full
+  match `s = s * Lambda + x` on active lanes. The current-time simp lemmas
+  `diagSsmForwardOutOffset_currentTime`,
+  `diagSsmForwardSpecAt_currentTime`, and
+  `diagSsmForwardActive_currentTime` expose the store address, expected value,
+  and active predicate for the loop body's current `t` lane. The theorem
+  surface now requires full
   `diagSsmForwardOutOffset` injectivity over `(time, column)` indices. The
   compute-facing wrapper is discharged once that algorithm-layer postcondition
   is supplied via

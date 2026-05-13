@@ -311,6 +311,34 @@ theorem diagSsmForwardSpecAt_eq_stateTile
           (idx.1.val + 1)).data (idx.2.1, PUnit.unit)) := by
   simp [diagSsmForwardSpecAt, diagSsmForwardSpec, diagSsmStateTile]
 
+@[simp] theorem diagSsmForwardOutOffset_currentTime
+    {length : Nat}
+    (st : BlockState) (batch_size dim BLOCK_SIZE t : Nat)
+    (i : Fin BLOCK_SIZE) (ht : t < length) :
+    diagSsmForwardOutOffset st batch_size dim BLOCK_SIZE
+        ((⟨t, ht⟩ : Fin length), i, PUnit.unit) =
+      timeOffset st batch_size dim BLOCK_SIZE t i := by
+  rfl
+
+@[simp] theorem diagSsmForwardSpecAt_currentTime
+    {length : Nat}
+    (st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat)
+    (i : Fin BLOCK_SIZE) (ht : t < length) :
+    diagSsmForwardSpecAt st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE
+        ((⟨t, ht⟩ : Fin length), i, PUnit.unit) =
+      diagSsmForwardSpec st s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE t i := by
+  rfl
+
+@[simp] theorem diagSsmForwardActive_currentTime
+    {length : Nat}
+    (st : BlockState) (batch_size dim BLOCK_SIZE t : Nat)
+    (i : Fin BLOCK_SIZE) (ht : t < length) :
+    diagSsmForwardActive st batch_size dim BLOCK_SIZE
+        ((⟨t, ht⟩ : Fin length), i, PUnit.unit) =
+      active st batch_size dim BLOCK_SIZE i := by
+  rfl
+
 theorem diagSsmForwardIndex_ne_currentTime
     {length : Nat} (idx : TileIndex [length, BLOCK_SIZE])
     (t : Nat) (i : Fin BLOCK_SIZE)
