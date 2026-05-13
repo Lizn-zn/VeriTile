@@ -131,9 +131,12 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   no-collision premise from full `diagSsmForwardOutOffset` injectivity. The
   generic semantic helper `BlockState.scatter_prop_masked_preserves_other_offset`
   and the local theorem `diagSsmForwardCurrentTimeScatter_preserve_old` cover
-  old-time preservation for the current-time scatter. The remaining store-side
-  work is matching the concrete DSL-expanded store to that scatter shape. The
-  theorem surface now requires full `diagSsmForwardOutOffset` injectivity over
-  `(time, column)` indices. The compute-facing wrapper is discharged once that
-  algorithm-layer postcondition is supplied via
+  old-time preservation for the current-time scatter.
+  `diagSsmForwardLoopInvariant_step_of_current_time_scatter` packages the
+  updated state register plus current-time scatter into the next loop invariant.
+  The remaining store-side work is matching the concrete DSL-expanded loop body
+  to that register/scatter shape. The theorem surface now requires full
+  `diagSsmForwardOutOffset` injectivity over `(time, column)` indices. The
+  compute-facing wrapper is discharged once that algorithm-layer postcondition
+  is supplied via
   `diag_ssm_forward_kernel_compute_correct_of_algorithm`.

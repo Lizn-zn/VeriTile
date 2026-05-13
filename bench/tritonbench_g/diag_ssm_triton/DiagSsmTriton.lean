@@ -540,6 +540,50 @@ theorem diagSsmForwardCurrentTimeScatter_preserve_old
           idx lane.1 hOutInj ht hOld heq.symm)
       (TileShape.allIndices [BLOCK_SIZE]) st
 
+theorem diagSsmForwardLoopInvariant_step_of_current_time_scatter
+    {length : Nat}
+    (st0 stPrev stReg : BlockState)
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat)
+    (ht : t < length)
+    (hPrev :
+      diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+        batch_size dim BLOCK_SIZE t stPrev)
+    (hReg :
+      stReg.regs .real [BLOCK_SIZE] "s" =
+        some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE (t + 1)))
+    (hMem :
+      ∀ offset,
+        stReg.readMem y_ptr offset = stPrev.readMem y_ptr offset)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx)) :
+    diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE (t + 1)
+      ((TileShape.allIndices [BLOCK_SIZE]).foldl
+        (fun acc lane =>
+          if active st0 batch_size dim BLOCK_SIZE lane.1 then
+            acc.writeMem y_ptr
+              (timeOffset st0 batch_size dim BLOCK_SIZE t lane.1)
+              (diagSsmForwardSpec st0 s_ptr x_ptr lambda_ptr batch_size dim
+                BLOCK_SIZE t lane.1)
+          else
+            acc)
+        stReg) := by
+  apply diagSsmForwardLoopInvariant_step_of_time_write st0 stPrev
+  · exact hPrev
+  · simpa using hReg
+  · intro idx hOld _hactive
+    rw [diagSsmForwardCurrentTimeScatter_preserve_old st0 stReg s_ptr x_ptr
+      lambda_ptr y_ptr batch_size dim BLOCK_SIZE t idx ht hOld hOutInj]
+    exact hMem (diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx)
+  · intro i hactive
+    exact diagSsmForwardCurrentTimeScatter_write st0 stReg s_ptr x_ptr
+      lambda_ptr y_ptr batch_size dim BLOCK_SIZE t i hactive
+      (diagSsmForwardCurrentTimeNoCollision_of_out_injective st0 batch_size dim
+        BLOCK_SIZE t i ht hOutInj)
+
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=

@@ -133,10 +133,12 @@ These files must not be counted complete yet:
     no-collision premise from the full output injectivity hypothesis.
     `BlockState.scatter_prop_masked_preserves_other_offset` and
     `diagSsmForwardCurrentTimeScatter_preserve_old` cover old-time preservation
-    for that current-time scatter.
+    for that current-time scatter, and
+    `diagSsmForwardLoopInvariant_step_of_current_time_scatter` packages the
+    updated state register plus scatter state into the next loop invariant.
   - Remaining proof: instantiate the recurrence invariant with `forLoop_inv`
     under full `diagSsmForwardOutOffset` injectivity, including the concrete
-    loop-body store/register update.
+    loop-body register/scatter shape.
 
 Passing `lake build` is not sufficient to close the objective while these
 algorithm-layer obligations remain.
