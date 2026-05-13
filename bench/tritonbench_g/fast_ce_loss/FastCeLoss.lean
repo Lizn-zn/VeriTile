@@ -11,11 +11,11 @@ set_option linter.unusedSimpArgs false
 
 /-- Surface transcription of `fast_ce_loss.py`'s `_cross_entropy_forward`.
 
-Python's hard-coded `label_idx = -100` sentinel is represented by the Nat
-`ignored_index` parameter in this surface. -/
+Python's hard-coded `label_idx != -100` sentinel is preserved as the literal
+`-100`. -/
 def cross_entropy_forward_surface
-    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .nat)
-    (ignored_index VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)
+    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
+    (VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
@@ -37,7 +37,7 @@ def cross_entropy_forward_surface
   logits = (logits).to(tl.float32)
   c = tl.max(logits, axis=0)
   logsumexp = c + tl.log(tl.sum(tl.exp(logits - c), axis=0))
-  if label_idx != $(ignored_index) {
+  if label_idx != $((-100 : Int)) {
     x = tl.load(logits_ptr + label_idx)
     if DO_LOGIT_SCALING {
       x = $(LOGIT_SCALE) * x
@@ -56,11 +56,11 @@ def cross_entropy_forward_surface
 /-- Surface transcription of `fast_ce_loss.py`'s
 `_chunked_cross_entropy_forward`.
 
-Python's hard-coded `label_idx = -100` sentinel is represented by the Nat
-`ignored_index` parameter in this surface. -/
+Python's hard-coded `label_idx != -100` sentinel is preserved as the literal
+`-100`. -/
 def chunked_cross_entropy_forward_surface
-    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .nat)
-    (ignored_index VOCAB_SIZE N_CHUNKS logits_row_stride BLOCK_SIZE : Nat)
+    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
+    (VOCAB_SIZE N_CHUNKS logits_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
@@ -84,7 +84,7 @@ def chunked_cross_entropy_forward_surface
   c = tl.max(logits, axis=0)
   logsumexp = c + tl.log(tl.sum(tl.exp(logits - c), axis=0))
   if chunk_idx == 0 {
-    if label_idx != $(ignored_index) {
+    if label_idx != $((-100 : Int)) {
       x = (tl.load(logits_ptr + label_idx)).to(tl.float32)
       if DO_LOGIT_SCALING {
         x = $(LOGIT_SCALE) * x
@@ -105,12 +105,11 @@ def chunked_cross_entropy_forward_surface
 
 This preserves the block logits load, optional logit scaling, optional softcap
 transform and derivative factor, softmax-minus-one update at the label, and
-final masked in-place gradient writeback. Python's hard-coded `label_idx =
--100` sentinel is represented by the Nat `ignored_index` parameter in this
-surface. -/
+final masked in-place gradient writeback. Python's hard-coded
+`label_idx != -100` sentinel is preserved as the literal `-100`. -/
 def cross_entropy_backward_surface
-    (logits_ptr dloss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .nat)
-    (ignored_index VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE : Nat)
+    (logits_ptr dloss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
+    (VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE : Nat)
     (SOFTCAP LOGIT_SCALE : ℝ)
     (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
     ComputeKernel := triton {
@@ -121,7 +120,7 @@ def cross_entropy_backward_surface
   col_offsets = block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
   label_idx = (tl.load(labels_ptr + row_idx)).to(tl.int32)
-  if label_idx != $(ignored_index) {
+  if label_idx != $((-100 : Int)) {
     dloss = tl.load(dloss_ptr)
   } else {
     dloss = 0.0

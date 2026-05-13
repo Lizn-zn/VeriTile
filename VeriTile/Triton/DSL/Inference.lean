@@ -94,6 +94,10 @@ private partial def intSourceExpr? : TSyntax `tritonExpr → Bool := fun stx =>
   | `(tritonExpr| tl.load($p:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
       staticPtrRootIsIntRegion? p
   | `(tritonExpr| ($e:tritonExpr)) => intSourceExpr? e
+  | `(tritonExpr| ($e:tritonExpr).to(tl.int32)) => intSourceExpr? e
+  | `(tritonExpr| ($e:tritonExpr).to(tl.int64)) => intSourceExpr? e
+  | `(tritonExpr| ($e:tritonExpr).to(tl.int16)) => intSourceExpr? e
+  | `(tritonExpr| ($e:tritonExpr).to(tl.int8)) => intSourceExpr? e
   | _ => Bool.false
 
 /-- Test whether `stx` would be recognized as a static pointer
