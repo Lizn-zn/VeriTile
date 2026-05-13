@@ -21,20 +21,21 @@ def decoding_cache_kernel
     (cos_output sin_output : RegionName)
     (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
-  pid = tl.program_id(axis=0)
-  idx = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
-  hid = tl.arange(0, $(HIDDEN_DIM))
+  idx = tl.program_id(0) * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   ori_seq_idx = tl.load($((lengths : Region .nat)) + idx,
     mask=idx < $(NUM_SEQS), other=None)
-  mask = idx[:, None] + hid[None, :] * $(0) < $(NUM_SEQS)
   cos_cache_part = tl.load(cos_cache + ori_seq_idx[:, None] * $(cache_stride) +
-      hid[None, :] * $(hidden_stride), mask=mask, other=0.0)
+      tl.arange(0, $(HIDDEN_DIM))[None, :] * $(hidden_stride),
+    mask=idx[:, None] < $(NUM_SEQS))
   sin_cache_part = tl.load(sin_cache + ori_seq_idx[:, None] * $(cache_stride) +
-      hid[None, :] * $(hidden_stride), mask=mask, other=0.0)
+      tl.arange(0, $(HIDDEN_DIM))[None, :] * $(hidden_stride),
+    mask=idx[:, None] < $(NUM_SEQS))
   tl.store(cos_output + idx[:, None] * $(cache_stride) +
-      hid[None, :] * $(hidden_stride), cos_cache_part, mask=mask)
+      tl.arange(0, $(HIDDEN_DIM))[None, :] * $(hidden_stride),
+    cos_cache_part, mask=idx[:, None] < $(NUM_SEQS))
   tl.store(sin_output + idx[:, None] * $(cache_stride) +
-      hid[None, :] * $(hidden_stride), sin_cache_part, mask=mask)
+      tl.arange(0, $(HIDDEN_DIM))[None, :] * $(hidden_stride),
+    sin_cache_part, mask=idx[:, None] < $(NUM_SEQS))
 }
 
 /-- Proof-oriented one-sequence, one-hidden-block slice of
@@ -161,7 +162,7 @@ theorem decoding_cache_kernel_correct
             Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
             Tile.expandDim, Tile.uop, NumericDType.add, NumericDType.mul,
             ComparableDType.lt, TileShape.dropInsertedIndex,
-            BlockState.readMemValue, hB, hH] at hExec
+            Tile.remap, BlockState.readMemValue, hB, hH] at hExec
       subst s'
       constructor
       · intro idx
