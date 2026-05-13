@@ -72,9 +72,11 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `embeddingPrefixIndex_ne_currentChunk` and
   `embeddingOldPrefix_outOffset_ne_currentChunk` are available for deriving
   the preservation side of the chunk step from the concrete `tl.store`.
-  `embeddingChunkLane_lt_of_aligned_start` captures the aligned-chunk boundary
-  condition needed to map every current `BLOCK_NN` lane into the full
-  `BLOCK_N` write map; the actual wrapper uses the simple `BLOCK_NN = 1` case.
+  `embeddingChunkLane_lt_of_aligned_start` captures the pointwise aligned-chunk
+  boundary condition needed to map every current `BLOCK_NN` lane into the full
+  `BLOCK_N` write map, and `embeddingChunkLaneBound_of_aligned_start` packages
+  it in the `∀ lane` shape consumed by the current-chunk scatter step; the
+  actual wrapper uses the simple `BLOCK_NN = 1` case.
   The chunk step is factored as `embeddingLoopInvariant_step_of_chunk_write`,
   which combines old-prefix preservation with the current
   `BLOCK_NN × BLOCK_DMODEL` write map to produce the next prefix invariant.

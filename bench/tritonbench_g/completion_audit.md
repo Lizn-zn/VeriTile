@@ -101,8 +101,9 @@ These files must not be counted complete yet:
     definitionally exact final offset. Old-prefix/current-chunk disjointness is
     factored into `embeddingPrefixIndex_ne_currentChunk` and
     `embeddingOldPrefix_outOffset_ne_currentChunk`; aligned chunk coverage is
-    captured by `embeddingChunkLane_lt_of_aligned_start`; current-chunk masked
-    scatter readback is bridged by `embeddingCurrentChunkScatter_write`, with
+    captured by `embeddingChunkLane_lt_of_aligned_start` and packaged for the
+    step theorem by `embeddingChunkLaneBound_of_aligned_start`; current-chunk
+    masked scatter readback is bridged by `embeddingCurrentChunkScatter_write`, with
     `embeddingCurrentChunkNoCollision_of_full_injective` deriving its
     no-collision premise from full output injectivity plus chunk-bound coverage.
     `embeddingCurrentChunkScatter_preserve_old` covers old-prefix preservation

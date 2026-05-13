@@ -400,6 +400,22 @@ theorem embeddingChunkLane_lt_of_aligned_start
     _ ≤ chunks * BLOCK_NN := Nat.mul_le_mul_right BLOCK_NN (Nat.succ_le_of_lt hklt)
     _ = BLOCK_N := by rw [hBlock]
 
+theorem embeddingChunkLaneBound_of_aligned_start
+    (s : BlockState)
+    (BLOCK_N BLOCK_NN chunks k start_nn n_ctx hiden_size BLOCK_DMODEL : Nat)
+    (hStep : 0 < BLOCK_NN)
+    (hBlock : BLOCK_N = chunks * BLOCK_NN)
+    (hStartEq : start_nn = k * BLOCK_NN)
+    (hStartLt : start_nn < BLOCK_N) :
+    ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+        BLOCK_DMODEL lane →
+        start_nn + lane.1.val < BLOCK_N := by
+  intro lane _hactive
+  exact embeddingChunkLane_lt_of_aligned_start
+    (BLOCK_DMODEL := BLOCK_DMODEL) BLOCK_N BLOCK_NN chunks k start_nn lane
+    hStep hBlock hStartEq hStartLt
+
 theorem embeddingChunkToFullIndex_written_after
     (start_nn BLOCK_NN : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
     (h : start_nn + idx.1.val < BLOCK_N) :
