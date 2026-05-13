@@ -172,6 +172,29 @@ else
   printf 'ok rsqrt preservation scan\n'
 fi
 
+lean_only_where=()
+while IFS= read -r lean_file; do
+  if ! rg -q 'tl\.where' "${lean_file}"; then
+    continue
+  fi
+  dir="${lean_file%/*}"
+  py_file="$(find "${dir}" -maxdepth 1 -name '*.py' | head -n 1)"
+  if [ -z "${py_file}" ]; then
+    continue
+  fi
+  if ! rg -q 'tl\.where' "${py_file}"; then
+    lean_only_where+=("${lean_file} -> ${py_file}")
+  fi
+done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name '*.lean' | sort)
+
+if [ "${#lean_only_where[@]}" -gt 0 ]; then
+  printf 'FAIL Lean-only tl.where found:\n'
+  printf '  %s\n' "${lean_only_where[@]}"
+  failures=$((failures + 1))
+else
+  printf 'ok no Lean-only tl.where statements\n'
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi
