@@ -9,9 +9,9 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - File: `mean_reduction/MeanReduction.lean`
 - Blocker: correctness needs a full row-wise sum invariant across
   `for off in range(0, N, BLOCK_N)`.
-- Current local spec now describes the full row mean via `meanInputTile` /
-  `meanCarrier` / `meanSpec`, but the theorem is still a placeholder until the
-  loop invariant is proved.
+- Current local spec now describes the full row mean via `meanSpec` as a
+  `Fin N` sum over the original row, matching all `off` iterations together,
+  but the theorem is still a placeholder until the loop invariant is proved.
 
 ## `embedding_triton_kernel.py`
 

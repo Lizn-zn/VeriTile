@@ -14,9 +14,10 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `[:, None]` / `[None, :]` dimension annotations preserved.
 - Python `BLOCK_M` / `BLOCK_N: tl.constexpr` → Lean `Nat` parameters.
 
-Known proof blocker: see `bench/tritonbench_g/proof_blockers.md`. The spec
-below now describes the full row mean, but the theorem still needs a loop
-invariant for the `for off in range(...)` accumulation. -/
+Known proof blocker: see `bench/tritonbench_g/proof_blockers.md`. The full-row
+spec below matches the mathematical effect of the `for off in range(...)`
+accumulation, but the theorem still needs a loop invariant for that accumulation.
+-/
 def mean_dim_kernel
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) :
@@ -45,26 +46,11 @@ noncomputable def meanOneColSpec
     (s : BlockState) (X : RegionName) (N BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
   s.readMem X (meanOutOffset s BLOCK_M i * N) / (N : ℝ)
 
-noncomputable def meanInputTile
-    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N : Nat) :
-    Tile .real [BLOCK_M, BLOCK_N] :=
-  { data := fun idx =>
-      if idx.1.val < M ∧ idx.2.1.val < N then
-        some (s.readMem X (meanOutOffset s BLOCK_M idx.1 * N + idx.2.1.val))
-      else some (0.0 : ℝ) }
-
-noncomputable def meanCarrier
-    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N : Nat)
-    (i : Fin BLOCK_M) : WithBot ℝ :=
-  Option.map₂ (fun total n => total / n)
-    ((Tile.reduceSum (shape := [BLOCK_M, BLOCK_N]) ⟨1, by simp⟩ Bool.false
-      (meanInputTile s X M N BLOCK_M BLOCK_N)).data (i, PUnit.unit))
-    ((Tile.scalar (dtype := .real) (some (N : ℝ) : WithBot ℝ)).data PUnit.unit)
-
 noncomputable def meanSpec
-    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N : Nat)
+    (s : BlockState) (X : RegionName) (N BLOCK_M : Nat)
     (i : Fin BLOCK_M) : ℝ :=
-  WithBot.unbotD 0 (meanCarrier s X M N BLOCK_M BLOCK_N i)
+  ((Finset.univ : Finset (Fin N)).sum fun j =>
+    s.readMem X (meanOutOffset s BLOCK_M i * N + j.val)) / (N : ℝ)
 
 /-- Algorithm-layer correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_correct
