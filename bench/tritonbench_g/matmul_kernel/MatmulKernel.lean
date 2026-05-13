@@ -19,23 +19,30 @@ def matmul_kernel_surface
     ComputeKernel := triton {
   pid_m = tl.program_id(axis=0)
   pid_n = tl.program_id(axis=1)
-  offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % $(4096)
-  offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % $(4096)
+  M, N, K = $(4096), $(4096), $(4096)
+  stride_am = $(4096)
+  stride_ak = $(1)
+  stride_bk = $(4096)
+  stride_bn = $(1)
+  stride_cm = $(4096)
+  stride_cn = $(1)
+  offs_am = (pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))) % M
+  offs_bn = (pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))) % N
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))
-  a_ptrs = A + offs_am[:, None] * $(4096) + offs_k[None, :] * $(1)
-  b_ptrs = B + offs_k[:, None] * $(4096) + offs_bn[None, :] * $(1)
+  a_ptrs = A + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+  b_ptrs = B + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
   accumulator = tl.zeros([$(BLOCK_SIZE_M), $(BLOCK_SIZE_N)], dtype=tl.float32)
-  for k in range($(0), tl.cdiv($(4096), $(BLOCK_SIZE_K)), $(1)) {
+  for k in range($(0), tl.cdiv(K, $(BLOCK_SIZE_K)), $(1)) {
     a = tl.load(a_ptrs)
     b = tl.load(b_ptrs)
     accumulator = tl.dot(a, b, accumulator)
-    a_ptrs += $(BLOCK_SIZE_K) * $(1)
-    b_ptrs += $(BLOCK_SIZE_K) * $(4096)
+    a_ptrs += $(BLOCK_SIZE_K) * stride_ak
+    b_ptrs += $(BLOCK_SIZE_K) * stride_bk
   }
-  c = (accumulator).to(tl.float16)
+  c = tl.cast(accumulator, tl.float16)
   offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
   offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
-  c_ptrs = C + $(4096) * offs_cm[:, None] + $(1) * offs_cn[None, :]
+  c_ptrs = C + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
   tl.store(c_ptrs, c)
 }
 
