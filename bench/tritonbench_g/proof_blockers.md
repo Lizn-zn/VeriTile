@@ -48,10 +48,11 @@ the named algorithm postconditions.
   for the state update `s = s * Lambda + x`, with a spec for every stored time
   step, not only the first update.
 - Current local spec now includes the recurrence target via `diagSsmStateAfter`
-  / `diagSsmForwardSpec`, a state-register target via `diagSsmStateTile`, plus
-  the full `(time, column)` write target via `diagSsmForwardOutOffset` /
-  `diagSsmForwardSpecAt`, with `diagSsmForwardSpecAt_eq_stateTile` bridging
-  stores to the recurrence state. The theorem target is fixed as
+  / `diagSsmForwardSpec`, state-register targets via `diagSsmStateTile` and
+  `diagSsmMaskedStateTile`, plus the full `(time, column)` write target via
+  `diagSsmForwardOutOffset` / `diagSsmForwardSpecAt`, with
+  `diagSsmForwardSpecAt_eq_stateTile` bridging stores to the recurrence state.
+  The theorem target is fixed as
   `diag_ssm_forward_kernel_correct_target`, but the theorem is still a
   placeholder until the recurrence invariant is instantiated with `forLoop_inv`.
   The theorem surface now requires full `diagSsmForwardOutOffset` injectivity
