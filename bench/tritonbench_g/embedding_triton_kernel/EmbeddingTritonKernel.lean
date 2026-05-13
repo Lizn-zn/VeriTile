@@ -343,6 +343,24 @@ theorem embeddingOldPrefix_outOffset_ne_currentChunk
     (BLOCK_DMODEL := BLOCK_DMODEL) start_nn BLOCK_NN oldIdx curIdx hCur hOld
     (hOutInj hEqFull)
 
+theorem embeddingChunkLane_lt_of_aligned_start
+    (BLOCK_N BLOCK_NN chunks k start_nn : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (hStep : 0 < BLOCK_NN)
+    (hBlock : BLOCK_N = chunks * BLOCK_NN)
+    (hStartEq : start_nn = k * BLOCK_NN)
+    (hStartLt : start_nn < BLOCK_N) :
+    start_nn + idx.1.val < BLOCK_N := by
+  have hklt : k < chunks := by
+    apply (Nat.mul_lt_mul_right hStep).mp
+    simpa [hStartEq, hBlock] using hStartLt
+  calc
+    start_nn + idx.1.val = k * BLOCK_NN + idx.1.val := by rw [hStartEq]
+    _ < k * BLOCK_NN + BLOCK_NN := Nat.add_lt_add_left idx.1.isLt _
+    _ = (k + 1) * BLOCK_NN := by rw [Nat.succ_mul]
+    _ ≤ chunks * BLOCK_NN := Nat.mul_le_mul_right BLOCK_NN (Nat.succ_le_of_lt hklt)
+    _ = BLOCK_N := by rw [hBlock]
+
 theorem embeddingChunkToFullIndex_written_after
     (start_nn BLOCK_NN : Nat) (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
     (h : start_nn + idx.1.val < BLOCK_N) :

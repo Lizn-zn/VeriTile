@@ -93,7 +93,8 @@ These files must not be counted complete yet:
     the `forRange_inv` shape `BLOCK_N ≤ final` rather than requiring a
     definitionally exact final offset. Old-prefix/current-chunk disjointness is
     factored into `embeddingPrefixIndex_ne_currentChunk` and
-    `embeddingOldPrefix_outOffset_ne_currentChunk`.
+    `embeddingOldPrefix_outOffset_ne_currentChunk`; aligned chunk coverage is
+    captured by `embeddingChunkLane_lt_of_aligned_start`.
   - Remaining proof: instantiate the per-chunk write invariant with
     `forRange_inv` under `outOffsetFull` injectivity.
 
