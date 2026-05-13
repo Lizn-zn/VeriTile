@@ -104,9 +104,11 @@ These files must not be counted complete yet:
     scatter readback is bridged by `embeddingCurrentChunkScatter_write`, with
     `embeddingCurrentChunkNoCollision_of_full_injective` deriving its
     no-collision premise from full output injectivity plus chunk-bound coverage.
+    `embeddingCurrentChunkScatter_preserve_old` covers old-prefix preservation
+    for that current-chunk scatter.
   - Remaining proof: instantiate the per-chunk write invariant with
-    `forRange_inv` under `outOffsetFull` injectivity, including old-prefix
-    preservation and the concrete loop-body store.
+    `forRange_inv` under `outOffsetFull` injectivity, including the concrete
+    loop-body store.
 
 - `diag_ssm_triton/DiagSsmTriton.lean`
   - Kernel body is faithful.

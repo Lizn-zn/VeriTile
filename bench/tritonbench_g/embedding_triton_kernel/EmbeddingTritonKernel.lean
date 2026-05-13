@@ -587,6 +587,49 @@ theorem embeddingCurrentChunkScatter_write
       idx hactive
       (fun lane hlane heq => hNoCollision lane hlane heq)
 
+theorem embeddingCurrentChunkScatter_preserve_old
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn : Nat)
+    (oldIdx : TileIndex [BLOCK_N, BLOCK_DMODEL])
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s0 stride_out_seq BLOCK_N idx))
+    (hOld : embeddingPrefixWritten start_nn oldIdx)
+    (hLaneBound :
+      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane →
+          start_nn + lane.1.val < BLOCK_N) :
+    ((TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]).foldl
+        (fun acc lane =>
+          if storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+              BLOCK_DMODEL lane then
+            acc.writeMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
+              (embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+                stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
+          else
+            acc)
+        st).readMem out (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx) =
+      st.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx) := by
+  exact
+    BlockState.scatter_prop_masked_preserves_other_offset
+      out
+      (fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        outOffset2D s0 stride_out_seq BLOCK_N start_nn lane)
+      (fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+          stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL lane)
+      (fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane)
+      (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx)
+      (fun lane hlane heq =>
+        embeddingOldPrefix_outOffset_ne_currentChunk s0 stride_out_seq BLOCK_N
+          start_nn BLOCK_NN BLOCK_DMODEL oldIdx lane hOutInj
+          (hLaneBound lane hlane) hOld heq.symm)
+      (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) st
+
 def embedding_kernel_correct_target
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx

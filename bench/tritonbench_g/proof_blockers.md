@@ -80,8 +80,11 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   readback fact needed for the concrete `tl.store`, and
   `embeddingCurrentChunkNoCollision_of_full_injective` derives its no-collision
   premise from full `outOffsetFull` injectivity plus chunk-bound coverage.
-  Remaining store-side work is old-prefix preservation plus matching the
-  DSL-expanded store to that scatter shape. The theorem target is fixed as
+  `embeddingCurrentChunkScatter_preserve_old` covers old-prefix preservation for
+  the current-chunk scatter using the generic
+  `BlockState.scatter_prop_masked_preserves_other_offset` helper. Remaining
+  store-side work is matching the DSL-expanded store to that scatter shape. The
+  theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until that
   chunk step is instantiated with the actual loop body via
