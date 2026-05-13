@@ -74,10 +74,16 @@ the named algorithm postconditions.
   `diagSsmMaskedStateTile`, plus the full `(time, column)` write target via
   `diagSsmForwardOutOffset` / `diagSsmForwardSpecAt`, with
   `diagSsmForwardSpecAt_eq_stateTile` bridging stores to the recurrence state.
-  The theorem target is fixed as
+  The `forLoop_inv` predicate is now named `diagSsmForwardLoopInvariant`, with
+  `diagSsmForwardLoopInvariant_zero` covering the initial loaded state,
+  `diagSsmForwardLoopInvariant_step_of_time_write` factoring one time-step
+  register/write update, and `diagSsmForwardLoopInvariant_to_alg_post`
+  bridging a completed loop to `diag_ssm_forward_kernel_alg_post`. The theorem
+  target is fixed as
   `diag_ssm_forward_kernel_correct_target`, but the theorem is still a
-  placeholder until the recurrence invariant is instantiated with `forLoop_inv`.
-  The theorem surface now requires full `diagSsmForwardOutOffset` injectivity
-  over `(time, column)` indices. The compute-facing wrapper is discharged once
-  that algorithm-layer postcondition is available via
+  placeholder until that recurrence invariant is instantiated with the actual
+  loop body via `forLoop_inv`. The theorem surface now requires full
+  `diagSsmForwardOutOffset` injectivity over `(time, column)` indices. The
+  compute-facing wrapper is discharged once that algorithm-layer postcondition
+  is available via
   `diag_ssm_forward_kernel_compute_correct_of_algorithm`.

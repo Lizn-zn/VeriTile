@@ -291,6 +291,70 @@ theorem diagSsmForwardSpecAt_eq_stateTile
           (idx.1.val + 1)).data (idx.2.1, PUnit.unit)) := by
   simp [diagSsmForwardSpecAt, diagSsmForwardSpec, diagSsmStateTile]
 
+def diagSsmForwardLoopInvariant
+    (st0 : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) (t : Nat) (st : BlockState) : Prop :=
+  st.regs .real [BLOCK_SIZE] "s" =
+      some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE t) ∧
+    ∀ idx : TileIndex [length, BLOCK_SIZE],
+      idx.1.val < t →
+        diagSsmForwardActive st0 batch_size dim BLOCK_SIZE idx →
+          st.readMem y_ptr
+              (diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx) =
+            diagSsmForwardSpecAt st0 s_ptr x_ptr lambda_ptr batch_size dim
+              BLOCK_SIZE idx
+
+theorem diagSsmForwardLoopInvariant_zero
+    (st0 st : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (hReg :
+      st.regs .real [BLOCK_SIZE] "s" =
+        some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE 0)) :
+    diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE 0 st := by
+  constructor
+  · exact hReg
+  · intro idx hlt _
+    omega
+
+theorem diagSsmForwardLoopInvariant_step_of_time_write
+    (st0 st st' : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE t : Nat)
+    (hPrev :
+      diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+        batch_size dim BLOCK_SIZE t st)
+    (hReg :
+      st'.regs .real [BLOCK_SIZE] "s" =
+        some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE (t + 1)))
+    (hPreserve :
+      ∀ idx : TileIndex [length, BLOCK_SIZE],
+        idx.1.val < t →
+          diagSsmForwardActive st0 batch_size dim BLOCK_SIZE idx →
+            st'.readMem y_ptr
+                (diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx) =
+              st.readMem y_ptr
+                (diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx))
+    (hWrite :
+      ∀ i : Fin BLOCK_SIZE,
+        active st0 batch_size dim BLOCK_SIZE i →
+          st'.readMem y_ptr (timeOffset st0 batch_size dim BLOCK_SIZE t i) =
+            diagSsmForwardSpec st0 s_ptr x_ptr lambda_ptr batch_size dim
+              BLOCK_SIZE t i) :
+    diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE (t + 1) st' := by
+  constructor
+  · exact hReg
+  · intro idx hlt hactive
+    by_cases hOld : idx.1.val < t
+    · rw [hPreserve idx hOld hactive]
+      exact hPrev.2 idx hOld hactive
+    · have ht : idx.1.val = t := by omega
+      rw [diagSsmForwardOutOffset, diagSsmForwardSpecAt, ht]
+      exact hWrite idx.2.1 hactive
+
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=
@@ -315,6 +379,17 @@ def diag_ssm_forward_kernel_alg_post
     s'.readMem y_ptr
         (diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx) =
       diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx
+
+theorem diagSsmForwardLoopInvariant_to_alg_post
+    (st0 st : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (hInv :
+      diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+        batch_size dim BLOCK_SIZE length st) :
+    diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE st0 st := by
+  intro idx hidx
+  exact hInv.2 idx idx.1.isLt hidx
 
 theorem diag_ssm_forward_kernel_compute_correct_of_algorithm
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
