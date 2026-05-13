@@ -19,11 +19,12 @@ optional `ADD_INPUTS`, and final masked store.
 `tl.max_contiguous` is a layout hint; the DSL accepts it at the surface and
 erases it into the same value expression. Python's early returns for
 `pid_m * BLOCK_M > M` and signed `lora_index == -1` are represented by guards;
-the signed LoRA sentinel is carried as a Nat `ignored_lora_index` parameter. -/
+the signed LoRA sentinel is preserved as the literal `-1`. -/
 def sgmv_expand_slice_surface
-    (input_ptr lora_ptr out_ptr : RegionName) (b_seq_start_loc seq_lens lora_indices : Region .nat)
-    (ignored_lora_index N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
-      cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (input_ptr lora_ptr out_ptr : RegionName) (b_seq_start_loc seq_lens : Region .nat)
+    (lora_indices : Region .int)
+    (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
+      cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat)
     (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
   pid = tl.program_id(axis=0)
@@ -33,8 +34,8 @@ def sgmv_expand_slice_surface
   pid_n = pid % cta_n_num
   m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
   if pid_m * $(BLOCK_M) <= m_len {
-    lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
-    if lora_index != $(ignored_lora_index) {
+    lora_index = tl.load($((lora_indices : Region .int)) + cur_batch)
+    if lora_index != $((-1 : Int)) {
       cur_seq_start = tl.load($((b_seq_start_loc : Region .nat)) + cur_batch)
       offset_m = tl.arange(0, $(BLOCK_M)) + pid_m * $(BLOCK_M)
       offset_n = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N)
