@@ -19,9 +19,11 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - Blocker: correctness needs a `forRange` invariant across
   `range(0, BLOCK_N, BLOCK_NN)` and a two-dimensional write map for all
   `(sequence, dmodel)` lanes written by the loop.
-- Current local spec now includes the per-iteration two-dimensional
-  `BLOCK_NN × BLOCK_DMODEL` write target via `outOffset2D` / `embeddingSpec2D`,
-  but the theorem is still a placeholder until the loop invariant is proved.
+- Current local spec now includes both the per-iteration
+  `BLOCK_NN × BLOCK_DMODEL` target (`outOffset2D` / `embeddingSpec2D`) and the
+  full `BLOCK_N × BLOCK_DMODEL` post-loop target (`outOffsetFull` /
+  `embeddingSpecFull`), but the theorem is still a placeholder until the loop
+  invariant is proved.
 
 ## `diag_ssm_triton.py`
 

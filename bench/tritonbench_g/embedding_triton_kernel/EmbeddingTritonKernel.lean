@@ -168,6 +168,56 @@ noncomputable def embeddingSpec2D
     else
       some (0.0 : ℝ))
 
+def fullSeqIndex
+    (s : BlockState) (BLOCK_N : Nat) (lane : Fin BLOCK_N) : Nat :=
+  s.pids 0 * BLOCK_N + lane.val
+
+def tokenRawFull
+    (s : BlockState) (input_ids : RegionName) (BLOCK_N : Nat)
+    (lane : Fin BLOCK_N) : Nat :=
+  s.readMemValue .nat input_ids (fullSeqIndex s BLOCK_N lane)
+
+def tokenIndexFull
+    (s : BlockState) (input_ids : RegionName)
+    (vob_start_id BLOCK_N : Nat) (lane : Fin BLOCK_N) : Nat :=
+  tokenRawFull s input_ids BLOCK_N lane - vob_start_id
+
+def outOffsetFull
+    (s : BlockState) (stride_out_seq BLOCK_N : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Nat :=
+  fullSeqIndex s BLOCK_N idx.1 * stride_out_seq + dimIndex idx.2.1
+
+def weightOffsetFull
+    (s : BlockState) (input_ids : RegionName)
+    (vob_start_id stride_weight_seq BLOCK_N : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Nat :=
+  tokenIndexFull s input_ids vob_start_id BLOCK_N idx.1 * stride_weight_seq +
+    dimIndex idx.2.1
+
+def storeActiveFull
+    (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : Prop :=
+  fullSeqIndex s BLOCK_N idx.1 < n_ctx ∧ dimIndex idx.2.1 < hiden_size
+
+instance storeActiveFullDecidable
+    (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) :
+    Decidable (storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx) := by
+  unfold storeActiveFull
+  infer_instance
+
+noncomputable def embeddingSpecFull
+    (s : BlockState) (weight input_ids : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq BLOCK_N BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) : ℝ :=
+  WithBot.unbotD 0
+    (if vob_start_id ≤ tokenRawFull s input_ids BLOCK_N idx.1 ∧
+        tokenRawFull s input_ids BLOCK_N idx.1 < vob_end_id then
+      some (s.readMem weight
+        (weightOffsetFull s input_ids vob_start_id stride_weight_seq BLOCK_N idx))
+    else
+      some (0.0 : ℝ))
+
 /-- Algorithm-layer correctness for the embedding kernel. -/
 theorem embedding_kernel_correct
     (weight input_ids out : RegionName)
