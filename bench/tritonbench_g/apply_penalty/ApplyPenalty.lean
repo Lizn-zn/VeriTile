@@ -13,14 +13,13 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `apply_penalty.py`'s
 `_fwd_kernel_apply_penalty`.
 
-The Python argument `stride_logit_s` is intentionally absent: the source kernel
-receives it but does not use it when indexing `Logits`. `p_token_counts` is
-loaded as a Nat channel and explicitly projected with `tl.toReal`, matching
-Triton's integer-to-float promotion in `batch_ids_count * cur_freqency`. -/
+`p_token_counts` is loaded as a Nat channel and explicitly projected with
+`tl.toReal`, matching Triton's integer-to-float promotion in
+`batch_ids_count * cur_freqency`. -/
 def apply_penalty
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b BLOCK_P : Nat) :
+    (stride_logit_b _stride_logit_s BLOCK_P : Nat) :
     ComputeKernel := triton {
   cur_batch = tl.program_id(0)
   cur_freqency = tl.load(freqency_penalty + cur_batch)
@@ -116,10 +115,10 @@ noncomputable def observedStoreValue
     (s : BlockState)
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b BLOCK_P : Nat) (i : Fin BLOCK_P) : ℝ :=
+    (stride_logit_b stride_logit_s BLOCK_P : Nat) (i : Fin BLOCK_P) : ℝ :=
   match exec (apply_penalty Logits presence_penalty freqency_penalty
       repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-      stride_logit_b BLOCK_P) s with
+      stride_logit_b stride_logit_s BLOCK_P) s with
   | some s' =>
       s'.readMem Logits
         (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b i)
@@ -133,17 +132,17 @@ kernel while the carrier-normal-form bridge to `penaltyValue` is completed. -/
 theorem apply_penalty_correct
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b BLOCK_P : Nat)
+    (stride_logit_b stride_logit_s BLOCK_P : Nat)
     (s s' : BlockState)
     (hExec : exec (apply_penalty Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-        stride_logit_b BLOCK_P) s = some s') :
+        stride_logit_b stride_logit_s BLOCK_P) s = some s') :
     ∀ i : Fin BLOCK_P,
       s'.readMem Logits
           (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b i) =
         observedStoreValue s Logits presence_penalty freqency_penalty
           repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-          stride_logit_b BLOCK_P i := by
+          stride_logit_b stride_logit_s BLOCK_P i := by
   intro i
   simp [observedStoreValue, hExec]
 
@@ -151,12 +150,12 @@ theorem apply_penalty_correct
 theorem apply_penalty_compute_correct
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b BLOCK_P : Nat)
+    (stride_logit_b stride_logit_s BLOCK_P : Nat)
     (s : BlockState) :
     ComputeCorrect.Realizes
       (kernel := apply_penalty Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-        stride_logit_b BLOCK_P)
+        stride_logit_b stride_logit_s BLOCK_P)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin BLOCK_P => active s p_cumsum_seq_len i)
@@ -165,7 +164,7 @@ theorem apply_penalty_compute_correct
       (expected := fun i : Fin BLOCK_P =>
         observedStoreValue s Logits presence_penalty freqency_penalty
           repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-          stride_logit_b BLOCK_P i) := by
+          stride_logit_b stride_logit_s BLOCK_P i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [apply_penalty, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -174,7 +173,7 @@ theorem apply_penalty_compute_correct
   intro i hActive
   have h := apply_penalty_correct Logits presence_penalty freqency_penalty
     repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-    stride_logit_b BLOCK_P s s' hExec i
+    stride_logit_b stride_logit_s BLOCK_P s s' hExec i
   exact h
 
 end VeriTile.Bench.TritonBenchG.ApplyPenalty
