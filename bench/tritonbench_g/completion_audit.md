@@ -36,7 +36,10 @@ surface.
   It also compares `for` / `while` / `if` counts inside the Python
   `@triton.jit` kernel body and Lean `triton { ... }` body to catch
   unannotated control-flow rewrites, and compares the ordered `tl.*(...)` call
-  sequence to catch unannotated call reordering.
+  sequence to catch unannotated call reordering. A statement left-hand-side
+  sequence scan covers top-level assignments, `+=` updates, annotated
+  assignments, and tuple assignments, so added/removed/reordered non-call
+  statements are also checked mechanically.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.

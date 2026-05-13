@@ -78,7 +78,7 @@ def diag_ssm_backward_kernel
 `diag_ssm_forward_kernel_complex`.
 
 The Python tuple assignment `s_real, s_imag = new_s_real, new_s_imag` is
-spelled as two scalar-tile assignments in the DSL. -/
+preserved with the DSL multiple-assignment surface. -/
 def diag_ssm_forward_kernel_complex
     (s_ptr x_ptr y_ptr lambda_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) :
@@ -100,8 +100,7 @@ def diag_ssm_forward_kernel_complex
     new_s_imag = s_real * lambda_imag + s_imag * lambda_real + x_imag
     tl.store(y_ptr + offsets, new_s_real, mask=mask)
     tl.store(y_ptr + offsets + $(1), new_s_imag, mask=mask)
-    s_real = new_s_real
-    s_imag = new_s_imag
+    s_real, s_imag = new_s_real, new_s_imag
   }
 }
 
