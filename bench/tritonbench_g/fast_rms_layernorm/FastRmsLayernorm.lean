@@ -72,6 +72,9 @@ def gemma_rms_layernorm_forward
 /-- Faithful transcription of `fast_rms_layernorm.py`'s
 `_rms_layernorm_backward` for `GEMMA = false`.
 
+Documented constexpr branch specialization: the Python kernel branches on
+`GEMMA`; this surface covers the `GEMMA = false` branch.
+
 The Python kernel accepts `dW`/`dW_row_stride` but does not write `dW`; this
 surface preserves the in-place `dY` writeback. -/
 def rms_layernorm_backward
@@ -102,7 +105,10 @@ def rms_layernorm_backward
 }
 
 /-- Faithful transcription of `fast_rms_layernorm.py`'s
-`_rms_layernorm_backward` for `GEMMA = true`. -/
+`_rms_layernorm_backward` for `GEMMA = true`.
+
+Documented constexpr branch specialization: the Python kernel branches on
+`GEMMA`; this surface covers the `GEMMA = true` branch. -/
 def gemma_rms_layernorm_backward
     (dY X W r _dW : RegionName)
     (dY_row_stride X_row_stride _W_row_stride r_row_stride _dW_row_stride

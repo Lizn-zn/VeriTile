@@ -437,6 +437,136 @@ else
   failures=$((failures + 1))
 fi
 
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+call_re = re.compile(r"\btl(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s*\(")
+ignored = {
+    "tl.constexpr",
+    "tl.float32",
+    "tl.float64",
+    "tl.int32",
+    "tl.int64",
+    "tl.uint32",
+    "tl.uint64",
+    "tl.tensor",
+    "tl.for",
+}
+
+def python_jit_kernel_bodies(text: str) -> list[str]:
+    lines = text.splitlines()
+    bodies = []
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith("@triton.jit"):
+            i += 1
+            continue
+        i += 1
+        while i < len(lines) and lines[i].strip().startswith("@"):
+            i += 1
+        if i >= len(lines) or not lines[i].strip().startswith("def "):
+            continue
+
+        def_i = i
+        start = None
+        parens = 0
+        for j in range(def_i, len(lines)):
+            line = lines[j]
+            parens += line.count("(") - line.count(")")
+            if parens <= 0 and line.rstrip().endswith(":"):
+                start = j + 1
+                break
+        if start is None:
+            break
+
+        body = []
+        k = start
+        while k < len(lines):
+            line = lines[k]
+            if line and not line.startswith((" ", "\t")):
+                break
+            body.append(line)
+            k += 1
+        body_text = "\n".join(body)
+        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+            bodies.append(body_text)
+        i = k
+    return bodies
+
+def lean_triton_bodies(text: str) -> list[str]:
+    bodies = []
+    pos = 0
+    while True:
+        idx = text.find("triton {", pos)
+        if idx < 0:
+            break
+        start = text.find("{", idx)
+        depth = 0
+        out = []
+        end = start
+        for off, ch in enumerate(text[start:], start):
+            if ch == "{":
+                depth += 1
+                if depth == 1:
+                    continue
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = off + 1
+                    break
+            if depth >= 1:
+                out.append(ch)
+        bodies.append("".join(out))
+        pos = end
+    return bodies
+
+def tl_call_sequence(text: str) -> list[str]:
+    out = []
+    for match in call_re.finditer(text):
+        call = match.group(0).split("(", 1)[0].strip()
+        if call not in ignored:
+            out.append(call)
+    return out
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    lean_text = lean_file.read_text()
+    py_sequences = [tl_call_sequence(body) for body in python_jit_kernel_bodies(py_file.read_text())]
+    lean_sequences = [tl_call_sequence(body) for body in lean_triton_bodies(lean_text)]
+    if py_sequences != lean_sequences and not any(marker in lean_text.lower() for marker in scope_markers):
+        failures.append((py_file, lean_file, py_sequences, lean_sequences))
+
+if failures:
+    for py_file, lean_file, py_sequences, lean_sequences in failures:
+        print(f"{py_file} -> {lean_file}: tl call sequence mismatch")
+        print(f"  python: {py_sequences}")
+        print(f"  lean:   {lean_sequences}")
+    sys.exit(1)
+PY
+then
+  printf 'ok tl.* call sequence scan\n'
+else
+  printf 'FAIL tl.* call sequence scan\n'
+  failures=$((failures + 1))
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi

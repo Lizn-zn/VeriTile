@@ -70,7 +70,9 @@ also checked for preservation, and Lean-only `tl.where` statements are
 rejected. The same audit compares Python and Lean `tl.*(...)` call surfaces and
 requires any missing or extra call to be covered by an explicit
 slice/specialization note, and it compares `for` / `while` / `if` counts inside
-the Python `@triton.jit` kernel body and Lean `triton { ... }` body.
+the Python `@triton.jit` kernel body and Lean `triton { ... }` body. Ordered
+`tl.*(...)` call sequences are checked as well, so unannotated call reordering
+is rejected mechanically.
 It is a mechanical gate only; line-by-line faithfulness still follows
 [`review_criteria.md`](./review_criteria.md), and unresolved proof obligations
 remain tracked in [`proof_blockers.md`](./proof_blockers.md).
