@@ -29,20 +29,20 @@ def chunked_cumsum_fwd_surface
   pid_b = tl.program_id(axis=0)
   pid_c = tl.program_id(axis=1)
   pid_h = tl.program_id(axis=2)
-  dt_base = Dt + pid_b * $(stride_dt_batch) +
+  Dt += pid_b * $(stride_dt_batch) +
     pid_c * $(chunk_size) * $(stride_dt_seqlen)
-  dt_out_base = DtOut + pid_b * $(stride_dt_out_batch) +
+  DtOut += pid_b * $(stride_dt_out_batch) +
     pid_c * $(stride_dt_out_chunk)
-  dA_cumsum_base = DACumsum + pid_b * $(stride_dA_cs_batch) +
+  DACumsum += pid_b * $(stride_dA_cs_batch) +
     pid_c * $(stride_dA_cs_chunk)
   offs_h = pid_h * $(BLOCK_SIZE_H) + tl.arange(0, $(BLOCK_SIZE_H))
   offs_c = tl.arange(0, $(BLOCK_SIZE_CHUNK))
-  dt_ptrs = dt_base + offs_h[:, None] * $(stride_dt_head) +
+  dt_ptrs = Dt + offs_h[:, None] * $(stride_dt_head) +
     offs_c[None, :] * $(stride_dt_seqlen)
   A_ptrs = A + offs_h * $(stride_A_head)
-  dt_out_ptrs = dt_out_base + offs_h[:, None] * $(stride_dt_out_head) +
+  dt_out_ptrs = DtOut + offs_h[:, None] * $(stride_dt_out_head) +
     offs_c[None, :] * $(stride_dt_out_csize)
-  dA_cs_ptrs = dA_cumsum_base + offs_h[:, None] * $(stride_dA_cs_head) +
+  dA_cs_ptrs = DACumsum + offs_h[:, None] * $(stride_dA_cs_head) +
     offs_c[None, :] * $(stride_dA_cs_csize)
   chunk_size_limit = min($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
   dt = tl.load(dt_ptrs, mask=(offs_h[:, None] < $(nheads)) &

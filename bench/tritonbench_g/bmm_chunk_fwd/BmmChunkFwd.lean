@@ -49,8 +49,10 @@ def bmm_chunk_fwd_surface
     pid_c * $(chunk_size) * $(stride_a_seqlen) + pid_h * $(stride_a_head)
   B += pid_b * $(stride_b_batch) +
     pid_c * $(chunk_size) * $(stride_b_seqlen) + pid_h * $(stride_b_head)
-  seq_idx_base = pid_b * $(stride_seq_idx_batch) +
-    pid_c * $(chunk_size) * $(stride_seq_idx_seqlen)
+  if HAS_SEQ_IDX {
+    SeqIdx += pid_b * $(stride_seq_idx_batch) +
+      pid_c * $(chunk_size) * $(stride_seq_idx_seqlen)
+  }
 
   offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
   offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
@@ -76,11 +78,9 @@ def bmm_chunk_fwd_surface
   offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
   if HAS_SEQ_IDX {
     chunk_size_limit = min($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
-    seq_idx_m = tl.load($((SeqIdx : Region .int)) + seq_idx_base +
-      offs_m * $(stride_seq_idx_seqlen),
+    seq_idx_m = tl.load(SeqIdx + offs_m * $(stride_seq_idx_seqlen),
       mask=offs_m < chunk_size_limit, other=-1)
-    seq_idx_n = tl.load($((SeqIdx : Region .int)) + seq_idx_base +
-      offs_n * $(stride_seq_idx_seqlen),
+    seq_idx_n = tl.load(SeqIdx + offs_n * $(stride_seq_idx_seqlen),
       mask=offs_n < chunk_size_limit, other=-2)
     acc = tl.where(seq_idx_m[:, None] == seq_idx_n[None, :], acc, 0.0)
   }
