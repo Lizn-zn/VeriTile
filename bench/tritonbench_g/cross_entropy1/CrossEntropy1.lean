@@ -21,18 +21,18 @@ def cross_entropy_fwd_surface
     (smoothing lse_square_scale : ℝ)
     (HAS_SMOOTHING SPLIT : Bool) :
     ComputeKernel := triton {
-  row_idx = tl.program_id(axis=0)
-  col_block_idx = tl.program_id(axis=1)
+  row_idx = tl.program_id(0)
+  col_block_idx = tl.program_id(1)
   logits_ptr = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   col_offsets = col_block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   label_idx = tl.load($((labels_ptr : Region .int)) + row_idx)
   logits = tl.load(logits_ptr + col_offsets,
     mask=col_offsets < $(n_cols), other=-inf).to(tl.float32)
-  max_logits = tl.max(logits, axis=0)
+  max_logits = tl.max(logits, 0)
   if HAS_SMOOTHING {
-    sum_logits = tl.sum(tl.where(col_offsets < $(n_cols), logits, 0.0), axis=0)
+    sum_logits = tl.sum(tl.where(col_offsets < $(n_cols), logits, 0.0), 0)
   }
-  lse = tl.log(tl.sum(tl.exp(logits - max_logits), axis=0)) + max_logits
+  lse = tl.log(tl.sum(tl.exp(logits - max_logits), 0)) + max_logits
   tl.store(lse_ptr + col_block_idx * $(n_rows) + row_idx, lse)
   if label_idx == $((ignored_index : Int)) {
     loss = 0.0
