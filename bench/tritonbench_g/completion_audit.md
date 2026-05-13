@@ -18,7 +18,7 @@ surface.
   `TritonBench-G ports: 141 ok, 0 fail`.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
-  currently reports only the three algorithm-layer blocker theorems below.
+  currently reports no matches.
 - Correctness-surface scan:
   every `bench/tritonbench_g/*/*.lean` file now contains a
   `ComputeCorrect.Realizes` target or theorem.
@@ -31,11 +31,13 @@ These files must not be counted complete yet:
   - Kernel body is faithful.
   - Target: `mean_dim_kernel_correct_target`.
   - Named algorithm postcondition: `mean_dim_kernel_alg_post`.
-  - Compute-facing theorem is reduced to this algorithm-layer postcondition.
+  - Public correctness theorem exposes this algorithm-layer postcondition as an
+    explicit hypothesis; there is no `True` / `trivial` placeholder.
   - Current local proof infrastructure: `meanLoopInvariant`,
     `meanMaskedAccumulatorSpec`, `meanChunkLoadSpec`,
     `meanLoopInvariant_init_of_zero_reg`,
-    `meanLoopInvariant_step_of_accumulator_update`, and
+    `meanLoopInvariant_step_of_accumulator_update`,
+    `meanLoopInvariant_register_reduceSum_to_meanSpec`, and
     `meanFromMaskedAccumulatorSpec_eq_meanSpec`.
   - Remaining proof: prove the concrete loop body produces the `_mean =
     old + chunkLoad` register update, instantiate `forRange_inv`, then connect
@@ -45,7 +47,11 @@ These files must not be counted complete yet:
   - Kernel body is faithful.
   - Target: `embedding_kernel_correct_target`.
   - Named algorithm postcondition: `embedding_kernel_alg_post`.
-  - Compute-facing theorem is reduced to this algorithm-layer postcondition.
+  - Public correctness theorem exposes this algorithm-layer postcondition as an
+    explicit hypothesis; there is no `True` / `trivial` placeholder.
+  - Current local proof infrastructure includes `embeddingLoopInvariant`,
+    `embeddingLoopInvariant_zero`, `embeddingLoopInvariant_step_of_chunk_write`,
+    and `embeddingLoopInvariant_to_alg_post`.
   - Remaining proof: instantiate the per-chunk write invariant with
     `forRange_inv` under `outOffsetFull` injectivity.
 
@@ -53,9 +59,14 @@ These files must not be counted complete yet:
   - Kernel body is faithful.
   - Target: `diag_ssm_forward_kernel_correct_target`.
   - Named algorithm postcondition: `diag_ssm_forward_kernel_alg_post`.
-  - Compute-facing theorem is reduced to this algorithm-layer postcondition.
+  - Public correctness theorem exposes this algorithm-layer postcondition as an
+    explicit hypothesis; there is no `True` / `trivial` placeholder.
+  - Current local proof infrastructure includes
+    `diagSsmForwardLoopInvariant`, `diagSsmForwardLoopInvariant_zero`,
+    `diagSsmForwardLoopInvariant_step_of_time_write`, and
+    `diagSsmForwardLoopInvariant_to_alg_post`.
   - Remaining proof: instantiate the recurrence invariant with `forLoop_inv`
     under full `diagSsmForwardOutOffset` injectivity.
 
 Passing `lake build` is not sufficient to close the objective while these
-placeholder theorems remain.
+algorithm-layer obligations remain.
