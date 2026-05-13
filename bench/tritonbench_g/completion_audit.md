@@ -32,8 +32,14 @@ These files must not be counted complete yet:
   - Target: `mean_dim_kernel_correct_target`.
   - Named algorithm postcondition: `mean_dim_kernel_alg_post`.
   - Compute-facing theorem is reduced to this algorithm-layer postcondition.
-  - Remaining proof: instantiate the `_mean` accumulator invariant with
-    `forRange_inv`, then use `meanFromAccumulatorSpec_eq_meanSpec`.
+  - Current local proof infrastructure: `meanLoopInvariant`,
+    `meanMaskedAccumulatorSpec`, `meanChunkLoadSpec`,
+    `meanLoopInvariant_init_of_zero_reg`,
+    `meanLoopInvariant_step_of_accumulator_update`, and
+    `meanFromMaskedAccumulatorSpec_eq_meanSpec`.
+  - Remaining proof: prove the concrete loop body produces the `_mean =
+    old + chunkLoad` register update, instantiate `forRange_inv`, then connect
+    the final readout/store to `mean_dim_kernel_alg_post`.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.
