@@ -315,9 +315,16 @@ partial def expandWhereFromCond (env : Env) (c' : EOut)
     if a'.dtype == b'.dtype then
       pure (a', b')
     else
-      let aCast ← expandNatToIntBranch a a'
-      let bCast ← expandNatToIntBranch b b'
-      pure (aCast, bCast)
+      if a'.dtype == .nat && b'.dtype == .int then
+        pure (⟨← `(Op.castNatToInt $a'.term), .int, a'.shape,
+          a'.computeTerm, a'.computeDType?⟩, b')
+      else if a'.dtype == .int && b'.dtype == .nat then
+        pure (a', ⟨← `(Op.castNatToInt $b'.term), .int, b'.shape,
+          b'.computeTerm, b'.computeDType?⟩)
+      else do
+        let aCast ← expandNatToIntBranch a a'
+        let bCast ← expandNatToIntBranch b b'
+        pure (aCast, bCast)
   unless a'.dtype == b'.dtype do
     Macro.throwError "tl.where: branch dtype mismatch"
   let (_, valueShape) ← broadcastTerm a'.shape b'.shape "tl.where branches"

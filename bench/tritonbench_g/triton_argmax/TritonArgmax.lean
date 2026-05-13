@@ -83,7 +83,7 @@ def argmax_kernel
       return_indices=True, return_indices_tie_break_left=True)
     update = local_max > max_values
     max_values = tl.where(update, local_max, max_values)
-    argmax_values = tl.where(update, (start_n + local_argmax).to(tl.int64), argmax_values)
+    argmax_values = tl.where(update, start_n + local_argmax, argmax_values)
   }
   offset_index = m_offset * $(K) + pid_k
   out_index_ptrs = $((out_index : Region .int)) + offset_index
