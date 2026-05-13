@@ -56,6 +56,39 @@ else
   printf 'ok correctness surface scan\n'
 fi
 
+known_algorithm_blockers=(
+  "bench/tritonbench_g/mean_reduction/MeanReduction.lean"
+  "bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean"
+  "bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean"
+)
+
+unexpected_algorithm_blockers=()
+while IFS= read -r lean_file; do
+  if ! rg -q '\(hAlg\s*:' "${lean_file}"; then
+    continue
+  fi
+  rel="${lean_file#${PROJECT_ROOT}/}"
+  known=false
+  for blocker in "${known_algorithm_blockers[@]}"; do
+    if [ "${rel}" = "${blocker}" ]; then
+      known=true
+      break
+    fi
+  done
+  if [ "${known}" = false ]; then
+    unexpected_algorithm_blockers+=("${rel}")
+  fi
+done < <(find "${PORTS_ROOT}" -maxdepth 2 -name '*.lean' | sort)
+
+if [ "${#unexpected_algorithm_blockers[@]}" -gt 0 ]; then
+  printf 'FAIL unexpected algorithm-layer hAlg blockers:\n'
+  printf '  %s\n' "${unexpected_algorithm_blockers[@]}"
+  failures=$((failures + 1))
+else
+  printf 'ok known algorithm-layer blocker scan: %s documented\n' \
+    "${#known_algorithm_blockers[@]}"
+fi
+
 stale_readmes=()
 while IFS= read -r readme; do
   dir="${readme%/README.md}"

@@ -16,7 +16,7 @@ surface.
 | Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current mechanical mismatch. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
 | Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
-| Do not close while algorithm-layer proof obligations remain. | `mean_reduction`, `embedding_triton_kernel`, and `diag_ssm_triton` still expose named algorithm postconditions as explicit hypotheses. | Not complete. |
+| Do not close while algorithm-layer proof obligations remain. | Audit now checks that explicit `hAlg` blockers are exactly the documented set: `mean_reduction`, `embedding_triton_kernel`, and `diag_ssm_triton`. | Not complete. |
 
 ## Evidence Checked
 
@@ -35,8 +35,10 @@ surface.
   scanning. It also checks that compiled ports do not still advertise README
   `TODO` status and that Python `.to(tl.float32)` casts missing from Lean are
   covered by an explicit documented slice/scope note. The same gate rejects
-  Lean-only `tl.load(..., dtype=...)` annotations and `keep_dims` reduction
-  substitutions, both of which are must-fix deviations under
+  unexpected algorithm-layer `hAlg` blockers outside the documented set of
+  three remaining obligations. It rejects Lean-only `tl.load(..., dtype=...)`
+  annotations and `keep_dims` reduction substitutions, both of which are
+  must-fix deviations under
   `review_criteria.md`. It also flags Python `+=` statements missing from Lean
   unless the Lean port documents that the update is outside a proof slice or
   branch/surface specialization; this includes a normalized left-hand-side
