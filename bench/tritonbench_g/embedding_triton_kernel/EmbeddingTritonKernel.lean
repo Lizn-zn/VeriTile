@@ -241,6 +241,17 @@ instance embeddingPrefixActiveDecidable
   unfold embeddingPrefixActive
   infer_instance
 
+@[simp] theorem not_embeddingPrefixWritten_zero
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) :
+    ¬ embeddingPrefixWritten 0 idx := by
+  simp [embeddingPrefixWritten]
+
+@[simp] theorem not_embeddingPrefixActive_zero
+    (s : BlockState) (n_ctx hiden_size BLOCK_N BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL]) :
+    ¬ embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL 0 idx := by
+  simp [embeddingPrefixActive]
+
 /-- Algorithm-layer correctness for the embedding kernel. -/
 theorem embedding_kernel_correct
     (weight input_ids out : RegionName)
