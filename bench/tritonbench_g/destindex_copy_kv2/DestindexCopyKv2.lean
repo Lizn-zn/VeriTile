@@ -59,6 +59,15 @@ instance activeDecidable (head_num : Nat)
   unfold active
   infer_instance
 
+@[simp] theorem headMask_remap_data
+    (head_num BLOCK_HEAD BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) :
+    (@Tile.remap TileDType.bool [BLOCK_HEAD, 1] [BLOCK_HEAD, BLOCK_DMODEL]
+        Broadcast.nil.consL.consSame.leftIndex
+        ({ data := fun i : TileIndex [BLOCK_HEAD, 1] =>
+          decide (i.1.val < head_num) } : Tile TileDType.bool [BLOCK_HEAD, 1])).data idx =
+      decide (idx.1.val < head_num) := rfl
+
 /-- Algorithm-layer cellwise correctness for `_fwd_kernel_destindex_copy_kv`. -/
 theorem fwd_kernel_destindex_copy_kv_correct
     (K Dest_loc Out : RegionName)
