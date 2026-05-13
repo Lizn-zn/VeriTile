@@ -12,8 +12,10 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - Current local spec now describes the full row mean via `meanSpec` as a
   `Fin N` sum over the original row, matching all `off` iterations together,
   and the intended `_mean` loop accumulator via `meanLanePrefix` /
-  `meanAccumulatorSpec`, but the theorem is still a placeholder until that
-  accumulator invariant is instantiated with `forRange_inv`.
+  `meanAccumulatorSpec`. The pure bridge from the final accumulator to the
+  row-wise sum is proved by `meanFromAccumulatorSpec_eq_meanSpec`; the theorem
+  is still a placeholder until the accumulator invariant itself is instantiated
+  with `forRange_inv`.
 
 ## `embedding_triton_kernel.py`
 
