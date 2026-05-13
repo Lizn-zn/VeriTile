@@ -264,6 +264,29 @@ def diag_ssm_forward_kernel_correct_target
     (expected := fun idx =>
       diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx)
 
+theorem diag_ssm_forward_kernel_compute_correct_of_algorithm
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState)
+    (hAlg :
+      ∀ s',
+        exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
+          length batch_size dim BLOCK_SIZE) s = some s' →
+        ∀ idx : TileIndex [length, BLOCK_SIZE],
+          diagSsmForwardActive s batch_size dim BLOCK_SIZE idx →
+          s'.readMem y_ptr
+              (diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx) =
+            diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim
+              BLOCK_SIZE idx) :
+    diag_ssm_forward_kernel_correct_target s_ptr x_ptr lambda_ptr y_ptr
+      length batch_size dim BLOCK_SIZE s := by
+  unfold diag_ssm_forward_kernel_correct_target
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hidx
+  exact hAlg s' hExec idx hidx
+
 /-- Algorithm-layer correctness for the forward SSM kernel. -/
 theorem diag_ssm_forward_kernel_correct
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
