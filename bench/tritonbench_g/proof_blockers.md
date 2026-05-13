@@ -24,10 +24,12 @@ the named algorithm postconditions.
   `meanLoopInvariant_step_of_accumulator_update` reducing the loop step to the
   concrete register update produced by the body. The final active-row readout
   bridge is proved by
-  `meanFromMaskedAccumulatorSpec_eq_meanSpec`. The pure lane-step fact is
-  proved as `meanLanePrefix_step` and lifted to the accumulator tile by
-  `meanAccumulatorSpec_step`; the bridge from the final accumulator to the
-  row-wise sum is proved by
+  `meanFromMaskedAccumulatorSpec_eq_meanSpec`; the register/reduction-facing
+  bridge is now named `meanLoopInvariant_register_reduceSum_to_meanSpec`, and
+  it connects the `_mean` tile register plus `tl.sum(axis=1)` readout to the
+  final `meanSpec`. The pure lane-step fact is proved as `meanLanePrefix_step`
+  and lifted to the accumulator tile by `meanAccumulatorSpec_step`; the bridge
+  from the final accumulator to the row-wise sum is proved by
   `meanFromAccumulatorSpec_eq_meanSpec`. The theorem target is fixed as
   `mean_dim_kernel_correct_target`, but the theorem is still a placeholder
   until this accumulator invariant is connected to the actual loop body with

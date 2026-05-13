@@ -387,6 +387,39 @@ theorem meanFromMaskedAccumulatorSpec_eq_meanSpec
   simpa [meanFromMaskedAccumulatorSpec, hrow, meanFromAccumulatorSpec] using
     meanFromAccumulatorSpec_eq_meanSpec s X N BLOCK_M BLOCK_N off i hBLOCK_N hoff
 
+theorem meanMaskedAccumulatorSpec_reduceSum_axis1
+    (s : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
+    (i : Fin BLOCK_M) :
+    (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
+      (meanMaskedAccumulatorSpec s X M N BLOCK_M BLOCK_N off)).data
+        ((i, PUnit.unit) : TileIndex [BLOCK_M]) =
+      some ((Finset.univ : Finset (Fin BLOCK_N)).sum fun j =>
+        if meanRowActive s M BLOCK_M i then
+          meanLanePrefix s X N BLOCK_M BLOCK_N off i j
+        else
+          0) := by
+  simp [Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex, meanMaskedAccumulatorSpec]
+  rfl
+
+theorem meanLoopInvariant_register_reduceSum_to_meanSpec
+    (s0 st : BlockState) (X : RegionName) (M N BLOCK_M BLOCK_N off : Nat)
+    (i : Fin BLOCK_M)
+    (hInv : meanLoopInvariant s0 X M N BLOCK_M BLOCK_N off st)
+    (hrow : meanRowActive s0 M BLOCK_M i)
+    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
+    ∃ acc : Tile .real [BLOCK_M, BLOCK_N],
+      st.regs .real [BLOCK_M, BLOCK_N] "_mean" = some acc ∧
+        WithBot.unbotD 0
+            ((Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
+              acc).data ((i, PUnit.unit) : TileIndex [BLOCK_M])) / (N : ℝ) =
+          meanSpec s0 X N BLOCK_M i := by
+  refine ⟨meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off, hInv.2, ?_⟩
+  rw [meanMaskedAccumulatorSpec_reduceSum_axis1]
+  simpa [meanFromMaskedAccumulatorSpec, hrow] using
+    meanFromMaskedAccumulatorSpec_eq_meanSpec s0 X M N BLOCK_M BLOCK_N off i
+      hrow hBLOCK_N hoff
+
 def mean_dim_kernel_correct_target
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState) : Prop :=
