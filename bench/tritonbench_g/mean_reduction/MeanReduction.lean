@@ -607,6 +607,32 @@ def meanPreLoop
       (.full [BLOCK_M, BLOCK_N] (.const 0))
   ]
 
+theorem meanPreLoop_step_regs
+    (s st : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat)
+    (hStep :
+      stepStmts (meanPreLoop X Mean M N BLOCK_M BLOCK_N) s = some st) :
+    st.regs .real [BLOCK_M, BLOCK_N] "_mean" =
+        some { data := fun _ : TileIndex [BLOCK_M, BLOCK_N] => some 0 } ∧
+      st.regs .ptr [BLOCK_M, 1] "Mean" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          (Mean, meanOutOffset s BLOCK_M idx.1) } ∧
+      st.regs .bool [BLOCK_M, 1] "row_mask" =
+        some { data := fun idx : TileIndex [BLOCK_M, 1] =>
+          meanRowActive s M BLOCK_M idx.1 } := by
+  unfold meanPreLoop at hStep
+  simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
+    TileShape.dropInsertedIndex, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul, BlockState.setReg, Option.bind] at hStep
+  subst st
+  constructor
+  · simp
+  · constructor
+    · simp [meanOutOffset]
+    · simp [Tile.cop, ComparableDType.lt, meanOutOffset, meanRowActive]
+      funext idx
+      rfl
+
 def meanLoopBody (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .nat [1, BLOCK_N] "cols"
       (.add NumericDType.nat Broadcast.scalarL

@@ -52,12 +52,14 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `mean_dim_kernel_alg_post`. The projected algorithm body is split as
   `meanProjectedBody`, with named `meanPreLoop`, `meanLoopBody`, and
   `meanPostLoop` components, and `mean_dim_kernel_toAlg_body` proves that this
-  split is the actual `toAlgKernel.body`. The theorem target is fixed as
+  split is the actual `toAlgKernel.body`. `meanPreLoop_step_regs` proves the
+  concrete pre-loop execution facts needed by the loop and post-loop bridges:
+  zero-initialized `_mean`, the expanded `Mean` pointer tile, and `row_mask`.
+  The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
   accumulator invariant is connected to the actual loop body with `forRange_inv`
-  and the pre-loop execution facts are used to feed the final loop invariant
-  into `meanPostLoop_step_alg_post`. The compute-facing
+  and the final loop invariant is fed into `meanPostLoop_step_alg_post`. The compute-facing
   wrapper is discharged once that algorithm-layer
   postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.

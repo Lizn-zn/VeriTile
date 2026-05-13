@@ -94,10 +94,12 @@ These files must not be counted complete yet:
     store-register assumptions. `meanPreLoop`, `meanLoopBody`, and
     `meanProjectedBody` name the projected algorithm body components, and
     `mean_dim_kernel_toAlg_body` proves that this split is the actual
-    `toAlgKernel.body`.
+    `toAlgKernel.body`. `meanPreLoop_step_regs` proves the concrete pre-loop
+    execution facts: zero `_mean`, expanded `Mean` pointer tile, and
+    `row_mask`.
   - Remaining proof: prove the concrete loop body produces the `_mean =
-    old + chunkLoad` register update, prove the pre-loop register facts,
-    instantiate `forRange_inv`, then feed the final loop invariant into
+    old + chunkLoad` register update, instantiate `forRange_inv`, then feed
+    the final loop invariant into
     `meanPostLoop_step_alg_post`.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
