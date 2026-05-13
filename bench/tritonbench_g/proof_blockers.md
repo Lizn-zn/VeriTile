@@ -11,7 +11,8 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   `for off in range(0, N, BLOCK_N)`.
 - Current local spec now describes the full row mean via `meanSpec` as a
   `Fin N` sum over the original row, matching all `off` iterations together,
-  but the theorem is still a placeholder until the loop invariant is proved.
+  but the theorem is still a placeholder until the kernel-specific accumulator
+  invariant is instantiated with `forRange_inv`.
 
 ## `embedding_triton_kernel.py`
 
@@ -22,8 +23,8 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - Current local spec now includes both the per-iteration
   `BLOCK_NN × BLOCK_DMODEL` target (`outOffset2D` / `embeddingSpec2D`) and the
   full `BLOCK_N × BLOCK_DMODEL` post-loop target (`outOffsetFull` /
-  `embeddingSpecFull`), but the theorem is still a placeholder until the loop
-  invariant is proved.
+  `embeddingSpecFull`), but the theorem is still a placeholder until the
+  per-chunk write invariant is instantiated with `forRange_inv`.
 
 ## `diag_ssm_triton.py`
 
@@ -34,4 +35,5 @@ complete until the blocker below is discharged or linked to a GitHub issue.
 - Current local spec now includes the recurrence target via `diagSsmStateAfter`
   / `diagSsmForwardSpec`, plus the full `(time, column)` write target via
   `diagSsmForwardOutOffset` / `diagSsmForwardSpecAt`, but the theorem is still
-  a placeholder until the loop invariant is proved.
+  a placeholder until the recurrence invariant is instantiated with
+  `forLoop_inv`.
