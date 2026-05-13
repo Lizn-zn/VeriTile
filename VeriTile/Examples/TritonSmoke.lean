@@ -1683,4 +1683,14 @@ def boolAntiquoteKernel (outReg : RegionName) (N : Nat) : ComputeKernel := trito
 
 #check boolAntiquoteKernel
 
+/-! ### Python helper surface expressions -/
+
+def helperExprKernel (outReg : RegionName) (N BLOCK : Nat) : ComputeKernel := triton {
+  pid = tl.program_id(axis=0)
+  n = min(_div_up($(N), $(BLOCK)), $(N))
+  tl.store(outReg + pid, n)
+}
+
+#check helperExprKernel
+
 end VeriTile.Examples.TritonSmoke

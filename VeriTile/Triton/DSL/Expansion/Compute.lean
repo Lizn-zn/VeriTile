@@ -216,6 +216,20 @@ partial def expandMinMax (expandExpr : ExprExpander) (env : Env) (ctx : String) 
   let a' ← expandExpr env a
   let b' ← expandExpr env b
   let a' ←
+    if b'.dtype == .nat && a'.dtype == .real then
+      match a with
+      | `(tritonExpr| $n:num) => pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩
+      | _ => pure a'
+    else
+      pure a'
+  let b' ←
+    if a'.dtype == .nat && b'.dtype == .real then
+      match b with
+      | `(tritonExpr| $n:num) => pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩
+      | _ => pure b'
+    else
+      pure b'
+  let a' ←
     if a'.dtype == .nat && b'.dtype == .real then
       match ← expandLeanAntiquoteAs? .real a with
       | some out => pure out

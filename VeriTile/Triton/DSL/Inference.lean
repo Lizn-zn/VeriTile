@@ -40,6 +40,8 @@ partial def natExprIdents : TSyntax `tritonExpr → List String := fun stx =>
   | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => natExprIdents a ++ natExprIdents b
   | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => natExprIdents a ++ natExprIdents b
   | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => natExprIdents a ++ natExprIdents b
+  | `(tritonExpr| _div_up($a:tritonExpr, $b:tritonExpr)) => natExprIdents a ++ natExprIdents b
+  | `(tritonExpr| min($a:tritonExpr, $b:tritonExpr)) => natExprIdents a ++ natExprIdents b
   | `(tritonExpr| $a:tritonExpr << $b:tritonExpr) => natExprIdents a ++ natExprIdents b
   | `(tritonExpr| $a:tritonExpr >> $b:tritonExpr) => natExprIdents a ++ natExprIdents b
   | `(tritonExpr| $a:tritonExpr &  $b:tritonExpr) => natExprIdents a ++ natExprIdents b
@@ -278,6 +280,8 @@ private partial def directPinsFromExpr (assigned : Assigned) :
   | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| _div_up($a:tritonExpr, $b:tritonExpr)) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
+  | `(tritonExpr| min($a:tritonExpr, $b:tritonExpr)) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr << $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr >> $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b
   | `(tritonExpr| $a:tritonExpr &  $b:tritonExpr) => directPinsFromExpr assigned a ++ directPinsFromExpr assigned b

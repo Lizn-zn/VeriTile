@@ -57,6 +57,8 @@ syntax "tl.logical_and(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.logical_or(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.logical_not(" tritonExpr ")" : tritonExpr
 syntax "tl.cdiv(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "_div_up(" tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "min(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.maximum(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.minimum(" tritonExpr ", " tritonExpr ")" : tritonExpr
 -- Element-wise select. All three operands must broadcast to a common

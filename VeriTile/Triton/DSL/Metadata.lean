@@ -116,6 +116,10 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.logical_not($e:tritonExpr)) => exprRegions assigned e
   | `(tritonExpr| tl.cdiv($a:tritonExpr, $b:tritonExpr)) =>
       exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| _div_up($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions assigned a ++ exprRegions assigned b
+  | `(tritonExpr| min($a:tritonExpr, $b:tritonExpr)) =>
+      exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr))   =>
       exprRegions assigned a ++ exprRegions assigned b
   | `(tritonExpr| tl.maximum($a:tritonExpr, $b:tritonExpr)) =>

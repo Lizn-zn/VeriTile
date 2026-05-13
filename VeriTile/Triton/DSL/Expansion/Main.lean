@@ -227,6 +227,15 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
       let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
       pure ⟨← `(Op.floorDiv IntegralDType.nat $bc $a'.term $b'.term),
         .nat, outShape, none, none⟩
+  | `(tritonExpr| _div_up($a:tritonExpr, $b:tritonExpr)) => do
+      let one ← `(Op.constNat 1)
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
+      let num ← `(Op.sub NumericDType.nat $bc
+        (Op.add NumericDType.nat $bc $a'.term $b'.term) $one)
+      pure ⟨← `(Op.floorDiv IntegralDType.nat $bc $num $b'.term),
+        .nat, outShape, none, none⟩
   | `(tritonExpr| $a:tritonExpr % $b:tritonExpr) => do
       let a' ← expandNatExpectedExpr env a
       let b' ← expandNatExpectedExpr env b
@@ -619,6 +628,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandMinMax expandExpr env "tl.maximum" (← `(Op.gt)) a b
   | `(tritonExpr| tl.minimum($a:tritonExpr, $b:tritonExpr)) => do
       expandMinMax expandExpr env "tl.minimum" (← `(Op.lt)) a b
+  | `(tritonExpr| min($a:tritonExpr, $b:tritonExpr)) => do
+      expandMinMax expandExpr env "min" (← `(Op.lt)) a b
   | `(tritonExpr| tl.cumsum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
       expandScan expandExpr env "tl.cumsum" (← `(ScanOp.sum)) e kwargs
   | `(tritonExpr| tl.cumprod($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
@@ -901,6 +912,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandArith expandExpr env "arithmetic" (← `(Op.div)) a b
   | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => do
       expandIntegralArith expandExpr env "integer floor division" (← `(Op.floorDiv)) a b
+  | `(tritonExpr| _div_up($a:tritonExpr, $b:tritonExpr)) => do
+      let one ← `(Op.constNat 1)
+      let a' ← expandNatExpectedExpr env a
+      let b' ← expandNatExpectedExpr env b
+      let (bc, outShape) ← broadcastTerm a'.shape b'.shape "_div_up"
+      let num ← `(Op.sub NumericDType.nat $bc
+        (Op.add NumericDType.nat $bc $a'.term $b'.term) $one)
+      pure ⟨← `(Op.floorDiv IntegralDType.nat $bc $num $b'.term),
+        .nat, outShape, none, none⟩
   | `(tritonExpr| $a:tritonExpr % $b:tritonExpr) => do
       expandIntegralArith expandExpr env "integer remainder" (← `(Op.mod)) a b
   | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) => do
