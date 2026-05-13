@@ -70,9 +70,8 @@ def sgmv_expand_slice_surface
       c_ptr = out_ptr + offset_cm[:, None] * $(cm_stride) +
         offset_cn[None, :] * $(cn_stride)
       m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
-      seq_limit = cur_seq_start + m_len
-      c_mask = (offset_cm[:, None] < seq_limit) and
-        ((offset_cn[None, :] - $(slice_offset)) < $(N))
+      c_mask = (offset_cm[:, None] < (cur_seq_start + m_len)) &
+        (offset_cn[None, :] < $(slice_offset + N))
       if ADD_INPUTS {
         tiled_out = tl.load(c_ptr, mask=c_mask)
         tiled_c += tiled_out

@@ -45,7 +45,7 @@ def bgmv_expand_slice_surface
       $(slice_offset) * $(cn_stride)
     for n in range($(0), split_n_length, $(BLOCK_N)) {
       current_n = n + offset_n
-      b_ptr_mask = (current_n[:, None] < split_n_length) and (offset_k[None, :] < $(K))
+      b_ptr_mask = (current_n[:, None] < split_n_length) & (offset_k[None, :] < $(K))
       c_mask = current_n < split_n_length
       tiled_b = tl.load(
         b_ptr + current_n[:, None] * $(lora_k_stride) +
