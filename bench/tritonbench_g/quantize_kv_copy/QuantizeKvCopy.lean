@@ -24,8 +24,8 @@ def destindex_copy_quantize_kv_group_real_surface
       stride_os_bs stride_os_h _stride_os_g
       group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
     ComputeKernel := triton {
-  cur_index = tl.program_id(axis=0)
-  cur_head = tl.program_id(axis=1)
+  cur_index = tl.program_id(0)
+  cur_head = tl.program_id(1)
   offs_g = tl.arange(0, $(BLOCK_GROUP_NUM))
   offs_d = tl.arange(0, $(BLOCK_GROUP_DIM))
   dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
@@ -60,8 +60,8 @@ def destindex_copy_quantize_kv_group_value_store_slice
       stride_os_bs stride_os_h _stride_os_g
       group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
     ComputeKernel := triton {
-  cur_index = tl.program_id(axis=0)
-  cur_head = tl.program_id(axis=1)
+  cur_index = tl.program_id(0)
+  cur_head = tl.program_id(1)
   offs_g = tl.arange(0, $(BLOCK_GROUP_NUM))
   offs_d = tl.arange(0, $(BLOCK_GROUP_DIM))
   dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)

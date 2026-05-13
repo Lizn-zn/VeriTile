@@ -25,7 +25,7 @@ def destindex_copy_quantize_kv_transform_real_surface
       stride_os_bs stride_os_h
       head_num head_dim BLOCK_HEAD BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
-  cur_index = tl.program_id(axis=0)
+  cur_index = tl.program_id(0)
   offs_h = tl.arange(0, $(BLOCK_HEAD))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
@@ -58,7 +58,7 @@ def destindex_copy_quantize_kv_transform_value_store_slice
       stride_os_bs stride_os_h
       head_num head_dim BLOCK_HEAD BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
-  cur_index = tl.program_id(axis=0)
+  cur_index = tl.program_id(0)
   offs_h = tl.arange(0, $(BLOCK_HEAD))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
