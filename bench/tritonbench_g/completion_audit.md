@@ -78,7 +78,10 @@ These files must not be counted complete yet:
     `meanFromMaskedAccumulatorSpec_eq_meanSpec`. The masked load bridge is
     exposed by `meanChunkLoadSpec_active` and `meanChunkLoadSpec_inactive`;
     final masked scatter/readback is bridged by
-    `meanStoreFromMaskedAccumulator_alg_post`.
+    `meanStoreFromMaskedAccumulator_alg_post`, with
+    `meanOutOffset_injective` and
+    `meanStoreFromMaskedAccumulator_alg_post_default` packaging the row-output
+    no-collision side.
   - Remaining proof: prove the concrete loop body produces the `_mean =
     old + chunkLoad` register update, instantiate `forRange_inv`, then connect
     the concrete post-loop DSL statements to the final scatter bridge.
