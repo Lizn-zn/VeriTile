@@ -36,12 +36,12 @@ def conv2d_forward_surface
   output_feat_offset = out_feat_pid * $(BLOCK_OUT_FEAT) + tl.arange(0, $(BLOCK_OUT_FEAT))
   output_height_offset = batch_height_offset % $(out_height)
   output_width_offset = batch_height_width_offset % $(out_width)
-  input_base = Input +
-    ($(input_batch_stride) * batch_offset +
-      $(input_in_feat_stride) * group_pid * in_group_dim)[:, None]
-  weight_base = Weight +
-    ($(weight_out_feat_stride) * output_feat_offset +
-      $(weight_out_feat_stride) * group_pid * out_group_dim)[None, :]
+    Input +=
+      ($(input_batch_stride) * batch_offset +
+        $(input_in_feat_stride) * group_pid * in_group_dim)[:, None]
+    Weight +=
+      ($(weight_out_feat_stride) * output_feat_offset +
+        $(weight_out_feat_stride) * group_pid * out_group_dim)[None, :]
   accum = tl.zeros([$(BLOCK_BHW), $(BLOCK_OUT_FEAT)], dtype=tl.float32)
   for h in range($(0), $(kernel_height), $(1)) {
     for w in range($(0), $(kernel_width), $(1)) {
@@ -51,13 +51,13 @@ def conv2d_forward_surface
           $(stride_height) * output_height_offset
         input_width_offset = w - $((padding_width : Int)) +
           $(stride_width) * output_width_offset
-        curr_input = input_base +
-          ($(input_in_feat_stride) * input_feat_offset)[None, :] +
-          ($(input_height_stride) * input_height_offset)[:, None] +
-          ($(input_width_stride) * input_width_offset)[:, None]
-        curr_weight = weight_base +
-          ($(weight_in_feat_stride) * input_feat_offset)[:, None] +
-          $(weight_height_stride) * h + $(weight_width_stride) * w
+          curr_input_pointer = Input +
+            ($(input_in_feat_stride) * input_feat_offset)[None, :] +
+            ($(input_height_stride) * input_height_offset)[:, None] +
+            ($(input_width_stride) * input_width_offset)[:, None]
+          curr_weight_pointer = Weight +
+            ($(weight_in_feat_stride) * input_feat_offset)[:, None] +
+            $(weight_height_stride) * h + $(weight_width_stride) * w
         input_mask = (batch_offset[:, None] < $(batch_dim)) &
           (input_feat_offset[None, :] < in_group_dim) &
           ($((0 : Int)) <= input_height_offset[:, None]) &
@@ -66,8 +66,8 @@ def conv2d_forward_surface
           (input_width_offset[:, None] < $(in_width))
         weight_mask = (input_feat_offset[:, None] < in_group_dim) &
           (output_feat_offset[None, :] < out_group_dim)
-        input_block = tl.load(curr_input, mask=input_mask)
-        weight_block = tl.load(curr_weight, mask=weight_mask)
+          input_block = tl.load(curr_input_pointer, mask=input_mask)
+          weight_block = tl.load(curr_weight_pointer, mask=weight_mask)
         if _fp16 {
           input_block = (input_block).to(tl.float16)
           weight_block = (weight_block).to(tl.float16)
@@ -76,16 +76,15 @@ def conv2d_forward_surface
       }
     }
   }
-  output_mask = (batch_offset[:, None] < $(batch_dim)) &
-    (output_feat_offset[None, :] < out_group_dim) &
-    (output_height_offset[:, None] < $(out_height)) &
-    (output_width_offset[:, None] < $(out_width))
-  tl.store(Output +
-      $(output_batch_stride) * batch_offset[:, None] +
+    Output += $(output_batch_stride) * batch_offset[:, None] +
       $(output_out_feat_stride) * (group_pid * out_group_dim + output_feat_offset)[None, :] +
       $(output_height_stride) * output_height_offset[:, None] +
-      $(output_width_stride) * output_width_offset[:, None],
-    accum, mask=output_mask)
+      $(output_width_stride) * output_width_offset[:, None]
+    output_mask = (batch_offset[:, None] < $(batch_dim)) &
+      (output_feat_offset[None, :] < out_group_dim) &
+      (output_height_offset[:, None] < $(out_height)) &
+      (output_width_offset[:, None] < $(out_width))
+    tl.store(Output, accum, mask=output_mask)
 }
 
 /-- Proof-oriented final output-store slice of `triton_conv2d_fwd.py`'s
