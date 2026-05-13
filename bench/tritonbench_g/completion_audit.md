@@ -76,10 +76,12 @@ These files must not be counted complete yet:
     `meanLoopInvariant_step_of_accumulator_update`,
     `meanLoopInvariant_register_reduceSum_to_meanSpec`, and
     `meanFromMaskedAccumulatorSpec_eq_meanSpec`. The masked load bridge is
-    exposed by `meanChunkLoadSpec_active` and `meanChunkLoadSpec_inactive`.
+    exposed by `meanChunkLoadSpec_active` and `meanChunkLoadSpec_inactive`;
+    final masked scatter/readback is bridged by
+    `meanStoreFromMaskedAccumulator_alg_post`.
   - Remaining proof: prove the concrete loop body produces the `_mean =
     old + chunkLoad` register update, instantiate `forRange_inv`, then connect
-    the final readout/store to `mean_dim_kernel_alg_post`.
+    the concrete post-loop DSL statements to the final scatter bridge.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.

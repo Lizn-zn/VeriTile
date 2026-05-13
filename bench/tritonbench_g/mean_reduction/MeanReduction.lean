@@ -457,6 +457,35 @@ def mean_dim_kernel_alg_post
     s'.readMem Mean (meanOutOffset s BLOCK_M i) =
       meanSpec s X N BLOCK_M i
 
+theorem meanStoreFromMaskedAccumulator_alg_post
+    (s0 stBase : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N off : Nat)
+    (hOffsetInj :
+      Function.Injective
+        (fun idx : TileIndex [BLOCK_M] => meanOutOffset s0 BLOCK_M idx.1))
+    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
+    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0
+      ((TileShape.allIndices [BLOCK_M]).foldl
+        (fun acc idx =>
+          if meanRowActive s0 M BLOCK_M idx.1 then
+            acc.writeMem Mean (meanOutOffset s0 BLOCK_M idx.1)
+              (WithBot.unbotD 0
+                ((Tile.reduceSumDrop
+                  (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length)
+                  (meanMaskedAccumulatorSpec s0 X M N BLOCK_M BLOCK_N off)).data
+                    idx) / (N : ℝ))
+          else
+            acc)
+        stBase) := by
+  intro i hi
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj
+    ((i, PUnit.unit) : TileIndex [BLOCK_M])]
+  simp [meanRowActive, hi]
+  simpa [TileShape.axisDim, TileShape.insertAxisIndex,
+    meanMaskedAccumulatorSpec, meanFromMaskedAccumulatorSpec, meanRowActive, hi] using
+    meanFromMaskedAccumulatorSpec_eq_meanSpec s0 X M N BLOCK_M BLOCK_N off i
+      (by simpa [meanRowActive] using hi) hBLOCK_N hoff
+
 theorem mean_dim_kernel_compute_correct_of_algorithm
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)

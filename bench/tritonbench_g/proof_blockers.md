@@ -33,12 +33,15 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   from the final accumulator to the row-wise sum is proved by
   `meanFromAccumulatorSpec_eq_meanSpec`. `meanChunkLoadSpec_active` and
   `meanChunkLoadSpec_inactive` expose the masked-load tile shape needed to
-  match `a = tl.load(..., mask, other=0.0)`. The theorem target is fixed as
-  `mean_dim_kernel_correct_target`, and the public theorem exposes the
-  remaining algorithm-layer postcondition as an explicit hypothesis until this
-  accumulator invariant is connected to the actual loop body with
-  `forRange_inv`. The compute-facing wrapper is discharged once that
-  algorithm-layer postcondition is supplied via
+  match `a = tl.load(..., mask, other=0.0)`. The final masked scatter/readback
+  bridge is now named `meanStoreFromMaskedAccumulator_alg_post`, reducing the
+  post-loop store to `mean_dim_kernel_alg_post` once the final accumulator is
+  available. The theorem target is fixed as `mean_dim_kernel_correct_target`,
+  and the public theorem exposes the remaining algorithm-layer postcondition as
+  an explicit hypothesis until this accumulator invariant is connected to the
+  actual loop body with `forRange_inv` and the concrete post-loop DSL statements
+  are aligned with the scatter bridge. The compute-facing wrapper is discharged
+  once that algorithm-layer postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.
 
 ## `embedding_triton_kernel.py`
