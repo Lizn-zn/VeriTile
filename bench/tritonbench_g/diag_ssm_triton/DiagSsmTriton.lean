@@ -250,6 +250,19 @@ theorem diagSsmForwardSpecAt_eq_stateTile
           (idx.1.val + 1)).data idx.2.1) := by
   simp [diagSsmForwardSpecAt, diagSsmForwardSpec, diagSsmStateTile]
 
+def diag_ssm_forward_kernel_correct_target
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=
+  ComputeCorrect.Realizes
+    (kernel := diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
+      length batch_size dim BLOCK_SIZE)
+    (initialState := s)
+    (write := ComputeCorrect.WriteMap.writeIf
+      (diagSsmForwardActive s batch_size dim BLOCK_SIZE)
+      (fun idx => (y_ptr, diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx)))
+    (expected := fun idx =>
+      diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx)
+
 /-- Algorithm-layer correctness for the forward SSM kernel. -/
 theorem diag_ssm_forward_kernel_correct
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)

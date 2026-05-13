@@ -144,6 +144,17 @@ theorem meanFromAccumulatorSpec_eq_meanSpec
   rw [sum_lane_prefix_eq_sum_range N BLOCK_N off hBLOCK_N hoff]
   rw [sum_range_eq_sum_fin]
 
+def mean_dim_kernel_correct_target
+    (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat) (s : BlockState) : Prop :=
+  ComputeCorrect.Realizes
+    (kernel := mean_dim_kernel X Mean M N BLOCK_M BLOCK_N)
+    (initialState := s)
+    (write := ComputeCorrect.WriteMap.writeIf
+      (fun i : Fin BLOCK_M => meanOutOffset s BLOCK_M i < M)
+      (fun i => (Mean, meanOutOffset s BLOCK_M i)))
+    (expected := fun i => meanSpec s X N BLOCK_M i)
+
 /-- Algorithm-layer correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_correct
     (X Mean : RegionName)

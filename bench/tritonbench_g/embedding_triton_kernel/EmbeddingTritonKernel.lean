@@ -298,6 +298,23 @@ instance embeddingPrefixActiveDecidable
     ¬ embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL 0 idx := by
   simp [embeddingPrefixActive]
 
+def embedding_kernel_correct_target
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (s : BlockState) : Prop :=
+  ComputeCorrect.Realizes
+    (kernel := embedding_kernel weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+    (initialState := s)
+    (write := ComputeCorrect.WriteMap.writeIf
+      (storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL)
+      (fun idx => (out, outOffsetFull s stride_out_seq BLOCK_N idx)))
+    (expected := fun idx =>
+      embeddingSpecFull s weight input_ids vob_start_id vob_end_id
+        stride_weight_seq BLOCK_N BLOCK_DMODEL idx)
+
 /-- Algorithm-layer correctness for the embedding kernel. -/
 theorem embedding_kernel_correct
     (weight input_ids out : RegionName)
