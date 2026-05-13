@@ -244,6 +244,7 @@ syntax ident ", " ident " := " "tl.max(" tritonExpr ("," tritonReduceKwarg)* ")"
 syntax "tl.async_copy(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.async_wait()" : tritonStmt
 syntax "tl.debug_barrier()" : tritonStmt
+syntax "tl.static_print(" term ")" : tritonStmt
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "for " ident " in " "range(0, " "$(" term ")" ", " "$(" term ")" ")" " { " tritonStmt* " }" : tritonStmt

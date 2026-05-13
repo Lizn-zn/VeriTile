@@ -388,6 +388,8 @@ private partial def stmtRegionsWith (assigned : List String)
       ([], [], assigned)
   | `(tritonStmt| tl.debug_barrier()) =>
       ([], [], assigned)
+  | `(tritonStmt| tl.static_print($_msg:term)) =>
+      ([], [], assigned)
   | `(tritonStmt| tl.for $idx:ident in $($_:term) { $stmts:tritonStmt* }) =>
       let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
       (i, o, assigned)

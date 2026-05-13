@@ -450,6 +450,7 @@ private partial def scanStmt (assigned : Assigned)
          cmpDeps := cmpDepsFromExpr src ++ memKwargCmpDeps kwargs }, assigned)
   | `(tritonStmt| tl.async_wait()) => ({}, assigned)
   | `(tritonStmt| tl.debug_barrier()) => ({}, assigned)
+  | `(tritonStmt| tl.static_print($_msg:term)) => ({}, assigned)
   | `(tritonStmt| tl.for $i:ident in $($_:term) { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
       let (info, _) := scanStmts bodyAssigned stmts.toList
