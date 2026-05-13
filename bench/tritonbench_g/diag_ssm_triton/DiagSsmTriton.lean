@@ -436,6 +436,44 @@ theorem diagSsmForwardLoopInvariant_step_of_time_write
       rw [diagSsmForwardOutOffset, diagSsmForwardSpecAt, ht]
       exact hWrite idx.2.1 hactive
 
+theorem diagSsmForwardCurrentTimeScatter_write
+    (st0 st : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat)
+    (i : Fin BLOCK_SIZE)
+    (hactive : active st0 batch_size dim BLOCK_SIZE i)
+    (hNoCollision :
+      ∀ lane : TileIndex [BLOCK_SIZE],
+        active st0 batch_size dim BLOCK_SIZE lane.1 →
+          timeOffset st0 batch_size dim BLOCK_SIZE t lane.1 =
+            timeOffset st0 batch_size dim BLOCK_SIZE t i →
+          lane = ((i, PUnit.unit) : TileIndex [BLOCK_SIZE])) :
+    ((TileShape.allIndices [BLOCK_SIZE]).foldl
+        (fun acc lane =>
+          if active st0 batch_size dim BLOCK_SIZE lane.1 then
+            acc.writeMem y_ptr
+              (timeOffset st0 batch_size dim BLOCK_SIZE t lane.1)
+              (diagSsmForwardSpec st0 s_ptr x_ptr lambda_ptr batch_size dim
+                BLOCK_SIZE t lane.1)
+          else
+            acc)
+        st).readMem y_ptr (timeOffset st0 batch_size dim BLOCK_SIZE t i) =
+      diagSsmForwardSpec st0 s_ptr x_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE t i := by
+  exact
+    BlockState.scatter_readback_prop_masked_nd_of_true
+      (region := y_ptr)
+      (s := st)
+      (offsetFn := fun lane : TileIndex [BLOCK_SIZE] =>
+        timeOffset st0 batch_size dim BLOCK_SIZE t lane.1)
+      (valueFn := fun lane : TileIndex [BLOCK_SIZE] =>
+        diagSsmForwardSpec st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE t lane.1)
+      (P := fun lane : TileIndex [BLOCK_SIZE] =>
+        active st0 batch_size dim BLOCK_SIZE lane.1)
+      ((i, PUnit.unit) : TileIndex [BLOCK_SIZE])
+      hactive
+      (fun lane hlane heq => hNoCollision lane hlane heq)
+
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=

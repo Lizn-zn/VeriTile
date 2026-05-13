@@ -116,9 +116,11 @@ These files must not be counted complete yet:
     exposes the active-lane register update shape. Current-time offset/spec/
     active unfold lemmas are named `diagSsmForwardOutOffset_currentTime`,
     `diagSsmForwardSpecAt_currentTime`, and
-    `diagSsmForwardActive_currentTime`.
+    `diagSsmForwardActive_currentTime`; current-time masked scatter readback is
+    bridged by `diagSsmForwardCurrentTimeScatter_write`.
   - Remaining proof: instantiate the recurrence invariant with `forLoop_inv`
-    under full `diagSsmForwardOutOffset` injectivity.
+    under full `diagSsmForwardOutOffset` injectivity, including old-time
+    preservation and the concrete loop-body store/register update.
 
 Passing `lake build` is not sufficient to close the objective while these
 algorithm-layer obligations remain.

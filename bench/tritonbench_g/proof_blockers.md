@@ -111,8 +111,11 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `diagSsmForwardOutOffset_currentTime`,
   `diagSsmForwardSpecAt_currentTime`, and
   `diagSsmForwardActive_currentTime` expose the store address, expected value,
-  and active predicate for the loop body's current `t` lane. The theorem
-  surface now requires full
+  and active predicate for the loop body's current `t` lane.
+  `diagSsmForwardCurrentTimeScatter_write` gives the current-time masked
+  scatter readback fact needed for the loop body's `tl.store`; the remaining
+  store-side work is proving old-time preservation and matching the concrete
+  DSL-expanded store to that scatter shape. The theorem surface now requires full
   `diagSsmForwardOutOffset` injectivity over `(time, column)` indices. The
   compute-facing wrapper is discharged once that algorithm-layer postcondition
   is supplied via
