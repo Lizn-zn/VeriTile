@@ -248,6 +248,16 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
         (defaultDType := some dst) (some mask)
       ensureDType .nat e'.dtype "nat expression"
       pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_dt:ident)) => do
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat) (some mask)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_base:ident.$_field:ident)) => do
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat) (some mask)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
       expandLoad expandExpr expandStaticPtrExpr env p kwargs
         (defaultDType := some .nat)
@@ -255,6 +265,16 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
       let dst ← expandDType dt
       let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
         (defaultDType := some dst)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_dt:ident)) => do
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat)
+      ensureDType .nat e'.dtype "nat expression"
+      pure e'
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_base:ident.$_field:ident)) => do
+      let e' ← expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat)
       ensureDType .nat e'.dtype "nat expression"
       pure e'
   | _ => do
@@ -876,11 +896,19 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let dst ← expandDType dt
       expandLoad expandExpr expandStaticPtrExpr env p kwargs
         (defaultDType := some dst) (positionalMask := some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_dt:ident)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs (positionalMask := some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_base:ident.$_field:ident)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs (positionalMask := some mask)
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) => do
       expandLoad expandExpr expandStaticPtrExpr env p kwargs
   | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($dt:tritonDType)) => do
       let dst ← expandDType dt
       expandLoad expandExpr expandStaticPtrExpr env p kwargs (defaultDType := some dst)
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_dt:ident)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*).to($_base:ident.$_field:ident)) => do
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
   | `(tritonExpr| $a:tritonExpr < $b:tritonExpr) => do
       expandCmp expandExpr env "comparison" (← `(Op.lt)) a b
   | `(tritonExpr| $a:tritonExpr <= $b:tritonExpr) => do
