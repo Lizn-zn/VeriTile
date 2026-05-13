@@ -91,10 +91,13 @@ These files must not be counted complete yet:
     expanded `[BLOCK_M, 1]` store shape emitted after `mean[:, None]`.
     `meanPostLoop_step_alg_post` consumes the actual
     `stepStmts (meanPostLoop ...)` execution from the final accumulator and
-    store-register assumptions.
+    store-register assumptions. `meanPreLoop`, `meanLoopBody`, and
+    `meanProjectedBody` name the projected algorithm body components, and
+    `mean_dim_kernel_toAlg_body` proves that this split is the actual
+    `toAlgKernel.body`.
   - Remaining proof: prove the concrete loop body produces the `_mean =
-    old + chunkLoad` register update, instantiate `forRange_inv`, then split
-    the kernel prefix so the final loop invariant feeds
+    old + chunkLoad` register update, prove the pre-loop register facts,
+    instantiate `forRange_inv`, then feed the final loop invariant into
     `meanPostLoop_step_alg_post`.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`

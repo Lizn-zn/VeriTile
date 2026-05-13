@@ -579,12 +579,61 @@ theorem meanStoreFromExpandedMaskedAccumulator_alg_post
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
     (meanOutOffset_injective_col1 s0 BLOCK_M)
     ((i, ⟨0, by omega⟩, PUnit.unit) : TileIndex [BLOCK_M, 1])]
-  simp [meanRowActive, hi, Tile.expandDim, TileShape.eraseAxis,
-    TileShape.dropInsertedIndex, Tile.bop, Broadcast.scalarR, NumericDType.div]
+  simp [meanRowActive, hi, Tile.expandDim, TileShape.dropInsertedIndex, Tile.bop,
+    NumericDType.div]
   simpa [TileShape.axisDim, TileShape.insertAxisIndex,
     meanMaskedAccumulatorSpec, meanFromMaskedAccumulatorSpec, meanRowActive, hi] using
     meanFromMaskedAccumulatorSpec_eq_meanSpec s0 X M N BLOCK_M BLOCK_N off i
       (by simpa [meanRowActive] using hi) hBLOCK_N hoff
+
+def meanPreLoop
+    (X Mean : RegionName) (M N BLOCK_M BLOCK_N : Nat) : List Stmt :=
+  [ .assign .nat [BLOCK_M, 1] "pid"
+      (.add NumericDType.nat Broadcast.scalarL
+        (.mul NumericDType.nat Broadcast.nil (.programId 0) (.constNat BLOCK_M))
+        (.expandDim (⟨1, by simp⟩ : Fin ([BLOCK_M].length + 1))
+          (.arange BLOCK_M)))
+  , .assign .ptr [BLOCK_M, 1] "X"
+      (.ptrAdd Broadcast.scalarL (.ptrBase X)
+        (.mul NumericDType.nat Broadcast.scalarR
+          (.ref .nat [BLOCK_M, 1] "pid") (.constNat N)))
+  , .assign .ptr [BLOCK_M, 1] "Mean"
+      (.ptrAdd Broadcast.scalarL (.ptrBase Mean)
+        (.ref .nat [BLOCK_M, 1] "pid"))
+  , .assign .bool [BLOCK_M, 1] "row_mask"
+      (.lt ComparableDType.nat Broadcast.scalarR
+        (.ref .nat [BLOCK_M, 1] "pid") (.constNat M))
+  , .assign .real [BLOCK_M, BLOCK_N] "_mean"
+      (.full [BLOCK_M, BLOCK_N] (.const 0))
+  ]
+
+def meanLoopBody (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
+  [ .assign .nat [1, BLOCK_N] "cols"
+      (.add NumericDType.nat Broadcast.scalarL
+        (.ref .nat [] "off")
+        (.expandDim (⟨0, by simp⟩ : Fin ([BLOCK_N].length + 1))
+          (.arange BLOCK_N)))
+  , .assign .bool [1, BLOCK_N] "col_mask"
+      (.lt ComparableDType.nat Broadcast.scalarR
+        (.ref .nat [1, BLOCK_N] "cols") (.constNat N))
+  , .assign .bool [BLOCK_M, BLOCK_N] "mask"
+      (.boolAnd Broadcast.nil.consL.consR
+        (.ref .bool [BLOCK_M, 1] "row_mask")
+        (.ref .bool [1, BLOCK_N] "col_mask"))
+  , .assign .real [BLOCK_M, BLOCK_N] "a"
+      (.load .real
+        (.ptr
+          (.ptrAdd Broadcast.nil.consL.consR
+            (.ref .ptr [BLOCK_M, 1] "X")
+            (.ref .nat [1, BLOCK_N] "cols")))
+        (.maskOther
+          (.ref .bool [BLOCK_M, BLOCK_N] "mask")
+          ((Op.const 0.0).broadcast [BLOCK_M, BLOCK_N])))
+  , .assign .real [BLOCK_M, BLOCK_N] "_mean"
+      (.add NumericDType.real Broadcast.nil.consSame.consSame
+        (.ref .real [BLOCK_M, BLOCK_N] "_mean")
+        (.ref .real [BLOCK_M, BLOCK_N] "a"))
+  ]
 
 def meanPostLoop (N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   [ .assign .real [BLOCK_M] "mean"
@@ -620,13 +669,25 @@ theorem meanPostLoop_step_alg_post
     mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0 st' := by
   unfold meanPostLoop at hStep
   simp [stepStmts, stepStmt, evalOp, hAcc, hMean, hMask, Tile.bop,
-    Tile.expandDim, TileShape.dropInsertedIndex, Broadcast.scalarR,
-    NumericDType.div, BlockState.setReg, Option.bind, Option.map] at hStep
+    Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.div,
+    BlockState.setReg, Option.bind, Option.map] at hStep
   subst st'
   simpa [Tile.expandDim, TileShape.dropInsertedIndex, Tile.bop,
     Broadcast.scalarR, NumericDType.div] using
     meanStoreFromExpandedMaskedAccumulator_alg_post s0 _ X Mean M N
       BLOCK_M BLOCK_N off hBLOCK_N hoff
+
+def meanProjectedBody
+    (X Mean : RegionName) (M N BLOCK_M BLOCK_N : Nat) : List Stmt :=
+  meanPreLoop X Mean M N BLOCK_M BLOCK_N ++
+    [.forRange "off" 0 N BLOCK_N (meanLoopBody N BLOCK_M BLOCK_N)] ++
+    meanPostLoop N BLOCK_M BLOCK_N
+
+theorem mean_dim_kernel_toAlg_body
+    (X Mean : RegionName) (M N BLOCK_M BLOCK_N : Nat) :
+    (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N).toAlgKernel.body =
+      meanProjectedBody X Mean M N BLOCK_M BLOCK_N := by
+  rfl
 
 theorem mean_dim_kernel_compute_correct_of_algorithm
     (X Mean : RegionName)

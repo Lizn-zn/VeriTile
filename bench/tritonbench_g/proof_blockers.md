@@ -49,12 +49,15 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   suffix emitted by the DSL. `meanPostLoop_step_alg_post` now consumes the
   actual `stepStmts (meanPostLoop ...)` execution from registers containing the
   final `_mean`, `Mean` pointer tile, and `row_mask`, and returns
-  `mean_dim_kernel_alg_post`. The theorem target is fixed as
+  `mean_dim_kernel_alg_post`. The projected algorithm body is split as
+  `meanProjectedBody`, with named `meanPreLoop`, `meanLoopBody`, and
+  `meanPostLoop` components, and `mean_dim_kernel_toAlg_body` proves that this
+  split is the actual `toAlgKernel.body`. The theorem target is fixed as
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
   accumulator invariant is connected to the actual loop body with `forRange_inv`
-  and the kernel prefix is split so the final loop invariant feeds
-  `meanPostLoop_step_alg_post`. The compute-facing
+  and the pre-loop execution facts are used to feed the final loop invariant
+  into `meanPostLoop_step_alg_post`. The compute-facing
   wrapper is discharged once that algorithm-layer
   postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.
