@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Faithful transcription of `layernorm_fwd_triton.py`'s
+/-- Documented transcription of `layernorm_fwd_triton.py`'s
 `_layer_norm_fwd_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
