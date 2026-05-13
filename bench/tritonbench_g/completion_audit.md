@@ -5,6 +5,19 @@ Objective: check every `bench/tritonbench_g` problem against
 each completed port has a standard `ComputeCorrect.Realizes` correctness
 surface.
 
+## Prompt-to-Artifact Checklist
+
+| Requirement | Evidence | Current status |
+|---|---|---|
+| Check every `bench/tritonbench_g` problem. | 184 work directories are present; 141 currently have `.py` / `.lean` port pairs, and 43 are README-only scaffolds. | Covered for completed port pairs; scaffolds are not counted as completed ports. |
+| Ensure every completed Python port has a Lean port. | Python/Lean file counts both report 141; `bench/audit_tritonbench_g.sh` enforces the count match. | Passing. |
+| Ensure Lean ports compile. | `bench/check_ports.sh` reports `TritonBench-G ports: 141 ok, 0 fail`; the audit script reruns this gate. | Passing. |
+| Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, and statement lhs order. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
+| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current mechanical mismatch. |
+| Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
+| Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
+| Do not close while algorithm-layer proof obligations remain. | `mean_reduction`, `embedding_triton_kernel`, and `diag_ssm_triton` still expose named algorithm postconditions as explicit hypotheses. | Not complete. |
+
 ## Evidence Checked
 
 - Directory coverage: `find bench/tritonbench_g -mindepth 1 -maxdepth 1 -type d`
