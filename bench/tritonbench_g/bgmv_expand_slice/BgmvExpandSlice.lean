@@ -90,7 +90,7 @@ def bgmv_expand_slice_one_block
       offset_k[None, :] * $(lora_n_stride),
     mask=(current_n[:, None] < $(split_n_length)) and (offset_k[None, :] < $(K)),
     other=0.0)
-  accumulator = tl.sum(tiled_a[None, :] * tiled_b, 1)
+  accumulator = tl.sum(tiled_a * tiled_b, 1)
   tl.store(c_ptr + current_n * $(cn_stride), accumulator,
     mask=current_n < $(split_n_length))
 }
