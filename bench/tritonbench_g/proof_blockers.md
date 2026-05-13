@@ -100,8 +100,9 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `forLoop_inv`. The old-time/current-time disjointness lemmas
   `diagSsmForwardIndex_ne_currentTime` and
   `diagSsmForwardOutOffset_ne_currentTime` are available for deriving the
-  preservation side of the time-step write from the concrete `tl.store`. The
-  theorem surface now requires full
+  preservation side of the time-step write from the concrete `tl.store`.
+  `diagSsmMaskedStateTile_succ` exposes the register-update shape needed to
+  match `s = s * Lambda + x` on active lanes. The theorem surface now requires full
   `diagSsmForwardOutOffset` injectivity over `(time, column)` indices. The
   compute-facing wrapper is discharged once that algorithm-layer postcondition
   is supplied via
