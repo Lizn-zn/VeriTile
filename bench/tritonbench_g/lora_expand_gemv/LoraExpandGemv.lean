@@ -15,18 +15,18 @@ set_option linter.unusedSimpArgs false
 
 This covers the `EVEN_K` load branch, `tl.cdiv` split length, output-block
 loop, optional `CAST_TYPE` conversion, and `ADD_INPUTS` accumulation branch.
-Python's signed `lora_index == -1` early return is represented by a Nat
-`ignored_lora_index` guard around the active body. -/
+Python's signed `lora_index == -1` early return is represented as a guard
+around the active body. -/
 def bgmv_expand_surface
-    (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .nat)
-    (ignored_lora_index N K xm_stride xk_stride l0_stride lora_k_stride
-      lora_n_stride cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_N : Nat)
+    (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .int)
+    (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
+      cn_stride BLOCK_N BLOCK_K SPLIT_N : Nat)
     (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
   pid_sn = tl.program_id(axis=0)
   cur_batch = tl.program_id(axis=1)
-  lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
-  if lora_index != $(ignored_lora_index) {
+  lora_index = tl.load($((lora_indices : Region .int)) + cur_batch)
+  if lora_index != $((-1 : Int)) {
     offset_k = tl.arange(0, $(BLOCK_K))
     offset_n = tl.arange(0, $(BLOCK_N))
     if EVEN_K {

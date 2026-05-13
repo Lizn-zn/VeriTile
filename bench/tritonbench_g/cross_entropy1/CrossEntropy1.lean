@@ -13,13 +13,11 @@ set_option linter.unusedSimpArgs false
 `cross_entropy_fwd_kernel`.
 
 This preserves the block logits load, optional smoothing sum, LSE side store,
-label-in-block loss branch, optional split behavior, and LSE-square term. The
-signed `ignored_index = -100` wrapper default is not represented in this Nat
-label surface; the kernel control-flow branch is preserved for Nat sentinels. -/
+label-in-block loss branch, optional split behavior, and LSE-square term. -/
 def cross_entropy_fwd_surface
-    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .nat)
-    (ignored_index total_classes class_start_idx n_cols n_rows logits_row_stride
-      BLOCK_SIZE : Nat)
+    (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (ignored_index class_start_idx : Int)
+    (total_classes n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
     (smoothing lse_square_scale : ℝ)
     (HAS_SMOOTHING SPLIT : Bool) :
     ComputeKernel := triton {
@@ -27,7 +25,7 @@ def cross_entropy_fwd_surface
   col_block_idx = tl.program_id(axis=1)
   logits_ptr = logits_ptr + row_idx * ($(logits_row_stride)).to(tl.int64)
   col_offsets = col_block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
-  label_idx = tl.load($((labels_ptr : Region .nat)) + row_idx)
+  label_idx = tl.load($((labels_ptr : Region .int)) + row_idx)
   logits = tl.load(logits_ptr + col_offsets,
     mask=col_offsets < $(n_cols), other=-inf).to(tl.float32)
   max_logits = tl.max(logits, axis=0)
@@ -36,10 +34,10 @@ def cross_entropy_fwd_surface
   }
   lse = tl.log(tl.sum(tl.exp(logits - max_logits), axis=0)) + max_logits
   tl.store(lse_ptr + col_block_idx * $(n_rows) + row_idx, lse)
-  if label_idx == $(ignored_index) {
+  if label_idx == $((ignored_index : Int)) {
     loss = 0.0
   } else {
-    label_idx -= $(class_start_idx)
+    label_idx -= $((class_start_idx : Int))
     if (label_idx >= col_block_idx * $(BLOCK_SIZE)) and
         (label_idx < tl.minimum($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))) {
       logits_label = tl.load(logits_ptr + label_idx)
