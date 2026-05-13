@@ -363,6 +363,81 @@ theorem embeddingPrefixActive_final_of_storeActive
     embeddingPrefixActive s n_ctx hiden_size BLOCK_N BLOCK_DMODEL BLOCK_N idx := by
   exact ⟨by simp [embeddingPrefixWritten], hidx⟩
 
+theorem embeddingLoopInvariant_step_of_chunk_write
+    (s0 st st' : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn : Nat)
+    (hPrev :
+      embeddingLoopInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL start_nn st)
+    (hPreserve :
+      ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+        embeddingPrefixActive s0 n_ctx hiden_size BLOCK_N BLOCK_DMODEL start_nn idx →
+          st'.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N idx) =
+            st.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N idx))
+    (hWrite :
+      ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+            BLOCK_DMODEL idx →
+          st'.readMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn idx) =
+            embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+              stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx) :
+    embeddingLoopInvariant s0 weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL (start_nn + BLOCK_NN) st' := by
+  intro idx hidx
+  by_cases hOld : embeddingPrefixWritten start_nn idx
+  · have hOldActive :
+        embeddingPrefixActive s0 n_ctx hiden_size BLOCK_N BLOCK_DMODEL
+          start_nn idx := ⟨hOld, hidx.2⟩
+    rw [hPreserve idx hOldActive]
+    exact hPrev idx hOldActive
+  · have hge : start_nn ≤ idx.1.val := by
+      unfold embeddingPrefixWritten at hOld
+      omega
+    have hltChunk : idx.1.val - start_nn < BLOCK_NN := by
+      unfold embeddingPrefixActive embeddingPrefixWritten at hidx
+      omega
+    let lane : Fin BLOCK_NN := ⟨idx.1.val - start_nn, hltChunk⟩
+    let chunkIdx : TileIndex [BLOCK_NN, BLOCK_DMODEL] := (lane, idx.2)
+    have hBound : start_nn + chunkIdx.1.val < BLOCK_N := by
+      dsimp [chunkIdx, lane]
+      omega
+    have hChunkEq :
+        embeddingChunkToFullIndex (BLOCK_N := BLOCK_N) start_nn chunkIdx hBound =
+          idx := by
+      cases idx with
+      | mk i rest =>
+        have hgei : start_nn ≤ i.val := by
+          simpa using hge
+        apply Prod.ext
+        · apply Fin.ext
+          simp [embeddingChunkToFullIndex, chunkIdx, lane]
+          omega
+        · rfl
+    have hStore2D :
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL chunkIdx := by
+      rw [storeActive2D_iff_full s0 n_ctx hiden_size BLOCK_N start_nn
+        BLOCK_NN BLOCK_DMODEL chunkIdx hBound]
+      simpa [hChunkEq] using hidx.2
+    have hOut :
+        outOffset2D s0 stride_out_seq BLOCK_N start_nn chunkIdx =
+          outOffsetFull s0 stride_out_seq BLOCK_N idx := by
+      simpa [hChunkEq] using
+        outOffset2D_eq_full s0 stride_out_seq BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL chunkIdx hBound
+    have hSpec :
+        embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+            stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL chunkIdx =
+          embeddingSpecFull s0 weight input_ids vob_start_id vob_end_id
+            stride_weight_seq BLOCK_N BLOCK_DMODEL idx := by
+      simpa [hChunkEq] using
+        embeddingSpec2D_eq_full s0 weight input_ids vob_start_id vob_end_id
+          stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL chunkIdx hBound
+    rw [← hOut, hWrite chunkIdx hStore2D, hSpec]
+
 def embedding_kernel_correct_target
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx

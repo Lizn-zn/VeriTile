@@ -52,11 +52,15 @@ the named algorithm postconditions.
   `storeActive2D_iff_full`. The `forRange_inv` predicate is now named
   `embeddingLoopInvariant`, with `embeddingLoopInvariant_zero` covering the
   vacuous prefix and `embeddingLoopInvariant_to_alg_post` bridging a completed
-  prefix to `embedding_kernel_alg_post`; the theorem target is fixed as
+  prefix to `embedding_kernel_alg_post`. The chunk step is factored as
+  `embeddingLoopInvariant_step_of_chunk_write`, which combines old-prefix
+  preservation with the current `BLOCK_NN × BLOCK_DMODEL` write map to produce
+  the next prefix invariant. The theorem target is fixed as
   `embedding_kernel_correct_target`, but the theorem is still a placeholder
-  until the per-chunk write invariant is instantiated with `forRange_inv` under
-  the full `outOffsetFull` injectivity assumption. The compute-facing wrapper
-  is discharged once that algorithm-layer postcondition is available via
+  until that chunk step is instantiated with the actual loop body via
+  `forRange_inv` under the full `outOffsetFull` injectivity assumption. The
+  compute-facing wrapper is discharged once that algorithm-layer postcondition
+  is available via
   `embedding_kernel_compute_correct_of_algorithm`.
 
 ## `diag_ssm_triton.py`
