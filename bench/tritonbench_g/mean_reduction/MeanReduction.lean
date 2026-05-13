@@ -137,6 +137,12 @@ theorem meanChunkLane_mod
   rw [hOff]
   simp [Nat.mod_eq_of_lt j.isLt]
 
+theorem meanLoopOffset_mod_step
+    (off BLOCK_N : Nat) (hOff : off % BLOCK_N = 0) :
+    (off + BLOCK_N) % BLOCK_N = 0 := by
+  rw [Nat.add_mod, hOff]
+  simp
+
 theorem meanChunkLane_mem_next
     (N off BLOCK_N : Nat) (j : Fin BLOCK_N)
     (hOff : off % BLOCK_N = 0) (hjN : off + j.val < N) :
