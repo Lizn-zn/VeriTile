@@ -26,9 +26,9 @@ def softmax_kernel
   row = (tl.load(input_ptrs, mask=col_offsets < $(n_cols), other=-inf)).to(tl.float32)
   row_minus_max = row - tl.max(row, axis=0)
   if HAS_MASK {
-    mask_ptrs = mask_ptr + row_idx * $(row_stride) + col_offsets
-    mask_row = (tl.load(mask_ptrs, mask=col_offsets < $(n_cols), other=0)).to(tl.float32)
-    row_minus_max = row_minus_max + mask_row
+    mask_ptrs = (mask_ptr + (row_idx * $(row_stride))) + col_offsets
+    mask = (tl.load(mask_ptrs, mask=col_offsets < $(n_cols), other=0)).to(tl.float32)
+    row_minus_max = row_minus_max + mask
   }
   numerator = tl.exp(row_minus_max)
   denominator = tl.sum(numerator, axis=0)
