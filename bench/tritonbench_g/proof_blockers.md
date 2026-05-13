@@ -14,8 +14,9 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   and the intended `_mean` loop accumulator via `meanLanePrefix` /
   `meanAccumulatorSpec`. The pure bridge from the final accumulator to the
   row-wise sum is proved by `meanFromAccumulatorSpec_eq_meanSpec`; the theorem
-  is still a placeholder until the accumulator invariant itself is instantiated
-  with `forRange_inv`.
+  target is fixed as `mean_dim_kernel_correct_target`, but the theorem is still
+  a placeholder until the accumulator invariant itself is instantiated with
+  `forRange_inv`.
 
 ## `embedding_triton_kernel.py`
 
@@ -28,7 +29,8 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   full `BLOCK_N × BLOCK_DMODEL` post-loop target (`outOffsetFull` /
   `embeddingSpecFull`), with `embeddingPrefixActive` identifying the lanes
   already written after a prefix of chunks. The chunk-to-full bridges are
-  `outOffset2D_eq_full` and `embeddingSpec2D_eq_full`; the theorem is still a
+  `outOffset2D_eq_full` and `embeddingSpec2D_eq_full`; the theorem target is
+  fixed as `embedding_kernel_correct_target`, but the theorem is still a
   placeholder until the per-chunk write invariant is instantiated with
   `forRange_inv`.
 
@@ -42,5 +44,6 @@ complete until the blocker below is discharged or linked to a GitHub issue.
   / `diagSsmForwardSpec`, a state-register target via `diagSsmStateTile`, plus
   the full `(time, column)` write target via `diagSsmForwardOutOffset` /
   `diagSsmForwardSpecAt`, with `diagSsmForwardSpecAt_eq_stateTile` bridging
-  stores to the recurrence state. The theorem is still a placeholder until the
-  recurrence invariant is instantiated with `forLoop_inv`.
+  stores to the recurrence state. The theorem target is fixed as
+  `diag_ssm_forward_kernel_correct_target`, but the theorem is still a
+  placeholder until the recurrence invariant is instantiated with `forLoop_inv`.
