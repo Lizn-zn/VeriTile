@@ -33,12 +33,12 @@ the named algorithm postconditions.
   full `BLOCK_N × BLOCK_DMODEL` post-loop target (`outOffsetFull` /
   `embeddingSpecFull`), with `embeddingPrefixActive` identifying the lanes
   already written after a prefix of chunks. The chunk-to-full bridges are
-  `outOffset2D_eq_full` and `embeddingSpec2D_eq_full`; the theorem target is
-  fixed as `embedding_kernel_correct_target`, but the theorem is still a
-  placeholder until the per-chunk write invariant is instantiated with
-  `forRange_inv` under the full `outOffsetFull` injectivity assumption. The
-  compute-facing wrapper is discharged once that algorithm-layer postcondition
-  is available via
+  `outOffset2D_eq_full`, `embeddingSpec2D_eq_full`, and
+  `storeActive2D_iff_full`; the theorem target is fixed as
+  `embedding_kernel_correct_target`, but the theorem is still a placeholder
+  until the per-chunk write invariant is instantiated with `forRange_inv` under
+  the full `outOffsetFull` injectivity assumption. The compute-facing wrapper
+  is discharged once that algorithm-layer postcondition is available via
   `embedding_kernel_compute_correct_of_algorithm`.
 
 ## `diag_ssm_triton.py`
