@@ -328,8 +328,16 @@ theorem diag_ssm_forward_kernel_compute_correct
     (s : BlockState)
     (hOutInj : Function.Injective
       (fun idx : TileIndex [length, BLOCK_SIZE] =>
-        diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx)) :
-    True := by
-  trivial
+        diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx))
+    (hAlg :
+      ∀ s',
+        exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
+          length batch_size dim BLOCK_SIZE) s = some s' →
+        diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr
+          length batch_size dim BLOCK_SIZE s s') :
+    diag_ssm_forward_kernel_correct_target s_ptr x_ptr lambda_ptr y_ptr
+      length batch_size dim BLOCK_SIZE s :=
+  diag_ssm_forward_kernel_compute_correct_of_algorithm s_ptr x_ptr lambda_ptr
+    y_ptr length batch_size dim BLOCK_SIZE s hAlg
 
 end VeriTile.Bench.TritonBenchG.DiagSsmTriton

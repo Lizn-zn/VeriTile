@@ -12,7 +12,7 @@ surface.
 - Build gate: `lake build` succeeds.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
-  currently reports only the three blocker files below.
+  currently reports only the three algorithm-layer blocker theorems below.
 - Correctness-surface scan:
   every `bench/tritonbench_g/*/*.lean` file now contains a
   `ComputeCorrect.Realizes` target or theorem.
@@ -25,6 +25,7 @@ These files must not be counted complete yet:
   - Kernel body is faithful.
   - Target: `mean_dim_kernel_correct_target`.
   - Named algorithm postcondition: `mean_dim_kernel_alg_post`.
+  - Compute-facing theorem is reduced to this algorithm-layer postcondition.
   - Remaining proof: instantiate the `_mean` accumulator invariant with
     `forRange_inv`, then use `meanFromAccumulatorSpec_eq_meanSpec`.
 
@@ -32,6 +33,7 @@ These files must not be counted complete yet:
   - Kernel body is faithful.
   - Target: `embedding_kernel_correct_target`.
   - Named algorithm postcondition: `embedding_kernel_alg_post`.
+  - Compute-facing theorem is reduced to this algorithm-layer postcondition.
   - Remaining proof: instantiate the per-chunk write invariant with
     `forRange_inv` under `outOffsetFull` injectivity.
 
@@ -39,6 +41,7 @@ These files must not be counted complete yet:
   - Kernel body is faithful.
   - Target: `diag_ssm_forward_kernel_correct_target`.
   - Named algorithm postcondition: `diag_ssm_forward_kernel_alg_post`.
+  - Compute-facing theorem is reduced to this algorithm-layer postcondition.
   - Remaining proof: instantiate the recurrence invariant with `forLoop_inv`
     under full `diagSsmForwardOutOffset` injectivity.
 

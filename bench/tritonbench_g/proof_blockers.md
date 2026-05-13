@@ -2,7 +2,9 @@
 
 These kernels currently have faithful-looking surface translations but do not
 yet have a real `ComputeCorrect.Realizes` theorem. They must not be counted as
-complete until the blocker below is discharged or linked to a GitHub issue.
+complete until the algorithm-layer blocker below is discharged or linked to a
+GitHub issue. The compute-facing wrappers for these files already reduce to
+the named algorithm postconditions.
 
 ## `mean_reduction.py`
 

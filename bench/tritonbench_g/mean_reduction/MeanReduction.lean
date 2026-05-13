@@ -190,8 +190,12 @@ theorem mean_dim_kernel_correct
 /-- Compute-facing correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_compute_correct
     (X Mean : RegionName)
-    (M N BLOCK_M BLOCK_N : Nat) (s : BlockState) :
-    True := by
-  trivial
+    (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
+    (hAlg :
+      ∀ s',
+        exec (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N) s = some s' →
+        mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s s') :
+    mean_dim_kernel_correct_target X Mean M N BLOCK_M BLOCK_N s :=
+  mean_dim_kernel_compute_correct_of_algorithm X Mean M N BLOCK_M BLOCK_N s hAlg
 
 end VeriTile.Bench.TritonBenchG.MeanReduction
