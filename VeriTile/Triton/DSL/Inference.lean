@@ -73,6 +73,29 @@ private def addManyUnique (xs ys : List String) : List String :=
 private def anyContained (needles haystack : List String) : Bool :=
   needles.any (fun x => haystack.contains x)
 
+private def typedRegionTermIsInt? (r : TSyntax `term) : Bool :=
+  match r with
+  | `(($_:term : Region .int)) => Bool.true
+  | `(($_:term : Region TileDType.int)) => Bool.true
+  | _ => Bool.false
+
+private partial def staticPtrRootIsIntRegion? (stx : TSyntax `tritonExpr) : Bool :=
+  match stx with
+  | `(tritonExpr| $($r:term)) => typedRegionTermIsInt? r
+  | `(tritonExpr| ($e:tritonExpr)) => staticPtrRootIsIntRegion? e
+  | `(tritonExpr| $a:tritonExpr + $_b:tritonExpr) => staticPtrRootIsIntRegion? a
+  | _ => Bool.false
+
+private partial def intSourceExpr? : TSyntax `tritonExpr → Bool := fun stx =>
+  match stx with
+  | `(tritonExpr| $(($_:term : Int))) => Bool.true
+  | `(tritonExpr| tl.load($p:tritonExpr, $_mask:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      staticPtrRootIsIntRegion? p
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      staticPtrRootIsIntRegion? p
+  | `(tritonExpr| ($e:tritonExpr)) => intSourceExpr? e
+  | _ => Bool.false
+
 /-- Test whether `stx` would be recognized as a static pointer
 expression by the macro's `expandStaticPtrExpr`. Mirrors the cases there. -/
 private partial def isStaticPtr (assigned : Assigned) :
@@ -339,6 +362,7 @@ structure ScanInfo where
   ptrUses : List String := []
   ptrDeps : List (String × List String × List String) := []
   cmpDeps : List (List String × List String) := []
+  intPins : List String := []
   deriving Inhabited
 
 private def ScanInfo.append (a b : ScanInfo) : ScanInfo :=
@@ -346,7 +370,8 @@ private def ScanInfo.append (a b : ScanInfo) : ScanInfo :=
     natDeps := a.natDeps ++ b.natDeps
     ptrUses := a.ptrUses ++ b.ptrUses
     ptrDeps := a.ptrDeps ++ b.ptrDeps
-    cmpDeps := a.cmpDeps ++ b.cmpDeps }
+    cmpDeps := a.cmpDeps ++ b.cmpDeps
+    intPins := a.intPins ++ b.intPins }
 
 private def assignmentInfo (assigned : Assigned) (lhs : List String)
     (rhs : List (TSyntax `tritonExpr)) : ScanInfo :=
@@ -356,7 +381,10 @@ private def assignmentInfo (assigned : Assigned) (lhs : List String)
   let ptrDeps := (lhs.zip rhs).map (fun (l, e) =>
     let (bases, offsets) := ptrDepsFromAssignedExpr assigned e
     (l, bases, offsets))
-  { directPins := directPins, natDeps := natDeps, ptrDeps := ptrDeps, cmpDeps := cmpDeps }
+  let intPins := (lhs.zip rhs).foldl
+    (fun acc (l, e) => if intSourceExpr? e then l :: acc else acc) []
+  { directPins := directPins, natDeps := natDeps, ptrDeps := ptrDeps,
+    cmpDeps := cmpDeps, intPins := intPins }
 
 mutual
 
@@ -563,9 +591,10 @@ partial def closeInfo (info : ScanInfo) (fuel : Nat := 128) :
           (ptrUses1, natPins3)
         else
           loop fuel ptrUses1 natPins3
-  loop fuel
+  let (ptrUses, natPins) := loop fuel
     (info.ptrUses.foldl addUnique [])
     (info.directPins.foldl addUnique [])
+  (ptrUses, natPins.filter (fun name => !(info.intPins.contains name)))
 
 /-- Set of identifier names that the body uses in a `.nat`-required
 position. The DSL macro consults this when expanding a `name = tl.load(p)`
