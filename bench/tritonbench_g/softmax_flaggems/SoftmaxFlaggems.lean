@@ -23,14 +23,16 @@ def softmax_kernel_non_inner_one_tile_surface
   pid_m = tl.program_id(0)
   k_offsets = pid_k * $(TILE_K) + tl.arange(0, $(TILE_K))
   n_offsets = tl.arange(0, $(TILE_N))
-  offset = pid_m * $(N) * $(K) + n_offsets[:, None] * $(K) + k_offsets[None, :]
-  mask = (n_offsets[:, None] < $(N)) & (k_offsets[None, :] < $(K))
-  inp = tl.load(input_ptr + offset, mask=mask, other=-float("inf"))
+  offset = pid_m * $(N) * $(K) + n_offsets[:, None] * $(K) + k_offsets
+  mask = (n_offsets[:, None] < $(N)) & (k_offsets < $(K))
+  input_ptrs = input_ptr + offset
+  inp = tl.load(input_ptrs, mask=mask, other=-float("inf"))
   m = tl.max(inp, 0)
   e = tl.exp(inp - m[None, :])
   z = tl.sum(e, 0)
-  out = e / z[None, :]
-  tl.store(output_ptr + offset, out, mask=mask)
+  out = e / z
+  output_ptrs = output_ptr + offset
+  tl.store(output_ptrs, out, mask=mask)
 }
 
 /-- Proof-oriented `ONE_TILE_PER_CTA=true` slice of
@@ -71,8 +73,8 @@ def softmax_backward_kernel_non_inner_one_tile_surface
   pid_k = tl.program_id(1)
   offsets_k = pid_k * $(TILE_K) + tl.arange(0, $(TILE_K))
   offsets_n = tl.arange(0, $(TILE_N))
-  offsets = pid_m * $(N) * $(K) + offsets_n[:, None] * $(K) + offsets_k[None, :]
-  mask = (offsets_n[:, None] < $(N)) & (offsets_k[None, :] < $(K))
+  offsets = pid_m * $(N) * $(K) + offsets_n[:, None] * $(K) + offsets_k
+  mask = (offsets_n < $(N))[:, None] & (offsets_k < $(K))
   out_tile = tl.load(out_ptr + offsets, mask=mask)
   out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask)
   scale = tl.sum(out_tile * out_grad_tile, axis=0)
@@ -92,8 +94,8 @@ def softmax_backward_kernel_inner_one_tile_surface
   pid_m = tl.program_id(0)
   m_offsets = pid_m * $(TILE_M) + tl.arange(0, $(TILE_M))
   n_offsets = tl.arange(0, $(TILE_N))
-  offsets = m_offsets[:, None] * $(N) + n_offsets[None, :]
-  mask = (m_offsets[:, None] < $(M)) & (n_offsets[None, :] < $(N))
+  offsets = m_offsets[:, None] * $(N) + n_offsets
+  mask = (m_offsets[:, None] < $(M)) & (n_offsets < $(N))
   out_tile = tl.load(out_ptr + offsets, mask=mask)
   out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask)
   scale = tl.sum(out_tile * out_grad_tile, axis=1)
