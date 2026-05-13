@@ -99,7 +99,16 @@ private partial def pinsFromPtrExpr (assigned : Assigned)
     let offsets := staticPtrChainOffsets stx
     offsets.foldl (fun acc o => acc ++ natExprIdents o) []
   else
-    []
+    match stx with
+    | `(tritonExpr| ($e:tritonExpr)) => pinsFromPtrExpr assigned e
+    | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) =>
+        let basePins :=
+          match a with
+          | `(tritonExpr| $r:ident) =>
+              if assigned.contains r.getId.toString then natExprIdents b else []
+          | _ => []
+        basePins ++ pinsFromPtrExpr assigned a ++ pinsFromPtrExpr assigned b
+    | _ => []
 
 /-- For an expression in a value-position context, collect identifiers
 pinned to `.nat`. The two ways an expression contributes pins:
@@ -185,6 +194,8 @@ private partial def ptrUsesFromPtrExpr (assigned : Assigned) :
   | `(tritonExpr| $r:ident) =>
       let name := r.getId.toString
       if assigned.contains name then [name] else []
+  | `(tritonExpr| $a:tritonExpr + $_b:tritonExpr) =>
+      ptrUsesFromPtrExpr assigned a
   | _ => []
 
 /-- Conditional comparison dependencies. Comparisons are not always Nat
@@ -209,12 +220,34 @@ private partial def cmpDepsFromExpr :
       cmpDepsFromExpr a ++ cmpDepsFromExpr b
   | `(tritonExpr| $a:tritonExpr and $b:tritonExpr) =>
       cmpDepsFromExpr a ++ cmpDepsFromExpr b
+  | `(tritonExpr| tl.where($c:tritonExpr, $t:tritonExpr, $f:tritonExpr)) =>
+      cmpDepsFromExpr c ++ cmpDepsFromExpr t ++ cmpDepsFromExpr f
   | `(tritonExpr| tl.extra.cuda.libdevice.pow($e:tritonExpr, $_:num)) =>
       cmpDepsFromExpr e
   | _ => []
 
 private partial def directPinsFromExpr (assigned : Assigned) :
     TSyntax `tritonExpr → List String := fun stx =>
+  if stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCast ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCastDTypeIdent ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCastElementTy ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCastElementTyIdent ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonIdentMethodCast ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonIdentMethodCastSpaced ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonIdentMethodCastDTypeIdent ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonIdentMethodCastDTypeIdentSpaced ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonIdentMethodCastElementTyIdent ||
+      stx.raw.getKind == ``VeriTile.Triton.DSL.tritonIdentMethodCastElementTyIdentSpaced then
+    let args := stx.raw.getArgs
+    if h : args.size = 5 then
+      let e : TSyntax `tritonExpr := ⟨args[0]⟩
+      directPinsFromExpr assigned e
+    else if h : args.size = 6 then
+      let e : TSyntax `tritonExpr := ⟨args[0]⟩
+      directPinsFromExpr assigned e
+    else
+      []
+  else
   match stx with
   | `(tritonExpr| ($e:tritonExpr)) => directPinsFromExpr assigned e
   | `(tritonExpr| tl.toReal($e:tritonExpr)) => natExprIdents e

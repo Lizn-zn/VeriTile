@@ -1601,4 +1601,32 @@ def fp32FullKernel (outReg : RegionName) (N : Nat) :
 #check fp32ZerosKernel
 #check fp32FullKernel
 
+/-! ### Casted Nat loads used as pointer offsets -/
+
+def castedNatLoadOffsetKernel
+    (dataReg : RegionName) (idxReg : Region .nat) (ignored : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(axis=0)
+  idxReg += row
+  idx = (tl.load(idxReg)).to(tl.int32)
+  vals = tl.load(dataReg + idx)
+  if idx != $(ignored) {
+    tl.store(dataReg + row, vals)
+  }
+}
+
+def castedNatLoadWhereKernel
+    (dataReg : RegionName) (idxReg : Region .nat) (BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(axis=0)
+  cols = tl.arange(0, $(BLOCK_SIZE))
+  idx = (tl.load(idxReg + row)).to(tl.int32)
+  vals = tl.load(dataReg + cols, mask=cols < $(BLOCK_SIZE), other=0.0)
+  out = tl.where(cols == idx, vals, 0.0)
+  tl.store(dataReg + cols, out, mask=cols < $(BLOCK_SIZE))
+}
+
+#check castedNatLoadOffsetKernel
+#check castedNatLoadWhereKernel
+
 end VeriTile.Examples.TritonSmoke

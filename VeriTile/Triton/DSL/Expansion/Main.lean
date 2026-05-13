@@ -152,6 +152,33 @@ mutual
 
 partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
     MacroM EOut := do
+  if stx.raw.getKind == ``tritonMethodCastElementTy ||
+      stx.raw.getKind == ``tritonMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastDTypeIdentSpaced ||
+      stx.raw.getKind == ``tritonIdentMethodCastElementTyIdent ||
+      stx.raw.getKind == ``tritonIdentMethodCastElementTyIdentSpaced then
+    let args := stx.raw.getArgs
+    if h : args.size = 5 then
+      let e : TSyntax `tritonExpr := ⟨args[0]⟩
+      expandNatExpectedExpr env e
+    else if h : args.size = 6 then
+      let e : TSyntax `tritonExpr := ⟨args[0]⟩
+      expandNatExpectedExpr env e
+    else
+      Macro.throwUnsupported
+  else
+  match methodCast? stx with
+  | some (e, dt) =>
+      let dst ← expandDType dt
+      if dst == .int then
+        expandNatExpectedExpr env e
+      else
+        let e' ← expandExpr env stx
+        ensureDType .nat e'.dtype "nat expression"
+        pure e'
+  | none =>
   match stx with
   | `(tritonExpr| $n:num) =>
       pure ⟨← `(Op.constNat $n), .nat, SInfo.scalar, none, none⟩
@@ -206,6 +233,12 @@ partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
       let (bc, outShape) ← broadcastTerm a'.shape b'.shape "nat expression"
       pure ⟨← `(Op.mod IntegralDType.nat $bc $a'.term $b'.term),
         .nat, outShape, none, none⟩
+  | `(tritonExpr| tl.load($p:tritonExpr, $mask:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat) (some mask)
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $kwargs:tritonMemKwarg]*)) =>
+      expandLoad expandExpr expandStaticPtrExpr env p kwargs
+        (defaultDType := some .nat)
   | _ => do
       let e' ← expandExpr env stx
       ensureDType .nat e'.dtype "nat expression"

@@ -26,7 +26,7 @@ def cross_entropy_forward_surface
   labels_ptr += row_idx
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
-  label_idx = (tl.load($((labels_ptr : Region .nat)))).to(tl.int32)
+  label_idx = (tl.load(labels_ptr)).to(tl.int32)
   logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-inf)
   if DO_LOGIT_SCALING {
     logits = $(LOGIT_SCALE) * logits
@@ -72,7 +72,7 @@ def chunked_cross_entropy_forward_surface
   labels_ptr += row_idx
   col_offsets = chunk_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
-  label_idx = (tl.load($((labels_ptr : Region .nat)))).to(tl.int32)
+  label_idx = (tl.load(labels_ptr)).to(tl.int32)
   logits = tl.load(logits_ptr + col_offsets, mask=mask, other=-inf)
   if DO_LOGIT_SCALING {
     logits = $(LOGIT_SCALE) * logits
@@ -120,7 +120,7 @@ def cross_entropy_backward_surface
   dloss_ptr += row_idx * $(dloss_row_stride)
   col_offsets = block_idx * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(VOCAB_SIZE)
-  label_idx = (tl.load($((labels_ptr : Region .nat)) + row_idx)).to(tl.int32)
+  label_idx = (tl.load(labels_ptr + row_idx)).to(tl.int32)
   if label_idx != $(ignored_index) {
     dloss = tl.load(dloss_ptr)
   } else {
