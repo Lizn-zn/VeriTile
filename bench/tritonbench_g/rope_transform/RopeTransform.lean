@@ -21,41 +21,44 @@ def triton_rope_forward
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
       sl n_qh n_kh hd pad_n_qh pad_n_kh PAD_HALF HEAD_HALF : Nat) :
     ComputeKernel := triton {
-  pid = tl.program_id(0)
-  q_ptr = Q + pid * $(q_row_stride)
-  k_ptr = K + pid * $(k_row_stride)
-  cos_row_idx = pid % $(sl)
-  cos_base = COS + cos_row_idx * $(cos_row_stride)
-  sin_base = SIN + cos_row_idx * $(sin_row_stride)
-  cos_offsets = tl.arange(0, $(PAD_HALF))
-  cos_mask = cos_offsets < $(HEAD_HALF)
-  cos_row = tl.load(cos_base + cos_offsets, mask=cos_mask, other=0)
-  sin_row = tl.load(sin_base + cos_offsets, mask=cos_mask, other=0)
-  q_heads = tl.arange(0, $(pad_n_qh))
-  k_heads = tl.arange(0, $(pad_n_kh))
-  dims = tl.arange(0, $(PAD_HALF))
-  first_half_q_offsets = q_heads[:, None] * $(hd) + dims[None, :]
-  first_half_k_offsets = k_heads[:, None] * $(hd) + dims[None, :]
-  first_q_mask = (q_heads[:, None] < $(n_qh)) & (dims[None, :] < $(HEAD_HALF))
-  first_k_mask = (k_heads[:, None] < $(n_kh)) & (dims[None, :] < $(HEAD_HALF))
-  q_tile_1 = tl.load(q_ptr + first_half_q_offsets, mask=first_q_mask,
-    other=0).to(sin_row.dtype)
-  k_tile_1 = tl.load(k_ptr + first_half_k_offsets, mask=first_k_mask,
-    other=0).to(sin_row.dtype)
-  second_half_q_offsets = first_half_q_offsets + $(HEAD_HALF)
-  second_half_k_offsets = first_half_k_offsets + $(HEAD_HALF)
-  q_tile_2 = tl.load(q_ptr + second_half_q_offsets, mask=first_q_mask,
-    other=0).to(sin_row.dtype)
-  k_tile_2 = tl.load(k_ptr + second_half_k_offsets, mask=first_k_mask,
-    other=0).to(sin_row.dtype)
-  new_q_tile_1 = q_tile_1 * cos_row[None, :] - q_tile_2 * sin_row[None, :]
-  new_q_tile_2 = q_tile_2 * cos_row[None, :] + q_tile_1 * sin_row[None, :]
-  new_k_tile_1 = k_tile_1 * cos_row[None, :] - k_tile_2 * sin_row[None, :]
-  new_k_tile_2 = k_tile_2 * cos_row[None, :] + k_tile_1 * sin_row[None, :]
-  tl.store(q_ptr + first_half_q_offsets, new_q_tile_1, mask=first_q_mask)
-  tl.store(q_ptr + second_half_q_offsets, new_q_tile_2, mask=first_q_mask)
-  tl.store(k_ptr + first_half_k_offsets, new_k_tile_1, mask=first_k_mask)
-  tl.store(k_ptr + second_half_k_offsets, new_k_tile_2, mask=first_k_mask)
+    pid = tl.program_id(0)
+    q_ptr = Q + pid * $(q_row_stride)
+    k_ptr = K + pid * $(k_row_stride)
+    cos_row_idx = pid % $(sl)
+    COS = COS + cos_row_idx * $(cos_row_stride)
+    SIN = SIN + cos_row_idx * $(sin_row_stride)
+    cos_offsets = tl.arange(0, $(PAD_HALF))
+    cos_mask = cos_offsets < $(HEAD_HALF)
+    cos_row = tl.load(COS + cos_offsets, mask=cos_mask, other=0)
+    sin_row = tl.load(SIN + cos_offsets, mask=cos_mask, other=0)
+    first_half_q_offsets = tl.arange(0, $(pad_n_qh))[:, None] * $(hd) +
+      tl.arange(0, $(PAD_HALF))[None, :]
+    first_half_k_offsets = tl.arange(0, $(pad_n_kh))[:, None] * $(hd) +
+      tl.arange(0, $(PAD_HALF))[None, :]
+    first_q_mask = (tl.arange(0, $(pad_n_qh))[:, None] < $(n_qh)) &
+      (tl.arange(0, $(PAD_HALF))[None, :] < $(HEAD_HALF))
+    first_k_mask = (tl.arange(0, $(pad_n_kh))[:, None] < $(n_kh)) &
+      (tl.arange(0, $(PAD_HALF))[None, :] < $(HEAD_HALF))
+    q_tile_1 = tl.load(q_ptr + first_half_q_offsets, mask=first_q_mask,
+      other=0).to(sin_row.dtype)
+    k_tile_1 = tl.load(k_ptr + first_half_k_offsets, mask=first_k_mask,
+      other=0).to(sin_row.dtype)
+    second_half_q_offsets = first_half_q_offsets + $(HEAD_HALF)
+    second_half_k_offsets = first_half_k_offsets + $(HEAD_HALF)
+    second_q_mask = first_q_mask
+    second_k_mask = first_k_mask
+    q_tile_2 = tl.load(q_ptr + second_half_q_offsets, mask=second_q_mask,
+      other=0).to(sin_row.dtype)
+    k_tile_2 = tl.load(k_ptr + second_half_k_offsets, mask=second_k_mask,
+      other=0).to(sin_row.dtype)
+    new_q_tile_1 = q_tile_1 * cos_row - q_tile_2 * sin_row
+    tl.store(q_ptr + first_half_q_offsets, new_q_tile_1, mask=first_q_mask)
+    new_q_tile_2 = q_tile_2 * cos_row + q_tile_1 * sin_row
+    tl.store(q_ptr + second_half_q_offsets, new_q_tile_2, mask=second_q_mask)
+    new_k_tile_1 = k_tile_1 * cos_row - k_tile_2 * sin_row
+    tl.store(k_ptr + first_half_k_offsets, new_k_tile_1, mask=first_k_mask)
+    new_k_tile_2 = k_tile_2 * cos_row + k_tile_1 * sin_row
+    tl.store(k_ptr + second_half_k_offsets, new_k_tile_2, mask=second_k_mask)
 }
 
 /-- Proof-oriented one-Q-head first-half forward slice of `rope_transform.py`'s
