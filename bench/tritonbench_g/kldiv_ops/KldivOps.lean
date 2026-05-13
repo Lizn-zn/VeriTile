@@ -10,8 +10,11 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Faithful transcription of `kldiv_ops.py`'s `_kldiv_kernel_backward`
+/-- Documented one-block slice of `kldiv_ops.py`'s `_kldiv_kernel_backward`
 for the `log_target = False` constexpr branch.
+
+This models one `BLOCK_SIZE` iteration of Python's `for i in range(0, n_cols,
+BLOCK_SIZE)` loop after the row pointers have been advanced.
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `log_target: tl.constexpr` → separate kernel defs per branch. -/
@@ -29,7 +32,7 @@ def kldiv_backward_default
   tl.store(new_grads_ptr + offsets, res, mask=mask)
 }
 
-/-- Faithful transcription of `_kldiv_kernel_backward` for the
+/-- Documented one-block slice of `_kldiv_kernel_backward` for the
 `log_target = True` constexpr branch. -/
 def kldiv_backward_log_target
     (target_ptr new_grads_ptr : RegionName)
