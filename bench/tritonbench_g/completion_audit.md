@@ -24,7 +24,9 @@ surface.
   covered by an explicit documented slice/scope note. The same gate rejects
   Lean-only `tl.load(..., dtype=...)` annotations and `keep_dims` reduction
   substitutions, both of which are must-fix deviations under
-  `review_criteria.md`.
+  `review_criteria.md`. It also flags Python `+=` statements missing from Lean
+  unless the Lean port documents that the update is outside a proof slice or
+  branch/surface specialization.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.

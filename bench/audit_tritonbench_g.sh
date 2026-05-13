@@ -122,6 +122,33 @@ else
   printf 'ok no keep_dims reduction substitutions\n'
 fi
 
+undocumented_iadd_gaps=()
+while IFS= read -r py_file; do
+  if ! rg -q '\+=' "${py_file}"; then
+    continue
+  fi
+  dir="${py_file%/*}"
+  lean_file="$(find "${dir}" -maxdepth 1 -name '*.lean' | head -n 1)"
+  if [ -z "${lean_file}" ]; then
+    continue
+  fi
+  if rg -q '\+=' "${lean_file}"; then
+    continue
+  fi
+  if rg -q 'slice|outside this|branch|precomputed|Surface transcription' "${lean_file}"; then
+    continue
+  fi
+  undocumented_iadd_gaps+=("${py_file} -> ${lean_file}")
+done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name '*.py' | sort)
+
+if [ "${#undocumented_iadd_gaps[@]}" -gt 0 ]; then
+  printf 'FAIL Python += missing from Lean without documented slice/scope:\n'
+  printf '  %s\n' "${undocumented_iadd_gaps[@]}"
+  failures=$((failures + 1))
+else
+  printf 'ok documented += coverage scan\n'
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi
