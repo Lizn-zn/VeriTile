@@ -958,6 +958,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) => do
       let c' ← expandExpr env c
       expandWhereFromCond env c' a b
+  | `(tritonExpr| $e:tritonExpr[ : ]) => do
+      -- Python no-op full slice `e[:]`.
+      expandExpr env e
   | `(tritonExpr| $e:tritonExpr[ : , None ]) => do
       -- `e[:, None]` — insert a unit axis at position 1: `[N] → [N, 1]`.
       expandSlicerNone expandExpr env e (axisIdx := 1)
@@ -1773,6 +1776,17 @@ partial def expandStmt (env : Env) (pinned : List String)
       let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
       pure (← `(Stmt.forRange $nameLit 0 $stop $step [$algBody,*]),
         ← `(ComputeStmt.forRange $nameLit 0 $stop $step [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in range($stop:tritonExpr) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let stop' ← expandNatExpectedExpr env stop
+      ensureShape SInfo.scalar stop'.shape "range stop"
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
+      let zero ← `(Op.constNat 0)
+      let one ← `(Op.constNat 1)
+      pure (← `(Stmt.forRangeDyn $nameLit $zero $stop'.term $one [$algBody,*]),
+        ← `(ComputeStmt.forRangeDyn $nameLit $zero $stop'.term $one [$computeBody,*]),
+        env, bodyHasCompute)
   | `(tritonStmt| for $i:ident in range($($start:term), $($stop:term), $($step:term)) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
