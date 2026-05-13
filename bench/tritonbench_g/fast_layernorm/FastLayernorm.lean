@@ -41,6 +41,39 @@ def layernorm_forward
   tl.store(Y + col_offsets, output, mask=mask)
 }
 
+/-- Faithful transcription of `fast_layernorm.py`'s `layernorm_backward`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter. -/
+def layernorm_backward
+    (dY X W bias r mu : RegionName)
+    (dY_row_stride X_row_stride n_cols : Nat)
+    (_eps : ℝ) (BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = col_offsets < $(n_cols)
+
+  dY += row_idx * $(dY_row_stride)
+  X += row_idx * $(X_row_stride)
+  r += row_idx
+  mu += row_idx
+
+  dY_row = tl.load(dY + col_offsets, mask=mask, other=0).to(tl.float32)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0).to(tl.float32)
+  W_row = tl.load(W + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(bias + col_offsets, mask=mask, other=0).to(tl.float32)
+
+  inv_var = tl.load(r).to(tl.float32)
+  mean = tl.load(mu).to(tl.float32)
+  normed = (X_row - mean) * inv_var
+  dY_W = dY_row * W_row
+  dX_row = dY_W - tl.sum(dY_W, axis=0) / $(n_cols) -
+    normed * tl.sum(dY_W * normed, axis=0) / $(n_cols)
+  dX_row = dX_row * inv_var
+  tl.store(dY + col_offsets, dX_row, mask=mask)
+}
+
 noncomputable def layernormInputTile
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
     Tile .real [BLOCK_SIZE] :=
