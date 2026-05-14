@@ -1956,7 +1956,15 @@ scope_markers = (
     "specializes",
 )
 
-def python_kernel_body(text: str) -> str:
+def lean_first_preamble(text: str) -> str:
+    idx = text.find("triton {")
+    return text[:idx] if idx >= 0 else text
+
+def target_kernel_name(preamble: str):
+    matches = re.findall(r"\.py`'s[^`]*`([^`]+)`", preamble, re.S)
+    return matches[-1] if matches else None
+
+def python_kernel_body(text: str, target) -> str:
     lines = text.splitlines()
     def_i = None
     pending_jit = False
@@ -1966,6 +1974,10 @@ def python_kernel_body(text: str) -> str:
             pending_jit = True
             continue
         if pending_jit and stripped.startswith("def "):
+            name = stripped[4:].split("(", 1)[0].strip()
+            if target is not None and name != target:
+                pending_jit = False
+                continue
             def_i = i
             break
         if pending_jit and stripped and not stripped.startswith("@"):
@@ -2019,8 +2031,8 @@ def lean_triton_body(text: str) -> str:
 def strip_python_comments(text: str) -> str:
     return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
-def python_control_counts(text: str) -> tuple[int, int, int]:
-    body = strip_python_comments(python_kernel_body(text))
+def python_control_counts(text: str, target) -> tuple[int, int, int]:
+    body = strip_python_comments(python_kernel_body(text, target))
     return (
         len(re.findall(r"^\s*for\s+", body, re.M)),
         len(re.findall(r"^\s*while\s+", body, re.M)),
@@ -2041,8 +2053,9 @@ for py_file in sorted(root.glob("*/*.py")):
     if not lean_files:
         continue
     lean_file = lean_files[0]
-    py_counts = python_control_counts(py_file.read_text())
     lean_text = lean_file.read_text()
+    target = target_kernel_name(lean_first_preamble(lean_text))
+    py_counts = python_control_counts(py_file.read_text(), target)
     lean_counts = lean_control_counts(lean_text)
     scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
     if py_counts != lean_counts and not any(marker in scope_text for marker in scope_markers):

@@ -9,12 +9,11 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `kv_cache_filling.py`'s `_fill_kv_cache_kernel`.
+/-- Lean port of `kv_cache_filling.py`'s `_fill_kv_cache_kernel`.
 
 This covers the Python wrapper's `quant_policy = 0` path. Correctness below is
-still proved on the smaller K/V tile slices, but the full non-quant kernel body
-is present so the benchmark has a faithful surface artifact for the unquantized
-path. -/
+still proved on smaller K/V tile lemmas, while this definition records the
+complete non-quant kernel body used by the unquantized path. -/
 def fill_kv_cache_kernel_surface
     (KStates VStates KCaches VCaches : RegionName)
     (QStartLoc QSeqLens KVSeqLens BlockOffsets : Region .nat)
