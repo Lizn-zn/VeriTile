@@ -10,7 +10,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `token_softmax_llama.py`'s
+/-- Faithful transcription of `token_softmax_llama.py`'s
 `_fwd_kernel_token_softmax`.
 
 The metadata buffers are typed Nat regions so their `tl.load` calls do not need
