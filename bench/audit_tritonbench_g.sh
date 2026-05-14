@@ -1249,6 +1249,149 @@ def python_first_kernel_body(text: str) -> str:
             i += 1
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
+        start = None
+        parens = 0
+        for j in range(i, len(lines)):
+            parens += lines[j].count("(") - lines[j].count(")")
+            if parens <= 0 and lines[j].rstrip().endswith(":"):
+                start = j + 1
+                break
+        if start is None:
+            return ""
+        body = []
+        k = start
+        while k < len(lines):
+            line = lines[k]
+            if line and not line.startswith((" ", "\t")):
+                break
+            body.append(line)
+            k += 1
+        body_text = "\n".join(body)
+        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+            return body_text
+        i = k
+    return ""
+
+def lean_first_triton_body(text: str) -> str:
+    idx = text.find("triton {")
+    if idx < 0:
+        return ""
+    start = text.find("{", idx)
+    depth = 0
+    out = []
+    for ch in text[start:]:
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth >= 1:
+            out.append(ch)
+    return "".join(out)
+
+def strip_comments(text: str) -> str:
+    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
+def tl_calls(text: str, fn: str) -> list[str]:
+    text = strip_comments(text)
+    pattern = re.compile(rf"tl\s*\.\s*{fn}\s*\(")
+    calls = []
+    pos = 0
+    while True:
+        match = pattern.search(text, pos)
+        if not match:
+            break
+        k = match.end()
+        depth = 1
+        while k < len(text) and depth > 0:
+            if text[k] == "(":
+                depth += 1
+            elif text[k] == ")":
+                depth -= 1
+            k += 1
+        calls.append(text[match.start():k])
+        pos = k
+    return calls
+
+def normalize_call(call: str) -> str:
+    call = re.sub(
+        r"\$\(\(([^:()]+)\s*:\s*Region\s*(?:\.[A-Za-z0-9_]+)?\)\)",
+        r"\1",
+        call,
+    )
+    call = re.sub(r"\$\(([^()]+)\)", r"\1", call)
+    call = call.replace("'", '"')
+    call = re.sub(r"(?<![A-Za-z0-9_])0\.(?![0-9])", "0.0", call)
+    call = re.sub(r"\(([^()]+)\)\.to\(", r"\1.to(", call)
+    call = re.sub(r"mask=\(([^()]+)\)", r"mask=\1", call)
+    for dtype in ("float16", "float32", "float64", "int32", "int64", "uint32", "uint64"):
+        call = call.replace(f"tl.{dtype}", dtype)
+    call = call.replace("True", "true").replace("False", "false")
+    return re.sub(r"\s+", "", call)
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    lean_text = lean_file.read_text()
+    if any(marker in lean_text.lower() for marker in scope_markers):
+        continue
+    py_body = python_first_kernel_body(py_file.read_text())
+    lean_body = lean_first_triton_body(lean_text)
+    for fn in ("load", "store"):
+        py_calls = [normalize_call(call) for call in tl_calls(py_body, fn)]
+        lean_calls = [normalize_call(call) for call in tl_calls(lean_body, fn)]
+        if py_calls != lean_calls:
+            failures.append((py_file, lean_file, fn, py_calls, lean_calls))
+
+if failures:
+    for py_file, lean_file, fn, py_calls, lean_calls in failures:
+        print(f"{py_file} -> {lean_file}: tl.{fn} call expression mismatch")
+        print(f"  python: {py_calls}")
+        print(f"  lean:   {lean_calls}")
+    sys.exit(1)
+PY
+then
+  printf 'ok tl.load/store call expression scan\n'
+else
+  printf 'FAIL tl.load/store call expression scan\n'
+  failures=$((failures + 1))
+fi
+
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+
+def python_first_kernel_body(text: str) -> str:
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith("@triton.jit"):
+            i += 1
+            continue
+        i += 1
+        while i < len(lines) and lines[i].strip().startswith("@"):
+            i += 1
+        if i >= len(lines) or not lines[i].strip().startswith("def "):
+            continue
 
         start = None
         parens = 0
