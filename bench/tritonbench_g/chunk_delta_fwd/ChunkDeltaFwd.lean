@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `chunk_delta_fwd.py`'s
+/-- Faithful transcription of `chunk_delta_fwd.py`'s
 `chunk_delta_rule_fwd_kernel_h`.
 
 The source uses dynamic tile-dtype casts around the two dot products and
@@ -17,7 +17,7 @@ block-pointer element dtype casts on stores; this surface preserves those forms
 alongside the nested `NT`/`ceil(BT/BC)` loop structure and optional
 initial/final state branches. -/
 def chunk_delta_rule_fwd_h_surface
-    (KReg VReg DReg VNew HOut InitialState FinalState : RegionName)
+    (k v d v_new h initial_state final_state : RegionName)
     (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
       _H T K V BT BC BK BV NT : Nat)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
@@ -27,31 +27,31 @@ def chunk_delta_rule_fwd_h_surface
   i_bh = tl.program_id(2)
   b_h = tl.zeros([$(BK), $(BV)], dtype=tl.float32)
   if USE_INITIAL_STATE {
-    p_h0 = tl.make_block_ptr(base=InitialState + i_bh * $(K) * $(V),
+    p_h0 = tl.make_block_ptr(base=initial_state + i_bh * $(K) * $(V),
       shape=($(K), $(V)), strides=($(V), $(1)),
       offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
     b_h = tl.load(p_h0, boundary_check=([0, 1] : List Nat)).to(tl.float32)
   }
   for i_t in range($(0), $(NT), $(1)) {
-    p_h = tl.make_block_ptr(base=HOut + i_bh * $(s_h_h) + i_t * $(K) * $(V),
+    p_h = tl.make_block_ptr(base=h + i_bh * $(s_h_h) + i_t * $(K) * $(V),
       shape=($(K), $(V)), strides=($(s_h_t), $(1)),
       offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
     tl.store(p_h, (b_h).to(p_h.dtype.element_ty), boundary_check=([0, 1] : List Nat))
     b_h_cumsum = tl.zeros([$(BK), $(BV)], dtype=tl.float32)
     for i_c in range($(0), tl.cdiv($(BT), $(BC)), $(1)) {
-      p_k = tl.make_block_ptr(base=KReg + i_bh * $(s_qk_h),
+      p_k = tl.make_block_ptr(base=k + i_bh * $(s_qk_h),
         shape=($(K), $(T)), strides=($(s_qk_d), $(s_qk_t)),
         offsets=(i_k * $(BK), i_t * $(BT) + i_c * $(BC)),
         block_shape=($(BK), $(BC)), order=(0, 1))
-      p_d = tl.make_block_ptr(base=DReg + i_bh * $(s_qk_h),
+      p_d = tl.make_block_ptr(base=d + i_bh * $(s_qk_h),
         shape=($(T), $(K)), strides=($(s_qk_t), $(s_qk_d)),
         offsets=(i_t * $(BT) + i_c * $(BC), i_k * $(BK)),
         block_shape=($(BC), $(BK)), order=(1, 0))
-      p_v = tl.make_block_ptr(base=VReg + i_bh * $(s_vo_h),
+      p_v = tl.make_block_ptr(base=v + i_bh * $(s_vo_h),
         shape=($(T), $(V)), strides=($(s_vo_t), $(s_vo_d)),
         offsets=(i_t * $(BT) + i_c * $(BC), i_v * $(BV)),
         block_shape=($(BC), $(BV)), order=(1, 0))
-      p_v_new = tl.make_block_ptr(base=VNew + i_bh * $(s_vo_h),
+      p_v_new = tl.make_block_ptr(base=v_new + i_bh * $(s_vo_h),
         shape=($(T), $(V)), strides=($(s_vo_t), $(s_vo_d)),
         offsets=(i_t * $(BT) + i_c * $(BC), i_v * $(BV)),
         block_shape=($(BC), $(BV)), order=(1, 0))
@@ -66,7 +66,7 @@ def chunk_delta_rule_fwd_h_surface
     b_h += b_h_cumsum
   }
   if STORE_FINAL_STATE {
-    p_ht = tl.make_block_ptr(base=FinalState + i_bh * $(K) * $(V),
+    p_ht = tl.make_block_ptr(base=final_state + i_bh * $(K) * $(V),
       shape=($(K), $(V)), strides=($(V), $(1)),
       offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
     tl.store(p_ht, (b_h).to(p_ht.dtype.element_ty),
