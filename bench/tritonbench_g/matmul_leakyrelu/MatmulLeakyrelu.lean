@@ -9,15 +9,17 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `matmul_leakyrelu.py`'s `matmul_kernel` for
-`ACTIVATION != "leaky_relu"`.
+/-- Faithful transcription of `matmul_leakyrelu.py`'s `matmul_kernel`.
 
 This preserves the grouped program-id mapping, K-block dot loop, pointer
-advances, output dtype cast, and masked store. -/
-def matmul_no_activation_surface
+advances, optional leaky-ReLU helper call, output dtype cast, and masked store.
+Python's string constexpr `ACTIVATION == "leaky_relu"` is represented by the
+Lean Bool parameter `ACTIVATION`. -/
+def matmul_kernel_surface
     (A B C : RegionName)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
-      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat) :
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat)
+    (ACTIVATION : Bool) :
     ComputeKernel := triton {
   pid = tl.program_id(axis=0)
   num_pid_m = tl.cdiv($(M), $(BLOCK_SIZE_M))
@@ -40,6 +42,9 @@ def matmul_no_activation_surface
     accumulator += tl.dot(a, b)
     a_ptrs += $(BLOCK_SIZE_K) * $(stride_ak)
     b_ptrs += $(BLOCK_SIZE_K) * $(stride_bk)
+  }
+  if ACTIVATION {
+    accumulator = leaky_relu(accumulator)
   }
   c = (accumulator).to(tl.float16)
   offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))

@@ -651,6 +651,18 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       pure ⟨← `(Op.sigmoid $eTerm), .real, e'.shape, none, none⟩
   | `(tritonExpr| silu($e:tritonExpr)) =>
       expandExpr env (← `(tritonExpr| $e * tl.sigmoid($e)))
+  | `(tritonExpr| leaky_relu($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "leaky_relu" e'
+      let (cmpBc, cmpShape) ← broadcastTerm e'.shape SInfo.scalar "leaky_relu"
+      ensureShape e'.shape cmpShape "leaky_relu"
+      let (mulBc, mulShape) ← broadcastTerm SInfo.scalar e'.shape "leaky_relu"
+      ensureShape e'.shape mulShape "leaky_relu"
+      let zero ← `(Op.const 0)
+      let slope ← `(Op.const (0.01 : ℝ))
+      let cond ← `(Op.ge ComparableDType.real $cmpBc $eTerm $zero)
+      let scaled ← `(Op.mul NumericDType.real $mulBc $slope $eTerm)
+      pure ⟨← `(Op.where $cond $eTerm $scaled), .real, e'.shape, none, none⟩
   | `(tritonExpr| tl.sqrt($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.sqrt" e'
