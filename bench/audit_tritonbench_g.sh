@@ -754,6 +754,165 @@ else
   failures=$((failures + 1))
 fi
 
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+reduce_call_re = re.compile(r"\btl\.(sum|max)\(([^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)")
+axis_kw_re = re.compile(r"(?:^|,)\s*axis\s*=\s*([0-9]+)\s*(?:,|$)")
+axis_pos_re = re.compile(r",\s*([0-9]+)\s*(?:,|$)")
+
+def python_jit_kernel_bodies(text: str) -> list[str]:
+    lines = text.splitlines()
+    bodies = []
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith("@triton.jit"):
+            i += 1
+            continue
+        i += 1
+        while i < len(lines) and lines[i].strip().startswith("@"):
+            i += 1
+        if i >= len(lines) or not lines[i].strip().startswith("def "):
+            continue
+
+        start = None
+        parens = 0
+        for j in range(i, len(lines)):
+            line = lines[j]
+            parens += line.count("(") - line.count(")")
+            if parens <= 0 and line.rstrip().endswith(":"):
+                start = j + 1
+                break
+        if start is None:
+            break
+
+        body = []
+        k = start
+        while k < len(lines):
+            line = lines[k]
+            if line and not line.startswith((" ", "\t")):
+                break
+            body.append(line)
+            k += 1
+        body_text = "\n".join(body)
+        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+            bodies.append(body_text)
+        i = k
+    return bodies
+
+def lean_triton_bodies(text: str) -> list[str]:
+    bodies = []
+    pos = 0
+    while True:
+        idx = text.find("triton {", pos)
+        if idx < 0:
+            break
+        start = text.find("{", idx)
+        depth = 0
+        out = []
+        end = start
+        for off, ch in enumerate(text[start:], start):
+            if ch == "{":
+                depth += 1
+                if depth == 1:
+                    continue
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = off + 1
+                    break
+            if depth >= 1:
+                out.append(ch)
+        bodies.append("".join(out))
+        pos = end
+    return bodies
+
+def logical_lines(text: str) -> list[str]:
+    out = []
+    cur = ""
+    depth = 0
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        cur = (cur + " " + line).strip() if cur else line
+        depth += (
+            line.count("(") + line.count("[") + line.count("{")
+            - line.count(")") - line.count("]") - line.count("}")
+        )
+        continues = bool(re.search(r"(\+|-|\*|/|&|\||,)$", line))
+        if depth <= 0 and not continues:
+            out.append(re.sub(r"\s+", " ", cur).strip())
+            cur = ""
+            depth = 0
+    if cur:
+        out.append(re.sub(r"\s+", " ", cur).strip())
+    return out
+
+def reduce_axis_styles(text: str) -> list[tuple[str, str, str]]:
+    styles = []
+    for line in logical_lines(text):
+        for match in reduce_call_re.finditer(line):
+            fn = match.group(1)
+            args = match.group(2)
+            axis_kw = axis_kw_re.search(args)
+            if axis_kw:
+                styles.append((fn, axis_kw.group(1), "kw"))
+                continue
+            axis_pos = axis_pos_re.search(args)
+            if axis_pos:
+                styles.append((fn, axis_pos.group(1), "pos"))
+    return styles
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    lean_text = lean_file.read_text()
+    if any(marker in lean_text.lower() for marker in scope_markers):
+        continue
+    py_styles = [
+        style
+        for body in python_jit_kernel_bodies(py_file.read_text())
+        for style in reduce_axis_styles(body)
+    ]
+    lean_styles = [
+        style
+        for body in lean_triton_bodies(lean_text)
+        for style in reduce_axis_styles(body)
+    ]
+    if py_styles != lean_styles:
+        failures.append((py_file, lean_file, py_styles, lean_styles))
+
+if failures:
+    for py_file, lean_file, py_styles, lean_styles in failures:
+        print(f"{py_file} -> {lean_file}: reduce axis style mismatch")
+        print(f"  python: {py_styles}")
+        print(f"  lean:   {lean_styles}")
+    sys.exit(1)
+PY
+then
+  printf 'ok reduce axis style scan\n'
+else
+  printf 'FAIL reduce axis style scan\n'
+  failures=$((failures + 1))
+fi
+
 if [ "${failures}" -gt 0 ]; then
   exit 1
 fi
