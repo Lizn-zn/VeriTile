@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `block_sparse_attn.py`'s
+/-- Faithful transcription of `block_sparse_attn.py`'s
 `block_sparse_attention_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
