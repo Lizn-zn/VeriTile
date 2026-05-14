@@ -9,46 +9,47 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `chunked_cumsum_fwd.py`'s
+/-- Faithful transcription of `chunked_cumsum_fwd.py`'s
 `_chunk_cumsum_fwd_kernel`.
 
 This preserves the optional `dt_bias` and softplus branches, the clamp via
 `tl.minimum(tl.maximum(...))`, the masked `dt_out` store, and the `dA_cumsum`
 store computed with `tl.cumsum` along the chunk axis. -/
 def chunked_cumsum_fwd_surface
-    (Dt A DtBias DtOut DACumsum : RegionName)
-    (_batch seqlen nheads chunk_size
-      stride_dt_batch stride_dt_seqlen stride_dt_head
-      stride_A_head stride_dt_bias_head
-      stride_dt_out_batch stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize
-      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
-      BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (batch seqlen nheads chunk_size : Nat)
     (dt_min dt_max : ℝ)
-    (DT_SOFTPLUS HAS_DT_BIAS : Bool) :
+    (stride_dt_batch stride_dt_seqlen stride_dt_head
+      stride_A_head
+      stride_dt_bias_head
+      stride_dt_out_batch stride_dt_out_chunk stride_dt_out_head stride_dt_out_csize
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize : Nat)
+    (DT_SOFTPLUS HAS_DT_BIAS : Bool)
+    (BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat) :
     ComputeKernel := triton {
   pid_b = tl.program_id(axis=0)
   pid_c = tl.program_id(axis=1)
   pid_h = tl.program_id(axis=2)
-  Dt += pid_b * $(stride_dt_batch) +
+  dt_ptr += pid_b * $(stride_dt_batch) +
     pid_c * $(chunk_size) * $(stride_dt_seqlen)
-  DtOut += pid_b * $(stride_dt_out_batch) +
+  dt_out_ptr += pid_b * $(stride_dt_out_batch) +
     pid_c * $(stride_dt_out_chunk)
-  DACumsum += pid_b * $(stride_dA_cs_batch) +
+  dA_cumsum_ptr += pid_b * $(stride_dA_cs_batch) +
     pid_c * $(stride_dA_cs_chunk)
   offs_h = pid_h * $(BLOCK_SIZE_H) + tl.arange(0, $(BLOCK_SIZE_H))
   offs_c = tl.arange(0, $(BLOCK_SIZE_CHUNK))
-  dt_ptrs = Dt + offs_h[:, None] * $(stride_dt_head) +
+  dt_ptrs = dt_ptr + offs_h[:, None] * $(stride_dt_head) +
     offs_c[None, :] * $(stride_dt_seqlen)
-  A_ptrs = A + offs_h * $(stride_A_head)
-  dt_out_ptrs = DtOut + offs_h[:, None] * $(stride_dt_out_head) +
+  A_ptrs = A_ptr + offs_h * $(stride_A_head)
+  dt_out_ptrs = dt_out_ptr + offs_h[:, None] * $(stride_dt_out_head) +
     offs_c[None, :] * $(stride_dt_out_csize)
-  dA_cs_ptrs = DACumsum + offs_h[:, None] * $(stride_dA_cs_head) +
+  dA_cs_ptrs = dA_cumsum_ptr + offs_h[:, None] * $(stride_dA_cs_head) +
     offs_c[None, :] * $(stride_dA_cs_csize)
   chunk_size_limit = min($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
   dt = tl.load(dt_ptrs, mask=(offs_h[:, None] < $(nheads)) &
     (offs_c[None, :] < chunk_size_limit), other=0.0).to(tl.float32)
   if HAS_DT_BIAS {
-    dt_bias = tl.load(DtBias + offs_h * $(stride_dt_bias_head),
+    dt_bias = tl.load(dt_bias_ptr + offs_h * $(stride_dt_bias_head),
       mask=offs_h < $(nheads), other=0.0).to(tl.float32)
     dt += dt_bias[:, None]
   }
@@ -60,8 +61,8 @@ def chunked_cumsum_fwd_surface
     dt, 0.0)
   tl.store(dt_out_ptrs, dt, mask=(offs_h[:, None] < $(nheads)) &
     (offs_c[None, :] < $(chunk_size)))
-  a = tl.load(A_ptrs, mask=offs_h < $(nheads), other=0.0).to(tl.float32)
-  dA = dt * a[:, None]
+  A = tl.load(A_ptrs, mask=offs_h < $(nheads), other=0.0).to(tl.float32)
+  dA = dt * A[:, None]
   dA_cs = tl.cumsum(dA, axis=1)
   tl.store(dA_cs_ptrs, dA_cs, mask=(offs_h[:, None] < $(nheads)) &
     (offs_c[None, :] < $(chunk_size)))
