@@ -27,9 +27,9 @@ def layernorm_forward
   r += row_idx
   mu += row_idx
 
-  X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  W_row = tl.load(W + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  b_row = tl.load(b + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  X_row = tl.load(X + col_offsets, mask=mask, other=0).to(tl.float32)
+  W_row = tl.load(W + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(b + col_offsets, mask=mask, other=0).to(tl.float32)
 
   mean_X = tl.sum(X_row, axis=0) / $(n_cols)
   XX = X_row - mean_X
@@ -79,7 +79,7 @@ noncomputable def layernormInputTile
     Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
       let off := s.pid * X_row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem X off) else some (0.0 : ℝ) }
+      if idx.1.val < n_cols then some (s.readMem X off) else some (0 : ℝ) }
 
 noncomputable def layernormMeanCarrier
     (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
