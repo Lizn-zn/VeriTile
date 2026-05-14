@@ -9,33 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `reversed_cumsum.py`'s
-`chunk_global_reversed_cumsum_vector_kernel` for the single-`BT` block path.
-
-When the time dimension fits in one `BT` tile, the Python reverse traversal has
-one iteration with `b_z = 0`. This surface preserves the triangular mask
-`o_i[:, None] <= o_i[None, :]`, the boundary-checked input load, the
-`tl.dot(m_s, b_s, allow_tf32=false)` reversed cumulative sum, and the
-boundary-checked store. -/
-def reversed_cumsum_single_block_surface
-    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
-    ComputeKernel := triton {
-  i_s = tl.program_id(0)
-  i_bh = tl.program_id(1)
-  o_i = tl.arange(0, $(BT))
-  m_s = tl.where(o_i[:, None] <= o_i[None, :], 1.0, 0.0)
-  p_s = tl.make_block_ptr(base=SReg + i_bh * $(s_s_h),
-    shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
-    offsets=($(0), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
-  p_z = tl.make_block_ptr(base=Z + i_bh * $(s_s_h),
-    shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
-    offsets=($(0), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
-  b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
-  b_c = tl.dot(m_s, b_s, allow_tf32=false)
-  tl.store(p_z, (b_c).to(p_z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
-}
-
-/-- Surface transcription of the full
+/-- Faithful transcription of `reversed_cumsum.py`'s
 `chunk_global_reversed_cumsum_vector_kernel`.
 
 The source traverses chunks in reverse. This surface preserves the reverse
@@ -63,6 +37,32 @@ def reversed_cumsum_surface
       b_z += tl.sum(b_s, 0)
     }
   }
+}
+
+/-- Specialized transcription of `reversed_cumsum.py`'s
+`chunk_global_reversed_cumsum_vector_kernel` for the single-`BT` block path.
+
+When the time dimension fits in one `BT` tile, the Python reverse traversal has
+one iteration with `b_z = 0`. This surface preserves the triangular mask
+`o_i[:, None] <= o_i[None, :]`, the boundary-checked input load, the
+`tl.dot(m_s, b_s, allow_tf32=false)` reversed cumulative sum, and the
+boundary-checked store. -/
+def reversed_cumsum_single_block_surface
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
+    ComputeKernel := triton {
+  i_s = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  o_i = tl.arange(0, $(BT))
+  m_s = tl.where(o_i[:, None] <= o_i[None, :], 1.0, 0.0)
+  p_s = tl.make_block_ptr(base=SReg + i_bh * $(s_s_h),
+    shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
+    offsets=($(0), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
+  p_z = tl.make_block_ptr(base=Z + i_bh * $(s_s_h),
+    shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
+    offsets=($(0), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
+  b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
+  b_c = tl.dot(m_s, b_s, allow_tf32=false)
+  tl.store(p_z, (b_c).to(p_z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
 /-- Proof-oriented block store surface slice of `reversed_cumsum.py`'s
