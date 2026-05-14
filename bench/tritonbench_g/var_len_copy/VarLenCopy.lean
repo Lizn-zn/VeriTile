@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `var_len_copy.py`'s `var_len_copy_kernel_triton`.
+/-- Faithful transcription of `var_len_copy.py`'s `var_len_copy_kernel_triton`.
 
 Allowed mechanical Lean-syntax-only change:
 - The Python test creates the start/length metadata as `int32`; the Lean
