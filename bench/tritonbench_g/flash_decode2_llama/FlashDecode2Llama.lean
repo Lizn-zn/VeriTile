@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `flash_decode2_llama.py`'s
+/-- Faithful transcription of `flash_decode2_llama.py`'s
 `_fwd_kernel_flash_decode_stage2`.
 
 The Python body passes but does not use `stride_mid_od`, `stride_mid_o_es`, or
