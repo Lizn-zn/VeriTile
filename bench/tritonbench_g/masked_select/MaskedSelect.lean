@@ -22,9 +22,9 @@ def masked_select_kernel
   offsets = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_elements)
   inp = tl.load(inp_ptr + offsets, mask=mask, other=0.0)
-  select_mask = tl.load($((select_mask_ptr : Region .bool)) + offsets,
+  select_mask = tl.load(select_mask_ptr + offsets,
     mask=mask, other=0.0).to(tl.int1)
-  out_offset = tl.load($((prefix_sum_ptr : Region .nat)) + offsets,
+  out_offset = tl.load(prefix_sum_ptr + offsets,
     mask=mask, other=0.0) - $(1)
   tl.store(out_ptr + out_offset, inp, mask=select_mask and mask)
 }

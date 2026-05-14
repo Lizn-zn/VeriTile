@@ -27,8 +27,8 @@ def token_attn_llama2_surface
   start_n = tl.program_id(2)
   cur_kv_head = cur_head // $(kv_group_num)
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
-  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
-  cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
+  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
   cur_batch_start_index = $(max_input_len) - cur_batch_seq_len
   cur_batch_end_index = $(max_input_len)
   off_q = cur_batch * $(stride_qbs) + cur_head * $(stride_qh) + offs_d * $(stride_qd)
@@ -38,7 +38,7 @@ def token_attn_llama2_surface
   for start_mark in range($(0), block_mask, $(1)) {
     q = tl.load(Q + off_q + start_mark)
     offs_n_new = cur_batch_start_index + offs_n
-    k_loc = tl.load($((B_Loc : Region .nat)) + $(stride_b_loc_b) * cur_batch +
+    k_loc = tl.load(B_Loc + $(stride_b_loc_b) * cur_batch +
       $(stride_b_loc_s) * offs_n_new,
       mask=offs_n_new < cur_batch_end_index, other=$(0))
     off_k = k_loc[:, None] * $(stride_kbs) + cur_kv_head * $(stride_kh) +
@@ -69,8 +69,8 @@ def token_attn_llama2_score_store_slice
   cur_head = tl.program_id(1)
   start_n = tl.program_id(2)
   offs_n = start_n * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
-  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
-  cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
+  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
   cur_batch_start_index = $(max_input_len) - cur_batch_seq_len
   cur_batch_end_index = $(max_input_len)
   offs_n_new = cur_batch_start_index + offs_n

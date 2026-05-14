@@ -14,7 +14,7 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_DMODEL: tl.constexpr` / `BLOCK_HEAD: tl.constexpr` -> Lean
   `Nat` parameters. -/
 def fwd_kernel_destindex_copy_kv
-    (K Dest_loc Out : RegionName)
+    (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat) :
     ComputeKernel := triton {
@@ -64,7 +64,7 @@ instance activeDecidable (head_num head_dim : Nat)
 
 /-- Algorithm-layer cellwise correctness for `_fwd_kernel_destindex_copy_kv`. -/
 theorem fwd_kernel_destindex_copy_kv_correct
-    (K Dest_loc Out : RegionName)
+    (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
     (s : BlockState)
@@ -159,7 +159,7 @@ theorem fwd_kernel_destindex_copy_kv_correct
 
 /-- Executed-state form of `fwd_kernel_destindex_copy_kv_correct`. -/
 theorem fwd_kernel_destindex_copy_kv_correct_of_exec
-    (K Dest_loc Out : RegionName)
+    (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
     (s : BlockState)
@@ -185,7 +185,7 @@ theorem fwd_kernel_destindex_copy_kv_correct_of_exec
 
 /-- Compute-facing correctness for `_fwd_kernel_destindex_copy_kv`. -/
 theorem fwd_kernel_destindex_copy_kv_compute_correct
-    (K Dest_loc Out : RegionName)
+    (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
     (s : BlockState)

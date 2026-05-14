@@ -26,11 +26,11 @@ def token_attn_mistral_surface
   cur_kv_head = cur_head // $(kv_group_num)
   offs_n = tl.arange(0, $(BLOCK_N))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
-  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
+  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
   cur_batch_start_index = tl.maximum(cur_batch_seq_len - $(sliding_window), $(0))
-  cur_batch_in_all_start_index = tl.load($((B_Att_Start_Loc : Region .nat)) + cur_batch)
-  cur_batch_req_idx = tl.load($((B_req_idx : Region .nat)) + cur_batch)
-  cur_att_seq_len = tl.load($((B_Att_Seqlen : Region .nat)) + cur_batch)
+  cur_batch_in_all_start_index = tl.load(B_Att_Start_Loc + cur_batch)
+  cur_batch_req_idx = tl.load(B_req_idx + cur_batch)
+  cur_att_seq_len = tl.load(B_Att_Seqlen + cur_batch)
   v_loc_off = cur_batch_req_idx * $(stride_req_to_tokens_b) +
     (cur_batch_start_index + offs_n) * $(stride_req_to_tokens_s)
   p_offs = cur_head * $(stride_ph) +
@@ -40,7 +40,7 @@ def token_attn_mistral_surface
   for start_n in range($(0), cur_att_seq_len, $(BLOCK_N)) {
     p_value = tl.load(Prob + p_offs + start_n,
       mask=(start_n + offs_n) < cur_att_seq_len, other=0.0)
-    v_loc = tl.load($((Req_to_tokens : Region .nat)) + v_loc_off +
+    v_loc = tl.load(Req_to_tokens + v_loc_off +
       start_n * $(stride_req_to_tokens_s),
       mask=(start_n + offs_n + cur_batch_start_index) < cur_batch_seq_len,
       other=$(0))

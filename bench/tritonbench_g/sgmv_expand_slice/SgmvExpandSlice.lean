@@ -32,11 +32,11 @@ def sgmv_expand_slice_surface
   cta_n_num = tl.cdiv($(N), $(BLOCK_N))
   pid_m = pid // cta_n_num
   pid_n = pid % cta_n_num
-  M = tl.load($((seq_lens : Region .nat)) + cur_batch)
+  M = tl.load(seq_lens + cur_batch)
   if pid_m * $(BLOCK_M) <= M {
-    lora_index = tl.load($((lora_indices : Region .int)) + cur_batch)
+    lora_index = tl.load(lora_indices + cur_batch)
     if lora_index != $((-1 : Int)) {
-      cur_seq_start = tl.load($((b_seq_start_loc : Region .nat)) + cur_batch)
+      cur_seq_start = tl.load(b_seq_start_loc + cur_batch)
       offset_m = tl.arange(0, $(BLOCK_M)) + pid_m * $(BLOCK_M)
       offset_n = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N)
       offset_k = tl.arange(0, $(BLOCK_K))
@@ -69,7 +69,7 @@ def sgmv_expand_slice_surface
       offset_cn = tl.arange(0, $(BLOCK_N)) + pid_n * $(BLOCK_N) + $(slice_offset)
       c_ptr = out_ptr + offset_cm[:, None] * $(cm_stride) +
         offset_cn[None, :] * $(cn_stride)
-      M = tl.load($((seq_lens : Region .nat)) + cur_batch)
+      M = tl.load(seq_lens + cur_batch)
       c_mask = (offset_cm[:, None] < (cur_seq_start + M)) &
         (offset_cn[None, :] < $(slice_offset + N))
       if ADD_INPUTS {
@@ -99,9 +99,9 @@ def sgmv_expand_slice_one_row_block
   pid_m = tl.program_id(axis=0)
   pid_n = tl.program_id(axis=1)
   cur_batch = tl.program_id(axis=2)
-  m_len = tl.load($((seq_lens : Region .nat)) + cur_batch)
-  cur_seq_start = tl.load($((b_seq_start_loc : Region .nat)) + cur_batch)
-  lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
+  m_len = tl.load(seq_lens + cur_batch)
+  cur_seq_start = tl.load(b_seq_start_loc + cur_batch)
+  lora_index = tl.load(lora_indices + cur_batch)
   row = pid_m * $(BLOCK_M)
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))

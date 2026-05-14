@@ -29,9 +29,9 @@ def context_attn_bloom_final_store_slice
   cur_batch = tl.program_id(0)
   cur_head = tl.program_id(1)
   start_m = tl.program_id(2)
-  prompt_cache_len = tl.load($((B_Prompt_Cache_Len : Region .nat)) + cur_batch)
-  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch) - prompt_cache_len
-  cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
+  prompt_cache_len = tl.load(B_Prompt_Cache_Len + cur_batch)
+  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch) - prompt_cache_len
+  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   mask = (offs_m[:, None] < cur_batch_seq_len) & (offs_d[None, :] < $(head_dim))

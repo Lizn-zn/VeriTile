@@ -25,7 +25,7 @@ def bgmv_expand_slice_surface
     ComputeKernel := triton {
   pid_sn = tl.program_id(axis=0)
   cur_batch = tl.program_id(axis=1)
-  lora_index = tl.load($((lora_indices : Region .int)) + cur_batch)
+  lora_index = tl.load(lora_indices + cur_batch)
   if lora_index != $((-1 : Int)) {
     offset_k = tl.arange(0, $(BLOCK_K))
     offset_n = tl.arange(0, $(BLOCK_N))
@@ -75,7 +75,7 @@ def bgmv_expand_slice_one_block
     ComputeKernel := triton {
   pid_sn = tl.program_id(axis=0)
   cur_batch = tl.program_id(axis=1)
-  lora_index = tl.load($((lora_indices : Region .nat)) + cur_batch)
+  lora_index = tl.load(lora_indices + cur_batch)
   offset_k = tl.arange(0, $(BLOCK_K))
   offset_n = tl.arange(0, $(BLOCK_N))
   tiled_a = tl.load(input_ptr + cur_batch * $(xm_stride) + offset_k * $(xk_stride),

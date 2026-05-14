@@ -22,8 +22,8 @@ def token_softmax_surface
   cur_batch = tl.program_id(0)
   cur_head = tl.program_id(1)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
-  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
-  cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
+  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
   row = (tl.load(Logics + cur_head * $(stride_logic_h) +
       (cur_batch_in_all_start_index + col_offsets) * $(stride_logic_bs),
     mask=col_offsets < cur_batch_seq_len, other=-float("inf"))).to(tl.float32)
@@ -50,8 +50,8 @@ def token_softmax_final_store_slice
   cur_batch = tl.program_id(0)
   cur_head = tl.program_id(1)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
-  cur_batch_seq_len = tl.load($((B_Seqlen : Region .nat)) + cur_batch)
-  cur_batch_in_all_start_index = tl.load($((B_Start_Loc : Region .nat)) + cur_batch)
+  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
   softmax_output = tl.load(Softmax + cur_head * $(stride_softmax_h) +
       (cur_batch_in_all_start_index + col_offsets) * $(stride_softmax_bs),
     mask=col_offsets < cur_batch_seq_len, other=0.0)

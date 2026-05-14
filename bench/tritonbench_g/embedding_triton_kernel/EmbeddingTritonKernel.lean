@@ -35,7 +35,7 @@ def embedding_kernel
     start_nn = tl.multiple_of(start_nn, $(BLOCK_NN))
     offs_seq = start_nn + offs_nn
     n_ctx_mask = offs_seq < $(n_ctx)
-    token_ids = tl.load(input_ids + offs_seq, mask=n_ctx_mask, other=$(vob_end_id))
+    token_ids = tl.load($((input_ids : Region .nat)) + offs_seq, mask=n_ctx_mask, other=$(vob_end_id))
       id_mask = (token_ids >= $(vob_start_id)) & (token_ids < $(vob_end_id))
       token_ids = token_ids - $(vob_start_id)
       dim_mask = offs_d < $(hiden_size)

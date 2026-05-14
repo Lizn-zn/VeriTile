@@ -143,9 +143,9 @@ def fused_rotary_embedding_v2_surface
     out_k0 = loaded_k0 * loaded_cos - loaded_k1 * loaded_sin
     out_k1 = loaded_k0 * loaded_sin + loaded_k1 * loaded_cos
 
-    past_kv_seq_len = tl.load($((ContextLengths : Region .nat)) + block_token_index) - $(1)
+    past_kv_seq_len = tl.load(ContextLengths + block_token_index) - $(1)
     last_block_idx = past_kv_seq_len // $(block_size)
-    block_table_ptr = $((BlockTables : Region .nat)) + block_token_index * $(bts_stride)
+    block_table_ptr = BlockTables + block_token_index * $(bts_stride)
     block_ids = tl.load(block_table_ptr + last_block_idx * $(btb_stride),
       mask=block_token_index < $(q_total_tokens))
     offsets_in_last_block = (past_kv_seq_len % $(block_size)) * $(cachebs_stride)

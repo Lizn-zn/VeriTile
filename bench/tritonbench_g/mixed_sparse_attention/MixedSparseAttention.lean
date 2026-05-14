@@ -29,7 +29,7 @@ def mixed_sparse_attention_output_store_slice
   off_hz = tl.program_id(1)
   off_z = off_hz // $(H)
   off_h = off_hz % $(H)
-  seqlen = tl.load($((Seqlens : Region .nat)) + off_z)
+  seqlen = tl.load(Seqlens + off_z)
   offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
   mask = (offs_m[:, None] < seqlen) & (offs_d[None, :] < $(BLOCK_DMODEL))

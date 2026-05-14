@@ -22,7 +22,7 @@ def dropout_kernel
   offsets = block_start + tl.arange(0, $(BLOCK_SIZE))
   mask = offsets < $(n_elements)
   x = tl.load(x_ptr + offsets, mask=mask)
-  x_keep = tl.load($((x_keep_ptr : Region .bool)) + offsets, mask=mask)
+  x_keep = tl.load(x_keep_ptr + offsets, mask=mask)
   output = tl.where(x_keep, x / (1 - $(p)), 0.0)
   tl.store(output_ptr + offsets, output, mask=mask)
 }

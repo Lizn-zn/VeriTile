@@ -27,7 +27,7 @@ def destindex_copy_quantize_kv_real_surface
   cur_index = tl.program_id(0)
   offs_h = tl.arange(0, $(BLOCK_HEAD))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
-  dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
+  dest_index = tl.load(DestLoc + cur_index)
   src_data = tl.load(K + cur_index * $(stride_k_bs) +
       offs_h[:, None] * $(stride_k_h) + $(stride_k_d) * offs_d[None, :],
     mask=offs_h[:, None] < $(head_num), other=0.0)
@@ -59,7 +59,7 @@ def destindex_copy_quantize_kv_value_store_slice
   cur_index = tl.program_id(0)
   offs_h = tl.arange(0, $(BLOCK_HEAD))
   offs_d = tl.arange(0, $(BLOCK_DMODEL))
-  dest_index = tl.load($((DestLoc : Region .nat)) + cur_index)
+  dest_index = tl.load(DestLoc + cur_index)
   mask = (offs_h[:, None] < $(head_num)) & (offs_d[None, :] < $(BLOCK_DMODEL))
   src_data = tl.load(K + cur_index * $(stride_k_bs) +
       offs_h[:, None] * $(stride_k_h) + $(stride_k_d) * offs_d[None, :],

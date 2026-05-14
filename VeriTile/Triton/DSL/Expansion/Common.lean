@@ -26,7 +26,7 @@ def regionTermName (regionTerm : TSyntax `term) : Option String :=
     | 0 => none
     | fuel + 1 =>
         if stx.isIdent then
-          some stx.getId.toString
+          some stx.getId.eraseMacroScopes.toString
         else
           let args := stx.getArgs
           if args.size == 1 then go fuel args[0]! else none
@@ -77,6 +77,10 @@ def realMathTerm (ctx : String) (e : EOut) : MacroM (TSyntax `term) := do
 
 def coerceRealArithOperands (ctx : String) (a b : EOut) : MacroM (EOut × EOut) := do
   match a.dtype, b.dtype with
+  | .real, .nat =>
+      pure (a, { b with term := ← `(Op.natToReal $b.term), dtype := .real })
+  | .nat, .real =>
+      pure ({ a with term := ← `(Op.natToReal $a.term), dtype := .real }, b)
   | .real, .fp32 | .real, .fp16 | .real, .bf16 =>
       pure (a, { b with term := ← realMathTerm (ctx ++ " rhs") b, dtype := .real })
   | .fp32, .real | .fp16, .real | .bf16, .real =>

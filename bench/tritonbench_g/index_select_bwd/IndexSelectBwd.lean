@@ -16,7 +16,7 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `.to(tl.float32)` on `grad_output` is represented explicitly in the
   Compute layer; the algorithm-layer theorem observes its Real projection. -/
 def index_select_cat_bwd_kernel
-    (grad_source_ptr index_ptr grad_output_ptr : RegionName)
+    (grad_source_ptr : RegionName) (index_ptr : Region .nat) (grad_output_ptr : RegionName)
     (_num_rows num_indices num_cols stride0 stride1
       BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat) :
     ComputeKernel := triton {
@@ -87,7 +87,7 @@ instance activeDecidable
 The injectivity hypothesis captures the no-duplicate-destination condition
 needed for a pointwise readback theorem over the scatter store. -/
 theorem index_select_cat_bwd_kernel_correct
-    (grad_source_ptr index_ptr grad_output_ptr : RegionName)
+    (grad_source_ptr : RegionName) (index_ptr : Region .nat) (grad_output_ptr : RegionName)
     (num_rows num_indices num_cols stride0 stride1
       BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
     (s : BlockState)
@@ -161,7 +161,7 @@ theorem index_select_cat_bwd_kernel_correct
 
 /-- Executed-state form of `index_select_cat_bwd_kernel_correct`. -/
 theorem index_select_cat_bwd_kernel_correct_of_exec
-    (grad_source_ptr index_ptr grad_output_ptr : RegionName)
+    (grad_source_ptr : RegionName) (index_ptr : Region .nat) (grad_output_ptr : RegionName)
     (num_rows num_indices num_cols stride0 stride1
       BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
     (s : BlockState)
@@ -189,7 +189,7 @@ theorem index_select_cat_bwd_kernel_correct_of_exec
 
 /-- Compute-facing cellwise correctness for `index_select_cat_bwd_kernel`. -/
 theorem index_select_cat_bwd_kernel_compute_correct
-    (grad_source_ptr index_ptr grad_output_ptr : RegionName)
+    (grad_source_ptr : RegionName) (index_ptr : Region .nat) (grad_output_ptr : RegionName)
     (num_rows num_indices num_cols stride0 stride1
       BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
     (s : BlockState)

@@ -30,7 +30,7 @@ def argmax_kernel_1
   max_val, max_index = tl.max(inp_val, axis=0, return_indices=True)
   max_index = max_index + pid * $(BLOCK_SIZE)
   mid_value_ptr = mid_value + pid
-  max_index_ptr = $((mid_index : Region .int)) + pid
+  max_index_ptr = mid_index + pid
   tl.store(mid_value_ptr, max_val)
   tl.store(max_index_ptr, max_index)
 }
@@ -49,9 +49,9 @@ def argmax_kernel_2
   mask = offset < $(mid_size)
   mid_val = tl.load(mid_ptrs, mask=mask, other=-float("inf"))
   index_val = tl.argmax(mid_val, axis=0)
-  mid_index_ptrs = $((mid_index : Region .int)) + index_val
+  mid_index_ptrs = mid_index + index_val
   out_val = tl.load(mid_index_ptrs)
-  tl.store($((out : Region .int)), out_val)
+  tl.store(out, out_val)
 }
 
 /-- Faithful transcription of `triton_argmax.py`'s dim-specific
@@ -85,7 +85,7 @@ def argmax_kernel
     argmax_values = tl.where(update, start_n + local_argmax, argmax_values)
   }
   offset_index = m_offset * $(K) + pid_k
-  out_index_ptrs = $((out_index : Region .int)) + offset_index
+  out_index_ptrs = out_index + offset_index
   mask1 = m_offset < $(M)
   tl.store(out_index_ptrs, argmax_values, mask=mask1)
 }

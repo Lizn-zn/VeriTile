@@ -27,15 +27,15 @@ def fill_kv_cache_kernel_surface
   block_id = tl.program_id(1)
   h_off = tl.arange(0, $(BLOCK_H))
   d_off = tl.arange(0, $(BLOCK_D))
-  q_startloc = tl.load($((QStartLoc : Region .nat)) + batch_id)
-  q_seqlen = tl.load($((QSeqLens : Region .nat)) + batch_id)
-  kv_seqlen = tl.load($((KVSeqLens : Region .nat)) + batch_id)
+  q_startloc = tl.load(QStartLoc + batch_id)
+  q_seqlen = tl.load(QSeqLens + batch_id)
+  kv_seqlen = tl.load(KVSeqLens + batch_id)
   history_seqlen = kv_seqlen - q_seqlen
   block0_first_tokenloc = history_seqlen % $(BLOCK)
   state_token_offset = tl.maximum(block_id * $(BLOCK) - block0_first_tokenloc, $(0))
   kv_block_id = _div_up(history_seqlen + $(1), $(BLOCK)) - $(1) + block_id
   kv_block_id = min(kv_block_id, $((stride_boff - 1 : Nat)))
-  block_off = tl.load($((BlockOffsets : Region .nat)) +
+  block_off = tl.load(BlockOffsets +
     batch_id * $(stride_boff) + kv_block_id)
   cur_startloc = q_startloc + state_token_offset
   ks_ptr = KStates + cur_startloc * $(stride_kss)
@@ -92,7 +92,7 @@ def fill_k_cache_tile
   batch_id = tl.program_id(0)
   h_off = tl.arange(0, $(BLOCK_H))
   d_off = tl.arange(0, $(BLOCK_D))
-  block_off = tl.load($((BlockOffsets : Region .nat)) + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
+  block_off = tl.load(BlockOffsets + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
   mask = (h_off[:, None] < $(num_heads)) & (d_off[None, :] < $(head_dim))
   k = tl.load(KStates + $(SIDX) * $(stride_kss) +
       h_off[:, None] * $(stride_ksh) + d_off[None, :] * $(stride_ksd),
@@ -119,7 +119,7 @@ def fill_v_cache_tile
   batch_id = tl.program_id(0)
   h_off = tl.arange(0, $(BLOCK_H))
   dv_off = tl.arange(0, $(BLOCK_DV))
-  block_off = tl.load($((BlockOffsets : Region .nat)) + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
+  block_off = tl.load(BlockOffsets + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
   maskv = (h_off[:, None] < $(num_heads)) & (dv_off[None, :] < $(head_dim_v))
   v = tl.load(VStates + $(SIDX) * $(stride_vss) +
       h_off[:, None] * $(stride_vsh) + dv_off[None, :] * $(stride_vsd),

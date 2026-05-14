@@ -67,6 +67,9 @@ import VeriTile.Triton.DSL.Syntax
 import VeriTile.Triton.DSL.Typing
 
 open Lean
+open Lean.Elab
+open Lean.Elab.Term
+open Lean.Meta
 
 namespace VeriTile.Triton.DSL
 
@@ -2163,9 +2166,47 @@ partial def expandStmts (env : Env) (pinned : List String)
 
 end
 
-/-! ## Block macro -/
+/-! ## Block elaborator -/
 
-macro_rules
+private def dInfoOfTileDTypeExpr? (e : Expr) : MetaM (Option DInfo) := do
+  let e ← whnf e
+  if e.isConstOf ``TileDType.real then
+    pure (some .real)
+  else if e.isConstOf ``TileDType.fp32 then
+    pure (some .fp32)
+  else if e.isConstOf ``TileDType.fp16 then
+    pure (some .fp16)
+  else if e.isConstOf ``TileDType.bf16 then
+    pure (some .bf16)
+  else if e.isConstOf ``TileDType.int then
+    pure (some .int)
+  else if e.isConstOf ``TileDType.nat then
+    pure (some .nat)
+  else if e.isConstOf ``TileDType.bool then
+    pure (some .bool)
+  else
+    pure none
+
+private def regionDTypeOfLocalType? (type : Expr) : MetaM (Option DInfo) := do
+  let type ← whnf type
+  match type with
+  | Expr.app fn d =>
+      if fn.isConstOf ``Region then
+        dInfoOfTileDTypeExpr? d
+      else
+        pure none
+  | _ => pure none
+
+private def collectLocalRegionDTypes : TermElabM Inference.RegionDTypes := do
+  let mut out : Inference.RegionDTypes := []
+  for decl in (← getLCtx) do
+    unless decl.isImplementationDetail do
+      match ← regionDTypeOfLocalType? decl.type with
+      | some dtype => out := out ++ [(decl.userName.toString, dtype)]
+      | none => pure ()
+  pure out
+
+elab_rules : term
   | `(triton { $stmts:tritonStmt* }) => do
       -- Pre-pass: scan the body for identifiers that appear in `.nat`-pinning
       -- positions (offsets of static-ptr-add chains). The `expandStmt` cases
@@ -2173,23 +2214,29 @@ macro_rules
       -- when no explicit `dtype=` kwarg is given, defaulting to `.nat`
       -- instead of `.real` so that `name` participates correctly in pointer
       -- arithmetic downstream.
-      let pinned := Inference.collectNatPinned stmts.toList
-      -- Pre-pass: collect `region <name> = <dtype>` directives so the
-      -- macro can default `tl.load(R + offs)` / `tl.store(R + offs, _)`
-      -- to the declared element dtype instead of `.real`.
-      let regionDTypes := Inference.collectRegionDTypes stmts.toList
-      -- Pre-pass: propagate region dtypes to chained pointer bindings
-      -- (`p = R + offs; ... ; tl.load(p)` recovers `R`'s dtype on the load).
-      let ptrElems := Inference.collectPtrElems regionDTypes stmts.toList
-      let (_, computeStmtTerms, _, _) ←
-        expandStmts [] pinned regionDTypes ptrElems stmts.toList
-      -- Auto-scan body: collect every region appearing in `tl.load(...)` (inputs)
-      -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
-      -- dedup (a mix of literals and Lean terms can't be statically deduped, and
-      -- `Kernel.inputs/outputs` is metadata-only, so duplicates are harmless).
-      let (allIns, allOuts) := Metadata.blockRegions stmts.toList
-      let insArr  : Array (TSyntax `term) := allIns.toArray
-      let outsArr : Array (TSyntax `term) := allOuts.toArray
-      `(ComputeKernel.mk [$insArr,*] [$outsArr,*] [$computeStmtTerms,*])
+      let localRegionDTypes ← collectLocalRegionDTypes
+      let expanded ← liftMacroM do
+        let pinned := Inference.collectNatPinned stmts.toList
+        -- Pre-pass: collect `region <name> = <dtype>` directives so the
+        -- macro can default `tl.load(R + offs)` / `tl.store(R + offs, _)`
+        -- to the declared element dtype instead of `.real`. Local Lean
+        -- parameters typed as `Region d` are available here through the term
+        -- elaborator and act as implicit region declarations.
+        let regionDTypes :=
+          Inference.collectRegionDTypes stmts.toList ++ localRegionDTypes
+        -- Pre-pass: propagate region dtypes to chained pointer bindings
+        -- (`p = R + offs; ... ; tl.load(p)` recovers `R`'s dtype on the load).
+        let ptrElems := Inference.collectPtrElems regionDTypes stmts.toList
+        let (_, computeStmtTerms, _, _) ←
+          expandStmts [] pinned regionDTypes ptrElems stmts.toList
+        -- Auto-scan body: collect every region appearing in `tl.load(...)` (inputs)
+        -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
+        -- dedup (a mix of literals and Lean terms can't be statically deduped, and
+        -- `Kernel.inputs/outputs` is metadata-only, so duplicates are harmless).
+        let (allIns, allOuts) := Metadata.blockRegions stmts.toList
+        let insArr  : Array (TSyntax `term) := allIns.toArray
+        let outsArr : Array (TSyntax `term) := allOuts.toArray
+        `(ComputeKernel.mk [$insArr,*] [$outsArr,*] [$computeStmtTerms,*])
+      elabTerm expanded none
 
 end VeriTile.Triton.DSL

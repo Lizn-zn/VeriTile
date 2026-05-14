@@ -31,9 +31,9 @@ def copy_to_kcache_seqlen_n1_surface
   cur_seq_idx = cur_token_idx
   cur_kv_head_idx = tl.program_id(1)
   split_x_idx = tl.program_id(2)
-  past_kv_seq_len = tl.load($((seq_lengths : Region .nat)) + cur_seq_idx) - $(1)
+  past_kv_seq_len = tl.load(seq_lengths + cur_seq_idx) - $(1)
   last_bt_block_idx = past_kv_seq_len // $(block_size)
-  block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +
+  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
     last_bt_block_idx * $(stride_btb))
   offset_last_block = past_kv_seq_len % $(block_size)
   offsets_dmodel = split_x_idx * $(KCACHE_X) + tl.arange(0, $(KCACHE_X))
@@ -63,7 +63,7 @@ def copy_to_kcache_split_x_block
   cur_kv_head_idx = tl.program_id(1)
   split_x_idx = tl.program_id(2)
   offsets_dmodel = split_x_idx * $(KCACHE_X) + tl.arange(0, $(KCACHE_X))
-  block_id = tl.load($((BLOCK_TABLES : Region .nat)) + cur_seq_idx * $(stride_bts) +
+  block_id = tl.load(BLOCK_TABLES + cur_seq_idx * $(stride_bts) +
     $(LAST_BLOCK_IDX) * $(stride_btb))
   k = tl.load(K + cur_token_idx * $(stride_kt) +
     cur_kv_head_idx * $(stride_kh) + offsets_dmodel * $(stride_kd))

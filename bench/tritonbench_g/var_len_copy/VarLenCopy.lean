@@ -22,9 +22,9 @@ def var_len_copy_kernel_triton
     (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   a_id = tl.program_id(0)
-  length = tl.load($((old_a_len : Region .nat)) + a_id)
-  old_start = tl.load($((old_a_start : Region .nat)) + a_id)
-  new_start = tl.load($((new_a_start : Region .nat)) + a_id)
+  length = tl.load(old_a_len + a_id)
+  old_start = tl.load(old_a_start + a_id)
+  new_start = tl.load(new_a_start + a_id)
   old_offset = tl.arange(0, $(BLOCK_SIZE))
   new_offset = tl.arange(0, $(BLOCK_SIZE))
   for i in range($(0), length, $(BLOCK_SIZE)) {
@@ -50,9 +50,9 @@ def var_len_copy_one_chunk
     (chunk BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   a_id = tl.program_id(0)
-  length = tl.load($((old_a_len : Region .nat)) + a_id)
-  old_start = tl.load($((old_a_start : Region .nat)) + a_id)
-  new_start = tl.load($((new_a_start : Region .nat)) + a_id)
+  length = tl.load(old_a_len + a_id)
+  old_start = tl.load(old_a_start + a_id)
+  new_start = tl.load(new_a_start + a_id)
   offset = tl.arange(0, $(BLOCK_SIZE))
   chunk_base = $(chunk) * $(BLOCK_SIZE)
   v = tl.load(old_a_location + old_start + chunk_base + offset,

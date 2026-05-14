@@ -15,7 +15,7 @@ Allowed mechanical Lean-syntax-only changes:
 - The unused Python head-count and head-stride arguments are retained at the
   theorem boundary, matching the original kernel signature. -/
 def fwd_kernel_destindex_copy_kv
-    (KV_nope KV_rope Dest_loc O_nope O_rope : RegionName)
+    (KV_nope KV_rope : RegionName) (Dest_loc : Region .nat) (O_nope O_rope : RegionName)
     (stride_kv_nope_bs _stride_kv_nope_h stride_kv_nope_d
       stride_kv_rope_bs _stride_kv_rope_h stride_kv_rope_d
       stride_o_nope_bs _stride_o_nope_h stride_o_nope_d
@@ -47,7 +47,7 @@ def fwd_kernel_destindex_copy_kv
 
 /-- The memory-equivalent state immediately before the two stores execute. -/
 def preStoreState
-    (KV_nope KV_rope Dest_loc O_nope O_rope : RegionName)
+    (KV_nope KV_rope : RegionName) (Dest_loc : Region .nat) (O_nope O_rope : RegionName)
     (stride_kv_nope_bs stride_kv_nope_d
       stride_kv_rope_bs stride_kv_rope_d
       stride_o_nope_bs stride_o_nope_d
@@ -124,7 +124,7 @@ def outRopeAddr
 
 /-- Executed-state readback for the `O_rope` store. -/
 theorem fwd_kernel_destindex_copy_kv_rope_correct_of_exec
-    (KV_nope KV_rope Dest_loc O_nope O_rope : RegionName)
+    (KV_nope KV_rope : RegionName) (Dest_loc : Region .nat) (O_nope O_rope : RegionName)
     (stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
       stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
       stride_o_nope_bs stride_o_nope_h stride_o_nope_d
@@ -204,7 +204,7 @@ theorem fwd_kernel_destindex_copy_kv_rope_correct_of_exec
 
 /-- Executed-state readback for the `O_nope` store. -/
 theorem fwd_kernel_destindex_copy_kv_nope_correct_of_exec
-    (KV_nope KV_rope Dest_loc O_nope O_rope : RegionName)
+    (KV_nope KV_rope : RegionName) (Dest_loc : Region .nat) (O_nope O_rope : RegionName)
     (stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
       stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
       stride_o_nope_bs stride_o_nope_h stride_o_nope_d
@@ -337,7 +337,7 @@ theorem fwd_kernel_destindex_copy_kv_nope_correct_of_exec
 
 /-- Compute-facing correctness for the `O_nope` output. -/
 theorem fwd_kernel_destindex_copy_kv_nope_compute_correct
-    (KV_nope KV_rope Dest_loc O_nope O_rope : RegionName)
+    (KV_nope KV_rope : RegionName) (Dest_loc : Region .nat) (O_nope O_rope : RegionName)
     (stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
       stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
       stride_o_nope_bs stride_o_nope_h stride_o_nope_d
@@ -379,7 +379,7 @@ theorem fwd_kernel_destindex_copy_kv_nope_compute_correct
 
 /-- Compute-facing correctness for the `O_rope` output. -/
 theorem fwd_kernel_destindex_copy_kv_rope_compute_correct
-    (KV_nope KV_rope Dest_loc O_nope O_rope : RegionName)
+    (KV_nope KV_rope : RegionName) (Dest_loc : Region .nat) (O_nope O_rope : RegionName)
     (stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
       stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
       stride_o_nope_bs stride_o_nope_h stride_o_nope_d
