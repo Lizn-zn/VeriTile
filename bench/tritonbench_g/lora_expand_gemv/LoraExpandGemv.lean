@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of
+/-- Faithful transcription of
 `lora_expand_gemv.py`'s `_bgmv_expand_kernel`.
 
 This covers the `EVEN_K` load branch, `tl.cdiv` split length, output-block
@@ -18,8 +18,9 @@ loop, optional `CAST_TYPE` conversion, and `ADD_INPUTS` accumulation branch.
 Python's signed `lora_index == -1` early return is represented as a guard
 around the active body. -/
 def bgmv_expand_surface
-    (input_ptr lora_ptr out_ptr : RegionName) (lora_indices : Region .int)
-    (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
+    (input_ptr lora_ptr out_ptr : RegionName)
+    (N K : Nat) (lora_indices : Region .int)
+    (xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
       cn_stride BLOCK_N BLOCK_K SPLIT_N : Nat)
     (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
