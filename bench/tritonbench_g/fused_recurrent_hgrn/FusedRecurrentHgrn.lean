@@ -9,25 +9,25 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `fused_recurrent_hgrn.py`'s
+/-- Faithful transcription of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_fwd_kernel`.
 
 The forward recurrence is a regular `0..T` loop and is represented directly,
 including the optional initial-state load and final-state store. -/
 def fused_recurrent_hgrn_fwd_surface
-    (X G O H0 HT : RegionName) (T D BD : Nat)
+    (x g o h0 ht : RegionName) (T D BD : Nat)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
     ComputeKernel := triton {
   i_d = tl.program_id(0)
   i_bh = tl.program_id(1)
   o_d = i_d * $(BD) + tl.arange(0, $(BD))
   mask = o_d < $(D)
-  p_x = X + i_bh * $(T) * $(D) + o_d
-  p_g = G + i_bh * $(T) * $(D) + o_d
-  p_o = O + i_bh * $(T) * $(D) + o_d
+  p_x = x + i_bh * $(T) * $(D) + o_d
+  p_g = g + i_bh * $(T) * $(D) + o_d
+  p_o = o + i_bh * $(T) * $(D) + o_d
   b_h = tl.zeros([$(BD)], dtype=tl.float32)
   if USE_INITIAL_STATE {
-    p_h0 = H0 + i_bh * $(D) + o_d
+    p_h0 = h0 + i_bh * $(D) + o_d
     b_h += tl.load(p_h0, mask=mask, other=0).to(tl.float32)
   }
   for _i in range($(0), $(T), $(1)) {
@@ -40,7 +40,7 @@ def fused_recurrent_hgrn_fwd_surface
     p_o += $(D)
   }
   if STORE_FINAL_STATE {
-    p_ht = HT + i_bh * $(D) + o_d
+    p_ht = ht + i_bh * $(D) + o_d
     tl.store(p_ht, (b_h).to(p_ht.dtype.element_ty), mask=mask)
   }
 }
