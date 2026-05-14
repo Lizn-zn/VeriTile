@@ -15,10 +15,10 @@ set_option linter.unusedVariables false
 The Python wrapper casts `dout` and `a` to a runtime `dot_dtype` constexpr. This
 surface preserves those casts as dtype annotations; current `tl.dot` typing in
 the DSL still evaluates through the algorithm carrier while preserving the loop
-structure, masks, pointer advances, residual branch, and final destination dtype
+structure, masks, pointer advances, residual case, and final destination dtype
 cast. -/
 def bmm_chunk_bwd_surface
-    (A Dout Db Res : RegionName)
+    (A Dout db_ptr Res : RegionName)
     (seqlen chunk_size K ngroups
       stride_a_batch stride_a_seqlen stride_a_head stride_ak
       stride_dout_batch stride_dout_chunk stride_dout_head
@@ -79,10 +79,10 @@ def bmm_chunk_bwd_surface
     acc += res
   }
 
-  db = (acc).to(Db.dtype.element_ty)
-  Db += pid_b * $(stride_db_batch) +
+  db = (acc).to(db_ptr.dtype.element_ty)
+  db_ptr += pid_b * $(stride_db_batch) +
     pid_c * $(chunk_size) * $(stride_db_seqlen) + pid_h * $(stride_db_head)
-  db_ptrs = Db + offs_m[:, None] * $(stride_db_seqlen) + offs_n[None, :] * $(stride_db_k)
+  db_ptrs = db_ptr + offs_m[:, None] * $(stride_db_seqlen) + offs_n[None, :] * $(stride_db_k)
   tl.store(db_ptrs, db, mask=(offs_m[:, None] < chunk_size_limit) &
     (offs_n[None, :] < $(K)))
 }
