@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `sgmv_expand_slice.py`'s
+/-- Faithful transcription of `sgmv_expand_slice.py`'s
 `_sgmv_expand_slice_kernel`.
 
 This keeps the CTA decomposition, sequence metadata loads, LoRA index gather,
@@ -21,9 +21,10 @@ erases it into the same value expression. Python's early returns for
 `pid_m * BLOCK_M > M` and signed `lora_index == -1` are represented by guards;
 the signed LoRA sentinel is preserved as the literal `-1`. -/
 def sgmv_expand_slice_surface
-    (input_ptr lora_ptr out_ptr : RegionName) (b_seq_start_loc seq_lens : Region .nat)
+    (input_ptr lora_ptr out_ptr : RegionName)
+    (N K : Nat) (b_seq_start_loc seq_lens : Region .nat)
     (lora_indices : Region .int)
-    (N K xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
+    (xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
       cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat)
     (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
     ComputeKernel := triton {
