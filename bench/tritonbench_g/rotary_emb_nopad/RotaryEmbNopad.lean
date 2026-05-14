@@ -10,6 +10,80 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Faithful transcription of `rotary_emb_nopad.py`'s
+`rotary_embedding_kernel`.
+
+This keeps the unconditional Q rotary writes and the conditional K rotary branch
+in one surface; the proof-oriented Q/K slices below remain available for local
+correctness arguments. -/
+def rotary_embedding_kernel_surface
+    (q k cos sin : RegionName)
+    (q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
+      cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM KV_GROUP_NUM
+      HEAD_HALF BLOCK_TOKENS : Nat) :
+    ComputeKernel := triton {
+  cur_head_idx = tl.program_id(0)
+  cur_token_block_idx = tl.program_id(1)
+
+  tokens_range = cur_token_block_idx * $(BLOCK_TOKENS) + tl.arange(0, $(BLOCK_TOKENS))
+  dim_range0 = tl.arange(0, $(HEAD_HALF))
+  dim_range1 = dim_range0 + $(HEAD_HALF)
+
+  off_cos_sin = tokens_range[:, None] * $(cos_token_stride) +
+    dim_range0[None, :] * $(cos_stride)
+  loaded_cos = tl.load(cos + off_cos_sin,
+    mask=tokens_range[:, None] < $(q_total_tokens), other=0.0)
+  loaded_sin = tl.load(sin + off_cos_sin,
+    mask=tokens_range[:, None] < $(q_total_tokens), other=0.0)
+
+  off_q0 = tokens_range[:, None, None] * $(q_token_stride) +
+    cur_head_idx * $(q_head_stride) +
+    dim_range0[None, None, :] * $(head_dim_stride)
+  off_q1 = tokens_range[:, None, None] * $(q_token_stride) +
+    cur_head_idx * $(q_head_stride) +
+    dim_range1[None, None, :] * $(head_dim_stride)
+  loaded_q0 = tl.load(q + off_q0,
+    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens)),
+    other=0.0)
+  loaded_q1 = tl.load(q + off_q1,
+    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens)),
+    other=0.0)
+  out_q0 = loaded_q0 * loaded_cos[:, None, :] - loaded_q1 * loaded_sin[:, None, :]
+  out_q1 = loaded_q0 * loaded_sin[:, None, :] + loaded_q1 * loaded_cos[:, None, :]
+
+  tl.store(q + off_q0, out_q0,
+    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens)))
+  tl.store(q + off_q1, out_q1,
+    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens)))
+
+  handle_kv = cur_head_idx % $(KV_GROUP_NUM) == $(0)
+  if handle_kv {
+    k_head_idx = cur_head_idx // $(KV_GROUP_NUM)
+    off_k0 = tokens_range[:, None, None] * $(k_token_stride) +
+      k_head_idx * $(k_head_stride) +
+      dim_range0[None, None, :] * $(head_dim_stride)
+    off_k1 = tokens_range[:, None, None] * $(k_token_stride) +
+      k_head_idx * $(k_head_stride) +
+      dim_range1[None, None, :] * $(head_dim_stride)
+    loaded_k0 = tl.load(k + off_k0,
+      mask=tokens_range[:, None, None] < $(q_total_tokens),
+      other=0.0)
+    loaded_k1 = tl.load(k + off_k1,
+      mask=tokens_range[:, None, None] < $(q_total_tokens),
+      other=0.0)
+    out_k0 = loaded_k0 * loaded_cos[:, None, :] - loaded_k1 * loaded_sin[:, None, :]
+    out_k1 = loaded_k0 * loaded_sin[:, None, :] + loaded_k1 * loaded_cos[:, None, :]
+    tl.store(k + off_k0, out_k0,
+      mask=tokens_range[:, None, None] < $(q_total_tokens))
+    tl.store(k + off_k1, out_k1,
+      mask=tokens_range[:, None, None] < $(q_total_tokens))
+  }
+}
+
 /-- Surface transcription of the Q part of `rotary_emb_nopad.py`'s
 `rotary_embedding_kernel`.
 
