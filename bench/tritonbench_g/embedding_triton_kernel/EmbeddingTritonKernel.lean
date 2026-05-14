@@ -1157,6 +1157,60 @@ theorem embeddingLoopBody_step_preserve_old
             exact heq.symm))
       (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) _
 
+theorem embeddingLoopInvariant_step_of_concrete_body
+    (s0 st st' : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hPrev :
+      embeddingLoopInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL start_nn st)
+    (hOffsNN :
+      st.regs .nat [BLOCK_NN] "offs_nn" =
+        some { data := fun lane : TileIndex [BLOCK_NN] =>
+          s0.pids 0 * BLOCK_N + lane.1.val })
+    (hOffsD :
+      st.regs .nat [BLOCK_DMODEL] "offs_d" =
+        some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val })
+    (hInputRead :
+      ∀ offset,
+        st.readMemValue .nat (Region.cast input_ids) offset =
+          s0.readMemValue .nat (Region.cast input_ids) offset)
+    (hWeightRead : ∀ offset, st.readMem weight offset = s0.readMem weight offset)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s0 stride_out_seq BLOCK_N idx))
+    (hLaneBound :
+      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane →
+          start_nn + lane.1.val < BLOCK_N)
+    (hStep :
+      stepStmts
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+        (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st') :
+    embeddingLoopInvariant s0 weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL (start_nn + BLOCK_NN) st' := by
+  apply embeddingLoopInvariant_step_of_chunk_write s0 st
+  · exact hPrev
+  · intro oldIdx hOldActive
+    exact embeddingLoopBody_step_preserve_old s0 st st' weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn hOffsNN hOffsD hInputRead
+      hWeightRead hStep oldIdx hOutInj hOldActive.1 hLaneBound
+  · intro idx hStore
+    exact embeddingLoopBody_step_current_chunk_write s0 st st' weight input_ids
+      out vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn hOffsNN hOffsD
+      hInputRead hWeightRead hStep idx
+      (embeddingCurrentChunkNoCollision_of_full_injective s0 stride_out_seq
+        n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx hOutInj
+        (hLaneBound idx hStore) hLaneBound)
+      hStore
+
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx

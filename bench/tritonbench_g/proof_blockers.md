@@ -63,6 +63,8 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `embeddingLoopBody` execution and proves the current chunk's masked scatter
   readback against `embeddingSpec2D`. `embeddingLoopBody_step_preserve_old`
   proves the same concrete body preserves all previously written prefix lanes.
+  `embeddingLoopInvariant_step_of_concrete_body` combines those two facts into
+  the per-iteration invariant step for the actual loop body.
   Remaining store-side work is matching the DSL-expanded store to that scatter
   shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the
