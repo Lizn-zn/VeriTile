@@ -185,9 +185,15 @@ syntax "tl.split(" tritonExpr ", " num ")" : tritonExpr
 syntax "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonExpr
 
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ")" : tritonExpr
-syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
-syntax "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonDType ", " ident "=" tritonExpr ")" : tritonExpr
-syntax "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
+syntax (priority := low) "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
+syntax (priority := high) "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" ident ")" : tritonExpr
+syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" ident "." ident "." ident ")" : tritonExpr
+syntax (priority := low) "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonDType ", " ident "=" tritonExpr ")" : tritonExpr
+syntax (priority := low) "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonExpr ", " ident "=" tritonDType ")" : tritonExpr
+syntax (priority := high) "tl.full(" "[" tritonExpr,* "]" ", " ident "=" ident ", " ident "=" tritonExpr ")" : tritonExpr
+syntax (priority := high) "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonExpr ", " ident "=" ident ")" : tritonExpr
+syntax "tl.full(" "[" tritonExpr,* "]" ", " ident "=" ident "." ident "." ident ", " ident "=" tritonExpr ")" : tritonExpr
+syntax "tl.full(" "[" tritonExpr,* "]" ", " ident "=" tritonExpr ", " ident "=" ident "." ident "." ident ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ")" : tritonExpr
 syntax "tl.zeros(" "[" tritonExpr,* "]" ", " tritonDType ")" : tritonExpr
 syntax (priority := high) "tl.zeros(" "[" tritonExpr,* "]" ", " ident "=" term ")" : tritonExpr

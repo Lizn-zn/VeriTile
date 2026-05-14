@@ -505,6 +505,30 @@ partial def natOffsetsWithBaseAdd (env : Env) (ctx : String)
             pure (some (← `(Op.add NumericDType.nat Broadcast.nil $x $rest)))
   pure (← listTerm staticOffsets.toList, ← sumOps dynamicAdds.toList)
 
+partial def expandFullDTypeTerm (expandExpr : ExprExpander) (env : Env)
+    (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr)
+    (dt : TSyntax `term) : MacroM EOut := do
+  let dtString := toString dt.raw
+  if dtString.contains "dtype" && dtString.contains "element_ty" then
+    expandFull expandExpr env dims v
+  else if dtString.contains "tl.float32" then
+    let dt ← `(tritonDType| tl.float32)
+    expandComputeFull expandExpr env dims v dt
+  else if dtString.contains "tl.float64" then
+    expandFull expandExpr env dims v (dtypeHint := some .real)
+  else if dtString.contains "tl.float16" then
+    expandFull expandExpr env dims v (dtypeHint := some .fp16)
+  else if dtString.contains "tl.bfloat16" then
+    expandFull expandExpr env dims v (dtypeHint := some .bf16)
+  else if dtString.contains "tl.int1" then
+    expandFull expandExpr env dims v (dtypeHint := some .bool)
+  else if dtString.contains "tl.int" then
+    expandFull expandExpr env dims v (dtypeHint := some .int)
+  else if dtString.contains "tl.uint" then
+    expandFull expandExpr env dims v (dtypeHint := some .nat)
+  else
+    Macro.throwError "tl.full: expected `dtype=<ptr>.dtype.element_ty` or a Triton dtype"
+
 partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
   if stx.raw.getKind == ``tritonDottedIdentMethodCast then
     let args := stx.raw.getArgs
@@ -1198,6 +1222,17 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
         Macro.throwError
           ("tl.full: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
       expandComputeFull expandExpr env dims.getElems v dt
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr,
+      $name:ident=$ptr:ident.$dtype:ident.$elem:ident)) => do
+      unless name.getId.getString! == "dtype" &&
+          dtype.getId.getString! == "dtype" && elem.getId.getString! == "element_ty" do
+        Macro.throwError "tl.full: expected `dtype=<ptr>.dtype.element_ty`"
+      expandFull expandExpr env dims.getElems v
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $v:tritonExpr, $name:ident=$dt:ident)) => do
+      unless name.getId.getString! == "dtype" do
+        Macro.throwError "tl.full: expected `dtype=`"
+      let dtTerm : TSyntax `term := ⟨dt.raw⟩
+      expandFullDTypeTerm expandExpr env dims.getElems v dtTerm
   | `(tritonExpr| tl.full([$dims:tritonExpr,*], $dtypeName:ident=$dt:tritonDType,
       $valueName:ident=$v:tritonExpr)) => do
       unless dtypeName.getId.getString! == "dtype" && valueName.getId.getString! == "value" do
@@ -1208,6 +1243,34 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       unless valueName.getId.getString! == "value" && dtypeName.getId.getString! == "dtype" do
         Macro.throwError "tl.full: expected kwargs `value=` and `dtype=`"
       expandComputeFull expandExpr env dims.getElems v dt
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $dtypeName:ident=$ptr:ident.$dtype:ident.$elem:ident,
+      $valueName:ident=$v:tritonExpr)) => do
+      unless dtypeName.getId.getString! == "dtype" &&
+          valueName.getId.getString! == "value" &&
+          dtype.getId.getString! == "dtype" && elem.getId.getString! == "element_ty" do
+        Macro.throwError "tl.full: expected kwargs `dtype=<ptr>.dtype.element_ty` and `value=`"
+      expandFull expandExpr env dims.getElems v
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $valueName:ident=$v:tritonExpr,
+      $dtypeName:ident=$ptr:ident.$dtype:ident.$elem:ident)) => do
+      unless valueName.getId.getString! == "value" &&
+          dtypeName.getId.getString! == "dtype" &&
+          dtype.getId.getString! == "dtype" && elem.getId.getString! == "element_ty" do
+        Macro.throwError "tl.full: expected kwargs `value=` and `dtype=<ptr>.dtype.element_ty`"
+      expandFull expandExpr env dims.getElems v
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $dtypeName:ident=$dt:ident,
+      $valueName:ident=$v:tritonExpr)) => do
+      unless dtypeName.getId.getString! == "dtype" &&
+          valueName.getId.getString! == "value" do
+        Macro.throwError "tl.full: expected kwargs `dtype=` and `value=`"
+      let dtTerm : TSyntax `term := ⟨dt.raw⟩
+      expandFullDTypeTerm expandExpr env dims.getElems v dtTerm
+  | `(tritonExpr| tl.full([$dims:tritonExpr,*], $valueName:ident=$v:tritonExpr,
+      $dtypeName:ident=$dt:ident)) => do
+      unless valueName.getId.getString! == "value" &&
+          dtypeName.getId.getString! == "dtype" do
+        Macro.throwError "tl.full: expected kwargs `value=` and `dtype=`"
+      let dtTerm : TSyntax `term := ⟨dt.raw⟩
+      expandFullDTypeTerm expandExpr env dims.getElems v dtTerm
   | `(tritonExpr| tl.zeros([$dims:tritonExpr,*])) => do
       -- `tl.zeros([dims])` ≡ `tl.full([dims], 0)`.
       let zero ← `(tritonExpr| 0)
