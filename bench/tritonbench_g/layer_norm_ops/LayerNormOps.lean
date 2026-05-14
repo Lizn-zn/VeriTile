@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `layer_norm_ops.py`'s `_layer_norm_fwd_1pass_kernel`.
+/-- Faithful transcription of `layer_norm_ops.py`'s `_layer_norm_fwd_1pass_kernel`.
 
 This preserves the forward constexpr branches for residual input,
 `RESIDUAL_OUT`, RMS-vs-layer norm, bias, `Mean`/`Rstd` side stores, and masked
@@ -58,16 +58,8 @@ def layer_norm_fwd_1pass_surface
   if HAS_BIAS {
     b = tl.load(B + cols, mask=mask).to(tl.float32)
   }
-  if not IS_RMS_NORM {
-    x_hat = (x - mean) * rstd
-  } else {
-    x_hat = x * rstd
-  }
-  if HAS_BIAS {
-    y = x_hat * w + b
-  } else {
-    y = x_hat * w
-  }
+  x_hat = ((x - mean) * rstd if not IS_RMS_NORM else x * rstd)
+  y = (x_hat * w + b if HAS_BIAS else x_hat * w)
   tl.store(Y + cols, y, mask=mask)
 }
 
