@@ -13,7 +13,7 @@ set_option linter.unusedSimpArgs false
 `cross_entropy_fwd_kernel`.
 
 This preserves the block logits load, optional smoothing sum, LSE side store,
-label-in-block loss branch, optional split behavior, and LSE-square term. -/
+label-in-block loss selection, optional split behavior, and LSE-square term. -/
 def cross_entropy_fwd_surface
     (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
     (smoothing lse_square_scale : ℝ)
