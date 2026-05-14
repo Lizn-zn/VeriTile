@@ -117,6 +117,70 @@ import re
 import sys
 
 root = Path(sys.argv[1])
+
+def is_triton_jit(dec: ast.expr) -> bool:
+    if isinstance(dec, ast.Call):
+        dec = dec.func
+    return (
+        isinstance(dec, ast.Attribute) and dec.attr == "jit"
+    ) or (
+        isinstance(dec, ast.Name) and dec.id == "jit"
+    )
+
+def python_jit_names(text: str) -> set[str]:
+    tree = ast.parse(text)
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and any(is_triton_jit(dec) for dec in node.decorator_list)
+    }
+
+def lean_first_preamble(text: str) -> str:
+    idx = text.find("triton {")
+    return text[:idx] if idx >= 0 else text
+
+def target_kernel_name(preamble: str):
+    matches = re.findall(r"\.py`'s[^`]*`([^`]+)`", preamble, re.S)
+    return matches[-1] if matches else None
+
+failures = []
+missing_docs = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    target = target_kernel_name(lean_first_preamble(lean_file.read_text()))
+    if target is None:
+        missing_docs.append((py_file, lean_file))
+        continue
+    jit_names = python_jit_names(py_file.read_text())
+    if target not in jit_names:
+        failures.append((py_file, lean_file, target, sorted(jit_names)))
+
+if missing_docs or failures:
+    for py_file, lean_file in missing_docs:
+        print(f"{lean_file}: missing preamble target JIT name for {py_file}")
+    for py_file, lean_file, target, jit_names in failures:
+        print(f"{lean_file}: target JIT `{target}` not found in {py_file}")
+        print(f"  python JITs: {jit_names}")
+    sys.exit(1)
+PY
+then
+  printf 'ok preamble target JIT scan\n'
+else
+  printf 'FAIL preamble target JIT scan\n'
+  failures=$((failures + 1))
+fi
+
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import ast
+import re
+import sys
+
+root = Path(sys.argv[1])
 scope_markers = (
     "slice",
     "outside this",
