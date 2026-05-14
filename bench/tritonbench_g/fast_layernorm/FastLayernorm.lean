@@ -14,7 +14,7 @@ set_option maxHeartbeats 5000000
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter. -/
 def layernorm_forward
-    (Y X W bias r mu : RegionName)
+    (Y X W b r mu : RegionName)
     (Y_row_stride X_row_stride n_cols : Nat)
     (eps : ℝ) (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
@@ -29,7 +29,7 @@ def layernorm_forward
 
   X_row = tl.load(X + col_offsets, mask=mask, other=0.0).to(tl.float32)
   W_row = tl.load(W + col_offsets, mask=mask, other=0.0).to(tl.float32)
-  b_row = tl.load(bias + col_offsets, mask=mask, other=0.0).to(tl.float32)
+  b_row = tl.load(b + col_offsets, mask=mask, other=0.0).to(tl.float32)
 
   mean_X = tl.sum(X_row, axis=0) / $(n_cols)
   XX = X_row - mean_X
@@ -46,7 +46,7 @@ def layernorm_forward
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter. -/
 def layernorm_backward
-    (dY X W bias r mu : RegionName)
+    (dY X W b r mu : RegionName)
     (dY_row_stride X_row_stride n_cols : Nat)
     (_eps : ℝ) (BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
@@ -62,7 +62,7 @@ def layernorm_backward
   dY_row = tl.load(dY + col_offsets, mask=mask, other=0).to(tl.float32)
   X_row = tl.load(X + col_offsets, mask=mask, other=0).to(tl.float32)
   W_row = tl.load(W + col_offsets, mask=mask, other=0).to(tl.float32)
-  b_row = tl.load(bias + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(b + col_offsets, mask=mask, other=0).to(tl.float32)
 
   inv_var = tl.load(r).to(tl.float32)
   mean = tl.load(mu).to(tl.float32)
