@@ -137,6 +137,170 @@ else
   printf 'ok documented float32 cast coverage scan\n'
 fi
 
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+
+def python_first_kernel_body(text: str) -> str:
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith("@triton.jit"):
+            i += 1
+            continue
+        i += 1
+        while i < len(lines) and lines[i].strip().startswith("@"):
+            i += 1
+        if i >= len(lines) or not lines[i].strip().startswith("def "):
+            continue
+
+        start = None
+        parens = 0
+        for j in range(i, len(lines)):
+            parens += lines[j].count("(") - lines[j].count(")")
+            if parens <= 0 and lines[j].rstrip().endswith(":"):
+                start = j + 1
+                break
+        if start is None:
+            return ""
+
+        body = []
+        k = start
+        while k < len(lines):
+            line = lines[k]
+            if line and not line.startswith((" ", "\t")):
+                break
+            body.append(line)
+            k += 1
+        body_text = "\n".join(body)
+        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+            return body_text
+        i = k
+    return ""
+
+def lean_first_triton_body(text: str) -> str:
+    idx = text.find("triton {")
+    if idx < 0:
+        return ""
+    start = text.find("{", idx)
+    depth = 0
+    out = []
+    for ch in text[start:]:
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth >= 1:
+            out.append(ch)
+    return "".join(out)
+
+def strip_comments(text: str) -> str:
+    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
+def tl_load_calls(text: str) -> list[str]:
+    text = strip_comments(text)
+    calls = []
+    i = 0
+    needle = "tl.load("
+    while True:
+        start = text.find(needle, i)
+        if start < 0:
+            break
+        k = start + len(needle)
+        depth = 1
+        while k < len(text) and depth > 0:
+            if text[k] == "(":
+                depth += 1
+            elif text[k] == ")":
+                depth -= 1
+            k += 1
+        calls.append(re.sub(r"\s+", " ", text[start:k]))
+        i = k
+    return calls
+
+def split_top_level_args(call: str) -> list[str]:
+    inside = call[len("tl.load("):-1]
+    args = []
+    cur = []
+    depth = 0
+    for ch in inside:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append("".join(cur).strip())
+            cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        args.append("".join(cur).strip())
+    return args
+
+def normalize_other(value: str) -> str:
+    value = re.sub(r"\$\(\(([^:()]+)\s*:[^)]+\)\)", r"\1", value.strip())
+    value = re.sub(r"\$\(([^()]+)\)", r"\1", value)
+    value = value.replace("'", '"')
+    if value in ('-inf', 'float("-inf"', '-float("inf"'):
+        return "-inf"
+    if value in ("0.", "0.0", "0.00"):
+        return "0.0"
+    return value
+
+def other_values(body: str) -> list[str]:
+    out = []
+    for call in tl_load_calls(body):
+        for arg in split_top_level_args(call):
+            if re.match(r"^other\s*=", arg):
+                out.append(normalize_other(arg.split("=", 1)[1]))
+                break
+    return out
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    lean_text = lean_file.read_text()
+    if any(marker in lean_text.lower() for marker in scope_markers):
+        continue
+    py_others = other_values(python_first_kernel_body(py_file.read_text()))
+    lean_others = other_values(lean_first_triton_body(lean_text))
+    if py_others != lean_others:
+        failures.append((py_file, lean_file, py_others, lean_others))
+
+if failures:
+    for py_file, lean_file, py_others, lean_others in failures:
+        print(f"{py_file} -> {lean_file}: tl.load other= mismatch")
+        print(f"  python: {py_others}")
+        print(f"  lean:   {lean_others}")
+    sys.exit(1)
+PY
+then
+  printf 'ok tl.load other literal scan\n'
+else
+  printf 'FAIL tl.load other literal scan\n'
+  failures=$((failures + 1))
+fi
+
 if rg -n 'tl\.load\([^\n]*dtype\s*=' bench/tritonbench_g -g '*.lean'; then
   printf 'FAIL Lean tl.load dtype annotations found; review_criteria.md only permits them when present upstream\n'
   failures=$((failures + 1))
