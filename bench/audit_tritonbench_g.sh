@@ -110,6 +110,126 @@ else
   printf 'ok compiled-port README status scan\n'
 fi
 
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import ast
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+
+def is_triton_jit(dec: ast.expr) -> bool:
+    if isinstance(dec, ast.Call):
+        dec = dec.func
+    return (
+        isinstance(dec, ast.Attribute) and dec.attr == "jit"
+    ) or (
+        isinstance(dec, ast.Name) and dec.id == "jit"
+    )
+
+def python_first_kernel_params(text: str) -> list[str]:
+    tree = ast.parse(text)
+    lines = text.splitlines()
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        if not any(is_triton_jit(dec) for dec in node.decorator_list):
+            continue
+        body = "\n".join(lines[node.lineno - 1: node.end_lineno or node.lineno])
+        if any(token in body for token in ("tl.program_id", "tl.load", "tl.store")):
+            return [arg.arg for arg in node.args.args]
+    return []
+
+def lean_first_kernel_signature(text: str) -> str:
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not re.match(r"\s*(?:noncomputable\s+)?def\s+", line):
+            continue
+        acc = []
+        for j in range(i, min(len(lines), i + 60)):
+            acc.append(lines[j])
+            if "ComputeKernel := triton {" in lines[j]:
+                return "\n".join(acc)
+    return ""
+
+def lean_binder_groups(signature: str) -> list[str]:
+    groups = []
+    pairs = {"(": ")", "{": "}", "[": "]"}
+    i = 0
+    while i < len(signature):
+        if signature[i] not in pairs:
+            i += 1
+            continue
+        open_ch = signature[i]
+        close_ch = pairs[open_ch]
+        depth = 1
+        j = i + 1
+        while j < len(signature) and depth > 0:
+            if signature[j] == open_ch:
+                depth += 1
+            elif signature[j] == close_ch:
+                depth -= 1
+            j += 1
+        if depth == 0:
+            groups.append(signature[i + 1:j - 1])
+        i = j
+    return groups
+
+def lean_first_kernel_params(text: str) -> list[str]:
+    params = []
+    for group in lean_binder_groups(lean_first_kernel_signature(text)):
+        if ":" not in group:
+            continue
+        left = group.split(":", 1)[0].strip()
+        if not left or left.startswith("h"):
+            continue
+        params.extend(
+            name.lstrip("_")
+            for name in re.split(r"\s+", left)
+            if name and name != "_"
+        )
+    return params
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    lean_text = lean_file.read_text()
+    if any(marker in lean_text.lower() for marker in scope_markers):
+        continue
+    py_params = python_first_kernel_params(py_file.read_text())
+    lean_params = lean_first_kernel_params(lean_text)
+    missing = [param for param in py_params if param not in lean_params]
+    if missing:
+        failures.append((py_file, lean_file, missing, py_params, lean_params))
+
+if failures:
+    for py_file, lean_file, missing, py_params, lean_params in failures:
+        print(f"{py_file} -> {lean_file}: Python kernel params missing from Lean")
+        print(f"  missing: {missing}")
+        print(f"  python:  {py_params}")
+        print(f"  lean:    {lean_params}")
+    sys.exit(1)
+PY
+then
+  printf 'ok kernel parameter presence scan\n'
+else
+  printf 'FAIL kernel parameter presence scan\n'
+  failures=$((failures + 1))
+fi
+
 undocumented_cast_gaps=()
 while IFS= read -r py_file; do
   if ! rg -q '\.to\(tl\.float32\)' "${py_file}"; then
