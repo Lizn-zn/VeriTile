@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `fifth_order_sph_harmonics.py`'s
+/-- Faithful transcription of `fifth_order_sph_harmonics.py`'s
 `fifth_order_fwd`.
 
 This preserves the full forward kernel: coordinate loads, all fifth-order
@@ -21,9 +21,10 @@ def fifth_order_fwd_surface
     (coord_ptr output_ptr : RegionName)
     (block_size coord_numel output_numel col_offset output_stride : Nat) :
     ComputeKernel := triton {
+  coord_stride = $(3)
   block_id = tl.program_id(0)
-  coord_striding = tl.arange(0, $(block_size)) * $(3)
-  coord_row_offset = coord_striding + $(block_size) * $(3) * block_id
+  coord_striding = tl.arange(0, $(block_size)) * coord_stride
+  coord_row_offset = coord_striding + $(block_size) * coord_stride * block_id
   x = tl.load(coord_ptr + coord_row_offset, mask=coord_row_offset < $(coord_numel))
   y = tl.load(coord_ptr + coord_row_offset + $(1),
     mask=coord_row_offset + $(1) < $(coord_numel))
