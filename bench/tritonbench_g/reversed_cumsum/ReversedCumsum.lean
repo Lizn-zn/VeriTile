@@ -15,20 +15,19 @@ set_option linter.unusedSimpArgs false
 The source traverses chunks in reverse. This surface preserves the reverse
 range and carries `b_z` across chunks. -/
 def reversed_cumsum_surface
-    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
+    (s z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
     ComputeKernel := triton {
   i_s = tl.program_id(0)
   i_bh = tl.program_id(1)
   o_i = tl.arange(0, $(BT))
   m_s = tl.where(o_i[:, None] <= o_i[None, :], 1.0, 0.0)
   b_z = tl.zeros([$(BS)], dtype=tl.float32)
-  num_tiles = tl.cdiv($(T), $(BT))
-  for i_t in range(num_tiles - $(1), -$(1), -$(1)) {
-    p_s = tl.make_block_ptr(base=SReg + i_bh * $(s_s_h),
-      shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
+  for i_t in range(tl.cdiv($(T), $(BT)) - $(1), -$(1), -$(1)) {
+    p_s = tl.make_block_ptr(base=s + i_bh * $(s_s_h),
+      shape=($(T), $(S)), strides=($(s_s_t), $(s_s_d)),
       offsets=(i_t * $(BT), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
-    p_z = tl.make_block_ptr(base=Z + i_bh * $(s_s_h),
-      shape=($(T), $(SSize)), strides=($(s_s_t), $(s_s_d)),
+    p_z = tl.make_block_ptr(base=z + i_bh * $(s_s_h),
+      shape=($(T), $(S)), strides=($(s_s_t), $(s_s_d)),
       offsets=(i_t * $(BT), i_s * $(BS)), block_shape=($(BT), $(BS)), order=(1, 0))
     b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
     b_c = b_z[None, :] + tl.dot(m_s, b_s, allow_tf32=false)
