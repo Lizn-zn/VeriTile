@@ -15,7 +15,7 @@ store, CUDA `llrint` surface operation, and the scaled output expression. The
 algorithm carrier records the pre-cast real value. -/
 def quantize_rowwise_real_surface
     (x_ptr output_ptr output_maxs : RegionName)
-    (BLOCK_SIZE P2 : Nat) :
+    (_n_elements BLOCK_SIZE P2 : Nat) :
     ComputeKernel := triton {
   pid = tl.program_id(axis=0)
   block_start = pid * $(BLOCK_SIZE)

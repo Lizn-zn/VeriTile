@@ -21,8 +21,8 @@ def destindex_copy_quantize_kv_real_surface
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
       stride_o_bs stride_o_h stride_o_d
-      stride_os_bs stride_os_h
-      head_num BLOCK_HEAD BLOCK_DMODEL : Nat) :
+      stride_os_bs stride_os_h _stride_os_d
+      head_num BLOCK_DMODEL BLOCK_HEAD : Nat) :
     ComputeKernel := triton {
   cur_index = tl.program_id(0)
   offs_h = tl.arange(0, $(BLOCK_HEAD))

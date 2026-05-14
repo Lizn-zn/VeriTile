@@ -30,7 +30,7 @@ def destindex_copy_quantize_kv_group_real_surface
   offs_d = tl.arange(0, $(BLOCK_GROUP_DIM))
   dest_index = tl.load(DestLoc + cur_index)
   src_data = tl.load(K + cur_index * $(stride_k_bs) + cur_head * $(stride_k_h) +
-      offs_g[:, None] * $(stride_k_g) + offs_d[None, :] * $(stride_k_d),
+      offs_g[:, None] * $(stride_k_g) + offs_d[None, :],
     mask=offs_g[:, None] < $(group_size), other=0.0)
   abs_data = tl.abs(src_data)
   data_scale = (tl.max(abs_data, axis=1) / 127.0).to(OutScale.dtype.element_ty)

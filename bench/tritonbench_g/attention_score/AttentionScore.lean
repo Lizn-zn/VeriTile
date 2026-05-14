@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Documented `BLOCK_M == BLOCK_N` specialization of
+/-- Documented `BLOCK_M == BLOCK_N` specialization that specializes
 `attention_score.py`'s `_score_kernel`.
 
 This surface keeps the wrapper invariant `BLOCK_M == BLOCK_N` explicit by

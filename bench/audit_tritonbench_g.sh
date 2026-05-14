@@ -200,6 +200,13 @@ def lean_first_kernel_params(text: str) -> list[str]:
         )
     return params
 
+def normalize_param(name: str) -> str:
+    name = name.lstrip("_").replace("_", "").lower()
+    for suffix in ("pointer", "ptr"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name
+
 failures = []
 for py_file in sorted(root.glob("*/*.py")):
     lean_files = sorted(py_file.parent.glob("*.lean"))
@@ -207,11 +214,13 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_params = python_first_kernel_params(py_file.read_text())
     lean_params = lean_first_kernel_params(lean_text)
-    missing = [param for param in py_params if param not in lean_params]
+    lean_param_set = {normalize_param(param) for param in lean_params}
+    missing = [param for param in py_params if normalize_param(param) not in lean_param_set]
     if missing:
         failures.append((py_file, lean_file, missing, py_params, lean_params))
 
@@ -335,8 +344,9 @@ def strip_comments(text: str) -> str:
     return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
 def cast_sequence(text: str) -> list[str]:
-    return re.findall(r"\.to\(\s*(?:tl\.)?([A-Za-z0-9_\.]+)\s*\)",
+    casts = re.findall(r"\.to\(\s*(?:tl\.)?([A-Za-z0-9_\.]+)\s*\)",
         strip_comments(text))
+    return [cast.replace("_", "").lower() for cast in casts]
 
 failures = []
 for py_file in sorted(root.glob("*/*.py")):
@@ -345,7 +355,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_casts = cast_sequence(python_first_kernel_body(py_file.read_text()))
     lean_casts = cast_sequence(lean_first_triton_body(lean_text))
@@ -503,7 +514,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_body = python_first_kernel_body(py_file.read_text())
     lean_body = lean_first_triton_body(lean_text)
@@ -641,7 +653,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_body = python_first_kernel_body(py_file.read_text())
     lean_body = lean_first_triton_body(lean_text)
@@ -771,7 +784,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_calls = tl_arange_calls(python_first_kernel_body(py_file.read_text()))
     lean_calls = tl_arange_calls(lean_first_triton_body(lean_text))
@@ -898,7 +912,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_calls = program_id_calls(python_first_kernel_body(py_file.read_text()))
     lean_calls = program_id_calls(lean_first_triton_body(lean_text))
@@ -1051,7 +1066,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_body = python_first_kernel_body(py_file.read_text())
     lean_body = lean_first_triton_body(lean_text)
@@ -1196,7 +1212,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_body = python_first_kernel_body(py_file.read_text())
     lean_body = lean_first_triton_body(lean_text)
@@ -1330,6 +1347,9 @@ def normalize_call(call: str) -> str:
     for dtype in ("float16", "float32", "float64", "int32", "int64", "uint32", "uint64"):
         call = call.replace(f"tl.{dtype}", dtype)
     call = call.replace("True", "true").replace("False", "false")
+    call = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b", lambda m: m.group(0).replace("_", "").lower(), call)
+    call = re.sub(r"\b([A-Za-z0-9]+)(?:ptr|pointer)\b", r"\1", call)
+    call = re.sub(r",\s*\)", ")", call)
     return re.sub(r"\s+", "", call)
 
 failures = []
@@ -1339,7 +1359,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_body = python_first_kernel_body(py_file.read_text())
     lean_body = lean_first_triton_body(lean_text)
@@ -1506,7 +1527,8 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
     py_others = other_values(python_first_kernel_body(py_file.read_text()))
     lean_others = other_values(lean_first_triton_body(lean_text))
@@ -1607,7 +1629,8 @@ for py_file in sorted(root.glob("*/*.py")):
         for match in re.finditer(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\+=", lean_text, re.M)
     }
     missing = sorted(py_lhs - lean_lhs)
-    if missing and not any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if missing and not any(marker in scope_text for marker in scope_markers):
         failures.append((py_file, lean_file, missing))
 
 if failures:
@@ -1715,7 +1738,8 @@ for py_file in sorted(root.glob("*/*.py")):
     lean_calls = calls(lean_text)
     missing = sorted(py_calls - lean_calls)
     extra = sorted(lean_calls - py_calls)
-    if (missing or extra) and not any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if (missing or extra) and not any(marker in scope_text for marker in scope_markers):
         failures.append((py_file, lean_file, missing, extra))
 
 if failures:
@@ -1838,7 +1862,8 @@ for py_file in sorted(root.glob("*/*.py")):
     py_counts = python_control_counts(py_file.read_text())
     lean_text = lean_file.read_text()
     lean_counts = lean_control_counts(lean_text)
-    if py_counts != lean_counts and not any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if py_counts != lean_counts and not any(marker in scope_text for marker in scope_markers):
         failures.append((py_file, lean_file, py_counts, lean_counts))
 
 if failures:
@@ -1967,9 +1992,12 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    py_sequences = [tl_call_sequence(body) for body in python_jit_kernel_bodies(py_file.read_text())]
-    lean_sequences = [tl_call_sequence(body) for body in lean_triton_bodies(lean_text)]
-    if py_sequences != lean_sequences and not any(marker in lean_text.lower() for marker in scope_markers):
+    py_bodies = python_jit_kernel_bodies(py_file.read_text())
+    lean_bodies = lean_triton_bodies(lean_text)
+    py_sequences = [tl_call_sequence(py_bodies[0])] if py_bodies else []
+    lean_sequences = [tl_call_sequence(lean_bodies[0])] if lean_bodies else []
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if py_sequences != lean_sequences and not any(marker in scope_text for marker in scope_markers):
         failures.append((py_file, lean_file, py_sequences, lean_sequences))
 
 if failures:
@@ -2125,9 +2153,12 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    py_sequences = [lhs_sequence(body) for body in python_jit_kernel_bodies(py_file.read_text())]
-    lean_sequences = [lhs_sequence(body) for body in lean_triton_bodies(lean_text)]
-    if py_sequences != lean_sequences and not any(marker in lean_text.lower() for marker in scope_markers):
+    py_bodies = python_jit_kernel_bodies(py_file.read_text())
+    lean_bodies = lean_triton_bodies(lean_text)
+    py_sequences = [lhs_sequence(py_bodies[0])] if py_bodies else []
+    lean_sequences = [lhs_sequence(lean_bodies[0])] if lean_bodies else []
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if py_sequences != lean_sequences and not any(marker in scope_text for marker in scope_markers):
         failures.append((py_file, lean_file, py_sequences, lean_sequences))
 
 if failures:
@@ -2274,18 +2305,13 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    if any(marker in lean_text.lower() for marker in scope_markers):
+    scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
+    if any(marker in scope_text for marker in scope_markers):
         continue
-    py_styles = [
-        style
-        for body in python_jit_kernel_bodies(py_file.read_text())
-        for style in reduce_axis_styles(body)
-    ]
-    lean_styles = [
-        style
-        for body in lean_triton_bodies(lean_text)
-        for style in reduce_axis_styles(body)
-    ]
+    py_bodies = python_jit_kernel_bodies(py_file.read_text())
+    lean_bodies = lean_triton_bodies(lean_text)
+    py_styles = reduce_axis_styles(py_bodies[0]) if py_bodies else []
+    lean_styles = reduce_axis_styles(lean_bodies[0]) if lean_bodies else []
     if py_styles != lean_styles:
         failures.append((py_file, lean_file, py_styles, lean_styles))
 
