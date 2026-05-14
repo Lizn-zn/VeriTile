@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `batched_vecmat_mult.py`'s `batched_vecmat_kernel`.
+/-- Faithful transcription of `batched_vecmat_mult.py`'s `batched_vecmat_kernel`.
 
 The Python wrapper asserts that `M`, `N`, and `K` are divisible by their block
 sizes, so this surface keeps the same unmasked block loads and stores. The

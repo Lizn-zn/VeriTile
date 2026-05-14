@@ -707,6 +707,7 @@ def normalize_shape_ctor_call(call: str) -> str:
     call = call.replace("tl.float32", "float32").replace("tl.float64", "float64")
     call = call.replace("dtype=", "")
     call = re.sub(r"\s+", "", call)
+    call = call.replace("_", "").lower()
     call = re.sub(r"\[([^\[\],]+),\]", r"[\1]", call)
     return call
 
@@ -837,7 +838,8 @@ def tl_arange_calls(text: str) -> list[str]:
                 depth -= 1
             k += 1
         call = re.sub(r"\$\(([^()]+)\)", r"\1", text[match.start():k])
-        calls.append(re.sub(r"\s+", "", call))
+        call = re.sub(r"\s+", "", call)
+        calls.append(call.replace("_", "").lower())
         pos = k
     return calls
 
