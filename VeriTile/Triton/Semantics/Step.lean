@@ -274,6 +274,44 @@ theorem append_some {l1 l2 : List Stmt} {s s' : BlockState}
           rw [List.cons_append, cons_some hst]
           exact ih h
 
+theorem append_some_iff {l1 l2 : List Stmt} {s s' : BlockState} :
+    stepStmts (l1 ++ l2) s = some s' ↔
+      ∃ smid, stepStmts l1 s = some smid ∧ stepStmts l2 smid = some s' := by
+  induction l1 generalizing s with
+  | nil =>
+      constructor
+      · intro h
+        refine ⟨s, ?_, h⟩
+        simp
+      · intro h
+        rcases h with ⟨smid, hLeft, hRight⟩
+        simp at hLeft
+        subst smid
+        exact hRight
+  | cons st rest ih =>
+      constructor
+      · intro h
+        unfold stepStmts at h
+        cases hst : stepStmt st s with
+        | none =>
+            simp [hst] at h
+        | some s1 =>
+            simp [hst] at h
+            rcases (ih.mp h) with ⟨smid, hRest, hRight⟩
+            refine ⟨smid, ?_, hRight⟩
+            rw [cons_some hst]
+            exact hRest
+      · intro h
+        rcases h with ⟨smid, hLeft, hRight⟩
+        unfold stepStmts at hLeft
+        cases hst : stepStmt st s with
+        | none =>
+            simp [hst] at hLeft
+        | some s1 =>
+            simp [hst] at hLeft
+            rw [List.cons_append, cons_some hst]
+            exact ih.mpr ⟨smid, hLeft, hRight⟩
+
 end stepStmts
 
 namespace stepForLoopAux

@@ -78,7 +78,9 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `mean_dim_kernel_correct_target`, and the public theorem exposes the
   remaining algorithm-layer postcondition as an explicit hypothesis until this
   projected-section composition is connected to the complete
-  `mean_dim_kernel.toAlgKernel` execution. The compute-facing
+  `mean_dim_kernel.toAlgKernel` execution. `meanProjectedBody_alg_post` now
+  proves correctness for the full named projected body using the generic
+  `stepStmts.append_some_iff` splitter. The compute-facing
   wrapper is discharged once that algorithm-layer
   postcondition is supplied via
   `mean_dim_kernel_compute_correct_of_algorithm`.

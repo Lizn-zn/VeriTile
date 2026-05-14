@@ -110,8 +110,11 @@ These files must not be counted complete yet:
     `meanPreLoop_forRange_postLoop_alg_post` bridge the final invariant through
     the actual post-loop and compose the projected pre-loop, loop, and
     post-loop sections.
-  - Remaining proof: connect the projected-section composition to the complete
-    `mean_dim_kernel.toAlgKernel` execution.
+    `meanProjectedBody_alg_post` proves correctness for the full named
+    projected body, using the generic `stepStmts.append_some_iff` splitter.
+  - Remaining proof: connect `meanProjectedBody_alg_post` through
+    `mean_dim_kernel_toAlg_body` to the complete `mean_dim_kernel.toAlgKernel`
+    execution.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.

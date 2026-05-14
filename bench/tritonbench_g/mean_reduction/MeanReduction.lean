@@ -961,6 +961,33 @@ def meanProjectedBody
     [.forRange "off" 0 N BLOCK_N (meanLoopBody N BLOCK_M BLOCK_N)] ++
     meanPostLoop N BLOCK_M BLOCK_N
 
+theorem meanProjectedBody_alg_post
+    (s s' : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat)
+    (hStepNe : BLOCK_N ≠ 0)
+    (hExec :
+      stepStmts (meanProjectedBody X Mean M N BLOCK_M BLOCK_N) s = some s') :
+    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s s' := by
+  unfold meanProjectedBody at hExec
+  rw [List.append_assoc] at hExec
+  rcases (stepStmts.append_some_iff).mp hExec with ⟨stPre, hPre, hRest⟩
+  rcases (stepStmts.append_some_iff).mp hRest with ⟨stLoop, hLoopStmt, hPost⟩
+  simp [stepStmts] at hLoopStmt
+  have hLoop :
+      stepStmt (.forRange "off" 0 N BLOCK_N (meanLoopBody N BLOCK_M BLOCK_N))
+        stPre = some stLoop := by
+    cases hAux :
+        stepForRangeAux "off" 0 N BLOCK_N (meanLoopBody N BLOCK_M BLOCK_N)
+          stPre with
+    | none =>
+        simp [hAux] at hLoopStmt
+    | some stMid =>
+        simp [hAux] at hLoopStmt
+        subst hLoopStmt
+        simp [hAux]
+  exact meanPreLoop_forRange_postLoop_alg_post s stPre stLoop s' X Mean M N
+    BLOCK_M BLOCK_N hStepNe hPre hLoop hPost
+
 theorem mean_dim_kernel_toAlg_body
     (X Mean : RegionName) (M N BLOCK_M BLOCK_N : Nat) :
     (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N).toAlgKernel.body =
