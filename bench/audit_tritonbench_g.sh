@@ -1902,7 +1902,11 @@ def lean_first_triton_body(text: str) -> str:
             out.append(ch)
     return "".join(out)
 
+def strip_comments(text: str) -> str:
+    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
 def calls(text: str) -> set[str]:
+    text = strip_comments(text)
     return {
         match.group(0).split("(", 1)[0].strip()
         for match in call_re.finditer(text)
@@ -2173,6 +2177,7 @@ def lean_triton_bodies(text: str) -> list[str]:
     return bodies
 
 def tl_call_sequence(text: str) -> list[str]:
+    text = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
     out = []
     for match in call_re.finditer(text):
         call = match.group(0).split("(", 1)[0].strip()
