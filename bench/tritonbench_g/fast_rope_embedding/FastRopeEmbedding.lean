@@ -12,7 +12,7 @@ set_option linter.unusedSimpArgs false
 
 /-- Faithful transcription of `fast_rope_embedding.py`'s `_rope_embedding`.
 
-The body preserves the fixed four-head group loop, the `BACKWARD_PASS` branch,
+The body preserves the fixed four-head group loop, the `BACKWARD_PASS` case,
 and both rotary-pair stores. -/
 def rope_embedding_surface
     (Q cos sin : RegionName)

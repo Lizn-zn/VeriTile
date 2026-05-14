@@ -1400,6 +1400,7 @@ def tl_calls(text: str, fn: str) -> list[str]:
     return calls
 
 def normalize_call(call: str) -> str:
+    call = call.replace("\\", "")
     call = re.sub(
         r"\$\(\(([^:()]+)\s*:\s*Region\s*(?:\.[A-Za-z0-9_]+)?\)\)",
         r"\1",
