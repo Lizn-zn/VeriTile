@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `fast_rope_embedding.py`'s `_rope_embedding`.
+/-- Faithful transcription of `fast_rope_embedding.py`'s `_rope_embedding`.
 
 The body preserves the fixed four-head group loop, the `BACKWARD_PASS` branch,
 and both rotary-pair stores. -/
@@ -19,6 +19,7 @@ def rope_embedding_surface
     (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
       BLOCK_SIZE : Nat) (BACKWARD_PASS : Bool) :
     ComputeKernel := triton {
+  ROPE_GROUP_SIZE = $(4)
   row_position = tl.program_id(0)
   group_head_position = tl.program_id(1)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
@@ -31,8 +32,8 @@ def rope_embedding_surface
   if BACKWARD_PASS {
     sin1 = -sin1
   }
-  head_start = group_head_position * $(4)
-  head_end = min(head_start + $(4), $(n_heads))
+  head_start = group_head_position * ROPE_GROUP_SIZE
+  head_end = min(head_start + ROPE_GROUP_SIZE, $(n_heads))
   for k in range(head_start, head_end, $(1)) {
     offs_q1 = row_position * $(Q_row_stride) + k * $(head_dim) + col_offsets
     offs_q2 = row_position * $(Q_row_stride) + k * $(head_dim) +
