@@ -9,22 +9,21 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `softmax_reducev.py`'s `_fwd_kernel` for
-nonnegative `other_kv_index`.
+/-- Lean port of `softmax_reducev.py`'s `_fwd_kernel`.
 
-This preserves the streaming softmax recurrence over token blocks, B_Loc gather,
-V gather, and final normalized writeback. The Python benchmark also passes
-`other_kv_index = -1` in some cases; that signed sentinel is not representable
-in the current Nat gather-address path, so this surface intentionally covers the
-nonnegative sentinel path such as `other_kv_index = 0`. -/
-def softmax_reducev_nonnegative_other_surface
-    (Logics V Out : RegionName) (BLoc BStartLoc BSeqLen : Region .nat)
+This records the streaming softmax recurrence over token blocks, the signed
+`B_Loc` gather with Python's `other_kv_index` sentinel, the V gather, and the
+final normalized writeback. -/
+def softmax_reducev_surface
+    (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat)
     (max_input_len
       stride_logic_h stride_logic_bs
       stride_vbs stride_vh stride_vd
       stride_obs stride_oh stride_od
       stride_b_loc_b stride_b_loc_s
-      other_kv_index BLOCK_DMODEL BLOCK_N : Nat) :
+      BLOCK_DMODEL BLOCK_N : Nat)
+    (other_kv_index : Int) :
     ComputeKernel := triton {
   cur_batch = tl.program_id(0)
   cur_head = tl.program_id(1)
@@ -36,7 +35,7 @@ def softmax_reducev_nonnegative_other_surface
   off_b_loc = cur_batch * $(stride_b_loc_b) +
     ($(max_input_len) - cur_batch_seq_len) * $(stride_b_loc_s)
   v_ptrs = V + off_v
-  e_max = -inf
+  e_max = float("-inf")
   e_sum = 0.0
   acc = tl.zeros([$(BLOCK_DMODEL)], dtype=tl.float32)
   for start_n in range($(0), cur_batch_seq_len, $(BLOCK_N)) {
@@ -46,7 +45,7 @@ def softmax_reducev_nonnegative_other_surface
       mask=(start_n + offs_n) < cur_batch_seq_len, other=$(other_kv_index))
     qk = tl.load(Logics + cur_head * $(stride_logic_h) +
         (cur_batch_start_loc + start_n + offs_n) * $(stride_logic_bs),
-      mask=start_n + offs_n < cur_batch_seq_len, other=-inf)
+      mask=start_n + offs_n < cur_batch_seq_len, other=float("-inf"))
     n_e_max = tl.maximum(tl.max(qk, 0), e_max)
     old_scale = tl.exp(e_max - n_e_max)
     p = tl.exp(qk - n_e_max)
