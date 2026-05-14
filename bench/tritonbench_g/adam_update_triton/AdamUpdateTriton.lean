@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
 
-/-- Surface transcription of `adam_update_triton.py`'s `update_fn_kernel`.
+/-- Faithful transcription of `adam_update_triton.py`'s `update_fn_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` -> Lean `Nat` parameter. -/
