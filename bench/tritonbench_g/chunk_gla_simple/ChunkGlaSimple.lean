@@ -9,15 +9,15 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `chunk_gla_simple.py`'s
+/-- Faithful transcription of `chunk_gla_simple.py`'s
 `chunk_simple_gla_fwd_kernel_o`.
 
 The Triton `order` metadata on block pointers is scheduling-only; the DSL
 accepts it at the surface and erases it into the same block-pointer AST. -/
 def chunk_gla_simple_fwd_surface
-    (Q K V H G O : RegionName)
-    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T KSize VSize BT BK BV : Nat)
-    (scale : ℝ) :
+    (q k v h g o : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat)
+    (scale : ℝ) (T K V BT BK BV : Nat) :
     ComputeKernel := triton {
   i_v = tl.program_id(0)
   i_t = tl.program_id(1)
@@ -26,15 +26,15 @@ def chunk_gla_simple_fwd_surface
   m_s = o_i[:, None] >= o_i[None, :]
   b_o = tl.zeros([$(BT), $(BV)], dtype=tl.float32)
   b_s = tl.zeros([$(BT), $(BT)], dtype=tl.float32)
-  for i_k in range($(0), tl.cdiv($(KSize), $(BK)), $(1)) {
-    p_q = tl.make_block_ptr(base=Q + i_bh * $(s_k_h),
-      shape=($(T), $(KSize)), strides=($(s_k_t), $(1)),
+  for i_k in range($(0), tl.cdiv($(K), $(BK)), $(1)) {
+    p_q = tl.make_block_ptr(base=q + i_bh * $(s_k_h),
+      shape=($(T), $(K)), strides=($(s_k_t), $(1)),
       offsets=(i_t * $(BT), i_k * $(BK)), block_shape=($(BT), $(BK)), order=(1, 0))
-    p_k = tl.make_block_ptr(base=K + i_bh * $(s_k_h),
-      shape=($(KSize), $(T)), strides=($(1), $(s_k_t)),
+    p_k = tl.make_block_ptr(base=k + i_bh * $(s_k_h),
+      shape=($(K), $(T)), strides=($(1), $(s_k_t)),
       offsets=(i_k * $(BK), i_t * $(BT)), block_shape=($(BK), $(BT)), order=(0, 1))
-    p_h = tl.make_block_ptr(base=H + i_bh * $(s_h_h) + i_t * $(KSize) * $(VSize),
-      shape=($(KSize), $(VSize)), strides=($(s_h_t), $(1)),
+    p_h = tl.make_block_ptr(base=h + i_bh * $(s_h_h) + i_t * $(K) * $(V),
+      shape=($(K), $(V)), strides=($(s_h_t), $(1)),
       offsets=(i_k * $(BK), i_v * $(BV)), block_shape=($(BK), $(BV)), order=(1, 0))
     b_q = tl.load(p_q, boundary_check=([0, 1] : List Nat))
     b_k = tl.load(p_k, boundary_check=([0, 1] : List Nat))
@@ -42,19 +42,19 @@ def chunk_gla_simple_fwd_surface
     b_o += tl.dot(b_q, b_h, allow_tf32=false)
     b_s += tl.dot(b_q, b_k, allow_tf32=false)
   }
-  p_g = tl.make_block_ptr(base=G + i_bh * $(T), shape=($(T)),
+  p_g = tl.make_block_ptr(base=g + i_bh * $(T), shape=($(T)),
     strides=($(1)), offsets=(i_t * $(BT)), block_shape=($(BT)), order=(0))
   b_g = tl.load(p_g, boundary_check=([0] : List Nat))
   b_o = b_o * tl.exp(b_g)[:, None]
   b_s = b_s * tl.exp(b_g[:, None] - b_g[None, :])
   b_s = tl.where(m_s, b_s, 0.0)
-  p_v = tl.make_block_ptr(base=V + i_bh * $(s_v_h),
-    shape=($(T), $(VSize)), strides=($(s_v_t), $(1)),
+  p_v = tl.make_block_ptr(base=v + i_bh * $(s_v_h),
+    shape=($(T), $(V)), strides=($(s_v_t), $(1)),
     offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
   b_v = tl.load(p_v, boundary_check=([0, 1] : List Nat))
   b_o = (b_o + tl.dot((b_s).to(b_v.dtype), b_v, allow_tf32=false)) * $(scale)
-  p_o = tl.make_block_ptr(base=O + i_bh * $(s_v_h),
-    shape=($(T), $(VSize)), strides=($(s_v_t), $(1)),
+  p_o = tl.make_block_ptr(base=o + i_bh * $(s_v_h),
+    shape=($(T), $(V)), strides=($(s_v_t), $(1)),
     offsets=(i_t * $(BT), i_v * $(BV)), block_shape=($(BT), $(BV)), order=(1, 0))
   tl.store(p_o, (b_o).to(p_o.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
