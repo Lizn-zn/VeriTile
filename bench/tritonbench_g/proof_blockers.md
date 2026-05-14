@@ -55,6 +55,10 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `embeddingPreLoop_step_regs` proves the concrete pre-loop register facts for
   `start_n`, `offs_nn`, and `offs_d`, plus preservation of the input and
   weight reads needed by the first loop iteration.
+  `seqLaneIndex_eval_add`, `outOffset2D_eval_add`,
+  `storeActive2D_eval_iff`, and `embeddingLoopStoreValue_eval_eq_spec2D`
+  normalize the offset and value shapes produced by the DSL expansion to the
+  local `outOffset2D` / `storeActive2D` / `embeddingSpec2D` vocabulary.
   Remaining store-side work is matching the DSL-expanded store to that scatter
   shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the

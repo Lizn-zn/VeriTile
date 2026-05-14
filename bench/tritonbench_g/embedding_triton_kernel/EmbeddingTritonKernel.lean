@@ -155,6 +155,32 @@ instance storeActive2DDecidable
   unfold storeActive2D
   infer_instance
 
+theorem seqLaneIndex_eval_add
+    (s : BlockState) (BLOCK_N start_nn : Nat) (lane : Fin BLOCK_NN) :
+    start_nn + (s.pids 0 * BLOCK_N + lane.val) =
+      seqLaneIndex s BLOCK_N start_nn lane := by
+  simp [seqLaneIndex]
+  omega
+
+theorem outOffset2D_eval_add
+    (s : BlockState) (stride_out_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL]) :
+    (start_nn + (s.pids 0 * BLOCK_N + idx.1.val)) * stride_out_seq +
+        idx.2.1.val =
+      outOffset2D s stride_out_seq BLOCK_N start_nn idx := by
+  simp [outOffset2D, seqLaneIndex, dimIndex]
+  omega
+
+theorem storeActive2D_eval_iff
+    (s : BlockState) (n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL]) :
+    (start_nn + (s.pids 0 * BLOCK_N + idx.1.val) < n_ctx ∧
+        idx.2.1.val < hiden_size) ↔
+      storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+        BLOCK_DMODEL idx := by
+  simp [storeActive2D, seqLaneIndex, dimIndex]
+  omega
+
 noncomputable def embeddingSpec2D
     (s : BlockState) (weight input_ids : RegionName)
     (vob_start_id vob_end_id stride_weight_seq BLOCK_N start_nn
@@ -168,6 +194,68 @@ noncomputable def embeddingSpec2D
           start_nn idx))
     else
       some (0.0 : ℝ))
+
+theorem embeddingLoopStoreValue_eval_eq_spec2D
+    (s0 st : BlockState) (weight input_ids : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq n_ctx hiden_size BLOCK_N
+      start_nn BLOCK_NN BLOCK_DMODEL : Nat)
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (hInputRead :
+      ∀ offset,
+        st.readMemValue .nat (Region.cast input_ids) offset =
+          s0.readMemValue .nat (Region.cast input_ids) offset)
+    (hactive :
+      storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+        BLOCK_DMODEL idx) :
+    WithBot.unbotD 0
+        (if
+            ((vob_start_id ≤
+                if start_nn + (s0.pids 0 * BLOCK_N + idx.1.val) < n_ctx then
+                  st.readMemValue .nat (Region.cast input_ids)
+                    (start_nn + (s0.pids 0 * BLOCK_N + idx.1.val))
+                else vob_end_id) ∧
+              (if start_nn + (s0.pids 0 * BLOCK_N + idx.1.val) < n_ctx then
+                  st.readMemValue .nat (Region.cast input_ids)
+                    (start_nn + (s0.pids 0 * BLOCK_N + idx.1.val))
+                else vob_end_id) < vob_end_id) ∧
+              idx.2.1.val < hiden_size then
+            some
+              (s0.readMem weight
+                (((if start_nn + (s0.pids 0 * BLOCK_N + idx.1.val) < n_ctx then
+                      st.readMemValue .nat (Region.cast input_ids)
+                        (start_nn + (s0.pids 0 * BLOCK_N + idx.1.val))
+                    else vob_end_id) - vob_start_id) * stride_weight_seq +
+                  idx.2.1.val))
+          else some (0.0 : ℝ)) =
+      embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+        stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx := by
+  have hEvalActive :
+      start_nn + (s0.pids 0 * BLOCK_N + idx.1.val) < n_ctx ∧
+        idx.2.1.val < hiden_size := by
+    exact (storeActive2D_eval_iff s0 n_ctx hiden_size BLOCK_N start_nn
+      BLOCK_NN BLOCK_DMODEL idx).2 hactive
+  rcases hEvalActive with ⟨hSeq, hDim⟩
+  have hSeqIndex :
+      start_nn + (s0.pids 0 * BLOCK_N + idx.1.val) =
+        seqLaneIndex s0 BLOCK_N start_nn idx.1 :=
+    seqLaneIndex_eval_add s0 BLOCK_N start_nn idx.1
+  have hSeqAssoc : s0.pids 0 * BLOCK_N + start_nn + idx.1.val < n_ctx := by
+    omega
+  have hReadAssoc :
+      st.readMemValue .nat (Region.cast input_ids)
+          (s0.pids 0 * BLOCK_N + start_nn + idx.1.val) =
+        s0.readMemValue .nat (Region.cast input_ids)
+          (s0.pids 0 * BLOCK_N + start_nn + idx.1.val) :=
+    hInputRead _
+  have hReadAssoc' :
+      st.readMemValue .nat input_ids
+          (s0.pids 0 * BLOCK_N + start_nn + idx.1.val) =
+        s0.readMemValue .nat input_ids
+          (s0.pids 0 * BLOCK_N + start_nn + idx.1.val) :=
+    hInputRead _
+  simp [embeddingSpec2D, tokenRaw2D, tokenIndex2D, weightOffset2D,
+    seqLaneIndex, dimIndex, hSeq, hDim, hInputRead,
+    hSeqIndex, hSeqAssoc, hReadAssoc, hReadAssoc']
 
 def fullSeqIndex
     (s : BlockState) (BLOCK_N : Nat) (lane : Fin BLOCK_N) : Nat :=
