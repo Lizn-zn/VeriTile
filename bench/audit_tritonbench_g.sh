@@ -323,6 +323,167 @@ def lean_first_triton_body(text: str) -> str:
 def strip_comments(text: str) -> str:
     return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
+def tl_calls(text: str, fn: str) -> list[str]:
+    text = strip_comments(text)
+    pattern = re.compile(rf"tl\s*\.\s*{fn}\s*\(")
+    calls = []
+    pos = 0
+    while True:
+        match = pattern.search(text, pos)
+        if not match:
+            break
+        k = match.end()
+        depth = 1
+        while k < len(text) and depth > 0:
+            if text[k] == "(":
+                depth += 1
+            elif text[k] == ")":
+                depth -= 1
+            k += 1
+        calls.append(re.sub(r"\s+", " ", text[match.start():k]))
+        pos = k
+    return calls
+
+def split_top_level_args(call: str, fn: str) -> list[str]:
+    match = re.search(rf"tl\s*\.\s*{fn}\s*\(", call)
+    inside = call[match.end():-1]
+    args = []
+    cur = []
+    depth = 0
+    for ch in inside:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append("".join(cur).strip())
+            cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        args.append("".join(cur).strip())
+    return args
+
+def mask_presence(body: str, fn: str) -> list[bool]:
+    out = []
+    for call in tl_calls(body, fn):
+        args = split_top_level_args(call, fn)
+        has_kw = any(re.match(r"^mask\s*=", arg) for arg in args)
+        positional = (
+            (fn == "load" and len(args) >= 2 and "=" not in args[1])
+            or (fn == "store" and len(args) >= 3 and "=" not in args[2])
+        )
+        out.append(has_kw or positional)
+    return out
+
+failures = []
+for py_file in sorted(root.glob("*/*.py")):
+    lean_files = sorted(py_file.parent.glob("*.lean"))
+    if not lean_files:
+        continue
+    lean_file = lean_files[0]
+    lean_text = lean_file.read_text()
+    if any(marker in lean_text.lower() for marker in scope_markers):
+        continue
+    py_body = python_first_kernel_body(py_file.read_text())
+    lean_body = lean_first_triton_body(lean_text)
+    for fn in ("load", "store"):
+        py_masks = mask_presence(py_body, fn)
+        lean_masks = mask_presence(lean_body, fn)
+        if py_masks != lean_masks:
+            failures.append((py_file, lean_file, fn, py_masks, lean_masks))
+
+if failures:
+    for py_file, lean_file, fn, py_masks, lean_masks in failures:
+        print(f"{py_file} -> {lean_file}: tl.{fn} mask presence mismatch")
+        print(f"  python: {py_masks}")
+        print(f"  lean:   {lean_masks}")
+    sys.exit(1)
+PY
+then
+  printf 'ok tl.load/store mask presence scan\n'
+else
+  printf 'FAIL tl.load/store mask presence scan\n'
+  failures=$((failures + 1))
+fi
+
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+scope_markers = (
+    "slice",
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+
+def python_first_kernel_body(text: str) -> str:
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith("@triton.jit"):
+            i += 1
+            continue
+        i += 1
+        while i < len(lines) and lines[i].strip().startswith("@"):
+            i += 1
+        if i >= len(lines) or not lines[i].strip().startswith("def "):
+            continue
+
+        start = None
+        parens = 0
+        for j in range(i, len(lines)):
+            parens += lines[j].count("(") - lines[j].count(")")
+            if parens <= 0 and lines[j].rstrip().endswith(":"):
+                start = j + 1
+                break
+        if start is None:
+            return ""
+
+        body = []
+        k = start
+        while k < len(lines):
+            line = lines[k]
+            if line and not line.startswith((" ", "\t")):
+                break
+            body.append(line)
+            k += 1
+        body_text = "\n".join(body)
+        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+            return body_text
+        i = k
+    return ""
+
+def lean_first_triton_body(text: str) -> str:
+    idx = text.find("triton {")
+    if idx < 0:
+        return ""
+    start = text.find("{", idx)
+    depth = 0
+    out = []
+    for ch in text[start:]:
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth >= 1:
+            out.append(ch)
+    return "".join(out)
+
+def strip_comments(text: str) -> str:
+    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
 def tl_load_calls(text: str) -> list[str]:
     text = strip_comments(text)
     calls = []
