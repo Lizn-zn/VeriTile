@@ -751,6 +751,108 @@ theorem embeddingLoopInvariant_to_alg_post_of_final
     (embeddingPrefixActive_of_storeActive_of_final s0 n_ctx hiden_size
       BLOCK_N BLOCK_DMODEL final idx hfinal hidx)
 
+def embeddingPreLoop
+    (BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) : List Stmt :=
+  [ .assign .nat [] "start_n"
+      (.mul NumericDType.nat Broadcast.nil (.programId 0) (.constNat BLOCK_N))
+  , .assign .nat [BLOCK_NN] "offs_nn"
+      (.add NumericDType.nat Broadcast.scalarL
+        (.ref .nat [] "start_n") (.arange BLOCK_NN))
+  , .assign .nat [BLOCK_DMODEL] "offs_d"
+      (.arange BLOCK_DMODEL)
+  ]
+
+def embeddingLoopBody
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) : List Stmt :=
+  [ .assign .nat [] "start_nn"
+      (.ref .nat [] "start_nn")
+  , .assign .nat [BLOCK_NN] "offs_seq"
+      (.add NumericDType.nat Broadcast.scalarL
+        (.ref .nat [] "start_nn") (.ref .nat [BLOCK_NN] "offs_nn"))
+  , .assign .bool [BLOCK_NN] "n_ctx_mask"
+      (.lt ComparableDType.nat Broadcast.scalarR
+        (.ref .nat [BLOCK_NN] "offs_seq") (.constNat n_ctx))
+  , .assign .nat [BLOCK_NN] "token_ids"
+      (.load .nat
+        (.region (Region.cast input_ids)
+          (.ref .nat [BLOCK_NN] "offs_seq"))
+        (.maskOther
+          (.ref .bool [BLOCK_NN] "n_ctx_mask")
+          ((Op.constNat vob_end_id).broadcast [BLOCK_NN])))
+  , .assign .bool [BLOCK_NN] "id_mask"
+      (.boolAnd Broadcast.nil.consSame
+        (.ge ComparableDType.nat Broadcast.scalarR
+          (.ref .nat [BLOCK_NN] "token_ids") (.constNat vob_start_id))
+        (.lt ComparableDType.nat Broadcast.scalarR
+          (.ref .nat [BLOCK_NN] "token_ids") (.constNat vob_end_id)))
+  , .assign .nat [BLOCK_NN] "token_ids"
+      (.sub NumericDType.nat Broadcast.scalarR
+        (.ref .nat [BLOCK_NN] "token_ids") (.constNat vob_start_id))
+  , .assign .bool [BLOCK_DMODEL] "dim_mask"
+      (.lt ComparableDType.nat Broadcast.scalarR
+        (.ref .nat [BLOCK_DMODEL] "offs_d") (.constNat hiden_size))
+  , .assign .bool [BLOCK_NN, BLOCK_DMODEL] "load_mask"
+      (.boolAnd Broadcast.nil.consL.consR
+        (.expandDim (⟨1, by simp⟩ : Fin ([BLOCK_NN].length + 1))
+          (.ref .bool [BLOCK_NN] "id_mask"))
+        (.expandDim (⟨0, by simp⟩ : Fin ([BLOCK_DMODEL].length + 1))
+          (.ref .bool [BLOCK_DMODEL] "dim_mask")))
+  , .assign .bool [BLOCK_NN, BLOCK_DMODEL] "store_mask"
+      (.boolAnd Broadcast.nil.consL.consR
+        (.expandDim (⟨1, by simp⟩ : Fin ([BLOCK_NN].length + 1))
+          (.ref .bool [BLOCK_NN] "n_ctx_mask"))
+        (.expandDim (⟨0, by simp⟩ : Fin ([BLOCK_DMODEL].length + 1))
+          (.ref .bool [BLOCK_DMODEL] "dim_mask")))
+  , .assign .real [BLOCK_NN, BLOCK_DMODEL] "vecs"
+      (.load .real
+        (.region weight
+          (.add NumericDType.nat Broadcast.nil.consL.consR
+            (.mul NumericDType.nat Broadcast.scalarR
+              (.expandDim (⟨1, by simp⟩ : Fin ([BLOCK_NN].length + 1))
+                (.ref .nat [BLOCK_NN] "token_ids"))
+              (.constNat stride_weight_seq))
+            (.expandDim (⟨0, by simp⟩ : Fin ([BLOCK_DMODEL].length + 1))
+              (.ref .nat [BLOCK_DMODEL] "offs_d"))))
+        (.maskOther
+          (.ref .bool [BLOCK_NN, BLOCK_DMODEL] "load_mask")
+          ((Op.const 0.0).broadcast [BLOCK_NN, BLOCK_DMODEL])))
+  , (.store .real [BLOCK_NN, BLOCK_DMODEL]
+      (.region out
+        (.add NumericDType.nat Broadcast.nil.consL.consR
+          (.mul NumericDType.nat Broadcast.scalarR
+            (.expandDim (⟨1, by simp⟩ : Fin ([BLOCK_NN].length + 1))
+              (.ref .nat [BLOCK_NN] "offs_seq"))
+            (.constNat stride_out_seq))
+          (.expandDim (⟨0, by simp⟩ : Fin ([BLOCK_DMODEL].length + 1))
+            (.ref .nat [BLOCK_DMODEL] "offs_d"))))
+      (.ref .real [BLOCK_NN, BLOCK_DMODEL] "vecs")
+      (MaskOpt.mask (.ref .bool [BLOCK_NN, BLOCK_DMODEL] "store_mask")))
+  ]
+
+def embeddingProjectedBody
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) : List Stmt :=
+  embeddingPreLoop BLOCK_DMODEL BLOCK_N BLOCK_NN ++
+    [.forRange "start_nn" 0 BLOCK_N BLOCK_NN
+      (embeddingLoopBody weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)]
+
+theorem embedding_kernel_toAlg_body
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) :
+    (embedding_kernel weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN).toAlgKernel.body =
+      embeddingProjectedBody weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN := by
+  rfl
+
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx

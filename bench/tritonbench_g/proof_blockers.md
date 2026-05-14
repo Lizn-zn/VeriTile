@@ -47,6 +47,11 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `BlockState.scatter_prop_masked_preserves_other_offset` helper.
   `embeddingLoopInvariant_step_of_current_chunk_scatter` packages these pieces
   into the next-prefix invariant for the concrete current-chunk scatter state.
+  `embeddingPreLoop`, `embeddingLoopBody`, and `embeddingProjectedBody` now name
+  the concrete DSL-expanded algorithm body, with `embedding_kernel_toAlg_body`
+  proving that this split is exactly the current `toAlgKernel.body`. The named
+  body also records the macro lowering detail that direct `region + offset`
+  memory expressions become `MemAccess.region` accesses in the algorithm layer.
   Remaining store-side work is matching the DSL-expanded store to that scatter
   shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the
