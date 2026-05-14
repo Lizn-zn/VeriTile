@@ -102,6 +102,9 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .reduceMax axis keepDims a, s => do
       let va ← evalOp a s
       Tile.reduceMax axis keepDims va
+  | .reduceMaxNat axis keepDims a, s => do
+      let va ← evalOp a s
+      Tile.reduceMaxNat axis keepDims va
   | .reduceSum axis keepDims a, s => return Tile.reduceSum axis keepDims (← evalOp a s)
   | .scan op axis a, s => return Tile.scan op axis (← evalOp a s)
   | .argMax axis a, s => return Tile.argMaxDrop axis (← evalOp a s)

@@ -743,13 +743,11 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.cdiv($a:tritonExpr, $b:tritonExpr)) => do
       expandCdiv expandExpr env a b
   | `(tritonExpr| tl.max($e:tritonExpr, $n:num)) => do
-      expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e
-        #[← `(tritonReduceKwarg| $n:num)]
+      expandReduceMax expandExpr env e #[← `(tritonReduceKwarg| $n:num)]
   | `(tritonExpr| tl.max($a:tritonExpr, $b:tritonExpr)) => do
       match b with
       | `(tritonExpr| $n:num) =>
-          expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) a
-            #[← `(tritonReduceKwarg| $n:num)]
+          expandReduceMax expandExpr env a #[← `(tritonReduceKwarg| $n:num)]
       | _ =>
           let a' ← expandExpr env a
           let b' ← expandExpr env b
@@ -778,7 +776,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.sum($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
       expandReduce expandExpr env "tl.sum" (← `(Op.reduceSum)) e kwargs
   | `(tritonExpr| tl.max($e:tritonExpr $[, $kwargs:tritonReduceKwarg]*)) => do
-      expandReduce expandExpr env "tl.max" (← `(Op.reduceMax)) e kwargs
+      expandReduceMax expandExpr env e kwargs
   | `(tritonExpr| tl.toReal($e:tritonExpr)) => do
       let e' ← expandExpr env e
       ensureDType .nat e'.dtype "tl.toReal"

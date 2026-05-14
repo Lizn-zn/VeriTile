@@ -137,6 +137,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .where c a b =>
       c.RespectsRegionTyping Γ ∧ a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .reduceMax _ _ a => a.RespectsRegionTyping Γ
+  | .reduceMaxNat _ _ a => a.RespectsRegionTyping Γ
   | .reduceSum _ _ a => a.RespectsRegionTyping Γ
   | .scan _ _ a => a.RespectsRegionTyping Γ
   | .argMax _ a => a.RespectsRegionTyping Γ

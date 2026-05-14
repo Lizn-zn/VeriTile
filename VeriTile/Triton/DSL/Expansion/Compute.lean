@@ -473,6 +473,110 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
           pure []
       pure ⟨term, .real, SInfo.dims outDims, none, none⟩
 
+/-- Lower `tl.max(...)` reductions. Real-valued tiles keep the existing
+mathematical-real path; Nat tiles lower to `Op.reduceMaxNat`, which is needed
+for index arithmetic such as `tl.max(tl.where(nat_cond, nat_values, 0))`. -/
+partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
+    (e : TSyntax `tritonExpr)
+    (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
+  let e' ← expandExpr env e
+  let mut eTerm := e'.term
+  let mut outDType : DInfo := .real
+  let mut isNat : Bool := Bool.false
+  match e'.dtype with
+  | .nat =>
+      outDType := .nat
+      isNat := Bool.true
+  | .real =>
+      pure ()
+  | .fp32 | .fp16 | .bf16 =>
+      eTerm ← realMathTerm "tl.max" e'
+  | _ =>
+      ensureDType .real e'.dtype "tl.max"
+  let dims := match e'.shape with | .dims ds => ds
+  if dims.isEmpty then
+    Macro.throwError "tl.max: reduction expects a tile, got scalar"
+  let mut seenAxis : Bool := Bool.false
+  let mut seenKeepDims : Bool := Bool.false
+  let mut keepDims : Bool := Bool.false
+  let mut axis? : Option Nat := none
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| $n:num) =>
+        if seenAxis then
+          Macro.throwError "tl.max: duplicate `axis=` kwarg"
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            ("tl.max: axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axis? := some n.getNat
+    | `(tritonReduceKwarg| axis = $n:num) =>
+        if seenAxis then
+          Macro.throwError "tl.max: duplicate `axis=` kwarg"
+        seenAxis := Bool.true
+        if n.getNat ≥ dims.length then
+          Macro.throwError
+            ("tl.max: axis `" ++ toString n.getNat ++ "` out of bounds for rank "
+             ++ toString dims.length)
+        axis? := some n.getNat
+    | `(tritonReduceKwarg| keep_dims = false) =>
+        if seenKeepDims then
+          Macro.throwError "tl.max: duplicate `keep_dims=` kwarg"
+        seenKeepDims := Bool.true
+    | `(tritonReduceKwarg| keep_dims = true) =>
+        if seenKeepDims then
+          Macro.throwError "tl.max: duplicate `keep_dims=` kwarg"
+        seenKeepDims := Bool.true
+        keepDims := Bool.true
+    | `(tritonReduceKwarg| return_indices=True) =>
+        Macro.throwError "tl.max: `return_indices=True` is only supported through tuple binding"
+    | `(tritonReduceKwarg| return_indices=False) =>
+        pure ()
+    | `(tritonReduceKwarg| $name:ident = $_) =>
+        let nm := name.getId.toString
+        if nm == "axis" || nm == "keep_dims" then
+          Macro.throwError
+            ("tl.max: `" ++ nm ++ "=` value is not a recognized literal")
+        else
+          Macro.throwError
+            ("tl.max: unknown kwarg `" ++ nm ++
+             "`. Only `axis = N` and `keep_dims = true|false` are supported.")
+    | _ => Macro.throwUnsupported
+  let kdLit : TSyntax `term ← if keepDims then `(Bool.true) else `(Bool.false)
+  match axis? with
+  | some axisIdx =>
+      let outDims ←
+        if keepDims then setNthOne dims axisIdx else eraseNth dims axisIdx
+      let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+      let term ←
+        if isNat then
+          `(Op.reduceMaxNat (⟨$axisLit, by simp⟩) $kdLit $eTerm)
+        else
+          `(Op.reduceMax (⟨$axisLit, by simp⟩) $kdLit $eTerm)
+      pure ⟨term, outDType, SInfo.dims outDims, none, none⟩
+  | none =>
+      let mut term := eTerm
+      for j in [:dims.length] do
+        let axisIdx := if keepDims then j else (dims.length - 1 - j)
+        let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+        term ←
+          if isNat then
+            `(Op.reduceMaxNat
+                (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.reduceShape]⟩)
+                $kdLit $term)
+          else
+            `(Op.reduceMax
+                (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.reduceShape]⟩)
+                $kdLit $term)
+      let outDims : List (TSyntax `term) ←
+        if keepDims then
+          let oneLit : TSyntax `term ← `((1 : Nat))
+          pure (List.replicate dims.length oneLit)
+        else
+          pure []
+      pure ⟨term, outDType, SInfo.dims outDims, none, none⟩
+
 /-- Lower a `tl.dot(a, b)` to `Op.dot a b`.
 
 Algorithm-layer dot is real-valued. If the surface operands were explicitly

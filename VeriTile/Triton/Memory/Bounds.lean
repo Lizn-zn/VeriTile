@@ -107,6 +107,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .max2 _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .where c a b => c.MemorySafe bounds ∧ a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .reduceMax _ _ a => a.MemorySafe bounds
+  | .reduceMaxNat _ _ a => a.MemorySafe bounds
   | .reduceSum _ _ a => a.MemorySafe bounds
   | .scan _ _ a => a.MemorySafe bounds
   | .argMax _ a => a.MemorySafe bounds

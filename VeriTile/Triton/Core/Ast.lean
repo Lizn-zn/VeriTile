@@ -135,6 +135,10 @@ inductive Op : TileDType → TileShape → Type where
   | reduceMax : (axis : Fin shape.length) → (keepDims : Bool) →
                 Op .real shape →
                 Op .real (TileShape.reduceShape shape axis keepDims)
+  /-- Nat-valued reduce-max along an arbitrary axis. -/
+  | reduceMaxNat : (axis : Fin shape.length) → (keepDims : Bool) →
+                Op .nat shape →
+                Op .nat (TileShape.reduceShape shape axis keepDims)
   /-- Block-level reduce-sum along an arbitrary axis. -/
   | reduceSum : (axis : Fin shape.length) → (keepDims : Bool) →
                 Op .real shape →

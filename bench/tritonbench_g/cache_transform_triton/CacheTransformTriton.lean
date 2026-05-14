@@ -10,7 +10,39 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `cache_transform_triton.py`'s
+/-- Faithful transcription of `cache_transform_triton.py`'s
+`prefill_cache_kernel`. -/
+def prefill_cache_kernel
+    (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  idx0 = tl.program_id(axis=0)
+  idx1 = tl.program_id(axis=1)
+  idx = idx0 * $(BLOCK_SIZE) + idx1
+  cumsum_lens = tl.load(cumsum_lengths + tl.arange(0, $(N_ELEMENTS)))
+  ori_seq_idx = idx - tl.max(tl.where(cumsum_lens <= idx, cumsum_lens, $(0)))
+  cos_cache_part = tl.load(
+    cos_cache + ori_seq_idx * $(cache_stride) +
+      tl.arange(0, $(HIDDEN_DIM)) * $(hidden_stride),
+    mask=idx < $(total_length))
+  sin_cache_part = tl.load(
+    sin_cache + ori_seq_idx * $(cache_stride) +
+      tl.arange(0, $(HIDDEN_DIM)) * $(hidden_stride),
+    mask=idx < $(total_length))
+  tl.store(
+    cos_output + idx * $(cache_stride) +
+      tl.arange(0, $(HIDDEN_DIM)) * $(hidden_stride),
+    cos_cache_part,
+    mask=idx < $(total_length))
+  tl.store(
+    sin_output + idx * $(cache_stride) +
+      tl.arange(0, $(HIDDEN_DIM)) * $(hidden_stride),
+    sin_cache_part,
+    mask=idx < $(total_length))
+}
+
+/-- Faithful transcription of `cache_transform_triton.py`'s
 `decoding_cache_kernel`.
 
 Allowed mechanical Lean-syntax-only changes:

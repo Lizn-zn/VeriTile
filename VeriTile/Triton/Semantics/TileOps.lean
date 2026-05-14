@@ -505,6 +505,36 @@ noncomputable def Tile.reduceMax {shape : TileShape}
   · exact Tile.reduceMaxDrop axis x
   · exact Tile.reduceMaxKeep axis x
 
+/-- Nat-valued reduce-max along an arbitrary axis. -/
+noncomputable def Tile.reduceMaxNatDrop {shape : TileShape}
+    (axis : Fin shape.length) (x : Tile .nat shape) :
+    Option (Tile .nat (TileShape.eraseAxis shape axis)) :=
+  if h : 0 < TileShape.axisDim shape axis then
+    some ⟨fun outIdx =>
+      (Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).sup'
+        (by exact ⟨⟨0, h⟩, Finset.mem_univ _⟩)
+        (fun k => x.data (TileShape.insertAxisIndex shape axis outIdx k))⟩
+  else
+    none
+
+noncomputable def Tile.reduceMaxNatKeep {shape : TileShape}
+    (axis : Fin shape.length) (x : Tile .nat shape) :
+    Option (Tile .nat (TileShape.setAxisOne shape axis)) :=
+  if h : 0 < TileShape.axisDim shape axis then
+    some ⟨fun outIdx =>
+      (Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).sup'
+        (by exact ⟨⟨0, h⟩, Finset.mem_univ _⟩)
+        (fun k => x.data (TileShape.replaceAxisIndex shape axis outIdx k))⟩
+  else
+    none
+
+noncomputable def Tile.reduceMaxNat {shape : TileShape}
+    (axis : Fin shape.length) (keepDims : Bool) (x : Tile .nat shape) :
+    Option (Tile .nat (TileShape.reduceShape shape axis keepDims)) := by
+  cases keepDims
+  · exact Tile.reduceMaxNatDrop axis x
+  · exact Tile.reduceMaxNatKeep axis x
+
 /-- Prefix scan along an axis. At each output index, folds all input lanes
 whose coordinate on `axis` is less than or equal to the output coordinate. -/
 noncomputable def Tile.scan {shape : TileShape}
