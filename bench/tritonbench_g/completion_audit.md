@@ -16,7 +16,7 @@ surface.
 | Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current mechanical mismatch. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
 | Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
-| Do not close while algorithm-layer proof obligations remain. | Audit now checks that explicit `hAlg` blockers are exactly the documented set: `embedding_triton_kernel` and `diag_ssm_triton`. | Not complete. |
+| Do not close while algorithm-layer proof obligations remain. | Audit now checks that explicit `hAlg` blockers are exactly the documented set: `diag_ssm_triton`. | Not complete. |
 
 ## Evidence Checked
 
@@ -36,7 +36,7 @@ surface.
   `TODO` status and that Python `.to(tl.float32)` casts missing from Lean are
   covered by an explicit documented slice/scope note. The same gate rejects
   unexpected algorithm-layer `hAlg` blockers outside the documented set of
-  two remaining obligations. It rejects Lean-only `tl.load(..., dtype=...)`
+  one remaining obligation. It rejects Lean-only `tl.load(..., dtype=...)`
   annotations and `keep_dims` reduction substitutions, both of which are
   must-fix deviations under
   `review_criteria.md`. It also flags Python `+=` statements missing from Lean
@@ -65,33 +65,6 @@ surface.
 ## Remaining Blockers
 
 These files must not be counted complete yet:
-
-- `embedding_triton_kernel/EmbeddingTritonKernel.lean`
-  - Kernel body is faithful.
-  - Target: `embedding_kernel_correct_target`.
-  - Named algorithm postcondition: `embedding_kernel_alg_post`.
-  - Public correctness theorem exposes this algorithm-layer postcondition as an
-    explicit hypothesis; there is no `True` / `trivial` placeholder.
-  - Current local proof infrastructure includes `embeddingLoopInvariant`,
-  `embeddingLoopInvariant_zero`, `embeddingLoopInvariant_step_of_chunk_write`,
-    `embeddingLoopInvariant_to_alg_post`, and
-    `embeddingLoopInvariant_to_alg_post_of_final`. The final bridge now accepts
-    the `forRange_inv` shape `BLOCK_N ≤ final` rather than requiring a
-    definitionally exact final offset. Old-prefix/current-chunk disjointness is
-    factored into `embeddingPrefixIndex_ne_currentChunk` and
-    `embeddingOldPrefix_outOffset_ne_currentChunk`; aligned chunk coverage is
-    captured by `embeddingChunkLane_lt_of_aligned_start` and packaged for the
-    step theorem by `embeddingChunkLaneBound_of_aligned_start`; current-chunk
-    masked scatter readback is bridged by `embeddingCurrentChunkScatter_write`, with
-    `embeddingCurrentChunkNoCollision_of_full_injective` deriving its
-    no-collision premise from full output injectivity plus chunk-bound coverage.
-    `embeddingCurrentChunkScatter_preserve_old` covers old-prefix preservation
-    for that current-chunk scatter, and
-    `embeddingLoopInvariant_step_of_current_chunk_scatter` packages the scatter
-    state into the next-prefix invariant.
-  - Remaining proof: instantiate the per-chunk write invariant with
-    `forRange_inv` under `outOffsetFull` injectivity, including the concrete
-    loop-body store.
 
 - `diag_ssm_triton/DiagSsmTriton.lean`
   - Kernel body is faithful.

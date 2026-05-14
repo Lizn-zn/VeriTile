@@ -1350,19 +1350,285 @@ theorem embeddingLoopBody_step_preserves_context
               hWeightOutNe (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) _
         · exact hWeightRead offset
 
+def embeddingLoopContextInvariant
+    (s0 : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN : Nat)
+    (off : Nat) (st : BlockState) : Prop :=
+  embeddingLoopInvariant s0 weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+    hiden_size BLOCK_N BLOCK_DMODEL off st ∧
+    st.regs .nat [BLOCK_NN] "offs_nn" =
+      some { data := fun lane : TileIndex [BLOCK_NN] =>
+        s0.pids 0 * BLOCK_N + lane.1.val } ∧
+    st.regs .nat [BLOCK_DMODEL] "offs_d" =
+      some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val } ∧
+    (∀ offset,
+      st.readMemValue .nat (Region.cast input_ids) offset =
+        s0.readMemValue .nat (Region.cast input_ids) offset) ∧
+    (∀ offset, st.readMem weight offset = s0.readMem weight offset)
+
+theorem embeddingLoopContextInvariant_init_of_preloop
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (hStep : stepStmts (embeddingPreLoop BLOCK_DMODEL BLOCK_N BLOCK_NN) s0 = some st) :
+    embeddingLoopContextInvariant s0 weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_N BLOCK_DMODEL BLOCK_NN 0 st := by
+  rcases embeddingPreLoop_step_regs s0 st input_ids weight BLOCK_DMODEL BLOCK_N
+      BLOCK_NN hStep with
+    ⟨_hStart, hOffsNN, hOffsD, hInputRead, hWeightRead⟩
+  exact ⟨embeddingLoopInvariant_zero s0 st weight input_ids out vob_start_id
+      vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_N
+      BLOCK_DMODEL,
+    hOffsNN, hOffsD, hInputRead, hWeightRead⟩
+
+theorem embeddingLoopContextInvariant_step_of_body
+    (s0 st st' : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hCtx :
+      embeddingLoopContextInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn st)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s0 stride_out_seq BLOCK_N idx))
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hLaneBound :
+      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane →
+          start_nn + lane.1.val < BLOCK_N)
+    (hStep :
+      stepStmts
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+        (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st') :
+    embeddingLoopContextInvariant s0 weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_N BLOCK_DMODEL BLOCK_NN (start_nn + BLOCK_NN) st' := by
+  rcases hCtx with ⟨hInv, hOffsNN, hOffsD, hInputRead, hWeightRead⟩
+  have hInv' :
+      embeddingLoopInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL (start_nn + BLOCK_NN) st' :=
+    embeddingLoopInvariant_step_of_concrete_body s0 st st' weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn hInv hOffsNN hOffsD hInputRead
+      hWeightRead hOutInj hLaneBound hStep
+  rcases embeddingLoopBody_step_preserves_context s0 st st' weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn hOffsNN hOffsD hInputRead
+      hWeightRead hInputOutNe hWeightOutNe hStep with
+    ⟨hOffsNN', hOffsD', hInputRead', hWeightRead'⟩
+  exact ⟨hInv', hOffsNN', hOffsD', hInputRead', hWeightRead'⟩
+
+theorem embeddingLaneBound_of_blockNN_one
+    (s0 : BlockState) (n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+      BLOCK_DMODEL : Nat)
+    (hOne : BLOCK_NN = 1) (hStartLt : start_nn < BLOCK_N) :
+    ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+        BLOCK_DMODEL lane →
+      start_nn + lane.1.val < BLOCK_N := by
+  subst hOne
+  intro lane _hactive
+  have hlane : lane.1.val = 0 := by
+    omega
+  omega
+
+theorem embeddingLoopContextInvariant_body_step_exists
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hOne : BLOCK_NN = 1)
+    (hStartLt : start_nn < BLOCK_N)
+    (hCtx :
+      embeddingLoopContextInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN start_nn st)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s0 stride_out_seq BLOCK_N idx))
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out) :
+    ∃ st',
+      stepStmts
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+        (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st' ∧
+      embeddingLoopContextInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN (start_nn + BLOCK_NN) st' := by
+  rcases hCtx with ⟨hInv, hOffsNN, hOffsD, hInputRead, hWeightRead⟩
+  cases hStep :
+      stepStmts
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+        (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) with
+  | none =>
+      unfold embeddingLoopBody at hStep
+      simp [stepStmts, stepStmt, evalOp, hOffsNN, hOffsD, Tile.bop, Tile.cop,
+        Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
+        NumericDType.sub, NumericDType.mul, ComparableDType.lt,
+        ComparableDType.ge, Bool.and_eq_true, Option.bind, hInputRead,
+        hWeightRead] at hStep
+  | some st' =>
+      refine ⟨st', rfl, ?_⟩
+      exact embeddingLoopContextInvariant_step_of_body s0 st st' weight
+        input_ids out vob_start_id vob_end_id stride_weight_seq stride_out_seq
+        n_ctx hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn
+        ⟨hInv, hOffsNN, hOffsD, hInputRead, hWeightRead⟩ hOutInj
+        hInputOutNe hWeightOutNe
+        (embeddingLaneBound_of_blockNN_one s0 n_ctx hiden_size BLOCK_N
+          start_nn BLOCK_NN BLOCK_DMODEL hOne hStartLt)
+        hStep
+
+theorem embeddingForRange_context_of_preloop
+    (s0 stPre stLoop : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (hOne : BLOCK_NN = 1)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s0 stride_out_seq BLOCK_N idx))
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hPre : stepStmts (embeddingPreLoop BLOCK_DMODEL BLOCK_N BLOCK_NN) s0 = some stPre)
+    (hLoop :
+      stepStmt (.forRange "start_nn" 0 BLOCK_N BLOCK_NN
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)) stPre = some stLoop) :
+    ∃ final,
+      BLOCK_N ≤ final ∧
+        embeddingLoopContextInvariant s0 weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN final stLoop := by
+  have hStepNe : BLOCK_NN ≠ 0 := by
+    subst hOne
+    simp
+  have hInit :
+      embeddingLoopContextInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN 0 stPre :=
+    embeddingLoopContextInvariant_init_of_preloop s0 stPre weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_DMODEL BLOCK_N BLOCK_NN hPre
+  obtain ⟨final, stFinal, hFor, hFinal, hCtx⟩ :=
+    forRange_inv
+      (idx := "start_nn") (start := 0) (stop := BLOCK_N) (step := BLOCK_NN)
+      (body := embeddingLoopBody weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+      (P := embeddingLoopContextInvariant s0 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN)
+      (s_init := stPre)
+      hStepNe hInit
+      (by
+        intro start st hlt hCtx
+        exact embeddingLoopContextInvariant_body_step_exists s0 st weight
+          input_ids out vob_start_id vob_end_id stride_weight_seq
+          stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start
+          hOne hlt hCtx hOutInj hInputOutNe hWeightOutNe)
+  have hEq : stFinal = stLoop := by
+    rw [hLoop] at hFor
+    injection hFor with h
+    exact h.symm
+  subst hEq
+  exact ⟨final, hFinal, hCtx⟩
+
+theorem embeddingProjectedBody_alg_post
+    (s s' : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (hOne : BLOCK_NN = 1)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s stride_out_seq BLOCK_N idx))
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hExec :
+      stepStmts
+        (embeddingProjectedBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s') :
+    embedding_kernel_alg_post weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s s' := by
+  unfold embeddingProjectedBody at hExec
+  rcases (stepStmts.append_some_iff).mp hExec with ⟨stPre, hPre, hLoopStmt⟩
+  simp [stepStmts] at hLoopStmt
+  have hLoop :
+      stepStmt (.forRange "start_nn" 0 BLOCK_N BLOCK_NN
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)) stPre = some s' := by
+    cases hAux :
+        stepForRangeAux "start_nn" 0 BLOCK_N BLOCK_NN
+          (embeddingLoopBody weight input_ids out
+            vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+            hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+          stPre with
+    | none =>
+        simp [hAux] at hLoopStmt
+    | some stLoop =>
+        simp [hAux] at hLoopStmt
+        subst hLoopStmt
+        simp [hAux]
+  obtain ⟨final, hFinal, hCtx⟩ :=
+    embeddingForRange_context_of_preloop s stPre s' weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_DMODEL BLOCK_N BLOCK_NN hOne hOutInj hInputOutNe hWeightOutNe
+      hPre hLoop
+  exact embeddingLoopInvariant_to_alg_post_of_final s s' weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+    BLOCK_DMODEL BLOCK_N BLOCK_NN final hFinal hCtx.1
+
+theorem embedding_kernel_alg_post_of_exec
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (s s' : BlockState)
+    (hOne : BLOCK_NN = 1)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s stride_out_seq BLOCK_N idx))
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hExec :
+      exec (embedding_kernel weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s') :
+    embedding_kernel_alg_post weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s s' := by
+  unfold exec at hExec
+  rw [embedding_kernel_toAlg_body weight input_ids out vob_start_id vob_end_id
+    stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+    BLOCK_NN] at hExec
+  exact embeddingProjectedBody_alg_post s s' weight input_ids out vob_start_id
+    vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+    BLOCK_N BLOCK_NN hOne hOutInj hInputOutNe hWeightOutNe hExec
+
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
     (s : BlockState)
-    (hAlg :
-      ∀ s',
-        exec (embedding_kernel weight input_ids out
-          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s' →
-        embedding_kernel_alg_post weight input_ids out
-          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s s') :
+    (hOne : BLOCK_NN = 1)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s stride_out_seq BLOCK_N idx))
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out) :
     embedding_kernel_correct_target weight input_ids out
       vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s := by
@@ -1372,7 +1638,9 @@ theorem embedding_kernel_compute_correct_of_algorithm
   intro s0 s' hExec hs0
   subst s0
   intro idx hidx
-  exact hAlg s' hExec idx hidx
+  exact embedding_kernel_alg_post_of_exec weight input_ids out vob_start_id
+    vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+    BLOCK_N BLOCK_NN s s' hOne hOutInj hInputOutNe hWeightOutNe hExec idx hidx
 
 /-- Algorithm-layer correctness for the embedding kernel. -/
 theorem embedding_kernel_correct
@@ -1383,20 +1651,16 @@ theorem embedding_kernel_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
         outOffsetFull s stride_out_seq BLOCK_N idx))
-    (hAlg :
-      ∀ s',
-        exec (embedding_kernel weight input_ids out
-          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s' →
-        embedding_kernel_alg_post weight input_ids out
-          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s s') :
+    (hOne : BLOCK_NN = 1)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out) :
     embedding_kernel_correct_target weight input_ids out
       vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s :=
   embedding_kernel_compute_correct_of_algorithm weight input_ids out
     vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-    hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s hAlg
+    hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s hOne hOutInj hInputOutNe
+    hWeightOutNe
 
 /-- Compute-facing correctness for the embedding kernel. -/
 theorem embedding_kernel_compute_correct
@@ -1407,18 +1671,14 @@ theorem embedding_kernel_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
         outOffsetFull s stride_out_seq BLOCK_N idx))
-    (hAlg :
-      ∀ s',
-        exec (embedding_kernel weight input_ids out
-          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some s' →
-        embedding_kernel_alg_post weight input_ids out
-          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s s') :
+    (hOne : BLOCK_NN = 1)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out) :
     embedding_kernel_correct_target weight input_ids out
       vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
       hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s :=
   embedding_kernel_compute_correct_of_algorithm weight input_ids out
     vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
-    hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s hAlg
+    hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s hOne hOutInj hInputOutNe
+    hWeightOutNe
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
