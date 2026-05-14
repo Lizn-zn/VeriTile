@@ -1094,6 +1094,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.where($c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) => do
       let c' ← expandExpr env c
       expandWhereFromCond env c' a b
+  | `(tritonExpr| ($a:tritonExpr if $c:tritonExpr else $b:tritonExpr)) => do
+      let c' ← expandBoolCondition env c
+      expandWhereFromCond env c' a b
   | `(tritonExpr| $e:tritonExpr[ : ]) => do
       -- Python no-op full slice `e[:]`.
       expandExpr env e

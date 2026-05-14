@@ -9,16 +9,17 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `cross_entropy1.py`'s
+/-- Faithful transcription of `cross_entropy1.py`'s
 `cross_entropy_fwd_kernel`.
 
 This preserves the block logits load, optional smoothing sum, LSE side store,
 label-in-block loss branch, optional split behavior, and LSE-square term. -/
 def cross_entropy_fwd_surface
     (loss_ptr lse_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
-    (ignored_index class_start_idx : Int)
-    (total_classes n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
     (smoothing lse_square_scale : ℝ)
+    (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
     (HAS_SMOOTHING SPLIT : Bool) :
     ComputeKernel := triton {
   row_idx = tl.program_id(0)
@@ -42,27 +43,16 @@ def cross_entropy_fwd_surface
         (label_idx < min($(n_cols), (col_block_idx + $(1)) * $(BLOCK_SIZE))) {
       logits_label = tl.load(logits_ptr + label_idx)
       if HAS_SMOOTHING {
-        if SPLIT {
-          loss = 0.0 - $(smoothing) * sum_logits / $(total_classes) -
-            (1.0 - $(smoothing)) * logits_label
-        } else {
-          loss = lse - $(smoothing) * sum_logits / $(total_classes) -
-            (1.0 - $(smoothing)) * logits_label
-        }
+        loss = (lse if not SPLIT else 0.0) -
+          $(smoothing) * sum_logits / $(total_classes) -
+          (1.0 - $(smoothing)) * logits_label
       } else {
-        if SPLIT {
-          loss = 0.0 - logits_label
-        } else {
-          loss = lse - logits_label
-        }
+        loss = (lse if not SPLIT else 0.0) - logits_label
       }
     } else {
       if HAS_SMOOTHING {
-        if SPLIT {
-          loss = $(smoothing) * (0.0 - sum_logits / $(total_classes))
-        } else {
-          loss = $(smoothing) * (lse - sum_logits / $(total_classes))
-        }
+        loss = $(smoothing) *
+          ((lse if not SPLIT else 0.0) - sum_logits / $(total_classes))
       } else {
         loss = 0.0
       }
