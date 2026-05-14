@@ -2393,9 +2393,8 @@ scope_markers = (
     "single-iteration",
     "specializes",
 )
-reduce_call_re = re.compile(r"\btl\.(sum|max)\(([^()\n]*(?:\([^()\n]*\)[^()\n]*)*)\)")
+reduce_call_head_re = re.compile(r"\btl\.(sum|max)\s*\(")
 axis_kw_re = re.compile(r"(?:^|,)\s*axis\s*=\s*([0-9]+)\s*(?:,|$)")
-axis_pos_re = re.compile(r",\s*([0-9]+)\s*(?:,|$)")
 
 def python_jit_kernel_bodies(text: str) -> list[str]:
     lines = text.splitlines()
@@ -2485,19 +2484,55 @@ def logical_lines(text: str) -> list[str]:
         out.append(re.sub(r"\s+", " ", cur).strip())
     return out
 
+def tl_reduce_calls(line: str) -> list[tuple[str, str]]:
+    calls = []
+    pos = 0
+    while True:
+        match = reduce_call_head_re.search(line, pos)
+        if not match:
+            break
+        k = match.end()
+        depth = 1
+        while k < len(line) and depth > 0:
+            if line[k] == "(":
+                depth += 1
+            elif line[k] == ")":
+                depth -= 1
+            k += 1
+        if depth == 0:
+            calls.append((match.group(1), line[match.end():k - 1]))
+        pos = max(k, match.end())
+    return calls
+
+def split_top_level_args(args_text: str) -> list[str]:
+    args = []
+    cur = []
+    depth = 0
+    for ch in args_text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append("".join(cur).strip())
+            cur = []
+            continue
+        cur.append(ch)
+    if cur:
+        args.append("".join(cur).strip())
+    return args
+
 def reduce_axis_styles(text: str) -> list[tuple[str, str, str]]:
     styles = []
     for line in logical_lines(text):
-        for match in reduce_call_re.finditer(line):
-            fn = match.group(1)
-            args = match.group(2)
+        for fn, args in tl_reduce_calls(line):
             axis_kw = axis_kw_re.search(args)
             if axis_kw:
                 styles.append((fn, axis_kw.group(1), "kw"))
                 continue
-            axis_pos = axis_pos_re.search(args)
-            if axis_pos:
-                styles.append((fn, axis_pos.group(1), "pos"))
+            parts = split_top_level_args(args)
+            if len(parts) >= 2 and re.fullmatch(r"[0-9]+", parts[1]):
+                styles.append((fn, parts[1], "pos"))
     return styles
 
 failures = []
