@@ -18,7 +18,7 @@ def load_reduce_kernel
     (x_ptr y_ptr : RegionName)
     (stride_xm stride_xn _stride_y BLOCK_M BLOCK_N : Nat) :
     ComputeKernel := triton {
-  x_ptr := tl.make_block_ptr(base=x_ptr,
+  x_ptr = tl.make_block_ptr(base=x_ptr,
     shape=($(BLOCK_M), $(BLOCK_N)),
     strides=($(stride_xm), $(stride_xn)),
     offsets=($(0), $(0)),
