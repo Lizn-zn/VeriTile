@@ -185,7 +185,7 @@ def log_softmax_backward_kernel
   out = tl.load(out_ptrs, mask=mask).to(tl.float32)
   out_grad_ptrs = out_grad_ptr + offsets
   out_grad = tl.load(out_grad_ptrs, mask=mask).to(tl.float32)
-  scale = tl.sum(out_grad, axis=1)
+  scale = tl.sum(out_grad, 1)
   in_grad = out_grad - tl.exp((out).to(tl.float32)) * scale[:, None]
   in_grad_ptrs = in_grad_ptr + offsets
   tl.store(in_grad_ptrs, in_grad, mask=mask)

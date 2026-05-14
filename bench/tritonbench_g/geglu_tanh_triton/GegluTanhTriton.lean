@@ -62,7 +62,7 @@ def geglu_tanh_backward_kernel
   term1 = 0.5 * (1 + tanh_result)
   tanh_sq = tanh_result * tanh_result
   term2 = 0.5 * a_row * (1 - tanh_sq) *
-    (sqrt_2_over_pi * (1 + 3.0 * 0.044715 * a_row * a_row))
+    (sqrt_2_over_pi * (1 + 3 * 0.044715 * a_row * a_row))
   da_row = dc_row * b_row * (term1 + term2)
   tl.store(a + col_offsets, da_row, mask=mask)
   tl.store(b + col_offsets, db_row, mask=mask)
@@ -178,7 +178,7 @@ theorem geglu_tanh_backward_kernel_correct
       have ha := h_a i
       have hb := h_b i
       simp [gegluTanhOffset] at hdc ha hb
-      simp [hi, TiledActivation.geluTanhBwdA, TiledActivation.geluTanhArg,
+      norm_num [hi, TiledActivation.geluTanhBwdA, TiledActivation.geluTanhArg,
             hdc, ha, hb]
     · simp [hi]
   · intro i

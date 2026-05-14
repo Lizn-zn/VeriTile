@@ -52,9 +52,9 @@ def softmax_kernel_inner_one_tile
   mask = n_offsets < $(N)
   input_ptrs = input_ptr + offset
   inp = (tl.load(input_ptrs, mask=mask, other=-float("inf"))).to(output_ptr.dtype.element_ty)
-  m = tl.max(inp, axis=0)
+  m = tl.max(inp, 0)
   e = tl.exp(inp - m)
-  z = tl.sum(e, axis=0)
+  z = tl.sum(e, 0)
   out = e / z
   output_ptrs = output_ptr + offset
   tl.store(output_ptrs, out, mask=mask)
@@ -98,7 +98,7 @@ def softmax_backward_kernel_inner_one_tile_surface
   mask = (m_offsets[:, None] < $(M)) & (n_offsets < $(N))
   out_tile = tl.load(out_ptr + offsets, mask=mask)
   out_grad_tile = tl.load(out_grad_ptr + offsets, mask=mask)
-  scale = tl.sum(out_tile * out_grad_tile, axis=1)
+  scale = tl.sum(out_tile * out_grad_tile, 1)
   in_grad_tile = out_tile * (out_grad_tile - scale[:, None])
   tl.store(in_grad_ptr + offsets, in_grad_tile, mask=mask)
 }

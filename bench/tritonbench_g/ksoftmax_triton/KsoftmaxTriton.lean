@@ -120,13 +120,13 @@ def ksoftmax_backward_surface
     o = tl.where(k > n, zero, o)
   }
   if LOG {
-    s = tl.sum(g, axis=0)
+    s = tl.sum(g, 0)
     if IS_FP16 {
       o = (o).to(tl.float32)
     }
     grad_in = g - tl.exp(o) * s
   } else {
-    s = tl.sum(g * o, axis=0)
+    s = tl.sum(g * o, 0)
     grad_in = o * (g - s)
   }
   grad_in_ptrs = GradIn + m * $(stride_bm) + n * $(stride_bn) + k
