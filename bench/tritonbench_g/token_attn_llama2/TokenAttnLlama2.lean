@@ -10,15 +10,14 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `token_attn_llama2.py`'s
+/-- Faithful transcription of `token_attn_llama2.py`'s
 `_fwd_kernel_token_att1`.
 
 Typed-region note: metadata/gather buffers are `Region .nat`, matching their
 index role without adding source-level `dtype=` kwargs. -/
 def token_attn_llama2_surface
-    (Q K : RegionName) (B_Loc B_Start_Loc B_Seqlen : Region .nat)
+    (Q K : RegionName) (sm_scale : ℝ) (B_Loc B_Start_Loc B_Seqlen : Region .nat)
     (Att_Out : RegionName)
-    (sm_scale : ℝ)
     (max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd
       stride_kbs stride_kh stride_kd att_stride_h att_stride_bs kv_group_num
       BLOCK_DMODEL BLOCK_N : Nat) : ComputeKernel := triton {
