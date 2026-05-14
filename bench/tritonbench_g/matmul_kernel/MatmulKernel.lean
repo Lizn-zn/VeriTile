@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `matmul_kernel.py`'s `matmul_kernel`.
+/-- Faithful transcription of `matmul_kernel.py`'s `matmul_kernel`.
 
 The Python kernel hard-codes `M = N = K = 4096` and the corresponding
 contiguous strides; this surface keeps those constants and the fused
