@@ -25,7 +25,7 @@ def rmsnorm_implementation
   pid_m = tl.program_id(1)
   offset_m = pid_batch * $(stride_x_batch) + pid_m * $(stride_x_m)
   block_n_size = tl.arange(0, $(BLOCK_N_SIZE))
-  var = tl.zeros([$(BLOCK_N_SIZE)], dtype=tl.float32)
+  var = tl.zeros([$(BLOCK_N_SIZE)], tl.float32)
   for block_n_strart_ptr in range(0, $(N_SIZE), $(BLOCK_N_SIZE)) {
     offset_n = block_n_strart_ptr + block_n_size
     x_ptr_mask = offset_n < $(N_SIZE)

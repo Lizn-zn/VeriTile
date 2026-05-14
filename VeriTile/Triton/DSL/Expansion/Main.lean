@@ -1180,6 +1180,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       -- `tl.zeros([dims])` ≡ `tl.full([dims], 0)`.
       let zero ← `(tritonExpr| 0)
       expandFull expandExpr env dims.getElems zero
+  | `(tritonExpr| tl.zeros([$dims:tritonExpr,*], $dt:tritonDType)) => do
+      expandComputeZeros expandExpr env dims.getElems dt
   | `(tritonExpr| tl.zeros([$dims:tritonExpr,*], $name:ident=$dt:tritonDType)) => do
       unless name.getId.getString! == "dtype" do
         Macro.throwError
