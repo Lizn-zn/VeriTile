@@ -9,6 +9,83 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Faithful transcription of `fused_rotary_embedding.py`'s
+`decoding_fused_rotary_embedding_kernel`.
+
+This keeps the unconditional Q rotary writes plus the conditional K rotary and
+K/V cache-fill branch guarded by `cur_head_idx % KV_GROUP_NUM == 0`. -/
+def decoding_fused_rotary_embedding_kernel_surface
+    (q k v cos sin k_cache v_cache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (x q_token_stride q_head_stride k_token_stride k_head_stride
+      head_dim_stride cos_token_stride cos_stride kcb_stride kch_stride
+      kcsplit_x_stride kcs_stride kcd_stride vcb_stride vch_stride vcs_stride
+      vcd_stride bts_stride btb_stride block_size KV_GROUP_NUM HEAD_DIM
+      HALF_DIM : Nat) :
+    ComputeKernel := triton {
+  cur_head_idx = tl.program_id(0)
+  cur_token_idx = tl.program_id(1)
+
+  dim_range = tl.arange(0, $(HEAD_DIM))
+  dim_range0 = tl.arange(0, $(HALF_DIM))
+  dim_range1 = dim_range0 + $(HALF_DIM)
+
+  off_q = cur_token_idx * $(q_token_stride) + cur_head_idx * $(q_head_stride)
+  off_q0 = off_q + dim_range0 * $(head_dim_stride)
+  off_q1 = off_q + dim_range1 * $(head_dim_stride)
+
+  loaded_q0 = tl.load(q + off_q0)
+  loaded_q1 = tl.load(q + off_q1)
+  off_cos_sin = cur_token_idx * $(cos_token_stride) + dim_range0 * $(cos_stride)
+  loaded_cos = tl.load(cos + off_cos_sin)
+  loaded_sin = tl.load(sin + off_cos_sin)
+
+  out_q0 = loaded_q0 * loaded_cos - loaded_q1 * loaded_sin
+  out_q1 = loaded_q0 * loaded_sin + loaded_q1 * loaded_cos
+  tl.store(q + off_q0, out_q0)
+  tl.store(q + off_q1, out_q1)
+
+  handle_kv = cur_head_idx % $(KV_GROUP_NUM) == $(0)
+  if handle_kv {
+    cur_k_head_idx = cur_head_idx // $(KV_GROUP_NUM)
+    off_kv = cur_token_idx * $(k_token_stride) + cur_k_head_idx * $(k_head_stride)
+    off_k0 = off_kv + dim_range0 * $(head_dim_stride)
+    off_k1 = off_kv + dim_range1 * $(head_dim_stride)
+    loaded_k0 = tl.load(k + off_k0)
+    loaded_k1 = tl.load(k + off_k1)
+
+    out_k0 = loaded_k0 * loaded_cos - loaded_k1 * loaded_sin
+    out_k1 = loaded_k0 * loaded_sin + loaded_k1 * loaded_cos
+
+    past_kv_seq_len = tl.load(context_lengths + cur_token_idx) - $(1)
+
+    last_block_idx = past_kv_seq_len // $(block_size)
+    block_ids = tl.load(BLOCK_TABLES + cur_token_idx * $(bts_stride) +
+      last_block_idx * $(btb_stride))
+    offsets_in_last_block = past_kv_seq_len % $(block_size)
+    offsets_cache_base = block_ids * $(kcb_stride) +
+      cur_k_head_idx * $(kch_stride)
+    k_range0 = offsets_cache_base +
+      offsets_in_last_block * $(kcs_stride) +
+      (dim_range0 // $(x)) * $(kcsplit_x_stride) +
+      (dim_range0 % $(x)) * $(kcd_stride)
+    k_range1 = offsets_cache_base +
+      offsets_in_last_block * $(kcs_stride) +
+      (dim_range1 // $(x)) * $(kcsplit_x_stride) +
+      (dim_range1 % $(x)) * $(kcd_stride)
+    tl.store(k_cache + k_range0, out_k0)
+    tl.store(k_cache + k_range1, out_k1)
+
+    off_v = off_kv + dim_range * $(head_dim_stride)
+    loaded_v = tl.load(v + off_v)
+    v_range = block_ids * $(vcb_stride) +
+      cur_k_head_idx * $(vch_stride) +
+      offsets_in_last_block * $(vcs_stride) +
+      dim_range * $(vcd_stride)
+    tl.store(v_cache + v_range, loaded_v)
+  }
+}
+
 /-- Surface transcription of the unconditional Q rotary part of
 `fused_rotary_embedding.py`'s `decoding_fused_rotary_embedding_kernel`.
 
