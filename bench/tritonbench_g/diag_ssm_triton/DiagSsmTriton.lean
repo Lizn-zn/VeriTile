@@ -654,6 +654,47 @@ theorem diag_ssm_forward_kernel_toAlg_body
         length batch_size dim BLOCK_SIZE := by
   rfl
 
+theorem diagSsmForwardPreLoop_step_regs
+    (st0 st : BlockState) (s_ptr x_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE : Nat)
+    (hStep :
+      stepStmts (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE) st0 = some st) :
+    st.regs .real [BLOCK_SIZE] "s" =
+        some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE 0) ∧
+      st.regs .real [BLOCK_SIZE] "Lambda" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          if active st0 batch_size dim BLOCK_SIZE idx.1 then
+            some (st0.readMem lambda_ptr
+              (IntegralDType.nat.mod (colOffset st0 BLOCK_SIZE idx.1) dim))
+          else
+            some 0 } ∧
+      st.regs .nat [BLOCK_SIZE] "col_offsets" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          colOffset st0 BLOCK_SIZE idx.1 } ∧
+      st.regs .bool [BLOCK_SIZE] "mask" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          active st0 batch_size dim BLOCK_SIZE idx.1 } := by
+  unfold diagSsmForwardPreLoop at hStep
+  simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+    NumericDType.mul, NumericDType.add, IntegralDType.mod,
+    ComparableDType.lt, Option.bind, colOffset, active,
+    diagSsmMaskedStateTile, diagSsmStateAfter] at hStep
+  subst st
+  constructor
+  · simp [BlockState.setReg, diagSsmMaskedStateTile, diagSsmStateAfter,
+      active, colOffset]
+    funext idx
+    split <;> norm_num
+  · constructor
+    · simp [BlockState.setReg, active, colOffset, IntegralDType.mod]
+    · constructor
+      · simp [BlockState.setReg, colOffset]
+      · simp [BlockState.setReg, active, colOffset]
+        funext idx
+        rfl
+
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=
