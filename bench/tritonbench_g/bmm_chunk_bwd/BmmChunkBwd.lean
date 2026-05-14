@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-- Surface transcription of `bmm_chunk_bwd.py`'s `_bmm_chunk_bwd_kernel`.
+/-- Faithful transcription of `bmm_chunk_bwd.py`'s `_bmm_chunk_bwd_kernel`.
 
 The Python wrapper casts `dout` and `a` to a runtime `dot_dtype` constexpr. This
 surface preserves those casts as dtype annotations; current `tl.dot` typing in
