@@ -46,6 +46,10 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   old-time preservation for the current-time scatter.
   `diagSsmForwardLoopInvariant_step_of_current_time_scatter` packages the
   updated state register plus current-time scatter into the next loop invariant.
+  `diagSsmForwardPreLoop`, `diagSsmForwardLoopBody`, and
+  `diagSsmForwardProjectedBody` now name the concrete DSL-expanded forward
+  algorithm body, with `diag_ssm_forward_kernel_toAlg_body` proving that this
+  split is exactly the current `toAlgKernel.body`.
   The remaining store-side work is matching the concrete DSL-expanded loop body
   to that register/scatter shape. The theorem surface now requires full
   `diagSsmForwardOutOffset` injectivity over `(time, column)` indices. The

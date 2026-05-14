@@ -584,6 +584,76 @@ theorem diagSsmForwardLoopInvariant_step_of_current_time_scatter
       (diagSsmForwardCurrentTimeNoCollision_of_out_injective st0 batch_size dim
         BLOCK_SIZE t i ht hOutInj)
 
+def diagSsmForwardPreLoop
+    (s_ptr lambda_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE : Nat) : List Stmt :=
+  [ .assign .nat [] "col_idx"
+      (.mul NumericDType.nat Broadcast.nil (.programId 0) (.constNat BLOCK_SIZE))
+  , .assign .nat [BLOCK_SIZE] "col_offsets"
+      (.add NumericDType.nat Broadcast.scalarL
+        (.ref .nat [] "col_idx") (.arange BLOCK_SIZE))
+  , .assign .bool [BLOCK_SIZE] "mask"
+      (.lt ComparableDType.nat Broadcast.scalarR
+        (.ref .nat [BLOCK_SIZE] "col_offsets")
+        (.constNat (batch_size * dim)))
+  , .assign .real [BLOCK_SIZE] "s"
+      (.load .real
+        (.region s_ptr (.ref .nat [BLOCK_SIZE] "col_offsets"))
+        (.maskOther
+          (.ref .bool [BLOCK_SIZE] "mask")
+          ((Op.const 0).broadcast [BLOCK_SIZE])))
+  , .assign .real [BLOCK_SIZE] "Lambda"
+      (.load .real
+        (.region lambda_ptr
+          (.mod IntegralDType.nat Broadcast.scalarR
+            (.ref .nat [BLOCK_SIZE] "col_offsets") (.constNat dim)))
+        (.maskOther
+          (.ref .bool [BLOCK_SIZE] "mask")
+          ((Op.const 0).broadcast [BLOCK_SIZE])))
+  ]
+
+def diagSsmForwardLoopBody
+    (x_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE : Nat) : List Stmt :=
+  [ .assign .nat [BLOCK_SIZE] "offsets"
+      (.add NumericDType.nat Broadcast.scalarL
+        (.mul NumericDType.nat Broadcast.nil
+          (.ref .nat [] "t") (.constNat (batch_size * dim)))
+        (.ref .nat [BLOCK_SIZE] "col_offsets"))
+  , .assign .real [BLOCK_SIZE] "x"
+      (.load .real
+        (.region x_ptr (.ref .nat [BLOCK_SIZE] "offsets"))
+        (.maskOther
+          (.ref .bool [BLOCK_SIZE] "mask")
+          ((Op.const 0).broadcast [BLOCK_SIZE])))
+  , .assign .real [BLOCK_SIZE] "s"
+      (.add NumericDType.real Broadcast.nil.consSame
+        (.mul NumericDType.real Broadcast.nil.consSame
+          (.ref .real [BLOCK_SIZE] "s")
+          (.ref .real [BLOCK_SIZE] "Lambda"))
+        (.ref .real [BLOCK_SIZE] "x"))
+  , .store .real [BLOCK_SIZE]
+      (.region y_ptr (.ref .nat [BLOCK_SIZE] "offsets"))
+      (.ref .real [BLOCK_SIZE] "s")
+      (.mask (.ref .bool [BLOCK_SIZE] "mask"))
+  ]
+
+def diagSsmForwardProjectedBody
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) : List Stmt :=
+  diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim BLOCK_SIZE ++
+    [.forLoop "t" length
+      (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)]
+
+theorem diag_ssm_forward_kernel_toAlg_body
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) :
+    (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
+      length batch_size dim BLOCK_SIZE).toAlgKernel.body =
+      diagSsmForwardProjectedBody s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE := by
+  rfl
+
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=
