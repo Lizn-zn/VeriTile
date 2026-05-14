@@ -22,8 +22,8 @@ def swiglu_fwd_kernel
   Y += row * $(stride_y_row)
   OUT += row * $(stride_out_row)
   cols = start_col + tl.arange(0, $(BLOCK_N))
-  x = tl.load(X + cols, mask=cols < $(ncols), other=0).to(tl.float32)
-  y = tl.load(Y + cols, mask=cols < $(ncols), other=0).to(tl.float32)
+  x = tl.load(X + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
+  y = tl.load(Y + cols, mask=cols < $(ncols), other=0.0).to(tl.float32)
   out = x * tl.sigmoid(x) * y
   tl.store(OUT + cols, out, mask=cols < $(ncols))
 }
