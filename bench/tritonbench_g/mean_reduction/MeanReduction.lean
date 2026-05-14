@@ -927,6 +927,34 @@ theorem meanPostLoop_step_alg_post
     meanStoreFromExpandedMaskedAccumulator_alg_post s0 _ X Mean M N
       BLOCK_M BLOCK_N off hBLOCK_N hoff
 
+theorem meanPostLoop_step_alg_post_of_context
+    (s0 st st' : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N off : Nat)
+    (hCtx : meanLoopContextInvariant s0 X Mean M N BLOCK_M BLOCK_N off st)
+    (hStep : stepStmts (meanPostLoop N BLOCK_M BLOCK_N) st = some st')
+    (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
+    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0 st' := by
+  rcases hCtx with ⟨hInv, _hX, hMean, hRow, _hRead⟩
+  exact meanPostLoop_step_alg_post s0 st st' X Mean M N BLOCK_M BLOCK_N off
+    hInv.2 hMean hRow hStep hBLOCK_N hoff
+
+theorem meanPreLoop_forRange_postLoop_alg_post
+    (s0 stPre stLoop stPost : BlockState) (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat)
+    (hStepNe : BLOCK_N ≠ 0)
+    (hPre :
+      stepStmts (meanPreLoop X Mean M N BLOCK_M BLOCK_N) s0 = some stPre)
+    (hLoop :
+      stepStmt (.forRange "off" 0 N BLOCK_N (meanLoopBody N BLOCK_M BLOCK_N))
+        stPre = some stLoop)
+    (hPost : stepStmts (meanPostLoop N BLOCK_M BLOCK_N) stLoop = some stPost) :
+    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0 stPost := by
+  obtain ⟨final, hFinal, hCtx⟩ :=
+    meanForRange_context_of_preloop s0 stPre stLoop X Mean M N BLOCK_M
+      BLOCK_N hStepNe hPre hLoop
+  exact meanPostLoop_step_alg_post_of_context s0 stLoop stPost X Mean M N
+    BLOCK_M BLOCK_N final hCtx hPost (Nat.pos_of_ne_zero hStepNe) hFinal
+
 def meanProjectedBody
     (X Mean : RegionName) (M N BLOCK_M BLOCK_N : Nat) : List Stmt :=
   meanPreLoop X Mean M N BLOCK_M BLOCK_N ++

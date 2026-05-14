@@ -106,8 +106,12 @@ These files must not be counted complete yet:
     `meanLoopContextInvariant_body_step_exists` packages the step in
     `forRange_inv`'s existential shape. `meanForRange_context_of_preloop`
     instantiates `forRange_inv` for the actual projected `forRange`.
-  - Remaining proof: feed the final loop invariant into
-    `meanPostLoop_step_alg_post`, then compose the full projected body split.
+    `meanPostLoop_step_alg_post_of_context` and
+    `meanPreLoop_forRange_postLoop_alg_post` bridge the final invariant through
+    the actual post-loop and compose the projected pre-loop, loop, and
+    post-loop sections.
+  - Remaining proof: connect the projected-section composition to the complete
+    `mean_dim_kernel.toAlgKernel` execution.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.
