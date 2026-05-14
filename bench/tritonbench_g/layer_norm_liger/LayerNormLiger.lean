@@ -10,6 +10,39 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Faithful transcription of `layer_norm_liger.py`'s
+`_layer_norm_forward_kernel`.
+
+The source accepts `W_row_stride` and `B_row_stride` but does not use them in
+pointer arithmetic; they are preserved in the surface signature. -/
+def layer_norm_liger_forward_surface
+    (Y_ptr : RegionName) (Y_row_stride : Nat)
+    (X_ptr : RegionName) (X_row_stride : Nat)
+    (W_ptr : RegionName) (W_row_stride : Nat)
+    (B_ptr : RegionName) (B_row_stride : Nat)
+    (Mean_ptr : RegionName) (Mean_row_stride : Nat)
+    (RSTD_ptr : RegionName) (RSTD_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = col_offsets < $(n_cols)
+  Y_ptr += row_idx * $(Y_row_stride)
+  X_ptr += row_idx * $(X_row_stride)
+  Mean_ptr += row_idx * $(Mean_row_stride)
+  RSTD_ptr += row_idx * $(RSTD_row_stride)
+  X_row = tl.load(X_ptr + col_offsets, mask=mask, other=0)
+  W_row = tl.load(W_ptr + col_offsets, mask=mask, other=0)
+  B_row = tl.load(B_ptr + col_offsets, mask=mask, other=0)
+  mean = tl.sum(X_row, axis=0) / $(n_cols)
+  var = tl.sum((X_row - mean) * (X_row - mean), axis=0) / $(n_cols)
+  rstd = tl.rsqrt(var + $(eps))
+  tl.store(Mean_ptr, mean)
+  tl.store(RSTD_ptr, rstd)
+  Y_row = (X_row - mean) * rstd * W_row + B_row
+  tl.store(Y_ptr + col_offsets, Y_row, mask=mask)
+}
+
 /-- Surface transcription of `layer_norm_liger.py`'s
 `_layer_norm_backward_kernel`.
 
