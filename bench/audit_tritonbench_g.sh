@@ -57,7 +57,6 @@ else
 fi
 
 known_algorithm_blockers=(
-  "bench/tritonbench_g/mean_reduction/MeanReduction.lean"
   "bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean"
   "bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean"
 )

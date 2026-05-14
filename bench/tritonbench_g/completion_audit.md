@@ -16,7 +16,7 @@ surface.
 | Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current mechanical mismatch. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
 | Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
-| Do not close while algorithm-layer proof obligations remain. | Audit now checks that explicit `hAlg` blockers are exactly the documented set: `mean_reduction`, `embedding_triton_kernel`, and `diag_ssm_triton`. | Not complete. |
+| Do not close while algorithm-layer proof obligations remain. | Audit now checks that explicit `hAlg` blockers are exactly the documented set: `embedding_triton_kernel` and `diag_ssm_triton`. | Not complete. |
 
 ## Evidence Checked
 
@@ -36,7 +36,7 @@ surface.
   `TODO` status and that Python `.to(tl.float32)` casts missing from Lean are
   covered by an explicit documented slice/scope note. The same gate rejects
   unexpected algorithm-layer `hAlg` blockers outside the documented set of
-  three remaining obligations. It rejects Lean-only `tl.load(..., dtype=...)`
+  two remaining obligations. It rejects Lean-only `tl.load(..., dtype=...)`
   annotations and `keep_dims` reduction substitutions, both of which are
   must-fix deviations under
   `review_criteria.md`. It also flags Python `+=` statements missing from Lean
@@ -65,56 +65,6 @@ surface.
 ## Remaining Blockers
 
 These files must not be counted complete yet:
-
-- `mean_reduction/MeanReduction.lean`
-  - Kernel body is faithful.
-  - Target: `mean_dim_kernel_correct_target`.
-  - Named algorithm postcondition: `mean_dim_kernel_alg_post`.
-  - Public correctness theorem exposes this algorithm-layer postcondition as an
-    explicit hypothesis; there is no `True` / `trivial` placeholder.
-  - Current local proof infrastructure: `meanLoopInvariant`,
-    `meanMaskedAccumulatorSpec`, `meanChunkLoadSpec`,
-    `meanLoopInvariant_init_of_zero_reg`,
-    `meanLoopInvariant_step_of_accumulator_update`,
-    `meanLoopInvariant_register_reduceSum_to_meanSpec`, and
-    `meanFromMaskedAccumulatorSpec_eq_meanSpec`. The masked load bridge is
-    exposed by `meanChunkLoadSpec_active` and `meanChunkLoadSpec_inactive`;
-    final masked scatter/readback is bridged by
-    `meanStoreFromMaskedAccumulator_alg_post`, with
-    `meanOutOffset_injective` and
-    `meanStoreFromMaskedAccumulator_alg_post_default` packaging the row-output
-    no-collision side; `meanLoopInvariant_to_scatter_alg_post` packages a final
-    loop invariant plus scatter state into the algorithm postcondition. The
-    concrete post-loop AST suffix is named `meanPostLoop`.
-    `meanOutOffset_injective_col1` and
-    `meanStoreFromExpandedMaskedAccumulator_alg_post` now cover the actual
-    expanded `[BLOCK_M, 1]` store shape emitted after `mean[:, None]`.
-    `meanPostLoop_step_alg_post` consumes the actual
-    `stepStmts (meanPostLoop ...)` execution from the final accumulator and
-    store-register assumptions. `meanPreLoop`, `meanLoopBody`, and
-    `meanProjectedBody` name the projected algorithm body components, and
-    `mean_dim_kernel_toAlg_body` proves that this split is the actual
-    `toAlgKernel.body`. `meanPreLoop_step_regs` proves the concrete pre-loop
-    execution facts: zero `_mean`, expanded `X` / `Mean` pointer tiles, and
-    `row_mask`. `meanLoopBody_step_accumulator_update` proves that the actual
-    projected loop body produces the `_mean = old + meanChunkLoadSpec`
-    register update. `meanLoopBody_step_preserves_context` proves the same
-    body preserves `X`, `Mean`, `row_mask`, and reads from `X`.
-    `meanLoopContextInvariant`, `meanLoopContextInvariant_init_of_preloop`, and
-    `meanLoopContextInvariant_step_of_body` package the strengthened predicate,
-    initialization, and body preservation needed by `forRange_inv`.
-    `meanLoopContextInvariant_body_step_exists` packages the step in
-    `forRange_inv`'s existential shape. `meanForRange_context_of_preloop`
-    instantiates `forRange_inv` for the actual projected `forRange`.
-    `meanPostLoop_step_alg_post_of_context` and
-    `meanPreLoop_forRange_postLoop_alg_post` bridge the final invariant through
-    the actual post-loop and compose the projected pre-loop, loop, and
-    post-loop sections.
-    `meanProjectedBody_alg_post` proves correctness for the full named
-    projected body, using the generic `stepStmts.append_some_iff` splitter.
-  - Remaining proof: connect `meanProjectedBody_alg_post` through
-    `mean_dim_kernel_toAlg_body` to the complete `mean_dim_kernel.toAlgKernel`
-    execution.
 
 - `embedding_triton_kernel/EmbeddingTritonKernel.lean`
   - Kernel body is faithful.

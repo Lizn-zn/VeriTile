@@ -994,13 +994,20 @@ theorem mean_dim_kernel_toAlg_body
       meanProjectedBody X Mean M N BLOCK_M BLOCK_N := by
   rfl
 
+theorem mean_dim_kernel_alg_post_of_exec
+    (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat) (s s' : BlockState)
+    (hStepNe : BLOCK_N ≠ 0)
+    (hExec : exec (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N) s = some s') :
+    mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s s' := by
+  unfold exec at hExec
+  rw [mean_dim_kernel_toAlg_body X Mean M N BLOCK_M BLOCK_N] at hExec
+  exact meanProjectedBody_alg_post s s' X Mean M N BLOCK_M BLOCK_N hStepNe hExec
+
 theorem mean_dim_kernel_compute_correct_of_algorithm
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
-    (hAlg :
-      ∀ s',
-        exec (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N) s = some s' →
-        mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s s') :
+    (hStepNe : BLOCK_N ≠ 0) :
     mean_dim_kernel_correct_target X Mean M N BLOCK_M BLOCK_N s := by
   unfold mean_dim_kernel_correct_target
   rw [ComputeCorrect.realizes_writeIf_iff]
@@ -1008,28 +1015,23 @@ theorem mean_dim_kernel_compute_correct_of_algorithm
   intro s0 s' hExec hs0
   subst s0
   intro i hi
-  exact hAlg s' hExec i hi
+  exact mean_dim_kernel_alg_post_of_exec X Mean M N BLOCK_M BLOCK_N s s'
+    hStepNe hExec i hi
 
 /-- Algorithm-layer correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_correct
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
-    (hAlg :
-      ∀ s',
-        exec (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N) s = some s' →
-        mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s s') :
+    (hStepNe : BLOCK_N ≠ 0) :
     mean_dim_kernel_correct_target X Mean M N BLOCK_M BLOCK_N s :=
-  mean_dim_kernel_compute_correct_of_algorithm X Mean M N BLOCK_M BLOCK_N s hAlg
+  mean_dim_kernel_compute_correct_of_algorithm X Mean M N BLOCK_M BLOCK_N s hStepNe
 
 /-- Compute-facing correctness for the mean reduction kernel. -/
 theorem mean_dim_kernel_compute_correct
     (X Mean : RegionName)
     (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
-    (hAlg :
-      ∀ s',
-        exec (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N) s = some s' →
-        mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s s') :
+    (hStepNe : BLOCK_N ≠ 0) :
     mean_dim_kernel_correct_target X Mean M N BLOCK_M BLOCK_N s :=
-  mean_dim_kernel_compute_correct_of_algorithm X Mean M N BLOCK_M BLOCK_N s hAlg
+  mean_dim_kernel_compute_correct_of_algorithm X Mean M N BLOCK_M BLOCK_N s hStepNe
 
 end VeriTile.Bench.TritonBenchG.MeanReduction
