@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `token_attn_mistral.py`'s
+/-- Faithful transcription of `token_attn_mistral.py`'s
 `_fwd_kernel_token_att2`.
 
 Typed-region note: metadata/gather buffers are `Region .nat`, matching their
@@ -38,12 +38,13 @@ def token_attn_mistral_surface
   v_offs = cur_kv_head * $(stride_vh) + offs_d[None, :] * $(stride_vd)
   acc = tl.zeros([$(BLOCK_DMODEL)], dtype=tl.float32)
   for start_n in range($(0), cur_att_seq_len, $(BLOCK_N)) {
+    start_n = tl.multiple_of(start_n, $(BLOCK_N))
     p_value = tl.load(Prob + p_offs + start_n,
       mask=(start_n + offs_n) < cur_att_seq_len, other=0.0)
     v_loc = tl.load(Req_to_tokens + v_loc_off +
       start_n * $(stride_req_to_tokens_s),
       mask=(start_n + offs_n + cur_batch_start_index) < cur_batch_seq_len,
-      other=$(0))
+      other=0.0)
     v_value = tl.load(V + v_offs + v_loc[:, None] * $(stride_vbs),
       mask=(start_n + offs_n[:, None] + cur_batch_start_index) < cur_batch_seq_len,
       other=0.0)
