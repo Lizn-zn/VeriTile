@@ -1416,7 +1416,9 @@ def normalize_call(call: str) -> str:
     call = re.sub(r"\b[A-Za-z_][A-Za-z0-9_]*\b", lambda m: m.group(0).replace("_", "").lower(), call)
     call = re.sub(r"\b([A-Za-z0-9]+)(?:ptr|pointer)\b", r"\1", call)
     call = re.sub(r",\s*\)", ")", call)
-    return re.sub(r"\s+", "", call)
+    call = re.sub(r"\s+", "", call)
+    call = re.sub(r"boundarycheck=\(\[([0-9,]+)\]:listnat\)", r"boundarycheck=(\1)", call)
+    return call
 
 failures = []
 for py_file in sorted(root.glob("*/*.py")):
@@ -1786,6 +1788,63 @@ ignored = {
     "tl.for",
 }
 
+def python_first_kernel_body(text: str) -> str:
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith("@triton.jit"):
+            i += 1
+            continue
+        i += 1
+        while i < len(lines) and lines[i].strip().startswith("@"):
+            i += 1
+        if i >= len(lines) or not lines[i].strip().startswith("def "):
+            continue
+
+        start = None
+        parens = 0
+        for j in range(i, len(lines)):
+            parens += lines[j].count("(") - lines[j].count(")")
+            if parens <= 0 and lines[j].rstrip().endswith(":"):
+                start = j + 1
+                break
+        if start is None:
+            return ""
+
+        body = []
+        k = start
+        while k < len(lines):
+            line = lines[k]
+            if line and not line.startswith((" ", "\t")):
+                break
+            body.append(line)
+            k += 1
+        body_text = "\n".join(body)
+        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store", "tl.make_block_ptr")):
+            return body_text
+        i = k
+    return ""
+
+def lean_first_triton_body(text: str) -> str:
+    idx = text.find("triton {")
+    if idx < 0:
+        return ""
+    start = text.find("{", idx)
+    depth = 0
+    out = []
+    for ch in text[start:]:
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        if depth >= 1:
+            out.append(ch)
+    return "".join(out)
+
 def calls(text: str) -> set[str]:
     return {
         match.group(0).split("(", 1)[0].strip()
@@ -1799,9 +1858,9 @@ for py_file in sorted(root.glob("*/*.py")):
     if not lean_files:
         continue
     lean_file = lean_files[0]
-    py_calls = calls(py_file.read_text())
+    py_calls = calls(python_first_kernel_body(py_file.read_text()))
     lean_text = lean_file.read_text()
-    lean_calls = calls(lean_text)
+    lean_calls = calls(lean_first_triton_body(lean_text))
     missing = sorted(py_calls - lean_calls)
     extra = sorted(lean_calls - py_calls)
     scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()

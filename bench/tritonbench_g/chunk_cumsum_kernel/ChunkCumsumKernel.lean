@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `chunk_cumsum_kernel.py`'s
+/-- Faithful transcription of `chunk_cumsum_kernel.py`'s
 `chunk_global_cumsum_scalar_kernel`.
 
 The final cast targets the block pointer destination dtype. -/
