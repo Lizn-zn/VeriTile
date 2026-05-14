@@ -10,47 +10,53 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of the `BACKWARD_PASS=True` branch of
-`rope_backward_transform.py`'s `_triton_rope`.
-
-Allowed mechanical Lean-syntax-only changes:
-- `PAD_HALF` is Python's `pad_hd // 2`.
-- `HEAD_HALF` is Python's `hd // 2`. -/
-def triton_rope_backward
-    (Q K COS SIN : RegionName)
+/-- Faithful transcription of `rope_backward_transform.py`'s `_triton_rope`. -/
+def triton_rope_surface
+    (q_ptr k_ptr cos sin : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl n_qh n_kh hd pad_n_qh pad_n_kh PAD_HALF HEAD_HALF : Nat) :
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (BACKWARD_PASS : Bool) :
     ComputeKernel := triton {
     pid = tl.program_id(0)
-    q_ptr = Q + pid * $(q_row_stride)
-    k_ptr = K + pid * $(k_row_stride)
+    q_ptr = q_ptr + pid * $(q_row_stride)
+    k_ptr = k_ptr + pid * $(k_row_stride)
     cos_row_idx = pid % $(sl)
-    COS = COS + cos_row_idx * $(cos_row_stride)
-    SIN = SIN + cos_row_idx * $(sin_row_stride)
-    cos_offsets = tl.arange(0, $(PAD_HALF))
-    cos_mask = cos_offsets < $(HEAD_HALF)
-    cos_row = tl.load(COS + cos_offsets, mask=cos_mask, other=0)
-    sin_row = tl.load(SIN + cos_offsets, mask=cos_mask, other=0)
+    cos = cos + cos_row_idx * $(cos_row_stride)
+    sin = sin + cos_row_idx * $(sin_row_stride)
+    cos_offsets = tl.arange(0, $(pad_hd) // $(2))
+    cos_mask = cos_offsets < $(hd) // $(2)
+    cos_row = tl.load(cos + cos_offsets, mask=cos_mask, other=0)
+    sin_row = tl.load(sin + cos_offsets, mask=cos_mask, other=0)
     first_half_q_offsets = tl.arange(0, $(pad_n_qh))[:, None] * $(hd) +
-      tl.arange(0, $(PAD_HALF))[None, :]
+      tl.arange(0, $(pad_hd) // $(2))[None, :]
     first_half_k_offsets = tl.arange(0, $(pad_n_kh))[:, None] * $(hd) +
-      tl.arange(0, $(PAD_HALF))[None, :]
+      tl.arange(0, $(pad_hd) // $(2))[None, :]
     first_q_mask = (tl.arange(0, $(pad_n_qh))[:, None] < $(n_qh)) &
-      (tl.arange(0, $(PAD_HALF))[None, :] < $(HEAD_HALF))
+      (tl.arange(0, $(pad_hd) // $(2))[None, :] < $(hd) // $(2))
     first_k_mask = (tl.arange(0, $(pad_n_kh))[:, None] < $(n_kh)) &
-      (tl.arange(0, $(PAD_HALF))[None, :] < $(HEAD_HALF))
+      (tl.arange(0, $(pad_hd) // $(2))[None, :] < $(hd) // $(2))
     q_tile_1 = tl.load(q_ptr + first_half_q_offsets, mask=first_q_mask,
       other=0).to(sin_row.dtype)
     k_tile_1 = tl.load(k_ptr + first_half_k_offsets, mask=first_k_mask,
       other=0).to(sin_row.dtype)
-    second_half_q_offsets = first_half_q_offsets + $(HEAD_HALF)
-    second_half_k_offsets = first_half_k_offsets + $(HEAD_HALF)
+    second_half_q_offsets = first_half_q_offsets + $(hd) // $(2)
+    second_half_k_offsets = first_half_k_offsets + $(hd) // $(2)
     second_q_mask = first_q_mask
     second_k_mask = first_k_mask
     q_tile_2 = tl.load(q_ptr + second_half_q_offsets, mask=second_q_mask,
       other=0).to(sin_row.dtype)
     k_tile_2 = tl.load(k_ptr + second_half_k_offsets, mask=second_k_mask,
       other=0).to(sin_row.dtype)
+    if not BACKWARD_PASS {
+    new_q_tile_1 = q_tile_1 * cos_row - q_tile_2 * sin_row
+    tl.store(q_ptr + first_half_q_offsets, new_q_tile_1, mask=first_q_mask)
+    new_q_tile_2 = q_tile_2 * cos_row + q_tile_1 * sin_row
+    tl.store(q_ptr + second_half_q_offsets, new_q_tile_2, mask=second_q_mask)
+    new_k_tile_1 = k_tile_1 * cos_row - k_tile_2 * sin_row
+    tl.store(k_ptr + first_half_k_offsets, new_k_tile_1, mask=first_k_mask)
+    new_k_tile_2 = k_tile_2 * cos_row + k_tile_1 * sin_row
+    tl.store(k_ptr + second_half_k_offsets, new_k_tile_2, mask=second_k_mask)
+    } else {
     new_q_tile_1 = q_tile_1 * cos_row + q_tile_2 * sin_row
     tl.store(q_ptr + first_half_q_offsets, new_q_tile_1, mask=first_q_mask)
     new_q_tile_2 = q_tile_2 * cos_row - q_tile_1 * sin_row
@@ -59,6 +65,7 @@ def triton_rope_backward
     tl.store(k_ptr + first_half_k_offsets, new_k_tile_1, mask=first_k_mask)
     new_k_tile_2 = k_tile_2 * cos_row - k_tile_1 * sin_row
     tl.store(k_ptr + second_half_k_offsets, new_k_tile_2, mask=second_k_mask)
+    }
 }
 
 /-- Proof-oriented one-Q-head first-half backward slice of

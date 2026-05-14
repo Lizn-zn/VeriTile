@@ -157,7 +157,7 @@ def isRealDType : DInfo → Bool
   | .real => Bool.true
   | _ => Bool.false
 
-def natDimTerm (ctx : String) (d : TSyntax `tritonExpr) :
+partial def natDimTerm (ctx : String) (d : TSyntax `tritonExpr) :
     MacroM (TSyntax `term) := do
   match d with
   | `(tritonExpr| $($t:term)) => `(($t : Nat))
@@ -165,6 +165,10 @@ def natDimTerm (ctx : String) (d : TSyntax `tritonExpr) :
   | `(tritonExpr| $i:ident) =>
       let t : TSyntax `term := ⟨i.raw⟩
       `(($t : Nat))
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => do
+      let aTerm ← natDimTerm ctx a
+      let bTerm ← natDimTerm ctx b
+      `(($aTerm / $bTerm : Nat))
   | _ => Macro.throwError (ctx ++ ": each entry must be a numeric literal or `$(t)` antiquote")
 
 def natListTerm (ctx : String) (dims : Array (TSyntax `tritonExpr)) :
