@@ -2301,6 +2301,8 @@ def split_lhs(lhs: str) -> list[str]:
 
 def top_assign_lhs(line: str) -> list[str]:
     stripped = line.strip()
+    if stripped.startswith(("if ", "elif ")) and ":" in stripped and not stripped.endswith(":"):
+        return top_assign_lhs(stripped.split(":", 1)[1])
     if not stripped or stripped.startswith(
         ("tl.store", "tl.atomic", "for ", "if ", "else", "tl.for", "tl.if")
     ):

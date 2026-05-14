@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `fast_ce_loss.py`'s `_cross_entropy_forward`.
+/-- Faithful transcription of `fast_ce_loss.py`'s `_cross_entropy_forward`.
 
 Python's hard-coded `label_idx != -100` sentinel is preserved as the literal
 `-100`. -/
