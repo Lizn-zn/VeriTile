@@ -52,6 +52,9 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   proving that this split is exactly the current `toAlgKernel.body`. The named
   body also records the macro lowering detail that direct `region + offset`
   memory expressions become `MemAccess.region` accesses in the algorithm layer.
+  `embeddingPreLoop_step_regs` proves the concrete pre-loop register facts for
+  `start_n`, `offs_nn`, and `offs_d`, plus preservation of the input and
+  weight reads needed by the first loop iteration.
   Remaining store-side work is matching the DSL-expanded store to that scatter
   shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the

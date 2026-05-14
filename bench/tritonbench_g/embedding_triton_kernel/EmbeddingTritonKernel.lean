@@ -853,6 +853,39 @@ theorem embedding_kernel_toAlg_body
         hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN := by
   rfl
 
+theorem embeddingPreLoop_step_regs
+    (s st : BlockState) (input_ids weight : RegionName)
+    (BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (hStep :
+      stepStmts (embeddingPreLoop BLOCK_DMODEL BLOCK_N BLOCK_NN) s = some st) :
+    st.regs .nat [] "start_n" =
+        some (Tile.scalar (s.pids 0 * BLOCK_N)) ∧
+      st.regs .nat [BLOCK_NN] "offs_nn" =
+        some { data := fun lane : TileIndex [BLOCK_NN] =>
+          s.pids 0 * BLOCK_N + lane.1.val } ∧
+      st.regs .nat [BLOCK_DMODEL] "offs_d" =
+        some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val } ∧
+      (∀ offset,
+        st.readMemValue .nat (Region.cast input_ids) offset =
+          s.readMemValue .nat (Region.cast input_ids) offset) ∧
+      (∀ offset, st.readMem weight offset = s.readMem weight offset) := by
+  unfold embeddingPreLoop at hStep
+  simp [stepStmts, stepStmt, evalOp, Tile.bop, NumericDType.mul,
+    NumericDType.add, BlockState.setReg, Option.bind] at hStep
+  subst st
+  constructor
+  · simp [BlockState.setReg]
+  · constructor
+    · simp [BlockState.setReg]
+    · constructor
+      · simp [BlockState.setReg]
+        rfl
+      · constructor
+        · intro offset
+          rfl
+        · intro offset
+          rfl
+
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
