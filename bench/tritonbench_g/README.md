@@ -36,11 +36,8 @@ reports `TritonBench-G ports: 141 ok, 0 fail`. The placeholder scan
 `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
 currently reports no matches.
 
-The remaining non-green items are proof obligations, not DSL transcription
-failures. They are listed in [`proof_blockers.md`](./proof_blockers.md):
-`mean_reduction`, `embedding_triton_kernel`, and the forward real path of
-`diag_ssm_triton` expose their algorithm-layer postconditions explicitly until
-their loop invariants are connected to the concrete loop bodies.
+There are no current explicit algorithm-layer `hAlg` blockers. Any future
+proof blockers should be listed in [`proof_blockers.md`](./proof_blockers.md).
 
 ## Build
 

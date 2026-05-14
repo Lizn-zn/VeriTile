@@ -19,9 +19,9 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE: tl.constexpr` → Lean `Nat` parameter.
 - Python `length`, `batch_size`, `dim` → Lean `Nat` parameters.
 
-Known proof blocker: see `bench/tritonbench_g/proof_blockers.md`. The current
-file still lacks a real `ComputeCorrect.Realizes` theorem for the recurrence
-across `tl.for t in length`. -/
+The proof below connects the recurrence invariant across `tl.for t in length`
+to `ComputeCorrect.Realizes` under the stated no-collision/no-alias
+hypotheses. -/
 def diag_ssm_forward_kernel
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) :
@@ -695,6 +695,418 @@ theorem diagSsmForwardPreLoop_step_regs
         funext idx
         rfl
 
+theorem diagSsmForwardLoopInvariant_step_of_concrete_body
+    {length : Nat}
+    (st0 st st' : BlockState)
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat)
+    (ht : t < length)
+    (hPrev :
+      diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+        batch_size dim BLOCK_SIZE t st)
+    (hS :
+      st.regs .real [BLOCK_SIZE] "s" =
+        some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE t))
+    (hLambda :
+      st.regs .real [BLOCK_SIZE] "Lambda" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          if active st0 batch_size dim BLOCK_SIZE idx.1 then
+            some (st0.readMem lambda_ptr
+              (IntegralDType.nat.mod (colOffset st0 BLOCK_SIZE idx.1) dim))
+          else
+            some 0 })
+    (hCol :
+      st.regs .nat [BLOCK_SIZE] "col_offsets" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          colOffset st0 BLOCK_SIZE idx.1 })
+    (hMask :
+      st.regs .bool [BLOCK_SIZE] "mask" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          active st0 batch_size dim BLOCK_SIZE idx.1 })
+    (hXRead : ∀ offset, st.readMem x_ptr offset = st0.readMem x_ptr offset)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx))
+    (hStep :
+      stepStmts (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+        (st.setReg "t" .nat [] (Tile.scalar t)) = some st') :
+    diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE (t + 1) st' := by
+  unfold diagSsmForwardLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, hS, hLambda, hCol, hMask, hXRead,
+    Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul, Option.bind,
+    timeOffset, active, colOffset, IntegralDType.mod,
+    diagSsmMaskedStateTile_succ] at hStep
+  subst st'
+  let actualS : Tile .real [BLOCK_SIZE] :=
+    { data := fun i : TileIndex [BLOCK_SIZE] =>
+        Option.map₂ (fun x1 x2 => x1 + x2)
+          (Option.map₂ (fun x1 x2 => x1 * x2)
+            ((diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+              BLOCK_SIZE t).data (i.1, PUnit.unit))
+            (if active st0 batch_size dim BLOCK_SIZE i.1 then
+              some (st0.readMem lambda_ptr
+                (IntegralDType.nat.mod (colOffset st0 BLOCK_SIZE i.1) dim))
+            else
+              some 0))
+          (if active st0 batch_size dim BLOCK_SIZE i.1 then
+            some (st0.readMem x_ptr
+              (timeOffset st0 batch_size dim BLOCK_SIZE t i.1))
+          else
+            some 0) }
+  have hActualS :
+      actualS =
+        diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE (t + 1) := by
+    ext i
+    by_cases hactive : active st0 batch_size dim BLOCK_SIZE i.1
+    · have hlt : st0.pids 0 * BLOCK_SIZE + i.1.val < batch_size * dim := by
+        simpa [active, colOffset] using hactive
+      simp [actualS, diagSsmMaskedStateTile, diagSsmStateAfter, hactive, hlt,
+        active, colOffset, timeOffset, IntegralDType.mod]
+    · have hlt : ¬ st0.pids 0 * BLOCK_SIZE + i.1.val < batch_size * dim := by
+        simpa [active, colOffset] using hactive
+      simp [actualS, diagSsmMaskedStateTile, diagSsmStateAfter, hactive, hlt,
+        active, colOffset, timeOffset, IntegralDType.mod]
+      norm_num
+  let stReg : BlockState :=
+    ((((st.setReg "t" TileDType.nat [] (Tile.scalar t)).setReg
+          "offsets" TileDType.nat [BLOCK_SIZE]
+          { data := fun i : TileIndex [BLOCK_SIZE] =>
+              timeOffset st0 batch_size dim BLOCK_SIZE t i.1 }).setReg
+        "x" TileDType.real [BLOCK_SIZE]
+          { data := fun i : TileIndex [BLOCK_SIZE] =>
+              if active st0 batch_size dim BLOCK_SIZE i.1 then
+                some (st0.readMem x_ptr
+                  (timeOffset st0 batch_size dim BLOCK_SIZE t i.1))
+              else
+                some 0 }).setReg
+        "s" TileDType.real [BLOCK_SIZE] actualS)
+  have hReg :
+      stReg.regs .real [BLOCK_SIZE] "s" =
+        some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE (t + 1)) := by
+    simp [stReg, BlockState.setReg, hActualS]
+  have hMem : ∀ offset, stReg.readMem y_ptr offset = st.readMem y_ptr offset := by
+    intro offset
+    rfl
+  have hAbs :=
+    diagSsmForwardLoopInvariant_step_of_current_time_scatter st0 st stReg
+      s_ptr x_ptr lambda_ptr y_ptr batch_size dim BLOCK_SIZE t ht hPrev
+      hReg hMem hOutInj
+  have hActualS_active :
+      ∀ i : Fin BLOCK_SIZE,
+        active st0 batch_size dim BLOCK_SIZE i →
+          WithBot.unbotD 0 (actualS.data (i, PUnit.unit)) =
+            diagSsmForwardSpec st0 s_ptr x_ptr lambda_ptr batch_size dim
+              BLOCK_SIZE t i := by
+    intro i hi
+    rw [hActualS]
+    simp [diagSsmMaskedStateTile, diagSsmForwardSpec, hi]
+  convert hAbs using 6
+  <;> try simp [stReg, timeOffset, active, colOffset]
+  all_goals first
+  | change WithBot.unbotD 0 (actualS.data (_, PUnit.unit)) = _
+    apply hActualS_active
+    assumption
+
+def diagSsmForwardLoopContextInvariant
+    (st0 : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) (t : Nat) (st : BlockState) : Prop :=
+  diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE t st ∧
+    st.regs .real [BLOCK_SIZE] "Lambda" =
+      some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        if active st0 batch_size dim BLOCK_SIZE idx.1 then
+          some (st0.readMem lambda_ptr
+            (IntegralDType.nat.mod (colOffset st0 BLOCK_SIZE idx.1) dim))
+        else
+          some 0 } ∧
+    st.regs .nat [BLOCK_SIZE] "col_offsets" =
+      some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        colOffset st0 BLOCK_SIZE idx.1 } ∧
+    st.regs .bool [BLOCK_SIZE] "mask" =
+      some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+        active st0 batch_size dim BLOCK_SIZE idx.1 } ∧
+    ∀ offset, st.readMem x_ptr offset = st0.readMem x_ptr offset
+
+theorem diagSsmForwardLoopContextInvariant_init_of_preloop
+    (st0 st : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (hStep :
+      stepStmts (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE) st0 = some st) :
+    diagSsmForwardLoopContextInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE 0 st := by
+  rcases diagSsmForwardPreLoop_step_regs st0 st s_ptr x_ptr lambda_ptr
+      batch_size dim BLOCK_SIZE hStep with
+    ⟨hS, hLambda, hCol, hMask⟩
+  refine ⟨diagSsmForwardLoopInvariant_zero st0 st s_ptr x_ptr lambda_ptr y_ptr
+      length batch_size dim BLOCK_SIZE hS, hLambda, hCol, hMask, ?_⟩
+  intro offset
+  unfold diagSsmForwardPreLoop at hStep
+  simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+    NumericDType.mul, NumericDType.add, IntegralDType.mod,
+    ComparableDType.lt, Option.bind, colOffset, active,
+    diagSsmMaskedStateTile, diagSsmStateAfter] at hStep
+  subst st
+  rfl
+
+theorem diagSsmForwardLoopBody_step_preserves_context
+    (st0 st st' : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat)
+    (hS :
+      st.regs .real [BLOCK_SIZE] "s" =
+        some (diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr batch_size dim
+          BLOCK_SIZE t))
+    (hLambda :
+      st.regs .real [BLOCK_SIZE] "Lambda" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          if active st0 batch_size dim BLOCK_SIZE idx.1 then
+            some (st0.readMem lambda_ptr
+              (IntegralDType.nat.mod (colOffset st0 BLOCK_SIZE idx.1) dim))
+          else
+            some 0 })
+    (hCol :
+      st.regs .nat [BLOCK_SIZE] "col_offsets" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          colOffset st0 BLOCK_SIZE idx.1 })
+    (hMask :
+      st.regs .bool [BLOCK_SIZE] "mask" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          active st0 batch_size dim BLOCK_SIZE idx.1 })
+    (hXRead : ∀ offset, st.readMem x_ptr offset = st0.readMem x_ptr offset)
+    (hXOutNe : x_ptr ≠ y_ptr)
+    (hStep :
+      stepStmts (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+        (st.setReg "t" .nat [] (Tile.scalar t)) = some st') :
+    st'.regs .real [BLOCK_SIZE] "Lambda" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          if active st0 batch_size dim BLOCK_SIZE idx.1 then
+            some (st0.readMem lambda_ptr
+              (IntegralDType.nat.mod (colOffset st0 BLOCK_SIZE idx.1) dim))
+          else
+            some 0 } ∧
+      st'.regs .nat [BLOCK_SIZE] "col_offsets" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          colOffset st0 BLOCK_SIZE idx.1 } ∧
+      st'.regs .bool [BLOCK_SIZE] "mask" =
+        some { data := fun idx : TileIndex [BLOCK_SIZE] =>
+          active st0 batch_size dim BLOCK_SIZE idx.1 } ∧
+      (∀ offset, st'.readMem x_ptr offset = st0.readMem x_ptr offset) := by
+  unfold diagSsmForwardLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, hS, hLambda, hCol, hMask, hXRead,
+    Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul, Option.bind,
+    timeOffset, active, colOffset, IntegralDType.mod,
+    diagSsmMaskedStateTile_succ] at hStep
+  subst st'
+  constructor
+  · simp [BlockState.setReg, hLambda]
+  · constructor
+    · simp [BlockState.setReg, hCol]
+    · constructor
+      · simp [BlockState.setReg, hMask]
+      · intro offset
+        trans st.readMem x_ptr offset
+        · simpa [BlockState.setReg, timeOffset, active, colOffset,
+            diagSsmForwardSpec, diagSsmStateAfter, IntegralDType.mod] using
+            BlockState.scatter_prop_masked_preserves_other_region
+              (region := y_ptr)
+              (offsetFn := fun i : TileIndex [BLOCK_SIZE] =>
+                timeOffset st0 batch_size dim BLOCK_SIZE t i.1)
+              (valueFn := fun i : TileIndex [BLOCK_SIZE] =>
+                WithBot.unbotD 0
+                  (Option.map₂ (fun x1 x2 => x1 + x2)
+                    (Option.map₂ (fun x1 x2 => x1 * x2)
+                      ((diagSsmMaskedStateTile st0 s_ptr x_ptr lambda_ptr
+                        batch_size dim BLOCK_SIZE t).data (i.1, PUnit.unit))
+                      (if active st0 batch_size dim BLOCK_SIZE i.1 then
+                        some (st0.readMem lambda_ptr
+                          (IntegralDType.nat.mod
+                            (colOffset st0 BLOCK_SIZE i.1) dim))
+                      else
+                        some 0))
+                    (if active st0 batch_size dim BLOCK_SIZE i.1 then
+                      some (st0.readMem x_ptr
+                        (timeOffset st0 batch_size dim BLOCK_SIZE t i.1))
+                    else
+                      some 0)))
+              (P := fun i : TileIndex [BLOCK_SIZE] =>
+                active st0 batch_size dim BLOCK_SIZE i.1)
+              (R := x_ptr) hXOutNe offset (TileShape.allIndices [BLOCK_SIZE]) _
+        · exact hXRead offset
+
+theorem diagSsmForwardLoopContextInvariant_step_of_body
+    {length : Nat}
+    (st0 st st' : BlockState)
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat)
+    (ht : t < length)
+    (hCtx :
+      diagSsmForwardLoopContextInvariant st0 s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE t st)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx))
+    (hXOutNe : x_ptr ≠ y_ptr)
+    (hStep :
+      stepStmts (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+        (st.setReg "t" .nat [] (Tile.scalar t)) = some st') :
+    diagSsmForwardLoopContextInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE (t + 1) st' := by
+  rcases hCtx with ⟨hInv, hLambda, hCol, hMask, hXRead⟩
+  have hInv' :
+      diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+        batch_size dim BLOCK_SIZE (t + 1) st' :=
+    diagSsmForwardLoopInvariant_step_of_concrete_body st0 st st' s_ptr x_ptr
+      lambda_ptr y_ptr batch_size dim BLOCK_SIZE t ht hInv hInv.1 hLambda
+      hCol hMask hXRead hOutInj hStep
+  rcases diagSsmForwardLoopBody_step_preserves_context st0 st st' s_ptr x_ptr
+      lambda_ptr y_ptr batch_size dim BLOCK_SIZE t hInv.1 hLambda hCol hMask
+      hXRead hXOutNe hStep with
+    ⟨hLambda', hCol', hMask', hXRead'⟩
+  exact ⟨hInv', hLambda', hCol', hMask', hXRead'⟩
+
+theorem diagSsmForwardLoopContextInvariant_body_step_exists
+    {length : Nat}
+    (st0 st : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (batch_size dim BLOCK_SIZE t : Nat)
+    (ht : t < length)
+    (hCtx :
+      diagSsmForwardLoopContextInvariant st0 s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE t st)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx))
+    (hXOutNe : x_ptr ≠ y_ptr) :
+    ∃ st',
+      stepStmts (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+        (st.setReg "t" .nat [] (Tile.scalar t)) = some st' ∧
+      diagSsmForwardLoopContextInvariant st0 s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE (t + 1) st' := by
+  rcases hCtx with ⟨hInv, hLambda, hCol, hMask, hXRead⟩
+  cases hStep :
+      stepStmts (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+        (st.setReg "t" .nat [] (Tile.scalar t)) with
+  | none =>
+      unfold diagSsmForwardLoopBody at hStep
+      simp [stepStmts, stepStmt, evalOp, hInv.1, hLambda, hCol, hMask,
+        hXRead, Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+        Option.bind, timeOffset, active, colOffset, IntegralDType.mod,
+        diagSsmMaskedStateTile_succ] at hStep
+  | some st' =>
+      refine ⟨st', rfl, ?_⟩
+      exact diagSsmForwardLoopContextInvariant_step_of_body st0 st st'
+        s_ptr x_ptr lambda_ptr y_ptr batch_size dim BLOCK_SIZE t ht
+        ⟨hInv, hLambda, hCol, hMask, hXRead⟩ hOutInj hXOutNe hStep
+
+theorem diagSsmForwardForLoop_context_of_preloop
+    (st0 stPre stLoop : BlockState)
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset st0 batch_size dim BLOCK_SIZE idx))
+    (hXOutNe : x_ptr ≠ y_ptr)
+    (hPre :
+      stepStmts (diagSsmForwardPreLoop s_ptr lambda_ptr batch_size dim
+        BLOCK_SIZE) st0 = some stPre)
+    (hLoop :
+      stepStmt (.forLoop "t" length
+        (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE))
+        stPre = some stLoop) :
+    diagSsmForwardLoopContextInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE length stLoop := by
+  have hInit :
+      diagSsmForwardLoopContextInvariant st0 s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE 0 stPre :=
+    diagSsmForwardLoopContextInvariant_init_of_preloop st0 stPre s_ptr x_ptr
+      lambda_ptr y_ptr length batch_size dim BLOCK_SIZE hPre
+  obtain ⟨stFinal, hFor, hCtx⟩ :=
+    forLoop_inv
+      (idx := "t") (n := length)
+      (body := diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+      (P := diagSsmForwardLoopContextInvariant st0 s_ptr x_ptr lambda_ptr
+        y_ptr length batch_size dim BLOCK_SIZE)
+      (s_init := stPre)
+      hInit
+      (by
+        intro t st ht hCtx
+        exact diagSsmForwardLoopContextInvariant_body_step_exists st0 st s_ptr
+          x_ptr lambda_ptr y_ptr batch_size dim BLOCK_SIZE t ht hCtx hOutInj
+          hXOutNe)
+  have hEq : stFinal = stLoop := by
+    rw [hLoop] at hFor
+    injection hFor with h
+    exact h.symm
+  subst hEq
+  exact hCtx
+
+def diag_ssm_forward_kernel_alg_post
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (s s' : BlockState) : Prop :=
+  ∀ idx : TileIndex [length, BLOCK_SIZE],
+    diagSsmForwardActive s batch_size dim BLOCK_SIZE idx →
+    s'.readMem y_ptr
+        (diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx) =
+      diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx
+
+theorem diagSsmForwardProjectedBody_alg_post
+    (s s' : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx))
+    (hXOutNe : x_ptr ≠ y_ptr)
+    (hExec :
+      stepStmts (diagSsmForwardProjectedBody s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE) s = some s') :
+    diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE s s' := by
+  unfold diagSsmForwardProjectedBody at hExec
+  rcases (stepStmts.append_some_iff).mp hExec with ⟨stPre, hPre, hLoopStmt⟩
+  simp [stepStmts] at hLoopStmt
+  have hLoop :
+      stepStmt (.forLoop "t" length
+        (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE))
+        stPre = some s' := by
+    cases hAux :
+        stepForLoopAux "t" 0 length
+          (diagSsmForwardLoopBody x_ptr y_ptr batch_size dim BLOCK_SIZE)
+          stPre with
+    | none =>
+        simp [hAux] at hLoopStmt
+    | some stLoop =>
+        simp [hAux] at hLoopStmt
+        subst hLoopStmt
+        simp [hAux]
+  have hCtx :=
+    diagSsmForwardForLoop_context_of_preloop s stPre s' s_ptr x_ptr
+      lambda_ptr y_ptr length batch_size dim BLOCK_SIZE hOutInj hXOutNe hPre
+      hLoop
+  intro idx hidx
+  exact hCtx.1.2 idx idx.1.isLt hidx
+
+theorem diag_ssm_forward_kernel_alg_post_of_exec
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat) (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx))
+    (hXOutNe : x_ptr ≠ y_ptr)
+    (hExec :
+      exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE) s = some s') :
+    diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr length
+      batch_size dim BLOCK_SIZE s s' := by
+  unfold exec at hExec
+  rw [diag_ssm_forward_kernel_toAlg_body s_ptr x_ptr lambda_ptr y_ptr length
+    batch_size dim BLOCK_SIZE] at hExec
+  exact diagSsmForwardProjectedBody_alg_post s s' s_ptr x_ptr lambda_ptr y_ptr
+    length batch_size dim BLOCK_SIZE hOutInj hXOutNe hExec
+
 def diag_ssm_forward_kernel_correct_target
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState) : Prop :=
@@ -710,16 +1122,6 @@ def diag_ssm_forward_kernel_correct_target
     (expected := fun idx : TileIndex [length, BLOCK_SIZE] =>
       diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx)
 
-def diag_ssm_forward_kernel_alg_post
-    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
-    (length batch_size dim BLOCK_SIZE : Nat)
-    (s s' : BlockState) : Prop :=
-  ∀ idx : TileIndex [length, BLOCK_SIZE],
-    diagSsmForwardActive s batch_size dim BLOCK_SIZE idx →
-    s'.readMem y_ptr
-        (diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx) =
-      diagSsmForwardSpecAt s s_ptr x_ptr lambda_ptr batch_size dim BLOCK_SIZE idx
-
 theorem diagSsmForwardLoopInvariant_to_alg_post
     (st0 st : BlockState) (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat)
@@ -734,12 +1136,10 @@ theorem diagSsmForwardLoopInvariant_to_alg_post
 theorem diag_ssm_forward_kernel_compute_correct_of_algorithm
     (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
     (length batch_size dim BLOCK_SIZE : Nat) (s : BlockState)
-    (hAlg :
-      ∀ s',
-        exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
-          length batch_size dim BLOCK_SIZE) s = some s' →
-        diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr
-          length batch_size dim BLOCK_SIZE s s') :
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx))
+    (hXOutNe : x_ptr ≠ y_ptr) :
     diag_ssm_forward_kernel_correct_target s_ptr x_ptr lambda_ptr y_ptr
       length batch_size dim BLOCK_SIZE s := by
   unfold diag_ssm_forward_kernel_correct_target
@@ -748,7 +1148,8 @@ theorem diag_ssm_forward_kernel_compute_correct_of_algorithm
   intro s0 s' hExec hs0
   subst s0
   intro idx hidx
-  exact hAlg s' hExec idx hidx
+  exact diag_ssm_forward_kernel_alg_post_of_exec s_ptr x_ptr lambda_ptr y_ptr
+    length batch_size dim BLOCK_SIZE s s' hOutInj hXOutNe hExec idx hidx
 
 /-- Algorithm-layer correctness for the forward SSM kernel. -/
 theorem diag_ssm_forward_kernel_correct
@@ -758,16 +1159,11 @@ theorem diag_ssm_forward_kernel_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [length, BLOCK_SIZE] =>
         diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx))
-    (hAlg :
-      ∀ s',
-        exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
-          length batch_size dim BLOCK_SIZE) s = some s' →
-        diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr
-          length batch_size dim BLOCK_SIZE s s') :
+    (hXOutNe : x_ptr ≠ y_ptr) :
     diag_ssm_forward_kernel_correct_target s_ptr x_ptr lambda_ptr y_ptr
       length batch_size dim BLOCK_SIZE s :=
   diag_ssm_forward_kernel_compute_correct_of_algorithm s_ptr x_ptr lambda_ptr
-    y_ptr length batch_size dim BLOCK_SIZE s hAlg
+    y_ptr length batch_size dim BLOCK_SIZE s hOutInj hXOutNe
 
 /-- Compute-facing correctness for the forward SSM kernel. -/
 theorem diag_ssm_forward_kernel_compute_correct
@@ -777,15 +1173,10 @@ theorem diag_ssm_forward_kernel_compute_correct
     (hOutInj : Function.Injective
       (fun idx : TileIndex [length, BLOCK_SIZE] =>
         diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx))
-    (hAlg :
-      ∀ s',
-        exec (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
-          length batch_size dim BLOCK_SIZE) s = some s' →
-        diag_ssm_forward_kernel_alg_post s_ptr x_ptr lambda_ptr y_ptr
-          length batch_size dim BLOCK_SIZE s s') :
+    (hXOutNe : x_ptr ≠ y_ptr) :
     diag_ssm_forward_kernel_correct_target s_ptr x_ptr lambda_ptr y_ptr
       length batch_size dim BLOCK_SIZE s :=
   diag_ssm_forward_kernel_compute_correct_of_algorithm s_ptr x_ptr lambda_ptr
-    y_ptr length batch_size dim BLOCK_SIZE s hAlg
+    y_ptr length batch_size dim BLOCK_SIZE s hOutInj hXOutNe
 
 end VeriTile.Bench.TritonBenchG.DiagSsmTriton

@@ -16,7 +16,7 @@ surface.
 | Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current mechanical mismatch. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
 | Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
-| Do not close while algorithm-layer proof obligations remain. | Audit now checks that explicit `hAlg` blockers are exactly the documented set: `diag_ssm_triton`. | Not complete. |
+| Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers. | Passing. |
 
 ## Evidence Checked
 
@@ -35,8 +35,7 @@ surface.
   scanning. It also checks that compiled ports do not still advertise README
   `TODO` status and that Python `.to(tl.float32)` casts missing from Lean are
   covered by an explicit documented slice/scope note. The same gate rejects
-  unexpected algorithm-layer `hAlg` blockers outside the documented set of
-  one remaining obligation. It rejects Lean-only `tl.load(..., dtype=...)`
+  any algorithm-layer `hAlg` blockers. It rejects Lean-only `tl.load(..., dtype=...)`
   annotations and `keep_dims` reduction substitutions, both of which are
   must-fix deviations under
   `review_criteria.md`. It also flags Python `+=` statements missing from Lean
@@ -64,35 +63,6 @@ surface.
 
 ## Remaining Blockers
 
-These files must not be counted complete yet:
-
-- `diag_ssm_triton/DiagSsmTriton.lean`
-  - Kernel body is faithful.
-  - Target: `diag_ssm_forward_kernel_correct_target`.
-  - Named algorithm postcondition: `diag_ssm_forward_kernel_alg_post`.
-  - Public correctness theorem exposes this algorithm-layer postcondition as an
-    explicit hypothesis; there is no `True` / `trivial` placeholder.
-  - Current local proof infrastructure includes
-    `diagSsmForwardLoopInvariant`, `diagSsmForwardLoopInvariant_zero`,
-    `diagSsmForwardLoopInvariant_step_of_time_write`, and
-    `diagSsmForwardLoopInvariant_to_alg_post`. Old-time/current-time
-    disjointness is factored into `diagSsmForwardIndex_ne_currentTime` and
-    `diagSsmForwardOutOffset_ne_currentTime`; `diagSsmMaskedStateTile_succ`
-    exposes the active-lane register update shape. Current-time offset/spec/
-    active unfold lemmas are named `diagSsmForwardOutOffset_currentTime`,
-    `diagSsmForwardSpecAt_currentTime`, and
-    `diagSsmForwardActive_currentTime`; current-time masked scatter readback is
-    bridged by `diagSsmForwardCurrentTimeScatter_write`, with
-    `diagSsmForwardCurrentTimeNoCollision_of_out_injective` deriving its
-    no-collision premise from the full output injectivity hypothesis.
-    `BlockState.scatter_prop_masked_preserves_other_offset` and
-    `diagSsmForwardCurrentTimeScatter_preserve_old` cover old-time preservation
-    for that current-time scatter, and
-    `diagSsmForwardLoopInvariant_step_of_current_time_scatter` packages the
-    updated state register plus scatter state into the next loop invariant.
-  - Remaining proof: instantiate the recurrence invariant with `forLoop_inv`
-    under full `diagSsmForwardOutOffset` injectivity, including the concrete
-    loop-body register/scatter shape.
-
-Passing `lake build` is not sufficient to close the objective while these
-algorithm-layer obligations remain.
+No explicit TritonBench-G `hAlg` blocker remains. Passing `lake build` alone is
+still not sufficient evidence for future changes; this audit must continue to
+run the translation-consistency gates above.

@@ -313,7 +313,7 @@ at hand-port time.
 | `matrix_reduction.py` | OK | — | — |
 | `matrix_transpose.py` | OK | — | — |
 | `max_reduction.py` | OK | — | autotune, heuristics |
-| `mean_reduction.py` | Soft | proof_blocker: row-wise forRange sum invariant | — |
+| `mean_reduction.py` | OK | — | — |
 | `mul_exponent_compensator.py` | OK | — | — |
 | `nested_loops_processing.py` | OK | — | — |
 | `sin_computation.py` | OK | — | — |
@@ -331,7 +331,7 @@ at hand-port time.
 | `destindex_copy.py` | OK | — | num_stages |
 | `destindex_copy_kv1.py` | OK | — | num_stages |
 | `destindex_copy_kv2.py` | OK | — | num_stages |
-| `embedding_triton_kernel.py` | Soft | proof_blocker: forRange embedding write-map invariant | num_stages, contig_hint |
+| `embedding_triton_kernel.py` | OK | — | num_stages, contig_hint |
 | `index_select_bwd.py` | OK | — | — |
 | `index_select_cat.py` | OK | — | — |
 | `kcache_copy_triton.py` | OK | — | — |
@@ -461,7 +461,7 @@ at hand-port time.
 | `chunk_gla_simple.py` | OK | — | autotune, tf32_hint |
 | `chunked_cumsum_fwd.py` | OK | — | autotune |
 | `decay_cumsum.py` | OK | — | — |
-| `diag_ssm_triton.py` | Soft | proof_blocker: recurrence invariant | autotune |
+| `diag_ssm_triton.py` | OK | — | autotune |
 | `fused_recurrent_hgrn.py` | OK | — | autotune |
 | `fused_rwkv6_kernel.py` | OK | — | num_stages |
 | `reversed_cumsum.py` | OK | — | autotune, tf32_hint |

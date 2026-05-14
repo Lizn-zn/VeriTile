@@ -45,11 +45,8 @@ Lean 文件名是目录名的 **CamelCase 形式**(例如 `vector_addition/` 包
 `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
 当前无匹配。
 
-剩余非绿色项是 proof obligation,不是 DSL 转写失败。它们列在
-[`proof_blockers.md`](./proof_blockers.md):`mean_reduction`、
-`embedding_triton_kernel`、`diag_ssm_triton` 的 forward real path 仍把
-algorithm-layer postcondition 显式暴露出来,直到 loop invariant 接到具体
-loop body。
+当前没有显式的 algorithm-layer `hAlg` blocker。后续如果新增 proof blocker,
+应登记到 [`proof_blockers.md`](./proof_blockers.md)。
 
 ## 构建
 

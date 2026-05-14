@@ -15,9 +15,8 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `[:, None]` / `[None, :]` dimension annotations preserved.
 - Python `BLOCK_M` / `BLOCK_N: tl.constexpr` → Lean `Nat` parameters.
 
-Known proof blocker: see `bench/tritonbench_g/proof_blockers.md`. The full-row
-spec below matches the mathematical effect of the `for off in range(...)`
-accumulation, but the theorem still needs a loop invariant for that accumulation.
+The proof below connects the full-row spec to a loop invariant for the
+`for off in range(...)` accumulation.
 -/
 def mean_dim_kernel
     (X Mean : RegionName)

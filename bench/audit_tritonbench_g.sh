@@ -56,9 +56,7 @@ else
   printf 'ok correctness surface scan\n'
 fi
 
-known_algorithm_blockers=(
-  "bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean"
-)
+known_algorithm_blockers=()
 
 unexpected_algorithm_blockers=()
 while IFS= read -r lean_file; do
