@@ -9,14 +9,13 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `int8_quantization.py`'s `q_kernel_per_block_int8`.
+/-- Faithful transcription of `int8_quantization.py`'s `q_kernel_per_block_int8`.
 
-The `preScale` parameter represents Python's `C**-0.5 * 1.44269504` factor.
 The final `to(tl.int8)` is preserved as a surface dtype annotation while the
 algorithm carrier records the rounded real-valued expression. -/
-def q_kernel_per_block_int8_surface
+noncomputable def q_kernel_per_block_int8_surface
     (X XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat) (preScale : ℝ) :
+    (L C BLK scale_stride : Nat) :
     ComputeKernel := triton {
   off_b = tl.program_id(1)
   off_blk = tl.program_id(0)
@@ -27,7 +26,7 @@ def q_kernel_per_block_int8_surface
   x_int8_ptrs = XInt8 + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
   scale_ptrs = Scale + off_b * $(scale_stride) + off_blk
   x = tl.load(x_ptrs, mask=offs_m[:, None] < $(L))
-  x *= $(preScale)
+  x *= $(((Real.sqrt (C : ℝ))⁻¹ * (1.44269504 : ℝ) : ℝ))
   scale = tl.max(tl.abs(x)) / 127.0
   x_int8 = x / scale
   x_int8 += 0.5 * tl.where(x_int8 >= 0.0, 1.0, -1.0)
