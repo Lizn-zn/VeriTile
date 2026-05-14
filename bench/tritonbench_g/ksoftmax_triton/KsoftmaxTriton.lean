@@ -7,6 +7,53 @@ namespace VeriTile.Bench.TritonBenchG.KsoftmaxTriton
 
 open VeriTile.Triton
 
+/-- Lean transcription of `ksoftmax_triton.py`'s `_softmax`.
+
+`MASK_TYPE` records whether the optional mask is present; `MASK_QK` selects
+Python's `qk` layout when true and `bk` layout when false. -/
+def ksoftmax_forward_surface
+    (Y X M : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
+    (LOG MASK_TYPE CAUSAL IS_FP16 MASK_QK : Bool) :
+    ComputeKernel := triton {
+  m = tl.program_id(0)
+  n = tl.program_id(1)
+  k = tl.arange(0, $(DEPTH))
+  x_ptrs = X + m * $(stride_xm) + n * $(stride_xn) + k
+  io_mask = k < $(K)
+  if CAUSAL {
+    io_mask = io_mask & (k <= n)
+  }
+  x = tl.load(x_ptrs, mask=io_mask, other=float("-inf"))
+  if CAUSAL {
+    off = float("-inf")
+    off = (off).to(x.dtype)
+    x = tl.where(k > n, off, x)
+  }
+  if MASK_TYPE {
+    if MASK_QK {
+      mask_ptrs = M + n * $(stride_m) + k
+    } else {
+      mask_ptrs = M + m * $(stride_m) + k
+    }
+    add_mask = tl.load(mask_ptrs, io_mask, other=float("-inf"))
+    x += add_mask
+  }
+  z = x - tl.max(x, axis=0)
+  if IS_FP16 {
+    z = (z).to(tl.float32)
+  }
+  num = tl.exp(z)
+  denom = tl.sum(num, axis=0)
+  if LOG {
+    y = z - tl.log(denom)
+  } else {
+    y = num / denom
+  }
+  y_ptrs = Y + m * $(stride_ym) + n * $(stride_yn) + k
+  tl.store(y_ptrs, y, mask=k < $(K))
+}
+
 /-- Surface transcription of `ksoftmax_triton.py`'s `_softmax` for the
 `MASK_TYPE='qk'` branch.
 
