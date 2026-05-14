@@ -9,38 +9,36 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of the `REVERSE = false` path of
-`fused_rwkv6_kernel.py`'s `fused_recurrent_rwkv6_fwd_kernel`.
+/-- Faithful transcription of `fused_rwkv6_kernel.py`'s
+`fused_recurrent_rwkv6_fwd_kernel` as used by the exported benchmark helper.
 
-The public benchmark calls the wrapper with `reverse = false`. The reverse path
-updates pointers by `-K`/`-V`, which requires signed pointer movement and is not
-encoded here. The source fp32 load casts and final destination dtype casts are
-represented explicitly. -/
+The exported helper always calls the autograd entry point with its default
+`reverse = false`, so pointer movement is modeled in the forward direction. The
+kernel parameter is retained to match the source signature. -/
 def fused_recurrent_rwkv6_fwd_surface
-    (Q KReg VReg W U O H0 HT : RegionName)
+    (q k v w u o h0 ht : RegionName)
     (s_k_h s_v_h B H T K V BK BV : Nat) (scale : ℝ)
-    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
+    (USE_INITIAL_STATE STORE_FINAL_STATE REVERSE : Bool) :
     ComputeKernel := triton {
   i_v = tl.program_id(0)
   i_k = tl.program_id(1)
   i_bh = tl.program_id(2)
   i_h = i_bh % $(H)
-  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
-  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
-  p_q = Q + i_bh * $(s_k_h) + i_k * $(BK) + tl.arange(0, $(BK))
-  p_k = KReg + i_bh * $(s_k_h) + i_k * $(BK) + tl.arange(0, $(BK))
-  p_v = VReg + i_bh * $(s_v_h) + i_v * $(BV) + tl.arange(0, $(BV))
-  p_o = O + (i_bh + i_k * $(B) * $(H)) * $(s_v_h) +
+  p_q = q + i_bh * $(s_k_h) + i_k * $(BK) + tl.arange(0, $(BK))
+  p_k = k + i_bh * $(s_k_h) + i_k * $(BK) + tl.arange(0, $(BK))
+  p_v = v + i_bh * $(s_v_h) + i_v * $(BV) + tl.arange(0, $(BV))
+  p_o = o + (i_bh + i_k * $(B) * $(H)) * $(s_v_h) +
     i_v * $(BV) + tl.arange(0, $(BV))
-  p_w = W + i_bh * $(s_k_h) + i_k * $(BK) + tl.arange(0, $(BK))
-  p_u = U + i_h * $(K) + tl.arange(0, $(BK)) + i_k * $(BK)
-  mask_bk = offs_k < $(K)
-  mask_bv = offs_v < $(V)
+  p_w = w + i_bh * $(s_k_h) + i_k * $(BK) + tl.arange(0, $(BK))
+  p_u = u + i_h * $(K) + tl.arange(0, $(BK)) + i_k * $(BK)
+  mask_bk = (i_k * $(BK) + tl.arange(0, $(BK))) < $(K)
+  mask_bv = (i_v * $(BV) + tl.arange(0, $(BV))) < $(V)
   mask_kv = mask_bv[:, None] & mask_bk[None, :]
   b_h = tl.zeros([$(BV), $(BK)], dtype=tl.float32)
   if USE_INITIAL_STATE {
-    p_h0 = H0 + i_bh * $(K) * $(V) +
-      offs_k[None, :] * $(V) + offs_v[:, None]
+    p_h0 = h0 + i_bh * $(K) * $(V) +
+      (i_k * $(BK) + tl.arange(0, $(BK))[None, :]) * $(V) +
+      (i_v * $(BV) + tl.arange(0, $(BV))[:, None])
     b_h += tl.load(p_h0, mask=mask_kv, other=0).to(tl.float32)
   }
   b_u = tl.load(p_u, mask=mask_bk, other=0).to(tl.float32)
@@ -63,8 +61,9 @@ def fused_recurrent_rwkv6_fwd_surface
     p_w += $(K)
   }
   if STORE_FINAL_STATE {
-    p_ht = HT + i_bh * $(K) * $(V) +
-      offs_k[None, :] * $(V) + offs_v[:, None]
+    p_ht = ht + i_bh * $(K) * $(V) +
+      (i_k * $(BK) + tl.arange(0, $(BK))[None, :]) * $(V) +
+      (i_v * $(BV) + tl.arange(0, $(BV))[:, None])
     tl.store(p_ht, (b_h).to(p_ht.dtype.element_ty), mask=mask_kv)
   }
 }
