@@ -7,7 +7,7 @@ namespace VeriTile.Bench.TritonBenchG.QuantizeGlobal
 
 open VeriTile.Triton
 
-/-- Surface transcription of `quantize_global.py`'s `_quantize_global`.
+/-- Faithful transcription of `quantize_global.py`'s `_quantize_global`.
 
 The CUDA `llrint` operation is preserved as a surface operation; the algorithm
 carrier records the pre-cast real value. -/
