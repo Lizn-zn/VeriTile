@@ -97,7 +97,7 @@ private theorem logsumexpGrid_input_loaded
 
 For pid `(i_n, i_d)` with at least one valid lane (`i_d * B < D`), the kernel
 writes `partialLSE_full xs i_d h_tail HAS_SCALE scale` to region `z`. Covers
-both `HAS_SCALE` branches and all mixed-tile masked-lane cases. -/
+both `HAS_SCALE` cases and all mixed-tile masked-lane cases. -/
 private theorem logsumexp_fwd_kernel_correct_full
     (x z : RegionName)
     {D : Nat} (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)

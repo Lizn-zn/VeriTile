@@ -33,7 +33,7 @@ def relu_kernel
 
 /-- Algorithm-layer correctness for `relu_kernel`.
 
-Only `pid = 0` writes. In that branch, active lanes write the branch-form ReLU
+Only `pid = 0` writes. In that case, active lanes write the conditional-form ReLU
 and inactive tail lanes are preserved; nonzero pids preserve the observed
 output cells. -/
 theorem relu_kernel_correct
