@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `nested_loops_processing.py`'s `nested3`.
+/-- Faithful transcription of `nested_loops_processing.py`'s `nested3`.
 
 Allowed mechanical Lean-syntax-only changes:
 - Python literal loop bounds `range(0, 2)` are written as
