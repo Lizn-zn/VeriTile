@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `matmul_triton2.py`'s `matmul_kernel`. -/
+/-- Faithful transcription of `matmul_triton2.py`'s `matmul_kernel`. -/
 def matmul_triton2_surface
     (A B C : RegionName)
     (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn

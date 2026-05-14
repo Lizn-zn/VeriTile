@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `matmul_triton1.py`'s `matmul_kernel`.
+/-- Faithful transcription of `matmul_triton1.py`'s `matmul_kernel`.
 
 Python passes `m_size` but the kernel body does not use it; this surface keeps
 the signature position as `_m_size`. -/
