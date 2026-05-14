@@ -257,6 +257,30 @@ theorem embeddingLoopStoreValue_eval_eq_spec2D
     seqLaneIndex, dimIndex, hSeq, hDim, hInputRead,
     hSeqIndex, hSeqAssoc, hReadAssoc, hReadAssoc']
 
+theorem foldl_writeMem_prop_preserves_readMemValue_of_region_ne
+    {α : Type} (l : List α) (s : BlockState) (writeRegion readRegion : RegionName)
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (dtype : TileDType) (offset : Nat)
+    (hNe : readRegion ≠ writeRegion) :
+    ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem writeRegion (offsetFn k) (valueFn k) else acc)
+        s).readMemValue dtype readRegion offset) =
+      s.readMemValue dtype readRegion offset := by
+  induction l generalizing s with
+  | nil =>
+      rfl
+  | cons hd tl ih =>
+      simp only [List.foldl_cons]
+      by_cases hp : P hd
+      · simp only [hp, if_true]
+        rw [ih]
+        cases dtype <;>
+          simp [BlockState.readMemValue, BlockState.readMemTyped,
+            BlockState.readMemAs, BlockState.readMem, BlockState.writeMem, hNe]
+      · simp only [hp, if_false]
+        exact ih s
+
 def fullSeqIndex
     (s : BlockState) (BLOCK_N : Nat) (lane : Fin BLOCK_N) : Nat :=
   s.pids 0 * BLOCK_N + lane.val
@@ -1210,6 +1234,121 @@ theorem embeddingLoopInvariant_step_of_concrete_body
         n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx hOutInj
         (hLaneBound idx hStore) hLaneBound)
       hStore
+
+theorem embeddingLoopBody_step_preserves_context
+    (s0 st st' : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hOffsNN :
+      st.regs .nat [BLOCK_NN] "offs_nn" =
+        some { data := fun lane : TileIndex [BLOCK_NN] =>
+          s0.pids 0 * BLOCK_N + lane.1.val })
+    (hOffsD :
+      st.regs .nat [BLOCK_DMODEL] "offs_d" =
+        some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val })
+    (hInputRead :
+      ∀ offset,
+        st.readMemValue .nat (Region.cast input_ids) offset =
+          s0.readMemValue .nat (Region.cast input_ids) offset)
+    (hWeightRead : ∀ offset, st.readMem weight offset = s0.readMem weight offset)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hStep :
+      stepStmts
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+        (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st') :
+    st'.regs .nat [BLOCK_NN] "offs_nn" =
+        some { data := fun lane : TileIndex [BLOCK_NN] =>
+          s0.pids 0 * BLOCK_N + lane.1.val } ∧
+      st'.regs .nat [BLOCK_DMODEL] "offs_d" =
+        some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val } ∧
+      (∀ offset,
+        st'.readMemValue .nat (Region.cast input_ids) offset =
+          s0.readMemValue .nat (Region.cast input_ids) offset) ∧
+      (∀ offset, st'.readMem weight offset = s0.readMem weight offset) := by
+  unfold embeddingLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, hOffsNN, hOffsD, Tile.bop, Tile.cop,
+    Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, ComparableDType.lt,
+    ComparableDType.ge, Bool.and_eq_true, Option.bind, hInputRead,
+    hWeightRead] at hStep
+  subst st'
+  constructor
+  · simp [BlockState.setReg, hOffsNN]
+  · constructor
+    · simp [BlockState.setReg, hOffsD]
+    · constructor
+      · intro offset
+        trans st.readMemValue .nat (Region.cast input_ids) offset
+        · simpa [BlockState.setReg] using
+            foldl_writeMem_prop_preserves_readMemValue_of_region_ne
+              (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) _ out input_ids
+              (fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+                (start_nn + (s0.pids 0 * BLOCK_N + i.1.val)) *
+                    stride_out_seq + i.2.1.val)
+              (fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+                WithBot.unbotD 0
+                  (if
+                      ((vob_start_id ≤
+                          if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                            st.readMemValue .nat input_ids
+                              (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+                          else vob_end_id) ∧
+                        (if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                            st.readMemValue .nat input_ids
+                              (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+                          else vob_end_id) < vob_end_id) ∧
+                        i.2.1.val < hiden_size then
+                      some
+                        (s0.readMem weight
+                          (((if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                                st.readMemValue .nat input_ids
+                                  (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+                              else vob_end_id) - vob_start_id) *
+                              stride_weight_seq + i.2.1.val))
+                    else some (0.0 : ℝ)))
+              (fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+                start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx ∧
+                  i.2.1.val < hiden_size)
+              .nat offset hInputOutNe
+        · exact hInputRead offset
+      · intro offset
+        trans st.readMem weight offset
+        · simpa [BlockState.setReg] using
+            BlockState.scatter_prop_masked_preserves_other_region
+              (region := out) (R := weight)
+              (offsetFn := fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+                (start_nn + (s0.pids 0 * BLOCK_N + i.1.val)) *
+                    stride_out_seq + i.2.1.val)
+              (valueFn := fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+                WithBot.unbotD 0
+                  (if
+                      ((vob_start_id ≤
+                          if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                            st.readMemValue .nat input_ids
+                              (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+                          else vob_end_id) ∧
+                        (if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                            st.readMemValue .nat input_ids
+                              (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+                          else vob_end_id) < vob_end_id) ∧
+                        i.2.1.val < hiden_size then
+                      some
+                        (s0.readMem weight
+                          (((if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                                st.readMemValue .nat input_ids
+                                  (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+                              else vob_end_id) - vob_start_id) *
+                              stride_weight_seq + i.2.1.val))
+                    else some (0.0 : ℝ)))
+              (P := fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+                start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx ∧
+                  i.2.1.val < hiden_size)
+              (off := offset)
+              hWeightOutNe (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) _
+        · exact hWeightRead offset
 
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)

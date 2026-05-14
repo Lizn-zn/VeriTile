@@ -65,6 +65,9 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   proves the same concrete body preserves all previously written prefix lanes.
   `embeddingLoopInvariant_step_of_concrete_body` combines those two facts into
   the per-iteration invariant step for the actual loop body.
+  `embeddingLoopBody_step_preserves_context` proves the actual body preserves
+  the loop context registers and input/weight read views under explicit
+  `input_ids ≠ out` and `weight ≠ out` no-alias assumptions.
   Remaining store-side work is matching the DSL-expanded store to that scatter
   shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the
