@@ -272,6 +272,8 @@ syntax "for " ident " in " "range(" tritonExpr ")" " { " tritonStmt* " }" : trit
 syntax "for " ident " in " "range(" "$(" term ")" ", " "$(" term ")" ", " "$(" term ")" ")" " { " tritonStmt* " }" : tritonStmt
 syntax "for " ident " in " "range(" tritonExpr ", " tritonExpr ")" " { " tritonStmt* " }" : tritonStmt
 syntax "for " ident " in " "range(" tritonExpr ", " tritonExpr ", " tritonExpr ")" " { " tritonStmt* " }" : tritonStmt
+syntax "for " ident " in " "tl.static_range(" "$(" term ")" ")" " { " tritonStmt* " }" : tritonStmt
+syntax "for " ident " in " "tl.static_range(" num ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.static_range " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.static_range " ident " in " num " { " tritonStmt* " }" : tritonStmt
 syntax "tl.if " tritonExpr " { " tritonStmt* " }" : tritonStmt

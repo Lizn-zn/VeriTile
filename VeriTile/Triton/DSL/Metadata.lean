@@ -448,6 +448,12 @@ private partial def stmtRegionsWith (assigned : List String)
   | `(tritonStmt| for $idx:ident in range($start:tritonExpr, $stop:tritonExpr, $step:tritonExpr) { $stmts:tritonStmt* }) =>
       let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
       (exprRegions assigned start ++ exprRegions assigned stop ++ exprRegions assigned step ++ i, o, assigned)
+  | `(tritonStmt| for $idx:ident in tl.static_range($($_:term)) { $stmts:tritonStmt* }) =>
+      let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
+      (i, o, assigned)
+  | `(tritonStmt| for $idx:ident in tl.static_range($_:num) { $stmts:tritonStmt* }) =>
+      let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
+      (i, o, assigned)
   | `(tritonStmt| tl.static_range $idx:ident in $($_:term) { $stmts:tritonStmt* }) =>
       let (i, o, _) := blockRegionsWith (idx.getId.toString :: assigned) stmts.toList
       (i, o, assigned)

@@ -552,6 +552,14 @@ private partial def scanStmt (assigned : Assigned)
             directPinsFromExpr assigned step
           cmpDeps := cmpDepsFromExpr start ++ cmpDepsFromExpr stop ++ cmpDepsFromExpr step }
       (rangeInfo.append info, assigned)
+  | `(tritonStmt| for $i:ident in tl.static_range($($_:term)) { $stmts:tritonStmt* }) =>
+      let bodyAssigned := i.getId.toString :: assigned
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      (info, assigned)
+  | `(tritonStmt| for $i:ident in tl.static_range($_:num) { $stmts:tritonStmt* }) =>
+      let bodyAssigned := i.getId.toString :: assigned
+      let (info, _) := scanStmts bodyAssigned stmts.toList
+      (info, assigned)
   | `(tritonStmt| tl.static_range $i:ident in $($_:term) { $stmts:tritonStmt* }) =>
       let bodyAssigned := i.getId.toString :: assigned
       let (info, _) := scanStmts bodyAssigned stmts.toList
@@ -694,6 +702,10 @@ private partial def regionDTypesFromStmt
       regionDTypesFromStmts stmts.toList
   | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
       regionDTypesFromStmts stmts.toList
+  | `(tritonStmt| for $_:ident in tl.static_range($($_:term)) { $stmts:tritonStmt* }) =>
+      regionDTypesFromStmts stmts.toList
+  | `(tritonStmt| for $_:ident in tl.static_range($_:num) { $stmts:tritonStmt* }) =>
+      regionDTypesFromStmts stmts.toList
   | `(tritonStmt| tl.static_range $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       regionDTypesFromStmts stmts.toList
   | `(tritonStmt| tl.static_range $_:ident in $_:num { $stmts:tritonStmt* }) =>
@@ -798,6 +810,10 @@ private partial def ptrElemsFromStmt (regionDTypes : RegionDTypes)
   | `(tritonStmt| tl.for $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       ptrElemsFromStmts regionDTypes acc stmts.toList
   | `(tritonStmt| tl.for $_:ident in $_:num { $stmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes acc stmts.toList
+  | `(tritonStmt| for $_:ident in tl.static_range($($_:term)) { $stmts:tritonStmt* }) =>
+      ptrElemsFromStmts regionDTypes acc stmts.toList
+  | `(tritonStmt| for $_:ident in tl.static_range($_:num) { $stmts:tritonStmt* }) =>
       ptrElemsFromStmts regionDTypes acc stmts.toList
   | `(tritonStmt| tl.static_range $_:ident in $($_:term) { $stmts:tritonStmt* }) =>
       ptrElemsFromStmts regionDTypes acc stmts.toList

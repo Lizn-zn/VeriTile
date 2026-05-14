@@ -322,6 +322,25 @@ private partial def valueTypedAntiquote? (stx : TSyntax `tritonExpr) : MacroM Bo
   | `(tritonExpr| $(($_:term : Real))) => pure Bool.true
   | _ => pure Bool.false
 
+private partial def sameRaw (a b : Syntax) : Bool :=
+  toString a == toString b
+
+private partial def expandArangeRangeWithEnv (env : Env)
+    (s e : TSyntax `tritonExpr) : MacroM EOut := do
+  match s, e with
+  | `(tritonExpr| $i:ident * $($step:term)),
+    `(tritonExpr| ($j:ident + $(1)) * $($step':term)) =>
+      if i.getId.eraseMacroScopes != j.getId.eraseMacroScopes ||
+          !sameRaw step.raw step'.raw then
+        expandArangeRange s e
+      else
+        let s' ← expandNatExpectedExpr env s
+        let stepTerm ← `(($step : Nat))
+        pure ⟨← `(Op.add NumericDType.nat Broadcast.scalarL
+              $s'.term (Op.arange $stepTerm)),
+          .nat, SInfo.vec stepTerm, none, none⟩
+  | _, _ => expandArangeRange s e
+
 partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
     MacroM (Option StaticPtrOut) := do
   if ← valueTypedAntiquote? stx then
@@ -620,7 +639,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.arange($e:tritonExpr)) =>
       expandArange e
   | `(tritonExpr| tl.arange($s:tritonExpr, $e:tritonExpr)) => do
-      expandArangeRange s e
+      expandArangeRangeWithEnv env s e
   | `(tritonExpr| tl.exp($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.exp" e'
@@ -2106,6 +2125,18 @@ partial def expandStmt (env : Env) (pinned : List String)
       pure (← `(Stmt.forRangeDyn $nameLit $start'.term $stop'.term $step'.term [$algBody,*]),
         ← `(ComputeStmt.forRangeDyn $nameLit $start'.term $stop'.term $step'.term [$computeBody,*]),
         env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in tl.static_range($($n:term)) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
+        ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
+  | `(tritonStmt| for $i:ident in tl.static_range($n:num) { $stmts:tritonStmt* }) => do
+      let nameLit ← identAsStr i
+      let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
+      let (algBody, computeBody, _, bodyHasCompute) ← expandStmts bodyEnv pinned regionDTypes ptrElems stmts.toList
+      pure (← `(Stmt.forLoop $nameLit $n [$algBody,*]),
+        ← `(ComputeStmt.forLoop $nameLit $n [$computeBody,*]), env, bodyHasCompute)
   | `(tritonStmt| tl.static_range $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env
