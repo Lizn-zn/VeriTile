@@ -1073,6 +1073,90 @@ theorem embeddingLoopBody_step_current_chunk_write
     vob_start_id vob_end_id stride_weight_seq n_ctx hiden_size BLOCK_N
     start_nn BLOCK_NN BLOCK_DMODEL idx hInputRead hactive
 
+theorem embeddingLoopBody_step_preserve_old
+    (s0 st st' : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hOffsNN :
+      st.regs .nat [BLOCK_NN] "offs_nn" =
+        some { data := fun lane : TileIndex [BLOCK_NN] =>
+          s0.pids 0 * BLOCK_N + lane.1.val })
+    (hOffsD :
+      st.regs .nat [BLOCK_DMODEL] "offs_d" =
+        some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val })
+    (hInputRead :
+      ∀ offset,
+        st.readMemValue .nat (Region.cast input_ids) offset =
+          s0.readMemValue .nat (Region.cast input_ids) offset)
+    (hWeightRead : ∀ offset, st.readMem weight offset = s0.readMem weight offset)
+    (hStep :
+      stepStmts
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+        (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st')
+    (oldIdx : TileIndex [BLOCK_N, BLOCK_DMODEL])
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s0 stride_out_seq BLOCK_N idx))
+    (hOld : embeddingPrefixWritten start_nn oldIdx)
+    (hLaneBound :
+      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane →
+          start_nn + lane.1.val < BLOCK_N) :
+    st'.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx) =
+      st.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx) := by
+  unfold embeddingLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, hOffsNN, hOffsD, Tile.bop, Tile.cop,
+    Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, ComparableDType.lt,
+    ComparableDType.ge, Bool.and_eq_true, Option.bind, hInputRead,
+    hWeightRead] at hStep
+  subst st'
+  let actualValue : TileIndex [BLOCK_NN, BLOCK_DMODEL] → ℝ := fun i =>
+    WithBot.unbotD 0
+      (if
+          ((vob_start_id ≤
+              if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                st.readMemValue .nat input_ids
+                  (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+              else vob_end_id) ∧
+            (if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                st.readMemValue .nat input_ids
+                  (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+              else vob_end_id) < vob_end_id) ∧
+            i.2.1.val < hiden_size then
+          some
+            (s0.readMem weight
+              (((if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                    st.readMemValue .nat input_ids
+                      (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+                  else vob_end_id) - vob_start_id) * stride_weight_seq +
+                i.2.1.val))
+        else some (0.0 : ℝ))
+  let actualActive : TileIndex [BLOCK_NN, BLOCK_DMODEL] → Prop := fun i =>
+    start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx ∧
+      i.2.1.val < hiden_size
+  let actualOffset : TileIndex [BLOCK_NN, BLOCK_DMODEL] → Nat := fun i =>
+    (start_nn + (s0.pids 0 * BLOCK_N + i.1.val)) * stride_out_seq + i.2.1.val
+  simpa [actualActive, actualOffset, actualValue, BlockState.setReg] using
+    BlockState.scatter_prop_masked_preserves_other_offset
+      out actualOffset actualValue actualActive
+      (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx)
+      (fun lane hlane heq =>
+        embeddingOldPrefix_outOffset_ne_currentChunk s0 stride_out_seq BLOCK_N
+          start_nn BLOCK_NN BLOCK_DMODEL oldIdx lane hOutInj
+          (hLaneBound lane
+            ((storeActive2D_eval_iff s0 n_ctx hiden_size BLOCK_N start_nn
+              BLOCK_NN BLOCK_DMODEL lane).1 hlane))
+          hOld
+          (by
+            rw [← outOffset2D_eval_add s0 stride_out_seq BLOCK_N start_nn
+              BLOCK_NN BLOCK_DMODEL lane]
+            exact heq.symm))
+      (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) _
+
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx

@@ -61,7 +61,8 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   local `outOffset2D` / `storeActive2D` / `embeddingSpec2D` vocabulary.
   `embeddingLoopBody_step_current_chunk_write` now consumes the concrete
   `embeddingLoopBody` execution and proves the current chunk's masked scatter
-  readback against `embeddingSpec2D`.
+  readback against `embeddingSpec2D`. `embeddingLoopBody_step_preserve_old`
+  proves the same concrete body preserves all previously written prefix lanes.
   Remaining store-side work is matching the DSL-expanded store to that scatter
   shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the
