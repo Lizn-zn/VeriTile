@@ -59,6 +59,9 @@ an explicit hypothesis and reduce it to the named algorithm postconditions.
   `storeActive2D_eval_iff`, and `embeddingLoopStoreValue_eval_eq_spec2D`
   normalize the offset and value shapes produced by the DSL expansion to the
   local `outOffset2D` / `storeActive2D` / `embeddingSpec2D` vocabulary.
+  `embeddingLoopBody_step_current_chunk_write` now consumes the concrete
+  `embeddingLoopBody` execution and proves the current chunk's masked scatter
+  readback against `embeddingSpec2D`.
   Remaining store-side work is matching the DSL-expanded store to that scatter
   shape. The theorem target is fixed as
   `embedding_kernel_correct_target`, and the public theorem exposes the

@@ -974,6 +974,105 @@ theorem embeddingPreLoop_step_regs
         · intro offset
           rfl
 
+theorem embeddingLoopBody_step_current_chunk_write
+    (s0 st st' : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hOffsNN :
+      st.regs .nat [BLOCK_NN] "offs_nn" =
+        some { data := fun lane : TileIndex [BLOCK_NN] =>
+          s0.pids 0 * BLOCK_N + lane.1.val })
+    (hOffsD :
+      st.regs .nat [BLOCK_DMODEL] "offs_d" =
+        some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val })
+    (hInputRead :
+      ∀ offset,
+        st.readMemValue .nat (Region.cast input_ids) offset =
+          s0.readMemValue .nat (Region.cast input_ids) offset)
+    (hWeightRead : ∀ offset, st.readMem weight offset = s0.readMem weight offset)
+    (hStep :
+      stepStmts
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+        (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st')
+    (idx : TileIndex [BLOCK_NN, BLOCK_DMODEL])
+    (hNoCollision :
+      ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+          BLOCK_DMODEL lane →
+          outOffset2D s0 stride_out_seq BLOCK_N start_nn lane =
+            outOffset2D s0 stride_out_seq BLOCK_N start_nn idx →
+          lane = idx)
+    (hactive :
+      storeActive2D s0 n_ctx hiden_size BLOCK_N start_nn BLOCK_NN
+        BLOCK_DMODEL idx) :
+    st'.readMem out (outOffset2D s0 stride_out_seq BLOCK_N start_nn idx) =
+      embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
+        stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx := by
+  unfold embeddingLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, hOffsNN, hOffsD, Tile.bop, Tile.cop,
+    Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, ComparableDType.lt,
+    ComparableDType.ge, Bool.and_eq_true, Option.bind, hInputRead,
+    hWeightRead] at hStep
+  subst st'
+  let actualValue : TileIndex [BLOCK_NN, BLOCK_DMODEL] → ℝ := fun i =>
+    WithBot.unbotD 0
+      (if
+            ((vob_start_id ≤
+                if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                st.readMemValue .nat input_ids
+                  (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+              else vob_end_id) ∧
+            (if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                st.readMemValue .nat input_ids
+                  (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+              else vob_end_id) < vob_end_id) ∧
+            i.2.1.val < hiden_size then
+          some
+            (s0.readMem weight
+              (((if start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx then
+                    st.readMemValue .nat input_ids
+                      (start_nn + (s0.pids 0 * BLOCK_N + i.1.val))
+                  else vob_end_id) - vob_start_id) * stride_weight_seq +
+                i.2.1.val))
+        else some (0.0 : ℝ))
+  let actualActive : TileIndex [BLOCK_NN, BLOCK_DMODEL] → Prop := fun i =>
+    start_nn + (s0.pids 0 * BLOCK_N + i.1.val) < n_ctx ∧
+      i.2.1.val < hiden_size
+  let actualOffset : TileIndex [BLOCK_NN, BLOCK_DMODEL] → Nat := fun i =>
+    (start_nn + (s0.pids 0 * BLOCK_N + i.1.val)) * stride_out_seq + i.2.1.val
+  have hIdxOffset :
+      actualOffset idx = outOffset2D s0 stride_out_seq BLOCK_N start_nn idx := by
+    exact outOffset2D_eval_add s0 stride_out_seq BLOCK_N start_nn BLOCK_NN
+      BLOCK_DMODEL idx
+  rw [← hIdxOffset]
+  have hPi : actualActive idx := by
+    exact (storeActive2D_eval_iff s0 n_ctx hiden_size BLOCK_N start_nn
+      BLOCK_NN BLOCK_DMODEL idx).2 hactive
+  rw [BlockState.scatter_readback_prop_masked_nd_of_true
+        (region := out)
+        (shape := [BLOCK_NN, BLOCK_DMODEL])
+        _
+        (offsetFn := actualOffset)
+        (valueFn := actualValue)
+        (P := actualActive)
+        idx hPi
+        (fun lane hlane heq =>
+          hNoCollision lane
+            ((storeActive2D_eval_iff s0 n_ctx hiden_size BLOCK_N start_nn
+              BLOCK_NN BLOCK_DMODEL lane).1 hlane)
+            (by
+              rw [← outOffset2D_eval_add s0 stride_out_seq BLOCK_N start_nn
+                BLOCK_NN BLOCK_DMODEL lane]
+              rw [← outOffset2D_eval_add s0 stride_out_seq BLOCK_N start_nn
+                BLOCK_NN BLOCK_DMODEL idx]
+              exact heq))]
+  exact embeddingLoopStoreValue_eval_eq_spec2D s0 st weight input_ids
+    vob_start_id vob_end_id stride_weight_seq n_ctx hiden_size BLOCK_N
+    start_nn BLOCK_NN BLOCK_DMODEL idx hInputRead hactive
+
 theorem embedding_kernel_compute_correct_of_algorithm
     (weight input_ids out : RegionName)
     (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
