@@ -14,41 +14,41 @@ Allowed mechanical Lean-syntax-only changes:
 - Python `n_cols: tl.constexpr` / `BLOCK_SIZE: tl.constexpr` -> Lean `Nat`
   parameters. -/
 def swiglu_forward_kernel
-    (A B C : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
+    (a_ptr b_ptr c_ptr : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   program_id = tl.program_id(0).to(tl.int64)
-  A += program_id * $(stride)
-  B += program_id * $(stride)
-  C += program_id * $(stride)
+  a_ptr += program_id * $(stride)
+  b_ptr += program_id * $(stride)
+  c_ptr += program_id * $(stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
-  a_row = tl.load(A + col_offsets, mask=mask, other=0).to(tl.float32)
-  b_row = tl.load(B + col_offsets, mask=mask, other=0)
+  a_row = tl.load(a_ptr + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(b_ptr + col_offsets, mask=mask, other=0)
   c_row = silu(a_row) * b_row
-  tl.store(C + col_offsets, c_row, mask=mask)
+  tl.store(c_ptr + col_offsets, c_row, mask=mask)
 }
 
 /-- Faithful transcription of `swiglu_triton.py`'s `_swiglu_backward_kernel`.
 
 Allowed mechanical Lean-syntax-only changes match `swiglu_forward_kernel`. -/
 def swiglu_backward_kernel
-    (DC A B : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
+    (dc_ptr a_ptr b_ptr : RegionName) (stride n_cols BLOCK_SIZE : Nat) :
     ComputeKernel := triton {
   program_id = tl.program_id(0).to(tl.int64)
-  DC += program_id * $(stride)
-  A += program_id * $(stride)
-  B += program_id * $(stride)
+  dc_ptr += program_id * $(stride)
+  a_ptr += program_id * $(stride)
+  b_ptr += program_id * $(stride)
   col_offsets = tl.arange(0, $(BLOCK_SIZE))
   mask = col_offsets < $(n_cols)
-  dc_row = tl.load(DC + col_offsets, mask=mask, other=0)
-  a_row = tl.load(A + col_offsets, mask=mask, other=0).to(tl.float32)
-  b_row = tl.load(B + col_offsets, mask=mask, other=0)
+  dc_row = tl.load(dc_ptr + col_offsets, mask=mask, other=0)
+  a_row = tl.load(a_ptr + col_offsets, mask=mask, other=0).to(tl.float32)
+  b_row = tl.load(b_ptr + col_offsets, mask=mask, other=0)
   sig_a = tl.sigmoid(a_row)
   silu_a = a_row * sig_a
   db_row = dc_row * silu_a
   da_row = dc_row * (silu_a * (1 - sig_a) + sig_a) * b_row
-  tl.store(A + col_offsets, da_row, mask=mask)
-  tl.store(B + col_offsets, db_row, mask=mask)
+  tl.store(a_ptr + col_offsets, da_row, mask=mask)
+  tl.store(b_ptr + col_offsets, db_row, mask=mask)
 }
 
 def swigluOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
