@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-- Surface transcription of `lightning_attention.py`'s `_fwd_kernel`.
+/-- Faithful transcription of `lightning_attention.py`'s `_fwd_kernel`.
 
 This covers the full forward recurrent tile loop. -/
 def lightning_attention_forward_surface
