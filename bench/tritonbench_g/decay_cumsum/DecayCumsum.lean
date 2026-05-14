@@ -9,26 +9,28 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `decay_cumsum.py`'s `fwd_decay_cumsum`.
+/-- Faithful transcription of `decay_cumsum.py`'s `fwd_decay_cumsum`.
 
 This preserves the program-id decomposition, row base pointers, `BK` lane mask,
 float32 accumulator, per-row cumulative update by `inv_ln2`, block-pointer
 element dtype cast, and `DK` pointer increments through the `BT` loop. -/
 def fwd_decay_cumsum_surface
     (G GO : RegionName)
-    (s_qk_h DK BT BK : Nat) :
+    (s_qk_h _s_qk_t _s_qk_d _B _H _T : Nat) (_scale : ℝ)
+    (BT BK DK : Nat) :
     ComputeKernel := triton {
   i_k = tl.program_id(0)
   i_c = tl.program_id(1)
   i_bh = tl.program_id(2)
-  offs = tl.arange(0, $(BK))
-  p_g = G + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
-  p_go = GO + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) + i_k * $(BK) + offs
+  p_g = G + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) +
+    i_k * $(BK) + tl.arange(0, $(BK))
+  p_go = GO + i_bh * $(s_qk_h) + i_c * $(BT) * $(DK) +
+    i_k * $(BK) + tl.arange(0, $(BK))
   cum_decay = tl.zeros([$(BK)], dtype=tl.float32)
-  mask = (i_k * $(BK) + offs) < $(DK)
+  mask = (i_k * $(BK) + tl.arange(0, $(BK))) < $(DK)
   for _i in range($(0), $(BT), $(1)) {
-    g_val = tl.load(p_g, mask=mask, other=0).to(tl.float32)
-    cum_decay += g_val * 1.44269504
+    _g = tl.load(p_g, mask=mask, other=0).to(tl.float32)
+    cum_decay += _g * 1.44269504
     tl.store(p_go, (cum_decay).to(p_go.dtype.element_ty), mask=mask)
     p_g += $(DK)
     p_go += $(DK)
