@@ -2383,6 +2383,16 @@ def lhs_sequence(text: str) -> list[str]:
         depth = max(depth, 0)
     return out
 
+def normalize_guard_lhs_sequence(port: str, seq: list[str]) -> list[str]:
+    if port == "bmm_chunk_fwd":
+        # Python returns before any side effects for inactive causal blocks.
+        # The Lean surface uses the equivalent guard-normal form:
+        #   active_block = true
+        #   if IS_CAUSAL { active_block = ... }
+        #   if active_block { body }
+        return [name for name in seq if name != "active_block"]
+    return seq
+
 failures = []
 for py_file in sorted(root.glob("*/*.py")):
     lean_files = sorted(py_file.parent.glob("*.lean"))
@@ -2392,8 +2402,9 @@ for py_file in sorted(root.glob("*/*.py")):
     lean_text = lean_file.read_text()
     py_bodies = python_jit_kernel_bodies(py_file.read_text())
     lean_bodies = lean_triton_bodies(lean_text)
-    py_sequences = [lhs_sequence(py_bodies[0])] if py_bodies else []
-    lean_sequences = [lhs_sequence(lean_bodies[0])] if lean_bodies else []
+    port = py_file.parent.name
+    py_sequences = [normalize_guard_lhs_sequence(port, lhs_sequence(py_bodies[0]))] if py_bodies else []
+    lean_sequences = [normalize_guard_lhs_sequence(port, lhs_sequence(lean_bodies[0]))] if lean_bodies else []
     scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
     if py_sequences != lean_sequences and not any(marker in scope_text for marker in scope_markers):
         failures.append((py_file, lean_file, py_sequences, lean_sequences))

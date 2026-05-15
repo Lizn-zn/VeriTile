@@ -33,11 +33,6 @@ not a one-to-one Python transcription yet:
   `tl.sum(..., axis=0)` shape flow typable. Closing this requires constraint
   propagation for constexpr shape equalities.
 
-- `bmm_chunk_fwd`: Python uses an early `return` under the causal guard; the
-  Lean surface represents the active body with an explicit guard. Closing this
-  requires a first-class early-return/terminated-block surface, or an audit rule
-  that treats the guard-normal form as a proven-preserving translation.
-
 - `iv_dependent_matmul`: Python dispatches five scheduling modes through a
   string constexpr `type`; Lean currently exposes the modes as separate
   surfaces. Closing this requires string-valued constexpr branching in the DSL

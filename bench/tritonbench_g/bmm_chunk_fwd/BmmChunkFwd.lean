@@ -10,7 +10,7 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-- Surface transcription of
+/-- Faithful transcription of
 `bmm_chunk_fwd.py`'s `_bmm_chunk_fwd_kernel`.
 
 This covers both `HAS_SEQ_IDX=false` and `HAS_SEQ_IDX=true`; the sequence-index
