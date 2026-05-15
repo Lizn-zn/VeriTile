@@ -48,3 +48,8 @@ The remaining blockers are not currently local proof-script failures:
   surfaces, including helper-call modeling where the Python kernel delegates
   to a separate `@triton.jit` helper. The current proof slices intentionally
   start from precomputed accumulator/output tiles.
+- `rotary_transform` and `rotary_transform_ops` need path-sensitive scalar
+  parameter refinement across the varlen/non-varlen and scalar/tensor
+  `SEQLEN_OFFSETS` paths. The full Python kernel rebinds `seqlen`, `X`, and
+  `OUT` differently by path before the shared rotary body; the current first
+  Lean surface covers only the non-varlen scalar-offset path.
