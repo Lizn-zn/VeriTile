@@ -14,7 +14,7 @@ set_option linter.unusedSimpArgs false
 `_sgmv_expand_slice_kernel`.
 
 This keeps the CTA decomposition, sequence metadata loads, LoRA index gather,
-K-block dot-product loop with the `EVEN_K` load branch, optional `CAST_TYPE`,
+K-block dot-product loop with the `EVEN_K` load path, optional `CAST_TYPE`,
 optional `ADD_INPUTS`, and final masked store.
 `tl.max_contiguous` is a layout hint; the DSL accepts it at the surface and
 erases it into the same value expression. Python's early returns for
