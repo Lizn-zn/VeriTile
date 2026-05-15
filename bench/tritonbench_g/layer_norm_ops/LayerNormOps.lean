@@ -14,8 +14,7 @@ set_option linter.unusedSimpArgs false
 
 This keeps the residual input, `RESIDUAL_OUT`, RMS-vs-layer norm, bias,
 `Mean`/`Rstd` side stores, Python ternary expressions, and masked `Y`
-writeback, but still uses pre-bound scalars for branch-assigned values while
-the DSL branch environment merge is being tightened. -/
+writeback. -/
 def layer_norm_fwd_1pass_surface
     (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
     (stride_x_row stride_y_row stride_res_row stride_res_out_row
@@ -41,9 +40,7 @@ def layer_norm_fwd_1pass_surface
   if STORE_RESIDUAL_OUT {
     tl.store(RESIDUAL_OUT + cols, x, mask=cols < $(N))
   }
-  mean = 0.0
-  var = 0.0
-  if not IS_RMS_NORM {
+  tl.if not IS_RMS_NORM {
     mean = tl.sum(x, axis=0) / $(N)
     tl.store(Mean + row, mean)
     xbar = tl.where(cols < $(N), x - mean, 0.0)
@@ -56,7 +53,7 @@ def layer_norm_fwd_1pass_surface
   tl.store(Rstd + row, rstd)
   mask = cols < $(N)
   w = tl.load(W + cols, mask=mask).to(tl.float32)
-  if HAS_BIAS {
+  tl.if HAS_BIAS {
     b = tl.load(B + cols, mask=mask).to(tl.float32)
   }
   x_hat = ((x - mean) * rstd if not IS_RMS_NORM else x * rstd)

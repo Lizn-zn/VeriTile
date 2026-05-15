@@ -13,7 +13,7 @@ surface.
 | Ensure every completed Python port has a Lean port. | Python/Lean file counts both report 141; `bench/audit_tritonbench_g.sh` enforces the count match. | Passing. |
 | Ensure Lean ports compile. | `bench/check_ports.sh` reports `TritonBench-G ports: 141 ok, 0 fail`; the audit script reruns this gate. | Passing. |
 | Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, statement lhs order, and documented translation-surface blockers. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
-| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current unannotated mechanical mismatch; 21 documented translation-surface blockers remain. |
+| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current unannotated mechanical mismatch; 20 documented translation-surface blockers remain. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
 | Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
 | Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers. | Passing for algorithm-layer blockers. Translation-surface blockers remain and are documented below. |
@@ -69,7 +69,7 @@ surface.
 
 No explicit TritonBench-G `hAlg` blocker remains.
 
-There are still 21 documented translation-surface blockers. These are not
+There are still 20 documented translation-surface blockers. These are not
 silent green ports: each remaining marker must be covered by
 `proof_blockers.md`, and `bench/audit_tritonbench_g.sh` enforces that coverage.
 The current documented blocker set is:
@@ -90,7 +90,6 @@ The current documented blocker set is:
 - `context_attn_nopad`
 - `flash_attn`
 - `iv_dependent_matmul`
-- `layer_norm_ops`
 - `mixed_sparse_attention`
 - `rotary_transform`
 - `rotary_transform_ops`

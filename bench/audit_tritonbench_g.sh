@@ -2148,7 +2148,7 @@ def lean_control_counts(text: str) -> tuple[int, int, int]:
     return (
         len(re.findall(r"^\s*(for\s+|tl\.for\s+)", body, re.M)),
         len(re.findall(r"^\s*while\s+", body, re.M)),
-        len(re.findall(r"^\s*if\s+", body, re.M)),
+        len(re.findall(r"^\s*(if\s+|tl\.if\s+)", body, re.M)),
     )
 
 failures = []

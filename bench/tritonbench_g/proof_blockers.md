@@ -39,11 +39,6 @@ not a one-to-one Python transcription yet:
   surface, or a review rule that accepts a complete family of mode-specific
   surfaces as the faithful representation.
 
-- `layer_norm_ops`: the Python constexpr branches make `mean` live only in the
-  non-RMS path, while the current Lean surface needs extra initialization to
-  keep later conditional expressions in scope. Closing this requires
-  path-sensitive constexpr environment tracking.
-
 - `rotary_transform` and `rotary_transform_ops`: the Python kernels combine
   varlen/non-varlen, tensor/scalar seqlen offsets, interleaved/non-interleaved,
   and conjugate/non-conjugate paths. Current Lean surfaces cover the
