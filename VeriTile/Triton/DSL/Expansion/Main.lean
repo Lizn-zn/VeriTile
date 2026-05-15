@@ -800,6 +800,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let rawName := i.getId.toString
       let userName := i.getId.getString!
       let erasedName := i.getId.eraseMacroScopes.toString
+      unless env.any (fun entry =>
+          entry.1 == rawName || entry.1 == userName || entry.1 == erasedName) do
+        let t : TSyntax `term := ⟨i.raw⟩
+        return ⟨← `(Op.constNat $t), .nat, SInfo.scalar, none, none⟩
       let name :=
         if env.any (fun entry => entry.1 == rawName) then rawName
         else if env.any (fun entry => entry.1 == userName) then userName

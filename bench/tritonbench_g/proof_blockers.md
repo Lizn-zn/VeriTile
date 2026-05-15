@@ -27,7 +27,7 @@ not a one-to-one Python transcription yet:
   mechanical audit compare helper parameters and call sequences against the
   inlined outer surface.
 
-- `rotary_transform` and `rotary_transform_ops`: the Python kernels combine
+- `rotary_transform`: the Python kernel combines
   varlen/non-varlen, tensor/scalar seqlen offsets, interleaved/non-interleaved,
   and conjugate/non-conjugate paths. Current Lean surfaces cover the
   non-varlen, non-interleaved, non-conjugate path. Closing this requires
@@ -42,7 +42,7 @@ The remaining blockers are not currently local proof-script failures:
   surfaces, including helper-call modeling where the Python kernel delegates
   to a separate `@triton.jit` helper. The current proof slices intentionally
   start from precomputed accumulator/output tiles.
-- `rotary_transform` and `rotary_transform_ops` need path-sensitive scalar
+- `rotary_transform` needs path-sensitive scalar
   parameter refinement across the varlen/non-varlen and scalar/tensor
   `SEQLEN_OFFSETS` paths. The full Python kernel rebinds `seqlen`, `X`, and
   `OUT` differently by path before the shared rotary body; the current first
