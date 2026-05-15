@@ -2460,26 +2460,55 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
         ← `(ComputeStmt.ifThen $cond'.term [$computeBody,*]),
         bodyEnv,
         bodyHasCompute)
+  | `(tritonStmt| return) =>
+      Macro.throwError "`return` is only supported as the sole body statement of `if cond { return }`"
   | _ => Macro.throwUnsupported
+
+private partial def isReturnStmt (st : TSyntax `tritonStmt) : MacroM Bool := do
+  pure (st.raw.getKind == ``tritonReturn)
+
+private partial def ifReturnCond? (st : TSyntax `tritonStmt) :
+    MacroM (Option (TSyntax `tritonExpr)) := do
+  match st with
+  | `(tritonStmt| if $cond:tritonExpr { $stmts:tritonStmt* }) => do
+      match stmts.toList with
+      | [st] =>
+          if ← isReturnStmt st then
+            pure (some cond)
+          else
+            pure none
+      | _ => pure none
+  | _ => pure none
 
 partial def expandStmts (env : Env) (pinned intPinned : List String)
     (regionDTypes : Inference.RegionDTypes) (ptrElems : Inference.PtrElems)
     (stmts : List (TSyntax `tritonStmt)) :
     MacroM (Array (TSyntax `term) × Array (TSyntax `term) × Env × Bool) := do
-  let mut algOut : Array (TSyntax `term) := #[]
-  let mut computeOut : Array (TSyntax `term) := #[]
-  let mut env' := env
-  let mut hasCompute := Bool.false
-  for st in stmts do
-    if Inference.isRegionDirective st then
-      continue
-    let (algTerm, computeTerm, nextEnv, stmtHasCompute) ←
-      expandStmt env' pinned intPinned regionDTypes ptrElems st
-    algOut := algOut.push algTerm
-    computeOut := computeOut.push computeTerm
-    env' := nextEnv
-    hasCompute := hasCompute || stmtHasCompute
-  pure (algOut, computeOut, env', hasCompute)
+  match stmts with
+  | [] => pure (#[], #[], env, Bool.false)
+  | st :: rest => do
+      if Inference.isRegionDirective st then
+        return ← expandStmts env pinned intPinned regionDTypes ptrElems rest
+      match ← ifReturnCond? st with
+      | some cond => do
+          let cond' ← expandBoolCondition env cond
+          ensureDType .bool cond'.dtype "return condition"
+          ensureShape SInfo.scalar cond'.shape "return condition"
+          let (algRest, computeRest, restEnv, restHasCompute) ←
+            expandStmts env pinned intPinned regionDTypes ptrElems rest
+          let negCond ← `(Op.boolNot $cond'.term)
+          pure (#[
+              ← `(Stmt.ifThen $negCond [$algRest,*])
+            ], #[
+              ← `(ComputeStmt.ifThen $negCond [$computeRest,*])
+            ], restEnv, cond'.computeTerm.isSome || restHasCompute)
+      | none => do
+          let (algTerm, computeTerm, nextEnv, stmtHasCompute) ←
+            expandStmt env pinned intPinned regionDTypes ptrElems st
+          let (algRest, computeRest, restEnv, restHasCompute) ←
+            expandStmts nextEnv pinned intPinned regionDTypes ptrElems rest
+          pure (#[algTerm] ++ algRest, #[computeTerm] ++ computeRest,
+            restEnv, stmtHasCompute || restHasCompute)
 
 end
 
