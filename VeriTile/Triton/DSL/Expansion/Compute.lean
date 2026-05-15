@@ -100,6 +100,7 @@ partial def expandIntegralArith (expandExpr : ExprExpander) (env : Env) (ctx : S
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  let (a', b') ← coerceNatIntOperands ctx a' b'
   ensureAlgorithmOnly ctx a'
   ensureAlgorithmOnly ctx b'
   unless a'.dtype == b'.dtype do

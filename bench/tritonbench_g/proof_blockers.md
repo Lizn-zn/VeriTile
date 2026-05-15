@@ -39,15 +39,6 @@ not a one-to-one Python transcription yet:
   surface, or a review rule that accepts a complete family of mode-specific
   surfaces as the faithful representation.
 
-- `kcache_copy_triton`: the full Python path includes signed negative
-  `cur_token_shift` arithmetic before selecting the cache slot. The proof
-  surface starts after that arithmetic. A direct full-surface transcription
-  currently infers `cur_token_shift` as `Nat`, so the decode-path expression
-  `cur_token_idx - (cur_seq_idx + 1)` saturates to `0` instead of producing
-  `-1`. Closing this requires signed arithmetic propagation for subtraction
-  whose result later combines with signed sequence lengths, followed by signed
-  pointer-offset flow for the selected cache slot.
-
 - `layer_norm_ops`: the Python constexpr branches make `mean` live only in the
   non-RMS path, while the current Lean surface needs extra initialization to
   keep later conditional expressions in scope. Closing this requires

@@ -10,6 +10,39 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Faithful transcription of `kcache_copy_triton.py`'s
+`_copy_to_kcache_seqlen_n_kernel`.
+
+The signed sequence-length path is represented with typed int regions for
+`BLOCK_TABLES` and `seq_lengths`, so `cur_token_shift` is inferred as signed
+when it is added to the signed `seq_lengths` load. -/
+def copy_to_kcache_seqlen_n_kernel
+    (K KCache : RegionName) (BLOCK_TABLES seq_lengths : Region .int)
+    (stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
+      stride_kcs _stride_kcx stride_bts stride_btb block_size n_tokens
+      _HEAD_DIM KCACHE_X : Nat) :
+    ComputeKernel := triton {
+  cur_token_idx = tl.program_id(0)
+  cur_seq_idx = cur_token_idx // $(n_tokens)
+  cur_token_shift = cur_token_idx - $(n_tokens) * (cur_seq_idx + $(1))
+  cur_kv_head_idx = tl.program_id(1)
+  split_x_idx = tl.program_id(2)
+  past_kv_seq_len = tl.load(seq_lengths + cur_seq_idx) + cur_token_shift
+  last_bt_block_idx = past_kv_seq_len // $(block_size)
+  block_table_ptr = BLOCK_TABLES + cur_seq_idx * $(stride_bts)
+  block_id = tl.load(block_table_ptr + last_bt_block_idx * $(stride_btb))
+  offset_last_block = past_kv_seq_len % $(block_size)
+  offsets_dmodel = split_x_idx * $(KCACHE_X) + tl.arange(0, $(KCACHE_X))
+  offsets_k = cur_token_idx * $(stride_kt) +
+    cur_kv_head_idx * $(stride_kh) + offsets_dmodel * $(stride_kd)
+  k = tl.load(K + offsets_k)
+  offsets_kcache = block_id * $(stride_kcb) +
+    cur_kv_head_idx * $(stride_kch) +
+    split_x_idx * $(stride_kcsplit_x) +
+    offset_last_block * $(stride_kcs) + tl.arange(0, $(KCACHE_X))
+  tl.store(KCache + offsets_kcache, k)
+}
+
 /-- Surface transcription of `kcache_copy_triton.py`'s
 `_copy_to_kcache_seqlen_n_kernel` for the `n_tokens = 1` decode path.
 

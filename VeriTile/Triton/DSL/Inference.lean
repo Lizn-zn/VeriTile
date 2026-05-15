@@ -112,11 +112,24 @@ private partial def intSourceExpr? : TSyntax `tritonExpr → Bool := fun stx =>
       staticPtrRootIsIntRegion? p
   | `(tritonExpr| tl.load($p:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
       staticPtrRootIsIntRegion? p
+  | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) => intSourceExpr? a || intSourceExpr? b
+  | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => intSourceExpr? a || intSourceExpr? b
+  | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => intSourceExpr? a || intSourceExpr? b
+  | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => intSourceExpr? a || intSourceExpr? b
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => intSourceExpr? a || intSourceExpr? b
+  | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => intSourceExpr? a || intSourceExpr? b
   | `(tritonExpr| ($e:tritonExpr)) => intSourceExpr? e
   | `(tritonExpr| ($e:tritonExpr).to(tl.int32)) => intSourceExpr? e
   | `(tritonExpr| ($e:tritonExpr).to(tl.int64)) => intSourceExpr? e
   | `(tritonExpr| ($e:tritonExpr).to(tl.int16)) => intSourceExpr? e
   | `(tritonExpr| ($e:tritonExpr).to(tl.int8)) => intSourceExpr? e
+  | _ => Bool.false
+
+private partial def signedSubExpr? : TSyntax `tritonExpr → Bool := fun stx =>
+  match stx with
+  | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) =>
+      !(intSourceExpr? a) && !(intSourceExpr? b)
+  | `(tritonExpr| ($e:tritonExpr)) => signedSubExpr? e
   | _ => Bool.false
 
 /-- Test whether `stx` would be recognized as a static pointer
@@ -399,6 +412,8 @@ structure ScanInfo where
   ptrDeps : List (String × List String × List String) := []
   cmpDeps : List (List String × List String) := []
   intPins : List String := []
+  intDeps : List String := []
+  signedSubPins : List String := []
   deriving Inhabited
 
 private def ScanInfo.append (a b : ScanInfo) : ScanInfo :=
@@ -407,7 +422,9 @@ private def ScanInfo.append (a b : ScanInfo) : ScanInfo :=
     ptrUses := a.ptrUses ++ b.ptrUses
     ptrDeps := a.ptrDeps ++ b.ptrDeps
     cmpDeps := a.cmpDeps ++ b.cmpDeps
-    intPins := a.intPins ++ b.intPins }
+    intPins := a.intPins ++ b.intPins
+    intDeps := a.intDeps ++ b.intDeps
+    signedSubPins := a.signedSubPins ++ b.signedSubPins }
 
 private def assignmentInfo (assigned : Assigned) (lhs : List String)
     (rhs : List (TSyntax `tritonExpr)) : ScanInfo :=
@@ -418,9 +435,14 @@ private def assignmentInfo (assigned : Assigned) (lhs : List String)
     let (bases, offsets) := ptrDepsFromAssignedExpr assigned e
     (l, bases, offsets))
   let intPins := (lhs.zip rhs).foldl
-    (fun acc (l, e) => if intSourceExpr? e then l :: acc else acc) []
+    (fun acc (l, e) => if intSourceExpr? e then addUnique acc l else acc) []
+  let intDeps := rhs.foldl
+    (fun acc e => if intSourceExpr? e then addManyUnique acc (natExprIdents e) else acc) []
+  let signedSubPins := (lhs.zip rhs).foldl
+    (fun acc (l, e) => if signedSubExpr? e then addUnique acc l else acc) []
   { directPins := directPins, natDeps := natDeps, ptrDeps := ptrDeps,
-    cmpDeps := cmpDeps, intPins := intPins }
+    cmpDeps := cmpDeps, intPins := intPins, intDeps := intDeps,
+    signedSubPins := signedSubPins }
 
 mutual
 
@@ -648,6 +670,12 @@ def collectNatPinned (stmts : List (TSyntax `tritonStmt)) : List String :=
   let (info, _) := scanStmts [] stmts
   let (_, pins) := closeInfo info
   pins
+
+/-- Set of identifier names that should be expanded as signed integers. -/
+def collectIntPinned (stmts : List (TSyntax `tritonStmt)) : List String :=
+  let (info, _) := scanStmts [] stmts
+  let signedDeps := info.intDeps.filter (fun name => info.signedSubPins.contains name)
+  addManyUnique (info.intPins.foldl addUnique []) signedDeps
 
 /-- Per-region element-dtype declarations gathered from in-body
 `region <name> : <dtype>` directives. Used by `expandLoad` /
