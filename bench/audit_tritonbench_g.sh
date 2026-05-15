@@ -182,7 +182,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -337,7 +336,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -448,7 +446,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -610,7 +607,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -750,7 +746,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -879,7 +874,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -1007,7 +1001,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -1164,7 +1157,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -1310,7 +1302,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -1460,7 +1451,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -1666,7 +1656,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -1824,7 +1813,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -1951,7 +1939,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -2088,7 +2075,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -2222,7 +2208,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
@@ -2385,7 +2370,6 @@ import sys
 
 root = Path(sys.argv[1])
 scope_markers = (
-    "slice",
     "outside this",
     "branch",
     "precomputed",
