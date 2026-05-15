@@ -9,6 +9,73 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Surface transcription of `attention_fwd_triton3.py`'s `_attn_fwd`. -/
+def attention_fwd_triton3_surface
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (stride_qz stride_qh stride_qm stride_qk
+      stride_kz stride_kh stride_kn stride_kk
+      stride_vz stride_vh stride_vk stride_vn
+      stride_oz stride_oh stride_om stride_on
+      _Z H H_KV N_CTX ROUND_CTX NKV_CTX
+      _sliding_window_offset _sliding_window_size
+      IS_EVEN_M _IS_EVEN_N BLOCK_M BLOCK_DMODEL BLOCK_N END INIT
+      _SLIDING_WINDOW _COMPLEMENT_SLIDING_WINDOW : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
+  off_z = off_hz // $(H)
+  off_h = off_hz % $(H)
+  off_hkv = off_h // ($(H) // $(H_KV))
+  q_offset = off_z.to(tl.int64) * $(stride_qz) + off_h.to(tl.int64) * $(stride_qh)
+  k_offset = off_z.to(tl.int64) * $(stride_kz) + off_hkv.to(tl.int64) * $(stride_kh)
+  v_offset = off_z.to(tl.int64) * $(stride_vz) + off_hkv.to(tl.int64) * $(stride_vh)
+  o_offset = off_z.to(tl.int64) * $(stride_oz) + off_h.to(tl.int64) * $(stride_oh)
+
+  Q_block_ptr = tl.make_block_ptr(base=Q + q_offset, shape=($(N_CTX), $(BLOCK_DMODEL)),
+    strides=($(stride_qm), $(stride_qk)), offsets=(start_m * $(BLOCK_M), 0),
+    block_shape=($(BLOCK_M), $(BLOCK_DMODEL)), order=(1, 0))
+  V_block_ptr = tl.make_block_ptr(base=V + v_offset, shape=($(NKV_CTX), $(BLOCK_DMODEL)),
+    strides=($(stride_vk), $(stride_vn)), offsets=(0, 0),
+    block_shape=($(BLOCK_N), $(BLOCK_DMODEL)), order=(1, 0))
+  K_block_ptr = tl.make_block_ptr(base=K + k_offset, shape=($(BLOCK_DMODEL), $(NKV_CTX)),
+    strides=($(stride_kk), $(stride_kn)), offsets=(0, 0),
+    block_shape=($(BLOCK_DMODEL), $(BLOCK_N)), order=(0, 1))
+  O_block_ptr = tl.make_block_ptr(base=Out + o_offset, shape=($(ROUND_CTX), $(BLOCK_DMODEL)),
+    strides=($(stride_om), $(stride_on)), offsets=(start_m * $(BLOCK_M), 0),
+    block_shape=($(BLOCK_M), $(BLOCK_DMODEL)), order=(1, 0))
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  m_ptrs = M + off_hz * $(ROUND_CTX) + offs_m
+  l_ptrs = L + off_hz * $(ROUND_CTX) + offs_m
+  if $(INIT) != $(0) {
+    m_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) - float("inf")
+    l_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) + 1.0
+    acc = tl.zeros([$(BLOCK_M), $(BLOCK_DMODEL)], dtype=tl.float32)
+  } else {
+    m_i = tl.load(m_ptrs).to(tl.float32)
+    l_i = tl.load(l_ptrs).to(tl.float32)
+    acc = tl.load(O_block_ptr).to(tl.float32)
+  }
+  qk_scale = tl.full([], $(sm_scale), dtype=tl.float32)
+  qk_scale *= 1.4426950408889634
+  if $(IS_EVEN_M) != $(0) {
+    q = tl.load(Q_block_ptr)
+  } else {
+    q = tl.load(Q_block_ptr, boundary_check=(0, 1), padding_option="zero")
+  }
+  acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, K_block_ptr, V_block_ptr,
+    start_m, qk_scale, $(NKV_CTX), $(_sliding_window_offset), $(_sliding_window_size),
+    $(BLOCK_M), $(BLOCK_DMODEL), $(BLOCK_N), $(_SLIDING_WINDOW), $(IS_EVEN_M),
+    $(_IS_EVEN_N), $(_COMPLEMENT_SLIDING_WINDOW))
+  if $(END) != $(0) {
+    m_i += tl.math.log2(l_i)
+    acc = acc / l_i[:, None]
+  } else {
+    tl.store(l_ptrs, l_i)
+  }
+  tl.store(m_ptrs, m_i)
+  tl.store(O_block_ptr, (acc).to(Out.type.element_ty))
+}
+
 /-- Surface transcription/proof-oriented final output-store slice of `attention_fwd_triton3.py`'s
 `_attn_fwd`.
 

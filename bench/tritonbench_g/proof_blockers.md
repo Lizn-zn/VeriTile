@@ -17,21 +17,18 @@ not a one-to-one Python transcription yet:
 - Attention/context/flash attention kernels:
   `attention_forward_triton`, `attention_fwd_triton2`,
   `attention_fwd_triton3`, `attn_fwd_causal`, and `attn_fwd_triton`.
-  These use proof-oriented output/accumulator slices or helper-inlined,
-  fixed-stage surfaces while the Python kernels contain larger streaming
-  softmax loops, helper JIT calls, or precomputed accumulator inputs. Closing
-  this needs full helper-call surface modeling or full-kernel attention
-  transcriptions rather than output-slice fronts.
-  In particular, `attention_forward_triton` currently inlines the helper JIT
-  `_attn_fwd_inner` into the `_attn_fwd` surface; removing its marker makes the
-  mechanical audit compare helper parameters and call sequences against the
-  inlined outer surface.
+  These now expose outer-kernel surfaces with opaque helper-call statements
+  where the Python `_attn_fwd` delegates to `_attn_fwd_inner`, but they still
+  keep proof-oriented output/accumulator slices as the correctness target.
+  Closing this category needs either executable semantics for helper-call
+  projection or a target-JIT-aware audit path that can mechanically compare the
+  outer `_attn_fwd` surface without falling back to the first helper JIT.
 
 ### Required VeriTile surface extensions
 
 The remaining blockers are not currently local proof-script failures:
 
 - The attention/context/flash kernels need full streaming-softmax loop
-  surfaces, including helper-call modeling where the Python kernel delegates
-  to a separate `@triton.jit` helper. The current proof slices intentionally
-  start from precomputed accumulator/output tiles.
+  semantics/proofs behind the helper-call surface where the Python kernel
+  delegates to a separate `@triton.jit` helper. The current proof slices
+  intentionally start from precomputed accumulator/output tiles.
