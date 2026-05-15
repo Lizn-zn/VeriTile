@@ -18,18 +18,34 @@ partial def expandArange (e : TSyntax `tritonExpr) : MacroM EOut := do
   let eTerm ← natDimTerm "tl.arange(...)" e
   pure ⟨← `(Op.arange $eTerm), .nat, SInfo.vec eTerm, none, none⟩
 
+private def sameRaw (a b : Syntax) : Bool :=
+  toString a == toString b
+
 partial def expandArangeRange (s e : TSyntax `tritonExpr) : MacroM EOut := do
   let sTerm ← natDimTerm "tl.arange(start, end) start" s
   let eTerm ← natDimTerm "tl.arange(start, end) end" e
-  match s with
-  | `(tritonExpr| $n:num) =>
+  match s, e with
+  | `(tritonExpr| $($base:term) // $den:tritonExpr), `(tritonExpr| $($endBase:term)) =>
+      let denIsTwo :=
+        toString den.raw ==
+          "(VeriTile.Triton.DSL.«tritonExpr$(_)» \"$(\" (num \"2\") \")\")" ||
+        toString den.raw == "(num \"2\")"
+      if sameRaw base.raw endBase.raw && denIsTwo then
+        pure ⟨← `(Op.add NumericDType.nat Broadcast.scalarL
+              (Op.constNat $sTerm) (Op.arange $sTerm)),
+          .nat, SInfo.vec sTerm, none, none⟩
+      else
+        pure ⟨← `(Op.add NumericDType.nat Broadcast.scalarL
+              (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
+          .nat, SInfo.vec (← `($eTerm - $sTerm)), none, none⟩
+  | `(tritonExpr| $n:num), _ =>
       if n.getNat = 0 then
         pure ⟨← `(Op.arange $eTerm), .nat, SInfo.vec eTerm, none, none⟩
       else
         pure ⟨← `(Op.add NumericDType.nat Broadcast.scalarL
               (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
           .nat, SInfo.vec (← `($eTerm - $sTerm)), none, none⟩
-  | _ =>
+  | _, _ =>
       pure ⟨← `(Op.add NumericDType.nat Broadcast.scalarL
             (Op.constNat $sTerm) (Op.arange ($eTerm - $sTerm))),
         .nat, SInfo.vec (← `($eTerm - $sTerm)), none, none⟩

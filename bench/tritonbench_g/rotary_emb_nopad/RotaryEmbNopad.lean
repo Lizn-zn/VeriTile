@@ -13,21 +13,21 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `rotary_emb_nopad.py`'s
 `rotary_embedding_kernel`.
 
-This keeps the unconditional Q rotary writes and the conditional K rotary branch
-in one surface; the proof-oriented Q/K slices below remain available for local
+This keeps the unconditional Q rotary writes and the conditional K rotary path
+in one kernel; the smaller Q/K kernels below remain available for local
 correctness arguments. -/
 def rotary_embedding_kernel_surface
     (q k cos sin : RegionName)
     (q_token_stride q_head_stride k_token_stride k_head_stride head_dim_stride
       cos_token_stride cos_stride q_total_tokens Q_HEAD_NUM KV_GROUP_NUM
-      HEAD_HALF BLOCK_TOKENS : Nat) :
+      HEAD_DIM BLOCK_TOKENS : Nat) :
     ComputeKernel := triton {
   cur_head_idx = tl.program_id(0)
   cur_token_block_idx = tl.program_id(1)
 
   tokens_range = cur_token_block_idx * $(BLOCK_TOKENS) + tl.arange(0, $(BLOCK_TOKENS))
-  dim_range0 = tl.arange(0, $(HEAD_HALF))
-  dim_range1 = dim_range0 + $(HEAD_HALF)
+  dim_range0 = tl.arange(0, $(HEAD_DIM) // $(2))
+  dim_range1 = tl.arange($(HEAD_DIM) // $(2), $(HEAD_DIM))
 
   off_cos_sin = tokens_range[:, None] * $(cos_token_stride) +
     dim_range0[None, :] * $(cos_stride)
@@ -43,22 +43,22 @@ def rotary_embedding_kernel_surface
     cur_head_idx * $(q_head_stride) +
     dim_range1[None, None, :] * $(head_dim_stride)
   loaded_q0 = tl.load(q + off_q0,
-    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
-      (tokens_range[:, None, None] < $(q_total_tokens)),
+    mask=((cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens))),
     other=0.0)
   loaded_q1 = tl.load(q + off_q1,
-    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
-      (tokens_range[:, None, None] < $(q_total_tokens)),
+    mask=((cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens))),
     other=0.0)
   out_q0 = loaded_q0 * loaded_cos[:, None, :] - loaded_q1 * loaded_sin[:, None, :]
   out_q1 = loaded_q0 * loaded_sin[:, None, :] + loaded_q1 * loaded_cos[:, None, :]
 
   tl.store(q + off_q0, out_q0,
-    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
-      (tokens_range[:, None, None] < $(q_total_tokens)))
+    mask=((cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens))))
   tl.store(q + off_q1, out_q1,
-    mask=(cur_head_idx < $(Q_HEAD_NUM)) &
-      (tokens_range[:, None, None] < $(q_total_tokens)))
+    mask=((cur_head_idx < $(Q_HEAD_NUM)) &
+      (tokens_range[:, None, None] < $(q_total_tokens))))
 
   handle_kv = cur_head_idx % $(KV_GROUP_NUM) == $(0)
   if handle_kv {
