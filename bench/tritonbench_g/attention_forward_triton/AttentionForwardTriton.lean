@@ -9,6 +9,79 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- Faithful transcription of `attention_forward_triton.py`'s `_attn_fwd`.
+
+The upstream kernel calls a separate `@triton.jit` helper `_attn_fwd_inner` to
+run the K/V streaming-softmax loop. The DSL has no function-call surface, so the
+helper body is inlined verbatim into the outer kernel; semantically the two
+forms are identical for this fixed-stage path.
+
+The literal `128` and `96` in the upstream kernel correspond to the
+`BLOCK_DMODEL` / `HEAD_ACTIVE` parameters threaded through the bundled tests
+(`head_dim = 128`, with the inner dot using only the first 96 lanes of the head
+dimension). They appear here as explicit Lean parameters. -/
+def attention_forward_triton_surface
+    (Q K V Q_scale K_scale Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk
+      _stride_kz _stride_kh stride_kn _stride_kk
+      _stride_vz _stride_vh _stride_vk _stride_vn
+      _stride_oz _stride_oh _stride_om _stride_on
+      _Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE _STAGE : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
+
+  off_z = off_hz // $(H)
+  off_h = off_hz % $(H)
+  qvk_offset = (off_z).to(tl.int64) * $(stride_qz) + (off_h).to(tl.int64) * $(stride_qh)
+  vk_offset = qvk_offset // $(stride_qm)
+  q_scale_offset = off_hz * tl.cdiv($(N_CTX), $(BLOCK_M))
+  k_scale_offset = off_hz * tl.cdiv($(N_CTX), $(BLOCK_N))
+
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_n = tl.arange(0, $(BLOCK_N))
+  offs_k = tl.arange(0, $(BLOCK_DMODEL))
+  Q_ptrs = Q + qvk_offset + offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk)
+  Q_scale_ptr = Q_scale + q_scale_offset + start_m
+  K_ptrs = K + qvk_offset + offs_k[:, None] + offs_n[None, :] * $(stride_kn)
+  K_scale_ptr = K_scale + k_scale_offset
+  V_ptrs = V + qvk_offset + offs_n[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk)
+  O_block_ptr = Out + qvk_offset + offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk)
+  m_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) - float("inf")
+  l_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) + 1.0
+  acc = tl.zeros([$(BLOCK_M), $(BLOCK_DMODEL)], dtype=tl.float32)
+  q = tl.load(Q_ptrs,
+    mask=(offs_m[:, None] < $(N_CTX)) & (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
+  q_scale = tl.load(Q_scale_ptr)
+  for start_n in range(0, $(N_CTX), $(BLOCK_N)) {
+    start_n = tl.multiple_of(start_n, $(BLOCK_N))
+    k_mask = (offs_n[None, :] < ($(N_CTX) - start_n)) &
+      (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[:, None]
+    k = tl.load(K_ptrs, mask=k_mask)
+    k_scale = tl.load(K_scale_ptr)
+    qk = (tl.dot(q, k)).to(tl.float32) * q_scale * k_scale
+    m_ij = tl.maximum(m_i, tl.max(qk, 1))
+    qk = qk - m_ij[:, None]
+    p = tl.math.exp2(qk)
+    l_ij = tl.sum(p, 1)
+    alpha = tl.math.exp2(m_i - m_ij)
+    l_i = l_i * alpha + l_ij
+    acc = acc * alpha[:, None]
+    v = tl.load(V_ptrs,
+      mask=(offs_n[:, None] < ($(N_CTX) - start_n)) &
+        (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
+    p = (p).to(tl.float16)
+    acc += tl.dot(p, v, out_dtype=tl.float16)
+    m_i = m_ij
+    K_ptrs += $(BLOCK_N) * $(HEAD_DIM)
+    K_scale_ptr += $(1)
+    V_ptrs += $(BLOCK_N) * $(HEAD_DIM)
+  }
+  acc = acc / l_i[:, None]
+  tl.store(O_block_ptr, (acc).to(Out.type.element_ty),
+    mask=(offs_m[:, None] < $(N_CTX)) & (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
+}
+
 /-- Surface transcription/proof-oriented final output-store slice of `attention_forward_triton.py`'s
 `_attn_fwd`.
 
