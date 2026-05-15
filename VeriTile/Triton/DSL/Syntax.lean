@@ -288,6 +288,13 @@ syntax "tl.if " tritonExpr " { " tritonStmt* " }" " else " " { " tritonStmt* " }
 -- Python-style alias: `if cond { body }` (and `if-else`) without the `tl.` prefix.
 -- Within `triton { ... }` the parser is in `tritonStmt` mode, so `if` here is a
 -- DSL token, distinct from Lean's term-level `if`.
+syntax "if " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }"
+  " else " " { " tritonStmt* " }" : tritonStmt
+syntax "if " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }"
+  " elif " tritonExpr " { " tritonStmt* " }" " else " " { " tritonStmt* " }" : tritonStmt
+syntax "if " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }"
+  " elif " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }"
+  " else " " { " tritonStmt* " }" : tritonStmt
 syntax "if " tritonExpr " { " tritonStmt* " }" : tritonStmt
 syntax "if " tritonExpr " { " tritonStmt* " }" " else " " { " tritonStmt* " }" : tritonStmt
 
