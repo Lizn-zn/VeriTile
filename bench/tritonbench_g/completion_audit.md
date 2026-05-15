@@ -55,7 +55,9 @@ surface.
   sequence to catch unannotated call reordering. A statement left-hand-side
   sequence scan covers top-level assignments, `+=` updates, annotated
   assignments, and tuple assignments, so added/removed/reordered non-call
-  statements are also checked mechanically.
+  statements are also checked mechanically. The audit also compares the
+  explicit `completion_audit.md` Remaining Blockers list against the active
+  Lean preamble marker set, so stale or missing blocker entries fail the gate.
 - Placeholder scan:
   `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
   currently reports no matches.
@@ -81,7 +83,6 @@ The current documented blocker set is:
 - `attention_score`
 - `attn_fwd_causal`
 - `attn_fwd_triton`
-- `bmm_chunk_fwd`
 - `context_attn_bloom`
 - `context_attn_fwd`
 - `context_attn_llama`

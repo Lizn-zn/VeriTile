@@ -122,6 +122,69 @@ else
   failures=$((failures + 1))
 fi
 
+if python3 - "${PORTS_ROOT}" "${PORTS_ROOT}/completion_audit.md" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+doc = Path(sys.argv[2]).read_text()
+scope_markers = (
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+
+actual = []
+for lean_file in sorted(root.glob("*/*.lean")):
+    text = lean_file.read_text()
+    scope = (text[:text.find("triton {")] if "triton {" in text else text).lower()
+    if any(marker in scope for marker in scope_markers):
+        actual.append(lean_file.parent.name)
+
+listed = []
+in_block = False
+seen_item = False
+for line in doc.splitlines():
+    if line.strip() == "The current documented blocker set is:":
+        in_block = True
+        continue
+    if not in_block:
+        continue
+    if not line.strip() and not seen_item:
+        continue
+    if not line.strip():
+        break
+    m = re.match(r"- `([^`]+)`", line.strip())
+    if m:
+        listed.append(m.group(1))
+        seen_item = True
+
+actual_set = set(actual)
+listed_set = set(listed)
+missing = sorted(actual_set - listed_set)
+stale = sorted(listed_set - actual_set)
+dupes = sorted({name for name in listed if listed.count(name) > 1})
+if missing or stale or dupes:
+    for name in missing:
+        print(f"{name}: completion_audit.md missing active translation-surface blocker")
+    for name in stale:
+        print(f"{name}: completion_audit.md lists stale translation-surface blocker")
+    for name in dupes:
+        print(f"{name}: completion_audit.md lists duplicate translation-surface blocker")
+    sys.exit(1)
+PY
+then
+  printf 'ok completion audit blocker list scan\n'
+else
+  printf 'FAIL completion audit blocker list scan\n'
+  failures=$((failures + 1))
+fi
+
 stale_readmes=()
 while IFS= read -r readme; do
   dir="${readme%/README.md}"
