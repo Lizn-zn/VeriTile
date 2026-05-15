@@ -340,17 +340,29 @@ partial def expandStore (expandExpr : ExprExpander)
             env, v'.computeTerm.isSome)
       | none =>
           let p' ← expandExpr env p
-          ensureDType .ptr p'.dtype "tl.store pointer"
-          let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
-          let sh ← p'.shape.term
-          let dt ← storeDType.term
-          let valueExpr' ←
-            match v'.computeTerm with
-            | some _ => pure valueExpr
-            | none => `(ComputeExpr.alg $vTerm)
-          pure (← `(Stmt.store $dt $sh (MemAccess.ptr $p'.term) $vTerm MaskOpt.none),
-            ← `(ComputeStmt.store $dt $sh (MemAccess.ptr $p'.term) $valueExpr' MaskOpt.none),
-            env, v'.computeTerm.isSome)
+          if p'.dtype == .blockPtr then
+            let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
+            let sh ← p'.shape.term
+            let dt ← storeDType.term
+            let valueExpr' ←
+              match v'.computeTerm with
+              | some _ => pure valueExpr
+              | none => `(ComputeExpr.alg $vTerm)
+            pure (← `(Stmt.store $dt $sh (MemAccess.blockPtr $p'.term ([] : List Nat)) $vTerm MaskOpt.none),
+              ← `(ComputeStmt.store $dt $sh (MemAccess.blockPtr $p'.term ([] : List Nat)) $valueExpr' MaskOpt.none),
+              env, v'.computeTerm.isSome)
+          else
+            ensureDType .ptr p'.dtype "tl.store pointer"
+            let vTerm ← coerceShape v'.term v'.shape p'.shape "tl.store value"
+            let sh ← p'.shape.term
+            let dt ← storeDType.term
+            let valueExpr' ←
+              match v'.computeTerm with
+              | some _ => pure valueExpr
+              | none => `(ComputeExpr.alg $vTerm)
+            pure (← `(Stmt.store $dt $sh (MemAccess.ptr $p'.term) $vTerm MaskOpt.none),
+              ← `(ComputeStmt.store $dt $sh (MemAccess.ptr $p'.term) $valueExpr' MaskOpt.none),
+              env, v'.computeTerm.isSome)
   | some (m, mShape) =>
       match ← expandStaticPtrExpr env p with
       | some sp =>

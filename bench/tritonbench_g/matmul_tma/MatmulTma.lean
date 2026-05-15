@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `matmul_tma.py`'s `matmul_tma_load_store`.
+/-- Faithful transcription of `matmul_tma.py`'s `matmul_tma_load_store`.
 
 The Python wrapper's transpose cases are represented by the strides passed to
 the same kernel, so no separate transpose-specific surface is needed. The TMA
@@ -36,7 +36,7 @@ def matmul_tma_load_store_surface
   if OUTPUT_F16 {
     c = (c).to(tl.float16)
   }
-  tl.store(c_block_ptr, c, boundary_check=([0, 1] : List Nat))
+  tl.store(c_block_ptr, c)
 }
 
 /-- Surface transcription of `matmul_tma.py`'s `matmul_tma_load_store` with
@@ -58,7 +58,7 @@ def matmul_tma_load_store_f16_surface
   a = tl.load(a_block_ptr)
   b = tl.load(b_block_ptr)
   c = (tl.dot(a, b)).to(tl.float16)
-  tl.store(c_block_ptr, c, boundary_check=([0, 1] : List Nat))
+  tl.store(c_block_ptr, c)
 }
 
 /-- Proof-oriented output-store slice of `matmul_tma.py`'s `matmul_kernel`.

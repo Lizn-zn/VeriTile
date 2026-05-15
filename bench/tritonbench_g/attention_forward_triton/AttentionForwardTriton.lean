@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Faithful transcription of `attention_forward_triton.py`'s `_attn_fwd`.
+/-- Surface transcription of `attention_forward_triton.py`'s `_attn_fwd`.
 
 The upstream kernel calls a separate `@triton.jit` helper `_attn_fwd_inner` to
 run the K/V streaming-softmax loop. The DSL has no function-call surface, so the
