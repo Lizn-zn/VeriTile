@@ -39,12 +39,6 @@ not a one-to-one Python transcription yet:
   `tl.sum(..., axis=0)` shape flow typable. Closing this requires constraint
   propagation for constexpr shape equalities.
 
-- `iv_dependent_matmul`: Python dispatches five scheduling modes through a
-  string constexpr `type`; Lean currently exposes the modes as separate
-  surfaces. Closing this requires string-valued constexpr branching in the DSL
-  surface, or a review rule that accepts a complete family of mode-specific
-  surfaces as the faithful representation.
-
 - `rotary_transform` and `rotary_transform_ops`: the Python kernels combine
   varlen/non-varlen, tensor/scalar seqlen offsets, interleaved/non-interleaved,
   and conjugate/non-conjugate paths. Current Lean surfaces cover the

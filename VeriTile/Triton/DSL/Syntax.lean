@@ -295,6 +295,11 @@ syntax "if " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonS
 syntax "if " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }"
   " elif " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }"
   " else " " { " tritonStmt* " }" : tritonStmt
+syntax "if " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }" : tritonStmt
+syntax "if " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }"
+  " elif " tritonExpr " { " tritonStmt* " }" : tritonStmt
+syntax "if " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }"
+  " elif " tritonExpr " { " tritonStmt* " }" " elif " tritonExpr " { " tritonStmt* " }" : tritonStmt
 syntax "if " tritonExpr " { " tritonStmt* " }" : tritonStmt
 syntax "if " tritonExpr " { " tritonStmt* " }" " else " " { " tritonStmt* " }" : tritonStmt
 
