@@ -16,8 +16,8 @@ not a one-to-one Python transcription yet:
 
 - Attention/context/flash attention kernels:
   `attention_forward_triton`, `attention_fwd_triton2`,
-  `attention_fwd_triton3`, `attn_fwd_causal`, `attn_fwd_triton`,
-  `context_attn_llama`, and `mixed_sparse_attention`.
+  `attention_fwd_triton3`, `attn_fwd_causal`, `attn_fwd_triton`, and
+  `mixed_sparse_attention`.
   These use proof-oriented output/accumulator slices or helper-inlined,
   fixed-stage surfaces while the Python kernels contain larger streaming
   softmax loops, helper JIT calls, or precomputed accumulator inputs. Closing
