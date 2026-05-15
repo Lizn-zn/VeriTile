@@ -18,7 +18,7 @@ not a one-to-one Python transcription yet:
   `attention_forward_triton`, `attention_fwd_triton2`,
   `attention_fwd_triton3`, `attn_fwd_causal`, `attn_fwd_triton`,
   `context_attn_bloom`, `context_attn_fwd`, `context_attn_llama`,
-  `context_attn_mistral`, `context_attn_nopad`, and `mixed_sparse_attention`.
+  `context_attn_mistral`, and `mixed_sparse_attention`.
   These use proof-oriented output/accumulator slices or helper-inlined,
   fixed-stage surfaces while the Python kernels contain larger streaming
   softmax loops, helper JIT calls, or precomputed accumulator inputs. Closing
