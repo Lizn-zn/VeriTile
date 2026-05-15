@@ -16,8 +16,7 @@ not a one-to-one Python transcription yet:
 
 - Attention/context/flash attention kernels:
   `attention_forward_triton`, `attention_fwd_triton2`,
-  `attention_fwd_triton3`, `attn_fwd_causal`, `attn_fwd_triton`, and
-  `mixed_sparse_attention`.
+  `attention_fwd_triton3`, `attn_fwd_causal`, and `attn_fwd_triton`.
   These use proof-oriented output/accumulator slices or helper-inlined,
   fixed-stage surfaces while the Python kernels contain larger streaming
   softmax loops, helper JIT calls, or precomputed accumulator inputs. Closing
@@ -26,9 +25,7 @@ not a one-to-one Python transcription yet:
   In particular, `attention_forward_triton` currently inlines the helper JIT
   `_attn_fwd_inner` into the `_attn_fwd` surface; removing its marker makes the
   mechanical audit compare helper parameters and call sequences against the
-  inlined outer surface. `mixed_sparse_attention` is a true final-store slice
-  from a precomputed normalized accumulator; the block-sparse and column-sparse
-  softmax loops are not represented in the first surface.
+  inlined outer surface.
 
 - `rotary_transform` and `rotary_transform_ops`: the Python kernels combine
   varlen/non-varlen, tensor/scalar seqlen offsets, interleaved/non-interleaved,

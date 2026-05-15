@@ -151,6 +151,7 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.uint32) => pure .nat
   | `(tritonDType| tl.uint64) => pure .nat
   | `(tritonDType| OUT_DTYPE) => pure (.floatVar "out_dtype")
+  | `(tritonDType| DTYPE) => pure (.floatVar "dtype")
   | _ => Macro.throwUnsupported
 
 def expandDTypeIdent (name : Name) : MacroM DInfo :=

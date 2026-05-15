@@ -105,6 +105,7 @@ syntax "tl.uint16" : tritonDType
 syntax "tl.uint32" : tritonDType
 syntax "tl.uint64" : tritonDType
 syntax "OUT_DTYPE" : tritonDType
+syntax "DTYPE" : tritonDType
 
 -- Block-level matrix multiply.
 syntax "tl.dot(" tritonExpr ", " tritonExpr ")" : tritonExpr
@@ -257,6 +258,7 @@ syntax ident " = " tritonExpr : tritonStmt
 syntax ident " += " tritonExpr : tritonStmt
 syntax ident " -= " tritonExpr : tritonStmt
 syntax ident " *= " tritonExpr : tritonStmt
+syntax ident " /= " tritonExpr : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ")" : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ", " tritonMemKwarg ("," tritonMemKwarg)* ")" : tritonStmt
 syntax "tl.store(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : tritonStmt

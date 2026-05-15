@@ -69,7 +69,7 @@ surface.
 
 No explicit TritonBench-G `hAlg` blocker remains.
 
-There are still 8 documented translation-surface blockers. These are not
+There are still 7 documented translation-surface blockers. These are not
 silent green ports: each remaining marker must be covered by
 `proof_blockers.md`, and `bench/audit_tritonbench_g.sh` enforces that coverage.
 The current documented blocker set is:
@@ -79,7 +79,6 @@ The current documented blocker set is:
 - `attention_fwd_triton3`
 - `attn_fwd_causal`
 - `attn_fwd_triton`
-- `mixed_sparse_attention`
 - `rotary_transform`
 - `rotary_transform_ops`
 

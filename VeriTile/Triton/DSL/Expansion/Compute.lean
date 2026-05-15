@@ -961,12 +961,16 @@ partial def expandExpandDims (expandExpr : ExprExpander) (env : Env)
         e'.dtype, .dims outDims, none, none⟩
 
 /-- Lower `e[:, None]` / `e[None, :]` to `Op.expandDim` with the appropriate
-axis. This postfix surface intentionally remains rank-1 only; use
-`tl.expand_dims(e, axis=N)` for general-rank insertion. -/
+axis. TritonBench-G contains scalar guard masks written as `cond[:, None]`;
+for rank-0 inputs we treat that spelling as inserting a single unit axis so
+the scalar guard can still broadcast against a vector mask. For higher-rank
+general insertion use `tl.expand_dims(e, axis=N)`. -/
 partial def expandSlicerNone (expandExpr : ExprExpander) (env : Env)
     (e : TSyntax `tritonExpr) (axisIdx : Nat) : MacroM EOut := do
   let e' ← expandExpr env e
   let dims := match e'.shape with | .dims ds => ds
+  if dims.length == 0 then
+    return ← expandExpandDims expandExpr env e (axisIdx := 0)
   if dims.length != 1 then
     Macro.throwError
       ("[:, None] / [None, :]: rank-1 input required, got rank " ++
