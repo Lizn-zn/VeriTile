@@ -15,7 +15,7 @@ set_option linter.unusedSimpArgs false
 The source uses dynamic tile-dtype casts around the two dot products and
 block-pointer element dtype casts on stores; this surface preserves those forms
 alongside the nested `NT`/`ceil(BT/BC)` loop structure and optional
-initial/final state branches. -/
+initial/final state paths. -/
 def chunk_delta_rule_fwd_h_surface
     (k v d v_new h initial_state final_state : RegionName)
     (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
