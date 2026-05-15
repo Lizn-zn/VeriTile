@@ -12,7 +12,7 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of `chunked_cumsum_fwd.py`'s
 `_chunk_cumsum_fwd_kernel`.
 
-This preserves the optional `dt_bias` and softplus branches, the clamp via
+This preserves the optional `dt_bias` and softplus paths, the clamp via
 `tl.minimum(tl.maximum(...))`, the masked `dt_out` store, and the `dA_cumsum`
 store computed with `tl.cumsum` along the chunk axis. -/
 def chunked_cumsum_fwd_surface
