@@ -9,6 +9,85 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-- DSL port of `triton_attention.py`'s `_fwd_kernel`. -/
+def triton_attention_fwd_kernel
+    (Q K V L M Out : RegionName)
+    (sm_scale : ℝ)
+    (_stride_qz stride_qh stride_qm stride_qk
+      _stride_kz _stride_kh stride_kn stride_kk
+      _stride_vz _stride_vh stride_vk stride_vn
+      _stride_oz _stride_oh stride_om stride_on
+      _Z _H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
+
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_n = tl.arange(0, $(BLOCK_N))
+  m_prev = tl.zeros([$(BLOCK_M)], dtype=tl.float32) - float("inf")
+  l_prev = tl.zeros([$(BLOCK_M)], dtype=tl.float32)
+  acc = tl.zeros([$(BLOCK_M), $(BLOCK_DMODEL)], dtype=tl.float32)
+
+  stride_qh_2d = $(stride_qh) // $(stride_qm) // $(stride_qk)
+
+  q_tile_ptr = tl.make_block_ptr(base=Q,
+    shape=($(D0), $(BLOCK_DMODEL)),
+    strides=($(stride_qm), $(stride_qk)),
+    offsets=(off_hz * stride_qh_2d + start_m * $(BLOCK_M), 0),
+    block_shape=($(BLOCK_M), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  k_tile_ptr = tl.make_block_ptr(base=K,
+    shape=($(D0), $(BLOCK_DMODEL)),
+    strides=($(stride_kn), $(stride_kk)),
+    offsets=(off_hz * stride_qh_2d, 0),
+    block_shape=($(BLOCK_N), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  v_tile_ptr = tl.make_block_ptr(base=V,
+    shape=($(D0), $(BLOCK_DMODEL)),
+    strides=($(stride_vk), $(stride_vn)),
+    offsets=(off_hz * stride_qh_2d, 0),
+    block_shape=($(BLOCK_N), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  out_tile_ptr = tl.make_block_ptr(base=Out,
+    shape=($(D0), $(BLOCK_DMODEL)),
+    strides=($(stride_om), $(stride_on)),
+    offsets=(off_hz * stride_qh_2d + start_m * $(BLOCK_M), 0),
+    block_shape=($(BLOCK_M), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  q = tl.load(q_tile_ptr)
+
+  for start_n in range($(0), (start_m + $(1)) * $(BLOCK_M), $(BLOCK_N)) {
+    k = tl.load(k_tile_ptr, boundary_check=(0, 1))
+    qk = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
+    qk += tl.dot(q, tl.trans(k))
+    qk *= $((sm_scale : ℝ))
+    qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+    m_curr = tl.maximum(tl.max(qk, 1), m_prev)
+    l_prev *= tl.exp(m_prev - m_curr)
+    p = tl.exp(qk - m_curr[:, None])
+    l_curr = tl.sum(p, 1) + l_prev
+    l_rcp = 1.0 / l_curr
+    p *= l_rcp[:, None]
+    acc *= (l_prev * l_rcp)[:, None]
+    p = (p).to(tl.float16)
+    v = tl.load(v_tile_ptr, boundary_check=(0, 1))
+    acc += tl.dot(p, v)
+    l_prev = l_curr
+    m_prev = m_curr
+    k_tile_ptr = tl.advance(k_tile_ptr, [$(BLOCK_N), $(0)])
+    v_tile_ptr = tl.advance(v_tile_ptr, [$(BLOCK_N), $(0)])
+  }
+  start_m = tl.program_id(0)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  l_ptrs = L + off_hz * $(N_CTX) + offs_m
+  m_ptrs = M + off_hz * $(N_CTX) + offs_m
+  tl.store(l_ptrs, l_prev)
+  tl.store(m_ptrs, m_prev)
+
+  acc = (acc).to(tl.float16)
+  tl.store(out_tile_ptr, acc, boundary_check=(0, 1))
+}
+
 /-- Surface transcription/proof-oriented forward output-store slice of
 `triton_attention.py`'s `_fwd_kernel`.
 
