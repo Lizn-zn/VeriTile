@@ -7,8 +7,66 @@ namespace VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
 
 open VeriTile.Triton
 
-/-- Surface transcription of `softmax_flaggems.py`'s
-`softmax_kernel_non_inner`, specialized to `ONE_TILE_PER_CTA=true`.
+/-- Faithful transcription of `softmax_flaggems.py`'s
+`softmax_kernel_non_inner`.
+
+This keeps both the one-tile CTA path and the multi-tile online fallback for
+the non-inner softmax dimension. -/
+def softmax_kernel_non_inner_surface
+    (output_ptr input_ptr : RegionName)
+    (M N K TILE_N TILE_K : Nat)
+    (ONE_TILE_PER_CTA : Bool) :
+    ComputeKernel := triton {
+  pid_k = tl.program_id(1)
+  pid_m = tl.program_id(0)
+
+  k_offsets = pid_k * $(TILE_K) + tl.arange(0, $(TILE_K))
+
+  if ONE_TILE_PER_CTA {
+    n_offsets = tl.arange(0, $(TILE_N))
+    offset = pid_m * $(N) * $(K) + n_offsets[:, None] * $(K) + k_offsets
+    mask = (n_offsets[:, None] < $(N)) & (k_offsets < $(K))
+    input_ptrs = input_ptr + offset
+    inp = tl.load(input_ptrs, mask=mask, other=-float("inf"))
+    m = tl.max(inp, 0)
+    e = tl.exp(inp - m[None, :])
+    z = tl.sum(e, 0)
+    out = e / z
+    output_ptrs = output_ptr + offset
+    tl.store(output_ptrs, out, mask=mask)
+  } else {
+    m = tl.full([$(TILE_N), $(TILE_K)], value=float("-inf"), dtype=tl.float32)
+    z = tl.full([$(TILE_N), $(TILE_K)], value=0.0, dtype=tl.float32)
+
+    for start_n in range($(0), $(N), $(TILE_N)) {
+      n_offsets = start_n + tl.arange(0, $(TILE_N))
+      offsets = pid_m * $(N) * $(K) + n_offsets[:, None] * $(K) + k_offsets
+      mask = (n_offsets[:, None] < $(N)) & (k_offsets < $(K))
+      inp = tl.load(input_ptr + offsets, mask=mask, other=-float("inf"))
+      m_new = tl.maximum(m, inp)
+      alpha = tl.exp(m - m_new)
+      z = z * alpha + tl.exp(inp - m_new)
+      m = m_new
+    }
+
+    m_reduced = tl.max(m, 0)
+    z = tl.sum(z * tl.exp(m - m_reduced[None, :]), 0)
+    m = m_reduced
+
+    previous_multiple = $((N + TILE_N - 1)) // $(TILE_N) * $(TILE_N) - $(TILE_N)
+    for start_n in range($(0), $(N), $(TILE_N)) {
+      n_offsets = (previous_multiple - start_n) + tl.arange(0, $(TILE_N))
+      offsets = pid_m * $(N) * $(K) + n_offsets[:, None] * $(K) + k_offsets
+      mask = (n_offsets[:, None] < $(N)) & (k_offsets[None, :] < $(K))
+      inp = tl.load(input_ptr + offsets, mask=mask, other=-float("inf"))
+      o = tl.exp(inp - m[None, :]) / z[None, :]
+      tl.store(output_ptr + offsets, o, mask=mask)
+    }
+  }
+}
+
+/-- Proof-oriented specialization of `softmax_kernel_non_inner` to
+`ONE_TILE_PER_CTA=true`.
 
 This covers the `K > 1` forward path used when the softmax dimension is not the
 innermost physical dimension: each CTA handles one `(m, k-block)`, loads the
