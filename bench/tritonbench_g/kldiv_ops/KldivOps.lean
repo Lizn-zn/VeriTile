@@ -10,6 +10,48 @@ open VeriTile.Triton
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
+/-- Faithful transcription of `kldiv_ops.py`'s `_kldiv_kernel_forward`.
+
+This keeps the row pointer advances, dynamic `n_cols` loop, `eps`-clamped
+default target log, `log_target` selection, accumulated reduction value, and
+the final reduced store. -/
+def kldiv_forward_surface
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (log_target : Bool) (reduction : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0).to(tl.int64)
+  y_ptr += pid * $(y_stride)
+  gt_ptr += pid * $(gt_stride)
+  loss_ptr += pid * $(loss_stride)
+
+  base_offsets = tl.arange(0, $(BLOCK_SIZE))
+
+  loss_sum = 0.0
+  for i in range($(0), $(n_cols), $(BLOCK_SIZE)) {
+    offsets = i + base_offsets
+    mask = offsets < $(n_cols)
+    y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+    y_true = tl.load(gt_ptr + offsets, mask=mask, other=0.0)
+
+    if not log_target {
+      loss = y_true * (tl.log(tl.maximum(y_true, $(eps))) - y)
+    } else {
+      loss = tl.exp(y_true) * (y_true - y)
+    }
+
+    if $(reduction) == $(0) {
+      tl.store(loss_ptr + offsets, loss, mask=mask)
+    } else {
+      loss_sum += tl.sum(loss, axis=0)
+    }
+  }
+
+  if $(reduction) != $(0) {
+    tl.store(loss_ptr, loss_sum)
+  }
+}
+
 /-- Documented one-block slice of `kldiv_ops.py`'s `_kldiv_kernel_backward`
 for the `log_target = False` constexpr branch.
 
