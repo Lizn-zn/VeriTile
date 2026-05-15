@@ -103,6 +103,7 @@ syntax "tl.uint8" : tritonDType
 syntax "tl.uint16" : tritonDType
 syntax "tl.uint32" : tritonDType
 syntax "tl.uint64" : tritonDType
+syntax "OUT_DTYPE" : tritonDType
 
 -- Block-level matrix multiply.
 syntax "tl.dot(" tritonExpr ", " tritonExpr ")" : tritonExpr

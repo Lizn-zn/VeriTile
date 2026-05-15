@@ -590,7 +590,7 @@ partial def expandDot (expandExpr : ExprExpander) (env : Env)
   let a' ←
     match a0.dtype with
     | .real => pure a0
-    | .fp32 | .fp16 | .bf16 =>
+    | .fp32 | .fp16 | .bf16 | .floatVar _ =>
         pure { a0 with term := ← realMathTerm "tl.dot lhs" a0, dtype := .real }
     | _ =>
         ensureDType .real a0.dtype "tl.dot"
@@ -598,7 +598,7 @@ partial def expandDot (expandExpr : ExprExpander) (env : Env)
   let b' ←
     match b0.dtype with
     | .real => pure b0
-    | .fp32 | .fp16 | .bf16 =>
+    | .fp32 | .fp16 | .bf16 | .floatVar _ =>
         pure { b0 with term := ← realMathTerm "tl.dot rhs" b0, dtype := .real }
     | _ =>
         ensureDType .real b0.dtype "tl.dot"

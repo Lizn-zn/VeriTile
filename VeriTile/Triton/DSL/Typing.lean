@@ -21,6 +21,7 @@ inductive DInfo where
   | bool
   | ptr
   | blockPtr
+  | floatVar : String → DInfo
   deriving BEq, Inhabited
 
 inductive SInfo where
@@ -70,6 +71,9 @@ def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .bool => `(TileDType.bool)
   | .ptr => `(TileDType.ptr)
   | .blockPtr => `(TileDType.blockPtr)
+  | .floatVar name => do
+      let t : TSyntax `term := ⟨mkIdent (Name.mkSimple name)⟩
+      `(($t).toTileDType)
 
 def DInfo.floatProof : DInfo → MacroM (TSyntax `term)
   | .real => `(FloatDType.real)
@@ -81,6 +85,7 @@ def DInfo.floatProof : DInfo → MacroM (TSyntax `term)
   | .bool => Macro.throwError "tl.cast: Bool casts are not supported"
   | .ptr => Macro.throwError "tl.cast: pointer casts are not supported"
   | .blockPtr => Macro.throwError "tl.cast: block pointer casts are not supported"
+  | .floatVar name => pure ⟨mkIdent (Name.mkSimple name)⟩
 
 def SInfo.term : SInfo → MacroM (TSyntax `term)
   | SInfo.dims ds => do
@@ -101,6 +106,9 @@ def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
   | .bool => Macro.throwError "arithmetic on Bool values is not supported"
   | .ptr => Macro.throwError "arithmetic on pointer values is not supported; use pointer + Nat offset"
   | .blockPtr => Macro.throwError "arithmetic on block pointers is not supported; use tl.advance"
+  | .floatVar name => do
+      let t : TSyntax `term := ⟨mkIdent (Name.mkSimple name)⟩
+      `(FloatDType.numericDType $t)
 
 def DInfo.integralProof : DInfo → MacroM (TSyntax `term)
   | .int => `(IntegralDType.int)
@@ -112,6 +120,7 @@ def DInfo.integralProof : DInfo → MacroM (TSyntax `term)
   | .bool => Macro.throwError "integer division/remainder on Bool values is not supported"
   | .ptr => Macro.throwError "integer division/remainder on pointer values is not supported"
   | .blockPtr => Macro.throwError "integer division/remainder on block pointers is not supported"
+  | .floatVar _ => Macro.throwError "integer division/remainder on floating values is not supported"
 
 def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
   | .real => `(ComparableDType.real)
@@ -123,6 +132,9 @@ def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
   | .bool => Macro.throwError "comparison on Bool values is not supported"
   | .ptr => Macro.throwError "comparison on pointer values is not supported"
   | .blockPtr => Macro.throwError "comparison on block pointers is not supported"
+  | .floatVar name => do
+      let t : TSyntax `term := ⟨mkIdent (Name.mkSimple name)⟩
+      `(FloatDType.comparableDType $t)
 
 def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.float64) => pure .real
@@ -138,6 +150,7 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.uint16) => pure .nat
   | `(tritonDType| tl.uint32) => pure .nat
   | `(tritonDType| tl.uint64) => pure .nat
+  | `(tritonDType| OUT_DTYPE) => pure (.floatVar "out_dtype")
   | _ => Macro.throwUnsupported
 
 def expandDTypeIdent (name : Name) : MacroM DInfo :=

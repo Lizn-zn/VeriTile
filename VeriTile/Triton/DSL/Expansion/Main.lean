@@ -71,6 +71,8 @@ open Lean.Elab
 open Lean.Elab.Term
 open Lean.Meta
 
+set_option maxHeartbeats 400000
+
 namespace VeriTile.Triton.DSL
 
 /-! ## Expansion -/
@@ -684,6 +686,9 @@ partial def expandFullDTypeTerm (expandExpr : ExprExpander) (env : Env)
     (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr)
     (dt : TSyntax `term) : MacroM EOut := do
   let dtString := toString dt.raw
+  if dtString.contains "OUT_DTYPE" then
+    let dtypeStx ← `(tritonDType| OUT_DTYPE)
+    return ← expandComputeFull expandExpr env dims v dtypeStx
   if dtString.contains "dtype" && dtString.contains "element_ty" then
     expandFull expandExpr env dims v
   else if dtString.contains "tl.float32" then
@@ -1459,9 +1464,12 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandComputeZeros expandExpr env dims.getElems dt
   | `(tritonExpr| tl.zeros([$dims:tritonExpr,*], $name:ident=$dt:term)) => do
       let dtString := toString dt.raw
+      if name.getId.getString! == "dtype" && dtString.contains "OUT_DTYPE" then
+        let dtypeStx ← `(tritonDType| OUT_DTYPE)
+        return ← expandComputeZeros expandExpr env dims.getElems dtypeStx
       unless name.getId.getString! == "dtype" &&
           dtString.contains "dtype" && dtString.contains "element_ty" do
-        Macro.throwError "tl.zeros: expected `dtype=<ptr>.dtype.element_ty`"
+        Macro.throwError ("tl.zeros: expected `dtype=<ptr>.dtype.element_ty`; got " ++ dtString)
       let zero ← `(tritonExpr| 0)
       expandFull expandExpr env dims.getElems zero
   | `(tritonExpr| tl.zeros_like($e:tritonExpr)) => do
@@ -1472,6 +1480,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
         | .fp32 => `(Op.constFloat FloatDType.fp32 0.0)
         | .fp16 => `(Op.constFloat FloatDType.fp16 0.0)
         | .bf16 => `(Op.constFloat FloatDType.bf16 0.0)
+        | .floatVar name => do
+            let t : TSyntax `term := ⟨mkIdent (Name.mkSimple name)⟩
+            `(Op.constFloat $t 0.0)
         | .nat => `(Op.constNat 0)
         | .int => `(Op.constInt 0)
         | .bool => `(Op.constBool Bool.false)

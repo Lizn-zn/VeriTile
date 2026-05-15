@@ -78,6 +78,7 @@ private def dtypeName : DInfo → String
   | .bool => "bool"
   | .ptr => "ptr"
   | .blockPtr => "blockPtr"
+  | .floatVar name => name
 
 partial def expandLoad (expandExpr : ExprExpander)
     (expandStaticPtrExpr : StaticPtrExpander) (env : Env)

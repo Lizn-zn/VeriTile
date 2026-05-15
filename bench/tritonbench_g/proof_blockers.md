@@ -16,8 +16,8 @@ not a one-to-one Python transcription yet:
 
 - Attention/context/flash attention kernels:
   `attention_forward_triton`, `attention_fwd_triton2`,
-  `attention_fwd_triton3`, `attention_kernel`,
-  `attention_kernel_aligned`, `attn_fwd_causal`, `attn_fwd_triton`,
+  `attention_fwd_triton3`, `attention_kernel_aligned`,
+  `attn_fwd_causal`, `attn_fwd_triton`,
   `context_attn_bloom`, `context_attn_fwd`, `context_attn_llama`,
   `context_attn_mistral`, `context_attn_nopad`, `flash_attn`, and
   `mixed_sparse_attention`.

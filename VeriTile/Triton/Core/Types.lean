@@ -233,4 +233,20 @@ inductive ComparableDType : TileDType → Type where
   | int : ComparableDType .int
   | nat  : ComparableDType .nat
 
+namespace FloatDType
+
+def numericDType : (f : FloatDType) → NumericDType f.toTileDType
+  | .real => NumericDType.real
+  | .fp32 => NumericDType.fp32
+  | .fp16 => NumericDType.fp16
+  | .bf16 => NumericDType.bf16
+
+def comparableDType : (f : FloatDType) → ComparableDType f.toTileDType
+  | .real => ComparableDType.real
+  | .fp32 => ComparableDType.fp32
+  | .fp16 => ComparableDType.fp16
+  | .bf16 => ComparableDType.bf16
+
+end FloatDType
+
 end VeriTile.Triton
