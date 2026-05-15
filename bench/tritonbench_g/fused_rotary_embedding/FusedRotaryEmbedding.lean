@@ -13,7 +13,7 @@ set_option linter.unusedSimpArgs false
 `decoding_fused_rotary_embedding_kernel`.
 
 This keeps the unconditional Q rotary writes plus the conditional K rotary and
-K/V cache-fill branch guarded by `cur_head_idx % KV_GROUP_NUM == 0`. -/
+K/V cache-fill path guarded by `cur_head_idx % KV_GROUP_NUM == 0`. -/
 def decoding_fused_rotary_embedding_kernel_surface
     (q k v cos sin k_cache v_cache : RegionName)
     (BLOCK_TABLES context_lengths : Region .nat)
@@ -21,14 +21,14 @@ def decoding_fused_rotary_embedding_kernel_surface
       head_dim_stride cos_token_stride cos_stride kcb_stride kch_stride
       kcsplit_x_stride kcs_stride kcd_stride vcb_stride vch_stride vcs_stride
       vcd_stride bts_stride btb_stride block_size KV_GROUP_NUM HEAD_DIM
-      HALF_DIM : Nat) :
+      : Nat) :
     ComputeKernel := triton {
   cur_head_idx = tl.program_id(0)
   cur_token_idx = tl.program_id(1)
 
   dim_range = tl.arange(0, $(HEAD_DIM))
-  dim_range0 = tl.arange(0, $(HALF_DIM))
-  dim_range1 = dim_range0 + $(HALF_DIM)
+  dim_range0 = tl.arange(0, $(HEAD_DIM) // $(2))
+  dim_range1 = tl.arange($(HEAD_DIM) // $(2), $(HEAD_DIM))
 
   off_q = cur_token_idx * $(q_token_stride) + cur_head_idx * $(q_head_stride)
   off_q0 = off_q + dim_range0 * $(head_dim_stride)
