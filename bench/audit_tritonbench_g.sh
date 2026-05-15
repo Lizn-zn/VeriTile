@@ -85,6 +85,43 @@ else
     "${#known_algorithm_blockers[@]}"
 fi
 
+if python3 - "${PORTS_ROOT}" "${PORTS_ROOT}/proof_blockers.md" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+doc = Path(sys.argv[2]).read_text()
+scope_markers = (
+    "outside this",
+    "branch",
+    "precomputed",
+    "surface transcription",
+    "single-tile",
+    "single-iteration",
+    "specializes",
+)
+
+missing = []
+for lean_file in sorted(root.glob("*/*.lean")):
+    text = lean_file.read_text()
+    scope = (text[:text.find("triton {")] if "triton {" in text else text).lower()
+    if any(marker in scope for marker in scope_markers):
+        port_name = lean_file.parent.name
+        if port_name not in doc:
+            missing.append(port_name)
+
+if missing:
+    for port_name in missing:
+        print(f"{port_name}: scope marker lacks proof_blockers.md entry")
+    sys.exit(1)
+PY
+then
+  printf 'ok documented translation-surface blocker scan\n'
+else
+  printf 'FAIL documented translation-surface blocker scan\n'
+  failures=$((failures + 1))
+fi
+
 stale_readmes=()
 while IFS= read -r readme; do
   dir="${readme%/README.md}"

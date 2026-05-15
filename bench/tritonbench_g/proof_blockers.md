@@ -27,6 +27,12 @@ not a one-to-one Python transcription yet:
   this needs full helper-call surface modeling or full-kernel attention
   transcriptions rather than output-slice fronts.
 
+- `attention_score`: the Python test surface fixes `_BLOCK_M == _BLOCK_N`,
+  while the general kernel shape uses separate M/N parameters. The Lean surface
+  currently specializes this equality to keep the `tl.zeros([_BLOCK_M])` /
+  `tl.sum(..., axis=1)` shape flow typable. Closing this requires constraint
+  propagation for constexpr shape equalities.
+
 - `bmm_chunk_fwd`: Python uses an early `return` under the causal guard; the
   Lean surface represents the active body with an explicit guard. Closing this
   requires a first-class early-return/terminated-block surface, or an audit rule
