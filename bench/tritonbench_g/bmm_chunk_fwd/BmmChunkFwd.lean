@@ -22,7 +22,7 @@ still evaluates through the algorithm carrier while the loop shape, masks,
 pointer advances, optional sequence filter, and final destination dtype cast are
 preserved. -/
 def bmm_chunk_fwd_surface
-    (A B Out : RegionName) (SeqIdx : Region .int)
+    (a_ptr b_ptr out_ptr : RegionName) (seq_idx_ptr : Region .int)
     (seqlen chunk_size K ngroups
       stride_a_batch stride_a_seqlen stride_a_head stride_ak
       stride_b_batch stride_b_seqlen stride_b_head stride_bk
@@ -45,21 +45,21 @@ def bmm_chunk_fwd_surface
   }
   if active_block {
 
-  A += pid_b * $(stride_a_batch) +
+  a_ptr += pid_b * $(stride_a_batch) +
     pid_c * $(chunk_size) * $(stride_a_seqlen) + pid_h * $(stride_a_head)
-  B += pid_b * $(stride_b_batch) +
+  b_ptr += pid_b * $(stride_b_batch) +
     pid_c * $(chunk_size) * $(stride_b_seqlen) + pid_h * $(stride_b_head)
   if HAS_SEQ_IDX {
-    SeqIdx += pid_b * $(stride_seq_idx_batch) +
+    seq_idx_ptr += pid_b * $(stride_seq_idx_batch) +
       pid_c * $(chunk_size) * $(stride_seq_idx_seqlen)
   }
 
   offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
   offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
   offs_k = tl.arange(0, $(BLOCK_SIZE_K))
-  a_ptrs = A + offs_m[:, None] * $(stride_a_seqlen) +
+  a_ptrs = a_ptr + offs_m[:, None] * $(stride_a_seqlen) +
     offs_k[None, :] * $(stride_ak)
-  b_ptrs = B + offs_k[:, None] * $(stride_bk) +
+  b_ptrs = b_ptr + offs_k[:, None] * $(stride_bk) +
     offs_n[None, :] * $(stride_b_seqlen)
   chunk_size_limit = min($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
 
@@ -78,16 +78,16 @@ def bmm_chunk_fwd_surface
   offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
   if HAS_SEQ_IDX {
     chunk_size_limit = min($(chunk_size), $(seqlen) - pid_c * $(chunk_size))
-    seq_idx_m = tl.load(SeqIdx + offs_m * $(stride_seq_idx_seqlen),
+    seq_idx_m = tl.load(seq_idx_ptr + offs_m * $(stride_seq_idx_seqlen),
       mask=offs_m < chunk_size_limit, other=-1)
-    seq_idx_n = tl.load(SeqIdx + offs_n * $(stride_seq_idx_seqlen),
+    seq_idx_n = tl.load(seq_idx_ptr + offs_n * $(stride_seq_idx_seqlen),
       mask=offs_n < chunk_size_limit, other=-2)
     acc = tl.where(seq_idx_m[:, None] == seq_idx_n[None, :], acc, 0.0)
   }
-  out = (acc).to(Out.dtype.element_ty)
-  Out += pid_b * $(stride_out_batch) +
+  out = (acc).to(out_ptr.dtype.element_ty)
+  out_ptr += pid_b * $(stride_out_batch) +
     pid_c * $(stride_out_chunk) + pid_h * $(stride_out_head)
-  out_ptrs = Out + $(stride_outm) * offs_m[:, None] + offs_n[None, :] * $(stride_outn)
+  out_ptrs = out_ptr + $(stride_outm) * offs_m[:, None] + offs_n[None, :] * $(stride_outn)
   tl.store(out_ptrs, out, mask=(offs_m[:, None] < $(chunk_size)) &
     (offs_n[None, :] < $(chunk_size)))
   }
