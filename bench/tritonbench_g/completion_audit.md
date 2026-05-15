@@ -12,11 +12,11 @@ surface.
 | Check every `bench/tritonbench_g` problem. | 184 work directories are present; 141 currently have `.py` / `.lean` port pairs, and 43 are README-only scaffolds. | Covered for completed port pairs; scaffolds are not counted as completed ports. |
 | Ensure every completed Python port has a Lean port. | Python/Lean file counts both report 141; `bench/audit_tritonbench_g.sh` enforces the count match. | Passing. |
 | Ensure Lean ports compile. | `bench/check_ports.sh` reports `TritonBench-G ports: 141 ok, 0 fail`; the audit script reruns this gate. | Passing. |
-| Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, and statement lhs order. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
-| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current mechanical mismatch. |
+| Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, statement lhs order, and documented translation-surface blockers. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
+| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current unannotated mechanical mismatch; 23 documented translation-surface blockers remain. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
 | Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
-| Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers. | Passing. |
+| Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers. | Passing for algorithm-layer blockers. Translation-surface blockers remain and are documented below. |
 
 ## Evidence Checked
 
@@ -35,7 +35,9 @@ surface.
   scanning. It also checks that compiled ports do not still advertise README
   `TODO` status and that Python `.to(tl.float32)` casts missing from Lean are
   covered by an explicit documented slice/scope note. The same gate rejects
-  any algorithm-layer `hAlg` blockers. It rejects Lean-only `tl.load(..., dtype=...)`
+  any algorithm-layer `hAlg` blockers and requires every remaining
+  translation-surface marker to have a corresponding `proof_blockers.md`
+  entry. It rejects Lean-only `tl.load(..., dtype=...)`
   annotations and `keep_dims` reduction substitutions, both of which are
   must-fix deviations under
   `review_criteria.md`. It also flags Python `+=` statements missing from Lean
@@ -63,6 +65,36 @@ surface.
 
 ## Remaining Blockers
 
-No explicit TritonBench-G `hAlg` blocker remains. Passing `lake build` alone is
-still not sufficient evidence for future changes; this audit must continue to
-run the translation-consistency gates above.
+No explicit TritonBench-G `hAlg` blocker remains.
+
+There are still 23 documented translation-surface blockers. These are not
+silent green ports: each remaining marker must be covered by
+`proof_blockers.md`, and `bench/audit_tritonbench_g.sh` enforces that coverage.
+The current documented blocker set is:
+
+- `attention_forward_triton`
+- `attention_fwd_triton1`
+- `attention_fwd_triton2`
+- `attention_fwd_triton3`
+- `attention_kernel`
+- `attention_kernel_aligned`
+- `attention_score`
+- `attn_fwd_causal`
+- `attn_fwd_triton`
+- `bmm_chunk_fwd`
+- `context_attn_bloom`
+- `context_attn_fwd`
+- `context_attn_llama`
+- `context_attn_mistral`
+- `context_attn_nopad`
+- `flash_attn`
+- `iv_dependent_matmul`
+- `kcache_copy_triton`
+- `layer_norm_ops`
+- `mixed_sparse_attention`
+- `rotary_transform`
+- `rotary_transform_ops`
+- `triton_attention`
+
+Passing `lake build` alone is still not sufficient evidence for future changes;
+this audit must continue to run the translation-consistency gates above.
