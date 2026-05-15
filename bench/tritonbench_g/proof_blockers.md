@@ -26,6 +26,12 @@ not a one-to-one Python transcription yet:
   softmax loops, helper JIT calls, or precomputed accumulator inputs. Closing
   this needs full helper-call surface modeling or full-kernel attention
   transcriptions rather than output-slice fronts.
+  In particular, `attention_forward_triton` currently inlines the helper JIT
+  `_attn_fwd_inner` into the `_attn_fwd` surface; removing its marker makes the
+  mechanical audit compare helper parameters and call sequences against the
+  inlined outer surface. `mixed_sparse_attention` is a true final-store slice
+  from a precomputed normalized accumulator; the block-sparse and column-sparse
+  softmax loops are not represented in the first surface.
 
 - `attention_score`: the Python test surface fixes `_BLOCK_M == _BLOCK_N`,
   while the general kernel shape uses separate M/N parameters. The Lean surface
