@@ -2552,6 +2552,52 @@ private def collectLocalRegionDTypes : TermElabM Inference.RegionDTypes := do
       | none => pure ()
   pure out
 
+private def localNatFVarName? (e : Expr) : TermElabM (Option String) := do
+  let e ← whnf e
+  match e with
+  | Expr.fvar fvarId =>
+      match (← getLCtx).find? fvarId with
+      | some decl => pure (some decl.userName.toString)
+      | none => pure none
+  | _ => pure none
+
+private def natEqAliasOfLocalType? (type : Expr) :
+    TermElabM (Option (String × String)) := do
+  let type ← whnf type
+  let args := type.getAppArgs
+  if type.getAppFn.isConstOf ``Eq && args.size == 3 then
+    let α ← whnf args[0]!
+    if α.isConstOf ``Nat then
+      match (← localNatFVarName? args[1]!), (← localNatFVarName? args[2]!) with
+      | some lhs, some rhs => pure (some (lhs, rhs))
+      | _, _ => pure none
+    else
+      pure none
+  else
+    pure none
+
+private def collectLocalNatEqAliases : TermElabM (List (String × String)) := do
+  let mut out : List (String × String) := []
+  for decl in (← getLCtx) do
+    unless decl.isImplementationDetail do
+      match ← natEqAliasOfLocalType? decl.type with
+      | some pair => out := out ++ [pair]
+      | none => pure ()
+  pure out
+
+partial def rewriteIdentAliases (aliases : List (String × String)) (stx : Syntax) :
+    Syntax :=
+  if stx.isIdent then
+    let key := stx.getId.eraseMacroScopes.toString
+    match aliases.find? (fun pair => pair.1 == key) with
+    | some (_, target) => mkIdentFrom stx (Name.mkSimple target)
+    | none => stx
+  else
+    match stx with
+    | Syntax.node info kind args =>
+        Syntax.node info kind (args.map (rewriteIdentAliases aliases))
+    | other => other
+
 elab_rules : term
   | `(triton { $stmts:tritonStmt* }) => do
       -- Pre-pass: scan the body for identifiers that appear in `.nat`-pinning
@@ -2561,21 +2607,24 @@ elab_rules : term
       -- instead of `.real` so that `name` participates correctly in pointer
       -- arithmetic downstream.
       let localRegionDTypes ← collectLocalRegionDTypes
+      let natEqAliases ← collectLocalNatEqAliases
       let expanded ← liftMacroM do
-        let pinned := Inference.collectNatPinned stmts.toList
-        let intPinned := Inference.collectIntPinned stmts.toList
+        let stmtList : List (TSyntax `tritonStmt) :=
+          stmts.toList.map fun st => ⟨rewriteIdentAliases natEqAliases st.raw⟩
+        let pinned := Inference.collectNatPinned stmtList
+        let intPinned := Inference.collectIntPinned stmtList
         -- Pre-pass: collect `region <name> = <dtype>` directives so the
         -- macro can default `tl.load(R + offs)` / `tl.store(R + offs, _)`
         -- to the declared element dtype instead of `.real`. Local Lean
         -- parameters typed as `Region d` are available here through the term
         -- elaborator and act as implicit region declarations.
         let regionDTypes :=
-          Inference.collectRegionDTypes stmts.toList ++ localRegionDTypes
+          Inference.collectRegionDTypes stmtList ++ localRegionDTypes
         -- Pre-pass: propagate region dtypes to chained pointer bindings
         -- (`p = R + offs; ... ; tl.load(p)` recovers `R`'s dtype on the load).
-        let ptrElems := Inference.collectPtrElems regionDTypes stmts.toList
+        let ptrElems := Inference.collectPtrElems regionDTypes stmtList
         let (_, computeStmtTerms, _, _) ←
-          expandStmts [] pinned intPinned regionDTypes ptrElems stmts.toList
+          expandStmts [] pinned intPinned regionDTypes ptrElems stmtList
         -- Auto-scan body: collect every region appearing in `tl.load(...)` (inputs)
         -- and `tl.store(...)` (outputs). Order = body occurrence; no macro-time
         -- dedup (a mix of literals and Lean terms can't be statically deduped, and

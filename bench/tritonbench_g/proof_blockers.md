@@ -33,12 +33,6 @@ not a one-to-one Python transcription yet:
   from a precomputed normalized accumulator; the block-sparse and column-sparse
   softmax loops are not represented in the first surface.
 
-- `attention_score`: the Python test surface fixes `_BLOCK_M == _BLOCK_N`,
-  while the general kernel shape uses separate M/N parameters. The Lean surface
-  currently specializes this equality to keep the `tl.zeros([_BLOCK_M])` /
-  `tl.sum(..., axis=0)` shape flow typable. Closing this requires constraint
-  propagation for constexpr shape equalities.
-
 - `rotary_transform` and `rotary_transform_ops`: the Python kernels combine
   varlen/non-varlen, tensor/scalar seqlen offsets, interleaved/non-interleaved,
   and conjugate/non-conjugate paths. Current Lean surfaces cover the
@@ -50,12 +44,6 @@ not a one-to-one Python transcription yet:
 
 The remaining blockers are not currently local proof-script failures:
 
-- `attention_score` needs macro-time constexpr shape-equality propagation.
-  The Python wrapper fixes `BLOCK_M == BLOCK_N`, but the kernel signature
-  carries both names. Faithfully restoring `o = tl.zeros([BLOCK_M],
-  dtype=tl.float32)` makes the later `o += tl.sum(p, axis=0)` combine
-  `[BLOCK_M]` with `[BLOCK_N]`; today's DSL shape checker compares the syntax
-  of the dimension terms and therefore rejects the body.
 - The attention/context/flash kernels need full streaming-softmax loop
   surfaces, including helper-call modeling where the Python kernel delegates
   to a separate `@triton.jit` helper. The current proof slices intentionally

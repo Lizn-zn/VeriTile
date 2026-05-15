@@ -9,11 +9,11 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Documented `BLOCK_M == BLOCK_N` specialization that specializes
-`attention_score.py`'s `_score_kernel`.
+/-- DSL port of `attention_score.py`'s `_score_kernel`.
 
-This surface keeps the wrapper invariant `BLOCK_M == BLOCK_N` explicit by
-shaping `o` as `[BLOCK_N]`, matching `tl.sum(p, axis=0)`. -/
+The proof parameter `hBlockMN` carries the Python wrapper invariant
+`BLOCK_M == BLOCK_N` so the DSL can type the source `tl.zeros([BLOCK_M])`
+against the later `tl.sum(p, axis=0)` vector. -/
 def attention_score_kernel
     (Q K M Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
@@ -23,7 +23,8 @@ def attention_score_kernel
       sliding_window_offset sliding_window_size
       BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
     (sm_scale : ℝ)
-    (SLIDING_WINDOW COMPLEMENT_SLIDING_WINDOW IS_EVEN_M IS_EVEN_N : Bool) :
+    (SLIDING_WINDOW COMPLEMENT_SLIDING_WINDOW IS_EVEN_M IS_EVEN_N : Bool)
+    (_hBlockMN : BLOCK_M = BLOCK_N) :
     ComputeKernel := triton {
   start_n = tl.program_id(0)
   off_hz = tl.program_id(1)
@@ -33,7 +34,7 @@ def attention_score_kernel
   q_offset = (off_z).to(tl.int64) * $(stride_qz) + (off_h).to(tl.int64) * $(stride_qh)
   k_offset = (off_z).to(tl.int64) * $(stride_kz) + (off_hkv).to(tl.int64) * $(stride_kh)
   m_ptrs = M + off_hz * $(ROUND_CTX) + tl.arange(0, $(BLOCK_M))
-  o = tl.zeros([$(BLOCK_N)], dtype=tl.float32)
+  o = tl.zeros([$(BLOCK_M)], dtype=tl.float32)
   Q_block_ptr = tl.make_block_ptr(base=Q + q_offset,
     shape=($(N_CTX), $(BLOCK_DMODEL)),
     strides=($(stride_qm), $(stride_qk)),
