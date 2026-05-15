@@ -568,6 +568,20 @@ partial def expandIteFromCond (env : Env) (c' : EOut)
 partial def expandBoolCondition (env : Env) (cond : TSyntax `tritonExpr) :
     MacroM EOut := do
   match cond with
+  | `(tritonExpr| $a:ident == $b:str) =>
+      if env.any (fun entry => entry.1 == a.getId.toString) then
+        expandExpr env cond
+      else
+        let lhs : TSyntax `term := ⟨a.raw⟩
+        let rhs : TSyntax `term := ⟨b.raw⟩
+        pure ⟨← `(Op.constBool ($lhs == $rhs)), .bool, SInfo.scalar, none, none⟩
+  | `(tritonExpr| $a:ident != $b:str) =>
+      if env.any (fun entry => entry.1 == a.getId.toString) then
+        expandExpr env cond
+      else
+        let lhs : TSyntax `term := ⟨a.raw⟩
+        let rhs : TSyntax `term := ⟨b.raw⟩
+        pure ⟨← `(Op.constBool ($lhs != $rhs)), .bool, SInfo.scalar, none, none⟩
   | `(tritonExpr| $b:ident) =>
       if env.any (fun entry => entry.1 == b.getId.toString) then
         expandExpr env cond
@@ -602,6 +616,10 @@ partial def mergeBranchEnv (base thenEnv elseEnv : Env) : Env :=
 
 partial def staticBoolCond? (env : Env) (cond : TSyntax `tritonExpr) : Bool :=
   match cond with
+  | `(tritonExpr| $a:ident == $_:str) =>
+      !env.any (fun entry => entry.1 == a.getId.toString)
+  | `(tritonExpr| $a:ident != $_:str) =>
+      !env.any (fun entry => entry.1 == a.getId.toString)
   | `(tritonExpr| $b:ident) =>
       !env.any (fun entry => entry.1 == b.getId.toString)
   | `(tritonExpr| not $e:tritonExpr) =>
