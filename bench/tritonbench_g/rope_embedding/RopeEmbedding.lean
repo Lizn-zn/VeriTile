@@ -12,7 +12,7 @@ set_option linter.unusedSimpArgs false
 
 /-- Faithful transcription of `rope_embedding.py`'s `_rope_embedding`.
 
-The body preserves the group-head loop, the `BACKWARD_PASS` branch, and both
+The body preserves the group-head loop, the `BACKWARD_PASS` path, and both
 rotary-pair stores. -/
 def rope_embedding_surface
     (Q : RegionName) (Q_row_stride : Nat)
