@@ -246,6 +246,9 @@ syntax ident ", " ident " = " "tl.broadcast(" tritonExpr ", " tritonExpr ")" : t
 syntax ident ", " ident " := " "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonStmt
 syntax ident ", " "_" " = " "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonStmt
 syntax ident ", " "_" " := " "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonStmt
+syntax ident ", " ident " = " ident "(" tritonExpr,* ")" : tritonStmt
+syntax ident ", " ident ", " ident " = " ident "(" tritonExpr,* ")" : tritonStmt
+syntax ident ", " ident ", " "_" " = " ident "(" tritonExpr,* ")" : tritonStmt
 syntax ident ", " ident (", " ident)* " := "
   tritonExpr ", " tritonExpr (", " tritonExpr)* : tritonStmt
 syntax ident ", " ident (", " ident)* " = "

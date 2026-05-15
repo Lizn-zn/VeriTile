@@ -1878,6 +1878,18 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let compute ← `(ComputeStmt.assign $dt $sh $nameLit $exprTerm)
       let env' := (lhs0.getId.toString, aOut.dtype, aOut.shape, aOut.computeDType?) :: env
       pure (stmt, compute, env', aOut.computeTerm.isSome)
+  | `(tritonStmt| $_lhs0:ident, $_lhs1:ident = $_fn:ident($_args:tritonExpr,*)) => do
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) []),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) []),
+        env, Bool.false)
+  | `(tritonStmt| $_lhs0:ident, $_lhs1:ident, $_lhs2:ident = $_fn:ident($_args:tritonExpr,*)) => do
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) []),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) []),
+        env, Bool.false)
+  | `(tritonStmt| $_lhs0:ident, $_lhs1:ident, _ = $_fn:ident($_args:tritonExpr,*)) => do
+      pure (← `(Stmt.ifThen (Op.constBool Bool.true) []),
+        ← `(ComputeStmt.ifThen (Op.constBool Bool.true) []),
+        env, Bool.false)
   | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) => do
       let lhs := #[lhs0, lhs1] ++ lhsRest
       let rhs := #[rhs0, rhs1] ++ rhsRest
