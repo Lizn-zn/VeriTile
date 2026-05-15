@@ -13,8 +13,8 @@ set_option linter.unusedSimpArgs false
 /-- Faithful transcription of
 `lora_expand_gemv.py`'s `_bgmv_expand_kernel`.
 
-This covers the `EVEN_K` load branch, `tl.cdiv` split length, output-block
-loop, optional `CAST_TYPE` conversion, and `ADD_INPUTS` accumulation branch.
+This covers the `EVEN_K` load path, `tl.cdiv` split length, output-block
+loop, optional `CAST_TYPE` conversion, and `ADD_INPUTS` accumulation path.
 Python's signed `lora_index == -1` early return is represented as a guard
 around the active body. -/
 def bgmv_expand_surface

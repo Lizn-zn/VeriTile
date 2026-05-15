@@ -548,12 +548,15 @@ def split_top_level_args(call: str, fn: str) -> list[str]:
         elif ch in ")]}":
             depth -= 1
         if ch == "," and depth == 0:
-            args.append("".join(cur).strip())
+            arg = "".join(cur).strip()
+            if arg:
+                args.append(arg)
             cur = []
             continue
         cur.append(ch)
-    if cur:
-        args.append("".join(cur).strip())
+    arg = "".join(cur).strip()
+    if arg:
+        args.append(arg)
     return args
 
 def mask_presence(body: str, fn: str) -> list[bool]:
@@ -1099,12 +1102,15 @@ def split_top_level_args(args_text: str) -> list[str]:
         elif ch in ")]}":
             depth -= 1
         if ch == "," and depth == 0:
-            args.append("".join(cur).strip())
+            arg = "".join(cur).strip()
+            if arg:
+                args.append(arg)
             cur = []
             continue
         cur.append(ch)
-    if cur:
-        args.append("".join(cur).strip())
+    arg = "".join(cur).strip()
+    if arg:
+        args.append(arg)
     return args
 
 def kwarg_sequence(body: str, fn: str) -> list[list[str]]:
@@ -1255,12 +1261,15 @@ def split_top_level_args(args_text: str) -> list[str]:
         elif ch in ")]}":
             depth -= 1
         if ch == "," and depth == 0:
-            args.append("".join(cur).strip())
+            arg = "".join(cur).strip()
+            if arg:
+                args.append(arg)
             cur = []
             continue
         cur.append(ch)
-    if "".join(cur).strip():
-        args.append("".join(cur).strip())
+    arg = "".join(cur).strip()
+    if arg:
+        args.append(arg)
     return args
 
 failures = []
@@ -1552,12 +1561,15 @@ def split_top_level_args(call: str) -> list[str]:
         elif ch in ")]}":
             depth -= 1
         if ch == "," and depth == 0:
-            args.append("".join(cur).strip())
+            arg = "".join(cur).strip()
+            if arg:
+                args.append(arg)
             cur = []
             continue
         cur.append(ch)
-    if cur:
-        args.append("".join(cur).strip())
+    arg = "".join(cur).strip()
+    if arg:
+        args.append(arg)
     return args
 
 def normalize_other(value: str) -> str:
@@ -2499,12 +2511,15 @@ def split_top_level_args(args_text: str) -> list[str]:
         elif ch in ")]}":
             depth -= 1
         if ch == "," and depth == 0:
-            args.append("".join(cur).strip())
+            arg = "".join(cur).strip()
+            if arg:
+                args.append(arg)
             cur = []
             continue
         cur.append(ch)
-    if cur:
-        args.append("".join(cur).strip())
+    arg = "".join(cur).strip()
+    if arg:
+        args.append(arg)
     return args
 
 def reduce_axis_styles(text: str) -> list[tuple[str, str, str]]:
