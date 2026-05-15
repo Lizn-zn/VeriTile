@@ -120,6 +120,9 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.select vc va vb)
+  | .ite c a b, s => do
+      let vc ← evalOp c s
+      if vc.data PUnit.unit then evalOp a s else evalOp b s
   | .transpose (batch := batch) a, s => do
       let va ← evalOp a s
       some (Tile.transpose batch va)

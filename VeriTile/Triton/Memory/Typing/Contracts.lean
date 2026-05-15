@@ -32,6 +32,10 @@ def Op.PointerRegionsHaveDType (Γ : RegionTyping) (dtype : TileDType) :
       c.RespectsRegionTyping Γ ∧
       a.PointerRegionsHaveDType Γ dtype ∧
       b.PointerRegionsHaveDType Γ dtype
+  | .ite c a b =>
+      c.RespectsRegionTyping Γ ∧
+      a.PointerRegionsHaveDType Γ dtype ∧
+      b.PointerRegionsHaveDType Γ dtype
   | .transpose ptr =>
       ptr.PointerRegionsHaveDType Γ dtype
   | .expandDim _ ptr =>
@@ -54,6 +58,10 @@ def Op.BlockPointerRegionHasDType (Γ : RegionTyping) (dtype : TileDType) :
   | .broadcast ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
   | .full _ ptr => ptr.BlockPointerRegionHasDType Γ dtype
   | .where c a b =>
+      c.RespectsRegionTyping Γ ∧
+      a.BlockPointerRegionHasDType Γ dtype ∧
+      b.BlockPointerRegionHasDType Γ dtype
+  | .ite c a b =>
       c.RespectsRegionTyping Γ ∧
       a.BlockPointerRegionHasDType Γ dtype ∧
       b.BlockPointerRegionHasDType Γ dtype
@@ -135,6 +143,8 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .boolNot a => a.RespectsRegionTyping Γ
   | .max2 _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .where c a b =>
+      c.RespectsRegionTyping Γ ∧ a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .ite c a b =>
       c.RespectsRegionTyping Γ ∧ a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .reduceMax _ _ a => a.RespectsRegionTyping Γ
   | .reduceMaxNat _ _ a => a.RespectsRegionTyping Γ

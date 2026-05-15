@@ -171,6 +171,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .boolNot a => a.check ctx
   | .max2 _ a b => a.check ctx *> b.check ctx
   | .where c a b => c.check ctx *> a.check ctx *> b.check ctx
+  | .ite c a b => c.check ctx *> a.check ctx *> b.check ctx
   | .reduceMax _ _ a => a.check ctx
   | .reduceMaxNat _ _ a => a.check ctx
   | .reduceSum _ _ a => a.check ctx
@@ -215,6 +216,11 @@ def Op.ptrProvenance (ctx : CheckCtx) : Op dtype shape → Except CheckError Reg
       let left ← a.ptrProvenance ctx
       let right ← b.ptrProvenance ctx
       if left = right then .ok left else .error (.pointerProvenanceConflict left right)
+  | .ite c a b => do
+      c.check ctx
+      let left ← a.ptrProvenance ctx
+      let right ← b.ptrProvenance ctx
+      if left = right then .ok left else .error (.pointerProvenanceConflict left right)
   | .transpose ptr => ptr.ptrProvenance ctx
   | .expandDim _ ptr => ptr.ptrProvenance ctx
   | .ref .ptr shape name => do
@@ -239,6 +245,11 @@ def Op.blockPtrProvenance (ctx : CheckCtx) :
   | .broadcast ptr _ => ptr.blockPtrProvenance ctx
   | .full _ ptr => ptr.blockPtrProvenance ctx
   | .where c a b => do
+      c.check ctx
+      let left ← a.blockPtrProvenance ctx
+      let right ← b.blockPtrProvenance ctx
+      if left = right then .ok left else .error (.blockPointerProvenanceConflict left right)
+  | .ite c a b => do
       c.check ctx
       let left ← a.blockPtrProvenance ctx
       let right ← b.blockPtrProvenance ctx

@@ -131,6 +131,14 @@ inductive Op : TileDType → TileShape → Type where
   | where     : {dtype : TileDType} → {shape : TileShape} →
                 Op .bool shape → Op dtype shape → Op dtype shape →
                 Op dtype shape
+  /--
+  Lazy scalar-condition expression select for Python's ternary expression
+  `a if cond else b`. Unlike `Op.where`, only the selected branch is
+  evaluated, matching Triton constexpr-branch use sites.
+  -/
+  | ite       : {dtype : TileDType} → {shape : TileShape} →
+                Op .bool [] → Op dtype shape → Op dtype shape →
+                Op dtype shape
   /-- Block-level reduce-max along an arbitrary axis. -/
   | reduceMax : (axis : Fin shape.length) → (keepDims : Bool) →
                 Op .real shape →

@@ -529,6 +529,42 @@ partial def expandWhereFromCond (env : Env) (c' : EOut)
   let bTerm ← coerceShape b'.term b'.shape target "tl.where else-branch"
   pure ⟨← `(Op.where $cTerm $aTerm $bTerm), a'.dtype, target, none, none⟩
 
+partial def expandIteFromCond (env : Env) (c' : EOut)
+    (a b : TSyntax `tritonExpr) : MacroM EOut := do
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  ensureDType .bool c'.dtype "conditional expression condition"
+  ensureShape SInfo.scalar c'.shape "conditional expression condition"
+  let expandNatToIntBranch (e : TSyntax `tritonExpr) (out : EOut) : MacroM EOut := do
+    match methodCast? e with
+    | some (_inner, dt) =>
+        let dst ← expandDType dt
+        if out.dtype == .nat && dst == .int then
+          pure ⟨← `(Op.castNatToInt $out.term), .int, out.shape, none, none⟩
+        else
+          pure out
+    | none => pure out
+  let (a', b') ←
+    if a'.dtype == b'.dtype then
+      pure (a', b')
+    else
+      if a'.dtype == .nat && b'.dtype == .int then
+        pure (⟨← `(Op.castNatToInt $a'.term), .int, a'.shape,
+          a'.computeTerm, a'.computeDType?⟩, b')
+      else if a'.dtype == .int && b'.dtype == .nat then
+        pure (a', ⟨← `(Op.castNatToInt $b'.term), .int, b'.shape,
+          b'.computeTerm, b'.computeDType?⟩)
+      else do
+        let aCast ← expandNatToIntBranch a a'
+        let bCast ← expandNatToIntBranch b b'
+        pure (aCast, bCast)
+  unless a'.dtype == b'.dtype do
+    Macro.throwError "conditional expression: branch dtype mismatch"
+  let (_, target) ← broadcastTerm a'.shape b'.shape "conditional expression branches"
+  let aTerm ← coerceShape a'.term a'.shape target "conditional expression then-branch"
+  let bTerm ← coerceShape b'.term b'.shape target "conditional expression else-branch"
+  pure ⟨← `(Op.ite $c'.term $aTerm $bTerm), a'.dtype, target, none, none⟩
+
 partial def expandBoolCondition (env : Env) (cond : TSyntax `tritonExpr) :
     MacroM EOut := do
   match cond with
@@ -563,6 +599,22 @@ partial def mergeBranchEnv (base thenEnv elseEnv : Env) : Env :=
     thenNew ++ base
   else
     mergedNew ++ base
+
+partial def staticBoolCond? (env : Env) (cond : TSyntax `tritonExpr) : Bool :=
+  match cond with
+  | `(tritonExpr| $b:ident) =>
+      !env.any (fun entry => entry.1 == b.getId.toString)
+  | `(tritonExpr| not $e:tritonExpr) =>
+      staticBoolCond? env e
+  | _ => Bool.false
+
+partial def mergeStaticBranchEnv (base thenEnv elseEnv : Env) : Env :=
+  let baseNames := base.map (fun entry => entry.1)
+  let thenNew := thenEnv.filter (fun entry => !(baseNames.contains entry.1))
+  let elseNew := elseEnv.filter (fun entry => !(baseNames.contains entry.1))
+  let thenNames := thenNew.map (fun entry => entry.1)
+  let elseOnly := elseNew.filter (fun entry => !(thenNames.contains entry.1))
+  thenNew ++ elseOnly ++ base
 
 partial def natOffsetsWithBaseAdd (env : Env) (ctx : String)
     (offsets strides : Array (TSyntax `tritonExpr)) :
@@ -1242,7 +1294,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandWhereFromCond env c' a b
   | `(tritonExpr| ($a:tritonExpr if $c:tritonExpr else $b:tritonExpr)) => do
       let c' ← expandBoolCondition env c
-      expandWhereFromCond env c' a b
+      expandIteFromCond env c' a b
   | `(tritonExpr| $e:tritonExpr[ : ]) => do
       -- Python no-op full slice `e[:]`.
       expandExpr env e
@@ -2332,7 +2384,11 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let thenBaseEnv := env
       let (algThen, computeThen, thenEnv, thenHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems thenStmts.toList
       let (algElse, computeElse, elseEnv, elseHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems elseStmts.toList
-      let nextEnv := mergeBranchEnv thenBaseEnv thenEnv elseEnv
+      let nextEnv :=
+        if staticBoolCond? env cond then
+          mergeStaticBranchEnv thenBaseEnv thenEnv elseEnv
+        else
+          mergeBranchEnv thenBaseEnv thenEnv elseEnv
       pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
         nextEnv,
@@ -2354,7 +2410,10 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let (algElse, computeElse, elseEnv, elseHasCompute) ← expandStmts env pinned intPinned regionDTypes ptrElems elseStmts.toList
       pure (← `(Stmt.ifThenElse $cond'.term [$algThen,*] [$algElse,*]),
         ← `(ComputeStmt.ifThenElse $cond'.term [$computeThen,*] [$computeElse,*]),
-        mergeBranchEnv env thenEnv elseEnv,
+        (if staticBoolCond? env cond then
+          mergeStaticBranchEnv env thenEnv elseEnv
+        else
+          mergeBranchEnv env thenEnv elseEnv),
         cond'.computeTerm.isSome || thenHasCompute || elseHasCompute)
   | `(tritonStmt| if $cond:tritonExpr { $stmts:tritonStmt* }) => do
       let cond' ← expandBoolCondition env cond

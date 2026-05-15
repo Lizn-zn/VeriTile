@@ -12,9 +12,10 @@ set_option linter.unusedSimpArgs false
 
 /-- Faithful transcription of `layer_norm_ops.py`'s `_layer_norm_fwd_1pass_kernel`.
 
-This preserves the forward constexpr branches for residual input,
-`RESIDUAL_OUT`, RMS-vs-layer norm, bias, `Mean`/`Rstd` side stores, and masked
-`Y` writeback. -/
+This keeps the residual input, `RESIDUAL_OUT`, RMS-vs-layer norm, bias,
+`Mean`/`Rstd` side stores, Python ternary expressions, and masked `Y`
+writeback, but still uses pre-bound scalars for branch-assigned values while
+the DSL branch environment merge is being tightened. -/
 def layer_norm_fwd_1pass_surface
     (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
     (stride_x_row stride_y_row stride_res_row stride_res_out_row
