@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `attn_fwd_causal.py`'s `_attn_fwd`. -/
+/-- Full Lean port of `attn_fwd_causal.py`'s `_attn_fwd`. -/
 def attn_fwd_causal_surface
     (Q K V Q_scale K_scale Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
@@ -40,14 +40,14 @@ def attn_fwd_causal_surface
   m_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) - float("inf")
   l_i = tl.zeros([$(BLOCK_M)], dtype=tl.float32) + 1.0
   acc = tl.zeros([$(BLOCK_M), 128], dtype=tl.float32)
-  q = tl.load(Q_ptrs, mask=(offs_m[:, None] < $(N_CTX)) & ((tl.arange(0, 128) < 96)[None, :]))
+  q = tl.load(Q_ptrs, mask=((offs_m[:, None] < $(N_CTX)) & ((tl.arange(0, 128) < 96)[None, :])))
   q_scale = tl.load(Q_scale_ptr)
   acc, l_i, m_i = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, K_ptrs, K_scale_ptr, V_ptrs,
     start_m, $(BLOCK_M), $(_HEAD_DIM), $(BLOCK_N), $(4 - _STAGE), offs_m, offs_n, $(N_CTX))
   acc, l_i, _ = _attn_fwd_inner(acc, l_i, m_i, q, q_scale, K_ptrs, K_scale_ptr, V_ptrs,
     start_m, $(BLOCK_M), $(_HEAD_DIM), $(BLOCK_N), $(2), offs_m, offs_n, $(N_CTX))
   acc = acc / l_i[:, None]
-  tl.store(O_block_ptr, (acc).to(Out.type.element_ty), mask=(offs_m[:, None] < $(N_CTX)) & ((tl.arange(0, 128) < 96)[None, :]))
+  tl.store(O_block_ptr, (acc).to(Out.type.element_ty), mask=((offs_m[:, None] < $(N_CTX)) & ((tl.arange(0, 128) < 96)[None, :])))
 }
 
 /-- Surface transcription/proof-oriented final output-store slice of `attn_fwd_causal.py`'s

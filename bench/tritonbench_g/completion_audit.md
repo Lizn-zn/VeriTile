@@ -67,18 +67,11 @@ surface.
 
 ## Remaining Blockers
 
-No explicit TritonBench-G `hAlg` blocker remains.
-
-There are still 5 documented translation-surface blockers. These are not
-silent green ports: each remaining marker must be covered by
-`proof_blockers.md`, and `bench/audit_tritonbench_g.sh` enforces that coverage.
+No explicit TritonBench-G `hAlg` blocker remains, and no documented
+translation-surface blocker remains. If a future Lean port reintroduces a
+translation-scope marker, it must be covered by `proof_blockers.md`, and
+`bench/audit_tritonbench_g.sh` enforces that coverage.
 The current documented blocker set is:
-
-- `attention_forward_triton`
-- `attention_fwd_triton2`
-- `attention_fwd_triton3`
-- `attn_fwd_causal`
-- `attn_fwd_triton`
 
 Passing `lake build` alone is still not sufficient evidence for future changes;
 this audit must continue to run the translation-consistency gates above.

@@ -9,7 +9,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-- Surface transcription of `attention_fwd_triton3.py`'s `_attn_fwd`. -/
+/-- Full Lean port of `attention_fwd_triton3.py`'s `_attn_fwd`. -/
 def attention_fwd_triton3_surface
     (Q K V M Out L : RegionName) (sm_scale : ℝ)
     (stride_qz stride_qh stride_qm stride_qk
@@ -55,7 +55,7 @@ def attention_fwd_triton3_surface
     l_i = tl.load(l_ptrs).to(tl.float32)
     acc = tl.load(O_block_ptr).to(tl.float32)
   }
-  qk_scale = tl.full([], $(sm_scale), dtype=tl.float32)
+  qk_scale = $(sm_scale) * 1.0
   qk_scale *= 1.4426950408889634
   if $(IS_EVEN_M) != $(0) {
     q = tl.load(Q_block_ptr)

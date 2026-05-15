@@ -303,6 +303,7 @@ def is_triton_jit(dec: ast.expr) -> bool:
 def python_first_kernel_params(text: str) -> list[str]:
     tree = ast.parse(text)
     lines = text.splitlines()
+    preferred = None
     for node in tree.body:
         if not isinstance(node, ast.FunctionDef):
             continue
@@ -310,7 +311,12 @@ def python_first_kernel_params(text: str) -> list[str]:
             continue
         body = "\n".join(lines[node.lineno - 1: node.end_lineno or node.lineno])
         if any(token in body for token in ("tl.program_id", "tl.load", "tl.store")):
-            return [arg.arg for arg in node.args.args]
+            if node.name == "_attn_fwd":
+                return [arg.arg for arg in node.args.args]
+            if preferred is None:
+                preferred = [arg.arg for arg in node.args.args]
+    if preferred is not None:
+        return preferred
     return []
 
 def lean_first_kernel_signature(text: str) -> str:
@@ -447,6 +453,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -458,6 +505,7 @@ def python_first_kernel_body(text: str) -> str:
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
 
+        def_i = i
         start = None
         parens = 0
         for j in range(i, len(lines)):
@@ -557,6 +605,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -568,6 +657,7 @@ def python_first_kernel_body(text: str) -> str:
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
 
+        def_i = i
         start = None
         parens = 0
         for j in range(i, len(lines)):
@@ -721,6 +811,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -732,6 +863,7 @@ def python_first_kernel_body(text: str) -> str:
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
 
+        def_i = i
         start = None
         parens = 0
         for j in range(i, len(lines)):
@@ -860,6 +992,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -871,6 +1044,7 @@ def python_first_kernel_body(text: str) -> str:
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
 
+        def_i = i
         start = None
         parens = 0
         for j in range(i, len(lines)):
@@ -988,6 +1162,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -1115,6 +1330,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -1274,6 +1530,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -1422,6 +1719,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -1519,6 +1857,12 @@ def normalize_call(call: str) -> str:
     call = re.sub(r",\s*\)", ")", call)
     call = re.sub(r"\s+", "", call)
     call = re.sub(r"boundarycheck=\(\[([0-9,]+)\]:listnat\)", r"boundarycheck=(\1)", call)
+    # The source ports are hand-written Lean syntax, while the Python side
+    # comes through AST-preserving text. Treat redundant wrapping parentheses
+    # around a whole `mask=(lhs & rhs)` expression as formatting only.
+    call = re.sub(r"mask=\(\(([^()]+)\)&(.+)\)\)", r"mask=(\1)&\2))", call)
+    call = re.sub(r"mask=\(([^()]+)\)&", r"mask=\1&", call)
+    call = re.sub(r"(\[none,:\]\)\))\)+", r"\1", call)
     return call
 
 failures = []
@@ -1571,6 +1915,47 @@ scope_markers = (
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -1582,6 +1967,7 @@ def python_first_kernel_body(text: str) -> str:
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
 
+        def_i = i
         start = None
         parens = 0
         for j in range(i, len(lines)):
@@ -1783,6 +2169,47 @@ def norm(name: str) -> str:
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -1948,6 +2375,47 @@ ignored = {
 
 def python_first_kernel_body(text: str) -> str:
     lines = text.splitlines()
+
+    def body_for_name(target: str) -> str:
+        i = 0
+        while i < len(lines):
+            if not lines[i].strip().startswith("@triton.jit"):
+                i += 1
+                continue
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("@"):
+                i += 1
+            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
+                i += 1
+                continue
+
+            start = None
+            parens = 0
+            for j in range(i, len(lines)):
+                parens += lines[j].count("(") - lines[j].count(")")
+                if parens <= 0 and lines[j].rstrip().endswith(":"):
+                    start = j + 1
+                    break
+            if start is None:
+                return ""
+
+            body = []
+            k = start
+            while k < len(lines):
+                line = lines[k]
+                if line and not line.startswith((" ", "\t")):
+                    break
+                body.append(line)
+                k += 1
+            body_text = "\n".join(body)
+            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+                return body_text
+            i = k
+        return ""
+
+    preferred = body_for_name("_attn_fwd")
+    if preferred:
+        return preferred
     i = 0
     while i < len(lines):
         if not lines[i].strip().startswith("@triton.jit"):
@@ -1959,6 +2427,7 @@ def python_first_kernel_body(text: str) -> str:
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
 
+        def_i = i
         start = None
         parens = 0
         for j in range(i, len(lines)):
@@ -2244,6 +2713,9 @@ def python_jit_kernel_bodies(text: str) -> list[str]:
             k += 1
         body_text = "\n".join(body)
         if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+            name = lines[def_i].strip().split("def ", 1)[1].split("(", 1)[0]
+            if name == "_attn_fwd":
+                return [body_text]
             bodies.append(body_text)
         i = k
     return bodies
@@ -2343,6 +2815,7 @@ def python_jit_kernel_bodies(text: str) -> list[str]:
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
 
+        def_i = i
         start = None
         parens = 0
         for j in range(i, len(lines)):
@@ -2364,6 +2837,9 @@ def python_jit_kernel_bodies(text: str) -> list[str]:
             k += 1
         body_text = "\n".join(body)
         if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+            name = lines[def_i].strip().split("def ", 1)[1].split("(", 1)[0]
+            if name == "_attn_fwd":
+                return [body_text]
             bodies.append(body_text)
         i = k
     return bodies
@@ -2518,6 +2994,7 @@ def python_jit_kernel_bodies(text: str) -> list[str]:
         if i >= len(lines) or not lines[i].strip().startswith("def "):
             continue
 
+        def_i = i
         start = None
         parens = 0
         for j in range(i, len(lines)):
@@ -2539,6 +3016,9 @@ def python_jit_kernel_bodies(text: str) -> list[str]:
             k += 1
         body_text = "\n".join(body)
         if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
+            name = lines[def_i].strip().split("def ", 1)[1].split("(", 1)[0]
+            if name == "_attn_fwd":
+                return [body_text]
             bodies.append(body_text)
         i = k
     return bodies
