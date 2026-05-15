@@ -44,4 +44,26 @@ not a one-to-one Python transcription yet:
   and conjugate/non-conjugate paths. Current Lean surfaces cover the
   non-varlen, non-interleaved, non-conjugate path. Closing this requires
   path-sensitive parameter refinement for `SEQLEN_OFFSETS`, `seqlen`, and
-  `rotary_dim`-derived half ranges.
+  `rotary_dim`-derived half ranges. It also requires statement-level early
+  return support: the Python kernel uses `if pid_m * BLOCK_M >= seqlen:
+  return`, while the current Lean surface represents that as an active-block
+  guard because `Stmt` / `ComputeStmt` and `stepStmts` have no early-exit
+  channel.
+
+### Required VeriTile surface extensions
+
+The remaining blockers are not currently local proof-script failures:
+
+- `attention_score` needs macro-time constexpr shape-equality propagation.
+  The Python wrapper fixes `BLOCK_M == BLOCK_N`, but the kernel signature
+  carries both names. Faithfully restoring `o = tl.zeros([BLOCK_M],
+  dtype=tl.float32)` makes the later `o += tl.sum(p, axis=0)` combine
+  `[BLOCK_M]` with `[BLOCK_N]`; today's DSL shape checker compares the syntax
+  of the dimension terms and therefore rejects the body.
+- `rotary_transform` / `rotary_transform_ops` need an early-return statement
+  in the core AST and operational semantics before the Python control flow can
+  be transcribed literally.
+- The attention/context/flash kernels need full streaming-softmax loop
+  surfaces, including helper-call modeling where the Python kernel delegates
+  to a separate `@triton.jit` helper. The current proof slices intentionally
+  start from precomputed accumulator/output tiles.
