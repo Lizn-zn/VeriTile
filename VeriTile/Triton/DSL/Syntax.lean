@@ -38,6 +38,7 @@ syntax "tl.math.exp2(" tritonExpr ")" : tritonExpr
 syntax "tl.extra.cuda.libdevice.pow(" tritonExpr ", " num ")" : tritonExpr
 syntax "tl.log(" tritonExpr ")" : tritonExpr
 syntax "tl.log2(" tritonExpr ")" : tritonExpr
+syntax "tl.math.log2(" tritonExpr ")" : tritonExpr
 syntax "tl.sigmoid(" tritonExpr ")" : tritonExpr
 syntax "silu(" tritonExpr ")" : tritonExpr
 syntax "leaky_relu" "(" tritonExpr ")" : tritonExpr

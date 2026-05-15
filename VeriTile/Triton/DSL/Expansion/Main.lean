@@ -868,6 +868,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.log2" e'
       pure ⟨← `(Op.log2 $eTerm), .real, e'.shape, none, none⟩
+  | `(tritonExpr| tl.math.log2($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "tl.math.log2" e'
+      pure ⟨← `(Op.log2 $eTerm), .real, e'.shape, none, none⟩
   | `(tritonExpr| tl.sigmoid($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.sigmoid" e'
