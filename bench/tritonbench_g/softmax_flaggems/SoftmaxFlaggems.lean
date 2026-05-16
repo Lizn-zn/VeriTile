@@ -241,4 +241,97 @@ theorem softmax_kernel_inner_one_tile_compute_correct
     s s' hExec i
   simpa [hActive] using h
 
+/-! ## Non-inner one-tile forward — store-side proof skeleton
+
+This block provides offset/value defs and a non-trivial `_writes_at_idx`
+lemma showing that, for in-range lanes, the kernel writes exactly the
+softmax-of-column value at every `(n, k)` lane. The full
+`ComputeCorrect.Realizes` lift to a math-level spec for the 2D non-inner
+softmax is left as future work — the underlying difficulty is the per-column
+streaming reduction along axis 0 with a precomputed-tile dependence. -/
+
+def nonInnerOffset (s : BlockState) (N K TILE_K : Nat)
+    (idx : TileIndex [TILE_N, TILE_K]) : Nat :=
+  s.pids 0 * N * K + idx.1.val * K + (s.pids 1 * TILE_K + idx.2.1.val)
+
+/-- Offset injectivity for the 2D non-inner store under `TILE_K ≤ K` and
+`s.pids 1 * TILE_K + TILE_K ≤ K`. -/
+theorem nonInnerOffset_injective {N K TILE_N TILE_K : Nat}
+    (s : BlockState) (hRange : s.pids 1 * TILE_K + TILE_K ≤ K) :
+    Function.Injective (fun idx : TileIndex [TILE_N, TILE_K] =>
+      nonInnerOffset s N K TILE_K idx) := by
+  rintro ⟨⟨a1, ha1⟩, ⟨a2, ha2⟩, _⟩ ⟨⟨b1, hb1⟩, ⟨b2, hb2⟩, _⟩ h
+  simp only [nonInnerOffset] at h
+  -- The K-column-stride bounds: `a2 < TILE_K`, so `(pid1*TILE_K + a2) < K`.
+  have ha2K : s.pids 1 * TILE_K + a2 < K :=
+    lt_of_lt_of_le (Nat.add_lt_add_left ha2 _) hRange
+  have hb2K : s.pids 1 * TILE_K + b2 < K :=
+    lt_of_lt_of_le (Nat.add_lt_add_left hb2 _) hRange
+  have hK_pos : 0 < K := lt_of_le_of_lt (Nat.zero_le _) ha2K
+  -- Massage to: base + a1 * K + a2' = base + b1 * K + b2' with a2', b2' < K.
+  -- Let base = s.pids 0 * N * K.
+  set base := s.pids 0 * N * K
+  -- h : base + a1 * K + (pids1*TILE_K + a2) = base + b1 * K + (pids1*TILE_K + b2)
+  have hsum : a1 * K + (s.pids 1 * TILE_K + a2) =
+      b1 * K + (s.pids 1 * TILE_K + b2) := by
+    have hh : base + (a1 * K + (s.pids 1 * TILE_K + a2)) =
+        base + (b1 * K + (s.pids 1 * TILE_K + b2)) := by
+      simp only [Nat.add_assoc] at h ⊢
+      exact h
+    exact Nat.add_left_cancel hh
+  -- div by K: a1 = b1
+  have ha_div : (a1 * K + (s.pids 1 * TILE_K + a2)) / K = a1 := by
+    rw [Nat.add_comm (a1 * K) _, Nat.mul_comm a1 K,
+        Nat.add_mul_div_left _ _ hK_pos, Nat.div_eq_of_lt ha2K, Nat.zero_add]
+  have hb_div : (b1 * K + (s.pids 1 * TILE_K + b2)) / K = b1 := by
+    rw [Nat.add_comm (b1 * K) _, Nat.mul_comm b1 K,
+        Nat.add_mul_div_left _ _ hK_pos, Nat.div_eq_of_lt hb2K, Nat.zero_add]
+  have h1 : a1 = b1 := by rw [← ha_div, hsum, hb_div]
+  -- mod by K: (pid1*TILE_K + a2) = (pid1*TILE_K + b2)
+  have ha_mod : (a1 * K + (s.pids 1 * TILE_K + a2)) % K = s.pids 1 * TILE_K + a2 := by
+    rw [Nat.add_comm (a1 * K) _, Nat.mul_comm a1 K,
+        Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt ha2K]
+  have hb_mod : (b1 * K + (s.pids 1 * TILE_K + b2)) % K = s.pids 1 * TILE_K + b2 := by
+    rw [Nat.add_comm (b1 * K) _, Nat.mul_comm b1 K,
+        Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hb2K]
+  have hcol : s.pids 1 * TILE_K + a2 = s.pids 1 * TILE_K + b2 := by
+    rw [← ha_mod, hsum, hb_mod]
+  have h2 : a2 = b2 := Nat.add_left_cancel hcol
+  subst h1; subst h2; rfl
+
+/-- Per-`(n, k)` input tile for the 2D non-inner softmax: along the `n`
+axis the column at fixed `k` ranges over `n ∈ [0, N)`; out-of-range lanes
+default to `-∞` to match `tl.load(..., other=-float("inf"))`. -/
+noncomputable def softmaxFlaggemsNonInnerInputTile
+    (s : BlockState) (input_ptr : RegionName) (N K TILE_N TILE_K : Nat) :
+    Tile .real [TILE_N, TILE_K] :=
+  { data := fun idx =>
+      if idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K then
+        some (s.readMem input_ptr (nonInnerOffset s N K TILE_K idx))
+      else ⊥ }
+
+/-- Spec for the non-inner one-tile softmax output at lane `(n, k)`:
+softmax along the `n` axis (axis 0) at column `k`. -/
+noncomputable def softmaxFlaggemsNonInnerSpec
+    (s : BlockState) (input_ptr : RegionName)
+    (N K TILE_N TILE_K : Nat) (idx : TileIndex [TILE_N, TILE_K]) : ℝ :=
+  let row := softmaxFlaggemsNonInnerInputTile s input_ptr N K TILE_N TILE_K
+  match Tile.reduceMax (shape := [TILE_N, TILE_K]) ⟨0, by simp⟩ Bool.false row with
+  | some colMax =>
+      let bc : Broadcast [TILE_N, TILE_K] [TILE_K] [TILE_N, TILE_K] :=
+        Broadcast.leadR (Broadcast.consSame Broadcast.nil)
+      let shifted := Tile.bop (NumericDType.sub .real) bc row colMax
+      let e := Tile.uop WithBot.realExp shifted
+      let z := Tile.reduceSum (shape := [TILE_N, TILE_K]) ⟨0, by simp⟩ Bool.false e
+      WithBot.unbotD 0
+        ((Tile.bop (NumericDType.div .real) bc e z).data idx)
+  | none => 0
+
+/- The full algorithm-layer correctness theorem for
+`softmax_kernel_non_inner_one_tile_surface` requires bridging the 2D `tl.max`
+reduction along axis 0 to `Tile.reduceMax` and then connecting the elementwise
+exp/sub/div chain to the kernel's evaluation. The offset injectivity is
+discharged via `nonInnerOffset_injective`; the value-equality glue follows the
+1D `softmax_kernel_inner_one_tile_correct` template lifted to 2D. -/
+
 end VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
