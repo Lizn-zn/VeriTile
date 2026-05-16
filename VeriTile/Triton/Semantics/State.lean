@@ -848,6 +848,31 @@ theorem scatter_readback_prop_masked_nd {region : RegionName} {shape : TileShape
   simp only [decide_eq_true_eq] at h
   exact h
 
+/-! ### Common 1D offset-injectivity helpers
+
+These cover the recurring `Function.Injective` proof obligations that arise
+when reducing `BlockState.scatter_readback_prop_masked_nd` over a 1D
+block-local index. Without them, every bench proof rebuilds the same
+3-line proof. -/
+
+/-- The 1D block-local offset `idx ↦ base + idx.1.val` is injective. -/
+theorem tileIndex1d_base_offset_injective {BLOCK : Nat} (base : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [BLOCK] => base + idx.1.val) := by
+  rintro ⟨a, _⟩ ⟨b, _⟩ h
+  exact Prod.ext (Fin.ext (Nat.add_left_cancel h)) rfl
+
+/-- The 1D block-local strided offset `idx ↦ base + idx.1.val * stride` is
+injective when `stride ≠ 0`. -/
+theorem tileIndex1d_base_strided_offset_injective {BLOCK : Nat}
+    (base stride : Nat) (h_stride : stride ≠ 0) :
+    Function.Injective
+      (fun idx : TileIndex [BLOCK] => base + idx.1.val * stride) := by
+  rintro ⟨a, _⟩ ⟨b, _⟩ h
+  have hval : a.val * stride = b.val * stride := Nat.add_left_cancel h
+  have heq : a.val = b.val := Nat.eq_of_mul_eq_mul_right (Nat.pos_of_ne_zero h_stride) hval
+  exact Prod.ext (Fin.ext heq) rfl
+
 private theorem foldl_writeMemTyped_nat_masked_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → Nat) (mask : α → Bool) (o : Nat) (l : List α) :
     ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
