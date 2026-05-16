@@ -624,6 +624,25 @@ and use the dtype default on mismatch. -/
     simp
   · simp [h]
 
+/-- `writeMemTyped .int` at a different region or offset leaves `readMem`
+unaffected. Same-cell case is excluded because the original cell could have
+been a `.real` cell whose value `readMem` would have returned. -/
+theorem writeMemTyped_int_readMem_of_ne (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.int)
+    (r : RegionName) (o : Nat) (hne : ¬(r = region ∧ o = offset)) :
+    (s.writeMemTyped .int region offset v).readMem r o = s.readMem r o := by
+  unfold writeMemTyped readMem
+  simp [hne]
+
+/-- `writeMemTyped .nat` at a different region or offset leaves `readMem`
+unaffected. -/
+theorem writeMemTyped_nat_readMem_of_ne (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.nat)
+    (r : RegionName) (o : Nat) (hne : ¬(r = region ∧ o = offset)) :
+    (s.writeMemTyped .nat region offset v).readMem r o = s.readMem r o := by
+  unfold writeMemTyped readMem
+  simp [hne]
+
 @[simp] theorem writeMem_readMem (s : BlockState) (region : RegionName)
     (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) :
     (s.writeMem region offset v).readMem r o =
