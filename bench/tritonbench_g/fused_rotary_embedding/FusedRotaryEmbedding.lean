@@ -660,4 +660,169 @@ theorem decoding_fused_rotary_embedding_k_first_half_compute_correct
     k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
     HALF_DIM s s' hOutInj hExec i
 
+/-- Proof-oriented K second-half slice of
+`decoding_fused_rotary_embedding_kernel`. Writes `out_k1 = k0 * sin + k1 * cos`
+to `k + off_k1`. -/
+def decoding_fused_rotary_embedding_k_second_half
+    (k cos sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat) :
+    ComputeKernel := triton {
+  cur_k_head_idx = tl.program_id(0)
+  cur_token_idx = tl.program_id(1)
+  dim_range0 = tl.arange(0, $(HALF_DIM))
+  dim_range1 = tl.arange(0, $(HALF_DIM)) + $(HALF_DIM)
+  off_kv = cur_token_idx * $(k_token_stride) + cur_k_head_idx * $(k_head_stride)
+  off_k0 = off_kv + dim_range0 * $(head_dim_stride)
+  off_k1 = off_kv + dim_range1 * $(head_dim_stride)
+  loaded_k0 = tl.load(k + off_k0)
+  loaded_k1 = tl.load(k + off_k1)
+  off_cos_sin = cur_token_idx * $(cos_token_stride) + dim_range0 * $(cos_stride)
+  loaded_cos = tl.load(cos + off_cos_sin)
+  loaded_sin = tl.load(sin + off_cos_sin)
+  out_k1 = loaded_k0 * loaded_sin + loaded_k1 * loaded_cos
+  tl.store(k + off_k1, out_k1)
+}
+
+noncomputable def kSecondSpec
+    (s : BlockState) (k cos sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat)
+    (i : Fin HALF_DIM) : ℝ :=
+  s.readMem k (kFirstOffset s k_token_stride k_head_stride head_dim_stride i) *
+    s.readMem sin (sinOffset s cos_token_stride cos_stride i) +
+  s.readMem k
+      (kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i) *
+    s.readMem cos (cosOffset s cos_token_stride cos_stride i)
+
+theorem decoding_fused_rotary_embedding_k_second_half_correct
+    (k cos sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
+    (hExec : exec (decoding_fused_rotary_embedding_k_second_half k cos sin
+        k_token_stride k_head_stride head_dim_stride cos_token_stride
+        cos_stride HALF_DIM) s = some s') :
+    ∀ i : Fin HALF_DIM,
+      s'.readMem k
+          (kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i) =
+        kSecondSpec s k cos sin k_token_stride k_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [HALF_DIM] =>
+        s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+          (idx.1.val + HALF_DIM) * head_dim_stride) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [kSecondOffset, kBase, dimIndex] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hHalf : 0 < HALF_DIM
+  · simp [exec, decoding_fused_rotary_embedding_k_second_half, stepStmts, stepStmt,
+          evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+          NumericDType.add, NumericDType.mul, NumericDType.sub, hHalf] at hExec
+    rw [← hExec]
+    simp only [kSecondOffset, kBase, dimIndex]
+    have hScatter :=
+      (BlockState.scatter_readback_prop_masked_nd
+        (region := k)
+        (shape := [HALF_DIM])
+        (s := (s.setReg "cur_k_head_idx" TileDType.nat [] (Tile.scalar (s.pids 0))
+          |>.setReg "cur_token_idx" TileDType.nat [] (Tile.scalar (s.pids 1))
+          |>.setReg "dim_range0" TileDType.nat [HALF_DIM] (Tile.vec fun i => i.val)
+          |>.setReg "dim_range1" TileDType.nat [HALF_DIM]
+            (Tile.vec fun i => i.val + HALF_DIM)
+          |>.setReg "off_kv" TileDType.nat []
+            (Tile.scalar (s.pids 1 * k_token_stride + s.pids 0 * k_head_stride))
+          |>.setReg "off_k0" TileDType.nat [HALF_DIM]
+            (Tile.vec fun i =>
+              s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+                i.val * head_dim_stride)
+          |>.setReg "off_k1" TileDType.nat [HALF_DIM]
+            (Tile.vec fun i =>
+              s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+                (i.val + HALF_DIM) * head_dim_stride)
+          |>.setReg "loaded_k0" TileDType.real [HALF_DIM]
+            { data := fun i =>
+              some (s.readMem k
+                (s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+                  i.1.val * head_dim_stride)) }
+          |>.setReg "loaded_k1" TileDType.real [HALF_DIM]
+            { data := fun i =>
+              some (s.readMem k
+                (s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+                  (i.1.val + HALF_DIM) * head_dim_stride)) }
+          |>.setReg "off_cos_sin" TileDType.nat [HALF_DIM]
+            (Tile.vec fun i => s.pids 1 * cos_token_stride + i.val * cos_stride)
+          |>.setReg "loaded_cos" TileDType.real [HALF_DIM]
+            { data := fun i =>
+              some (s.readMem cos (s.pids 1 * cos_token_stride + i.1.val * cos_stride)) }
+          |>.setReg "loaded_sin" TileDType.real [HALF_DIM]
+            { data := fun i =>
+              some (s.readMem sin (s.pids 1 * cos_token_stride + i.1.val * cos_stride)) }
+          |>.setReg "out_k1" TileDType.real [HALF_DIM]
+            { data := fun i =>
+              some
+                (s.readMem k
+                    (s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+                      i.1.val * head_dim_stride) *
+                  s.readMem sin (s.pids 1 * cos_token_stride + i.1.val * cos_stride) +
+                s.readMem k
+                    (s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+                      (i.1.val + HALF_DIM) * head_dim_stride) *
+                  s.readMem cos (s.pids 1 * cos_token_stride + i.1.val * cos_stride)) }))
+        (offsetFn := fun idx : TileIndex [HALF_DIM] =>
+          s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+            (idx.1.val + HALF_DIM) * head_dim_stride)
+        (valueFn := fun idx : TileIndex [HALF_DIM] =>
+          s.readMem k
+              (s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+                idx.1.val * head_dim_stride) *
+            s.readMem sin (s.pids 1 * cos_token_stride + idx.1.val * cos_stride) +
+          s.readMem k
+              (s.pids 1 * k_token_stride + s.pids 0 * k_head_stride +
+                (idx.1.val + HALF_DIM) * head_dim_stride) *
+            s.readMem cos (s.pids 1 * cos_token_stride + idx.1.val * cos_stride))
+        (P := fun _idx : TileIndex [HALF_DIM] => True)
+        hRawInj (i, PUnit.unit))
+    simpa [kSecondSpec, kFirstOffset, kSecondOffset, cosOffset, sinOffset, kBase,
+      dimIndex, Tile.vec] using hScatter
+  · exact False.elim (hHalf (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+theorem decoding_fused_rotary_embedding_k_second_half_compute_correct
+    (k cos sin : RegionName)
+    (k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+      HALF_DIM : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin HALF_DIM =>
+        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i)) :
+    ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
+        k_token_stride k_head_stride head_dim_stride cos_token_stride
+        cos_stride HALF_DIM)
+      (initialState := s)
+      (write := fun i : Fin HALF_DIM => some (k,
+        kSecondOffset s k_token_stride k_head_stride head_dim_stride HALF_DIM i))
+      (expected := fun i =>
+        kSecondSpec s k cos sin k_token_stride k_head_stride head_dim_stride
+          cos_token_stride cos_stride HALF_DIM i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [decoding_fused_rotary_embedding_k_second_half]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  exact decoding_fused_rotary_embedding_k_second_half_correct k cos sin
+    k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
+    HALF_DIM s s' hOutInj hExec i
+
 end VeriTile.Bench.TritonBenchG.FusedRotaryEmbedding
