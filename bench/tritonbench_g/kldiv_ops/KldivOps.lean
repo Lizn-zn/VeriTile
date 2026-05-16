@@ -281,14 +281,92 @@ theorem kldiv_backward_log_target_compute_correct
   have h := kldiv_backward_log_target_correct target_ptr new_grads_ptr
     target_stride new_grads_stride n_cols BLOCK_SIZE s s' hOutInj hExec i
   simpa [hActive] using h
-/- A full `ComputeCorrect.Realizes`-style theorem for
-`kldiv_forward_default_none` reduces to evaluating the kernel chain
-`unbotD 0 (map₂ * (some yt) (map₂ - (realLog clamped) (some y)))` against the
-spec `yt * (Real.log (max yt eps) - y)`. The bridge `real_gt_some_some_eq_true_iff`
-lifts `Op.where`'s Bool comparison to a propositional `<`, which discharges
-the clamp via `max_eq_left`/`max_eq_right`. The remaining goal-shape
-reconciliation (Prod-projection through `(i, PUnit.unit).1`, `Option.map₂`
-folding) is a tactical detail and is left as a follow-up. -/
+/-- Algorithm-layer correctness for the forward `log_target=False`,
+`reduction=0` one-block slice.
+
+Uses the `ComparableDType.real_gt_some_some_eq_true_iff` bridge to lift the
+kernel's Bool comparison `tl.maximum(y_true, eps)` to `eps < y_true`, then
+case-splits to discharge the clamp via `max_eq_left`/`max_eq_right`. -/
+theorem kldiv_forward_default_none_correct
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (s s' : BlockState)
+    (_hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => outOffset s loss_stride i))
+    (hExec : exec (kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+        y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps) s = some s') :
+    ∀ i : Fin BLOCK_SIZE,
+      s'.readMem loss_ptr (outOffset s loss_stride i) =
+        if i.val < n_cols then
+          forwardDefaultSpec s y_ptr gt_ptr y_stride gt_stride eps i
+        else s.readMem loss_ptr (outOffset s loss_stride i) := by
+  intro i
+  -- Disable the `@[simp]` Prop-form bridge so `simp` doesn't push `decide` into
+  -- a classical Decidable. Keep the Bool comparison form intact.
+  simp [exec, kldiv_forward_default_none, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt, -ComparableDType.real_gt_eq_true] at hExec
+  rw [← hExec]
+  simp only [outOffset]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  -- Reduce the Prod projection at the top.
+  show (if i.val < n_cols then _ else _) =
+    if i.val < n_cols then _ else s.readMem loss_ptr (s.pid * loss_stride + i.val)
+  -- Reduce `Prod.fst` projections; both LHS and RHS use the same `i.val`.
+  have hfst : ((i, PUnit.unit) : TileIndex [BLOCK_SIZE]).1 = i := rfl
+  rw [hfst]
+  by_cases h : i.val < n_cols
+  · rw [if_pos h, if_pos h]
+    by_cases hgt : eps < s.readMem gt_ptr (s.pids 0 * gt_stride + i.val)
+    · have hbool : ComparableDType.gt ComparableDType.real
+          (some (s.readMem gt_ptr (s.pids 0 * gt_stride + i.val))) (some eps) =
+          Bool.true :=
+        (ComparableDType.real_gt_some_some_eq_true_iff _ _).mpr hgt
+      simp only [hbool, if_true]
+      simp only [forwardDefaultSpec, inOffset, BlockState.pid_eq,
+        max_eq_left (le_of_lt hgt)]
+      simp [h]
+    · push_neg at hgt
+      have hbool : ComparableDType.gt ComparableDType.real
+          (some (s.readMem gt_ptr (s.pids 0 * gt_stride + i.val))) (some eps) =
+          Bool.false := by
+        rw [Bool.eq_false_iff, Ne, ComparableDType.real_gt_some_some_eq_true_iff]
+        exact not_lt.mpr hgt
+      simp only [hbool, if_false]
+      simp only [forwardDefaultSpec, inOffset, BlockState.pid_eq,
+        max_eq_right hgt]
+      simp [h]
+  · rw [if_neg h, if_neg h]
+    simp [BlockState.pid_eq]
+
+/-- Compute-facing correctness for the forward `log_target=False`,
+`reduction=0` one-block slice. -/
+theorem kldiv_forward_default_none_compute_correct
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => outOffset s loss_stride i)) :
+    ComputeCorrect.Realizes
+      (kernel := kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+        y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (loss_ptr, outOffset s loss_stride i)))
+      (expected := fun i =>
+        forwardDefaultSpec s y_ptr gt_ptr y_stride gt_stride eps i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [kldiv_forward_default_none]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := kldiv_forward_default_none_correct y_ptr gt_ptr loss_ptr
+    y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps s s' hOutInj hExec i
+  simpa [hActive] using h
 
 /-- Algorithm-layer correctness for the forward `log_target=True`,
 `reduction=0` one-block slice. -/
