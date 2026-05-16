@@ -241,4 +241,144 @@ theorem destindex_copy_quantize_kv_group_value_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented scale-writeback slice of `quantize_kv_copy.py`'s grouped
+`_fwd_kernel_destindex_copy_kv`. Companion to the value-store slice: this
+covers the 1D `Out_scale` writeback from a precomputed `Scale` tile under
+the destination-indexed grouped addressing. -/
+def destindex_copy_quantize_kv_group_scale_store_slice
+    (Scale : RegionName) (DestLoc : Region .nat) (OutScale : RegionName)
+    (stride_s_bs stride_s_h
+      stride_os_bs stride_os_h
+      group_size BLOCK_GROUP_NUM : Nat) :
+    ComputeKernel := triton {
+  cur_index = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  offs_g = tl.arange(0, $(BLOCK_GROUP_NUM))
+  dest_index = tl.load(DestLoc + cur_index)
+  mask = offs_g < $(group_size)
+  data_scale = tl.load(Scale + cur_index * $(stride_s_bs) +
+      cur_head * $(stride_s_h) + offs_g,
+    mask=mask, other=0.0)
+  tl.store(OutScale + dest_index * $(stride_os_bs) +
+      cur_head * $(stride_os_h) + offs_g,
+    data_scale, mask=mask)
+}
+
+def scaleActive (group_size BLOCK_GROUP_NUM : Nat) (i : Fin BLOCK_GROUP_NUM) :
+    Prop := i.val < group_size
+
+instance scaleActiveDecidable (group_size BLOCK_GROUP_NUM : Nat)
+    (i : Fin BLOCK_GROUP_NUM) : Decidable (scaleActive group_size BLOCK_GROUP_NUM i) := by
+  unfold scaleActive
+  infer_instance
+
+def scaleSourceOffset (s : BlockState) (stride_s_bs stride_s_h : Nat)
+    (i : Fin BLOCK_GROUP_NUM) : Nat :=
+  s.pids 0 * stride_s_bs + s.pids 1 * stride_s_h + i.val
+
+def scaleOutOffset
+    (s : BlockState) (DestLoc : RegionName)
+    (stride_os_bs stride_os_h : Nat) (i : Fin BLOCK_GROUP_NUM) : Nat :=
+  destIndex s DestLoc * stride_os_bs + s.pids 1 * stride_os_h + i.val
+
+noncomputable def quantizeKvCopyScaleSpec
+    (s : BlockState) (Scale : RegionName)
+    (stride_s_bs stride_s_h : Nat) (i : Fin BLOCK_GROUP_NUM) : ℝ :=
+  s.readMem Scale (scaleSourceOffset s stride_s_bs stride_s_h i)
+
+theorem destindex_copy_quantize_kv_group_scale_store_slice_correct
+    (Scale DestLoc OutScale : RegionName)
+    (stride_s_bs stride_s_h
+      stride_os_bs stride_os_h
+      group_size BLOCK_GROUP_NUM : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_GROUP_NUM =>
+        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
+    ∀ i : Fin BLOCK_GROUP_NUM,
+      let outAddr := scaleOutOffset s DestLoc stride_os_bs stride_os_h i
+      (exec (destindex_copy_quantize_kv_group_scale_store_slice Scale DestLoc
+            OutScale stride_s_bs stride_s_h stride_os_bs stride_os_h
+            group_size BLOCK_GROUP_NUM) s).map (·.readMem OutScale outAddr)
+        = some (if scaleActive group_size BLOCK_GROUP_NUM i then
+            quantizeKvCopyScaleSpec s Scale stride_s_bs stride_s_h i
+          else s.readMem OutScale outAddr) := by
+  intro i
+  simp [exec, destindex_copy_quantize_kv_group_scale_store_slice, stepStmts,
+        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        BlockState.readMemValue, destIndex, scaleSourceOffset, scaleOutOffset]
+  let offsetFn : TileIndex [BLOCK_GROUP_NUM] → Nat :=
+    fun i =>
+      (match s.readMemTyped TileDType.nat DestLoc (s.pids 0) with
+        | some value => value
+        | none => BlockState.defaultCarrier TileDType.nat) * stride_os_bs +
+        s.pids 1 * stride_os_h + i.1.val
+  let valueFn : TileIndex [BLOCK_GROUP_NUM] → ℝ :=
+    fun i =>
+      WithBot.unbotD 0
+        (if i.1.val < group_size then
+          some (s.readMem Scale
+            (s.pids 0 * stride_s_bs + s.pids 1 * stride_s_h + i.1.val))
+        else some (0.0 : ℝ))
+  let P : TileIndex [BLOCK_GROUP_NUM] → Prop :=
+    fun i => i.1.val < group_size
+  have hOffsetInj : Function.Injective offsetFn := by
+    intro a b hab
+    have hInner :
+        scaleOutOffset s DestLoc stride_os_bs stride_os_h a.1 =
+          scaleOutOffset s DestLoc stride_os_bs stride_os_h b.1 := by
+      simpa [offsetFn, scaleOutOffset, destIndex, BlockState.readMemValue] using hab
+    have : a.1 = b.1 := hOutInj hInner
+    cases a; cases b
+    simp only at this
+    cases this; rfl
+  change (List.foldl
+      (fun (acc : BlockState) j =>
+        if P j then acc.writeMem OutScale (offsetFn j) (valueFn j) else acc)
+      _ (TileShape.allIndices [BLOCK_GROUP_NUM])).readMem OutScale
+        (offsetFn (i, PUnit.unit)) =
+    if scaleActive group_size BLOCK_GROUP_NUM i then
+      quantizeKvCopyScaleSpec s Scale stride_s_bs stride_s_h i
+    else s.readMem OutScale (offsetFn (i, PUnit.unit))
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
+  by_cases hi : i.val < group_size
+  · simp [offsetFn, valueFn, P, scaleActive, quantizeKvCopyScaleSpec,
+      scaleSourceOffset, scaleOutOffset, destIndex,
+      BlockState.readMemValue, hi]
+  · simp [offsetFn, valueFn, P, scaleActive, scaleOutOffset, destIndex,
+      BlockState.readMemValue, hi]
+
+theorem destindex_copy_quantize_kv_group_scale_store_slice_compute_correct
+    (Scale DestLoc OutScale : RegionName)
+    (stride_s_bs stride_s_h
+      stride_os_bs stride_os_h
+      group_size BLOCK_GROUP_NUM : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_GROUP_NUM =>
+        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_scale_store_slice Scale DestLoc
+        OutScale stride_s_bs stride_s_h stride_os_bs stride_os_h
+        group_size BLOCK_GROUP_NUM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive group_size BLOCK_GROUP_NUM)
+        (fun i => (OutScale,
+          scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
+      (expected := fun i =>
+        quantizeKvCopyScaleSpec s Scale stride_s_bs stride_s_h i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [destindex_copy_quantize_kv_group_scale_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := destindex_copy_quantize_kv_group_scale_store_slice_correct Scale
+    DestLoc OutScale stride_s_bs stride_s_h stride_os_bs stride_os_h
+    group_size BLOCK_GROUP_NUM s hOutInj i
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.QuantizeKvCopy
