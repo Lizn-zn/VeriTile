@@ -304,4 +304,89 @@ theorem flash_attn_output_store_slice_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
+/-- Output offset for the FlashAttention `L` row store. -/
+def lOffset (s : BlockState) (SEQLEN BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
+  s.pids 1 * SEQLEN + mIndex s BLOCK_M i
+
+/-- Source offset for the precomputed `Max` row read. -/
+def maxOffset
+    (s : BlockState) (stride_max_h stride_max_m BLOCK_M : Nat)
+    (i : Fin BLOCK_M) : Nat :=
+  s.pids 1 * stride_max_h + mIndex s BLOCK_M i * stride_max_m
+
+/-- Source offset for the precomputed `Denom` row read. -/
+def denomOffset
+    (s : BlockState) (stride_den_h stride_den_m BLOCK_M : Nat)
+    (i : Fin BLOCK_M) : Nat :=
+  s.pids 1 * stride_den_h + mIndex s BLOCK_M i * stride_den_m
+
+/-- Spec for the `L` row store value: `max + log(denom) / log(2)`, mirroring
+the kernel's `tl.log2` semantics (`Real.log x / Real.log 2`). -/
+noncomputable def lStoreSpec
+    (s : BlockState) (Max Denom : RegionName)
+    (stride_max_h stride_max_m stride_den_h stride_den_m BLOCK_M : Nat)
+    (i : Fin BLOCK_M) : ℝ :=
+  s.readMem Max (maxOffset s stride_max_h stride_max_m BLOCK_M i) +
+    Real.log (s.readMem Denom
+      (denomOffset s stride_den_h stride_den_m BLOCK_M i)) / Real.log 2
+
+/-- Algorithm-layer correctness for the `L` row store slice. -/
+theorem flash_attn_l_store_slice_correct
+    (Max Denom L : RegionName)
+    (stride_max_h stride_max_m stride_den_h stride_den_m
+      SEQLEN BLOCK_M : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => lOffset s SEQLEN BLOCK_M i)) :
+    ∀ i : Fin BLOCK_M,
+      let outAddr := lOffset s SEQLEN BLOCK_M i
+      (exec (flash_attn_l_store_slice Max Denom L stride_max_h stride_max_m
+            stride_den_h stride_den_m SEQLEN BLOCK_M) s).map (·.readMem L outAddr)
+        = some
+            (lStoreSpec s Max Denom stride_max_h stride_max_m stride_den_h
+              stride_den_m BLOCK_M i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M] =>
+        s.pids 1 * SEQLEN + (s.pids 0 * BLOCK_M + idx.1.val)) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have hab' : s.pids 1 * SEQLEN + s.pids 0 * BLOCK_M + a.val =
+        s.pids 1 * SEQLEN + s.pids 0 * BLOCK_M + b.val := by
+      simpa [Nat.add_assoc] using hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
+    rfl
+  simp [exec, flash_attn_l_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul]
+  simp only [lOffset, mIndex, Nat.add_assoc]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [lStoreSpec, maxOffset, denomOffset, mIndex, Nat.add_assoc]
+
+/-- Compute-facing correctness for the `L` row store slice. -/
+theorem flash_attn_l_store_slice_compute_correct
+    (Max Denom L : RegionName)
+    (stride_max_h stride_max_m stride_den_h stride_den_m
+      SEQLEN BLOCK_M : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => lOffset s SEQLEN BLOCK_M i)) :
+    ComputeCorrect.Realizes
+      (kernel := flash_attn_l_store_slice Max Denom L stride_max_h
+        stride_max_m stride_den_h stride_den_m SEQLEN BLOCK_M)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (L, lOffset s SEQLEN BLOCK_M i))
+      (expected := fun i =>
+        lStoreSpec s Max Denom stride_max_h stride_max_m stride_den_h
+          stride_den_m BLOCK_M i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_attn_l_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := flash_attn_l_store_slice_correct Max Denom L stride_max_h
+    stride_max_m stride_den_h stride_den_m SEQLEN BLOCK_M s hOutInj i
+  rw [hExec] at h
+  exact Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
