@@ -425,6 +425,105 @@ namespace stepForRangeAux
   unfold stepStmt
   rfl
 
+/-- Loop invariant induction for `stepForRangeAux` with step 1. This is the
+common case `for i in range(start, stop)` that maps cleanly onto an
+`induct_on_inv`-style proof. The `step = 1` restriction means consecutive
+iteration indices, matching most cumsum/recurrent kernel bodies. -/
+theorem induct_on_inv_step_one
+    {idx : RegName} (stop : Nat) (body : List Stmt)
+    (Inv : Nat → BlockState → Prop) :
+    ∀ (cur : Nat) (s : BlockState),
+      cur ≤ stop →
+      Inv cur s →
+      (∀ i s, cur ≤ i → i < stop → Inv i s →
+        ∃ s', stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s'
+          ∧ Inv (i + 1) s') →
+      ∃ s', stepForRangeAux idx cur stop 1 body s = some s' ∧ Inv stop s' := by
+  intro cur s hLe hStart hStep
+  induction h : stop - cur generalizing cur s with
+  | zero =>
+      have hge : stop ≤ cur := Nat.le_of_sub_eq_zero h
+      have heq : stop = cur := Nat.le_antisymm hge hLe
+      refine ⟨s, step_ge (by decide) hge, ?_⟩
+      rw [heq]; exact hStart
+  | succ k ih =>
+      have hlt : cur < stop := by omega
+      obtain ⟨smid, hBody, hInvMid⟩ := hStep cur s (Nat.le_refl _) hlt hStart
+      have hk : stop - (cur + 1) = k := by omega
+      have hLe' : cur + 1 ≤ stop := hlt
+      have hStepShift : ∀ i s, cur + 1 ≤ i → i < stop → Inv i s →
+          ∃ s', stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s'
+            ∧ Inv (i + 1) s' := by
+        intro i s' hge hilt hInv
+        exact hStep i s' (Nat.le_of_succ_le hge) hilt hInv
+      obtain ⟨sFinal, hFinalExec, hFinalInv⟩ :=
+        ih (cur + 1) smid hLe' hInvMid hStepShift hk
+      refine ⟨sFinal, ?_, hFinalInv⟩
+      rw [step_lt (by decide) hlt, hBody]
+      exact hFinalExec
+
+/-- Generic step variant of `induct_on_inv_step_one`. The loop iterates
+`cur, cur+step, cur+2*step, …` while strictly less than `stop`; the invariant
+tracks the loop counter (which advances by `step` each iteration). The proof
+terminates at the smallest multiple-step point `≥ stop`; the existential `k`
+records that point.
+
+Useful for `for i in range(0, N, BLOCK_SIZE)` patterns where iteration indices
+are multiples of BLOCK_SIZE. -/
+theorem induct_on_inv_step
+    {idx : RegName} (stop step : Nat) (hstep : step ≠ 0) (body : List Stmt)
+    (Inv : Nat → BlockState → Prop) :
+    ∀ (cur : Nat) (s : BlockState),
+      Inv cur s →
+      (∀ i s, cur ≤ i → i < stop → Inv i s →
+        ∃ s', stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s'
+          ∧ Inv (i + step) s') →
+      ∃ s' k, stepForRangeAux idx cur stop step body s = some s'
+        ∧ stop ≤ cur + k * step ∧ Inv (cur + k * step) s' := by
+  intro cur s hStart hStep
+  by_cases hge : stop ≤ cur
+  · refine ⟨s, 0, step_ge hstep hge, ?_, ?_⟩
+    · simpa using hge
+    · simpa using hStart
+  · have hlt : cur < stop := Nat.lt_of_not_le hge
+    -- Use strong induction on `stop - cur` to recurse
+    have key : ∀ d cur s, stop - cur = d →
+        Inv cur s →
+        (∀ i s, cur ≤ i → i < stop → Inv i s →
+          ∃ s', stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s'
+            ∧ Inv (i + step) s') →
+        ∃ s' k, stepForRangeAux idx cur stop step body s = some s'
+          ∧ stop ≤ cur + k * step ∧ Inv (cur + k * step) s' := by
+      intro d
+      induction d using Nat.strong_induction_on with
+      | _ d ih =>
+          intro cur s hEq hStart hStep
+          by_cases hge : stop ≤ cur
+          · refine ⟨s, 0, step_ge hstep hge, ?_, ?_⟩
+            · simpa using hge
+            · simpa using hStart
+          · have hlt : cur < stop := Nat.lt_of_not_le hge
+            obtain ⟨smid, hBody, hInvMid⟩ := hStep cur s (Nat.le_refl _) hlt hStart
+            have hStepShift : ∀ i s, cur + step ≤ i → i < stop → Inv i s →
+                ∃ s', stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s'
+                  ∧ Inv (i + step) s' := by
+              intro i s' hge' hilt hInv
+              have : cur ≤ i := le_trans (Nat.le_add_right cur step) hge'
+              exact hStep i s' this hilt hInv
+            have hd' : stop - (cur + step) < d := by
+              have : step ≥ 1 := Nat.one_le_iff_ne_zero.mpr hstep
+              omega
+            obtain ⟨sFinal, k, hFinalExec, hFinalGe, hFinalInv⟩ :=
+              ih _ hd' (cur + step) smid rfl hInvMid hStepShift
+            refine ⟨sFinal, k + 1, ?_, ?_, ?_⟩
+            · rw [step_lt hstep hlt, hBody]
+              exact hFinalExec
+            · have : cur + step + k * step = cur + (k + 1) * step := by ring
+              omega
+            · have : cur + step + k * step = cur + (k + 1) * step := by ring
+              rw [← this]; exact hFinalInv
+    exact key _ cur s rfl hStart hStep
+
 @[simp] theorem forRangeDyn_unfold {idx} {start stop step} {body} {s} :
     stepStmt (.forRangeDyn idx start stop step body) s
       = (evalOp start s).bind (fun start' =>
