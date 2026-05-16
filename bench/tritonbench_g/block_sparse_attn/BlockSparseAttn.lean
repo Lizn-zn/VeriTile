@@ -342,4 +342,108 @@ theorem block_sparse_attn_output_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Output offset for the second block-sparse store. -/
+def out2Offset
+    (s : BlockState)
+    (num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_D]) : Nat :=
+  offB s num_heads * stride_ob + offH s num_heads * stride_oh +
+    mIndex s BLOCK_M idx.1 * stride_om + BLOCK_D + dIndex idx
+
+/-- Algorithm-layer correctness for the second block-sparse output store. -/
+theorem block_sparse_attn_output_store_second_slice_correct
+    (Acc2 Out : RegionName)
+    (num_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx)) :
+    ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      let outAddr := out2Offset s num_heads stride_ob stride_oh stride_om
+        BLOCK_M BLOCK_D idx
+      (exec (block_sparse_attn_output_store_second_slice Acc2 Out num_heads
+            total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+            stride_ob stride_oh stride_om BLOCK_M BLOCK_D) s).map
+          (·.readMem Out outAddr)
+        = some (if active s total_seq_len BLOCK_M idx then
+            accStoreValue s Acc2 num_heads total_seq_len stride_acc_b
+              stride_acc_h stride_acc_m stride_acc_d BLOCK_M idx
+          else s.readMem Out outAddr) := by
+  intro idx
+  simp [exec, block_sparse_attn_output_store_second_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+        IntegralDType.mod, ComparableDType.lt, offH, offB, mIndex, dIndex,
+        active, accOffset, out2Offset, TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BLOCK_M, BLOCK_D] → Nat :=
+    fun idx =>
+      s.pids 1 / num_heads * stride_ob + s.pids 1 % num_heads * stride_oh +
+        (s.pids 0 * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val
+  let valueFn : TileIndex [BLOCK_M, BLOCK_D] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (if s.pids 0 * BLOCK_M + idx.1.val < total_seq_len then
+          some (s.readMem Acc2
+            (s.pids 1 / num_heads * stride_acc_b +
+              s.pids 1 % num_heads * stride_acc_h +
+              (s.pids 0 * BLOCK_M + idx.1.val) * stride_acc_m +
+              idx.2.1.val * stride_acc_d))
+        else some (0.0 : ℝ))
+  let P : TileIndex [BLOCK_M, BLOCK_D] → Prop :=
+    fun idx => s.pids 0 * BLOCK_M + idx.1.val < total_seq_len
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, out2Offset, offH, offB, mIndex, dIndex] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem Out (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BLOCK_M, BLOCK_D])).readMem Out
+        (offsetFn idx) =
+    if P idx then
+      accStoreValue s Acc2 num_heads total_seq_len stride_acc_b stride_acc_h
+        stride_acc_m stride_acc_d BLOCK_M idx
+    else s.readMem Out (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive : s.pids 0 * BLOCK_M + idx.1.val < total_seq_len
+  · rfl
+  · rfl
+
+/-- Compute-facing correctness for the second block-sparse output store. -/
+theorem block_sparse_attn_output_store_second_slice_compute_correct
+    (Acc2 Out : RegionName)
+    (num_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx)) :
+    ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_second_slice Acc2 Out num_heads
+        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        stride_ob stride_oh stride_om BLOCK_M BLOCK_D)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+          active s total_seq_len BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out,
+          out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        accStoreValue s Acc2 num_heads total_seq_len stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d BLOCK_M idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [block_sparse_attn_output_store_second_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := block_sparse_attn_output_store_second_slice_correct Acc2 Out num_heads
+    total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d stride_ob
+    stride_oh stride_om BLOCK_M BLOCK_D s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
