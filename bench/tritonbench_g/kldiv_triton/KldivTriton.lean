@@ -154,12 +154,9 @@ theorem kldiv_backward_default_correct
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt] at hExec
   rw [← hExec]
-  have hOffsetInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * input_stride + idx.1.val) := by
-    intro a b h
-    exact Prod.ext (Fin.ext (Nat.add_left_cancel h)) rfl
   simp only [outOffset]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases h : i.val < n_cols
   · simp [defaultSpec, inOffset, h]
   · simp [h]
@@ -183,12 +180,9 @@ theorem kldiv_backward_log_target_correct
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt] at hExec
   rw [← hExec]
-  have hOffsetInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * input_stride + idx.1.val) := by
-    intro a b h
-    exact Prod.ext (Fin.ext (Nat.add_left_cancel h)) rfl
   simp only [outOffset]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases h : i.val < n_cols
   · simp [logTargetSpec, inOffset, h]
   · simp [h]
@@ -261,12 +255,9 @@ theorem kldiv_forward_log_target_none_correct
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt] at hExec
   rw [← hExec]
-  have hOffsetInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * loss_stride + idx.1.val) := by
-    intro a b h
-    exact Prod.ext (Fin.ext (Nat.add_left_cancel h)) rfl
   simp only [outOffset]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases h : i.val < n_cols
   · simp [forwardLogTargetSpec, inOffset, h]
   · simp [h]
