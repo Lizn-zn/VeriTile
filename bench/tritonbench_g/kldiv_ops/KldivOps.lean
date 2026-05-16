@@ -157,6 +157,7 @@ noncomputable def forwardLogTargetSpec
   let y_true := s.readMem gt_ptr (inOffset s gt_stride i)
   Real.exp y_true * (y_true - y)
 
+
 /-- Algorithm-layer correctness for the default backward one-block slice. -/
 theorem kldiv_backward_default_correct
     (target_ptr new_grads_ptr : RegionName)

@@ -154,6 +154,53 @@ noncomputable def ne :
   | .int, x, y => decide (x ≠ y)
   | .nat, x, y => decide (x ≠ y)
 
+/-! ### Bridge lemmas: `ComparableDType.{gt,lt,ge,le,eq,ne} = Bool.true ↔ _`
+
+These let `simp` unfold the Bool-valued comparison forms produced by
+`tl.maximum` / `tl.minimum` / `tl.where(... > ...)` / `tl.where(... != ...)`
+into ordinary propositional inequalities on the underlying carrier. Without
+these, bench proofs end up stuck on `decide ... = Bool.true` subgoals. -/
+
+@[simp] theorem real_gt_eq_true (x y : TileCarrier .real) :
+    (ComparableDType.real.gt x y = Bool.true) ↔ x > y := by
+  simp [gt]
+
+@[simp] theorem real_lt_eq_true (x y : TileCarrier .real) :
+    (ComparableDType.real.lt x y = Bool.true) ↔ x < y := by
+  simp [lt]
+
+@[simp] theorem real_ge_eq_true (x y : TileCarrier .real) :
+    (ComparableDType.real.ge x y = Bool.true) ↔ x ≥ y := by
+  simp [ge]
+
+@[simp] theorem real_le_eq_true (x y : TileCarrier .real) :
+    (ComparableDType.real.le x y = Bool.true) ↔ x ≤ y := by
+  simp [le]
+
+@[simp] theorem real_eq_eq_true (x y : TileCarrier .real) :
+    (ComparableDType.real.eq x y = Bool.true) ↔ x = y := by
+  simp [eq]
+
+@[simp] theorem real_ne_eq_true (x y : TileCarrier .real) :
+    (ComparableDType.real.ne x y = Bool.true) ↔ x ≠ y := by
+  simp [ne]
+
+@[simp] theorem int_gt_eq_true (x y : Int) :
+    (ComparableDType.int.gt x y = Bool.true) ↔ x > y := by
+  simp [gt]
+
+@[simp] theorem int_lt_eq_true (x y : Int) :
+    (ComparableDType.int.lt x y = Bool.true) ↔ x < y := by
+  simp [lt]
+
+@[simp] theorem nat_gt_eq_true (x y : Nat) :
+    (ComparableDType.nat.gt x y = Bool.true) ↔ x > y := by
+  simp [gt]
+
+@[simp] theorem nat_lt_eq_true (x y : Nat) :
+    (ComparableDType.nat.lt x y = Bool.true) ↔ x < y := by
+  simp [lt]
+
 end ComparableDType
 
 namespace FloatDType
