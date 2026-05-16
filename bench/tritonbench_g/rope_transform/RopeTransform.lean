@@ -208,4 +208,123 @@ theorem rope_transform_q0_head_compute_correct
     s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-! ## Second-half Q store (`new_q_tile_2`) -/
+
+/-- Slice fixing one Q head, proving the forward second-half Q store:
+`q1' = q1 * cos + q0 * sin` written at `second_half_q_offsets`. -/
+def rope_transform_q1_head
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  q_base = Q + pid * $(q_row_stride) + $(HEAD_IDX) * $(hd)
+  cos_base = COS + $(COS_ROW_IDX) * $(cos_row_stride)
+  sin_base = SIN + $(COS_ROW_IDX) * $(sin_row_stride)
+  q0 = tl.load(q_base + dim,
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(sin_row.dtype)
+  q1 = tl.load(q_base + dim + $(HEAD_HALF),
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(sin_row.dtype)
+  cos_row = tl.load(cos_base + dim, mask=dim < $(HEAD_HALF), other=0)
+  sin_row = tl.load(sin_base + dim, mask=dim < $(HEAD_HALF), other=0)
+  out = q1 * cos_row + q0 * sin_row
+  tl.store(q_base + dim + $(HEAD_HALF), out,
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)))
+}
+
+/-- Write offset for `q1`: matches the kernel evaluation
+`q_base + dim + HEAD_HALF`, i.e. `((s.pid * q_row_stride + HEAD_IDX * hd)
++ dim) + HEAD_HALF`. -/
+def q1WriteOffset
+    (s : BlockState) (HEAD_IDX q_row_stride hd HEAD_HALF : Nat)
+    (i : Fin BLOCK_HALF) : Nat :=
+  s.pid * q_row_stride + HEAD_IDX * hd + dimIndex i + HEAD_HALF
+
+noncomputable def ropeQ1Spec
+    (s : BlockState) (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      HEAD_HALF : Nat) (i : Fin BLOCK_HALF) : ℝ :=
+  s.readMem Q (q1WriteOffset s HEAD_IDX q_row_stride hd HEAD_HALF i) *
+    s.readMem COS (cosOffset COS_ROW_IDX cos_row_stride i) +
+  s.readMem Q (qOffset s HEAD_IDX q_row_stride hd (dimIndex i)) *
+    s.readMem SIN (sinOffset COS_ROW_IDX sin_row_stride i)
+
+/-- Algorithm-layer correctness for the one-Q-head second-half RoPE store. -/
+theorem rope_transform_q1_head_correct
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        q1WriteOffset s HEAD_IDX q_row_stride hd HEAD_HALF i))
+    (hExec : exec (rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF) s = some s') :
+    ∀ i : Fin BLOCK_HALF,
+      s'.readMem Q (q1WriteOffset s HEAD_IDX q_row_stride hd HEAD_HALF i) =
+        if active HEAD_IDX n_qh HEAD_HALF i then
+          ropeQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+            cos_row_stride sin_row_stride hd HEAD_HALF i
+        else
+          s.readMem Q (q1WriteOffset s HEAD_IDX q_row_stride hd HEAD_HALF i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_HALF] =>
+        s.pids 0 * q_row_stride + HEAD_IDX * hd + idx.1.val + HEAD_HALF) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simp only [q1WriteOffset, rowIndex, dimIndex] at *
+      exact h
+    cases a; cases b; simp only at hab; cases hab; rfl
+  by_cases hBH : 0 < BLOCK_HALF
+  · simp [exec, rope_transform_q1_head, stepStmts, stepStmt, evalOp,
+          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt, hBH] at hExec
+    rw [← hExec]
+    simp only [q1WriteOffset, rowIndex, dimIndex]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj
+      (i, PUnit.unit)]
+    by_cases hHead : HEAD_IDX < n_qh
+    · by_cases hDim : i.val < HEAD_HALF
+      · simp [active, ropeQ1Spec, q1WriteOffset, qOffset, cosOffset, sinOffset,
+              rowIndex, dimIndex, hHead, hDim, Option.bind, Option.map]
+      · simp [active, dimIndex, hHead, hDim]
+    · simp [active, hHead]
+  · exact False.elim (hBH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the one-Q-head second-half RoPE store. -/
+theorem rope_transform_q1_head_compute_correct
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        q1WriteOffset s HEAD_IDX q_row_stride hd HEAD_HALF i)) :
+    ComputeCorrect.Realizes
+      (kernel := rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF
+        BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF => active HEAD_IDX n_qh HEAD_HALF i)
+        (fun i => (Q, q1WriteOffset s HEAD_IDX q_row_stride hd HEAD_HALF i)))
+      (expected := fun i =>
+        ropeQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+          cos_row_stride sin_row_stride hd HEAD_HALF i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rope_transform_q1_head]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := rope_transform_q1_head_correct Q COS SIN HEAD_IDX COS_ROW_IDX
+    q_row_stride cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+    s s' hOutInj hExec i
+  simpa [hActive] using h
+
 end VeriTile.Bench.TritonBenchG.RopeTransform
