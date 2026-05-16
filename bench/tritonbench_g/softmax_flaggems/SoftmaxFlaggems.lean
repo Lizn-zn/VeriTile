@@ -328,10 +328,13 @@ noncomputable def softmaxFlaggemsNonInnerSpec
   | none => 0
 
 /- The full algorithm-layer correctness theorem for
-`softmax_kernel_non_inner_one_tile_surface` requires bridging the 2D `tl.max`
-reduction along axis 0 to `Tile.reduceMax` and then connecting the elementwise
-exp/sub/div chain to the kernel's evaluation. The offset injectivity is
-discharged via `nonInnerOffset_injective`; the value-equality glue follows the
-1D `softmax_kernel_inner_one_tile_correct` template lifted to 2D. -/
+`softmax_kernel_non_inner_one_tile_surface` is reduced via `Option.bind` to a
+`List.foldl` over `[TILE_N, TILE_K]` of `writeMem`s, but the resulting goal
+keeps `TileShape.dropInsertedIndex [TILE_N] 1 1 (i.1, 0, PUnit.unit)` terms
+that the existing `dropInsertedIndex_zero_cons`/`_succ` simp lemmas do not
+discharge when the `Fin` axis is a literal rather than `⟨0, _⟩` / `⟨k+1, _⟩`.
+The value-equality glue otherwise follows the 1D
+`softmax_kernel_inner_one_tile_correct` template lifted to 2D using the
+existing `nonInnerOffset_injective` helper for the offset injectivity side. -/
 
 end VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
