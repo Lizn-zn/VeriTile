@@ -331,17 +331,6 @@ theorem rms_layernorm_forward_y_correct
           rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols BLOCK_SIZE eps i
         else s.readMem Y (yOutOffset s Y_row_stride i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * Y_row_stride + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [yOutOffset] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
@@ -352,7 +341,8 @@ theorem rms_layernorm_forward_y_correct
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [yOutOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, rmsLayernormYSpec, rmsInvVarCarrier, rmsSumCarrier,
             rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
@@ -406,17 +396,6 @@ theorem gemma_rms_layernorm_forward_y_correct
           gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i
         else s.readMem Y (yOutOffset s Y_row_stride i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * Y_row_stride + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [yOutOffset] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
@@ -427,7 +406,8 @@ theorem gemma_rms_layernorm_forward_y_correct
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [yOutOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, gemmaRmsLayernormYSpec, rmsInvVarCarrier, rmsSumCarrier,
             rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
@@ -483,17 +463,6 @@ theorem rms_layernorm_backward_dy_correct
             r_row_stride n_cols BLOCK_SIZE i
         else s.readMem dY (dyOutOffset s dY_row_stride i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * dY_row_stride + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [dyOutOffset] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, rms_layernorm_backward, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceSum,
@@ -504,7 +473,8 @@ theorem rms_layernorm_backward_dy_correct
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [dyOutOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, rmsBackwardDYSpecPlain, rmsBackwardRowSumCarrierPlain,
             rmsBackwardDYTilePlain, rmsBackwardNormedTile, Tile.reduceSum,
@@ -562,17 +532,6 @@ theorem gemma_rms_layernorm_backward_dy_correct
             r_row_stride n_cols BLOCK_SIZE i
         else s.readMem dY (dyOutOffset s dY_row_stride i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * dY_row_stride + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [dyOutOffset] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, gemma_rms_layernorm_backward, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceSum,
@@ -583,7 +542,8 @@ theorem gemma_rms_layernorm_backward_dy_correct
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [dyOutOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, rmsBackwardDYSpecGemma, rmsBackwardRowSumCarrierGemma,
             rmsBackwardDYTileGemma, rmsBackwardNormedTile, Tile.reduceSum,

@@ -131,11 +131,6 @@ theorem softmax_kernel_online_v2_one_tile_correct
           softmaxOptimizeSpec s input_ptr N TILE_N i
         else s.readMem output_ptr (outOffset s N i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [TILE_N] => s.pids 0 * N + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   by_cases hT : 0 < TILE_N
   · simp [exec, softmax_kernel_online_v2_one_tile, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
@@ -145,7 +140,8 @@ theorem softmax_kernel_online_v2_one_tile_correct
           ComparableDType.lt, hT] at hExec
     subst s'
     simp [BlockState.pid_eq, outOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < N
     · simp [hi, softmaxOptimizeSpec, softmaxOptimizeInputTile, outOffset,
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum,

@@ -83,24 +83,14 @@ theorem update_fn_kernel_exp_avg_slice_correct
           expAvgSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i
         else s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * BLOCK_SIZE + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply Fin.ext
-      exact Nat.add_left_cancel h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, update_fn_kernel_exp_avg_slice, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
           NumericDType.sub, ComparableDType.lt] at hExec
     subst s'
     simp only [outOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : s.pids 0 * BLOCK_SIZE + i.val < n_elements
     · simp [hi, expAvgSpec, outOffset]
     · simp [hi]

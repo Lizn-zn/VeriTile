@@ -146,17 +146,6 @@ theorem layernorm_forward_y_correct
           layernormYSpec s X W bias X_row_stride n_cols BLOCK_SIZE eps i
         else s.readMem Y (yOutOffset s Y_row_stride i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * Y_row_stride + idx.1.val) := by
-    intro a bidx h
-    have hab : a.1 = bidx.1 := by
-      apply hOutInj
-      simpa [yOutOffset] using h
-    cases a
-    cases bidx
-    simp only at hab
-    cases hab
-    rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
@@ -167,7 +156,8 @@ theorem layernorm_forward_y_correct
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [yOutOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, layernormYSpec, layernormInvVarCarrier, layernormVarCarrier,
             layernormCenteredTile, layernormMeanCarrier, layernormInputTile,

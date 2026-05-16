@@ -152,11 +152,6 @@ theorem l2_norm_fwd_1pass_kernel_correct
         if i.val < N then l2FwdSpec s X stride_x_row N BLOCK_N eps i
         else s.readMem Y outAddr := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * stride_x_row + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   by_cases hB : 0 < BLOCK_N
   · simp [exec, l2_norm_fwd_1pass_kernel, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
@@ -167,7 +162,8 @@ theorem l2_norm_fwd_1pass_kernel_correct
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     rw [← hExec]
     simp only [l2OutOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < N
     · have hvar := l2VarCarrier_eq_l2NormSqSum s X stride_x_row N BLOCK_N
       simp [l2VarCarrier, l2InputTile, Tile.reduceSum, Tile.reduceSumDrop,
@@ -191,11 +187,6 @@ theorem l2_norm_bwd_kernel_correct
         if i.val < N then l2BwdSpec s X DY stride_x_row N BLOCK_N eps i
         else s.readMem DX outAddr := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * stride_x_row + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   by_cases hB : 0 < BLOCK_N
   · simp [exec, l2_norm_bwd_kernel, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
@@ -206,7 +197,8 @@ theorem l2_norm_bwd_kernel_correct
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     rw [← hExec]
     simp only [l2OutOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < N
     · have hvar := l2VarCarrier_eq_l2NormSqSum s X stride_x_row N BLOCK_N
       have hdot := l2BwdDotCarrier_eq_l2NormDot s X DY stride_x_row N BLOCK_N

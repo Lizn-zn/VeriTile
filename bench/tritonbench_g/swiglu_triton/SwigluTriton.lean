@@ -70,16 +70,12 @@ theorem swiglu_forward_kernel_correct
           TiledActivation.swiglu (as i) (bs i)
         else s.readMem C outAddr := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * stride + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [exec, swiglu_forward_kernel, stepStmts, stepStmt, evalOp,
         tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   subst s'
   simp only [swigluOffset]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hi : i.val < n_cols
   · have ha := h_a i
     have hb := h_b i
@@ -139,11 +135,6 @@ theorem swiglu_backward_kernel_correct
         if i.val < n_cols then
           TiledActivation.swigluBwdB (dcs i) (as i)
         else s.readMem B outAddr) := by
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * stride + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [exec, swiglu_backward_kernel, stepStmts, stepStmt, evalOp,
         tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   subst s'
@@ -154,7 +145,8 @@ theorem swiglu_backward_kernel_correct
       (region := B) (R := A) (h_ne := hAB)
       (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
       (off := s.pids 0 * stride + i.val) (l := TileShape.allIndices [BLOCK_SIZE])]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · have hdc := h_dc i
       have ha := h_a i
@@ -164,7 +156,8 @@ theorem swiglu_backward_kernel_correct
     · simp [hi]
   · intro i
     simp only [swigluOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · have hdc := h_dc i
       have ha := h_a i

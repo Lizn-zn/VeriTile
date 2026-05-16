@@ -68,17 +68,13 @@ theorem softmax_kernel_correct
           softmaxSpec s input_ptr input_row_stride n_cols BLOCK_SIZE i
         else s.readMem output_ptr outAddr := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * output_row_stride + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, softmax_kernel, stepStmts, stepStmt, evalOp,
           tile_elementwise, hB] at hExec
     subst s'
     simp [BlockState.pid_eq]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols
     · simp [hi, softmaxSpec, softmaxInputTile, Tile.reduceMax, Tile.reduceMaxDrop,
             Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,

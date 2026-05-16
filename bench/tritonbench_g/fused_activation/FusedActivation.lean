@@ -80,17 +80,13 @@ theorem fused_add_mul_activation_kernel_correct
           fusedActivationSpec ACTIVATION_SIGMOID (xs i) (biases i) (inputs i) multiplier
         else s.readMem x_ptr outAddr := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pids 0 * BLOCK_SIZE + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   cases ACTIVATION_SIGMOID
   · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp,
           tile_elementwise] at hExec
     subst s'
     simp only [fusedActivationOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : s.pid * BLOCK_SIZE + i.val < xnumel
     · have hx := h_x i
       have hin := h_in i
@@ -106,7 +102,8 @@ theorem fused_add_mul_activation_kernel_correct
           tile_elementwise] at hExec
     subst s'
     simp only [fusedActivationOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : s.pid * BLOCK_SIZE + i.val < xnumel
     · have hx := h_x i
       have hin := h_in i

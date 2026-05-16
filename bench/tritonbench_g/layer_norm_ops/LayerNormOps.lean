@@ -152,17 +152,6 @@ theorem layer_norm_fwd_rms_one_block_y_correct
           rmsYSpec s X W stride_x_row N BLOCK_N eps i
         else s.readMem Y (yOffset s stride_y_row i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * stride_y_row + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [yOffset] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
   by_cases hB : 0 < BLOCK_N
   · simp [exec, layer_norm_fwd_rms_one_block, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
@@ -173,7 +162,8 @@ theorem layer_norm_fwd_rms_one_block_y_correct
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
     subst s'
     simp only [yOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < N
     · simp [hi, hWRstd, rmsYSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile,
             xOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
