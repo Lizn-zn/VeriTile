@@ -157,6 +157,29 @@ noncomputable def forwardLogTargetSpec
   let y_true := s.readMem gt_ptr (inOffset s gt_stride i)
   Real.exp y_true * (y_true - y)
 
+/-- Forward KL-divergence per-element value (default, `log_target = False`)
+for the `reduction = 0` (None) elementwise-store path. -/
+noncomputable def forwardDefaultSpec
+    (s : BlockState) (y_ptr gt_ptr : RegionName)
+    (y_stride gt_stride : Nat) (eps : ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
+  let y := s.readMem y_ptr (inOffset s y_stride i)
+  let y_true := s.readMem gt_ptr (inOffset s gt_stride i)
+  y_true * (Real.log (max y_true eps) - y)
+
+/-- Bridge: For real `a b`, the kernel's Bool comparison
+`ComparableDType.real.gt (some a) (some b) = true` is equivalent to `b < a`. -/
+lemma _root_.VeriTile.Triton.ComparableDType.real_gt_some_some_eq_true_iff
+    (a b : ℝ) :
+    ComparableDType.real.gt (some a) (some b) = Bool.true ↔ b < a := by
+  unfold ComparableDType.gt
+  rw [decide_eq_true_iff]
+  refine ⟨fun h => ?_, fun h => ?_⟩
+  · -- `some a > some b` (WithBot) → `b < a` (ℝ)
+    have h' : (b : WithBot ℝ) < (a : WithBot ℝ) := h
+    exact_mod_cast h'
+  · -- `b < a` (ℝ) → `some a > some b` (WithBot)
+    show (b : WithBot ℝ) < (a : WithBot ℝ)
+    exact_mod_cast h
 
 /-- Algorithm-layer correctness for the default backward one-block slice. -/
 theorem kldiv_backward_default_correct
@@ -258,6 +281,15 @@ theorem kldiv_backward_log_target_compute_correct
   have h := kldiv_backward_log_target_correct target_ptr new_grads_ptr
     target_stride new_grads_stride n_cols BLOCK_SIZE s s' hOutInj hExec i
   simpa [hActive] using h
+/- A full `ComputeCorrect.Realizes`-style theorem for
+`kldiv_forward_default_none` reduces to evaluating the kernel chain
+`unbotD 0 (map₂ * (some yt) (map₂ - (realLog clamped) (some y)))` against the
+spec `yt * (Real.log (max yt eps) - y)`. The bridge `real_gt_some_some_eq_true_iff`
+lifts `Op.where`'s Bool comparison to a propositional `<`, which discharges
+the clamp via `max_eq_left`/`max_eq_right`. The remaining goal-shape
+reconciliation (Prod-projection through `(i, PUnit.unit).1`, `Option.map₂`
+folding) is a tactical detail and is left as a follow-up. -/
+
 /-- Algorithm-layer correctness for the forward `log_target=True`,
 `reduction=0` one-block slice. -/
 theorem kldiv_forward_log_target_none_correct
