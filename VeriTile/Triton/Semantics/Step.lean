@@ -339,6 +339,62 @@ namespace stepForLoopAux
   unfold stepStmt
   rfl
 
+/-- Loop invariant induction for `stepForLoopAux`. If `Inv` holds for the
+initial start index/state, and each loop iteration preserves `Inv` from
+`(i, s)` to `(i + 1, s')`, then the loop terminates with some final `s'` for
+which `Inv n s'` holds.
+
+This is the standard tool for reasoning about cumsum/recurrent kernels whose
+body mutates a running accumulator register. The `start` parameter lets you
+state the invariant at an arbitrary mid-loop entry point; pass `start = 0` for
+a full-loop proof. Precondition `start ≤ n` ensures the loop counter eventually
+reaches `n`. -/
+theorem induct_on_inv
+    {idx : RegName} (n : Nat) (body : List Stmt)
+    (Inv : Nat → BlockState → Prop) :
+    ∀ (start : Nat) (s : BlockState),
+      start ≤ n →
+      Inv start s →
+      (∀ i s, start ≤ i → i < n → Inv i s →
+        ∃ s', stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s'
+          ∧ Inv (i + 1) s') →
+      ∃ s', stepForLoopAux idx start n body s = some s' ∧ Inv n s' := by
+  intro start s hLe hStart hStep
+  induction h : n - start generalizing start s with
+  | zero =>
+      have hge : n ≤ start := Nat.le_of_sub_eq_zero h
+      have heq : n = start := Nat.le_antisymm hge hLe
+      refine ⟨s, step_ge hge, ?_⟩
+      rw [heq]; exact hStart
+  | succ k ih =>
+      have hlt : start < n := by omega
+      obtain ⟨smid, hBody, hInvMid⟩ := hStep start s (Nat.le_refl _) hlt hStart
+      have hk : n - (start + 1) = k := by omega
+      have hLe' : start + 1 ≤ n := hlt
+      have hStepShift : ∀ i s, start + 1 ≤ i → i < n → Inv i s →
+          ∃ s', stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s'
+            ∧ Inv (i + 1) s' := by
+        intro i s' hge hilt hInv
+        exact hStep i s' (Nat.le_of_succ_le hge) hilt hInv
+      obtain ⟨sFinal, hFinalExec, hFinalInv⟩ :=
+        ih (start + 1) smid hLe' hInvMid hStepShift hk
+      refine ⟨sFinal, ?_, hFinalInv⟩
+      rw [step_lt hlt, hBody]
+      exact hFinalExec
+
+/-- Specialization of `induct_on_inv` to the common `start = 0` entry point.
+The invariant is stated at the loop counter and final result. -/
+theorem inv_from_zero
+    {idx : RegName} (n : Nat) (body : List Stmt)
+    (Inv : Nat → BlockState → Prop) (s : BlockState)
+    (hStart : Inv 0 s)
+    (hStep : ∀ i s, i < n → Inv i s →
+      ∃ s', stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s'
+        ∧ Inv (i + 1) s') :
+    ∃ s', stepForLoopAux idx 0 n body s = some s' ∧ Inv n s' :=
+  induct_on_inv n body Inv 0 s (Nat.zero_le _) hStart
+    (fun i s' _ hilt hInv => hStep i s' hilt hInv)
+
 end stepForLoopAux
 
 namespace stepForRangeAux
