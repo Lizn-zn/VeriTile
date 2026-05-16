@@ -168,6 +168,184 @@ theorem layernorm_forward_y_correct
     · simp [hi, BlockState.writeMem_readMem, hYr, hYmu]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
+/-! ### Backward (`layernorm_backward`) -/
+
+/-- Per-lane gradient input tile from `dY`. -/
+noncomputable def layernormBackwardDYTile
+    (s : BlockState) (dY : RegionName)
+    (dY_row_stride n_cols BLOCK_SIZE : Nat) :
+    Tile .real [BLOCK_SIZE] :=
+  { data := fun idx =>
+      let off := s.pid * dY_row_stride + idx.1.val
+      if idx.1.val < n_cols then some (s.readMem dY off) else some (0 : ℝ) }
+
+/-- Per-lane scale (`W`) tile (broadcast row). -/
+noncomputable def layernormBackwardWTile
+    (s : BlockState) (W : RegionName) (n_cols BLOCK_SIZE : Nat) :
+    Tile .real [BLOCK_SIZE] :=
+  { data := fun idx =>
+      if idx.1.val < n_cols then some (s.readMem W idx.1.val) else some (0 : ℝ) }
+
+/-- The forward kernel's already-stored `inv_var` / `mean` are reread by
+backward; the spec treats them as values currently in memory. -/
+noncomputable def layernormBackwardInvVar
+    (s : BlockState) (r : RegionName) : ℝ :=
+  s.readMem r s.pid
+
+noncomputable def layernormBackwardMean
+    (s : BlockState) (mu : RegionName) : ℝ :=
+  s.readMem mu s.pid
+
+/-- `(X - mean) * inv_var`, mirroring the kernel's masked-load → centered →
+scaled chain. The false branch carries `(0 - mean) * inv_var` because the
+kernel computes `(other=0 - mean) * inv_var` before any masking is reapplied,
+so the spec must match for elementwise tile equality. -/
+noncomputable def layernormBackwardNormedTile
+    (s : BlockState) (X r mu : RegionName)
+    (X_row_stride n_cols BLOCK_SIZE : Nat) :
+    Tile .real [BLOCK_SIZE] :=
+  { data := fun idx =>
+      let off := s.pid * X_row_stride + idx.1.val
+      Option.map
+        ((fun a => a * layernormBackwardInvVar s r) ∘
+          fun a => a - layernormBackwardMean s mu)
+        (if idx.1.val < n_cols then some (s.readMem X off) else some (0 : ℝ)) }
+
+/-- `dY_W = dY_row * W_row` per lane. -/
+noncomputable def layernormBackwardDYWTile
+    (s : BlockState) (dY W : RegionName)
+    (dY_row_stride n_cols BLOCK_SIZE : Nat) :
+    Tile .real [BLOCK_SIZE] :=
+  Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
+    (layernormBackwardDYTile s dY dY_row_stride n_cols BLOCK_SIZE)
+    (layernormBackwardWTile s W n_cols BLOCK_SIZE)
+
+/-- Sum-mean of `dY_W` across the row. -/
+noncomputable def layernormBackwardSumDYWMean
+    (s : BlockState) (dY W : RegionName)
+    (dY_row_stride n_cols BLOCK_SIZE : Nat) : WithBot ℝ :=
+  Option.map (fun a => a / (n_cols : ℝ))
+    ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+      (layernormBackwardDYWTile s dY W dY_row_stride n_cols BLOCK_SIZE)).data
+        PUnit.unit)
+
+/-- Sum-mean of `dY_W * normed`. -/
+noncomputable def layernormBackwardSumDYWNormedMean
+    (s : BlockState) (dY X W r mu : RegionName)
+    (dY_row_stride X_row_stride n_cols BLOCK_SIZE : Nat) : WithBot ℝ :=
+  Option.map (fun a => a / (n_cols : ℝ))
+    ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+      (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
+        (layernormBackwardDYWTile s dY W dY_row_stride n_cols BLOCK_SIZE)
+        (layernormBackwardNormedTile s X r mu X_row_stride n_cols
+          BLOCK_SIZE))).data PUnit.unit)
+
+/-- Per-lane `dX` value matching the Python backward kernel formula:
+`((dY*W - mean(dY*W) - normed * mean(dY*W*normed)) * inv_var)`.
+
+Structured to mirror the kernel's elementwise broadcast evaluation: the
+sum-by-n_cols and scaling by `normed_i` are folded into the `Option.map`s
+to match the kernel-produced term. -/
+noncomputable def layernormDXSpec
+    (s : BlockState) (dY X W r mu : RegionName)
+    (dY_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (i : Fin BLOCK_SIZE) : ℝ :=
+  let dyw_i := s.readMem dY (s.pid * dY_row_stride + i.val) *
+    s.readMem W i.val
+  let normed_i_inv := (s.readMem X (s.pid * X_row_stride + i.val) -
+    s.readMem mu s.pid) * s.readMem r s.pid
+  WithBot.unbotD 0
+    (Option.map (fun v => v * s.readMem r s.pid)
+      (Option.map₂ (fun a b => a - b)
+        (Option.map
+          ((fun b => dyw_i - b) ∘ fun a => a / (n_cols : ℝ))
+          ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+            (layernormBackwardDYWTile s dY W dY_row_stride n_cols
+              BLOCK_SIZE)).data PUnit.unit))
+        (Option.map
+          ((fun a => a / (n_cols : ℝ)) ∘ fun b => normed_i_inv * b)
+          ((Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+            (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
+              (layernormBackwardDYWTile s dY W dY_row_stride n_cols BLOCK_SIZE)
+              (layernormBackwardNormedTile s X r mu X_row_stride n_cols
+                BLOCK_SIZE))).data PUnit.unit))))
+
+def dXOutOffset (s : BlockState) (dY_row_stride : Nat) (i : Fin BLOCK_SIZE) :
+    Nat :=
+  s.pid * dY_row_stride + i.val
+
+/-- Executed-state correctness for `layernorm_backward`'s in-place `dX` store.
+
+Mirrors `layernorm_forward_y_correct`: `BLOCK_SIZE`-many lanes, masked write
+into `dY + col_offsets`. The kernel reads `dY_row` from `dY` *before* writing
+back, so `s.readMem dY ...` references the original `dY` values throughout
+the spec. -/
+theorem layernorm_backward_dx_correct
+    (dY X W bias r mu : RegionName)
+    (dY_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => dXOutOffset s dY_row_stride i))
+    (hExec : exec (layernorm_backward dY X W bias r mu dY_row_stride
+          X_row_stride n_cols eps BLOCK_SIZE) s = some s') :
+    ∀ i : Fin BLOCK_SIZE,
+      s'.readMem dY (dXOutOffset s dY_row_stride i) =
+        if i.val < n_cols then
+          layernormDXSpec s dY X W r mu dY_row_stride X_row_stride n_cols
+            BLOCK_SIZE i
+        else s.readMem dY (dXOutOffset s dY_row_stride i) := by
+  intro i
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, layernorm_backward, stepStmts, stepStmt, evalOp, Option.bind,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+          NumericDType.sub, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [dXOutOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < n_cols
+    · simp [hi, layernormDXSpec, layernormBackwardDYWTile,
+            layernormBackwardDYTile, layernormBackwardWTile,
+            layernormBackwardNormedTile, layernormBackwardSumDYWMean,
+            layernormBackwardSumDYWNormedMean, layernormBackwardInvVar,
+            layernormBackwardMean,
+            Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+            TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.mul]
+      rfl
+    · simp [hi]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for `layernorm_backward`'s in-place `dX` store. -/
+theorem layernorm_backward_dx_compute_correct
+    (dY X W bias r mu : RegionName)
+    (dY_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => dXOutOffset s dY_row_stride i)) :
+    ComputeCorrect.Realizes
+      (kernel := layernorm_backward dY X W bias r mu dY_row_stride
+        X_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (dY, dXOutOffset s dY_row_stride i)))
+      (expected := fun i =>
+        layernormDXSpec s dY X W r mu dY_row_stride X_row_stride n_cols
+          BLOCK_SIZE i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layernorm_backward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := layernorm_backward_dx_correct dY X W bias r mu dY_row_stride
+    X_row_stride n_cols BLOCK_SIZE eps s s' hOutInj hExec i
+  simpa [hActive] using h
+
 /-- Compute-facing correctness for the `Y` output of `layernorm_forward`. -/
 theorem layernorm_forward_y_compute_correct
     (Y X W bias r mu : RegionName)
