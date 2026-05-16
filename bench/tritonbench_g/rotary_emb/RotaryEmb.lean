@@ -468,4 +468,260 @@ theorem rotary_emb_q1_block_compute_correct
     HEAD_Q BLOCK_HALF s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-- Proof-oriented K-even-dimension slice of `rotary_emb.py`'s `_rotary_kernel`.
+
+Mirrors the Q0 slice for the K buffer with `HEAD_K` head bound. -/
+def rotary_emb_k0_block
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  cur_head_index = tl.program_id(0)
+  cur_seq_index = tl.program_id(1)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  dim0 = dim * $(2)
+  dim1 = dim * $(2) + $(1)
+  k0 = tl.load(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim0 * $(stride_kd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)),
+    other=0.0)
+  k1 = tl.load(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim1 * $(stride_kd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)),
+    other=0.0)
+  cos0 = tl.load(Cos + cur_seq_index * $(stride_cosbs) +
+      dim0 * $(stride_cosd),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  sin0 = tl.load(Sin + cur_seq_index * $(stride_sinbs) +
+      dim0 * $(stride_sind),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  outK0 = k0 * cos0 - k1 * sin0
+  tl.store(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim0 * $(stride_kd),
+    outK0,
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)))
+}
+
+def kOffset
+    (s : BlockState) (stride_kbs stride_kh stride_kd : Nat) (dim : Nat) : Nat :=
+  seqIndex s * stride_kbs + headIndex s * stride_kh + dim * stride_kd
+
+def activeK (s : BlockState) (max_total_len HEAD_K : Nat) : Prop :=
+  seqIndex s < max_total_len ∧ headIndex s < HEAD_K
+
+instance activeKDecidable (s : BlockState) (max_total_len HEAD_K : Nat) :
+    Decidable (activeK s max_total_len HEAD_K) := by
+  unfold activeK
+  infer_instance
+
+noncomputable def rotaryK0Spec
+    (s : BlockState) (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind : Nat) (i : Fin BLOCK_HALF) : ℝ :=
+  s.readMem K (kOffset s stride_kbs stride_kh stride_kd (dimEven i)) *
+    s.readMem Cos (cosOffset s stride_cosbs stride_cosd (dimEven i)) -
+  s.readMem K (kOffset s stride_kbs stride_kh stride_kd (dimOdd i)) *
+    s.readMem Sin (sinOffset s stride_sinbs stride_sind (dimEven i))
+
+theorem rotary_emb_k0_block_correct
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        kOffset s stride_kbs stride_kh stride_kd (dimEven i)))
+    (hExec : exec (rotary_emb_k0_block K Cos Sin stride_kbs stride_kh
+        stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind
+        max_total_len HEAD_K BLOCK_HALF) s = some s') :
+    ∀ i : Fin BLOCK_HALF,
+      s'.readMem K (kOffset s stride_kbs stride_kh stride_kd (dimEven i)) =
+        if activeK s max_total_len HEAD_K then
+          rotaryK0Spec s K Cos Sin stride_kbs stride_kh stride_kd
+            stride_cosbs stride_cosd stride_sinbs stride_sind i
+        else
+          s.readMem K (kOffset s stride_kbs stride_kh stride_kd (dimEven i)) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_HALF] =>
+        s.pids 1 * stride_kbs + s.pids 0 * stride_kh +
+          (idx.1.val * 2) * stride_kd) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [kOffset, seqIndex, headIndex, dimEven] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hBH : 0 < BLOCK_HALF
+  · simp [exec, rotary_emb_k0_block, stepStmts, stepStmt, evalOp,
+          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt, hBH] at hExec
+    rw [← hExec]
+    simp only [kOffset, seqIndex, headIndex, dimEven]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj
+      (i, PUnit.unit)]
+    by_cases hSeq : s.pids 1 < max_total_len
+    · by_cases hHead : s.pids 0 < HEAD_K
+      · simp [activeK, rotaryK0Spec, kOffset, cosOffset, sinOffset,
+              seqIndex, headIndex, dimEven, dimOdd, hSeq, hHead,
+              Option.bind, Option.map]
+      · simp [activeK, seqIndex, headIndex, hSeq, hHead]
+    · simp [activeK, seqIndex, hSeq]
+  · exact False.elim (hBH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+theorem rotary_emb_k0_block_compute_correct
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        kOffset s stride_kbs stride_kh stride_kd (dimEven i))) :
+    ComputeCorrect.Realizes
+      (kernel := rotary_emb_k0_block K Cos Sin stride_kbs stride_kh
+        stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind
+        max_total_len HEAD_K BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin BLOCK_HALF => activeK s max_total_len HEAD_K)
+        (fun i => (K, kOffset s stride_kbs stride_kh stride_kd (dimEven i))))
+      (expected := fun i =>
+        rotaryK0Spec s K Cos Sin stride_kbs stride_kh stride_kd
+          stride_cosbs stride_cosd stride_sinbs stride_sind i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rotary_emb_k0_block]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := rotary_emb_k0_block_correct K Cos Sin stride_kbs stride_kh
+    stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
+    HEAD_K BLOCK_HALF s s' hOutInj hExec i
+  simpa [hActive] using h
+
+/-- Proof-oriented K-odd-dimension slice of `rotary_emb.py`'s `_rotary_kernel`. -/
+def rotary_emb_k1_block
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  cur_head_index = tl.program_id(0)
+  cur_seq_index = tl.program_id(1)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  dim0 = dim * $(2)
+  dim1 = dim * $(2) + $(1)
+  k0 = tl.load(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim0 * $(stride_kd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)),
+    other=0.0)
+  k1 = tl.load(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim1 * $(stride_kd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)),
+    other=0.0)
+  cos0 = tl.load(Cos + cur_seq_index * $(stride_cosbs) +
+      dim0 * $(stride_cosd),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  sin0 = tl.load(Sin + cur_seq_index * $(stride_sinbs) +
+      dim0 * $(stride_sind),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  outK1 = k0 * sin0 + k1 * cos0
+  tl.store(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim1 * $(stride_kd),
+    outK1,
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)))
+}
+
+noncomputable def rotaryK1Spec
+    (s : BlockState) (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind : Nat) (i : Fin BLOCK_HALF) : ℝ :=
+  s.readMem K (kOffset s stride_kbs stride_kh stride_kd (dimEven i)) *
+    s.readMem Sin (sinOffset s stride_sinbs stride_sind (dimEven i)) +
+  s.readMem K (kOffset s stride_kbs stride_kh stride_kd (dimOdd i)) *
+    s.readMem Cos (cosOffset s stride_cosbs stride_cosd (dimEven i))
+
+theorem rotary_emb_k1_block_correct
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        kOffset s stride_kbs stride_kh stride_kd (dimOdd i)))
+    (hExec : exec (rotary_emb_k1_block K Cos Sin stride_kbs stride_kh
+        stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind
+        max_total_len HEAD_K BLOCK_HALF) s = some s') :
+    ∀ i : Fin BLOCK_HALF,
+      s'.readMem K (kOffset s stride_kbs stride_kh stride_kd (dimOdd i)) =
+        if activeK s max_total_len HEAD_K then
+          rotaryK1Spec s K Cos Sin stride_kbs stride_kh stride_kd
+            stride_cosbs stride_cosd stride_sinbs stride_sind i
+        else
+          s.readMem K (kOffset s stride_kbs stride_kh stride_kd (dimOdd i)) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_HALF] =>
+        s.pids 1 * stride_kbs + s.pids 0 * stride_kh +
+          (idx.1.val * 2 + 1) * stride_kd) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [kOffset, seqIndex, headIndex, dimOdd] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hBH : 0 < BLOCK_HALF
+  · simp [exec, rotary_emb_k1_block, stepStmts, stepStmt, evalOp,
+          Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt, hBH] at hExec
+    rw [← hExec]
+    simp only [kOffset, seqIndex, headIndex, dimOdd]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj
+      (i, PUnit.unit)]
+    by_cases hSeq : s.pids 1 < max_total_len
+    · by_cases hHead : s.pids 0 < HEAD_K
+      · simp [activeK, rotaryK1Spec, kOffset, cosOffset, sinOffset,
+              seqIndex, headIndex, dimEven, dimOdd, hSeq, hHead,
+              Option.bind, Option.map]
+      · simp [activeK, seqIndex, headIndex, hSeq, hHead]
+    · simp [activeK, seqIndex, hSeq]
+  · exact False.elim (hBH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+theorem rotary_emb_k1_block_compute_correct
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        kOffset s stride_kbs stride_kh stride_kd (dimOdd i))) :
+    ComputeCorrect.Realizes
+      (kernel := rotary_emb_k1_block K Cos Sin stride_kbs stride_kh
+        stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind
+        max_total_len HEAD_K BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin BLOCK_HALF => activeK s max_total_len HEAD_K)
+        (fun i => (K, kOffset s stride_kbs stride_kh stride_kd (dimOdd i))))
+      (expected := fun i =>
+        rotaryK1Spec s K Cos Sin stride_kbs stride_kh stride_kd
+          stride_cosbs stride_cosd stride_sinbs stride_sind i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rotary_emb_k1_block]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := rotary_emb_k1_block_correct K Cos Sin stride_kbs stride_kh
+    stride_kd stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
+    HEAD_K BLOCK_HALF s s' hOutInj hExec i
+  simpa [hActive] using h
+
 end VeriTile.Bench.TritonBenchG.RotaryEmb
