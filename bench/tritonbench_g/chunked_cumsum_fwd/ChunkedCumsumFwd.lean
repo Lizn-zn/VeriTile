@@ -229,4 +229,139 @@ theorem chunked_cumsum_dt_out_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented `dA_cumsum` writeback slice of `chunked_cumsum_fwd.py`'s
+`_chunk_cumsum_fwd_kernel`.
+
+The full kernel produces a per-head running cumsum tile `dA_cs = cumsum(dt * A,
+axis=1)`. This slice starts from a precomputed `DAcs` tile and proves the
+masked writeback into `dA_cumsum_ptr` using the original head/chunk indexing
+and output strides. -/
+def chunked_cumsum_dA_cs_store_slice
+    (DAcs DACumsum : RegionName)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+      nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat) :
+    ComputeKernel := triton {
+  pid_b = tl.program_id(axis=0)
+  pid_c = tl.program_id(axis=1)
+  pid_h = tl.program_id(axis=2)
+  offs_h = pid_h * $(BLOCK_SIZE_H) + tl.arange(0, $(BLOCK_SIZE_H))
+  offs_c = tl.arange(0, $(BLOCK_SIZE_CHUNK))
+  mask = (offs_h[:, None] < $(nheads)) & (offs_c[None, :] < $(chunk_size))
+  dA_cs = tl.load(DAcs + pid_b * $(stride_dt_batch) +
+      (pid_c * $(chunk_size) + offs_c[None, :]) * $(stride_dt_seqlen) +
+      offs_h[:, None] * $(stride_dt_head),
+    mask=mask, other=0.0)
+  tl.store(DACumsum + pid_b * $(stride_dA_cs_batch) + pid_c * $(stride_dA_cs_chunk) +
+      offs_h[:, None] * $(stride_dA_cs_head) + offs_c[None, :] * $(stride_dA_cs_csize),
+    dA_cs, mask=mask)
+}
+
+def dACsOutOffset
+    (s : BlockState)
+    (stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+      BLOCK_SIZE_H : Nat)
+    (idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK]) : Nat :=
+  s.pids 0 * stride_dA_cs_batch + s.pids 1 * stride_dA_cs_chunk +
+    headIndex s BLOCK_SIZE_H idx.1 * stride_dA_cs_head +
+    chunkIndex s idx.2.1 * stride_dA_cs_csize
+
+/-- Algorithm-layer correctness for the `dA_cumsum` store slice. -/
+theorem chunked_cumsum_dA_cs_store_slice_correct
+    (DAcs DACumsum : RegionName)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+      nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
+        dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+          stride_dA_cs_csize BLOCK_SIZE_H idx)) :
+    ∀ idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK],
+      let outAddr := dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk
+        stride_dA_cs_head stride_dA_cs_csize BLOCK_SIZE_H idx
+      (exec (chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+            stride_dt_batch stride_dt_seqlen stride_dt_head stride_dA_cs_batch
+            stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize nheads
+            chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK) s).map (·.readMem DACumsum outAddr)
+        = some (if active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK idx then
+            s.readMem DAcs
+              (dtPreparedOffset s stride_dt_batch stride_dt_seqlen stride_dt_head
+                chunk_size BLOCK_SIZE_H idx)
+          else s.readMem DACumsum outAddr) := by
+  intro idx
+  simp [exec, chunked_cumsum_dA_cs_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        headIndex, chunkIndex, dtPreparedOffset, dACsOutOffset,
+        TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] → Nat :=
+    fun idx =>
+      s.pids 0 * stride_dA_cs_batch + s.pids 1 * stride_dA_cs_chunk +
+        (s.pids 2 * BLOCK_SIZE_H + idx.1.val) * stride_dA_cs_head +
+        idx.2.1.val * stride_dA_cs_csize
+  let valueFn : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (if s.pids 2 * BLOCK_SIZE_H + idx.1.val < nheads ∧
+            idx.2.1.val < chunk_size then
+          some (s.readMem DAcs
+            (s.pids 0 * stride_dt_batch +
+              (s.pids 1 * chunk_size + idx.2.1.val) * stride_dt_seqlen +
+              (s.pids 2 * BLOCK_SIZE_H + idx.1.val) * stride_dt_head))
+        else some (0.0 : ℝ))
+  let P : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] → Prop :=
+    fun idx =>
+      s.pids 2 * BLOCK_SIZE_H + idx.1.val < nheads ∧
+        idx.2.1.val < chunk_size
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, dACsOutOffset, headIndex, chunkIndex] using hOutInj
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive :
+      s.pids 2 * BLOCK_SIZE_H + idx.1.val < nheads ∧
+        idx.2.1.val < chunk_size
+  · simp [offsetFn, valueFn, P, active, headIndex, chunkIndex,
+      dtPreparedOffset, dACsOutOffset, hActive]
+  · simp [offsetFn, valueFn, P, active, headIndex, chunkIndex,
+      dtPreparedOffset, dACsOutOffset, hActive]
+
+/-- Compute-facing correctness for the `dA_cumsum` store slice. -/
+theorem chunked_cumsum_dA_cs_store_slice_compute_correct
+    (DAcs DACumsum : RegionName)
+    (stride_dt_batch stride_dt_seqlen stride_dt_head
+      stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize
+      nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
+        dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk stride_dA_cs_head
+          stride_dA_cs_csize BLOCK_SIZE_H idx)) :
+    ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+        stride_dt_batch stride_dt_seqlen stride_dt_head stride_dA_cs_batch
+        stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize nheads
+        chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s nheads chunk_size BLOCK_SIZE_H BLOCK_SIZE_CHUNK)
+        (fun idx => (DACumsum,
+          dACsOutOffset s stride_dA_cs_batch stride_dA_cs_chunk
+            stride_dA_cs_head stride_dA_cs_csize BLOCK_SIZE_H idx)))
+      (expected := fun idx =>
+        s.readMem DAcs
+          (dtPreparedOffset s stride_dt_batch stride_dt_seqlen stride_dt_head
+            chunk_size BLOCK_SIZE_H idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunked_cumsum_dA_cs_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := chunked_cumsum_dA_cs_store_slice_correct DAcs DACumsum
+    stride_dt_batch stride_dt_seqlen stride_dt_head stride_dA_cs_batch
+    stride_dA_cs_chunk stride_dA_cs_head stride_dA_cs_csize nheads chunk_size
+    BLOCK_SIZE_H BLOCK_SIZE_CHUNK s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd
