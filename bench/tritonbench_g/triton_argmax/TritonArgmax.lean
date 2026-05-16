@@ -90,6 +90,103 @@ def argmax_kernel
   tl.store(out_index_ptrs, argmax_values, mask=mask1)
 }
 
+/-- Masked input tile for `argmax_kernel_1`. Masked lanes evaluate to `none`
+matching `other=-float("inf")`. -/
+noncomputable def argmaxKernel1InputTile
+    (s : BlockState) (inp : RegionName) (M BLOCK_SIZE : Nat) :
+    Tile .real [BLOCK_SIZE] :=
+  { data := fun idx =>
+      let off := s.pid * BLOCK_SIZE + idx.1.val
+      if off < M then some (s.readMem inp off) else none }
+
+/-- Exact `max_val` written by `argmax_kernel_1` at lane `pid`. -/
+noncomputable def argmaxKernel1ValueSpec
+    (s : BlockState) (inp : RegionName) (M BLOCK_SIZE : Nat) : ℝ :=
+  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+      (argmaxKernel1InputTile s inp M BLOCK_SIZE) with
+  | some out => WithBot.unbotD 0 (out.data PUnit.unit)
+  | none => 0
+
+/-- Exact `max_index` (after the `+ pid * BLOCK_SIZE` shift) written by
+`argmax_kernel_1` at lane `pid`. -/
+noncomputable def argmaxKernel1IndexSpec
+    (s : BlockState) (inp : RegionName) (M BLOCK_SIZE : Nat) : Nat :=
+  (Tile.argMaxDrop (shape := [BLOCK_SIZE]) ⟨0, by simp⟩
+    (argmaxKernel1InputTile s inp M BLOCK_SIZE)).data PUnit.unit
+    + s.pid * BLOCK_SIZE
+
+/-- Compute-facing correctness for the value channel of `argmax_kernel_1`
+(`INT64_INDEX=false` branch). The hypothesis `hRegions` rules out aliasing
+between the real `mid_value` buffer and the int `mid_index` buffer at the same
+offset; without it the `.nat` index store could overwrite the `.real` value
+store. -/
+theorem argmax_kernel_1_value_compute_correct
+    (inp mid_value : RegionName) (mid_index : Region .int)
+    (M BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegions : mid_value ≠ (Region.cast mid_index : RegionName)) :
+    ComputeCorrect.Realizes
+      (kernel := argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false)
+      (initialState := s)
+      (write := fun _ : PUnit => some (mid_value, s.pid))
+      (expected := fun _ => argmaxKernel1ValueSpec s inp M BLOCK_SIZE) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [argmax_kernel_1]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, Option.bind,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+          TileShape.axisDim, TileShape.eraseAxis,
+          NumericDType.add, NumericDType.mul, ComparableDType.lt,
+          argmaxKernel1ValueSpec, argmaxKernel1InputTile, hB] at hExec ⊢
+    cases hExec
+    rw [BlockState.writeMemTyped_nat_readMem_of_ne _ _ _ _ _ _ (by
+      intro ⟨h1, _⟩
+      exact hRegions h1)]
+    simp
+    congr
+  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, Option.bind,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+          TileShape.axisDim, TileShape.eraseAxis,
+          NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
+
+/-- Compute-facing correctness for the index channel of `argmax_kernel_1`
+(`INT64_INDEX=false` branch). -/
+theorem argmax_kernel_1_index_compute_correct
+    (inp mid_value : RegionName) (mid_index : Region .int)
+    (M BLOCK_SIZE : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false)
+      (initialState := s)
+      (write := fun _ : PUnit =>
+        some ((Region.cast mid_index : RegionName), s.pid))
+      (expected :=
+        fun _ : PUnit =>
+          (argmaxKernel1IndexSpec s inp M BLOCK_SIZE : Nat)) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [argmax_kernel_1]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, Option.bind,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+          Tile.argMaxDrop, Tile.argBestDrop,
+          TileShape.axisDim, TileShape.eraseAxis,
+          NumericDType.add, NumericDType.mul, ComparableDType.lt,
+          argmaxKernel1IndexSpec, argmaxKernel1InputTile, hB] at hExec ⊢
+    cases hExec
+    simp [BlockState.writeMemTyped_nat_readMemValue_nat]
+  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, Option.bind,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+          TileShape.axisDim, TileShape.eraseAxis,
+          NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
+
 noncomputable def argmaxKernel2InputTile
     (s : BlockState) (mid_value : RegionName) (mid_size BLOCK_MID : Nat) :
     Tile .real [BLOCK_MID] :=
