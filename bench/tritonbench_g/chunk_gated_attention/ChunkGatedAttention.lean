@@ -221,4 +221,120 @@ theorem chunk_gated_attention_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented final-state store slice of `chunk_gated_attention.py`'s
+`chunk_gated_abc_fwd_kernel_h`. Writes a precomputed final-state `BHFinal`
+[BK, BV] tile into `Ht` after the NT-iteration chunk loop completes
+(STORE_FINAL_STATE=True branch). -/
+def chunk_gated_attention_final_state_store_slice
+    (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat) :
+    ComputeKernel := triton {
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
+  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
+  mask = (offs_k[:, None] < $(KSize)) & (offs_v[None, :] < $(VSize))
+  b_h = tl.load(BHFinal + i_bh * $(KSize) * $(VSize) +
+      offs_k[:, None] * $(VSize) + offs_v[None, :],
+    mask=mask, other=0.0)
+  tl.store(Ht + i_bh * $(KSize) * $(VSize) +
+      offs_k[:, None] * $(VSize) + offs_v[None, :], b_h, mask=mask)
+}
+
+def kIndexFinal (s : BlockState) (BK : Nat) (i : Fin BK) : Nat :=
+  s.pids 1 * BK + i.val
+
+def vIndexFinal (s : BlockState) (BV : Nat) (j : Fin BV) : Nat :=
+  s.pids 0 * BV + j.val
+
+def finalActive (s : BlockState) (KSize VSize BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : Prop :=
+  kIndexFinal s BK idx.1 < KSize ∧ vIndexFinal s BV idx.2.1 < VSize
+
+instance finalActiveDecidable (s : BlockState) (KSize VSize BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : Decidable (finalActive s KSize VSize BK BV idx) := by
+  unfold finalActive
+  infer_instance
+
+def finalStateOffset (s : BlockState) (KSize VSize BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : Nat :=
+  s.pids 2 * KSize * VSize +
+    kIndexFinal s BK idx.1 * VSize + vIndexFinal s BV idx.2.1
+
+noncomputable def finalStateStoreValue (s : BlockState) (BHFinal : RegionName)
+    (KSize VSize BK BV : Nat) (idx : TileIndex [BK, BV]) : ℝ :=
+  WithBot.unbotD 0
+    (if finalActive s KSize VSize BK BV idx then
+      some (s.readMem BHFinal (finalStateOffset s KSize VSize BK BV idx))
+    else some (0.0 : ℝ))
+
+theorem chunk_gated_attention_final_state_store_slice_correct
+    (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        finalStateOffset s KSize VSize BK BV idx)) :
+    ∀ idx : TileIndex [BK, BV],
+      let outAddr := finalStateOffset s KSize VSize BK BV idx
+      (exec (chunk_gated_attention_final_state_store_slice BHFinal Ht
+            KSize VSize BK BV) s).map (·.readMem Ht outAddr)
+        = some (if finalActive s KSize VSize BK BV idx then
+            finalStateStoreValue s BHFinal KSize VSize BK BV idx
+          else s.readMem Ht outAddr) := by
+  intro idx
+  simp [exec, chunk_gated_attention_final_state_store_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        kIndexFinal, vIndexFinal, finalActive, finalStateOffset,
+        TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BK, BV] → Nat :=
+    fun idx => s.pids 2 * KSize * VSize +
+      (s.pids 1 * BK + idx.1.val) * VSize +
+      (s.pids 0 * BV + idx.2.1.val)
+  let valueFn : TileIndex [BK, BV] → ℝ :=
+    fun idx => WithBot.unbotD 0
+      (if s.pids 1 * BK + idx.1.val < KSize ∧
+          s.pids 0 * BV + idx.2.1.val < VSize then
+        some (s.readMem BHFinal (offsetFn idx))
+      else some (0.0 : ℝ))
+  let P : TileIndex [BK, BV] → Prop :=
+    fun idx => s.pids 1 * BK + idx.1.val < KSize ∧
+      s.pids 0 * BV + idx.2.1.val < VSize
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, finalStateOffset, kIndexFinal, vIndexFinal] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem Ht (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BK, BV])).readMem Ht (offsetFn idx) =
+    if P idx then finalStateStoreValue s BHFinal KSize VSize BK BV idx
+    else s.readMem Ht (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive : s.pids 1 * BK + idx.1.val < KSize ∧ s.pids 0 * BV + idx.2.1.val < VSize
+  · rfl
+  · rfl
+
+theorem chunk_gated_attention_final_state_store_slice_compute_correct
+    (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        finalStateOffset s KSize VSize BK BV idx)) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
+        KSize VSize BK BV)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BK, BV] => finalActive s KSize VSize BK BV idx)
+        (fun idx : TileIndex [BK, BV] => (Ht, finalStateOffset s KSize VSize BK BV idx)))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        finalStateStoreValue s BHFinal KSize VSize BK BV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_gated_attention_final_state_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := chunk_gated_attention_final_state_store_slice_correct BHFinal Ht
+    KSize VSize BK BV s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention
