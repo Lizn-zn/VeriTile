@@ -189,4 +189,81 @@ theorem fused_recurrent_hgrn_output_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented final-state store slice of `fused_recurrent_hgrn.py`'s
+`fused_recurrent_hgrn_fwd_kernel`. Companion to the per-iteration output store
+slice: writes a precomputed final-state `BHFinal` vector into `Ht` after the
+loop completes (STORE_FINAL_STATE=True branch). -/
+def fused_recurrent_hgrn_final_state_store_slice
+    (BHFinal Ht : RegionName) (D BD : Nat) :
+    ComputeKernel := triton {
+  i_d = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  offs_d = i_d * $(BD) + tl.arange(0, $(BD))
+  mask = offs_d < $(D)
+  b_h = tl.load(BHFinal + i_bh * $(D) + offs_d, mask=mask, other=0.0)
+  tl.store(Ht + i_bh * $(D) + offs_d,
+    (b_h).to(Ht.dtype.element_ty), mask=mask)
+}
+
+def finalStateOffset (s : BlockState) (D BD : Nat) (i : Fin BD) : Nat :=
+  s.pids 1 * D + dIndex s BD i
+
+noncomputable def finalStateStoreValue (s : BlockState) (BHFinal : RegionName)
+    (D BD : Nat) (i : Fin BD) : ℝ :=
+  WithBot.unbotD 0
+    (if active s D BD i then some (s.readMem BHFinal (finalStateOffset s D BD i))
+    else some (0.0 : ℝ))
+
+theorem fused_recurrent_hgrn_final_state_store_slice_correct
+    (BHFinal Ht : RegionName) (D BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BD => finalStateOffset s D BD i)) :
+    ∀ i : Fin BD,
+      let outAddr := finalStateOffset s D BD i
+      (exec (fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD) s).map
+          (·.readMem Ht outAddr)
+        = some (if active s D BD i then
+            finalStateStoreValue s BHFinal D BD i
+          else s.readMem Ht outAddr) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BD] =>
+        s.pids 1 * D + (s.pids 0 * BD + idx.1.val)) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have hab' : s.pids 1 * D + s.pids 0 * BD + a.val =
+        s.pids 1 * D + s.pids 0 * BD + b.val := by
+      simpa [Nat.add_assoc] using hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
+    rfl
+  simp [exec, fused_recurrent_hgrn_final_state_store_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt]
+  simp only [finalStateOffset, dIndex, Nat.add_assoc]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
+  by_cases hi : s.pids 0 * BD + i.val < D
+  · simp [active, dIndex, finalStateStoreValue, finalStateOffset,
+      Nat.add_assoc, hi]
+  · simp [active, dIndex, finalStateOffset, Nat.add_assoc, hi]
+
+theorem fused_recurrent_hgrn_final_state_store_slice_compute_correct
+    (BHFinal Ht : RegionName) (D BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BD => finalStateOffset s D BD i)) :
+    ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s D BD)
+        (fun i => (Ht, finalStateOffset s D BD i)))
+      (expected := fun i => finalStateStoreValue s BHFinal D BD i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fused_recurrent_hgrn_final_state_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := fused_recurrent_hgrn_final_state_store_slice_correct BHFinal Ht D BD s hOutInj i
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn
