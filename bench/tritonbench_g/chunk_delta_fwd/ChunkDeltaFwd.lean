@@ -310,4 +310,101 @@ theorem chunk_delta_fwd_v_new_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented final-state store slice of `chunk_delta_fwd.py`'s
+`chunk_delta_rule_fwd_kernel_h`. Companion to the per-iteration h-store slice:
+writes a precomputed final-state `BHFinal` tile into `FinalState` after the
+loop completes (i.e. when STORE_FINAL_STATE=True). -/
+def chunk_delta_fwd_final_state_store_slice
+    (BHFinal FinalState : RegionName) (K V BK BV : Nat) :
+    ComputeKernel := triton {
+  i_k = tl.program_id(0)
+  i_v = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
+  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
+  mask = (offs_k[:, None] < $(K)) & (offs_v[None, :] < $(V))
+  b_h = tl.load(BHFinal + i_bh * $(K) * $(V) +
+      offs_k[:, None] * $(V) + offs_v[None, :], mask=mask, other=0.0)
+  tl.store(FinalState + i_bh * $(K) * $(V) +
+      offs_k[:, None] * $(V) + offs_v[None, :], b_h, mask=mask)
+}
+
+def finalStateOffset (s : BlockState) (K V BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : Nat :=
+  s.pids 2 * K * V + kIndex s BK idx.1 * V + vIndex s BV idx.2.1
+
+noncomputable def finalStateStoreValue (s : BlockState) (BHFinal : RegionName)
+    (K V BK BV : Nat) (idx : TileIndex [BK, BV]) : ℝ :=
+  WithBot.unbotD 0
+    (if active s K V BK BV idx then
+      some (s.readMem BHFinal (finalStateOffset s K V BK BV idx))
+    else some (0.0 : ℝ))
+
+theorem chunk_delta_fwd_final_state_store_slice_correct
+    (BHFinal FinalState : RegionName) (K V BK BV : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx)) :
+    ∀ idx : TileIndex [BK, BV],
+      let outAddr := finalStateOffset s K V BK BV idx
+      (exec (chunk_delta_fwd_final_state_store_slice BHFinal FinalState K V BK BV)
+          s).map (·.readMem FinalState outAddr)
+        = some (if active s K V BK BV idx then
+            finalStateStoreValue s BHFinal K V BK BV idx
+          else s.readMem FinalState outAddr) := by
+  intro idx
+  simp [exec, chunk_delta_fwd_final_state_store_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        kIndex, vIndex, active, finalStateOffset, TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BK, BV] → Nat :=
+    fun idx => s.pids 2 * K * V +
+      (s.pids 0 * BK + idx.1.val) * V +
+      (s.pids 1 * BV + idx.2.1.val)
+  let valueFn : TileIndex [BK, BV] → ℝ :=
+    fun idx => WithBot.unbotD 0
+      (if s.pids 0 * BK + idx.1.val < K ∧
+          s.pids 1 * BV + idx.2.1.val < V then
+        some (s.readMem BHFinal (offsetFn idx))
+      else some (0.0 : ℝ))
+  let P : TileIndex [BK, BV] → Prop :=
+    fun idx => s.pids 0 * BK + idx.1.val < K ∧
+      s.pids 1 * BV + idx.2.1.val < V
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, finalStateOffset, kIndex, vIndex] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem FinalState (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BK, BV])).readMem FinalState (offsetFn idx) =
+    if P idx then finalStateStoreValue s BHFinal K V BK BV idx
+    else s.readMem FinalState (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive : s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V
+  · rfl
+  · rfl
+
+theorem chunk_delta_fwd_final_state_store_slice_compute_correct
+    (BHFinal FinalState : RegionName) (K V BK BV : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx)) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState K V BK BV)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
+        (fun idx : TileIndex [BK, BV] => (FinalState, finalStateOffset s K V BK BV idx)))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        finalStateStoreValue s BHFinal K V BK BV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_delta_fwd_final_state_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := chunk_delta_fwd_final_state_store_slice_correct BHFinal FinalState K V BK BV
+    s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
