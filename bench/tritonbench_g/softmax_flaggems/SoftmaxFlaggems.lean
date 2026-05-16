@@ -327,14 +327,82 @@ noncomputable def softmaxFlaggemsNonInnerSpec
         ((Tile.bop (NumericDType.div .real) bc e z).data idx)
   | none => 0
 
-/- The full algorithm-layer correctness theorem for
-`softmax_kernel_non_inner_one_tile_surface` is reduced via `Option.bind` to a
-`List.foldl` over `[TILE_N, TILE_K]` of `writeMem`s, but the resulting goal
-keeps `TileShape.dropInsertedIndex [TILE_N] 1 1 (i.1, 0, PUnit.unit)` terms
-that the existing `dropInsertedIndex_zero_cons`/`_succ` simp lemmas do not
-discharge when the `Fin` axis is a literal rather than `⟨0, _⟩` / `⟨k+1, _⟩`.
-The value-equality glue otherwise follows the 1D
-`softmax_kernel_inner_one_tile_correct` template lifted to 2D using the
-existing `nonInnerOffset_injective` helper for the offset injectivity side. -/
+/-- Algorithm-layer correctness for the non-inner one-tile FlagGems softmax.
+
+Uses `nonInnerOffset_injective` for the masked-store readback and lifts the
+1D `softmax_kernel_inner_one_tile_correct` template to the 2D `[TILE_N, TILE_K]`
+non-inner shape. The reduction axis is 0 (the `n` dimension); each `(n, k)`
+output is the softmax along its column. -/
+theorem softmax_kernel_non_inner_one_tile_correct
+    (output_ptr input_ptr : RegionName)
+    (N K TILE_N TILE_K : Nat)
+    (s s' : BlockState)
+    (hRange : s.pids 1 * TILE_K + TILE_K ≤ K)
+    (hExec : exec (softmax_kernel_non_inner_one_tile_surface
+        output_ptr input_ptr N K TILE_N TILE_K) s = some s') :
+    ∀ idx : TileIndex [TILE_N, TILE_K],
+      s'.readMem output_ptr (nonInnerOffset s N K TILE_K idx) =
+        if idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K then
+          softmaxFlaggemsNonInnerSpec s input_ptr N K TILE_N TILE_K idx
+        else s.readMem output_ptr (nonInnerOffset s N K TILE_K idx) := by
+  intro idx
+  by_cases hN : 0 < TILE_N
+  · by_cases hK : 0 < TILE_K
+    · simp [exec, softmax_kernel_non_inner_one_tile_surface,
+            stepStmts, stepStmt, evalOp, Option.bind,
+            Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+            Tile.reduceMax, Tile.reduceMaxDrop,
+            Tile.reduceSum, Tile.reduceSumDrop,
+            TileShape.axisDim, TileShape.eraseAxis,
+            TileShape.insertAxisIndex,
+            NumericDType.add, NumericDType.mul, NumericDType.sub,
+            NumericDType.div, ComparableDType.lt, hN, hK] at hExec
+      rw [← hExec]
+      -- Restate the writeMem offset in terms of `nonInnerOffset` so the
+      -- scatter readback can fire.
+      simp only [show ∀ idx : TileIndex [TILE_N, TILE_K],
+          s.pids 0 * N * K + idx.1.val * K + (s.pids 1 * TILE_K + idx.2.1.val) =
+            nonInnerOffset s N K TILE_K idx from fun _ => rfl]
+      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+            (nonInnerOffset_injective s hRange) idx]
+      by_cases hmask : idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K
+      · simp [hmask, softmaxFlaggemsNonInnerSpec,
+              softmaxFlaggemsNonInnerInputTile, nonInnerOffset,
+              Tile.reduceMax, Tile.reduceMaxDrop,
+              Tile.reduceSum, Tile.reduceSumDrop,
+              TileShape.axisDim, TileShape.eraseAxis,
+              TileShape.insertAxisIndex,
+              NumericDType.div, NumericDType.sub,
+              hN, hmask.2]
+        rfl
+      · simp [hmask]
+    · exact False.elim (hK (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
+  · exact False.elim (hN (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
+
+/-- Compute-facing correctness for the non-inner one-tile FlagGems softmax. -/
+theorem softmax_kernel_non_inner_one_tile_compute_correct
+    (output_ptr input_ptr : RegionName)
+    (N K TILE_N TILE_K : Nat)
+    (s : BlockState)
+    (hRange : s.pids 1 * TILE_K + TILE_K ≤ K) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_kernel_non_inner_one_tile_surface
+        output_ptr input_ptr N K TILE_N TILE_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [TILE_N, TILE_K] =>
+          idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K)
+        (fun idx => (output_ptr, nonInnerOffset s N K TILE_K idx)))
+      (expected := fun idx =>
+        softmaxFlaggemsNonInnerSpec s input_ptr N K TILE_N TILE_K idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [softmax_kernel_non_inner_one_tile_surface]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := softmax_kernel_non_inner_one_tile_correct output_ptr input_ptr
+    N K TILE_N TILE_K s s' hRange hExec idx
+  simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.SoftmaxFlaggems

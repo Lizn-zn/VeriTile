@@ -265,6 +265,35 @@ theorem insertAxis_head (shape : TileShape) (n : Nat) :
     dropInsertedIndex (d :: rest) ⟨k + 1, h⟩ n idx =
       (idx.1, dropInsertedIndex rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ n idx.2) := rfl
 
+/-! ### `Fin` literal cases of `dropInsertedIndex`
+
+The induction lemmas above pattern-match on `⟨0, _⟩` / `⟨k+1, h⟩`. They don't
+fire when the axis appears as a `Fin` literal (e.g. `(1 : Fin 2)`) because the
+literal's normal form doesn't syntactically expose `0 + 1`. These literal-axis
+simp lemmas close the gap for the cases produced by DSL kernels that use
+`[:, None]` / `[None, :]` (2D non-inner softmax, fused rotary etc.). -/
+
+@[simp] theorem dropInsertedIndex_one_singleton (d n : Nat)
+    (idx : TileIndex [d, n]) :
+    dropInsertedIndex [d] (1 : Fin 2) n idx = (idx.1, PUnit.unit) := rfl
+
+@[simp] theorem dropInsertedIndex_zero_singleton (d n : Nat)
+    (idx : TileIndex [n, d]) :
+    dropInsertedIndex [d] (0 : Fin 2) n idx = (idx.2.1, PUnit.unit) := rfl
+
+@[simp] theorem dropInsertedIndex_one_pair (d e n : Nat)
+    (idx : TileIndex [d, n, e]) :
+    dropInsertedIndex [d, e] (1 : Fin 3) n idx = (idx.1, idx.2.2) := rfl
+
+@[simp] theorem dropInsertedIndex_zero_pair (d e n : Nat)
+    (idx : TileIndex [n, d, e]) :
+    dropInsertedIndex [d, e] (0 : Fin 3) n idx = idx.2 := rfl
+
+@[simp] theorem dropInsertedIndex_two_pair (d e n : Nat)
+    (idx : TileIndex [d, e, n]) :
+    dropInsertedIndex [d, e] (2 : Fin 3) n idx =
+      (idx.1, idx.2.1, PUnit.unit) := rfl
+
 /-- Enumerate all indices of a shape, in row-major / outer-to-inner order. -/
 def allIndices : (shape : TileShape) → List (TileIndex shape)
   | [] => [PUnit.unit]
