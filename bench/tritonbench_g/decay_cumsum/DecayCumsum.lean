@@ -228,4 +228,81 @@ theorem prepare_qg_decay_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented masked kg writeback slice of `decay_cumsum.py`'s
+`prepare_qg_kg`. K-side analog of `prepare_qg_decay_store_slice`: starts from
+a precomputed `KDecay` multiplier, proves `kg = k * decay` over the BK vector. -/
+def prepare_kg_decay_store_slice
+    (K KDecay KG : RegionName)
+    (s_qk_h DK t_rel BT BK : Nat) :
+    ComputeKernel := triton {
+  i_k = tl.program_id(0)
+  i_c = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs = tl.arange(0, $(BK))
+  base = i_bh * $(s_qk_h) + (i_c * $(BT) + $(t_rel)) * $(DK) + i_k * $(BK)
+  mask = (i_k * $(BK) + offs) < $(DK)
+  k = tl.load(K + base + offs, mask=mask, other=0.0)
+  decay = tl.load(KDecay + base + offs, mask=mask, other=0.0)
+  kg = k * decay
+  tl.store(KG + base + offs, (kg).to(KG.dtype.element_ty), mask=mask)
+}
+
+noncomputable def prepareKgDecaySpec
+    (s : BlockState) (K KDecay : RegionName)
+    (s_qk_h DK t_rel BT BK : Nat) (i : Fin BK) : ℝ :=
+  s.readMem K (offset s s_qk_h DK t_rel BT BK i) *
+    s.readMem KDecay (offset s s_qk_h DK t_rel BT BK i)
+
+/-- Algorithm-layer correctness for the masked kg decay store slice. -/
+theorem prepare_kg_decay_store_slice_correct
+    (K KDecay KG : RegionName)
+    (s_qk_h DK t_rel BT BK : Nat)
+    (s : BlockState) :
+    ∀ i : Fin BK,
+      let outAddr := offset s s_qk_h DK t_rel BT BK i
+      (exec (prepare_kg_decay_store_slice K KDecay KG s_qk_h DK t_rel BT BK)
+          s).map (·.readMem KG outAddr)
+        = some (if active s DK BK i then
+            prepareKgDecaySpec s K KDecay s_qk_h DK t_rel BT BK i
+          else s.readMem KG outAddr) := by
+  intro i
+  have hInj : Function.Injective
+      (fun idx : TileIndex [BK] =>
+        s.pids 2 * s_qk_h + (s.pids 1 * BT + t_rel) * DK +
+          s.pids 0 * BK + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [exec, prepare_kg_decay_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
+        NumericDType.mul, ComparableDType.lt, elemIndex, baseOffset, offset]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj (i, PUnit.unit)]
+  by_cases hi : s.pids 0 * BK + i.val < DK
+  · simp [active, prepareKgDecaySpec, elemIndex, baseOffset, offset, hi]
+  · simp [active, elemIndex, baseOffset, offset, hi]
+
+/-- Compute-facing correctness for the masked kg decay store slice. -/
+theorem prepare_kg_decay_store_slice_compute_correct
+    (K KDecay KG : RegionName)
+    (s_qk_h DK t_rel BT BK : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := prepare_kg_decay_store_slice K KDecay KG s_qk_h DK t_rel BT BK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s DK BK)
+        (fun i => (KG, offset s s_qk_h DK t_rel BT BK i)))
+      (expected := fun i =>
+        prepareKgDecaySpec s K KDecay s_qk_h DK t_rel BT BK i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [prepare_kg_decay_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := prepare_kg_decay_store_slice_correct K KDecay KG
+    s_qk_h DK t_rel BT BK s i
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.DecayCumsum
