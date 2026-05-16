@@ -880,6 +880,50 @@ theorem tileIndex1d_offset_injective {BLOCK : Nat} :
   rintro ⟨a, _⟩ ⟨b, _⟩ h
   exact Prod.ext (Fin.ext h) rfl
 
+/-! ### 2D tile-index injectivity helpers
+
+The 2D analogue of the 1D helpers above, for the recurring offset form
+`fun idx : TileIndex [M, N] => base + idx.1.val * Nstride + idx.2.1.val`. -/
+
+/-- The 2D block-local offset `idx ↦ base + idx.1.val * Nstride + idx.2.1.val`
+is injective when `Nstride > N` (so the row coordinate `idx.1.val` separates
+distinct rows in the offset value, given that `idx.2.1.val < N`). -/
+theorem tileIndex2d_base_row_major_injective
+    {M N : Nat} (base Nstride : Nat) (h_lt : N ≤ Nstride) :
+    Function.Injective
+      (fun idx : TileIndex [M, N] =>
+        base + idx.1.val * Nstride + idx.2.1.val) := by
+  rintro ⟨⟨a1, ha1⟩, ⟨a2, ha2⟩, _⟩ ⟨⟨b1, hb1⟩, ⟨b2, hb2⟩, _⟩ h
+  -- After subtracting `base`, we have `a1 * Nstride + a2 = b1 * Nstride + b2`
+  -- with `a2 < N ≤ Nstride` and `b2 < N ≤ Nstride`. Standard div/mod argument.
+  simp only at h
+  have hN_pos : 0 < N := lt_of_le_of_lt (Nat.zero_le _) ha2
+  have hStride_pos : 0 < Nstride := lt_of_lt_of_le hN_pos h_lt
+  have ha2' : a2 < Nstride := lt_of_lt_of_le ha2 h_lt
+  have hb2' : b2 < Nstride := lt_of_lt_of_le hb2 h_lt
+  -- Rewrite associativity then cancel.
+  have h' : base + (a1 * Nstride + a2) = base + (b1 * Nstride + b2) := by
+    rw [← Nat.add_assoc, ← Nat.add_assoc]; exact h
+  have hkey : a1 * Nstride + a2 = b1 * Nstride + b2 := Nat.add_left_cancel h'
+  -- a1 and a2 are the "div" and "mod" of LHS by Nstride; similarly for b.
+  have ha_div : (a1 * Nstride + a2) / Nstride = a1 := by
+    rw [Nat.add_comm (a1 * Nstride) a2, Nat.mul_comm a1 Nstride,
+        Nat.add_mul_div_left _ _ hStride_pos, Nat.div_eq_of_lt ha2',
+        Nat.zero_add]
+  have hb_div : (b1 * Nstride + b2) / Nstride = b1 := by
+    rw [Nat.add_comm (b1 * Nstride) b2, Nat.mul_comm b1 Nstride,
+        Nat.add_mul_div_left _ _ hStride_pos, Nat.div_eq_of_lt hb2',
+        Nat.zero_add]
+  have ha_mod : (a1 * Nstride + a2) % Nstride = a2 := by
+    rw [Nat.add_comm (a1 * Nstride) a2, Nat.mul_comm a1 Nstride,
+        Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt ha2']
+  have hb_mod : (b1 * Nstride + b2) % Nstride = b2 := by
+    rw [Nat.add_comm (b1 * Nstride) b2, Nat.mul_comm b1 Nstride,
+        Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt hb2']
+  have h1 : a1 = b1 := by rw [← ha_div, hkey, hb_div]
+  have h2 : a2 = b2 := by rw [← ha_mod, hkey, hb_mod]
+  subst h1; subst h2; rfl
+
 private theorem foldl_writeMemTyped_nat_masked_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → Nat) (mask : α → Bool) (o : Nat) (l : List α) :
     ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
