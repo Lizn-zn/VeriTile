@@ -61,10 +61,7 @@ theorem load_reduce_kernel_correct
       s'.readMem y_ptr i.val =
         matrixReduceSpec s x_ptr stride_xm stride_xn BLOCK_M BLOCK_N i := by
   intro i
-  have h_inj : Function.Injective (fun idx : TileIndex [BLOCK_M] => idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext hab
-    rfl
+  have h_inj := BlockState.tileIndex1d_offset_injective (BLOCK := BLOCK_M)
   by_cases hBM : 0 < BLOCK_M
   · by_cases hBN : 0 < BLOCK_N
     · simp [exec, load_reduce_kernel, stepStmts, stepStmt, evalOp,

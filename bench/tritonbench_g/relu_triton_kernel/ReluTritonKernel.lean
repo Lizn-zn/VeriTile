@@ -49,16 +49,12 @@ theorem relu_kernel_correct
                 else s.readMem out_ptr addr) := by
   intro i
   by_cases hpid : s.pid = 0
-  · have h_inj : Function.Injective
-        (fun idx : TileIndex [block_size] => idx.1.val) := by
-      rintro ⟨a, _⟩ ⟨b, _⟩ hab
-      obtain rfl : a = b := Fin.ext hab
-      rfl
-    simp [observeAt, exec, relu_kernel, stepStmts, stepStmt, evalOp,
+  · simp [observeAt, exec, relu_kernel, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.select, NumericDType.add, NumericDType.mul,
           ComparableDType.lt, ComparableDType.eq, ComparableDType.ge, hpid]
     unfold InputLoadedAt at h_x
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          BlockState.tileIndex1d_offset_injective (i, PUnit.unit)]
     have hx0 : s.readMem x_ptr i.val = xs i := by
       simpa [hpid] using h_x i
     by_cases hi : i.val < N
