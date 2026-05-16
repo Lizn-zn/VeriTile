@@ -327,4 +327,82 @@ theorem rope_transform_q1_head_compute_correct
     s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-! ## K-side coverage
+
+The `rope_transform_q0_head` and `rope_transform_q1_head` surfaces are
+parameterised by a generic region name and head-count bound. Applying the
+same correctness theorems with the K region, `n_kh` head count, and the
+appropriate `K` stride covers the K-side forward stores
+`new_k_tile_1 = k_tile_1 * cos - k_tile_2 * sin` and
+`new_k_tile_2 = k_tile_2 * cos + k_tile_1 * sin`. The thin wrappers below
+make this explicit so downstream consumers of #134 can cite a K-specific
+theorem name. -/
+
+/-- K-side first-half store, alias of `rope_transform_q0_head` instantiated
+with the K region and `n_kh` head bound. -/
+abbrev rope_transform_k0_head
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd
+      n_kh HEAD_HALF BLOCK_HALF : Nat) :
+    ComputeKernel :=
+  rope_transform_q0_head K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride
+    cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+
+/-- K-side second-half store, alias of `rope_transform_q1_head`. -/
+abbrev rope_transform_k1_head
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd
+      n_kh HEAD_HALF BLOCK_HALF : Nat) :
+    ComputeKernel :=
+  rope_transform_q1_head K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride
+    cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+
+/-- K-side first-half correctness, derived from the Q-side theorem. -/
+theorem rope_transform_k0_head_compute_correct
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd
+      n_kh HEAD_HALF BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        qOffset s HEAD_IDX k_row_stride hd (dimIndex i))) :
+    ComputeCorrect.Realizes
+      (kernel := rope_transform_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
+        k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF
+        BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF => active HEAD_IDX n_kh HEAD_HALF i)
+        (fun i => (K, qOffset s HEAD_IDX k_row_stride hd (dimIndex i))))
+      (expected := fun i =>
+        ropeQ0Spec s K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride
+          cos_row_stride sin_row_stride hd HEAD_HALF i) :=
+  rope_transform_q0_head_compute_correct K COS SIN HEAD_IDX COS_ROW_IDX
+    k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+    s hOutInj
+
+/-- K-side second-half correctness, derived from the Q-side theorem. -/
+theorem rope_transform_k1_head_compute_correct
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd
+      n_kh HEAD_HALF BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        q1WriteOffset s HEAD_IDX k_row_stride hd HEAD_HALF i)) :
+    ComputeCorrect.Realizes
+      (kernel := rope_transform_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
+        k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF
+        BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF => active HEAD_IDX n_kh HEAD_HALF i)
+        (fun i => (K, q1WriteOffset s HEAD_IDX k_row_stride hd HEAD_HALF i)))
+      (expected := fun i =>
+        ropeQ1Spec s K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride
+          cos_row_stride sin_row_stride hd HEAD_HALF i) :=
+  rope_transform_q1_head_compute_correct K COS SIN HEAD_IDX COS_ROW_IDX
+    k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+    s hOutInj
+
 end VeriTile.Bench.TritonBenchG.RopeTransform
