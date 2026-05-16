@@ -296,4 +296,154 @@ theorem fill_k_cache_tile_compute_correct
     BLOCK_H BLOCK_D s s' hOutInj hExec idx
   simpa [hActive] using h
 
+/-! ## V-cache tile fill correctness -/
+
+def vSourceOffset
+    (s : BlockState) (SIDX stride_vss stride_vsh stride_vsd : Nat)
+    (idx : TileIndex [BLOCK_H, BLOCK_DV]) : Nat :=
+  SIDX * stride_vss + headIndex s idx.1 * stride_vsh +
+    dimIndex s idx.2.1 * stride_vsd
+
+def vCacheOffset
+    (s : BlockState) (BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX stride_vcn stride_vcb stride_vch stride_vcd stride_boff : Nat)
+    (idx : TileIndex [BLOCK_H, BLOCK_DV]) : Nat :=
+  blockOff s BlockOffsets KV_BLOCK_IDX stride_boff * stride_vcn +
+    BIDX * stride_vcb + headIndex s idx.1 * stride_vch +
+    dimIndex s idx.2.1 * stride_vcd
+
+private noncomputable def vRegisterValue
+    (s : BlockState) (VStates : RegionName)
+    (SIDX stride_vss stride_vsh stride_vsd num_heads head_dim_v : Nat)
+    (idx : TileIndex [BLOCK_H, BLOCK_DV]) : ℝ :=
+  WithBot.unbotD 0
+    (if idx.1.val < num_heads ∧ idx.2.1.val < head_dim_v then
+      some (s.readMem VStates
+        (SIDX * stride_vss + idx.1.val * stride_vsh +
+          idx.2.1.val * stride_vsd))
+    else some (0.0 : ℝ))
+
+private noncomputable def preStoreStateV
+    (s : BlockState) (VStates BlockOffsets : RegionName)
+    (SIDX KV_BLOCK_IDX
+      stride_vss stride_vsh stride_vsd stride_boff
+      num_heads head_dim_v BLOCK_H BLOCK_DV : Nat) : BlockState :=
+  (s.setReg "batch_id" TileDType.nat [] (Tile.scalar (s.pids 0))
+    |>.setReg "h_off" TileDType.nat [BLOCK_H] (Tile.vec fun i => i.val)
+    |>.setReg "dv_off" TileDType.nat [BLOCK_DV] (Tile.vec fun j => j.val)
+    |>.setReg "block_off" TileDType.nat []
+        (Tile.scalar
+          (s.readMemValue .nat BlockOffsets (s.pids 0 * stride_boff + KV_BLOCK_IDX)))
+    |>.setReg "maskv" TileDType.bool [BLOCK_H, BLOCK_DV]
+        { data := fun idx =>
+            decide (idx.1.val < num_heads) && decide (idx.2.1.val < head_dim_v) }
+    |>.setReg "v" TileDType.real [BLOCK_H, BLOCK_DV]
+        { data := fun idx =>
+          if idx.1.val < num_heads ∧ idx.2.1.val < head_dim_v then
+            some (s.readMem VStates
+              (SIDX * stride_vss + idx.1.val * stride_vsh +
+                idx.2.1.val * stride_vsd))
+          else some (0.0 : ℝ) })
+
+/-- Algorithm-layer correctness for the V-cache tile fill (analogous to
+`fill_k_cache_tile_correct`, with V-specific strides and bound). -/
+theorem fill_v_cache_tile_correct
+    (VStates VCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_vss stride_vsh stride_vsd
+      stride_vcn stride_vcb stride_vch stride_vcd
+      stride_boff num_heads head_dim_v BLOCK_H BLOCK_DV : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_H, BLOCK_DV] =>
+        vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+          stride_vch stride_vcd stride_boff idx))
+    (hExec : exec (fill_v_cache_tile VStates VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd
+        stride_vcn stride_vcb stride_vch stride_vcd stride_boff
+        num_heads head_dim_v BLOCK_H BLOCK_DV) s = some s') :
+    ∀ idx : TileIndex [BLOCK_H, BLOCK_DV],
+      s'.readMem VCaches
+          (vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+            stride_vch stride_vcd stride_boff idx) =
+        if active s num_heads head_dim_v BLOCK_H BLOCK_DV idx then
+          s.readMem VStates
+            (vSourceOffset s SIDX stride_vss stride_vsh stride_vsd idx)
+        else
+          s.readMem VCaches
+            (vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+              stride_vch stride_vcd stride_boff idx) := by
+  intro idx
+  simp [exec, fill_v_cache_tile, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        BlockState.readMemValue, TileShape.dropInsertedIndex] at hExec
+  rw [← hExec]
+  let offsetFn : TileIndex [BLOCK_H, BLOCK_DV] → Nat :=
+    fun idx =>
+      s.readMemValue .nat BlockOffsets (s.pids 0 * stride_boff + KV_BLOCK_IDX) *
+          stride_vcn +
+        BIDX * stride_vcb + idx.1.val * stride_vch + idx.2.1.val * stride_vcd
+  let valueFn : TileIndex [BLOCK_H, BLOCK_DV] → ℝ :=
+    fun idx =>
+      vRegisterValue s VStates SIDX stride_vss stride_vsh stride_vsd
+        num_heads head_dim_v idx
+  let P : TileIndex [BLOCK_H, BLOCK_DV] → Prop :=
+    fun idx => idx.1.val < num_heads ∧ idx.2.1.val < head_dim_v
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, vCacheOffset, blockOff, headIndex, dimIndex,
+      BlockState.readMemValue] using hOutInj
+  have hscatter := BlockState.scatter_readback_prop_masked_nd
+    (region := VCaches)
+    (s := preStoreStateV s VStates BlockOffsets SIDX KV_BLOCK_IDX
+      stride_vss stride_vsh stride_vsd stride_boff num_heads head_dim_v
+      BLOCK_H BLOCK_DV)
+    (offsetFn := offsetFn) (valueFn := valueFn) (P := P)
+    hOffsetInj idx
+  by_cases hActive : P idx
+  · simpa [offsetFn, valueFn, P, active, vSourceOffset, vCacheOffset, blockOff,
+      headIndex, dimIndex, vRegisterValue, preStoreStateV,
+      BlockState.readMemValue, TileShape.dropInsertedIndex, hActive] using hscatter
+  · simpa [offsetFn, valueFn, P, active, vSourceOffset, vCacheOffset, blockOff,
+      headIndex, dimIndex, vRegisterValue, preStoreStateV,
+      BlockState.readMemValue, TileShape.dropInsertedIndex, hActive] using hscatter
+
+/-- Compute-facing correctness for the V-cache tile fill. -/
+theorem fill_v_cache_tile_compute_correct
+    (VStates VCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_vss stride_vsh stride_vsd
+      stride_vcn stride_vcb stride_vch stride_vcd
+      stride_boff num_heads head_dim_v BLOCK_H BLOCK_DV : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_H, BLOCK_DV] =>
+        vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+          stride_vch stride_vcd stride_boff idx)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile VStates VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd
+        stride_vcn stride_vcb stride_vch stride_vcd stride_boff
+        num_heads head_dim_v BLOCK_H BLOCK_DV)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_heads head_dim_v BLOCK_H BLOCK_DV)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+            stride_vch stride_vcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem VStates
+          (vSourceOffset s SIDX stride_vss stride_vsh stride_vsd idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fill_v_cache_tile]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := fill_v_cache_tile_correct VStates VCaches BlockOffsets
+    SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd stride_vcn
+    stride_vcb stride_vch stride_vcd stride_boff num_heads head_dim_v
+    BLOCK_H BLOCK_DV s s' hOutInj hExec idx
+  simpa [hActive] using h
+
 end VeriTile.Bench.TritonBenchG.KvCacheFilling
