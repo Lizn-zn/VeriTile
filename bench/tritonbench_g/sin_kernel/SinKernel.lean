@@ -38,16 +38,12 @@ theorem kernel_function_correct
         = some (if addr < n_elements then Real.sin (xs i)
                 else s.readMem output_ptr addr) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [observeAt, exec, kernel_function, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.uop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, WithBot.realSin]
   unfold InputLoadedAt at h_x
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hi : s.pid * BLOCK_SIZE + i.val < n_elements
   · simp [hi, h_x]
   · simp [hi]

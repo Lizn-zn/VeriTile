@@ -43,16 +43,12 @@ theorem square_kernel_correct
             n_cols BLOCK_SIZE) s).map (·.readMem output_ptr outAddr)
         = some (if i.val < n_cols then xs i * xs i else s.readMem output_ptr outAddr) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pid * output_row_stride + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [exec, square_kernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.mul,
         ComparableDType.lt]
   unfold InputRowLoadedAt at h_x
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hi : i.val < n_cols
   · simp [hi, h_x]
   · simp [hi]

@@ -254,18 +254,6 @@ theorem ksoftmax_forward_plain_correct
           ksoftmaxSpec s X stride_xm stride_xn K DEPTH i
         else s.readMem Y (yOffset s stride_ym stride_yn i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [DEPTH] =>
-        s.pids 0 * stride_ym + s.pids 1 * stride_yn + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [yOffset] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
   by_cases hD : 0 < DEPTH
   · simp [exec, ksoftmax_forward_plain, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
@@ -275,7 +263,8 @@ theorem ksoftmax_forward_plain_correct
           ComparableDType.lt, hD] at hExec
     subst s'
     simp only [yOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < K
     · simp [hi, ksoftmaxSpec, ksoftmaxInputTile, xOffset,
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum,

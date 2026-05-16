@@ -53,16 +53,12 @@ theorem mul2_kernel_correct
           out_ptr BLOCK_SIZE s.pid i
         = some (if addr < n_elements then 2 * xs i else s.readMem out_ptr addr) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [observeAt, exec, mul2_kernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   unfold InputLoadedAt at h_x
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hi : s.pid * BLOCK_SIZE + i.val < n_elements
   · simp [hi, h_x]
   · simp [hi]
@@ -103,16 +99,12 @@ theorem mul2_inplace_kernel_correct
           ptr BLOCK_SIZE s.pid i
         = some (if addr < n_elements then 2 * xs i else s.readMem ptr addr) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [observeAt, exec, mul2_inplace_kernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   unfold InputLoadedAt at h_x
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hi : s.pid * BLOCK_SIZE + i.val < n_elements
   · simp [hi, h_x]
   · simp [hi]

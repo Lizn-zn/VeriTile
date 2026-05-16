@@ -52,15 +52,11 @@ theorem dequantize_rowwise_kernel_correct
             dequantizeRowwiseSpec s x_ptr state_x BLOCK_SIZE inv_127 i
           else s.readMem output_ptr outAddr) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [P2] => s.pid * BLOCK_SIZE + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [exec, dequantize_rowwise_kernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hi : i.val < BLOCK_SIZE
   · simp [hi, dequantizeRowwiseSpec, BlockState.pid_eq, mul_assoc]
   · simp [hi]

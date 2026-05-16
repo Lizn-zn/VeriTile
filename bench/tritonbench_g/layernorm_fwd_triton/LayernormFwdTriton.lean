@@ -152,18 +152,6 @@ theorem layernorm_fwd_triton_correct
             N BLOCK_SIZE eps i
         else s.readMem Y (yOffset s stride_y_N stride_y_hn i) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] =>
-        s.pids 0 * stride_y_N + s.pids 1 * stride_y_hn + idx.1.val) := by
-    intro a b h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [yOffset] using h
-    cases a
-    cases b
-    simp only at hab
-    cases hab
-    rfl
   by_cases hB : 0 < BLOCK_SIZE
   · have hStep : BLOCK_SIZE ≠ 0 := Nat.ne_of_gt hB
     simp [layernorm_fwd_triton, ComputeKernel.toAlgKernel,
@@ -188,7 +176,8 @@ theorem layernorm_fwd_triton_correct
     simp [BlockState.setReg] at hExec
     subst s'
     simp only [yOffset]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < N
     · simp only [hi, ↓reduceIte]
       simp [hi, layernormYSpec, layernormInvVarCarrier, layernormVarCarrier,

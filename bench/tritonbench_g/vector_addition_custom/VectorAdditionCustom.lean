@@ -37,16 +37,12 @@ theorem add_kernel_correct
       observeAt (exec (_add_kernel A B C size BLOCK) s) C BLOCK s.pid i
         = some (if addr < size then as i + bs i else s.readMem C addr) := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK] => s.pid * BLOCK + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [observeAt, exec, _add_kernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   unfold InputLoadedAt at h_a h_b
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hi : s.pid * BLOCK + i.val < size
   · simp [hi, h_a, h_b]
   · simp [hi]

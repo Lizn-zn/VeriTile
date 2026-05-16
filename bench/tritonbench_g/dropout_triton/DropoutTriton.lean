@@ -55,18 +55,14 @@ theorem dropout_kernel_correct
           dropoutSpec s x_ptr x_keep_ptr p BLOCK_SIZE i
         else s.readMem output_ptr outAddr := by
   intro i
-  have h_inj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + idx.1.val) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
-    rfl
   simp [exec, dropout_kernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.cop, Tile.select,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
         ComparableDType.lt] at hExec
   subst s'
   simp only [dropoutOffset]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hBounds : s.pid * BLOCK_SIZE + i.val < n_elements
   · simp [hBounds, dropoutSpec, dropoutOffset]
     cases hKeep : s.readMemValue .bool x_keep_ptr (s.pid * BLOCK_SIZE + i.val) <;>

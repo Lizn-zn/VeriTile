@@ -873,6 +873,13 @@ theorem tileIndex1d_base_strided_offset_injective {BLOCK : Nat}
   have heq : a.val = b.val := Nat.eq_of_mul_eq_mul_right (Nat.pos_of_ne_zero h_stride) hval
   exact Prod.ext (Fin.ext heq) rfl
 
+/-- The bare 1D block-local offset `idx ↦ idx.1.val` is injective. -/
+theorem tileIndex1d_offset_injective {BLOCK : Nat} :
+    Function.Injective
+      (fun idx : TileIndex [BLOCK] => idx.1.val) := by
+  rintro ⟨a, _⟩ ⟨b, _⟩ h
+  exact Prod.ext (Fin.ext h) rfl
+
 private theorem foldl_writeMemTyped_nat_masked_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → Nat) (mask : α → Bool) (o : Nat) (l : List α) :
     ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
