@@ -778,8 +778,45 @@ theorem prefill_cache_kernel_correct
   · simp [exec, prefill_cache_kernel, stepStmts, stepStmt, evalOp,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
-          ComparableDType.lt, ComparableDType.le, hN, hH] at hExec
-    sorry
+          ComparableDType.lt, ComparableDType.le,
+          Tile.reduceMaxNat, Tile.reduceMaxNatDrop, TileShape.axisDim,
+          hN, hH] at hExec
+    -- Note: `prefillOriSeqIdx` unfolds to the same `Finset.sup'` expression
+    -- that the symbolic execution produces.
+    have hOri : prefillOriSeqIdx s cumsum_lengths BLOCK_SIZE N_ELEMENTS =
+        s.pids 0 * BLOCK_SIZE + s.pids 1 -
+          Finset.univ.sup' (Finset.univ_nonempty_iff.mpr ⟨⟨0, hN⟩⟩)
+            (fun x : Fin N_ELEMENTS =>
+              if s.readMemValue TileDType.nat cumsum_lengths.cast x.val ≤
+                  s.pids 0 * BLOCK_SIZE + s.pids 1 then
+                s.readMemValue TileDType.nat cumsum_lengths.cast x.val
+              else 0) := by
+      simp [prefillOriSeqIdx, prefillIdx, Tile.reduceMaxNatDrop,
+            TileShape.axisDim, hN]
+      rfl
+    subst s'
+    refine ⟨?_, ?_⟩
+    · intro i
+      simp only [prefillOutOffset, prefillIdx, prefillCacheOffset,
+                 prefillActive, hOri]
+      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+            sin_output _ _ _ _ _ cos_output _ hRegion]
+      rw [BlockState.scatter_readback_prop_masked_nd
+            (region := cos_output) _ _ _ _ hRawInj (i, PUnit.unit)]
+      by_cases hAct : s.pids 0 * BLOCK_SIZE + s.pids 1 < total_length
+      · simp [hAct]
+        rfl
+      · simp [hAct]
+    · intro i
+      simp only [prefillOutOffset, prefillIdx, prefillCacheOffset,
+                 prefillActive, hOri]
+      rw [BlockState.scatter_readback_prop_masked_nd
+            (region := sin_output) _ _ _ _ hRawInj (i, PUnit.unit)]
+      by_cases hAct : s.pids 0 * BLOCK_SIZE + s.pids 1 < total_length
+      · simp [hAct]
+      · rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+              cos_output _ _ _ _ _ sin_output _ (Ne.symm hRegion)]
+        simp [hAct]
   · constructor
     · intro i
       exact False.elim (hH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))

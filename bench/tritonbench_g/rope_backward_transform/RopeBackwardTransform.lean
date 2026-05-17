@@ -531,6 +531,7 @@ Assumptions:
   bound used for Q first-vs-second-half offset disjointness;
 * `0 < pad_n_qh`, `0 < pad_hd / 2`, `0 < pad_n_kh` — non-empty tile shapes;
 * tile offset injectivity for the Q first-half scatter readback. -/
+set_option maxHeartbeats 80000000 in
 theorem triton_rope_surface_q_first_half_correct
     (q_ptr k_ptr cos sin : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride

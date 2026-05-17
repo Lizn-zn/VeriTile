@@ -674,12 +674,11 @@ theorem rms_layernorm_forward_inv_var_correct
     subst s'
     have hB' : BLOCK_SIZE = 0 := Nat.eq_zero_of_not_pos hB
     subst hB'
-    simp [List.foldl, TileShape.allIndices, List.finRange,
+    simp [TileShape.allIndices, List.finRange,
           rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
           rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-          WithBot.realRsqrt, NumericDType.mul, BlockState.writeMem_readMem,
-          hRegions]
+          WithBot.realRsqrt, NumericDType.mul]
 
 /-- Compute-facing correctness for the `r` (rstd / inv_var) output of
 `_rms_layernorm_forward`. -/
@@ -741,12 +740,11 @@ theorem gemma_rms_layernorm_forward_inv_var_correct
     subst s'
     have hB' : BLOCK_SIZE = 0 := Nat.eq_zero_of_not_pos hB
     subst hB'
-    simp [List.foldl, TileShape.allIndices, List.finRange,
+    simp [TileShape.allIndices, List.finRange,
           rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
           rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-          WithBot.realRsqrt, NumericDType.mul, BlockState.writeMem_readMem,
-          hRegions]
+          WithBot.realRsqrt, NumericDType.mul]
 
 /-- Compute-facing correctness for the `r` (rstd / inv_var) output of
 `_gemma_rms_layernorm_forward`. -/

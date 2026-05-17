@@ -807,6 +807,12 @@ theorem rotary_kernel_q0_correct
       (fun idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2] =>
         qFullOffset s stride_qbs stride_qh stride_qd
           BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) idx))
+    (hQ0Q1Disjoint : ∀ (i k : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2]),
+      qFullOffset s stride_qbs stride_qh stride_qd
+          BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) i ≠
+        (s.pids 1 * BLOCK_SEQ + k.1.val) * stride_qbs +
+          (s.pids 0 * BLOCK_HEAD + k.2.1.val) * stride_qh +
+          (k.2.2.1.val * 2 + 1) * stride_qd)
     (hExec : exec (rotary_kernel_surface Q K Cos Sin
         stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
         stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
@@ -839,6 +845,14 @@ theorem rotary_kernel_q0_correct
         -- Strip the K0 foldl (cross-region: Q ≠ K).
         rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
               (region := K) _ _ _ _ _ _ _ hQK]
+        -- Strip the Q1 foldl (intra-region, parity-disjoint offsets).
+        rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+              (region := Q)
+              (offsetFn := fun k : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2] =>
+                (s.pids 1 * BLOCK_SEQ + k.1.val) * stride_qbs +
+                  (s.pids 0 * BLOCK_HEAD + k.2.1.val) * stride_qh +
+                  (k.2.2.1.val * 2 + 1) * stride_qd)
+              (hOff := fun k _ _ => hQ0Q1Disjoint idx k)]
         sorry
       · sorry
     · sorry

@@ -1221,21 +1221,37 @@ theorem decoding_fused_rotary_embedding_kernel_surface_q_first_half_correct
     simp [hGate] at hExec
     rw [← hExec]
     simp only [qFirstOffset, qBase, dimIndex]
-    -- Strip v_cache foldl (cross-region q ≠ v_cache).
+    -- Strip v_cache foldl (cross-region q ≠ v_cache). Shape is [HEAD_DIM]
+    -- since v_cache writes the full head dimension in one tile.
     rw [BlockState.scatter_preserves_other_region
-          (region := v_cache) _ _ _ hQVC _ _]
+          (region := v_cache) (R := q) (h_ne := hQVC)
+          (off := s.pids 1 * q_token_stride + s.pids 0 * q_head_stride +
+            i.val * head_dim_stride)
+          (l := TileShape.allIndices [HEAD_DIM])]
     -- Strip k_cache second-half foldl (cross-region q ≠ k_cache).
     rw [BlockState.scatter_preserves_other_region
-          (region := k_cache) _ _ _ hQKC _ _]
+          (region := k_cache) (R := q) (h_ne := hQKC)
+          (off := s.pids 1 * q_token_stride + s.pids 0 * q_head_stride +
+            i.val * head_dim_stride)
+          (l := TileShape.allIndices [HALF_DIM])]
     -- Strip k_cache first-half foldl (cross-region q ≠ k_cache).
     rw [BlockState.scatter_preserves_other_region
-          (region := k_cache) _ _ _ hQKC _ _]
+          (region := k_cache) (R := q) (h_ne := hQKC)
+          (off := s.pids 1 * q_token_stride + s.pids 0 * q_head_stride +
+            i.val * head_dim_stride)
+          (l := TileShape.allIndices [HALF_DIM])]
     -- Strip k second-half foldl (cross-region q ≠ k).
     rw [BlockState.scatter_preserves_other_region
-          (region := k) _ _ _ hQK _ _]
+          (region := k) (R := q) (h_ne := hQK)
+          (off := s.pids 1 * q_token_stride + s.pids 0 * q_head_stride +
+            i.val * head_dim_stride)
+          (l := TileShape.allIndices [HALF_DIM])]
     -- Strip k first-half foldl (cross-region q ≠ k).
     rw [BlockState.scatter_preserves_other_region
-          (region := k) _ _ _ hQK _ _]
+          (region := k) (R := q) (h_ne := hQK)
+          (off := s.pids 1 * q_token_stride + s.pids 0 * q_head_stride +
+            i.val * head_dim_stride)
+          (l := TileShape.allIndices [HALF_DIM])]
     -- Strip Q second-half foldl (same region, disjoint offsets).
     rw [hStripSecond]
     -- Close Q first-half foldl with scatter readback.

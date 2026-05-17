@@ -938,7 +938,7 @@ theorem fifth_order_fwd_surface_y01_correct
                  WithBot.realSub, WithBot.realAdd, WithBot.realMul,
                  Option.map₂, Option.map, WithBot.unbotD,
                  Option.bind, Option.bind_some, WithBot.recBotCoe]
-      split_ifs with hx hy hz hz hy hz hz
+      split_ifs
       all_goals (simp only [id]; first | (norm_num; ring) | norm_num)
     · -- Inactive: strip remaining Y00 inner fold.
       rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
@@ -1165,5 +1165,204 @@ theorem fifth_order_fwd_surface_y02_compute_correct
   have h := fifth_order_fwd_surface_y02_correct coord_ptr output_ptr block_size coord_numel
     output_numel col_offset output_stride s s' hStride hOutInj hExec i
   simpa [hActive] using h
+
+noncomputable def y03Spec
+    (s : BlockState) (coord_ptr : RegionName)
+    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+  let x := coordX s coord_ptr block_size coord_numel i
+  let y := coordY s coord_ptr block_size coord_numel i
+  let z := coordZ s coord_ptr block_size coord_numel i
+  let x2 := Option.map₂ (fun a b => a * b) x x
+  let x3 := Option.map₂ (fun a b => a * b) x2 x
+  let y2 := Option.map₂ (fun a b => a * b) y y
+  let y3 := Option.map₂ (fun a b => a * b) y2 y
+  let z2 := Option.map₂ (fun a b => a * b) z z
+  let z3 := Option.map₂ (fun a b => a * b) z2 z
+  WithBot.unbotD 0
+    (Option.map₂ (fun a b => a + b)
+      (Option.map₂ (fun a b => a * b)
+        (Option.map₂ (fun a b => a * b)
+          (Option.map (fun b => (-16.9926454679664 : ℝ) * b) x3) y) z)
+      (Option.map₂ (fun a b => a * b) x
+        (Option.map₂ (fun a b => a + b)
+          (Option.map₂ (fun a b => a * b)
+            (Option.map (fun b => (33.9852909359329 : ℝ) * b) y3) z)
+          (Option.map₂ (fun a b => a * b)
+            (Option.map (fun b => (-16.9926454679664 : ℝ) * b) z3) y))))
+
+noncomputable def y04Spec
+    (s : BlockState) (coord_ptr : RegionName)
+    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+  let x := coordX s coord_ptr block_size coord_numel i
+  let y := coordY s coord_ptr block_size coord_numel i
+  let z := coordZ s coord_ptr block_size coord_numel i
+  let x2 := Option.map₂ (fun a b => a * b) x x
+  let x3 := Option.map₂ (fun a b => a * b) x2 x
+  let x5 := Option.map₂ (fun a b => a * b) x3 x2
+  let y2 := Option.map₂ (fun a b => a * b) y y
+  let y4 := Option.map₂ (fun a b => a * b) y2 y2
+  let z2 := Option.map₂ (fun a b => a * b) z z
+  let z4 := Option.map₂ (fun a b => a * b) z2 z2
+  WithBot.unbotD 0
+    (Option.map₂ (fun a b => a + b)
+      (Option.map₂ (fun a b => a + b)
+        (Option.map (fun b => (1.60565407233314 : ℝ) * b) x5)
+        (Option.map₂ (fun a b => a * b) x3
+          (Option.map₂ (fun a b => a + b)
+            (Option.map (fun b => (3.21130814466628 : ℝ) * b) z2)
+            (Option.map (fun b => (-19.2678488679977 : ℝ) * b) y2))))
+      (Option.map₂ (fun a b => a * b) x
+        (Option.map₂ (fun a b => a + b)
+          (Option.map₂ (fun a b => a + b)
+            (Option.map (fun b => (1.60565407233314 : ℝ) * b) z4)
+            (Option.map (fun b => (12.8452325786651 : ℝ) * b) y4))
+          (Option.map₂ (fun a b => a * b)
+            (Option.map (fun b => (-19.2678488679977 : ℝ) * b) y2) z2))))
+
+noncomputable def y05Spec
+    (s : BlockState) (coord_ptr : RegionName)
+    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+  let x := coordX s coord_ptr block_size coord_numel i
+  let y := coordY s coord_ptr block_size coord_numel i
+  let z := coordZ s coord_ptr block_size coord_numel i
+  let x2 := Option.map₂ (fun a b => a * b) x x
+  let x4 := Option.map₂ (fun a b => a * b) x2 x2
+  let y2 := Option.map₂ (fun a b => a * b) y y
+  let y3 := Option.map₂ (fun a b => a * b) y2 y
+  let y4 := Option.map₂ (fun a b => a * b) y2 y2
+  let y5 := Option.map₂ (fun a b => a * b) y4 y
+  let z2 := Option.map₂ (fun a b => a * b) z z
+  let z4 := Option.map₂ (fun a b => a * b) z2 z2
+  WithBot.unbotD 0
+    (Option.map₂ (fun a b => a + b)
+      (Option.map₂ (fun a b => a + b)
+        (Option.map (fun b => (3.31662479035540 : ℝ) * b) y5)
+        (Option.map₂ (fun a b => a * b) y3
+          (Option.map₂ (fun a b => a + b)
+            (Option.map (fun b => (-16.5831239517770 : ℝ) * b) x2)
+            (Option.map (fun b => (-16.5831239517770 : ℝ) * b) z2))))
+      (Option.map₂ (fun a b => a * b) y
+        (Option.map₂ (fun a b => a + b)
+          (Option.map₂ (fun a b => a + b)
+            (Option.map (fun b => (6.21867148191637 : ℝ) * b) x4)
+            (Option.map (fun b => (6.21867148191637 : ℝ) * b) z4))
+          (Option.map₂ (fun a b => a * b)
+            (Option.map (fun b => (12.4373429638327 : ℝ) * b) x2) z2))))
+
+noncomputable def y06Spec
+    (s : BlockState) (coord_ptr : RegionName)
+    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+  let x := coordX s coord_ptr block_size coord_numel i
+  let y := coordY s coord_ptr block_size coord_numel i
+  let z := coordZ s coord_ptr block_size coord_numel i
+  let x2 := Option.map₂ (fun a b => a * b) x x
+  let x4 := Option.map₂ (fun a b => a * b) x2 x2
+  let y2 := Option.map₂ (fun a b => a * b) y y
+  let y4 := Option.map₂ (fun a b => a * b) y2 y2
+  let z2 := Option.map₂ (fun a b => a * b) z z
+  let z3 := Option.map₂ (fun a b => a * b) z2 z
+  let z5 := Option.map₂ (fun a b => a * b) z3 z2
+  WithBot.unbotD 0
+    (Option.map₂ (fun a b => a + b)
+      (Option.map₂ (fun a b => a + b)
+        (Option.map (fun b => (1.60565407233314 : ℝ) * b) z5)
+        (Option.map₂ (fun a b => a * b) z3
+          (Option.map₂ (fun a b => a + b)
+            (Option.map (fun b => (3.21130814466628 : ℝ) * b) x2)
+            (Option.map (fun b => (-19.2678488679977 : ℝ) * b) y2))))
+      (Option.map₂ (fun a b => a * b) z
+        (Option.map₂ (fun a b => a + b)
+          (Option.map₂ (fun a b => a + b)
+            (Option.map (fun b => (1.60565407233314 : ℝ) * b) x4)
+            (Option.map (fun b => (12.8452325786651 : ℝ) * b) y4))
+          (Option.map₂ (fun a b => a * b)
+            (Option.map (fun b => (-19.2678488679977 : ℝ) * b) x2) y2))))
+
+noncomputable def y07Spec
+    (s : BlockState) (coord_ptr : RegionName)
+    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+  let x := coordX s coord_ptr block_size coord_numel i
+  let y := coordY s coord_ptr block_size coord_numel i
+  let z := coordZ s coord_ptr block_size coord_numel i
+  let x2 := Option.map₂ (fun a b => a * b) x x
+  let x4 := Option.map₂ (fun a b => a * b) x2 x2
+  let y2 := Option.map₂ (fun a b => a * b) y y
+  let y3 := Option.map₂ (fun a b => a * b) y2 y
+  let z2 := Option.map₂ (fun a b => a * b) z z
+  let z4 := Option.map₂ (fun a b => a * b) z2 z2
+  WithBot.unbotD 0
+    (Option.map₂ (fun a b => a + b)
+      (Option.map₂ (fun a b => a * b) y3
+        (Option.map₂ (fun a b => a - b)
+          (Option.map (fun b => (-16.9926454679664 : ℝ) * b) x2)
+          (Option.map (fun b => (-16.9926454679664 : ℝ) * b) z2)))
+      (Option.map₂ (fun a b => a * b) y
+        (Option.map₂ (fun a b => a + b)
+          (Option.map (fun b => -((-8.49632273398321 : ℝ)) * b) x4)
+          (Option.map (fun b => (-8.49632273398321 : ℝ) * b) z4))))
+
+noncomputable def y08Spec
+    (s : BlockState) (coord_ptr : RegionName)
+    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+  let x := coordX s coord_ptr block_size coord_numel i
+  let y := coordY s coord_ptr block_size coord_numel i
+  let z := coordZ s coord_ptr block_size coord_numel i
+  let x2 := Option.map₂ (fun a b => a * b) x x
+  let x4 := Option.map₂ (fun a b => a * b) x2 x2
+  let y2 := Option.map₂ (fun a b => a * b) y y
+  let z2 := Option.map₂ (fun a b => a * b) z z
+  let z3 := Option.map₂ (fun a b => a * b) z2 z
+  let z5 := Option.map₂ (fun a b => a * b) z3 z2
+  WithBot.unbotD 0
+    (Option.map₂ (fun a b => a + b)
+      (Option.map₂ (fun a b => a + b)
+        (Option.map (fun b => (-1.73430461568895 : ℝ) * b) z5)
+        (Option.map₂ (fun a b => a * b) z3
+          (Option.map₂ (fun a b => a + b)
+            (Option.map (fun b => (13.8744369255116 : ℝ) * b) y2)
+            (Option.map (fun b => (3.46860923137790 : ℝ) * b) x2))))
+      (Option.map₂ (fun a b => a * b) z
+        (Option.map₂ (fun a b => a - b)
+          (Option.map₂ (fun a b => a * b)
+            (Option.map (fun b => (-41.6233107765348 : ℝ) * b) x2) y2)
+          (Option.map (fun b => (-5.20291384706685 : ℝ) * b) x4))))
+
+noncomputable def y09Spec
+    (s : BlockState) (coord_ptr : RegionName)
+    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+  let x := coordX s coord_ptr block_size coord_numel i
+  let y := coordY s coord_ptr block_size coord_numel i
+  let z := coordZ s coord_ptr block_size coord_numel i
+  let x2 := Option.map₂ (fun a b => a * b) x x
+  let x4 := Option.map₂ (fun a b => a * b) x2 x2
+  let z2 := Option.map₂ (fun a b => a * b) z z
+  let z4 := Option.map₂ (fun a b => a * b) z2 z2
+  WithBot.unbotD 0
+    (Option.map₂ (fun a b => a * b) y
+      (Option.map₂ (fun a b => a + b)
+        (Option.map₂ (fun a b => a + b)
+          (Option.map (fun b => (7.35803132638072 : ℝ) * b) x4)
+          (Option.map (fun b => (7.35803132638072 : ℝ) * b) z4))
+        (Option.map₂ (fun a b => a * b)
+          (Option.map (fun b => (-44.1481879582843 : ℝ) * b) x2) z2)))
+
+noncomputable def y10Spec
+    (s : BlockState) (coord_ptr : RegionName)
+    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+  let x := coordX s coord_ptr block_size coord_numel i
+  let z := coordZ s coord_ptr block_size coord_numel i
+  let x2 := Option.map₂ (fun a b => a * b) x x
+  let x4 := Option.map₂ (fun a b => a * b) x2 x2
+  let z2 := Option.map₂ (fun a b => a * b) z z
+  let z3 := Option.map₂ (fun a b => a * b) z2 z
+  let z5 := Option.map₂ (fun a b => a * b) z3 z2
+  WithBot.unbotD 0
+    (Option.map₂ (fun a b => a + b)
+      (Option.map₂ (fun a b => a + b)
+        (Option.map (fun b => (2.32681380862329 : ℝ) * b) z5)
+        (Option.map₂ (fun a b => a * b)
+          (Option.map (fun b => (11.6340690431164 : ℝ) * b) x4) z))
+      (Option.map₂ (fun a b => a * b)
+        (Option.map (fun b => (-23.2681380862329 : ℝ) * b) x2) z3))
 
 end VeriTile.Bench.TritonBenchG.FifthOrderSphHarmonics
