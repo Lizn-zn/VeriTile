@@ -643,6 +643,26 @@ theorem writeMemTyped_nat_readMem_of_ne (s : BlockState)
   unfold writeMemTyped readMem
   simp [hne]
 
+/-- `writeMemTyped .nat` at a different region or offset leaves `readMemValue
+.int` unaffected. -/
+theorem writeMemTyped_nat_readMemValue_int_of_ne (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.nat)
+    (r : RegionName) (o : Nat) (hne : ¬(r = region ∧ o = offset)) :
+    (s.writeMemTyped .nat region offset v).readMemValue .int r o =
+      s.readMemValue .int r o := by
+  unfold writeMemTyped readMemValue readMemTyped
+  simp [hne]
+
+/-- `writeMemTyped .int` at a different region or offset leaves `readMemValue
+.nat` unaffected. -/
+theorem writeMemTyped_int_readMemValue_nat_of_ne (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.int)
+    (r : RegionName) (o : Nat) (hne : ¬(r = region ∧ o = offset)) :
+    (s.writeMemTyped .int region offset v).readMemValue .nat r o =
+      s.readMemValue .nat r o := by
+  unfold writeMemTyped readMemValue readMemTyped
+  simp [hne]
+
 @[simp] theorem writeMem_readMem (s : BlockState) (region : RegionName)
     (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) :
     (s.writeMem region offset v).readMem r o =
