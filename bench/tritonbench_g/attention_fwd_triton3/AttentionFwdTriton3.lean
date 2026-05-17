@@ -251,4 +251,131 @@ theorem attention_fwd_triton3_final_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented L (log-sum-exp) row store slice of `attention_fwd_triton3.py`.
+Takes a precomputed `LPre` vector and proves the row writeback into `L` at
+offset `off_hz * ROUND_CTX + offs_m`. -/
+def attention_fwd_triton3_l_store_slice
+    (LPre L : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  l_i = tl.load(LPre + $(off_hz) * $(ROUND_CTX) + offs_m)
+  tl.store(L + $(off_hz) * $(ROUND_CTX) + offs_m, l_i)
+}
+
+def lRowOffset (s : BlockState) (off_hz ROUND_CTX BLOCK_M : Nat)
+    (i : Fin BLOCK_M) : Nat :=
+  off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + i.val)
+
+noncomputable def lStoreSpec (s : BlockState) (LPre : RegionName)
+    (off_hz ROUND_CTX BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
+  s.readMem LPre (lRowOffset s off_hz ROUND_CTX BLOCK_M i)
+
+theorem attention_fwd_triton3_l_store_slice_correct
+    (LPre L : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
+    ∀ i : Fin BLOCK_M,
+      let outAddr := lRowOffset s off_hz ROUND_CTX BLOCK_M i
+      (exec (attention_fwd_triton3_l_store_slice LPre L off_hz ROUND_CTX BLOCK_M)
+          s).map (·.readMem L outAddr)
+        = some (lStoreSpec s LPre off_hz ROUND_CTX BLOCK_M i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M] =>
+        off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + idx.1.val)) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have hab' : off_hz * ROUND_CTX + s.pids 0 * BLOCK_M + a.val =
+        off_hz * ROUND_CTX + s.pids 0 * BLOCK_M + b.val := by
+      simpa [Nat.add_assoc] using hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
+    rfl
+  simp [exec, attention_fwd_triton3_l_store_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul]
+  simp only [lRowOffset, Nat.add_assoc]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [lStoreSpec, lRowOffset, Nat.add_assoc]
+
+theorem attention_fwd_triton3_l_store_slice_compute_correct
+    (LPre L : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_l_store_slice LPre L off_hz ROUND_CTX BLOCK_M)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (L, lRowOffset s off_hz ROUND_CTX BLOCK_M i))
+      (expected := fun i => lStoreSpec s LPre off_hz ROUND_CTX BLOCK_M i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton3_l_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := attention_fwd_triton3_l_store_slice_correct LPre L off_hz ROUND_CTX BLOCK_M
+    s hOutInj i
+  rw [hExec] at h
+  exact Option.some.inj h
+
+/-- Proof-oriented M (max) row store slice of `attention_fwd_triton3.py`.
+Mirrors the L-row store slice. -/
+def attention_fwd_triton3_m_store_slice
+    (MPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  m_i = tl.load(MPre + $(off_hz) * $(ROUND_CTX) + offs_m)
+  tl.store(M + $(off_hz) * $(ROUND_CTX) + offs_m, m_i)
+}
+
+noncomputable def mStoreSpec (s : BlockState) (MPre : RegionName)
+    (off_hz ROUND_CTX BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
+  s.readMem MPre (lRowOffset s off_hz ROUND_CTX BLOCK_M i)
+
+theorem attention_fwd_triton3_m_store_slice_correct
+    (MPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
+    ∀ i : Fin BLOCK_M,
+      let outAddr := lRowOffset s off_hz ROUND_CTX BLOCK_M i
+      (exec (attention_fwd_triton3_m_store_slice MPre M off_hz ROUND_CTX BLOCK_M)
+          s).map (·.readMem M outAddr)
+        = some (mStoreSpec s MPre off_hz ROUND_CTX BLOCK_M i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M] =>
+        off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + idx.1.val)) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have hab' : off_hz * ROUND_CTX + s.pids 0 * BLOCK_M + a.val =
+        off_hz * ROUND_CTX + s.pids 0 * BLOCK_M + b.val := by
+      simpa [Nat.add_assoc] using hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
+    rfl
+  simp [exec, attention_fwd_triton3_m_store_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul]
+  simp only [lRowOffset, Nat.add_assoc]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [mStoreSpec, lRowOffset, Nat.add_assoc]
+
+theorem attention_fwd_triton3_m_store_slice_compute_correct
+    (MPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_m_store_slice MPre M off_hz ROUND_CTX BLOCK_M)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (M, lRowOffset s off_hz ROUND_CTX BLOCK_M i))
+      (expected := fun i => mStoreSpec s MPre off_hz ROUND_CTX BLOCK_M i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton3_m_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := attention_fwd_triton3_m_store_slice_correct MPre M off_hz ROUND_CTX BLOCK_M
+    s hOutInj i
+  rw [hExec] at h
+  exact Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
