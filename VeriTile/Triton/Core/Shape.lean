@@ -167,6 +167,37 @@ def splitLastIndex :
     (idx : TileIndex (d :: rest)) (k : Fin d) :
     replaceAxisCoord (d :: rest) ⟨0, Nat.succ_pos _⟩ idx k = (k, idx.2) := rfl
 
+@[simp] theorem axisDim_succ (d : Nat) (rest : TileShape) (k : Nat)
+    (h : k + 1 < (d :: rest).length) :
+    axisDim (d :: rest) ⟨k + 1, h⟩ =
+      axisDim rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ := rfl
+
+@[simp] theorem insertAxisIndex_succ {d : Nat} {rest : TileShape}
+    (k : Nat) (h : k + 1 < (d :: rest).length)
+    (outIdx : TileIndex (eraseAxis (d :: rest) ⟨k + 1, h⟩))
+    (r : Fin (axisDim (d :: rest) ⟨k + 1, h⟩)) :
+    insertAxisIndex (d :: rest) ⟨k + 1, h⟩ outIdx r =
+      (outIdx.1, insertAxisIndex rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ outIdx.2 r) := rfl
+
+@[simp] theorem replaceAxisIndex_succ {d : Nat} {rest : TileShape}
+    (k : Nat) (h : k + 1 < (d :: rest).length)
+    (outIdx : TileIndex (setAxisOne (d :: rest) ⟨k + 1, h⟩))
+    (r : Fin (axisDim (d :: rest) ⟨k + 1, h⟩)) :
+    replaceAxisIndex (d :: rest) ⟨k + 1, h⟩ outIdx r =
+      (outIdx.1, replaceAxisIndex rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ outIdx.2 r) := rfl
+
+@[simp] theorem axisCoord_succ {d : Nat} {rest : TileShape}
+    (k : Nat) (h : k + 1 < (d :: rest).length)
+    (idx : TileIndex (d :: rest)) :
+    axisCoord (d :: rest) ⟨k + 1, h⟩ idx =
+      axisCoord rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ idx.2 := rfl
+
+@[simp] theorem replaceAxisCoord_succ {d : Nat} {rest : TileShape}
+    (k : Nat) (h : k + 1 < (d :: rest).length)
+    (idx : TileIndex (d :: rest)) (r : Fin (axisDim (d :: rest) ⟨k + 1, h⟩)) :
+    replaceAxisCoord (d :: rest) ⟨k + 1, h⟩ idx r =
+      (idx.1, replaceAxisCoord rest ⟨k, Nat.succ_lt_succ_iff.mp h⟩ idx.2 r) := rfl
+
 @[simp] theorem product_nil :
     product [] = 1 := rfl
 
