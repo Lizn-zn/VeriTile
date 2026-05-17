@@ -605,6 +605,23 @@ noncomputable def Tile.argMinDrop {shape : TileShape}
     Tile .nat (TileShape.eraseAxis shape axis) :=
   Tile.argBestDrop (fun candidate current => decide (candidate < current)) axis x
 
+/-- Definitional unfolding of `Tile.argMaxDrop` to `Tile.argBestDrop` over
+strict-less-than. Useful as a simp lemma for proving argmax kernel
+correctness. -/
+@[simp] theorem Tile.argMaxDrop_unfold {shape : TileShape}
+    (axis : Fin shape.length) (x : Tile .real shape) :
+    Tile.argMaxDrop axis x =
+      Tile.argBestDrop (fun candidate current => decide (current < candidate)) axis x :=
+  rfl
+
+/-- Definitional unfolding of `Tile.argMinDrop` to `Tile.argBestDrop` over
+strict-less-than (with arguments swapped). -/
+@[simp] theorem Tile.argMinDrop_unfold {shape : TileShape}
+    (axis : Fin shape.length) (x : Tile .real shape) :
+    Tile.argMinDrop axis x =
+      Tile.argBestDrop (fun candidate current => decide (candidate < current)) axis x :=
+  rfl
+
 /-- Sort values along `axis` in ascending order, preserving all other
 coordinates. -/
 noncomputable def Tile.sortAxis {shape : TileShape}
