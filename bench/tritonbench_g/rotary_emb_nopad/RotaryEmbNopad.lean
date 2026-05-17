@@ -842,4 +842,99 @@ theorem rotary_embedding_k1_block_compute_correct
     K_HEAD_NUM HEAD_HALF BLOCK_TOKENS s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-- Proof-oriented kv_cache first-half store slice of
+`rotary_emb_nopad.py`'s `fused_rotary_embedding_kernel_v2`. Takes a
+precomputed `OutK0Pre` tile and proves the writeback into `kv_cache` at the
+cache-layout first-half offsets. Parameterized over
+`(block_ids, offsets_in_last_block)`. -/
+def fused_rotary_v2_kv_cache_first_half_store_slice
+    (OutK0Pre kv_cache : RegionName)
+    (block_ids offsets_in_last_block cacheb_stride cacheh_stride cached_stride
+      HEAD_HALF : Nat) :
+    ComputeKernel := triton {
+  block_head_index = tl.program_id(0)
+  dim_range0 = tl.arange(0, $(HEAD_HALF))
+  out_k0 = tl.load(OutK0Pre + dim_range0)
+  kv_range0 = $(block_ids) * $(cacheb_stride) +
+    block_head_index * $(cacheh_stride) +
+    $(offsets_in_last_block) +
+    dim_range0 * $(cached_stride)
+  tl.store(kv_cache + kv_range0, out_k0)
+}
+
+def kvCacheFirstOffset
+    (s : BlockState)
+    (block_ids offsets_in_last_block cacheb_stride cacheh_stride cached_stride : Nat)
+    (i : Fin HEAD_HALF) : Nat :=
+  block_ids * cacheb_stride + s.pids 0 * cacheh_stride +
+    offsets_in_last_block + i.val * cached_stride
+
+noncomputable def kvCacheFirstStoreSpec
+    (s : BlockState) (OutK0Pre : RegionName) (i : Fin HEAD_HALF) : ℝ :=
+  s.readMem OutK0Pre i.val
+
+theorem fused_rotary_v2_kv_cache_first_half_store_slice_correct
+    (OutK0Pre kv_cache : RegionName)
+    (block_ids offsets_in_last_block cacheb_stride cacheh_stride cached_stride
+      HEAD_HALF : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin HEAD_HALF =>
+        kvCacheFirstOffset s block_ids offsets_in_last_block cacheb_stride
+          cacheh_stride cached_stride i))
+    (hExec : exec (fused_rotary_v2_kv_cache_first_half_store_slice OutK0Pre
+        kv_cache block_ids offsets_in_last_block cacheb_stride cacheh_stride
+        cached_stride HEAD_HALF) s = some s') :
+    ∀ i : Fin HEAD_HALF,
+      s'.readMem kv_cache
+          (kvCacheFirstOffset s block_ids offsets_in_last_block cacheb_stride
+            cacheh_stride cached_stride i) =
+        kvCacheFirstStoreSpec s OutK0Pre i := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [HEAD_HALF] =>
+        block_ids * cacheb_stride + s.pids 0 * cacheh_stride +
+          offsets_in_last_block + idx.1.val * cached_stride) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [kvCacheFirstOffset] using h
+    cases a; cases b
+    simp only at hab; cases hab; rfl
+  simp [exec, fused_rotary_v2_kv_cache_first_half_store_slice, stepStmts,
+        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hExec
+  rw [← hExec]
+  simp only [kvCacheFirstOffset]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [kvCacheFirstStoreSpec]
+
+theorem fused_rotary_v2_kv_cache_first_half_store_slice_compute_correct
+    (OutK0Pre kv_cache : RegionName)
+    (block_ids offsets_in_last_block cacheb_stride cacheh_stride cached_stride
+      HEAD_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin HEAD_HALF =>
+        kvCacheFirstOffset s block_ids offsets_in_last_block cacheb_stride
+          cacheh_stride cached_stride i)) :
+    ComputeCorrect.Realizes
+      (kernel := fused_rotary_v2_kv_cache_first_half_store_slice OutK0Pre
+        kv_cache block_ids offsets_in_last_block cacheb_stride cacheh_stride
+        cached_stride HEAD_HALF)
+      (initialState := s)
+      (write := fun i : Fin HEAD_HALF => some (kv_cache,
+        kvCacheFirstOffset s block_ids offsets_in_last_block cacheb_stride
+          cacheh_stride cached_stride i))
+      (expected := fun i => kvCacheFirstStoreSpec s OutK0Pre i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fused_rotary_v2_kv_cache_first_half_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  exact fused_rotary_v2_kv_cache_first_half_store_slice_correct OutK0Pre kv_cache
+    block_ids offsets_in_last_block cacheb_stride cacheh_stride cached_stride
+    HEAD_HALF s s' hOutInj hExec i
+
 end VeriTile.Bench.TritonBenchG.RotaryEmbNopad
