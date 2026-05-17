@@ -173,4 +173,74 @@ theorem attention_fwd_triton1_output_store_slice_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
+/-- Proof-oriented `p_h` state-store slice of `attention_fwd_triton1.py`.
+Companion to the output_store_slice: takes a precomputed `BHPre` [BD, BD]
+tile and proves the per-iteration writeback into `H` at the canonical block
+offset `i_bh * s_hh + (i * BD + idx.1) * s_ht + idx.2.1`. -/
+def attention_fwd_triton1_h_store_slice
+    (BHPre H : RegionName) (i_iter s_hh s_ht BT BD : Nat) :
+    ComputeKernel := triton {
+  i_bh = tl.program_id(0)
+  offs_d0 = $(i_iter) * $(BD) + tl.arange(0, $(BD))
+  offs_d1 = tl.arange(0, $(BD))
+  b_h = tl.load(BHPre + i_bh * $(s_hh) + offs_d0[:, None] * $(s_ht) +
+      offs_d1[None, :])
+  tl.store(H + i_bh * $(s_hh) + offs_d0[:, None] * $(s_ht) +
+      offs_d1[None, :], b_h)
+}
+
+def hRow (i_iter BD : Nat) (i : Fin BD) : Nat := i_iter * BD + i.val
+def hCol (j : Fin BD) : Nat := j.val
+
+def hOffset (s : BlockState) (i_iter s_hh s_ht BD : Nat)
+    (idx : TileIndex [BD, BD]) : Nat :=
+  s.pids 0 * s_hh + hRow i_iter BD idx.1 * s_ht + hCol idx.2.1
+
+noncomputable def hStoreSpec (s : BlockState) (BHPre : RegionName)
+    (i_iter s_hh s_ht BD : Nat) (idx : TileIndex [BD, BD]) : ℝ :=
+  s.readMem BHPre (hOffset s i_iter s_hh s_ht BD idx)
+
+theorem attention_fwd_triton1_h_store_slice_correct
+    (BHPre H : RegionName) (i_iter s_hh s_ht BT BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BD, BD] => hOffset s i_iter s_hh s_ht BD idx)) :
+    ∀ idx : TileIndex [BD, BD],
+      let outAddr := hOffset s i_iter s_hh s_ht BD idx
+      (exec (attention_fwd_triton1_h_store_slice BHPre H i_iter s_hh s_ht BT BD) s).map
+          (·.readMem H outAddr)
+        = some (hStoreSpec s BHPre i_iter s_hh s_ht BD idx) := by
+  intro idx
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BD, BD] =>
+        s.pids 0 * s_hh + (i_iter * BD + idx.1.val) * s_ht + idx.2.1.val) := by
+    simpa [hOffset, hRow, hCol] using hOutInj
+  simp [exec, attention_fwd_triton1_h_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        TileShape.dropInsertedIndex]
+  simp only [hOffset, hRow, hCol]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj idx]
+  simp [hStoreSpec, hOffset, hRow, hCol]
+
+theorem attention_fwd_triton1_h_store_slice_compute_correct
+    (BHPre H : RegionName) (i_iter s_hh s_ht BT BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BD, BD] => hOffset s i_iter s_hh s_ht BD idx)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_h_store_slice BHPre H i_iter s_hh s_ht BT BD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BD, BD] =>
+        some (H, hOffset s i_iter s_hh s_ht BD idx))
+      (expected := fun idx => hStoreSpec s BHPre i_iter s_hh s_ht BD idx) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton1_h_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have h := attention_fwd_triton1_h_store_slice_correct BHPre H i_iter s_hh s_ht BT BD
+    s hOutInj idx
+  rw [hExec] at h
+  exact Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
