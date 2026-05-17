@@ -233,4 +233,49 @@ theorem forRange_readout_tile
     forRange_inv hstep h_init h_step
   exact ⟨final, s_final, h_eq, hfinal, h_readout final s_final hfinal hP⟩
 
+/-- Single-iteration corollary for `forRange`. When `start < stop ≤ start + step`,
+the range `[start, stop)` contains exactly one step-aligned index (`start`),
+so the loop executes the body once and terminates.
+
+This special case avoids constructing an inductive `P` for kernels that the
+Python test only ever drives through a single chunk (e.g. `var_len_copy` with
+`length ≤ BLOCK_SIZE`, or single-block rmsnorm/layernorm regimes). -/
+theorem forRange_single_step
+    {idx : RegName} {start stop step : Nat} {body : List Stmt}
+    {s_init s_body : BlockState}
+    (hstep : step ≠ 0)
+    (hlt : start < stop)
+    (hle : stop ≤ start + step)
+    (hBody :
+      stepStmts body (s_init.setReg idx .nat [] (Tile.scalar start))
+        = some s_body) :
+    stepStmt (.forRange idx start stop step body) s_init = some s_body := by
+  rw [stepForRangeAux.forRange_unfold, stepForRangeAux.step_lt hstep hlt,
+      hBody]
+  simp [Option.bind, stepForRangeAux.step_ge hstep hle]
+
+/-- Single-iteration variant for `forRangeDyn` after the dynamic bounds have
+been resolved. Use when start/stop/step come from runtime register values
+(e.g. `length` loaded from a metadata buffer). The caller must supply the
+resolved Nat values and the corresponding evalOp evidence. -/
+theorem forRangeDyn_single_step
+    {idx : RegName} {startOp stopOp stepOp : Op .nat []}
+    {start stop step : Nat} {body : List Stmt}
+    {s_init s_body : BlockState}
+    (hStart : evalOp startOp s_init = some (Tile.scalar start))
+    (hStop : evalOp stopOp s_init = some (Tile.scalar stop))
+    (hStepOp : evalOp stepOp s_init = some (Tile.scalar step))
+    (hstep : step ≠ 0)
+    (hlt : start < stop)
+    (hle : stop ≤ start + step)
+    (hBody :
+      stepStmts body (s_init.setReg idx .nat [] (Tile.scalar start))
+        = some s_body) :
+    stepStmt (.forRangeDyn idx startOp stopOp stepOp body) s_init = some s_body := by
+  rw [stepForRangeAux.forRangeDyn_unfold, hStart, hStop, hStepOp]
+  simp only [Option.bind]
+  show stepForRangeAux idx start stop step body s_init = some s_body
+  rw [stepForRangeAux.step_lt hstep hlt, hBody]
+  simp [Option.bind, stepForRangeAux.step_ge hstep hle]
+
 end VeriTile.Triton
