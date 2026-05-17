@@ -721,6 +721,14 @@ noncomputable def Tile.sortAxis {shape : TileShape}
 def Tile.natToReal {shape} (x : Tile .nat shape) : Tile .real shape :=
   ⟨fun i => some ((x.data i : ℝ))⟩
 
+/-- `Tile.natToReal` lifts each `Nat` lane to a `some` real value. Useful
+when bridging Nat-channel indices into Real-channel arithmetic (e.g. when
+adding `tl.arange(0, BLOCK_SIZE)` to a pointer that's then multiplied by a
+real value). -/
+@[simp] theorem Tile.natToReal_data {shape : TileShape}
+    (x : Tile .nat shape) (idx : TileIndex shape) :
+    (Tile.natToReal x).data idx = some ((x.data idx : ℝ)) := rfl
+
 /-- Block-level (possibly batched) matrix multiply (Triton's `tl.dot`):
 `c[…, m, n] = ∑_k a[…, m, k] * b[…, k, n]`.
 

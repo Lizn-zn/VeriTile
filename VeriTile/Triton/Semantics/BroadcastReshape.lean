@@ -40,7 +40,8 @@ attribute [tile_elementwise]
 /-! ## Tile shape coercions / reshapes -/
 
 attribute [tile_elementwise]
-  Tile.expandDim Tile.ofReal Tile.natToReal Tile.dot Tile.transpose Tile.select
+  Tile.expandDim Tile.ofReal Tile.natToReal Tile.natToReal_data
+  Tile.dot Tile.transpose Tile.select
   Tile.mat_data
 
 /-! ## Tile reductions -/
