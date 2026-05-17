@@ -494,4 +494,231 @@ theorem fifth_order_fwd_channel_store_slice_compute_correct
     block_size output_numel col_offset output_stride s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-- Disjointness helper: the Y00 readback offset at lane `i` differs from
+any `Y0k` store offset at lane `idx`, for `k ∈ [1, output_stride - 1]`. -/
+private theorem y0k_offset_disjoint
+    (s : BlockState) (block_size col_offset output_stride : Nat)
+    (hStride : 10 < output_stride)
+    (k : Nat) (hk_pos : 0 < k) (hk_le : k ≤ 10)
+    (i : Fin block_size) (idx : TileIndex [block_size]) :
+    i.val * output_stride + block_size * output_stride * s.pid + col_offset ≠
+      idx.1.val * output_stride + block_size * output_stride * s.pid + col_offset + k := by
+  -- Reduce to: i.val * output_stride ≠ idx.1.val * output_stride + k.
+  have hk_lt_stride : k < output_stride := Nat.lt_of_le_of_lt hk_le hStride
+  intro heq
+  -- Strip the common `base = block_size * output_stride * s.pid + col_offset`.
+  have hbase :
+      i.val * output_stride + (block_size * output_stride * s.pid + col_offset) =
+      idx.1.val * output_stride + k + (block_size * output_stride * s.pid + col_offset) := by
+    have hl :
+        i.val * output_stride + block_size * output_stride * s.pid + col_offset =
+        i.val * output_stride + (block_size * output_stride * s.pid + col_offset) := by
+      ring
+    have hr :
+        idx.1.val * output_stride + block_size * output_stride * s.pid + col_offset + k =
+        idx.1.val * output_stride + k + (block_size * output_stride * s.pid + col_offset) := by
+      ring
+    rw [hl, hr] at heq
+    exact heq
+  have hkey : i.val * output_stride = idx.1.val * output_stride + k :=
+    Nat.add_right_cancel hbase
+  -- Case-split on i.val vs idx.1.val.
+  rcases Nat.lt_trichotomy i.val idx.1.val with hlt | heqv | hgt
+  · -- i.val < idx.1.val: i.val * stride < idx.1.val * stride ≤ idx.1.val * stride + k.
+    have h1 : i.val * output_stride < idx.1.val * output_stride := by
+      have hpos : 0 < output_stride := Nat.lt_of_lt_of_le hk_pos (Nat.le_of_lt hk_lt_stride)
+      exact (Nat.mul_lt_mul_right hpos).mpr hlt
+    have h2 : idx.1.val * output_stride ≤ idx.1.val * output_stride + k := Nat.le_add_right _ _
+    exact absurd hkey (Nat.ne_of_lt (Nat.lt_of_lt_of_le h1 h2))
+  · -- i.val = idx.1.val: kkey reduces to 0 = k, contradicts hk_pos.
+    rw [heqv] at hkey
+    have : k = 0 := by omega
+    exact absurd this (Nat.pos_iff_ne_zero.mp hk_pos)
+  · -- i.val > idx.1.val: i.val * stride ≥ (idx.1.val + 1) * stride = idx.1.val * stride + stride > idx.1.val * stride + k.
+    have h1 : idx.1.val + 1 ≤ i.val := hgt
+    have h2 : (idx.1.val + 1) * output_stride ≤ i.val * output_stride :=
+      Nat.mul_le_mul_right _ h1
+    have h3 : (idx.1.val + 1) * output_stride = idx.1.val * output_stride + output_stride := by ring
+    have h4 : idx.1.val * output_stride + output_stride ≤ i.val * output_stride := by
+      rw [← h3]; exact h2
+    have h5 : idx.1.val * output_stride + k < idx.1.val * output_stride + output_stride := by
+      exact Nat.add_lt_add_left hk_lt_stride _
+    have h6 : idx.1.val * output_stride + k < i.val * output_stride :=
+      Nat.lt_of_lt_of_le h5 h4
+    exact absurd hkey.symm (Nat.ne_of_lt h6)
+
+/-- Algorithm-layer correctness for the full forward `Y00` store: even when
+the kernel proceeds to write `Y01..Y10` at offsets `+1..+10`, those writes
+target offsets disjoint from the `Y00` readback offset as long as
+`output_stride > 10`. -/
+theorem fifth_order_fwd_surface_y00_correct
+    (coord_ptr output_ptr : RegionName)
+    (block_size coord_numel output_numel col_offset output_stride : Nat)
+    (s s' : BlockState)
+    (hStride : 10 < output_stride)
+    (hOutInj : Function.Injective
+      (fun i : Fin block_size => outOffset s block_size col_offset output_stride i))
+    (hExec : exec (fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
+        output_numel col_offset output_stride) s = some s') :
+    ∀ i : Fin block_size,
+      s'.readMem output_ptr (outOffset s block_size col_offset output_stride i) =
+        if outOffset s block_size col_offset output_stride i < output_numel then
+          y00Spec s coord_ptr block_size coord_numel i
+        else s.readMem output_ptr (outOffset s block_size col_offset output_stride i) := by
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [block_size] =>
+        idx.1.val * output_stride + block_size * output_stride * s.pid + col_offset) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [outOffset] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  -- Disjointness packets for k = 1..10.
+  have hd1 := y0k_offset_disjoint s block_size col_offset output_stride hStride 1
+    (by norm_num) (by norm_num) i
+  have hd2 := y0k_offset_disjoint s block_size col_offset output_stride hStride 2
+    (by norm_num) (by norm_num) i
+  have hd3 := y0k_offset_disjoint s block_size col_offset output_stride hStride 3
+    (by norm_num) (by norm_num) i
+  have hd4 := y0k_offset_disjoint s block_size col_offset output_stride hStride 4
+    (by norm_num) (by norm_num) i
+  have hd5 := y0k_offset_disjoint s block_size col_offset output_stride hStride 5
+    (by norm_num) (by norm_num) i
+  have hd6 := y0k_offset_disjoint s block_size col_offset output_stride hStride 6
+    (by norm_num) (by norm_num) i
+  have hd7 := y0k_offset_disjoint s block_size col_offset output_stride hStride 7
+    (by norm_num) (by norm_num) i
+  have hd8 := y0k_offset_disjoint s block_size col_offset output_stride hStride 8
+    (by norm_num) (by norm_num) i
+  have hd9 := y0k_offset_disjoint s block_size col_offset output_stride hStride 9
+    (by norm_num) (by norm_num) i
+  have hd10 := y0k_offset_disjoint s block_size col_offset output_stride hStride 10
+    (by norm_num) (by norm_num) i
+  by_cases hB : 0 < block_size
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
+    subst s'
+    simp only [outOffset]
+    -- Strip the 10 outer foldls (Y10, Y09, ..., Y01) one at a time.
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 10 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 10)
+          (hOff := fun k _ _ => hd10 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 9 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 9)
+          (hOff := fun k _ _ => hd9 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 8 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 8)
+          (hOff := fun k _ _ => hd8 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 7 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 7)
+          (hOff := fun k _ _ => hd7 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 6 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 6)
+          (hOff := fun k _ _ => hd6 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 5 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 5)
+          (hOff := fun k _ _ => hd5 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 4 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 4)
+          (hOff := fun k _ _ => hd4 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 3 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 3)
+          (hOff := fun k _ _ => hd3 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 2 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 2)
+          (hOff := fun k _ _ => hd2 k)]
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (P := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
+              col_offset + 1 < output_numel)
+          (offsetFn := fun idx : TileIndex [block_size] =>
+            idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 1)
+          (hOff := fun k _ _ => hd1 k)]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+    by_cases hActive : i.val * output_stride + block_size * output_stride * s.pid +
+        col_offset < output_numel
+    · -- Active branch. The surface kernel writes
+      -- `Y00 = 2.32681 * x^5 + 11.634 * z^4 * x + (0 - 23.268) * x^3 * z^2`
+      -- via the unary-minus expansion of `CONST023`, while `y00Spec` uses
+      -- `... - 23.268 * x^3 * z^2`. After splitting the coordinate `if`s,
+      -- close by `norm_num` (to fold `0.0 = 0`) plus `ring`.
+      simp only [hActive, if_true, y00Spec, coordX, coordZ, coordOffset,
+                 NumericDType.mul, NumericDType.add, NumericDType.sub,
+                 WithBot.realSub, WithBot.realAdd, WithBot.realMul,
+                 Option.map₂, Option.map, WithBot.unbotD,
+                 Option.bind, Option.bind_some, WithBot.recBotCoe]
+      split_ifs with hx hz hz
+      all_goals (simp only [id]; norm_num; ring)
+    · simp [hActive]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the full forward `Y00` store. -/
+theorem fifth_order_fwd_surface_y00_compute_correct
+    (coord_ptr output_ptr : RegionName)
+    (block_size coord_numel output_numel col_offset output_stride : Nat)
+    (s : BlockState)
+    (hStride : 10 < output_stride)
+    (hOutInj : Function.Injective
+      (fun i : Fin block_size => outOffset s block_size col_offset output_stride i)) :
+    ComputeCorrect.Realizes
+      (kernel := fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
+        output_numel col_offset output_stride)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin block_size =>
+          outOffset s block_size col_offset output_stride i < output_numel)
+        (fun i => (output_ptr, outOffset s block_size col_offset output_stride i)))
+      (expected := fun i => y00Spec s coord_ptr block_size coord_numel i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fifth_order_fwd_surface]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := fifth_order_fwd_surface_y00_correct coord_ptr output_ptr block_size coord_numel
+    output_numel col_offset output_stride s s' hStride hOutInj hExec i
+  simpa [hActive] using h
+
 end VeriTile.Bench.TritonBenchG.FifthOrderSphHarmonics

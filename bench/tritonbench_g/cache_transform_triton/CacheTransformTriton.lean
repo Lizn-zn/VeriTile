@@ -292,6 +292,69 @@ theorem decoding_cache_kernel_compute_correct
         exact hi
       · simp [hActive]
 
+/-- Algorithm-layer correctness for the sin output of the full decoding
+cache-copy surface. The sin store is the outer (last) foldl in the kernel,
+so the active-branch readback reduces via `scatter_readback_prop_masked_nd`
+directly. The inactive-branch readback strips the inner cos foldl via
+`foldl_writeMem_const_region_prop_masked_readMem_other`, which needs
+`cos_output ≠ sin_output`. -/
+theorem decoding_cache_kernel_sin_correct
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat) (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hRegion : cos_output ≠ sin_output)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+        decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx))
+    (hExec : exec (decoding_cache_kernel cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
+        s = some s') :
+    ∀ idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM],
+      s'.readMem sin_output
+          (decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx) =
+        if decodeActive s NUM_SEQS BLOCK_SIZE idx then
+          s.readMem sin_cache
+            (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)
+        else
+          s.readMem sin_output
+            (decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx) :=
+  (decoding_cache_kernel_correct cos_cache sin_cache lengths cos_output
+    sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE s s'
+    hRegion hOutInj hExec).2
+
+/-- Compute-facing correctness for the sin output of the full decoding
+cache-copy surface. -/
+theorem decoding_cache_kernel_sin_compute_correct
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat) (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegion : cos_output ≠ sin_output)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+        decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)) :
+    ComputeCorrect.Realizes
+      (kernel := decoding_cache_kernel cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+          decodeActive s NUM_SEQS BLOCK_SIZE idx)
+        (fun idx => (sin_output,
+          decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)))
+      (expected := fun idx =>
+        s.readMem sin_cache
+          (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [decoding_cache_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := decoding_cache_kernel_sin_correct cos_cache sin_cache lengths
+    cos_output sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS
+    BLOCK_SIZE s s' hRegion hOutInj hExec idx
+  simpa [hActive] using h
+
 /-- Algorithm-layer correctness for the one-sequence decoding cache copy. -/
 theorem decoding_cache_one_seq_block_correct
     (cos_cache sin_cache : RegionName) (lengths : Region .nat) (cos_output sin_output : RegionName)
