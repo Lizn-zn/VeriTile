@@ -557,4 +557,86 @@ theorem prefill_cache_cos_store_slice_compute_correct
     cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-- Proof-oriented sin-output store slice of `cache_transform_triton.py`'s
+`prefill_cache_kernel`. Sin-side analog of the cos store slice. -/
+def prefill_cache_sin_store_slice
+    (SinPre sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  idx0 = tl.program_id(axis=0)
+  idx1 = tl.program_id(axis=1)
+  idx = idx0 * $(BLOCK_SIZE) + idx1
+  sin_part = tl.load(SinPre + idx * $(cache_stride) +
+      tl.arange(0, $(HIDDEN_DIM)) * $(hidden_stride),
+    mask=idx < $(total_length))
+  tl.store(sin_output + idx * $(cache_stride) +
+      tl.arange(0, $(HIDDEN_DIM)) * $(hidden_stride),
+    sin_part, mask=idx < $(total_length))
+}
+
+theorem prefill_cache_sin_store_slice_correct
+    (SinPre sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin HIDDEN_DIM =>
+        prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i))
+    (hExec : exec (prefill_cache_sin_store_slice SinPre sin_output
+        cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE) s = some s') :
+    ∀ i : Fin HIDDEN_DIM,
+      s'.readMem sin_output
+          (prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i) =
+        if prefillActive s total_length BLOCK_SIZE then
+          s.readMem SinPre (prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)
+        else
+          s.readMem sin_output
+            (prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [HIDDEN_DIM] =>
+        (s.pids 0 * BLOCK_SIZE + s.pids 1) * cache_stride + idx.1.val * hidden_stride) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [prefillOutOffset, prefillIdx] using h
+    cases a; cases b
+    simp only at hab; cases hab; rfl
+  simp [exec, prefill_cache_sin_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
+  rw [← hExec]
+  simp only [prefillOutOffset, prefillIdx]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
+  by_cases hAct : s.pids 0 * BLOCK_SIZE + s.pids 1 < total_length
+  · simp [prefillActive, prefillIdx, hAct]
+  · simp [prefillActive, prefillIdx, hAct]
+
+theorem prefill_cache_sin_store_slice_compute_correct
+    (SinPre sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin HIDDEN_DIM =>
+        prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) :
+    ComputeCorrect.Realizes
+      (kernel := prefill_cache_sin_store_slice SinPre sin_output
+        cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin HIDDEN_DIM => prefillActive s total_length BLOCK_SIZE)
+        (fun i => (sin_output,
+          prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)))
+      (expected := fun i =>
+        s.readMem SinPre
+          (prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [prefill_cache_sin_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := prefill_cache_sin_store_slice_correct SinPre sin_output
+    cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE s s' hOutInj hExec i
+  simpa [hActive] using h
+
 end VeriTile.Bench.TritonBenchG.CacheTransformTriton
