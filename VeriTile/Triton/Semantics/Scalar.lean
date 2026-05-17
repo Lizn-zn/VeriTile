@@ -80,6 +80,24 @@ noncomputable def div : NumericDType dtype → TileCarrier dtype → TileCarrier
   | .int, x, y => x / y
   | .nat, x, y => x / y
 
+/-- `.nat` channel addition unfolds to `Nat.+`. -/
+theorem nat_add (x y : Nat) : NumericDType.add .nat x y = x + y := rfl
+
+/-- `.int` channel addition unfolds to `Int.+`. -/
+theorem int_add (x y : Int) : NumericDType.add .int x y = x + y := rfl
+
+/-- `.nat` channel subtraction unfolds to `Nat.-` (truncated). -/
+theorem nat_sub (x y : Nat) : NumericDType.sub .nat x y = x - y := rfl
+
+/-- `.int` channel subtraction unfolds to `Int.-`. -/
+theorem int_sub (x y : Int) : NumericDType.sub .int x y = x - y := rfl
+
+/-- `.nat` channel multiplication unfolds to `Nat.*`. -/
+theorem nat_mul (x y : Nat) : NumericDType.mul .nat x y = x * y := rfl
+
+/-- `.int` channel multiplication unfolds to `Int.*`. -/
+theorem int_mul (x y : Int) : NumericDType.mul .int x y = x * y := rfl
+
 end NumericDType
 
 namespace IntegralDType
