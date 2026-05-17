@@ -679,6 +679,28 @@ theorem writeMemTyped_int_readMemValue_nat_of_ne (s : BlockState)
     rfl
   · simp [h]
 
+/-- Cross-region specialization of `writeMem_readMem`. When the read region is
+known to differ from the write region (a hypothesis common in multi-store
+kernel proofs), the readback is unchanged regardless of the offset. -/
+theorem writeMem_readMem_of_ne_region (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) (h : r ≠ region) :
+    (s.writeMem region offset v).readMem r o = s.readMem r o := by
+  rw [writeMem_readMem, if_neg]
+  rintro ⟨hR, _⟩
+  exact h hR
+
+/-- Same-region different-offset specialization of `writeMem_readMem`. When
+the read offset is known to differ from the write offset, the readback is
+unchanged. Use for intra-region multi-store kernels (rotary embeddings,
+spherical harmonics) where stores at offset `+ k₁, +k₂, ...` with distinct
+`kᵢ` don't disturb each other. -/
+theorem writeMem_readMem_of_ne_offset (s : BlockState) (region : RegionName)
+    (offset : Nat) (v : ℝ) (r : RegionName) (o : Nat) (h : o ≠ offset) :
+    (s.writeMem region offset v).readMem r o = s.readMem r o := by
+  rw [writeMem_readMem, if_neg]
+  rintro ⟨_, hO⟩
+  exact h hO
+
 @[simp] theorem writeMemAs_readMemAs (s : BlockState) (dtype : FloatDType)
     (region : RegionName) (offset : Nat) (v : TileCarrier dtype.toTileDType)
     (r : RegionName) (o : Nat) :
