@@ -771,4 +771,110 @@ theorem rotary_kernel_o0o1_row_o1_correct
     · simp [active, rowIndex, dimIndex, hRow]
   · exact False.elim (hBH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
+/-! ### Full 2D `[BLOCK_M, BLOCK_HALF]` non-interleaved kernel correctness
+
+The `rotary_kernel_non_interleaved` kernel above lifts the one-row
+`o0`/`o1` companion stores to the FULL `[BLOCK_M, BLOCK_HALF]` tile of the
+non-interleaved, non-varlen, non-conjugate, scalar-offset branch from
+`rotary_transform_ops.py`. The 2D tile-indexed offset functions and active
+predicate below mirror the 1D ones (`outOffset`, `active`, etc.) but use
+`TileIndex [BLOCK_M, BLOCK_HALF]` instead of `Fin BLOCK_HALF`. The proof
+target is the same: `o0 = x0 * cos - x1 * sin` written into `OUT` at the
+first-half `rk_half` offsets, with the companion `o1` store landing on the
+disjoint second-half offsets. -/
+
+/-- 2D-tile row coordinate `rm = pid_m * BLOCK_M + idx.1.val`. -/
+def rowIndex2D (s : BlockState) (BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
+  s.pids 0 * BLOCK_M + idx.1.val
+
+/-- 2D-tile column coordinate `rk_half = idx.2.1.val`. -/
+def dimIndex2D (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
+  idx.2.1.val
+
+/-- 2D-tile active mask: row in `seqlen`, column in `rotary_dim_half`. -/
+def active2D (s : BlockState) (seqlen rotary_dim_half BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Prop :=
+  rowIndex2D s BLOCK_M idx < seqlen ∧ dimIndex2D idx < rotary_dim_half
+
+instance active2DDecidable (s : BlockState) (seqlen rotary_dim_half BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) :
+    Decidable (active2D s seqlen rotary_dim_half BLOCK_M idx) := by
+  unfold active2D
+  infer_instance
+
+/-- 2D-tile first-half output offset (matches the surface's outer
+`OUT = OUT + (rm[:, None] * stride_out_seqlen + rk_half[None, :] *
+stride_out_headdim)` chain after batch/head base advancement). -/
+def outOffset2D
+    (s : BlockState)
+    (stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
+  s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
+    rowIndex2D s BLOCK_M idx * stride_out_seqlen +
+    dimIndex2D idx * stride_out_headdim
+
+/-- 2D-tile second-half output offset (`+ rotary_dim_half * stride_headdim`). -/
+def out1Offset2D
+    (s : BlockState)
+    (stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      rotary_dim_half BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
+  s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
+    rowIndex2D s BLOCK_M idx * stride_out_seqlen +
+    (dimIndex2D idx + rotary_dim_half) * stride_out_headdim
+
+/-- 2D-tile `x0` input offset. -/
+def x0Offset2D
+    (s : BlockState)
+    (stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
+  s.pids 1 * stride_x_batch + s.pids 2 * stride_x_nheads +
+    rowIndex2D s BLOCK_M idx * stride_x_seqlen +
+    dimIndex2D idx * stride_x_headdim
+
+/-- 2D-tile `x1` input offset (`+ rotary_dim_half * stride_x_headdim`). -/
+def x1Offset2D
+    (s : BlockState)
+    (stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      rotary_dim_half BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
+  s.pids 1 * stride_x_batch + s.pids 2 * stride_x_nheads +
+    rowIndex2D s BLOCK_M idx * stride_x_seqlen +
+    (dimIndex2D idx + rotary_dim_half) * stride_x_headdim
+
+/-- 2D-tile cos/sin offset. -/
+def rotOffset2D (s : BlockState) (SEQLEN_OFFSETS rotary_dim_half BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : Nat :=
+  (rowIndex2D s BLOCK_M idx + SEQLEN_OFFSETS) * rotary_dim_half + dimIndex2D idx
+
+/-- 2D-tile expected `o0` value at active positions. -/
+noncomputable def rotaryO0Spec2D
+    (s : BlockState) (X COS SIN : RegionName)
+    (SEQLEN_OFFSETS seqlen_ro stride_x_batch stride_x_seqlen stride_x_nheads
+      stride_x_headdim rotary_dim_half BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_HALF]) : ℝ :=
+  let cosVal :=
+    if rowIndex2D s BLOCK_M idx + SEQLEN_OFFSETS < seqlen_ro ∧
+        dimIndex2D idx < rotary_dim_half then
+      s.readMem COS (rotOffset2D s SEQLEN_OFFSETS rotary_dim_half BLOCK_M idx)
+    else
+      1.0
+  let sinVal :=
+    if rowIndex2D s BLOCK_M idx + SEQLEN_OFFSETS < seqlen_ro ∧
+        dimIndex2D idx < rotary_dim_half then
+      s.readMem SIN (rotOffset2D s SEQLEN_OFFSETS rotary_dim_half BLOCK_M idx)
+    else
+      0.0
+  s.readMem X
+      (x0Offset2D s stride_x_batch stride_x_seqlen stride_x_nheads
+        stride_x_headdim BLOCK_M idx) *
+    cosVal -
+  s.readMem X
+      (x1Offset2D s stride_x_batch stride_x_seqlen stride_x_nheads
+        stride_x_headdim rotary_dim_half BLOCK_M idx) *
+    sinVal
+
 end VeriTile.Bench.TritonBenchG.RotaryTransformOps
