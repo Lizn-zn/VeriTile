@@ -404,6 +404,13 @@ def mat {dtype : TileDType} {rows cols : Nat}
     (f : Fin rows → Fin cols → TileCarrier dtype) : Tile dtype [rows, cols] :=
   ⟨fun (row, col, _) => f row col⟩
 
+/-- Reading a `Tile.mat` at a 2D index calls the underlying function at the
+(row, col) coordinates. -/
+@[simp] theorem mat_data {dtype : TileDType} {rows cols : Nat}
+    (f : Fin rows → Fin cols → TileCarrier dtype)
+    (idx : TileIndex [rows, cols]) :
+    (Tile.mat f).data idx = f idx.1 idx.2.1 := rfl
+
 end Tile
 
 /-- Binary broadcasting cases supported by Triton elementwise operators. -/
