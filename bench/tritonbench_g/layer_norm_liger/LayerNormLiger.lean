@@ -268,4 +268,92 @@ theorem layer_norm_liger_forward_y_compute_correct
     hYMean hYRSTD hOutInj hExec i
   simpa [hActive] using h
 
+/-- Proof-oriented Mean store slice of `layer_norm_liger.py`'s
+`_layer_norm_forward_kernel`. Takes a precomputed `MeanPre` scalar (per row)
+and proves the scalar writeback into Mean. -/
+def layer_norm_liger_forward_mean_store_slice
+    (MeanPre Mean : RegionName) (Mean_row_stride : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(0)
+  mean = tl.load(MeanPre + row * $(Mean_row_stride))
+  tl.store(Mean + row * $(Mean_row_stride), mean)
+}
+
+def meanRowOffset (s : BlockState) (Mean_row_stride : Nat) : Nat :=
+  s.pid * Mean_row_stride
+
+noncomputable def meanStoreSpec (s : BlockState) (MeanPre : RegionName)
+    (Mean_row_stride : Nat) : ℝ :=
+  s.readMem MeanPre (meanRowOffset s Mean_row_stride)
+
+theorem layer_norm_liger_forward_mean_store_slice_correct
+    (MeanPre Mean : RegionName) (Mean_row_stride : Nat) (s s' : BlockState)
+    (hExec : exec (layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride)
+      s = some s') :
+    s'.readMem Mean (meanRowOffset s Mean_row_stride) =
+      meanStoreSpec s MeanPre Mean_row_stride := by
+  simp [exec, layer_norm_liger_forward_mean_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul] at hExec
+  subst s'
+  simp [meanRowOffset, meanStoreSpec]
+
+theorem layer_norm_liger_forward_mean_store_slice_compute_correct
+    (MeanPre Mean : RegionName) (Mean_row_stride : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, meanRowOffset s Mean_row_stride))
+      (expected := fun _ => meanStoreSpec s MeanPre Mean_row_stride) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_liger_forward_mean_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layer_norm_liger_forward_mean_store_slice_correct MeanPre Mean Mean_row_stride
+    s s' hExec
+
+/-- Proof-oriented RSTD store slice of `layer_norm_liger.py`'s
+`_layer_norm_forward_kernel`. Same scalar-copy pattern. -/
+def layer_norm_liger_forward_rstd_store_slice
+    (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(0)
+  rstd = tl.load(RSTDPre + row * $(RSTD_row_stride))
+  tl.store(RSTD + row * $(RSTD_row_stride), rstd)
+}
+
+noncomputable def rstdStoreSpec (s : BlockState) (RSTDPre : RegionName)
+    (RSTD_row_stride : Nat) : ℝ :=
+  s.readMem RSTDPre (meanRowOffset s RSTD_row_stride)
+
+theorem layer_norm_liger_forward_rstd_store_slice_correct
+    (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) (s s' : BlockState)
+    (hExec : exec (layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride)
+      s = some s') :
+    s'.readMem RSTD (meanRowOffset s RSTD_row_stride) =
+      rstdStoreSpec s RSTDPre RSTD_row_stride := by
+  simp [exec, layer_norm_liger_forward_rstd_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul] at hExec
+  subst s'
+  simp [meanRowOffset, rstdStoreSpec]
+
+theorem layer_norm_liger_forward_rstd_store_slice_compute_correct
+    (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (RSTD, meanRowOffset s RSTD_row_stride))
+      (expected := fun _ => rstdStoreSpec s RSTDPre RSTD_row_stride) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_liger_forward_rstd_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layer_norm_liger_forward_rstd_store_slice_correct RSTDPre RSTD RSTD_row_stride
+    s s' hExec
+
 end VeriTile.Bench.TritonBenchG.LayerNormLiger
