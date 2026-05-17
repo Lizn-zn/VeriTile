@@ -1119,6 +1119,24 @@ theorem foldl_writeMem_prop_masked_readMem_other_region {α : Type}
       · simp only [hhd, if_false]
         exact ih _ htl
 
+/-- Specialization of `foldl_writeMem_prop_masked_readMem_other_region` to
+the case where all writes target the same constant `region`. Practical
+shortcut for multi-store kernels (e.g. adam updates `p` then `exp_avg`): when
+proving the second store's readback, the first store's foldl can be stripped
+by `h : R ≠ region`. -/
+theorem foldl_writeMem_const_region_prop_masked_readMem_other {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (R : RegionName) (off : Nat) (hRR : R ≠ region) :
+    BlockState.readMem ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s))
+      R off
+      = s.readMem R off :=
+  foldl_writeMem_prop_masked_readMem_other_region
+    (regionFn := fun _ => region) offsetFn valueFn P l s R off
+    (fun _ _ _ => hRR)
+
 theorem foldl_writeMemTyped_natAt_prop_masked_readMem_other_region {α : Type}
     (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → Nat)
     (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
