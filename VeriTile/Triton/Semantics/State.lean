@@ -1071,6 +1071,34 @@ theorem scatter_readback_nat_prop_masked_nd {region : RegionName} {shape : TileS
       (offsetFn i) l₁]
     exact h_l1_not_in
 
+/-- A foldl of `writeMem` (real channel) at masked locations, with all writes
+going to regions disjoint from `R`, leaves `readMem R off` unchanged. -/
+theorem foldl_writeMem_prop_masked_readMem_other_region {α : Type}
+    (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (R : RegionName) (off : Nat)
+    (h_other : ∀ k, k ∈ l → P k → R ≠ regionFn k) :
+    BlockState.readMem ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem (regionFn k) (offsetFn k) (valueFn k) else acc) s))
+      R off
+      = s.readMem R off := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      have htl : ∀ k, k ∈ tl → P k → R ≠ regionFn k :=
+        fun k hk hPk => h_other k (List.mem_cons_of_mem hd hk) hPk
+      by_cases hhd : P hd
+      · simp only [hhd, if_true]
+        rw [ih _ htl]
+        rw [writeMem_readMem]
+        rw [if_neg]
+        rintro ⟨hR, _⟩
+        exact (h_other hd (List.mem_cons_self) hhd) hR
+      · simp only [hhd, if_false]
+        exact ih _ htl
+
 theorem foldl_writeMemTyped_natAt_prop_masked_readMem_other_region {α : Type}
     (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → Nat)
     (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
