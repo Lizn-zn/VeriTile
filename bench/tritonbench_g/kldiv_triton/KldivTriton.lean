@@ -48,11 +48,11 @@ def kldiv_forward_surface
   }
 }
 
-/-- Documented one-block slice of `kldiv_triton.py`'s `_kldiv_kernel_backward`
+/-- Faithful transcription of `kldiv_triton.py`'s `_kldiv_kernel_backward`
 for the `log_target = False` constexpr branch.
 
-This models one `BLOCK_SIZE` iteration of Python's `for i in range(0, n_cols,
-BLOCK_SIZE)` loop after the row pointers have been advanced.
+Includes the Python `for i in range(0, n_cols, BLOCK_SIZE)` loop. Proofs
+target the Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`.
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `log_target: tl.constexpr` → separate kernel defs per branch. -/
@@ -63,11 +63,14 @@ def kldiv_backward_default
   pid = tl.program_id(0).to(tl.int64)
   input_ptr += pid * $(input_stride)
   target_ptr += pid * $(target_stride)
-  offsets = tl.arange(0, $(BLOCK_SIZE))
-  mask = offsets < $(n_cols)
-  target = tl.load(target_ptr + offsets, mask=mask, other=0.0)
-  res = target * -1
-  tl.store(input_ptr + offsets, res, mask=mask)
+  base_offsets = tl.arange(0, $(BLOCK_SIZE))
+  for i in range($(0), $(n_cols), $(BLOCK_SIZE)) {
+    offsets = i + base_offsets
+    mask = offsets < $(n_cols)
+    target = tl.load(target_ptr + offsets, mask=mask, other=0.0)
+    res = target * -1
+    tl.store(input_ptr + offsets, res, mask=mask)
+  }
 }
 
 /-- Documented one-block slice of `kldiv_triton.py`'s `_kldiv_kernel_forward`
@@ -164,11 +167,15 @@ noncomputable def forwardLogTargetSpec
   let y_true := s.readMem gt_ptr (inOffset s gt_stride i)
   Real.exp y_true * (y_true - y)
 
-/-- Algorithm-layer correctness for the default backward one-block slice. -/
+/-- Algorithm-layer correctness for the default backward kernel under the
+Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 theorem kldiv_backward_default_correct
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat)
     (s s' : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen : n_cols ≤ BLOCK_SIZE)
+    (hLenPos : 0 < n_cols)
     (_hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => outOffset s input_stride i))
     (hExec : exec (kldiv_backward_default input_ptr target_ptr
@@ -179,10 +186,13 @@ theorem kldiv_backward_default_correct
           defaultSpec s target_ptr target_stride i
         else s.readMem input_ptr (outOffset s input_stride i) := by
   intro i
+  have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
   simp [exec, kldiv_backward_default, stepStmts, stepStmt, evalOp,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
-        ComparableDType.lt] at hExec
+        ComparableDType.lt, hBS, hBSne, hLenPos, hLen,
+        stepForRangeAux.forRangeDyn_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge, Nat.zero_add] at hExec
   rw [← hExec]
   simp only [outOffset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _

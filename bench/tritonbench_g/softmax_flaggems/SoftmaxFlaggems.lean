@@ -525,9 +525,9 @@ theorem softmax_backward_kernel_inner_one_tile_correct
             ¬ (s.pids 0 * TILE_M + idx.1.val < M ∧ idx.2.1.val < N) := by
           simpa [innerBwdActive, innerBwdRowIndex, innerBwdColIndex,
                  BlockState.pid_eq] using hActive
-        simp [hInactive]
-        intro h
-        exact False.elim (hActive h)
+        rw [if_neg hInactive]
+        simp only [BlockState.setReg_readMem]
+        rw [if_neg hActive]
     · exact False.elim (hTN (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
   · exact False.elim (hTM (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
 

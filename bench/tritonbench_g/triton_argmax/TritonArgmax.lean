@@ -389,8 +389,7 @@ theorem argmax_kernel_single_block_correct
   simp [exec, argmax_kernel, ComputeStmt.listToAlgorithm?,
         ComputeStmt.toAlgorithm?,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
-        ComputeKernel.toAlgKernel, AlgKernel.body, Kernel.body,
-        Function.comp] at hExec
+        ComputeKernel.toAlgKernel] at hExec
   sorry
 
 end VeriTile.Bench.TritonBenchG.TritonArgmax
