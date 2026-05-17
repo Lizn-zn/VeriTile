@@ -487,6 +487,16 @@ noncomputable def Tile.reduceMaxDrop {shape : TileShape}
   else
     none
 
+/-- Tile.reduceMaxDrop returns `none` when the reduction axis has zero
+length. Useful as a simp lemma when proving correctness of kernels that
+guard `tl.max(..., return_indices=False)` against empty axes. -/
+@[simp] theorem Tile.reduceMaxDrop_eq_none {shape : TileShape}
+    {axis : Fin shape.length} {x : Tile .real shape}
+    (h : TileShape.axisDim shape axis = 0) :
+    Tile.reduceMaxDrop axis x = none := by
+  unfold Tile.reduceMaxDrop
+  rw [dif_neg (by omega)]
+
 noncomputable def Tile.reduceMaxKeep {shape : TileShape}
     (axis : Fin shape.length) (x : Tile .real shape) :
     Option (Tile .real (TileShape.setAxisOne shape axis)) :=
