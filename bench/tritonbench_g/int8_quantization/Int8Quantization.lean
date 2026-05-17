@@ -241,4 +241,18 @@ theorem per_block_int8_scale_store_slice_compute_correct
   exact per_block_int8_scale_store_slice_correct ScalePre Scale scale_stride
     s s' hExec
 
+-- DRAFT: probe the surface kernel's scale-store readback
+theorem probe_q_scale
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat)
+    (s s' : BlockState)
+    (hExec : exec (q_kernel_per_block_int8_surface X XInt8 Scale
+        L C BLK scale_stride) s = some s') :
+    s'.readMem Scale (scaleOffset s scale_stride) = 0 := by
+  simp [exec, q_kernel_per_block_int8_surface, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.div,
+        ComparableDType.lt, scaleOffset] at hExec
+  sorry
+
 end VeriTile.Bench.TritonBenchG.Int8Quantization
