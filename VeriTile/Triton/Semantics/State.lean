@@ -1137,6 +1137,40 @@ theorem foldl_writeMem_const_region_prop_masked_readMem_other {α : Type}
     (regionFn := fun _ => region) offsetFn valueFn P l s R off
     (fun _ _ _ => hRR)
 
+/-- Intra-region offset-disjointness companion to
+`foldl_writeMem_const_region_prop_masked_readMem_other`. When all writes
+in the foldl target the same `region` but at offsets disjoint from a given
+read offset `off`, the foldl doesn't disturb `readMem region off`.
+
+Use for kernels where multiple stores write to the SAME region at non-
+overlapping offset sets — e.g. rotary embeddings (Q first-half offsets vs
+Q second-half offsets) or fifth-order spherical harmonics (Y00..Y10 outputs
+at different col offsets within the same output region). -/
+theorem foldl_writeMem_same_region_disjoint_offsets_readMem {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (off : Nat) (hOff : ∀ k, k ∈ l → P k → off ≠ offsetFn k) :
+    BlockState.readMem ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s))
+      region off
+      = s.readMem region off := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      have htl : ∀ k, k ∈ tl → P k → off ≠ offsetFn k :=
+        fun k hk hPk => hOff k (List.mem_cons_of_mem hd hk) hPk
+      by_cases hhd : P hd
+      · simp only [hhd, if_true]
+        rw [ih _ htl]
+        rw [writeMem_readMem]
+        rw [if_neg]
+        rintro ⟨_, hOffEq⟩
+        exact (hOff hd (List.mem_cons_self) hhd) hOffEq
+      · simp only [hhd, if_false]
+        exact ih _ htl
+
 theorem foldl_writeMemTyped_natAt_prop_masked_readMem_other_region {α : Type}
     (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → Nat)
     (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
