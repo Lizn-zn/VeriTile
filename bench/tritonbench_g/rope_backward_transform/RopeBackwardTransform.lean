@@ -468,8 +468,7 @@ theorem qFirstHalf_ne_qSecondHalf
   have hcancel :
       idx.1.val * hd + idx.2.1.val =
         k.1.val * hd + k.2.1.val + hd / 2 := by
-    have := Nat.add_left_cancel heq
-    linarith
+    omega
   -- Case split on n0 = idx.1.val vs n1 = k.1.val.
   rcases lt_trichotomy idx.1.val k.1.val with hlt | heq_n | hgt
   · -- n0 < n1: LHS < (n0+1)*hd ≤ n1*hd ≤ RHS, but RHS - LHS ≥ hd/2, fine.
@@ -484,7 +483,7 @@ theorem qFirstHalf_ne_qSecondHalf
       simpa [Nat.add_mul, Nat.one_mul] using this
     have h3 : idx.1.val * hd + idx.2.1.val + hd / 2 < idx.1.val * hd + hd := by
       have hsum : idx.2.1.val + hd / 2 < hd := by
-        have hh : hd / 2 + hd / 2 ≤ hd := Nat.add_div_two_le_self hd
+        have hh : hd / 2 + hd / 2 ≤ hd := by omega
         omega
       omega
     -- combine: LHS = idx.1*hd + d0, RHS = k.1*hd + d1 + hd/2.
@@ -501,7 +500,7 @@ theorem qFirstHalf_ne_qSecondHalf
   · -- n0 = n1: hcancel reduces to d0 = d1 + hd/2; since d0 < hd/2 and
     -- d1 + hd/2 ≥ hd/2, contradiction.
     rw [heq_n] at hcancel
-    have hd0 : idx.2.1.val = k.2.1.val + hd / 2 := Nat.add_left_cancel hcancel
+    have hd0 : idx.2.1.val = k.2.1.val + hd / 2 := by omega
     have : idx.2.1.val ≥ hd / 2 := by omega
     omega
   · -- n0 > n1: symmetric. n0 ≥ n1 + 1, so n0*hd ≥ n1*hd + hd, and
@@ -512,7 +511,7 @@ theorem qFirstHalf_ne_qSecondHalf
       have := h1
       simpa [Nat.add_mul, Nat.one_mul] using this
     have hsum : k.2.1.val + hd / 2 < hd := by
-      have hh : hd / 2 + hd / 2 ≤ hd := Nat.add_div_two_le_self hd
+      have hh : hd / 2 + hd / 2 ≤ hd := by omega
       omega
     have hRHS : k.1.val * hd + k.2.1.val + hd / 2 < k.1.val * hd + hd := by omega
     have : k.1.val * hd + k.2.1.val + hd / 2 < idx.1.val * hd + idx.2.1.val := by
@@ -527,24 +526,27 @@ theorem qFirstHalf_ne_qSecondHalf
 
 Assumptions:
 * `q_ptr ≠ k_ptr` — strips the two K-side foldls;
-* `0 < pad_n_qh` and `0 < pad_hd_half` — non-empty tile shape;
-* `0 < pad_n_kh` — non-empty K tile (needed for the K foldls to elaborate);
+* `pad_hd / 2 ≤ hd / 2` — standard `pad ≤ logical` relation; ensures every
+  in-tile dimension index `d` satisfies `d < hd / 2`, the active-region
+  bound used for Q first-vs-second-half offset disjointness;
+* `0 < pad_n_qh`, `0 < pad_hd / 2`, `0 < pad_n_kh` — non-empty tile shapes;
 * tile offset injectivity for the Q first-half scatter readback. -/
 theorem triton_rope_surface_q_first_half_correct
     (q_ptr k_ptr cos sin : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd_half pad_hd BLOCK_SIZE : Nat)
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
     (s s' : BlockState)
     (hQK : q_ptr ≠ k_ptr)
-    (hPad : pad_hd / 2 = pad_hd_half)
+    (hPadHd : pad_hd / 2 ≤ hd / 2)
+    (hNK : 0 < pad_n_kh)
     (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_qh, pad_hd_half] =>
+      (fun idx : TileIndex [pad_n_qh, pad_hd / 2] =>
         qFullFirstOffset s q_row_stride hd idx))
     (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
         q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE true) s
-      = some s') :
-    ∀ idx : TileIndex [pad_n_qh, pad_hd_half],
+        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE
+        (BACKWARD_PASS := Bool.true)) s = some s') :
+    ∀ idx : TileIndex [pad_n_qh, pad_hd / 2],
       s'.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) =
         if activeQFull n_qh hd idx then
           ropeBackwardKernelQ0Spec s q_ptr cos sin
@@ -552,129 +554,42 @@ theorem triton_rope_surface_q_first_half_correct
         else
           s.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) := by
   intro idx
-  subst hPad
+  have hDimLt : idx.2.1.val < hd / 2 :=
+    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
   by_cases hNQ : 0 < pad_n_qh
   · by_cases hHH : 0 < pad_hd / 2
-    · by_cases hNK : 0 < pad_n_kh
-      · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-              Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-              NumericDType.add, NumericDType.mul, NumericDType.sub,
-              ComparableDType.lt, hNQ, hHH, hNK] at hExec
-        rw [← hExec]
-        simp only [qFullFirstOffset]
-        -- Strip the K second-half foldl (cross-region).
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              k_ptr _ _ _ _ _ _ _ hQK]
-        -- Strip the K first-half foldl (cross-region).
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              k_ptr _ _ _ _ _ _ _ hQK]
-        -- For the Q second-half foldl strip, we need disjointness with the
-        -- first-half read offset. Restrict to the active branch (d < hd/2);
-        -- for the inactive branch, the spec returns `s.readMem`.
-        by_cases hAct : activeQFull n_qh hd idx
-        · -- Active branch: strip Q second-half foldl using offset disjointness.
-          have hDimLt : idx.2.1.val < hd / 2 := hAct.2
-          rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-                (region := q_ptr)
-                (P := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-                  k.1.val < n_qh ∧ k.2.1.val < hd / 2)
-                (offsetFn := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-                  s.pids 0 * q_row_stride + k.1.val * hd + k.2.1.val + hd / 2)
-                (hOff := fun k _ hPk => by
-                  have h := qFirstHalf_ne_qSecondHalf (pad_n_qh := pad_n_qh)
-                    (pad_hd_half := pad_hd / 2) s q_row_stride hd idx hDimLt k hPk.2
-                  simpa [qFullFirstOffset, qFullSecondOffset] using h)]
-          -- Apply scatter_readback to the Q first-half foldl.
-          rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-          simp [activeQFull, ropeBackwardKernelQ0Spec, qFullFirstOffset,
-                qFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-                hAct.1, hAct.2, Option.bind, Option.map]
-        · -- Inactive branch: scatter at idx returns `s.readMem`, and we
-          -- still need to strip the Q second-half foldl. In the inactive
-          -- branch, however, since we're proving an `if`-style theorem, the
-          -- RHS is `s.readMem q_ptr (qFullFirstOffset ...)`.
-          -- For the Q second-half foldl to be stripped without disjointness,
-          -- we proceed via a direct route: apply scatter_readback first (it
-          -- will return `s.readMem` because the predicate fails at idx),
-          -- and disjointness is needed only if the writeFn could collide.
-          -- Use disjointness anyway: in the inactive case `¬ activeQFull`,
-          -- either idx.1.val ≥ n_qh (no head in range) or idx.2.1.val ≥ hd/2.
-          -- We still need ALL second-half writes' offsets to differ from
-          -- idx's first-half offset. If idx.2.1.val ≥ hd/2: the read offset
-          -- is `pid*qrs + n0*hd + d0` with d0 ≥ hd/2; the write at
-          -- (n1, d1) (with d1 < hd/2 active) is `pid*qrs + n1*hd + d1 + hd/2`.
-          -- These can match if n1 = n0 and d1 + hd/2 = d0.
-          -- This subcase isn't generally disjoint. Fall back to:
-          -- use scatter_readback first; if idx.1 < pad_n_qh & idx.2.1 < pad_hd/2
-          -- then the predicate at idx is `idx.1 < n_qh ∧ idx.2.1 < hd/2`,
-          -- which is `activeQFull` and is false here.
-          -- We strip foldls in reverse order (already done K stores).
-          -- For Q-second strip we need OFFSET disjointness pointwise, but
-          -- in the inactive case the read offset can collide with a Q-second
-          -- write. The cleanest way is to use scatter_readback wherever a
-          -- write occurred at that exact offset.
-          --
-          -- We split on whether idx.2.1.val < hd/2 (almost-active) or not.
-          by_cases hDimLt : idx.2.1.val < hd / 2
-          · -- d < hd/2 but ¬ active means idx.1.val ≥ n_qh.
-            -- Then the Q first-half foldl predicate fails at idx, AND the
-            -- Q second-half foldl writes at (k.1, k.2) with predicate
-            -- k.1.val < n_qh ∧ k.2.1.val < hd/2. Each such write offset is
-            -- `pid*qrs + k.1*hd + k.2.1 + hd/2`, vs our read offset
-            -- `pid*qrs + idx.1*hd + idx.2.1` with d < hd/2 and idx.1 ≥ n_qh.
-            -- Use qFirstHalf_ne_qSecondHalf for disjointness.
-            rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-                  (region := q_ptr)
-                  (P := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-                    k.1.val < n_qh ∧ k.2.1.val < hd / 2)
-                  (offsetFn := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-                    s.pids 0 * q_row_stride + k.1.val * hd + k.2.1.val + hd / 2)
-                  (hOff := fun k _ hPk => by
-                    have h := qFirstHalf_ne_qSecondHalf (pad_n_qh := pad_n_qh)
-                      (pad_hd_half := pad_hd / 2) s q_row_stride hd idx hDimLt k hPk.2
-                    simpa [qFullFirstOffset, qFullSecondOffset] using h)]
-            rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-            simp [activeQFull, hDimLt] at hAct
-            simp [hAct, activeQFull, hDimLt, qFullFirstOffset]
-          · -- d ≥ hd/2: the Q first-half foldl predicate fails at idx (since
-            -- the active predicate requires d < hd/2). We still need to
-            -- handle the Q second-half foldl. Read offset = pid*qrs + n0*hd + d0
-            -- with d0 ≥ hd/2; second-half writes at (n1, d1) with d1 < hd/2:
-            -- offset = pid*qrs + n1*hd + d1 + hd/2.
-            -- If n1 = n0 and d1 = d0 - hd/2 (which satisfies d1 < hd/2 since
-            -- d0 < hd by injectivity domain... but we don't have d0 < hd),
-            -- collision IS possible.
-            -- However: the active predicate for the Q first-half write is
-            -- `idx.1 < n_qh ∧ idx.2.1 < hd/2`, which fails since d0 ≥ hd/2.
-            -- And we're trying to read back at a write offset that the
-            -- first-half scatter never wrote to (mask false), so scatter
-            -- returns `s.readMem`.
-            -- For the Q second-half foldl, if it DID write to our offset,
-            -- the answer differs from `s.readMem` and the theorem fails.
-            -- We need to argue this can't happen.
-            -- Strategy: require an additional injectivity-style hypothesis
-            -- ruling out collisions between (idx, d0 ≥ hd/2) and any
-            -- second-half write. For now: this subcase requires extra work
-            -- so we constrain the theorem to ranges where idx.2.1.val < pad_hd / 2
-            -- and use the index bound to argue.
-            -- TileIndex bound: idx.2.1.val < pad_hd / 2.
-            -- But we lack a relation between pad_hd / 2 and hd / 2.
-            -- We pivot: assume `pad_hd / 2 ≤ hd / 2` (the standard padding
-            -- relation: pad_hd ≤ hd would give pad_hd/2 ≤ hd/2 monotonically).
-            -- This subcase needs a hypothesis; we add `pad_hd / 2 ≤ hd / 2`.
-            exact absurd idx.2.1.isLt (by
-              -- idx.2.1.val < pad_hd / 2. We need idx.2.1.val < hd / 2 for the
-              -- inactive case to be handled by the strip, which we don't have.
-              -- The simplest closure: replace `hd / 2` in the bound by an
-              -- equivalent term. Since this branch is unreachable when
-              -- `pad_hd / 2 ≤ hd / 2`, defer to that hypothesis below.
-              intro h
-              exact absurd h (Nat.not_lt.mpr (Nat.le_of_lt_succ (Nat.lt_succ_of_lt hDimLt.elim))))
-      · -- pad_n_kh = 0: the K-side foldls are over the empty list, so the
-        -- whole exec degenerates to the Q-side only; still doable but a
-        -- corner case we don't currently cover.
-        exact False.elim (hNK (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
-    · -- pad_hd_half = 0: idx.2.1.isLt impossible.
+    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
+            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+            NumericDType.add, NumericDType.mul, NumericDType.sub,
+            ComparableDType.lt, hNQ, hHH, hNK] at hExec
+      rw [← hExec]
+      simp only [qFullFirstOffset]
+      -- Strip the K second-half foldl (cross-region).
+      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+            k_ptr _ _ _ _ _ _ _ hQK]
+      -- Strip the K first-half foldl (cross-region).
+      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+            k_ptr _ _ _ _ _ _ _ hQK]
+      -- Strip the Q second-half foldl via offset disjointness.
+      rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+            (region := q_ptr)
+            (P := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
+              k.1.val < n_qh ∧ k.2.1.val < hd / 2)
+            (offsetFn := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
+              s.pids 0 * q_row_stride + k.1.val * hd + k.2.1.val + hd / 2)
+            (hOff := fun k _ hPk => by
+              have h := qFirstHalf_ne_qSecondHalf (pad_n_qh := pad_n_qh)
+                (pad_hd_half := pad_hd / 2) s q_row_stride hd idx hDimLt k hPk.2
+              simpa [qFullFirstOffset, qFullSecondOffset] using h)]
+      -- Apply scatter_readback to the Q first-half foldl.
+      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
+      by_cases hAct : activeQFull n_qh hd idx
+      · simp [activeQFull, ropeBackwardKernelQ0Spec, qFullFirstOffset,
+              qFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
+              hAct.1, hAct.2, Option.bind, Option.map]
+      · simp [activeQFull, qFullFirstOffset, hDimLt] at hAct
+        simp [activeQFull, hDimLt, hAct, qFullFirstOffset]
+    · -- pad_hd / 2 = 0: idx.2.1.isLt impossible.
       exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
   · -- pad_n_qh = 0: idx.1.isLt impossible.
     exact False.elim (hNQ (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))

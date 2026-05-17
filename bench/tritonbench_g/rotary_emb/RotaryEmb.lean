@@ -829,15 +829,16 @@ theorem rotary_kernel_q0_correct
       · simp [exec, rotary_kernel_surface, stepStmts, stepStmt, evalOp,
               Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
               Tile.remap, Tile.cop, Tile.expandDim,
-              TileShape.dropInsertedIndex_one_singleton,
-              TileShape.dropInsertedIndex_zero_singleton,
-              TileShape.dropInsertedIndex_one_pair,
-              TileShape.dropInsertedIndex_zero_pair,
-              TileShape.dropInsertedIndex_two_pair,
               NumericDType.add, NumericDType.mul, NumericDType.sub,
               ComparableDType.lt, hSEQ, hHEAD, hHALF] at hExec
         subst s'
         simp only [qFullOffset]
+        -- Strip the outer K1 foldl (cross-region: Q ≠ K).
+        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+              (region := K) _ _ _ _ _ _ _ hQK]
+        -- Strip the K0 foldl (cross-region: Q ≠ K).
+        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+              (region := K) _ _ _ _ _ _ _ hQK]
         sorry
       · sorry
     · sorry

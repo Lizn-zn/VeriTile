@@ -663,6 +663,7 @@ theorem rms_layernorm_forward_inv_var_correct
           rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
+    rfl
   · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
@@ -673,10 +674,12 @@ theorem rms_layernorm_forward_inv_var_correct
     subst s'
     have hB' : BLOCK_SIZE = 0 := Nat.eq_zero_of_not_pos hB
     subst hB'
-    simp [rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
+    simp [List.foldl, TileShape.allIndices, List.finRange,
+          rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
           rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-          WithBot.realRsqrt, NumericDType.mul]
+          WithBot.realRsqrt, NumericDType.mul, BlockState.writeMem_readMem,
+          hRegions]
 
 /-- Compute-facing correctness for the `r` (rstd / inv_var) output of
 `_rms_layernorm_forward`. -/
@@ -727,6 +730,7 @@ theorem gemma_rms_layernorm_forward_inv_var_correct
           rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
+    rfl
   · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
@@ -737,10 +741,12 @@ theorem gemma_rms_layernorm_forward_inv_var_correct
     subst s'
     have hB' : BLOCK_SIZE = 0 := Nat.eq_zero_of_not_pos hB
     subst hB'
-    simp [rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
+    simp [List.foldl, TileShape.allIndices, List.finRange,
+          rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
           rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
-          WithBot.realRsqrt, NumericDType.mul]
+          WithBot.realRsqrt, NumericDType.mul, BlockState.writeMem_readMem,
+          hRegions]
 
 /-- Compute-facing correctness for the `r` (rstd / inv_var) output of
 `_gemma_rms_layernorm_forward`. -/
