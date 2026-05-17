@@ -223,4 +223,47 @@ theorem cross_entropy_lse_store_slice_compute_correct
   intro _
   exact cross_entropy_lse_store_slice_correct LsePre lse_ptr n_rows s s' hExec
 
+/-- Proof-oriented loss-store slice of `cross_entropy1.py`'s forward kernel.
+Same scalar-copy pattern as the LSE store slice. Takes a precomputed LossPre
+scalar (per row × col_block) and proves the writeback into loss_ptr. -/
+def cross_entropy_loss_store_slice
+    (LossPre loss_ptr : RegionName) (n_rows : Nat) :
+    ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  col_block_idx = tl.program_id(1)
+  loss = tl.load(LossPre + col_block_idx * $(n_rows) + row_idx)
+  tl.store(loss_ptr + col_block_idx * $(n_rows) + row_idx, loss)
+}
+
+noncomputable def lossStoreSpec (s : BlockState) (LossPre : RegionName)
+    (n_rows : Nat) : ℝ :=
+  s.readMem LossPre (lseOutOffset s n_rows)
+
+theorem cross_entropy_loss_store_slice_correct
+    (LossPre loss_ptr : RegionName) (n_rows : Nat) (s s' : BlockState)
+    (hExec : exec (cross_entropy_loss_store_slice LossPre loss_ptr n_rows)
+      s = some s') :
+    s'.readMem loss_ptr (lseOutOffset s n_rows) =
+      lossStoreSpec s LossPre n_rows := by
+  simp [exec, cross_entropy_loss_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul] at hExec
+  subst s'
+  simp [lseOutOffset, lossStoreSpec]
+
+theorem cross_entropy_loss_store_slice_compute_correct
+    (LossPre loss_ptr : RegionName) (n_rows : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := cross_entropy_loss_store_slice LossPre loss_ptr n_rows)
+      (initialState := s)
+      (write := fun _ : PUnit => some (loss_ptr, lseOutOffset s n_rows))
+      (expected := fun _ => lossStoreSpec s LossPre n_rows) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [cross_entropy_loss_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact cross_entropy_loss_store_slice_correct LossPre loss_ptr n_rows s s' hExec
+
 end VeriTile.Bench.TritonBenchG.CrossEntropy1
