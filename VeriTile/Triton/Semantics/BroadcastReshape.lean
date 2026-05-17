@@ -35,12 +35,13 @@ namespace VeriTile.Triton
 
 attribute [tile_elementwise]
   Tile.bop Tile.cop Tile.uop Tile.ptrAdd Tile.bop_data Tile.cop_data
-  Tile.uop_data
+  Tile.uop_data Tile.ptrAdd_data Tile.ptrSub Tile.ptrSub_data
 
 /-! ## Tile shape coercions / reshapes -/
 
 attribute [tile_elementwise]
   Tile.expandDim Tile.ofReal Tile.natToReal Tile.dot Tile.transpose Tile.select
+  Tile.mat_data
 
 /-! ## Tile reductions -/
 
@@ -50,6 +51,16 @@ attribute [tile_elementwise]
   Tile.reduceSumDrop_data Tile.reduceSumKeep_data
   Tile.reduceMax Tile.reduceMaxDrop Tile.reduceMaxKeep
   Tile.reduceMax_false Tile.reduceMax_true
+  Tile.reduceMaxDrop_eq_none
+
+/-! ## Tile scans (cumsum / associative_scan) -/
+
+attribute [tile_elementwise]
+  Tile.scan Tile.scan_data
+  Tile.argMaxDrop Tile.argMinDrop Tile.argBestDrop
+  Tile.argMaxDrop_unfold Tile.argMinDrop_unfold
+  ScanOp.eval ScanOp.eval_sum ScanOp.eval_prod ScanOp.eval_max
+  ScanOp.eval_min_nil ScanOp.eval_min_cons
 
 /-! ## Numeric / comparable / integral dtype operations -/
 
