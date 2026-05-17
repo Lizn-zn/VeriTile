@@ -1030,4 +1030,157 @@ theorem fused_rotary_v2_kv_cache_second_half_store_slice_compute_correct
     block_ids offsets_in_last_block cacheb_stride cacheh_stride cached_stride
     HEAD_HALF s s' hOutInj hExec i
 
+/-! ## Full-kernel Q-surface store proofs
+
+The full Q surface `rotary_embedding_q_surface` writes the Q first-half and
+Q second-half tiles consecutively over the 3D `[BLOCK_TOKENS, 1, HEAD_HALF]`
+tile. We characterize each store at the algorithm layer using the substrate
+helpers `BlockState.scatter_readback_prop_masked_nd` (for the active scatter)
+and `BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem` (for
+stripping the sibling Q store, which targets the same region at disjoint
+offsets). -/
+
+/-- Per-tile-index Q first-half offset for the full Q surface kernel.
+The 3D tile shape is `[BLOCK_TOKENS, 1, HEAD_HALF]`. -/
+def qFullFirstOffset
+    (s : BlockState) (q_token_stride q_head_stride head_dim_stride
+      BLOCK_TOKENS : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) : Nat :=
+  (s.pids 1 * BLOCK_TOKENS + idx.1.val) * q_token_stride +
+    s.pids 0 * q_head_stride + idx.2.2.1.val * head_dim_stride
+
+/-- Per-tile-index Q second-half offset for the full Q surface kernel. -/
+def qFullSecondOffset
+    (s : BlockState) (q_token_stride q_head_stride head_dim_stride
+      BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) : Nat :=
+  (s.pids 1 * BLOCK_TOKENS + idx.1.val) * q_token_stride +
+    s.pids 0 * q_head_stride + (idx.2.2.1.val + HEAD_HALF) * head_dim_stride
+
+/-- Per-tile-index cos/sin offset (the cos/sin tile is `[BLOCK_TOKENS,
+HEAD_HALF]` and broadcasts into the 3D Q tile along the singleton head
+axis). -/
+def cosFullOffset
+    (s : BlockState) (cos_token_stride cos_stride BLOCK_TOKENS : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) : Nat :=
+  (s.pids 1 * BLOCK_TOKENS + idx.1.val) * cos_token_stride +
+    idx.2.2.1.val * cos_stride
+
+/-- Active predicate for the Q stores in the full Q surface kernel: head
+index in range AND the per-tile token index in range. -/
+def activeFull (s : BlockState) (q_total_tokens Q_HEAD_NUM BLOCK_TOKENS : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) : Prop :=
+  s.pids 0 < Q_HEAD_NUM ∧
+    s.pids 1 * BLOCK_TOKENS + idx.1.val < q_total_tokens
+
+instance activeFullDecidable (s : BlockState)
+    (q_total_tokens Q_HEAD_NUM BLOCK_TOKENS : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) :
+    Decidable (activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS idx) := by
+  unfold activeFull
+  infer_instance
+
+/-- Q first-half rotary spec for the full Q surface kernel:
+`q0 * cos - q1 * sin`. -/
+noncomputable def rotaryNopadQ0FullSpec
+    (s : BlockState) (q cos sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) : ℝ :=
+  s.readMem q
+      (qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
+        BLOCK_TOKENS idx) *
+    s.readMem cos (cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS idx) -
+  s.readMem q
+      (qFullSecondOffset s q_token_stride q_head_stride head_dim_stride
+        BLOCK_TOKENS HEAD_HALF idx) *
+    s.readMem sin (cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS idx)
+
+/-- Q second-half rotary spec for the full Q surface kernel:
+`q0 * sin + q1 * cos`. -/
+noncomputable def rotaryNopadQ1FullSpec
+    (s : BlockState) (q cos sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      BLOCK_TOKENS HEAD_HALF : Nat)
+    (idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF]) : ℝ :=
+  s.readMem q
+      (qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
+        BLOCK_TOKENS idx) *
+    s.readMem sin (cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS idx) +
+  s.readMem q
+      (qFullSecondOffset s q_token_stride q_head_stride head_dim_stride
+        BLOCK_TOKENS HEAD_HALF idx) *
+    s.readMem cos (cosFullOffset s cos_token_stride cos_stride BLOCK_TOKENS idx)
+
+/-- Algorithm-layer correctness for the Q first-half store in the full
+3D-tile Q surface kernel `rotary_embedding_q_surface`. The Q second-half
+store (same region, disjoint offsets) is stripped via
+`foldl_writeMem_same_region_disjoint_offsets_readMem`. -/
+theorem rotary_embedding_q_surface_q0_correct
+    (Q Cos Sin : RegionName)
+    (q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+      q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
+        qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
+          BLOCK_TOKENS idx))
+    (hOutDisjoint :
+      ∀ idx idx' : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+        qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
+            BLOCK_TOKENS idx ≠
+          qFullSecondOffset s q_token_stride q_head_stride head_dim_stride
+            BLOCK_TOKENS HEAD_HALF idx')
+    (hExec : exec (rotary_embedding_q_surface Q Cos Sin
+        q_token_stride q_head_stride head_dim_stride cos_token_stride cos_stride
+        q_total_tokens Q_HEAD_NUM HEAD_HALF BLOCK_TOKENS) s = some s') :
+    ∀ idx : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF],
+      s'.readMem Q
+          (qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
+            BLOCK_TOKENS idx) =
+        if activeFull s q_total_tokens Q_HEAD_NUM BLOCK_TOKENS idx then
+          rotaryNopadQ0FullSpec s Q Cos Sin q_token_stride q_head_stride
+            head_dim_stride cos_token_stride cos_stride BLOCK_TOKENS HEAD_HALF idx
+        else
+          s.readMem Q
+            (qFullFirstOffset s q_token_stride q_head_stride head_dim_stride
+              BLOCK_TOKENS idx) := by
+  intro idx
+  by_cases hTok : 0 < BLOCK_TOKENS
+  · by_cases hHalf : 0 < HEAD_HALF
+    · have hRawInj : Function.Injective
+          (fun j : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
+            (s.pids 1 * BLOCK_TOKENS + j.1.val) * q_token_stride +
+              s.pids 0 * q_head_stride + j.2.2.1.val * head_dim_stride) := by
+        simpa [qFullFirstOffset] using hOutInj
+      simp only [exec, rotary_embedding_q_surface, stepStmts, stepStmt, evalOp,
+            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+            NumericDType.add, NumericDType.mul, NumericDType.sub,
+            ComparableDType.lt,
+            TileShape.dropInsertedIndex_two_pair,
+            TileShape.dropInsertedIndex_zero_pair] at hExec
+      subst hExec
+      simp only [qFullFirstOffset]
+      -- Strip the outer Q second-half foldl: same region Q, disjoint offsets.
+      rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+            Q (fun j : TileIndex [BLOCK_TOKENS, 1, HEAD_HALF] =>
+                (s.pids 1 * BLOCK_TOKENS + j.1.val) * q_token_stride +
+                  s.pids 0 * q_head_stride +
+                  (j.2.2.1.val + HEAD_HALF) * head_dim_stride)
+            _ _ _ _ _
+            (fun k _ _ => by
+              have := hOutDisjoint idx k
+              simpa [qFullFirstOffset, qFullSecondOffset] using this)]
+      -- The inner foldl is the Q first-half scatter.
+      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj idx]
+      by_cases hHead : s.pids 0 < Q_HEAD_NUM
+      · by_cases hTokIdx : s.pids 1 * BLOCK_TOKENS + idx.1.val < q_total_tokens
+        · simp [activeFull, rotaryNopadQ0FullSpec, qFullFirstOffset,
+                qFullSecondOffset, cosFullOffset, hHead, hTokIdx,
+                Option.bind, Option.map]
+        · simp [activeFull, hHead, hTokIdx]
+      · simp [activeFull, hHead]
+    · exact False.elim (hHalf (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.2.1.isLt))
+  · exact False.elim (hTok (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
+
 end VeriTile.Bench.TritonBenchG.RotaryEmbNopad

@@ -1211,14 +1211,13 @@ theorem decoding_fused_rotary_embedding_kernel_surface_q_first_half_correct
         rw [List.foldl_cons, ih]
         rw [BlockState.writeMem_readMem_of_ne_offset _ _ _ _ _ _
           (fun heq => hDisjoint hd heq)]
-  simp [exec, decoding_fused_rotary_embedding_kernel_surface, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.uop,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.sub,
-        ComparableDType.eq, hHD] at hExec
   -- Branch on the KV gate condition.
   by_cases hGate : s.pids 0 % KV_GROUP_NUM = 0
   · -- Active branch: all 7 stores fire (Q0, Q1, K0, K1, KC0, KC1, VC).
-    simp [hGate] at hExec
+    simp [exec, decoding_fused_rotary_embedding_kernel_surface, stepStmts,
+          stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.uop,
+          Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.eq, hHD, hGate] at hExec
     rw [← hExec]
     simp only [qFirstOffset, qBase, dimIndex]
     -- Strip v_cache foldl (cross-region q ≠ v_cache). Shape is [HEAD_DIM]
@@ -1273,7 +1272,10 @@ theorem decoding_fused_rotary_embedding_kernel_surface_q_first_half_correct
     simp [qFirstSpec, qFirstOffset, qSecondOffset, cosOffset, sinOffset, qBase,
       dimIndex, Tile.vec, Nat.add_comm HALF_DIM]
   · -- Inactive branch: only Q0 and Q1 stores fire.
-    simp [hGate] at hExec
+    simp [exec, decoding_fused_rotary_embedding_kernel_surface, stepStmts,
+          stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.uop,
+          Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.eq, hHD, hGate] at hExec
     rw [← hExec]
     simp only [qFirstOffset, qBase, dimIndex]
     -- Strip Q second-half foldl.

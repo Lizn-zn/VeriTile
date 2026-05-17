@@ -686,6 +686,8 @@ theorem rotary_kernel_o0o1_row_o1_correct
       (fun i : Fin BLOCK_HALF =>
         out1Offset s stride_out_batch stride_out_seqlen stride_out_nheads
           stride_out_headdim rotary_dim_half BLOCK_M i))
+    (hStrideHd : stride_out_headdim ≠ 0)
+    (hHalfBound : BLOCK_HALF ≤ rotary_dim_half)
     (hExec : exec (rotary_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
         seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
         stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
@@ -717,6 +719,25 @@ theorem rotary_kernel_o0o1_row_o1_correct
     simp only at hab
     cases hab
     rfl
+  -- Disjointness: the `o0` write at `j.val * stride_headdim` never collides
+  -- with the `o1` read offset `(i.val + rotary_dim_half) * stride_headdim`.
+  have hDisjoint : ∀ k : TileIndex [BLOCK_HALF],
+      s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
+          s.pids 0 * BLOCK_M * stride_out_seqlen +
+          (i.val + rotary_dim_half) * stride_out_headdim
+        ≠
+      s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
+          s.pids 0 * BLOCK_M * stride_out_seqlen +
+          k.1.val * stride_out_headdim := by
+    intro k hEq
+    have hMul : (i.val + rotary_dim_half) * stride_out_headdim =
+        k.1.val * stride_out_headdim :=
+      Nat.add_left_cancel hEq
+    have hVal : i.val + rotary_dim_half = k.1.val :=
+      Nat.eq_of_mul_eq_mul_right (Nat.pos_of_ne_zero hStrideHd) hMul
+    have hK : k.1.val < rotary_dim_half :=
+      Nat.lt_of_lt_of_le k.1.isLt hHalfBound
+    omega
   by_cases hBH : 0 < BLOCK_HALF
   · simp [exec, rotary_kernel_o0o1_row, stepStmts, stepStmt, evalOp,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
@@ -724,8 +745,19 @@ theorem rotary_kernel_o0o1_row_o1_correct
           ComparableDType.lt, hBH] at hExec
     rw [← hExec]
     simp only [out1Offset, rowIndex, dimIndex]
-    -- The `o1` store is the outer foldl; close it via `scatter_readback`.
+    -- Outer foldl is the `o1` store; close via scatter_readback.
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
+    -- Now the `else` branch leaves a `(o0_foldl _).readMem OUT o1_offset`.
+    -- Strip the `o0` foldl via the disjoint-offsets lemma.
+    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+          (region := OUT)
+          (P := fun idx : TileIndex [BLOCK_HALF] =>
+            s.pids 0 * BLOCK_M < seqlen ∧ idx.1.val < rotary_dim_half)
+          (offsetFn := fun idx : TileIndex [BLOCK_HALF] =>
+            s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
+              s.pids 0 * BLOCK_M * stride_out_seqlen +
+              idx.1.val * stride_out_headdim)
+          (hOff := fun k _ _ => hDisjoint k)]
     by_cases hRow : s.pids 0 * BLOCK_M < seqlen
     · by_cases hDim : i.val < rotary_dim_half
       · by_cases hRot : s.pids 0 * BLOCK_M + SEQLEN_OFFSETS < seqlen_ro

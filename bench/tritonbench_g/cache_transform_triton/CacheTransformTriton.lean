@@ -814,6 +814,7 @@ theorem prefill_cache_kernel_correct
             (region := sin_output) _ _ _ _ hRawInj (i, PUnit.unit)]
       by_cases hAct : s.pids 0 * BLOCK_SIZE + s.pids 1 < total_length
       · simp [hAct]
+        rfl
       · rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
               cos_output _ _ _ _ _ sin_output _ (Ne.symm hRegion)]
         simp [hAct]
@@ -822,5 +823,65 @@ theorem prefill_cache_kernel_correct
       exact False.elim (hH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
     · intro i
       exact False.elim (hH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the full prefill cache-copy surface. -/
+theorem prefill_cache_kernel_compute_correct
+    (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegion : cos_output ≠ sin_output)
+    (hN : 0 < N_ELEMENTS)
+    (hOutInj : Function.Injective
+      (fun i : Fin HIDDEN_DIM =>
+        prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) :
+    ComputeCorrect.Realizes
+      (kernel := prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
+        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
+        BLOCK_SIZE)
+      (initialState := s)
+      (write := fun i : Sum (Fin HIDDEN_DIM) (Fin HIDDEN_DIM) =>
+        match i with
+        | .inl idx =>
+            if prefillActive s total_length BLOCK_SIZE then
+              some (cos_output, prefillOutOffset s cache_stride hidden_stride
+                BLOCK_SIZE idx)
+            else none
+        | .inr idx =>
+            if prefillActive s total_length BLOCK_SIZE then
+              some (sin_output, prefillOutOffset s cache_stride hidden_stride
+                BLOCK_SIZE idx)
+            else none)
+      (expected := fun i =>
+        match i with
+        | .inl idx =>
+            s.readMem cos_cache
+              (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
+                BLOCK_SIZE N_ELEMENTS idx)
+        | .inr idx =>
+            s.readMem sin_cache
+              (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
+                BLOCK_SIZE N_ELEMENTS idx)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [prefill_cache_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := prefill_cache_kernel_correct cos_cache sin_cache cumsum_lengths
+    cos_output sin_output cache_stride hidden_stride total_length HIDDEN_DIM
+    N_ELEMENTS BLOCK_SIZE s s' hRegion hN hOutInj hExec
+  cases i with
+  | inl idx =>
+      by_cases hActive : prefillActive s total_length BLOCK_SIZE
+      · have hi := h.1 idx
+        simp [hActive] at hi ⊢
+        exact hi
+      · simp [hActive]
+  | inr idx =>
+      by_cases hActive : prefillActive s total_length BLOCK_SIZE
+      · have hi := h.2 idx
+        simp [hActive] at hi ⊢
+        exact hi
+      · simp [hActive]
 
 end VeriTile.Bench.TritonBenchG.CacheTransformTriton
