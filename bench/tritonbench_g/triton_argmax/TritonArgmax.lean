@@ -343,9 +343,4 @@ noncomputable def argmaxKernelArgmaxSpec
     ((Tile.argMaxDrop (shape := [BLOCK_M, BLOCK_N]) ⟨1, by simp⟩
       (argmaxKernelInputTile s inp M N K BLOCK_M BLOCK_N)).data (i, PUnit.unit))
 
-/-- Stub: full argmax_kernel single-block proof requires bridging the inner
-loop's stepForRangeAux residual to the int-channel scatter-readback. Spec
-defs (`argmaxKernelInputTile`, `argmaxKernelArgmaxSpec`) are in place above;
-final scatter-readback bridge is the remaining gap. See memory v6. -/
-
 end VeriTile.Bench.TritonBenchG.TritonArgmax
