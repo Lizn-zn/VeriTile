@@ -92,6 +92,22 @@ def mod : IntegralDType dtype → TileCarrier dtype → TileCarrier dtype → Ti
   | .int, x, y => x % y
   | .nat, x, y => x % y
 
+/-- `IntegralDType.nat.floorDiv` unfolds to natural-number `/`. -/
+@[simp] theorem nat_floorDiv (x y : Nat) :
+    IntegralDType.floorDiv .nat x y = x / y := rfl
+
+/-- `IntegralDType.int.floorDiv` unfolds to integer `/`. -/
+@[simp] theorem int_floorDiv (x y : Int) :
+    IntegralDType.floorDiv .int x y = x / y := rfl
+
+/-- `IntegralDType.nat.mod` unfolds to natural-number `%`. -/
+@[simp] theorem nat_mod (x y : Nat) :
+    IntegralDType.mod .nat x y = x % y := rfl
+
+/-- `IntegralDType.int.mod` unfolds to integer `%`. -/
+@[simp] theorem int_mod (x y : Int) :
+    IntegralDType.mod .int x y = x % y := rfl
+
 end IntegralDType
 
 namespace ComparableDType
