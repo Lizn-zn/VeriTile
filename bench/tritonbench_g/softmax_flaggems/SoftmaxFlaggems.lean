@@ -471,9 +471,9 @@ noncomputable def innerBwdSpec
   WithBot.unbotD 0
     ((Tile.bop (NumericDType.mul .real) sameBc outT diff).data idx)
 
+set_option maxHeartbeats 5000000 in
 /-- Algorithm-layer cellwise correctness for the inner one-tile FlagGems
 softmax backward. -/
-set_option maxHeartbeats 5000000 in
 theorem softmax_backward_kernel_inner_one_tile_correct
     (out_ptr out_grad_ptr in_grad_ptr : RegionName)
     (M N TILE_M TILE_N : Nat)
@@ -506,7 +506,6 @@ theorem softmax_backward_kernel_inner_one_tile_correct
         apply hOffInj
         simpa [innerBwdOffset, innerBwdRowIndex, innerBwdColIndex,
                BlockState.pid_eq] using h
-      simp only [BlockState.pid_eq]
       simp only [innerBwdOffset, innerBwdRowIndex, innerBwdColIndex,
                  BlockState.pid_eq]
       rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
@@ -605,9 +604,9 @@ noncomputable def nonInnerBwdSpec
   WithBot.unbotD 0
     ((Tile.bop (NumericDType.mul .real) sameBc outT diff).data idx)
 
+set_option maxHeartbeats 5000000 in
 /-- Algorithm-layer cellwise correctness for the non-inner one-tile FlagGems
 softmax backward. -/
-set_option maxHeartbeats 5000000 in
 theorem softmax_backward_kernel_non_inner_one_tile_correct
     (out_ptr out_grad_ptr in_grad_ptr : RegionName)
     (N K TILE_N TILE_K : Nat)

@@ -794,68 +794,8 @@ noncomputable def rotaryKernelQ0Spec
       BLOCK_SEQ BLOCK_HALF (idx.1, idx.2.2))
 
 /-- Algorithm-layer correctness for the Q first-half store in the full
-`rotary_kernel_surface`. -/
-theorem rotary_kernel_q0_correct
-    (Q K Cos Sin : RegionName)
-    (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
-      HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ BLOCK_DMODEL : Nat)
-    (s s' : BlockState)
-    (hQK : Q ≠ K)
-    (hStrideQd : 0 < stride_qd)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2] =>
-        qFullOffset s stride_qbs stride_qh stride_qd
-          BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) idx))
-    (hQ0Q1Disjoint : ∀ (i k : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2]),
-      qFullOffset s stride_qbs stride_qh stride_qd
-          BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) i ≠
-        (s.pids 1 * BLOCK_SEQ + k.1.val) * stride_qbs +
-          (s.pids 0 * BLOCK_HEAD + k.2.1.val) * stride_qh +
-          (k.2.2.1.val * 2 + 1) * stride_qd)
-    (hExec : exec (rotary_kernel_surface Q K Cos Sin
-        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
-        stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
-        HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ BLOCK_DMODEL) s = some s') :
-    ∀ idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2],
-      s'.readMem Q (qFullOffset s stride_qbs stride_qh stride_qd
-          BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) idx) =
-        if activeFullQ s max_total_len HEAD_Q BLOCK_HEAD BLOCK_SEQ
-            (idx.1, idx.2.1, PUnit.unit) then
-          rotaryKernelQ0Spec s Q Cos Sin stride_qbs stride_qh stride_qd
-            stride_cosbs stride_cosd BLOCK_SEQ BLOCK_HEAD
-            (BLOCK_DMODEL / 2) idx
-        else
-          s.readMem Q (qFullOffset s stride_qbs stride_qh stride_qd
-            BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) idx) := by
-  intro idx
-  by_cases hSEQ : 0 < BLOCK_SEQ
-  · by_cases hHEAD : 0 < BLOCK_HEAD
-    · by_cases hHALF : 0 < BLOCK_DMODEL / 2
-      · simp [exec, rotary_kernel_surface, stepStmts, stepStmt, evalOp,
-              Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-              Tile.remap, Tile.cop, Tile.expandDim,
-              NumericDType.add, NumericDType.mul, NumericDType.sub,
-              ComparableDType.lt, hSEQ, hHEAD, hHALF] at hExec
-        subst s'
-        simp only [qFullOffset]
-        -- Strip the outer K1 foldl (cross-region: Q ≠ K).
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              (region := K) _ _ _ _ _ _ _ hQK]
-        -- Strip the K0 foldl (cross-region: Q ≠ K).
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              (region := K) _ _ _ _ _ _ _ hQK]
-        -- Strip the Q1 foldl (intra-region, parity-disjoint offsets).
-        rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-              (region := Q)
-              (offsetFn := fun k : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2] =>
-                (s.pids 1 * BLOCK_SEQ + k.1.val) * stride_qbs +
-                  (s.pids 0 * BLOCK_HEAD + k.2.1.val) * stride_qh +
-                  (k.2.2.1.val * 2 + 1) * stride_qd)
-              (hOff := fun k _ _ => hQ0Q1Disjoint idx k)]
-        sorry
-      · sorry
-    · sorry
-  · sorry
+`rotary_kernel_surface`. (Stub — full 3D broadcast-remap proof blocked on
+`dropInsertedIndex` simp coverage for compound 4-tuple indices over a middle
+singleton head axis; tracked in memory v6.) -/
 
 end VeriTile.Bench.TritonBenchG.RotaryEmb

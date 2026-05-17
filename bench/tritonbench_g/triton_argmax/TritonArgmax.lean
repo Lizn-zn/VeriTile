@@ -235,4 +235,112 @@ theorem argmax_kernel_2_compute_correct
     cases hExec
     simp
 
+/-! ## Dim-specific `argmax_kernel` — single-block (N ≤ BLOCK_N) regime
+
+The Python test only drives `argmax_kernel` with `N ≤ BLOCK_N`. Under that
+regime the `for start_n in range(0, N, BLOCK_N)` loop runs exactly once
+at `start_n = 0`. We collapse the loop with `forRangeDyn_single_step` and
+apply a local int-channel scatter-readback to the final argmax store. -/
+
+/-- Local int-channel analogue of `scatter_readback_nat_prop_masked_nd`.
+The dim-specific `argmax_kernel` stores into an `.int`-typed `out_index`
+region; the upstream `Semantics/State.lean` only provides nat/real
+scatter-readback combinators. This helper folds along
+`TileShape.allIndices shape` and bridges `writeMemTyped .int` writes to
+the `readMemValue .int` readback at any element. -/
+private theorem scatter_readback_int_prop_masked_nd
+    {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → Int) (P : TileIndex shape → Prop) [DecidablePred P]
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    BlockState.readMemValue ((TileShape.allIndices shape).foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s)
+      .int region (offsetFn i)
+    = if P i then valueFn i else s.readMemValue .int region (offsetFn i) := by
+  -- Mirrors `scatter_readback_nat_prop_masked_nd` for the `.int` channel.
+  have h_preserve :
+      ∀ (l : List (TileIndex shape)) (s' : BlockState),
+        (∀ k ∈ l, P k → offsetFn k ≠ offsetFn i) →
+        BlockState.readMemValue ((l.foldl
+            (fun acc k =>
+              if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s'))
+            .int region (offsetFn i)
+          = s'.readMemValue .int region (offsetFn i) := by
+    intro l
+    induction l with
+    | nil => intros; rfl
+    | cons hd tl ih =>
+        intro s' h
+        rw [List.foldl_cons]
+        have htl : ∀ k ∈ tl, P k → offsetFn k ≠ offsetFn i :=
+          fun k hk hPk => h k (List.mem_cons_of_mem hd hk) hPk
+        by_cases hPhd : P hd
+        · have hhd : offsetFn hd ≠ offsetFn i :=
+            h hd List.mem_cons_self hPhd
+          simp only [hPhd, if_true]
+          rw [ih _ htl]
+          rw [BlockState.writeMemTyped_int_readMemValue_int]
+          show (if region = region ∧ offsetFn i = offsetFn hd then valueFn hd
+              else s'.readMemValue TileDType.int region (offsetFn i)) =
+            s'.readMemValue TileDType.int region (offsetFn i)
+          rw [if_neg]
+          rintro ⟨_, h_eq⟩
+          exact hhd h_eq.symm
+        · simp only [hPhd, if_false]
+          exact ih _ htl
+  let l := TileShape.allIndices shape
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  change BlockState.readMemValue ((l.foldl
+       (fun acc k =>
+         if P k then acc.writeMemTyped .int region (offsetFn k) (valueFn k) else acc) s))
+      .int region (offsetFn i)
+    = if P i then valueFn i else s.readMemValue .int region (offsetFn i)
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, hl1_disj⟩ := h_nodup
+  have hl' : l = l₁ ++ i :: l₂ := by simpa [l] using hl
+  rw [hl', List.foldl_append, List.foldl_cons]
+  have h_l1_not_in : ∀ k ∈ l₁, P k → offsetFn k ≠ offsetFn i := by
+    intro k hk _ heq
+    have hki : k = i := h_inj heq
+    rw [hki] at hk
+    exact (hl1_disj i hk i List.mem_cons_self) rfl
+  have h_l2_not_in : ∀ k ∈ l₂, P k → offsetFn k ≠ offsetFn i := by
+    intro k hk _ heq
+    have hki : k = i := h_inj heq
+    subst hki
+    exact hi_notin_l2 hk
+  rw [h_preserve l₂ _ h_l2_not_in]
+  by_cases hPi : P i
+  · simp only [hPi, if_true]
+    rw [BlockState.writeMemTyped_int_readMemValue_int]
+    show (if region = region ∧ offsetFn i = offsetFn i then valueFn i else _) = valueFn i
+    exact if_pos ⟨rfl, rfl⟩
+  · simp only [hPi, if_false]
+    rw [h_preserve l₁ _ h_l1_not_in]
+
+/-- The 2D `[BLOCK_M, BLOCK_N]` input tile loaded inside the `argmax_kernel`
+loop body at `start_n = 0`. Masked-out lanes evaluate to `none` matching
+`tl.load(..., mask=..., other=-float("inf"))`. -/
+noncomputable def argmaxKernelInputTile
+    (s : BlockState) (inp : RegionName) (M N K BLOCK_M BLOCK_N : Nat) :
+    Tile .real [BLOCK_M, BLOCK_N] :=
+  { data := fun idx =>
+      let m := idx.1.val
+      let n := idx.2.1.val
+      let mOff := s.pids 0 * BLOCK_M + m
+      let off := mOff * N * K + n * K + s.pids 1
+      if mOff < M ∧ n < N then some (s.readMem inp off) else none }
+
+/-- Per-row argmax over the 2D input tile, dropping axis 1 (matching
+`tl.max(inp_vals, 1, return_indices=True, return_indices_tie_break_left=True)`). -/
+noncomputable def argmaxKernelArgmaxSpec
+    (s : BlockState) (inp : RegionName) (M N K BLOCK_M BLOCK_N : Nat)
+    (i : Fin BLOCK_M) : Int :=
+  Int.ofNat
+    ((Tile.argMaxDrop (shape := [BLOCK_M, BLOCK_N]) ⟨1, by simp⟩
+      (argmaxKernelInputTile s inp M N K BLOCK_M BLOCK_N)).data (i, PUnit.unit))
+
 end VeriTile.Bench.TritonBenchG.TritonArgmax
