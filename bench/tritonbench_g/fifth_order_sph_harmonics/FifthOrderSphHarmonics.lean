@@ -418,4 +418,80 @@ theorem fifth_order_fwd_y00_compute_correct
     output_numel col_offset output_stride s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-- Proof-oriented per-channel `Yk` store slice of
+`fifth_order_sph_harmonics.py`'s `fifth_order_fwd`. Parameterized over the
+channel column offset, takes a precomputed `YkPre` row and proves the masked
+strided writeback into `output_ptr`. Used to factor the 11 output-channel
+stores out of the per-polynomial computation. -/
+def fifth_order_fwd_channel_store_slice
+    (YkPre output_ptr : RegionName)
+    (block_size output_numel col_offset output_stride : Nat) :
+    ComputeKernel := triton {
+  block_id = tl.program_id(0)
+  output_striding = tl.arange(0, $(block_size)) * $(output_stride)
+  output_row_offset = output_striding + $(block_size) * $(output_stride) * block_id +
+    $(col_offset)
+  yk = tl.load(YkPre + output_row_offset, mask=output_row_offset < $(output_numel))
+  tl.store(output_ptr + output_row_offset, yk, mask=output_row_offset < $(output_numel))
+}
+
+theorem fifth_order_fwd_channel_store_slice_correct
+    (YkPre output_ptr : RegionName)
+    (block_size output_numel col_offset output_stride : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin block_size => outOffset s block_size col_offset output_stride i))
+    (hExec : exec (fifth_order_fwd_channel_store_slice YkPre output_ptr
+        block_size output_numel col_offset output_stride) s = some s') :
+    ∀ i : Fin block_size,
+      s'.readMem output_ptr (outOffset s block_size col_offset output_stride i) =
+        if outOffset s block_size col_offset output_stride i < output_numel then
+          s.readMem YkPre (outOffset s block_size col_offset output_stride i)
+        else s.readMem output_ptr (outOffset s block_size col_offset output_stride i) := by
+  intro i
+  have h_inj : Function.Injective
+      (fun idx : TileIndex [block_size] =>
+        idx.1.val * output_stride + block_size * output_stride * s.pid + col_offset) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [outOffset] using h
+    cases a; cases b
+    simp only at hab; cases hab; rfl
+  simp [exec, fifth_order_fwd_channel_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
+  rw [← hExec]
+  simp only [outOffset]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
+  by_cases hi : i.val * output_stride + block_size * output_stride * s.pid + col_offset < output_numel
+  · simp [outOffset, hi]
+  · simp [outOffset, hi]
+
+theorem fifth_order_fwd_channel_store_slice_compute_correct
+    (YkPre output_ptr : RegionName)
+    (block_size output_numel col_offset output_stride : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin block_size => outOffset s block_size col_offset output_stride i)) :
+    ComputeCorrect.Realizes
+      (kernel := fifth_order_fwd_channel_store_slice YkPre output_ptr
+        block_size output_numel col_offset output_stride)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin block_size =>
+          outOffset s block_size col_offset output_stride i < output_numel)
+        (fun i => (output_ptr, outOffset s block_size col_offset output_stride i)))
+      (expected := fun i =>
+        s.readMem YkPre (outOffset s block_size col_offset output_stride i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fifth_order_fwd_channel_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := fifth_order_fwd_channel_store_slice_correct YkPre output_ptr
+    block_size output_numel col_offset output_stride s s' hOutInj hExec i
+  simpa [hActive] using h
+
 end VeriTile.Bench.TritonBenchG.FifthOrderSphHarmonics
