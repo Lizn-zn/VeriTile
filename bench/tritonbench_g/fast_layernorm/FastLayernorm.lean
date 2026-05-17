@@ -373,4 +373,81 @@ theorem layernorm_forward_y_compute_correct
     n_cols BLOCK_SIZE eps s s' hYr hYmu hOutInj hExec i
   simpa [hActive] using h
 
+/-- Proof-oriented inv_var (rstd) store slice of `fast_layernorm.py`'s
+`layernorm_forward`. Takes a precomputed `InvVarPre` scalar (per row) and
+proves the scalar writeback into `r`. -/
+def layernorm_forward_inv_var_store_slice
+    (InvVarPre r : RegionName) : ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  inv_var = tl.load(InvVarPre + row_idx)
+  tl.store(r + row_idx, inv_var)
+}
+
+def rOutOffset (s : BlockState) : Nat := s.pid
+
+noncomputable def invVarStoreSpec (s : BlockState) (InvVarPre : RegionName) : ℝ :=
+  s.readMem InvVarPre s.pid
+
+theorem layernorm_forward_inv_var_store_slice_correct
+    (InvVarPre r : RegionName) (s s' : BlockState)
+    (hExec : exec (layernorm_forward_inv_var_store_slice InvVarPre r) s = some s') :
+    s'.readMem r (rOutOffset s) = invVarStoreSpec s InvVarPre := by
+  simp [exec, layernorm_forward_inv_var_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add] at hExec
+  subst s'
+  simp [rOutOffset, invVarStoreSpec]
+
+theorem layernorm_forward_inv_var_store_slice_compute_correct
+    (InvVarPre r : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layernorm_forward_inv_var_store_slice InvVarPre r)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, rOutOffset s))
+      (expected := fun _ => invVarStoreSpec s InvVarPre) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layernorm_forward_inv_var_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layernorm_forward_inv_var_store_slice_correct InvVarPre r s s' hExec
+
+/-- Proof-oriented mean (mu) store slice of `fast_layernorm.py`'s
+`layernorm_forward`. Same scalar-copy pattern. -/
+def layernorm_forward_mean_store_slice
+    (MeanPre mu : RegionName) : ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  mean_X = tl.load(MeanPre + row_idx)
+  tl.store(mu + row_idx, mean_X)
+}
+
+noncomputable def meanStoreSpec (s : BlockState) (MeanPre : RegionName) : ℝ :=
+  s.readMem MeanPre s.pid
+
+theorem layernorm_forward_mean_store_slice_correct
+    (MeanPre mu : RegionName) (s s' : BlockState)
+    (hExec : exec (layernorm_forward_mean_store_slice MeanPre mu) s = some s') :
+    s'.readMem mu (rOutOffset s) = meanStoreSpec s MeanPre := by
+  simp [exec, layernorm_forward_mean_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add] at hExec
+  subst s'
+  simp [rOutOffset, meanStoreSpec]
+
+theorem layernorm_forward_mean_store_slice_compute_correct
+    (MeanPre mu : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layernorm_forward_mean_store_slice MeanPre mu)
+      (initialState := s)
+      (write := fun _ : PUnit => some (mu, rOutOffset s))
+      (expected := fun _ => meanStoreSpec s MeanPre) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layernorm_forward_mean_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layernorm_forward_mean_store_slice_correct MeanPre mu s s' hExec
+
 end VeriTile.Bench.TritonBenchG.FastLayernorm
