@@ -548,6 +548,18 @@ noncomputable def Tile.scan {shape : TileShape}
         (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))
     op.eval vals⟩
 
+/-- Direct unfolding of `Tile.scan.data` to a list-folded `op.eval` over the
+prefix of lanes at most the output coordinate on `axis`. Useful as a simp
+lemma when proving cumsum/recurrent kernel correctness. -/
+@[simp] theorem Tile.scan_data {shape : TileShape}
+    (op : ScanOp) (axis : Fin shape.length) (x : Tile .real shape)
+    (idx : TileIndex shape) :
+    (Tile.scan op axis x).data idx =
+      op.eval
+        (((Finset.univ : Finset (Fin (TileShape.axisDim shape axis))).filter
+          (fun k => k.val ≤ (TileShape.axisCoord shape axis idx).val)).toList.map
+          (fun k => x.data (TileShape.replaceAxisCoord shape axis idx k))) := rfl
+
 noncomputable def Tile.argBestDrop {shape : TileShape}
     (better : WithBot ℝ → WithBot ℝ → Bool)
     (axis : Fin shape.length) (x : Tile .real shape) :
