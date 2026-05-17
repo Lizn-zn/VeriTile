@@ -102,6 +102,14 @@ def flipIndex (shape : TileShape) (axis : Fin shape.length)
     (idx : TileIndex shape) : TileIndex shape :=
   replaceAxisCoord shape axis idx (Fin.rev (axisCoord shape axis idx))
 
+/-- Definitional unfolding of `flipIndex` to `replaceAxisCoord` with the
+reversed coordinate. Useful for proofs over reversed cumsum / reverse-iter
+recurrent kernels. -/
+@[simp] theorem flipIndex_def (shape : TileShape) (axis : Fin shape.length)
+    (idx : TileIndex shape) :
+    flipIndex shape axis idx =
+      replaceAxisCoord shape axis idx (Fin.rev (axisCoord shape axis idx)) := rfl
+
 /-- Product of all dimensions. Scalars have one element. -/
 def product : TileShape → Nat
   | [] => 1
