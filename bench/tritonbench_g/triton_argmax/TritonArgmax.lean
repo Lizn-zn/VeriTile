@@ -343,4 +343,58 @@ noncomputable def argmaxKernelArgmaxSpec
     ((Tile.argMaxDrop (shape := [BLOCK_M, BLOCK_N]) ⟨1, by simp⟩
       (argmaxKernelInputTile s inp M N K BLOCK_M BLOCK_N)).data (i, PUnit.unit))
 
+/-- Compute-facing correctness for `argmax_kernel` under the Python-tested
+single-block (`N ≤ BLOCK_N`) regime. The `for start_n` loop runs exactly
+once at `start_n = 0`, after which the masked store deposits
+`argmaxKernelArgmaxSpec` at offset `m_offset[i] * K + pid_k` whenever
+`m_offset[i] < M`. -/
+theorem argmax_kernel_single_block_correct
+    (inp : RegionName) (out_index : Region .int)
+    (M N K BLOCK_M BLOCK_N : Nat)
+    (s s' : BlockState)
+    (hBM : 0 < BLOCK_M)
+    (hBN : 0 < BLOCK_N)
+    (hN_pos : 0 < N)
+    (hN_le : N ≤ BLOCK_N)
+    (hKpos : 0 < K)
+    (hKstride : K * 1 ≤ N * K)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => (s.pids 0 * BLOCK_M + i.val) * K + s.pids 1))
+    (hExec :
+      exec (argmax_kernel inp out_index M N K BLOCK_M BLOCK_N Bool.false) s
+        = some s') :
+    ∀ i : Fin BLOCK_M,
+      s'.readMemValue .int (Region.cast out_index : RegionName)
+          ((s.pids 0 * BLOCK_M + i.val) * K + s.pids 1) =
+        if s.pids 0 * BLOCK_M + i.val < M then
+          argmaxKernelArgmaxSpec s inp M N K BLOCK_M BLOCK_N i
+        else
+          s.readMemValue .int (Region.cast out_index : RegionName)
+            ((s.pids 0 * BLOCK_M + i.val) * K + s.pids 1) := by
+  intro i
+  -- Output-offset injectivity at the TileIndex layer.
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M] =>
+        (s.pids 0 * BLOCK_M + idx.1.val) * K + s.pids 1) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa using h
+    cases a; cases b
+    simp only at hab
+    cases hab; rfl
+  have hBNne : BLOCK_N ≠ 0 := Nat.pos_iff_ne_zero.mp hBN
+  have hBMne : BLOCK_M ≠ 0 := Nat.pos_iff_ne_zero.mp hBM
+  -- Aggressively reduce `hExec` through the kernel body using simp.
+  simp only [exec, argmax_kernel, stepStmts, stepStmt, evalOp, Option.bind,
+        Option.map, Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+        TileShape.axisDim, TileShape.eraseAxis,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        ComparableDType.gt,
+        stepForRangeAux.forRange_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge,
+        hBM, hBN, hBMne, hBNne, hN_pos, hN_le, Nat.zero_add,
+        BlockState.readMemValue] at hExec
+  sorry
+
 end VeriTile.Bench.TritonBenchG.TritonArgmax

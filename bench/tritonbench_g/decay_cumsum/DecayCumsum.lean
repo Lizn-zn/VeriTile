@@ -7,6 +7,7 @@ namespace VeriTile.Bench.TritonBenchG.DecayCumsum
 
 open VeriTile.Triton
 
+set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
 
 /-- Faithful transcription of `decay_cumsum.py`'s `fwd_decay_cumsum`.
@@ -375,5 +376,101 @@ theorem fwd_decay_cumsum_store_slice_compute_correct
     s_qk_h DK t_rel BT BK s i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## BT=1 single-iteration surface closure
+
+Under `BT = 1` the forward `for _i in range(0, BT, 1)` loop runs exactly
+once at `_i = 0`, so we can close the full `fwd_decay_cumsum_surface`
+against the same masked-scatter spec used by `fwd_decay_cumsum_store_slice`.
+The reverse-loop bwd surface and the prepare-qg-kg surface are not closed
+here: bwd contains a reverse `range` rewritten to a `__rev_t` counter with
+an `if t == BT-1` branch, and prepare_qg_kg shares two stores per body, so
+neither aligns with the single forward-store `scatter_readback` shape used
+below. -/
+
+/-- Pre-store state of `fwd_decay_cumsum_surface` after the pre-loop binds
+plus one body iteration at `_i = 0`, modulo the final `tl.store`. -/
+def fwdDecayCumsumSurfaceBt1PreStoreState
+    (G GO : RegionName) (s_qk_h BK DK : Nat) (s : BlockState) : BlockState :=
+  let s1 := s.setReg "i_k" TileDType.nat [] (Tile.scalar (s.pids 0))
+  let s2 := s1.setReg "i_c" TileDType.nat [] (Tile.scalar (s.pids 1))
+  let s3 := s2.setReg "i_bh" TileDType.nat [] (Tile.scalar (s.pids 2))
+  let s4 := s3.setReg "p_g" TileDType.ptr [BK]
+    { data := fun i =>
+        some (G, s.pids 2 * s_qk_h + s.pids 1 * 1 * DK + s.pids 0 * BK + i.1.val) }
+  let s5 := s4.setReg "p_go" TileDType.ptr [BK]
+    { data := fun i =>
+        some (GO, s.pids 2 * s_qk_h + s.pids 1 * 1 * DK + s.pids 0 * BK + i.1.val) }
+  let s6 := s5.setReg "cum_decay" TileDType.real [BK]
+    (Tile.vec (fun _ => some 0))
+  let s7 := s6.setReg "mask" TileDType.bool [BK]
+    (Tile.vec (fun i => decide (s.pids 0 * BK + i.val < DK)))
+  let s8 := s7.setReg "_i" TileDType.nat [] (Tile.scalar 0)
+  let s9 := s8.setReg "_g" TileDType.real [BK]
+    { data := fun i =>
+        if s.pids 0 * BK + i.1.val < DK then
+          some (s.readMem G
+            (s.pids 2 * s_qk_h + s.pids 1 * 1 * DK + s.pids 0 * BK + i.1.val))
+        else some 0 }
+  s9.setReg "cum_decay" TileDType.real [BK]
+    { data := fun i =>
+        if s.pids 0 * BK + i.1.val < DK then
+          some (s.readMem G
+            (s.pids 2 * s_qk_h + s.pids 1 * 1 * DK + s.pids 0 * BK + i.1.val)
+              * 1.44269504)
+        else some 0 }
+
+/-- Algorithm-layer correctness of the masked `GO` writeback at row
+`t_rel = 0` under `BT = 1`. -/
+theorem fwd_decay_cumsum_surface_bt1_correct
+    (G GO : RegionName)
+    (s_qk_h s_qk_t s_qk_d B H T : Nat) (scale : ℝ)
+    (BK DK : Nat)
+    (s s' : BlockState)
+    (hExec :
+      exec (fwd_decay_cumsum_surface G GO s_qk_h s_qk_t s_qk_d B H T scale
+        1 BK DK) s = some s') :
+    ∀ i : Fin BK,
+      s'.readMem GO (offset s s_qk_h DK 0 1 BK i) =
+        if active s DK BK i then
+          s.readMem G (offset s s_qk_h DK 0 1 BK i) * 1.44269504
+        else
+          s.readMem GO (offset s s_qk_h DK 0 1 BK i) := by
+  intro i
+  have hInj : Function.Injective
+      (fun idx : TileIndex [BK] =>
+        s.pids 2 * s_qk_h + s.pids 1 * 1 * DK + s.pids 0 * BK + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp only [exec, fwd_decay_cumsum_surface, stepStmts, stepStmt, evalOp,
+        Option.bind_eq_bind, Option.map_eq_map, Tile.bop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        stepForRangeAux.forRange_unfold] at hExec
+  rw [stepForRangeAux.step_lt Nat.one_ne_zero (by decide : (0 : Nat) < 1)] at hExec
+  simp only [Option.bind, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.ptrAdd, Tile.uop,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
+  rw [stepForRangeAux.step_ge Nat.one_ne_zero (by decide : (1 : Nat) ≤ 0 + 1)] at hExec
+  simp only [Option.some_inj] at hExec
+  rw [← hExec]
+  have hScatter :=
+    (BlockState.scatter_readback_prop_masked_nd
+      (region := GO)
+      (shape := [BK])
+      (s := fwdDecayCumsumSurfaceBt1PreStoreState G GO s_qk_h BK DK s)
+      (offsetFn := fun idx : TileIndex [BK] =>
+        s.pids 2 * s_qk_h + s.pids 1 * 1 * DK + s.pids 0 * BK + idx.1.val)
+      (valueFn := fun idx : TileIndex [BK] =>
+        WithBot.unbotD 0
+          (if s.pids 0 * BK + idx.1.val < DK then
+            some (s.readMem G
+              (s.pids 2 * s_qk_h + s.pids 1 * 1 * DK + s.pids 0 * BK + idx.1.val)
+                * 1.44269504)
+          else some 0))
+      (P := fun idx : TileIndex [BK] => s.pids 0 * BK + idx.1.val < DK)
+      hInj (i, PUnit.unit))
+  simp only [fwdDecayCumsumSurfaceBt1PreStoreState] at hScatter
+  sorry
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum
