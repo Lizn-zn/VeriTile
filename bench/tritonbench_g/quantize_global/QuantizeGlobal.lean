@@ -75,6 +75,65 @@ theorem quantize_global_scaled_store_slice_correct
   · simp [hi, quantizeGlobalScaledSpec, offset]
   · simp [hi]
 
+/-- Surface-level spec: `127.0 * (x * absmax_inv)` at lane `i`. The CUDA
+`llrint` is the identity at the algorithm carrier (post-erasure all dtypes
+unify to `ℝ`). -/
+noncomputable def quantizeGlobalSurfaceSpec
+    (s : BlockState) (x_ptr absmax_inv_ptr : RegionName)
+    (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
+  127.0 * (s.readMem x_ptr (offset s BLOCK_SIZE i) *
+    s.readMem absmax_inv_ptr 0)
+
+/-- Algorithm-layer correctness for the full surface `_quantize_global` kernel.
+
+The CUDA `tl.extra.cuda.libdevice.llrint` lowers to identity at the algorithm
+carrier, so the surface kernel agrees with the proof slice at `scale127 = 127.0`. -/
+theorem quantize_global_surface_correct
+    (x_ptr absmax_inv_ptr output_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState) :
+    ∀ i : Fin BLOCK_SIZE,
+      let outAddr := offset s BLOCK_SIZE i
+      (exec (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+            n_elements BLOCK_SIZE) s).map (·.readMem output_ptr outAddr)
+        = some (if outAddr < n_elements then
+            quantizeGlobalSurfaceSpec s x_ptr absmax_inv_ptr BLOCK_SIZE i
+          else s.readMem output_ptr outAddr) := by
+  intro i
+  simp [exec, quantize_global_surface, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, offset]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+        (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  by_cases hi : s.pid * BLOCK_SIZE + i.val < n_elements
+  · simp [hi, quantizeGlobalSurfaceSpec, offset]
+  · simp [hi]
+
+/-- Compute-facing correctness for the full surface `_quantize_global` kernel. -/
+theorem quantize_global_surface_compute_correct
+    (x_ptr absmax_inv_ptr output_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+        n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => offset s BLOCK_SIZE i < n_elements)
+          (fun i => (output_ptr, offset s BLOCK_SIZE i)))
+      (expected := fun i =>
+        quantizeGlobalSurfaceSpec s x_ptr absmax_inv_ptr BLOCK_SIZE i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [quantize_global_surface]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have hi := quantize_global_surface_correct x_ptr absmax_inv_ptr output_ptr
+    n_elements BLOCK_SIZE s i
+  rw [hExec] at hi
+  simpa [hActive] using Option.some.inj hi
+
 /-- Compute-facing correctness for the masked global-quantization store slice. -/
 theorem quantize_global_scaled_store_slice_compute_correct
     (x_ptr absmax_inv_ptr output_ptr : RegionName)
