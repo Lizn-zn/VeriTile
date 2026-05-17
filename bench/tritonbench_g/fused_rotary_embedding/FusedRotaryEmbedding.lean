@@ -825,4 +825,98 @@ theorem decoding_fused_rotary_embedding_k_second_half_compute_correct
     k_token_stride k_head_stride head_dim_stride cos_token_stride cos_stride
     HALF_DIM s s' hOutInj hExec i
 
+/-- Proof-oriented v_cache store slice of `fused_rotary_embedding.py`'s
+`decoding_fused_rotary_embedding_kernel`. Takes a precomputed `LoadedV` tile
+and proves the writeback into `v_cache` at the canonical cache-layout offset
+parameterized on `(block_id, offsets_in_last_block)`. -/
+def decoding_fused_rotary_embedding_v_cache_store_slice
+    (LoadedV v_cache : RegionName)
+    (block_id offsets_in_last_block vcb_stride vch_stride vcs_stride vcd_stride
+      HEAD_DIM : Nat) :
+    ComputeKernel := triton {
+  cur_k_head_idx = tl.program_id(0)
+  dim_range = tl.arange(0, $(HEAD_DIM))
+  loaded_v = tl.load(LoadedV + dim_range)
+  v_range = $(block_id) * $(vcb_stride) +
+    cur_k_head_idx * $(vch_stride) +
+    $(offsets_in_last_block) * $(vcs_stride) +
+    dim_range * $(vcd_stride)
+  tl.store(v_cache + v_range, loaded_v)
+}
+
+def vCacheOffset
+    (s : BlockState)
+    (block_id offsets_in_last_block vcb_stride vch_stride vcs_stride vcd_stride : Nat)
+    (i : Fin HEAD_DIM) : Nat :=
+  block_id * vcb_stride + s.pids 0 * vch_stride +
+    offsets_in_last_block * vcs_stride + i.val * vcd_stride
+
+noncomputable def vCacheStoreSpec
+    (s : BlockState) (LoadedV : RegionName) (i : Fin HEAD_DIM) : ℝ :=
+  s.readMem LoadedV i.val
+
+theorem decoding_fused_rotary_embedding_v_cache_store_slice_correct
+    (LoadedV v_cache : RegionName)
+    (block_id offsets_in_last_block vcb_stride vch_stride vcs_stride vcd_stride
+      HEAD_DIM : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin HEAD_DIM =>
+        vCacheOffset s block_id offsets_in_last_block vcb_stride vch_stride
+          vcs_stride vcd_stride i))
+    (hExec : exec (decoding_fused_rotary_embedding_v_cache_store_slice LoadedV
+        v_cache block_id offsets_in_last_block vcb_stride vch_stride vcs_stride
+        vcd_stride HEAD_DIM) s = some s') :
+    ∀ i : Fin HEAD_DIM,
+      s'.readMem v_cache
+          (vCacheOffset s block_id offsets_in_last_block vcb_stride vch_stride
+            vcs_stride vcd_stride i) =
+        vCacheStoreSpec s LoadedV i := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [HEAD_DIM] =>
+        block_id * vcb_stride + s.pids 0 * vch_stride +
+          offsets_in_last_block * vcs_stride + idx.1.val * vcd_stride) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [vCacheOffset] using h
+    cases a; cases b
+    simp only at hab; cases hab; rfl
+  simp [exec, decoding_fused_rotary_embedding_v_cache_store_slice, stepStmts,
+        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hExec
+  rw [← hExec]
+  simp only [vCacheOffset]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [vCacheStoreSpec]
+
+theorem decoding_fused_rotary_embedding_v_cache_store_slice_compute_correct
+    (LoadedV v_cache : RegionName)
+    (block_id offsets_in_last_block vcb_stride vch_stride vcs_stride vcd_stride
+      HEAD_DIM : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin HEAD_DIM =>
+        vCacheOffset s block_id offsets_in_last_block vcb_stride vch_stride
+          vcs_stride vcd_stride i)) :
+    ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_v_cache_store_slice LoadedV
+        v_cache block_id offsets_in_last_block vcb_stride vch_stride vcs_stride
+        vcd_stride HEAD_DIM)
+      (initialState := s)
+      (write := fun i : Fin HEAD_DIM => some (v_cache,
+        vCacheOffset s block_id offsets_in_last_block vcb_stride vch_stride
+          vcs_stride vcd_stride i))
+      (expected := fun i => vCacheStoreSpec s LoadedV i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [decoding_fused_rotary_embedding_v_cache_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  exact decoding_fused_rotary_embedding_v_cache_store_slice_correct LoadedV v_cache
+    block_id offsets_in_last_block vcb_stride vch_stride vcs_stride vcd_stride
+    HEAD_DIM s s' hOutInj hExec i
+
 end VeriTile.Bench.TritonBenchG.FusedRotaryEmbedding
