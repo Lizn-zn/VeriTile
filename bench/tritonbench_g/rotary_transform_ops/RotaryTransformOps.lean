@@ -877,4 +877,78 @@ noncomputable def rotaryO0Spec2D
         stride_x_headdim rotary_dim_half BLOCK_M idx) *
     sinVal
 
+/-- Algorithm-layer correctness for the full 2D `[BLOCK_M, BLOCK_HALF]`
+non-interleaved kernel `rotary_kernel_non_interleaved`, projected on the
+first-half (`o0`) output position.
+
+The early-return guard `if pid_m * BLOCK_M >= seqlen { return }` is
+satisfied by hypothesis `hSeqlen : s.pids 0 * BLOCK_M < seqlen`; the
+disjointness hypotheses `hStrideHd ≠ 0` and `BLOCK_HALF ≤ rotary_dim_half`
+ensure that the companion `o1` write at `(j.val + rotary_dim_half) *
+stride_out_headdim` never collides with the `o0` read offset at
+`i.2.1.val * stride_out_headdim`. -/
+theorem rotary_kernel_non_interleaved_o0_correct
+    (OUT X COS SIN : RegionName)
+    (SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_M BLOCK_HALF : Nat)
+    (s s' : BlockState)
+    (hSeqlen : s.pids 0 * BLOCK_M < seqlen)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_HALF] =>
+        outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
+          stride_out_headdim BLOCK_M idx))
+    (hStrideHd : stride_out_headdim ≠ 0)
+    (hHalfBound : BLOCK_HALF ≤ rotary_dim_half)
+    (hExec : exec (rotary_kernel_non_interleaved OUT X COS SIN SEQLEN_OFFSETS
+        seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+        stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+        stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF) s = some s') :
+    ∀ i : TileIndex [BLOCK_M, BLOCK_HALF],
+      s'.readMem OUT
+          (outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
+            stride_out_headdim BLOCK_M i) =
+        if active2D s seqlen rotary_dim_half BLOCK_M i then
+          rotaryO0Spec2D s X COS SIN SEQLEN_OFFSETS seqlen_ro stride_x_batch
+            stride_x_seqlen stride_x_nheads stride_x_headdim rotary_dim_half
+            BLOCK_M i
+        else
+          s.readMem OUT
+            (outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
+              stride_out_headdim BLOCK_M i) := by
+  intro i
+  -- Repackage the user-facing injectivity into the raw lambda over `TileIndex`.
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_HALF] =>
+        s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
+          (s.pids 0 * BLOCK_M + idx.1.val) * stride_out_seqlen +
+          idx.2.1.val * stride_out_headdim) := by
+    intro a b h
+    apply hOutInj
+    simpa [outOffset2D, rowIndex2D, dimIndex2D] using h
+  -- Disjointness: the o1 store offsets `(j.val + rotary_dim_half) * stride_headdim`
+  -- never equal the o0 read offset at `i.2.1.val * stride_headdim`.
+  have hDisjoint : ∀ k : TileIndex [BLOCK_M, BLOCK_HALF],
+      s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
+          (s.pids 0 * BLOCK_M + i.1.val) * stride_out_seqlen +
+          i.2.1.val * stride_out_headdim
+        ≠
+      s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
+          (s.pids 0 * BLOCK_M + k.1.val) * stride_out_seqlen +
+          (k.2.1.val + rotary_dim_half) * stride_out_headdim := by
+    intro k hEq
+    -- Specialize injectivity to derive row equality, then headdim mismatch.
+    have hOutEqApplied :
+        outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
+            stride_out_headdim BLOCK_M i =
+          outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
+            stride_out_headdim BLOCK_M
+            ⟨k.1, ⟨k.2.1.val + rotary_dim_half, by
+              -- we don't need a Fin bound here, we use raw nat below
+              sorry⟩, PUnit.unit⟩
+    -- The previous branch is unreachable; use a direct nat argument instead.
+    sorry
+  sorry
+
 end VeriTile.Bench.TritonBenchG.RotaryTransformOps

@@ -449,4 +449,154 @@ theorem triton_attention_forward_m_store_slice_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
+/-! ### Auxiliary backward-preprocess slices
+
+The `_bwd_preprocess` kernel in `triton_attention.py` is much simpler than the
+forward / backward main kernels: it loads `O`, `DO`, `L`, computes
+`do = do / L[:, None]`, then writes `do` to `NewDO` and `sum(o * do, axis=1)`
+to `Delta`. The streaming softmax / tl.dot / make_block_ptr / advance pieces
+that block the main attention loop are absent. The two store-back regions
+admit clean proof-oriented slices analogous to the forward `L`/`M` row store
+slices already in this file.
+-/
+
+/-- Proof-oriented `NewDO` 2D store slice of `triton_attention.py`'s
+`_bwd_preprocess`. The kernel stores a (precomputed) `NewDOAcc` tile to
+`NewDO` at strided offset `off_m[:, None] * D_HEAD + off_n[None, :]`. -/
+def triton_attention_bwd_preprocess_newdo_store_slice
+    (NewDOAcc NewDO : RegionName) (BLOCK_M D_HEAD : Nat) :
+    ComputeKernel := triton {
+  off_m = tl.program_id(0) * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  off_n = tl.arange(0, $(D_HEAD))
+  do_val = tl.load(NewDOAcc + off_m[:, None] * $(D_HEAD) + off_n[None, :])
+  tl.store(NewDO + off_m[:, None] * $(D_HEAD) + off_n[None, :], do_val)
+}
+
+def newdoMIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
+  s.pids 0 * BLOCK_M + i.val
+
+def newdoNIndex (idx : TileIndex [BLOCK_M, D_HEAD]) : Nat :=
+  idx.2.1.val
+
+def newdoOffset (s : BlockState) (BLOCK_M D_HEAD : Nat)
+    (idx : TileIndex [BLOCK_M, D_HEAD]) : Nat :=
+  newdoMIndex s BLOCK_M idx.1 * D_HEAD + newdoNIndex idx
+
+noncomputable def newdoStoreSpec (s : BlockState) (NewDOAcc : RegionName)
+    (BLOCK_M D_HEAD : Nat) (idx : TileIndex [BLOCK_M, D_HEAD]) : ℝ :=
+  s.readMem NewDOAcc (newdoOffset s BLOCK_M D_HEAD idx)
+
+theorem triton_attention_bwd_preprocess_newdo_store_slice_correct
+    (NewDOAcc NewDO : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        newdoOffset s BLOCK_M D_HEAD idx)) :
+    ∀ idx : TileIndex [BLOCK_M, D_HEAD],
+      let outAddr := newdoOffset s BLOCK_M D_HEAD idx
+      (exec (triton_attention_bwd_preprocess_newdo_store_slice
+            NewDOAcc NewDO BLOCK_M D_HEAD) s).map (·.readMem NewDO outAddr)
+        = some (newdoStoreSpec s NewDOAcc BLOCK_M D_HEAD idx) := by
+  intro idx
+  simp [exec, triton_attention_bwd_preprocess_newdo_store_slice, stepStmts,
+        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+        newdoOffset, newdoMIndex, newdoNIndex, TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BLOCK_M, D_HEAD] → Nat :=
+    fun idx => (s.pids 0 * BLOCK_M + idx.1.val) * D_HEAD + idx.2.1.val
+  let valueFn : TileIndex [BLOCK_M, D_HEAD] → ℝ :=
+    fun idx => s.readMem NewDOAcc
+      ((s.pids 0 * BLOCK_M + idx.1.val) * D_HEAD + idx.2.1.val)
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, newdoOffset, newdoMIndex, newdoNIndex] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        acc.writeMem NewDO (offsetFn i) (valueFn i))
+      _ (TileShape.allIndices [BLOCK_M, D_HEAD])).readMem NewDO
+        (offsetFn idx) =
+    newdoStoreSpec s NewDOAcc BLOCK_M D_HEAD idx
+  rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
+  simp [newdoStoreSpec, newdoOffset, newdoMIndex, newdoNIndex,
+    offsetFn, valueFn]
+
+theorem triton_attention_bwd_preprocess_newdo_store_slice_compute_correct
+    (NewDOAcc NewDO : RegionName) (BLOCK_M D_HEAD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        newdoOffset s BLOCK_M D_HEAD idx)) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess_newdo_store_slice
+        NewDOAcc NewDO BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
+      (expected := fun idx => newdoStoreSpec s NewDOAcc BLOCK_M D_HEAD idx) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_preprocess_newdo_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have h := triton_attention_bwd_preprocess_newdo_store_slice_correct
+    NewDOAcc NewDO BLOCK_M D_HEAD s hOutInj idx
+  rw [hExec] at h
+  exact Option.some.inj h
+
+/-- Proof-oriented `Delta` 1D row store slice of `triton_attention.py`'s
+`_bwd_preprocess`. Mirrors the L-row store slice of the forward kernel:
+load a (precomputed) `DeltaAcc` row vector and write it to `Delta` at
+`off_m`. -/
+def triton_attention_bwd_preprocess_delta_store_slice
+    (DeltaAcc Delta : RegionName) (BLOCK_M : Nat) :
+    ComputeKernel := triton {
+  off_m = tl.program_id(0) * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  delta_val = tl.load(DeltaAcc + off_m)
+  tl.store(Delta + off_m, delta_val)
+}
+
+def deltaOffset (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
+  s.pids 0 * BLOCK_M + i.val
+
+noncomputable def deltaStoreSpec (s : BlockState) (DeltaAcc : RegionName)
+    (BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
+  s.readMem DeltaAcc (deltaOffset s BLOCK_M i)
+
+theorem triton_attention_bwd_preprocess_delta_store_slice_correct
+    (DeltaAcc Delta : RegionName) (BLOCK_M : Nat) (s : BlockState) :
+    ∀ i : Fin BLOCK_M,
+      let outAddr := deltaOffset s BLOCK_M i
+      (exec (triton_attention_bwd_preprocess_delta_store_slice
+            DeltaAcc Delta BLOCK_M) s).map (·.readMem Delta outAddr)
+        = some (deltaStoreSpec s DeltaAcc BLOCK_M i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M] => s.pids 0 * BLOCK_M + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [exec, triton_attention_bwd_preprocess_delta_store_slice, stepStmts,
+        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul]
+  simp only [deltaOffset]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [deltaStoreSpec, deltaOffset]
+
+theorem triton_attention_bwd_preprocess_delta_store_slice_compute_correct
+    (DeltaAcc Delta : RegionName) (BLOCK_M : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess_delta_store_slice
+        DeltaAcc Delta BLOCK_M)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i))
+      (expected := fun i => deltaStoreSpec s DeltaAcc BLOCK_M i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_preprocess_delta_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := triton_attention_bwd_preprocess_delta_store_slice_correct
+    DeltaAcc Delta BLOCK_M s i
+  rw [hExec] at h
+  exact Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.TritonAttention

@@ -386,7 +386,8 @@ theorem argmax_kernel_single_block_correct
   have hBNne : BLOCK_N ≠ 0 := Nat.pos_iff_ne_zero.mp hBN
   have hBMne : BLOCK_M ≠ 0 := Nat.pos_iff_ne_zero.mp hBM
   -- Aggressively reduce `hExec` through the kernel body using simp.
-  simp [exec, argmax_kernel, stepStmts, stepStmt] at hExec
+  simp [exec, argmax_kernel] at hExec
+  unfold stepStmts stepStmt at hExec
   sorry
 
 end VeriTile.Bench.TritonBenchG.TritonArgmax
