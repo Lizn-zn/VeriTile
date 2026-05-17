@@ -405,4 +405,278 @@ theorem softmax_kernel_non_inner_one_tile_compute_correct
     N K TILE_N TILE_K s s' hRange hExec idx
   simpa [hActive] using h
 
+/-! ## Inner-dimension one-tile backward proof
+
+The backward kernel reduces along axis 1 (the `n` dimension within a row)
+and is a pure straight-line two-load / one-store kernel. Offset injectivity
+must be supplied externally (it only holds when `TILE_N ≤ N`, i.e. when the
+row-stride `N` separates rows). -/
+
+set_option maxHeartbeats 5000000 in
+section BackwardInner
+
+def innerBwdRowIndex (s : BlockState) (TILE_M : Nat)
+    (idx : TileIndex [TILE_M, TILE_N]) : Nat :=
+  s.pid * TILE_M + idx.1.val
+
+def innerBwdColIndex (idx : TileIndex [TILE_M, TILE_N]) : Nat :=
+  idx.2.1.val
+
+def innerBwdOffset (s : BlockState) (N TILE_M : Nat)
+    (idx : TileIndex [TILE_M, TILE_N]) : Nat :=
+  innerBwdRowIndex s TILE_M idx * N + innerBwdColIndex idx
+
+def innerBwdActive (s : BlockState) (M N TILE_M : Nat)
+    (idx : TileIndex [TILE_M, TILE_N]) : Prop :=
+  innerBwdRowIndex s TILE_M idx < M ∧ innerBwdColIndex idx < N
+
+instance innerBwdActiveDecidable
+    (s : BlockState) (M N TILE_M : Nat)
+    (idx : TileIndex [TILE_M, TILE_N]) :
+    Decidable (innerBwdActive s M N TILE_M idx) := by
+  unfold innerBwdActive
+  infer_instance
+
+noncomputable def innerBwdOutTile
+    (s : BlockState) (out_ptr : RegionName)
+    (M N TILE_M TILE_N : Nat) :
+    Tile .real [TILE_M, TILE_N] :=
+  { data := fun idx =>
+      if innerBwdActive s M N TILE_M idx then
+        some (s.readMem out_ptr (innerBwdOffset s N TILE_M idx))
+      else some (s.undef out_ptr (innerBwdOffset s N TILE_M idx)) }
+
+noncomputable def innerBwdOutGradTile
+    (s : BlockState) (out_grad_ptr : RegionName)
+    (M N TILE_M TILE_N : Nat) :
+    Tile .real [TILE_M, TILE_N] :=
+  { data := fun idx =>
+      if innerBwdActive s M N TILE_M idx then
+        some (s.readMem out_grad_ptr (innerBwdOffset s N TILE_M idx))
+      else some (s.undef out_grad_ptr (innerBwdOffset s N TILE_M idx)) }
+
+noncomputable def innerBwdSpec
+    (s : BlockState) (out_ptr out_grad_ptr : RegionName)
+    (M N TILE_M TILE_N : Nat) (idx : TileIndex [TILE_M, TILE_N]) : ℝ :=
+  let outT := innerBwdOutTile s out_ptr M N TILE_M TILE_N
+  let gradT := innerBwdOutGradTile s out_grad_ptr M N TILE_M TILE_N
+  let sameBc : Broadcast [TILE_M, TILE_N] [TILE_M, TILE_N] [TILE_M, TILE_N] :=
+    Broadcast.consSame (Broadcast.consSame Broadcast.nil)
+  let prod := Tile.bop (NumericDType.mul .real) sameBc outT gradT
+  let scale :=
+    Tile.reduceSum (shape := [TILE_M, TILE_N]) ⟨1, by simp⟩ Bool.true prod
+  let rowBc : Broadcast [TILE_M, TILE_N] [TILE_M, 1] [TILE_M, TILE_N] :=
+    Broadcast.consSame (Broadcast.consR Broadcast.nil)
+  let diff :=
+    Tile.bop (NumericDType.sub .real) rowBc gradT scale
+  WithBot.unbotD 0
+    ((Tile.bop (NumericDType.mul .real) sameBc outT diff).data idx)
+
+/-- Algorithm-layer cellwise correctness for the inner one-tile FlagGems
+softmax backward. -/
+theorem softmax_backward_kernel_inner_one_tile_correct
+    (out_ptr out_grad_ptr in_grad_ptr : RegionName)
+    (M N TILE_M TILE_N : Nat)
+    (s s' : BlockState)
+    (hOffInj : Function.Injective
+      (fun idx : TileIndex [TILE_M, TILE_N] => innerBwdOffset s N TILE_M idx))
+    (hExec : exec (softmax_backward_kernel_inner_one_tile_surface
+        out_ptr out_grad_ptr in_grad_ptr M N TILE_M TILE_N) s = some s') :
+    ∀ idx : TileIndex [TILE_M, TILE_N],
+      s'.readMem in_grad_ptr (innerBwdOffset s N TILE_M idx) =
+        if innerBwdActive s M N TILE_M idx then
+          innerBwdSpec s out_ptr out_grad_ptr M N TILE_M TILE_N idx
+        else s.readMem in_grad_ptr (innerBwdOffset s N TILE_M idx) := by
+  intro idx
+  by_cases hTM : 0 < TILE_M
+  · by_cases hTN : 0 < TILE_N
+    · simp [exec, softmax_backward_kernel_inner_one_tile_surface,
+            stepStmts, stepStmt, evalOp, Option.bind, Option.map,
+            Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
+            Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceSumKeep,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
+            NumericDType.sub, ComparableDType.lt,
+            ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, hTN] at hExec
+      rw [← hExec]
+      have hOffsetInj : Function.Injective
+          (fun idx : TileIndex [TILE_M, TILE_N] =>
+            (s.pids 0 * TILE_M + idx.1.val) * N + idx.2.1.val) := by
+        intro a b h
+        apply hOffInj
+        simpa [innerBwdOffset, innerBwdRowIndex, innerBwdColIndex,
+               BlockState.pid_eq] using h
+      simp only [BlockState.pid_eq]
+      simp only [innerBwdOffset, innerBwdRowIndex, innerBwdColIndex,
+                 BlockState.pid_eq]
+      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+      by_cases hActive : innerBwdActive s M N TILE_M idx
+      · rcases hActive with ⟨hM, hN⟩
+        simp only [innerBwdRowIndex, innerBwdColIndex, BlockState.pid_eq]
+            at hM hN
+        simp [innerBwdActive, innerBwdRowIndex, innerBwdColIndex,
+              BlockState.pid_eq, hM, hN, innerBwdSpec,
+              innerBwdOutTile, innerBwdOutGradTile, innerBwdOffset,
+              Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceSumKeep,
+              TileShape.axisDim, TileShape.eraseAxis,
+              TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
+              NumericDType.sub, NumericDType.mul, hTN]
+        congr
+      · have hInactive :
+            ¬ (s.pids 0 * TILE_M + idx.1.val < M ∧ idx.2.1.val < N) := by
+          simpa [innerBwdActive, innerBwdRowIndex, innerBwdColIndex,
+                 BlockState.pid_eq] using hActive
+        simp [hInactive]
+        intro h
+        exact False.elim (hActive h)
+    · exact False.elim (hTN (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
+  · exact False.elim (hTM (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
+
+/-- Compute-facing correctness for the inner one-tile FlagGems softmax
+backward. -/
+theorem softmax_backward_kernel_inner_one_tile_compute_correct
+    (out_ptr out_grad_ptr in_grad_ptr : RegionName)
+    (M N TILE_M TILE_N : Nat)
+    (s : BlockState)
+    (hOffInj : Function.Injective
+      (fun idx : TileIndex [TILE_M, TILE_N] => innerBwdOffset s N TILE_M idx)) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_backward_kernel_inner_one_tile_surface
+        out_ptr out_grad_ptr in_grad_ptr M N TILE_M TILE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [TILE_M, TILE_N] =>
+          innerBwdActive s M N TILE_M idx)
+        (fun idx => (in_grad_ptr, innerBwdOffset s N TILE_M idx)))
+      (expected := fun idx =>
+        innerBwdSpec s out_ptr out_grad_ptr M N TILE_M TILE_N idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [softmax_backward_kernel_inner_one_tile_surface,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := softmax_backward_kernel_inner_one_tile_correct out_ptr out_grad_ptr
+    in_grad_ptr M N TILE_M TILE_N s s' hOffInj hExec idx
+  simpa [hActive] using h
+
+end BackwardInner
+
+/-! ## Non-inner-dimension one-tile backward proof
+
+This is the 2D `[TILE_N, TILE_K]` backward path, reducing along axis 0.
+The store-side offset matches the existing forward `nonInnerOffset`, and the
+in-tile mask `(n < N) ∧ (pid_k * TILE_K + k < K)` matches the corresponding
+forward `softmax_kernel_non_inner_one_tile_*` mask. -/
+
+set_option maxHeartbeats 5000000 in
+section BackwardNonInner
+
+noncomputable def nonInnerBwdOutTile
+    (s : BlockState) (out_ptr : RegionName) (N K TILE_N TILE_K : Nat) :
+    Tile .real [TILE_N, TILE_K] :=
+  { data := fun idx =>
+      if idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K then
+        some (s.readMem out_ptr (nonInnerOffset s N K TILE_K idx))
+      else some (s.undef out_ptr (nonInnerOffset s N K TILE_K idx)) }
+
+noncomputable def nonInnerBwdOutGradTile
+    (s : BlockState) (out_grad_ptr : RegionName) (N K TILE_N TILE_K : Nat) :
+    Tile .real [TILE_N, TILE_K] :=
+  { data := fun idx =>
+      if idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K then
+        some (s.readMem out_grad_ptr (nonInnerOffset s N K TILE_K idx))
+      else some (s.undef out_grad_ptr (nonInnerOffset s N K TILE_K idx)) }
+
+noncomputable def nonInnerBwdSpec
+    (s : BlockState) (out_ptr out_grad_ptr : RegionName)
+    (N K TILE_N TILE_K : Nat) (idx : TileIndex [TILE_N, TILE_K]) : ℝ :=
+  let outT := nonInnerBwdOutTile s out_ptr N K TILE_N TILE_K
+  let gradT := nonInnerBwdOutGradTile s out_grad_ptr N K TILE_N TILE_K
+  let sameBc : Broadcast [TILE_N, TILE_K] [TILE_N, TILE_K] [TILE_N, TILE_K] :=
+    Broadcast.consSame (Broadcast.consSame Broadcast.nil)
+  let prod := Tile.bop (NumericDType.mul .real) sameBc outT gradT
+  let scale :=
+    Tile.reduceSum (shape := [TILE_N, TILE_K]) ⟨0, by simp⟩ Bool.false prod
+  let colBc : Broadcast [TILE_N, TILE_K] [TILE_K] [TILE_N, TILE_K] :=
+    Broadcast.leadR (Broadcast.consSame Broadcast.nil)
+  let diff :=
+    Tile.bop (NumericDType.sub .real) colBc gradT scale
+  WithBot.unbotD 0
+    ((Tile.bop (NumericDType.mul .real) sameBc outT diff).data idx)
+
+/-- Algorithm-layer cellwise correctness for the non-inner one-tile FlagGems
+softmax backward. -/
+theorem softmax_backward_kernel_non_inner_one_tile_correct
+    (out_ptr out_grad_ptr in_grad_ptr : RegionName)
+    (N K TILE_N TILE_K : Nat)
+    (s s' : BlockState)
+    (hRange : s.pids 1 * TILE_K + TILE_K ≤ K)
+    (hExec : exec (softmax_backward_kernel_non_inner_one_tile_surface
+        out_ptr out_grad_ptr in_grad_ptr N K TILE_N TILE_K) s = some s') :
+    ∀ idx : TileIndex [TILE_N, TILE_K],
+      s'.readMem in_grad_ptr (nonInnerOffset s N K TILE_K idx) =
+        if idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K then
+          nonInnerBwdSpec s out_ptr out_grad_ptr N K TILE_N TILE_K idx
+        else s.readMem in_grad_ptr (nonInnerOffset s N K TILE_K idx) := by
+  intro idx
+  by_cases hTN : 0 < TILE_N
+  · by_cases hTK : 0 < TILE_K
+    · simp [exec, softmax_backward_kernel_non_inner_one_tile_surface,
+            stepStmts, stepStmt, evalOp, Option.bind, Option.map,
+            Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
+            Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceSumKeep,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul,
+            NumericDType.sub, ComparableDType.lt,
+            ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, hTN, hTK] at hExec
+      rw [← hExec]
+      simp only [show ∀ idx : TileIndex [TILE_N, TILE_K],
+          s.pids 0 * N * K + idx.1.val * K + (s.pids 1 * TILE_K + idx.2.1.val) =
+            nonInnerOffset s N K TILE_K idx from fun _ => rfl]
+      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+            (nonInnerOffset_injective s hRange) idx]
+      by_cases hmask : idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K
+      · simp [hmask, nonInnerBwdSpec, nonInnerBwdOutTile,
+              nonInnerBwdOutGradTile, nonInnerOffset,
+              Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceSumKeep,
+              TileShape.axisDim, TileShape.eraseAxis,
+              TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
+              NumericDType.sub, NumericDType.mul, hTN, hmask.2]
+        congr
+      · simp [hmask]
+    · exact False.elim (hTK (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
+  · exact False.elim (hTN (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
+
+/-- Compute-facing correctness for the non-inner one-tile FlagGems softmax
+backward. -/
+theorem softmax_backward_kernel_non_inner_one_tile_compute_correct
+    (out_ptr out_grad_ptr in_grad_ptr : RegionName)
+    (N K TILE_N TILE_K : Nat)
+    (s : BlockState)
+    (hRange : s.pids 1 * TILE_K + TILE_K ≤ K) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_backward_kernel_non_inner_one_tile_surface
+        out_ptr out_grad_ptr in_grad_ptr N K TILE_N TILE_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [TILE_N, TILE_K] =>
+          idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K)
+        (fun idx => (in_grad_ptr, nonInnerOffset s N K TILE_K idx)))
+      (expected := fun idx =>
+        nonInnerBwdSpec s out_ptr out_grad_ptr N K TILE_N TILE_K idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [softmax_backward_kernel_non_inner_one_tile_surface,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := softmax_backward_kernel_non_inner_one_tile_correct out_ptr
+    out_grad_ptr in_grad_ptr N K TILE_N TILE_K s s' hRange hExec idx
+  simpa [hActive] using h
+
+end BackwardNonInner
+
 end VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
