@@ -196,4 +196,49 @@ theorem per_block_int8_scaled_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented scale-store slice of `int8_quantization.py`'s per-block
+int8 kernels. Companion to per_block_int8_scaled_store_slice: takes a
+precomputed `ScalePre` scalar (per off_b × off_blk) and proves the unmasked
+writeback into `Scale` at offset `off_b * scale_stride + off_blk`. -/
+def per_block_int8_scale_store_slice
+    (ScalePre Scale : RegionName) (scale_stride : Nat) :
+    ComputeKernel := triton {
+  off_blk = tl.program_id(0)
+  off_b = tl.program_id(1)
+  scale = tl.load(ScalePre + off_b * $(scale_stride) + off_blk)
+  tl.store(Scale + off_b * $(scale_stride) + off_blk, scale)
+}
+
+noncomputable def scaleStoreSpec
+    (s : BlockState) (ScalePre : RegionName) (scale_stride : Nat) : ℝ :=
+  s.readMem ScalePre (scaleOffset s scale_stride)
+
+theorem per_block_int8_scale_store_slice_correct
+    (ScalePre Scale : RegionName) (scale_stride : Nat) (s s' : BlockState)
+    (hExec : exec (per_block_int8_scale_store_slice ScalePre Scale scale_stride)
+      s = some s') :
+    s'.readMem Scale (scaleOffset s scale_stride) =
+      scaleStoreSpec s ScalePre scale_stride := by
+  simp [exec, per_block_int8_scale_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul] at hExec
+  subst s'
+  simp [scaleOffset, scaleStoreSpec]
+
+theorem per_block_int8_scale_store_slice_compute_correct
+    (ScalePre Scale : RegionName) (scale_stride : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice ScalePre Scale scale_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
+      (expected := fun _ => scaleStoreSpec s ScalePre scale_stride) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [per_block_int8_scale_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact per_block_int8_scale_store_slice_correct ScalePre Scale scale_stride
+    s s' hExec
+
 end VeriTile.Bench.TritonBenchG.Int8Quantization
