@@ -51,6 +51,13 @@ def Tile.ptrAdd {a b out}
     let o := offs.data (bc.rightIndex i)
     (p.1, p.2 + o)⟩
 
+@[simp] theorem Tile.ptrAdd_data {a b out}
+    (bc : Broadcast a b out) (ptrs : Tile .ptr a) (offs : Tile .nat b)
+    (i : TileIndex out) :
+    (Tile.ptrAdd bc ptrs offs).data i =
+      ((ptrs.data (bc.leftIndex i)).1,
+       (ptrs.data (bc.leftIndex i)).2 + offs.data (bc.rightIndex i)) := rfl
+
 def Tile.ptrSub {a b out}
     (bc : Broadcast a b out) (ptrs : Tile .ptr a) (offs : Tile .nat b) :
     Tile .ptr out :=
@@ -58,6 +65,13 @@ def Tile.ptrSub {a b out}
     let p := ptrs.data (bc.leftIndex i)
     let o := offs.data (bc.rightIndex i)
     (p.1, p.2 - o)⟩
+
+@[simp] theorem Tile.ptrSub_data {a b out}
+    (bc : Broadcast a b out) (ptrs : Tile .ptr a) (offs : Tile .nat b)
+    (i : TileIndex out) :
+    (Tile.ptrSub bc ptrs offs).data i =
+      ((ptrs.data (bc.leftIndex i)).1,
+       (ptrs.data (bc.leftIndex i)).2 - offs.data (bc.rightIndex i)) := rfl
 
 def Tile.uop {dtype shape} (op : TileCarrier dtype → TileCarrier dtype)
     (x : Tile dtype shape) : Tile dtype shape :=
