@@ -216,6 +216,32 @@ noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
   | .min, [] => ⊥
   | .min, x :: xs => xs.foldl (fun acc x => if acc ≤ x then acc else x) x
 
+/-- `ScanOp.sum.eval` unfolds to the standard `foldl + 0` pattern over
+`WithBot.realAdd`. Useful for cumsum kernel proofs. -/
+@[simp] theorem ScanOp.eval_sum (xs : List (WithBot ℝ)) :
+    ScanOp.eval .sum xs = xs.foldl WithBot.realAdd ((0 : ℝ) : WithBot ℝ) := rfl
+
+/-- `ScanOp.prod.eval` unfolds to the standard `foldl * 1` pattern over
+`WithBot.realMul`. -/
+@[simp] theorem ScanOp.eval_prod (xs : List (WithBot ℝ)) :
+    ScanOp.eval .prod xs = xs.foldl WithBot.realMul ((1 : ℝ) : WithBot ℝ) := rfl
+
+/-- `ScanOp.max.eval` unfolds to `foldl` with the strict-less-than
+comparator over `WithBot ℝ`. -/
+@[simp] theorem ScanOp.eval_max (xs : List (WithBot ℝ)) :
+    ScanOp.eval .max xs =
+      xs.foldl (fun acc x => if acc ≤ x then x else acc) (⊥ : WithBot ℝ) := rfl
+
+/-- `ScanOp.min.eval` on the empty list yields `⊥`. -/
+@[simp] theorem ScanOp.eval_min_nil :
+    ScanOp.eval .min ([] : List (WithBot ℝ)) = (⊥ : WithBot ℝ) := rfl
+
+/-- `ScanOp.min.eval` on `x :: xs` folds with the strict-greater-than
+comparator starting from `x`. -/
+@[simp] theorem ScanOp.eval_min_cons (x : WithBot ℝ) (xs : List (WithBot ℝ)) :
+    ScanOp.eval .min (x :: xs) =
+      xs.foldl (fun acc x => if acc ≤ x then acc else x) x := rfl
+
 @[simp] theorem WithBot.realExp_some (r : ℝ) :
     WithBot.realExp (some r) = some (Real.exp r) := rfl
 @[simp] theorem WithBot.realLog_some (r : ℝ) :
