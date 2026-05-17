@@ -301,6 +301,28 @@ def storeValue (h : FloatDType) (x : TileCarrier h.toTileDType) : ℝ :=
 @[simp] theorem real_storeValue (x : TileCarrier FloatDType.real.toTileDType) :
     FloatDType.real.storeValue x = x.unbotD 0 := rfl
 
+/-- `FloatDType.fp32.ofWithBot` is the identity in the current placeholder
+implementation. Documents that fp32→bytes rounding is not yet modeled; once
+rounding is added (#129/#137), this lemma will need an explicit rounding
+adjustment. -/
+@[simp] theorem fp32_ofWithBot (x : WithBot ℝ) :
+    FloatDType.fp32.ofWithBot x = x := rfl
+
+@[simp] theorem fp32_toWithBot (x : TileCarrier FloatDType.fp32.toTileDType) :
+    FloatDType.fp32.toWithBot x = x := rfl
+
+@[simp] theorem fp16_ofWithBot (x : WithBot ℝ) :
+    FloatDType.fp16.ofWithBot x = x := rfl
+
+@[simp] theorem fp16_toWithBot (x : TileCarrier FloatDType.fp16.toTileDType) :
+    FloatDType.fp16.toWithBot x = x := rfl
+
+@[simp] theorem bf16_ofWithBot (x : WithBot ℝ) :
+    FloatDType.bf16.ofWithBot x = x := rfl
+
+@[simp] theorem bf16_toWithBot (x : TileCarrier FloatDType.bf16.toTileDType) :
+    FloatDType.bf16.toWithBot x = x := rfl
+
 end FloatDType
 
 /-- Cast a typed tile across definitional dtype/shape equalities. -/
