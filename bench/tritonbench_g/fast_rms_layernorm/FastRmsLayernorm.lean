@@ -583,4 +583,49 @@ theorem gemma_rms_layernorm_backward_dy_compute_correct
     hOutInj hExec i
   simpa [hActive] using h
 
+/-- Proof-oriented inv_var (rstd) store slice of `fast_rms_layernorm.py`'s
+`_rms_layernorm_forward`. Takes a precomputed `InvVarPre` scalar and proves
+the strided scalar writeback into `r` at offset `row_idx * r_row_stride`. -/
+def rms_layernorm_forward_inv_var_store_slice
+    (InvVarPre r : RegionName) (r_row_stride : Nat) : ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  inv_var = tl.load(InvVarPre + row_idx * $(r_row_stride))
+  tl.store(r + row_idx * $(r_row_stride), inv_var)
+}
+
+def rOutOffset (s : BlockState) (r_row_stride : Nat) : Nat :=
+  s.pid * r_row_stride
+
+noncomputable def invVarStoreSpec (s : BlockState) (InvVarPre : RegionName)
+    (r_row_stride : Nat) : ℝ :=
+  s.readMem InvVarPre (rOutOffset s r_row_stride)
+
+theorem rms_layernorm_forward_inv_var_store_slice_correct
+    (InvVarPre r : RegionName) (r_row_stride : Nat)
+    (s s' : BlockState)
+    (hExec : exec (rms_layernorm_forward_inv_var_store_slice InvVarPre r r_row_stride)
+      s = some s') :
+    s'.readMem r (rOutOffset s r_row_stride) =
+      invVarStoreSpec s InvVarPre r_row_stride := by
+  simp [exec, rms_layernorm_forward_inv_var_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul] at hExec
+  subst s'
+  simp [rOutOffset, invVarStoreSpec]
+
+theorem rms_layernorm_forward_inv_var_store_slice_compute_correct
+    (InvVarPre r : RegionName) (r_row_stride : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rms_layernorm_forward_inv_var_store_slice InvVarPre r r_row_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
+      (expected := fun _ => invVarStoreSpec s InvVarPre r_row_stride) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rms_layernorm_forward_inv_var_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact rms_layernorm_forward_inv_var_store_slice_correct InvVarPre r r_row_stride s s' hExec
+
 end VeriTile.Bench.TritonBenchG.FastRmsLayernorm
