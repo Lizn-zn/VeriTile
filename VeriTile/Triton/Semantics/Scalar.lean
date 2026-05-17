@@ -235,6 +235,34 @@ these, bench proofs end up stuck on `decide ... = Bool.true` subgoals. -/
     (ComparableDType.nat.lt x y = Bool.true) ↔ x < y := by
   simp [lt]
 
+@[simp] theorem nat_le_eq_true (x y : Nat) :
+    (ComparableDType.nat.le x y = Bool.true) ↔ x ≤ y := by
+  simp [le]
+
+@[simp] theorem nat_eq_eq_true (x y : Nat) :
+    (ComparableDType.nat.eq x y = Bool.true) ↔ x = y := by
+  simp [eq]
+
+@[simp] theorem nat_ne_eq_true (x y : Nat) :
+    (ComparableDType.nat.ne x y = Bool.true) ↔ x ≠ y := by
+  simp [ne]
+
+@[simp] theorem int_ge_eq_true (x y : Int) :
+    (ComparableDType.int.ge x y = Bool.true) ↔ x ≥ y := by
+  simp [ge]
+
+@[simp] theorem int_le_eq_true (x y : Int) :
+    (ComparableDType.int.le x y = Bool.true) ↔ x ≤ y := by
+  simp [le]
+
+@[simp] theorem int_eq_eq_true (x y : Int) :
+    (ComparableDType.int.eq x y = Bool.true) ↔ x = y := by
+  simp [eq]
+
+@[simp] theorem int_ne_eq_true (x y : Int) :
+    (ComparableDType.int.ne x y = Bool.true) ↔ x ≠ y := by
+  simp [ne]
+
 end ComparableDType
 
 namespace FloatDType
