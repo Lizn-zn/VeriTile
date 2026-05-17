@@ -356,4 +356,125 @@ theorem layer_norm_liger_forward_rstd_store_slice_compute_correct
   exact layer_norm_liger_forward_rstd_store_slice_correct RSTDPre RSTD RSTD_row_stride
     s s' hExec
 
+/-! ## Full-kernel scalar-store correctness for `Mean` and `inv_var` (rstd).
+
+Per #139, slice proofs over precomputed inputs are insufficient. These
+theorems characterize the per-row `Mean` and `RSTD` writebacks for the full
+`layer_norm_liger_forward` kernel by stripping the trailing `Y` foldl with
+the cross-region helper and (for `Mean`) peeling the intervening `RSTD`
+scalar store. -/
+
+/-- Algorithm-layer correctness for the `inv_var` (rstd) scalar store of the
+full `layer_norm_liger_forward` kernel. -/
+theorem layer_norm_liger_forward_inv_var_correct
+    (Y X W B Mean RSTD : RegionName)
+    (Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
+      BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRSTDY : RSTD ≠ Y)
+    (hExec : exec (layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps) s =
+        some s') :
+    s'.readMem RSTD (s.pid * RSTD_row_stride) =
+      WithBot.unbotD 0
+        (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps) := by
+  simp [exec, layer_norm_liger_forward, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, NumericDType.div, ComparableDType.lt,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRSTDY]
+  simp [BlockState.writeMem_readMem, layernormInvVarCarrier,
+        layernormVarCarrier, layernormCenteredTile, layernormMeanCarrier,
+        layernormInputTile, xOffset, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        WithBot.realRsqrt, NumericDType.mul]
+  rfl
+
+/-- Compute-facing correctness for the `inv_var` (rstd) scalar store of the
+full `layer_norm_liger_forward` kernel. -/
+theorem layer_norm_liger_forward_inv_var_compute_correct
+    (Y X W B Mean RSTD : RegionName)
+    (Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
+      BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hRSTDY : RSTD ≠ Y) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := fun _ : PUnit => some (RSTD, s.pid * RSTD_row_stride))
+      (expected := fun _ =>
+        WithBot.unbotD 0
+          (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_liger_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layer_norm_liger_forward_inv_var_correct Y X W B Mean RSTD Y_row_stride
+    X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps s s'
+    hRSTDY hExec
+
+/-- Algorithm-layer correctness for the `Mean` scalar store of the full
+`layer_norm_liger_forward` kernel. -/
+theorem layer_norm_liger_forward_mean_correct
+    (Y X W B Mean RSTD : RegionName)
+    (Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
+      BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hMeanY : Mean ≠ Y) (hMeanRSTD : Mean ≠ RSTD)
+    (hExec : exec (layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps) s =
+        some s') :
+    s'.readMem Mean (s.pid * Mean_row_stride) =
+      WithBot.unbotD 0
+        (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE) := by
+  simp [exec, layer_norm_liger_forward, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, NumericDType.div, ComparableDType.lt,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hMeanY]
+  simp only [BlockState.setReg_readMem]
+  rw [BlockState.writeMem_readMem_of_ne_region _ _ _ _ _ _ hMeanRSTD]
+  simp [BlockState.writeMem_readMem, layernormMeanCarrier,
+        layernormInputTile, xOffset, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.mul]
+  rfl
+
+/-- Compute-facing correctness for the `Mean` scalar store of the full
+`layer_norm_liger_forward` kernel. -/
+theorem layer_norm_liger_forward_mean_compute_correct
+    (Y X W B Mean RSTD : RegionName)
+    (Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
+      BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hMeanY : Mean ≠ Y) (hMeanRSTD : Mean ≠ RSTD) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, s.pid * Mean_row_stride))
+      (expected := fun _ =>
+        WithBot.unbotD 0
+          (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE)) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_liger_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layer_norm_liger_forward_mean_correct Y X W B Mean RSTD Y_row_stride
+    X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps s s'
+    hMeanY hMeanRSTD hExec
+
 end VeriTile.Bench.TritonBenchG.LayerNormLiger

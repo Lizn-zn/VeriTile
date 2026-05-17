@@ -200,6 +200,68 @@ theorem layer_norm_fwd_rms_one_block_y_compute_correct
     stride_y_row N BLOCK_N eps s s' hYRstd hWRstd hOutInj hExec i
   simpa [hActive] using h
 
+/-- Full-kernel spec for the `Rstd` scalar store of `layer_norm_fwd_rms_one_block`.
+Wraps `rmsInvCarrier` with `WithBot.unbotD 0` to match the kernel's
+post-execution scalar readback. -/
+noncomputable def rmsInvVarFullSpec
+    (s : BlockState) (X : RegionName)
+    (stride_x_row N BLOCK_N : Nat) (eps : ℝ) : ℝ :=
+  WithBot.unbotD 0
+    (rmsInvCarrier s X stride_x_row N BLOCK_N eps)
+
+/-- Executed-state correctness for the `Rstd` scalar store of
+`layer_norm_fwd_rms_one_block`. The kernel writes a single element at offset
+`s.pid` into `Rstd`; this theorem strips the trailing `Y` foldl to expose that
+store. -/
+theorem layer_norm_fwd_rms_one_block_rstd_correct
+    (X Y W Rstd : RegionName)
+    (stride_x_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
+    (s s' : BlockState)
+    (hRstdY : Rstd ≠ Y)
+    (hExec : exec (layer_norm_fwd_rms_one_block X Y W Rstd
+        stride_x_row stride_y_row N BLOCK_N eps) s = some s') :
+    s'.readMem Rstd s.pid =
+      rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps := by
+  simp [exec, layer_norm_fwd_rms_one_block, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.div, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRstdY]
+  simp only [BlockState.setReg_readMem, BlockState.writeMem_readMem]
+  simp [rmsInvVarFullSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile,
+        xOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        WithBot.realSqrt, NumericDType.mul]
+  rfl
+
+/-- Compute-facing correctness for the `Rstd` scalar store of
+`layer_norm_fwd_rms_one_block`. -/
+theorem layer_norm_fwd_rms_one_block_rstd_compute_correct
+    (X Y W Rstd : RegionName)
+    (stride_x_row stride_y_row N BLOCK_N : Nat) (eps : ℝ)
+    (s : BlockState)
+    (hRstdY : Rstd ≠ Y) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_fwd_rms_one_block X Y W Rstd
+        stride_x_row stride_y_row N BLOCK_N eps)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, s.pid))
+      (expected := fun _ =>
+        rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_fwd_rms_one_block, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layer_norm_fwd_rms_one_block_rstd_correct X Y W Rstd stride_x_row
+    stride_y_row N BLOCK_N eps s s' hRstdY hExec
+
 /-- Proof-oriented Mean store slice of `layer_norm_ops.py`'s
 `_layer_norm_fwd_1pass_kernel`. Takes a precomputed `MeanPre` scalar (per row)
 and proves the unmasked scalar writeback into `Mean` at row offset. -/

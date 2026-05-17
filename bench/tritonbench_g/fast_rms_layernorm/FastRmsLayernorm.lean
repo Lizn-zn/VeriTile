@@ -628,4 +628,141 @@ theorem rms_layernorm_forward_inv_var_store_slice_compute_correct
   intro _
   exact rms_layernorm_forward_inv_var_store_slice_correct InvVarPre r r_row_stride s s' hExec
 
+/-! ### Full-kernel rstd correctness
+
+Per #139, the slice proofs above rely on a precomputed `InvVarPre` region and
+are not sufficient as full-kernel guarantees. The following theorems close the
+`r` (rstd / inv_var) store for the full `_rms_layernorm_forward` and
+`_gemma_rms_layernorm_forward` kernels by stripping the trailing `Y` write
+foldl with `BlockState.foldl_writeMem_const_region_prop_masked_readMem_other`
+(requiring `r ≠ Y`) and reducing the scalar `r` writeMem with `simp`. -/
+
+/-- Executed-state correctness for the `r` (rstd / inv_var) output of
+`_rms_layernorm_forward`. -/
+theorem rms_layernorm_forward_inv_var_correct
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRegions : r ≠ Y)
+    (hExec : exec (rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+          W_row_stride r_row_stride n_cols eps BLOCK_SIZE) s = some s') :
+    s'.readMem r (rOutOffset s r_row_stride) =
+      rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps := by
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+          Y _ _ _ _ _ _ _ hRegions]
+    simp [rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
+          rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          WithBot.realRsqrt, NumericDType.mul]
+  · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    have hB' : BLOCK_SIZE = 0 := Nat.eq_zero_of_not_pos hB
+    subst hB'
+    simp [rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
+          rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          WithBot.realRsqrt, NumericDType.mul]
+
+/-- Compute-facing correctness for the `r` (rstd / inv_var) output of
+`_rms_layernorm_forward`. -/
+theorem rms_layernorm_forward_inv_var_compute_correct
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hRegions : r ≠ Y) :
+    ComputeCorrect.Realizes
+      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
+      (expected := fun _ =>
+        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact rms_layernorm_forward_inv_var_correct Y X W r Y_row_stride X_row_stride
+    W_row_stride r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hExec
+
+/-- Executed-state correctness for the `r` (rstd / inv_var) output of
+`_gemma_rms_layernorm_forward`. -/
+theorem gemma_rms_layernorm_forward_inv_var_correct
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRegions : r ≠ Y)
+    (hExec : exec (gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+          r_row_stride n_cols eps BLOCK_SIZE) s = some s') :
+    s'.readMem r (rOutOffset s r_row_stride) =
+      rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps := by
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+          Y _ _ _ _ _ _ _ hRegions]
+    simp [rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
+          rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          WithBot.realRsqrt, NumericDType.mul]
+  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    have hB' : BLOCK_SIZE = 0 := Nat.eq_zero_of_not_pos hB
+    subst hB'
+    simp [rOutOffset, rmsInvVarSpec, rmsInvVarCarrier, rmsSumCarrier,
+          rmsInputTile, Tile.reduceSum, Tile.reduceSumDrop,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          WithBot.realRsqrt, NumericDType.mul]
+
+/-- Compute-facing correctness for the `r` (rstd / inv_var) output of
+`_gemma_rms_layernorm_forward`. -/
+theorem gemma_rms_layernorm_forward_inv_var_compute_correct
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hRegions : r ≠ Y) :
+    ComputeCorrect.Realizes
+      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
+      (expected := fun _ =>
+        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [gemma_rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact gemma_rms_layernorm_forward_inv_var_correct Y X W r Y_row_stride X_row_stride
+    r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hExec
+
 end VeriTile.Bench.TritonBenchG.FastRmsLayernorm

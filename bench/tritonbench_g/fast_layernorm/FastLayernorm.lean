@@ -373,6 +373,138 @@ theorem layernorm_forward_y_compute_correct
     n_cols BLOCK_SIZE eps s s' hYr hYmu hOutInj hExec i
   simpa [hActive] using h
 
+/-- Full-kernel spec for the `inv_var` (rstd) store of `layernorm_forward`.
+
+Wraps `layernormInvVarCarrier` with `WithBot.unbotD 0` so that the readback
+of the kernel's scalar write into `r` matches the carrier's value as a
+plain `ℝ`. -/
+noncomputable def invVarFullSpec
+    (s : BlockState) (X : RegionName)
+    (X_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ) : ℝ :=
+  WithBot.unbotD 0
+    (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)
+
+/-- Full-kernel spec for the `mean` (mu) store of `layernorm_forward`.
+
+Wraps `layernormMeanCarrier` with `WithBot.unbotD 0` so that the readback
+of the kernel's scalar write into `mu` matches the carrier's value as a
+plain `ℝ`. -/
+noncomputable def meanFullSpec
+    (s : BlockState) (X : RegionName)
+    (X_row_stride n_cols BLOCK_SIZE : Nat) : ℝ :=
+  WithBot.unbotD 0
+    (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE)
+
+/-- Executed-state correctness for the `inv_var` (rstd) scalar store of
+`layernorm_forward`. The kernel writes a single element at offset `s.pid`
+into `r`; this theorem strips the trailing `mu` writeMem and the `Y` foldl
+to expose that store. -/
+theorem layernorm_forward_inv_var_correct
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRY : r ≠ Y) (hRmu : r ≠ mu)
+    (hExec : exec (layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+          n_cols eps BLOCK_SIZE) s = some s') :
+    s'.readMem r s.pid =
+      invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps := by
+  simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, NumericDType.div, ComparableDType.lt,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRY]
+  simp only [BlockState.setReg_readMem]
+  rw [BlockState.writeMem_readMem_of_ne_region _ mu _ _ _ _ hRmu]
+  rw [BlockState.writeMem_readMem]
+  simp only [BlockState.pid_eq, and_self, if_true]
+  simp [invVarFullSpec, layernormInvVarCarrier, layernormVarCarrier,
+        layernormCenteredTile, layernormMeanCarrier, layernormInputTile,
+        Tile.bop, Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.mul,
+        WithBot.realRsqrt]
+  rfl
+
+/-- Compute-facing correctness for the `inv_var` (rstd) scalar store of
+`layernorm_forward`. -/
+theorem layernorm_forward_inv_var_compute_correct
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hRY : r ≠ Y) (hRmu : r ≠ mu) :
+    ComputeCorrect.Realizes
+      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+        n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, s.pid))
+      (expected := fun _ =>
+        invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layernorm_forward_inv_var_correct Y X W bias r mu Y_row_stride
+    X_row_stride n_cols BLOCK_SIZE eps s s' hRY hRmu hExec
+
+/-- Executed-state correctness for the `mean` (mu) scalar store of
+`layernorm_forward`. The kernel writes a single element at offset `s.pid`
+into `mu`; this theorem strips the trailing `Y` foldl to expose that store.
+The `r` writeMem is beneath the `mu` writeMem at a different region, so it
+is irrelevant once the readback resolves at `mu`. -/
+theorem layernorm_forward_mean_correct
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hMuY : mu ≠ Y)
+    (hExec : exec (layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+          n_cols eps BLOCK_SIZE) s = some s') :
+    s'.readMem mu s.pid =
+      meanFullSpec s X X_row_stride n_cols BLOCK_SIZE := by
+  simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, NumericDType.div, ComparableDType.lt,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hMuY]
+  simp only [BlockState.setReg_readMem]
+  rw [BlockState.writeMem_readMem]
+  simp only [BlockState.pid_eq, and_self, if_true]
+  simp only [meanFullSpec, layernormMeanCarrier, layernormInputTile,
+        Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex]
+  rfl
+
+/-- Compute-facing correctness for the `mean` (mu) scalar store of
+`layernorm_forward`. -/
+theorem layernorm_forward_mean_compute_correct
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hMuY : mu ≠ Y) :
+    ComputeCorrect.Realizes
+      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+        n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (mu, s.pid))
+      (expected := fun _ =>
+        meanFullSpec s X X_row_stride n_cols BLOCK_SIZE) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layernorm_forward_mean_correct Y X W bias r mu Y_row_stride
+    X_row_stride n_cols BLOCK_SIZE eps s s' hMuY hExec
+
 /-- Proof-oriented inv_var (rstd) store slice of `fast_layernorm.py`'s
 `layernorm_forward`. Takes a precomputed `InvVarPre` scalar (per row) and
 proves the scalar writeback into `r`. -/

@@ -702,4 +702,88 @@ theorem prefill_cache_sin_store_slice_compute_correct
     cache_stride hidden_stride total_length HIDDEN_DIM BLOCK_SIZE s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-- Source row index `ori_seq_idx` computed by the full prefill kernel:
+`idx - tl.max(tl.where(cumsum_lens <= idx, cumsum_lens, 0))`. The reduction
+is `reduceMaxNatDrop` over the `[N_ELEMENTS]` tile loaded from `cumsum_lengths`.
+When `N_ELEMENTS = 0` the reduction returns `none`; we treat that case as `0`
+so the spec is total. -/
+noncomputable def prefillOriSeqIdx
+    (s : BlockState) (cumsum_lengths : Region .nat) (BLOCK_SIZE N_ELEMENTS : Nat) : Nat :=
+  let idx := prefillIdx s BLOCK_SIZE
+  let tile : Tile .nat [N_ELEMENTS] :=
+    ⟨fun i => s.readMemValue .nat (Region.cast cumsum_lengths) i.1.val⟩
+  let cond : Tile .bool [N_ELEMENTS] :=
+    ⟨fun i => decide (tile.data i ≤ idx)⟩
+  let zero : Tile .nat [N_ELEMENTS] := ⟨fun _ => 0⟩
+  let masked : Tile .nat [N_ELEMENTS] := Tile.select cond tile zero
+  let reduced : Option (Tile .nat (TileShape.eraseAxis [N_ELEMENTS] ⟨0, by simp⟩)) :=
+    Tile.reduceMaxNatDrop (shape := [N_ELEMENTS]) ⟨0, by simp⟩ masked
+  let maxv : Nat := match reduced with
+    | some t => t.data PUnit.unit
+    | none => 0
+  idx - maxv
+
+/-- Cache offset for the full prefill kernel using the data-dependent source row
+`ori_seq_idx`. -/
+noncomputable def prefillCacheOffset
+    (s : BlockState) (cumsum_lengths : Region .nat)
+    (cache_stride hidden_stride BLOCK_SIZE N_ELEMENTS : Nat) (i : Fin HIDDEN_DIM) : Nat :=
+  prefillOriSeqIdx s cumsum_lengths BLOCK_SIZE N_ELEMENTS * cache_stride +
+    i.val * hidden_stride
+
+/-- Algorithm-layer correctness for the full prefill cache-copy surface. -/
+theorem prefill_cache_kernel_correct
+    (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hRegion : cos_output ≠ sin_output)
+    (hN : 0 < N_ELEMENTS)
+    (hOutInj : Function.Injective
+      (fun i : Fin HIDDEN_DIM =>
+        prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i))
+    (hExec : exec (prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
+        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
+        BLOCK_SIZE) s = some s') :
+    (∀ i : Fin HIDDEN_DIM,
+      s'.readMem cos_output
+          (prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i) =
+        if prefillActive s total_length BLOCK_SIZE then
+          s.readMem cos_cache
+            (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
+              BLOCK_SIZE N_ELEMENTS i)
+        else
+          s.readMem cos_output
+            (prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) ∧
+    (∀ i : Fin HIDDEN_DIM,
+      s'.readMem sin_output
+          (prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i) =
+        if prefillActive s total_length BLOCK_SIZE then
+          s.readMem sin_cache
+            (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
+              BLOCK_SIZE N_ELEMENTS i)
+        else
+          s.readMem sin_output
+            (prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) := by
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [HIDDEN_DIM] =>
+        (s.pids 0 * BLOCK_SIZE + s.pids 1) * cache_stride + idx.1.val * hidden_stride) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [prefillOutOffset, prefillIdx] using h
+    cases a; cases b
+    simp only at hab; cases hab; rfl
+  by_cases hH : 0 < HIDDEN_DIM
+  · simp [exec, prefill_cache_kernel, stepStmts, stepStmt, evalOp,
+          Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt, ComparableDType.le, hN, hH] at hExec
+    sorry
+  · constructor
+    · intro i
+      exact False.elim (hH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+    · intro i
+      exact False.elim (hH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
 end VeriTile.Bench.TritonBenchG.CacheTransformTriton

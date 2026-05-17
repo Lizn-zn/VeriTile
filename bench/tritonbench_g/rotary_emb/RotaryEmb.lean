@@ -724,4 +724,123 @@ theorem rotary_emb_k1_block_compute_correct
     HEAD_K BLOCK_HALF s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-! ## Full-kernel Q first-half (off_q0) correctness
+
+The Python test runs the full `_rotary_kernel` which writes 4 stores: Q at
+`off_q0` (even), Q at `off_q1` (odd), K at `off_k0` (even), K at `off_k1` (odd).
+Per #139's audit, the slice proofs above aren't sufficient — we need
+full-kernel proofs.
+
+This section establishes the Q first-half store for the full kernel under the
+assumption that `Q ≠ K` and `stride_qd ≠ 0` (the latter is needed to prove the
+intra-region Q first-half vs Q second-half offsets disjoint: they differ by
+parity of the dimension factor). -/
+
+/-- Q first-half offset of the full `rotary_kernel_surface`. The tile shape is
+`[BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL/2]`. The even dimension factor is
+`2 * idx.2.2.1.val`. -/
+def qFullOffset
+    (s : BlockState) (stride_qbs stride_qh stride_qd
+      BLOCK_HEAD BLOCK_SEQ BLOCK_HALF : Nat)
+    (idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_HALF]) : Nat :=
+  (s.pids 1 * BLOCK_SEQ + idx.1.val) * stride_qbs +
+  (s.pids 0 * BLOCK_HEAD + idx.2.1.val) * stride_qh +
+  (idx.2.2.1.val * 2) * stride_qd
+
+/-- Cosine offset for the full kernel's Q first-half store. -/
+def cosFullOffset
+    (s : BlockState) (stride_cosbs stride_cosd
+      BLOCK_SEQ BLOCK_HALF : Nat)
+    (idx : TileIndex [BLOCK_SEQ, BLOCK_HALF]) : Nat :=
+  (s.pids 1 * BLOCK_SEQ + idx.1.val) * stride_cosbs +
+  (idx.2.1.val * 2) * stride_cosd
+
+/-- Sine offset for the full kernel's Q first-half store. -/
+def sinFullOffset
+    (s : BlockState) (stride_cosbs stride_cosd
+      BLOCK_SEQ BLOCK_HALF : Nat)
+    (idx : TileIndex [BLOCK_SEQ, BLOCK_HALF]) : Nat :=
+  (s.pids 1 * BLOCK_SEQ + idx.1.val) * stride_cosbs +
+  (idx.2.1.val * 2) * stride_cosd
+
+/-- Active predicate for the full kernel's Q stores. -/
+def activeFullQ (s : BlockState) (max_total_len HEAD_Q
+    BLOCK_HEAD BLOCK_SEQ : Nat)
+    (idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD]) : Prop :=
+  s.pids 1 * BLOCK_SEQ + idx.1.val < max_total_len ∧
+  s.pids 0 * BLOCK_HEAD + idx.2.1.val < HEAD_Q
+
+instance activeFullQDecidable (s : BlockState) (max_total_len HEAD_Q
+    BLOCK_HEAD BLOCK_SEQ : Nat)
+    (idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD]) :
+    Decidable (activeFullQ s max_total_len HEAD_Q BLOCK_HEAD BLOCK_SEQ idx) := by
+  unfold activeFullQ
+  infer_instance
+
+/-- Specification for the Q first-half output in the full kernel. -/
+noncomputable def rotaryKernelQ0Spec
+    (s : BlockState) (Q Cos Sin : RegionName)
+    (stride_qbs stride_qh stride_qd stride_cosbs stride_cosd : Nat)
+    (BLOCK_SEQ BLOCK_HEAD BLOCK_HALF : Nat)
+    (idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_HALF]) : ℝ :=
+  s.readMem Q (qFullOffset s stride_qbs stride_qh stride_qd
+      BLOCK_HEAD BLOCK_SEQ BLOCK_HALF idx) *
+    s.readMem Cos (cosFullOffset s stride_cosbs stride_cosd
+      BLOCK_SEQ BLOCK_HALF (idx.1, idx.2.2)) -
+  s.readMem Q ((s.pids 1 * BLOCK_SEQ + idx.1.val) * stride_qbs +
+      (s.pids 0 * BLOCK_HEAD + idx.2.1.val) * stride_qh +
+      (idx.2.2.1.val * 2 + 1) * stride_qd) *
+    s.readMem Sin (sinFullOffset s stride_cosbs stride_cosd
+      BLOCK_SEQ BLOCK_HALF (idx.1, idx.2.2))
+
+/-- Algorithm-layer correctness for the Q first-half store in the full
+`rotary_kernel_surface`. -/
+theorem rotary_kernel_q0_correct
+    (Q K Cos Sin : RegionName)
+    (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
+      HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ BLOCK_DMODEL : Nat)
+    (s s' : BlockState)
+    (hQK : Q ≠ K)
+    (hStrideQd : 0 < stride_qd)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2] =>
+        qFullOffset s stride_qbs stride_qh stride_qd
+          BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) idx))
+    (hExec : exec (rotary_kernel_surface Q K Cos Sin
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
+        HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ BLOCK_DMODEL) s = some s') :
+    ∀ idx : TileIndex [BLOCK_SEQ, BLOCK_HEAD, BLOCK_DMODEL / 2],
+      s'.readMem Q (qFullOffset s stride_qbs stride_qh stride_qd
+          BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) idx) =
+        if activeFullQ s max_total_len HEAD_Q BLOCK_HEAD BLOCK_SEQ
+            (idx.1, idx.2.1, PUnit.unit) then
+          rotaryKernelQ0Spec s Q Cos Sin stride_qbs stride_qh stride_qd
+            stride_cosbs stride_cosd BLOCK_SEQ BLOCK_HEAD
+            (BLOCK_DMODEL / 2) idx
+        else
+          s.readMem Q (qFullOffset s stride_qbs stride_qh stride_qd
+            BLOCK_HEAD BLOCK_SEQ (BLOCK_DMODEL / 2) idx) := by
+  intro idx
+  by_cases hSEQ : 0 < BLOCK_SEQ
+  · by_cases hHEAD : 0 < BLOCK_HEAD
+    · by_cases hHALF : 0 < BLOCK_DMODEL / 2
+      · simp [exec, rotary_kernel_surface, stepStmts, stepStmt, evalOp,
+              Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
+              Tile.remap, Tile.cop, Tile.expandDim,
+              TileShape.dropInsertedIndex_one_singleton,
+              TileShape.dropInsertedIndex_zero_singleton,
+              TileShape.dropInsertedIndex_one_pair,
+              TileShape.dropInsertedIndex_zero_pair,
+              TileShape.dropInsertedIndex_two_pair,
+              NumericDType.add, NumericDType.mul, NumericDType.sub,
+              ComparableDType.lt, hSEQ, hHEAD, hHALF] at hExec
+        subst s'
+        simp only [qFullOffset]
+        sorry
+      · sorry
+    · sorry
+  · sorry
+
 end VeriTile.Bench.TritonBenchG.RotaryEmb
