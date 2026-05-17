@@ -266,4 +266,45 @@ theorem cross_entropy_backward_store_slice_compute_correct
     s s' hExec i
   simpa [hActive] using h
 
+/-- Proof-oriented LSE store slice of `fast_ce_loss.py`'s
+`_cross_entropy_forward`. Companion to the bwd_store_slice: takes a precomputed
+`LsumPre` scalar (per row) and proves the unmasked writeback into
+`logsumexp_ptr` at offset `row_idx`. -/
+def cross_entropy_lse_store_slice
+    (LsumPre logsumexp_ptr : RegionName) : ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  lsum = tl.load(LsumPre + row_idx)
+  tl.store(logsumexp_ptr + row_idx, lsum)
+}
+
+def lseOutOffset (s : BlockState) : Nat := s.pid
+
+noncomputable def lseStoreSpec (s : BlockState) (LsumPre : RegionName) : ℝ :=
+  s.readMem LsumPre s.pid
+
+theorem cross_entropy_lse_store_slice_correct
+    (LsumPre logsumexp_ptr : RegionName) (s s' : BlockState)
+    (hExec : exec (cross_entropy_lse_store_slice LsumPre logsumexp_ptr) s = some s') :
+    s'.readMem logsumexp_ptr (lseOutOffset s) = lseStoreSpec s LsumPre := by
+  simp [exec, cross_entropy_lse_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add] at hExec
+  subst s'
+  simp [lseOutOffset, lseStoreSpec]
+
+theorem cross_entropy_lse_store_slice_compute_correct
+    (LsumPre logsumexp_ptr : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := cross_entropy_lse_store_slice LsumPre logsumexp_ptr)
+      (initialState := s)
+      (write := fun _ : PUnit => some (logsumexp_ptr, lseOutOffset s))
+      (expected := fun _ => lseStoreSpec s LsumPre) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [cross_entropy_lse_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact cross_entropy_lse_store_slice_correct LsumPre logsumexp_ptr s s' hExec
+
 end VeriTile.Bench.TritonBenchG.FastCeLoss
