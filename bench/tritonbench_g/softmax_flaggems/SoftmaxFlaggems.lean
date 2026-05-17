@@ -412,7 +412,6 @@ and is a pure straight-line two-load / one-store kernel. Offset injectivity
 must be supplied externally (it only holds when `TILE_N ≤ N`, i.e. when the
 row-stride `N` separates rows). -/
 
-set_option maxHeartbeats 5000000 in
 section BackwardInner
 
 def innerBwdRowIndex (s : BlockState) (TILE_M : Nat)
@@ -474,6 +473,7 @@ noncomputable def innerBwdSpec
 
 /-- Algorithm-layer cellwise correctness for the inner one-tile FlagGems
 softmax backward. -/
+set_option maxHeartbeats 5000000 in
 theorem softmax_backward_kernel_inner_one_tile_correct
     (out_ptr out_grad_ptr in_grad_ptr : RegionName)
     (M N TILE_M TILE_N : Nat)
@@ -570,7 +570,6 @@ The store-side offset matches the existing forward `nonInnerOffset`, and the
 in-tile mask `(n < N) ∧ (pid_k * TILE_K + k < K)` matches the corresponding
 forward `softmax_kernel_non_inner_one_tile_*` mask. -/
 
-set_option maxHeartbeats 5000000 in
 section BackwardNonInner
 
 noncomputable def nonInnerBwdOutTile
@@ -608,6 +607,7 @@ noncomputable def nonInnerBwdSpec
 
 /-- Algorithm-layer cellwise correctness for the non-inner one-tile FlagGems
 softmax backward. -/
+set_option maxHeartbeats 5000000 in
 theorem softmax_backward_kernel_non_inner_one_tile_correct
     (out_ptr out_grad_ptr in_grad_ptr : RegionName)
     (N K TILE_N TILE_K : Nat)
