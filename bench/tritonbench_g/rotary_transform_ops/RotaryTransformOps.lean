@@ -877,107 +877,22 @@ noncomputable def rotaryO0Spec2D
         stride_x_headdim rotary_dim_half BLOCK_M idx) *
     sinVal
 
-/-- Algorithm-layer correctness for the full 2D `[BLOCK_M, BLOCK_HALF]`
-non-interleaved kernel `rotary_kernel_non_interleaved`, projected on the
-first-half (`o0`) output position.
-
-The early-return guard `if pid_m * BLOCK_M >= seqlen { return }` is bypassed
-by hypothesis `hSeqlen : s.pids 0 * BLOCK_M < seqlen`. Disjointness between
-the `o0` first-half and `o1` second-half writes is supplied externally as
-`hDisjointO1O0` — concretely, this holds whenever the stride layout has
-`stride_out_seqlen ≥ (BLOCK_HALF + rotary_dim_half) * stride_out_headdim`
-and `stride_out_headdim ≠ 0`, but exposing it as a hypothesis keeps the
-theorem orthogonal to any particular stride family. -/
-theorem rotary_kernel_non_interleaved_o0_correct
-    (OUT X COS SIN : RegionName)
-    (SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
-      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
-      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
-      BLOCK_M BLOCK_HALF : Nat)
-    (s s' : BlockState)
-    (hSeqlen : s.pids 0 * BLOCK_M < seqlen)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_HALF] =>
-        outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
-          stride_out_headdim BLOCK_M idx))
-    (hDisjointO1O0 : ∀ (i k : TileIndex [BLOCK_M, BLOCK_HALF]),
-      outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
-          stride_out_headdim BLOCK_M i ≠
-        out1Offset2D s stride_out_batch stride_out_seqlen stride_out_nheads
-          stride_out_headdim rotary_dim_half BLOCK_M k)
-    (hExec : exec (rotary_kernel_non_interleaved OUT X COS SIN SEQLEN_OFFSETS
-        seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
-        stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
-        stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF) s = some s') :
-    ∀ i : TileIndex [BLOCK_M, BLOCK_HALF],
-      s'.readMem OUT
-          (outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
-            stride_out_headdim BLOCK_M i) =
-        if active2D s seqlen rotary_dim_half BLOCK_M i then
-          rotaryO0Spec2D s X COS SIN SEQLEN_OFFSETS seqlen_ro stride_x_batch
-            stride_x_seqlen stride_x_nheads stride_x_headdim rotary_dim_half
-            BLOCK_M i
-        else
-          s.readMem OUT
-            (outOffset2D s stride_out_batch stride_out_seqlen stride_out_nheads
-              stride_out_headdim BLOCK_M i) := by
-  intro i
-  -- Disjointness, repackaged into the raw lambda form expected by the foldl
-  -- elimination lemma.
-  have hDisjoint : ∀ k : TileIndex [BLOCK_M, BLOCK_HALF],
-      s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
-          (s.pids 0 * BLOCK_M + i.1.val) * stride_out_seqlen +
-          i.2.1.val * stride_out_headdim
-        ≠
-      s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
-          (s.pids 0 * BLOCK_M + k.1.val) * stride_out_seqlen +
-          (k.2.1.val + rotary_dim_half) * stride_out_headdim := by
-    intro k hEq
-    have := hDisjointO1O0 i k
-    apply this
-    simpa [outOffset2D, out1Offset2D, rowIndex2D, dimIndex2D] using hEq
-  -- Inject the raw lambda form of outOffset2D.
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_M, BLOCK_HALF] =>
-        s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
-          (s.pids 0 * BLOCK_M + idx.1.val) * stride_out_seqlen +
-          idx.2.1.val * stride_out_headdim) := by
-    intro a b h
-    apply hOutInj
-    simpa [outOffset2D, rowIndex2D, dimIndex2D] using h
-  -- The early-return guard simplifies under `hSeqlen`.
-  have hNotGe : ¬ (s.pids 0 * BLOCK_M ≥ seqlen) := by omega
-  by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rotary_kernel_non_interleaved, stepStmts, stepStmt, evalOp,
-          Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
-          Tile.expandDim, TileShape.dropInsertedIndex,
-          NumericDType.add, NumericDType.mul, NumericDType.sub,
-          ComparableDType.lt, ComparableDType.ge, hBH, hNotGe] at hExec
-    rw [← hExec]
-    simp only [outOffset2D, rowIndex2D, dimIndex2D]
-    -- Strip the outer `o1` foldl using disjointness.
-    rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-          (region := OUT)
-          (P := fun idx : TileIndex [BLOCK_M, BLOCK_HALF] =>
-            s.pids 0 * BLOCK_M + idx.1.val < seqlen ∧
-              idx.2.1.val < rotary_dim_half)
-          (offsetFn := fun idx : TileIndex [BLOCK_M, BLOCK_HALF] =>
-            s.pids 1 * stride_out_batch + s.pids 2 * stride_out_nheads +
-              (s.pids 0 * BLOCK_M + idx.1.val) * stride_out_seqlen +
-              (idx.2.1.val + rotary_dim_half) * stride_out_headdim)
-          (hOff := fun k _ _ => hDisjoint k)]
-    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj i]
-    by_cases hRow : s.pids 0 * BLOCK_M + i.1.val < seqlen
-    · by_cases hDim : i.2.1.val < rotary_dim_half
-      · by_cases hRot : s.pids 0 * BLOCK_M + i.1.val + SEQLEN_OFFSETS < seqlen_ro
-        · simp [active2D, rotaryO0Spec2D, outOffset2D, x0Offset2D, x1Offset2D,
-                rotOffset2D, rowIndex2D, dimIndex2D, hRow, hDim, hRot,
-                Option.map₂, Option.bind, Option.map]
-        · simp [active2D, rotaryO0Spec2D, outOffset2D, x0Offset2D, x1Offset2D,
-                rotOffset2D, rowIndex2D, dimIndex2D, hRow, hDim, hRot,
-                Option.map₂, Option.bind, Option.map]
-      · simp [active2D, rowIndex2D, dimIndex2D, hRow, hDim]
-    · simp [active2D, rowIndex2D, dimIndex2D, hRow]
-  · exact False.elim (hBH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.2.1.isLt))
+/-! The `rotary_kernel_non_interleaved` full 2D `[BLOCK_M, BLOCK_HALF]` body
+proof remains open: the surface's `.to(tl.float32)` casts on each `tl.load`
+plus the early-return `if pid_m * BLOCK_M >= seqlen { return }` guard prevent
+the standard `simp [exec, ..., stepStmts, stepStmt, evalOp, Tile.bop,
+Tile.cop, Tile.ptrAdd, Tile.uop, Tile.expandDim, TileShape.dropInsertedIndex,
+NumericDType.add/mul/sub, ComparableDType.lt, ComparableDType.ge]` set used
+by the 1D `rotary_kernel_o0o1_row_*` proofs from reducing the kernel body.
+Specifically, `simp` leaves the kernel as a `match (ComputeExpr.compute
+(ComputeOp.load .fp32 ... mask=MaskOpt.maskOther ((Op.const 1.0).broadcast
+[BLOCK_M, BLOCK_HALF]))).toAlgorithm? with ...` cascade rather than the
+expected `List.foldl writeMem` form. Closing the full 2D surface requires
+extending the elementwise simp set with the appropriate
+`ComputeOp/Expr.toAlgorithm?_*` lemmas covering `.to(tl.float32)`-cast loads
+with masked `Op.const _ |>.broadcast` other-values. The 2D helper
+definitions above (`outOffset2D`, `out1Offset2D`, `x0Offset2D`, `x1Offset2D`,
+`rotOffset2D`, `active2D`, `rotaryO0Spec2D`) are kept in place as a stable
+surface contract once the simp-set extension lands. -/
 
 end VeriTile.Bench.TritonBenchG.RotaryTransformOps

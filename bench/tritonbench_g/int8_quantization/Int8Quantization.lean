@@ -241,4 +241,156 @@ theorem per_block_int8_scale_store_slice_compute_correct
   exact per_block_int8_scale_store_slice_correct ScalePre Scale scale_stride
     s s' hExec
 
-end VeriTile.Bench.TritonBenchG.Int8Quantization
+/-! ## Full-kernel scale-store correctness
+
+Although the int8 value store in `q_kernel_per_block_int8_surface` /
+`k_kernel_per_block_int8_surface` is blocked by the `to(tl.int8)` cast (the
+real-channel algorithm carrier records the pre-cast real value), the scale
+store is written from `tl.max(tl.abs(x_scaled)) / 127.0` -- a purely
+real-valued computation that does NOT depend on the int8 cast. The scale store
+is unmasked and lands at a different region from the value store, so the
+value-store foldl can be stripped via region-disjointness. -/
+
+/-- The pre-`abs` tile fed into `tl.max` in the surface kernel: a `[BLK, C]`
+real tile with active lanes holding `preScale * s.readMem X (xOffset ...)` and
+masked-out lanes holding `preScale * s.undef X (...)`. -/
+noncomputable def perBlockInt8ScaleInputTile
+    (s : BlockState) (X : RegionName) (L C BLK : Nat) (preScale : ℝ) :
+    Tile .real [BLK, C] :=
+  { data := fun idx =>
+      if s.pids 0 * BLK + idx.1.val < L then
+        some (preScale * s.readMem X (xOffset s L C BLK idx))
+      else
+        some (preScale * s.undef X (xOffset s L C BLK idx)) }
+
+/-- Absolute-value tile produced by the surface kernel's `tl.abs(x)`. Triton
+lowers `tl.abs` to `select(x < 0, -x, x)` over the masked input tile. -/
+noncomputable def perBlockInt8ScaleAbsTile
+    (s : BlockState) (X : RegionName) (L C BLK : Nat) (preScale : ℝ) :
+    Tile .real [BLK, C] :=
+  let x := perBlockInt8ScaleInputTile s X L C BLK preScale
+  Tile.select
+    { data := fun i =>
+        ComparableDType.real.lt (x.data i) (some 0) }
+    { data := fun i => NumericDType.real.sub (some 0) (x.data i) }
+    x
+
+/-- Scale spec for the per-block int8 surface kernel:
+`tl.max(tl.abs(preScale * x)) / 127.0`, reduced over both axes of the loaded
+`[BLK, C]` tile. -/
+noncomputable def perBlockInt8ScaleSpec
+    (s : BlockState) (X : RegionName) (L C BLK : Nat) (preScale : ℝ) : ℝ :=
+  match Tile.reduceMaxDrop (shape := [BLK, C]) ⟨1, by simp⟩
+      (perBlockInt8ScaleAbsTile s X L C BLK preScale) with
+  | some t1 =>
+      match Tile.reduceMaxDrop (shape := [BLK]) ⟨0, by simp⟩ t1 with
+      | some t0 =>
+          WithBot.unbotD 0
+            (match t0.data PUnit.unit with
+             | some x => some (x / 127.0)
+             | none => none)
+      | none => 0
+  | none => 0
+
+/-- Algorithm-layer correctness for the scale store of
+`q_kernel_per_block_int8_surface`. The `preScale` factor is
+`(Real.sqrt C)⁻¹ * 1.44269504`. The cast-blocked int8 value store is
+stripped via region-disjointness (`Scale ≠ XInt8`).
+
+The `0 < BLK` and `0 < C` hypotheses are required for `tl.max` over the
+`[BLK, C]` tile to be defined; the upstream Python launches with positive
+`BLK` and `C`. -/
+theorem q_kernel_per_block_int8_surface_scale_correct
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat)
+    (s s' : BlockState)
+    (hRegions : Scale ≠ XInt8)
+    (hBLK : 0 < BLK) (hC : 0 < C)
+    (hExec : exec (q_kernel_per_block_int8_surface X XInt8 Scale
+        L C BLK scale_stride) s = some s') :
+    s'.readMem Scale (scaleOffset s scale_stride) =
+      perBlockInt8ScaleSpec s X L C BLK
+        ((Real.sqrt (C : ℝ))⁻¹ * (1.44269504 : ℝ)) := by
+  simp [exec, q_kernel_per_block_int8_surface, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.div,
+        ComparableDType.lt, ComparableDType.ge, scaleOffset, xOffset,
+        baseOffset, rowIndex, colIndex,
+        Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, hBLK, hC] at hExec
+  subst hExec
+  simp [BlockState.writeMem_readMem, perBlockInt8ScaleSpec,
+        perBlockInt8ScaleAbsTile, perBlockInt8ScaleInputTile,
+        xOffset, baseOffset, rowIndex, colIndex, scaleOffset,
+        Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, hBLK, hC]
+
+/-- Compute-facing scale-store correctness for `q_kernel_per_block_int8_surface`. -/
+theorem q_kernel_per_block_int8_surface_scale_compute_correct
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat)
+    (s : BlockState)
+    (hRegions : Scale ≠ XInt8)
+    (hBLK : 0 < BLK) (hC : 0 < C) :
+    ComputeCorrect.Realizes
+      (kernel := q_kernel_per_block_int8_surface X XInt8 Scale
+        L C BLK scale_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
+      (expected := fun _ =>
+        perBlockInt8ScaleSpec s X L C BLK
+          ((Real.sqrt (C : ℝ))⁻¹ * (1.44269504 : ℝ))) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [q_kernel_per_block_int8_surface]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact q_kernel_per_block_int8_surface_scale_correct X XInt8 Scale
+    L C BLK scale_stride s s' hRegions hBLK hC hExec
+
+/-- Algorithm-layer correctness for the scale store of
+`k_kernel_per_block_int8_surface`. The k variant has `preScale = 1`. -/
+theorem k_kernel_per_block_int8_surface_scale_correct
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat)
+    (s s' : BlockState)
+    (hRegions : Scale ≠ XInt8)
+    (hExec : exec (k_kernel_per_block_int8_surface X XInt8 Scale
+        L C BLK scale_stride) s = some s') :
+    s'.readMem Scale (scaleOffset s scale_stride) =
+      perBlockInt8ScaleSpec s X L C BLK 1 := by
+  simp [exec, k_kernel_per_block_int8_surface, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.div,
+        ComparableDType.lt, ComparableDType.ge, scaleOffset, xOffset,
+        baseOffset, rowIndex, colIndex] at hExec
+  subst hExec
+  simp [BlockState.writeMem_readMem, perBlockInt8ScaleSpec,
+        perBlockInt8ScaleAbsTile, perBlockInt8ScaleInputTile,
+        xOffset, baseOffset, rowIndex, colIndex, scaleOffset,
+        Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex]
+
+/-- Compute-facing scale-store correctness for `k_kernel_per_block_int8_surface`. -/
+theorem k_kernel_per_block_int8_surface_scale_compute_correct
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat)
+    (s : BlockState)
+    (hRegions : Scale ≠ XInt8) :
+    ComputeCorrect.Realizes
+      (kernel := k_kernel_per_block_int8_surface X XInt8 Scale
+        L C BLK scale_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
+      (expected := fun _ => perBlockInt8ScaleSpec s X L C BLK 1) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [k_kernel_per_block_int8_surface]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact k_kernel_per_block_int8_surface_scale_correct X XInt8 Scale
+    L C BLK scale_stride s s' hRegions hExec
+
+>end VeriTile.Bench.TritonBenchG.Int8Quantization

@@ -1218,6 +1218,8 @@ theorem decoding_fused_rotary_embedding_kernel_surface_q_first_half_correct
           stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.uop,
           Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.eq, hHD, hGate] at hExec
+    -- Re-fold `HEAD_DIM / 2` introduced by `simp` back to the `set` alias.
+    simp only [← hHalfDef] at hExec
     rw [← hExec]
     simp only [qFirstOffset, qBase, dimIndex]
     -- Strip v_cache foldl (cross-region q ≠ v_cache). Shape is [HEAD_DIM]
@@ -1276,6 +1278,7 @@ theorem decoding_fused_rotary_embedding_kernel_surface_q_first_half_correct
           stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.uop,
           Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.eq, hHD, hGate] at hExec
+    simp only [← hHalfDef] at hExec
     rw [← hExec]
     simp only [qFirstOffset, qBase, dimIndex]
     -- Strip Q second-half foldl.

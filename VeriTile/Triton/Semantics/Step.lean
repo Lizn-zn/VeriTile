@@ -369,6 +369,20 @@ namespace stepForRangeAux
   unfold stepStmt
   rfl
 
+/-- One-step-and-terminate combinator: when `cur < stop ≤ cur + step`, the
+loop executes one body iteration then immediately terminates. Produces a
+clean `Option.bind`-free RHS suitable for further simp. Avoids the
+`stepForRangeAux _ (cur+step) stop step _` residual that arises from
+chaining `step_lt` with `step_ge` separately. -/
+theorem step_one_iter {idx} {cur stop step} {body} {s}
+    (hstep : step ≠ 0) (hlt : cur < stop) (hle : stop ≤ cur + step) :
+    stepForRangeAux idx cur stop step body s =
+      stepStmts body (s.setReg idx .nat [] (Tile.scalar cur)) := by
+  rw [step_lt hstep hlt]
+  cases hbody : stepStmts body (s.setReg idx .nat [] (Tile.scalar cur))
+  · simp [Option.bind]
+  · simp [Option.bind, step_ge hstep hle]
+
 @[simp] theorem forRangeDyn_unfold {idx} {start stop step} {body} {s} :
     stepStmt (.forRangeDyn idx start stop step body) s
       = (evalOp start s).bind (fun start' =>

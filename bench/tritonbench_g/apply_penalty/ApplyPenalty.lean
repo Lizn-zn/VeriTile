@@ -112,43 +112,46 @@ noncomputable def penaltyValue
       * s.readMem freqency_penalty (s.pids 0)
     - s.readMem presence_penalty (s.pids 0)
 
-/-! ### Bench-local helper: rewriting a masked-conditional foldl
+/-! ### Bench-local masked-injectivity scatter readback
 
-The simp-normalized kernel produces a foldl whose write-offset has shape
-`base + (if cond then f i else 0)` inside an outer `if cond then ... else acc`.
-When `cond` holds the inner conditional collapses to `f i`; when `cond` fails
-no write happens, so the offset value is irrelevant. The lemma below
-rewrites such a foldl to one whose write-offset is the simplified `base + f i`,
-which then satisfies the standard injectivity precondition of
-`scatter_readback_prop_masked_nd` given a per-lane uniqueness hypothesis on
-`f`. -/
+`BlockState.scatter_readback_prop_masked_nd` requires *global* injectivity of
+the offset function. Apply-penalty's offset function `λ i. base + (if active i
+then tokenId i else 0)` is not globally injective (all inactive lanes alias to
+`base + 0`), but inactive lanes never write — the masked store guards them.
+The following helper weakens the injectivity precondition to injectivity over
+the masked-true subset, which is all that the underlying proof uses. -/
 
-private theorem foldl_masked_offset_collapse
-    {α : Type} {region : RegionName}
-    (l : List α) (cond : α → Bool) (base : Nat) (f : α → Nat) (val : α → ℝ)
-    (s : BlockState) :
-    l.foldl
-        (fun acc k =>
-          if cond k then
-            acc.writeMem region (base + if cond k then f k else 0) (val k)
-          else acc)
-        s
-      =
-    l.foldl
-        (fun acc k =>
-          if cond k then acc.writeMem region (base + f k) (val k) else acc)
-        s := by
-  induction l generalizing s with
-  | nil => rfl
+private theorem foldl_writeMem_masked_preserves_local {α : Type}
+    {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α) :
+    ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
+      ((l.foldl
+          (fun acc k =>
+            if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region o)
+      = s.readMem region o := by
+  induction l with
+  | nil => intros; rfl
   | cons hd tl ih =>
-    rw [List.foldl_cons, List.foldl_cons]
-    by_cases hcond : cond hd = true
-    · simp [hcond, ih]
-    · have hcondF : cond hd = false := by
-        rcases hboolHd : cond hd
+    intro s h
+    rw [List.foldl_cons]
+    have htl : ∀ k ∈ tl, mask k = true → offsetFn k ≠ o :=
+      fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
+    by_cases hmaskhd : mask hd = true
+    · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
+      simp only [hmaskhd, if_true]
+      rw [ih _ htl]
+      rw [BlockState.writeMem_readMem]
+      show (if region = region ∧ o = offsetFn hd then valueFn hd else s.readMem region o)
+          = s.readMem region o
+      rw [if_neg]
+      rintro ⟨_, h_eq⟩
+      exact hhd h_eq.symm
+    · have hmaskhd' : mask hd = false := by
+        rcases hmaskFalse : mask hd
         · rfl
-        · exact absurd hboolHd hcond
-      simp [hcondF, ih]
+        · exact absurd hmaskFalse hmaskhd
+      simp only [hmaskhd', if_false, Bool.false_eq_true]
+      exact ih _ htl
 
 /-! ## apply_penalty correctness — status
 
@@ -157,14 +160,14 @@ under a uniqueness hypothesis (`tokenId` injective) is feasible in principle
 but requires bridging the bench-local masked-injectivity helper through the
 kernel's data-dependent address chain (multi-day work). The pieces in place:
 
-- `foldl_masked_offset_collapse` (above): rewrites the masked conditional
-  offset to the simplified form.
 - `tokenId`, `storeOffset`, `activeStoreAddr`, `penaltyValue` (above): the
   full formula-level spec.
 - `storeOffset_eq_active` (above): bridges active-lane offset forms.
+- `foldl_writeMem_masked_preserves_local` (above): masked-preservation under
+  per-element offset-disjointness.
 
 Future closure: state `apply_penalty_correct` against `penaltyValue` under
 `hUniq : Function.Injective (tokenId s p_token_ids p_cumsum_seq_len)` and
-discharge via `scatter_readback_prop_masked_nd` on the collapsed foldl. -/
+discharge via masked scatter-readback. -/
 
 end VeriTile.Bench.TritonBenchG.ApplyPenalty
