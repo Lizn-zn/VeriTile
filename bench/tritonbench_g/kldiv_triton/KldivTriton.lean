@@ -73,9 +73,11 @@ def kldiv_backward_default
   }
 }
 
-/-- Documented one-block slice of `kldiv_triton.py`'s `_kldiv_kernel_forward`
+/-- Faithful transcription of `kldiv_triton.py`'s `_kldiv_kernel_forward`
 for the `log_target = False`, `reduction = 0` (None) constexpr branch.
 
+Includes the Python `for i in range(0, n_cols, BLOCK_SIZE)` loop; proofs
+target the Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`.
 Mirrors the Python `loss = y_true * (tl.log(y_true) - y)` body; no `eps`
 clamp (unlike the kldiv_ops port). -/
 def kldiv_forward_default_none
@@ -86,19 +88,23 @@ def kldiv_forward_default_none
   y_ptr += pid * $(y_stride)
   gt_ptr += pid * $(gt_stride)
   loss_ptr += pid * $(loss_stride)
-  offsets = tl.arange(0, $(BLOCK_SIZE))
-  mask = offsets < $(n_cols)
-  y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
-  y_true = tl.load(gt_ptr + offsets, mask=mask, other=0.0)
-  loss = y_true * (tl.log(y_true) - y)
-  tl.store(loss_ptr + offsets, loss, mask=mask)
+  base_offsets = tl.arange(0, $(BLOCK_SIZE))
+  for i in range($(0), $(n_cols), $(BLOCK_SIZE)) {
+    offsets = i + base_offsets
+    mask = offsets < $(n_cols)
+    y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+    y_true = tl.load(gt_ptr + offsets, mask=mask, other=0.0)
+    loss = y_true * (tl.log(y_true) - y)
+    tl.store(loss_ptr + offsets, loss, mask=mask)
+  }
 }
 
-/-- Documented one-block slice of `kldiv_triton.py`'s `_kldiv_kernel_forward`
+/-- Faithful transcription of `kldiv_triton.py`'s `_kldiv_kernel_forward`
 for the `log_target = True`, `reduction = 0` (None) constexpr branch.
 
-Mirrors the kldiv_ops port; covers a single `BLOCK_SIZE` iteration of the
-Python loop with the elementwise-store path. -/
+Includes the Python `for i in range(0, n_cols, BLOCK_SIZE)` loop with the
+elementwise-store path; proofs target the Python-tested single-chunk regime
+`0 < n_cols ≤ BLOCK_SIZE`. -/
 def kldiv_forward_log_target_none
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) :
@@ -107,16 +113,21 @@ def kldiv_forward_log_target_none
   y_ptr += pid * $(y_stride)
   gt_ptr += pid * $(gt_stride)
   loss_ptr += pid * $(loss_stride)
-  offsets = tl.arange(0, $(BLOCK_SIZE))
-  mask = offsets < $(n_cols)
-  y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
-  y_true = tl.load(gt_ptr + offsets, mask=mask, other=0.0)
-  loss = tl.exp(y_true) * (y_true - y)
-  tl.store(loss_ptr + offsets, loss, mask=mask)
+  base_offsets = tl.arange(0, $(BLOCK_SIZE))
+  for i in range($(0), $(n_cols), $(BLOCK_SIZE)) {
+    offsets = i + base_offsets
+    mask = offsets < $(n_cols)
+    y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+    y_true = tl.load(gt_ptr + offsets, mask=mask, other=0.0)
+    loss = tl.exp(y_true) * (y_true - y)
+    tl.store(loss_ptr + offsets, loss, mask=mask)
+  }
 }
 
-/-- Documented one-block slice of `_kldiv_kernel_backward` for the
-`log_target = True` constexpr branch. -/
+/-- Faithful transcription of `_kldiv_kernel_backward` for the
+`log_target = True` constexpr branch. Includes the Python
+`for i in range(0, n_cols, BLOCK_SIZE)` loop; proofs target the
+Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 def kldiv_backward_log_target
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat) :
@@ -124,11 +135,14 @@ def kldiv_backward_log_target
   pid = tl.program_id(0).to(tl.int64)
   input_ptr += pid * $(input_stride)
   target_ptr += pid * $(target_stride)
-  offsets = tl.arange(0, $(BLOCK_SIZE))
-  mask = offsets < $(n_cols)
-  target = tl.load(target_ptr + offsets, mask=mask, other=0.0)
-  res = -tl.exp(target)
-  tl.store(input_ptr + offsets, res, mask=mask)
+  base_offsets = tl.arange(0, $(BLOCK_SIZE))
+  for i in range($(0), $(n_cols), $(BLOCK_SIZE)) {
+    offsets = i + base_offsets
+    mask = offsets < $(n_cols)
+    target = tl.load(target_ptr + offsets, mask=mask, other=0.0)
+    res = -tl.exp(target)
+    tl.store(input_ptr + offsets, res, mask=mask)
+  }
 }
 
 def outOffset (s : BlockState) (input_stride : Nat) (i : Fin BLOCK_SIZE) :
@@ -200,11 +214,15 @@ theorem kldiv_backward_default_correct
   by_cases h : i.val < n_cols
   · simp [defaultSpec, inOffset, h]
   · simp [h]
-/-- Algorithm-layer correctness for the log-target backward one-block slice. -/
+/-- Algorithm-layer correctness for the log-target backward kernel under the
+Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 theorem kldiv_backward_log_target_correct
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat)
     (s s' : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen : n_cols ≤ BLOCK_SIZE)
+    (hLenPos : 0 < n_cols)
     (_hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => outOffset s input_stride i))
     (hExec : exec (kldiv_backward_log_target input_ptr target_ptr
@@ -215,10 +233,13 @@ theorem kldiv_backward_log_target_correct
           logTargetSpec s target_ptr target_stride i
         else s.readMem input_ptr (outOffset s input_stride i) := by
   intro i
+  have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
   simp [exec, kldiv_backward_log_target, stepStmts, stepStmt, evalOp,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
-        ComparableDType.lt] at hExec
+        ComparableDType.lt, hBS, hBSne, hLenPos, hLen,
+        stepForRangeAux.forRangeDyn_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge, Nat.zero_add] at hExec
   rw [← hExec]
   simp only [outOffset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
@@ -226,11 +247,15 @@ theorem kldiv_backward_log_target_correct
   by_cases h : i.val < n_cols
   · simp [logTargetSpec, inOffset, h]
   · simp [h]
-/-- Compute-facing correctness for the default backward one-block slice. -/
+/-- Compute-facing correctness for the default backward kernel under the
+Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 theorem kldiv_backward_default_compute_correct
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen : n_cols ≤ BLOCK_SIZE)
+    (hLenPos : 0 < n_cols)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => outOffset s input_stride i)) :
     ComputeCorrect.Realizes
@@ -248,13 +273,18 @@ theorem kldiv_backward_default_compute_correct
   subst s0
   intro i hActive
   have h := kldiv_backward_default_correct input_ptr target_ptr
-    input_stride target_stride n_cols BLOCK_SIZE s s' hOutInj hExec i
+    input_stride target_stride n_cols BLOCK_SIZE s s'
+    hBS hLen hLenPos hOutInj hExec i
   simpa [hActive] using h
-/-- Compute-facing correctness for the log-target backward one-block slice. -/
+/-- Compute-facing correctness for the log-target backward kernel under the
+Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 theorem kldiv_backward_log_target_compute_correct
     (input_ptr target_ptr : RegionName)
     (input_stride target_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen : n_cols ≤ BLOCK_SIZE)
+    (hLenPos : 0 < n_cols)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => outOffset s input_stride i)) :
     ComputeCorrect.Realizes
@@ -272,14 +302,19 @@ theorem kldiv_backward_log_target_compute_correct
   subst s0
   intro i hActive
   have h := kldiv_backward_log_target_correct input_ptr target_ptr
-    input_stride target_stride n_cols BLOCK_SIZE s s' hOutInj hExec i
+    input_stride target_stride n_cols BLOCK_SIZE s s'
+    hBS hLen hLenPos hOutInj hExec i
   simpa [hActive] using h
 /-- Algorithm-layer correctness for the forward `log_target=False`,
-`reduction=0` one-block slice. -/
+`reduction=0` kernel under the Python-tested single-chunk regime
+`0 < n_cols ≤ BLOCK_SIZE`. -/
 theorem kldiv_forward_default_none_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s s' : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen : n_cols ≤ BLOCK_SIZE)
+    (hLenPos : 0 < n_cols)
     (_hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => outOffset s loss_stride i))
     (hExec : exec (kldiv_forward_default_none y_ptr gt_ptr loss_ptr
@@ -290,10 +325,13 @@ theorem kldiv_forward_default_none_correct
           forwardDefaultSpec s y_ptr gt_ptr y_stride gt_stride i
         else s.readMem loss_ptr (outOffset s loss_stride i) := by
   intro i
+  have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
   simp [exec, kldiv_forward_default_none, stepStmts, stepStmt, evalOp,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
-        ComparableDType.lt] at hExec
+        ComparableDType.lt, hBS, hBSne, hLenPos, hLen,
+        stepForRangeAux.forRangeDyn_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge, Nat.zero_add] at hExec
   rw [← hExec]
   simp only [outOffset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
@@ -303,11 +341,15 @@ theorem kldiv_forward_default_none_correct
   · simp [h]
 
 /-- Compute-facing correctness for the forward `log_target=False`,
-`reduction=0` one-block slice. -/
+`reduction=0` kernel under the Python-tested single-chunk regime
+`0 < n_cols ≤ BLOCK_SIZE`. -/
 theorem kldiv_forward_default_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen : n_cols ≤ BLOCK_SIZE)
+    (hLenPos : 0 < n_cols)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => outOffset s loss_stride i)) :
     ComputeCorrect.Realizes
@@ -326,15 +368,20 @@ theorem kldiv_forward_default_none_compute_correct
   subst s0
   intro i hActive
   have h := kldiv_forward_default_none_correct y_ptr gt_ptr loss_ptr
-    y_stride gt_stride loss_stride n_cols BLOCK_SIZE s s' hOutInj hExec i
+    y_stride gt_stride loss_stride n_cols BLOCK_SIZE s s'
+    hBS hLen hLenPos hOutInj hExec i
   simpa [hActive] using h
 
 /-- Algorithm-layer correctness for the forward `log_target=True`,
-`reduction=0` one-block slice. -/
+`reduction=0` kernel under the Python-tested single-chunk regime
+`0 < n_cols ≤ BLOCK_SIZE`. -/
 theorem kldiv_forward_log_target_none_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s s' : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen : n_cols ≤ BLOCK_SIZE)
+    (hLenPos : 0 < n_cols)
     (_hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => outOffset s loss_stride i))
     (hExec : exec (kldiv_forward_log_target_none y_ptr gt_ptr loss_ptr
@@ -345,10 +392,13 @@ theorem kldiv_forward_log_target_none_correct
           forwardLogTargetSpec s y_ptr gt_ptr y_stride gt_stride i
         else s.readMem loss_ptr (outOffset s loss_stride i) := by
   intro i
+  have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
   simp [exec, kldiv_forward_log_target_none, stepStmts, stepStmt, evalOp,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
-        ComparableDType.lt] at hExec
+        ComparableDType.lt, hBS, hBSne, hLenPos, hLen,
+        stepForRangeAux.forRangeDyn_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge, Nat.zero_add] at hExec
   rw [← hExec]
   simp only [outOffset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
@@ -357,11 +407,15 @@ theorem kldiv_forward_log_target_none_correct
   · simp [forwardLogTargetSpec, inOffset, h]
   · simp [h]
 
-/-- Compute-facing correctness for the forward log-target one-block slice. -/
+/-- Compute-facing correctness for the forward log-target kernel under the
+Python-tested single-chunk regime `0 < n_cols ≤ BLOCK_SIZE`. -/
 theorem kldiv_forward_log_target_none_compute_correct
     (y_ptr gt_ptr loss_ptr : RegionName)
     (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
     (s : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen : n_cols ≤ BLOCK_SIZE)
+    (hLenPos : 0 < n_cols)
     (hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => outOffset s loss_stride i)) :
     ComputeCorrect.Realizes
@@ -380,7 +434,8 @@ theorem kldiv_forward_log_target_none_compute_correct
   subst s0
   intro i hActive
   have h := kldiv_forward_log_target_none_correct y_ptr gt_ptr loss_ptr
-    y_stride gt_stride loss_stride n_cols BLOCK_SIZE s s' hOutInj hExec i
+    y_stride gt_stride loss_stride n_cols BLOCK_SIZE s s'
+    hBS hLen hLenPos hOutInj hExec i
   simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.KldivTriton
