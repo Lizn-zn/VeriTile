@@ -1153,13 +1153,13 @@ theorem rotary_embedding_q_surface_q0_correct
             (s.pids 1 * BLOCK_TOKENS + j.1.val) * q_token_stride +
               s.pids 0 * q_head_stride + j.2.2.1.val * head_dim_stride) := by
         simpa [qFullFirstOffset] using hOutInj
-      simp only [exec, rotary_embedding_q_surface, stepStmts, stepStmt, evalOp,
+      simp [exec, rotary_embedding_q_surface, stepStmts, stepStmt, evalOp,
             Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
             NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt,
+            ComparableDType.lt, hTok, hHalf,
             TileShape.dropInsertedIndex_two_pair,
             TileShape.dropInsertedIndex_zero_pair] at hExec
-      subst hExec
+      rw [← hExec]
       simp only [qFullFirstOffset]
       -- Strip the outer Q second-half foldl: same region Q, disjoint offsets.
       rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
