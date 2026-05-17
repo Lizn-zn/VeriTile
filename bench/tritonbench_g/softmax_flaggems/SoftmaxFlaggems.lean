@@ -520,7 +520,10 @@ theorem softmax_backward_kernel_inner_one_tile_correct
               TileShape.axisDim, TileShape.eraseAxis,
               TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
               NumericDType.sub, NumericDType.mul, hTN]
-        congr
+        congr 1
+        apply Finset.sum_congr rfl
+        intro x _
+        simp [hM]
       · have hInactive :
             ¬ (s.pids 0 * TILE_M + idx.1.val < M ∧ idx.2.1.val < N) := by
           simpa [innerBwdActive, innerBwdRowIndex, innerBwdColIndex,

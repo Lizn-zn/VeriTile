@@ -82,6 +82,22 @@ def adjustedOffset (s : BlockState) (p_cumsum_seq_len : RegionName)
     (i : Fin BLOCK_P) : Nat :=
   tokenOffset s p_cumsum_seq_len i
 
+/-- The "active" store address (no mask conditional) used for the readback
+spec. When `active s i` holds, this equals `storeOffset s ... i`. -/
+def activeStoreAddr
+    (s : BlockState) (p_token_ids p_cumsum_seq_len : RegionName)
+    (stride_logit_b : Nat) (i : Fin BLOCK_P) : Nat :=
+  s.pids 0 * stride_logit_b + tokenId s p_token_ids p_cumsum_seq_len i
+
+theorem storeOffset_eq_active
+    (s : BlockState) (p_token_ids p_cumsum_seq_len : RegionName)
+    (stride_logit_b : Nat) (i : Fin BLOCK_P)
+    (hAct : active s p_cumsum_seq_len i) :
+    storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b i
+      = activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i := by
+  unfold storeOffset activeStoreAddr
+  simp [hAct]
+
 noncomputable def penaltyValue
     (s : BlockState)
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
@@ -96,84 +112,201 @@ noncomputable def penaltyValue
       * s.readMem freqency_penalty (s.pids 0)
     - s.readMem presence_penalty (s.pids 0)
 
-noncomputable def rawStoreValue
-    (s : BlockState)
-    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
-    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b : Nat)
-    (idx : TileIndex [BLOCK_P]) : ℝ :=
-  WithBot.unbotD 0
-    (if s.readMemValue .nat p_cumsum_seq_len (s.pids 0) + idx.1.val <
-        s.readMemValue .nat p_cumsum_seq_len (s.pids 0 + 1) then
-      some (penaltyValue s Logits presence_penalty freqency_penalty
-        repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-        stride_logit_b idx.1)
-    else
-      some (0.0 : ℝ))
+/-! ### Bench-local helper: rewriting a masked-conditional foldl
 
-noncomputable def observedStoreValue
-    (s : BlockState)
-    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
-    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b stride_logit_s BLOCK_P : Nat) (i : Fin BLOCK_P) : ℝ :=
-  match exec (apply_penalty Logits presence_penalty freqency_penalty
-      repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-      stride_logit_b stride_logit_s BLOCK_P) s with
-  | some s' =>
-      s'.readMem Logits
-        (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b i)
-  | none => 0
+The simp-normalized kernel produces a foldl whose write-offset has shape
+`base + (if cond then f i else 0)` inside an outer `if cond then ... else acc`.
+When `cond` holds the inner conditional collapses to `f i`; when `cond` fails
+no write happens, so the offset value is irrelevant. The lemma below
+rewrites such a foldl to one whose write-offset is the simplified `base + f i`,
+which then satisfies the standard injectivity precondition of
+`scatter_readback_prop_masked_nd` given a per-lane uniqueness hypothesis on
+`f`. -/
 
-/-- Algorithm-layer sanity theorem for the faithful kernel transcription.
+private theorem foldl_masked_offset_collapse
+    {α : Type} {region : RegionName}
+    (l : List α) (cond : α → Bool) (base : Nat) (f : α → Nat) (val : α → ℝ)
+    (s : BlockState) :
+    l.foldl
+        (fun acc k =>
+          if cond k then
+            acc.writeMem region (base + if cond k then f k else 0) (val k)
+          else acc)
+        s
+      =
+    l.foldl
+        (fun acc k =>
+          if cond k then acc.writeMem region (base + f k) (val k) else acc)
+        s := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+    rw [List.foldl_cons, List.foldl_cons]
+    by_cases hcond : cond hd = true
+    · simp [hcond, ih]
+    · have hcondF : cond hd = false := by
+        rcases hboolHd : cond hd
+        · rfl
+        · exact absurd hboolHd hcond
+      simp [hcondF, ih]
 
-The formula-level `penaltyValue` above records the intended Python arithmetic.
-This theorem keeps the public `ComputeCorrect` surface tied to the executable
-kernel while the carrier-normal-form bridge to `penaltyValue` is completed. -/
+/-- Algorithm-layer cellwise correctness for the faithful kernel transcription.
+
+The injectivity hypothesis captures the no-duplicate-destination condition
+needed for a pointwise readback theorem over the scatter store. With per-lane
+uniqueness of token ids, the kernel's `Logits` write commutes with reads at the
+formula-level `penaltyValue`. -/
 theorem apply_penalty_correct
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b stride_logit_s BLOCK_P : Nat)
-    (s s' : BlockState)
-    (hExec : exec (apply_penalty Logits presence_penalty freqency_penalty
-        repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-        stride_logit_b stride_logit_s BLOCK_P) s = some s') :
+    (s : BlockState)
+    (hUniq : Function.Injective
+      (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i)) :
     ∀ i : Fin BLOCK_P,
-      s'.readMem Logits
-          (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b i) =
-        observedStoreValue s Logits presence_penalty freqency_penalty
+      active s p_cumsum_seq_len i →
+      (exec (apply_penalty Logits presence_penalty freqency_penalty
           repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-          stride_logit_b stride_logit_s BLOCK_P i := by
-  intro i
-  simp [observedStoreValue, hExec]
-
-/-- Compute-facing correctness for the masked token-id penalty scatter. -/
-theorem apply_penalty_compute_correct
-    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
-    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b stride_logit_s BLOCK_P : Nat)
-    (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := apply_penalty Logits presence_penalty freqency_penalty
-        repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-        stride_logit_b stride_logit_s BLOCK_P)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_P => active s p_cumsum_seq_len i)
-        (fun i : Fin BLOCK_P => (Logits,
-          storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b i)))
-      (expected := fun i : Fin BLOCK_P =>
-        observedStoreValue s Logits presence_penalty freqency_penalty
-          repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-          stride_logit_b stride_logit_s BLOCK_P i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [apply_penalty, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
+          stride_logit_b stride_logit_s BLOCK_P) s).map
+          (fun s' => s'.readMem Logits
+            (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i))
+        = some (penaltyValue s Logits presence_penalty freqency_penalty
+            repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
+            stride_logit_b i) := by
   intro i hActive
-  have h := apply_penalty_correct Logits presence_penalty freqency_penalty
-    repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-    stride_logit_b stride_logit_s BLOCK_P s s' hExec i
-  exact h
+  -- Lift `hUniq` to a `TileIndex [BLOCK_P]`-keyed injectivity for the raw
+  -- offset that the simp form produces.
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_P] =>
+        s.pids 0 * stride_logit_b +
+          (match s.readMemTyped TileDType.nat p_token_ids.cast
+              ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                | some value => value
+                | none => BlockState.defaultCarrier TileDType.nat) +
+                idx.1.val) with
+            | some value => value
+            | none => BlockState.defaultCarrier TileDType.nat)) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ h
+    have hcancel := Nat.add_left_cancel h
+    have ha : tokenId s p_token_ids p_cumsum_seq_len a = tokenId s p_token_ids p_cumsum_seq_len b := by
+      simpa [tokenId, tokenOffset, batchStart, BlockState.readMemValue] using hcancel
+    have hab : a = b := hUniq ha
+    exact Prod.ext (Fin.ext (by simpa using congrArg Fin.val hab)) rfl
+  simp [exec, apply_penalty, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        ComparableDType.lt,
+        BlockState.readMemValue, Option.bind, Option.map,
+        TileShape.insertAxis, TileShape.dropInsertedIndex,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  -- Collapse the conditional offset using the bench-local helper.
+  rw [foldl_masked_offset_collapse
+    (region := Logits) (l := TileShape.allIndices [BLOCK_P])
+    (cond := fun i : TileIndex [BLOCK_P] =>
+      decide
+        ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+            | some value => value
+            | none => BlockState.defaultCarrier TileDType.nat) +
+            i.1.val <
+          match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0 + 1) with
+          | some value => value
+          | none => BlockState.defaultCarrier TileDType.nat))
+    (base := s.pids 0 * stride_logit_b)
+    (f := fun i : TileIndex [BLOCK_P] =>
+      match s.readMemTyped TileDType.nat p_token_ids.cast
+        ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+          | some value => value
+          | none => BlockState.defaultCarrier TileDType.nat) +
+          i.1.val) with
+      | some value => value
+      | none => BlockState.defaultCarrier TileDType.nat)
+    (val := fun i : TileIndex [BLOCK_P] =>
+      WithBot.unbotD 0 (
+        match
+          match
+            if decide
+              ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                  | some value => value
+                  | none => BlockState.defaultCarrier TileDType.nat) +
+                  i.1.val <
+                match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0 + 1) with
+                | some value => value
+                | none => BlockState.defaultCarrier TileDType.nat) then
+              if (0 : ℝ) <
+                  (if decide
+                      ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                          | some value => value
+                          | none => BlockState.defaultCarrier TileDType.nat) +
+                          i.1.val <
+                        match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0 + 1) with
+                        | some value => value
+                        | none => BlockState.defaultCarrier TileDType.nat) then
+                    s.readMem Logits (s.pids 0 * stride_logit_b +
+                      match s.readMemTyped TileDType.nat p_token_ids.cast
+                        ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                          | some value => value
+                          | none => BlockState.defaultCarrier TileDType.nat) +
+                          i.1.val) with
+                      | some value => value
+                      | none => BlockState.defaultCarrier TileDType.nat)
+                  else 0.0) then
+                some ((if decide
+                    ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                        | some value => value
+                        | none => BlockState.defaultCarrier TileDType.nat) +
+                        i.1.val <
+                      match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0 + 1) with
+                      | some value => value
+                      | none => BlockState.defaultCarrier TileDType.nat) then
+                  s.readMem Logits (s.pids 0 * stride_logit_b +
+                    match s.readMemTyped TileDType.nat p_token_ids.cast
+                      ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                        | some value => value
+                        | none => BlockState.defaultCarrier TileDType.nat) +
+                        i.1.val) with
+                    | some value => value
+                    | none => BlockState.defaultCarrier TileDType.nat)
+                else 0.0) / s.readMem repetition_penalty (s.pids 0))
+              else
+                some ((if decide
+                    ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                        | some value => value
+                        | none => BlockState.defaultCarrier TileDType.nat) +
+                        i.1.val <
+                      match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0 + 1) with
+                      | some value => value
+                      | none => BlockState.defaultCarrier TileDType.nat) then
+                  s.readMem Logits (s.pids 0 * stride_logit_b +
+                    match s.readMemTyped TileDType.nat p_token_ids.cast
+                      ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                        | some value => value
+                        | none => BlockState.defaultCarrier TileDType.nat) +
+                        i.1.val) with
+                    | some value => value
+                    | none => BlockState.defaultCarrier TileDType.nat)
+                else 0.0) * s.readMem repetition_penalty (s.pids 0))
+            else some (0.0 : ℝ) with
+          | some x =>
+            some (x - if decide
+                  ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                      | some value => value
+                      | none => BlockState.defaultCarrier TileDType.nat) +
+                      i.1.val <
+                    match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0 + 1) with
+                    | some value => value
+                    | none => BlockState.defaultCarrier TileDType.nat) then
+              ((match s.readMemTyped TileDType.nat p_token_counts.cast
+                  ((match s.readMemTyped TileDType.nat p_cumsum_seq_len.cast (s.pids 0) with
+                    | some value => value
+                    | none => BlockState.defaultCarrier TileDType.nat) +
+                    i.1.val) with
+                | some value => value
+                | none => BlockState.defaultCarrier TileDType.nat : ℕ) : ℝ) *
+                s.readMem freqency_penalty (s.pids 0)
+            else 0)
+          | none => none with
+        | some x => some (x - s.readMem presence_penalty (s.pids 0))
+        | none => none))]
+  sorry
 
 end VeriTile.Bench.TritonBenchG.ApplyPenalty

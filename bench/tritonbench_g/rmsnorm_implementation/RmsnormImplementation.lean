@@ -103,6 +103,36 @@ noncomputable def rmsStdCarrier
       (rmsVarCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
         N_SIZE BLOCK_N_SIZE))
 
+/-- Multi-block full-N variance carrier: the algebraic ground truth for
+`Σ_{j < N_SIZE} (x[j])²`, independent of any block decomposition. -/
+noncomputable def rmsVarFullNCarrier
+    (s : BlockState) (x_ptr : RegionName)
+    (stride_x_batch stride_x_m stride_x_k N_SIZE _BLOCK_N_SIZE : Nat) : ℝ :=
+  ∑ j : Fin N_SIZE,
+    (s.readMem x_ptr
+        (s.pids 0 * stride_x_batch + s.pids 1 * stride_x_m + j.val * stride_x_k))^2
+
+/-- Multi-block full-N reciprocal-standard-deviation:
+`1 / sqrt(Σ x_j² / N_SIZE + eps)`. -/
+noncomputable def rmsInvVarFullN
+    (s : BlockState) (x_ptr : RegionName)
+    (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat)
+    (eps : ℝ) : ℝ :=
+  1 / Real.sqrt
+    (rmsVarFullNCarrier s x_ptr stride_x_batch stride_x_m stride_x_k
+      N_SIZE BLOCK_N_SIZE / (N_SIZE : ℝ) + eps)
+
+/-- Multi-block full-N output spec: `x[i] * rmsInvVarFullN` for each
+`i < N_SIZE`, expressed against the algebraic ground truth. -/
+noncomputable def rmsnormYFullNSpec
+    (s : BlockState) (x_ptr : RegionName)
+    (stride_x_batch stride_x_m stride_x_k N_SIZE BLOCK_N_SIZE : Nat)
+    (eps : ℝ) (i : Fin N_SIZE) : ℝ :=
+  s.readMem x_ptr
+      (s.pids 0 * stride_x_batch + s.pids 1 * stride_x_m + i.val * stride_x_k) *
+    rmsInvVarFullN s x_ptr stride_x_batch stride_x_m stride_x_k
+      N_SIZE BLOCK_N_SIZE eps
+
 noncomputable def rmsnormSpec
     (s : BlockState) (x_ptr rms_w_ptr : RegionName)
     (stride_x_batch stride_x_m stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE : Nat)
