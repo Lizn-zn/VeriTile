@@ -305,4 +305,75 @@ theorem prepare_kg_decay_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Proof-oriented per-iteration cumdecay-store slice of `decay_cumsum.py`'s
+`fwd_decay_cumsum`. Takes a precomputed `CumDecayPre` tile (at iteration
+`t_rel`) and proves the masked writeback into `GO`. -/
+def fwd_decay_cumsum_store_slice
+    (CumDecayPre GO : RegionName)
+    (s_qk_h DK t_rel BT BK : Nat) :
+    ComputeKernel := triton {
+  i_k = tl.program_id(0)
+  i_c = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs = tl.arange(0, $(BK))
+  base = i_bh * $(s_qk_h) + (i_c * $(BT) + $(t_rel)) * $(DK) + i_k * $(BK)
+  mask = (i_k * $(BK) + offs) < $(DK)
+  cum_decay = tl.load(CumDecayPre + base + offs, mask=mask, other=0.0)
+  tl.store(GO + base + offs,
+    (cum_decay).to(GO.dtype.element_ty), mask=mask)
+}
+
+noncomputable def fwdDecayCumsumSpec
+    (s : BlockState) (CumDecayPre : RegionName)
+    (s_qk_h DK t_rel BT BK : Nat) (i : Fin BK) : ℝ :=
+  s.readMem CumDecayPre (offset s s_qk_h DK t_rel BT BK i)
+
+theorem fwd_decay_cumsum_store_slice_correct
+    (CumDecayPre GO : RegionName)
+    (s_qk_h DK t_rel BT BK : Nat) (s : BlockState) :
+    ∀ i : Fin BK,
+      let outAddr := offset s s_qk_h DK t_rel BT BK i
+      (exec (fwd_decay_cumsum_store_slice CumDecayPre GO s_qk_h DK t_rel BT BK)
+          s).map (·.readMem GO outAddr)
+        = some (if active s DK BK i then
+            fwdDecayCumsumSpec s CumDecayPre s_qk_h DK t_rel BT BK i
+          else s.readMem GO outAddr) := by
+  intro i
+  have hInj : Function.Injective
+      (fun idx : TileIndex [BK] =>
+        s.pids 2 * s_qk_h + (s.pids 1 * BT + t_rel) * DK +
+          s.pids 0 * BK + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [exec, fwd_decay_cumsum_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
+        NumericDType.mul, ComparableDType.lt, elemIndex, baseOffset, offset]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj (i, PUnit.unit)]
+  by_cases hi : s.pids 0 * BK + i.val < DK
+  · simp [active, fwdDecayCumsumSpec, elemIndex, baseOffset, offset, hi]
+  · simp [active, elemIndex, baseOffset, offset, hi]
+
+theorem fwd_decay_cumsum_store_slice_compute_correct
+    (CumDecayPre GO : RegionName)
+    (s_qk_h DK t_rel BT BK : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_store_slice CumDecayPre GO s_qk_h DK t_rel BT BK)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s DK BK)
+        (fun i => (GO, offset s s_qk_h DK t_rel BT BK i)))
+      (expected := fun i =>
+        fwdDecayCumsumSpec s CumDecayPre s_qk_h DK t_rel BT BK i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fwd_decay_cumsum_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := fwd_decay_cumsum_store_slice_correct CumDecayPre GO
+    s_qk_h DK t_rel BT BK s i
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 end VeriTile.Bench.TritonBenchG.DecayCumsum
