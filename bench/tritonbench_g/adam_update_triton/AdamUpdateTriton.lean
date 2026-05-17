@@ -119,4 +119,79 @@ theorem update_fn_kernel_exp_avg_slice_compute_correct
     n_elements BLOCK_SIZE s s' hExec i
   simpa [hActive] using h
 
+/-! ## Full-kernel exp_avg correctness
+
+The Python test runs the full `update_fn_kernel` which writes both `p` and
+`exp_avg`. Per #139's audit, slice proofs are insufficient. This theorem
+characterizes the `exp_avg` store for the full kernel under the assumption
+that `p_ptr ≠ exp_avg_ptr` (no kernel callers rely on aliasing those
+buffers).
+
+The companion `p` store theorem is significantly more complex due to the
+`tl.where(update > 0, -lr, lr)` and `update != 0` branches, and is left as
+follow-up work in the same file. -/
+
+noncomputable def expAvgFullSpec
+    (s : BlockState) (grad_ptr exp_avg_ptr : RegionName)
+    (beta2 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
+  (s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) -
+      s.readMem grad_ptr (outOffset s BLOCK_SIZE i)) *
+    beta2 + s.readMem grad_ptr (outOffset s BLOCK_SIZE i)
+
+/-- Algorithm-layer correctness for the `exp_avg` store of the full
+`update_fn_kernel`. -/
+theorem update_fn_kernel_exp_avg_correct
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hRegions : exp_avg_ptr ≠ p_ptr)
+    (hExec : exec (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE) s = some s') :
+    ∀ i : Fin BLOCK_SIZE,
+      s'.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) =
+        if outOffset s BLOCK_SIZE i < n_elements then
+          expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i
+        else s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) := by
+  intro i
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
+    subst s'
+    simp only [outOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+          p_ptr _ _ _ _ _ _ _ hRegions]
+    by_cases hi : s.pids 0 * BLOCK_SIZE + i.val < n_elements
+    · simp [hi, expAvgFullSpec, outOffset]
+    · simp [hi]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the `exp_avg` store of the full
+`update_fn_kernel`. -/
+theorem update_fn_kernel_exp_avg_compute_correct
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegions : exp_avg_ptr ≠ p_ptr) :
+    ComputeCorrect.Realizes
+      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (exp_avg_ptr, outOffset s BLOCK_SIZE i)))
+      (expected := fun i => expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [update_fn_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := update_fn_kernel_exp_avg_correct p_ptr grad_ptr exp_avg_ptr
+    lr wd beta1 beta2 n_elements BLOCK_SIZE s s' hRegions hExec i
+  simpa [hActive] using h
+
 end VeriTile.Bench.TritonBenchG.AdamUpdateTriton
