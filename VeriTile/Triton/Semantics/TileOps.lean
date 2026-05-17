@@ -246,6 +246,40 @@ noncomputable def ScanOp.eval : ScanOp → List (WithBot ℝ) → WithBot ℝ
 @[simp] theorem WithBot.realErf_bot :
     WithBot.realErf (⊥ : WithBot ℝ) = ((-1 : ℝ) : WithBot ℝ) := rfl
 
+/-! ### Bot-preserving math primitives
+
+The following math functions are undefined at -∞ in the kernel semantics
+(they return `none`/`⊥` on `⊥` input rather than a finite value). These
+`_bot` lemmas let `simp` propagate `⊥` cleanly through chained tile
+expressions like `tl.log(tl.exp(x) - max)`. -/
+
+@[simp] theorem WithBot.realLog_bot :
+    WithBot.realLog (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realLog2_bot :
+    WithBot.realLog2 (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realSqrt_bot :
+    WithBot.realSqrt (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realRsqrt_bot :
+    WithBot.realRsqrt (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realSin_bot :
+    WithBot.realSin (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realCos_bot :
+    WithBot.realCos (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realTan_bot :
+    WithBot.realTan (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realCosh_bot :
+    WithBot.realCosh (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
+@[simp] theorem WithBot.realSinh_bot :
+    WithBot.realSinh (⊥ : WithBot ℝ) = (⊥ : WithBot ℝ) := rfl
+
 @[simp] theorem WithBot.realExp_coe (r : ℝ) :
     WithBot.realExp ((r : ℝ) : WithBot ℝ) = (((Real.exp r : ℝ)) : WithBot ℝ) := rfl
 @[simp] theorem WithBot.realLog_coe (r : ℝ) :
