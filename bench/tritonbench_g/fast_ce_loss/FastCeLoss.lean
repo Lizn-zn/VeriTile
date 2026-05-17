@@ -307,4 +307,43 @@ theorem cross_entropy_lse_store_slice_compute_correct
   intro _
   exact cross_entropy_lse_store_slice_correct LsumPre logsumexp_ptr s s' hExec
 
+/-- Proof-oriented loss-store slice of `fast_ce_loss.py`'s forward kernel.
+Same scalar-copy pattern as the LSE store slice: takes a precomputed
+LossPre scalar (per row) and proves the writeback into loss_ptr. -/
+def cross_entropy_loss_store_slice
+    (LossPre loss_ptr : RegionName) :
+    ComputeKernel := triton {
+  row_idx = tl.program_id(0)
+  loss = tl.load(LossPre + row_idx)
+  tl.store(loss_ptr + row_idx, loss)
+}
+
+noncomputable def lossStoreSpec (s : BlockState) (LossPre : RegionName) : ℝ :=
+  s.readMem LossPre s.pid
+
+theorem cross_entropy_loss_store_slice_correct
+    (LossPre loss_ptr : RegionName) (s s' : BlockState)
+    (hExec : exec (cross_entropy_loss_store_slice LossPre loss_ptr) s = some s') :
+    s'.readMem loss_ptr (lseOutOffset s) = lossStoreSpec s LossPre := by
+  simp [exec, cross_entropy_loss_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add] at hExec
+  subst s'
+  simp [lseOutOffset, lossStoreSpec]
+
+theorem cross_entropy_loss_store_slice_compute_correct
+    (LossPre loss_ptr : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := cross_entropy_loss_store_slice LossPre loss_ptr)
+      (initialState := s)
+      (write := fun _ : PUnit => some (loss_ptr, lseOutOffset s))
+      (expected := fun _ => lossStoreSpec s LossPre) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [cross_entropy_loss_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact cross_entropy_loss_store_slice_correct LossPre loss_ptr s s' hExec
+
 end VeriTile.Bench.TritonBenchG.FastCeLoss
