@@ -52,6 +52,19 @@ def kldiv_forward_surface
   }
 }
 
+/-- The full KL-divergence ops forward surface lowers to the algorithm layer,
+including eps clamping, the `log_target` branch, dynamic column loop, and
+reduction modes. -/
+theorem kldiv_forward_surface_toAlgorithm_supported
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (log_target : Bool) (reduction : Nat) :
+    ∃ alg,
+      (kldiv_forward_surface y_ptr gt_ptr loss_ptr y_stride gt_stride
+        loss_stride n_cols BLOCK_SIZE eps log_target reduction).toAlgorithm? =
+        Except.ok alg := by
+  simp [kldiv_forward_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Documented one-block slice of `kldiv_ops.py`'s `_kldiv_kernel_forward`
 for the `log_target = False`, `reduction = 0` (None) constexpr branch.
 
@@ -328,7 +341,7 @@ theorem kldiv_forward_default_none_correct
       simp only [forwardDefaultSpec, inOffset, BlockState.pid_eq,
         max_eq_left (le_of_lt hgt)]
       simp [h]
-    · push_neg at hgt
+    · push Not at hgt
       have hbool : ComparableDType.gt ComparableDType.real
           (some (s.readMem gt_ptr (s.pids 0 * gt_stride + i.val))) (some eps) =
           Bool.false := by

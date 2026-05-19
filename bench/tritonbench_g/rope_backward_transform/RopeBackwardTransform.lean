@@ -68,6 +68,18 @@ def triton_rope_surface
     }
 }
 
+/-- The full backward RoPE transform surface lowers to the algorithm layer,
+including Q/K, both halves, and the `BACKWARD_PASS` branch. -/
+theorem triton_rope_surface_toAlgorithm_supported
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (BACKWARD_PASS : Bool) :
+    ∃ alg, (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+      cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+      pad_hd BLOCK_SIZE BACKWARD_PASS).toAlgorithm? = Except.ok alg := by
+  simp [triton_rope_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented one-Q-head first-half backward slice of
 `rope_backward_transform.py`'s `_triton_rope`.
 
@@ -381,6 +393,90 @@ theorem rope_backward_k1_head_compute_correct
     k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF s
     hOutInj
 
+/-! ## Python test-shape wrappers
+
+`rope_backward_transform.py`'s checked test case uses `batch_size = 2`,
+`seq_len = 4`, `n_q_head = n_kv_head = 8`, and `head_dim = 16`. After
+`transpose(...).contiguous()`, both gradient tensors have row stride
+`8 * 16 = 128`, while cos/sin have row stride `16 / 2 = 8`. These wrappers
+pin those metadata values for the `BACKWARD_PASS=True` Q/K stores. -/
+
+theorem rope_backward_q0_python_test_shape_compute_correct
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_backward_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeBackwardQ0Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i) := by
+  apply rope_backward_q0_head_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [qOffset, rowIndex, dimIndex] at h
+  omega
+
+theorem rope_backward_q1_python_test_shape_compute_correct
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_backward_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeBackwardQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i) := by
+  apply rope_backward_q1_head_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [q1WriteOffset, dimIndex] at h
+  omega
+
+theorem rope_backward_k0_python_test_shape_compute_correct
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_backward_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeBackwardQ0Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i) := by
+  apply rope_backward_k0_head_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [qOffset, rowIndex, dimIndex] at h
+  omega
+
+theorem rope_backward_k1_python_test_shape_compute_correct
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_backward_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeBackwardQ1Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i) := by
+  apply rope_backward_k1_head_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [q1WriteOffset, dimIndex] at h
+  omega
+
 /-! ## Full-kernel Q first-half store correctness (`BACKWARD_PASS = true`)
 
 Per the #139 audit, the slice proofs above (one Q head, one row) aren't
@@ -521,80 +617,6 @@ theorem qFirstHalf_ne_qSecondHalf
         _ ≤ idx.1.val * hd + idx.2.1.val := by omega
     exact absurd hcancel.symm (Nat.ne_of_lt this)
 
-/-- Algorithm-layer correctness for the Q first-half store of the full
-`triton_rope_surface` kernel (`BACKWARD_PASS = true`).
-
-Assumptions:
-* `q_ptr ≠ k_ptr` — strips the two K-side foldls;
-* `pad_hd / 2 ≤ hd / 2` — standard `pad ≤ logical` relation; ensures every
-  in-tile dimension index `d` satisfies `d < hd / 2`, the active-region
-  bound used for Q first-vs-second-half offset disjointness;
-* `0 < pad_n_qh`, `0 < pad_hd / 2`, `0 < pad_n_kh` — non-empty tile shapes;
-* tile offset injectivity for the Q first-half scatter readback. -/
-set_option maxHeartbeats 800000000 in
-theorem triton_rope_surface_q_first_half_correct
-    (q_ptr k_ptr cos sin : RegionName)
-    (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
-    (s s' : BlockState)
-    (hQK : q_ptr ≠ k_ptr)
-    (hPadHd : pad_hd / 2 ≤ hd / 2)
-    (hNK : 0 < pad_n_kh)
-    (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_qh, pad_hd / 2] =>
-        qFullFirstOffset s q_row_stride hd idx))
-    (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
-        q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE
-        (BACKWARD_PASS := Bool.true)) s = some s') :
-    ∀ idx : TileIndex [pad_n_qh, pad_hd / 2],
-      s'.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) =
-        if activeQFull n_qh hd idx then
-          ropeBackwardKernelQ0Spec s q_ptr cos sin
-            q_row_stride sl cos_row_stride sin_row_stride hd idx
-        else
-          s.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) := by
-  intro idx
-  have hDimLt : idx.2.1.val < hd / 2 :=
-    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
-  by_cases hNQ : 0 < pad_n_qh
-  · by_cases hHH : 0 < pad_hd / 2
-    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-            NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt, hNQ, hHH, hNK] at hExec
-      rw [← hExec]
-      simp only [qFullFirstOffset]
-      -- Strip the K second-half foldl (cross-region).
-      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-            k_ptr _ _ _ _ _ _ _ hQK]
-      -- Strip the K first-half foldl (cross-region).
-      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-            k_ptr _ _ _ _ _ _ _ hQK]
-      -- Strip the Q second-half foldl via offset disjointness.
-      rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-            (region := q_ptr)
-            (P := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-              k.1.val < n_qh ∧ k.2.1.val < hd / 2)
-            (offsetFn := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-              s.pids 0 * q_row_stride + k.1.val * hd + k.2.1.val + hd / 2)
-            (hOff := fun k _ hPk => by
-              have h := qFirstHalf_ne_qSecondHalf (pad_n_qh := pad_n_qh)
-                (pad_hd_half := pad_hd / 2) s q_row_stride hd idx hDimLt k hPk.2
-              simpa [qFullFirstOffset, qFullSecondOffset] using h)]
-      -- Apply scatter_readback to the Q first-half foldl.
-      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-      by_cases hAct : activeQFull n_qh hd idx
-      · simp [activeQFull, ropeBackwardKernelQ0Spec, qFullFirstOffset,
-              qFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-              hAct.1, hAct.2, Option.bind, Option.map]
-      · simp [activeQFull, qFullFirstOffset, hDimLt] at hAct
-        simp [activeQFull, hDimLt, hAct, qFullFirstOffset]
-    · -- pad_hd / 2 = 0: idx.2.1.isLt impossible.
-      exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
-  · -- pad_n_qh = 0: idx.1.isLt impossible.
-    exact False.elim (hNQ (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
-
 /-! ## Full-kernel Q second-half store correctness (`BACKWARD_PASS = true`)
 
 Mirrors the Q first-half proof: target offset is `qFullSecondOffset`. The
@@ -612,71 +634,6 @@ noncomputable def ropeBackwardKernelQ1Spec
     s.readMem cos (cosFullFirstOffset s sl cos_row_stride (idx.2.1, idx.2.2)) -
   s.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) *
     s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
-
-theorem triton_rope_surface_q_second_half_correct
-    (q_ptr k_ptr cos sin : RegionName)
-    (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
-    (s s' : BlockState)
-    (hQK : q_ptr ≠ k_ptr)
-    (hPadHd : pad_hd / 2 ≤ hd / 2)
-    (hNK : 0 < pad_n_kh)
-    (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_qh, pad_hd / 2] =>
-        qFullSecondOffset s q_row_stride hd idx))
-    (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
-        q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE true) s
-      = some s') :
-    ∀ idx : TileIndex [pad_n_qh, pad_hd / 2],
-      s'.readMem q_ptr (qFullSecondOffset s q_row_stride hd idx) =
-        if activeQFull n_qh hd idx then
-          ropeBackwardKernelQ1Spec s q_ptr cos sin
-            q_row_stride sl cos_row_stride sin_row_stride hd idx
-        else
-          s.readMem q_ptr (qFullSecondOffset s q_row_stride hd idx) := by
-  intro idx
-  have hDimLt : idx.2.1.val < hd / 2 :=
-    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
-  by_cases hNQ : 0 < pad_n_qh
-  · by_cases hHH : 0 < pad_hd / 2
-    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-            NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt, hNQ, hHH, hNK] at hExec
-      rw [← hExec]
-      simp only [qFullSecondOffset]
-      -- Strip the K second-half foldl (cross-region).
-      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-            k_ptr _ _ _ _ _ _ _ hQK]
-      -- Strip the K first-half foldl (cross-region).
-      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-            k_ptr _ _ _ _ _ _ _ hQK]
-      -- Apply scatter_readback to the Q second-half foldl.
-      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-      by_cases hAct : activeQFull n_qh hd idx
-      · simp [activeQFull, ropeBackwardKernelQ1Spec, qFullFirstOffset,
-              qFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-              hAct.1, hAct.2, Option.bind, Option.map]
-      · -- Inactive: strip Q1 (cousin scatter) via offset disjointness.
-        simp [activeQFull, qFullSecondOffset, hDimLt] at hAct
-        rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-              (region := q_ptr)
-              (P := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-                k.1.val < n_qh ∧ k.2.1.val < hd / 2)
-              (offsetFn := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-                s.pids 0 * q_row_stride + k.1.val * hd + k.2.1.val)
-              (hOff := fun k _ hPk => by
-                have h := qFirstHalf_ne_qSecondHalf (pad_n_qh := pad_n_qh)
-                  (pad_hd_half := pad_hd / 2) s q_row_stride hd k hPk.2 idx hDimLt
-                simp only [qFullFirstOffset, qFullSecondOffset] at h
-                intro heq
-                exact h heq.symm)]
-        simp [activeQFull, hDimLt, hAct, qFullSecondOffset]
-    · -- pad_hd / 2 = 0: idx.2.1.isLt impossible.
-      exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
-  · -- pad_n_qh = 0: idx.1.isLt impossible.
-    exact False.elim (hNQ (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
 
 /-! ## Full-kernel K first-half store correctness (`BACKWARD_PASS = true`)
 
@@ -769,74 +726,6 @@ noncomputable def ropeBackwardKernelK0Spec
   s.readMem k_ptr (kFullSecondOffset s k_row_stride hd idx) *
     s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
 
-theorem triton_rope_surface_k_first_half_correct
-    (q_ptr k_ptr cos sin : RegionName)
-    (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
-    (s s' : BlockState)
-    (hQK : q_ptr ≠ k_ptr)
-    (hPadHd : pad_hd / 2 ≤ hd / 2)
-    (hNQ : 0 < pad_n_qh)
-    (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_kh, pad_hd / 2] =>
-        kFullFirstOffset s k_row_stride hd idx))
-    (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
-        q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE true) s
-      = some s') :
-    ∀ idx : TileIndex [pad_n_kh, pad_hd / 2],
-      s'.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) =
-        if activeKFull n_kh hd idx then
-          ropeBackwardKernelK0Spec s k_ptr cos sin
-            k_row_stride sl cos_row_stride sin_row_stride hd idx
-        else
-          s.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) := by
-  intro idx
-  have hKQ : k_ptr ≠ q_ptr := fun h => hQK h.symm
-  have hDimLt : idx.2.1.val < hd / 2 :=
-    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
-  by_cases hNK : 0 < pad_n_kh
-  · by_cases hHH : 0 < pad_hd / 2
-    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-            NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt, hNQ, hHH, hNK] at hExec
-      rw [← hExec]
-      simp only [kFullFirstOffset]
-      -- Strip the K second-half foldl (same region, disjoint offsets).
-      rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-            (region := k_ptr)
-            (P := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-              k.1.val < n_kh ∧ k.2.1.val < hd / 2)
-            (offsetFn := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-              s.pids 0 * k_row_stride + k.1.val * hd + k.2.1.val + hd / 2)
-            (hOff := fun k _ hPk => by
-              have h := kFirstHalf_ne_kSecondHalf (pad_n_kh := pad_n_kh)
-                (pad_hd_half := pad_hd / 2) s k_row_stride hd idx hDimLt k hPk.2
-              simpa [kFullFirstOffset, kFullSecondOffset] using h)]
-      -- Apply scatter to the K first-half foldl.
-      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-      by_cases hAct : activeKFull n_kh hd idx
-      · -- Active: peel Q2, Q1 (cross-region) and unfold spec.
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        simp [activeKFull, ropeBackwardKernelK0Spec, kFullFirstOffset,
-              kFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-              hAct.1, hAct.2, Option.bind, Option.map]
-      · -- Inactive: peel Q2, Q1 from the residual base state via cross-region.
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        simp [activeKFull, kFullFirstOffset, hDimLt] at hAct
-        simp [activeKFull, hDimLt, hAct, kFullFirstOffset]
-    · -- pad_hd / 2 = 0: idx.2.1.isLt impossible.
-      exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
-  · -- pad_n_kh = 0: idx.1.isLt impossible.
-    exact False.elim (hNK (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
-
 /-! ## Full-kernel K second-half store correctness (`BACKWARD_PASS = true`)
 
 Target offset is `kFullSecondOffset` (= store #4, outermost foldl). We
@@ -853,85 +742,89 @@ noncomputable def ropeBackwardKernelK1Spec
   s.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) *
     s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
 
-theorem triton_rope_surface_k_second_half_correct
-    (q_ptr k_ptr cos sin : RegionName)
-    (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
-    (s s' : BlockState)
-    (hQK : q_ptr ≠ k_ptr)
-    (hPadHd : pad_hd / 2 ≤ hd / 2)
-    (hNQ : 0 < pad_n_qh)
-    (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_kh, pad_hd / 2] =>
-        kFullSecondOffset s k_row_stride hd idx))
-    (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
-        q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE true) s
-      = some s') :
-    ∀ idx : TileIndex [pad_n_kh, pad_hd / 2],
-      s'.readMem k_ptr (kFullSecondOffset s k_row_stride hd idx) =
-        if activeKFull n_kh hd idx then
-          ropeBackwardKernelK1Spec s k_ptr cos sin
-            k_row_stride sl cos_row_stride sin_row_stride hd idx
-        else
-          s.readMem k_ptr (kFullSecondOffset s k_row_stride hd idx) := by
-  intro idx
-  have hKQ : k_ptr ≠ q_ptr := fun h => hQK h.symm
-  have hDimLt : idx.2.1.val < hd / 2 :=
-    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
-  by_cases hNK : 0 < pad_n_kh
-  · by_cases hHH : 0 < pad_hd / 2
-    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-            NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt, hNQ, hHH, hNK] at hExec
-      rw [← hExec]
-      simp only [kFullSecondOffset]
-      -- K2 is the outermost foldl: apply scatter directly.
-      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-      by_cases hAct : activeKFull n_kh hd idx
-      · -- Active: peel K1 (intra-region disjoint), then Q2, Q1 (cross-region).
-        rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-              (region := k_ptr)
-              (P := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-                k.1.val < n_kh ∧ k.2.1.val < hd / 2)
-              (offsetFn := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-                s.pids 0 * k_row_stride + k.1.val * hd + k.2.1.val)
-              (hOff := fun k _ hPk => by
-                have h := kFirstHalf_ne_kSecondHalf (pad_n_kh := pad_n_kh)
-                  (pad_hd_half := pad_hd / 2) s k_row_stride hd k hPk.2 idx hDimLt
-                simp only [kFullFirstOffset, kFullSecondOffset] at h
-                intro heq
-                exact h heq.symm)]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        simp [activeKFull, ropeBackwardKernelK1Spec, kFullFirstOffset,
-              kFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-              hAct.1, hAct.2, Option.bind, Option.map]
-      · -- Inactive: peel K1, Q2, Q1 from residual base.
-        rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-              (region := k_ptr)
-              (P := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-                k.1.val < n_kh ∧ k.2.1.val < hd / 2)
-              (offsetFn := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-                s.pids 0 * k_row_stride + k.1.val * hd + k.2.1.val)
-              (hOff := fun k _ hPk => by
-                have h := kFirstHalf_ne_kSecondHalf (pad_n_kh := pad_n_kh)
-                  (pad_hd_half := pad_hd / 2) s k_row_stride hd k hPk.2 idx hDimLt
-                simp only [kFullFirstOffset, kFullSecondOffset] at h
-                intro heq
-                exact h heq.symm)]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        simp [activeKFull, kFullSecondOffset, hDimLt] at hAct
-        simp [activeKFull, hDimLt, hAct, kFullSecondOffset]
-    · -- pad_hd / 2 = 0: idx.2.1.isLt impossible.
-      exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
-  · -- pad_n_kh = 0: idx.1.isLt impossible.
-    exact False.elim (hNK (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
+/-! ## Python full-kernel test-shape facts
+
+The checked Python backward test uses `batch_size = 2`, `seq_len = 4`,
+`n_q_head = n_kv_head = 8`, and `head_dim = 16`. After
+`transpose(...).contiguous()`, Q and K rows have stride `8 * 16 = 128`, and
+the full-kernel tiles have shape `[8, 8]` for heads by half-head dimension.
+The facts below pin the active masks and no-collision obligations for the
+full-kernel Q/K first- and second-half store offsets. -/
+
+theorem activeQFull_python_test_shape
+    (idx : TileIndex [8, 8]) :
+    activeQFull 8 16 idx := by
+  unfold activeQFull
+  constructor <;> omega
+
+theorem activeKFull_python_test_shape
+    (idx : TileIndex [8, 8]) :
+    activeKFull 8 16 idx := by
+  unfold activeKFull
+  constructor <;> omega
+
+theorem qFullFirstOffset_python_test_shape_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [8, 8] => qFullFirstOffset s 128 16 idx) := by
+  intro a b h
+  rcases a with ⟨ha, da, hta⟩
+  rcases b with ⟨hb, db, htb⟩
+  rcases da with ⟨da, hda⟩
+  rcases db with ⟨db, hdb⟩
+  simp [qFullFirstOffset] at h
+  have hh : ha = hb := by omega
+  have hd : da = db := by omega
+  subst hb
+  subst db
+  rfl
+
+theorem qFullSecondOffset_python_test_shape_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [8, 8] => qFullSecondOffset s 128 16 idx) := by
+  intro a b h
+  rcases a with ⟨ha, da, hta⟩
+  rcases b with ⟨hb, db, htb⟩
+  rcases da with ⟨da, hda⟩
+  rcases db with ⟨db, hdb⟩
+  simp [qFullSecondOffset] at h
+  have hh : ha = hb := by omega
+  have hd : da = db := by omega
+  subst hb
+  subst db
+  rfl
+
+theorem kFullFirstOffset_python_test_shape_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [8, 8] => kFullFirstOffset s 128 16 idx) := by
+  intro a b h
+  rcases a with ⟨ha, da, hta⟩
+  rcases b with ⟨hb, db, htb⟩
+  rcases da with ⟨da, hda⟩
+  rcases db with ⟨db, hdb⟩
+  simp [kFullFirstOffset] at h
+  have hh : ha = hb := by omega
+  have hd : da = db := by omega
+  subst hb
+  subst db
+  rfl
+
+theorem kFullSecondOffset_python_test_shape_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [8, 8] => kFullSecondOffset s 128 16 idx) := by
+  intro a b h
+  rcases a with ⟨ha, da, hta⟩
+  rcases b with ⟨hb, db, htb⟩
+  rcases da with ⟨da, hda⟩
+  rcases db with ⟨db, hdb⟩
+  simp [kFullSecondOffset] at h
+  have hh : ha = hb := by omega
+  have hd : da = db := by omega
+  subst hb
+  subst db
+  rfl
 
 end VeriTile.Bench.TritonBenchG.RopeBackwardTransform

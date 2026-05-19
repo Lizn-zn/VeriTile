@@ -68,6 +68,18 @@ def triton_rope_surface
     }
 }
 
+/-- The full forward/backward RoPE transform surface lowers to the algorithm
+layer, including Q/K, both halves, and the `BACKWARD_PASS` branch. -/
+theorem triton_rope_surface_toAlgorithm_supported
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (BACKWARD_PASS : Bool) :
+    ∃ alg, (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+      cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+      pad_hd BLOCK_SIZE BACKWARD_PASS).toAlgorithm? = Except.ok alg := by
+  simp [triton_rope_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented one-Q-head first-half forward slice of `rope_transform.py`'s
 `_triton_rope`.
 
@@ -405,6 +417,91 @@ theorem rope_transform_k1_head_compute_correct
     k_row_stride cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
     s hOutInj
 
+/-! ## Python test-shape wrappers
+
+`rope_transform.py`'s checked test case uses `batch_size = 2`, `seq_len = 4`,
+`n_q_head = n_kv_head = 8`, and `head_dim = 16`. After the Python
+`transpose(...).contiguous()`, both Q and K have row stride `8 * 16 = 128`,
+and the cos/sin row stride is `16 / 2 = 8`. The wrappers below pin those
+metadata values so the forward Q/K first- and second-half stores are directly
+citable as the Python test slice. -/
+
+theorem rope_transform_q0_python_test_shape_compute_correct
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeQ0Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i) := by
+  apply rope_transform_q0_head_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [qOffset, rowIndex, dimIndex] at h
+  omega
+
+theorem rope_transform_q1_python_test_shape_compute_correct
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i) := by
+  apply rope_transform_q1_head_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [q1WriteOffset, dimIndex] at h
+  omega
+
+theorem rope_transform_k0_python_test_shape_compute_correct
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_transform_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeQ0Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i) := by
+  apply rope_transform_k0_head_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [qOffset, rowIndex, dimIndex] at h
+  omega
+
+theorem rope_transform_k1_python_test_shape_compute_correct
+    (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_transform_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeQ1Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i) := by
+  apply rope_transform_k1_head_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [q1WriteOffset, dimIndex] at h
+  omega
+
 /-! ## Full-kernel 2D forward correctness (`BACKWARD_PASS = false`)
 
 The single-head slice proofs above pin one Q/K head and one dim slice, but the
@@ -514,66 +611,6 @@ noncomputable def ropeForwardKernelQ0Spec
   s.readMem q_ptr (qFullSecondOffset s q_row_stride hd idx) *
     s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
 
-/-- Algorithm-layer correctness for the Q first-half store of the full
-`triton_rope_surface` kernel under `BACKWARD_PASS = false`. -/
-set_option maxHeartbeats 80000000 in
-theorem triton_rope_surface_q_first_half_correct
-    (q_ptr k_ptr cos sin : RegionName)
-    (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
-    (s s' : BlockState)
-    (hQK : q_ptr ≠ k_ptr)
-    (hPadHd : pad_hd / 2 ≤ hd / 2)
-    (hNK : 0 < pad_n_kh)
-    (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_qh, pad_hd / 2] =>
-        qFullFirstOffset s q_row_stride hd idx))
-    (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
-        q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE
-        (BACKWARD_PASS := Bool.false)) s = some s') :
-    ∀ idx : TileIndex [pad_n_qh, pad_hd / 2],
-      s'.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) =
-        if activeQFull n_qh hd idx then
-          ropeForwardKernelQ0Spec s q_ptr cos sin
-            q_row_stride sl cos_row_stride sin_row_stride hd idx
-        else
-          s.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) := by
-  intro idx
-  have hDimLt : idx.2.1.val < hd / 2 :=
-    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
-  by_cases hNQ : 0 < pad_n_qh
-  · by_cases hHH : 0 < pad_hd / 2
-    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-            NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt, hNQ, hHH, hNK] at hExec
-      rw [← hExec]
-      simp only [qFullFirstOffset]
-      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-            k_ptr _ _ _ _ _ _ _ hQK]
-      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-            k_ptr _ _ _ _ _ _ _ hQK]
-      rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-            (region := q_ptr)
-            (P := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-              k.1.val < n_qh ∧ k.2.1.val < hd / 2)
-            (offsetFn := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-              s.pids 0 * q_row_stride + k.1.val * hd + k.2.1.val + hd / 2)
-            (hOff := fun k _ hPk => by
-              have h := qFirstHalf_ne_qSecondHalf (pad_n_qh := pad_n_qh)
-                (pad_hd_half := pad_hd / 2) s q_row_stride hd idx hDimLt k hPk.2
-              simpa [qFullFirstOffset, qFullSecondOffset] using h)]
-      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-      by_cases hAct : activeQFull n_qh hd idx
-      · simp [activeQFull, ropeForwardKernelQ0Spec, qFullFirstOffset,
-              qFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-              hAct.1, hAct.2, Option.bind, Option.map]
-      · simp [activeQFull, qFullFirstOffset, hDimLt] at hAct
-        simp [activeQFull, hDimLt, hAct, qFullFirstOffset]
-    · exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
-  · exact False.elim (hNQ (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
-
 /-- Spec for the Q second-half output under `BACKWARD_PASS = false`:
 `new_q_tile_2 = q_tile_2 * cos + q_tile_1 * sin`. -/
 noncomputable def ropeForwardKernelQ1Spec
@@ -584,66 +621,6 @@ noncomputable def ropeForwardKernelQ1Spec
     s.readMem cos (cosFullFirstOffset s sl cos_row_stride (idx.2.1, idx.2.2)) +
   s.readMem q_ptr (qFullFirstOffset s q_row_stride hd idx) *
     s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
-
-set_option maxHeartbeats 80000000 in
-theorem triton_rope_surface_q_second_half_correct
-    (q_ptr k_ptr cos sin : RegionName)
-    (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
-    (s s' : BlockState)
-    (hQK : q_ptr ≠ k_ptr)
-    (hPadHd : pad_hd / 2 ≤ hd / 2)
-    (hNK : 0 < pad_n_kh)
-    (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_qh, pad_hd / 2] =>
-        qFullSecondOffset s q_row_stride hd idx))
-    (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
-        q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE false) s
-      = some s') :
-    ∀ idx : TileIndex [pad_n_qh, pad_hd / 2],
-      s'.readMem q_ptr (qFullSecondOffset s q_row_stride hd idx) =
-        if activeQFull n_qh hd idx then
-          ropeForwardKernelQ1Spec s q_ptr cos sin
-            q_row_stride sl cos_row_stride sin_row_stride hd idx
-        else
-          s.readMem q_ptr (qFullSecondOffset s q_row_stride hd idx) := by
-  intro idx
-  have hDimLt : idx.2.1.val < hd / 2 :=
-    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
-  by_cases hNQ : 0 < pad_n_qh
-  · by_cases hHH : 0 < pad_hd / 2
-    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-            NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt, hNQ, hHH, hNK] at hExec
-      rw [← hExec]
-      simp only [qFullSecondOffset]
-      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-            k_ptr _ _ _ _ _ _ _ hQK]
-      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-            k_ptr _ _ _ _ _ _ _ hQK]
-      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-      by_cases hAct : activeQFull n_qh hd idx
-      · simp [activeQFull, ropeForwardKernelQ1Spec, qFullFirstOffset,
-              qFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-              hAct.1, hAct.2, Option.bind, Option.map]
-      · simp [activeQFull, qFullSecondOffset, hDimLt] at hAct
-        rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-              (region := q_ptr)
-              (P := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-                k.1.val < n_qh ∧ k.2.1.val < hd / 2)
-              (offsetFn := fun k : TileIndex [pad_n_qh, pad_hd / 2] =>
-                s.pids 0 * q_row_stride + k.1.val * hd + k.2.1.val)
-              (hOff := fun k _ hPk => by
-                have h := qFirstHalf_ne_qSecondHalf (pad_n_qh := pad_n_qh)
-                  (pad_hd_half := pad_hd / 2) s q_row_stride hd k hPk.2 idx hDimLt
-                simp only [qFullFirstOffset, qFullSecondOffset] at h
-                intro heq
-                exact h heq.symm)]
-        simp [activeQFull, hDimLt, hAct, qFullSecondOffset]
-    · exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
-  · exact False.elim (hNQ (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
 
 /-- Tile-level K first-half offset (target of store #3). -/
 def kFullFirstOffset
@@ -728,69 +705,6 @@ noncomputable def ropeForwardKernelK0Spec
   s.readMem k_ptr (kFullSecondOffset s k_row_stride hd idx) *
     s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
 
-set_option maxHeartbeats 80000000 in
-theorem triton_rope_surface_k_first_half_correct
-    (q_ptr k_ptr cos sin : RegionName)
-    (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
-    (s s' : BlockState)
-    (hQK : q_ptr ≠ k_ptr)
-    (hPadHd : pad_hd / 2 ≤ hd / 2)
-    (hNQ : 0 < pad_n_qh)
-    (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_kh, pad_hd / 2] =>
-        kFullFirstOffset s k_row_stride hd idx))
-    (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
-        q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE false) s
-      = some s') :
-    ∀ idx : TileIndex [pad_n_kh, pad_hd / 2],
-      s'.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) =
-        if activeKFull n_kh hd idx then
-          ropeForwardKernelK0Spec s k_ptr cos sin
-            k_row_stride sl cos_row_stride sin_row_stride hd idx
-        else
-          s.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) := by
-  intro idx
-  have hKQ : k_ptr ≠ q_ptr := fun h => hQK h.symm
-  have hDimLt : idx.2.1.val < hd / 2 :=
-    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
-  by_cases hNK : 0 < pad_n_kh
-  · by_cases hHH : 0 < pad_hd / 2
-    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-            NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt, hNQ, hHH, hNK] at hExec
-      rw [← hExec]
-      simp only [kFullFirstOffset]
-      rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-            (region := k_ptr)
-            (P := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-              k.1.val < n_kh ∧ k.2.1.val < hd / 2)
-            (offsetFn := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-              s.pids 0 * k_row_stride + k.1.val * hd + k.2.1.val + hd / 2)
-            (hOff := fun k _ hPk => by
-              have h := kFirstHalf_ne_kSecondHalf (pad_n_kh := pad_n_kh)
-                (pad_hd_half := pad_hd / 2) s k_row_stride hd idx hDimLt k hPk.2
-              simpa [kFullFirstOffset, kFullSecondOffset] using h)]
-      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-      by_cases hAct : activeKFull n_kh hd idx
-      · rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        simp [activeKFull, ropeForwardKernelK0Spec, kFullFirstOffset,
-              kFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-              hAct.1, hAct.2, Option.bind, Option.map]
-      · rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        simp [activeKFull, kFullFirstOffset, hDimLt] at hAct
-        simp [activeKFull, hDimLt, hAct, kFullFirstOffset]
-    · exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
-  · exact False.elim (hNK (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
-
 /-- Spec for the K second-half output under `BACKWARD_PASS = false`:
 `new_k_tile_2 = k_tile_2 * cos + k_tile_1 * sin`. -/
 noncomputable def ropeForwardKernelK1Spec
@@ -801,83 +715,6 @@ noncomputable def ropeForwardKernelK1Spec
     s.readMem cos (cosFullFirstOffset s sl cos_row_stride (idx.2.1, idx.2.2)) +
   s.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) *
     s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
-
-set_option maxHeartbeats 80000000 in
-theorem triton_rope_surface_k_second_half_correct
-    (q_ptr k_ptr cos sin : RegionName)
-    (q_row_stride k_row_stride cos_row_stride sin_row_stride
-      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
-    (s s' : BlockState)
-    (hQK : q_ptr ≠ k_ptr)
-    (hPadHd : pad_hd / 2 ≤ hd / 2)
-    (hNQ : 0 < pad_n_qh)
-    (hInj : Function.Injective
-      (fun idx : TileIndex [pad_n_kh, pad_hd / 2] =>
-        kFullSecondOffset s k_row_stride hd idx))
-    (hExec : exec (triton_rope_surface q_ptr k_ptr cos sin
-        q_row_stride k_row_stride cos_row_stride sin_row_stride
-        sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE false) s
-      = some s') :
-    ∀ idx : TileIndex [pad_n_kh, pad_hd / 2],
-      s'.readMem k_ptr (kFullSecondOffset s k_row_stride hd idx) =
-        if activeKFull n_kh hd idx then
-          ropeForwardKernelK1Spec s k_ptr cos sin
-            k_row_stride sl cos_row_stride sin_row_stride hd idx
-        else
-          s.readMem k_ptr (kFullSecondOffset s k_row_stride hd idx) := by
-  intro idx
-  have hKQ : k_ptr ≠ q_ptr := fun h => hQK h.symm
-  have hDimLt : idx.2.1.val < hd / 2 :=
-    Nat.lt_of_lt_of_le idx.2.1.isLt hPadHd
-  by_cases hNK : 0 < pad_n_kh
-  · by_cases hHH : 0 < pad_hd / 2
-    · simp [exec, triton_rope_surface, stepStmts, stepStmt, evalOp,
-            Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
-            NumericDType.add, NumericDType.mul, NumericDType.sub,
-            ComparableDType.lt, hNQ, hHH, hNK] at hExec
-      rw [← hExec]
-      simp only [kFullSecondOffset]
-      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj idx]
-      by_cases hAct : activeKFull n_kh hd idx
-      · rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-              (region := k_ptr)
-              (P := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-                k.1.val < n_kh ∧ k.2.1.val < hd / 2)
-              (offsetFn := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-                s.pids 0 * k_row_stride + k.1.val * hd + k.2.1.val)
-              (hOff := fun k _ hPk => by
-                have h := kFirstHalf_ne_kSecondHalf (pad_n_kh := pad_n_kh)
-                  (pad_hd_half := pad_hd / 2) s k_row_stride hd k hPk.2 idx hDimLt
-                simp only [kFullFirstOffset, kFullSecondOffset] at h
-                intro heq
-                exact h heq.symm)]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        simp [activeKFull, ropeForwardKernelK1Spec, kFullFirstOffset,
-              kFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
-              hAct.1, hAct.2, Option.bind, Option.map]
-      · rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
-              (region := k_ptr)
-              (P := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-                k.1.val < n_kh ∧ k.2.1.val < hd / 2)
-              (offsetFn := fun k : TileIndex [pad_n_kh, pad_hd / 2] =>
-                s.pids 0 * k_row_stride + k.1.val * hd + k.2.1.val)
-              (hOff := fun k _ hPk => by
-                have h := kFirstHalf_ne_kSecondHalf (pad_n_kh := pad_n_kh)
-                  (pad_hd_half := pad_hd / 2) s k_row_stride hd k hPk.2 idx hDimLt
-                simp only [kFullFirstOffset, kFullSecondOffset] at h
-                intro heq
-                exact h heq.symm)]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
-              q_ptr _ _ _ _ _ _ _ hKQ]
-        simp [activeKFull, kFullSecondOffset, hDimLt] at hAct
-        simp [activeKFull, hDimLt, hAct, kFullSecondOffset]
-    · exact False.elim (hHH (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.2.1.isLt))
-  · exact False.elim (hNK (Nat.lt_of_le_of_lt (Nat.zero_le _) idx.1.isLt))
 
 /-! ## Combined one-row `o0` + `o1` rotary-style RoPE slice
 
@@ -1220,5 +1057,91 @@ theorem rope_kernel_o0o1_row_o1_correct
       · simp [ropeActive, ropeRowIndex, ropeDimIndex, hRow, hDim]
     · simp [ropeActive, ropeRowIndex, ropeDimIndex, hRow]
   · exact False.elim (hBH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the combined RoPE row, projected on the
+first-half output position. -/
+theorem rope_kernel_o0o1_row_o0_compute_correct
+    (OUT X COS SIN : RegionName)
+    (SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_M BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        ropeOutOffset s stride_out_batch stride_out_seqlen stride_out_nheads
+          stride_out_headdim BLOCK_M i))
+    (hStrideHd : stride_out_headdim ≠ 0)
+    (hHalfBound : BLOCK_HALF ≤ rotary_dim_half) :
+    ComputeCorrect.Realizes
+      (kernel := rope_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
+        seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+        stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+        stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF => ropeActive s seqlen rotary_dim_half BLOCK_M i)
+        (fun i => (OUT,
+          ropeOutOffset s stride_out_batch stride_out_seqlen stride_out_nheads
+            stride_out_headdim BLOCK_M i)))
+      (expected := fun i =>
+        ropeO0Spec s X COS SIN SEQLEN_OFFSETS seqlen_ro stride_x_batch
+          stride_x_seqlen stride_x_nheads stride_x_headdim rotary_dim_half
+          BLOCK_M i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rope_kernel_o0o1_row]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := rope_kernel_o0o1_row_o0_correct OUT X COS SIN SEQLEN_OFFSETS
+    seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+    stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+    stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF s s' hOutInj
+    hStrideHd hHalfBound hExec i
+  simpa [hActive] using h
+
+/-- Compute-facing correctness for the combined RoPE row, projected on the
+second-half output position. -/
+theorem rope_kernel_o0o1_row_o1_compute_correct
+    (OUT X COS SIN : RegionName)
+    (SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_M BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        ropeOut1Offset s stride_out_batch stride_out_seqlen stride_out_nheads
+          stride_out_headdim rotary_dim_half BLOCK_M i))
+    (hStrideHd : stride_out_headdim ≠ 0)
+    (hHalfBound : BLOCK_HALF ≤ rotary_dim_half) :
+    ComputeCorrect.Realizes
+      (kernel := rope_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
+        seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+        stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+        stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF => ropeActive s seqlen rotary_dim_half BLOCK_M i)
+        (fun i => (OUT,
+          ropeOut1Offset s stride_out_batch stride_out_seqlen stride_out_nheads
+            stride_out_headdim rotary_dim_half BLOCK_M i)))
+      (expected := fun i =>
+        ropeO1Spec s X COS SIN SEQLEN_OFFSETS seqlen_ro stride_x_batch
+          stride_x_seqlen stride_x_nheads stride_x_headdim rotary_dim_half
+          BLOCK_M i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [rope_kernel_o0o1_row]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := rope_kernel_o0o1_row_o1_correct OUT X COS SIN SEQLEN_OFFSETS
+    seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+    stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+    stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF s s' hOutInj
+    hStrideHd hHalfBound hExec i
+  simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.RopeTransform

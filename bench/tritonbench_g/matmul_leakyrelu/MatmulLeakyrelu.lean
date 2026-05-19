@@ -54,6 +54,17 @@ def matmul_kernel_surface
   tl.store(c_ptrs, c, mask=c_mask)
 }
 
+/-- The full matmul/leaky-ReLU surface lowers to the algorithm layer. -/
+theorem matmul_kernel_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat)
+    (ACTIVATION : Bool) :
+    ∃ alg, (matmul_kernel_surface A B C M N K stride_am stride_ak stride_bk
+      stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
+      GROUP_SIZE_M ACTIVATION).toAlgorithm? = Except.ok alg := by
+  simp [matmul_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `matmul_leakyrelu.py`'s `matmul_kernel` for
 `ACTIVATION == "leaky_relu"`. -/
 def matmul_leaky_relu_surface
@@ -92,6 +103,16 @@ def matmul_leaky_relu_surface
   tl.store(c_ptrs, c, mask=c_mask)
 }
 
+/-- The leaky-ReLU specialized matmul surface lowers to the algorithm layer. -/
+theorem matmul_leaky_relu_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat) :
+    ∃ alg, (matmul_leaky_relu_surface A B C M N K stride_am stride_ak
+      stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N
+      BLOCK_SIZE_K GROUP_SIZE_M).toAlgorithm? = Except.ok alg := by
+  simp [matmul_leaky_relu_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of the `ACTIVATION == "leaky_relu"` tail of
 `matmul_leakyrelu.py`'s `matmul_kernel`.
 
@@ -115,6 +136,17 @@ def matmul_leaky_relu_tail_surface
   tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
     c, mask=c_mask)
 }
+
+/-- The leaky-ReLU tail surface lowers to the algorithm layer. -/
+theorem matmul_leaky_relu_tail_surface_toAlgorithm_supported
+    (Acc C : RegionName)
+    (M N stride_accm stride_accn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
+    ∃ alg, (matmul_leaky_relu_tail_surface Acc C M N stride_accm stride_accn
+      stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N).toAlgorithm? =
+        Except.ok alg := by
+  simp [matmul_leaky_relu_tail_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented masked output-store slice of `matmul_leakyrelu.py`'s
 `matmul_kernel`.

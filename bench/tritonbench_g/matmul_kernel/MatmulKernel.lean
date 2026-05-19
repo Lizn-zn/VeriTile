@@ -46,6 +46,13 @@ def matmul_kernel_surface
   tl.store(c_ptrs, c)
 }
 
+/-- The full matmul kernel surface lowers to the algorithm layer. -/
+theorem matmul_kernel_surface_toAlgorithm_supported
+    (C A B : RegionName) (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ∃ alg, (matmul_kernel_surface C A B BLOCK_SIZE_M BLOCK_SIZE_N
+      BLOCK_SIZE_K).toAlgorithm? = Except.ok alg := by
+  simp [matmul_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented output-store slice of `matmul_kernel.py`'s `matmul_kernel`.
 
 The full kernel computes `accumulator = dot(A, B)` in a loop, casts it to

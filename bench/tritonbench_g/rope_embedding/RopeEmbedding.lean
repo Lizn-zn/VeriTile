@@ -45,6 +45,18 @@ def rope_embedding_surface
   }
 }
 
+/-- The full RoPE surface lowers to the algorithm layer, including the
+group-head loop, backward sin flip, and both rotary-pair stores. -/
+theorem rope_embedding_surface_toAlgorithm_supported
+    (Q : RegionName) (Q_row_stride : Nat)
+    (cos : RegionName) (cos_row_stride : Nat)
+    (sin : RegionName) (sin_row_stride seqlen head_dim n_heads : Nat)
+    (BACKWARD_PASS : Bool) (BLOCK_SIZE ROPE_GROUP_SIZE : Nat) :
+    ∃ alg, (rope_embedding_surface Q Q_row_stride cos cos_row_stride sin
+      sin_row_stride seqlen head_dim n_heads BACKWARD_PASS BLOCK_SIZE
+      ROPE_GROUP_SIZE).toAlgorithm? = Except.ok alg := by
+  simp [rope_embedding_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented forward first-half slice of `rope_embedding.py`'s
 `_rope_embedding`.
 
@@ -324,5 +336,153 @@ theorem rope_embedding_forward_second_half_compute_correct
     cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE
     BLOCK_SIZE s s' hOutInj hExec i
   simpa [hActive] using h
+
+theorem rope_embedding_python_first_offset_injective
+    (s : BlockState) (Q_row_stride head_dim ROPE_GROUP_SIZE BLOCK_SIZE : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_SIZE =>
+        qFirstOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) := by
+  intro a b h
+  simp [qFirstOffset, headStart, colIndex] at h
+  exact Fin.ext h
+
+theorem rope_embedding_python_second_offset_injective
+    (s : BlockState) (Q_row_stride head_dim ROPE_GROUP_SIZE BLOCK_SIZE : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_SIZE =>
+        qSecondOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) := by
+  intro a b h
+  simp [qSecondOffset, qFirstOffset, headStart, colIndex] at h
+  exact Fin.ext h
+
+theorem rope_embedding_python_base_first_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_first_half Q cos sin 512 32 32 16 64 8 4 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => active s 64 8 4 32 i)
+        (fun i => (Q, qFirstOffset s 512 64 4 i)))
+      (expected := fun i => ropeFirstSpec s Q cos sin 512 32 32 16 64 4 32 i) := by
+  exact rope_embedding_forward_first_half_compute_correct Q cos sin
+    512 32 32 16 64 8 4 32 s
+    (rope_embedding_python_first_offset_injective s 512 64 4 32)
+
+theorem rope_embedding_python_base_second_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_second_half Q cos sin 512 32 32 16 64 8 4 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => active s 64 8 4 32 i)
+        (fun i => (Q, qSecondOffset s 512 64 4 i)))
+      (expected := fun i => ropeSecondSpec s Q cos sin 512 32 32 16 64 4 32 i) := by
+  exact rope_embedding_forward_second_half_compute_correct Q cos sin
+    512 32 32 16 64 8 4 32 s
+    (rope_embedding_python_second_offset_injective s 512 64 4 32)
+
+theorem rope_embedding_python_case1_first_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_first_half Q cos sin 128 16 16 8 32 4 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 16 => active s 32 4 4 16 i)
+        (fun i => (Q, qFirstOffset s 128 32 4 i)))
+      (expected := fun i => ropeFirstSpec s Q cos sin 128 16 16 8 32 4 16 i) := by
+  exact rope_embedding_forward_first_half_compute_correct Q cos sin
+    128 16 16 8 32 4 4 16 s
+    (rope_embedding_python_first_offset_injective s 128 32 4 16)
+
+theorem rope_embedding_python_case1_second_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_second_half Q cos sin 128 16 16 8 32 4 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 16 => active s 32 4 4 16 i)
+        (fun i => (Q, qSecondOffset s 128 32 4 i)))
+      (expected := fun i => ropeSecondSpec s Q cos sin 128 16 16 8 32 4 16 i) := by
+  exact rope_embedding_forward_second_half_compute_correct Q cos sin
+    128 16 16 8 32 4 4 16 s
+    (rope_embedding_python_second_offset_injective s 128 32 4 16)
+
+theorem rope_embedding_python_case2_first_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_first_half Q cos sin 2048 64 64 32 128 16 4 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 128 16 4 64 i)
+        (fun i => (Q, qFirstOffset s 2048 128 4 i)))
+      (expected := fun i => ropeFirstSpec s Q cos sin 2048 64 64 32 128 4 64 i) := by
+  exact rope_embedding_forward_first_half_compute_correct Q cos sin
+    2048 64 64 32 128 16 4 64 s
+    (rope_embedding_python_first_offset_injective s 2048 128 4 64)
+
+theorem rope_embedding_python_case2_second_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_second_half Q cos sin 2048 64 64 32 128 16 4 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 128 16 4 64 i)
+        (fun i => (Q, qSecondOffset s 2048 128 4 i)))
+      (expected := fun i => ropeSecondSpec s Q cos sin 2048 64 64 32 128 4 64 i) := by
+  exact rope_embedding_forward_second_half_compute_correct Q cos sin
+    2048 64 64 32 128 16 4 64 s
+    (rope_embedding_python_second_offset_injective s 2048 128 4 64)
+
+theorem rope_embedding_python_case3_first_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_first_half Q cos sin 8192 128 128 64 256 32 4 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 128 => active s 256 32 4 128 i)
+        (fun i => (Q, qFirstOffset s 8192 256 4 i)))
+      (expected := fun i => ropeFirstSpec s Q cos sin 8192 128 128 64 256 4 128 i) := by
+  exact rope_embedding_forward_first_half_compute_correct Q cos sin
+    8192 128 128 64 256 32 4 128 s
+    (rope_embedding_python_first_offset_injective s 8192 256 4 128)
+
+theorem rope_embedding_python_case3_second_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_second_half Q cos sin 8192 128 128 64 256 32 4 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 128 => active s 256 32 4 128 i)
+        (fun i => (Q, qSecondOffset s 8192 256 4 i)))
+      (expected := fun i => ropeSecondSpec s Q cos sin 8192 128 128 64 256 4 128 i) := by
+  exact rope_embedding_forward_second_half_compute_correct Q cos sin
+    8192 128 128 64 256 32 4 128 s
+    (rope_embedding_python_second_offset_injective s 8192 256 4 128)
+
+theorem rope_embedding_python_case4_first_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_first_half Q cos sin 32768 256 256 128 512 64 4 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 256 => active s 512 64 4 256 i)
+        (fun i => (Q, qFirstOffset s 32768 512 4 i)))
+      (expected := fun i => ropeFirstSpec s Q cos sin 32768 256 256 128 512 4 256 i) := by
+  exact rope_embedding_forward_first_half_compute_correct Q cos sin
+    32768 256 256 128 512 64 4 256 s
+    (rope_embedding_python_first_offset_injective s 32768 512 4 256)
+
+theorem rope_embedding_python_case4_second_half_compute_correct
+    (Q cos sin : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := rope_embedding_forward_second_half Q cos sin 32768 256 256 128 512 64 4 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 256 => active s 512 64 4 256 i)
+        (fun i => (Q, qSecondOffset s 32768 512 4 i)))
+      (expected := fun i => ropeSecondSpec s Q cos sin 32768 256 256 128 512 4 256 i) := by
+  exact rope_embedding_forward_second_half_compute_correct Q cos sin
+    32768 256 256 128 512 64 4 256 s
+    (rope_embedding_python_second_offset_injective s 32768 512 4 256)
 
 end VeriTile.Bench.TritonBenchG.RopeEmbedding

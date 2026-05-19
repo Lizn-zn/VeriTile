@@ -68,6 +68,18 @@ def fused_recurrent_rwkv6_fwd_surface
   }
 }
 
+/-- The full fused RWKV6 recurrent forward surface lowers to the algorithm
+layer. -/
+theorem fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported
+    (q k v w u o h0 ht : RegionName)
+    (s_k_h s_v_h B H T K V BK BV : Nat) (scale : ℝ)
+    (USE_INITIAL_STATE STORE_FINAL_STATE REVERSE : Bool) :
+    ∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht s_k_h
+      s_v_h B H T K V BK BV scale USE_INITIAL_STATE STORE_FINAL_STATE
+      REVERSE).toAlgorithm? = Except.ok alg := by
+  simp [fused_recurrent_rwkv6_fwd_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented per-step output-store slice of
 `fused_rwkv6_kernel.py`'s `fused_recurrent_rwkv6_fwd_kernel`.
 
@@ -287,5 +299,67 @@ theorem fused_recurrent_rwkv6_final_state_store_slice_compute_correct
     s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-- Python test-shape output buffer addresses are injective for
+`B=2,H=3,T=4,V=8,BV=8`. The Python helper creates `o` with shape
+`(NK,B,H,T,V) = (1,2,3,4,8)`, so the modeled partial-output slice writes a
+single contiguous `V` row for each loop iteration. -/
+theorem fused_recurrent_rwkv6_output_python_test_shape_offset_injective
+    (s : BlockState) (timeOffset : Fin 4) :
+    Function.Injective
+      (fun i : Fin 8 => outOffset s timeOffset.val 2 3 4 8 8 i) := by
+  intro a b h
+  simp [outOffset, vIndex] at h
+  omega
+
+/-- Python test-shape final-state addresses are injective for
+`K=V=BK=BV=8`. The final state has shape `(B,H,K,V) = (2,3,8,8)`, matching the
+kernel's row-major `i_bh * K * V + k * V + v` layout. -/
+theorem fused_recurrent_rwkv6_final_state_python_test_shape_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [8, 8] => finalStateOffset s 8 8 8 8 idx) := by
+  rintro ⟨⟨av, hav⟩, ⟨ak, hak⟩, _⟩ ⟨⟨bv, hbv⟩, ⟨bk, hbk⟩, _⟩ h
+  simp [finalStateOffset, vIndex2D, kIndex2D] at h
+  have hv : av = bv := by omega
+  have hk : ak = bk := by omega
+  subst bv
+  subst bk
+  rfl
+
+/-- Output-store correctness specialized to the concrete Python regression
+shape `B=2,H=3,T=4,K=V=8`, with `BK=BV=8`. This instantiates the generic
+per-iteration store proof at each valid time offset. -/
+theorem fused_recurrent_rwkv6_output_python_test_shape_compute_correct
+    (BO O : RegionName) (timeOffset : Fin 4) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_output_store_slice BO O timeOffset.val
+        2 3 4 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active s 8 8 i)
+        (fun i => (O, outOffset s timeOffset.val 2 3 4 8 8 i)))
+      (expected := fun i : Fin 8 => storeValue s BO 8 8 i) := by
+  exact fused_recurrent_rwkv6_output_store_slice_compute_correct BO O
+    timeOffset.val 2 3 4 8 8 s
+    (fused_recurrent_rwkv6_output_python_test_shape_offset_injective s timeOffset)
+
+/-- Final-state-store correctness specialized to the Python regression shape
+`B=2,H=3,T=4,K=V=8`, with `BK=BV=8`. -/
+theorem fused_recurrent_rwkv6_final_state_python_test_shape_compute_correct
+    (BHFinal Ht : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal Ht
+        8 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [8, 8] => finalActive s 8 8 8 8 idx)
+        (fun idx : TileIndex [8, 8] =>
+          (Ht, finalStateOffset s 8 8 8 8 idx)))
+      (expected := fun idx : TileIndex [8, 8] =>
+        finalStateStoreValue s BHFinal 8 8 8 8 idx) := by
+  exact fused_recurrent_rwkv6_final_state_store_slice_compute_correct BHFinal Ht
+    8 8 8 8 s
+    (fused_recurrent_rwkv6_final_state_python_test_shape_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel

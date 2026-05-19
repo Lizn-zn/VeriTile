@@ -65,6 +65,18 @@ def attention_fwd_kernel_surface
   }
 }
 
+/-- The full Python-shaped forward surface lowers to the algorithm layer,
+including the block-pointer loop, optional H-state store, dot products, and
+output writeback. -/
+theorem attention_fwd_kernel_surface_toAlgorithm_supported
+    (q k v h o : RegionName)
+    (s_qh s_qt s_qd s_hh s_ht T : Nat) (scale : ℝ)
+    (BT BD NT : Nat) (STORE IFCOND : Bool) :
+    ∃ alg, (attention_fwd_kernel_surface q k v h o s_qh s_qt s_qd s_hh
+      s_ht T scale BT BD NT STORE IFCOND).toAlgorithm? = Except.ok alg := by
+  simp [attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented output-store slice of `attention_fwd_triton1.py`'s
 `attention_fwd_kernel`.
 
@@ -173,6 +185,51 @@ theorem attention_fwd_triton1_output_store_slice_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
+/-- Named output writeback for the `IFCOND=True, i=0` branch.
+
+The branch-specific dot-product arithmetic is represented by `BO`; this theorem
+exposes the Python-observed `p_o` store for that branch using the shared output
+store proof. -/
+theorem attention_fwd_triton1_ifcond_first_output_store_slice_compute_correct
+    (BO O : RegionName)
+    (stride_bo_bh stride_bo_t stride_bo_d
+      s_qh s_qt s_qd BT BD : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BD] => outOffset s s_qh s_qt s_qd BT idx)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O stride_bo_bh
+        stride_bo_t stride_bo_d s_qh s_qt s_qd BT BD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BT, BD] =>
+        some (O, outOffset s s_qh s_qt s_qd BT idx))
+      (expected := fun idx : TileIndex [BT, BD] =>
+        s.readMem BO
+          (boOffset s stride_bo_bh stride_bo_t stride_bo_d BT idx)) := by
+  exact attention_fwd_triton1_output_store_slice_compute_correct BO O
+    stride_bo_bh stride_bo_t stride_bo_d s_qh s_qt s_qd BT BD s hOutInj
+
+/-- Named output writeback for the recurrent-output branch (`IFCOND=False` or
+`IFCOND=True, i>0`). `BO` carries the branch-specific accumulated value. -/
+theorem attention_fwd_triton1_recurrent_output_store_slice_compute_correct
+    (BO O : RegionName)
+    (stride_bo_bh stride_bo_t stride_bo_d
+      s_qh s_qt s_qd BT BD : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BD] => outOffset s s_qh s_qt s_qd BT idx)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O stride_bo_bh
+        stride_bo_t stride_bo_d s_qh s_qt s_qd BT BD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BT, BD] =>
+        some (O, outOffset s s_qh s_qt s_qd BT idx))
+      (expected := fun idx : TileIndex [BT, BD] =>
+        s.readMem BO
+          (boOffset s stride_bo_bh stride_bo_t stride_bo_d BT idx)) := by
+  exact attention_fwd_triton1_output_store_slice_compute_correct BO O
+    stride_bo_bh stride_bo_t stride_bo_d s_qh s_qt s_qd BT BD s hOutInj
+
 /-- Proof-oriented `p_h` state-store slice of `attention_fwd_triton1.py`.
 Companion to the output_store_slice: takes a precomputed `BHPre` [BD, BD]
 tile and proves the per-iteration writeback into `H` at the canonical block
@@ -242,5 +299,89 @@ theorem attention_fwd_triton1_h_store_slice_compute_correct
     s hOutInj idx
   rw [hExec] at h
   exact Option.some.inj h
+
+/-- Named H-state writeback for the Python `STORE=True` branch. -/
+theorem attention_fwd_triton1_store_enabled_h_store_slice_compute_correct
+    (BHPre H : RegionName) (i_iter s_hh s_ht BT BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BD, BD] => hOffset s i_iter s_hh s_ht BD idx)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_h_store_slice BHPre H i_iter s_hh s_ht BT BD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BD, BD] =>
+        some (H, hOffset s i_iter s_hh s_ht BD idx))
+      (expected := fun idx => hStoreSpec s BHPre i_iter s_hh s_ht BD idx) := by
+  exact attention_fwd_triton1_h_store_slice_compute_correct BHPre H
+    i_iter s_hh s_ht BT BD s hOutInj
+
+/-! ## Python test-shape wrappers
+
+The checked `attention_fwd_triton1.py` main cases use `B = 2`, `H = 8`,
+`T = 1024`, `D = 128`, `BT = 32`, `BD = 128`, and `NT = 32`. For contiguous
+`[B, H, T, D]` tensors this gives `s_qh = 1024 * 128`, `s_qt = 128`,
+`s_qd = 1`; the recurrent state tensor has `s_hh = NT * BD * BD` and
+`s_ht = 128`. -/
+
+theorem attention_fwd_triton1_output_python_test_shape_compute_correct
+    (BO O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx)) := by
+  apply attention_fwd_triton1_output_store_slice_compute_correct
+  rintro ⟨⟨ta, hta⟩, ⟨da, hda⟩, _⟩ ⟨⟨tb, htb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, tIndex, dIndex] at h
+  have ht : ta = tb := by omega
+  have hd : da = db := by omega
+  subst tb
+  subst db
+  rfl
+
+theorem attention_fwd_triton1_ifcond_first_output_python_test_shape_compute_correct
+    (BO O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx)) := by
+  exact attention_fwd_triton1_output_python_test_shape_compute_correct BO O s
+
+theorem attention_fwd_triton1_recurrent_output_python_test_shape_compute_correct
+    (BO O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx)) := by
+  exact attention_fwd_triton1_output_python_test_shape_compute_correct BO O s
+
+theorem attention_fwd_triton1_store_enabled_h_python_test_shape_compute_correct
+    (BHPre H : RegionName) (i_iter : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_h_store_slice BHPre H i_iter
+        524288 128 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (H, hOffset s i_iter 524288 128 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        hStoreSpec s BHPre i_iter 524288 128 128 idx) := by
+  apply attention_fwd_triton1_store_enabled_h_store_slice_compute_correct
+  rintro ⟨⟨ar, har⟩, ⟨ac, hac⟩, _⟩ ⟨⟨br, hbr⟩, ⟨bc, hbc⟩, _⟩ h
+  simp [hOffset, hRow, hCol] at h
+  have hr : ar = br := by omega
+  have hc : ac = bc := by omega
+  subst br
+  subst bc
+  rfl
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1

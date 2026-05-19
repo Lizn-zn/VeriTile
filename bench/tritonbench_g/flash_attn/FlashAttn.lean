@@ -85,6 +85,24 @@ def flash_attn_fwd_kernel_surface
   tl.store(O_block_ptr, (out_buffer).to(tl.float16))
 }
 
+/-- The full flash-attention forward surface lowers to the algorithm layer. -/
+theorem flash_attn_fwd_kernel_surface_toAlgorithm_supported
+    (Q K V L O : RegionName) (sm_scale : ℝ)
+    (stride_q_bs stride_q_head stride_q_seqlen stride_q_dim
+      stride_k_bs stride_k_head stride_k_seqlen stride_k_dim
+      stride_v_bs stride_v_head stride_v_seqlen stride_v_dim
+      stride_o_bs stride_o_head stride_o_seqlen stride_o_dim
+      BS HEAD SEQLEN BLOCK_M DIM BLOCK_N : Nat)
+    (IS_CAUSAL : Bool) :
+    ∃ alg, (flash_attn_fwd_kernel_surface Q K V L O sm_scale stride_q_bs
+      stride_q_head stride_q_seqlen stride_q_dim stride_k_bs stride_k_head
+      stride_k_seqlen stride_k_dim stride_v_bs stride_v_head stride_v_seqlen
+      stride_v_dim stride_o_bs stride_o_head stride_o_seqlen stride_o_dim
+      BS HEAD SEQLEN BLOCK_M DIM BLOCK_N IS_CAUSAL).toAlgorithm? =
+        Except.ok alg := by
+  simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented final output-store slice of `flash_attn.py`'s
 `_fwd_kernel`.
 
@@ -388,5 +406,53 @@ theorem flash_attn_l_store_slice_compute_correct
     stride_max_m stride_den_h stride_den_m SEQLEN BLOCK_M s hOutInj i
   rw [hExec] at h
   exact Option.some.inj h
+
+theorem flash_attn_python_output_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [128, 64] => outOffset s 8192 64 1 128 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem flash_attn_python_l_offset_injective
+    (s : BlockState) :
+    Function.Injective (fun i : Fin 128 => lOffset s 128 128 i) := by
+  intro a b h
+  simp [lOffset, mIndex] at h
+  exact Fin.ext h
+
+theorem flash_attn_python_output_store_compute_correct
+    (OutBuffer O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_attn_output_store_slice OutBuffer O
+        8192 64 1 8192 64 1 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (O, outOffset s 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem OutBuffer
+              (bufferOffset s 8192 64 1 128 idx))))) := by
+  exact flash_attn_output_store_slice_compute_correct OutBuffer O
+    8192 64 1 8192 64 1 128 64 s
+    (flash_attn_python_output_offset_injective s)
+
+theorem flash_attn_python_l_store_compute_correct
+    (Max Denom L : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_attn_l_store_slice Max Denom L 128 1 128 1 128 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
+      (expected := fun i =>
+        lStoreSpec s Max Denom 128 1 128 1 128 i) := by
+  exact flash_attn_l_store_slice_compute_correct Max Denom L
+    128 1 128 1 128 128 s
+    (flash_attn_python_l_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.FlashAttn

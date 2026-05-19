@@ -45,6 +45,16 @@ def apply_penalty
     mask=cur_batch_id_offset < cur_batch_end_index)
 }
 
+/-- The full apply-penalty surface lowers to the algorithm layer. -/
+theorem apply_penalty_toAlgorithm_supported
+    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
+    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
+    (stride_logit_b stride_logit_s BLOCK_P : Nat) :
+    ∃ alg, (apply_penalty Logits presence_penalty freqency_penalty
+      repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
+      stride_logit_b stride_logit_s BLOCK_P).toAlgorithm? = Except.ok alg := by
+  simp [apply_penalty, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 def batchStart (s : BlockState) (p_cumsum_seq_len : RegionName) : Nat :=
   s.readMemValue .nat p_cumsum_seq_len (s.pids 0)
 
@@ -112,6 +122,25 @@ noncomputable def penaltyValue
       * s.readMem freqency_penalty (s.pids 0)
     - s.readMem presence_penalty (s.pids 0)
 
+/-- Formula-level correctness target for the Python apply-penalty store.
+
+The remaining proof work is the data-dependent masked scatter readback from the
+actual kernel state to this target under a token-id uniqueness hypothesis. -/
+def apply_penalty_correct_target
+    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
+    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
+    (stride_logit_b BLOCK_P : Nat) (s s' : BlockState) : Prop :=
+  ∀ i : Fin BLOCK_P,
+    s'.readMem Logits
+        (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i) =
+      if active s p_cumsum_seq_len i then
+        penaltyValue s Logits presence_penalty freqency_penalty
+          repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
+          stride_logit_b i
+      else
+        s.readMem Logits
+          (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i)
+
 /-! ### Bench-local masked-injectivity scatter readback
 
 `BlockState.scatter_readback_prop_masked_nd` requires *global* injectivity of
@@ -124,7 +153,7 @@ the masked-true subset, which is all that the underlying proof uses. -/
 private theorem foldl_writeMem_masked_preserves_local {α : Type}
     {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → ℝ) (mask : α → Bool) (o : Nat) (l : List α) :
-    ∀ (s : BlockState), (∀ k ∈ l, mask k = true → offsetFn k ≠ o) →
+    ∀ (s : BlockState), (∀ k, k ∈ l → (mask k = Bool.true) → offsetFn k ≠ o) →
       ((l.foldl
           (fun acc k =>
             if mask k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).readMem region o)
@@ -134,9 +163,9 @@ private theorem foldl_writeMem_masked_preserves_local {α : Type}
   | cons hd tl ih =>
     intro s h
     rw [List.foldl_cons]
-    have htl : ∀ k ∈ tl, mask k = true → offsetFn k ≠ o :=
+    have htl : ∀ k, k ∈ tl → (mask k = Bool.true) → offsetFn k ≠ o :=
       fun k hk hmk => h k (List.mem_cons_of_mem hd hk) hmk
-    by_cases hmaskhd : mask hd = true
+    by_cases hmaskhd : mask hd = Bool.true
     · have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self) hmaskhd
       simp only [hmaskhd, if_true]
       rw [ih _ htl]
@@ -146,7 +175,7 @@ private theorem foldl_writeMem_masked_preserves_local {α : Type}
       rw [if_neg]
       rintro ⟨_, h_eq⟩
       exact hhd h_eq.symm
-    · have hmaskhd' : mask hd = false := by
+    · have hmaskhd' : mask hd = Bool.false := by
         rcases hmaskFalse : mask hd
         · rfl
         · exact absurd hmaskFalse hmaskhd

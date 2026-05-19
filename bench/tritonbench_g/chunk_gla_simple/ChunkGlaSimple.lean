@@ -59,6 +59,17 @@ def chunk_gla_simple_fwd_surface
   tl.store(p_o, (b_o).to(p_o.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
+/-- The full simple-GLA forward output surface lowers to the algorithm layer. -/
+theorem chunk_gla_simple_fwd_surface_toAlgorithm_supported
+    (q k v h g o : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat)
+    (scale : ℝ) (T K V BT BK BV : Nat) :
+    ∃ alg, (chunk_gla_simple_fwd_surface q k v h g o s_k_h s_k_t s_v_h
+      s_v_t s_h_h s_h_t scale T K V BT BK BV).toAlgorithm? =
+        Except.ok alg := by
+  simp [chunk_gla_simple_fwd_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final output-store slice of `chunk_gla_simple.py`'s
 `chunk_simple_gla_fwd_kernel_o`.
 
@@ -171,5 +182,102 @@ theorem chunk_gla_simple_output_store_slice_compute_correct
     s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-- Python case 1 uses `B=2,H=4,T=128,K=64,V=64,BT=32`, with contiguous
+`v/o` strides `s_v_h=8192`, `s_v_t=64`, and `BV=64`. -/
+theorem chunk_gla_simple_output_python_case1_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [32, 64] => tileOffset s 8192 64 32 64 idx) := by
+  rintro ⟨⟨ta, hta⟩, ⟨va, hva⟩, _⟩ ⟨⟨tb, htb⟩, ⟨vb, hvb⟩, _⟩ h
+  simp [tileOffset, tIndex, vIndex] at h
+  have ht : ta = tb := by omega
+  have hv : va = vb := by omega
+  subst tb
+  subst vb
+  rfl
+
+/-- Python cases 2 and 3 reuse `B=2,H=4,T=128,K=64,V=64`, but launch with
+`BT=64`; their output layout is still contiguous with `s_v_h=8192`,
+`s_v_t=64`, `BV=64`. -/
+theorem chunk_gla_simple_output_python_case2_case3_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [64, 64] => tileOffset s 8192 64 64 64 idx) := by
+  rintro ⟨⟨ta, hta⟩, ⟨va, hva⟩, _⟩ ⟨⟨tb, htb⟩, ⟨vb, hvb⟩, _⟩ h
+  simp [tileOffset, tIndex, vIndex] at h
+  have ht : ta = tb := by omega
+  have hv : va = vb := by omega
+  subst tb
+  subst vb
+  rfl
+
+/-- Python case 4 uses `B=1,H=2,T=64,K=32,V=32,BT=64`, with contiguous
+`v/o` strides `s_v_h=2048`, `s_v_t=32`, and `BV=32`. -/
+theorem chunk_gla_simple_output_python_case4_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [64, 32] => tileOffset s 2048 32 64 32 idx) := by
+  rintro ⟨⟨ta, hta⟩, ⟨va, hva⟩, _⟩ ⟨⟨tb, htb⟩, ⟨vb, hvb⟩, _⟩ h
+  simp [tileOffset, tIndex, vIndex] at h
+  have ht : ta = tb := by omega
+  have hv : va = vb := by omega
+  subst tb
+  subst vb
+  rfl
+
+theorem chunk_gla_simple_output_python_case1_compute_correct
+    (BO O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_output_store_slice BO O 8192 64 128 64 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => active s 128 64 32 64 idx)
+        (fun idx : TileIndex [32, 64] => (O, tileOffset s 8192 64 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        storeValue s BO 8192 64 128 64 32 64 idx) := by
+  exact chunk_gla_simple_output_store_slice_compute_correct BO O
+    8192 64 128 64 32 64 s
+    (chunk_gla_simple_output_python_case1_offset_injective s)
+
+theorem chunk_gla_simple_output_python_case2_compute_correct
+    (BO O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_output_store_slice BO O 8192 64 128 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (O, tileOffset s 8192 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        storeValue s BO 8192 64 128 64 64 64 idx) := by
+  exact chunk_gla_simple_output_store_slice_compute_correct BO O
+    8192 64 128 64 64 64 s
+    (chunk_gla_simple_output_python_case2_case3_offset_injective s)
+
+theorem chunk_gla_simple_output_python_case3_compute_correct
+    (BO O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_output_store_slice BO O 8192 64 128 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (O, tileOffset s 8192 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        storeValue s BO 8192 64 128 64 64 64 idx) := by
+  exact chunk_gla_simple_output_python_case2_compute_correct BO O s
+
+theorem chunk_gla_simple_output_python_case4_compute_correct
+    (BO O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_output_store_slice BO O 2048 32 64 32 64 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 32] => active s 64 32 64 32 idx)
+        (fun idx : TileIndex [64, 32] => (O, tileOffset s 2048 32 64 32 idx)))
+      (expected := fun idx : TileIndex [64, 32] =>
+        storeValue s BO 2048 32 64 32 64 32 idx) := by
+  exact chunk_gla_simple_output_store_slice_compute_correct BO O
+    2048 32 64 32 64 32 s
+    (chunk_gla_simple_output_python_case4_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.ChunkGlaSimple

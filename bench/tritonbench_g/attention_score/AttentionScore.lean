@@ -97,6 +97,27 @@ def attention_score_kernel
     mask=o_range < $(NKV_CTX))
 }
 
+/-- The full attention-score surface lowers to the algorithm layer, with the
+Python wrapper invariant `BLOCK_M = BLOCK_N` carried as an explicit parameter. -/
+theorem attention_score_kernel_toAlgorithm_supported
+    (Q K M Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk
+      stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX
+      sliding_window_offset sliding_window_size
+      BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
+    (sm_scale : ℝ)
+    (SLIDING_WINDOW COMPLEMENT_SLIDING_WINDOW IS_EVEN_M IS_EVEN_N : Bool)
+    (hBlockMN : BLOCK_M = BLOCK_N) :
+    ∃ alg, (attention_score_kernel Q K M Out stride_qz stride_qh stride_qm
+      stride_qk stride_kz stride_kh stride_kn stride_kk stride_oz stride_oh
+      stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX sliding_window_offset
+      sliding_window_size BLOCK_M BLOCK_DMODEL BLOCK_N sm_scale SLIDING_WINDOW
+      COMPLEMENT_SLIDING_WINDOW IS_EVEN_M IS_EVEN_N hBlockMN).toAlgorithm?
+        = Except.ok alg := by
+  simp [attention_score_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final score-vector store slice of `attention_score.py`'s
 `_score_kernel`.
 
@@ -241,5 +262,27 @@ theorem attention_score_final_store_slice_compute_correct
     s hOutInj i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrapper
+
+`attention_score.py`'s checked test uses `B = 2`, `H = 4`, `N_CTX = 128`,
+`NKV_CTX = 128`, and the global `_BLOCK_N = _BLOCK_M = 64`. The score/output
+vectors are contiguous `[B, H, NKV_CTX]` surfaces with strides `(512, 128, 1)`. -/
+
+theorem attention_score_final_store_python_test_shape_compute_correct
+    (Score Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_score_final_store_slice Score Out
+        512 128 1 512 128 128 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 128 64 i)
+        (fun i => (Out, outOffset s 512 128 64 i)))
+      (expected := fun i : Fin 64 =>
+        scoreStoreValue s Score 512 128 1 128 64 i) := by
+  apply attention_score_final_store_slice_compute_correct
+  intro a b h
+  simp [outOffset, nIndex] at h
+  exact Fin.ext (by omega)
 
 end VeriTile.Bench.TritonBenchG.AttentionScore

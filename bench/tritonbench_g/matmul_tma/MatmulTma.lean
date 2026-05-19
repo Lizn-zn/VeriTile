@@ -39,6 +39,17 @@ def matmul_tma_load_store_surface
   tl.store(c_block_ptr, c)
 }
 
+/-- The full TMA load/store matmul surface lowers to the algorithm layer. -/
+theorem matmul_tma_load_store_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (OUTPUT_F16 : Bool) :
+    ∃ alg, (matmul_tma_load_store_surface A B C M N K stride_am stride_ak
+      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K
+      OUTPUT_F16).toAlgorithm? = Except.ok alg := by
+  simp [matmul_tma_load_store_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `matmul_tma.py`'s `matmul_tma_load_store` with
 `OUTPUT_F16 = true`. -/
 def matmul_tma_load_store_f16_surface
@@ -60,6 +71,17 @@ def matmul_tma_load_store_f16_surface
   c = (tl.dot(a, b)).to(tl.float16)
   tl.store(c_block_ptr, c)
 }
+
+/-- The fp16-specialized TMA load/store surface lowers to the algorithm layer. -/
+theorem matmul_tma_load_store_f16_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    ∃ alg, (matmul_tma_load_store_f16_surface A B C M N K stride_am stride_ak
+      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgorithm?
+        = Except.ok alg := by
+  simp [matmul_tma_load_store_f16_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented output-store slice of `matmul_tma.py`'s `matmul_kernel`.
 

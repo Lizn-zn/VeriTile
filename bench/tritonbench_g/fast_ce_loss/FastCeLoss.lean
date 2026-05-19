@@ -53,6 +53,19 @@ def cross_entropy_forward_surface
   tl.store(loss_ptr, loss)
 }
 
+/-- The faithful full forward surface lowers to the algorithm layer, including
+optional logit scaling and softcapping branches. -/
+theorem cross_entropy_forward_surface_toAlgorithm_supported
+    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
+    (VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)
+    (SOFTCAP LOGIT_SCALE : ℝ)
+    (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
+    ∃ alg,
+      (cross_entropy_forward_surface logits_ptr loss_ptr logsumexp_ptr labels_ptr
+        VOCAB_SIZE logits_row_stride BLOCK_SIZE SOFTCAP LOGIT_SCALE
+        DO_SOFTCAPPING DO_LOGIT_SCALING).toAlgorithm? = Except.ok alg := by
+  simp [cross_entropy_forward_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `fast_ce_loss.py`'s
 `_chunked_cross_entropy_forward`.
 
@@ -101,6 +114,21 @@ def chunked_cross_entropy_forward_surface
   }
 }
 
+/-- The faithful chunked forward surface lowers to the algorithm layer,
+including optional logit scaling and softcapping branches. -/
+theorem chunked_cross_entropy_forward_surface_toAlgorithm_supported
+    (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
+    (VOCAB_SIZE N_CHUNKS logits_row_stride BLOCK_SIZE : Nat)
+    (SOFTCAP LOGIT_SCALE : ℝ)
+    (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
+    ∃ alg,
+      (chunked_cross_entropy_forward_surface logits_ptr loss_ptr logsumexp_ptr
+        labels_ptr VOCAB_SIZE N_CHUNKS logits_row_stride BLOCK_SIZE SOFTCAP
+        LOGIT_SCALE DO_SOFTCAPPING DO_LOGIT_SCALING).toAlgorithm? =
+        Except.ok alg := by
+  simp [chunked_cross_entropy_forward_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `fast_ce_loss.py`'s `_cross_entropy_backward`.
 
 This preserves the block logits load, optional logit scaling, optional softcap
@@ -145,6 +173,21 @@ def cross_entropy_backward_surface
   }
   tl.store(logits_ptr + col_offsets, dloss * y, mask=mask)
 }
+
+/-- The faithful full backward surface lowers to the algorithm layer, including
+the ignored-label, logit scaling, softcapping derivative, and masked writeback
+branches. -/
+theorem cross_entropy_backward_surface_toAlgorithm_supported
+    (logits_ptr dloss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
+    (VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE : Nat)
+    (SOFTCAP LOGIT_SCALE : ℝ)
+    (DO_SOFTCAPPING DO_LOGIT_SCALING : Bool) :
+    ∃ alg,
+      (cross_entropy_backward_surface logits_ptr dloss_ptr logsumexp_ptr labels_ptr
+        VOCAB_SIZE logits_row_stride dloss_row_stride BLOCK_SIZE SOFTCAP
+        LOGIT_SCALE DO_SOFTCAPPING DO_LOGIT_SCALING).toAlgorithm? =
+        Except.ok alg := by
+  simp [cross_entropy_backward_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented backward final-store slice of `fast_ce_loss.py`'s
 `_cross_entropy_backward`.

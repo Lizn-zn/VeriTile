@@ -74,6 +74,19 @@ def chunk_delta_rule_fwd_h_surface
   }
 }
 
+/-- The full chunk-delta forward H surface lowers to the algorithm layer. -/
+theorem chunk_delta_rule_fwd_h_surface_toAlgorithm_supported
+    (k v d v_new h initial_state final_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
+    ∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+      final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm?
+        = Except.ok alg := by
+  simp [chunk_delta_rule_fwd_h_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented state-store slice of `chunk_delta_fwd.py`'s
 `chunk_delta_rule_fwd_kernel_h`.
 
@@ -406,5 +419,97 @@ theorem chunk_delta_fwd_final_state_store_slice_compute_correct
     s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+`chunk_delta_fwd.py`'s checked tests use `B = 2`, `H = 4`, `T = 128`,
+`K = 64`, `V = 64`, and `BT = 32`. The Python launcher derives
+`BK = 64`, `BV = 64`, `BC = 32`, and `NT = 4`. Contiguous tensor strides passed
+to the kernel are:
+- `u/v_new`: `(s_vo_h, s_vo_t, s_vo_d) = (8192, 64, 1)`
+- `h`: `(s_h_h, s_h_t) = (16384, 64)` for shape `(B, H, NT * K, V)`. -/
+
+theorem chunk_delta_fwd_h_python_test_shape_offset_injective
+    (s : BlockState) (i_t : Fin 4) :
+    Function.Injective
+      (fun idx : TileIndex [64, 64] =>
+        hOffset s i_t.val 16384 64 64 64 64 64 idx) := by
+  rintro ⟨⟨ka, hka⟩, ⟨va, hva⟩, _⟩ ⟨⟨kb, hkb⟩, ⟨vb, hvb⟩, _⟩ h
+  simp [hOffset, kIndex, vIndex] at h
+  have hk : ka = kb := by omega
+  have hv : va = vb := by omega
+  subst kb
+  subst vb
+  rfl
+
+theorem chunk_delta_fwd_v_new_python_test_shape_offset_injective
+    (s : BlockState) (i_t : Fin 4) :
+    Function.Injective
+      (fun idx : TileIndex [32, 64] =>
+        vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx) := by
+  rintro ⟨⟨ca, hca⟩, ⟨va, hva⟩, _⟩ ⟨⟨cb, hcb⟩, ⟨vb, hvb⟩, _⟩ h
+  simp [vNewOffset, cIndex, vIndex] at h
+  have hc : ca = cb := by omega
+  have hv : va = vb := by omega
+  subst cb
+  subst vb
+  rfl
+
+theorem chunk_delta_fwd_final_state_python_test_shape_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx) := by
+  rintro ⟨⟨ka, hka⟩, ⟨va, hva⟩, _⟩ ⟨⟨kb, hkb⟩, ⟨vb, hvb⟩, _⟩ h
+  simp [finalStateOffset, kIndex, vIndex] at h
+  have hk : ka = kb := by omega
+  have hv : va = vb := by omega
+  subst kb
+  subst vb
+  rfl
+
+theorem chunk_delta_fwd_h_store_python_test_shape_compute_correct
+    (BH HOut : RegionName) (i_t : Fin 4) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_h_store_slice BH HOut
+        i_t.val 16384 64 64 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx => (HOut, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        storeValue s BH i_t.val 16384 64 64 64 64 64 idx) := by
+  exact chunk_delta_fwd_h_store_slice_compute_correct BH HOut
+    i_t.val 16384 64 64 64 64 64 s
+    (chunk_delta_fwd_h_python_test_shape_offset_injective s i_t)
+
+theorem chunk_delta_fwd_v_new_store_python_test_shape_compute_correct
+    (BVN VNew : RegionName) (i_t : Fin 4) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew
+        i_t.val 0 8192 64 1 128 64 32 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => vNewActive s i_t.val 0 128 64 32 32 64 idx)
+        (fun idx => (VNew, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        vNewStoreValue s BVN i_t.val 0 8192 64 1 128 64 32 32 64 idx) := by
+  exact chunk_delta_fwd_v_new_store_slice_compute_correct BVN VNew
+    i_t.val 0 8192 64 1 128 64 32 32 64 s
+    (chunk_delta_fwd_v_new_python_test_shape_offset_injective s i_t)
+
+theorem chunk_delta_fwd_final_state_python_test_shape_compute_correct
+    (BHFinal FinalState : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState
+        64 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx => (FinalState, finalStateOffset s 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        finalStateStoreValue s BHFinal 64 64 64 64 idx) := by
+  exact chunk_delta_fwd_final_state_store_slice_compute_correct BHFinal FinalState
+    64 64 64 64 s
+    (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd

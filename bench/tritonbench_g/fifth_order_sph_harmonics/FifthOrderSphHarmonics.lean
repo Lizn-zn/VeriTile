@@ -88,12 +88,12 @@ def fifth_order_fwd_surface
   Y06 = CONST002 * VAR23 +
     VAR25 * (CONST003 * VAR08 + CONST024 * VAR17) +
     z * (CONST007 * VAR06 + CONST012 * VAR15 + CONST024 * VAR08 * VAR17)
-  Y07 = VAR16 * (CONST026 * VAR08 - CONST026 * VAR26) +
-    y * (-CONST031 * VAR06 + CONST031 * VAR24)
+  Y07 = VAR16 * ((0 - 16.9926454679664) * VAR08 + 16.9926454679664 * VAR26) +
+    y * (8.49632273398321 * VAR06 + (0 - 8.49632273398321) * VAR24)
   Y08 = CONST034 * VAR23 +
     VAR25 * (CONST013 * VAR17 + CONST030 * VAR08) +
     z * (CONST021 * VAR08 * VAR17 - CONST032 * VAR06)
-  Y09 = y * (CONST018 * VAR06 + CONST018 * VAR24 + CONST020 * VAR08 * VAR26)
+  Y09 = y * (CONST018 * VAR06 + CONST018 * VAR24 + (0 - 44.1481879582843) * VAR08 * VAR26)
   Y10 = CONST001 * VAR23 + CONST009 * VAR06 * z + CONST023 * VAR08 * VAR25
   output_striding = tl.arange(0, $(block_size)) * $(output_stride)
   output_row_offset = output_striding + $(block_size) * $(output_stride) * block_id +
@@ -120,6 +120,15 @@ def fifth_order_fwd_surface
   tl.store(output_ptr + output_row_offset + $(10), Y10,
     mask=output_row_offset + $(10) < $(output_numel))
 }
+
+/-- The full fifth-order spherical harmonics forward surface lowers to the
+algorithm layer, including all eleven output channels. -/
+theorem fifth_order_fwd_surface_toAlgorithm_supported
+    (coord_ptr output_ptr : RegionName)
+    (block_size coord_numel output_numel col_offset output_stride : Nat) :
+    ∃ alg, (fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
+      output_numel col_offset output_stride).toAlgorithm? = Except.ok alg := by
+  simp [fifth_order_fwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Surface transcription of `fifth_order_sph_harmonics.py`'s
 `fifth_order_bwd`. -/
@@ -277,6 +286,16 @@ def fifth_order_bwd_surface
   tl.store(coord_grad_ptr + coord_row_offset + $(2), g_z,
     mask=coord_row_offset + $(2) < $(coord_numel))
 }
+
+/-- The full fifth-order spherical harmonics backward surface lowers to the
+algorithm layer, including all coordinate-gradient updates. -/
+theorem fifth_order_bwd_surface_toAlgorithm_supported
+    (coord_ptr coord_grad_ptr sph_grad_ptr : RegionName)
+    (block_size coord_numel output_numel col_offset output_stride : Nat) :
+    ∃ alg, (fifth_order_bwd_surface coord_ptr coord_grad_ptr sph_grad_ptr
+      block_size coord_numel output_numel col_offset output_stride).toAlgorithm?
+        = Except.ok alg := by
+  simp [fifth_order_bwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented `Y00` slice of `fifth_order_sph_harmonics.py`'s
 `fifth_order_fwd`.
@@ -831,14 +850,8 @@ theorem fifth_order_fwd_surface_y01_correct
     have h' : a.1.val * output_stride + block_size * output_stride * s.pid + col_offset =
               b.1.val * output_stride + block_size * output_stride * s.pid + col_offset :=
       Nat.add_right_cancel h
-    have hab : a.1 = b.1 := by
-      apply hOutInj
-      simpa [outOffset] using h'
-    cases a; cases b
-    simp only at hab
-    cases hab
-    rfl
-  -- Disjointness packets: read at +1, writes at +j for j ∈ {0, 2..10}.
+    have hab : a.1 = b.1 := by apply hOutInj; simpa [outOffset] using h'
+    cases a; cases b; simp only at hab; cases hab; rfl
   have hd0 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 0 1
     (by norm_num) (by norm_num) (by norm_num) i
   have hd2 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 2 1
@@ -865,7 +878,6 @@ theorem fifth_order_fwd_surface_y01_correct
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
     simp only [outOffset]
-    -- Strip Y10..Y02 (outer folds, 9 strips).
     rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
           (P := fun idx : TileIndex [block_size] =>
             idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
@@ -929,7 +941,6 @@ theorem fifth_order_fwd_surface_y01_correct
           (offsetFn := fun idx : TileIndex [block_size] =>
             idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset + 2)
           (hOff := fun k _ _ => hd2 k)]
-    -- Now apply scatter_readback to Y01.
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ h_inj (i, PUnit.unit)]
     by_cases hActive : i.val * output_stride + block_size * output_stride * s.pid +
         col_offset + 1 < output_numel
@@ -940,16 +951,13 @@ theorem fifth_order_fwd_surface_y01_correct
                  Option.bind, Option.bind_some, WithBot.recBotCoe]
       split_ifs
       all_goals (simp only [id]; first | (norm_num; ring) | norm_num)
-    · -- Inactive: strip remaining Y00 inner fold.
-      rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+    · rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
             (P := fun idx : TileIndex [block_size] =>
               idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
                 col_offset < output_numel)
             (offsetFn := fun idx : TileIndex [block_size] =>
               idx.1.val * output_stride + block_size * output_stride * s.pids 0 + col_offset)
-            (hOff := fun k _ _ => by
-              have := hd0 k
-              simpa using this)]
+            (hOff := fun k _ _ => by have := hd0 k; simpa using this)]
       simp [hActive]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
@@ -982,6 +990,7 @@ theorem fifth_order_fwd_surface_y01_compute_correct
 noncomputable def y02Spec
     (s : BlockState) (coord_ptr : RegionName)
     (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
+
   let x := coordX s coord_ptr block_size coord_numel i
   let y := coordY s coord_ptr block_size coord_numel i
   let z := coordZ s coord_ptr block_size coord_numel i
@@ -2081,7 +2090,7 @@ theorem fifth_order_fwd_surface_y07_correct
                  Option.map₂, Option.map, WithBot.unbotD,
                  Option.bind, Option.bind_some, WithBot.recBotCoe]
       split_ifs
-      all_goals (simp only [id]; first | (norm_num; ring) | norm_num)
+      all_goals (simp only [id]; try simp; try ring_nf; try norm_num)
     · rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
             (P := fun idx : TileIndex [block_size] =>
               idx.1.val * output_stride + block_size * output_stride * s.pids 0 +
@@ -2385,7 +2394,7 @@ theorem fifth_order_fwd_surface_y09_correct
                  Option.map₂, Option.map, WithBot.unbotD,
                  Option.bind, Option.bind_some, WithBot.recBotCoe]
       split_ifs
-      all_goals (simp only [id]; first | (norm_num; ring) | norm_num)
+      all_goals (simp only [id]; try simp; try ring_nf; try norm_num)
     · rw [BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
             (P := fun idx : TileIndex [block_size] =>
               idx.1.val * output_stride + block_size * output_stride * s.pids 0 +

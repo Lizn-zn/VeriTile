@@ -37,6 +37,14 @@ def chunk_gated_attention_cum_surface
   tl.store(p_o, (b_o).to(p_o.dtype.element_ty), boundary_check=([0, 1] : List Nat))
 }
 
+/-- The cumulative preprocessing surface lowers to the algorithm layer. -/
+theorem chunk_gated_attention_cum_surface_toAlgorithm_supported
+    (s o : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    ∃ alg, (chunk_gated_attention_cum_surface s o s_s_h s_s_t s_s_d T S BT
+      BS).toAlgorithm? = Except.ok alg := by
+  simp [chunk_gated_attention_cum_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `chunk_gated_attention.py`'s
 `chunk_gated_abc_fwd_kernel_h`.
 
@@ -106,6 +114,20 @@ def chunk_gated_attention_h_surface
     tl.store(p_h, (b_h).to(p_h.dtype.element_ty), boundary_check=([0, 1] : List Nat))
   }
 }
+
+/-- The gated H-state forward surface lowers to the algorithm layer, including
+initial-state, gate-K/gate-V, recurrent state stores, and final-state branches. -/
+theorem chunk_gated_attention_h_surface_toAlgorithm_supported
+    (K V G H H0 HT : RegionName)
+    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d s_h_h s_h_t s_h_d
+      T KSize VSize TK TV BT BK BV NT : Nat)
+    (GATEK USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
+    ∃ alg, (chunk_gated_attention_h_surface K V G H H0 HT s_k_h s_k_t
+      s_k_d s_v_h s_v_t s_v_d s_h_h s_h_t s_h_d T KSize VSize TK TV
+      BT BK BV NT GATEK USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm?
+        = Except.ok alg := by
+  simp [chunk_gated_attention_h_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented block store slice of `chunk_gated_attention.py`'s
 `chunk_gated_abc_fwd_kernel_cum`.
@@ -218,6 +240,233 @@ theorem chunk_gated_attention_store_slice_compute_correct
   intro idx hActive
   have h := chunk_gated_attention_store_slice_correct BC Z s_s_h s_s_t s_s_d T S BT BS
     s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
+/-! ## Computed cumulative-normalizer slice
+
+The `fwd_pre` Python path computes `b_o = tl.dot(m_s, b_s)` with a
+lower-triangular mask before storing. This slice proves that computation and
+writeback directly, rather than starting from a precomputed `BC` tile. -/
+
+def chunk_gated_attention_cum_compute_slice
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    ComputeKernel := triton {
+  i_s = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  i_t = tl.program_id(2)
+  offs_t = i_t * $(BT) + tl.arange(0, $(BT))
+  offs_s = i_s * $(BS) + tl.arange(0, $(BS))
+  o_i = tl.arange(0, $(BT))
+  m_s = tl.where(o_i[:, None] >= o_i[None, :], 1.0, 0.0)
+  mask = (offs_t[:, None] < $(T)) & (offs_s[None, :] < $(S))
+  b_s = tl.load(SReg + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
+      offs_s[None, :] * $(s_s_d), mask=mask, other=0.0)
+  b_o = tl.dot(m_s, b_s, allow_tf32=false)
+  tl.store(Z + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
+      offs_s[None, :] * $(s_s_d), b_o, mask=mask)
+}
+
+noncomputable def lowerTriTile (BT : Nat) : Tile .real [BT, BT] :=
+  { data := fun idx =>
+      if idx.1.val >= idx.2.1.val then some (1.0 : ℝ) else some (0.0 : ℝ) }
+
+noncomputable def sourceTile
+    (s : BlockState) (SReg : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    Tile .real [BT, BS] :=
+  { data := fun idx =>
+      if active s T S BT BS idx then
+        some (s.readMem SReg (tileOffset s s_s_h s_s_t s_s_d BT BS idx))
+      else some (0.0 : ℝ) }
+
+noncomputable def cumComputeStoreValue
+    (s : BlockState) (SReg : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) : ℝ :=
+  WithBot.unbotD 0
+    ((Tile.dot [] (lowerTriTile BT)
+      (sourceTile s SReg s_s_h s_s_t s_s_d T S BT BS)).data
+        (idx.1, idx.2.1, PUnit.unit))
+
+theorem chunk_gated_attention_cum_compute_slice_correct
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BS] => tileOffset s s_s_h s_s_t s_s_d BT BS idx)) :
+    ∀ idx : TileIndex [BT, BS],
+      let outAddr := tileOffset s s_s_h s_s_t s_s_d BT BS idx
+      (exec (chunk_gated_attention_cum_compute_slice SReg Z s_s_h s_s_t
+            s_s_d T S BT BS) s).map (·.readMem Z outAddr)
+        = some (if active s T S BT BS idx then
+            cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx
+          else s.readMem Z outAddr) := by
+  intro idx
+  simp [exec, chunk_gated_attention_cum_compute_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, Tile.dot, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, ComparableDType.ge, tIndex, sIndex, active,
+        tileOffset, sourceTile, lowerTriTile, TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BT, BS] → Nat :=
+    fun idx => s.pids 1 * s_s_h + (s.pids 2 * BT + idx.1.val) * s_s_t +
+      (s.pids 0 * BS + idx.2.1.val) * s_s_d
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, tileOffset, tIndex, sIndex] using hOutInj
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive :
+      s.pids 2 * BT + idx.1.val < T ∧ s.pids 0 * BS + idx.2.1.val < S
+  · simp [offsetFn, active, tIndex, sIndex, tileOffset, cumComputeStoreValue,
+      sourceTile, lowerTriTile, Tile.dot, hActive]
+  · simp [offsetFn, active, tIndex, sIndex, tileOffset, hActive]
+
+theorem chunk_gated_attention_cum_compute_slice_compute_correct
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BS] => tileOffset s s_s_h s_s_t s_s_d BT BS idx)) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_cum_compute_slice SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => active s T S BT BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_gated_attention_cum_compute_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := chunk_gated_attention_cum_compute_slice_correct SReg Z s_s_h
+    s_s_t s_s_d T S BT BS s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
+/-- Proof-oriented intermediate-state store slice of
+`chunk_gated_abc_fwd_kernel_h`.
+
+At each `i_t`, the Python kernel stores the current recurrent state `b_h` into
+`H + i_bh * s_h_h + i_t * KSize * VSize` before applying the chunk update.
+This slice starts from a precomputed `BH` tile and proves that masked writeback. -/
+def chunk_gated_attention_h_state_store_slice
+    (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat) :
+    ComputeKernel := triton {
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
+  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
+  mask = (offs_k[:, None] < $(KSize)) & (offs_v[None, :] < $(VSize))
+  b_h = tl.load(BH + i_bh * $(s_h_h) + $(i_t) * $(KSize) * $(VSize) +
+      offs_k[:, None] * $(s_h_t) + offs_v[None, :] * $(s_h_d),
+    mask=mask, other=0.0)
+  tl.store(H + i_bh * $(s_h_h) + $(i_t) * $(KSize) * $(VSize) +
+      offs_k[:, None] * $(s_h_t) + offs_v[None, :] * $(s_h_d),
+    b_h, mask=mask)
+}
+
+def kIndexState (s : BlockState) (BK : Nat) (i : Fin BK) : Nat :=
+  s.pids 1 * BK + i.val
+
+def vIndexState (s : BlockState) (BV : Nat) (j : Fin BV) : Nat :=
+  s.pids 0 * BV + j.val
+
+def stateActive (s : BlockState) (KSize VSize BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : Prop :=
+  kIndexState s BK idx.1 < KSize ∧ vIndexState s BV idx.2.1 < VSize
+
+instance stateActiveDecidable (s : BlockState) (KSize VSize BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : Decidable (stateActive s KSize VSize BK BV idx) := by
+  unfold stateActive
+  infer_instance
+
+def hStateOffset (s : BlockState) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : Nat :=
+  s.pids 2 * s_h_h + i_t * KSize * VSize +
+    kIndexState s BK idx.1 * s_h_t + vIndexState s BV idx.2.1 * s_h_d
+
+noncomputable def hStateStoreValue (s : BlockState) (BH : RegionName)
+    (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : ℝ :=
+  WithBot.unbotD 0
+    (if stateActive s KSize VSize BK BV idx then
+      some (s.readMem BH (hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx))
+    else some (0.0 : ℝ))
+
+theorem chunk_gated_attention_h_state_store_slice_correct
+    (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx)) :
+    ∀ idx : TileIndex [BK, BV],
+      let outAddr := hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx
+      (exec (chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t
+            s_h_d KSize VSize BK BV) s).map (·.readMem H outAddr)
+        = some (if stateActive s KSize VSize BK BV idx then
+            hStateStoreValue s BH i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx
+          else s.readMem H outAddr) := by
+  intro idx
+  simp [exec, chunk_gated_attention_h_state_store_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        kIndexState, vIndexState, stateActive, hStateOffset,
+        TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BK, BV] → Nat :=
+    fun idx => s.pids 2 * s_h_h + i_t * KSize * VSize +
+      (s.pids 1 * BK + idx.1.val) * s_h_t +
+      (s.pids 0 * BV + idx.2.1.val) * s_h_d
+  let valueFn : TileIndex [BK, BV] → ℝ :=
+    fun idx => WithBot.unbotD 0
+      (if s.pids 1 * BK + idx.1.val < KSize ∧
+          s.pids 0 * BV + idx.2.1.val < VSize then
+        some (s.readMem BH (offsetFn idx))
+      else some (0.0 : ℝ))
+  let P : TileIndex [BK, BV] → Prop :=
+    fun idx => s.pids 1 * BK + idx.1.val < KSize ∧
+      s.pids 0 * BV + idx.2.1.val < VSize
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, hStateOffset, kIndexState, vIndexState] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem H (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BK, BV])).readMem H (offsetFn idx) =
+    if P idx then
+      hStateStoreValue s BH i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx
+    else s.readMem H (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive : s.pids 1 * BK + idx.1.val < KSize ∧
+      s.pids 0 * BV + idx.2.1.val < VSize
+  · rfl
+  · rfl
+
+theorem chunk_gated_attention_h_state_store_slice_compute_correct
+    (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx)) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t s_h_h
+        s_h_t s_h_d KSize VSize BK BV)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BK, BV] => stateActive s KSize VSize BK BV idx)
+        (fun idx : TileIndex [BK, BV] =>
+          (H, hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx)))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        hStateStoreValue s BH i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_gated_attention_h_state_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := chunk_gated_attention_h_state_store_slice_correct BH H i_t s_h_h
+    s_h_t s_h_d KSize VSize BK BV s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
@@ -336,5 +585,142 @@ theorem chunk_gated_attention_final_state_store_slice_compute_correct
     KSize VSize BK BV s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+theorem chunk_gated_attention_python_pre_bs16_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [32, 16] => tileOffset s 8192 64 1 32 16 idx) := by
+  rintro ⟨⟨ta, hta⟩, ⟨sa, hsa⟩, _⟩ ⟨⟨tb, htb⟩, ⟨sb, hsb⟩, _⟩ h
+  simp [tileOffset, tIndex, sIndex] at h
+  have ht : ta = tb := by omega
+  have hs : sa = sb := by omega
+  subst tb
+  subst sb
+  rfl
+
+theorem chunk_gated_attention_python_pre_bs32_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [32, 32] => tileOffset s 8192 64 1 32 32 idx) := by
+  rintro ⟨⟨ta, hta⟩, ⟨sa, hsa⟩, _⟩ ⟨⟨tb, htb⟩, ⟨sb, hsb⟩, _⟩ h
+  simp [tileOffset, tIndex, sIndex] at h
+  have ht : ta = tb := by omega
+  have hs : sa = sb := by omega
+  subst tb
+  subst sb
+  rfl
+
+theorem chunk_gated_attention_python_pre_bs64_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [32, 64] => tileOffset s 8192 64 1 32 64 idx) := by
+  rintro ⟨⟨ta, hta⟩, ⟨sa, hsa⟩, _⟩ ⟨⟨tb, htb⟩, ⟨sb, hsb⟩, _⟩ h
+  simp [tileOffset, tIndex, sIndex] at h
+  have ht : ta = tb := by omega
+  have hs : sa = sb := by omega
+  subst tb
+  subst sb
+  rfl
+
+theorem chunk_gated_attention_python_h_state_offset_injective
+    (s : BlockState) (i_t : Fin 4) :
+    Function.Injective
+      (fun idx : TileIndex [16, 16] =>
+        hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx) := by
+  rintro ⟨⟨ka, hka⟩, ⟨va, hva⟩, _⟩ ⟨⟨kb, hkb⟩, ⟨vb, hvb⟩, _⟩ h
+  simp [hStateOffset, kIndexState, vIndexState] at h
+  have hk : ka = kb := by omega
+  have hv : va = vb := by omega
+  subst kb
+  subst vb
+  rfl
+
+theorem chunk_gated_attention_python_final_state_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [16, 16] => finalStateOffset s 32 32 16 16 idx) := by
+  rintro ⟨⟨ka, hka⟩, ⟨va, hva⟩, _⟩ ⟨⟨kb, hkb⟩, ⟨vb, hvb⟩, _⟩ h
+  simp [finalStateOffset, kIndexFinal, vIndexFinal] at h
+  have hk : ka = kb := by omega
+  have hv : va = vb := by omega
+  subst kb
+  subst vb
+  rfl
+
+theorem chunk_gated_attention_cum_python_bs16_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_cum_compute_slice SReg Z 8192 64 1
+        128 64 32 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 16] => active s 128 64 32 16 idx)
+        (fun idx : TileIndex [32, 16] => (Z, tileOffset s 8192 64 1 32 16 idx)))
+      (expected := fun idx : TileIndex [32, 16] =>
+        cumComputeStoreValue s SReg 8192 64 1 128 64 32 16 idx) := by
+  exact chunk_gated_attention_cum_compute_slice_compute_correct SReg Z
+    8192 64 1 128 64 32 16 s
+    (chunk_gated_attention_python_pre_bs16_offset_injective s)
+
+theorem chunk_gated_attention_cum_python_bs32_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_cum_compute_slice SReg Z 8192 64 1
+        128 64 32 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 32] => active s 128 64 32 32 idx)
+        (fun idx : TileIndex [32, 32] => (Z, tileOffset s 8192 64 1 32 32 idx)))
+      (expected := fun idx : TileIndex [32, 32] =>
+        cumComputeStoreValue s SReg 8192 64 1 128 64 32 32 idx) := by
+  exact chunk_gated_attention_cum_compute_slice_compute_correct SReg Z
+    8192 64 1 128 64 32 32 s
+    (chunk_gated_attention_python_pre_bs32_offset_injective s)
+
+theorem chunk_gated_attention_cum_python_bs64_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_cum_compute_slice SReg Z 8192 64 1
+        128 64 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => active s 128 64 32 64 idx)
+        (fun idx : TileIndex [32, 64] => (Z, tileOffset s 8192 64 1 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        cumComputeStoreValue s SReg 8192 64 1 128 64 32 64 idx) := by
+  exact chunk_gated_attention_cum_compute_slice_compute_correct SReg Z
+    8192 64 1 128 64 32 64 s
+    (chunk_gated_attention_python_pre_bs64_offset_injective s)
+
+theorem chunk_gated_attention_h_state_python_test_shape_compute_correct
+    (BH H : RegionName) (i_t : Fin 4) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
+        4096 32 1 32 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        hStateStoreValue s BH i_t.val 4096 32 1 32 32 16 16 idx) := by
+  exact chunk_gated_attention_h_state_store_slice_compute_correct BH H i_t.val
+    4096 32 1 32 32 16 16 s
+    (chunk_gated_attention_python_h_state_offset_injective s i_t)
+
+theorem chunk_gated_attention_final_state_python_test_shape_compute_correct
+    (BHFinal Ht : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
+        32 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        finalStateStoreValue s BHFinal 32 32 16 16 idx) := by
+  exact chunk_gated_attention_final_state_store_slice_compute_correct BHFinal Ht
+    32 32 16 16 s
+    (chunk_gated_attention_python_final_state_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention

@@ -51,6 +51,19 @@ def token_attn_llama2_surface
   }
 }
 
+/-- The full token-attention LLaMA2 score surface lowers to the algorithm layer. -/
+theorem token_attn_llama2_surface_toAlgorithm_supported
+    (Q K : RegionName) (sm_scale : ℝ) (B_Loc B_Start_Loc B_Seqlen : Region .nat)
+    (Att_Out : RegionName)
+    (max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd att_stride_h att_stride_bs kv_group_num
+      BLOCK_DMODEL BLOCK_N : Nat) :
+    ∃ alg, (token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen
+      Att_Out max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh
+      stride_qd stride_kbs stride_kh stride_kd att_stride_h att_stride_bs
+      kv_group_num BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg := by
+  simp [token_attn_llama2_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented attention-score store slice of `token_attn_llama2.py`'s
 `_fwd_kernel_token_att1`.
 

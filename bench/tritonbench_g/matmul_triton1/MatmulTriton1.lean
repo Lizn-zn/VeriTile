@@ -38,6 +38,14 @@ def matmul_triton1_surface
   tl.store(z_ptrs, z)
 }
 
+/-- The full `matmul_triton1` surface lowers to the algorithm layer. -/
+theorem matmul_triton1_surface_toAlgorithm_supported
+    (X Y Z : RegionName)
+    (m_size k_size n_size m_block_size k_block_size n_block_size : Nat) :
+    ∃ alg, (matmul_triton1_surface X Y Z m_size k_size n_size m_block_size
+      k_block_size n_block_size).toAlgorithm? = Except.ok alg := by
+  simp [matmul_triton1_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented output-store slice of `matmul_triton1.py`'s `matmul_kernel`.
 
 The full kernel maps a linear program id to an M/N tile, computes `z` in a dot loop, and stores the tile. This slice starts from a precomputed `Acc` tile

@@ -44,6 +44,24 @@ def destindex_copy_quantize_kv_transform_real_surface
   tl.store(os_ptrs, data_scale, mask=offs_h[:, None] < $(head_num))
 }
 
+/-- The full real-valued quantize-kv-transform surface is still blocked at
+algorithm erasure by the final quotient `to(tl.int8)` cast. The store-slice
+theorems below cover the real-valued quotient and scale writeback around this
+explicit gap. -/
+theorem destindex_copy_quantize_kv_transform_real_surface_toAlgorithm_blocked
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat) :
+    ∃ err,
+      (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+        BLOCK_HEAD).toAlgorithm? = Except.error err := by
+  simp [destindex_copy_quantize_kv_transform_real_surface,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented q-value writeback slice of `quantize_kv_transform.py`'s
 `_fwd_kernel_destindex_copy_quantize_kv`.
 
@@ -235,6 +253,86 @@ theorem destindex_copy_quantize_kv_transform_value_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Named value writeback coverage for Python test case 1
+(`H = 12`, `D = 96`, so `BLOCK_HEAD = 16`, `BLOCK_DMODEL = 128`). -/
+theorem destindex_copy_quantize_kv_transform_test_h12_d96_value_store_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [16, 128] =>
+        outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_value_store_slice K
+        DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
+        stride_o_h stride_o_d stride_os_bs stride_os_h 12 96 16 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 12 96 16 128)
+        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h
+          stride_o_d idx)))
+      (expected := fun idx =>
+        quantizeKvTransformValueSpec s K DestLoc OutScale stride_k_bs
+          stride_k_h stride_k_d stride_os_bs stride_os_h idx) := by
+  exact destindex_copy_quantize_kv_transform_value_store_slice_compute_correct
+    K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
+    stride_o_h stride_o_d stride_os_bs stride_os_h 12 96 16 128 s hOutInj
+
+/-- Named value writeback coverage for Python test cases 2 and 3
+(`H = 8`, `D = 64`). -/
+theorem destindex_copy_quantize_kv_transform_test_h8_d64_value_store_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [8, 64] =>
+        outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_value_store_slice K
+        DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
+        stride_o_h stride_o_d stride_os_bs stride_os_h 8 64 8 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 64 8 64)
+        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h
+          stride_o_d idx)))
+      (expected := fun idx =>
+        quantizeKvTransformValueSpec s K DestLoc OutScale stride_k_bs
+          stride_k_h stride_k_d stride_os_bs stride_os_h idx) := by
+  exact destindex_copy_quantize_kv_transform_value_store_slice_compute_correct
+    K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
+    stride_o_h stride_o_d stride_os_bs stride_os_h 8 64 8 64 s hOutInj
+
+/-- Named value writeback coverage for Python test case 4 (`H = 1`, `D = 1`). -/
+theorem destindex_copy_quantize_kv_transform_test_h1_d1_value_store_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [1, 1] =>
+        outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_value_store_slice K
+        DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
+        stride_o_h stride_o_d stride_os_bs stride_os_h 1 1 1 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 1 1 1 1)
+        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h
+          stride_o_d idx)))
+      (expected := fun idx =>
+        quantizeKvTransformValueSpec s K DestLoc OutScale stride_k_bs
+          stride_k_h stride_k_d stride_os_bs stride_os_h idx) := by
+  exact destindex_copy_quantize_kv_transform_value_store_slice_compute_correct
+    K DestLoc Out OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs
+    stride_o_h stride_o_d stride_os_bs stride_os_h 1 1 1 1 s hOutInj
+
 /-- Proof-oriented scale-writeback slice of `quantize_kv_transform.py`'s
 `_fwd_kernel_destindex_copy_quantize_kv`. Companion to the value-store slice:
 covers the 1D `Out_scale` writeback from a precomputed `Scale` tile under the
@@ -364,5 +462,74 @@ theorem destindex_copy_quantize_kv_transform_scale_store_slice_compute_correct
     hOutInj i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-- Named scale writeback coverage for Python test case 1
+(`H = 12`, `BLOCK_HEAD = 16`). -/
+theorem destindex_copy_quantize_kv_transform_test_h12_scale_store_compute_correct
+    (Scale DestLoc OutScale : RegionName)
+    (stride_s_bs stride_os_bs stride_os_h : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin 16 =>
+        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_scale_store_slice Scale
+        DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 12 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 12 16)
+        (fun i => (OutScale,
+          scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
+      (expected := fun i =>
+        quantizeKvTransformScaleSpec s Scale stride_s_bs i) := by
+  exact destindex_copy_quantize_kv_transform_scale_store_slice_compute_correct
+    Scale DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 12 16
+    s hOutInj
+
+/-- Named scale writeback coverage for Python test cases 2 and 3
+(`H = 8`, `BLOCK_HEAD = 8`). -/
+theorem destindex_copy_quantize_kv_transform_test_h8_scale_store_compute_correct
+    (Scale DestLoc OutScale : RegionName)
+    (stride_s_bs stride_os_bs stride_os_h : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin 8 =>
+        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_scale_store_slice Scale
+        DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 8 8)
+        (fun i => (OutScale,
+          scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
+      (expected := fun i =>
+        quantizeKvTransformScaleSpec s Scale stride_s_bs i) := by
+  exact destindex_copy_quantize_kv_transform_scale_store_slice_compute_correct
+    Scale DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 8 8
+    s hOutInj
+
+/-- Named scale writeback coverage for Python test case 4
+(`H = 1`, `BLOCK_HEAD = 1`). -/
+theorem destindex_copy_quantize_kv_transform_test_h1_scale_store_compute_correct
+    (Scale DestLoc OutScale : RegionName)
+    (stride_s_bs stride_os_bs stride_os_h : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin 1 =>
+        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_scale_store_slice Scale
+        DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 1 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 1 1)
+        (fun i => (OutScale,
+          scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
+      (expected := fun i =>
+        quantizeKvTransformScaleSpec s Scale stride_s_bs i) := by
+  exact destindex_copy_quantize_kv_transform_scale_store_slice_compute_correct
+    Scale DestLoc OutScale stride_s_bs stride_os_bs stride_os_h 1 1
+    s hOutInj
 
 end VeriTile.Bench.TritonBenchG.QuantizeKvTransform

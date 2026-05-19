@@ -8,6 +8,8 @@ namespace VeriTile.Bench.TritonBenchG.FastLayernorm
 open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
+set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Faithful transcription of `fast_layernorm.py`'s `layernorm_forward`.
 

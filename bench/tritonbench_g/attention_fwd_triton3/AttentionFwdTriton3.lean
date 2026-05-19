@@ -76,6 +76,29 @@ def attention_fwd_triton3_surface
   tl.store(O_block_ptr, (acc).to(Out.type.element_ty))
 }
 
+/-- The full Python-shaped `_attn_fwd` surface lowers through the algorithm
+translation, covering the staged accumulator load/update path and the final
+M/O stores. -/
+theorem attention_fwd_triton3_surface_toAlgorithm_supported
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (stride_qz stride_qh stride_qm stride_qk
+      stride_kz stride_kh stride_kn stride_kk
+      stride_vz stride_vh stride_vk stride_vn
+      stride_oz stride_oh stride_om stride_on
+      _Z H H_KV N_CTX ROUND_CTX NKV_CTX
+      _sliding_window_offset _sliding_window_size
+      IS_EVEN_M _IS_EVEN_N BLOCK_M BLOCK_DMODEL BLOCK_N END INIT
+      _SLIDING_WINDOW _COMPLEMENT_SLIDING_WINDOW : Nat) :
+    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L sm_scale stride_qz
+      stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_vz stride_vh stride_vk stride_vn stride_oz stride_oh stride_om
+      stride_on _Z H H_KV N_CTX ROUND_CTX NKV_CTX _sliding_window_offset
+      _sliding_window_size IS_EVEN_M _IS_EVEN_N BLOCK_M BLOCK_DMODEL
+      BLOCK_N END INIT _SLIDING_WINDOW _COMPLEMENT_SLIDING_WINDOW).toAlgorithm?
+        = Except.ok alg := by
+  simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented final output-store slice of `attention_fwd_triton3.py`'s
 `_attn_fwd`.
 
@@ -284,12 +307,12 @@ theorem attention_fwd_triton3_l_store_slice_correct
   have hRawInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M] =>
         off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + idx.1.val)) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    have hab' : off_hz * ROUND_CTX + s.pids 0 * BLOCK_M + a.val =
-        off_hz * ROUND_CTX + s.pids 0 * BLOCK_M + b.val := by
-      simpa [Nat.add_assoc] using hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
-    rfl
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [lRowOffset, Nat.add_assoc] using h
+    cases a; cases b
+    simp only at hab; cases hab; rfl
   simp [exec, attention_fwd_triton3_l_store_slice, stepStmts, stepStmt,
         evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul]
@@ -345,12 +368,12 @@ theorem attention_fwd_triton3_m_store_slice_correct
   have hRawInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M] =>
         off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + idx.1.val)) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    have hab' : off_hz * ROUND_CTX + s.pids 0 * BLOCK_M + a.val =
-        off_hz * ROUND_CTX + s.pids 0 * BLOCK_M + b.val := by
-      simpa [Nat.add_assoc] using hab
-    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
-    rfl
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [lRowOffset, Nat.add_assoc] using h
+    cases a; cases b
+    simp only at hab; cases hab; rfl
   simp [exec, attention_fwd_triton3_m_store_slice, stepStmts, stepStmt,
         evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul]
@@ -375,6 +398,79 @@ theorem attention_fwd_triton3_m_store_slice_compute_correct
   intro i
   have h := attention_fwd_triton3_m_store_slice_correct MPre M off_hz ROUND_CTX BLOCK_M
     s hOutInj i
+  rw [hExec] at h
+  exact Option.some.inj h
+
+/-- Formula-level `END=True` M-row epilogue of `attention_fwd_triton3.py`:
+`m_i += tl.math.log2(l_i)`, then store to `M`. This starts from the row values
+computed by the streaming inner loop and proves the Python epilogue arithmetic,
+not only a precomputed M readback. -/
+def attention_fwd_triton3_end_m_formula_store_slice
+    (MPre LPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  m_i = tl.load(MPre + $(off_hz) * $(ROUND_CTX) + offs_m)
+  l_i = tl.load(LPre + $(off_hz) * $(ROUND_CTX) + offs_m)
+  m_i += tl.math.log2(l_i)
+  tl.store(M + $(off_hz) * $(ROUND_CTX) + offs_m, m_i)
+}
+
+noncomputable def endMStoreSpec
+    (s : BlockState) (MPre LPre : RegionName)
+    (off_hz ROUND_CTX BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
+  s.readMem MPre (lRowOffset s off_hz ROUND_CTX BLOCK_M i) +
+    Real.log (s.readMem LPre (lRowOffset s off_hz ROUND_CTX BLOCK_M i)) /
+      Real.log 2
+
+theorem attention_fwd_triton3_end_m_formula_store_slice_correct
+    (MPre LPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
+    ∀ i : Fin BLOCK_M,
+      let outAddr := lRowOffset s off_hz ROUND_CTX BLOCK_M i
+      (exec (attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+          off_hz ROUND_CTX BLOCK_M) s).map (·.readMem M outAddr)
+        = some (endMStoreSpec s MPre LPre off_hz ROUND_CTX BLOCK_M i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M] =>
+        off_hz * ROUND_CTX + (s.pids 0 * BLOCK_M + idx.1.val)) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [lRowOffset, Nat.add_assoc] using h
+    cases a; cases b
+    simp only at hab; cases hab; rfl
+  simp [exec, attention_fwd_triton3_end_m_formula_store_slice, stepStmts,
+        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.uop, Tile.ptrAdd, NumericDType.add, NumericDType.mul]
+  simp only [lRowOffset, Nat.add_assoc]
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [endMStoreSpec, lRowOffset, Nat.add_assoc]
+
+theorem attention_fwd_triton3_end_m_formula_store_slice_compute_correct
+    (MPre LPre M : RegionName) (off_hz ROUND_CTX BLOCK_M : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => lRowOffset s off_hz ROUND_CTX BLOCK_M i)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz ROUND_CTX BLOCK_M)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (M,
+        lRowOffset s off_hz ROUND_CTX BLOCK_M i))
+      (expected := fun i =>
+        endMStoreSpec s MPre LPre off_hz ROUND_CTX BLOCK_M i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton3_end_m_formula_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := attention_fwd_triton3_end_m_formula_store_slice_correct MPre LPre
+    M off_hz ROUND_CTX BLOCK_M s hOutInj i
   rw [hExec] at h
   exact Option.some.inj h
 

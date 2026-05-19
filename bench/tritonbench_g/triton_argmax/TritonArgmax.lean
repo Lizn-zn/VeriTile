@@ -343,4 +343,168 @@ noncomputable def argmaxKernelArgmaxSpec
     ((Tile.argMaxDrop (shape := [BLOCK_M, BLOCK_N]) ⟨1, by simp⟩
       (argmaxKernelInputTile s inp M N K BLOCK_M BLOCK_N)).data (i, PUnit.unit))
 
+noncomputable def argmaxKernelDimSingleBlockRowMax
+    (s : BlockState) (inp : RegionName) (M N K BLOCK_M BLOCK_N : Nat)
+    (i : Fin BLOCK_M) : WithBot ℝ := by
+  classical
+  by_cases h : 0 < BLOCK_N
+  · haveI : Nonempty (Fin BLOCK_N) := Fin.pos_iff_nonempty.mp h
+    exact Finset.univ.sup' Finset.univ_nonempty
+      (fun n : Fin BLOCK_N =>
+        (argmaxKernelInputTile s inp M N K BLOCK_M BLOCK_N).data
+          (i, n, PUnit.unit))
+  · exact none
+
+/-- Exact per-row value carried by `argmax_values` after the single
+`start_n = 0` loop iteration. This keeps the kernel's `update` guard explicit:
+when every lane in a row is masked, the initial zero is retained. -/
+noncomputable def argmaxKernelDimSingleBlockSpec
+    (s : BlockState) (inp : RegionName) (M N K BLOCK_M BLOCK_N : Nat)
+    (i : Fin BLOCK_M) : Int := by
+  classical
+  exact if ComparableDType.real.gt
+      (argmaxKernelDimSingleBlockRowMax s inp M N K BLOCK_M BLOCK_N i) none then
+    argmaxKernelArgmaxSpec s inp M N K BLOCK_M BLOCK_N i
+  else 0
+
+/-- Output offset for the dim-specific `argmax_kernel`: lane `i` of the
+`[BLOCK_M]` output row writes to `out_index` at position
+`(pid_m * BLOCK_M + i) * K + pid_k`. -/
+@[reducible] noncomputable def argmaxKernelOutOffset
+    (s : BlockState) (K BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
+  (s.pids 0 * BLOCK_M + i.val) * K + s.pids 1
+
+/-- State just before the final `out_index` scatter in the Python-tested
+single-block (`N ≤ BLOCK_N`) dim-specific argmax path. -/
+noncomputable def argmaxKernelDimSingleBlockPreStoreState
+    (s : BlockState) (inp : RegionName) (M N K BLOCK_M BLOCK_N : Nat)
+    (out_index : Region .int) : BlockState :=
+  let s1 := s.setReg "pid_m" .nat [] (Tile.scalar (s.pids 0))
+  let s2 := s1.setReg "pid_k" .nat [] (Tile.scalar (s.pids 1))
+  let s3 := s2.setReg "m_offset" .nat [BLOCK_M]
+    { data := fun i => s.pids 0 * BLOCK_M + i.1.val }
+  let s4 := s3.setReg "max_values" .real [BLOCK_M]
+    { data := fun _ => none }
+  let s5 := s4.setReg "argmax_values" .int [BLOCK_M]
+    { data := fun _ => (0 : Int) }
+  let s6 := s5.setReg "start_n" .nat [] (Tile.scalar 0)
+  let s7 := s6.setReg "n_offset" .nat [BLOCK_N]
+    { data := fun i => i.1.val }
+  let s8 := s7.setReg "offset" .nat [BLOCK_M, BLOCK_N]
+    { data := fun i =>
+      (s.pids 0 * BLOCK_M + i.1.val) * N * K + i.2.1.val * K + s.pids 1 }
+  let s9 := s8.setReg "mask" .bool [BLOCK_M, BLOCK_N]
+    { data := fun i =>
+      decide (s.pids 0 * BLOCK_M + i.1.val < M) && decide (i.2.1.val < N) }
+  let s10 := s9.setReg "inp_ptrs" .ptr [BLOCK_M, BLOCK_N]
+    { data := fun i =>
+      (inp, (s.pids 0 * BLOCK_M + i.1.val) * N * K + i.2.1.val * K + s.pids 1) }
+  let s11 := s10.setReg "inp_vals" .real [BLOCK_M, BLOCK_N]
+    (argmaxKernelInputTile s inp M N K BLOCK_M BLOCK_N)
+  let s12 := s11.setReg "local_max" .real [BLOCK_M]
+    { data := fun i =>
+      argmaxKernelDimSingleBlockRowMax s inp M N K BLOCK_M BLOCK_N i.1 }
+  let s13 := s12.setReg "local_argmax" .nat [BLOCK_M]
+    { data := fun i =>
+      ((Tile.argMaxDrop (shape := [BLOCK_M, BLOCK_N]) ⟨1, by simp⟩
+        (argmaxKernelInputTile s inp M N K BLOCK_M BLOCK_N)).data (i.1, PUnit.unit)) }
+  let updateTile : Tile .bool [BLOCK_M] :=
+    { data := fun i =>
+      ComparableDType.real.gt
+        (argmaxKernelDimSingleBlockRowMax s inp M N K BLOCK_M BLOCK_N i.1) none }
+  let s14 := s13.setReg "update" .bool [BLOCK_M]
+    updateTile
+  let s15 := s14.setReg "max_values" .real [BLOCK_M]
+    (updateTile.select
+      { data := fun i =>
+        argmaxKernelDimSingleBlockRowMax s inp M N K BLOCK_M BLOCK_N i.1 }
+      { data := fun _ => none })
+  let s16 := s15.setReg "argmax_values" .int [BLOCK_M]
+    (updateTile.select
+      { data := fun i =>
+        argmaxKernelArgmaxSpec s inp M N K BLOCK_M BLOCK_N i.1 }
+      { data := fun _ => (0 : Int) })
+  let s17 := s16.setReg "offset_index" .nat [BLOCK_M]
+    { data := fun i => (s.pids 0 * BLOCK_M + i.1.val) * K + s.pids 1 }
+  let s18 := s17.setReg "out_index_ptrs" .ptr [BLOCK_M]
+    { data := fun i =>
+      ((Region.cast out_index : RegionName),
+        (s.pids 0 * BLOCK_M + i.1.val) * K + s.pids 1) }
+  s18.setReg "mask1" .bool [BLOCK_M]
+    { data := fun i => decide (s.pids 0 * BLOCK_M + i.1.val < M) }
+
+/-- Compute-facing correctness for the dim-specific `argmax_kernel` in the
+single-block regime exercised by the Python tests (`0 < N ≤ BLOCK_N`). This
+covers the output index store for every active `(m, k)` lane in the launch
+tile. -/
+theorem argmax_kernel_dim_single_block_compute_correct
+    (inp : RegionName) (out_index : Region .int)
+    (M N K BLOCK_M BLOCK_N : Nat)
+    (s : BlockState)
+    (hBN : 0 < BLOCK_N)
+    (hNpos : 0 < N)
+    (hNle : N ≤ BLOCK_N)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_M => argmaxKernelOutOffset s K BLOCK_M i)) :
+    ComputeCorrect.Realizes
+      (kernel := argmax_kernel inp out_index M N K BLOCK_M BLOCK_N Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_M => s.pids 0 * BLOCK_M + i.val < M)
+        (fun i => ((Region.cast out_index : RegionName),
+          argmaxKernelOutOffset s K BLOCK_M i)))
+      (expected := fun i =>
+        argmaxKernelDimSingleBlockSpec s inp M N K BLOCK_M BLOCK_N i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [argmax_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have hBNne : BLOCK_N ≠ 0 := Nat.pos_iff_ne_zero.mp hBN
+  simp only [Region.cast] at hOutInj hActive ⊢
+  simp [exec, argmax_kernel, stepStmts, stepStmt, evalOp, Option.bind,
+        Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        Tile.reduceMax, Tile.reduceMaxDrop, Tile.argMaxDrop, Tile.argBestDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        argmaxKernelDimSingleBlockSpec, argmaxKernelDimSingleBlockRowMax,
+        argmaxKernelArgmaxSpec, argmaxKernelInputTile, argmaxKernelOutOffset,
+        TileShape.insertAxisIndex,
+        hBN, hBNne, hNpos, hNle,
+        stepForRangeAux.forRange_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge] at hExec ⊢
+  rw [← hExec]
+  have hScatter :=
+    scatter_readback_int_prop_masked_nd
+      (region := (Region.cast out_index : RegionName))
+      (shape := [BLOCK_M])
+      (s := argmaxKernelDimSingleBlockPreStoreState s inp M N K BLOCK_M BLOCK_N out_index)
+      (offsetFn := fun idx : TileIndex [BLOCK_M] =>
+        argmaxKernelOutOffset s K BLOCK_M idx.1)
+      (valueFn := fun idx : TileIndex [BLOCK_M] =>
+        argmaxKernelDimSingleBlockSpec s inp M N K BLOCK_M BLOCK_N idx.1)
+      (P := fun idx : TileIndex [BLOCK_M] =>
+        s.pids 0 * BLOCK_M + idx.1.val < M)
+      (h_inj := by
+        intro a b h
+        have hab : a.1 = b.1 := by
+          apply hOutInj
+          simpa [argmaxKernelOutOffset] using h
+        cases a
+        cases b
+        simp only at hab
+        cases hab
+        rfl)
+      (i := (i, PUnit.unit))
+  simp [argmaxKernelDimSingleBlockPreStoreState,
+        argmaxKernelDimSingleBlockSpec, argmaxKernelDimSingleBlockRowMax,
+        argmaxKernelArgmaxSpec, argmaxKernelInputTile, argmaxKernelOutOffset,
+        Tile.argBestDrop, TileShape.axisDim, TileShape.insertAxisIndex,
+        hBN, hActive] at hScatter
+  simpa [argmaxKernelDimSingleBlockSpec, argmaxKernelArgmaxSpec,
+        argmaxKernelInputTile, argmaxKernelOutOffset, Tile.argBestDrop,
+        TileShape.axisDim, TileShape.insertAxisIndex, hBN, hActive] using hScatter
+
 end VeriTile.Bench.TritonBenchG.TritonArgmax

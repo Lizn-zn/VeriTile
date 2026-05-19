@@ -48,6 +48,23 @@ def attention_forward_triton_helper_call_surface
   tl.store(O_block_ptr, (acc).to(Out.type.element_ty), mask=((offs_m[:, None] < $(N_CTX)) & ((tl.arange(0, 128) < 96)[None, :])))
 }
 
+/-- The helper-call shaped attention-forward surface lowers to the algorithm
+layer. -/
+theorem attention_forward_triton_helper_call_surface_toAlgorithm_supported
+    (Q K V Q_scale K_scale Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk
+      stride_kz stride_kh stride_kn stride_kk
+      stride_vz stride_vh stride_vk stride_vn
+      stride_oz stride_oh stride_om stride_on
+      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N STAGE : Nat) :
+    ∃ alg, (attention_forward_triton_helper_call_surface Q K V Q_scale K_scale
+      Out stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh
+      stride_kn stride_kk stride_vz stride_vh stride_vk stride_vn stride_oz
+      stride_oh stride_om stride_on Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N
+      STAGE).toAlgorithm? = Except.ok alg := by
+  simp [attention_forward_triton_helper_call_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Full Lean port of `attention_forward_triton.py`'s `_attn_fwd`.
 
 The upstream kernel calls a separate `@triton.jit` helper `_attn_fwd_inner` to
@@ -120,6 +137,22 @@ def attention_forward_triton_surface
   tl.store(O_block_ptr, (acc).to(Out.type.element_ty),
     mask=(offs_m[:, None] < $(N_CTX)) & (tl.arange(0, $(BLOCK_DMODEL)) < $(HEAD_ACTIVE))[None, :])
 }
+
+/-- The full inlined attention-forward surface lowers to the algorithm layer. -/
+theorem attention_forward_triton_surface_toAlgorithm_supported
+    (Q K V Q_scale K_scale Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk
+      stride_kz stride_kh stride_kn stride_kk
+      stride_vz stride_vh stride_vk stride_vn
+      stride_oz stride_oh stride_om stride_on
+      Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat) :
+    ∃ alg, (attention_forward_triton_surface Q K V Q_scale K_scale Out
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn
+      stride_kk stride_vz stride_vh stride_vk stride_vn stride_oz stride_oh
+      stride_om stride_on Z H N_CTX HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+      HEAD_ACTIVE STAGE).toAlgorithm? = Except.ok alg := by
+  simp [attention_forward_triton_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Surface transcription/proof-oriented final output-store slice of `attention_forward_triton.py`'s
 `_attn_fwd`.
@@ -297,5 +330,34 @@ theorem attention_forward_triton_final_store_slice_compute_correct
     stride_qh stride_qm stride_qk BLOCK_M BLOCK_DMODEL s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrapper
+
+`attention_forward_triton.py`'s checked test uses
+`B = 2`, `H = 4`, `N_CTX = 128`, `HEAD_DIM = 128`, `BLOCK_M = 128`,
+`BLOCK_N = 64`, and the source mask only enables the first 96 head lanes.
+For contiguous `[B, H, N_CTX, HEAD_DIM]` tensors the output/accumulator strides
+are `(65536, 16384, 128, 1)`. -/
+
+theorem attention_forward_triton_final_store_python_test_shape_compute_correct
+    (Acc Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_forward_triton_final_store_slice Acc Out
+        4 128 96 65536 16384 128 1 65536 16384 128 1 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
+        (fun idx : TileIndex [128, 128] => (Out,
+          outOffset s 4 65536 16384 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        s.readMem Acc (accOffset s 4 65536 16384 128 1 128 idx)) := by
+  apply attention_forward_triton_final_store_slice_compute_correct
+  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
+  simp [outOffset, offZ, offH, mIndex, kIndex] at h
+  have hm : ma = mb := by omega
+  have hk : ka = kb := by omega
+  subst mb
+  subst kb
+  rfl
 
 end VeriTile.Bench.TritonBenchG.AttentionForwardTriton

@@ -66,6 +66,23 @@ def fill_kv_cache_kernel_surface
   }
 }
 
+/-- The full non-quantized KV-cache filling surface lowers to the algorithm
+layer, including sequence/block arithmetic and K/V cache stores. -/
+theorem fill_kv_cache_kernel_surface_toAlgorithm_supported
+    (KStates VStates KCaches VCaches : RegionName)
+    (QStartLoc QSeqLens KVSeqLens BlockOffsets : Region .nat)
+    (num_heads head_dim head_dim_v stride_kss stride_ksh stride_ksd
+      stride_vss stride_vsh stride_vsd stride_kcn stride_kcb stride_kch
+      stride_kcd stride_vcn stride_vcb stride_vch stride_vcd stride_boff
+      BLOCK BLOCK_D BLOCK_DV BLOCK_H : Nat) :
+    ∃ alg, (fill_kv_cache_kernel_surface KStates VStates KCaches VCaches
+      QStartLoc QSeqLens KVSeqLens BlockOffsets num_heads head_dim head_dim_v
+      stride_kss stride_ksh stride_ksd stride_vss stride_vsh stride_vsd
+      stride_kcn stride_kcb stride_kch stride_kcd stride_vcn stride_vcb
+      stride_vch stride_vcd stride_boff BLOCK BLOCK_D BLOCK_DV
+      BLOCK_H).toAlgorithm? = Except.ok alg := by
+  simp [fill_kv_cache_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription and proof-oriented K-cache fill slice of `kv_cache_filling.py`'s
 `_fill_kv_cache_kernel`.
 
@@ -445,5 +462,750 @@ theorem fill_v_cache_tile_compute_correct
     stride_vcb stride_vch stride_vcd stride_boff num_heads head_dim_v
     BLOCK_H BLOCK_DV s s' hOutInj hExec idx
   simpa [hActive] using h
+
+/-! ## Quantized cache value stores -/
+
+/-- Named K-cache value writeback for `_fill_kv_cache_quant_kernel`.
+
+The quantized kernel computes `q_k` via `_quant_int8` or `_quant_int4` before
+the store. This theorem exposes the cache writeback from a precomputed
+`QKPre` tile while leaving the integer quantization/packing arithmetic as the
+remaining proof obligation. -/
+theorem fill_quant_k_cache_value_store_slice_compute_correct
+    (QKPre KCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_qss stride_qsh stride_qsd
+      stride_kcn stride_kcb stride_kch stride_kcd
+      stride_boff num_heads head_dim BLOCK_H BLOCK_D : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_H, BLOCK_D] =>
+        kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
+          stride_kch stride_kcd stride_boff idx)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile QKPre KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd
+        stride_kcn stride_kcb stride_kch stride_kcd stride_boff
+        num_heads head_dim BLOCK_H BLOCK_D)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_heads head_dim BLOCK_H BLOCK_D)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
+            stride_kch stride_kcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem QKPre
+          (kSourceOffset s SIDX stride_qss stride_qsh stride_qsd idx)) := by
+  exact fill_k_cache_tile_compute_correct QKPre KCaches BlockOffsets
+    SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd stride_kcn
+    stride_kcb stride_kch stride_kcd stride_boff num_heads head_dim BLOCK_H
+    BLOCK_D s hOutInj
+
+/-- Named V-cache value writeback for `_fill_kv_cache_quant_kernel`.
+
+For `quant_policy = 4`, callers instantiate `BLOCK_DV`/`head_dim_v` with the
+packed width; for `quant_policy = 8`, they use the full value head dimension.
+The theorem covers the masked cache writeback from a precomputed `QVPre` tile. -/
+theorem fill_quant_v_cache_value_store_slice_compute_correct
+    (QVPre VCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_qss stride_qsh stride_qsd
+      stride_vcn stride_vcb stride_vch stride_vcd
+      stride_boff num_heads head_dim_v BLOCK_H BLOCK_DV : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_H, BLOCK_DV] =>
+        vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+          stride_vch stride_vcd stride_boff idx)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile QVPre VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd
+        stride_vcn stride_vcb stride_vch stride_vcd stride_boff
+        num_heads head_dim_v BLOCK_H BLOCK_DV)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_heads head_dim_v BLOCK_H BLOCK_DV)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+            stride_vch stride_vcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem QVPre
+          (vSourceOffset s SIDX stride_qss stride_qsh stride_qsd idx)) := by
+  exact fill_v_cache_tile_compute_correct QVPre VCaches BlockOffsets
+    SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd stride_vcn
+    stride_vcb stride_vch stride_vcd stride_boff num_heads head_dim_v BLOCK_H
+    BLOCK_DV s hOutInj
+
+/-! ## Quantized scale/zero metadata stores -/
+
+/-- Proof-oriented metadata store slice for `_fill_kv_cache_quant_kernel`.
+
+The Python quantized path writes per-head scale values at `szd = 0` and zero
+points at `szd = 1` for both K and V metadata regions. This generic slice fixes
+one slot (`SZD = 0` or `SZD = 1`) and proves the masked writeback from a
+precomputed per-head metadata vector. -/
+def fill_quant_meta_store_slice
+    (MetaPre MetaOut : RegionName) (BlockOffsets : Region .nat)
+    (BIDX KV_BLOCK_IDX SZD
+      stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) :
+    ComputeKernel := triton {
+  batch_id = tl.program_id(0)
+  h_off = tl.arange(0, $(BLOCK_H))
+  block_off = tl.load(BlockOffsets + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
+  mask = h_off < $(num_heads)
+  meta_val = tl.load(MetaPre + h_off, mask=mask, other=0.0)
+  tl.store(MetaOut + block_off * $(stride_mn) + $(BIDX) * $(stride_mb) +
+      h_off * $(stride_mh) + $(SZD) * $(stride_md), meta_val, mask=mask)
+}
+
+def metaActive (_s : BlockState) (num_heads BLOCK_H : Nat) (i : Fin BLOCK_H) : Prop :=
+  i.val < num_heads
+
+instance metaActiveDecidable (s : BlockState) (num_heads BLOCK_H : Nat)
+    (i : Fin BLOCK_H) :
+    Decidable (metaActive s num_heads BLOCK_H i) := by
+  unfold metaActive
+  infer_instance
+
+def metaOffset
+    (s : BlockState) (BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff : Nat)
+    (i : Fin BLOCK_H) : Nat :=
+  blockOff s BlockOffsets KV_BLOCK_IDX stride_boff * stride_mn +
+    BIDX * stride_mb + i.val * stride_mh + SZD * stride_md
+
+noncomputable def metaStoreSpec
+    (s : BlockState) (MetaPre : RegionName) (i : Fin BLOCK_H) : ℝ :=
+  s.readMem MetaPre i.val
+
+private noncomputable def preStoreStateMeta
+    (s : BlockState) (MetaPre BlockOffsets : RegionName)
+    (KV_BLOCK_IDX stride_boff num_heads BLOCK_H : Nat) : BlockState :=
+  (s.setReg "batch_id" TileDType.nat [] (Tile.scalar (s.pids 0))
+    |>.setReg "h_off" TileDType.nat [BLOCK_H] (Tile.vec fun i => i.val)
+    |>.setReg "block_off" TileDType.nat []
+        (Tile.scalar
+          (s.readMemValue .nat BlockOffsets (s.pids 0 * stride_boff + KV_BLOCK_IDX)))
+    |>.setReg "mask" TileDType.bool [BLOCK_H]
+        { data := fun i => decide (i.1.val < num_heads) }
+    |>.setReg "meta_val" TileDType.real [BLOCK_H]
+        { data := fun i =>
+          if i.1.val < num_heads then some (s.readMem MetaPre i.1.val)
+          else some (0.0 : ℝ) })
+
+theorem fill_quant_meta_store_slice_correct
+    (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD
+      stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_H =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
+          stride_mh stride_md stride_boff i))
+    (hExec : exec (fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets
+        BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md
+        stride_boff num_heads BLOCK_H) s = some s') :
+    ∀ i : Fin BLOCK_H,
+      s'.readMem MetaOut
+          (metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
+            stride_mh stride_md stride_boff i) =
+        if metaActive s num_heads BLOCK_H i then
+          metaStoreSpec s MetaPre i
+        else
+          s.readMem MetaOut
+            (metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
+              stride_mh stride_md stride_boff i) := by
+  intro i
+  simp [exec, fill_quant_meta_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        BlockState.readMemValue, TileShape.dropInsertedIndex] at hExec
+  rw [← hExec]
+  let offsetFn : TileIndex [BLOCK_H] → Nat :=
+    fun idx =>
+      s.readMemValue .nat BlockOffsets (s.pids 0 * stride_boff + KV_BLOCK_IDX) *
+          stride_mn +
+        BIDX * stride_mb + idx.1.val * stride_mh + SZD * stride_md
+  let valueFn : TileIndex [BLOCK_H] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (if idx.1.val < num_heads then some (s.readMem MetaPre idx.1.val)
+        else some (0.0 : ℝ))
+  let P : TileIndex [BLOCK_H] → Prop := fun idx => idx.1.val < num_heads
+  have hOffsetInj : Function.Injective offsetFn := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [offsetFn, metaOffset, blockOff, BlockState.readMemValue] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  have hscatter := BlockState.scatter_readback_prop_masked_nd
+    (region := MetaOut)
+    (s := preStoreStateMeta s MetaPre BlockOffsets KV_BLOCK_IDX stride_boff
+      num_heads BLOCK_H)
+    (offsetFn := offsetFn) (valueFn := valueFn) (P := P)
+    hOffsetInj (i, PUnit.unit)
+  by_cases hActive : P (i, PUnit.unit)
+  · simpa [offsetFn, valueFn, P, metaActive, metaOffset, blockOff, metaStoreSpec,
+      preStoreStateMeta, BlockState.readMemValue, hActive] using hscatter
+  · simpa [offsetFn, valueFn, P, metaActive, metaOffset, blockOff, metaStoreSpec,
+      preStoreStateMeta, BlockState.readMemValue, hActive] using hscatter
+
+theorem fill_quant_meta_store_slice_compute_correct
+    (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD
+      stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_H =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
+          stride_mh stride_md stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets
+        BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md
+        stride_boff num_heads BLOCK_H)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_H => metaActive s num_heads BLOCK_H i)
+        (fun i : Fin BLOCK_H => (MetaOut,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
+            stride_mh stride_md stride_boff i)))
+      (expected := fun i : Fin BLOCK_H => metaStoreSpec s MetaPre i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fill_quant_meta_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := fill_quant_meta_store_slice_correct MetaPre MetaOut BlockOffsets
+    BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+    num_heads BLOCK_H s s' hOutInj hExec i
+  simpa [hActive] using h
+
+/-- Named K-scale writeback for `_fill_kv_cache_quant_kernel`.
+
+This is the Python store with `ksz_ptr + ... + szd_off * stride_kszd` and
+`szd_off = 0`, using a precomputed per-head scale vector. -/
+theorem fill_quant_k_scale_store_slice_compute_correct
+    (KScalePre KScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX
+      stride_kszn stride_kszb stride_kszh stride_kszd stride_boff
+      num_heads BLOCK_H : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_H =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_kszn stride_kszb
+          stride_kszh stride_kszd stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KScalePre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 stride_kszn stride_kszb stride_kszh stride_kszd
+        stride_boff num_heads BLOCK_H)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_H => metaActive s num_heads BLOCK_H i)
+        (fun i : Fin BLOCK_H => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_kszn
+            stride_kszb stride_kszh stride_kszd stride_boff i)))
+      (expected := fun i : Fin BLOCK_H => metaStoreSpec s KScalePre i) := by
+  exact fill_quant_meta_store_slice_compute_correct KScalePre KScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX 0 stride_kszn stride_kszb stride_kszh
+    stride_kszd stride_boff num_heads BLOCK_H s hOutInj
+
+/-- Named K-zero-point writeback for `_fill_kv_cache_quant_kernel`, fixing
+`szd_off = 1`. -/
+theorem fill_quant_k_zero_store_slice_compute_correct
+    (KZeroPre KScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX
+      stride_kszn stride_kszb stride_kszh stride_kszd stride_boff
+      num_heads BLOCK_H : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_H =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_kszn stride_kszb
+          stride_kszh stride_kszd stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KZeroPre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 stride_kszn stride_kszb stride_kszh stride_kszd
+        stride_boff num_heads BLOCK_H)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_H => metaActive s num_heads BLOCK_H i)
+        (fun i : Fin BLOCK_H => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_kszn
+            stride_kszb stride_kszh stride_kszd stride_boff i)))
+      (expected := fun i : Fin BLOCK_H => metaStoreSpec s KZeroPre i) := by
+  exact fill_quant_meta_store_slice_compute_correct KZeroPre KScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX 1 stride_kszn stride_kszb stride_kszh
+    stride_kszd stride_boff num_heads BLOCK_H s hOutInj
+
+/-- Named V-scale writeback for `_fill_kv_cache_quant_kernel`, fixing
+`szd_off = 0`. -/
+theorem fill_quant_v_scale_store_slice_compute_correct
+    (VScalePre VScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX
+      stride_vszn stride_vszb stride_vszh stride_vszd stride_boff
+      num_heads BLOCK_H : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_H =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_vszn stride_vszb
+          stride_vszh stride_vszd stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VScalePre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 stride_vszn stride_vszb stride_vszh stride_vszd
+        stride_boff num_heads BLOCK_H)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_H => metaActive s num_heads BLOCK_H i)
+        (fun i : Fin BLOCK_H => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_vszn
+            stride_vszb stride_vszh stride_vszd stride_boff i)))
+      (expected := fun i : Fin BLOCK_H => metaStoreSpec s VScalePre i) := by
+  exact fill_quant_meta_store_slice_compute_correct VScalePre VScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX 0 stride_vszn stride_vszb stride_vszh
+    stride_vszd stride_boff num_heads BLOCK_H s hOutInj
+
+/-- Named V-zero-point writeback for `_fill_kv_cache_quant_kernel`, fixing
+`szd_off = 1`. -/
+theorem fill_quant_v_zero_store_slice_compute_correct
+    (VZeroPre VScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX
+      stride_vszn stride_vszb stride_vszh stride_vszd stride_boff
+      num_heads BLOCK_H : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_H =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_vszn stride_vszb
+          stride_vszh stride_vszd stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VZeroPre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 stride_vszn stride_vszb stride_vszh stride_vszd
+        stride_boff num_heads BLOCK_H)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_H => metaActive s num_heads BLOCK_H i)
+        (fun i : Fin BLOCK_H => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_vszn
+            stride_vszb stride_vszh stride_vszd stride_boff i)))
+      (expected := fun i : Fin BLOCK_H => metaStoreSpec s VZeroPre i) := by
+  exact fill_quant_meta_store_slice_compute_correct VZeroPre VScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX 1 stride_vszn stride_vszb stride_vszh
+    stride_vszd stride_boff num_heads BLOCK_H s hOutInj
+
+/-! ## Python test-shape wrappers
+
+The checked Python test uses `num_heads = 4`, `head_dim = 16`,
+`head_dim_v = 16`, and `block_size = 8`, so the next-power-of-two block shapes
+are exactly `BLOCK_H = 4`, `BLOCK_D = 16`, and `BLOCK_DV = 16`.  The following
+wrappers expose the generic K/V and metadata store proofs at those observed
+dimensions. -/
+
+theorem fill_k_cache_tile_test_h4_d16_compute_correct
+    (KStates KCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_kss stride_ksh stride_ksd
+      stride_kcn stride_kcb stride_kch stride_kcd stride_boff : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [4, 16] =>
+        kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
+          stride_kch stride_kcd stride_boff idx)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile KStates KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_kss stride_ksh stride_ksd
+        stride_kcn stride_kcb stride_kch stride_kcd stride_boff 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
+            stride_kch stride_kcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem KStates
+          (kSourceOffset s SIDX stride_kss stride_ksh stride_ksd idx)) := by
+  exact fill_k_cache_tile_compute_correct KStates KCaches BlockOffsets
+    SIDX BIDX KV_BLOCK_IDX stride_kss stride_ksh stride_ksd stride_kcn
+    stride_kcb stride_kch stride_kcd stride_boff 4 16 4 16 s hOutInj
+
+theorem fill_v_cache_tile_test_h4_dv16_compute_correct
+    (VStates VCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_vss stride_vsh stride_vsd
+      stride_vcn stride_vcb stride_vch stride_vcd stride_boff : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [4, 16] =>
+        vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+          stride_vch stride_vcd stride_boff idx)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile VStates VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd
+        stride_vcn stride_vcb stride_vch stride_vcd stride_boff 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+            stride_vch stride_vcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem VStates
+          (vSourceOffset s SIDX stride_vss stride_vsh stride_vsd idx)) := by
+  exact fill_v_cache_tile_compute_correct VStates VCaches BlockOffsets
+    SIDX BIDX KV_BLOCK_IDX stride_vss stride_vsh stride_vsd stride_vcn
+    stride_vcb stride_vch stride_vcd stride_boff 4 16 4 16 s hOutInj
+
+theorem fill_quant_k_cache_value_store_test_h4_d16_compute_correct
+    (QKPre KCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_qss stride_qsh stride_qsd
+      stride_kcn stride_kcb stride_kch stride_kcd stride_boff : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [4, 16] =>
+        kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
+          stride_kch stride_kcd stride_boff idx)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile QKPre KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd
+        stride_kcn stride_kcb stride_kch stride_kcd stride_boff 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_kcn stride_kcb
+            stride_kch stride_kcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem QKPre
+          (kSourceOffset s SIDX stride_qss stride_qsh stride_qsd idx)) := by
+  exact fill_quant_k_cache_value_store_slice_compute_correct QKPre KCaches
+    BlockOffsets SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd
+    stride_kcn stride_kcb stride_kch stride_kcd stride_boff 4 16 4 16
+    s hOutInj
+
+theorem fill_quant_v_cache_value_store_test_h4_dv16_compute_correct
+    (QVPre VCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX
+      stride_qss stride_qsh stride_qsd
+      stride_vcn stride_vcb stride_vch stride_vcd stride_boff : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [4, 16] =>
+        vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+          stride_vch stride_vcd stride_boff idx)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile QVPre VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd
+        stride_vcn stride_vcb stride_vch stride_vcd stride_boff 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX stride_vcn stride_vcb
+            stride_vch stride_vcd stride_boff idx)))
+      (expected := fun idx =>
+        s.readMem QVPre
+          (vSourceOffset s SIDX stride_qss stride_qsh stride_qsd idx)) := by
+  exact fill_quant_v_cache_value_store_slice_compute_correct QVPre VCaches
+    BlockOffsets SIDX BIDX KV_BLOCK_IDX stride_qss stride_qsh stride_qsd
+    stride_vcn stride_vcb stride_vch stride_vcd stride_boff 4 16 4 16
+    s hOutInj
+
+theorem fill_quant_k_scale_store_test_h4_compute_correct
+    (KScalePre KScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX
+      stride_kszn stride_kszb stride_kszh stride_kszd stride_boff : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin 4 =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_kszn stride_kszb
+          stride_kszh stride_kszd stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KScalePre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 stride_kszn stride_kszb stride_kszh stride_kszd
+        stride_boff 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_kszn
+            stride_kszb stride_kszh stride_kszd stride_boff i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s KScalePre i) := by
+  exact fill_quant_k_scale_store_slice_compute_correct KScalePre KScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX stride_kszn stride_kszb stride_kszh
+    stride_kszd stride_boff 4 4 s hOutInj
+
+theorem fill_quant_k_zero_store_test_h4_compute_correct
+    (KZeroPre KScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX
+      stride_kszn stride_kszb stride_kszh stride_kszd stride_boff : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin 4 =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_kszn stride_kszb
+          stride_kszh stride_kszd stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KZeroPre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 stride_kszn stride_kszb stride_kszh stride_kszd
+        stride_boff 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_kszn
+            stride_kszb stride_kszh stride_kszd stride_boff i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s KZeroPre i) := by
+  exact fill_quant_k_zero_store_slice_compute_correct KZeroPre KScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX stride_kszn stride_kszb stride_kszh
+    stride_kszd stride_boff 4 4 s hOutInj
+
+theorem fill_quant_v_scale_store_test_h4_compute_correct
+    (VScalePre VScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX
+      stride_vszn stride_vszb stride_vszh stride_vszd stride_boff : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin 4 =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_vszn stride_vszb
+          stride_vszh stride_vszd stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VScalePre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 stride_vszn stride_vszb stride_vszh stride_vszd
+        stride_boff 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 stride_vszn
+            stride_vszb stride_vszh stride_vszd stride_boff i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s VScalePre i) := by
+  exact fill_quant_v_scale_store_slice_compute_correct VScalePre VScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX stride_vszn stride_vszb stride_vszh
+    stride_vszd stride_boff 4 4 s hOutInj
+
+theorem fill_quant_v_zero_store_test_h4_compute_correct
+    (VZeroPre VScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX
+      stride_vszn stride_vszb stride_vszh stride_vszd stride_boff : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin 4 =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_vszn stride_vszb
+          stride_vszh stride_vszd stride_boff i)) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VZeroPre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 stride_vszn stride_vszb stride_vszh stride_vszd
+        stride_boff 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 stride_vszn
+            stride_vszb stride_vszh stride_vszd stride_boff i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s VZeroPre i) := by
+  exact fill_quant_v_zero_store_slice_compute_correct VZeroPre VScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX stride_vszn stride_vszb stride_vszh
+    stride_vszd stride_boff 4 4 s hOutInj
+
+/-! ## Python test-layout wrappers
+
+The checked Python test instantiates contiguous tensors with:
+* `k_states/v_states.shape = (2, 32, 4, 16)`, inner strides `(64, 16, 1)`;
+* `k_caches/v_caches.shape = (2, 8, 4, 16)`, strides `(512, 64, 16, 1)`;
+* `k_scales_zeros/v_scales_zeros.shape = (2, 8, 4, 2)`, strides `(64, 8, 2, 1)`;
+* `block_offsets.shape = (2, 5)`, stride `5`.
+
+These wrappers discharge the concrete no-collision obligations for those
+Python layouts, leaving only the already documented uint8 rounding/int4
+packing semantics outside this file's real-valued store model. -/
+
+theorem fill_cache_python_test_h4_d16_offset_injective
+    (s : BlockState) (BlockOffsets : RegionName) (BIDX KV_BLOCK_IDX : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [4, 16] =>
+        kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx) := by
+  intro a b h
+  rcases a with ⟨ha, da, hta⟩
+  rcases b with ⟨hb, db, htb⟩
+  rcases da with ⟨da, hda⟩
+  rcases db with ⟨db, hdb⟩
+  simp [kCacheOffset, blockOff, headIndex, dimIndex, BlockState.readMemValue] at h
+  have hh : ha = hb := by omega
+  have hd : da = db := by omega
+  subst hb
+  subst db
+  rfl
+
+theorem fill_cache_python_test_v_h4_d16_offset_injective
+    (s : BlockState) (BlockOffsets : RegionName) (BIDX KV_BLOCK_IDX : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [4, 16] =>
+        vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx) := by
+  intro a b h
+  rcases a with ⟨ha, da, hta⟩
+  rcases b with ⟨hb, db, htb⟩
+  rcases da with ⟨da, hda⟩
+  rcases db with ⟨db, hdb⟩
+  simp [vCacheOffset, blockOff, headIndex, dimIndex, BlockState.readMemValue] at h
+  have hh : ha = hb := by omega
+  have hd : da = db := by omega
+  subst hb
+  subst db
+  rfl
+
+theorem fill_cache_python_test_h4_meta_offset_injective
+    (s : BlockState) (BlockOffsets : RegionName) (BIDX KV_BLOCK_IDX SZD : Nat) :
+    Function.Injective
+      (fun i : Fin 4 =>
+        metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD 64 8 2 1 5 i) := by
+  intro a b h
+  simp [metaOffset, blockOff, BlockState.readMemValue] at h
+  apply Fin.ext
+  omega
+
+theorem fill_k_cache_tile_python_test_layout_compute_correct
+    (KStates KCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile KStates KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem KStates (kSourceOffset s SIDX 64 16 1 idx)) := by
+  exact fill_k_cache_tile_test_h4_d16_compute_correct KStates KCaches
+    BlockOffsets SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 s
+    (fill_cache_python_test_h4_d16_offset_injective s BlockOffsets BIDX
+      KV_BLOCK_IDX)
+
+theorem fill_v_cache_tile_python_test_layout_compute_correct
+    (VStates VCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile VStates VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem VStates (vSourceOffset s SIDX 64 16 1 idx)) := by
+  exact fill_v_cache_tile_test_h4_dv16_compute_correct VStates VCaches
+    BlockOffsets SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 s
+    (fill_cache_python_test_v_h4_d16_offset_injective s BlockOffsets BIDX
+      KV_BLOCK_IDX)
+
+theorem fill_quant_k_cache_value_store_python_test_layout_compute_correct
+    (QKPre KCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile QKPre KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem QKPre (kSourceOffset s SIDX 64 16 1 idx)) := by
+  exact fill_quant_k_cache_value_store_test_h4_d16_compute_correct QKPre
+    KCaches BlockOffsets SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 s
+    (fill_cache_python_test_h4_d16_offset_injective s BlockOffsets BIDX
+      KV_BLOCK_IDX)
+
+theorem fill_quant_v_cache_value_store_python_test_layout_compute_correct
+    (QVPre VCaches BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile QVPre VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem QVPre (vSourceOffset s SIDX 64 16 1 idx)) := by
+  exact fill_quant_v_cache_value_store_test_h4_dv16_compute_correct QVPre
+    VCaches BlockOffsets SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 s
+    (fill_cache_python_test_v_h4_d16_offset_injective s BlockOffsets BIDX
+      KV_BLOCK_IDX)
+
+theorem fill_quant_k_scale_store_python_test_layout_compute_correct
+    (KScalePre KScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KScalePre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s KScalePre i) := by
+  exact fill_quant_k_scale_store_test_h4_compute_correct KScalePre KScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX 64 8 2 1 5 s
+    (fill_cache_python_test_h4_meta_offset_injective s BlockOffsets BIDX
+      KV_BLOCK_IDX 0)
+
+theorem fill_quant_k_zero_store_python_test_layout_compute_correct
+    (KZeroPre KScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KZeroPre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s KZeroPre i) := by
+  exact fill_quant_k_zero_store_test_h4_compute_correct KZeroPre KScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX 64 8 2 1 5 s
+    (fill_cache_python_test_h4_meta_offset_injective s BlockOffsets BIDX
+      KV_BLOCK_IDX 1)
+
+theorem fill_quant_v_scale_store_python_test_layout_compute_correct
+    (VScalePre VScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VScalePre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s VScalePre i) := by
+  exact fill_quant_v_scale_store_test_h4_compute_correct VScalePre VScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX 64 8 2 1 5 s
+    (fill_cache_python_test_h4_meta_offset_injective s BlockOffsets BIDX
+      KV_BLOCK_IDX 0)
+
+theorem fill_quant_v_zero_store_python_test_layout_compute_correct
+    (VZeroPre VScalesZeros BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VZeroPre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s VZeroPre i) := by
+  exact fill_quant_v_zero_store_test_h4_compute_correct VZeroPre VScalesZeros
+    BlockOffsets BIDX KV_BLOCK_IDX 64 8 2 1 5 s
+    (fill_cache_python_test_h4_meta_offset_injective s BlockOffsets BIDX
+      KV_BLOCK_IDX 1)
 
 end VeriTile.Bench.TritonBenchG.KvCacheFilling

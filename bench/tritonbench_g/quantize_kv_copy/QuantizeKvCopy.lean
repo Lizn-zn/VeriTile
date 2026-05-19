@@ -19,7 +19,7 @@ The final quotient cast to int8 is preserved as a surface dtype annotation while
 the algorithm carrier records the real-valued quotient. -/
 def destindex_copy_quantize_kv_group_real_surface
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
-    (stride_k_bs stride_k_h stride_k_g stride_k_d
+    (stride_k_bs stride_k_h stride_k_g _stride_k_d
       stride_o_bs stride_o_h stride_o_g _stride_o_d
       stride_os_bs stride_os_h _stride_os_g
       group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
@@ -42,6 +42,23 @@ def destindex_copy_quantize_kv_group_real_surface
   tl.store(o_ptrs, q_src_data, mask=offs_g[:, None] < $(group_size))
   tl.store(os_ptrs, data_scale, mask=offs_g < $(group_size))
 }
+
+/-- The grouped quantize-kv-copy surface is still blocked at algorithm erasure
+by the final quotient `to(tl.int8)` cast. The store-slice theorems below cover
+the real-valued quotient and scale writeback around this explicit gap. -/
+theorem destindex_copy_quantize_kv_group_real_surface_toAlgorithm_blocked
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d
+      stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
+    ∃ err,
+      (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
+        stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
+        BLOCK_GROUP_NUM BLOCK_GROUP_DIM).toAlgorithm? = Except.error err := by
+  simp [destindex_copy_quantize_kv_group_real_surface,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented q-value writeback slice of `quantize_kv_copy.py`'s grouped
 `_fwd_kernel_destindex_copy_quantize_kv`.
@@ -241,6 +258,36 @@ theorem destindex_copy_quantize_kv_group_value_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Named value writeback coverage for the Python tests
+(`head_dim = 16`, `quant_group_dim = 8`, hence `group_size = 2`). -/
+theorem destindex_copy_quantize_kv_group_test_g2_d8_value_store_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d
+      stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [2, 8] =>
+        outOffset s DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_value_store_slice K DestLoc Out
+        OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs
+        stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g
+        2 2 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 2 8)
+        (fun idx => (Out,
+          outOffset s DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx)))
+      (expected := fun idx =>
+        quantizeKvCopyGroupValueSpec s K DestLoc OutScale stride_k_bs
+          stride_k_h stride_k_g stride_k_d stride_os_bs stride_os_h
+          stride_os_g idx) := by
+  exact destindex_copy_quantize_kv_group_value_store_slice_compute_correct K
+    DestLoc Out OutScale stride_k_bs stride_k_h stride_k_g stride_k_d
+    stride_o_bs stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h
+    stride_os_g 2 2 8 s hOutInj
+
 /-- Proof-oriented scale-writeback slice of `quantize_kv_copy.py`'s grouped
 `_fwd_kernel_destindex_copy_kv`. Companion to the value-store slice: this
 covers the 1D `Out_scale` writeback from a precomputed `Scale` tile under
@@ -380,5 +427,28 @@ theorem destindex_copy_quantize_kv_group_scale_store_slice_compute_correct
     group_size BLOCK_GROUP_NUM s hOutInj i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-- Named scale writeback coverage for the Python tests
+(`head_dim = 16`, `quant_group_dim = 8`, hence two groups). -/
+theorem destindex_copy_quantize_kv_group_test_g2_scale_store_compute_correct
+    (Scale DestLoc OutScale : RegionName)
+    (stride_s_bs stride_s_h stride_os_bs stride_os_h : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin 2 =>
+        scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_scale_store_slice Scale DestLoc
+        OutScale stride_s_bs stride_s_h stride_os_bs stride_os_h 2 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 2 2)
+        (fun i => (OutScale,
+          scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
+      (expected := fun i =>
+        quantizeKvCopyScaleSpec s Scale stride_s_bs stride_s_h i) := by
+  exact destindex_copy_quantize_kv_group_scale_store_slice_compute_correct Scale
+    DestLoc OutScale stride_s_bs stride_s_h stride_os_bs stride_os_h 2 2
+    s hOutInj
 
 end VeriTile.Bench.TritonBenchG.QuantizeKvCopy

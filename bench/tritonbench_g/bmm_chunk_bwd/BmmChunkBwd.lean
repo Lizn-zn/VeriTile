@@ -87,6 +87,27 @@ def bmm_chunk_bwd_surface
     (offs_n[None, :] < $(K)))
 }
 
+/-- The full BMM chunk backward surface lowers to the algorithm layer. -/
+theorem bmm_chunk_bwd_surface_toAlgorithm_supported
+    (A Dout db_ptr Res : RegionName)
+    (seqlen chunk_size K ngroups
+      stride_a_batch stride_a_seqlen stride_a_head stride_ak
+      stride_dout_batch stride_dout_chunk stride_dout_head
+      stride_dout_csize_m stride_dout_csize_n
+      stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+      stride_res_batch stride_res_seqlen stride_res_head stride_res_k
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS : Nat)
+    (dot_dtype : TileDType)
+    (HAS_RESIDUAL : Bool) :
+    ∃ alg, (bmm_chunk_bwd_surface A Dout db_ptr Res seqlen chunk_size K
+      ngroups stride_a_batch stride_a_seqlen stride_a_head stride_ak
+      stride_dout_batch stride_dout_chunk stride_dout_head stride_dout_csize_m
+      stride_dout_csize_n stride_db_batch stride_db_seqlen stride_db_head
+      stride_db_k stride_res_batch stride_res_seqlen stride_res_head
+      stride_res_k BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS dot_dtype
+      HAS_RESIDUAL).toAlgorithm? = Except.ok alg := by
+  simp [bmm_chunk_bwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final `db` store slice of `bmm_chunk_bwd.py`'s
 `_bmm_chunk_bwd_kernel`.
 
@@ -287,5 +308,468 @@ theorem bmm_chunk_bwd_final_store_slice_compute_correct
     stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-- Residual path final store slice for `bmm_chunk_bwd.py`.
+
+This models the `HAS_RESIDUAL` branch after the dot-product accumulation:
+load the accumulated tile and residual tile, add them, then store the resulting
+`db` tile with the Python output layout. -/
+def bmm_chunk_bwd_residual_final_store_slice
+    (Acc Res Db : RegionName)
+    (num_pid_n ngroups chunk_size_limit K
+      stride_acc_batch stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+      stride_res_batch stride_res_chunk stride_res_head stride_res_m stride_res_n
+      stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
+    ComputeKernel := triton {
+  pid_b = tl.program_id(axis=1)
+  pid_ch = tl.program_id(axis=2)
+  pid_c = pid_ch // $(ngroups)
+  pid_h = pid_ch - pid_c * $(ngroups)
+  pid_m = tl.program_id(axis=0) // $(num_pid_n)
+  pid_n = tl.program_id(axis=0) % $(num_pid_n)
+  offs_m = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
+  offs_n = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
+  mask = (offs_m[:, None] < $(chunk_size_limit)) & (offs_n[None, :] < $(K))
+  acc = tl.load(Acc + pid_b * $(stride_acc_batch) + pid_c * $(stride_acc_chunk) +
+      pid_h * $(stride_acc_head) + offs_m[:, None] * $(stride_acc_m) +
+      offs_n[None, :] * $(stride_acc_n), mask=mask, other=0.0)
+  res = tl.load(Res + pid_b * $(stride_res_batch) + pid_c * $(stride_res_chunk) +
+      pid_h * $(stride_res_head) + offs_m[:, None] * $(stride_res_m) +
+      offs_n[None, :] * $(stride_res_n), mask=mask, other=0.0)
+  db = acc + res
+  tl.store(Db + pid_b * $(stride_db_batch) + pid_c * $(chunk_size_limit) * $(stride_db_seqlen) +
+      pid_h * $(stride_db_head) + offs_m[:, None] * $(stride_db_seqlen) +
+      offs_n[None, :] * $(stride_db_k), db, mask=mask)
+}
+
+def resOffset
+    (s : BlockState)
+    (num_pid_n ngroups stride_res_batch stride_res_chunk stride_res_head
+      stride_res_m stride_res_n BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N]) : Nat :=
+  s.pids 1 * stride_res_batch + pidC s ngroups * stride_res_chunk +
+    pidH s ngroups * stride_res_head +
+    mIndex s num_pid_n BLOCK_SIZE_M idx.1 * stride_res_m +
+    nIndex s num_pid_n BLOCK_SIZE_N idx.2.1 * stride_res_n
+
+noncomputable def residualFinalSpec
+    (s : BlockState) (Acc Res : RegionName)
+    (num_pid_n ngroups
+      stride_acc_batch stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+      stride_res_batch stride_res_chunk stride_res_head stride_res_m stride_res_n
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N]) : ℝ :=
+  s.readMem Acc
+      (accOffset s num_pid_n ngroups stride_acc_batch stride_acc_chunk
+        stride_acc_head stride_acc_m stride_acc_n BLOCK_SIZE_M BLOCK_SIZE_N idx) +
+    s.readMem Res
+      (resOffset s num_pid_n ngroups stride_res_batch stride_res_chunk
+        stride_res_head stride_res_m stride_res_n BLOCK_SIZE_M BLOCK_SIZE_N idx)
+
+theorem bmm_chunk_bwd_residual_final_store_slice_correct
+    (Acc Res Db : RegionName)
+    (num_pid_n ngroups chunk_size_limit K
+      stride_acc_batch stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+      stride_res_batch stride_res_chunk stride_res_head stride_res_m stride_res_n
+      stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] =>
+        dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+          stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N idx)) :
+    ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+      let outAddr := dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+        stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N idx
+      (exec (bmm_chunk_bwd_residual_final_store_slice Acc Res Db num_pid_n
+            ngroups chunk_size_limit K stride_acc_batch stride_acc_chunk
+            stride_acc_head stride_acc_m stride_acc_n stride_res_batch
+            stride_res_chunk stride_res_head stride_res_m stride_res_n
+            stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+            BLOCK_SIZE_M BLOCK_SIZE_N) s).map (·.readMem Db outAddr)
+        = some (if active s num_pid_n chunk_size_limit K BLOCK_SIZE_M BLOCK_SIZE_N idx then
+            residualFinalSpec s Acc Res num_pid_n ngroups stride_acc_batch
+              stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+              stride_res_batch stride_res_chunk stride_res_head stride_res_m
+              stride_res_n BLOCK_SIZE_M BLOCK_SIZE_N idx
+          else s.readMem Db outAddr) := by
+  intro idx
+  simp [exec, bmm_chunk_bwd_residual_final_store_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
+        IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+        pidC, pidH, pidM, pidN, mIndex, nIndex, active, accOffset, resOffset,
+        dbOffset, residualFinalSpec, TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Nat :=
+    fun idx =>
+      s.pids 1 * stride_db_batch +
+        (s.pids 2 / ngroups) * chunk_size_limit * stride_db_seqlen +
+        (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_db_head +
+        (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_db_seqlen +
+        (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_db_k
+  let valueFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (Option.map₂ (fun a r => a + r)
+          (if s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+              s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K then
+            some (s.readMem Acc
+              (s.pids 1 * stride_acc_batch + (s.pids 2 / ngroups) * stride_acc_chunk +
+                (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_acc_head +
+                (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_acc_m +
+                (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_acc_n))
+          else some (0.0 : ℝ))
+          (if s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+              s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K then
+            some (s.readMem Res
+              (s.pids 1 * stride_res_batch + (s.pids 2 / ngroups) * stride_res_chunk +
+                (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_res_head +
+                (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_res_m +
+                (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_res_n))
+          else some (0.0 : ℝ)))
+  let P : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Prop :=
+    fun idx =>
+      s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+        s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, dbOffset, pidC, pidH, pidM, pidN, mIndex, nIndex] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem Db (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BLOCK_SIZE_M, BLOCK_SIZE_N])).readMem Db
+        (offsetFn idx) =
+    if P idx then
+      residualFinalSpec s Acc Res num_pid_n ngroups stride_acc_batch
+        stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+        stride_res_batch stride_res_chunk stride_res_head stride_res_m
+        stride_res_n BLOCK_SIZE_M BLOCK_SIZE_N idx
+    else s.readMem Db (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive :
+      s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+        s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K
+  · simp [offsetFn, valueFn, P, active, residualFinalSpec, accOffset, resOffset,
+      dbOffset, pidC, pidH, pidM, pidN, mIndex, nIndex, hActive]
+  · simp [offsetFn, valueFn, P, active, residualFinalSpec, accOffset, resOffset,
+      dbOffset, pidC, pidH, pidM, pidN, mIndex, nIndex, hActive]
+
+theorem bmm_chunk_bwd_residual_final_store_slice_compute_correct
+    (Acc Res Db : RegionName)
+    (num_pid_n ngroups chunk_size_limit K
+      stride_acc_batch stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+      stride_res_batch stride_res_chunk stride_res_head stride_res_m stride_res_n
+      stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] =>
+        dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+          stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N idx)) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_bwd_residual_final_store_slice Acc Res Db num_pid_n
+        ngroups chunk_size_limit K stride_acc_batch stride_acc_chunk
+        stride_acc_head stride_acc_m stride_acc_n stride_res_batch
+        stride_res_chunk stride_res_head stride_res_m stride_res_n
+        stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+        BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_pid_n chunk_size_limit K BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Db,
+          dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+            stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        residualFinalSpec s Acc Res num_pid_n ngroups stride_acc_batch
+          stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+          stride_res_batch stride_res_chunk stride_res_head stride_res_m
+          stride_res_n BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [bmm_chunk_bwd_residual_final_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := bmm_chunk_bwd_residual_final_store_slice_correct Acc Res Db
+    num_pid_n ngroups chunk_size_limit K stride_acc_batch stride_acc_chunk
+    stride_acc_head stride_acc_m stride_acc_n stride_res_batch stride_res_chunk
+    stride_res_head stride_res_m stride_res_n stride_db_batch stride_db_seqlen
+    stride_db_head stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
+/-- Active-lane variant for the non-residual backward `db` store. Python
+autotune may choose block sizes larger than the active `chunk_size=32` rows or
+`K=64` columns; only masked-in lanes need collision freedom. -/
+theorem bmm_chunk_bwd_final_store_slice_active_compute_correct
+    (Acc Db : RegionName)
+    (num_pid_n ngroups chunk_size_limit K
+      stride_acc_batch stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+      stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (s : BlockState)
+    (hNoCollision :
+      ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+        active s num_pid_n chunk_size_limit K BLOCK_SIZE_M BLOCK_SIZE_N idx →
+        ∀ k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+          active s num_pid_n chunk_size_limit K BLOCK_SIZE_M BLOCK_SIZE_N k →
+          dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+            stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M
+              BLOCK_SIZE_N k =
+            dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+              stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M
+                BLOCK_SIZE_N idx →
+          k = idx) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_bwd_final_store_slice Acc Db num_pid_n ngroups
+        chunk_size_limit K stride_acc_batch stride_acc_chunk stride_acc_head
+        stride_acc_m stride_acc_n stride_db_batch stride_db_seqlen stride_db_head
+        stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_pid_n chunk_size_limit K BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Db,
+          dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+            stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        s.readMem Acc
+          (accOffset s num_pid_n ngroups stride_acc_batch stride_acc_chunk
+            stride_acc_head stride_acc_m stride_acc_n BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [bmm_chunk_bwd_final_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  simp [exec, bmm_chunk_bwd_final_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
+        IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+        pidC, pidH, pidM, pidN, mIndex, nIndex, active, accOffset, dbOffset,
+        TileShape.dropInsertedIndex] at hExec
+  subst s'
+  let offsetFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Nat :=
+    fun idx =>
+      s.pids 1 * stride_db_batch +
+        (s.pids 2 / ngroups) * chunk_size_limit * stride_db_seqlen +
+        (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_db_head +
+        (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_db_seqlen +
+        (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_db_k
+  let valueFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (if s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+            s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K then
+          some (s.readMem Acc
+            (s.pids 1 * stride_acc_batch + (s.pids 2 / ngroups) * stride_acc_chunk +
+              (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_acc_head +
+              (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_acc_m +
+              (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_acc_n))
+        else some (0.0 : ℝ))
+  let P : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Prop :=
+    fun idx =>
+      s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+        s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem Db (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BLOCK_SIZE_M, BLOCK_SIZE_N])).readMem Db
+        (offsetFn idx) =
+    s.readMem Acc
+      (accOffset s num_pid_n ngroups stride_acc_batch stride_acc_chunk
+        stride_acc_head stride_acc_m stride_acc_n BLOCK_SIZE_M BLOCK_SIZE_N idx)
+  rw [BlockState.scatter_readback_prop_masked_nd_of_true _ _ _ P idx]
+  · have hP : P idx := by
+      simpa [P, active, pidM, pidN, mIndex, nIndex] using hActive
+    simp [offsetFn, valueFn, P, active, accOffset, dbOffset, pidC, pidH, pidM,
+      pidN, mIndex, nIndex, hP]
+  · simpa [P, active, pidM, pidN, mIndex, nIndex] using hActive
+  · intro k hPk heq
+    exact hNoCollision idx hActive k
+      (by simpa [P, active, pidM, pidN, mIndex, nIndex] using hPk)
+      (by simpa [offsetFn, dbOffset, pidC, pidH, pidM, pidN, mIndex, nIndex]
+        using heq)
+
+/-- Active-lane variant for the residual backward `db` store. -/
+theorem bmm_chunk_bwd_residual_final_store_slice_active_compute_correct
+    (Acc Res Db : RegionName)
+    (num_pid_n ngroups chunk_size_limit K
+      stride_acc_batch stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+      stride_res_batch stride_res_chunk stride_res_head stride_res_m stride_res_n
+      stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (s : BlockState)
+    (hNoCollision :
+      ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+        active s num_pid_n chunk_size_limit K BLOCK_SIZE_M BLOCK_SIZE_N idx →
+        ∀ k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+          active s num_pid_n chunk_size_limit K BLOCK_SIZE_M BLOCK_SIZE_N k →
+          dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+            stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M
+              BLOCK_SIZE_N k =
+            dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+              stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M
+                BLOCK_SIZE_N idx →
+          k = idx) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_bwd_residual_final_store_slice Acc Res Db num_pid_n
+        ngroups chunk_size_limit K stride_acc_batch stride_acc_chunk
+        stride_acc_head stride_acc_m stride_acc_n stride_res_batch
+        stride_res_chunk stride_res_head stride_res_m stride_res_n
+        stride_db_batch stride_db_seqlen stride_db_head stride_db_k
+        BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_pid_n chunk_size_limit K BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Db,
+          dbOffset s num_pid_n ngroups chunk_size_limit stride_db_batch
+            stride_db_seqlen stride_db_head stride_db_k BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        residualFinalSpec s Acc Res num_pid_n ngroups stride_acc_batch
+          stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+          stride_res_batch stride_res_chunk stride_res_head stride_res_m
+          stride_res_n BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [bmm_chunk_bwd_residual_final_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  simp [exec, bmm_chunk_bwd_residual_final_store_slice, stepStmts, stepStmt,
+        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
+        IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+        pidC, pidH, pidM, pidN, mIndex, nIndex, active, accOffset, resOffset,
+        dbOffset, residualFinalSpec, TileShape.dropInsertedIndex] at hExec
+  subst s'
+  let offsetFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Nat :=
+    fun idx =>
+      s.pids 1 * stride_db_batch +
+        (s.pids 2 / ngroups) * chunk_size_limit * stride_db_seqlen +
+        (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_db_head +
+        (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_db_seqlen +
+        (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_db_k
+  let valueFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (Option.map₂ (fun a r => a + r)
+          (if s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+              s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K then
+            some (s.readMem Acc
+              (s.pids 1 * stride_acc_batch + (s.pids 2 / ngroups) * stride_acc_chunk +
+                (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_acc_head +
+                (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_acc_m +
+                (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_acc_n))
+          else some (0.0 : ℝ))
+          (if s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+              s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K then
+            some (s.readMem Res
+              (s.pids 1 * stride_res_batch + (s.pids 2 / ngroups) * stride_res_chunk +
+                (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_res_head +
+                (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_res_m +
+                (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_res_n))
+          else some (0.0 : ℝ)))
+  let P : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Prop :=
+    fun idx =>
+      s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size_limit ∧
+        s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < K
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem Db (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BLOCK_SIZE_M, BLOCK_SIZE_N])).readMem Db
+        (offsetFn idx) =
+    residualFinalSpec s Acc Res num_pid_n ngroups stride_acc_batch
+      stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+      stride_res_batch stride_res_chunk stride_res_head stride_res_m
+      stride_res_n BLOCK_SIZE_M BLOCK_SIZE_N idx
+  rw [BlockState.scatter_readback_prop_masked_nd_of_true _ _ _ P idx]
+  · have hP : P idx := by
+      simpa [P, active, pidM, pidN, mIndex, nIndex] using hActive
+    simp [offsetFn, valueFn, P, active, residualFinalSpec, accOffset, resOffset,
+      dbOffset, pidC, pidH, pidM, pidN, mIndex, nIndex, hP]
+  · simpa [P, active, pidM, pidN, mIndex, nIndex] using hActive
+  · intro k hPk heq
+    exact hNoCollision idx hActive k
+      (by simpa [P, active, pidM, pidN, mIndex, nIndex] using hPk)
+      (by simpa [offsetFn, dbOffset, pidC, pidH, pidM, pidN, mIndex, nIndex]
+        using heq)
+
+theorem bmm_chunk_bwd_python_ungrouped_active_no_collision
+    (num_pid_n BLOCK_SIZE_M BLOCK_SIZE_N : Nat) (s : BlockState) :
+    ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+      active s num_pid_n 32 64 BLOCK_SIZE_M BLOCK_SIZE_N idx →
+      ∀ k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+        active s num_pid_n 32 64 BLOCK_SIZE_M BLOCK_SIZE_N k →
+        dbOffset s num_pid_n 1 32 8192 64 0 1 BLOCK_SIZE_M BLOCK_SIZE_N k =
+          dbOffset s num_pid_n 1 32 8192 64 0 1 BLOCK_SIZE_M BLOCK_SIZE_N idx →
+        k = idx := by
+  rintro ⟨⟨ma, hma⟩, ⟨na, hna⟩, _⟩ hA
+    ⟨⟨mb, hmb⟩, ⟨nb, hnb⟩, _⟩ hB hEq
+  simp [active, dbOffset, pidC, pidH, pidM, pidN, mIndex, nIndex] at hA hB hEq
+  have hm : mb = ma := by omega
+  have hn : nb = na := by omega
+  subst mb
+  subst nb
+  rfl
+
+theorem bmm_chunk_bwd_python_grouped_active_no_collision
+    (num_pid_n BLOCK_SIZE_M BLOCK_SIZE_N : Nat) (s : BlockState) :
+    ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+      active s num_pid_n 32 64 BLOCK_SIZE_M BLOCK_SIZE_N idx →
+      ∀ k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+        active s num_pid_n 32 64 BLOCK_SIZE_M BLOCK_SIZE_N k →
+        dbOffset s num_pid_n 4 32 32768 256 64 1 BLOCK_SIZE_M BLOCK_SIZE_N k =
+          dbOffset s num_pid_n 4 32 32768 256 64 1 BLOCK_SIZE_M BLOCK_SIZE_N idx →
+        k = idx := by
+  rintro ⟨⟨ma, hma⟩, ⟨na, hna⟩, _⟩ hA
+    ⟨⟨mb, hmb⟩, ⟨nb, hnb⟩, _⟩ hB hEq
+  simp [active, dbOffset, pidC, pidH, pidM, pidN, mIndex, nIndex] at hA hB hEq
+  have hm : mb = ma := by omega
+  have hn : nb = na := by omega
+  subst mb
+  subst nb
+  rfl
+
+theorem bmm_chunk_bwd_python_case1_compute_correct
+    (Acc Db : RegionName) (num_pid_n BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_bwd_final_store_slice Acc Db num_pid_n 1 32 64
+        8192 2048 0 64 1 8192 64 0 1 BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_pid_n 32 64 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Db,
+          dbOffset s num_pid_n 1 32 8192 64 0 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        s.readMem Acc
+          (accOffset s num_pid_n 1 8192 2048 0 64 1
+            BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  exact bmm_chunk_bwd_final_store_slice_active_compute_correct Acc Db
+    num_pid_n 1 32 64 8192 2048 0 64 1 8192 64 0 1
+    BLOCK_SIZE_M BLOCK_SIZE_N s
+    (bmm_chunk_bwd_python_ungrouped_active_no_collision num_pid_n
+      BLOCK_SIZE_M BLOCK_SIZE_N s)
+
+theorem bmm_chunk_bwd_python_case2_residual_compute_correct
+    (Acc Res Db : RegionName) (num_pid_n BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_bwd_residual_final_store_slice Acc Res Db num_pid_n 4
+        32 64 32768 8192 2048 256 1 32768 8192 64 256 1
+        32768 256 64 1 BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_pid_n 32 64 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Db,
+          dbOffset s num_pid_n 4 32 32768 256 64 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        residualFinalSpec s Acc Res num_pid_n 4 32768 8192 2048 256 1
+          32768 8192 64 256 1 BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
+  exact bmm_chunk_bwd_residual_final_store_slice_active_compute_correct Acc Res Db
+    num_pid_n 4 32 64 32768 8192 2048 256 1 32768 8192 64 256 1
+    32768 256 64 1 BLOCK_SIZE_M BLOCK_SIZE_N s
+    (bmm_chunk_bwd_python_grouped_active_no_collision num_pid_n
+      BLOCK_SIZE_M BLOCK_SIZE_N s)
 
 end VeriTile.Bench.TritonBenchG.BmmChunkBwd

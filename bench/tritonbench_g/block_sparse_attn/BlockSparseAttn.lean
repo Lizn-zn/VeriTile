@@ -446,4 +446,59 @@ theorem block_sparse_attn_output_store_second_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+theorem block_sparse_attn_python_first_output_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [16, 16] => outOffset s 4 2048 512 32 16 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, offB, offH, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem block_sparse_attn_python_second_output_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [16, 16] => out2Offset s 4 2048 512 32 16 16 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [out2Offset, offB, offH, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem block_sparse_attn_python_first_output_compute_correct
+    (Acc Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_slice Acc Out 4 16
+        2048 512 16 1 2048 512 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        accStoreValue s Acc 4 16 2048 512 16 1 16 idx) := by
+  exact block_sparse_attn_output_store_slice_compute_correct Acc Out
+    4 16 2048 512 16 1 2048 512 32 16 16 s
+    (block_sparse_attn_python_first_output_offset_injective s)
+
+theorem block_sparse_attn_python_second_output_compute_correct
+    (Acc2 Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_second_slice Acc2 Out 4 16
+        2048 512 16 1 2048 512 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (Out, out2Offset s 4 2048 512 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        accStoreValue s Acc2 4 16 2048 512 16 1 16 idx) := by
+  exact block_sparse_attn_output_store_second_slice_compute_correct Acc2 Out
+    4 16 2048 512 16 1 2048 512 32 16 16 s
+    (block_sparse_attn_python_second_output_offset_injective s)
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn

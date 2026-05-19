@@ -60,6 +60,23 @@ def softmax_reducev_surface
   tl.store(out_ptrs, acc)
 }
 
+/-- The full softmax-reduceV surface lowers to the algorithm layer. -/
+theorem softmax_reducev_surface_toAlgorithm_supported
+    (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat)
+    (max_input_len
+      stride_logic_h stride_logic_bs
+      stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od
+      stride_b_loc_b stride_b_loc_s
+      BLOCK_DMODEL BLOCK_N : Nat)
+    (other_kv_index : Int) :
+    ∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      max_input_len stride_logic_h stride_logic_bs stride_vbs stride_vh
+      stride_vd stride_obs stride_oh stride_od stride_b_loc_b stride_b_loc_s
+      BLOCK_DMODEL BLOCK_N other_kv_index).toAlgorithm? = Except.ok alg := by
+  simp [softmax_reducev_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final normalization/store slice of `softmax_reducev.py`'s
 `_fwd_kernel`.
 

@@ -48,6 +48,18 @@ def kldiv_forward_surface
   }
 }
 
+/-- The full KL-divergence forward surface lowers to the algorithm layer,
+including the `log_target` branch, dynamic column loop, and reduction modes. -/
+theorem kldiv_forward_surface_toAlgorithm_supported
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat)
+    (log_target : Bool) (reduction : Nat) :
+    ∃ alg,
+      (kldiv_forward_surface y_ptr gt_ptr loss_ptr y_stride gt_stride
+        loss_stride n_cols BLOCK_SIZE log_target reduction).toAlgorithm? =
+        Except.ok alg := by
+  simp [kldiv_forward_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Faithful transcription of `kldiv_triton.py`'s `_kldiv_kernel_backward`
 for the `log_target = False` constexpr branch.
 

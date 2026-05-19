@@ -71,6 +71,17 @@ def softmax_kernel_online_v2_surface
   }
 }
 
+/-- The full online-softmax surface lowers to the algorithm layer, including
+the online recurrence loops, masked tail pass, final normalization, and both
+writeback loops. -/
+theorem softmax_kernel_online_v2_surface_toAlgorithm_supported
+    (output_ptr input_ptr : RegionName)
+    (M N TILE_N : Nat) :
+    ∃ alg,
+      (softmax_kernel_online_v2_surface output_ptr input_ptr M N TILE_N).toAlgorithm? =
+        Except.ok alg := by
+  simp [softmax_kernel_online_v2_surface, ComputeExpr.toAlgorithm?]
+
 /-- Proof-oriented one-tile specialization of `softmax_kernel_online_v2`.
 
 When `N <= TILE_N`, the online loops collapse to one masked row tile. This kernel

@@ -72,6 +72,22 @@ def cross_entropy_fwd_surface
   }
 }
 
+/-- The faithful full forward surface lowers to the algorithm layer, including
+the smoothing, split, ignored-label, LSE/z-loss side-store branches. -/
+theorem cross_entropy_fwd_surface_toAlgorithm_supported
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ)
+    (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
+    (HAS_SMOOTHING SPLIT : Bool) :
+    ∃ alg,
+      (cross_entropy_fwd_surface loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+        smoothing logit_scale lse_square_scale ignored_index total_classes
+        class_start_idx n_cols n_rows logits_row_stride BLOCK_SIZE
+        HAS_SMOOTHING SPLIT).toAlgorithm? = Except.ok alg := by
+  simp [cross_entropy_fwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final-store slice of `cross_entropy_ops.py`'s
 `cross_entropy_bwd_kernel`.
 

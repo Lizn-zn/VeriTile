@@ -42,6 +42,16 @@ def matmul_triton2_surface
   tl.store(c_ptrs, accumulator, mask=c_mask)
 }
 
+/-- The full `matmul_triton2` surface lowers to the algorithm layer. -/
+theorem matmul_triton2_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat) :
+    ∃ alg, (matmul_triton2_surface A B C M N K stride_am stride_ak stride_bk
+      stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
+      GROUP_SIZE_M).toAlgorithm? = Except.ok alg := by
+  simp [matmul_triton2_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented masked output-store slice of `matmul_triton2.py`'s
 `matmul_kernel`.
 

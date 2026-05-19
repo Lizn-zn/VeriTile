@@ -59,13 +59,37 @@ block_component +directive numgrid where
   toHtml id _ _ goB contents := do
     pure {{<div class="numgrid" id={{id}}>{{← contents.mapM goB}}</div>}}
 
-block_component +directive flowToday where
-  toHtml id _ _ goB contents := do
-    pure {{<div class="flow-today" id={{id}}>{{← contents.mapM goB}}</div>}}
+/- Embed a static asset (lives in `static_files/`) as a slide-width image.
+   Use this for diagrams authored in Figma / Excalidraw / hand-written SVG,
+   instead of recreating the visuals as CSS-positioned divs. -/
+block_component +directive image (src : String) (alt : String) where
+  toHtml id _ _ _ _ := do
+    pure {{<img id={{id}} class="diagram" src={{"static/" ++ src}} alt={{alt}}/>}}
 
-block_component +directive flowVeritile where
+/- A horizontal pipeline. The `flow` directive only carries the rail label
+   and its colour; everything inside is a sequence of `:::stage` directives,
+   each fully describing its own block (border, body colour, shadow). The
+   stage's body is regular markdown — backticks for `<code>`, etc.
+   `static_files/slides.css` only owns the layout (flex row, arrows). -/
+block_component +directive flow (label : String) (railColor : String) where
   toHtml id _ _ goB contents := do
-    pure {{<div class="flow-veritile" id={{id}}>{{← contents.mapM goB}}</div>}}
+    let style := s!"--flow-rail-color: {railColor};"
+    pure {{<div class="flow" id={{id}} style={{style}}>
+            <div class="rail">{{label}}</div>
+            {{← contents.mapM goB}}
+          </div>}}
+
+/- `width` is a CSS flex-basis value (`"auto"`, `"12vmin"`, `"120px"`, …) —
+   each stage sets its own width independently. `accent` overrides only the
+   top border (e.g. `"0.4vmin solid var(--blue)"`); pass `""` to leave the
+   top border equal to the rest. `weight` is a CSS font-weight ("400", ...). -/
+block_component +directive stage
+    (width : String) (border : String) (color : String) (shadow : String)
+    (weight : String) (accent : String) where
+  toHtml id _ _ goB contents := do
+    let base := s!"flex: 0 0 {width}; border: {border}; color: {color}; box-shadow: {shadow}; font-weight: {weight};"
+    let style := if accent.isEmpty then base else s!"{base} border-top: {accent};"
+    pure {{<div class="stage" id={{id}} style={{style}}>{{← contents.mapM goB}}</div>}}
 
 end
 
@@ -178,53 +202,15 @@ Agent generates the proof, fully automated.
 
 `Performance up · correctness on a prayer.`
 
-:::flowToday
-* `.py` kernel
-* PyTorch reference
-* sample a few inputs
-* ship
-* silent bug?
-:::
-
-:::flowVeritile
-* `.py` kernel
-* embedded DSL
-* Lean theorem
-* ship
-* ✓ proven
-:::
-
-:::cardBlue
-*Workflow today*
-
-Triton engineers iterate fast — naive → stable → online → fused. Each
-optimization rewrites the algebra; equivalence is checked by hand, then
-by sampling a few inputs against PyTorch or `flash-attn`. Once the sample
-passes, the kernel ships.
-
-:::
-
-:::cardOrange
-*Where bugs hide*
-
-A single off-by-one in `mask=` / `other=`, a partial KV block, a D-tail
-boundary, a wrong reduction axis — any of these silently changes the
-result. Sample testing can pass while the algorithm is subtly wrong on
-inputs that never get generated.
-
-:::
-
-:::cardGreen
-*What's at stake*
-
-Attention, GEMM, fused-norm, SSM kernels sit on the production hot path.
-A silent regression shifts downstream model behavior; debug cost is
-enormous and rollback hits real users.
-
+:::image "today-vs-veritile.svg" "Today's workflow vs VeriTile's workflow"
 :::
 
 :::cardMuted
-*This isn't a Triton problem — it's a verification gap. We close it.*
+Engineers iterate fast — naive → stable → online → fused — but each
+rewrite ships on a sample-test prayer. A single `mask=` / `other=` slip,
+partial KV block, or wrong reduction axis can pass sampling and quietly
+break the production hot path. We see this as a verification gap, and
+VeriTile is our attempt at it.
 
 :::
 
@@ -856,7 +842,7 @@ single-program proofs.
 
 `ComputeCorrect.Realizes` states the observable write map of one kernel:
 
-```lean
+```
 write : ι → Option MemCellAddr
 expected : ι → α
 ```
@@ -871,7 +857,7 @@ expected : ι → α
 `ComputeRefine.Realizes` compares two write maps from the same logical output
 index:
 
-```lean
+```
 lhsWrite rhsWrite : ι → Option MemCellAddr
 relation : ι → α → β → Prop
 ```

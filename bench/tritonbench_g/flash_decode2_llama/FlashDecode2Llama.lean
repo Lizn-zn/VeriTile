@@ -46,6 +46,18 @@ def flash_decode2_llama_surface
     acc / sum_exp)
 }
 
+/-- The full flash-decode stage2 LLaMA surface lowers to the algorithm layer. -/
+theorem flash_decode2_llama_surface_toAlgorithm_supported
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum O : RegionName)
+    (stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od
+      BLOCK_SEQ BLOCK_DMODEL : Nat) :
+    ∃ alg, (flash_decode2_llama_surface B_Seqlen Mid_O Mid_O_LogExpSum O
+      stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb
+      stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od BLOCK_SEQ
+      BLOCK_DMODEL).toAlgorithm? = Except.ok alg := by
+  simp [flash_decode2_llama_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final output-store slice of
 `flash_decode2_llama.py`'s `_fwd_kernel_flash_decode_stage2`.
 

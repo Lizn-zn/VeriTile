@@ -90,6 +90,30 @@ def conv2d_forward_surface
     tl.store(Output, accum, mask=output_mask)
 }
 
+/-- The full conv2d forward surface lowers to the algorithm layer, including
+grouped launch indexing, nested kernel/input-feature loops, optional fp16 cast,
+dot accumulation, and the final masked output store. -/
+theorem conv2d_forward_surface_toAlgorithm_supported
+    (Input Weight Output : RegionName)
+    (batch_dim in_feat_dim in_height in_width out_feat_dim out_height out_width
+      input_batch_stride input_in_feat_stride input_height_stride input_width_stride
+      weight_out_feat_stride weight_in_feat_stride weight_height_stride weight_width_stride
+      output_batch_stride output_out_feat_stride output_height_stride output_width_stride
+      kernel_height kernel_width stride_height stride_width padding_height padding_width groups : Nat)
+    (_fp16 _tf32 : Bool)
+    (BLOCK_SIZE_BATCH_HEIGHT_WIDTH BLOCK_SIZE_IN_FEAT BLOCK_SIZE_OUT_FEAT : Nat) :
+    ∃ alg,
+      (conv2d_forward_surface Input Weight Output batch_dim in_feat_dim in_height
+        in_width out_feat_dim out_height out_width input_batch_stride
+        input_in_feat_stride input_height_stride input_width_stride
+        weight_out_feat_stride weight_in_feat_stride weight_height_stride
+        weight_width_stride output_batch_stride output_out_feat_stride
+        output_height_stride output_width_stride kernel_height kernel_width
+        stride_height stride_width padding_height padding_width groups _fp16 _tf32
+        BLOCK_SIZE_BATCH_HEIGHT_WIDTH BLOCK_SIZE_IN_FEAT
+        BLOCK_SIZE_OUT_FEAT).toAlgorithm? = Except.ok alg := by
+  simp [conv2d_forward_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final output-store slice of `triton_conv2d_fwd.py`'s
 `conv2d_forward_kernel`.
 

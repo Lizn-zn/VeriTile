@@ -91,6 +91,26 @@ def context_attn_llama_fwd_kernel_surface
   tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 }
 
+/-- The full LLaMA context-attention surface lowers to the algorithm layer. -/
+theorem context_attn_llama_fwd_kernel_surface_toAlgorithm_supported
+    (Q K V : RegionName) (sm_scale : ℝ) (Out : RegionName)
+    (B_Start_Loc B_Seqlen : Region .nat)
+    (Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat)
+    (stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od
+      stride_req_to_tokens_b stride_req_to_tokens_s
+      kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) :
+    ∃ alg, (context_attn_llama_fwd_kernel_surface Q K V sm_scale Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len
+      stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      stride_req_to_tokens_b stride_req_to_tokens_s kv_group_num H
+      BLOCK_DMODEL BLOCK_M BLOCK_N).toAlgorithm? = Except.ok alg := by
+  simp [context_attn_llama_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented final output-store slice of `context_attn_llama.py`'s
 `_fwd_kernel`.
 

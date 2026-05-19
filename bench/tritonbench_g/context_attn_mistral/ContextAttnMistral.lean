@@ -94,6 +94,24 @@ def context_attn_mistral_fwd_kernel_surface
   tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 }
 
+/-- The full Mistral sliding-window context-attention surface lowers to the
+algorithm layer. -/
+theorem context_attn_mistral_fwd_kernel_surface_toAlgorithm_supported
+    (Q K V : RegionName) (sm_scale : ℝ)
+    (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
+    ∃ alg, (context_attn_mistral_fwd_kernel_surface Q K V sm_scale B_Start_Loc
+      B_Seqlen Out stride_qbs stride_qh stride_qd stride_kbs stride_kh
+      stride_kd stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_M BLOCK_DMODEL BLOCK_N).toAlgorithm?
+        = Except.ok alg := by
+  simp [context_attn_mistral_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented final output-store slice of `context_attn_mistral.py`'s
 `_fwd_kernel`.
 

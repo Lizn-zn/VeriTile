@@ -101,6 +101,27 @@ def context_attn_bloom_fwd_kernel_surface
     mask=(offs_m[:, None] < cur_batch_seq_len) & (offs_d[None, :] < $(head_dim)))
 }
 
+/-- The full BLOOM context-attention surface lowers to the algorithm layer,
+including request-token gathers and final masked output stores. -/
+theorem context_attn_bloom_fwd_kernel_surface_toAlgorithm_supported
+    (Q K V : RegionName) (sm_scale : ℝ)
+    (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat)
+    (stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od
+      stride_req_to_tokens_b stride_req_to_tokens_s
+      kv_group_num head_dim BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
+    ∃ alg, (context_attn_bloom_fwd_kernel_surface Q K V sm_scale B_Start_Loc
+      B_Seqlen Out Req_to_tokens B_req_idx b_prompt_cache_len stride_qbs
+      stride_qh stride_qd stride_kbs stride_kh stride_kd stride_vbs stride_vh
+      stride_vd stride_obs stride_oh stride_od stride_req_to_tokens_b
+      stride_req_to_tokens_s kv_group_num head_dim BLOCK_M BLOCK_DMODEL
+      BLOCK_N).toAlgorithm? = Except.ok alg := by
+  simp [context_attn_bloom_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented final output-store slice of `context_attn_bloom.py`'s
 `_fwd_kernel`.
 

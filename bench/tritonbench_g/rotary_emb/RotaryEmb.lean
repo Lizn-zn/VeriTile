@@ -113,6 +113,18 @@ def rotary_kernel_surface
       (cur_head_range[None, :, None] < $(HEAD_K)))
 }
 
+/-- The full rotary Q/K surface lowers to the algorithm layer. -/
+theorem rotary_kernel_surface_toAlgorithm_supported
+    (Q K Cos Sin : RegionName)
+    (stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len
+      HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ BLOCK_DMODEL : Nat) :
+    ∃ alg, (rotary_kernel_surface Q K Cos Sin stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_Q HEAD_K BLOCK_HEAD BLOCK_SEQ
+      BLOCK_DMODEL).toAlgorithm? = Except.ok alg := by
+  simp [rotary_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of the Q part of `rotary_emb.py`'s `_rotary_kernel`
 under the existing one-sequence/one-head tile abstraction used in this file.
 
@@ -150,6 +162,16 @@ def rotary_emb_q_surface
   tl.store(Q + off_q1, out1, mask=active)
 }
 
+/-- The standalone Q rotary surface lowers to the algorithm layer. -/
+theorem rotary_emb_q_surface_toAlgorithm_supported
+    (Q Cos Sin : RegionName)
+    (stride_qbs stride_qh stride_qd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_Q BLOCK_HALF : Nat) :
+    ∃ alg, (rotary_emb_q_surface Q Cos Sin stride_qbs stride_qh stride_qd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q
+      BLOCK_HALF).toAlgorithm? = Except.ok alg := by
+  simp [rotary_emb_q_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of the K part of `rotary_emb.py`'s `_rotary_kernel`
 under the existing one-sequence/one-head tile abstraction. -/
 def rotary_emb_k_surface
@@ -182,6 +204,16 @@ def rotary_emb_k_surface
   tl.store(K + off_k0, out0, mask=active)
   tl.store(K + off_k1, out1, mask=active)
 }
+
+/-- The standalone K rotary surface lowers to the algorithm layer. -/
+theorem rotary_emb_k_surface_toAlgorithm_supported
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat) :
+    ∃ alg, (rotary_emb_k_surface K Cos Sin stride_kbs stride_kh stride_kd
+      stride_cosbs stride_cosd stride_sinbs stride_sind max_total_len HEAD_K
+      BLOCK_HALF).toAlgorithm? = Except.ok alg := by
+  simp [rotary_emb_k_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented Q-even-dimension slice of `rotary_emb.py`'s `_rotary_kernel`.
 
@@ -792,10 +824,5 @@ noncomputable def rotaryKernelQ0Spec
       (idx.2.2.1.val * 2 + 1) * stride_qd) *
     s.readMem Sin (sinFullOffset s stride_cosbs stride_cosd
       BLOCK_SEQ BLOCK_HALF (idx.1, idx.2.2))
-
-/-- Algorithm-layer correctness for the Q first-half store in the full
-`rotary_kernel_surface`. (Stub — full 3D broadcast-remap proof blocked on
-`dropInsertedIndex` simp coverage for compound 4-tuple indices over a middle
-singleton head axis; tracked in memory v6.) -/
 
 end VeriTile.Bench.TritonBenchG.RotaryEmb

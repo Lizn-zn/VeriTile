@@ -1,5 +1,5 @@
 name = "veritile-overview"
-defaultTargets = ["VeriTileOverview", "VeriTileSite"]
+defaultTargets = ["VeriTileOverview", "VeriTileSite", "veritile-overview"]
 
 [[require]]
 name = "verso"

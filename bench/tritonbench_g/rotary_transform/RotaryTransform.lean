@@ -108,6 +108,23 @@ def rotary_kernel_surface
   }
 }
 
+/-- The full rotary-transform surface lowers to the algorithm layer, including
+varlen/scalar-offset branches, interleaved mode, and conjugation. -/
+theorem rotary_kernel_surface_toAlgorithm_supported
+    (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat)
+    (SEQLEN_OFFSETS_SCALAR seqlen nheads rotary_dim seqlen_ro CACHE_KEY_SEQLEN
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_K BLOCK_M : Nat)
+    (IS_SEQLEN_OFFSETS_TENSOR IS_VARLEN INTERLEAVED CONJUGATE : Bool) :
+    ∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      SEQLEN_OFFSETS_SCALAR seqlen nheads rotary_dim seqlen_ro CACHE_KEY_SEQLEN
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_K BLOCK_M IS_SEQLEN_OFFSETS_TENSOR IS_VARLEN INTERLEAVED
+      CONJUGATE).toAlgorithm? = Except.ok alg := by
+  simp [rotary_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of the non-varlen, scalar-offset, non-interleaved,
 non-conjugate branch of `rotary_transform.py`'s `rotary_kernel`.
 

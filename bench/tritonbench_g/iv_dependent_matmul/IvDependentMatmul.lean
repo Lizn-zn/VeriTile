@@ -124,6 +124,17 @@ def iv_dependent_matmul_pre_load_surface
   tl.store(c_ptrs, c, mask=c_mask)
 }
 
+/-- The `pre_load` IV-dependent matmul surface lowers to the algorithm layer. -/
+theorem iv_dependent_matmul_pre_load_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ∃ alg, (iv_dependent_matmul_pre_load_surface A B C M N K stride_am
+      stride_ak stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M
+      BLOCK_SIZE_N BLOCK_SIZE_K).toAlgorithm? = Except.ok alg := by
+  simp [iv_dependent_matmul_pre_load_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of the `type == "post_load"` scheduling path. -/
 def iv_dependent_matmul_post_load_surface
     (A B C : RegionName)
@@ -159,6 +170,17 @@ def iv_dependent_matmul_post_load_surface
     c, mask=c_mask)
 }
 
+/-- The `post_load` IV-dependent matmul surface lowers to the algorithm layer. -/
+theorem iv_dependent_matmul_post_load_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ∃ alg, (iv_dependent_matmul_post_load_surface A B C M N K stride_am
+      stride_ak stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M
+      BLOCK_SIZE_N BLOCK_SIZE_K).toAlgorithm? = Except.ok alg := by
+  simp [iv_dependent_matmul_post_load_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of the `type == "post_pre_mixed"` scheduling path. -/
 def iv_dependent_matmul_post_pre_mixed_surface
     (A B C : RegionName)
@@ -193,6 +215,18 @@ def iv_dependent_matmul_post_pre_mixed_surface
   tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
     c, mask=c_mask)
 }
+
+/-- The `post_pre_mixed` IV-dependent matmul surface lowers to the algorithm
+layer. -/
+theorem iv_dependent_matmul_post_pre_mixed_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ∃ alg, (iv_dependent_matmul_post_pre_mixed_surface A B C M N K stride_am
+      stride_ak stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M
+      BLOCK_SIZE_N BLOCK_SIZE_K).toAlgorithm? = Except.ok alg := by
+  simp [iv_dependent_matmul_post_pre_mixed_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Surface transcription of the `type == "post_load_two_iters"` scheduling path. -/
 def iv_dependent_matmul_post_load_two_iters_surface
@@ -232,6 +266,18 @@ def iv_dependent_matmul_post_load_two_iters_surface
   tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
     c, mask=c_mask)
 }
+
+/-- The `post_load_two_iters` IV-dependent matmul surface lowers to the
+algorithm layer. -/
+theorem iv_dependent_matmul_post_load_two_iters_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ∃ alg, (iv_dependent_matmul_post_load_two_iters_surface A B C M N K
+      stride_am stride_ak stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M
+      BLOCK_SIZE_N BLOCK_SIZE_K).toAlgorithm? = Except.ok alg := by
+  simp [iv_dependent_matmul_post_load_two_iters_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Surface transcription of the `type == "post_load_three_iters"` scheduling path. -/
 def iv_dependent_matmul_post_load_three_iters_surface
@@ -275,6 +321,18 @@ def iv_dependent_matmul_post_load_three_iters_surface
   tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
     c, mask=c_mask)
 }
+
+/-- The `post_load_three_iters` IV-dependent matmul surface lowers to the
+algorithm layer. -/
+theorem iv_dependent_matmul_post_load_three_iters_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ∃ alg, (iv_dependent_matmul_post_load_three_iters_surface A B C M N K
+      stride_am stride_ak stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M
+      BLOCK_SIZE_N BLOCK_SIZE_K).toAlgorithm? = Except.ok alg := by
+  simp [iv_dependent_matmul_post_load_three_iters_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented masked output-store slice of `iv_dependent_matmul.py`'s
 `iv_dependent_matmul_kernel`.

@@ -1292,6 +1292,30 @@ theorem scatter_readback_prop_masked_nd_of_true {region : RegionName} {shape : T
     i (TileShape.allIndices_nodup shape) (TileShape.mem_allIndices shape i) hPi
     (fun k _hk hPk heq => h_no_collision k hPk heq)
 
+theorem foldl_writeMem_prop_masked_readMem_base_ext {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (R : RegionName) (off : Nat)
+    (l : List α) (s t : BlockState)
+    (hmem : ∀ region offset, s.mem region offset = t.mem region offset) :
+    ((l.foldl
+        (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+        s).readMem R off) =
+      ((l.foldl
+        (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+        t).readMem R off) := by
+  induction l generalizing s t with
+  | nil =>
+      simp [readMem, hmem]
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · simp [hP]
+        apply ih
+        intro region' offset'
+        simp [writeMem, hmem]
+      · simp [hP]
+        exact ih s t hmem
+
 theorem scatter_preserves_other_region {α : Type}
     (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
     (R : RegionName) (h_ne : R ≠ region) (off : Nat) :
@@ -1410,6 +1434,36 @@ theorem foldl_writeMem_masked_pid {α : Type}
       by_cases hmask : mask hd
       · simp [hmask]
       · simp [hmask]
+
+theorem foldl_writeMem_prop_masked_pid {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState) :
+    ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+        s).pid) = s.pid := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hP : P hd
+      · simp [hP]
+      · simp [hP]
+
+theorem foldl_writeMem_prop_masked_pids {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState) :
+    ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+        s).pids) = s.pids := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      by_cases hP : P hd
+      · simp [hP]
+      · simp [hP]
 
 theorem foldl_writeMemAt_pid {α : Type}
     (regionFn : α → RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
@@ -1538,6 +1592,19 @@ theorem foldl_writeMemTyped_pid {α : Type} (dtype : TileDType)
       by_cases hmask : P hd
       · simp [hmask]
       · simp [hmask]
+
+@[simp] theorem foldl_writeMem_prop_masked_setReg_same {α : Type}
+    (region : RegionName) (offsetFn : α → Nat)
+    (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState)
+    (name : RegName) (dtype : TileDType) (shape : TileShape)
+    (v : Tile dtype shape) :
+    ((l.foldl
+        (fun acc k => if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+        (s.setReg name dtype shape v)).regs dtype shape name) =
+      some v := by
+  rw [foldl_writeMem_prop_masked_regs]
+  simp
 
 @[simp] theorem foldl_writeMemTyped_regs {α : Type} (dtype : TileDType)
     (region : RegionName) (offsetFn : α → Nat)

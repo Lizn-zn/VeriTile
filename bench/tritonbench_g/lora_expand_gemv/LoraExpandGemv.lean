@@ -63,6 +63,21 @@ def bgmv_expand_surface
   }
 }
 
+/-- The full LoRA expand GEMV surface lowers to the algorithm layer, including
+the signed sentinel guard, split loop, optional cast, and add-inputs branch. -/
+theorem bgmv_expand_surface_toAlgorithm_supported
+    (input_ptr lora_ptr out_ptr : RegionName)
+    (N K : Nat) (lora_indices : Region .int)
+    (xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
+      cn_stride BLOCK_N BLOCK_K SPLIT_N : Nat)
+    (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
+    ∃ alg,
+      (bgmv_expand_surface input_ptr lora_ptr out_ptr N K lora_indices
+        xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
+        cn_stride BLOCK_N BLOCK_K SPLIT_N EVEN_K ADD_INPUTS CAST_TYPE).toAlgorithm? =
+        Except.ok alg := by
+  simp [bgmv_expand_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented one-output-block slice of `lora_expand_gemv.py`'s
 `_bgmv_expand_kernel`.
 
@@ -199,7 +214,34 @@ theorem bgmv_expand_one_block_correct
             outOffset, nIndex, Tile.reduceSum, Tile.reduceSumDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
             BlockState.readMemValue]
-      rfl
+      congr 1
+      apply Finset.sum_congr rfl
+      intro x _
+      change Option.map₂ (fun x1 x2 => x1 * x2)
+          (if x.val < K then
+            some (s.readMem input_ptr
+              (s.pids 1 * xm_stride + x.val * xk_stride))
+          else some 0.0)
+          (if x.val < K then
+            some (s.readMem lora_ptr
+              ((l0_stride * loraIndex s lora_indices) +
+                s.pids 0 * split_n_length * lora_k_stride +
+                i.val * lora_k_stride + x.val * lora_n_stride))
+          else some 0.0) =
+        Option.map₂ (fun x1 x2 => x1 * x2)
+          (if x.val < K then
+            some (s.readMem input_ptr
+              (s.pids 1 * xm_stride + x.val * xk_stride))
+          else some 0.0)
+          (if i.val < split_n_length ∧ x.val < K then
+            some (s.readMem lora_ptr
+              ((l0_stride * loraIndex s lora_indices) +
+                s.pids 0 * split_n_length * lora_k_stride +
+                i.val * lora_k_stride + x.val * lora_n_stride))
+          else some 0.0)
+      by_cases hxK : x.val < K
+      · simp [hxK, hi]
+      · simp [hxK]
     · simp [hi]
   · exact False.elim (hBN (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 

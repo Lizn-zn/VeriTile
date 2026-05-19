@@ -140,7 +140,28 @@ theorem mv_kernel_one_block_correct
     · simp [hi, mvSpec, mvProdTile, aOffset, bOffset, cOffset, nIndex,
             Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
             TileShape.eraseAxis, TileShape.insertAxisIndex]
-      rfl
+      congr 1
+      apply Finset.sum_congr rfl
+      intro x _
+      change Option.map₂ (fun x1 x2 => x1 * x2)
+          (if x.val < M then
+            some (s.readMem A
+              ((s.pids 0 * BLOCK_N + i.val) * stride_an + x.val * stride_am))
+          else some 0.0)
+          (if x.val < M then
+            some (s.readMem B (x.val * stride_bm))
+          else some 0.0) =
+        Option.map₂ (fun x1 x2 => x1 * x2)
+          (if s.pids 0 * BLOCK_N + i.val < N ∧ x.val < M then
+            some (s.readMem A
+              ((s.pids 0 * BLOCK_N + i.val) * stride_an + x.val * stride_am))
+          else some 0.0)
+          (if x.val < M then
+            some (s.readMem B (x.val * stride_bm))
+          else some 0.0)
+      by_cases hxM : x.val < M
+      · simp [hxM, hi]
+      · simp [hxM]
     · simp [hi]
   · exact False.elim (hBN (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 

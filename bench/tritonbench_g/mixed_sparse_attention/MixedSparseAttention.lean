@@ -103,6 +103,28 @@ def mixed_sparse_attention_fwd_kernel_surface
   tl.store(o_ptrs, (acc).to(DTYPE), mask=m_mask)
 }
 
+/-- The full mixed-sparse attention forward surface lowers to the algorithm
+layer, including block and column sparse phases. -/
+theorem mixed_sparse_attention_fwd_kernel_surface_toAlgorithm_supported
+    (Q K V : RegionName) (seqlens : Region .nat) (sm_scale : ℝ)
+    (block_count block_offset column_count column_index : Region .nat)
+    (Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk
+      stride_kz stride_kh stride_kn stride_kk
+      stride_vz stride_vh stride_vn stride_vk
+      stride_oz stride_oh stride_om stride_ok
+      Z H N_CTX NUM_ROWS NNZ_S NNZ_V
+      BLOCK_M BLOCK_N BLOCK_DMODEL : Nat)
+    (dtype : FloatDType) :
+    ∃ alg, (mixed_sparse_attention_fwd_kernel_surface Q K V seqlens sm_scale
+      block_count block_offset column_count column_index Out stride_qz stride_qh
+      stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk stride_vz
+      stride_vh stride_vn stride_vk stride_oz stride_oh stride_om stride_ok
+      Z H N_CTX NUM_ROWS NNZ_S NNZ_V BLOCK_M BLOCK_N BLOCK_DMODEL
+      dtype).toAlgorithm? = Except.ok alg := by
+  simp [mixed_sparse_attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented final output-store slice of
 `mixed_sparse_attention.py`'s `_triton_mixed_sparse_attn_fwd_kernel`.
 

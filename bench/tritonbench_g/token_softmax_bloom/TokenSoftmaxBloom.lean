@@ -89,6 +89,40 @@ def probOffset
     (stride_prob_h stride_prob_bs : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pids 1 * stride_prob_h + tokenIndex s B_Start_Loc i * stride_prob_bs
 
+def logicOffset
+    (s : BlockState) (B_Start_Loc : RegionName)
+    (stride_logic_h stride_logic_bs : Nat) (i : Fin BLOCK_SIZE) : Nat :=
+  s.pids 1 * stride_logic_h + tokenIndex s B_Start_Loc i * stride_logic_bs
+
+/-- Masked input row for the Python token-softmax path. Inactive lanes are `⊥`,
+matching the `other=-float("inf")` load used before the stable softmax. -/
+noncomputable def tokenSoftmaxInputTile
+    (s : BlockState) (Logics B_Start_Loc B_Seqlen : RegionName)
+    (stride_logic_h stride_logic_bs BLOCK_SIZE : Nat) :
+    Tile .real [BLOCK_SIZE] :=
+  { data := fun idx =>
+      if idx.1.val < seqLen s B_Seqlen then
+        some (s.readMem Logics
+          (logicOffset s B_Start_Loc stride_logic_h stride_logic_bs idx.1))
+      else none }
+
+/-- Exact stable-softmax value produced at one active token lane. -/
+noncomputable def tokenSoftmaxSpec
+    (s : BlockState) (Logics B_Start_Loc B_Seqlen : RegionName)
+    (stride_logic_h stride_logic_bs BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
+  let row :=
+    tokenSoftmaxInputTile s Logics B_Start_Loc B_Seqlen stride_logic_h
+      stride_logic_bs BLOCK_SIZE
+  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false row with
+  | some rowMax =>
+      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
+      let numerator := Tile.uop WithBot.realExp shifted
+      let denominator := Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false numerator
+      WithBot.unbotD 0
+        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR numerator denominator).data
+          (i, PUnit.unit))
+  | none => 0
+
 noncomputable def softmaxStoreValue
     (s : BlockState) (Softmax B_Start_Loc B_Seqlen : RegionName)
     (stride_softmax_h stride_softmax_bs : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
@@ -97,6 +131,23 @@ noncomputable def softmaxStoreValue
       some (s.readMem Softmax
         (softmaxOffset s B_Start_Loc stride_softmax_h stride_softmax_bs i))
     else some (0.0 : ℝ))
+
+/-- The full Python-path token softmax kernel lowers to the algorithm layer:
+the `.to(tl.float32)`, max/exp/sum/div reductions, and masked store are all
+translation-supported. The value-level store theorem below remains the
+proof-facing entry point for destination correctness. -/
+theorem token_softmax_surface_toAlgorithm_supported
+    (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName)
+    (stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs
+      BLOCK_SIZE : Nat) :
+    (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+        stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs
+        BLOCK_SIZE).toAlgorithm? =
+      Except.ok
+        (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+          stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs
+          BLOCK_SIZE).toAlgKernel := by
+  simp [token_softmax_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Algorithm-layer correctness for the masked token-softmax probability store. -/
 theorem token_softmax_final_store_slice_correct

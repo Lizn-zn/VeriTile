@@ -54,6 +54,16 @@ def ksoftmax_forward_surface
   tl.store(y_ptrs, y, mask=k < $(K))
 }
 
+/-- The full k-softmax forward surface lowers to the algorithm layer. -/
+theorem ksoftmax_forward_surface_toAlgorithm_supported
+    (Y X M : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
+    (LOG MASK_TYPE CAUSAL IS_FP16 MASK_QK : Bool) :
+    ∃ alg, (ksoftmax_forward_surface Y X M stride_ym stride_yn stride_xm
+      stride_xn stride_m K DEPTH LOG MASK_TYPE CAUSAL IS_FP16 MASK_QK).toAlgorithm?
+        = Except.ok alg := by
+  simp [ksoftmax_forward_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `ksoftmax_triton.py`'s `_softmax` for the
 `MASK_TYPE='qk'` branch.
 
@@ -95,6 +105,16 @@ def ksoftmax_forward_qk_surface
   y_ptrs = Y + m * $(stride_ym) + n * $(stride_yn) + k
   tl.store(y_ptrs, y, mask=k < $(K))
 }
+
+/-- The qk-mask k-softmax forward surface lowers to the algorithm layer. -/
+theorem ksoftmax_forward_qk_surface_toAlgorithm_supported
+    (Y X Mask : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
+    (LOG CAUSAL IS_FP16 : Bool) :
+    ∃ alg, (ksoftmax_forward_qk_surface Y X Mask stride_ym stride_yn
+      stride_xm stride_xn stride_m K DEPTH LOG CAUSAL IS_FP16).toAlgorithm?
+        = Except.ok alg := by
+  simp [ksoftmax_forward_qk_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Surface transcription of `ksoftmax_triton.py`'s `_softmax` for the
 `MASK_TYPE='bk'` branch.
@@ -139,6 +159,16 @@ def ksoftmax_forward_bk_surface
   tl.store(y_ptrs, y, mask=k < $(K))
 }
 
+/-- The bk-mask k-softmax forward surface lowers to the algorithm layer. -/
+theorem ksoftmax_forward_bk_surface_toAlgorithm_supported
+    (Y X Mask : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
+    (LOG CAUSAL IS_FP16 : Bool) :
+    ∃ alg, (ksoftmax_forward_bk_surface Y X Mask stride_ym stride_yn
+      stride_xm stride_xn stride_m K DEPTH LOG CAUSAL IS_FP16).toAlgorithm?
+        = Except.ok alg := by
+  simp [ksoftmax_forward_bk_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `ksoftmax_triton.py`'s `_softmax_backward`.
 
 This covers the tested backward paths for `LOG=true/false` and
@@ -179,6 +209,16 @@ def ksoftmax_backward_surface
   grad_in_ptrs = GradIn + m * $(stride_bm) + n * $(stride_bn) + k
   tl.store(grad_in_ptrs, grad_in, mask=k < $(K))
 }
+
+/-- The k-softmax backward surface lowers to the algorithm layer. -/
+theorem ksoftmax_backward_surface_toAlgorithm_supported
+    (GradIn GradOut Out : RegionName)
+    (stride_bm stride_bn stride_gm stride_gn stride_om stride_on K DEPTH : Nat)
+    (LOG CAUSAL IS_FP16 : Bool) :
+    ∃ alg, (ksoftmax_backward_surface GradIn GradOut Out stride_bm stride_bn
+      stride_gm stride_gn stride_om stride_on K DEPTH LOG CAUSAL
+      IS_FP16).toAlgorithm? = Except.ok alg := by
+  simp [ksoftmax_backward_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented forward softmax slice of `ksoftmax_triton.py`'s `_softmax`.
 

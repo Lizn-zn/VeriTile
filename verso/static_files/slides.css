@@ -245,7 +245,7 @@ body.deck .card-orange { border-left: 0.45vmin solid var(--orange); }
 body.deck .card-green  { border-left: 0.45vmin solid var(--green); }
 body.deck .card-purple { border-left: 0.45vmin solid var(--purple); }
 body.deck .card-muted  { background: transparent; border: 1px dashed var(--bd); color: var(--sub); }
-body.deck .card-muted p { color: var(--sub); }
+body.deck .card-muted p { color: var(--sub); font-size: 2.7vmin; line-height: 1.5; }
 body.deck .card-muted strong { color: var(--ink); }
 
 /* First strong-text in a card becomes an "INPUT/WHAT/OUTPUT" label. */
@@ -329,88 +329,75 @@ body.deck .numgrid li strong {
 }
 body.deck .numgrid li:nth-child(2) strong { color: var(--orange); }
 
-/* ---------- Two-flow comparison (Slide "The problem") ----------
- * `:::flowToday` and `:::flowVeritile` each render a 5-stage horizontal
- * pipeline. The "today" flow is muted with a warning-coloured tail; the
- * "veritile" flow is accent-blue with a green ✓ tail. */
+/* Diagram images (SVG/PNG dropped in via `:::image` directive). */
+body.deck img.diagram {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin: 1.6vmin 0;
+}
 
-body.deck .flow-today,
-body.deck .flow-veritile {
+/* ---------- Horizontal flow pipeline ----------
+ * Layout only. Each stage's appearance (border, body colour, shadow) is
+ * set inline by the `:::stage` directive in `VeriTileOverview.lean`. The
+ * rail label colour comes from the parent `:::flow`'s `railColor` arg.
+ * Kept for now but no longer used by the slide deck — the today-vs-veritile
+ * comparison is now a single SVG diagram (see `:::image` above). */
+
+body.deck .flow {
   display: flex;
   align-items: stretch;
-  gap: 0.8vmin;
+  gap: 3.6vmin;
   margin: 1vmin 0;
 }
-body.deck .flow-today ul,
-body.deck .flow-veritile ul { display: contents; }
-body.deck .flow-today li,
-body.deck .flow-veritile li {
-  flex: 1;
-  list-style: none;
+body.deck .flow .stage {
+  /* width comes from the per-stage `width` arg in Lean (`flex: 0 0 …`) */
   background: var(--card);
-  border-radius: 1.4vmin;
-  padding: 1vmin 0.8vmin;
+  border-radius: 1vmin;
+  padding: 0.6vmin 0.6vmin;
   text-align: center;
-  font-size: 1.6vmin;
-  line-height: 1.3;
-  margin: 0;
+  font-size: 1.3vmin;
+  line-height: 1.25;
   position: relative;
 }
-body.deck .flow-today li + li::before,
-body.deck .flow-veritile li + li::before {
-  content: "→";
+/* Connector arrow in the flex gap between consecutive stages. CSS-drawn
+ * (shaft = `::before` rectangle, head = `::after` triangle via borders),
+ * so head/tail align to the stage's geometric vertical centre with no
+ * font-metric drift. `right: 100%` anchors both pieces to the previous gap. */
+body.deck .flow .stage + .stage::before {
+  content: "";
   position: absolute;
-  left: -1.1vmin; top: 50%;
+  top: 50%;
+  right: 100%;
+  width: 3.1vmin;             /* = gap (3.6) − head-overlap (0.5) */
+  height: 0.2vmin;
+  margin-right: 0.5vmin;
+  background: #9aa6b8;
   transform: translateY(-50%);
-  font-size: 1.6vmin;
-  color: #9aa6b8;
+  pointer-events: none;
+}
+body.deck .flow .stage + .stage::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 100%;
+  width: 0; height: 0;
+  margin-right: 0.05vmin;
+  border-left: 0.9vmin solid #9aa6b8;
+  border-top: 0.55vmin solid transparent;
+  border-bottom: 0.55vmin solid transparent;
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
-/* "Today" — muted, dashed border, warning tail. */
-body.deck .flow-today li {
-  border: 1px dashed var(--bd);
-  color: var(--sub);
-}
-body.deck .flow-today li:last-child {
-  border-style: solid;
-  border-color: var(--orange);
-  color: var(--orange);
-  font-weight: 600;
-}
-
-/* "VeriTile" — accent blue with green ✓ tail and soft shadow. */
-body.deck .flow-veritile li {
-  border: 1px solid var(--bd);
-  border-top: 0.4vmin solid var(--blue);
-  color: var(--ink);
-  box-shadow: var(--shadow-card);
-}
-body.deck .flow-veritile li:last-child {
-  border-top-color: var(--green);
-  color: var(--green);
-  font-weight: 600;
-}
-
-/* "TODAY" / "VERITILE" rail label drawn to the left of each flow. */
-body.deck .flow-today::before {
-  content: "TODAY";
+body.deck .flow > .rail {
   align-self: center;
   font-size: 1.2vmin;
   letter-spacing: 0.16em;
   font-weight: 700;
-  color: var(--sub);
-  margin-right: 0.6vmin;
+  margin: 0 0.6vmin 0 0;
   min-width: 9vmin;
-}
-body.deck .flow-veritile::before {
-  content: "VERITILE";
-  align-self: center;
-  font-size: 1.2vmin;
-  letter-spacing: 0.16em;
-  font-weight: 700;
-  color: var(--blue);
-  margin-right: 0.6vmin;
-  min-width: 9vmin;
+  color: var(--flow-rail-color);
 }
 body.deck .numgrid li:nth-child(3) strong { color: var(--green); }
 body.deck .numgrid li:nth-child(4) strong { color: var(--purple); }

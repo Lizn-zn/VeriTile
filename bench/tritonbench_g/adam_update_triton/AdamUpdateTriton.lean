@@ -119,17 +119,13 @@ theorem update_fn_kernel_exp_avg_slice_compute_correct
     n_elements BLOCK_SIZE s s' hExec i
   simpa [hActive] using h
 
-/-! ## Full-kernel exp_avg correctness
+/-! ## Full-kernel output correctness
 
 The Python test runs the full `update_fn_kernel` which writes both `p` and
 `exp_avg`. Per #139's audit, slice proofs are insufficient. This theorem
-characterizes the `exp_avg` store for the full kernel under the assumption
+characterizes the observable stores for the full kernel under the assumption
 that `p_ptr ≠ exp_avg_ptr` (no kernel callers rely on aliasing those
-buffers).
-
-The companion `p` store theorem is significantly more complex due to the
-`tl.where(update > 0, -lr, lr)` and `update != 0` branches, and is left as
-follow-up work in the same file. -/
+buffers). -/
 
 noncomputable def expAvgFullSpec
     (s : BlockState) (grad_ptr exp_avg_ptr : RegionName)
@@ -137,6 +133,31 @@ noncomputable def expAvgFullSpec
   (s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) -
       s.readMem grad_ptr (outOffset s BLOCK_SIZE i)) *
     beta2 + s.readMem grad_ptr (outOffset s BLOCK_SIZE i)
+
+noncomputable def pFullSpec
+    (s : BlockState) (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
+  by
+    classical
+    let off := outOffset s BLOCK_SIZE i
+    let pTile : TileCarrier TileDType.real := some (s.readMem p_ptr off)
+    let gradTile : TileCarrier TileDType.real := some (s.readMem grad_ptr off)
+    let expAvgTile : TileCarrier TileDType.real := some (s.readMem exp_avg_ptr off)
+    let diff : TileCarrier TileDType.real :=
+      Option.map₂ (fun x y => x - y) expAvgTile gradTile
+    let update : TileCarrier TileDType.real := Option.map₂ (fun x y => x + y)
+      (Option.map (fun x => x * beta1) diff) gradTile
+    exact
+      WithBot.unbotD 0
+        (Option.map₂ (fun x y => x + y)
+          (Option.map (fun x => x * (1 - lr * wd)) pTile)
+          (if update = some 0 then
+            some 0
+          else if @LT.lt (TileCarrier TileDType.real) WithBot.instPreorder.toLT
+              (some 0) update then
+            some (0.0 - lr)
+          else
+            some lr))
 
 /-- Algorithm-layer correctness for the `exp_avg` store of the full
 `update_fn_kernel`. -/
@@ -191,6 +212,66 @@ theorem update_fn_kernel_exp_avg_compute_correct
   subst s0
   intro i hActive
   have h := update_fn_kernel_exp_avg_correct p_ptr grad_ptr exp_avg_ptr
+    lr wd beta1 beta2 n_elements BLOCK_SIZE s s' hRegions hExec i
+  simpa [hActive] using h
+
+/-- Algorithm-layer correctness for the `p` store of the full
+`update_fn_kernel`. -/
+theorem update_fn_kernel_p_correct
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hRegions : p_ptr ≠ exp_avg_ptr)
+    (hExec : exec (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE) s = some s') :
+    ∀ i : Fin BLOCK_SIZE,
+      s'.readMem p_ptr (outOffset s BLOCK_SIZE i) =
+        if outOffset s BLOCK_SIZE i < n_elements then
+          pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i
+        else s.readMem p_ptr (outOffset s BLOCK_SIZE i) := by
+  intro i
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
+    subst s'
+    rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+          exp_avg_ptr _ _ _ _ _ _ _ hRegions]
+    simp only [outOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : s.pids 0 * BLOCK_SIZE + i.val < n_elements
+    · unfold pFullSpec
+      simp only [outOffset, hi, if_true, Option.map, Option.map₂,
+        BlockState.pid_eq]
+      rfl
+    · simp [hi]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the `p` store of the full
+`update_fn_kernel`. -/
+theorem update_fn_kernel_p_compute_correct
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegions : p_ptr ≠ exp_avg_ptr) :
+    ComputeCorrect.Realizes
+      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (p_ptr, outOffset s BLOCK_SIZE i)))
+      (expected := fun i =>
+        pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [update_fn_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := update_fn_kernel_p_correct p_ptr grad_ptr exp_avg_ptr
     lr wd beta1 beta2 n_elements BLOCK_SIZE s s' hRegions hExec i
   simpa [hActive] using h
 

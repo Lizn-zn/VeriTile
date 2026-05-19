@@ -90,6 +90,25 @@ def attention_kernel_fwd_kernel_aligned_surface
   tl.store(O_block_ptr, (acc).to(OUT_DTYPE))
 }
 
+/-- The full aligned attention-kernel surface lowers to the algorithm layer. -/
+theorem attention_kernel_fwd_kernel_aligned_surface_toAlgorithm_supported
+    (Q K V B0 Out : RegionName) (sm_scale : ℝ)
+    (stride_qh stride_qm stride_qk
+      stride_kh stride_kn stride_kk
+      stride_vh stride_vk stride_vn
+      stride_oh stride_om stride_on
+      stride_b0h stride_b0m
+      Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
+      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (out_dtype : FloatDType) :
+    ∃ alg, (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out sm_scale
+      stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk stride_vh
+      stride_vk stride_vn stride_oh stride_om stride_on stride_b0h
+      stride_b0m Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL
+      BLOCK_M BLOCK_N out_dtype).toAlgorithm? = Except.ok alg := by
+  simp [attention_kernel_fwd_kernel_aligned_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented final output-store slice of `attention_kernel.py`'s
 `_fwd_kernel_aligned`.
 
@@ -207,5 +226,31 @@ theorem attention_kernel_final_store_slice_compute_correct
     BLOCK_DMODEL s hOutInj idx
   rw [hExec] at h
   exact Option.some.inj h
+
+/-! ## Python test-shape wrapper
+
+`attention_kernel.py`'s checked test uses `B = 2`, `H = 4`, `N_CTX = 128`,
+`D_MODEL = 128`, `BLOCK_M = 64`, and `BLOCK_N = 64`. Contiguous
+`[B, H, N_CTX, D_MODEL]` tensors are passed to the kernel with per-head strides
+`(16384, 128, 1)`. -/
+
+theorem attention_kernel_final_store_python_test_shape_compute_correct
+    (Acc Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_kernel_final_store_slice Acc Out
+        16384 128 1 16384 128 1 64 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 128] =>
+        some (Out, outOffset s 16384 128 1 64 idx))
+      (expected := fun idx : TileIndex [64, 128] =>
+        s.readMem Acc (accOffset s 16384 128 1 64 idx)) := by
+  apply attention_kernel_final_store_slice_compute_correct
+  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
+  simp [outOffset, mIndex, kIndex] at h
+  have hm : ma = mb := by omega
+  have hk : ka = kb := by omega
+  subst mb
+  subst kb
+  rfl
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel

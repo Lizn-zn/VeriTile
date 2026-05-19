@@ -34,6 +34,36 @@ def indexToList : (shape : TileShape) → TileIndex shape → List Nat
   | [], _ => []
   | _ :: rest, idx => idx.1.val :: indexToList rest idx.2
 
+@[simp] theorem blockPtr_address_2d_zero_offsets_index
+    (region : RegionName) (base rows cols BT BS strideT strideS : Nat)
+    (idx : TileIndex [BT, BS]) :
+    BlockPtr.address
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, 0] }
+      (TileShape.indexToList [BT, BS] idx) =
+        base + idx.1.val * strideT + idx.2.1.val * strideS := by
+  cases idx with
+  | mk i rest =>
+    cases rest with
+    | mk j rest2 =>
+      cases rest2
+      simp [TileShape.indexToList]
+
+@[simp] theorem blockPtr_inBounds_2d_zero_offsets_index
+    (region : RegionName) (base rows cols BT BS strideT strideS : Nat)
+    (idx : TileIndex [BT, BS]) :
+    BlockPtr.inBounds
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, 0] }
+      (TileShape.indexToList [BT, BS] idx) [0, 1] =
+        decide (idx.1.val < rows ∧ idx.2.1.val < cols) := by
+  cases idx with
+  | mk i rest =>
+    cases rest with
+    | mk j rest2 =>
+      cases rest2
+      simp [TileShape.indexToList]
+
 /-- Dimension at an axis. -/
 def axisDim : (shape : TileShape) → Fin shape.length → Nat
   | [], axis => nomatch axis

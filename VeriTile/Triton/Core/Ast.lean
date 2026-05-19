@@ -538,12 +538,16 @@ end ComputeOp
 inductive ComputeExpr : AlgDType → TileShape → Type where
   | alg : Op dtype shape → ComputeExpr dtype shape
   | compute : ComputeOp cdtype shape → ComputeExpr cdtype.eraseDType shape
+  | opaque : (op : String) → ComputeExpr dtype shape
+  | llrint : ComputeExpr .real shape → ComputeExpr .int shape
 
 namespace ComputeExpr
 
 def toAlgorithm? : ComputeExpr dtype shape → Except EraseDTypeError (Op dtype shape)
   | .alg e => Except.ok e
   | .compute e => ComputeOp.toAlgorithm? e
+  | .opaque op => Except.error (.requiresComputeSemantics op)
+  | .llrint _ => Except.error (.requiresComputeSemantics "runtime CUDA llrint")
 
 @[simp] theorem toAlgorithm?_alg (e : Op dtype shape) :
     (ComputeExpr.alg e).toAlgorithm? = Except.ok e := rfl

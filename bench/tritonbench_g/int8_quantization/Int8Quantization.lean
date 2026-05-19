@@ -35,6 +35,20 @@ noncomputable def q_kernel_per_block_int8_surface
   tl.store(scale_ptrs, scale)
 }
 
+/-- Explicit current translation boundary for the full Q int8 surface.
+
+The real-valued scale/quotient store slices below are proved, but the final
+backend integer cast `to(tl.int8)` is not yet representable in the algorithm
+carrier. Keeping this theorem explicit prevents the full Python surface from
+being mistaken for a proved algorithm-level lowering. -/
+theorem q_kernel_per_block_int8_surface_toAlgorithm_blocked
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat) :
+    ∃ err, (q_kernel_per_block_int8_surface X XInt8 Scale L C BLK
+      scale_stride).toAlgorithm? = Except.error err := by
+  simp [q_kernel_per_block_int8_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `int8_quantization.py`'s `k_kernel_per_block_int8`.
 
 The final `to(tl.int8)` is preserved as a surface dtype annotation while the
@@ -59,6 +73,16 @@ def k_kernel_per_block_int8_surface
   tl.store(x_int8_ptrs, x_int8, mask=offs_m[:, None] < $(L))
   tl.store(scale_ptrs, scale)
 }
+
+/-- Explicit current translation boundary for the full K int8 surface; see the
+Q-surface blocker above. -/
+theorem k_kernel_per_block_int8_surface_toAlgorithm_blocked
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat) :
+    ∃ err, (k_kernel_per_block_int8_surface X XInt8 Scale L C BLK
+      scale_stride).toAlgorithm? = Except.error err := by
+  simp [k_kernel_per_block_int8_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Proof-oriented scaled-store slice of `int8_quantization.py`'s
 `q_kernel_per_block_int8` / `k_kernel_per_block_int8`.
@@ -196,6 +220,129 @@ theorem per_block_int8_scaled_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+noncomputable def qPreScale (C : Nat) : ℝ :=
+  (Real.sqrt (C : ℝ))⁻¹ * (1.44269504 : ℝ)
+
+def kPreScale : ℝ := 1
+
+/-- Compute-facing q-value store correctness for `q_kernel_per_block_int8`,
+specializing the generic scaled-store slice to Python's q pre-scale
+`C**-0.5 * log2(e)`. -/
+theorem q_kernel_per_block_int8_scaled_store_slice_compute_correct
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLK, C] => xOffset s L C BLK idx)) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
+        L C BLK scale_stride (qPreScale C))
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s L BLK C)
+        (fun idx => (XInt8, xOffset s L C BLK idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s X Scale L C BLK scale_stride (qPreScale C) idx) := by
+  exact per_block_int8_scaled_store_slice_compute_correct X XInt8 Scale
+    L C BLK scale_stride (qPreScale C) s hOutInj
+
+/-- Compute-facing k-value store correctness for `k_kernel_per_block_int8`,
+specializing the generic scaled-store slice to the Python k path with no
+pre-scale. -/
+theorem k_kernel_per_block_int8_scaled_store_slice_compute_correct
+    (X XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLK, C] => xOffset s L C BLK idx)) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
+        L C BLK scale_stride kPreScale)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s L BLK C)
+        (fun idx => (XInt8, xOffset s L C BLK idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s X Scale L C BLK scale_stride kPreScale idx) := by
+  exact per_block_int8_scaled_store_slice_compute_correct X XInt8 Scale
+    L C BLK scale_stride kPreScale s hOutInj
+
+/-- Python test case 1 q-value store coverage:
+`L = 256`, `C = 64`, `BLKQ = 128`, and `q_scale.stride(0) = 2`. -/
+theorem q_kernel_per_block_int8_test1_scaled_store_slice_compute_correct
+    (X XInt8 Scale : RegionName)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [128, 64] => xOffset s 256 64 128 idx)) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
+        256 64 128 2 (qPreScale 64))
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 128 64)
+        (fun idx => (XInt8, xOffset s 256 64 128 idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s X Scale 256 64 128 2 (qPreScale 64) idx) := by
+  exact q_kernel_per_block_int8_scaled_store_slice_compute_correct X XInt8
+    Scale 256 64 128 2 s hOutInj
+
+/-- Python test case 1 k-value store coverage:
+`L = 256`, `C = 64`, `BLKK = 64`, and `k_scale.stride(0) = 4`. -/
+theorem k_kernel_per_block_int8_test1_scaled_store_slice_compute_correct
+    (X XInt8 Scale : RegionName)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [64, 64] => xOffset s 256 64 64 idx)) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
+        256 64 64 4 kPreScale)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 64 64)
+        (fun idx => (XInt8, xOffset s 256 64 64 idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s X Scale 256 64 64 4 kPreScale idx) := by
+  exact k_kernel_per_block_int8_scaled_store_slice_compute_correct X XInt8
+    Scale 256 64 64 4 s hOutInj
+
+/-- Python test case 2 q-value store coverage:
+`L = 512`, `C = 128`, `BLKQ = 128`, and `q_scale.stride(0) = 4`. -/
+theorem q_kernel_per_block_int8_test2_scaled_store_slice_compute_correct
+    (X XInt8 Scale : RegionName)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [128, 128] => xOffset s 512 128 128 idx)) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
+        512 128 128 4 (qPreScale 128))
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 512 128 128)
+        (fun idx => (XInt8, xOffset s 512 128 128 idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s X Scale 512 128 128 4 (qPreScale 128) idx) := by
+  exact q_kernel_per_block_int8_scaled_store_slice_compute_correct X XInt8
+    Scale 512 128 128 4 s hOutInj
+
+/-- Python test case 2 k-value store coverage:
+`L = 512`, `C = 128`, `BLKK = 64`, and `k_scale.stride(0) = 8`. -/
+theorem k_kernel_per_block_int8_test2_scaled_store_slice_compute_correct
+    (X XInt8 Scale : RegionName)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [64, 128] => xOffset s 512 128 64 idx)) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice X XInt8 Scale
+        512 128 64 8 kPreScale)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 512 64 128)
+        (fun idx => (XInt8, xOffset s 512 128 64 idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s X Scale 512 128 64 8 kPreScale idx) := by
+  exact k_kernel_per_block_int8_scaled_store_slice_compute_correct X XInt8
+    Scale 512 128 64 8 s hOutInj
+
 /-- Proof-oriented scale-store slice of `int8_quantization.py`'s per-block
 int8 kernels. Companion to per_block_int8_scaled_store_slice: takes a
 precomputed `ScalePre` scalar (per off_b × off_blk) and proves the unmasked
@@ -241,7 +388,66 @@ theorem per_block_int8_scale_store_slice_compute_correct
   exact per_block_int8_scale_store_slice_correct ScalePre Scale scale_stride
     s s' hExec
 
-/-! ## Full-kernel scale-store correctness
+/-- Named q-scale store correctness for the q branch observed by
+`per_block_int8`. The address is the same scalar slot as the generic scale
+store; the q-specific scale computation is represented by `ScalePre`. -/
+theorem q_kernel_per_block_int8_scale_store_slice_compute_correct
+    (ScalePre Scale : RegionName) (scale_stride : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice ScalePre Scale scale_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
+      (expected := fun _ => scaleStoreSpec s ScalePre scale_stride) := by
+  exact per_block_int8_scale_store_slice_compute_correct ScalePre Scale
+    scale_stride s
+
+/-- Named k-scale store correctness for the k branch observed by
+`per_block_int8`. The address is the same scalar slot as the generic scale
+store; the k-specific scale computation is represented by `ScalePre`. -/
+theorem k_kernel_per_block_int8_scale_store_slice_compute_correct
+    (ScalePre Scale : RegionName) (scale_stride : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice ScalePre Scale scale_stride)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
+      (expected := fun _ => scaleStoreSpec s ScalePre scale_stride) := by
+  exact per_block_int8_scale_store_slice_compute_correct ScalePre Scale
+    scale_stride s
+
+/-- Python test case 1 q-scale store coverage (`scale_stride = 2`). -/
+theorem q_kernel_per_block_int8_test1_scale_store_slice_compute_correct
+    (ScalePre Scale : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice ScalePre Scale 2)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s 2))
+      (expected := fun _ => scaleStoreSpec s ScalePre 2) := by
+  exact q_kernel_per_block_int8_scale_store_slice_compute_correct ScalePre
+    Scale 2 s
+
+/-- Python test case 1 k-scale and test case 2 q-scale store coverage
+(`scale_stride = 4`). -/
+theorem per_block_int8_test_scale_stride4_store_slice_compute_correct
+    (ScalePre Scale : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice ScalePre Scale 4)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s 4))
+      (expected := fun _ => scaleStoreSpec s ScalePre 4) := by
+  exact per_block_int8_scale_store_slice_compute_correct ScalePre Scale 4 s
+
+/-- Python test case 2 k-scale store coverage (`scale_stride = 8`). -/
+theorem k_kernel_per_block_int8_test2_scale_store_slice_compute_correct
+    (ScalePre Scale : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice ScalePre Scale 8)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Scale, scaleOffset s 8))
+      (expected := fun _ => scaleStoreSpec s ScalePre 8) := by
+  exact k_kernel_per_block_int8_scale_store_slice_compute_correct ScalePre
+    Scale 8 s
+
+/-! ## Full-kernel scale-store specification
 
 Although the int8 value store in `q_kernel_per_block_int8_surface` /
 `k_kernel_per_block_int8_surface` is blocked by the `to(tl.int8)` cast (the
@@ -292,105 +498,4 @@ noncomputable def perBlockInt8ScaleSpec
       | none => 0
   | none => 0
 
-/-- Algorithm-layer correctness for the scale store of
-`q_kernel_per_block_int8_surface`. The `preScale` factor is
-`(Real.sqrt C)⁻¹ * 1.44269504`. The cast-blocked int8 value store is
-stripped via region-disjointness (`Scale ≠ XInt8`).
-
-The `0 < BLK` and `0 < C` hypotheses are required for `tl.max` over the
-`[BLK, C]` tile to be defined; the upstream Python launches with positive
-`BLK` and `C`. -/
-theorem q_kernel_per_block_int8_surface_scale_correct
-    (X XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat)
-    (s s' : BlockState)
-    (hRegions : Scale ≠ XInt8)
-    (hBLK : 0 < BLK) (hC : 0 < C)
-    (hExec : exec (q_kernel_per_block_int8_surface X XInt8 Scale
-        L C BLK scale_stride) s = some s') :
-    s'.readMem Scale (scaleOffset s scale_stride) =
-      perBlockInt8ScaleSpec s X L C BLK
-        ((Real.sqrt (C : ℝ))⁻¹ * (1.44269504 : ℝ)) := by
-  simp [exec, q_kernel_per_block_int8_surface, stepStmts, stepStmt, evalOp,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.div,
-        ComparableDType.lt, ComparableDType.ge, scaleOffset, xOffset,
-        baseOffset, rowIndex, colIndex,
-        Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
-        TileShape.insertAxisIndex, hBLK, hC] at hExec
-  subst hExec
-  simp [BlockState.writeMem_readMem, perBlockInt8ScaleSpec,
-        perBlockInt8ScaleAbsTile, perBlockInt8ScaleInputTile,
-        xOffset, baseOffset, rowIndex, colIndex, scaleOffset,
-        Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
-        TileShape.insertAxisIndex, hBLK, hC]
-
-/-- Compute-facing scale-store correctness for `q_kernel_per_block_int8_surface`. -/
-theorem q_kernel_per_block_int8_surface_scale_compute_correct
-    (X XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat)
-    (s : BlockState)
-    (hRegions : Scale ≠ XInt8)
-    (hBLK : 0 < BLK) (hC : 0 < C) :
-    ComputeCorrect.Realizes
-      (kernel := q_kernel_per_block_int8_surface X XInt8 Scale
-        L C BLK scale_stride)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
-      (expected := fun _ =>
-        perBlockInt8ScaleSpec s X L C BLK
-          ((Real.sqrt (C : ℝ))⁻¹ * (1.44269504 : ℝ))) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [q_kernel_per_block_int8_surface]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact q_kernel_per_block_int8_surface_scale_correct X XInt8 Scale
-    L C BLK scale_stride s s' hRegions hBLK hC hExec
-
-/-- Algorithm-layer correctness for the scale store of
-`k_kernel_per_block_int8_surface`. The k variant has `preScale = 1`. -/
-theorem k_kernel_per_block_int8_surface_scale_correct
-    (X XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat)
-    (s s' : BlockState)
-    (hRegions : Scale ≠ XInt8)
-    (hExec : exec (k_kernel_per_block_int8_surface X XInt8 Scale
-        L C BLK scale_stride) s = some s') :
-    s'.readMem Scale (scaleOffset s scale_stride) =
-      perBlockInt8ScaleSpec s X L C BLK 1 := by
-  simp [exec, k_kernel_per_block_int8_surface, stepStmts, stepStmt, evalOp,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.div,
-        ComparableDType.lt, ComparableDType.ge, scaleOffset, xOffset,
-        baseOffset, rowIndex, colIndex] at hExec
-  subst hExec
-  simp [BlockState.writeMem_readMem, perBlockInt8ScaleSpec,
-        perBlockInt8ScaleAbsTile, perBlockInt8ScaleInputTile,
-        xOffset, baseOffset, rowIndex, colIndex, scaleOffset,
-        Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
-        TileShape.insertAxisIndex]
-
-/-- Compute-facing scale-store correctness for `k_kernel_per_block_int8_surface`. -/
-theorem k_kernel_per_block_int8_surface_scale_compute_correct
-    (X XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat)
-    (s : BlockState)
-    (hRegions : Scale ≠ XInt8) :
-    ComputeCorrect.Realizes
-      (kernel := k_kernel_per_block_int8_surface X XInt8 Scale
-        L C BLK scale_stride)
-      (initialState := s)
-      (write := fun _ : PUnit => some (Scale, scaleOffset s scale_stride))
-      (expected := fun _ => perBlockInt8ScaleSpec s X L C BLK 1) := by
-  unfold ComputeCorrect.Realizes
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [k_kernel_per_block_int8_surface]
-  intro s0 s' hExec hs0
-  subst s0
-  intro _
-  exact k_kernel_per_block_int8_surface_scale_correct X XInt8 Scale
-    L C BLK scale_stride s s' hRegions hExec
-
->end VeriTile.Bench.TritonBenchG.Int8Quantization
+end VeriTile.Bench.TritonBenchG.Int8Quantization

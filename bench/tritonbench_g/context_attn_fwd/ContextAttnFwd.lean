@@ -82,6 +82,23 @@ def context_attn_fwd_kernel_int8kv_surface
   tl.store(out_ptrs, acc, mask=offs_m[:, None] < cur_batch_seq_len)
 }
 
+/-- The full int8-KV context-attention surface lowers to the algorithm layer. -/
+theorem context_attn_fwd_kernel_int8kv_surface_toAlgorithm_supported
+    (Q K V : RegionName) (sm_scale : ℝ) (Out : RegionName)
+    (B_Start_Loc B_Seqlen b_prompt_cache_len : Region .nat)
+    (stride_qbs stride_qh stride_qd
+      stride_kb stride_kh stride_ks stride_kd
+      stride_vb stride_vh stride_vs stride_vd
+      stride_obs stride_oh stride_od
+      kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) :
+    ∃ alg, (context_attn_fwd_kernel_int8kv_surface Q K V sm_scale Out
+      B_Start_Loc B_Seqlen b_prompt_cache_len stride_qbs stride_qh stride_qd
+      stride_kb stride_kh stride_ks stride_kd stride_vb stride_vh stride_vs
+      stride_vd stride_obs stride_oh stride_od kv_group_num H BLOCK_DMODEL
+      BLOCK_M BLOCK_N).toAlgorithm? = Except.ok alg := by
+  simp [context_attn_fwd_kernel_int8kv_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription/proof-oriented final output-store slice of `context_attn_fwd.py`'s
 `_fwd_kernel_int8kv`.
 

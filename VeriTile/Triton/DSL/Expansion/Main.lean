@@ -163,8 +163,9 @@ private def expandIdentRefByName (env : Env) (name : String) : MacroM EOut := do
   | some .fp32 =>
       pure ⟨term, dtype, shape, some (← fp32ComputeExpr term), some .fp32⟩
   | some _ =>
-      Macro.throwError
-        ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+      pure ⟨term, dtype, shape,
+        some (← `(ComputeExpr.opaque ("runtime compute value `" ++ $s ++ "`"))),
+        lookupComputeDType? env name⟩
   | none =>
       pure ⟨term, dtype, shape, none, none⟩
 
@@ -722,8 +723,24 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           match dst with
           | .bool =>
               Macro.throwError "tl.cast: Bool casts are only supported directly on tl.load"
-          | .nat => pure e'
-          | .int => pure e'
+          | .nat =>
+              match e'.dtype with
+              | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+                  let sh ← e'.shape.term
+                  pure ⟨← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__"),
+                    .nat, e'.shape,
+                    some (← `(ComputeExpr.opaque "runtime float-to-nat cast")),
+                    some .nat⟩
+              | _ => pure e'
+          | .int =>
+              match e'.dtype with
+              | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+                  let sh ← e'.shape.term
+                  pure ⟨← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__"),
+                    .int, e'.shape,
+                    some (← `(ComputeExpr.opaque "runtime float-to-int cast")),
+                    some .int⟩
+              | _ => pure e'
           | .fp32 =>
               let srcProof ← e'.dtype.floatProof
               let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
@@ -771,20 +788,34 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           | none =>
               Macro.throwError "tl.cast: Bool casts are only supported directly on tl.load"
       | _ =>
-      let e' ← expandExpr env e
-      match e'.dtype, dst with
-      | .nat, .int =>
-          pure e'
-      | _, .int =>
-          pure e'
-      | _, .fp32 =>
-          let srcProof ← e'.dtype.floatProof
-          let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
-          pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
-      | _, _ =>
-          let srcProof ← e'.dtype.floatProof
-          let dstProof ← dst.floatProof
-          pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none, none⟩
+          let e' ← expandExpr env e
+          match e'.dtype, dst with
+          | .real, .nat | .fp32, .nat | .fp16, .nat | .bf16, .nat
+          | .floatVar _, .nat =>
+              let sh ← e'.shape.term
+              pure ⟨← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__"),
+                .nat, e'.shape,
+                some (← `(ComputeExpr.opaque "runtime float-to-nat cast")),
+                some .nat⟩
+          | .real, .int | .fp32, .int | .fp16, .int | .bf16, .int
+          | .floatVar _, .int =>
+              let sh ← e'.shape.term
+              pure ⟨← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__"),
+                .int, e'.shape,
+                some (← `(ComputeExpr.opaque "runtime float-to-int cast")),
+                some .int⟩
+          | .nat, .int =>
+              pure e'
+          | _, .int =>
+              pure e'
+          | _, .fp32 =>
+              let srcProof ← e'.dtype.floatProof
+              let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
+          | _, _ =>
+              let srcProof ← e'.dtype.floatProof
+              let dstProof ← dst.floatProof
+              pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none, none⟩
   | none =>
   match stx with
   | `(tritonExpr| $n:num) =>
@@ -819,8 +850,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
             some (← fp32ComputeExpr term),
             some .fp32⟩
       | some _ =>
-          Macro.throwError
-            ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
+          pure ⟨term, dtype, shape,
+            some (← `(ComputeExpr.opaque ("runtime compute value `" ++ $s ++ "`"))),
+            lookupComputeDType? env name⟩
       | none =>
           pure ⟨term, dtype, shape, none, none⟩
   | `(tritonExpr| $(($t:term : ℝ))) =>
@@ -1047,8 +1079,24 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let e' ← expandExpr env e
       let dst ← expandDType dt
       match dst with
+      | .nat =>
+          match e'.dtype with
+          | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+              let sh ← e'.shape.term
+              pure ⟨← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__"),
+                .nat, e'.shape,
+                some (← `(ComputeExpr.opaque "runtime float-to-nat cast")),
+                some .nat⟩
+          | _ => pure e'
       | .int =>
-          pure e'
+          match e'.dtype with
+          | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+              let sh ← e'.shape.term
+              pure ⟨← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__"),
+                .int, e'.shape,
+                some (← `(ComputeExpr.opaque "runtime float-to-int cast")),
+                some .int⟩
+          | _ => pure e'
       | .fp32 =>
           let srcProof ← e'.dtype.floatProof
           let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
@@ -1059,7 +1107,14 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           pure ⟨← `(Op.castFloat $srcProof $dstProof $e'.term), dst, e'.shape, none, none⟩
   | `(tritonExpr| tl.extra.cuda.libdevice.llrint($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      pure e'
+      let realTerm ← realMathTerm "tl.extra.cuda.libdevice.llrint" e'
+      let sh ← e'.shape.term
+      let argCompute ←
+        match e'.computeTerm with
+        | some computeTerm => pure computeTerm
+        | none => `(ComputeExpr.alg $realTerm)
+      pure ⟨← `(Op.ref TileDType.int $sh "__compute_llrint_unprojected__"),
+        .int, e'.shape, some (← `(ComputeExpr.llrint $argCompute)), some .int⟩
   | `(tritonExpr| -inf) =>
       pure ⟨← `(Op.negInf), .real, SInfo.scalar, none, none⟩
   | `(tritonExpr| - float ($arg:term)) =>

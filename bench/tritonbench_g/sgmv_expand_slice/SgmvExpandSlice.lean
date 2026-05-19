@@ -82,6 +82,23 @@ def sgmv_expand_slice_surface
   }
 }
 
+/-- The full SGMV expand-slice surface lowers to the algorithm layer, including
+the CTA decomposition, sequence metadata, signed sentinel guard, K-loop,
+optional cast/add-input branches, and final masked store. -/
+theorem sgmv_expand_slice_surface_toAlgorithm_supported
+    (input_ptr lora_ptr out_ptr : RegionName)
+    (N K : Nat) (b_seq_start_loc seq_lens : Region .nat)
+    (lora_indices : Region .int)
+    (xm_stride xk_stride l0_stride lora_k_stride lora_n_stride cm_stride
+      cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (EVEN_K ADD_INPUTS CAST_TYPE : Bool) :
+    ∃ alg,
+      (sgmv_expand_slice_surface input_ptr lora_ptr out_ptr N K b_seq_start_loc
+        seq_lens lora_indices xm_stride xk_stride l0_stride lora_k_stride
+        lora_n_stride cm_stride cn_stride slice_offset BLOCK_M BLOCK_N
+        BLOCK_K EVEN_K ADD_INPUTS CAST_TYPE).toAlgorithm? = Except.ok alg := by
+  simp [sgmv_expand_slice_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented one-row, one-output-block slice of `sgmv_expand_slice.py`'s
 `_sgmv_expand_slice_kernel`.
 

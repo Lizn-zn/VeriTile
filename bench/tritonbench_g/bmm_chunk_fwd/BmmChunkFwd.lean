@@ -93,6 +93,29 @@ def bmm_chunk_fwd_surface
   }
 }
 
+/-- The full BMM chunk forward surface lowers to the algorithm layer, including
+causal gating, optional sequence-index filtering, K-loop dot accumulation, and
+the destination dtype cast. -/
+theorem bmm_chunk_fwd_surface_toAlgorithm_supported
+    (a_ptr b_ptr out_ptr : RegionName) (seq_idx_ptr : Region .int)
+    (seqlen chunk_size K ngroups
+      stride_a_batch stride_a_seqlen stride_a_head stride_ak
+      stride_b_batch stride_b_seqlen stride_b_head stride_bk
+      stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
+      stride_seq_idx_batch stride_seq_idx_seqlen
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (dot_dtype : TileDType)
+    (IS_CAUSAL HAS_SEQ_IDX : Bool) :
+    ∃ alg,
+      (bmm_chunk_fwd_surface a_ptr b_ptr out_ptr seq_idx_ptr seqlen chunk_size
+        K ngroups stride_a_batch stride_a_seqlen stride_a_head stride_ak
+        stride_b_batch stride_b_seqlen stride_b_head stride_bk stride_out_batch
+        stride_out_chunk stride_out_head stride_outm stride_outn
+        stride_seq_idx_batch stride_seq_idx_seqlen BLOCK_SIZE_M BLOCK_SIZE_N
+        BLOCK_SIZE_K dot_dtype IS_CAUSAL HAS_SEQ_IDX).toAlgorithm? =
+        Except.ok alg := by
+  simp [bmm_chunk_fwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final output-store slice of `bmm_chunk_fwd.py`'s
 `_bmm_chunk_fwd_kernel`.
 
@@ -290,5 +313,152 @@ theorem bmm_chunk_fwd_final_store_slice_compute_correct
     stride_outn BLOCK_SIZE_M BLOCK_SIZE_N s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-- Active-lane variant for Python/autotuned configurations where the
+boundary-checked inactive tile lanes may alias, but all lanes satisfying the
+store mask have unique row-major output addresses. -/
+theorem bmm_chunk_fwd_final_store_slice_active_compute_correct
+    (Acc Out : RegionName)
+    (num_pid_n ngroups chunk_size
+      stride_acc_batch stride_acc_chunk stride_acc_head stride_acc_m stride_acc_n
+      stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
+    (s : BlockState)
+    (hNoCollision :
+      ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+        active s num_pid_n chunk_size BLOCK_SIZE_M BLOCK_SIZE_N idx →
+        ∀ k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+          active s num_pid_n chunk_size BLOCK_SIZE_M BLOCK_SIZE_N k →
+          outOffset s num_pid_n ngroups stride_out_batch stride_out_chunk
+            stride_out_head stride_outm stride_outn BLOCK_SIZE_M BLOCK_SIZE_N k =
+            outOffset s num_pid_n ngroups stride_out_batch stride_out_chunk
+              stride_out_head stride_outm stride_outn BLOCK_SIZE_M BLOCK_SIZE_N idx →
+          k = idx) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_fwd_final_store_slice Acc Out num_pid_n ngroups
+        chunk_size stride_acc_batch stride_acc_chunk stride_acc_head stride_acc_m
+        stride_acc_n stride_out_batch stride_out_chunk stride_out_head stride_outm
+        stride_outn BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_pid_n chunk_size BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Out,
+          outOffset s num_pid_n ngroups stride_out_batch stride_out_chunk
+            stride_out_head stride_outm stride_outn BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        s.readMem Acc
+          (accOffset s num_pid_n ngroups stride_acc_batch stride_acc_chunk
+            stride_acc_head stride_acc_m stride_acc_n BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [bmm_chunk_fwd_final_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  simp [exec, bmm_chunk_fwd_final_store_slice, stepStmts, stepStmt, evalOp,
+        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
+        IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
+        pidC, pidH, pidM, pidN, mIndex, nIndex, active, accOffset, outOffset,
+        TileShape.dropInsertedIndex] at hExec
+  subst s'
+  let offsetFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Nat :=
+    fun idx =>
+      s.pids 1 * stride_out_batch + (s.pids 2 / ngroups) * stride_out_chunk +
+        (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_out_head +
+        (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_outm +
+        (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_outn
+  let valueFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (if s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size ∧
+            s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < chunk_size then
+          some (s.readMem Acc
+            (s.pids 1 * stride_acc_batch + (s.pids 2 / ngroups) * stride_acc_chunk +
+              (s.pids 2 - s.pids 2 / ngroups * ngroups) * stride_acc_head +
+              (s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val) * stride_acc_m +
+              (s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val) * stride_acc_n))
+        else some (0.0 : ℝ))
+  let P : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Prop :=
+    fun idx =>
+      s.pids 0 / num_pid_n * BLOCK_SIZE_M + idx.1.val < chunk_size ∧
+        s.pids 0 % num_pid_n * BLOCK_SIZE_N + idx.2.1.val < chunk_size
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem Out (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BLOCK_SIZE_M, BLOCK_SIZE_N])).readMem Out
+        (offsetFn idx) =
+    s.readMem Acc
+      (accOffset s num_pid_n ngroups stride_acc_batch stride_acc_chunk
+        stride_acc_head stride_acc_m stride_acc_n BLOCK_SIZE_M BLOCK_SIZE_N idx)
+  rw [BlockState.scatter_readback_prop_masked_nd_of_true _ _ _ P idx]
+  · have hP : P idx := by
+      simpa [P, active, pidM, pidN, mIndex, nIndex] using hActive
+    simp [offsetFn, valueFn, P, active, accOffset, outOffset, pidC, pidH, pidM,
+      pidN, mIndex, nIndex, hP]
+  · simpa [P, active, pidM, pidN, mIndex, nIndex] using hActive
+  · intro k hPk heq
+    exact hNoCollision idx hActive k
+      (by simpa [P, active, pidM, pidN, mIndex, nIndex] using hPk)
+      (by simpa [offsetFn, outOffset, pidC, pidH, pidM, pidN, mIndex, nIndex]
+        using heq)
+
+theorem bmm_chunk_fwd_python_chunk32_active_no_collision
+    (num_pid_n ngroups stride_out_batch stride_out_chunk stride_out_head
+      BLOCK_SIZE_M BLOCK_SIZE_N : Nat) (s : BlockState) :
+    ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+      active s num_pid_n 32 BLOCK_SIZE_M BLOCK_SIZE_N idx →
+      ∀ k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
+        active s num_pid_n 32 BLOCK_SIZE_M BLOCK_SIZE_N k →
+        outOffset s num_pid_n ngroups stride_out_batch stride_out_chunk
+          stride_out_head 32 1 BLOCK_SIZE_M BLOCK_SIZE_N k =
+          outOffset s num_pid_n ngroups stride_out_batch stride_out_chunk
+            stride_out_head 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx →
+        k = idx := by
+  rintro ⟨⟨ma, hma⟩, ⟨na, hna⟩, _⟩ hA
+    ⟨⟨mb, hmb⟩, ⟨nb, hnb⟩, _⟩ hB hEq
+  simp [active, outOffset, pidC, pidH, pidM, pidN, mIndex, nIndex] at hA hB hEq
+  have hm : mb = ma := by omega
+  have hn : nb = na := by omega
+  subst mb
+  subst nb
+  rfl
+
+theorem bmm_chunk_fwd_python_ungrouped_output_compute_correct
+    (Acc Out : RegionName) (BLOCK_SIZE_M BLOCK_SIZE_N : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_fwd_final_store_slice Acc Out 1 1 32
+        4096 1024 0 32 1 4096 1024 0 32 1 BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 1 32 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Out,
+          outOffset s 1 1 4096 1024 0 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        s.readMem Acc
+          (accOffset s 1 1 4096 1024 0 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  exact bmm_chunk_fwd_final_store_slice_active_compute_correct Acc Out
+    1 1 32 4096 1024 0 32 1 4096 1024 0 32 1 BLOCK_SIZE_M BLOCK_SIZE_N s
+    (bmm_chunk_fwd_python_chunk32_active_no_collision 1 1 4096 1024 0
+      BLOCK_SIZE_M BLOCK_SIZE_N s)
+
+theorem bmm_chunk_fwd_python_grouped_output_compute_correct
+    (Acc Out : RegionName) (BLOCK_SIZE_M BLOCK_SIZE_N : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_fwd_final_store_slice Acc Out 1 4 32
+        16384 4096 1024 32 1 16384 4096 1024 32 1 BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 1 32 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Out,
+          outOffset s 1 4 16384 4096 1024 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        s.readMem Acc
+          (accOffset s 1 4 16384 4096 1024 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  exact bmm_chunk_fwd_final_store_slice_active_compute_correct Acc Out
+    1 4 32 16384 4096 1024 32 1 16384 4096 1024 32 1
+    BLOCK_SIZE_M BLOCK_SIZE_N s
+    (bmm_chunk_fwd_python_chunk32_active_no_collision 1 4 16384 4096 1024
+      BLOCK_SIZE_M BLOCK_SIZE_N s)
 
 end VeriTile.Bench.TritonBenchG.BmmChunkFwd

@@ -7,6 +7,9 @@ namespace VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
 
 open VeriTile.Triton
 
+set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
+
 /-- Faithful transcription of `softmax_flaggems.py`'s
 `softmax_kernel_non_inner`.
 
@@ -243,7 +246,7 @@ theorem softmax_kernel_inner_one_tile_compute_correct
 
 /-! ## Non-inner one-tile forward — store-side proof skeleton
 
-This block provides offset/value defs and a non-trivial `_writes_at_idx`
+This block provides offset/value defs and a substantive `_writes_at_idx`
 lemma showing that, for in-range lanes, the kernel writes exactly the
 softmax-of-column value at every `(n, k)` lane. The full
 `ComputeCorrect.Realizes` lift to a math-level spec for the 2D non-inner
@@ -521,10 +524,11 @@ theorem softmax_backward_kernel_inner_one_tile_correct
               TileShape.insertAxisIndex, TileShape.dropInsertedIndex,
               TileShape.replaceAxisIndex,
               NumericDType.sub, NumericDType.mul, hTN]
+        rfl
       · have hInactive :
             ¬ (s.pids 0 * TILE_M + idx.1.val < M ∧ idx.2.1.val < N) := by
-          simpa [innerBwdActive, innerBwdRowIndex, innerBwdColIndex,
-                 BlockState.pid_eq] using hActive
+          intro ⟨hM, hN⟩
+          exact hActive ⟨hM, hN⟩
         rw [if_neg hInactive]
         simp only [BlockState.setReg_readMem]
         rw [if_neg hActive]

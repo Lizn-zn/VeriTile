@@ -56,6 +56,22 @@ def token_attn_mistral_surface
   tl.store(out_ptrs, acc)
 }
 
+/-- The full token-attention Mistral reduce-V surface lowers to the algorithm
+layer. -/
+theorem token_attn_mistral_surface_toAlgorithm_supported
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N : Nat) :
+    ∃ alg, (token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
+      B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen stride_req_to_tokens_b
+      stride_req_to_tokens_s stride_ph stride_pbs stride_vbs stride_vh
+      stride_vd stride_obs stride_oh stride_od kv_group_num sliding_window
+      BLOCK_DMODEL BLOCK_N).toAlgorithm? = Except.ok alg := by
+  simp [token_attn_mistral_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented final output-store slice of `token_attn_mistral.py`'s
 `_fwd_kernel_token_att2`.
 
