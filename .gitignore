@@ -22,3 +22,8 @@
 
 # Private dev script for switching API providers
 /scripts/claude-miromind.sh
+
+# Astro / Starlight docs site build artifacts
+/site/node_modules/
+/site/dist/
+/site/.astro/

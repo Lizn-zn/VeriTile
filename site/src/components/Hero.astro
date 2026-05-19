@@ -1,0 +1,205 @@
+---
+import type { Props } from '@astrojs/starlight/props';
+
+const { locale } = Astro.props;
+const isZh = locale === 'zh-cn';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+const copy = isZh
+  ? {
+      tagline: 'Triton kernel,机械化于 Lean 4。',
+      stats: '141 kernel · 742 ComputeCorrect 证明 · 0 sorry · Lean 4.29.0',
+      cta: {
+        primary: { label: '项目状态', href: `${base}/zh-cn/status/` },
+        secondary: { label: '翻译手册', href: `${base}/zh-cn/cookbook/` },
+        ghost: { label: 'GitHub', href: 'https://github.com/Lizn-zn/VeriTile' },
+      },
+      excerptCaption: 'VeriTile/Examples/SoftmaxReciprocal.lean',
+    }
+  : {
+      tagline: 'Triton kernels, mechanized in Lean 4.',
+      stats: '141 kernels · 742 ComputeCorrect proofs · 0 sorry · Lean 4.29.0',
+      cta: {
+        primary: { label: 'Project status', href: `${base}/status/` },
+        secondary: { label: 'Translation cookbook', href: `${base}/cookbook/` },
+        ghost: { label: 'GitHub', href: 'https://github.com/Lizn-zn/VeriTile' },
+      },
+      excerptCaption: 'VeriTile/Examples/SoftmaxReciprocal.lean',
+    };
+---
+
+<section class="vt-hero vt-grid-bg" aria-labelledby="vt-hero-heading">
+  <div class="vt-hero__head">
+    <h1 id="vt-hero-heading" class="vt-wordmark">
+      <span class="vt-wordmark__veri">Veri</span><span class="vt-wordmark__tile">Tile</span>
+    </h1>
+
+    <p class="vt-tagline">{copy.tagline}</p>
+
+    <div class="vt-cta">
+      <a class="vt-btn vt-btn--primary" href={copy.cta.primary.href}>
+        {copy.cta.primary.label}
+        <span aria-hidden="true" class="vt-btn__arrow">→</span>
+      </a>
+      <a class="vt-btn" href={copy.cta.secondary.href}>
+        {copy.cta.secondary.label}
+        <span aria-hidden="true" class="vt-btn__arrow">→</span>
+      </a>
+      <a class="vt-btn vt-btn--ghost" href={copy.cta.ghost.href}>
+        {copy.cta.ghost.label}
+        <span aria-hidden="true" class="vt-btn__arrow">↗</span>
+      </a>
+    </div>
+
+    <p class="vt-stats">{copy.stats}</p>
+  </div>
+
+  <figure class="vt-excerpt">
+    <figcaption>{copy.excerptCaption}</figcaption>
+    <pre><code><span class="kw">theorem</span> softmax_recip_correct
+    (xReg yReg : RegionName) (N : Nat) (hN : 0 &lt; N)
+    (s : BlockState) (xs : Fin N → ℝ)
+    (_hx : InputLoadedAt s xReg N xs) :
+    ∀ i : Fin N,
+      OutputAt (run s) yReg i =
+        (Real.exp (xs i)) / (∑ j, Real.exp (xs j)) := <span class="kw">by</span>
+  ...</code></pre>
+  </figure>
+</section>
+
+<style>
+  .vt-hero {
+    position: relative;
+    margin: -1.5rem -1rem 3rem;
+    padding: 4rem clamp(1.5rem, 6vw, 5rem) 3rem;
+    border-bottom: 1px solid var(--vt-rule);
+    overflow: hidden;
+  }
+  .vt-hero::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      120% 80% at 50% 0%,
+      transparent 0%,
+      var(--vt-paper) 88%
+    );
+  }
+  .vt-hero > * { position: relative; }
+
+  .vt-hero__head {
+    max-width: 50rem;
+  }
+
+  .vt-wordmark {
+    font-family: 'Fragment Mono', monospace;
+    font-size: clamp(2.4rem, 6vw + 0.5rem, 4.6rem);
+    line-height: 1;
+    letter-spacing: -0.018em;
+    margin: 0;
+    font-weight: 400;
+    color: var(--vt-ink);
+  }
+  .vt-wordmark__tile {
+    color: var(--vt-seal);
+  }
+
+  .vt-tagline {
+    margin: 1.1rem 0 0;
+    font-size: clamp(1rem, 0.5vw + 0.95rem, 1.2rem);
+    line-height: 1.5;
+    color: var(--vt-ink-2);
+    max-width: 36ch;
+  }
+
+  .vt-cta {
+    margin-top: 2rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+  }
+  .vt-btn {
+    --bg: transparent;
+    --fg: var(--vt-ink);
+    --bd: var(--vt-rule-2);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 0.95rem;
+    border: 1px solid var(--bd);
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Fragment Mono', monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-decoration: none;
+    border-radius: 2px;
+    transition: transform 120ms ease,
+                background 120ms ease,
+                color 120ms ease,
+                border-color 120ms ease;
+  }
+  .vt-btn__arrow { transition: transform 140ms ease; }
+  .vt-btn:hover { transform: translateY(-1px); }
+  .vt-btn:hover .vt-btn__arrow { transform: translateX(2px); }
+  .vt-btn--primary {
+    --bg: var(--vt-seal);
+    --fg: var(--vt-paper);
+    --bd: var(--vt-seal);
+  }
+  .vt-btn--primary:hover {
+    --bg: var(--vt-seal-ink);
+    --bd: var(--vt-seal-ink);
+  }
+  .vt-btn--ghost {
+    --fg: var(--vt-ink-3);
+  }
+  .vt-btn--ghost:hover {
+    --fg: var(--vt-ink);
+    --bd: var(--vt-ink-2);
+  }
+
+  .vt-stats {
+    margin: 2rem 0 0;
+    font-family: 'Fragment Mono', monospace;
+    font-size: 0.78rem;
+    letter-spacing: 0.04em;
+    color: var(--vt-ink-3);
+    font-feature-settings: 'tnum' 1;
+  }
+
+  .vt-excerpt {
+    margin: 2.6rem 0 0;
+    border: 1px solid var(--vt-rule);
+    background: var(--vt-paper-2);
+    max-width: 50rem;
+  }
+  .vt-excerpt figcaption {
+    font-family: 'Fragment Mono', monospace;
+    font-size: 0.66rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--vt-ink-3);
+    padding: 0.5rem 0.85rem;
+    border-bottom: 1px dashed var(--vt-rule);
+    background: var(--vt-paper);
+  }
+  .vt-excerpt pre {
+    margin: 0;
+    padding: 0.95rem 1.05rem 1.1rem;
+    overflow-x: auto;
+    background: transparent;
+  }
+  .vt-excerpt code {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.8rem;
+    line-height: 1.55;
+    color: var(--vt-ink);
+  }
+  .vt-excerpt code :global(.kw) {
+    color: var(--vt-seal);
+    font-weight: 500;
+  }
+</style>

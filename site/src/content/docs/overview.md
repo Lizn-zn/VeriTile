@@ -1,8 +1,7 @@
-# VeriTile
-
-**English** | [中文](README_zh.md)
-
-📖 **Docs site:** [lizn-zn.github.io/VeriTile/](https://lizn-zn.github.io/VeriTile/) (bench cookbook, status, architecture). Run locally: `./site/scripts/dev.sh`.
+---
+title: "Overview"
+description: "What VeriTile is, what it does, and how to start using it."
+---
 
 VeriTile embeds a typed Triton-style kernel DSL in Lean 4 and proves
 correctness or refinement of those kernels against mathematical
@@ -14,7 +13,7 @@ typed `Op : TileDType → TileShape → Type` terms, and exposes
 Algorithmic proofs run over the erased `.real` (mathematical) channel; the
 optional `GapPolicy` records — but does not internally prove — the
 compute-to-algorithm gap (IEEE-754 / PTX / TMA / concurrency), which stays
-externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
+externally checked. See [Triton subset and gaps](/VeriTile/architecture/triton-subset/).
 
 ## What VeriTile Does
 
@@ -26,7 +25,7 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   Both project through `toAlgorithm?` and run on `Kernel.Correct` /
   `Kernel.Refine` underneath.
 - **Examples**: 15 ported TritonBench-G kernels with proofs (see
-  [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
+  [`bench/tritonbench_g/`](https://github.com/Lizn-zn/VeriTile/tree/main/bench/tritonbench_g/)) plus FlashAttention-1
   forward, online softmax, Welford, LayerNorm, log-sum-exp.
 - **CI gate**: `lake build` + `scripts/check-artifact.sh` (no `sorry`,
   axiom whitelist, manifest schema, doc-drift checks) +
@@ -63,7 +62,7 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 | Custom postcondition over the final state | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | Relation over arbitrary initial states (rare) | `ComputeCorrect.General` / `ComputeRefine.General` |
 
-Full surface guide: [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md).
+Full surface guide: [CorrectnessSurfaces.md](/VeriTile/proofs/correctness-surfaces/).
 
 ### 3. Prove via the projected algorithm
 
@@ -92,8 +91,8 @@ invoking a math identity from `Mathlib`. The LLM proof wrapper
 
 Add a row to [`scripts/kernel-manifest.tsv`](./scripts/kernel-manifest.tsv)
 so `scripts/check-artifact.sh` recognizes the theorem in CI. Schema and
-naming conventions: [KernelManifest.md](./documents/KernelManifest.md),
-[TheoremSurfaces.md](./documents/TheoremSurfaces.md).
+naming conventions: [KernelManifest.md](/VeriTile/proofs/kernel-manifest/),
+[TheoremSurfaces.md](/VeriTile/proofs/theorem-surfaces/).
 
 ## Minimal Example
 
@@ -111,17 +110,17 @@ Task-oriented:
 
 | Question | Doc |
 |---|---|
-| Which Triton constructs are supported? | [TritonSubset.md](./documents/TritonSubset.md) |
-| Where does my new lemma / definition belong? | [CodeOrganization.md](./documents/CodeOrganization.md) |
-| Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./documents/ProofConventions.md) |
-| Which theorem surface should I use? | [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md) |
-| How does dtype erasure work? | [EraseDType.md](./documents/EraseDType.md) |
-| How does memory safety / framing work? | [MemorySafety.md](./documents/MemorySafety.md) |
-| What's the GPU memory model? | [GpuMemoryModel.md](./documents/GpuMemoryModel.md) |
-| How are atomics / async copies modeled? | [ConcurrencySemantics.md](./documents/ConcurrencySemantics.md) |
-| How does the kernel manifest work? | [KernelManifest.md](./documents/KernelManifest.md) |
-| Naming conventions for theorem surfaces | [TheoremSurfaces.md](./documents/TheoremSurfaces.md) |
-| LLM proof wrapper | [scripts/README.md](./scripts/README.md) |
+| Which Triton constructs are supported? | [TritonSubset.md](/VeriTile/architecture/triton-subset/) |
+| Where does my new lemma / definition belong? | [CodeOrganization.md](/VeriTile/architecture/code-organization/) |
+| Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](/VeriTile/proofs/proof-conventions/) |
+| Which theorem surface should I use? | [CorrectnessSurfaces.md](/VeriTile/proofs/correctness-surfaces/) |
+| How does dtype erasure work? | [EraseDType.md](/VeriTile/architecture/erase-dtype/) |
+| How does memory safety / framing work? | [MemorySafety.md](/VeriTile/architecture/memory-safety/) |
+| What's the GPU memory model? | [GpuMemoryModel.md](/VeriTile/architecture/gpu-memory-model/) |
+| How are atomics / async copies modeled? | [ConcurrencySemantics.md](/VeriTile/architecture/concurrency-semantics/) |
+| How does the kernel manifest work? | [KernelManifest.md](/VeriTile/proofs/kernel-manifest/) |
+| Naming conventions for theorem surfaces | [TheoremSurfaces.md](/VeriTile/proofs/theorem-surfaces/) |
+| LLM proof wrapper | [scripts/README.md](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/README.md) |
 
 ## Repository Layout
 
@@ -155,7 +154,7 @@ Long-running project. Goal: bring real Triton kernels (forward, backward,
 concurrency, production layouts / autograd) into Lean's proof scope with
 minimal modification. Live roadmap:
 [#91](https://github.com/Lizn-zn/VeriTile/issues/91). Architecture and
-decision log: [PLAN.md](./PLAN.md).
+decision log: [PLAN.md](https://github.com/Lizn-zn/VeriTile/blob/main/PLAN.md).
 
 ## License
 

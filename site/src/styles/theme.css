@@ -1,0 +1,293 @@
+/* VeriTile — engineering notebook theme
+ * Cream paper + cinnabar seal, with a typewriter display + variable serif body.
+ */
+
+@import '@fontsource/fragment-mono/400.css';
+@import '@fontsource/fragment-mono/400-italic.css';
+@import '@fontsource-variable/source-serif-4';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+
+/* ── Design tokens ─────────────────────────────────────────────────────── */
+
+:root,
+[data-theme='light'] {
+  /* Paper */
+  --vt-paper:   #F2EBDC;
+  --vt-paper-2: #EADFC6;
+  --vt-paper-3: #DFD1B0;
+  /* Ink */
+  --vt-ink:     #15171B;
+  --vt-ink-2:   #3A3F46;
+  --vt-ink-3:   #6B7280;
+  /* Rules */
+  --vt-rule:    #C9BFA9;
+  --vt-rule-2:  #B8AC91;
+  /* Cinnabar (印) */
+  --vt-seal:        #C12A12;
+  --vt-seal-soft:   rgba(193, 42, 18, 0.12);
+  --vt-seal-ink:    #8B1D0C;
+  /* Verified green — used very sparingly */
+  --vt-verified:    #1F5D3A;
+
+  /* Grid texture stops */
+  --vt-grid-line:   rgba(21, 23, 27, 0.06);
+  --vt-grid-major:  rgba(21, 23, 27, 0.10);
+}
+
+[data-theme='dark'] {
+  --vt-paper:   #0E1014;
+  --vt-paper-2: #161A22;
+  --vt-paper-3: #1E2330;
+  --vt-ink:     #E8DEC6;
+  --vt-ink-2:   #B7AC92;
+  --vt-ink-3:   #7B7565;
+  --vt-rule:    #2A2F3A;
+  --vt-rule-2:  #353C49;
+  --vt-seal:        #E34A2D;
+  --vt-seal-soft:   rgba(227, 74, 45, 0.16);
+  --vt-seal-ink:    #FF6C4E;
+  --vt-verified:    #4ADE80;
+  --vt-grid-line:   rgba(232, 222, 198, 0.05);
+  --vt-grid-major:  rgba(232, 222, 198, 0.09);
+}
+
+/* ── Starlight variable overrides ──────────────────────────────────────── */
+
+:root {
+  --sl-font: 'Source Serif 4 Variable', 'Iowan Old Style', 'Palatino', Georgia, serif;
+  --sl-font-system: 'Source Serif 4 Variable', 'Iowan Old Style', 'Palatino', Georgia, serif;
+  --sl-font-system-mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, monospace;
+  /* CJK fallback layered after the latin stack */
+  --sl-text-h1: 2.6rem;
+  --sl-text-h2: 1.7rem;
+  --sl-text-h3: 1.25rem;
+  --sl-line-height: 1.7;
+  --sl-content-width: 48rem;
+  --sl-sidebar-width: 18rem;
+  --sl-nav-height: 4rem;
+}
+
+:root[data-theme='light'] {
+  --sl-color-bg:           var(--vt-paper);
+  --sl-color-bg-nav:       var(--vt-paper);
+  --sl-color-bg-sidebar:   var(--vt-paper);
+  --sl-color-bg-inline-code: var(--vt-paper-2);
+  --sl-color-bg-accent:    var(--vt-seal);
+  --sl-color-text:         var(--vt-ink);
+  --sl-color-text-accent:  var(--vt-seal-ink);
+  --sl-color-text-invert:  var(--vt-paper);
+  --sl-color-white:        var(--vt-ink);
+  --sl-color-gray-1:       var(--vt-ink);
+  --sl-color-gray-2:       var(--vt-ink-2);
+  --sl-color-gray-3:       var(--vt-ink-3);
+  --sl-color-gray-4:       var(--vt-rule-2);
+  --sl-color-gray-5:       var(--vt-rule);
+  --sl-color-gray-6:       var(--vt-paper-3);
+  --sl-color-gray-7:       var(--vt-paper-2);
+  --sl-color-black:        var(--vt-paper);
+  --sl-color-hairline:           var(--vt-rule);
+  --sl-color-hairline-light:     var(--vt-rule);
+  --sl-color-hairline-shade:     var(--vt-rule-2);
+  --sl-color-accent:       var(--vt-seal);
+  --sl-color-accent-low:   var(--vt-seal-soft);
+  --sl-color-accent-high:  var(--vt-seal-ink);
+}
+
+:root[data-theme='dark'] {
+  --sl-color-bg:           var(--vt-paper);
+  --sl-color-bg-nav:       var(--vt-paper);
+  --sl-color-bg-sidebar:   var(--vt-paper);
+  --sl-color-bg-inline-code: var(--vt-paper-2);
+  --sl-color-bg-accent:    var(--vt-seal);
+  --sl-color-text:         var(--vt-ink);
+  --sl-color-text-accent:  var(--vt-seal-ink);
+  --sl-color-text-invert:  var(--vt-paper);
+  --sl-color-white:        var(--vt-ink);
+  --sl-color-gray-1:       var(--vt-ink);
+  --sl-color-gray-2:       var(--vt-ink-2);
+  --sl-color-gray-3:       var(--vt-ink-3);
+  --sl-color-gray-4:       var(--vt-rule-2);
+  --sl-color-gray-5:       var(--vt-rule);
+  --sl-color-gray-6:       var(--vt-paper-3);
+  --sl-color-gray-7:       var(--vt-paper-2);
+  --sl-color-black:        var(--vt-paper);
+  --sl-color-hairline:           var(--vt-rule);
+  --sl-color-hairline-light:     var(--vt-rule);
+  --sl-color-hairline-shade:     var(--vt-rule-2);
+  --sl-color-accent:       var(--vt-seal);
+  --sl-color-accent-low:   var(--vt-seal-soft);
+  --sl-color-accent-high:  var(--vt-seal-ink);
+}
+
+/* ── Global type ───────────────────────────────────────────────────────── */
+
+html { font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1; }
+body {
+  font-family: var(--sl-font);
+  font-optical-sizing: auto;
+  font-variation-settings: 'opsz' 14;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Lang-specific tweaks for CJK */
+html[lang^='zh'] body {
+  font-family:
+    'Source Serif 4 Variable',
+    -apple-system-ui-serif, 'Iowan Old Style', Georgia,
+    'PingFang SC', 'Hiragino Sans GB', 'Source Han Serif SC',
+    'Noto Serif SC', 'Songti SC', serif;
+  font-feature-settings: 'kern' 1;
+}
+
+/* Headings — display flavour */
+h1, h2, h3, h4 {
+  font-variation-settings: 'opsz' 36;
+  letter-spacing: -0.012em;
+  font-weight: 600;
+}
+h1 { font-weight: 700; letter-spacing: -0.018em; }
+
+/* Section heading rule */
+.sl-markdown-content h2 {
+  border-top: 1px solid var(--vt-rule);
+  padding-top: 1.4rem;
+  margin-top: 2.6rem;
+}
+
+/* Links — pen-mark underline */
+a:not([class]) {
+  color: inherit;
+  text-decoration-color: var(--vt-seal);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  transition: text-decoration-thickness 120ms ease,
+              color 120ms ease;
+}
+a:not([class]):hover {
+  color: var(--vt-seal);
+  text-decoration-thickness: 2px;
+}
+
+/* Code — IBM Plex Mono */
+code, kbd, samp, pre,
+.sl-markdown-content code,
+.expressive-code .frame pre {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace !important;
+  font-feature-settings: 'zero' 1, 'ss02' 1;
+}
+.sl-markdown-content :not(pre) > code {
+  background: var(--vt-paper-2);
+  border: 1px solid var(--vt-rule);
+  border-radius: 2px;
+  padding: 0 0.35em;
+  font-size: 0.88em;
+}
+
+/* ── Nav & sidebar restyle ─────────────────────────────────────────────── */
+
+header.header {
+  background: var(--vt-paper);
+  border-bottom: 1px solid var(--vt-rule);
+  backdrop-filter: none;
+}
+header.header .site-title { font-family: 'Fragment Mono', monospace; letter-spacing: 0.04em; }
+
+/* Sidebar */
+nav.sidebar { background: var(--vt-paper); }
+.sidebar-content { font-family: var(--sl-font); }
+.sidebar-content ul li > a { font-size: 0.95rem; }
+.sidebar-content details > summary,
+.sidebar-content .group-label > .large {
+  font-family: 'Fragment Mono', monospace !important;
+  font-size: 0.72rem !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vt-ink-3) !important;
+}
+.sidebar-content a[aria-current='page'] {
+  color: var(--vt-seal) !important;
+  background: var(--vt-seal-soft) !important;
+  border-left: 2px solid var(--vt-seal);
+  border-radius: 0 !important;
+  padding-left: calc(0.5rem - 2px);
+}
+
+/* On-this-page right rail */
+starlight-toc nav h2,
+nav.right-sidebar > h2 {
+  font-family: 'Fragment Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--vt-ink-3);
+}
+
+/* ── Content niceties ──────────────────────────────────────────────────── */
+
+.sl-markdown-content blockquote {
+  border-left: 2px solid var(--vt-seal);
+  background: var(--vt-seal-soft);
+  padding: 0.6rem 1rem;
+  margin: 1.4rem 0;
+  font-style: italic;
+  color: var(--vt-ink);
+}
+.sl-markdown-content hr {
+  border: 0;
+  border-top: 1px dashed var(--vt-rule-2);
+  margin: 2.5rem 0;
+}
+.sl-markdown-content table {
+  border-collapse: collapse;
+}
+.sl-markdown-content th {
+  font-family: 'Fragment Mono', monospace;
+  font-weight: 400;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  color: var(--vt-ink-3);
+  border-bottom: 1px solid var(--vt-ink-2);
+}
+.sl-markdown-content td {
+  border-bottom: 1px dotted var(--vt-rule);
+}
+
+/* Asides / callouts — stamped feel */
+.sl-markdown-content aside.starlight-aside {
+  border: 1px solid var(--vt-rule);
+  border-left-width: 3px;
+  background: var(--vt-paper-2);
+  border-radius: 0;
+}
+aside.starlight-aside--caution { border-left-color: var(--vt-seal); }
+aside.starlight-aside--tip     { border-left-color: var(--vt-verified); }
+
+/* Expressive Code frames — flatten to match */
+.expressive-code .frame {
+  border-radius: 2px !important;
+  border: 1px solid var(--vt-rule) !important;
+}
+
+/* ── Decorative motifs ─────────────────────────────────────────────────── */
+
+.vt-grid-bg {
+  background-image:
+    linear-gradient(to right,  var(--vt-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--vt-grid-line) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+.vt-grid-bg--major {
+  background-image:
+    linear-gradient(to right,  var(--vt-grid-major) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--vt-grid-major) 1px, transparent 1px),
+    linear-gradient(to right,  var(--vt-grid-line)  1px, transparent 1px),
+    linear-gradient(to bottom, var(--vt-grid-line)  1px, transparent 1px);
+  background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
+}
+
+/* Hide the splash hero's default decorative svg if any */
+.hero > img, .hero > svg { display: none; }

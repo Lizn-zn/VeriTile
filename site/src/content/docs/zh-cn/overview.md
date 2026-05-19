@@ -1,8 +1,7 @@
-# VeriTile
-
-[English](README.md) | **中文**
-
-📖 **文档站:** [lizn-zn.github.io/VeriTile/](https://lizn-zn.github.io/VeriTile/)(bench 翻译手册、项目状态、架构)。本地起:`./site/scripts/dev.sh`。
+---
+title: "Overview"
+description: "What VeriTile is, what it does, and how to start using it."
+---
 
 VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明这些 kernel
 对数学规范的正确性 (correctness),或者两个 kernel 之间的等价性 (refinement)。
@@ -13,7 +12,7 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
 算法层证明跑在已 erase 的 `.real`(数学)通道上;可选的 `GapPolicy`
 **记录但不内部证明** compute-to-algorithm gap(IEEE-754 / PTX / TMA / 并发),
 这一层始终走外部检查。详见
-[Triton 子集与 gap](./documents/TritonSubset_zh.md)。
+[Triton 子集与 gap](/VeriTile/zh-cn/architecture/triton-subset/)。
 
 ## VeriTile 做什么
 
@@ -23,7 +22,7 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
   `ComputeRefine.Realizes`(kernel pair 等价)。两者都通过 `toAlgorithm?`
   投影,底层走 `Kernel.Correct` / `Kernel.Refine`。
 - **示例**:15 个 TritonBench-G 端口及其证明
-  (见 [`bench/tritonbench_g/`](./bench/tritonbench_g/)),加上
+  (见 [`bench/tritonbench_g/`](https://github.com/Lizn-zn/VeriTile/tree/main/bench/tritonbench_g/)),加上
   FlashAttention-1 forward、online softmax、Welford、LayerNorm、log-sum-exp。
 - **CI gate**:`lake build` + `scripts/check-artifact.sh`(无 `sorry`、
   公理白名单、manifest schema、文档漂移检查)+ `bench/check_ports.sh`。
@@ -58,7 +57,7 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 | 自定义 final-state 后置条件 | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | 关系跨任意初始状态(罕见) | `ComputeCorrect.General` / `ComputeRefine.General` |
 
-完整 surface 指南:[CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md)。
+完整 surface 指南:[CorrectnessSurfaces.md](/VeriTile/proofs/correctness-surfaces/)。
 
 ### 3. 通过投影到算法 kernel 来证
 
@@ -86,8 +85,8 @@ theorem add_kernel_correct
 
 往 [`scripts/kernel-manifest.tsv`](./scripts/kernel-manifest.tsv) 加一行,
 让 `scripts/check-artifact.sh` 在 CI 里识别这条定理。Schema 和命名规约:
-[KernelManifest.md](./documents/KernelManifest.md)、
-[TheoremSurfaces.md](./documents/TheoremSurfaces.md)。
+[KernelManifest.md](/VeriTile/proofs/kernel-manifest/)、
+[TheoremSurfaces.md](/VeriTile/proofs/theorem-surfaces/)。
 
 ## 最小示例
 
@@ -105,15 +104,15 @@ Naive softmax vs 数值稳定 softmax(kernel pair refinement)——
 
 | 问题 | 文档 |
 |---|---|
-| 支持哪些 Triton 构造? | [TritonSubset_zh.md](./documents/TritonSubset_zh.md) |
-| 用哪个定理 surface? | [CorrectnessSurfaces.md](./documents/CorrectnessSurfaces.md) |
-| dtype erasure 怎么工作? | [EraseDType.md](./documents/EraseDType.md) |
-| 内存安全 / framing 怎么工作? | [MemorySafety.md](./documents/MemorySafety.md) |
-| GPU 内存模型是什么? | [GpuMemoryModel.md](./documents/GpuMemoryModel.md) |
-| 原子操作 / async copy 怎么建模? | [ConcurrencySemantics.md](./documents/ConcurrencySemantics.md) |
-| Kernel manifest 怎么用? | [KernelManifest.md](./documents/KernelManifest.md) |
-| 定理 surface 命名规约 | [TheoremSurfaces.md](./documents/TheoremSurfaces.md) |
-| LLM 证明 wrapper | [scripts/README.md](./scripts/README.md) |
+| 支持哪些 Triton 构造? | [TritonSubset_zh.md](/VeriTile/zh-cn/architecture/triton-subset/) |
+| 用哪个定理 surface? | [CorrectnessSurfaces.md](/VeriTile/proofs/correctness-surfaces/) |
+| dtype erasure 怎么工作? | [EraseDType.md](/VeriTile/architecture/erase-dtype/) |
+| 内存安全 / framing 怎么工作? | [MemorySafety.md](/VeriTile/architecture/memory-safety/) |
+| GPU 内存模型是什么? | [GpuMemoryModel.md](/VeriTile/architecture/gpu-memory-model/) |
+| 原子操作 / async copy 怎么建模? | [ConcurrencySemantics.md](/VeriTile/architecture/concurrency-semantics/) |
+| Kernel manifest 怎么用? | [KernelManifest.md](/VeriTile/proofs/kernel-manifest/) |
+| 定理 surface 命名规约 | [TheoremSurfaces.md](/VeriTile/proofs/theorem-surfaces/) |
+| LLM 证明 wrapper | [scripts/README.md](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/README.md) |
 
 ## 目录结构
 
@@ -146,7 +145,7 @@ verso/                     幻灯片 / 概览
 长期项目。目标:把真实 Triton kernel(forward / backward / 并发 /
 生产级 layout / autograd)以最小修改纳入 Lean 的证明范围。当前 roadmap:
 [#91](https://github.com/Lizn-zn/VeriTile/issues/91)。架构与决策记录:
-[PLAN.md](./PLAN.md)。
+[PLAN.md](https://github.com/Lizn-zn/VeriTile/blob/main/PLAN.md)。
 
 ## License
 
