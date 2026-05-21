@@ -130,7 +130,7 @@ lane 走 `writeIf`-preserve 路径,根本不消费 spec。这意味着 spec 可�
 
 ## 相关
 
-- [`CodeOrganization.md`](/VeriTile/architecture/code-organization/) —— 三层结构(Math /
+- [`CodeOrganization.md`](/VeriTile/zh-cn/architecture/code-organization/) —— 三层结构(Math /
   Semantics / per-kernel glue)
-- [`CorrectnessSurfaces.md`](/VeriTile/proofs/correctness-surfaces/) —— 用户面 theorem
+- [`CorrectnessSurfaces.md`](/VeriTile/zh-cn/proofs/correctness-surfaces/) —— 用户面 theorem
   surface(`Realizes`, `WriteMap`, `OutputReadable`)

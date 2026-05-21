@@ -44,7 +44,7 @@ proven projected test-gap blocked smoke
 
 1. 普通 example 用公开的 `ComputeCorrect.*` 或 `ComputeRefine.*` 定理
    surface 增加 Lean 定理。详见
-   [`CorrectnessSurfaces.md`](/VeriTile/proofs/correctness-surfaces/)。
+   [`CorrectnessSurfaces.md`](/VeriTile/zh-cn/proofs/correctness-surfaces/)。
 2. 在 `scripts/kernel-manifest.tsv` 增加一行。
 3. 把 source 和静态 config 记录得足够精确,使该 port 可复现。
 4. 把简化或证明 scope 限制写进 `notes`。

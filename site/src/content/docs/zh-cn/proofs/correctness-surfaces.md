@@ -4,7 +4,7 @@ title: "正确性 surface"
 
 本文档说明在证明 `ComputeKernel` 的性质时,应当选用哪个公开 theorem surface。
 所有 surface 定义在
-[`VeriTile.Triton.Float.Correctness`](../VeriTile/Triton/Float/Correctness.lean)。
+[`VeriTile.Triton.Float.Correctness`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/Float/Correctness.lean)。
 
 ## 速查表
 
@@ -209,4 +209,4 @@ gap := .require contract
 
 仅用于执行的 helper lemma 可用 `_exec_view` 命名,以及直接的 `exec` 等式。
 对外的 theorem 应把这些 helper 包到 `ComputeCorrect.*` 或 `ComputeRefine.*`
-里。命名细则:[`TheoremSurfaces.md`](/VeriTile/proofs/theorem-surfaces/)。
+里。命名细则:[`TheoremSurfaces.md`](/VeriTile/zh-cn/proofs/theorem-surfaces/)。

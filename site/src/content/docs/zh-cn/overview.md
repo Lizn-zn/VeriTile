@@ -57,7 +57,7 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 | 自定义 final-state 后置条件 | `ComputeCorrect.Post` / `ComputeRefine.Post` |
 | 关系跨任意初始状态(罕见) | `ComputeCorrect.General` / `ComputeRefine.General` |
 
-完整 surface 指南:[CorrectnessSurfaces.md](/VeriTile/proofs/correctness-surfaces/)。
+完整 surface 指南:[CorrectnessSurfaces.md](/VeriTile/zh-cn/proofs/correctness-surfaces/)。
 
 ### 3. 通过投影到算法 kernel 来证
 
@@ -83,20 +83,20 @@ theorem add_kernel_correct
 
 ### 4. 登记到 kernel manifest
 
-往 [`scripts/kernel-manifest.tsv`](./scripts/kernel-manifest.tsv) 加一行,
+往 [`scripts/kernel-manifest.tsv`](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/kernel-manifest.tsv) 加一行,
 让 `scripts/check-artifact.sh` 在 CI 里识别这条定理。Schema 和命名规约:
-[KernelManifest.md](/VeriTile/proofs/kernel-manifest/)、
-[TheoremSurfaces.md](/VeriTile/proofs/theorem-surfaces/)。
+[KernelManifest.md](/VeriTile/zh-cn/proofs/kernel-manifest/)、
+[TheoremSurfaces.md](/VeriTile/zh-cn/proofs/theorem-surfaces/)。
 
 ## 最小示例
 
 逐元素向量加法对照 `addSpec xs ys i = xs i + ys i` 数学规范——
-见 [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean)。
+见 [`VeriTile/Examples/VectorAdd.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Examples/VectorAdd.lean)。
 
 ## Refinement 示例
 
 Naive softmax vs 数值稳定 softmax(kernel pair refinement)——
-见 [`VeriTile/Examples/SoftmaxEq.lean`](./VeriTile/Examples/SoftmaxEq.lean)。
+见 [`VeriTile/Examples/SoftmaxEq.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Examples/SoftmaxEq.lean)。
 
 ## 文档地图
 
@@ -105,13 +105,13 @@ Naive softmax vs 数值稳定 softmax(kernel pair refinement)——
 | 问题 | 文档 |
 |---|---|
 | 支持哪些 Triton 构造? | [TritonSubset_zh.md](/VeriTile/zh-cn/architecture/triton-subset/) |
-| 用哪个定理 surface? | [CorrectnessSurfaces.md](/VeriTile/proofs/correctness-surfaces/) |
-| dtype erasure 怎么工作? | [EraseDType.md](/VeriTile/architecture/erase-dtype/) |
-| 内存安全 / framing 怎么工作? | [MemorySafety.md](/VeriTile/architecture/memory-safety/) |
-| GPU 内存模型是什么? | [GpuMemoryModel.md](/VeriTile/architecture/gpu-memory-model/) |
-| 原子操作 / async copy 怎么建模? | [ConcurrencySemantics.md](/VeriTile/architecture/concurrency-semantics/) |
-| Kernel manifest 怎么用? | [KernelManifest.md](/VeriTile/proofs/kernel-manifest/) |
-| 定理 surface 命名规约 | [TheoremSurfaces.md](/VeriTile/proofs/theorem-surfaces/) |
+| 用哪个定理 surface? | [CorrectnessSurfaces.md](/VeriTile/zh-cn/proofs/correctness-surfaces/) |
+| dtype erasure 怎么工作? | [EraseDType.md](/VeriTile/zh-cn/architecture/erase-dtype/) |
+| 内存安全 / framing 怎么工作? | [MemorySafety.md](/VeriTile/zh-cn/architecture/memory-safety/) |
+| GPU 内存模型是什么? | [GpuMemoryModel.md](/VeriTile/zh-cn/architecture/gpu-memory-model/) |
+| 原子操作 / async copy 怎么建模? | [ConcurrencySemantics.md](/VeriTile/zh-cn/architecture/concurrency-semantics/) |
+| Kernel manifest 怎么用? | [KernelManifest.md](/VeriTile/zh-cn/proofs/kernel-manifest/) |
+| 定理 surface 命名规约 | [TheoremSurfaces.md](/VeriTile/zh-cn/proofs/theorem-surfaces/) |
 | LLM 证明 wrapper | [scripts/README.md](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/README.md) |
 
 ## 目录结构
@@ -149,4 +149,4 @@ verso/                     幻灯片 / 概览
 
 ## License
 
-[MIT](./LICENSE) © 2026 Zenan Li.
+[MIT](https://github.com/Lizn-zn/VeriTile/blob/main/LICENSE) © 2026 Zenan Li.

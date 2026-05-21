@@ -89,7 +89,7 @@ invoking a math identity from `Mathlib`. The LLM proof wrapper
 
 ### 4. Register in the kernel manifest
 
-Add a row to [`scripts/kernel-manifest.tsv`](./scripts/kernel-manifest.tsv)
+Add a row to [`scripts/kernel-manifest.tsv`](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/kernel-manifest.tsv)
 so `scripts/check-artifact.sh` recognizes the theorem in CI. Schema and
 naming conventions: [KernelManifest.md](/VeriTile/proofs/kernel-manifest/),
 [TheoremSurfaces.md](/VeriTile/proofs/theorem-surfaces/).
@@ -97,12 +97,12 @@ naming conventions: [KernelManifest.md](/VeriTile/proofs/kernel-manifest/),
 ## Minimal Example
 
 Elementwise vector add against the `addSpec xs ys i = xs i + ys i` math
-spec — see [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean).
+spec — see [`VeriTile/Examples/VectorAdd.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Examples/VectorAdd.lean).
 
 ## Refinement Example
 
 Naive vs numerically-stable softmax (kernel pair refinement) — see
-[`VeriTile/Examples/SoftmaxEq.lean`](./VeriTile/Examples/SoftmaxEq.lean).
+[`VeriTile/Examples/SoftmaxEq.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Examples/SoftmaxEq.lean).
 
 ## Documentation Map
 
@@ -158,4 +158,4 @@ decision log: [PLAN.md](https://github.com/Lizn-zn/VeriTile/blob/main/PLAN.md).
 
 ## License
 
-[MIT](./LICENSE) © 2026 Zenan Li.
+[MIT](https://github.com/Lizn-zn/VeriTile/blob/main/LICENSE) © 2026 Zenan Li.

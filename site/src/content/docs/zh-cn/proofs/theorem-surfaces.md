@@ -4,7 +4,7 @@ title: "Examples 定理 surface 风格"
 
 `VeriTile/Examples/` 中面向用户的定理 surface 都应当从公开的 compute-facing
 API 出发。完整 user guide 见
-[`CorrectnessSurfaces.md`](/VeriTile/proofs/correctness-surfaces/)。
+[`CorrectnessSurfaces.md`](/VeriTile/zh-cn/proofs/correctness-surfaces/)。
 
 - 单 kernel 对照数学或算法 spec 的 correctness 用
   `ComputeCorrect.Realizes`、`ComputeCorrect.Post` 或

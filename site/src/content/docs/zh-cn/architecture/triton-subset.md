@@ -156,7 +156,7 @@ contract 路径(#59)。
 - `tl.max(x, axis=N, return_indices=True)` 返回 (value, index) 对,只能通过
   多重赋值绑定 `vmax, imax = tl.max(x, axis=N, return_indices=True)` 消费。
   对应的 paired-channel 正确性 surface 用
-  [`ComputeCorrect.OutputPairWhere`](/VeriTile/proofs/correctness-surfaces/)。
+  [`ComputeCorrect.OutputPairWhere`](/VeriTile/zh-cn/proofs/correctness-surfaces/)。
 
 省略 `axis` 时遵循 Triton 的 `axis=None`:对所有维度做 reduction。
 显式 `axis=N` 时只 reduce 一个 axis。当前 reduction 作用于 `.real` tile。
