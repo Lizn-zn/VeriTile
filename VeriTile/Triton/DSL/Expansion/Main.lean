@@ -169,6 +169,33 @@ private def expandIdentRefByName (env : Env) (name : String) : MacroM EOut := do
   | none =>
       pure ⟨term, dtype, shape, none, none⟩
 
+private partial def nonnegativeIntTermAsNat? (term : TSyntax `term) :
+    MacroM (Option (TSyntax `term)) := do
+  match term with
+  | `(Op.castNatToInt $e) =>
+      pure (some e)
+  | `(Op.constInt (Int.ofNat $e)) =>
+      pure (some (← `(Op.constNat $e)))
+  | `(Op.constInt $n:num) =>
+      pure (some (← `(Op.constNat $n)))
+  | `(Op.add NumericDType.int $bc $a $b) => do
+      match ← nonnegativeIntTermAsNat? a, ← nonnegativeIntTermAsNat? b with
+      | some aNat, some bNat =>
+          pure (some (← `(Op.add NumericDType.nat $bc $aNat $bNat)))
+      | _, _ => pure none
+  | `(Op.mul NumericDType.int $bc $a $b) => do
+      match ← nonnegativeIntTermAsNat? a, ← nonnegativeIntTermAsNat? b with
+      | some aNat, some bNat =>
+          pure (some (← `(Op.mul NumericDType.nat $bc $aNat $bNat)))
+      | _, _ => pure none
+  | _ =>
+      pure none
+
+private def pointerOffsetIntAsNat (out : EOut) : MacroM EOut := do
+  match ← nonnegativeIntTermAsNat? out.term with
+  | some natTerm => pure { out with term := natTerm, dtype := .nat }
+  | none => pure { out with term := ← `(Op.castIntToNat $out.term), dtype := .nat }
+
 mutual
 
 partial def expandNatExpectedExpr (env : Env) (stx : TSyntax `tritonExpr) :
@@ -479,7 +506,7 @@ partial def expandStaticPtrExpr (env : Env) (stx : TSyntax `tritonExpr) :
           let b0 ← expandExpr env b
           let b' ←
             if b0.dtype == .int then
-              pure { b0 with term := ← `(Op.castIntToNat $b0.term), dtype := .nat }
+              pointerOffsetIntAsNat b0
             else if b0.dtype == .nat then
               pure b0
             else
@@ -683,6 +710,49 @@ partial def natOffsetsWithBaseAdd (env : Env) (ctx : String)
             pure (some (← `(Op.add NumericDType.nat Broadcast.nil $x $rest)))
   pure (← listTerm staticOffsets.toList, ← sumOps dynamicAdds.toList)
 
+partial def natBlockPtrOffsets (env : Env) (ctx : String)
+    (offsets : Array (TSyntax `tritonExpr)) :
+    MacroM (TSyntax `term × TSyntax `term × Bool) := do
+  let mut staticOffsets : Array (TSyntax `term) := #[]
+  let mut offsetOps : Array (TSyntax `term) := #[]
+  let mut hasDynamic := Bool.false
+  for off in offsets do
+    match off with
+    | `(tritonExpr| $n:num) =>
+        staticOffsets := staticOffsets.push (⟨n.raw⟩ : TSyntax `term)
+        offsetOps := offsetOps.push (← `(Op.constNat $n))
+    | `(tritonExpr| $($t:term)) =>
+        staticOffsets := staticOffsets.push (← `(($t : Nat)))
+        offsetOps := offsetOps.push (← `(Op.constNat ($t : Nat)))
+    | `(tritonExpr| $id:ident) =>
+        if env.any (fun entry => entry.1 == id.getId.toString) then
+          hasDynamic := Bool.true
+          staticOffsets := staticOffsets.push (← `((0 : Nat)))
+          let off' ← expandNatExpectedExpr env off
+          ensureShape SInfo.scalar off'.shape (ctx ++ " offsets")
+          offsetOps := offsetOps.push off'.term
+        else
+          let t : TSyntax `term := ⟨id.raw⟩
+          staticOffsets := staticOffsets.push (← `(($t : Nat)))
+          offsetOps := offsetOps.push (← `(Op.constNat ($t : Nat)))
+    | _ =>
+        hasDynamic := Bool.true
+        staticOffsets := staticOffsets.push (← `((0 : Nat)))
+        let off' ← expandNatExpectedExpr env off
+        ensureShape SInfo.scalar off'.shape (ctx ++ " offsets")
+        offsetOps := offsetOps.push off'.term
+  let rec natListTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : List Nat))
+    | d :: rest => do
+        let tail ← natListTerm rest
+        `($d :: $tail)
+  let rec opListTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : List (Op .nat [])))
+    | d :: rest => do
+        let tail ← opListTerm rest
+        `($d :: $tail)
+  pure (← natListTerm staticOffsets.toList, ← opListTerm offsetOps.toList, hasDynamic)
+
 partial def expandFullDTypeTerm (expandExpr : ExprExpander) (env : Env)
     (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr)
     (dt : TSyntax `term) : MacroM EOut := do
@@ -727,19 +797,19 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               match e'.dtype with
               | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
                   let sh ← e'.shape.term
-                  pure ⟨← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__"),
-                    .nat, e'.shape,
-                    some (← `(ComputeExpr.opaque "runtime float-to-nat cast")),
-                    some .nat⟩
+                  let ref ← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__")
+                  pure ⟨ref, .nat, e'.shape, none, none⟩
+              | .int =>
+                  pure ⟨← `(Op.castIntToNat $e'.term), .nat, e'.shape, none, none⟩
               | _ => pure e'
           | .int =>
               match e'.dtype with
               | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
                   let sh ← e'.shape.term
-                  pure ⟨← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__"),
-                    .int, e'.shape,
-                    some (← `(ComputeExpr.opaque "runtime float-to-int cast")),
-                    some .int⟩
+                  let ref ← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__")
+                  pure ⟨ref, .int, e'.shape, none, none⟩
+              | .nat =>
+                  pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
               | _ => pure e'
           | .fp32 =>
               let srcProof ← e'.dtype.floatProof
@@ -763,8 +833,14 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
     let args := stx.raw.getArgs
     if h : 0 < args.size then
       let e : TSyntax `tritonExpr := ⟨args[0]⟩
-      let e' ← expandExpr env e
-      pure e'
+      let raw := toString stx.raw
+      if raw.contains "tl.int" then
+        expandIntExpectedExpr env e
+      else if raw.contains "tl.uint" then
+        expandNatExpectedExpr env e
+      else
+        let e' ← expandExpr env e
+        pure e'
     else
       Macro.throwUnsupported
   else
@@ -793,19 +869,17 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           | .real, .nat | .fp32, .nat | .fp16, .nat | .bf16, .nat
           | .floatVar _, .nat =>
               let sh ← e'.shape.term
-              pure ⟨← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__"),
-                .nat, e'.shape,
-                some (← `(ComputeExpr.opaque "runtime float-to-nat cast")),
-                some .nat⟩
+              let ref ← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__")
+              pure ⟨ref, .nat, e'.shape, none, none⟩
+          | .int, .nat =>
+              pure ⟨← `(Op.castIntToNat $e'.term), .nat, e'.shape, none, none⟩
           | .real, .int | .fp32, .int | .fp16, .int | .bf16, .int
           | .floatVar _, .int =>
               let sh ← e'.shape.term
-              pure ⟨← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__"),
-                .int, e'.shape,
-                some (← `(ComputeExpr.opaque "runtime float-to-int cast")),
-                some .int⟩
+              let ref ← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__")
+              pure ⟨ref, .int, e'.shape, none, none⟩
           | .nat, .int =>
-              pure e'
+              pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
           | _, .int =>
               pure e'
           | _, .fp32 =>
@@ -1083,19 +1157,19 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           match e'.dtype with
           | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
               let sh ← e'.shape.term
-              pure ⟨← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__"),
-                .nat, e'.shape,
-                some (← `(ComputeExpr.opaque "runtime float-to-nat cast")),
-                some .nat⟩
+              let ref ← `(Op.ref TileDType.nat $sh "__compute_float_to_nat_cast_unprojected__")
+              pure ⟨ref, .nat, e'.shape, none, none⟩
+          | .int =>
+              pure ⟨← `(Op.castIntToNat $e'.term), .nat, e'.shape, none, none⟩
           | _ => pure e'
       | .int =>
           match e'.dtype with
           | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
               let sh ← e'.shape.term
-              pure ⟨← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__"),
-                .int, e'.shape,
-                some (← `(ComputeExpr.opaque "runtime float-to-int cast")),
-                some .int⟩
+              let ref ← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__")
+              pure ⟨ref, .int, e'.shape, none, none⟩
+          | .nat =>
+              pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
           | _ => pure e'
       | .fp32 =>
           let srcProof ← e'.dtype.floatProof
@@ -1178,16 +1252,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
             `(Op.add NumericDType.nat $bc $ptrBase $base'.term)
       let (parentShape, _) ← natListTerm "tl.make_block_ptr shape" parentDims
       let (strides, _) ← natListTerm "tl.make_block_ptr strides" strideDims
-      let (offsets, dynOffsetAdd?) ←
-        natOffsetsWithBaseAdd env "tl.make_block_ptr" offsetDims strideDims
-      let baseTerm ←
-        match dynOffsetAdd? with
-        | none => pure baseTerm
-        | some dyn =>
-            `(Op.add NumericDType.nat Broadcast.nil $baseTerm $dyn)
+      let (offsets, offsetOps, hasDynamicOffsets) ←
+        natBlockPtrOffsets env "tl.make_block_ptr" offsetDims
       let (blockShape, blockShapeInfo) ← natListTerm "tl.make_block_ptr block_shape" blockDims
-      pure ⟨← `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets),
-            .blockPtr, .dims blockShapeInfo, none, none⟩
+      let term ←
+        if hasDynamicOffsets then
+          `(Op.makeBlockPtrDynOffsets $region $baseTerm $parentShape $blockShape $strides $offsetOps)
+        else
+          `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets)
+      pure ⟨term, .blockPtr, .dims blockShapeInfo, none, none⟩
   | `(tritonExpr| tl.make_block_ptr($baseKw:ident=$p:tritonExpr,
         $shapeKw:ident=($parentDims:tritonExpr,*), $stridesKw:ident=($strideDims:tritonExpr,*),
         $offsetsKw:ident=($offsetDims:tritonExpr,*), $blockShapeKw:ident=($blockDims:tritonExpr,*),
@@ -1206,16 +1279,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       ensureShape SInfo.scalar baseShape "tl.make_block_ptr base"
       let (parentShape, _) ← natListTerm "tl.make_block_ptr shape" parentDims
       let (strides, _) ← natListTerm "tl.make_block_ptr strides" strideDims
-      let (offsets, dynOffsetAdd?) ←
-        natOffsetsWithBaseAdd env "tl.make_block_ptr" offsetDims strideDims
-      let baseTerm ←
-        match dynOffsetAdd? with
-        | none => pure baseTerm
-        | some dyn =>
-            `(Op.add NumericDType.nat Broadcast.nil $baseTerm $dyn)
+      let (offsets, offsetOps, hasDynamicOffsets) ←
+        natBlockPtrOffsets env "tl.make_block_ptr" offsetDims
       let (blockShape, blockShapeInfo) ← natListTerm "tl.make_block_ptr block_shape" blockDims
-      pure ⟨← `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets),
-            .blockPtr, .dims blockShapeInfo, none, none⟩
+      let term ←
+        if hasDynamicOffsets then
+          `(Op.makeBlockPtrDynOffsets $region $baseTerm $parentShape $blockShape $strides $offsetOps)
+        else
+          `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets)
+      pure ⟨term, .blockPtr, .dims blockShapeInfo, none, none⟩
   | `(tritonExpr| tl.make_block_ptr($baseKw:ident=$p:tritonExpr,
         $shapeKw:ident=($parentDims:tritonExpr,*), $stridesKw:ident=($strideDims:tritonExpr,*),
         $offsetsKw:ident=($offsetDims:tritonExpr,*), $blockShapeKw:ident=($blockDims:tritonExpr,*))) => do
@@ -1232,16 +1304,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       ensureShape SInfo.scalar baseShape "tl.make_block_ptr base"
       let (parentShape, _) ← natListTerm "tl.make_block_ptr shape" parentDims
       let (strides, _) ← natListTerm "tl.make_block_ptr strides" strideDims
-      let (offsets, dynOffsetAdd?) ←
-        natOffsetsWithBaseAdd env "tl.make_block_ptr" offsetDims strideDims
-      let baseTerm ←
-        match dynOffsetAdd? with
-        | none => pure baseTerm
-        | some dyn =>
-            `(Op.add NumericDType.nat Broadcast.nil $baseTerm $dyn)
+      let (offsets, offsetOps, hasDynamicOffsets) ←
+        natBlockPtrOffsets env "tl.make_block_ptr" offsetDims
       let (blockShape, blockShapeInfo) ← natListTerm "tl.make_block_ptr block_shape" blockDims
-      pure ⟨← `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets),
-            .blockPtr, .dims blockShapeInfo, none, none⟩
+      let term ←
+        if hasDynamicOffsets then
+          `(Op.makeBlockPtrDynOffsets $region $baseTerm $parentShape $blockShape $strides $offsetOps)
+        else
+          `(Op.makeBlockPtrDyn $region $baseTerm $parentShape $blockShape $strides $offsets)
+      pure ⟨term, .blockPtr, .dims blockShapeInfo, none, none⟩
   | `(tritonExpr| tl.advance($p:tritonExpr, [$deltas:tritonExpr,*])) => do
       let p' ← expandExpr env p
       ensureDType .blockPtr p'.dtype "tl.advance pointer"
@@ -1336,7 +1407,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               ensureAlgorithmOnly "pointer arithmetic" a'
               ensureAlgorithmOnly "pointer arithmetic" b'
               let (bc, outShape) ← broadcastTerm a'.shape b'.shape "pointer arithmetic"
-              pure ⟨← `(Op.ptrAdd $bc $a'.term (Op.castIntToNat $b'.term)), .ptr, outShape, none, none⟩
+              let bNat ← pointerOffsetIntAsNat b'
+              pure ⟨← `(Op.ptrAdd $bc $a'.term $bNat.term), .ptr, outShape, none, none⟩
           | .nat, .ptr =>
               ensureAlgorithmOnly "pointer arithmetic" a'
               ensureAlgorithmOnly "pointer arithmetic" b'
@@ -1346,7 +1418,8 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               ensureAlgorithmOnly "pointer arithmetic" a'
               ensureAlgorithmOnly "pointer arithmetic" b'
               let (bc, outShape) ← broadcastTerm b'.shape a'.shape "pointer arithmetic"
-              pure ⟨← `(Op.ptrAdd $bc $b'.term (Op.castIntToNat $a'.term)), .ptr, outShape, none, none⟩
+              let aNat ← pointerOffsetIntAsNat a'
+              pure ⟨← `(Op.ptrAdd $bc $b'.term $aNat.term), .ptr, outShape, none, none⟩
           | _, _ =>
               expandArith expandExpr env "arithmetic" (← `(Op.add)) a b
   | `(tritonExpr| $a:tritonExpr - float ($arg:term)) => do
@@ -1707,7 +1780,13 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
               Bool.false)
       let nameLit : TSyntax `term := Syntax.mkStrLit envName
       if lhsDType == .ptr then
-        let rhs' ← expandNatExpectedExpr env rhs
+        let rhs0 ← expandExpr env rhs
+        let rhs' ←
+          match rhs0.dtype with
+          | .nat => pure rhs0
+          | .int =>
+              pointerOffsetIntAsNat rhs0
+          | _ => expandNatExpectedExpr env rhs
         ensureAlgorithmOnly "pointer rebind assignment" rhs'
         let lhsShapeTerm ← lhsShape.term
         let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
@@ -2144,7 +2223,13 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
         let (lhsDType, lhsShape) ← lookupEnv env name
         match lhsDType with
         | .ptr =>
-            let rhs ← expandNatExpectedExpr env e
+            let rhs0 ← expandExpr env e
+            let rhs ←
+              match rhs0.dtype with
+              | .nat => pure rhs0
+              | .int =>
+                  pointerOffsetIntAsNat rhs0
+              | _ => expandNatExpectedExpr env e
             ensureAlgorithmOnly "`+=` pointer offset" rhs
             let lhsShapeTerm ← lhsShape.term
             let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)
@@ -2201,7 +2286,13 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
               (name, e'.dtype, e'.shape, e'.computeDType?) :: env,
               e'.computeTerm.isSome)
       else
-          let rhs ← expandNatExpectedExpr env e
+          let rhs0 ← expandExpr env e
+          let rhs ←
+            match rhs0.dtype with
+            | .nat => pure rhs0
+            | .int =>
+                pointerOffsetIntAsNat rhs0
+            | _ => expandNatExpectedExpr env e
           ensureAlgorithmOnly "`+=` pointer offset" rhs
           let region : TSyntax `term := ⟨i.raw⟩
           let lhsTerm ← `(Op.ptrBase $region)
@@ -2219,7 +2310,13 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
         Macro.throwError ("`-=`: unknown identifier `" ++ name ++ "`")
       let (lhsDType, lhsShape) ← lookupEnv env name
       if lhsDType == .ptr then
-        let rhs ← expandNatExpectedExpr env e
+        let rhs0 ← expandExpr env e
+        let rhs ←
+          match rhs0.dtype with
+          | .nat => pure rhs0
+          | .int =>
+              pointerOffsetIntAsNat rhs0
+          | _ => expandNatExpectedExpr env e
         ensureAlgorithmOnly "`-=` pointer offset" rhs
         let lhsShapeTerm ← lhsShape.term
         let lhsTerm ← `(Op.ref TileDType.ptr $lhsShapeTerm $nameLit)

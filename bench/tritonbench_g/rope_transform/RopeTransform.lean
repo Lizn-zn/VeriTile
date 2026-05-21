@@ -172,7 +172,7 @@ theorem rope_transform_q0_head_correct
     cases hab
     rfl
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rope_transform_q0_head, stepStmts, stepStmt, evalOp,
+  · simp [exec, rope_transform_q0_head, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -292,7 +292,7 @@ theorem rope_transform_q1_head_correct
       exact h
     cases a; cases b; simp only at hab; cases hab; rfl
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rope_transform_q1_head, stepStmts, stepStmt, evalOp,
+  · simp [exec, rope_transform_q1_head, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -501,6 +501,60 @@ theorem rope_transform_k1_python_test_shape_compute_correct
   apply Fin.ext
   simp [q1WriteOffset, dimIndex] at h
   omega
+
+/-- Python test-shape coverage for all four forward stores exposed by the
+one-head RoPE slices: Q first/second half and K first/second half. -/
+theorem rope_transform_python_test_shape_all_outputs_compute_correct
+    (Q K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeQ0Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_transform_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeQ0Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_transform_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeQ1Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) := by
+  constructor
+  · exact rope_transform_q0_python_test_shape_compute_correct Q COS SIN
+      HEAD_IDX COS_ROW_IDX s
+  · constructor
+    · exact rope_transform_q1_python_test_shape_compute_correct Q COS SIN
+        HEAD_IDX COS_ROW_IDX s
+    · constructor
+      · exact rope_transform_k0_python_test_shape_compute_correct K COS SIN
+          HEAD_IDX COS_ROW_IDX s
+      · exact rope_transform_k1_python_test_shape_compute_correct K COS SIN
+          HEAD_IDX COS_ROW_IDX s
 
 /-! ## Full-kernel 2D forward correctness (`BACKWARD_PASS = false`)
 
@@ -936,7 +990,7 @@ theorem rope_kernel_o0o1_row_o0_correct
     have hGe : k.1.val + rotary_dim_half ≥ rotary_dim_half := Nat.le_add_left _ _
     omega
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rope_kernel_o0o1_row, stepStmts, stepStmt, evalOp,
+  · simp [exec, rope_kernel_o0o1_row, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -1029,7 +1083,7 @@ theorem rope_kernel_o0o1_row_o1_correct
       Nat.lt_of_lt_of_le k.1.isLt hHalfBound
     omega
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rope_kernel_o0o1_row, stepStmts, stepStmt, evalOp,
+  · simp [exec, rope_kernel_o0o1_row, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -1143,5 +1197,66 @@ theorem rope_kernel_o0o1_row_o1_compute_correct
     stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF s s' hOutInj
     hStrideHd hHalfBound hExec i
   simpa [hActive] using h
+
+/-- Compute-facing coverage for the combined RoPE row: both first-half and
+second-half stores match the forward Python formula. -/
+theorem rope_kernel_o0o1_row_all_outputs_compute_correct
+    (OUT X COS SIN : RegionName)
+    (SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_M BLOCK_HALF : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        ropeOutOffset s stride_out_batch stride_out_seqlen stride_out_nheads
+          stride_out_headdim BLOCK_M i))
+    (hOut1Inj : Function.Injective
+      (fun i : Fin BLOCK_HALF =>
+        ropeOut1Offset s stride_out_batch stride_out_seqlen stride_out_nheads
+          stride_out_headdim rotary_dim_half BLOCK_M i))
+    (hStrideHd : stride_out_headdim ≠ 0)
+    (hHalfBound : BLOCK_HALF ≤ rotary_dim_half) :
+    (ComputeCorrect.Realizes
+      (kernel := rope_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
+        seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+        stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+        stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF => ropeActive s seqlen rotary_dim_half BLOCK_M i)
+        (fun i => (OUT,
+          ropeOutOffset s stride_out_batch stride_out_seqlen stride_out_nheads
+            stride_out_headdim BLOCK_M i)))
+      (expected := fun i =>
+        ropeO0Spec s X COS SIN SEQLEN_OFFSETS seqlen_ro stride_x_batch
+          stride_x_seqlen stride_x_nheads stride_x_headdim rotary_dim_half
+          BLOCK_M i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_kernel_o0o1_row OUT X COS SIN SEQLEN_OFFSETS
+        seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+        stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+        stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_HALF => ropeActive s seqlen rotary_dim_half BLOCK_M i)
+        (fun i => (OUT,
+          ropeOut1Offset s stride_out_batch stride_out_seqlen stride_out_nheads
+            stride_out_headdim rotary_dim_half BLOCK_M i)))
+      (expected := fun i =>
+        ropeO1Spec s X COS SIN SEQLEN_OFFSETS seqlen_ro stride_x_batch
+          stride_x_seqlen stride_x_nheads stride_x_headdim rotary_dim_half
+          BLOCK_M i)) := by
+  constructor
+  · exact rope_kernel_o0o1_row_o0_compute_correct OUT X COS SIN SEQLEN_OFFSETS
+      seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+      stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+      stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF s hOutInj
+      hStrideHd hHalfBound
+  · exact rope_kernel_o0o1_row_o1_compute_correct OUT X COS SIN SEQLEN_OFFSETS
+      seqlen rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen
+      stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
+      stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF s hOut1Inj
+      hStrideHd hHalfBound
 
 end VeriTile.Bench.TritonBenchG.RopeTransform

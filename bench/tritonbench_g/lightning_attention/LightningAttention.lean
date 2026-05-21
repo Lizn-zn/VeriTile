@@ -126,7 +126,7 @@ theorem lightning_attention_forward_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, lightning_attention_forward_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.remap,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.remap,
         Tile.expandDim, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         rowIndex, colIndex, active, tileOffset, TileShape.dropInsertedIndex]
@@ -231,7 +231,7 @@ theorem lightning_attention_forward_sum_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, lightning_attention_forward_sum_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.remap,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.remap,
         Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, rowIndex, colIndex, active, tileOffset,
         TileShape.dropInsertedIndex]
@@ -356,7 +356,7 @@ theorem lightning_attention_bwd_grad_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, lightning_attention_bwd_grad_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         gradRowIndex, gradColIndex, activeGrad, gradTileOffset,
         TileShape.dropInsertedIndex]
@@ -410,6 +410,120 @@ theorem lightning_attention_bwd_grad_store_slice_compute_correct
   intro idx hActive
   have h := lightning_attention_bwd_grad_store_slice_correct GradPre Out n width
     BLOCK WIDTH s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
+/-- Backward inter-kernel DQ accumulation slice.
+
+This captures the Python `_bwd_inter_kernel` writeback
+`dq = dq_inter + tl.load(DQ_block_ptr, ...)` before storing back into `DQ`.
+The surrounding loop and `dq_inter = tl.dot(do, kv_trans)` producer remain
+separate proof obligations, but this is stronger than a precomputed-gradient
+store because it includes the Python-observable in-place DQ accumulation. -/
+def lightning_attention_bwd_dq_accum_store_slice
+    (DQInter DQ : RegionName) (n width BLOCK WIDTH : Nat) :
+    ComputeKernel := triton {
+  off_bh = tl.program_id(0)
+  off_block = tl.program_id(1) * $(BLOCK) + tl.arange(0, $(BLOCK))
+  offs_w = tl.arange(0, $(WIDTH))
+  mask = (off_block[:, None] < $(n)) & (offs_w[None, :] < $(WIDTH))
+  dq_inter = tl.load(DQInter + off_bh * $(n) * $(width) +
+      off_block[:, None] * $(width) + offs_w[None, :],
+      mask=mask, other=0.0)
+  dq_prev = tl.load(DQ + off_bh * $(n) * $(width) +
+      off_block[:, None] * $(width) + offs_w[None, :],
+      mask=mask, other=0.0)
+  dq = dq_inter + dq_prev
+  tl.store(DQ + off_bh * $(n) * $(width) +
+      off_block[:, None] * $(width) + offs_w[None, :],
+      (dq).to(DQ.dtype.element_ty), mask=mask)
+}
+
+noncomputable def dqAccumStoreValue
+    (s : BlockState) (DQInter DQ : RegionName)
+    (n width BLOCK WIDTH : Nat) (idx : TileIndex [BLOCK, WIDTH]) : ℝ :=
+  WithBot.unbotD 0
+    (if activeGrad s n BLOCK idx then
+      some (s.readMem DQInter (gradTileOffset s n width BLOCK WIDTH idx) +
+        s.readMem DQ (gradTileOffset s n width BLOCK WIDTH idx))
+    else some (0.0 : ℝ))
+
+theorem lightning_attention_bwd_dq_accum_store_slice_correct
+    (DQInter DQ : RegionName) (n width BLOCK WIDTH : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK, WIDTH] =>
+        gradTileOffset s n width BLOCK WIDTH idx)) :
+    ∀ idx : TileIndex [BLOCK, WIDTH],
+      let outAddr := gradTileOffset s n width BLOCK WIDTH idx
+      (exec (lightning_attention_bwd_dq_accum_store_slice DQInter DQ
+          n width BLOCK WIDTH) s).map (·.readMem DQ outAddr)
+        = some (if activeGrad s n BLOCK idx then
+            dqAccumStoreValue s DQInter DQ n width BLOCK WIDTH idx
+          else s.readMem DQ outAddr) := by
+  intro idx
+  simp [exec, lightning_attention_bwd_dq_accum_store_slice, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+        FloatDType.toWithBot, gradRowIndex, gradColIndex, activeGrad,
+        gradTileOffset, TileShape.dropInsertedIndex, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?]
+  let offsetFn : TileIndex [BLOCK, WIDTH] → Nat :=
+    fun idx =>
+      s.pids 0 * n * width + (s.pids 1 * BLOCK + idx.1.val) * width +
+        idx.2.1.val
+  let valueFn : TileIndex [BLOCK, WIDTH] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (Option.map₂ (fun a b => a + b)
+          (if s.pids 1 * BLOCK + idx.1.val < n then
+            some (s.readMem DQInter (offsetFn idx))
+          else some (0.0 : ℝ))
+          (if s.pids 1 * BLOCK + idx.1.val < n then
+            some (s.readMem DQ (offsetFn idx))
+          else some (0.0 : ℝ)))
+  let P : TileIndex [BLOCK, WIDTH] → Prop :=
+    fun idx => s.pids 1 * BLOCK + idx.1.val < n
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, gradTileOffset, gradRowIndex, gradColIndex] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem DQ (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BLOCK, WIDTH])).readMem DQ
+        (offsetFn idx) =
+    if P idx then dqAccumStoreValue s DQInter DQ n width BLOCK WIDTH idx
+    else s.readMem DQ (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive : s.pids 1 * BLOCK + idx.1.val < n
+  · simp [offsetFn, valueFn, P, dqAccumStoreValue, activeGrad, gradTileOffset,
+      gradRowIndex, gradColIndex, hActive, NumericDType.add]
+  · simp [offsetFn, valueFn, P, dqAccumStoreValue, activeGrad, gradTileOffset,
+      gradRowIndex, gradColIndex, hActive]
+
+theorem lightning_attention_bwd_dq_accum_store_slice_compute_correct
+    (DQInter DQ : RegionName) (n width BLOCK WIDTH : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK, WIDTH] =>
+        gradTileOffset s n width BLOCK WIDTH idx)) :
+    ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_dq_accum_store_slice DQInter DQ
+        n width BLOCK WIDTH)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK, WIDTH] => activeGrad s n BLOCK idx)
+        (fun idx : TileIndex [BLOCK, WIDTH] =>
+          (DQ, gradTileOffset s n width BLOCK WIDTH idx)))
+      (expected := fun idx : TileIndex [BLOCK, WIDTH] =>
+        dqAccumStoreValue s DQInter DQ n width BLOCK WIDTH idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [lightning_attention_bwd_dq_accum_store_slice, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := lightning_attention_bwd_dq_accum_store_slice_correct DQInter DQ
+    n width BLOCK WIDTH s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
@@ -572,6 +686,22 @@ theorem lightning_attention_bwd_dq_store_python_test_shape_compute_correct
     128 64 64 64 s
     (lightning_attention_bwd_qk_python_test_shape_offset_injective s)
 
+theorem lightning_attention_bwd_dq_accum_python_test_shape_compute_correct
+    (DQInter DQ : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_dq_accum_store_slice DQInter DQ
+        128 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (DQ, gradTileOffset s 128 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        dqAccumStoreValue s DQInter DQ 128 64 64 64 idx) := by
+  exact lightning_attention_bwd_dq_accum_store_slice_compute_correct DQInter DQ
+    128 64 64 64 s
+    (lightning_attention_bwd_qk_python_test_shape_offset_injective s)
+
 theorem lightning_attention_bwd_dk_store_python_test_shape_compute_correct
     (DKPre DK : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
@@ -601,5 +731,92 @@ theorem lightning_attention_bwd_dv_store_python_test_shape_compute_correct
   exact lightning_attention_bwd_dv_store_slice_compute_correct DVPre DV
     128 128 64 128 s
     (lightning_attention_bwd_v_python_test_shape_offset_injective s)
+
+/-- Python forward test-shape output coverage for Lightning Attention: both the
+direct precomputed output writeback and the summed intra/inter writeback realize
+the masked `Out` store shape used by the checked launcher. -/
+theorem lightning_attention_forward_python_test_shape_all_outputs_compute_correct
+    (OAcc OIntra OInter Out : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_forward_store_slice OAcc Out 128 128 64 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 32] => active s 128 64 idx)
+        (fun idx : TileIndex [64, 32] =>
+          (Out, tileOffset s 128 128 64 32 idx)))
+      (expected := fun idx : TileIndex [64, 32] =>
+        storeValue s OAcc 128 128 64 32 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_forward_sum_store_slice OIntra OInter Out
+        128 128 64 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 32] => active s 128 64 idx)
+        (fun idx : TileIndex [64, 32] =>
+          (Out, tileOffset s 128 128 64 32 idx)))
+      (expected := fun idx : TileIndex [64, 32] =>
+        sumStoreValue s OIntra OInter 128 128 64 32 idx)) := by
+  constructor
+  · exact lightning_attention_forward_store_python_test_shape_compute_correct
+      OAcc Out s
+  · exact lightning_attention_forward_sum_store_python_test_shape_compute_correct
+      OIntra OInter Out s
+
+/-- Python backward test-shape output coverage for Lightning Attention: the DQ
+inter-kernel accumulation and the final `DQ`/`DK`/`DV` gradient writebacks all
+realize the masked store shapes used by the checked launcher. -/
+theorem lightning_attention_bwd_python_test_shape_all_outputs_compute_correct
+    (DQInter DQPre DKPre DVPre DQ DK DV : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_dq_accum_store_slice DQInter DQ
+        128 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (DQ, gradTileOffset s 128 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        dqAccumStoreValue s DQInter DQ 128 64 64 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_grad_store_slice DQPre DQ
+        128 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (DQ, gradTileOffset s 128 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        gradStoreValue s DQPre 128 64 64 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_grad_store_slice DKPre DK
+        128 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (DK, gradTileOffset s 128 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        gradStoreValue s DKPre 128 64 64 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_grad_store_slice DVPre DV
+        128 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 128] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 128] =>
+          (DV, gradTileOffset s 128 128 64 128 idx)))
+      (expected := fun idx : TileIndex [64, 128] =>
+        gradStoreValue s DVPre 128 128 64 128 idx)) := by
+  constructor
+  · exact lightning_attention_bwd_dq_accum_python_test_shape_compute_correct
+      DQInter DQ s
+  constructor
+  · exact lightning_attention_bwd_dq_store_python_test_shape_compute_correct
+      DQPre DQ s
+  constructor
+  · exact lightning_attention_bwd_dk_store_python_test_shape_compute_correct
+      DKPre DK s
+  · exact lightning_attention_bwd_dv_store_python_test_shape_compute_correct
+      DVPre DV s
 
 end VeriTile.Bench.TritonBenchG.LightningAttention

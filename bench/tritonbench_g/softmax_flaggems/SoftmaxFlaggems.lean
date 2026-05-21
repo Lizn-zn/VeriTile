@@ -203,7 +203,7 @@ theorem softmax_kernel_inner_one_tile_correct
         else s.readMem output_ptr (outOffset s N i) := by
   intro i
   by_cases hT : 0 < TILE_N
-  · simp [exec, softmax_kernel_inner_one_tile, stepStmts, stepStmt, evalOp,
+  · simp [exec, softmax_kernel_inner_one_tile, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
@@ -352,7 +352,7 @@ theorem softmax_kernel_non_inner_one_tile_correct
   by_cases hN : 0 < TILE_N
   · by_cases hK : 0 < TILE_K
     · simp [exec, softmax_kernel_non_inner_one_tile_surface,
-            stepStmts, stepStmt, evalOp, Option.bind,
+            stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
             Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
             Tile.reduceMax, Tile.reduceMaxDrop,
             Tile.reduceSum, Tile.reduceSumDrop,
@@ -494,7 +494,7 @@ theorem softmax_backward_kernel_inner_one_tile_correct
   by_cases hTM : 0 < TILE_M
   · by_cases hTN : 0 < TILE_N
     · simp [exec, softmax_backward_kernel_inner_one_tile_surface,
-            stepStmts, stepStmt, evalOp, Option.bind, Option.map,
+            stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
             Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
             Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceSumKeep,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
@@ -627,7 +627,7 @@ theorem softmax_backward_kernel_non_inner_one_tile_correct
   by_cases hTN : 0 < TILE_N
   · by_cases hTK : 0 < TILE_K
     · simp [exec, softmax_backward_kernel_non_inner_one_tile_surface,
-            stepStmts, stepStmt, evalOp, Option.bind, Option.map,
+            stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
             Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
             Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceSumKeep,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,

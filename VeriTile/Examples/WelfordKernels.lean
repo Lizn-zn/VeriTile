@@ -338,7 +338,11 @@ theorem twopass_welford_correct
         Triton.TiledReduction.tileSum]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
-    simp [_h_mv]
+    repeat unfold evalOp
+    simp [Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      WithBot.realAdd, WithBot.realMul, WithBot.realSub, WithBot.realDiv, _h_mv]
     rfl
   · simp [exec, twopassWelfordKernel, stepStmts, stepStmt, evalOp,
         Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
@@ -350,7 +354,11 @@ theorem twopass_welford_correct
         Triton.TiledReduction.welfordMean, Triton.TiledReduction.tileSum]
     unfold InputLoadedAt at _h_x
     simp_rw [_h_x]
-    simp [pow_two]
+    repeat unfold evalOp
+    simp [Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+      WithBot.realAdd, WithBot.realMul, WithBot.realSub, WithBot.realDiv, _h_mv, pow_two]
     rfl
 
 /-- Loop invariant for `onlineWelfordKernel`: after `k` body iterations,

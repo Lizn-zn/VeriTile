@@ -27,6 +27,7 @@ v1 / boundary-mask scope:
     their DSL surface and padded-D math bridges are in place.
 -/
 
+import VeriTile.Examples.FlashAttention1.Common.Spec
 import VeriTile.Examples.FlashAttention1.Common.CausalBoundary
 
 namespace VeriTile.Examples
@@ -51,7 +52,7 @@ noncomputable def maskedScore {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ) (scale : ℝ)
     (i : Fin M) (j : Fin S) : WithBot ℝ :=
   if j.val ≤ qStart + i.val then
-    (FA1Math.scaledScore Q K scale i j : ℝ)
+    (StreamingAccumulator.scaledScore Q K scale i j : ℝ)
   else
     ⊥
 
@@ -60,7 +61,7 @@ noncomputable def maskedScore {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ) (scale : ℝ)
     (i : Fin M) (j : Fin S) (h : j.val ≤ qStart + i.val) :
     maskedScore qStart Q K scale i j =
-      ((FA1Math.scaledScore Q K scale i j : ℝ) : WithBot ℝ) := by
+      ((StreamingAccumulator.scaledScore Q K scale i j : ℝ) : WithBot ℝ) := by
   simp [maskedScore, h]
 
 @[simp] theorem maskedScore_of_not_le {M S D : Nat}
@@ -83,7 +84,7 @@ theorem realExp_maskedScore_sub {M S D : Nat}
       =
       if j.val ≤ qStart + i.val then
         WithBot.realExp
-          (Option.map (fun y : ℝ => FA1Math.scaledScore Q K scale i j - y) m)
+          (Option.map (fun y : ℝ => StreamingAccumulator.scaledScore Q K scale i j - y) m)
       else
         some 0 := by
   by_cases h : j.val ≤ qStart + i.val
@@ -106,7 +107,7 @@ noncomputable def mPartial {M D : Nat} (Bk : Nat)
         max (mPartial Bk qStart Q numKVBlocks K scale k i)
           ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
             maskedScore qStart Q K scale i
-              (FA1Math.blockIndex Bk numKVBlocks k h jLocal))
+              (StreamingAccumulator.blockIndex Bk numKVBlocks k h jLocal))
       else
         mPartial Bk qStart Q numKVBlocks K scale k i
 
@@ -130,7 +131,7 @@ noncomputable def lPartial {M D : Nat} (Bk : Nat)
             (WithBot.realExp
               (Option.map₂ (fun x y : ℝ => x - y)
                 (maskedScore qStart Q K scale i
-                  (FA1Math.blockIndex Bk numKVBlocks k h jLocal))
+                  (StreamingAccumulator.blockIndex Bk numKVBlocks k h jLocal))
                 (mPartial Bk qStart Q numKVBlocks K scale (k + 1) i))).unbotD 0)
       else
         lPartial Bk qStart Q numKVBlocks K scale k i
@@ -152,7 +153,7 @@ noncomputable def oPartial {M D : Nat} (Bk : Nat)
               (mPartial Bk qStart Q numKVBlocks K scale (k + 1) idx.1))).unbotD 0
         alpha * oPartial Bk qStart Q numKVBlocks K V scale k idx +
           (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
-            let j := FA1Math.blockIndex Bk numKVBlocks k h jLocal
+            let j := StreamingAccumulator.blockIndex Bk numKVBlocks k h jLocal
             (WithBot.realExp
               (Option.map₂ (fun x y : ℝ => x - y)
                 (maskedScore qStart Q K scale idx.1 j)
@@ -171,7 +172,7 @@ theorem mPartial_succ_of_lt {M D Bk : Nat}
       max (mPartial Bk qStart Q numKVBlocks K scale k i)
         ((Finset.univ : Finset (Fin Bk)).sup fun jLocal =>
           maskedScore qStart Q K scale i
-            (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal)) := by
+            (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal)) := by
   conv_lhs => rw [mPartial]
   rw [dif_pos (Nat.succ_le_iff.mpr hk)]
 
@@ -192,7 +193,7 @@ theorem lPartial_succ_of_lt {M D Bk : Nat}
           (WithBot.realExp
             (Option.map₂ (fun x y : ℝ => x - y)
               (maskedScore qStart Q K scale i
-                (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal))
+                (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal))
               (mPartial Bk qStart Q numKVBlocks K scale (k + 1) i))).unbotD 0) := by
   conv_lhs => rw [lPartial]
   rw [dif_pos (Nat.succ_le_iff.mpr hk)]
@@ -211,7 +212,7 @@ theorem oPartial_succ_of_lt {M D Bk : Nat}
             (mPartial Bk qStart Q numKVBlocks K scale (k + 1) idx.1))).unbotD 0
       alpha * oPartial Bk qStart Q numKVBlocks K V scale k idx +
         (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
-          let j := FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal
+          let j := StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) jLocal
           (WithBot.realExp
             (Option.map₂ (fun x y : ℝ => x - y)
               (maskedScore qStart Q K scale idx.1 j)
@@ -222,7 +223,7 @@ theorem oPartial_succ_of_lt {M D Bk : Nat}
 
 /-! ### Causal m-free reference sums
 
-These are the causal counterparts of `FA1Math.lFree` / `FA1Math.oFree`.
+These are the causal counterparts of `StreamingAccumulator.lFree` / `StreamingAccumulator.oFree`.
 They keep the causal mask in the unshifted reference form, so the final
 streaming ratio can be compared directly with `attentionRealCausalBlock`.
 -/
@@ -234,9 +235,9 @@ noncomputable def lFree {M D Bk N : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [Bk * N, D] → ℝ)
     (scale : ℝ) (k : Nat) (hk : k ≤ N) (i : Fin M) : ℝ :=
   Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
-    let j := FA1Math.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
+    let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
     if j.val ≤ qStart + i.val then
-      Real.exp (FA1Math.scaledScore Q K scale i j)
+      Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
     else
       0))
 
@@ -247,9 +248,9 @@ noncomputable def oFree {M D Bk N : Nat}
     (scale : ℝ) (k : Nat) (hk : k ≤ N)
     (idx : TileIndex [M, D]) : ℝ :=
   Finset.univ.sum (fun n : Fin k => Finset.univ.sum (fun jL : Fin Bk =>
-    let j := FA1Math.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
+    let j := StreamingAccumulator.blockIndex Bk N n.val (Nat.lt_of_lt_of_le n.isLt hk) jL
     (if j.val ≤ qStart + idx.1.val then
-      Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+      Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
     else
       0) * V (j, idx.2.1, PUnit.unit)))
 
@@ -277,9 +278,9 @@ theorem lFree_succ {M D Bk N : Nat}
     lFree qStart Q K scale (k + 1) hk i =
       lFree qStart Q K scale k (Nat.le_of_succ_le hk) i +
       Finset.univ.sum (fun jL : Fin Bk =>
-        let j := FA1Math.blockIndex Bk N k hk jL
+        let j := StreamingAccumulator.blockIndex Bk N k hk jL
         if j.val ≤ qStart + i.val then
-          Real.exp (FA1Math.scaledScore Q K scale i j)
+          Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
         else
           0) := by
   unfold lFree
@@ -295,9 +296,9 @@ theorem oFree_succ {M D Bk N : Nat}
     oFree qStart Q K V scale (k + 1) hk idx =
       oFree qStart Q K V scale k (Nat.le_of_succ_le hk) idx +
       Finset.univ.sum (fun jL : Fin Bk =>
-        let j := FA1Math.blockIndex Bk N k hk jL
+        let j := StreamingAccumulator.blockIndex Bk N k hk jL
         (if j.val ≤ qStart + idx.1.val then
-          Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+          Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
         else
           0) * V (j, idx.2.1, PUnit.unit)) := by
   unfold oFree
@@ -312,15 +313,15 @@ theorem lFree_eq_flat {M D Bk N : Nat}
     lFree qStart Q K scale N (le_refl N) i =
       Finset.univ.sum (fun j : Fin (Bk * N) =>
         if j.val ≤ qStart + i.val then
-          Real.exp (FA1Math.scaledScore Q K scale i j)
+          Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
         else
           0) := by
   unfold lFree
   rw [← Finset.sum_product', Finset.univ_product_univ]
-  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk N) ?_ ?_).symm
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk N) ?_ ?_).symm
   · intro _; simp
   · intro j _
-    rw [FA1Math.blockIndex_blockIndexEquiv]
+    rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
 
 /-- Flat form of the final causal output accumulator. -/
 theorem oFree_eq_flat {M D Bk N : Nat}
@@ -330,15 +331,15 @@ theorem oFree_eq_flat {M D Bk N : Nat}
     oFree qStart Q K V scale N (le_refl N) idx =
       Finset.univ.sum (fun j : Fin (Bk * N) =>
         (if j.val ≤ qStart + idx.1.val then
-          Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+          Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
         else
           0) * V (j, idx.2.1, PUnit.unit)) := by
   unfold oFree
   rw [← Finset.sum_product', Finset.univ_product_univ]
-  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk N) ?_ ?_).symm
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk N) ?_ ?_).symm
   · intro _; simp
   · intro j _
-    rw [FA1Math.blockIndex_blockIndexEquiv]
+    rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
 
 /-- For causal streaming, `mPartial (k+1) i` is non-`⊥` whenever there
 is at least one block (`hBk : 0 < Bk`) and at least one iteration
@@ -355,12 +356,12 @@ theorem mPartial_succ_ne_bot {M D Bk : Nat} (hBk : 0 < Bk)
   | zero =>
       rw [mPartial_succ_of_lt qStart Q numKVBlocks K scale 0
             (Nat.lt_of_succ_le hk) i]
-      have hVis : (FA1Math.blockIndex Bk numKVBlocks 0
+      have hVis : (StreamingAccumulator.blockIndex Bk numKVBlocks 0
               (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) (⟨0, hBk⟩ : Fin Bk)).val
               ≤ qStart + i.val := by
-        simp [FA1Math.blockIndex]
+        simp [StreamingAccumulator.blockIndex]
       have h0 : maskedScore qStart Q K scale i
-              (FA1Math.blockIndex Bk numKVBlocks 0
+              (StreamingAccumulator.blockIndex Bk numKVBlocks 0
                 (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk))
                 (⟨0, hBk⟩ : Fin Bk)) ≠ ⊥ := by
         rw [maskedScore_of_le qStart Q K scale i _ hVis]
@@ -415,22 +416,22 @@ theorem lPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
             (WithBot.realExp
               (Option.map₂ (fun x y : ℝ => x - y)
                 (maskedScore qStart Q K scale i
-                  (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal))
+                  (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal))
                 (mPartial Bk qStart Q numKVBlocks K scale (k + 1) i))).unbotD 0)
           =
           Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale (k + 1) i).unbotD 0) *
             (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
-              let j := FA1Math.blockIndex Bk numKVBlocks k hk jLocal
+              let j := StreamingAccumulator.blockIndex Bk numKVBlocks k hk jLocal
               if j.val ≤ qStart + i.val then
-                Real.exp (FA1Math.scaledScore Q K scale i j)
+                Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
               else
                 0) := by
         rw [Finset.mul_sum]
         apply Finset.sum_congr rfl
         intro jLocal _
-        let j := FA1Math.blockIndex Bk numKVBlocks k hk jLocal
+        let j := StreamingAccumulator.blockIndex Bk numKVBlocks k hk jLocal
         have hjEq :
-            FA1Math.blockIndex Bk numKVBlocks k
+            StreamingAccumulator.blockIndex Bk numKVBlocks k
               (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal = j := by
           rfl
         rw [hjEq]
@@ -440,7 +441,7 @@ theorem lPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
             (mPartial_succ_ne_bot hBk qStart Q numKVBlocks K scale k hk i)
           rw [← hm]
           simp [hvis]
-          rw [show FA1Math.scaledScore Q K scale i j - m = -m + FA1Math.scaledScore Q K scale i j by ring,
+          rw [show StreamingAccumulator.scaledScore Q K scale i j - m = -m + StreamingAccumulator.scaledScore Q K scale i j by ring,
               Real.exp_add]
         · rw [maskedScore_of_not_le qStart Q K scale i j hvis]
           simp [hvis]
@@ -511,7 +512,7 @@ theorem oPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
             Real.exp_add]
       have hSumB :
           (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
-            let j := FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal
+            let j := StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal
             (WithBot.realExp
               (Option.map₂ (fun x y : ℝ => x - y)
                 (maskedScore qStart Q K scale idx.1 j)
@@ -520,17 +521,17 @@ theorem oPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
           =
           Real.exp (-(mPartial Bk qStart Q numKVBlocks K scale (k + 1) idx.1).unbotD 0) *
             (Finset.univ : Finset (Fin Bk)).sum (fun jLocal =>
-              let j := FA1Math.blockIndex Bk numKVBlocks k hk jLocal
+              let j := StreamingAccumulator.blockIndex Bk numKVBlocks k hk jLocal
               (if j.val ≤ qStart + idx.1.val then
-                Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+                Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
               else
                 0) * V (j, idx.2.1, PUnit.unit)) := by
         rw [Finset.mul_sum]
         apply Finset.sum_congr rfl
         intro jLocal _
-        let j := FA1Math.blockIndex Bk numKVBlocks k hk jLocal
+        let j := StreamingAccumulator.blockIndex Bk numKVBlocks k hk jLocal
         have hjEq :
-            FA1Math.blockIndex Bk numKVBlocks k
+            StreamingAccumulator.blockIndex Bk numKVBlocks k
               (Nat.succ_le_iff.mpr (Nat.lt_of_succ_le hk)) jLocal = j := by
           rfl
         rw [hjEq]
@@ -541,8 +542,8 @@ theorem oPartial_eq_mShifted {M D Bk : Nat} (hBk : 0 < Bk)
             (mPartial_succ_ne_bot hBk qStart Q numKVBlocks K scale k hk idx.1)
           rw [← hm]
           simp [hvis]
-          rw [show FA1Math.scaledScore Q K scale idx.1 j - m =
-                -m + FA1Math.scaledScore Q K scale idx.1 j by ring,
+          rw [show StreamingAccumulator.scaledScore Q K scale idx.1 j - m =
+                -m + StreamingAccumulator.scaledScore Q K scale idx.1 j by ring,
               Real.exp_add]
           ring
         · rw [maskedScore_of_not_le qStart Q K scale idx.1 j hvis]
@@ -680,18 +681,18 @@ theorem block_scoresRaw_tile_eq {M D Bk N : Nat}
       (Tile.dot [] (Tile.ofReal Q)
         (Tile.transpose [] (Tile.ofReal
           (fun idx : TileIndex [Bk, D] =>
-            K (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.1,
+            K (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.1,
               idx.2.1, PUnit.unit)))))
       (Tile.scalar ((scale : ℝ) : WithBot ℝ))
     = Tile.ofReal (fun idx : TileIndex [M, Bk] =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)) := by
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)) := by
   ext idx
   obtain ⟨i, j, _⟩ := idx
   simp only [Tile.bop, Tile.scalar, Tile.ofReal_data,
     Broadcast.leftIndex, Broadcast.rightIndex,
     NumericDType.mul]
-  exact FA1Math.block_scaled_data_eq Q K scale n hn i j
+  exact StreamingAccumulator.block_scaled_data_eq Q K scale n hn i j
 
 /-- The causal mask tile `offs_m[:, None] >= offs_n[None, :]` evaluates
 to the `decide` predicate `(n * Bk + j) ≤ (qb * M + i)` at position
@@ -722,17 +723,17 @@ theorem block_scores_tile_eq {M D Bk N : Nat}
       (⟨fun idx : TileIndex [M, Bk] =>
         decide ((n * Bk + idx.2.1.val) ≤ (qb * M + idx.1.val))⟩ : Tile .bool [M, Bk])
       (Tile.ofReal (fun idx : TileIndex [M, Bk] =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)))
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)))
       (⟨fun _ : TileIndex [M, Bk] => (none : WithBot ℝ)⟩ : Tile .real [M, Bk])
     = ⟨fun idx : TileIndex [M, Bk] =>
         maskedScore (qb * M) Q K scale idx.1
-          (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)⟩ := by
+          (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)⟩ := by
   ext idx
   obtain ⟨i, j, u⟩ := idx
   simp only [Tile.select_data, Tile.ofReal_data]
-  have hIdx : (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j).val
-            = n * Bk + j.val := by simp [FA1Math.blockIndex]
+  have hIdx : (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j).val
+            = n * Bk + j.val := by simp [StreamingAccumulator.blockIndex]
   by_cases h_mask : n * Bk + j.val ≤ qb * M + i.val
   · rw [decide_eq_true h_mask]
     simp only [if_true]
@@ -740,7 +741,7 @@ theorem block_scores_tile_eq {M D Bk N : Nat}
     rfl
   · rw [decide_eq_false h_mask]
     show (none : WithBot ℝ) = maskedScore (qb * M) Q K scale i
-        (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j)
+        (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) j)
     rw [maskedScore_of_not_le (qb * M) Q K scale i _ (by rw [hIdx]; exact h_mask)]
     rfl
 
@@ -754,11 +755,11 @@ theorem block_mBlock_tile_eq {M D Bk N : Nat} (hBk : 0 < Bk)
     Tile.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
       ⟨fun idx : TileIndex [M, Bk] =>
         maskedScore (qb * M) Q K scale idx.1
-          (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)⟩
+          (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) idx.2.1)⟩
     = some ⟨fun idx : TileIndex [M] =>
         (Finset.univ : Finset (Fin Bk)).sup
           (fun jLocal => maskedScore (qb * M) Q K scale idx.1
-            (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) jLocal))⟩ := by
+            (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) jLocal))⟩ := by
   unfold Tile.reduceMax
   simp [Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
     TileShape.insertAxisIndex, hBk]
@@ -778,7 +779,7 @@ theorem block_mNew_tile_eq {M D Bk N : Nat}
       (⟨fun idx : TileIndex [M] =>
         (Finset.univ : Finset (Fin Bk)).sup
           (fun jLocal => maskedScore (qb * M) Q K scale idx.1
-            (FA1Math.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) jLocal))⟩ : Tile .real [M])
+            (StreamingAccumulator.blockIndex Bk N n (Nat.succ_le_iff.mpr hn) jLocal))⟩ : Tile .real [M])
     = ⟨fun idx : TileIndex [M] =>
         mPartial Bk (qb * M) Q N K scale (n + 1) idx.1⟩ := by
   ext idx
@@ -788,7 +789,7 @@ theorem block_mNew_tile_eq {M D Bk N : Nat}
 
 /-- Causal `α` multiplier — the unbotted real payload of
 `exp(mPartial(k) - mPartial(k+1))`. Same role as
-`FA1Math.alphaPartial`, but for the causal streaming. -/
+`StreamingAccumulator.alphaPartial`, but for the causal streaming. -/
 noncomputable def alphaCausal {M D Bk : Nat}
     (qStart : Nat)
     (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
@@ -817,7 +818,7 @@ theorem block_lNew_tile_eq {M D Bk N : Nat}
           (WithBot.realExp
             (Option.map₂ (fun x y : ℝ => x - y)
               (maskedScore qStart Q K scale idx.1
-                (FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) jLocal))
+                (StreamingAccumulator.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) jLocal))
               (mPartial Bk qStart Q N K scale (k + 1) idx.1))).unbotD 0))
       =
       Tile.ofReal (fun idx : TileIndex [M] =>
@@ -857,7 +858,7 @@ theorem block_oAcc_tile_eq {M D Bk N : Nat}
           oPartial Bk qStart Q N K V scale k idx))
       (Tile.ofReal fun idx : TileIndex [M, D] =>
         Finset.univ.sum (fun jLocal : Fin Bk =>
-          let j := FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) jLocal
+          let j := StreamingAccumulator.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) jLocal
           (WithBot.realExp
             (Option.map₂ (fun x y : ℝ => x - y)
               (maskedScore qStart Q K scale idx.1 j)
@@ -887,23 +888,23 @@ theorem kernelIfSup_eq_maskedScoreSup {M D Bk N : Nat}
           some
             ((∑ x_1 : Fin D,
               Q (i, x_1, PUnit.unit) *
-                K (FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x, x_1, PUnit.unit)) * scale)
+                K (StreamingAccumulator.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x, x_1, PUnit.unit)) * scale)
         else none : WithBot ℝ))) =
     ((Finset.univ : Finset (Fin Bk)).sup
       (fun x : Fin Bk =>
         maskedScore (qb * M) Q K scale i
-          (FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x))) := by
+          (StreamingAccumulator.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x))) := by
   apply Finset.sup_congr rfl
   intro x _
   by_cases h_mask : k * Bk + x.val ≤ qb * M + i.val
   · rw [maskedScore_of_le (qb * M) Q K scale i _
-        (by simp [FA1Math.blockIndex]; exact h_mask)]
+        (by simp [StreamingAccumulator.blockIndex]; exact h_mask)]
     rw [if_pos h_mask]
-    unfold FA1Math.scaledScore
+    unfold StreamingAccumulator.scaledScore
     ring_nf
     rfl
   · rw [maskedScore_of_not_le (qb * M) Q K scale i _
-        (by simp [FA1Math.blockIndex]; omega)]
+        (by simp [StreamingAccumulator.blockIndex]; omega)]
     simp [h_mask]
     rfl
 
@@ -921,7 +922,7 @@ theorem mPartial_succ_kernelForm {M D Bk N : Nat}
             some
               ((∑ x_1 : Fin D,
                 Q (i, x_1, PUnit.unit) *
-                  K (FA1Math.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x, x_1, PUnit.unit)) * scale)
+                  K (StreamingAccumulator.blockIndex Bk N k (Nat.succ_le_iff.mpr hk) x, x_1, PUnit.unit)) * scale)
           else none : WithBot ℝ))) =
     mPartial Bk (qb * M) Q N K scale (k + 1) i := by
   rw [kernelIfSup_eq_maskedScoreSup Q K scale qb k hk i,
@@ -956,13 +957,13 @@ def P_fa1
   s.regs .real [M, D] "q" = some (Tile.ofReal Q) ∧
   -- Streaming accumulators at iteration `k`.
   s.regs .real [M] "m_i" = some
-      ⟨fun idx : TileIndex [M] => FA1Math.mPartial Bk Q numKVBlocks K scale k idx.1⟩ ∧
+      ⟨fun idx : TileIndex [M] => StreamingAccumulator.mPartial Bk Q numKVBlocks K scale k idx.1⟩ ∧
   s.regs .real [M] "l_i" = some
       (Tile.ofReal fun idx : TileIndex [M] =>
-        FA1Math.lPartial Q numKVBlocks K scale k idx.1) ∧
+        StreamingAccumulator.lPartial Q numKVBlocks K scale k idx.1) ∧
   s.regs .real [M, D] "o_acc" = some
       (Tile.ofReal fun idx : TileIndex [M, D] =>
-        FA1Math.oPartial Q numKVBlocks K V scale k idx) ∧
+        StreamingAccumulator.oPartial Q numKVBlocks K V scale k idx) ∧
   -- Input regions still loaded as the user's hypothesis says.
   InputAt s qReg
       (Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D) Q ∧
@@ -1022,13 +1023,13 @@ def P_fa1_strided
   s.regs .real [M, D] "q" = some (Tile.ofReal Q) ∧
   -- Streaming accumulators at iter k.
   s.regs .real [M] "m_i" = some
-      ⟨fun idx : TileIndex [M] => FA1Math.mPartial Bk Q numKVBlocks K scale k idx.1⟩ ∧
+      ⟨fun idx : TileIndex [M] => StreamingAccumulator.mPartial Bk Q numKVBlocks K scale k idx.1⟩ ∧
   s.regs .real [M] "l_i" = some
       (Tile.ofReal fun idx : TileIndex [M] =>
-        FA1Math.lPartial Q numKVBlocks K scale k idx.1) ∧
+        StreamingAccumulator.lPartial Q numKVBlocks K scale k idx.1) ∧
   s.regs .real [M, D] "o_acc" = some
       (Tile.ofReal fun idx : TileIndex [M, D] =>
-        FA1Math.oPartial Q numKVBlocks K V scale k idx) ∧
+        StreamingAccumulator.oPartial Q numKVBlocks K V scale k idx) ∧
   -- Input regions still loaded under the strided addressing.
   InputAt s qReg
       (fun idx : TileIndex [M, D] =>
@@ -1359,11 +1360,8 @@ theorem attentionReal_row_eq {M1 M2 S D : Nat}
     (hRow : ∀ d' : Fin D, Q1 (i1, d', PUnit.unit) = Q2 (i2, d', PUnit.unit)) :
     attentionReal Q1 K V scale (i1, d, PUnit.unit)
       = attentionReal Q2 K V scale (i2, d, PUnit.unit) := by
-  unfold attentionReal
-  congr 1
-  apply attention_data_row_eq
-  intro d'
-  simp only [Tile.ofReal_data, hRow d']
+  unfold attentionReal VeriTile.Triton.attentionReal VeriTile.Triton.scaledScore
+  simp [hRow]
 
 /-- Bridge: the slice-form `attentionReal` produced by FA-1's strided
 kernel equals the `attentionReal4D` spec at the corresponding 4D

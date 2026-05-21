@@ -158,7 +158,7 @@ theorem attn_fwd_causal_final_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, attn_fwd_causal_final_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
         offZ, offH, mIndex, kIndex, active, accOffset, outOffset,

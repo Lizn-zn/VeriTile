@@ -213,7 +213,7 @@ theorem kldiv_backward_default_correct
         else s.readMem input_ptr (outOffset s input_stride i) := by
   intro i
   have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
-  simp [exec, kldiv_backward_default, stepStmts, stepStmt, evalOp,
+  simp [exec, kldiv_backward_default, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt, hBS, hBSne, hLenPos, hLen,
@@ -221,8 +221,10 @@ theorem kldiv_backward_default_correct
         stepForRangeAux.step_ge, Nat.zero_add] at hExec
   rw [← hExec]
   simp only [outOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
         (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   by_cases h : i.val < n_cols
   · simp [defaultSpec, inOffset, h]
   · simp [h]
@@ -246,7 +248,7 @@ theorem kldiv_backward_log_target_correct
         else s.readMem input_ptr (outOffset s input_stride i) := by
   intro i
   have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
-  simp [exec, kldiv_backward_log_target, stepStmts, stepStmt, evalOp,
+  simp [exec, kldiv_backward_log_target, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt, hBS, hBSne, hLenPos, hLen,
@@ -254,8 +256,10 @@ theorem kldiv_backward_log_target_correct
         stepForRangeAux.step_ge, Nat.zero_add] at hExec
   rw [← hExec]
   simp only [outOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
         (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   by_cases h : i.val < n_cols
   · simp [logTargetSpec, inOffset, h]
   · simp [h]
@@ -338,7 +342,7 @@ theorem kldiv_forward_default_none_correct
         else s.readMem loss_ptr (outOffset s loss_stride i) := by
   intro i
   have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
-  simp [exec, kldiv_forward_default_none, stepStmts, stepStmt, evalOp,
+  simp [exec, kldiv_forward_default_none, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt, hBS, hBSne, hLenPos, hLen,
@@ -346,10 +350,13 @@ theorem kldiv_forward_default_none_correct
         stepForRangeAux.step_ge, Nat.zero_add] at hExec
   rw [← hExec]
   simp only [outOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
         (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   by_cases h : i.val < n_cols
-  · simp [forwardDefaultSpec, inOffset, h]
+  · rw [← Int.natCast_mul, Int.toNat_natCast]
+    simp [forwardDefaultSpec, inOffset, h]
   · simp [h]
 
 /-- Compute-facing correctness for the forward `log_target=False`,
@@ -405,7 +412,7 @@ theorem kldiv_forward_log_target_none_correct
         else s.readMem loss_ptr (outOffset s loss_stride i) := by
   intro i
   have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
-  simp [exec, kldiv_forward_log_target_none, stepStmts, stepStmt, evalOp,
+  simp [exec, kldiv_forward_log_target_none, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt, hBS, hBSne, hLenPos, hLen,
@@ -413,10 +420,13 @@ theorem kldiv_forward_log_target_none_correct
         stepForRangeAux.step_ge, Nat.zero_add] at hExec
   rw [← hExec]
   simp only [outOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
         (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   by_cases h : i.val < n_cols
-  · simp [forwardLogTargetSpec, inOffset, h]
+  · rw [← Int.natCast_mul, Int.toNat_natCast]
+    simp [forwardLogTargetSpec, inOffset, h]
   · simp [h]
 
 /-- Compute-facing correctness for the forward log-target kernel under the

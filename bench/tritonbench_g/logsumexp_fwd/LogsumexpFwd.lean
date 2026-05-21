@@ -122,13 +122,14 @@ private theorem logsumexp_fwd_kernel_correct_full
       s.readMem x (s.pids 0 * D + (s.pids 1 * (n+1) + ↑i)) = rm i := fun _ => rfl
   rcases h_HAS_SCALE : HAS_SCALE with _ | _
   · -- HAS_SCALE = false
-    simp [exec, logsumexp_fwd_kernel, stepStmts, stepStmt, evalOp,
+    simp [exec, logsumexp_fwd_kernel, stepStmts, stepStmt, evalOp.eq_def,
       Tile.bop, Tile.uop, Tile.cop, Tile.reduceSum, Tile.reduceSumDrop,
       Tile.reduceMax, Tile.reduceMaxDrop,
       TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
       NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
       ComparableDType.lt]
-    simp only [h_fold]
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast, Int.ofNat_lt, if_true, h_fold]
     erw [sup'_masked_eq h_ne h_filter rm, sum_exp_masked_eq rm]
     simp only [WithBot.realLog_coe]
     erw [Option.map₂_coe_coe, WithBot.unbotD_coe]
@@ -158,13 +159,14 @@ private theorem logsumexp_fwd_kernel_correct_full
     -- rm i = xs ⟨...⟩: rm is transparent so exact closes via def-eq
     exact h_rm i hi
   · -- HAS_SCALE = true
-    simp [exec, logsumexp_fwd_kernel, stepStmts, stepStmt, evalOp,
+    simp [exec, logsumexp_fwd_kernel, stepStmts, stepStmt, evalOp.eq_def,
       Tile.bop, Tile.uop, Tile.cop, Tile.reduceSum, Tile.reduceSumDrop,
       Tile.reduceMax, Tile.reduceMaxDrop,
       TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
       NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
       ComparableDType.lt]
-    simp only [h_fold]
+    simp only [← Int.natCast_one, ← Int.natCast_add, ← Int.natCast_mul,
+      ← Int.natCast_ediv, Int.toNat_natCast, Int.ofNat_lt, if_true, h_fold]
     erw [sup'_masked_map_eq h_ne h_filter rm (· * scale),
          sum_exp_masked_map_eq rm (· * scale)]
     simp only [WithBot.realLog_coe]

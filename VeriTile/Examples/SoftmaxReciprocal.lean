@@ -62,6 +62,12 @@ theorem softmax_recip_correct
         Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableRecipSpec, tileMax]
+  repeat unfold evalOp
+  simp [observeAt, exec, softmaxRecipKernel, stepStmts, stepStmt,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableRecipSpec, tileMax]
   unfold InputLoadedAt at _h_x
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
   simp [_h_x]

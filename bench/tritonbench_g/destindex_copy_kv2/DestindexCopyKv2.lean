@@ -88,7 +88,7 @@ theorem fwd_kernel_destindex_copy_kv_correct
           else
             s.readMem Out (outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)) := by
   intro idx
-  simp [exec, fwd_kernel_destindex_copy_kv, stepStmts, stepStmt, evalOp,
+  simp [exec, fwd_kernel_destindex_copy_kv, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         BlockState.readMemValue, Option.bind, Option.map,

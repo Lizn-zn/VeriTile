@@ -9,6 +9,7 @@ open VeriTile.Triton
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Faithful DSL port of `rotary_transform.py`'s `rotary_kernel`.
 
@@ -322,7 +323,7 @@ theorem rotary_kernel_o0_row_correct
     cases hab
     rfl
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rotary_kernel_o0_row, stepStmts, stepStmt, evalOp,
+  · simp [exec, rotary_kernel_o0_row, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -496,7 +497,7 @@ theorem rotary_kernel_o1_row_correct
     cases hab
     rfl
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rotary_kernel_o1_row, stepStmts, stepStmt, evalOp,
+  · simp [exec, rotary_kernel_o1_row, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -662,7 +663,7 @@ theorem rotary_kernel_o0o1_row_o0_correct
     have hGe : k.1.val + rotary_dim_half ≥ rotary_dim_half := Nat.le_add_left _ _
     omega
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rotary_kernel_o0o1_row, stepStmts, stepStmt, evalOp,
+  · simp [exec, rotary_kernel_o0o1_row, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -758,7 +759,7 @@ theorem rotary_kernel_o0o1_row_o1_correct
       Nat.lt_of_lt_of_le k.1.isLt hHalfBound
     omega
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rotary_kernel_o0o1_row, stepStmts, stepStmt, evalOp,
+  · simp [exec, rotary_kernel_o0o1_row, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -789,5 +790,56 @@ theorem rotary_kernel_o0o1_row_o1_correct
       · simp [active, rowIndex, dimIndex, hRow, hDim]
     · simp [active, rowIndex, dimIndex, hRow]
   · exact False.elim (hBH (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-! ## Python test-shape surface wrappers -/
+
+/-- Python case 1 full surface lowering: fixed sequence length,
+scalar offset, non-interleaved, non-conjugate. The wrapper applies the
+Python scalar-offset normalization `seqlen_offsets += seqlen`, hence
+`SEQLEN_OFFSETS_SCALAR = 128`. -/
+theorem rotary_transform_python_case1_surface_toAlgorithm_supported
+    (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat) :
+    ∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      128 128 4 32 128 1 32768 256 64 1 32768 256 64 1 32 8
+      Bool.false Bool.false Bool.false Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact rotary_kernel_surface_toAlgorithm_supported OUT X COS SIN
+    CU_SEQLENS SEQLEN_OFFSETS 128 128 4 32 128 1 32768 256 64 1
+    32768 256 64 1 32 8 Bool.false Bool.false Bool.false Bool.false
+
+/-- Python case 2 full surface lowering: varlen + interleaved path. -/
+theorem rotary_transform_python_case2_surface_toAlgorithm_supported
+    (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat) :
+    ∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      128 128 4 32 128 1 0 256 64 1 0 256 64 1 32 4
+      Bool.false Bool.true Bool.true Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact rotary_kernel_surface_toAlgorithm_supported OUT X COS SIN
+    CU_SEQLENS SEQLEN_OFFSETS 128 128 4 32 128 1 0 256 64 1
+    0 256 64 1 32 4 Bool.false Bool.true Bool.true Bool.false
+
+/-- Python case 3 full surface lowering: conjugate branch. -/
+theorem rotary_transform_python_case3_surface_toAlgorithm_supported
+    (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat) :
+    ∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      128 128 4 32 128 1 32768 256 64 1 32768 256 64 1 32 8
+      Bool.false Bool.false Bool.false Bool.true).toAlgorithm? =
+        Except.ok alg := by
+  exact rotary_kernel_surface_toAlgorithm_supported OUT X COS SIN
+    CU_SEQLENS SEQLEN_OFFSETS 128 128 4 32 128 1 32768 256 64 1
+    32768 256 64 1 32 8 Bool.false Bool.false Bool.false Bool.true
+
+/-- Python case 4 full surface lowering: inplace branch. At kernel level the
+observed strides match case 1; aliasing of `OUT = X` is a launch-level fact, so
+the surface wrapper preserves the same pointer layout. -/
+theorem rotary_transform_python_case4_surface_toAlgorithm_supported
+    (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat) :
+    ∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      128 128 4 32 128 1 32768 256 64 1 32768 256 64 1 32 8
+      Bool.false Bool.false Bool.false Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact rotary_kernel_surface_toAlgorithm_supported OUT X COS SIN
+    CU_SEQLENS SEQLEN_OFFSETS 128 128 4 32 128 1 32768 256 64 1
+    32768 256 64 1 32 8 Bool.false Bool.false Bool.false Bool.false
 
 end VeriTile.Bench.TritonBenchG.RotaryTransform

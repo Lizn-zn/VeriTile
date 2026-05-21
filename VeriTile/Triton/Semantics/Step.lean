@@ -542,6 +542,13 @@ theorem stepStmt_atomicAdd_lift_regs {dtype : TileDType} (hnum : NumericDType dt
     s'.regs dtype' shape' name = some t := by
   rw [stepStmt_atomicAdd_regs hnum h]; exact hPre
 
+theorem stepStmt_assign_eq_some
+    {dtype : TileDType} {shape : TileShape} {name : RegName}
+    {e : Op dtype shape} {s : BlockState} {v : Tile dtype shape}
+    (h : evalOp e s = some v) :
+    stepStmt (.assign dtype shape name e) s = some (s.setReg name dtype shape v) := by
+  simp [stepStmt, h]
+
 mutual
 
 theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
@@ -902,8 +909,7 @@ example : evalOp (.programId 0) default = some (Tile.scalar 0) := by
 
 example : evalOp (.add .nat .nil (.constNat 2) (.constNat 3)) default
     = some (Tile.scalar 5) := by
-  unfold evalOp Tile.bop NumericDType.add
-  rfl
+  simp [evalOp, Tile.bop, NumericDType.add]
 
 
 

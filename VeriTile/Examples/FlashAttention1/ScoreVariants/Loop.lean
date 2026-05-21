@@ -5,6 +5,8 @@ Generic operational loop invariant proofs for score-variant FA-1 kernels.
 -/
 
 import VeriTile.Examples.FlashAttention1.ScoreVariants.Block
+import VeriTile.Examples.FlashAttention1.Core.Bodies
+import VeriTile.Triton.Memory.View
 
 namespace VeriTile.Examples
 
@@ -18,6 +20,26 @@ FA-1 kernels. It mirrors `P_fa1`, but the running accumulator slots are driven
 by an explicit `score` function and `visible` predicate instead of being tied
 to bare scaled dot-product scores.
 -/
+
+private theorem option_map_mul_right_eq_map₂ (x : WithBot ℝ) (a : ℝ) :
+    Option.map (fun b => b * a) x =
+      Option.map₂ (fun x y => x * y) x (((a : ℝ) : WithBot ℝ)) := by
+  cases x <;> rfl
+
+private theorem option_map_mul_left_eq_map₂ (a : ℝ) (x : WithBot ℝ) :
+    Option.map (fun b => a * b) x =
+      Option.map₂ (fun x y => x * y) (((a : ℝ) : WithBot ℝ)) x := by
+  cases x <;> rfl
+
+private theorem option_map_div_right_eq_map₂ (x : WithBot ℝ) (a : ℝ) :
+    Option.map (fun b => b / a) x =
+      Option.map₂ (fun x y => x / y) x (((a : ℝ) : WithBot ℝ)) := by
+  cases x <;> rfl
+
+private theorem option_map_sub_left_eq_map₂ (a : ℝ) (x : WithBot ℝ) :
+    Option.map (fun b => a - b) x =
+      Option.map₂ (fun x y => x - y) (((a : ℝ) : WithBot ℝ)) x := by
+  cases x <;> rfl
 
 def fa1ScorePreLoop (qReg : RegionName) (M D : Nat) : List Stmt :=
   [ Stmt.assign .nat [] "pid" (Op.programId 0)
@@ -851,13 +873,151 @@ theorem fa1_score_loop_loadBlock_correct
   let s4 := s3.setReg "k" .real [Bk, D] kTile
   let sLoad := s4.setReg "v" .real [Bk, D] vTile
   refine ⟨sLoad, ?_, ?_⟩
-  · simp [fa1ScoreLoopLoadBlock, stepStmts, stepStmt, evalOp, Tile.bop,
-      Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
-      NumericDType.mul, Option.bind, hoffs_d,
-      offsN, ptrs, kTile, vTile, s0, s1, s2, s3, s4, sLoad]
-    rw [fa1_score_block_mem_load_tile_eq kReg s K hK k hk]
-    rw [fa1_score_block_mem_load_tile_eq vReg s V hV k hk]
-    simp [Tile.vec]
+  · have hKmem :
+        (⟨fun idx : TileIndex [Bk, D] =>
+          some (s.readMem kReg ((k * Bk + idx.1.val) * D + idx.2.1.val))⟩ :
+            Tile .real [Bk, D]) = kTile := by
+      simpa [kTile] using fa1_score_block_mem_load_tile_eq kReg s K hK k hk
+    have hVmem :
+        (⟨fun idx : TileIndex [Bk, D] =>
+          some (s.readMem vReg ((k * Bk + idx.1.val) * D + idx.2.1.val))⟩ :
+            Tile .real [Bk, D]) = vTile := by
+      simpa [vTile] using fa1_score_block_mem_load_tile_eq vReg s V hV k hk
+    have hOffsNReg : s1.regs .nat [Bk] "offs_n" = some offsN := by
+      simp [s1, s0, offsN, BlockState.setReg]
+    have hOffsDReg : s1.regs .nat [D] "offs_d" = some (Tile.vec fun d : Fin D => d.val) := by
+      simp [s1, s0, BlockState.setReg, hoffs_d]
+    have hKPtrsEval :
+        evalOp
+          (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+              (Op.constNat D))
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))) s1 =
+          some ptrs := by
+      simp only [evalOp_add, evalOp_mul, evalOp_constNat, Option.bind_eq_bind,
+        Option.bind_some]
+      rw [evalOp_expandDim_one_nat, hOffsNReg]
+      simp only [Option.bind_some]
+      rw [evalOp_expandDim_zero_nat, hOffsDReg]
+      simp [ptrs, offsN, Tile.bop, NumericDType.add, NumericDType.mul]
+    have hOffsNReg2 : s2.regs .nat [Bk] "offs_n" = some offsN := by
+      simp [s2, s1, s0, offsN, BlockState.setReg]
+    have hOffsDReg2 : s2.regs .nat [D] "offs_d" = some (Tile.vec fun d : Fin D => d.val) := by
+      simp [s2, s1, s0, BlockState.setReg, hoffs_d]
+    have hVPtrsEval :
+        evalOp
+          (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+              (Op.constNat D))
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))) s2 =
+          some ptrs := by
+      simp only [evalOp_add, evalOp_mul, evalOp_constNat, Option.bind_eq_bind,
+        Option.bind_some]
+      rw [evalOp_expandDim_one_nat, hOffsNReg2]
+      simp only [Option.bind_some]
+      rw [evalOp_expandDim_zero_nat, hOffsDReg2]
+      simp [ptrs, offsN, Tile.bop, NumericDType.add, NumericDType.mul]
+    have h1 :
+        stepStmt
+          (Stmt.assign .nat [Bk] "offs_n"
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil
+                (Op.ref .nat [] "n")
+                (Op.constNat Bk))
+              (Op.arange Bk))) s0 = some s1 := by
+      simp [stepStmt, s1, s0, offsN, Tile.bop, NumericDType.add, NumericDType.mul]
+      rfl
+    have h2 :
+        stepStmt
+          (Stmt.assign .nat [Bk, D] "k_ptrs"
+            (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.mul .nat Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+                (Op.constNat D))
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))) s1 =
+          some s2 := by
+      simp only [stepStmt, hKPtrsEval, Option.bind_some, s2]
+      rfl
+    have h3 :
+        stepStmt
+          (Stmt.assign .nat [Bk, D] "v_ptrs"
+            (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.mul .nat Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+                (Op.constNat D))
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))) s2 =
+          some s3 := by
+      simp only [stepStmt, hVPtrsEval, Option.bind_some, s3]
+      rfl
+    have h4 :
+        stepStmt
+          (Stmt.assign .real [Bk, D] "k"
+            (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+              MaskOpt.none)) s3 = some s4 := by
+      simp [stepStmt, s4, s3, s2, s1, s0, kTile, ptrs, evalOp_load_region_none,
+        Region.cast, hKmem]
+    have h5 :
+        stepStmt
+          (Stmt.assign .real [Bk, D] "v"
+            (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+              MaskOpt.none)) s4 = some sLoad := by
+      simp [stepStmt, sLoad, s4, s3, s2, s1, s0, vTile, ptrs, evalOp_load_region_none,
+        Region.cast, hVmem]
+    calc
+      stepStmts (fa1ScoreLoopLoadBlock kReg vReg D Bk) s0
+          = stepStmts
+              [ Stmt.assign .nat [Bk, D] "k_ptrs"
+                  (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                    (Op.mul .nat Broadcast.scalarR
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+                      (Op.constNat D))
+                    (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+              , Stmt.assign .nat [Bk, D] "v_ptrs"
+                  (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                    (Op.mul .nat Broadcast.scalarR
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+                      (Op.constNat D))
+                    (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+              , Stmt.assign .real [Bk, D] "k"
+                  (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+                    MaskOpt.none)
+              , Stmt.assign .real [Bk, D] "v"
+                  (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+                    MaskOpt.none)
+              ] s1 := by
+                simp [fa1ScoreLoopLoadBlock]
+                exact stepStmts.cons_some h1
+      _ = stepStmts
+              [ Stmt.assign .nat [Bk, D] "v_ptrs"
+                  (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                    (Op.mul .nat Broadcast.scalarR
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [Bk] "offs_n"))
+                      (Op.constNat D))
+                    (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+              , Stmt.assign .real [Bk, D] "k"
+                  (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+                    MaskOpt.none)
+              , Stmt.assign .real [Bk, D] "v"
+                  (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+                    MaskOpt.none)
+              ] s2 := stepStmts.cons_some h2
+      _ = stepStmts
+              [ Stmt.assign .real [Bk, D] "k"
+                  (Op.load .real (MemAccess.region kReg (Op.ref .nat [Bk, D] "k_ptrs"))
+                    MaskOpt.none)
+              , Stmt.assign .real [Bk, D] "v"
+                  (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+                    MaskOpt.none)
+              ] s3 := stepStmts.cons_some h3
+      _ = stepStmts
+              [ Stmt.assign .real [Bk, D] "v"
+                  (Op.load .real (MemAccess.region vReg (Op.ref .nat [Bk, D] "v_ptrs"))
+                    MaskOpt.none)
+              ] s4 := stepStmts.cons_some h4
+      _ = stepStmts [] sLoad := stepStmts.cons_some h5
+      _ = some sLoad := by simp
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
     · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
       · simp [sLoad, s4, s3, s2, s1, s0, hpidReg]
@@ -908,24 +1068,68 @@ theorem fa1_score_loop_scoreSoftcap_correct
   let sRaw := sLoad.setReg "raw" .real [M, Bk] raw
   let sScore := sRaw.setReg "scores" .real [M, Bk] scores
   refine ⟨sScore, ?_, ?_⟩
-  · simp [fa1ScoreLoopScoreSoftcap, stepStmts, stepStmt, evalOp, Option.bind,
-      hq, hkTileReg, raw, scores, sRaw, sScore]
-    simp only [valueBlock]
-    change (sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "scores" .real [M, Bk]
-          (Tile.bop NumericDType.real.mul Broadcast.scalarL
-            (Tile.scalar ((softcap : ℝ) : WithBot ℝ))
-            (Tile.uop WithBot.realTanh
-              (Tile.bop NumericDType.real.div Broadcast.scalarR
-                (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
-                (Tile.scalar ((softcap : ℝ) : WithBot ℝ))))) =
-        (sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "scores" .real [M, Bk]
-          (scoreBlockLane allVisible (softcapDotScore softcap Q K scale) k
-            (Nat.succ_le_iff.mpr hk))
-    rw [softcapScoreBlock_numeric_tile_eq softcap Q K scale k hk]
+  · have hRawEval :
+        evalOp
+          (Op.mul .real Broadcast.scalarR
+            (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+              (Op.ref .real [M, D] "q")
+              (Op.transpose (batch := []) (M := Bk) (N := D)
+                (Op.ref .real [Bk, D] "k")))
+            (Op.const scale)) sLoad = some raw := by
+      unfold raw rawScoreBlockTile
+      repeat unfold evalOp
+      simp [hq, hkTileReg, valueBlock, Tile.bop, NumericDType.mul,
+        option_map_mul_right_eq_map₂]
+    have hScoreEval :
+        evalOp
+          (Op.mul .real Broadcast.scalarL
+            (Op.const softcap)
+            (Op.tanh
+              (Op.div .real Broadcast.scalarR
+                (Op.ref .real [M, Bk] "raw")
+                (Op.const softcap)))) sRaw = some scores := by
+      unfold scores
+      simp only [evalOp_mul, evalOp_const, evalOp_tanh, evalOp_div,
+        evalOp_ref_setReg_same, Option.bind_some, sRaw]
+      simpa [raw] using
+        congrArg some (softcapScoreBlock_numeric_tile_eq softcap Q K scale k hk)
+    have hRawStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "raw"
+            (Op.mul .real Broadcast.scalarR
+              (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+                (Op.ref .real [M, D] "q")
+                (Op.transpose (batch := []) (M := Bk) (N := D)
+                  (Op.ref .real [Bk, D] "k")))
+              (Op.const scale))) sLoad = some sRaw := by
+      simp only [stepStmt, hRawEval, sRaw]
+      rfl
+    have hScoreStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "scores"
+            (Op.mul .real Broadcast.scalarL
+              (Op.const softcap)
+              (Op.tanh
+                (Op.div .real Broadcast.scalarR
+                  (Op.ref .real [M, Bk] "raw")
+                  (Op.const softcap))))) sRaw = some sScore := by
+      simp only [stepStmt, hScoreEval, sScore]
+      rfl
+    calc
+      stepStmts (fa1ScoreLoopScoreSoftcap M D Bk scale softcap) sLoad
+          = stepStmts
+              [ Stmt.assign .real [M, Bk] "scores"
+                  (Op.mul .real Broadcast.scalarL
+                    (Op.const softcap)
+                    (Op.tanh
+                      (Op.div .real Broadcast.scalarR
+                        (Op.ref .real [M, Bk] "raw")
+                        (Op.const softcap))))
+              ] sRaw := by
+                simp [fa1ScoreLoopScoreSoftcap]
+                exact stepStmts.cons_some hRawStep
+      _ = stepStmts [] sScore := stepStmts.cons_some hScoreStep
+      _ = some sScore := by simp
   · refine ⟨?_, ?_⟩
     · rcases hLoaded with
         ⟨hCore, hoffs_n, hk_ptrs, hv_ptrs, hkReg, hvReg⟩
@@ -997,33 +1201,162 @@ theorem fa1_score_loop_scoreAlibi_correct
   let sDist := sDelta.setReg "dist" .real [M, Bk] dist
   let sScore := sDist.setReg "scores" .real [M, Bk] scores
   refine ⟨sScore, ?_, ?_⟩
-  · simp [fa1ScoreLoopScoreAlibi, stepStmts, stepStmt, evalOp, Option.bind,
-      hq, hkTileReg, hoffs_n, hoffs_m, raw, delta, dist, scores, sRaw, sDelta, sDist,
-      sScore]
-    simp only [valueBlock]
-    change (((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "scores" .real [M, Bk]
-          (Tile.bop NumericDType.real.add
-            (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-            (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
-            (Tile.bop NumericDType.real.sub Broadcast.scalarL
-              (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
-              (Tile.bop NumericDType.real.mul Broadcast.scalarL
-                (Tile.scalar ((slope : ℝ) : WithBot ℝ))
-                (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)))) =
-        (((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk] (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "scores" .real [M, Bk]
-          (scoreBlockLane allVisible (alibiScore (origPid * M) slope Q K scale) k
-            (Nat.succ_le_iff.mpr hk))
-    rw [distanceBlockTileNumeric_eq (M := M) (Bk := Bk) (origPid * M) k]
-    rw [alibiScoreBlock_numeric_tile_eq (origPid * M) slope Q K scale k hk]
+  · have hRawEval :
+        evalOp
+          (Op.mul .real Broadcast.scalarR
+            (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+              (Op.ref .real [M, D] "q")
+              (Op.transpose (batch := []) (M := Bk) (N := D)
+                (Op.ref .real [Bk, D] "k")))
+            (Op.const scale)) sLoad = some raw := by
+      unfold raw rawScoreBlockTile
+      repeat unfold evalOp
+      simp [hq, hkTileReg, valueBlock, Tile.bop, NumericDType.mul,
+        option_map_mul_right_eq_map₂]
+    have hDeltaEval :
+        evalOp
+          (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+            (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+            (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+          sRaw = some delta := by
+      unfold delta
+      repeat unfold evalOp
+      simp [sRaw, BlockState.setReg, hoffs_n, hoffs_m, Tile.bop, Tile.natToReal,
+        Tile.expandDim, Tile.vec, NumericDType.sub, WithBot.realSub, Option.bind]
+    have hDistEval :
+        evalOp
+          (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [M, Bk] "delta")
+            (Op.sub .real Broadcast.scalarL
+              (Op.const 0)
+              (Op.ref .real [M, Bk] "delta"))) sDelta = some dist := by
+      unfold dist
+      simp [sDelta, delta, distanceBlockTile, Tile.bop, NumericDType.sub,
+        WithBot.realSub, Option.bind]
+      funext i
+      rw [show
+        Option.map
+            (fun a : ℝ =>
+              a - (↑k * ↑Bk + ↑↑i.2.1 - (↑origPid * ↑M + ↑↑i.1)))
+            (0 : WithBot ℝ) =
+          some ((0 : ℝ) -
+            (↑k * ↑Bk + ↑↑i.2.1 - (↑origPid * ↑M + ↑↑i.1))) by
+        rfl]
+      ring_nf
+    have hScoreEval :
+        evalOp
+          (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [M, Bk] "raw")
+            (Op.sub .real Broadcast.scalarL
+              (Op.const 0)
+              (Op.mul .real Broadcast.scalarL
+                (Op.const slope)
+                (Op.ref .real [M, Bk] "dist")))) sDist = some scores := by
+      unfold scores
+      repeat unfold evalOp
+      simp [sDist, sDelta, sRaw, BlockState.setReg, raw, dist, Option.bind]
+      simpa [raw, dist] using
+        congrArg some (alibiScoreBlock_numeric_tile_eq (origPid * M) slope Q K scale k hk)
+    have hRawStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "raw"
+            (Op.mul .real Broadcast.scalarR
+              (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+                (Op.ref .real [M, D] "q")
+                (Op.transpose (batch := []) (M := Bk) (N := D)
+                (Op.ref .real [Bk, D] "k")))
+              (Op.const scale))) sLoad = some sRaw := by
+      unfold stepStmt
+      rw [hRawEval]
+      rfl
+    have hDeltaStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "delta"
+            (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+              (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+              (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))) sRaw =
+          some sDelta := by
+      unfold stepStmt
+      rw [hDeltaEval]
+      rfl
+    have hDistStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "dist"
+            (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [M, Bk] "delta")
+              (Op.sub .real Broadcast.scalarL
+                (Op.const 0)
+                (Op.ref .real [M, Bk] "delta")))) sDelta =
+          some sDist := by
+      unfold stepStmt
+      rw [hDistEval]
+      rfl
+    have hScoreStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "scores"
+            (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [M, Bk] "raw")
+              (Op.sub .real Broadcast.scalarL
+                (Op.const 0)
+                (Op.mul .real Broadcast.scalarL
+                  (Op.const slope)
+                  (Op.ref .real [M, Bk] "dist"))))) sDist =
+          some sScore := by
+      unfold stepStmt
+      rw [hScoreEval]
+      rfl
+    calc
+      stepStmts (fa1ScoreLoopScoreAlibi M D Bk scale slope) sLoad
+          = stepStmts
+              [ Stmt.assign .real [M, Bk] "delta"
+                  (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+                    (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+                    (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+              , Stmt.assign .real [M, Bk] "dist"
+                  (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "delta")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.ref .real [M, Bk] "delta")))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.mul .real Broadcast.scalarL
+                        (Op.const slope)
+                        (Op.ref .real [M, Bk] "dist"))))
+              ] sRaw := by
+                simp [fa1ScoreLoopScoreAlibi]
+                exact stepStmts.cons_some hRawStep
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "dist"
+                  (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "delta")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.ref .real [M, Bk] "delta")))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.mul .real Broadcast.scalarL
+                        (Op.const slope)
+                        (Op.ref .real [M, Bk] "dist"))))
+              ] sDelta := stepStmts.cons_some hDeltaStep
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "scores"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.mul .real Broadcast.scalarL
+                        (Op.const slope)
+                        (Op.ref .real [M, Bk] "dist"))))
+              ] sDist := stepStmts.cons_some hDistStep
+      _ = stepStmts [] sScore := stepStmts.cons_some hScoreStep
+      _ = some sScore := by simp
   · refine ⟨?_, ?_⟩
     · rcases hLoaded with
         ⟨hCore, hoffs_n, hk_ptrs, hv_ptrs, hkReg, hvReg⟩
@@ -1097,60 +1430,187 @@ theorem fa1_score_loop_scoreSlidingWindow_correct
   let sVis := sDist.setReg "visible" .bool [M, Bk] vis
   let sScore := sVis.setReg "scores" .real [M, Bk] scores
   refine ⟨sScore, ?_, ?_⟩
-  · simp [fa1ScoreLoopScoreSlidingWindow, stepStmts, stepStmt, evalOp,
-      Option.bind, hq, hkTileReg, hoffs_n, hoffs_m, raw, delta, dist, vis,
-      scores, sRaw, sDelta, sDist, sVis, sScore]
-    simp only [valueBlock]
-    change ((((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "visible" .bool [M, Bk]
-          (Tile.cop ComparableDType.real.lt Broadcast.scalarR
-            (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)
-            (Tile.scalar (((window : ℝ) : WithBot ℝ))))).setReg
-        "scores" .real [M, Bk]
-          (Tile.select
-            (Tile.cop ComparableDType.real.lt Broadcast.scalarR
-              (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)
-              (Tile.scalar (((window : ℝ) : WithBot ℝ))))
-            (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
-            (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk])) =
-        ((((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "visible" .bool [M, Bk]
-          (slidingVisibleBlockTile (M := M) (Bk := Bk) (origPid * M) window k)).setReg
-        "scores" .real [M, Bk]
-          (scoreBlockLane (slidingVisible window (origPid * M)) (dotScore Q K scale) k
-            (Nat.succ_le_iff.mpr hk))
-    rw [distanceBlockTileNumeric_eq (M := M) (Bk := Bk) (origPid * M) k]
-    change ((((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "visible" .bool [M, Bk]
-          (slidingVisibleBlockTile (M := M) (Bk := Bk) (origPid * M) window k)).setReg
-        "scores" .real [M, Bk]
-          (Tile.select
-            (slidingVisibleBlockTile (M := M) (Bk := Bk) (origPid * M) window k)
-            (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
-            (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk])) =
-        ((((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "visible" .bool [M, Bk]
-          (slidingVisibleBlockTile (M := M) (Bk := Bk) (origPid * M) window k)).setReg
-        "scores" .real [M, Bk]
-          (scoreBlockLane (slidingVisible window (origPid * M)) (dotScore Q K scale) k
-            (Nat.succ_le_iff.mpr hk))
-    rw [slidingScoreBlock_numeric_tile_eq (origPid * M) window Q K scale k hk]
+  · have hRawEval :
+        evalOp
+          (Op.mul .real Broadcast.scalarR
+            (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+              (Op.ref .real [M, D] "q")
+              (Op.transpose (batch := []) (M := Bk) (N := D)
+                (Op.ref .real [Bk, D] "k")))
+            (Op.const scale)) sLoad = some raw := by
+      unfold raw rawScoreBlockTile
+      repeat unfold evalOp
+      simp [hq, hkTileReg, valueBlock, Tile.bop, NumericDType.mul,
+        option_map_mul_right_eq_map₂]
+    have hDeltaEval :
+        evalOp
+          (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+            (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+            (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+          sRaw = some delta := by
+      unfold delta
+      repeat unfold evalOp
+      simp [sRaw, BlockState.setReg, hoffs_n, hoffs_m, Tile.bop, Tile.natToReal,
+        Tile.expandDim, Tile.vec, NumericDType.sub, WithBot.realSub, Option.bind]
+    have hDistEval :
+        evalOp
+          (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [M, Bk] "delta")
+            (Op.sub .real Broadcast.scalarL
+              (Op.const 0)
+              (Op.ref .real [M, Bk] "delta"))) sDelta = some dist := by
+      unfold dist
+      simp [sDelta, delta, distanceBlockTile, Tile.bop, NumericDType.sub,
+        WithBot.realSub, Option.bind]
+      funext i
+      rw [show
+        Option.map
+            (fun a : ℝ =>
+              a - (↑k * ↑Bk + ↑↑i.2.1 - (↑origPid * ↑M + ↑↑i.1)))
+            (0 : WithBot ℝ) =
+          some ((0 : ℝ) -
+            (↑k * ↑Bk + ↑↑i.2.1 - (↑origPid * ↑M + ↑↑i.1))) by
+        rfl]
+      ring_nf
+    have hVisEval :
+        evalOp
+          (Op.lt ComparableDType.real Broadcast.scalarR
+            (Op.ref .real [M, Bk] "dist")
+            (Op.const (window : ℝ))) sDist = some vis := by
+      unfold vis slidingVisibleBlockTile
+      repeat unfold evalOp
+      simp [sDist, dist, distanceBlockTile, Tile.cop, ComparableDType.lt,
+        Option.bind]
+      funext i
+      rfl
+    have hScoreEval :
+        evalOp
+          (Op.where
+            (Op.ref .bool [M, Bk] "visible")
+            (Op.ref .real [M, Bk] "raw")
+            (Op.broadcast Op.negInf [M, Bk])) sVis = some scores := by
+      unfold scores
+      repeat unfold evalOp
+      simp [sVis, sDist, sDelta, sRaw, BlockState.setReg, raw, vis, Option.bind]
+      simpa [raw, vis] using
+        congrArg some (slidingScoreBlock_numeric_tile_eq (origPid * M) window Q K scale k hk)
+    have hRawStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "raw"
+            (Op.mul .real Broadcast.scalarR
+              (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+                (Op.ref .real [M, D] "q")
+                (Op.transpose (batch := []) (M := Bk) (N := D)
+                  (Op.ref .real [Bk, D] "k")))
+              (Op.const scale))) sLoad = some sRaw := by
+      unfold stepStmt
+      rw [hRawEval]
+      rfl
+    have hDeltaStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "delta"
+            (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+              (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+              (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))) sRaw =
+          some sDelta := by
+      unfold stepStmt
+      rw [hDeltaEval]
+      rfl
+    have hDistStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "dist"
+            (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [M, Bk] "delta")
+              (Op.sub .real Broadcast.scalarL
+                (Op.const 0)
+                (Op.ref .real [M, Bk] "delta")))) sDelta =
+          some sDist := by
+      unfold stepStmt
+      rw [hDistEval]
+      rfl
+    have hVisStep :
+        stepStmt
+          (Stmt.assign .bool [M, Bk] "visible"
+            (Op.lt ComparableDType.real Broadcast.scalarR
+              (Op.ref .real [M, Bk] "dist")
+              (Op.const (window : ℝ)))) sDist =
+          some sVis := by
+      unfold stepStmt
+      rw [hVisEval]
+      rfl
+    have hScoreStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "scores"
+            (Op.where
+              (Op.ref .bool [M, Bk] "visible")
+              (Op.ref .real [M, Bk] "raw")
+              (Op.broadcast Op.negInf [M, Bk]))) sVis =
+          some sScore := by
+      unfold stepStmt
+      rw [hScoreEval]
+      rfl
+    calc
+      stepStmts (fa1ScoreLoopScoreSlidingWindow M D Bk window scale) sLoad
+          = stepStmts
+              [ Stmt.assign .real [M, Bk] "delta"
+                  (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+                    (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+                    (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+              , Stmt.assign .real [M, Bk] "dist"
+                  (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "delta")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.ref .real [M, Bk] "delta")))
+              , Stmt.assign .bool [M, Bk] "visible"
+                  (Op.lt ComparableDType.real Broadcast.scalarR
+                    (Op.ref .real [M, Bk] "dist")
+                    (Op.const (window : ℝ)))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sRaw := by
+                simp [fa1ScoreLoopScoreSlidingWindow]
+                exact stepStmts.cons_some hRawStep
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "dist"
+                  (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "delta")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.ref .real [M, Bk] "delta")))
+              , Stmt.assign .bool [M, Bk] "visible"
+                  (Op.lt ComparableDType.real Broadcast.scalarR
+                    (Op.ref .real [M, Bk] "dist")
+                    (Op.const (window : ℝ)))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sDelta := stepStmts.cons_some hDeltaStep
+      _ = stepStmts
+              [ Stmt.assign .bool [M, Bk] "visible"
+                  (Op.lt ComparableDType.real Broadcast.scalarR
+                    (Op.ref .real [M, Bk] "dist")
+                    (Op.const (window : ℝ)))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sDist := stepStmts.cons_some hDistStep
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sVis := stepStmts.cons_some hVisStep
+      _ = stepStmts [] sScore := stepStmts.cons_some hScoreStep
+      _ = some sScore := by simp
   · refine ⟨?_, ?_⟩
     · rcases hLoaded with
         ⟨hCore, hoffs_n, hk_ptrs, hv_ptrs, hkReg, hvReg⟩
@@ -1237,100 +1697,319 @@ theorem fa1_score_loop_scoreAlibiSlidingSoftcap_correct
   let sVis := sCapped.setReg "visible" .bool [M, Bk] vis
   let sScore := sVis.setReg "scores" .real [M, Bk] scores
   refine ⟨sScore, ?_, ?_⟩
-  · simp [fa1ScoreLoopScoreAlibiSlidingSoftcap, stepStmts, stepStmt, evalOp,
-      Option.bind, hq, hkTileReg, hoffs_n, hoffs_m, raw, delta, dist, biased,
-      capped, vis, scores, sRaw, sDelta, sDist, sBiased, sCapped, sVis, sScore]
-    simp only [valueBlock]
-    change ((((((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "biased" .real [M, Bk]
-          (Tile.bop NumericDType.real.add
-            (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-            (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
-            (Tile.bop NumericDType.real.sub Broadcast.scalarL
-              (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
-              (Tile.bop NumericDType.real.mul Broadcast.scalarL
-                (Tile.scalar ((slope : ℝ) : WithBot ℝ))
-                (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k))))).setReg
-        "capped" .real [M, Bk]
-          (Tile.bop NumericDType.real.mul Broadcast.scalarL
-            (Tile.scalar ((softcap : ℝ) : WithBot ℝ))
-            (Tile.uop WithBot.realTanh
-              (Tile.bop NumericDType.real.div Broadcast.scalarR
-                (Tile.bop NumericDType.real.add
-                  (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                  (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
-                  (Tile.bop NumericDType.real.sub Broadcast.scalarL
-                    (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
-                    (Tile.bop NumericDType.real.mul Broadcast.scalarL
-                      (Tile.scalar ((slope : ℝ) : WithBot ℝ))
-                      (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k))))
-                (Tile.scalar ((softcap : ℝ) : WithBot ℝ)))))).setReg
-        "visible" .bool [M, Bk]
-          (Tile.cop ComparableDType.real.lt Broadcast.scalarR
-            (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)
-            (Tile.scalar (((window : ℝ) : WithBot ℝ))))).setReg
-        "scores" .real [M, Bk]
-          (Tile.select
-            (Tile.cop ComparableDType.real.lt Broadcast.scalarR
-              (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k)
-              (Tile.scalar (((window : ℝ) : WithBot ℝ))))
-            (Tile.bop NumericDType.real.mul Broadcast.scalarL
-              (Tile.scalar ((softcap : ℝ) : WithBot ℝ))
-              (Tile.uop WithBot.realTanh
-                (Tile.bop NumericDType.real.div Broadcast.scalarR
-                  (Tile.bop NumericDType.real.add
-                    (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-                    (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))
-                    (Tile.bop NumericDType.real.sub Broadcast.scalarL
-                      (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
-                      (Tile.bop NumericDType.real.mul Broadcast.scalarL
-                        (Tile.scalar ((slope : ℝ) : WithBot ℝ))
-                        (distanceBlockTileNumeric (M := M) (Bk := Bk) (origPid * M) k))))
-                  (Tile.scalar ((softcap : ℝ) : WithBot ℝ)))))
-            (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk])) =
-        ((((((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "biased" .real [M, Bk] biased).setReg
-        "capped" .real [M, Bk] capped).setReg
-        "visible" .bool [M, Bk] vis).setReg
-        "scores" .real [M, Bk] scores
-    rw [distanceBlockTileNumeric_eq (M := M) (Bk := Bk) (origPid * M) k]
-    rw [alibiScoreBlock_numeric_eq_tile (origPid * M) slope Q K scale k hk]
-    rw [softcapScoreTileNumeric_eq softcap
-      (alibiScoreBlockTile (origPid * M) slope Q K scale k (Nat.succ_le_iff.mpr hk))]
-    change ((((((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "biased" .real [M, Bk] biased).setReg
-        "capped" .real [M, Bk] capped).setReg
-        "visible" .bool [M, Bk] vis).setReg
-        "scores" .real [M, Bk]
-          (Tile.select vis capped
-            (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk])) =
-        ((((((sLoad.setReg "raw" .real [M, Bk]
-          (rawScoreBlockTile Q K scale k (Nat.succ_le_iff.mpr hk))).setReg
-        "delta" .real [M, Bk] delta).setReg
-        "dist" .real [M, Bk]
-          (distanceBlockTile (M := M) (Bk := Bk) (origPid * M) k)).setReg
-        "biased" .real [M, Bk] biased).setReg
-        "capped" .real [M, Bk] capped).setReg
-        "visible" .bool [M, Bk] vis).setReg
-        "scores" .real [M, Bk] scores
-    rw [show Tile.select vis capped
-        (⟨fun _ : TileIndex [M, Bk] => (⊥ : WithBot ℝ)⟩ : Tile .real [M, Bk]) =
-        scores by
-      simp [vis, capped, biased, scores]
-      exact alibiSlidingSoftcapScoreBlock_numeric_tile_eq
-        (origPid * M) window slope softcap Q K scale k hk]
+  · have hRawEval :
+        evalOp
+          (Op.mul .real Broadcast.scalarR
+            (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+              (Op.ref .real [M, D] "q")
+              (Op.transpose (batch := []) (M := Bk) (N := D)
+                (Op.ref .real [Bk, D] "k")))
+            (Op.const scale)) sLoad = some raw := by
+      unfold raw rawScoreBlockTile
+      repeat unfold evalOp
+      simp [hq, hkTileReg, valueBlock, Tile.bop, NumericDType.mul,
+        option_map_mul_right_eq_map₂]
+    have hDeltaEval :
+        evalOp
+          (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+            (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+            (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+          sRaw = some delta := by
+      unfold delta
+      repeat unfold evalOp
+      simp [sRaw, BlockState.setReg, hoffs_n, hoffs_m, Tile.bop, Tile.natToReal,
+        Tile.expandDim, Tile.vec, NumericDType.sub, WithBot.realSub, Option.bind]
+    have hDistEval :
+        evalOp
+          (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [M, Bk] "delta")
+            (Op.sub .real Broadcast.scalarL
+              (Op.const 0)
+              (Op.ref .real [M, Bk] "delta"))) sDelta = some dist := by
+      unfold dist
+      simp [sDelta, delta, distanceBlockTile, Tile.bop, NumericDType.sub,
+        WithBot.realSub, Option.bind]
+      funext i
+      rw [show
+        Option.map
+            (fun a : ℝ =>
+              a - (↑k * ↑Bk + ↑↑i.2.1 - (↑origPid * ↑M + ↑↑i.1)))
+            (0 : WithBot ℝ) =
+          some ((0 : ℝ) -
+            (↑k * ↑Bk + ↑↑i.2.1 - (↑origPid * ↑M + ↑↑i.1))) by
+        rfl]
+      ring_nf
+    have hBiasedEval :
+        evalOp
+          (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [M, Bk] "raw")
+            (Op.sub .real Broadcast.scalarL
+              (Op.const 0)
+              (Op.mul .real Broadcast.scalarL
+                (Op.const slope)
+                (Op.ref .real [M, Bk] "dist")))) sDist = some biased := by
+      unfold biased
+      repeat unfold evalOp
+      simp [sDist, sDelta, sRaw, BlockState.setReg, raw, dist, Option.bind]
+      simpa [raw, dist] using
+        congrArg some (alibiScoreBlock_numeric_eq_tile (origPid * M) slope Q K scale k hk)
+    have hCappedEval :
+        evalOp
+          (Op.mul .real Broadcast.scalarL
+            (Op.const softcap)
+            (Op.tanh
+              (Op.div .real Broadcast.scalarR
+                (Op.ref .real [M, Bk] "biased")
+                (Op.const softcap)))) sBiased = some capped := by
+      unfold capped
+      repeat unfold evalOp
+      simp [sBiased, sDist, sDelta, sRaw, BlockState.setReg, biased, Option.bind]
+      rfl
+    have hVisEval :
+        evalOp
+          (Op.lt ComparableDType.real Broadcast.scalarR
+            (Op.ref .real [M, Bk] "dist")
+            (Op.const (window : ℝ))) sCapped = some vis := by
+      unfold vis slidingVisibleBlockTile
+      repeat unfold evalOp
+      simp [sCapped, sBiased, sDist, sDelta, sRaw, dist, distanceBlockTile,
+        Tile.cop, ComparableDType.lt, Option.bind]
+      funext i
+      rfl
+    have hScoreEval :
+        evalOp
+          (Op.where
+            (Op.ref .bool [M, Bk] "visible")
+            (Op.ref .real [M, Bk] "capped")
+            (Op.broadcast Op.negInf [M, Bk])) sVis = some scores := by
+      unfold scores
+      repeat unfold evalOp
+      simp [sVis, sCapped, sBiased, sDist, sDelta, sRaw, BlockState.setReg,
+        capped, vis, Option.bind]
+      simpa [capped, biased, vis] using
+        congrArg some
+          (alibiSlidingSoftcapScoreBlock_numeric_tile_eq
+            (origPid * M) window slope softcap Q K scale k hk)
+    have hRawStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "raw"
+            (Op.mul .real Broadcast.scalarR
+              (Op.dot (batch := []) (M := M) (K := D) (N := Bk)
+                (Op.ref .real [M, D] "q")
+                (Op.transpose (batch := []) (M := Bk) (N := D)
+                  (Op.ref .real [Bk, D] "k")))
+              (Op.const scale))) sLoad = some sRaw := by
+      unfold stepStmt
+      rw [hRawEval]
+      rfl
+    have hDeltaStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "delta"
+            (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+              (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+              (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))) sRaw =
+          some sDelta := by
+      unfold stepStmt
+      rw [hDeltaEval]
+      rfl
+    have hDistStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "dist"
+            (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [M, Bk] "delta")
+              (Op.sub .real Broadcast.scalarL
+                (Op.const 0)
+                (Op.ref .real [M, Bk] "delta")))) sDelta =
+          some sDist := by
+      unfold stepStmt
+      rw [hDistEval]
+      rfl
+    have hBiasedStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "biased"
+            (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [M, Bk] "raw")
+              (Op.sub .real Broadcast.scalarL
+                (Op.const 0)
+                (Op.mul .real Broadcast.scalarL
+                  (Op.const slope)
+                  (Op.ref .real [M, Bk] "dist"))))) sDist =
+          some sBiased := by
+      unfold stepStmt
+      rw [hBiasedEval]
+      rfl
+    have hCappedStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "capped"
+            (Op.mul .real Broadcast.scalarL
+              (Op.const softcap)
+              (Op.tanh
+                (Op.div .real Broadcast.scalarR
+                  (Op.ref .real [M, Bk] "biased")
+                  (Op.const softcap))))) sBiased =
+          some sCapped := by
+      unfold stepStmt
+      rw [hCappedEval]
+      rfl
+    have hVisStep :
+        stepStmt
+          (Stmt.assign .bool [M, Bk] "visible"
+            (Op.lt ComparableDType.real Broadcast.scalarR
+              (Op.ref .real [M, Bk] "dist")
+              (Op.const (window : ℝ)))) sCapped =
+          some sVis := by
+      unfold stepStmt
+      rw [hVisEval]
+      rfl
+    have hScoreStep :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "scores"
+            (Op.where
+              (Op.ref .bool [M, Bk] "visible")
+              (Op.ref .real [M, Bk] "capped")
+              (Op.broadcast Op.negInf [M, Bk]))) sVis =
+          some sScore := by
+      unfold stepStmt
+      rw [hScoreEval]
+      rfl
+    calc
+      stepStmts
+          (fa1ScoreLoopScoreAlibiSlidingSoftcap M D Bk window scale slope softcap)
+          sLoad
+          = stepStmts
+              [ Stmt.assign .real [M, Bk] "delta"
+                  (Op.sub .real (Broadcast.consL (Broadcast.consR Broadcast.nil))
+                    (Op.natToReal (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [Bk] "offs_n")))
+                    (Op.natToReal (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))))
+              , Stmt.assign .real [M, Bk] "dist"
+                  (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "delta")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.ref .real [M, Bk] "delta")))
+              , Stmt.assign .real [M, Bk] "biased"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.mul .real Broadcast.scalarL
+                        (Op.const slope)
+                        (Op.ref .real [M, Bk] "dist"))))
+              , Stmt.assign .real [M, Bk] "capped"
+                  (Op.mul .real Broadcast.scalarL
+                    (Op.const softcap)
+                    (Op.tanh
+                      (Op.div .real Broadcast.scalarR
+                        (Op.ref .real [M, Bk] "biased")
+                        (Op.const softcap))))
+              , Stmt.assign .bool [M, Bk] "visible"
+                  (Op.lt ComparableDType.real Broadcast.scalarR
+                    (Op.ref .real [M, Bk] "dist")
+                    (Op.const (window : ℝ)))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "capped")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sRaw := by
+                simp [fa1ScoreLoopScoreAlibiSlidingSoftcap]
+                exact stepStmts.cons_some hRawStep
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "dist"
+                  (Op.max2 (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "delta")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.ref .real [M, Bk] "delta")))
+              , Stmt.assign .real [M, Bk] "biased"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.mul .real Broadcast.scalarL
+                        (Op.const slope)
+                        (Op.ref .real [M, Bk] "dist"))))
+              , Stmt.assign .real [M, Bk] "capped"
+                  (Op.mul .real Broadcast.scalarL
+                    (Op.const softcap)
+                    (Op.tanh
+                      (Op.div .real Broadcast.scalarR
+                        (Op.ref .real [M, Bk] "biased")
+                        (Op.const softcap))))
+              , Stmt.assign .bool [M, Bk] "visible"
+                  (Op.lt ComparableDType.real Broadcast.scalarR
+                    (Op.ref .real [M, Bk] "dist")
+                    (Op.const (window : ℝ)))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "capped")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sDelta := stepStmts.cons_some hDeltaStep
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "biased"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.ref .real [M, Bk] "raw")
+                    (Op.sub .real Broadcast.scalarL
+                      (Op.const 0)
+                      (Op.mul .real Broadcast.scalarL
+                        (Op.const slope)
+                        (Op.ref .real [M, Bk] "dist"))))
+              , Stmt.assign .real [M, Bk] "capped"
+                  (Op.mul .real Broadcast.scalarL
+                    (Op.const softcap)
+                    (Op.tanh
+                      (Op.div .real Broadcast.scalarR
+                        (Op.ref .real [M, Bk] "biased")
+                        (Op.const softcap))))
+              , Stmt.assign .bool [M, Bk] "visible"
+                  (Op.lt ComparableDType.real Broadcast.scalarR
+                    (Op.ref .real [M, Bk] "dist")
+                    (Op.const (window : ℝ)))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "capped")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sDist := stepStmts.cons_some hDistStep
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "capped"
+                  (Op.mul .real Broadcast.scalarL
+                    (Op.const softcap)
+                    (Op.tanh
+                      (Op.div .real Broadcast.scalarR
+                        (Op.ref .real [M, Bk] "biased")
+                        (Op.const softcap))))
+              , Stmt.assign .bool [M, Bk] "visible"
+                  (Op.lt ComparableDType.real Broadcast.scalarR
+                    (Op.ref .real [M, Bk] "dist")
+                    (Op.const (window : ℝ)))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "capped")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sBiased := stepStmts.cons_some hBiasedStep
+      _ = stepStmts
+              [ Stmt.assign .bool [M, Bk] "visible"
+                  (Op.lt ComparableDType.real Broadcast.scalarR
+                    (Op.ref .real [M, Bk] "dist")
+                    (Op.const (window : ℝ)))
+              , Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "capped")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sCapped := stepStmts.cons_some hCappedStep
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "scores"
+                  (Op.where
+                    (Op.ref .bool [M, Bk] "visible")
+                    (Op.ref .real [M, Bk] "capped")
+                    (Op.broadcast Op.negInf [M, Bk]))
+              ] sVis := stepStmts.cons_some hVisStep
+      _ = stepStmts [] sScore := stepStmts.cons_some hScoreStep
+      _ = some sScore := by simp
   · refine ⟨?_, ?_⟩
     · rcases hLoaded with
         ⟨hCore, hoffs_n, hk_ptrs, hv_ptrs, hkReg, hvReg⟩
@@ -1555,14 +2234,267 @@ theorem fa1_score_loop_tail_correct
             V (j, idx.2.1, PUnit.unit)))) = oNew
     rw [score_block_oAcc_tile_eq visible score V k hk]
   refine ⟨s', ?_, ?_⟩
-  · simp [fa1ScoreLoopTail, stepStmts, stepStmt, evalOp, Option.bind,
-      Tile.reduceMax, Tile.reduceMaxDrop, TileShape.axisDim,
-      TileShape.eraseAxis, TileShape.insertAxisIndex,
-      hBk, hscores, hm, hl, ho, hvReg,
-      mOld, lOld, oOld, scoresTile, mBlockExec, mNewExec,
-      alphaExec, pExec, lNewExec, oNewExec, s1, s2, s3, s4, s5,
-      s6, s7, s']
-    rfl
+  · have hMBlockReduce :
+        Tile.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false scoresTile =
+          some mBlockExec := by
+      rw [hmBlockExec]
+      exact score_block_mBlock_reduceMax_eq hBk visible score k hk
+    have h1 :
+        stepStmt
+          (Stmt.assign .real [M] "m_block"
+            (Op.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩
+              (keepDims := Bool.false)
+              (Op.ref .real [M, Bk] "scores"))) sScore = some s1 := by
+      simp only [stepStmt]
+      change ((evalOp (Op.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩
+          (keepDims := Bool.false)
+          (Op.ref .real [M, Bk] "scores")) sScore).bind
+        fun v => some (sScore.setReg "m_block" .real [M] v)) = some s1
+      rw [evalOp_reduceMax]
+      rw [evalOp_ref]
+      rw [hscores]
+      change ((Tile.reduceMax (shape := [M, Bk]) ⟨1, by simp⟩ Bool.false
+          scoresTile).bind
+        fun v => some (sScore.setReg "m_block" .real [M] v)) = some s1
+      rw [hMBlockReduce]
+      change some (sScore.setReg "m_block" .real [M] mBlockExec) = some s1
+      rfl
+    have hMBlockReg : s1.regs .real [M] "m_block" = some mBlockExec := by
+      simp [s1]
+    have hMOldReg : s1.regs .real [M] "m_i" = some mOld := by
+      simp [s1, mOld, hm]
+    have h2 :
+        stepStmt
+          (Stmt.assign .real [M] "m_new"
+            (Op.max2 (Broadcast.consSame Broadcast.nil)
+              (Op.ref .real [M] "m_i")
+              (Op.ref .real [M] "m_block"))) s1 = some s2 := by
+      simp only [stepStmt, evalOp_max2, Option.bind_eq_bind, Option.bind_some]
+      rw [evalOp_ref]
+      rw [hMOldReg]
+      rw [evalOp_ref]
+      rw [hMBlockReg]
+      simp [s2, mNewExec]
+    have h3 :
+        stepStmt
+          (Stmt.assign .real [M] "alpha"
+            (Op.exp
+              (Op.sub .real (Broadcast.consSame Broadcast.nil)
+                (Op.ref .real [M] "m_i")
+                (Op.ref .real [M] "m_new")))) s2 = some s3 := by
+      simp [stepStmt, evalOp_exp, evalOp_sub, s3, s2, s1, mOld, mNewExec,
+        alphaExec, Tile.bop, Tile.uop, NumericDType.sub, hm]
+    have h4 :
+        stepStmt
+          (Stmt.assign .real [M, Bk] "p"
+            (Op.exp
+              (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+                (Op.ref .real [M, Bk] "scores")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "m_new"))))) s3 =
+          some s4 := by
+      simp only [stepStmt, evalOp_exp, evalOp_sub, Option.bind_eq_bind,
+        Option.bind_some]
+      unfold evalOp
+      simp [VeriTile.Triton.evalOp_expandDim, VeriTile.Triton.evalOp_expandDim_ref,
+        VeriTile.Triton.evalOp_ref, evalOp_expandDim_one_real,
+        s4, s3, s2, s1, pExec, scoresTile, mNewExec, Tile.bop, Tile.uop,
+        Tile.expandDim, NumericDType.sub, hscores]
+      change some (s3.setReg "p" .real [M, Bk] pExec) = some s4
+      rfl
+    have h5 :
+        stepStmt
+          (Stmt.assign .real [M] "l_new"
+            (Op.add .real (Broadcast.consSame Broadcast.nil)
+              (Op.mul .real (Broadcast.consSame Broadcast.nil)
+                (Op.ref .real [M] "alpha")
+                (Op.ref .real [M] "l_i"))
+              (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩
+                (keepDims := Bool.false)
+                (Op.ref .real [M, Bk] "p")))) s4 = some s5 := by
+      simp [stepStmt, evalOp_add, evalOp_mul, evalOp_reduceSum, s5, s4, s3,
+        s2, s1, lNewExec, alphaExec, pExec, lOld, Tile.bop, NumericDType.add,
+        NumericDType.mul, hl]
+      unfold evalOp
+      simp [s5, s4, s3, s2, s1, lNewExec, alphaExec, pExec, lOld, Tile.bop,
+        Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.mul, hl]
+    have h6 :
+        stepStmt
+          (Stmt.assign .real [M, D] "o_acc"
+            (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+                (Op.ref .real [M, D] "o_acc"))
+              (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+                (Op.ref .real [M, Bk] "p")
+                (Op.ref .real [Bk, D] "v")))) s5 = some s6 := by
+      simp [stepStmt, evalOp_add, evalOp_mul, evalOp_dot, s6, s5, s4, s3,
+        s2, s1, oNewExec, alphaExec, pExec, oOld, Tile.bop, Tile.dot,
+        Tile.expandDim, NumericDType.add, NumericDType.mul, ho, hvReg]
+      unfold evalOp
+      simp [VeriTile.Triton.evalOp_expandDim, VeriTile.Triton.evalOp_expandDim_ref,
+        VeriTile.Triton.evalOp_ref, evalOp_expandDim_one_real,
+        s6, s5, s4, s3, s2, s1, oNewExec, alphaExec, pExec, oOld,
+        Tile.bop, Tile.uop, Tile.dot, Tile.expandDim, NumericDType.add,
+        NumericDType.mul, Option.bind, ho, hvReg]
+    have h7 :
+        stepStmt
+          (Stmt.assign .real [M] "m_i"
+            (Op.ref .real [M] "m_new")) s6 = some s7 := by
+      simp [stepStmt, evalOp_ref, s7, s6, s5, s4, s3, s2, s1]
+    have h8 :
+        stepStmt
+          (Stmt.assign .real [M] "l_i"
+            (Op.ref .real [M] "l_new")) s7 = some s' := by
+      simp [stepStmt, evalOp_ref, s', s7, s6, s5, s4, s3, s2, s1]
+    calc
+      stepStmts (fa1ScoreLoopTail M D Bk) sScore
+          = stepStmts
+              [ Stmt.assign .real [M] "m_new"
+                  (Op.max2 (Broadcast.consSame Broadcast.nil)
+                    (Op.ref .real [M] "m_i")
+                    (Op.ref .real [M] "m_block"))
+              , Stmt.assign .real [M] "alpha"
+                  (Op.exp
+                    (Op.sub .real (Broadcast.consSame Broadcast.nil)
+                      (Op.ref .real [M] "m_i")
+                      (Op.ref .real [M] "m_new")))
+              , Stmt.assign .real [M, Bk] "p"
+                  (Op.exp
+                    (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+                      (Op.ref .real [M, Bk] "scores")
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "m_new"))))
+              , Stmt.assign .real [M] "l_new"
+                  (Op.add .real (Broadcast.consSame Broadcast.nil)
+                    (Op.mul .real (Broadcast.consSame Broadcast.nil)
+                      (Op.ref .real [M] "alpha")
+                      (Op.ref .real [M] "l_i"))
+                    (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩
+                      (keepDims := Bool.false)
+                      (Op.ref .real [M, Bk] "p")))
+              , Stmt.assign .real [M, D] "o_acc"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+                      (Op.ref .real [M, D] "o_acc"))
+                    (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+                      (Op.ref .real [M, Bk] "p")
+                      (Op.ref .real [Bk, D] "v")))
+              , Stmt.assign .real [M] "m_i"
+                  (Op.ref .real [M] "m_new")
+              , Stmt.assign .real [M] "l_i"
+                  (Op.ref .real [M] "l_new")
+              ] s1 := by
+                simp [fa1ScoreLoopTail]
+                exact stepStmts.cons_some h1
+      _ = stepStmts
+              [ Stmt.assign .real [M] "alpha"
+                  (Op.exp
+                    (Op.sub .real (Broadcast.consSame Broadcast.nil)
+                      (Op.ref .real [M] "m_i")
+                      (Op.ref .real [M] "m_new")))
+              , Stmt.assign .real [M, Bk] "p"
+                  (Op.exp
+                    (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+                      (Op.ref .real [M, Bk] "scores")
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "m_new"))))
+              , Stmt.assign .real [M] "l_new"
+                  (Op.add .real (Broadcast.consSame Broadcast.nil)
+                    (Op.mul .real (Broadcast.consSame Broadcast.nil)
+                      (Op.ref .real [M] "alpha")
+                      (Op.ref .real [M] "l_i"))
+                    (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩
+                      (keepDims := Bool.false)
+                      (Op.ref .real [M, Bk] "p")))
+              , Stmt.assign .real [M, D] "o_acc"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+                      (Op.ref .real [M, D] "o_acc"))
+                    (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+                      (Op.ref .real [M, Bk] "p")
+                      (Op.ref .real [Bk, D] "v")))
+              , Stmt.assign .real [M] "m_i"
+                  (Op.ref .real [M] "m_new")
+              , Stmt.assign .real [M] "l_i"
+                  (Op.ref .real [M] "l_new")
+              ] s2 := stepStmts.cons_some h2
+      _ = stepStmts
+              [ Stmt.assign .real [M, Bk] "p"
+                  (Op.exp
+                    (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+                      (Op.ref .real [M, Bk] "scores")
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "m_new"))))
+              , Stmt.assign .real [M] "l_new"
+                  (Op.add .real (Broadcast.consSame Broadcast.nil)
+                    (Op.mul .real (Broadcast.consSame Broadcast.nil)
+                      (Op.ref .real [M] "alpha")
+                      (Op.ref .real [M] "l_i"))
+                    (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩
+                      (keepDims := Bool.false)
+                      (Op.ref .real [M, Bk] "p")))
+              , Stmt.assign .real [M, D] "o_acc"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+                      (Op.ref .real [M, D] "o_acc"))
+                    (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+                      (Op.ref .real [M, Bk] "p")
+                      (Op.ref .real [Bk, D] "v")))
+              , Stmt.assign .real [M] "m_i"
+                  (Op.ref .real [M] "m_new")
+              , Stmt.assign .real [M] "l_i"
+                  (Op.ref .real [M] "l_new")
+              ] s3 := stepStmts.cons_some h3
+      _ = stepStmts
+              [ Stmt.assign .real [M] "l_new"
+                  (Op.add .real (Broadcast.consSame Broadcast.nil)
+                    (Op.mul .real (Broadcast.consSame Broadcast.nil)
+                      (Op.ref .real [M] "alpha")
+                      (Op.ref .real [M] "l_i"))
+                    (Op.reduceSum (shape := [M, Bk]) ⟨1, by simp⟩
+                      (keepDims := Bool.false)
+                      (Op.ref .real [M, Bk] "p")))
+              , Stmt.assign .real [M, D] "o_acc"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+                      (Op.ref .real [M, D] "o_acc"))
+                    (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+                      (Op.ref .real [M, Bk] "p")
+                      (Op.ref .real [Bk, D] "v")))
+              , Stmt.assign .real [M] "m_i"
+                  (Op.ref .real [M] "m_new")
+              , Stmt.assign .real [M] "l_i"
+                  (Op.ref .real [M] "l_new")
+              ] s4 := stepStmts.cons_some h4
+      _ = stepStmts
+              [ Stmt.assign .real [M, D] "o_acc"
+                  (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                    (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "alpha"))
+                      (Op.ref .real [M, D] "o_acc"))
+                    (Op.dot (batch := []) (M := M) (K := Bk) (N := D)
+                      (Op.ref .real [M, Bk] "p")
+                      (Op.ref .real [Bk, D] "v")))
+              , Stmt.assign .real [M] "m_i"
+                  (Op.ref .real [M] "m_new")
+              , Stmt.assign .real [M] "l_i"
+                  (Op.ref .real [M] "l_new")
+              ] s5 := stepStmts.cons_some h5
+      _ = stepStmts
+              [ Stmt.assign .real [M] "m_i"
+                  (Op.ref .real [M] "m_new")
+              , Stmt.assign .real [M] "l_i"
+                  (Op.ref .real [M] "l_new")
+              ] s6 := stepStmts.cons_some h6
+      _ = stepStmts
+              [ Stmt.assign .real [M] "l_i"
+                  (Op.ref .real [M] "l_new")
+              ] s7 := stepStmts.cons_some h7
+      _ = stepStmts [] s' := stepStmts.cons_some h8
+      _ = some s' := by simp [stepStmts]
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s', s7, s6, s5, s4, s3, s2, s1, hpidReg]
     · simpa [s', s7, s6, s5, s4, s3, s2, s1] using hpid
@@ -1744,7 +2676,7 @@ theorem fa1_score_preLoop_correct
       ).setReg "offs_d" .nat [D] (Tile.vec fun d : Fin D => d.val)
       ).setReg "q_ptrs" .nat [M, D] qPtrs
       ).setReg "q" .real [M, D] qLoaded
-      ).setReg "m_i" .real [M] ⟨fun _ => (⊥ : WithBot ℝ)⟩
+      ).setReg "m_i" .real [M] ⟨fun _ => (none : WithBot ℝ)⟩
       ).setReg "l_i" .real [M] (Tile.ofReal fun _ => 0)
       ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
   have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
@@ -1758,7 +2690,9 @@ theorem fa1_score_preLoop_correct
   refine ⟨s0, ?_, ?_⟩
   · simp [fa1ScorePreLoop, stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
       NumericDType.add, NumericDType.mul, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal, qPtrs, qLoaded, s0]
-    rfl
+    unfold evalOp
+    simp [fa1ScorePreLoop, stepStmts, stepStmt, Tile.bop, NumericDType.add,
+      NumericDType.mul, Option.bind, Tile.vec, Tile.ofReal, qPtrs, qLoaded, s0]
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s0]
     · simp [s0]
@@ -1766,6 +2700,8 @@ theorem fa1_score_preLoop_correct
     · simp [s0]
     · simp [s0, hQ_loaded_eq]
     · simp [s0, mScoreOnline]
+      funext idx
+      rfl
     · simp [s0, lScoreOnline, Tile.ofReal]
     · simp [s0, oScoreOnline, Tile.ofReal]
     · intro idx
@@ -1850,15 +2786,101 @@ theorem fa1_score_postLoop_correct
     apply h_inj
     simpa [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
       Nat.add_assoc] using h
-  simp [observeTileAt, fa1ScorePostLoop, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
-        Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
-        NumericDType.div, Offset.rowMajor2D, Offset.strided, Option.bind,
-        TileShape.dropInsertedIndex]
-  rw [show origPid * M * D + idx.1.val * D + idx.2.1.val =
-      (origPid * M + idx.1.val) * D + idx.2.1.val by
-        rw [Nat.add_mul]]
-  rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
-  simp [oScoreOnline_div_lScoreOnline_eq_attentionRealMaskedScore visible score V idx]
+  let outFn : TileIndex [M, D] → ℝ :=
+    fun i => oScoreOnline visible score V S i / lScoreOnline visible score S i.1
+  let outTile : Tile .real [M, D] := Tile.ofReal outFn
+  let ptrTile : Tile .nat [M, D] :=
+    ⟨fun i : TileIndex [M, D] => (origPid * M + i.1.val) * D + i.2.1.val⟩
+  let sOut := sLoop.setReg "out" .real [M, D] outTile
+  let sPtrs := sOut.setReg "o_ptrs" .nat [M, D] ptrTile
+  have hOut :
+      stepStmt
+        (Stmt.assign .real [M, D] "out"
+          (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (Op.ref .real [M, D] "o_acc")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i"))))
+        sLoop = some sOut := by
+    simp only [stepStmt, evalOp_div, Option.bind_eq_bind, Option.bind_some]
+    rw [evalOp_ref]
+    rw [ho]
+    rw [evalOp_expandDim_one_real]
+    rw [hl]
+    simp [outFn, outTile, sOut, Tile.ofReal, Tile.bop, NumericDType.div]
+  have hPtrs :
+      stepStmt
+        (Stmt.assign .nat [M, D] "o_ptrs"
+          (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+              (Op.constNat D))
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))))
+        sOut = some sPtrs := by
+    simp only [stepStmt, evalOp_add, evalOp_mul, evalOp_constNat,
+      Option.bind_eq_bind, Option.bind_some]
+    rw [evalOp_expandDim_one_nat]
+    rw [show sOut.regs .nat [M] "offs_m" =
+        some (Tile.vec fun i : Fin M => origPid * M + i.val) by
+      simp [sOut, hoffs_m]]
+    rw [evalOp_expandDim_zero_nat]
+    rw [show sOut.regs .nat [D] "offs_d" =
+        some (Tile.vec fun d : Fin D => d.val) by
+      simp [sOut, hoffs_d]]
+    simp [ptrTile, sPtrs, Tile.vec, Tile.bop, NumericDType.add,
+      NumericDType.mul]
+  have hExec :
+      stepStmts (fa1ScorePostLoop outReg M D) sLoop =
+        stepStmt
+          (Stmt.store .real [M, D]
+            (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+            (Op.ref .real [M, D] "out") MaskOpt.none) sPtrs := by
+    calc
+      stepStmts (fa1ScorePostLoop outReg M D) sLoop
+          = stepStmts
+              [ Stmt.assign .nat [M, D] "o_ptrs"
+                  (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                    (Op.mul .nat Broadcast.scalarR
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+                      (Op.constNat D))
+                    (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+              , Stmt.store .real [M, D]
+                  (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+                  (Op.ref .real [M, D] "out") MaskOpt.none
+              ] sOut := by
+                simp [fa1ScorePostLoop]
+                exact stepStmts.cons_some hOut
+      _ = stepStmts
+              [ Stmt.store .real [M, D]
+                  (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+                  (Op.ref .real [M, D] "out") MaskOpt.none
+              ] sPtrs := stepStmts.cons_some hPtrs
+      _ = stepStmt
+              (Stmt.store .real [M, D]
+                (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+                (Op.ref .real [M, D] "out") MaskOpt.none) sPtrs := by
+            cases hStore :
+              stepStmt
+                (Stmt.store .real [M, D]
+                  (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+                  (Op.ref .real [M, D] "out") MaskOpt.none) sPtrs <;>
+              simp [stepStmts, hStore]
+  rw [hExec]
+  have hPtrEq :
+      ptrTile =
+        (⟨Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D⟩ :
+          Tile .nat [M, D]) := by
+    ext i
+    simp [ptrTile, Offset.rowMajor2D, Offset.strided, Nat.add_mul,
+      Nat.mul_assoc, Nat.add_assoc]
+  have hPtrsReg :
+      sPtrs.regs .nat [M, D] "o_ptrs" =
+        some (⟨Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D⟩ :
+          Tile .nat [M, D]) := by
+    simp [sPtrs, hPtrEq]
+  have hOutReg : sPtrs.regs .real [M, D] "out" = some (Tile.ofReal outFn) := by
+    simp [sPtrs, sOut, outTile]
+  simpa [outFn, oScoreOnline_div_lScoreOnline_eq_attentionRealMaskedScore visible score V idx] using
+    Offset.store_stage_readback_rowMajor2D_base outReg "o_ptrs" "out" M D
+      (origPid * M * D) sPtrs outFn hPtrsReg hOutReg idx
 
 theorem fa1_score_postLoop_correct_blocks
     {M D Bk numKVBlocks : Nat}
@@ -1912,14 +2934,102 @@ theorem fa1_score_blockrec_postLoop_correct
     apply h_inj
     simpa [Offset.rowMajor2D, Offset.strided, Nat.add_mul, Nat.mul_assoc,
       Nat.add_assoc] using h
-  simp [observeTileAt, fa1ScorePostLoop, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho,
-        Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
-        NumericDType.div, Offset.rowMajor2D, Offset.strided, Option.bind,
-        TileShape.dropInsertedIndex]
-  rw [show origPid * M * D + idx.1.val * D + idx.2.1.val =
-      (origPid * M + idx.1.val) * D + idx.2.1.val by
-        rw [Nat.add_mul]]
-  rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
+  let outFn : TileIndex [M, D] → ℝ :=
+    fun i => oScoreBlockPartial visible score V numKVBlocks i /
+      lScoreBlockPartial visible score numKVBlocks i.1
+  let outTile : Tile .real [M, D] := Tile.ofReal outFn
+  let ptrTile : Tile .nat [M, D] :=
+    ⟨fun i : TileIndex [M, D] => (origPid * M + i.1.val) * D + i.2.1.val⟩
+  let sOut := sLoop.setReg "out" .real [M, D] outTile
+  let sPtrs := sOut.setReg "o_ptrs" .nat [M, D] ptrTile
+  have hOut :
+      stepStmt
+        (Stmt.assign .real [M, D] "out"
+          (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (Op.ref .real [M, D] "o_acc")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i"))))
+        sLoop = some sOut := by
+    simp only [stepStmt, evalOp_div, Option.bind_eq_bind, Option.bind_some]
+    rw [evalOp_ref]
+    rw [ho]
+    rw [evalOp_expandDim_one_real]
+    rw [hl]
+    simp [outFn, outTile, sOut, Tile.ofReal, Tile.bop, NumericDType.div]
+  have hPtrs :
+      stepStmt
+        (Stmt.assign .nat [M, D] "o_ptrs"
+          (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+              (Op.constNat D))
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))))
+        sOut = some sPtrs := by
+    simp only [stepStmt, evalOp_add, evalOp_mul, evalOp_constNat,
+      Option.bind_eq_bind, Option.bind_some]
+    rw [evalOp_expandDim_one_nat]
+    rw [show sOut.regs .nat [M] "offs_m" =
+        some (Tile.vec fun i : Fin M => origPid * M + i.val) by
+      simp [sOut, hoffs_m]]
+    rw [evalOp_expandDim_zero_nat]
+    rw [show sOut.regs .nat [D] "offs_d" =
+        some (Tile.vec fun d : Fin D => d.val) by
+      simp [sOut, hoffs_d]]
+    simp [ptrTile, sPtrs, Tile.vec, Tile.bop, NumericDType.add,
+      NumericDType.mul]
+  have hExec :
+      stepStmts (fa1ScorePostLoop outReg M D) sLoop =
+        stepStmt
+          (Stmt.store .real [M, D]
+            (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+            (Op.ref .real [M, D] "out") MaskOpt.none) sPtrs := by
+    calc
+      stepStmts (fa1ScorePostLoop outReg M D) sLoop
+          = stepStmts
+              [ Stmt.assign .nat [M, D] "o_ptrs"
+                  (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                    (Op.mul .nat Broadcast.scalarR
+                      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+                      (Op.constNat D))
+                    (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d")))
+              , Stmt.store .real [M, D]
+                  (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+                  (Op.ref .real [M, D] "out") MaskOpt.none
+              ] sOut := by
+                simp [fa1ScorePostLoop]
+                exact stepStmts.cons_some hOut
+      _ = stepStmts
+              [ Stmt.store .real [M, D]
+                  (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+                  (Op.ref .real [M, D] "out") MaskOpt.none
+              ] sPtrs := stepStmts.cons_some hPtrs
+      _ = stepStmt
+              (Stmt.store .real [M, D]
+                (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+                (Op.ref .real [M, D] "out") MaskOpt.none) sPtrs := by
+            cases hStore :
+              stepStmt
+                (Stmt.store .real [M, D]
+                  (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+                  (Op.ref .real [M, D] "out") MaskOpt.none) sPtrs <;>
+              simp [stepStmts, hStore]
+  rw [hExec]
+  have hPtrEq :
+      ptrTile =
+        (⟨Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D⟩ :
+          Tile .nat [M, D]) := by
+    ext i
+    simp [ptrTile, Offset.rowMajor2D, Offset.strided, Nat.add_mul,
+      Nat.mul_assoc, Nat.add_assoc]
+  have hPtrsReg :
+      sPtrs.regs .nat [M, D] "o_ptrs" =
+        some (⟨Offset.rowMajor2D (rows := M) (cols := D) (origPid * M * D) D⟩ :
+          Tile .nat [M, D]) := by
+    simp [sPtrs, hPtrEq]
+  have hOutReg : sPtrs.regs .real [M, D] "out" = some (Tile.ofReal outFn) := by
+    simp [sPtrs, sOut, outTile]
+  simpa [outFn] using
+    Offset.store_stage_readback_rowMajor2D_base outReg "o_ptrs" "out" M D
+      (origPid * M * D) sPtrs outFn hPtrsReg hOutReg idx
 
 end FA1Score
 

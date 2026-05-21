@@ -166,7 +166,7 @@ theorem fused_recurrent_hgrn_output_store_slice_correct
           else s.readMem O outAddr) := by
   intro i
   simp [exec, fused_recurrent_hgrn_output_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt, dIndex,
         active, bhOffset, outOffset]
   let offsetFn : TileIndex [BD] → Nat :=
@@ -260,7 +260,7 @@ theorem fused_recurrent_hgrn_forward_step_store_slice_correct
     obtain rfl : a = b := hOutInj habFin
     rfl
   simp [exec, fused_recurrent_hgrn_forward_step_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
         outOffset, bhOffset, dIndex, ComputeExpr.toAlgorithm?,
@@ -340,7 +340,7 @@ theorem fused_recurrent_hgrn_final_state_store_slice_correct
     obtain rfl : a = b := hOutInj habFin
     rfl
   simp [exec, fused_recurrent_hgrn_final_state_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt]
   simp only [finalStateOffset, dIndex, Nat.add_assoc]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
@@ -415,7 +415,7 @@ theorem fused_recurrent_hgrn_bwd_grad_store_slice_correct
     obtain rfl : a = b := hOutInj habFin
     rfl
   simp [exec, fused_recurrent_hgrn_bwd_grad_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt, outOffset,
         dIndex]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
@@ -488,7 +488,7 @@ theorem fused_recurrent_hgrn_bwd_dx_step_store_slice_correct
     obtain rfl : a = b := hOutInj habFin
     rfl
   simp [exec, fused_recurrent_hgrn_bwd_dx_step_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
         outOffset, dIndex, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -568,7 +568,7 @@ theorem fused_recurrent_hgrn_bwd_dg_step_store_slice_correct
     obtain rfl : a = b := hOutInj habFin
     rfl
   simp [exec, fused_recurrent_hgrn_bwd_dg_step_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
         outOffset, dIndex, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -747,5 +747,261 @@ theorem fused_recurrent_hgrn_test_bwd_dg_store_slice_compute_correct
   apply Fin.ext
   simp [outOffset, dIndex] at h
   omega
+
+/-! ## Python test-case surface wrappers
+
+The Python regression keeps `B = 1`, `H = 2`, `T = 2`, `D = 2` and varies
+only `initial_state`/`output_final_state`. These wrappers pin the four forward
+entry points and the two backward `USE_INITIAL_STATE` paths used by autograd. -/
+
+theorem fused_recurrent_hgrn_test_case1_fwd_surface_toAlgorithm_supported
+    (x g o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
+      Bool.false Bool.false).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
+    2 2 32 Bool.false Bool.false
+
+theorem fused_recurrent_hgrn_test_case2_fwd_surface_toAlgorithm_supported
+    (x g o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
+      Bool.true Bool.false).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
+    2 2 32 Bool.true Bool.false
+
+theorem fused_recurrent_hgrn_test_case3_fwd_surface_toAlgorithm_supported
+    (x g o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
+      Bool.false Bool.true).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
+    2 2 32 Bool.false Bool.true
+
+theorem fused_recurrent_hgrn_test_case4_fwd_surface_toAlgorithm_supported
+    (x g o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_hgrn_fwd_surface x g o h0 ht 2 2 32
+      Bool.true Bool.true).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported x g o h0 ht
+    2 2 32 Bool.true Bool.true
+
+theorem fused_recurrent_hgrn_test_no_initial_state_bwd_surface_toAlgorithm_supported
+    (G O H0 DX DG DO : RegionName) :
+    (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
+      Bool.false).toAlgorithm? =
+      Except.ok
+        (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
+          Bool.false).toAlgKernel := by
+  exact fused_recurrent_hgrn_bwd_surface_toAlgorithm_supported G O H0 DX DG DO
+    2 2 32 Bool.false
+
+theorem fused_recurrent_hgrn_test_with_initial_state_bwd_surface_toAlgorithm_supported
+    (G O H0 DX DG DO : RegionName) :
+    (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
+      Bool.true).toAlgorithm? =
+      Except.ok
+        (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
+          Bool.true).toAlgKernel := by
+  exact fused_recurrent_hgrn_bwd_surface_toAlgorithm_supported G O H0 DX DG DO
+    2 2 32 Bool.true
+
+/-! ## Python test-case all-output summaries
+
+The following public wrappers group the proof slices that correspond to the
+four result entries produced by `test_fused_recurrent_hgrn_with_backward`.
+They deliberately stay in this benchmark file: the grouping is specific to the
+Python regression's `initial_state`/`output_final_state` matrix and should not
+be promoted to the shared math or semantics layers. -/
+
+/-- `test_case_1`: no initial state and no final state. The checked observable
+outputs are the forward `o` row and the backward `dx`/`dg` row writebacks. -/
+theorem fused_recurrent_hgrn_test_case1_python_test_shape_all_outputs_compute_correct
+    (BH DHPrev DO BO O DX DG : RegionName) (t_rel : Fin 2) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_output_store_slice BH O t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => storeValue s BH 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (DX, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => bwdDxStepValue s DHPrev DO t_rel.val 2 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (DG, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => bwdDgStepValue s DHPrev DO BO t_rel.val 2 2 32 i)) := by
+  constructor
+  · exact fused_recurrent_hgrn_test_output_store_slice_compute_correct
+      BH O t_rel.val s
+  constructor
+  · exact fused_recurrent_hgrn_test_bwd_dx_step_store_slice_compute_correct
+      DHPrev DO DX t_rel.val s
+  · exact fused_recurrent_hgrn_test_bwd_dg_step_store_slice_compute_correct
+      DHPrev DO BO DG t_rel.val s
+
+/-- `test_case_2`: initial state and no final state. Besides the observable
+`o`, `dx`, and `dg` rows, this records the forward recurrence step used when
+the Python path seeds the hidden state from `initial_state`. -/
+theorem fused_recurrent_hgrn_test_case2_python_test_shape_all_outputs_compute_correct
+    (BH BHPrev X G DHPrev DO BO O DX DG : RegionName) (t_rel : Fin 2)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_output_store_slice BH O t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => storeValue s BH 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i =>
+        forwardStepValue s BHPrev X G t_rel.val 2 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (DX, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => bwdDxStepValue s DHPrev DO t_rel.val 2 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (DG, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => bwdDgStepValue s DHPrev DO BO t_rel.val 2 2 32 i)) := by
+  constructor
+  · exact fused_recurrent_hgrn_test_output_store_slice_compute_correct
+      BH O t_rel.val s
+  constructor
+  · exact fused_recurrent_hgrn_test_forward_step_store_slice_compute_correct
+      BHPrev X G O t_rel.val s
+  constructor
+  · exact fused_recurrent_hgrn_test_bwd_dx_step_store_slice_compute_correct
+      DHPrev DO DX t_rel.val s
+  · exact fused_recurrent_hgrn_test_bwd_dg_step_store_slice_compute_correct
+      DHPrev DO BO DG t_rel.val s
+
+/-- `test_case_3`: no initial state and final-state output. This groups the
+forward `o` row, the final-state store, and the backward `dx`/`dg` row
+writebacks used after `loss = o.sum() + final_state.sum()`. -/
+theorem fused_recurrent_hgrn_test_case3_python_test_shape_all_outputs_compute_correct
+    (BH BHFinal DHPrev DO BO O Ht DX DG : RegionName) (t_rel : Fin 2)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_output_store_slice BH O t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => storeValue s BH 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (Ht, finalStateOffset s 2 32 i)))
+      (expected := fun i => finalStateStoreValue s BHFinal 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (DX, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => bwdDxStepValue s DHPrev DO t_rel.val 2 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (DG, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => bwdDgStepValue s DHPrev DO BO t_rel.val 2 2 32 i)) := by
+  constructor
+  · exact fused_recurrent_hgrn_test_output_store_slice_compute_correct
+      BH O t_rel.val s
+  constructor
+  · exact fused_recurrent_hgrn_test_final_state_store_slice_compute_correct
+      BHFinal Ht s
+  constructor
+  · exact fused_recurrent_hgrn_test_bwd_dx_step_store_slice_compute_correct
+      DHPrev DO DX t_rel.val s
+  · exact fused_recurrent_hgrn_test_bwd_dg_step_store_slice_compute_correct
+      DHPrev DO BO DG t_rel.val s
+
+/-- `test_case_4`: initial state and final-state output. This is the full
+Python regression surface for this port: forward row store, recurrence step,
+final-state store, and the two backward gradient row writebacks. -/
+theorem fused_recurrent_hgrn_test_case4_python_test_shape_all_outputs_compute_correct
+    (BH BHPrev BHFinal X G DHPrev DO BO O Ht DX DG : RegionName)
+    (t_rel : Fin 2) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_output_store_slice BH O t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => storeValue s BH 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_forward_step_store_slice BHPrev X G O
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (O, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i =>
+        forwardStepValue s BHPrev X G t_rel.val 2 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (Ht, finalStateOffset s 2 32 i)))
+      (expected := fun i => finalStateStoreValue s BHFinal 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (DX, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => bwdDxStepValue s DHPrev DO t_rel.val 2 2 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
+        t_rel.val 2 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 32)
+        (fun i => (DG, outOffset s t_rel.val 2 2 32 i)))
+      (expected := fun i => bwdDgStepValue s DHPrev DO BO t_rel.val 2 2 32 i)) := by
+  constructor
+  · exact fused_recurrent_hgrn_test_output_store_slice_compute_correct
+      BH O t_rel.val s
+  constructor
+  · exact fused_recurrent_hgrn_test_forward_step_store_slice_compute_correct
+      BHPrev X G O t_rel.val s
+  constructor
+  · exact fused_recurrent_hgrn_test_final_state_store_slice_compute_correct
+      BHFinal Ht s
+  constructor
+  · exact fused_recurrent_hgrn_test_bwd_dx_step_store_slice_compute_correct
+      DHPrev DO DX t_rel.val s
+  · exact fused_recurrent_hgrn_test_bwd_dg_step_store_slice_compute_correct
+      DHPrev DO BO DG t_rel.val s
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn

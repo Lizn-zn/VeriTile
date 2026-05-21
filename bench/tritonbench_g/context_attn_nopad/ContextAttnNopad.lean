@@ -201,7 +201,7 @@ theorem context_attn_nopad_final_store_slice_correct
               stride_acc_m stride_acc_d BLOCK_M idx
           else s.readMem Out outAddr) := by
   intro idx
-  simp [exec, context_attn_nopad_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, context_attn_nopad_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         BlockState.readMemValue, seqLen, startLoc, mIndex, dIndex, active,
@@ -278,5 +278,40 @@ theorem context_attn_nopad_final_store_slice_compute_correct
     stride_obs stride_oh stride_od BLOCK_M BLOCK_DMODEL s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+The checked Python tests use `H = 6`, `N_CTX = 1024`, and `D_HEAD = 128`
+with contiguous output row/head/dimension strides `(768, 128, 1)`. The launcher
+uses `BLOCK_M = BLOCK_N = 128` and `BLOCK_DMODEL = 128`. -/
+
+theorem context_attn_nopad_python_test_shape_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        outOffset s B_Start_Loc 768 128 1 128 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem context_attn_nopad_final_store_python_test_shape_compute_correct
+    (Acc B_Start_Loc B_Seqlen Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_nopad_final_store_slice Acc B_Start_Loc B_Seqlen
+        Out 786432 128 768 1 768 128 1 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        accStoreValue s Acc B_Seqlen 786432 128 768 1 128 idx) := by
+  exact context_attn_nopad_final_store_slice_compute_correct Acc B_Start_Loc
+    B_Seqlen Out 786432 128 768 1 768 128 1 128 128 s
+    (context_attn_nopad_python_test_shape_offset_injective s B_Start_Loc)
 
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad

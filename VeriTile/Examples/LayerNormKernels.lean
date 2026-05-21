@@ -250,6 +250,13 @@ theorem twopass_layernorm_correct
         Tile.natToReal,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
         layerNormSpec, twoPassMean, twoPassS]
+  repeat unfold evalOp
+  simp [observeAt, exec, twoPassLayerNormKernel, stepStmts, stepStmt,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        Tile.natToReal,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+        layerNormSpec, twoPassMean, twoPassS]
   unfold InputLoadedAt at _h_x
   unfold InputFeatureLoadedAt at _h_γ _h_β
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]

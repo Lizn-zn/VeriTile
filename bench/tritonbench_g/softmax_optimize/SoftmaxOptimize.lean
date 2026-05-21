@@ -143,7 +143,7 @@ theorem softmax_kernel_online_v2_one_tile_correct
         else s.readMem output_ptr (outOffset s N i) := by
   intro i
   by_cases hT : 0 < TILE_N
-  · simp [exec, softmax_kernel_online_v2_one_tile, stepStmts, stepStmt, evalOp,
+  · simp [exec, softmax_kernel_online_v2_one_tile, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,

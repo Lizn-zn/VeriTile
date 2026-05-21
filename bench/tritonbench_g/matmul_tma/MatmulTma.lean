@@ -233,7 +233,7 @@ theorem matmul_output_store_slice_correct
         s.readMem Acc
           (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
   intro idx
-  simp [exec, matmul_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, matmul_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.expandDim, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, TileShape.dropInsertedIndex] at hExec
   rw [← hExec]
@@ -295,7 +295,7 @@ theorem matmul_output_store_f16_slice_correct
             (some (s.readMem Acc
               (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx)))) := by
   intro idx
-  simp [exec, matmul_output_store_f16_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, matmul_output_store_f16_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.expandDim, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, TileShape.dropInsertedIndex] at hExec
   rw [← hExec]

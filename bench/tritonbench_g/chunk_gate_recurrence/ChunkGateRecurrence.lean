@@ -208,7 +208,7 @@ theorem chunk_gate_recurrence_forward_store_slice_correct
             (accOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx)) := by
   intro idx
   simp [exec, chunk_gate_recurrence_forward_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, kIndex, vIndex,
         accOffset, outOffset, TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] → Nat :=
@@ -338,7 +338,7 @@ theorem chunk_gate_recurrence_initial_zero_store_slice_correct
         = some (0.0 : ℝ) := by
   intro idx
   simp [exec, chunk_gate_recurrence_initial_zero_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         outOffset, kIndex, vIndex, TileShape.dropInsertedIndex,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -451,7 +451,7 @@ theorem chunk_gate_recurrence_forward_step_store_slice_correct
             D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx) := by
   intro idx
   simp [exec, chunk_gate_recurrence_forward_step_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         accOffset, forwardStepTileOffset, dOffset, kIndex, vIndex,
         TileShape.dropInsertedIndex, ComputeExpr.toAlgorithm?,
@@ -556,7 +556,7 @@ theorem chunk_gate_recurrence_bwd_dacc_step_DI_store_slice_correct
             D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx) := by
   intro idx
   simp [exec, chunk_gate_recurrence_bwd_dacc_step_DI_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         timeTileOffset, dOffset, kIndex, vIndex, TileShape.dropInsertedIndex,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
@@ -680,7 +680,7 @@ theorem chunk_gate_recurrence_bwd_dg_step_store_slice_correct
       bwdDGStepSpec s DaccPrev DS S D t_rel NUM_BLOCK D_MODEL_K D_MODEL_V
         BLOCK_MODEL_K BLOCK_MODEL_V := by
   simp [exec, chunk_gate_recurrence_bwd_dg_step_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
         NumericDType.add, NumericDType.mul, FloatDType.cast,
@@ -772,7 +772,7 @@ theorem chunk_gate_recurrence_bwd_DI_store_slice_correct
             BLOCK_MODEL_K BLOCK_MODEL_V idx) := by
   intro idx
   simp [exec, chunk_gate_recurrence_bwd_DI_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, kIndex, vIndex,
         timeTileOffset, TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] → Nat :=
@@ -859,7 +859,7 @@ theorem chunk_gate_recurrence_bwd_DG_store_slice_correct
     s'.readMem DG (bwdDGOffset s t_rel NUM_BLOCK NUM_K NUM_V) =
       bwdDGStoreSpec s DGPre t_rel NUM_BLOCK NUM_K NUM_V := by
   simp [exec, chunk_gate_recurrence_bwd_DG_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul] at hExec
   rw [← hExec]
   simp [bwdDGOffset, bwdDGStoreSpec]
@@ -944,7 +944,7 @@ theorem chunk_gate_recurrence_bwd_DL_store_slice_correct
           idx.1.val * D_MODEL_V + idx.2.1.val) := by
     simpa [bwdDLOffset] using hOutInj
   simp [exec, chunk_gate_recurrence_bwd_DL_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         TileShape.dropInsertedIndex] at hExec
   rw [← hExec]
@@ -1128,5 +1128,109 @@ theorem chunk_gate_recurrence_bwd_DL_python_test_shape_compute_correct
   subst bk
   subst bv
   rfl
+
+/-- Python test-shape forward coverage for chunk gate recurrence: the initial
+state variants and the recurrent step store all realize the checked output tile
+shape. -/
+theorem chunk_gate_recurrence_forward_python_test_shape_all_outputs_compute_correct
+    (Acc LastKv AccPrev S D O : RegionName) (t_rel : Nat) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_forward_store_slice Acc O
+        64 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (O, outOffset s 64 64 64 64 16 idx))
+      (expected := fun idx : TileIndex [64, 16] =>
+        s.readMem Acc (accOffset s 64 64 64 16 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_initial_last_kv_store_slice LastKv O
+        64 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (O, outOffset s 64 64 64 64 16 idx))
+      (expected := fun idx =>
+        s.readMem LastKv (accOffset s 64 64 64 16 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_initial_zero_store_slice O
+        64 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (O, outOffset s 64 64 64 64 16 idx))
+      (expected := fun _ : TileIndex [64, 16] => (0.0 : ℝ))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_forward_step_store_slice AccPrev S D O
+        t_rel 64 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (O, forwardStepTileOffset s (t_rel + 1) 64 64 64 64 16 idx))
+      (expected := fun idx =>
+        forwardStepSpec s AccPrev S D t_rel 64 64 64 64 16 idx)) := by
+  constructor
+  · exact chunk_gate_recurrence_forward_store_python_test_shape_compute_correct
+      Acc O s
+  constructor
+  · exact
+      chunk_gate_recurrence_initial_last_kv_python_test_shape_compute_correct
+        LastKv O s
+  constructor
+  · exact chunk_gate_recurrence_initial_zero_python_test_shape_compute_correct O s
+  · exact chunk_gate_recurrence_forward_step_python_test_shape_compute_correct
+      AccPrev S D O t_rel s
+
+/-- Python test-shape backward coverage for chunk gate recurrence: the DAcc-step
+`DI`, scalar `DG` step/store, tile `DI`, and final `DL` writebacks all realize
+their checked output shapes. -/
+theorem chunk_gate_recurrence_backward_python_test_shape_all_outputs_compute_correct
+    (DaccPrev DS D DI S DGPre DaccPre DL DG : RegionName) (t_rel : Nat)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_bwd_dacc_step_DI_store_slice DaccPrev
+        DS D DI t_rel 64 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (DI, timeTileOffset s t_rel 64 64 64 64 16 idx))
+      (expected := fun idx =>
+        bwdDaccStepSpec s DaccPrev DS D t_rel 64 64 64 64 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_bwd_dg_step_store_slice DaccPrev DS
+        S D DG t_rel 64 1 4 64 64 64 16)
+      (initialState := s)
+      (write := fun _ : PUnit => some (DG, bwdDGOffset s t_rel 64 1 4))
+      (expected := fun _ =>
+        bwdDGStepSpec s DaccPrev DS S D t_rel 64 64 64 64 16)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_bwd_DI_store_slice DaccPre DI
+        t_rel 64 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (DI, timeTileOffset s t_rel 64 64 64 64 16 idx))
+      (expected := fun idx : TileIndex [64, 16] =>
+        bwdDIStoreSpec s DaccPre t_rel 64 64 64 64 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_bwd_DG_store_slice DGPre DG t_rel 64 1 4)
+      (initialState := s)
+      (write := fun _ : PUnit => some (DG, bwdDGOffset s t_rel 64 1 4))
+      (expected := fun _ => bwdDGStoreSpec s DGPre t_rel 64 1 4)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gate_recurrence_bwd_DL_store_slice DaccPre DL 64 64 64 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 16] =>
+        some (DL, bwdDLOffset s 64 64 64 16 idx))
+      (expected := fun idx =>
+        bwdDLStoreSpec s DaccPre 64 64 64 16 idx)) := by
+  constructor
+  · exact chunk_gate_recurrence_bwd_dacc_step_DI_python_test_shape_compute_correct
+      DaccPrev DS D DI t_rel s
+  constructor
+  · exact chunk_gate_recurrence_bwd_dg_step_python_test_shape_compute_correct
+      DaccPrev DS S D DG t_rel s
+  constructor
+  · exact chunk_gate_recurrence_bwd_DI_python_test_shape_compute_correct
+      DaccPre DI t_rel s
+  constructor
+  · exact chunk_gate_recurrence_bwd_DG_python_test_shape_compute_correct
+      DGPre DG t_rel s
+  · exact chunk_gate_recurrence_bwd_DL_python_test_shape_compute_correct
+      DaccPre DL s
 
 end VeriTile.Bench.TritonBenchG.ChunkGateRecurrence

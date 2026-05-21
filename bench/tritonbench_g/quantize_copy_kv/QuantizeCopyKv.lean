@@ -15,8 +15,8 @@ set_option linter.unusedSimpArgs false
 This preserves destination-indexed addressing, `tl.abs`, the per-head
 `tl.max(..., axis=1)` scale computation, value writeback, and scale writeback.
 The Python kernel casts the scale to fp16 before broadcasting it and casts the
-quotient to int8; both casts are preserved as surface dtype annotations while
-the algorithm carrier records the real-valued quotient. -/
+quotient to int8; both casts are preserved as surface dtype annotations and
+lower through the DSL's fixed-width cast placeholders. -/
 def destindex_copy_quantize_kv_real_surface
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
@@ -41,20 +41,19 @@ def destindex_copy_quantize_kv_real_surface
   tl.store(os_ptrs, data_scale, mask=offs_h[:, None] < $(head_num))
 }
 
-/-- The quantize-copy-kv surface is still blocked at algorithm erasure by the
-final quotient `to(tl.int8)` cast. The store-slice theorems below cover the
-real-valued quotient and scale writeback around this explicit gap. -/
-theorem destindex_copy_quantize_kv_real_surface_toAlgorithm_blocked
+/-- The quantize-copy-kv surface lowers through algorithm erasure, including the
+final quotient `to(tl.int8)` cast placeholder. -/
+theorem destindex_copy_quantize_kv_real_surface_toAlgorithm_supported
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
       stride_o_bs stride_o_h stride_o_d
       stride_os_bs stride_os_h stride_os_d
       head_num BLOCK_DMODEL BLOCK_HEAD : Nat) :
-    ∃ err,
+    ∃ alg,
       (destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
         stride_os_bs stride_os_h stride_os_d head_num BLOCK_DMODEL
-        BLOCK_HEAD).toAlgorithm? = Except.error err := by
+        BLOCK_HEAD).toAlgorithm? = Except.ok alg := by
   simp [destindex_copy_quantize_kv_real_surface,
     ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
@@ -65,7 +64,7 @@ The full kernel computes a per-head `data_scale` with `max(abs(src_data))`,
 casts the quotient to int8, and stores both the quantized values and the scale.
 VeriTile's current arithmetic layer models real tiles, so this slice starts from
 a precomputed per-head scale in `OutScale` and proves the masked destination
-indexed value writeback before the backend-specific int8 cast. -/
+indexed value writeback before the fixed-width int8 cast placeholder. -/
 def destindex_copy_quantize_kv_value_store_slice
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
@@ -161,7 +160,7 @@ theorem destindex_copy_quantize_kv_value_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, destindex_copy_quantize_kv_value_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.div,
         ComparableDType.lt, BlockState.readMemValue, headIndex, dimIndex,
         destIndex, kOffset, outOffset, scaleOffset, TileShape.dropInsertedIndex]
@@ -305,7 +304,7 @@ theorem destindex_copy_quantize_kv_test_h8_d256_value_store_compute_correct
 The full kernel computes `data_scale = max(abs(src_data), axis=1) / 127` and
 stores it to `Out_scale` with destination-indexed addressing. This slice starts
 from a precomputed per-head `Scale` region and proves the observed scale store
-surface independently of the current integer cast gap. -/
+surface independently of the integer value-store cast placeholder. -/
 def destindex_copy_quantize_kv_scale_store_slice
     (Scale : RegionName) (DestLoc : Region .nat) (OutScale : RegionName)
     (stride_s_bs stride_s_h stride_os_bs stride_os_h
@@ -361,7 +360,7 @@ theorem destindex_copy_quantize_kv_scale_store_slice_correct
           else s.readMem OutScale outAddr) := by
   intro i
   simp [exec, destindex_copy_quantize_kv_scale_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         BlockState.readMemValue, destIndex, scaleSourceOffset, scaleOutOffset1]
   let offsetFn : TileIndex [BLOCK_HEAD] → Nat :=
@@ -459,5 +458,142 @@ theorem destindex_copy_quantize_kv_test_h8_scale_store_compute_correct
   exact destindex_copy_quantize_kv_scale_store_slice_compute_correct Scale
     DestLoc OutScale stride_s_bs stride_s_h stride_os_bs stride_os_h 8 8
     s hOutInj
+
+/-! ## Python test-shape wrappers
+
+The checked Python tests use `B * N_CTX = 8192` and `H = 8`. Cases 1 and 2
+use `D = 64`, so `K/Out` strides are `(512, 64, 1)` and `Out_scale` strides
+are `(8, 1, 1)`. Case 3 uses `D = 256`, so `K/Out` strides are
+`(2048, 256, 1)` with the same per-head scale layout `(8, 1, 1)`. -/
+
+theorem destindex_copy_quantize_kv_python_d64_value_offset_injective
+    (s : BlockState) (DestLoc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [8, 64] => outOffset s DestLoc 512 64 1 idx) := by
+  rintro ⟨⟨ha, hha⟩, ⟨da, hda⟩, _⟩ ⟨⟨hb, hhb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, destIndex, headIndex, dimIndex] at h
+  have hh : ha = hb := by omega
+  have hd : da = db := by omega
+  subst hb
+  subst db
+  rfl
+
+theorem destindex_copy_quantize_kv_python_d256_value_offset_injective
+    (s : BlockState) (DestLoc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [8, 256] => outOffset s DestLoc 2048 256 1 idx) := by
+  rintro ⟨⟨ha, hha⟩, ⟨da, hda⟩, _⟩ ⟨⟨hb, hhb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, destIndex, headIndex, dimIndex] at h
+  have hh : ha = hb := by omega
+  have hd : da = db := by omega
+  subst hb
+  subst db
+  rfl
+
+theorem destindex_copy_quantize_kv_python_scale_offset_injective
+    (s : BlockState) (DestLoc : RegionName) :
+    Function.Injective
+      (fun i : Fin 8 => scaleOutOffset1 s DestLoc 8 1 i) := by
+  intro a b h
+  simp [scaleOutOffset1, destIndex] at h
+  exact Fin.ext (by omega)
+
+theorem destindex_copy_quantize_kv_python_d64_value_store_compute_correct
+    (K DestLoc Out OutScale : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_value_store_slice K DestLoc Out
+        OutScale 512 64 1 512 64 1 8 1 8 8 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 8 64)
+        (fun idx => (Out, outOffset s DestLoc 512 64 1 idx)))
+      (expected := fun idx =>
+        quantizeCopyKvValueSpec s K DestLoc OutScale 512 64 1 8 1 idx) := by
+  exact destindex_copy_quantize_kv_value_store_slice_compute_correct K DestLoc
+    Out OutScale 512 64 1 512 64 1 8 1 8 8 64 s
+    (destindex_copy_quantize_kv_python_d64_value_offset_injective s DestLoc)
+
+theorem destindex_copy_quantize_kv_python_d256_value_store_compute_correct
+    (K DestLoc Out OutScale : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_value_store_slice K DestLoc Out
+        OutScale 2048 256 1 2048 256 1 8 1 8 8 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 8 256)
+        (fun idx => (Out, outOffset s DestLoc 2048 256 1 idx)))
+      (expected := fun idx =>
+        quantizeCopyKvValueSpec s K DestLoc OutScale 2048 256 1 8 1 idx) := by
+  exact destindex_copy_quantize_kv_value_store_slice_compute_correct K DestLoc
+    Out OutScale 2048 256 1 2048 256 1 8 1 8 8 256 s
+    (destindex_copy_quantize_kv_python_d256_value_offset_injective s DestLoc)
+
+theorem destindex_copy_quantize_kv_python_scale_store_compute_correct
+    (Scale DestLoc OutScale : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_scale_store_slice Scale DestLoc
+        OutScale 8 1 8 1 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 8 8)
+        (fun i => (OutScale, scaleOutOffset1 s DestLoc 8 1 i)))
+      (expected := fun i => quantizeCopyKvScaleSpec s Scale 8 1 i) := by
+  exact destindex_copy_quantize_kv_scale_store_slice_compute_correct Scale
+    DestLoc OutScale 8 1 8 1 8 8 s
+    (destindex_copy_quantize_kv_python_scale_offset_injective s DestLoc)
+
+/-- Python cases 1 and 2 (`D = 64`) expose both destination-indexed value
+writeback and per-head scale writeback. -/
+theorem destindex_copy_quantize_kv_python_d64_all_outputs_compute_correct
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_value_store_slice K DestLoc Out
+        OutScale 512 64 1 512 64 1 8 1 8 8 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 8 64)
+        (fun idx => (Out, outOffset s DestLoc 512 64 1 idx)))
+      (expected := fun idx =>
+        quantizeCopyKvValueSpec s K DestLoc OutScale 512 64 1 8 1 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_scale_store_slice Scale DestLoc
+        OutScale 8 1 8 1 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 8 8)
+        (fun i => (OutScale, scaleOutOffset1 s DestLoc 8 1 i)))
+      (expected := fun i => quantizeCopyKvScaleSpec s Scale 8 1 i)) := by
+  constructor
+  · exact destindex_copy_quantize_kv_python_d64_value_store_compute_correct
+      K DestLoc Out OutScale s
+  · exact destindex_copy_quantize_kv_python_scale_store_compute_correct
+      Scale DestLoc OutScale s
+
+/-- Python case 3 (`D = 256`) exposes both destination-indexed value writeback
+and per-head scale writeback. -/
+theorem destindex_copy_quantize_kv_python_d256_all_outputs_compute_correct
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_value_store_slice K DestLoc Out
+        OutScale 2048 256 1 2048 256 1 8 1 8 8 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 8 256)
+        (fun idx => (Out, outOffset s DestLoc 2048 256 1 idx)))
+      (expected := fun idx =>
+        quantizeCopyKvValueSpec s K DestLoc OutScale 2048 256 1 8 1 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_scale_store_slice Scale DestLoc
+        OutScale 8 1 8 1 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 8 8)
+        (fun i => (OutScale, scaleOutOffset1 s DestLoc 8 1 i)))
+      (expected := fun i => quantizeCopyKvScaleSpec s Scale 8 1 i)) := by
+  constructor
+  · exact destindex_copy_quantize_kv_python_d256_value_store_compute_correct
+      K DestLoc Out OutScale s
+  · exact destindex_copy_quantize_kv_python_scale_store_compute_correct
+      Scale DestLoc OutScale s
 
 end VeriTile.Bench.TritonBenchG.QuantizeCopyKv

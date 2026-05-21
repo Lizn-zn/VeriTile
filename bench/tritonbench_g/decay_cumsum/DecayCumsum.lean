@@ -229,7 +229,7 @@ theorem prepare_qg_decay_store_slice_correct
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [exec, prepare_qg_decay_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, prepare_qg_decay_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt, elemIndex, baseOffset, offset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj (i, PUnit.unit)]
@@ -306,7 +306,7 @@ theorem prepare_kg_decay_store_slice_correct
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [exec, prepare_kg_decay_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, prepare_kg_decay_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt, elemIndex, baseOffset, offset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj (i, PUnit.unit)]
@@ -379,7 +379,7 @@ theorem fwd_decay_cumsum_store_slice_correct
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [exec, fwd_decay_cumsum_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, fwd_decay_cumsum_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt, elemIndex, baseOffset, offset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj (i, PUnit.unit)]
@@ -451,7 +451,7 @@ theorem fwd_decay_cumsum_step_store_slice_correct
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [exec, fwd_decay_cumsum_step_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, fwd_decay_cumsum_step_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt, FloatDType.cast,
         FloatDType.ofWithBot, FloatDType.toWithBot, elemIndex, baseOffset,
@@ -529,7 +529,7 @@ theorem bwd_decay_cumsum_store_slice_correct
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [exec, bwd_decay_cumsum_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, bwd_decay_cumsum_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt, elemIndex, baseOffset, offset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj (i, PUnit.unit)]
@@ -611,7 +611,7 @@ theorem bwd_decay_dg_step_store_slice_correct
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [exec, bwd_decay_dg_step_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, bwd_decay_dg_step_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.sub, NumericDType.mul, ComparableDType.lt,
         FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
@@ -814,5 +814,118 @@ theorem bwd_decay_dg_step_python_test_shape_compute_correct
           64 8 t_rel.val 2 4 i) := by
   exact bwd_decay_dg_step_store_slice_compute_correct CumGradPrev DQ DKReg Q K DG
     64 8 t_rel.val 2 4 s
+
+/-- Python test-shape preparation coverage: both `q_g` and `k_g` decay-prep
+stores realize the checked row slice for either `t_rel` loop row. -/
+theorem decay_cumsum_prepare_python_test_shape_all_outputs_compute_correct
+    (Q QDecay QG K KDecay KG : RegionName) (t_rel : Fin 2)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := prepare_qg_decay_store_slice Q QDecay QG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (QG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        prepareQgDecaySpec s Q QDecay 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := prepare_kg_decay_store_slice K KDecay KG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (KG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        prepareKgDecaySpec s K KDecay 64 8 t_rel.val 2 4 i)) := by
+  constructor
+  · exact prepare_qg_decay_python_test_shape_compute_correct
+      Q QDecay QG t_rel s
+  · exact prepare_kg_decay_python_test_shape_compute_correct
+      K KDecay KG t_rel s
+
+/-- Python test-shape forward coverage: the cumulative decay writeback and the
+one-step recurrence writeback both realize the checked `GO` row slice. -/
+theorem decay_cumsum_forward_python_test_shape_all_outputs_compute_correct
+    (CumDecayPre CumPrev G GO : RegionName) (t_rel : Fin 2)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_store_slice CumDecayPre GO
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        fwdDecayCumsumSpec s CumDecayPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_step_store_slice CumPrev G GO
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        fwdDecayStepSpec s CumPrev G 64 8 t_rel.val 2 4 i)) := by
+  constructor
+  · exact fwd_decay_cumsum_store_python_test_shape_compute_correct
+      CumDecayPre GO t_rel s
+  · exact fwd_decay_cumsum_step_python_test_shape_compute_correct
+      CumPrev G GO t_rel s
+
+/-- Python test-shape backward coverage: the cumsum writebacks for `dq_inter`,
+`dk_inter`, and `dg`, plus the one-step `dg` recurrence, all realize the checked
+row slice. -/
+theorem decay_cumsum_backward_python_test_shape_all_outputs_compute_correct
+    (DQInterPre DQInter DKInterPre DKInter DGPre CumGradPrev DQ DKReg Q K DG :
+      RegionName)
+    (t_rel : Fin 2) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DQInterPre DQInter
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DQInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DQInterPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DKInterPre DKInter
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DKInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DKInterPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DGPre DG 64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DGPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_dg_step_store_slice CumGradPrev DQ DKReg Q K DG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayDGStepSpec s CumGradPrev DQ DKReg Q K
+          64 8 t_rel.val 2 4 i)) := by
+  constructor
+  · exact bwd_decay_cumsum_dq_inter_python_test_shape_compute_correct
+      DQInterPre DQInter t_rel s
+  constructor
+  · exact bwd_decay_cumsum_dk_inter_python_test_shape_compute_correct
+      DKInterPre DKInter t_rel s
+  constructor
+  · exact bwd_decay_cumsum_dg_python_test_shape_compute_correct
+      DGPre DG t_rel s
+  · exact bwd_decay_dg_step_python_test_shape_compute_correct
+      CumGradPrev DQ DKReg Q K DG t_rel s
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum

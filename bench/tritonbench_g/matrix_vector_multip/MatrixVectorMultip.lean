@@ -125,7 +125,7 @@ theorem mv_kernel_one_block_correct
     cases hab
     rfl
   by_cases hBN : 0 < BLOCK_N
-  · simp [exec, mv_kernel_one_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, mv_kernel_one_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
           Option.bind, Option.map,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,

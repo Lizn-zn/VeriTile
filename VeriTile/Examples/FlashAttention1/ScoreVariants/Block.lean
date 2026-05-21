@@ -20,7 +20,7 @@ shape that the loop body computes.
 
 def scoreBlockIndex (Bk numKVBlocks k : Nat) (h : k + 1 ≤ numKVBlocks)
     (jLocal : Fin Bk) : Fin (Bk * numKVBlocks) :=
-  FA1Math.blockIndex Bk numKVBlocks k h jLocal
+  StreamingAccumulator.blockIndex Bk numKVBlocks k h jLocal
 
 noncomputable def scoreBlockLane {M Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
@@ -115,10 +115,10 @@ theorem lScoreBlockFree_final_eq_lFreeScore {M Bk numKVBlocks : Nat}
       lFreeScore visible score i := by
   unfold lScoreBlockFree lFreeScore
   rw [← Finset.sum_product', Finset.univ_product_univ]
-  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
   · intro _; simp
   · intro j _
-    simp [scoreBlockIndex, FA1Math.blockIndex_blockIndexEquiv]
+    simp [scoreBlockIndex, StreamingAccumulator.blockIndex_blockIndexEquiv]
 
 theorem oScoreBlockFree_final_eq_oFreeScore {M D Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
@@ -129,10 +129,10 @@ theorem oScoreBlockFree_final_eq_oFreeScore {M D Bk numKVBlocks : Nat}
       oFreeScore visible score V idx := by
   unfold oScoreBlockFree oFreeScore
   rw [← Finset.sum_product', Finset.univ_product_univ]
-  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
   · intro _; simp
   · intro j _
-    simp [scoreBlockIndex, FA1Math.blockIndex_blockIndexEquiv]
+    simp [scoreBlockIndex, StreamingAccumulator.blockIndex_blockIndexEquiv]
 
 theorem scoreBlock_exp_shift_sum_eq {M Bk numKVBlocks : Nat}
     (visible : Fin M → Fin (Bk * numKVBlocks) → Bool)
@@ -271,7 +271,7 @@ theorem fa1_score_block_read
         Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D
           (scoreBlockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j,
             d, PUnit.unit) := by
-    simp [Offset.rowMajor2D, Offset.strided, scoreBlockIndex, FA1Math.blockIndex]
+    simp [Offset.rowMajor2D, Offset.strided, scoreBlockIndex, StreamingAccumulator.blockIndex]
   rw [haddr]
   exact hX _
 
@@ -1117,7 +1117,7 @@ theorem rawScoreBlockTile_eq {M D Bk numKVBlocks : Nat}
   simp only [rawScoreBlockTile, Tile.bop, Tile.scalar, Broadcast.leftIndex,
     Broadcast.rightIndex, NumericDType.mul]
   unfold scoreBlockIndex
-  rw [FA1Math.block_scaled_data_eq Q K scale k hk i j]
+  rw [StreamingAccumulator.block_scaled_data_eq Q K scale k hk i j]
   simp [scoreBlockLane, scoreLane, dotScore, allVisible, scoreBlockIndex]
 
 theorem score_block_lNew_tile_eq {M Bk numKVBlocks : Nat}
@@ -1201,9 +1201,9 @@ theorem softcapScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
   simp only [Tile.bop, Tile.scalar, Tile.uop, Broadcast.leftIndex,
     Broadcast.rightIndex, NumericDType.mul]
   unfold scoreBlockIndex
-  rw [FA1Math.block_scaled_data_eq Q K scale k hk i j]
+  rw [StreamingAccumulator.block_scaled_data_eq Q K scale k hk i j]
   exact softcapScore_lane_eq softcap Q K scale i
-    (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
+    (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
 
 theorem softcapScoreBlock_numeric_tile_eq {M D Bk numKVBlocks : Nat}
     (softcap : ℝ)
@@ -1289,7 +1289,7 @@ theorem slidingVisibleBlock_tile_eq {M Bk numKVBlocks : Nat}
   simp only [Tile.cop, Tile.scalar, Tile.ofReal_data, Broadcast.leftIndex,
     Broadcast.rightIndex, ComparableDType.lt]
   unfold visibleBlock slidingVisible scoreBlockIndex
-  simp [FA1Math.blockIndex]
+  simp [StreamingAccumulator.blockIndex]
   constructor
   · intro hlt
     change ((((natAbsDiff (qStart + i.val) (k * Bk + j.val) : Nat) : ℝ) :
@@ -1346,7 +1346,7 @@ theorem alibiScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
     Tile.vec_data, Broadcast.leftIndex, Broadcast.rightIndex,
     TileShape.dropInsertedIndex, NumericDType.mul]
   unfold scoreBlockIndex
-  rw [FA1Math.block_scaled_data_eq Q K scale k hk i j]
+  rw [StreamingAccumulator.block_scaled_data_eq Q K scale k hk i j]
   have hdist :
       max (WithBot.realSub (some (((k * Bk + j.val : Nat) : ℝ)))
             (some (((qStart + i.val : Nat) : ℝ))))
@@ -1363,9 +1363,9 @@ theorem alibiScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
     rw [real_max_delta_eq_natAbsDiff]
   rw [hdist]
   rw [alibiBiasSub_toWithBot slope (qStart + i.val) (k * Bk + j.val)]
-  simpa [scoreBlockLane, scoreBlockIndex, FA1Math.blockIndex] using
+  simpa [scoreBlockLane, scoreBlockIndex, StreamingAccumulator.blockIndex] using
     alibiScore_lane_eq qStart slope Q K scale i
-      (FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
+      (StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j)
 
 theorem slidingScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
     (qStart window : Nat)
@@ -1410,10 +1410,10 @@ theorem slidingScoreBlock_tile_eq {M D Bk numKVBlocks : Nat}
   simp only [Tile.select_data, Tile.bop, Tile.scalar,
     Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul]
   unfold scoreBlockIndex
-  let jg := FA1Math.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j
+  let jg := StreamingAccumulator.blockIndex Bk numKVBlocks k (Nat.succ_le_iff.mpr hk) j
   by_cases hvis : slidingVisible window qStart i jg = Bool.true
   · simp [visibleBlock, scoreBlockIndex, jg, hvis]
-    have hraw := FA1Math.block_scaled_data_eq Q K scale k hk i j
+    have hraw := StreamingAccumulator.block_scaled_data_eq Q K scale k hk i j
     simp only [WithBot.realMul] at hraw
     exact hraw.trans (by
       simp [scoreBlockLane, scoreBlockIndex, dotScore, hvis, jg] at ⊢

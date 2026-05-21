@@ -190,7 +190,7 @@ theorem decoding_cache_kernel_correct
       simpa [decodeOutOffset, rowIndex] using h)
   by_cases hB : 0 < BLOCK_SIZE
   · by_cases hH : 0 < HIDDEN_DIM
-    · simp [exec, decoding_cache_kernel, stepStmts, stepStmt, evalOp,
+    · simp [exec, decoding_cache_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
             Tile.expandDim, Tile.uop, NumericDType.add, NumericDType.mul,
             ComparableDType.lt, TileShape.dropInsertedIndex,
@@ -411,7 +411,7 @@ theorem decoding_cache_one_seq_block_correct
     cases hab
     rfl
   by_cases hBH : 0 < BLOCK_H
-  · simp [exec, decoding_cache_one_seq_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, decoding_cache_one_seq_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt,
           BlockState.readMemValue, hBH] at hExec
@@ -582,7 +582,7 @@ theorem prefill_cache_cos_store_slice_correct
       simpa [prefillOutOffset, prefillIdx] using h
     cases a; cases b
     simp only at hab; cases hab; rfl
-  simp [exec, prefill_cache_cos_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, prefill_cache_cos_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
   rw [← hExec]
@@ -664,7 +664,7 @@ theorem prefill_cache_sin_store_slice_correct
       simpa [prefillOutOffset, prefillIdx] using h
     cases a; cases b
     simp only at hab; cases hab; rfl
-  simp [exec, prefill_cache_sin_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, prefill_cache_sin_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
   rw [← hExec]
@@ -775,7 +775,7 @@ theorem prefill_cache_kernel_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   by_cases hH : 0 < HIDDEN_DIM
-  · simp [exec, prefill_cache_kernel, stepStmts, stepStmt, evalOp,
+  · simp [exec, prefill_cache_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, ComparableDType.le,

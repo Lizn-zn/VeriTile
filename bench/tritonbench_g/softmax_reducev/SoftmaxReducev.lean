@@ -144,7 +144,7 @@ theorem softmax_reducev_final_store_slice_correct
         = some (softmaxReducevFinalSpec s Acc ESum stride_acc_bs stride_acc_h
           stride_acc_d stride_es_bs stride_es_h i) := by
   intro i
-  simp [exec, softmax_reducev_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, softmax_reducev_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, NumericDType.div, dIndex, accOffset, eSumOffset,
         outOffset]
@@ -191,5 +191,82 @@ theorem softmax_reducev_final_store_slice_compute_correct
     stride_obs stride_oh stride_od BLOCK_DMODEL s hOutInj i
   rw [hExec] at h
   exact Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+`test_token_softmax_reducev_fwd` fixes `batch = 2`, `head = 2`,
+`max_input_len = 128`, `d_model = 64`, and `BLOCK_N = 64`.  The first three
+cases use `other_kv_index = -1`; the fourth uses `other_kv_index = 0`. -/
+
+theorem softmax_reducev_python_output_offset_injective
+    (s : BlockState) :
+    Function.Injective (fun i : Fin 64 => outOffset s 128 64 1 i) := by
+  intro a b h
+  apply Fin.ext
+  simp [outOffset, dIndex] at h
+  omega
+
+/-- Python test-shape final output store correctness for `o` with shape
+`(batch, head, d_model) = (2, 2, 64)`.  The accumulator and denominator are
+materialized in proof regions; the full streaming softmax loop is represented
+by the surface wrappers below. -/
+theorem softmax_reducev_python_test_shape_final_output_compute_correct
+    (Acc ESum Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_reducev_final_store_slice Acc ESum Out
+        128 64 1 2 1 128 64 1 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
+      (expected := fun i =>
+        softmaxReducevFinalSpec s Acc ESum 128 64 1 2 1 i) := by
+  exact softmax_reducev_final_store_slice_compute_correct Acc ESum Out
+    128 64 1 2 1 128 64 1 64 s
+    (softmax_reducev_python_output_offset_injective s)
+
+theorem softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported
+    (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat) :
+    ∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgorithm? =
+        Except.ok alg := by
+  exact softmax_reducev_surface_toAlgorithm_supported Logics V Out BLoc
+    BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)
+
+theorem softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
+    (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat) :
+    ∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 0).toAlgorithm? =
+        Except.ok alg := by
+  exact softmax_reducev_surface_toAlgorithm_supported Logics V Out BLoc
+    BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 0
+
+/-- Public Python case coverage summary: the full checked surface lowers for
+both sentinel choices, and the final normalized `o` vector writeback realizes
+the Python output shape. -/
+theorem softmax_reducev_python_test_shape_output_surface_summary
+    (Logics V Acc ESum Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat) (s : BlockState) :
+    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 0).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := softmax_reducev_final_store_slice Acc ESum Out
+        128 64 1 2 1 128 64 1 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
+      (expected := fun i =>
+        softmaxReducevFinalSpec s Acc ESum 128 64 1 2 1 i)) := by
+  constructor
+  · exact softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported
+      Logics V Out BLoc BStartLoc BSeqLen
+  constructor
+  · exact softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
+      Logics V Out BLoc BStartLoc BSeqLen
+  · exact softmax_reducev_python_test_shape_final_output_compute_correct
+      Acc ESum Out s
 
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev

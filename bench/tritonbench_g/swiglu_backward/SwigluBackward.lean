@@ -113,7 +113,7 @@ theorem swiglu_bwd_kernel_correct
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
     rfl
   cases RECOMPUTE_OUTPUT <;>
-    simp [exec, swiglu_bwd_kernel, stepStmts, stepStmt, evalOp,
+    simp [exec, swiglu_bwd_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   · subst s'
     constructor

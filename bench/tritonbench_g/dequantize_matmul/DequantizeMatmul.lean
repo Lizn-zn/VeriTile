@@ -112,7 +112,7 @@ theorem dequantize_kernel_correct
           s.readMem fpb_ptr
             (fpbOffset s stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K idx) := by
   intro idx
-  simp [exec, dequantize_kernel, stepStmts, stepStmt, evalOp, Option.bind,
+  simp [exec, dequantize_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
         Tile.bop, Tile.cop, Tile.expandDim,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         TileShape.dropInsertedIndex] at hExec

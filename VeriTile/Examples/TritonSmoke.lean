@@ -1122,6 +1122,7 @@ example : evalOp
     { mem := fun _ _ => 100, regs := fun _ _ _ => none
     , pids := fun _ => 0, undef := fun _ _ => 42 }
     = some (Tile.scalar (some (42 : ℝ) : WithBot ℝ)) := by
+  simp only [evalOp]
   rfl
 
 /-- Different `undef` oracles can produce different masked-off load values. -/
@@ -1136,6 +1137,7 @@ example :
       Op.lt ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)
     evalOp (Op.load .real (MemAccess.region "X" (Op.constNat 0)) (MaskOpt.mask maskFalse)) s1
       ≠ evalOp (Op.load .real (MemAccess.region "X" (Op.constNat 0)) (MaskOpt.mask maskFalse)) s2 := by
+  simp only [evalOp]
   change (some (Tile.scalar (some (42 : ℝ) : WithBot ℝ) : Tile .real [])) ≠
     (some (Tile.scalar (some (99 : ℝ) : WithBot ℝ) : Tile .real []))
   intro h

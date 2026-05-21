@@ -53,7 +53,7 @@ theorem mul2_kernel_correct
           out_ptr BLOCK_SIZE s.pid i
         = some (if addr < n_elements then 2 * xs i else s.readMem out_ptr addr) := by
   intro i
-  simp [observeAt, exec, mul2_kernel, stepStmts, stepStmt, evalOp,
+  simp [observeAt, exec, mul2_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   unfold InputLoadedAt at h_x
@@ -99,7 +99,7 @@ theorem mul2_inplace_kernel_correct
           ptr BLOCK_SIZE s.pid i
         = some (if addr < n_elements then 2 * xs i else s.readMem ptr addr) := by
   intro i
-  simp [observeAt, exec, mul2_inplace_kernel, stepStmts, stepStmt, evalOp,
+  simp [observeAt, exec, mul2_inplace_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   unfold InputLoadedAt at h_x

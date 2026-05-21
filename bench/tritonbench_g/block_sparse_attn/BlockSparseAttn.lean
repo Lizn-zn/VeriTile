@@ -270,7 +270,7 @@ theorem block_sparse_attn_output_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, block_sparse_attn_output_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
         IntegralDType.mod, ComparableDType.lt, offH, offB, mIndex, dIndex,
         active, accOffset, outOffset, TileShape.dropInsertedIndex]
@@ -374,7 +374,7 @@ theorem block_sparse_attn_output_store_second_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, block_sparse_attn_output_store_second_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
         IntegralDType.mod, ComparableDType.lt, offH, offB, mIndex, dIndex,
         active, accOffset, out2Offset, TileShape.dropInsertedIndex]

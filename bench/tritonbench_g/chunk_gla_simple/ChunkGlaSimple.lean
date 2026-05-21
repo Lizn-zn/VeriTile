@@ -129,7 +129,7 @@ theorem chunk_gla_simple_output_store_slice_correct
             storeValue s BO s_v_h s_v_t T V BT BV idx
           else s.readMem O outAddr) := by
   intro idx
-  simp [exec, chunk_gla_simple_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunk_gla_simple_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         tIndex, vIndex, active, tileOffset, TileShape.dropInsertedIndex]

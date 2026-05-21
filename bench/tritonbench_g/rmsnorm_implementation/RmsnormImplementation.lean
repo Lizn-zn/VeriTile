@@ -481,7 +481,7 @@ theorem rmsOutLoopBody_step_write_current
       rmsnormWeightedYFullNSpec s0 x_ptr rms_w_ptr stride_x_batch stride_x_m
         stride_x_k stride_rms_w N_SIZE BLOCK_N_SIZE eps ⟨off + i.val, hActive⟩ := by
   unfold rmsOutLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
     Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
     NumericDType.div, ComparableDType.lt, Option.bind, FloatDType.cast,
     hReadX, hReadW, outColOffset, rmsStdFullNSpec] at hStep
@@ -539,7 +539,7 @@ theorem rmsOutLoopBody_step_preserves_regs_pids
           (rmsStdFullNSpec s0 x_ptr stride_x_batch stride_x_m stride_x_k
             N_SIZE BLOCK_N_SIZE eps)) := by
   unfold rmsOutLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
     Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
     NumericDType.div, ComparableDType.lt, Option.bind, FloatDType.cast,
     hReadX, hReadW, outColOffset, rmsStdFullNSpec] at hStep
@@ -586,7 +586,7 @@ theorem rmsOutLoopBody_step_preserves_reads
     (∀ offset, st'.readMem x_ptr offset = s0.readMem x_ptr offset) ∧
       (∀ offset, st'.readMem rms_w_ptr offset = s0.readMem rms_w_ptr offset) := by
   unfold rmsOutLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
     Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
     NumericDType.div, ComparableDType.lt, Option.bind, FloatDType.cast,
     hReadX, hReadW, outColOffset, rmsStdFullNSpec] at hStep
@@ -642,7 +642,7 @@ theorem rmsOutLoopBody_step_preserves_old_output
       st.readMem out_ptr
         (outColOffset s0 stride_out_batch stride_out_m stride_out_k col.val) := by
   unfold rmsOutLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
     Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
     NumericDType.div, ComparableDType.lt, Option.bind, FloatDType.cast,
     hReadX, hReadW, outColOffset, rmsStdFullNSpec] at hStep
@@ -835,7 +835,7 @@ theorem rmsOutLoopContextInvariant_body_step_exists
         (st.setReg "block_n_strart_ptr" .nat [] (Tile.scalar off)) with
   | none =>
       unfold rmsOutLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hPidBatch, hPidM, hOffsetM, hBlockN, hStd, Tile.bop,
         Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind, FloatDType.cast,
         hReadX, hReadW, hPids, outColOffset, rmsStdFullNSpec] at hStep
@@ -1048,7 +1048,7 @@ theorem rmsnorm_implementation_correct
     rfl
   by_cases hB : 0 < BLOCK_N_SIZE
   · have hStep : BLOCK_N_SIZE ≠ 0 := Nat.ne_of_gt hB
-    simp [exec, rmsnorm_implementation, stepStmts, stepStmt, evalOp,
+    simp [exec, rmsnorm_implementation, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
           stepForRangeAux.step_lt, stepForRangeAux.step_ge,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
@@ -1446,7 +1446,7 @@ theorem rmsVarPreLoop_step_regs
         some { data := fun idx : TileIndex [BLOCK_N_SIZE] => idx.1.val } ∧
       (∀ offset, st.readMem x_ptr offset = s.readMem x_ptr offset) := by
   unfold rmsVarPreLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, Tile.bop, NumericDType.add,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, NumericDType.add,
     NumericDType.mul, BlockState.setReg, Option.bind] at hStep
   subst st
   refine ⟨?_, ?_, ?_, ?_⟩
@@ -1492,7 +1492,7 @@ theorem rmsVarLoopBody_step_accumulator_update
                   ((rmsVarChunkSquareSpec s0 x_ptr stride_x_batch stride_x_m
                     stride_x_k N_SIZE BLOCK_N_SIZE off).data idx)) } := by
   unfold rmsVarLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hOffsetM, hBlockN, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hOffsetM, hBlockN, Tile.bop, Tile.cop,
     Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
     Option.bind, FloatDType.cast, hRead, xColOffset] at hStep
   subst st'
@@ -1529,7 +1529,7 @@ theorem rmsVarLoopBody_step_preserves_context
         some { data := fun idx : TileIndex [BLOCK_N_SIZE] => idx.1.val } ∧
       (∀ offset, st'.readMem x_ptr offset = st.readMem x_ptr offset) := by
   unfold rmsVarLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hOffsetM, hBlockN, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hOffsetM, hBlockN, Tile.bop, Tile.cop,
     Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
     Option.bind, FloatDType.cast] at hStep
   subst st'
@@ -1654,7 +1654,7 @@ theorem rmsVarLoopContextInvariant_body_step_exists
         (st.setReg "block_n_strart_ptr" .nat [] (Tile.scalar off)) with
   | none =>
       unfold rmsVarLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hInv.2, hOffsetM, hBlockN, Tile.bop,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.2, hOffsetM, hBlockN, Tile.bop,
         Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, Option.bind, FloatDType.cast] at hStep
   | some st' =>
@@ -1819,7 +1819,7 @@ theorem rmsStdPostLoop_step_to_out_init
             N_SIZE BLOCK_N_SIZE / (N_SIZE : ℝ) + eps := by
     rw [hSum]
   unfold rmsStdPostLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, hVarReg, Tile.bop, Tile.uop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hVarReg, Tile.bop, Tile.uop,
     NumericDType.add, NumericDType.div, Option.bind, WithBot.realSqrt] at hStep
   subst stStd
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -1909,7 +1909,7 @@ theorem rmsVarPreLoop_step_preserves_pids_read
       st.regs .nat [] "pid_m" = some (Tile.scalar (s.pids 1)) ∧
       ∀ offset, st.readMem R offset = s.readMem R offset := by
   unfold rmsVarPreLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, Tile.bop, NumericDType.add,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, NumericDType.add,
     NumericDType.mul, Option.bind] at hStep
   subst st
   refine ⟨?_, ?_, ?_, ?_⟩
@@ -1933,7 +1933,7 @@ theorem rmsVarLoopBody_step_preserves_pids_read
       ∀ offset, st'.readMem R offset = st.readMem R offset := by
   rcases hCtx with ⟨hInv, hOffsetM, hBlockN, _hReadX⟩
   unfold rmsVarLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hInv.2, hOffsetM, hBlockN, Tile.bop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.2, hOffsetM, hBlockN, Tile.bop,
     Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
     ComparableDType.lt, Option.bind, FloatDType.cast] at hStep
   subst st'

@@ -56,7 +56,7 @@ theorem add_kernel_correct
                 else s.readMem out_ptr addr) := by
   intro i
   have h_inj := injective_offset_singleton (n := BLOCK_SIZE) (s.pid * BLOCK_SIZE)
-  simp [observeAt, exec, add_kernel, stepStmts, stepStmt, evalOp,
+  simp [observeAt, exec, add_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   unfold InputLoadedAt at h_x h_y

@@ -80,7 +80,7 @@ noncomputable def attentionRealMaskedScore {M S D : Nat}
 noncomputable def dotScore {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
     (scale : ℝ) : Fin M → Fin S → ℝ :=
-  fun i j => FA1Math.scaledScore Q K scale i j
+  fun i j => StreamingAccumulator.scaledScore Q K scale i j
 
 /-- ALiBi additive bias `-slope * |q - k|`. -/
 noncomputable def alibiBias (slope : ℝ) (qPos kPos : Nat) : ℝ :=
@@ -240,7 +240,7 @@ theorem attentionBackwardRealScoreVariant_dotScore_eq_masked {M S D : Nat}
   simp [attentionBackwardRealScoreVariant, FA1Backward.attentionBackwardRealMasked,
     dSScore, FA1Backward.dSMasked, rowCorrectionScore, FA1Backward.rowCorrectionMasked,
     probabilityScore, FA1Backward.probabilityMasked, dPScore, FA1Backward.dP,
-    FA1Backward.probability, dotScore, unitScoreGrad, FA1Math.scaledScore]
+    FA1Backward.probability, dotScore, unitScoreGrad, StreamingAccumulator.scaledScore]
 
 /-- Derivative of `softcap * tanh(raw / softcap)` with respect to `raw`. -/
 noncomputable def softcapScoreGrad {M S D : Nat}
@@ -338,7 +338,7 @@ noncomputable def dQBlockContributionScoreVariant {M D Bk numKVBlocks : Nat}
     (block : Fin numKVBlocks) (idx : TileIndex [M, D]) : ℝ :=
   scale * Finset.univ.sum fun jLocal : Fin Bk =>
     let j : Fin (Bk * numKVBlocks) :=
-      FA1Math.blockIndex Bk numKVBlocks block.val
+      StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) jLocal
     dSScore visible score V dO LSE idx.1 j * scoreGrad idx.1 j *
       K (j, idx.2.1, PUnit.unit)
@@ -369,10 +369,10 @@ theorem dQBlockContributionScoreVariant_sum_eq_attentionBackwardRealScoreVariant
           rw [← Finset.mul_sum]
           congr 1
           rw [← Finset.sum_product', Finset.univ_product_univ]
-          refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+          refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
           · intro _; simp
           · intro j _
-            rw [FA1Math.blockIndex_blockIndexEquiv]
+            rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
 
 theorem dQBlockContributionAlibi_sum_eq_attentionBackwardRealAlibi
     {M D Bk numKVBlocks : Nat}
@@ -710,7 +710,7 @@ theorem softcapScore_lane_eq {M S D : Nat}
     WithBot.realMul ((softcap : ℝ) : WithBot ℝ)
       (WithBot.realTanh
         (WithBot.realDiv
-          ((FA1Math.scaledScore Q K scale i j : ℝ) : WithBot ℝ)
+          ((StreamingAccumulator.scaledScore Q K scale i j : ℝ) : WithBot ℝ)
           ((softcap : ℝ) : WithBot ℝ))) =
       scoreLane allVisible (softcapDotScore softcap Q K scale) i j := by
   rw [softcapScore_toWithBot]
@@ -739,7 +739,7 @@ theorem alibiScore_lane_eq {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
     (scale : ℝ) (i : Fin M) (j : Fin S) :
     WithBot.realAdd
-      ((FA1Math.scaledScore Q K scale i j : ℝ) : WithBot ℝ)
+      ((StreamingAccumulator.scaledScore Q K scale i j : ℝ) : WithBot ℝ)
       ((alibiBias slope (qStart + i.val) j.val : ℝ) : WithBot ℝ) =
       scoreLane allVisible (alibiScore qStart slope Q K scale) i j := by
   simp [scoreLane, allVisible, alibiScore, dotScore, WithBot.realAdd]
@@ -749,7 +749,7 @@ theorem slidingScore_lane_eq {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
     (scale : ℝ) (i : Fin M) (j : Fin S) :
     (if slidingVisible window qStart i j then
-        ((FA1Math.scaledScore Q K scale i j : ℝ) : WithBot ℝ)
+        ((StreamingAccumulator.scaledScore Q K scale i j : ℝ) : WithBot ℝ)
       else
         (⊥ : WithBot ℝ)) =
       scoreLane (slidingVisible window qStart) (dotScore Q K scale) i j := by

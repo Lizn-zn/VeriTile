@@ -219,7 +219,7 @@ theorem layer_norm_liger_forward_y_correct
         else s.readMem Y (yOffset s Y_row_stride i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, layer_norm_liger_forward, stepStmts, stepStmt, evalOp,
+  · simp [exec, layer_norm_liger_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -292,7 +292,7 @@ theorem layer_norm_liger_forward_mean_store_slice_correct
       s = some s') :
     s'.readMem Mean (meanRowOffset s Mean_row_stride) =
       meanStoreSpec s MeanPre Mean_row_stride := by
-  simp [exec, layer_norm_liger_forward_mean_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_liger_forward_mean_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul] at hExec
   subst s'
@@ -334,7 +334,7 @@ theorem layer_norm_liger_forward_rstd_store_slice_correct
       s = some s') :
     s'.readMem RSTD (meanRowOffset s RSTD_row_stride) =
       rstdStoreSpec s RSTDPre RSTD_row_stride := by
-  simp [exec, layer_norm_liger_forward_rstd_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_liger_forward_rstd_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul] at hExec
   subst s'
@@ -378,7 +378,7 @@ theorem layer_norm_liger_forward_inv_var_correct
     s'.readMem RSTD (s.pid * RSTD_row_stride) =
       WithBot.unbotD 0
         (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps) := by
-  simp [exec, layer_norm_liger_forward, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_liger_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
         TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -434,7 +434,7 @@ theorem layer_norm_liger_forward_mean_correct
     s'.readMem Mean (s.pid * Mean_row_stride) =
       WithBot.unbotD 0
         (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE) := by
-  simp [exec, layer_norm_liger_forward, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_liger_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
         TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -476,5 +476,54 @@ theorem layer_norm_liger_forward_mean_compute_correct
   exact layer_norm_liger_forward_mean_correct Y X W B Mean RSTD Y_row_stride
     X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps s s'
     hMeanY hMeanRSTD hExec
+
+/-- Full forward output coverage for the Liger layer-norm kernel: vector `Y`,
+row `Mean`, and row `RSTD` are all characterized against the Python formula. -/
+theorem layer_norm_liger_forward_all_outputs_compute_correct
+    (Y X W B Mean RSTD : RegionName)
+    (Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
+      BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hYMean : Y ≠ Mean) (hYRSTD : Y ≠ RSTD)
+    (hMeanY : Mean ≠ Y) (hMeanRSTD : Mean ≠ RSTD)
+    (hRSTDY : RSTD ≠ Y)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOffset s Y_row_stride i)) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (Y, yOffset s Y_row_stride i)))
+      (expected := fun i =>
+        layernormYSpec s X W B X_row_stride n_cols BLOCK_SIZE eps i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, s.pid * Mean_row_stride))
+      (expected := fun _ =>
+        WithBot.unbotD 0
+          (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := fun _ : PUnit => some (RSTD, s.pid * RSTD_row_stride))
+      (expected := fun _ =>
+        WithBot.unbotD 0
+          (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))) := by
+  constructor
+  · exact layer_norm_liger_forward_y_compute_correct Y X W B Mean RSTD
+      Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
+      BLOCK_SIZE eps s hYMean hYRSTD hOutInj
+  · constructor
+    · exact layer_norm_liger_forward_mean_compute_correct Y X W B Mean RSTD
+        Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
+        BLOCK_SIZE eps s hMeanY hMeanRSTD
+    · exact layer_norm_liger_forward_inv_var_compute_correct Y X W B Mean RSTD
+        Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
+        BLOCK_SIZE eps s hRSTDY
 
 end VeriTile.Bench.TritonBenchG.LayerNormLiger

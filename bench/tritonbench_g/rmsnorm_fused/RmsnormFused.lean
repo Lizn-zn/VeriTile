@@ -161,7 +161,7 @@ theorem rms_norm_fwd_fused_correct
   intro i
   by_cases hB : 0 < BLOCK_SIZE
   · have hStep : BLOCK_SIZE ≠ 0 := Nat.ne_of_gt hB
-    simp [exec, rms_norm_fwd_fused, stepStmts, stepStmt, evalOp,
+    simp [exec, rms_norm_fwd_fused, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
           stepForRangeAux.step_lt, stepForRangeAux.step_ge,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,

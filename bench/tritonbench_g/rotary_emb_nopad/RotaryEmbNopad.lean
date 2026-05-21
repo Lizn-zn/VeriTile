@@ -407,7 +407,7 @@ theorem rotary_embedding_q0_block_correct
     cases hab
     rfl
   by_cases hHH : 0 < HEAD_HALF
-  · simp [exec, rotary_embedding_q0_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, rotary_embedding_q0_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hHH] at hExec
@@ -551,7 +551,7 @@ theorem rotary_embedding_q1_block_correct
     cases hab
     rfl
   by_cases hHH : 0 < HEAD_HALF
-  · simp [exec, rotary_embedding_q1_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, rotary_embedding_q1_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hHH] at hExec
@@ -704,7 +704,7 @@ theorem rotary_embedding_k0_block_correct
     cases hab
     rfl
   by_cases hHH : 0 < HEAD_HALF
-  · simp [exec, rotary_embedding_k0_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, rotary_embedding_k0_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hHH] at hExec
@@ -844,7 +844,7 @@ theorem rotary_embedding_k1_block_correct
     cases hab
     rfl
   by_cases hHH : 0 < HEAD_HALF
-  · simp [exec, rotary_embedding_k1_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, rotary_embedding_k1_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hHH] at hExec
@@ -954,7 +954,7 @@ theorem fused_rotary_v2_kv_cache_first_half_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, fused_rotary_v2_kv_cache_first_half_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hExec
   rw [← hExec]
   simp only [kvCacheFirstOffset]
@@ -1047,7 +1047,7 @@ theorem fused_rotary_v2_kv_cache_second_half_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, fused_rotary_v2_kv_cache_second_half_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hExec
   rw [← hExec]
   simp only [kvCacheSecondOffset]
@@ -1286,14 +1286,14 @@ theorem fused_rotary_v2_q_first_half_store_slice_correct
       cases a; cases b
       simp only at hab; cases hab; rfl
     simp [exec, fused_rotary_v2_q_first_half_store_slice, stepStmts, stepStmt,
-          evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hHead] at hExec
     rw [← hExec]
     simp only [v2QFirstOffset]
     rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
     simp [v2QActive, v2QStoreSpec, hHead]
   · simp [exec, fused_rotary_v2_q_first_half_store_slice, stepStmts, stepStmt,
-          evalOp, Option.bind, Option.map, Tile.bop, ComparableDType.lt,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, ComparableDType.lt,
           hHead] at hExec
     rw [← hExec]
     simp [v2QActive, hHead]
@@ -1359,14 +1359,14 @@ theorem fused_rotary_v2_q_second_half_store_slice_correct
       cases a; cases b
       simp only at hab; cases hab; rfl
     simp [exec, fused_rotary_v2_q_second_half_store_slice, stepStmts, stepStmt,
-          evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hHead] at hExec
     rw [← hExec]
     simp only [v2QSecondOffset]
     rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
     simp [v2QActive, v2QStoreSpec, hHead]
   · simp [exec, fused_rotary_v2_q_second_half_store_slice, stepStmts, stepStmt,
-          evalOp, Option.bind, Option.map, Tile.bop, ComparableDType.lt,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, ComparableDType.lt,
           hHead] at hExec
     rw [← hExec]
     simp [v2QActive, hHead]
@@ -1523,7 +1523,7 @@ theorem rotary_embedding_q_surface_q0_correct
             (s.pids 1 * BLOCK_TOKENS + j.1.val) * q_token_stride +
               s.pids 0 * q_head_stride + j.2.2.1.val * head_dim_stride) := by
         simpa [qFullFirstOffset] using hOutInj
-      simp [exec, rotary_embedding_q_surface, stepStmts, stepStmt, evalOp,
+      simp [exec, rotary_embedding_q_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, Tile.remap,
             NumericDType.add, NumericDType.mul, NumericDType.sub,
             ComparableDType.lt, hTok, hHalf,
@@ -1640,7 +1640,7 @@ theorem rotary_embedding_q_surface_q1_correct
               s.pids 0 * q_head_stride +
               (j.2.2.1.val + HEAD_HALF) * head_dim_stride) := by
         simpa [qFullSecondOffset] using hOutInj
-      simp [exec, rotary_embedding_q_surface, stepStmts, stepStmt, evalOp,
+      simp [exec, rotary_embedding_q_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, Tile.remap,
             NumericDType.add, NumericDType.mul, NumericDType.sub,
             ComparableDType.lt, hTok, hHalf,
@@ -1838,7 +1838,7 @@ theorem rotary_embedding_k_surface_k0_correct
               j.2.2.1.val * head_dim_stride) := by
         simpa [kFullFirstOffset] using hOutInj
       by_cases hGroup : s.pids 0 % KV_GROUP_NUM = 0
-      · simp [exec, rotary_embedding_k_surface, stepStmts, stepStmt, evalOp,
+      · simp [exec, rotary_embedding_k_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, Tile.remap,
             NumericDType.add, NumericDType.mul, NumericDType.sub,
             IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
@@ -1865,7 +1865,7 @@ theorem rotary_embedding_k_surface_k0_correct
                 kFullSecondOffset, cosFullOffset, hGroup, hTokIdx,
                 Option.bind, Option.map]
         · simp [activeKFull, hGroup, hTokIdx]
-      · simp [exec, rotary_embedding_k_surface, stepStmts, stepStmt, evalOp,
+      · simp [exec, rotary_embedding_k_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map, Tile.bop, IntegralDType.mod,
             ComparableDType.eq, hGroup] at hExec
         rw [← hExec]
@@ -1959,7 +1959,7 @@ theorem rotary_embedding_k_surface_k1_correct
               (j.2.2.1.val + HEAD_HALF) * head_dim_stride) := by
         simpa [kFullSecondOffset] using hOutInj
       by_cases hGroup : s.pids 0 % KV_GROUP_NUM = 0
-      · simp [exec, rotary_embedding_k_surface, stepStmts, stepStmt, evalOp,
+      · simp [exec, rotary_embedding_k_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, Tile.remap,
             NumericDType.add, NumericDType.mul, NumericDType.sub,
             IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
@@ -1986,7 +1986,7 @@ theorem rotary_embedding_k_surface_k1_correct
                 have := hOutDisjoint k idx
                 simpa [kFullFirstOffset, kFullSecondOffset] using this.symm)]
           simp [activeKFull, hGroup, hTokIdx]
-      · simp [exec, rotary_embedding_k_surface, stepStmts, stepStmt, evalOp,
+      · simp [exec, rotary_embedding_k_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map, Tile.bop, IntegralDType.mod,
             ComparableDType.eq, hGroup] at hExec
         rw [← hExec]
@@ -2037,5 +2037,136 @@ theorem rotary_embedding_k_surface_k1_compute_correct
     q_total_tokens KV_GROUP_NUM HEAD_HALF BLOCK_TOKENS s s' hOutInj
     hOutDisjoint hExec idx
   simpa [hActive] using h
+
+/-! ## Python test-shape wrappers -/
+
+theorem rotary_nopad_python_q_first_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [4, 1, 32] =>
+        qFullFirstOffset s 512 64 1 4 idx) := by
+  intro a b h
+  simp [qFullFirstOffset] at h
+  ext <;> omega
+
+theorem rotary_nopad_python_q_second_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [4, 1, 32] =>
+        qFullSecondOffset s 512 64 1 4 32 idx) := by
+  intro a b h
+  simp [qFullSecondOffset] at h
+  ext <;> omega
+
+theorem rotary_nopad_python_q_offsets_disjoint
+    (s : BlockState) :
+    ∀ idx idx' : TileIndex [4, 1, 32],
+      qFullFirstOffset s 512 64 1 4 idx ≠
+        qFullSecondOffset s 512 64 1 4 32 idx' := by
+  intro idx idx' h
+  simp [qFullFirstOffset, qFullSecondOffset] at h
+  omega
+
+theorem rotary_nopad_python_k_first_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [4, 1, 32] =>
+        kFullFirstOffset s 256 64 1 2 4 idx) := by
+  intro a b h
+  simp [kFullFirstOffset] at h
+  ext <;> omega
+
+theorem rotary_nopad_python_k_second_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [4, 1, 32] =>
+        kFullSecondOffset s 256 64 1 2 4 32 idx) := by
+  intro a b h
+  simp [kFullSecondOffset] at h
+  ext <;> omega
+
+theorem rotary_nopad_python_k_offsets_disjoint
+    (s : BlockState) :
+    ∀ idx idx' : TileIndex [4, 1, 32],
+      kFullFirstOffset s 256 64 1 2 4 idx ≠
+        kFullSecondOffset s 256 64 1 2 4 32 idx' := by
+  intro idx idx' h
+  simp [kFullFirstOffset, kFullSecondOffset] at h
+  omega
+
+/-- Python no-cache case full surface lowering for `total_tokens = 32`,
+`q_head_num = 8`, `kv_head_num = 4`, and `head_dim = 64`. -/
+theorem rotary_nopad_python_case1_surface_toAlgorithm_supported
+    (Q K Cos Sin : RegionName) :
+    ∃ alg, (rotary_embedding_kernel_surface Q K Cos Sin
+      512 64 256 64 1 64 1 32 8 2 64 4).toAlgorithm? =
+        Except.ok alg := by
+  exact rotary_embedding_kernel_surface_toAlgorithm_supported Q K Cos Sin
+    512 64 256 64 1 64 1 32 8 2 64 4
+
+/-- Public Python no-cache case coverage summary: the full Q/K rotary surface
+lowers, and all four Q/K half-output stores realize the checked tensor strides. -/
+theorem rotary_nopad_python_case1_all_outputs_surface_summary
+    (Q K Cos Sin : RegionName) (s : BlockState) :
+    (∃ alg, (rotary_embedding_kernel_surface Q K Cos Sin
+      512 64 256 64 1 64 1 32 8 2 64 4).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_embedding_q_surface Q Cos Sin
+        512 64 1 64 1 32 8 32 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [4, 1, 32] => activeFull s 32 8 4 idx)
+        (fun idx => (Q, qFullFirstOffset s 512 64 1 4 idx)))
+      (expected := fun idx =>
+        rotaryNopadQ0FullSpec s Q Cos Sin 512 64 1 64 1 4 32 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_embedding_q_surface Q Cos Sin
+        512 64 1 64 1 32 8 32 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [4, 1, 32] => activeFull s 32 8 4 idx)
+        (fun idx => (Q, qFullSecondOffset s 512 64 1 4 32 idx)))
+      (expected := fun idx =>
+        rotaryNopadQ1FullSpec s Q Cos Sin 512 64 1 64 1 4 32 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_embedding_k_surface K Cos Sin
+        256 64 1 64 1 32 2 32 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [4, 1, 32] => activeKFull s 32 2 4 idx)
+        (fun idx => (K, kFullFirstOffset s 256 64 1 2 4 idx)))
+      (expected := fun idx =>
+        rotaryNopadK0FullSpec s K Cos Sin 256 64 1 64 1 2 4 32 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rotary_embedding_k_surface K Cos Sin
+        256 64 1 64 1 32 2 32 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [4, 1, 32] => activeKFull s 32 2 4 idx)
+        (fun idx => (K, kFullSecondOffset s 256 64 1 2 4 32 idx)))
+      (expected := fun idx =>
+        rotaryNopadK1FullSpec s K Cos Sin 256 64 1 64 1 2 4 32 idx)) := by
+  constructor
+  · exact rotary_nopad_python_case1_surface_toAlgorithm_supported Q K Cos Sin
+  constructor
+  · exact rotary_embedding_q_surface_q0_compute_correct Q Cos Sin
+      512 64 1 64 1 32 8 32 4 s
+      (rotary_nopad_python_q_first_offset_injective s)
+      (rotary_nopad_python_q_offsets_disjoint s)
+  constructor
+  · exact rotary_embedding_q_surface_q1_compute_correct Q Cos Sin
+      512 64 1 64 1 32 8 32 4 s
+      (rotary_nopad_python_q_second_offset_injective s)
+      (rotary_nopad_python_q_offsets_disjoint s)
+  constructor
+  · exact rotary_embedding_k_surface_k0_compute_correct K Cos Sin
+      256 64 1 64 1 32 2 32 4 s
+      (rotary_nopad_python_k_first_offset_injective s)
+      (rotary_nopad_python_k_offsets_disjoint s)
+  · exact rotary_embedding_k_surface_k1_compute_correct K Cos Sin
+      256 64 1 64 1 32 2 32 4 s
+      (rotary_nopad_python_k_second_offset_injective s)
+      (rotary_nopad_python_k_offsets_disjoint s)
 
 end VeriTile.Bench.TritonBenchG.RotaryEmbNopad

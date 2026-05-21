@@ -30,15 +30,15 @@ noncomputable def lseReal {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
     (scale : ℝ) (i : Fin M) : ℝ :=
   Real.log (Finset.univ.sum fun j : Fin S =>
-    Real.exp (FA1Math.scaledScore Q K scale i j))
+    Real.exp (StreamingAccumulator.scaledScore Q K scale i j))
 
 /-- The value computed by the online-softmax registers at forward readout:
 `m_i + log(l_i)`. -/
 noncomputable def streamingLSE {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
     (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) (i : Fin M) : ℝ :=
-  (FA1Math.mPartial Bk Q numKVBlocks K scale numKVBlocks i).unbotD 0 +
-    Real.log (FA1Math.lPartial Q numKVBlocks K scale numKVBlocks i)
+  (StreamingAccumulator.mPartial Bk Q numKVBlocks K scale numKVBlocks i).unbotD 0 +
+    Real.log (StreamingAccumulator.lPartial Q numKVBlocks K scale numKVBlocks i)
 
 /-- The forward LSE store is the usual unshifted log-sum-exp.
 
@@ -49,24 +49,24 @@ theorem streamingLSE_eq_lseReal_impl {M D Bk : Nat} (hBk : 0 < Bk)
     (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) (i : Fin M) :
     streamingLSE Q numKVBlocks K scale i = lseReal Q K scale i := by
   unfold streamingLSE lseReal
-  let m : ℝ := (FA1Math.mPartial Bk Q numKVBlocks K scale numKVBlocks i).unbotD 0
-  have hlf_pos : 0 < FA1Math.lFree Q K scale numKVBlocks (le_refl numKVBlocks) i :=
-    FA1Math.lFree_final_pos hBk hN Q K scale i
+  let m : ℝ := (StreamingAccumulator.mPartial Bk Q numKVBlocks K scale numKVBlocks i).unbotD 0
+  have hlf_pos : 0 < StreamingAccumulator.lFree Q K scale numKVBlocks (le_refl numKVBlocks) i :=
+    StreamingAccumulator.lFree_final_pos hBk hN Q K scale i
   have hlf_ne :
-      FA1Math.lFree Q K scale numKVBlocks (le_refl numKVBlocks) i ≠ 0 :=
+      StreamingAccumulator.lFree Q K scale numKVBlocks (le_refl numKVBlocks) i ≠ 0 :=
     ne_of_gt hlf_pos
-  rw [FA1Math.lPartial_eq_mShifted hBk Q numKVBlocks K scale
+  rw [StreamingAccumulator.lPartial_eq_mShifted hBk Q numKVBlocks K scale
       numKVBlocks (le_refl _) i]
   rw [Real.log_mul (Real.exp_ne_zero _) hlf_ne]
   rw [Real.log_exp]
-  rw [FA1Math.lFree_eq_flat]
+  rw [StreamingAccumulator.lFree_eq_flat]
   ring
 
 /-- Softmax probabilities reconstructed from a stored LSE row. -/
 noncomputable def probability {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
     (LSE : Fin M → ℝ) (scale : ℝ) (i : Fin M) (j : Fin S) : ℝ :=
-  Real.exp (FA1Math.scaledScore Q K scale i j - LSE i)
+  Real.exp (StreamingAccumulator.scaledScore Q K scale i j - LSE i)
 
 /-- `dP = dO · Vᵀ`. -/
 noncomputable def dP {M S D : Nat}
@@ -124,7 +124,7 @@ theorem maskedProbability_exp_eq {M S D : Nat}
         else none)) =
       some (probabilityMasked visible Q K LSE scale i j) := by
   by_cases h : visible i j
-  · simp [h, probabilityMasked, probability, FA1Math.scaledScore]
+  · simp [h, probabilityMasked, probability, StreamingAccumulator.scaledScore]
   · simp [h, probabilityMasked, WithBot.realExp]
 
 theorem maskedProbability_exp_ite_eq {M S D : Nat}
@@ -138,7 +138,7 @@ theorem maskedProbability_exp_ite_eq {M S D : Nat}
       else none) =
       some (probabilityMasked visible Q K LSE scale i j) := by
   by_cases h : visible i j
-  · simp [h, probabilityMasked, probability, FA1Math.scaledScore]
+  · simp [h, probabilityMasked, probability, StreamingAccumulator.scaledScore]
   · simp [h, probabilityMasked, WithBot.realExp]
 
 /-- Mask-aware row correction `D_i = Σ_j P_ij · dP_ij`, with invisible lanes
@@ -240,13 +240,13 @@ theorem causalBlockDS_option_eq {M D Bk numKVBlocks : Nat}
           (if block.val * Bk + jLocal.val ≤ i.val then
             some (scale * (Finset.univ.sum fun d : Fin D =>
               Q (i, d, PUnit.unit) *
-                K (FA1Math.blockIndex Bk numKVBlocks block.val
+                K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) jLocal, d, PUnit.unit)))
           else none)))
       (Option.map
         (fun b : ℝ =>
           dP V dO i
-              (FA1Math.blockIndex Bk numKVBlocks block.val
+              (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) jLocal) - b)
         (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
           (fun j' : Fin (Bk * numKVBlocks) =>
@@ -259,13 +259,13 @@ theorem causalBlockDS_option_eq {M D Bk numKVBlocks : Nat}
                   else none))) : WithBot ℝ)))) =
       some (dSMasked (fun i j => decide (j.val ≤ i.val))
         Q K V dO LSE scale i
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) jLocal)) := by
-  simpa [FA1Math.blockIndex] using
+  simpa [StreamingAccumulator.blockIndex] using
     maskedDS_option_eq (M := M) (S := Bk * numKVBlocks) (D := D)
       (fun (i : Fin M) (j : Fin (Bk * numKVBlocks)) => decide (j.val ≤ i.val))
       Q K V dO LSE scale i
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) jLocal)
 
 /-- Same bridge as `causalBlockDS_option_eq`, matching the exact comparison
@@ -283,13 +283,13 @@ theorem causalBlockDS_kernel_option_eq {M D Bk numKVBlocks : Nat}
           (if ComparableDType.nat.ge i.val (block.val * Bk + jLocal.val) = Bool.true then
             some ((Finset.univ.sum fun d : Fin D =>
               Q (i, d, PUnit.unit) *
-                K (FA1Math.blockIndex Bk numKVBlocks block.val
+                K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) jLocal, d, PUnit.unit)) * scale)
           else none)))
       (Option.map
         (fun b : ℝ =>
           dP V dO i
-              (FA1Math.blockIndex Bk numKVBlocks block.val
+              (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) jLocal) - b)
         (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
           (fun j' : Fin (Bk * numKVBlocks) =>
@@ -302,9 +302,9 @@ theorem causalBlockDS_kernel_option_eq {M D Bk numKVBlocks : Nat}
                   else none))) : WithBot ℝ)))) =
       some (dSMasked (fun i j => decide (j.val ≤ i.val))
         Q K V dO LSE scale i
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) jLocal)) := by
-  simpa [ComparableDType.ge, mul_comm, FA1Math.blockIndex] using
+  simpa [ComparableDType.ge, mul_comm, StreamingAccumulator.blockIndex] using
     causalBlockDS_option_eq Q K V dO LSE scale block i jLocal
 
 /-- Closed-form reverse-mode FA-1 backward over Real tensors with an explicit
@@ -692,7 +692,7 @@ noncomputable def dQBlockContribution {M D Bk numKVBlocks : Nat}
     (block : Fin numKVBlocks) (idx : TileIndex [M, D]) : ℝ :=
   scale * Finset.univ.sum fun jLocal : Fin Bk =>
     let j : Fin (Bk * numKVBlocks) :=
-      FA1Math.blockIndex Bk numKVBlocks block.val
+      StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) jLocal
     dS Q K V dO LSE scale idx.1 j * K (j, idx.2.1, PUnit.unit)
 
@@ -704,7 +704,7 @@ noncomputable def dQBlockContribution {M D Bk numKVBlocks : Nat}
     dQBlockContribution Q K V dO LSE scale block idx =
       scale * Finset.univ.sum (fun jLocal : Fin Bk =>
         let j : Fin (Bk * numKVBlocks) :=
-          FA1Math.blockIndex Bk numKVBlocks block.val
+          StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) jLocal
         dS Q K V dO LSE scale idx.1 j * K (j, idx.2.1, PUnit.unit)) := rfl
 
@@ -720,10 +720,10 @@ theorem dQBlockContribution_sum_eq_attentionBackwardReal {M D Bk numKVBlocks : N
   rw [← Finset.mul_sum]
   congr 1
   rw [← Finset.sum_product', Finset.univ_product_univ]
-  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
   · intro _; simp
   · intro j _
-    rw [FA1Math.blockIndex_blockIndexEquiv]
+    rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
 
 /-- Mask-aware contribution to `dQ` from one KV block. -/
 noncomputable def dQBlockContributionMasked {M D Bk numKVBlocks : Nat}
@@ -734,7 +734,7 @@ noncomputable def dQBlockContributionMasked {M D Bk numKVBlocks : Nat}
     (block : Fin numKVBlocks) (idx : TileIndex [M, D]) : ℝ :=
   scale * Finset.univ.sum fun jLocal : Fin Bk =>
     let j : Fin (Bk * numKVBlocks) :=
-      FA1Math.blockIndex Bk numKVBlocks block.val
+      StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) jLocal
     dSMasked visible Q K V dO LSE scale idx.1 j * K (j, idx.2.1, PUnit.unit)
 
@@ -760,10 +760,10 @@ theorem dQBlockContributionMasked_sum_eq_attentionBackwardRealMasked_impl
           rw [← Finset.mul_sum]
           congr 1
           rw [← Finset.sum_product', Finset.univ_product_univ]
-          refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+          refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
           · intro _; simp
           · intro j _
-            rw [FA1Math.blockIndex_blockIndexEquiv]
+            rw [StreamingAccumulator.blockIndex_blockIndexEquiv]
 
 /-- Causal specialization of the mask-aware block-local `dQ` contribution. -/
 noncomputable def dQBlockContributionCausal {M D Bk numKVBlocks : Nat}
@@ -924,7 +924,7 @@ theorem dQ_block_kernel_tile_some_eq_dQBlockContributionCausal
       (@Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ (fun jLocal : Fin Bk =>
         Option.map
           (fun a : ℝ =>
-            a * K (FA1Math.blockIndex Bk numKVBlocks block.val
+            a * K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit))
           (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
             (WithBot.realExp
@@ -933,13 +933,13 @@ theorem dQ_block_kernel_tile_some_eq_dQBlockContributionCausal
                     Bool.true then
                   some ((Finset.univ.sum fun d : Fin D =>
                     Q (idx.1, d, PUnit.unit) *
-                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                      K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                         (by have := block.isLt; omega) jLocal, d, PUnit.unit)) * scale)
                 else none)))
             (Option.map
               (fun b : ℝ =>
                 dP V dO idx.1
-                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) jLocal) - b)
               (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
                 (fun j' : Fin (Bk * numKVBlocks) =>
@@ -955,7 +955,7 @@ theorem dQ_block_kernel_tile_some_eq_dQBlockContributionCausal
       (fun jLocal : Fin Bk =>
         Option.map
           (fun a : ℝ =>
-            a * K (FA1Math.blockIndex Bk numKVBlocks block.val
+            a * K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit))
           (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
             (WithBot.realExp
@@ -964,13 +964,13 @@ theorem dQ_block_kernel_tile_some_eq_dQBlockContributionCausal
                     Bool.true then
                   some ((Finset.univ.sum fun d : Fin D =>
                     Q (idx.1, d, PUnit.unit) *
-                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                      K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                         (by have := block.isLt; omega) jLocal, d, PUnit.unit)) * scale)
                 else none)))
             (Option.map
               (fun b : ℝ =>
                 dP V dO idx.1
-                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) jLocal) - b)
               (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
                 (fun j' : Fin (Bk * numKVBlocks) =>
@@ -985,9 +985,9 @@ theorem dQ_block_kernel_tile_some_eq_dQBlockContributionCausal
         (some
           (dSMasked (fun i j => decide (j.val ≤ i.val))
             Q K V dO LSE scale idx.1
-            (FA1Math.blockIndex Bk numKVBlocks block.val
+            (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) jLocal) *
-            K (FA1Math.blockIndex Bk numKVBlocks block.val
+            K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit)) :
           WithBot ℝ)) := by
     funext jLocal
@@ -1013,7 +1013,7 @@ theorem dQ_block_kernel_prop_tile_some_eq_dQBlockContributionCausal
       (@Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ (fun jLocal : Fin Bk =>
         Option.map
           (fun a : ℝ =>
-            a * K (FA1Math.blockIndex Bk numKVBlocks block.val
+            a * K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit))
           (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
             (WithBot.realExp
@@ -1021,13 +1021,13 @@ theorem dQ_block_kernel_prop_tile_some_eq_dQBlockContributionCausal
                 (if block.val * Bk + jLocal.val ≤ idx.1.val then
                   some ((Finset.univ.sum fun d : Fin D =>
                     Q (idx.1, d, PUnit.unit) *
-                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                      K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                         (by have := block.isLt; omega) jLocal, d, PUnit.unit)) * scale)
                 else none)))
             (Option.map
               (fun b : ℝ =>
                 dP V dO idx.1
-                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) jLocal) - b)
               (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
                 (fun j' : Fin (Bk * numKVBlocks) =>
@@ -1057,7 +1057,7 @@ theorem dQ_block_kernel_prop_sum_some_eq_dQBlockContributionCausal_unscaled
     @Finset.sum (Fin Bk) (WithBot ℝ) _ Finset.univ (fun jLocal : Fin Bk =>
       Option.map
         (fun a : ℝ =>
-          a * K (FA1Math.blockIndex Bk numKVBlocks block.val
+          a * K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit))
         (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
           (WithBot.realExp
@@ -1065,13 +1065,13 @@ theorem dQ_block_kernel_prop_sum_some_eq_dQBlockContributionCausal_unscaled
               (if block.val * Bk + jLocal.val ≤ idx.1.val then
                 some (scale * (Finset.univ.sum fun d : Fin D =>
                   Q (idx.1, d, PUnit.unit) *
-                    K (FA1Math.blockIndex Bk numKVBlocks block.val
+                    K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) jLocal, d, PUnit.unit)))
               else none)))
           (Option.map
             (fun b : ℝ =>
               dP V dO idx.1
-                  (FA1Math.blockIndex Bk numKVBlocks block.val
+                  (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) jLocal) - b)
             (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
               (fun j' : Fin (Bk * numKVBlocks) =>
@@ -1085,15 +1085,15 @@ theorem dQ_block_kernel_prop_sum_some_eq_dQBlockContributionCausal_unscaled
       some (Finset.univ.sum fun jLocal : Fin Bk =>
         dSMasked (fun i j => decide (j.val ≤ i.val))
           Q K V dO LSE scale idx.1
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) jLocal) *
-        K (FA1Math.blockIndex Bk numKVBlocks block.val
+        K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit)) := by
   have hterm :
       (fun jLocal : Fin Bk =>
         Option.map
           (fun a : ℝ =>
-            a * K (FA1Math.blockIndex Bk numKVBlocks block.val
+            a * K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit))
           (Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
             (WithBot.realExp
@@ -1101,13 +1101,13 @@ theorem dQ_block_kernel_prop_sum_some_eq_dQBlockContributionCausal_unscaled
                 (if block.val * Bk + jLocal.val ≤ idx.1.val then
                   some (scale * (Finset.univ.sum fun d : Fin D =>
                     Q (idx.1, d, PUnit.unit) *
-                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                      K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                         (by have := block.isLt; omega) jLocal, d, PUnit.unit)))
                 else none)))
             (Option.map
               (fun b : ℝ =>
                 dP V dO idx.1
-                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) jLocal) - b)
               (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
                 (fun j' : Fin (Bk * numKVBlocks) =>
@@ -1122,9 +1122,9 @@ theorem dQ_block_kernel_prop_sum_some_eq_dQBlockContributionCausal_unscaled
         (some
           (dSMasked (fun i j => decide (j.val ≤ i.val))
             Q K V dO LSE scale idx.1
-            (FA1Math.blockIndex Bk numKVBlocks block.val
+            (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) jLocal) *
-            K (FA1Math.blockIndex Bk numKVBlocks block.val
+            K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) jLocal, idx.2.1, PUnit.unit)) :
           WithBot ℝ)) := by
     funext jLocal
@@ -1150,13 +1150,13 @@ theorem dK_block_kernel_tile_some_eq_attentionBackwardRealCausal
                     Bool.true then
                   some ((Finset.univ.sum fun d : Fin D =>
                     Q (i, d, PUnit.unit) *
-                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                      K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                         (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
                 else none)))
             (Option.map
               (fun b : ℝ =>
                 dP V dO i
-                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) idx.1) - b)
               (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
                 (fun j' : Fin (Bk * numKVBlocks) =>
@@ -1168,7 +1168,7 @@ theorem dK_block_kernel_tile_some_eq_attentionBackwardRealCausal
                             Q (i, d, PUnit.unit) * K (j', d, PUnit.unit)) * scale)
                         else none))) : WithBot ℝ))))))) =
       some ((attentionBackwardRealCausal Q K V dO LSE scale).dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   have hterm :
       (fun i : Fin M =>
@@ -1180,13 +1180,13 @@ theorem dK_block_kernel_tile_some_eq_attentionBackwardRealCausal
                     Bool.true then
                   some ((Finset.univ.sum fun d : Fin D =>
                     Q (i, d, PUnit.unit) *
-                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                      K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                         (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
                 else none)))
             (Option.map
               (fun b : ℝ =>
                 dP V dO i
-                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) idx.1) - b)
               (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
                 (fun j' : Fin (Bk * numKVBlocks) =>
@@ -1201,7 +1201,7 @@ theorem dK_block_kernel_tile_some_eq_attentionBackwardRealCausal
         (some
           (dSMasked (fun i j => decide (j.val ≤ i.val))
             Q K V dO LSE scale i
-            (FA1Math.blockIndex Bk numKVBlocks block.val
+            (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1) *
             Q (i, idx.2.1, PUnit.unit)) : WithBot ℝ)) := by
     funext i
@@ -1228,13 +1228,13 @@ theorem dK_block_kernel_prop_tile_some_eq_attentionBackwardRealCausal
                 (if block.val * Bk + idx.1.val ≤ i.val then
                   some ((Finset.univ.sum fun d : Fin D =>
                     Q (i, d, PUnit.unit) *
-                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                      K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                         (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
                 else none)))
             (Option.map
               (fun b : ℝ =>
                 dP V dO i
-                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) idx.1) - b)
               (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
                 (fun j' : Fin (Bk * numKVBlocks) =>
@@ -1246,7 +1246,7 @@ theorem dK_block_kernel_prop_tile_some_eq_attentionBackwardRealCausal
                             Q (i, d, PUnit.unit) * K (j', d, PUnit.unit)) * scale)
                         else none))) : WithBot ℝ))))))) =
       some ((attentionBackwardRealCausal Q K V dO LSE scale).dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   simpa [ComparableDType.ge] using
     dK_block_kernel_tile_some_eq_attentionBackwardRealCausal
@@ -1267,13 +1267,13 @@ theorem dK_block_kernel_prop_sum_some_eq_attentionBackwardRealCausal_unscaled
               (if block.val * Bk + idx.1.val ≤ i.val then
                 some (scale * (Finset.univ.sum fun d : Fin D =>
                   Q (i, d, PUnit.unit) *
-                    K (FA1Math.blockIndex Bk numKVBlocks block.val
+                    K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) idx.1, d, PUnit.unit)))
               else none)))
           (Option.map
             (fun b : ℝ =>
               dP V dO i
-                  (FA1Math.blockIndex Bk numKVBlocks block.val
+                  (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) idx.1) - b)
             (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
               (fun j' : Fin (Bk * numKVBlocks) =>
@@ -1287,7 +1287,7 @@ theorem dK_block_kernel_prop_sum_some_eq_attentionBackwardRealCausal_unscaled
       some (Finset.univ.sum fun i : Fin M =>
         dSMasked (fun i j => decide (j.val ≤ i.val))
           Q K V dO LSE scale i
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1) *
         Q (i, idx.2.1, PUnit.unit)) := by
   have hterm :
@@ -1299,13 +1299,13 @@ theorem dK_block_kernel_prop_sum_some_eq_attentionBackwardRealCausal_unscaled
                 (if block.val * Bk + idx.1.val ≤ i.val then
                   some (scale * (Finset.univ.sum fun d : Fin D =>
                     Q (i, d, PUnit.unit) *
-                      K (FA1Math.blockIndex Bk numKVBlocks block.val
+                      K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                         (by have := block.isLt; omega) idx.1, d, PUnit.unit)))
                 else none)))
             (Option.map
               (fun b : ℝ =>
                 dP V dO i
-                    (FA1Math.blockIndex Bk numKVBlocks block.val
+                    (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) idx.1) - b)
               (@Finset.sum (Fin (Bk * numKVBlocks)) (WithBot ℝ) _ Finset.univ
                 (fun j' : Fin (Bk * numKVBlocks) =>
@@ -1320,7 +1320,7 @@ theorem dK_block_kernel_prop_sum_some_eq_attentionBackwardRealCausal_unscaled
         (some
           (dSMasked (fun i j => decide (j.val ≤ i.val))
             Q K V dO LSE scale i
-            (FA1Math.blockIndex Bk numKVBlocks block.val
+            (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1) *
             Q (i, idx.2.1, PUnit.unit)) : WithBot ℝ)) := by
     funext i
@@ -1344,11 +1344,11 @@ theorem dV_block_kernel_tile_some_eq_attentionBackwardRealCausal
                 Bool.true then
               some ((Finset.univ.sum fun d : Fin D =>
                 Q (i, d, PUnit.unit) *
-                  K (FA1Math.blockIndex Bk numKVBlocks block.val
+                  K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
             else none))) : WithBot ℝ)) =
       some ((attentionBackwardRealCausal Q K V dO LSE scale).dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   have hterm :
       (fun i : Fin M =>
@@ -1359,14 +1359,14 @@ theorem dV_block_kernel_tile_some_eq_attentionBackwardRealCausal
                   Bool.true then
                 some ((Finset.univ.sum fun d : Fin D =>
                   Q (i, d, PUnit.unit) *
-                    K (FA1Math.blockIndex Bk numKVBlocks block.val
+                    K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
               else none))) : WithBot ℝ)) =
       (fun i : Fin M =>
         (some
           (probabilityMasked (fun i j => decide (j.val ≤ i.val))
             Q K LSE scale i
-            (FA1Math.blockIndex Bk numKVBlocks block.val
+            (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1) *
             dO (i, idx.2.1, PUnit.unit)) : WithBot ℝ)) := by
     funext i
@@ -1377,18 +1377,18 @@ theorem dV_block_kernel_tile_some_eq_attentionBackwardRealCausal
                 Bool.true then
               some ((Finset.univ.sum fun d : Fin D =>
                 Q (i, d, PUnit.unit) *
-                  K (FA1Math.blockIndex Bk numKVBlocks block.val
+                  K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
             else none)) =
           some (probabilityMasked (fun i j => decide (j.val ≤ i.val))
             Q K LSE scale i
-            (FA1Math.blockIndex Bk numKVBlocks block.val
+            (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1)) := by
-      simpa [ComparableDType.ge, mul_comm, FA1Math.blockIndex] using
+      simpa [ComparableDType.ge, mul_comm, StreamingAccumulator.blockIndex] using
         maskedProbability_exp_eq
           (fun (i : Fin M) (j : Fin (Bk * numKVBlocks)) => decide (j.val ≤ i.val))
           Q K LSE scale i
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1)
     rw [hprob]
     rfl
@@ -1410,11 +1410,11 @@ theorem dV_block_kernel_prop_tile_some_eq_attentionBackwardRealCausal
             (if block.val * Bk + idx.1.val ≤ i.val then
               some ((Finset.univ.sum fun d : Fin D =>
                 Q (i, d, PUnit.unit) *
-                  K (FA1Math.blockIndex Bk numKVBlocks block.val
+                  K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) idx.1, d, PUnit.unit)) * scale)
             else none))) : WithBot ℝ)) =
       some ((attentionBackwardRealCausal Q K V dO LSE scale).dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   simpa [ComparableDType.ge] using
     dV_block_kernel_tile_some_eq_attentionBackwardRealCausal
@@ -1434,13 +1434,13 @@ theorem dV_block_kernel_prop_sum_some_eq_attentionBackwardRealCausal_unscaled
             (if block.val * Bk + idx.1.val ≤ i.val then
               some (scale * (Finset.univ.sum fun d : Fin D =>
                 Q (i, d, PUnit.unit) *
-                  K (FA1Math.blockIndex Bk numKVBlocks block.val
+                  K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) idx.1, d, PUnit.unit)))
             else none))) : WithBot ℝ)) =
       some (Finset.univ.sum fun i : Fin M =>
         probabilityMasked (fun i j => decide (j.val ≤ i.val))
           Q K LSE scale i
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1) *
         dO (i, idx.2.1, PUnit.unit)) := by
   have hterm :
@@ -1451,14 +1451,14 @@ theorem dV_block_kernel_prop_sum_some_eq_attentionBackwardRealCausal_unscaled
               (if block.val * Bk + idx.1.val ≤ i.val then
                 some (scale * (Finset.univ.sum fun d : Fin D =>
                   Q (i, d, PUnit.unit) *
-                    K (FA1Math.blockIndex Bk numKVBlocks block.val
+                    K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                       (by have := block.isLt; omega) idx.1, d, PUnit.unit)))
               else none))) : WithBot ℝ)) =
       (fun i : Fin M =>
         (some
           (probabilityMasked (fun i j => decide (j.val ≤ i.val))
             Q K LSE scale i
-            (FA1Math.blockIndex Bk numKVBlocks block.val
+            (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1) *
             dO (i, idx.2.1, PUnit.unit)) : WithBot ℝ)) := by
     funext i
@@ -1468,18 +1468,18 @@ theorem dV_block_kernel_prop_sum_some_eq_attentionBackwardRealCausal_unscaled
             (if block.val * Bk + idx.1.val ≤ i.val then
               some (scale * (Finset.univ.sum fun d : Fin D =>
                 Q (i, d, PUnit.unit) *
-                  K (FA1Math.blockIndex Bk numKVBlocks block.val
+                  K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                     (by have := block.isLt; omega) idx.1, d, PUnit.unit)))
             else none)) =
           some (probabilityMasked (fun i j => decide (j.val ≤ i.val))
             Q K LSE scale i
-            (FA1Math.blockIndex Bk numKVBlocks block.val
+            (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1)) := by
-      simpa [FA1Math.blockIndex] using
+      simpa [StreamingAccumulator.blockIndex] using
         maskedProbability_exp_eq
           (fun (i : Fin M) (j : Fin (Bk * numKVBlocks)) => decide (j.val ≤ i.val))
           Q K LSE scale i
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1)
     rw [hprob]
     rfl
@@ -1503,12 +1503,12 @@ theorem dQ_block_tile_some_eq_dQBlockContribution {M D Bk numKVBlocks : Nat}
       ((Tile.dot []
         (Tile.ofReal fun idx : TileIndex [M, Bk] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.2.1
           dS Q K V dO LSE scale idx.1 j)
         (Tile.ofReal fun idx : TileIndex [Bk, D] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1
           K (j, idx.2.1, PUnit.unit))).data idx) =
       some (dQBlockContribution Q K V dO LSE scale block idx) := by
@@ -1527,12 +1527,12 @@ theorem dK_block_tile_some_eq_attentionBackwardReal {M D Bk numKVBlocks : Nat}
         (Tile.transpose []
           (Tile.ofReal fun idx : TileIndex [M, Bk] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.2.1
             dS Q K V dO LSE scale idx.1 j))
         (Tile.ofReal Q)).data idx) =
       some ((attentionBackwardReal Q K V dO LSE scale).dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   rw [Tile.dot_nil_data]
   simp [Tile.transpose, Tile.ofReal, attentionBackwardReal_dK]
@@ -1548,12 +1548,12 @@ theorem dV_block_tile_some_eq_attentionBackwardReal {M D Bk numKVBlocks : Nat}
       (Tile.transpose []
         (Tile.ofReal fun idx : TileIndex [M, Bk] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.2.1
           probability Q K LSE scale idx.1 j))
       (Tile.ofReal dO)).data idx =
       some ((attentionBackwardReal Q K V dO LSE scale).dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   rw [Tile.dot_nil_data]
   simp [Tile.transpose, Tile.ofReal, attentionBackwardReal_dV]
@@ -1570,12 +1570,12 @@ theorem dQ_block_tile_some_eq_dQBlockContributionMasked {M D Bk numKVBlocks : Na
       ((Tile.dot []
         (Tile.ofReal fun idx : TileIndex [M, Bk] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.2.1
           dSMasked visible Q K V dO LSE scale idx.1 j)
         (Tile.ofReal fun idx : TileIndex [Bk, D] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1
           K (j, idx.2.1, PUnit.unit))).data idx) =
       some (dQBlockContributionMasked visible Q K V dO LSE scale block idx) := by
@@ -1595,12 +1595,12 @@ theorem dK_block_tile_some_eq_attentionBackwardRealMasked {M D Bk numKVBlocks : 
         (Tile.transpose []
           (Tile.ofReal fun idx : TileIndex [M, Bk] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.2.1
             dSMasked visible Q K V dO LSE scale idx.1 j))
         (Tile.ofReal Q)).data idx) =
       some ((attentionBackwardRealMasked visible Q K V dO LSE scale).dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   rw [Tile.dot_nil_data]
   simp [Tile.transpose, Tile.ofReal, attentionBackwardRealMasked]
@@ -1617,12 +1617,12 @@ theorem dV_block_tile_some_eq_attentionBackwardRealMasked {M D Bk numKVBlocks : 
       (Tile.transpose []
         (Tile.ofReal fun idx : TileIndex [M, Bk] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.2.1
           probabilityMasked visible Q K LSE scale idx.1 j))
       (Tile.ofReal dO)).data idx =
       some ((attentionBackwardRealMasked visible Q K V dO LSE scale).dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   rw [Tile.dot_nil_data]
   simp [Tile.transpose, Tile.ofReal, attentionBackwardRealMasked]
@@ -1638,12 +1638,12 @@ theorem dQ_block_tile_some_eq_dQBlockContributionCausal {M D Bk numKVBlocks : Na
       ((Tile.dot []
         (Tile.ofReal fun idx : TileIndex [M, Bk] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.2.1
           dSMasked (fun i j => decide (j.val ≤ i.val)) Q K V dO LSE scale idx.1 j)
         (Tile.ofReal fun idx : TileIndex [Bk, D] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.1
           K (j, idx.2.1, PUnit.unit))).data idx) =
       some (dQBlockContributionCausal Q K V dO LSE scale block idx) := by
@@ -1662,12 +1662,12 @@ theorem dK_block_tile_some_eq_attentionBackwardRealCausal {M D Bk numKVBlocks : 
         (Tile.transpose []
           (Tile.ofReal fun idx : TileIndex [M, Bk] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.2.1
             dSMasked (fun i j => decide (j.val ≤ i.val)) Q K V dO LSE scale idx.1 j))
         (Tile.ofReal Q)).data idx) =
       some ((attentionBackwardRealCausal Q K V dO LSE scale).dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   simpa [attentionBackwardRealCausal] using
     dK_block_tile_some_eq_attentionBackwardRealMasked
@@ -1683,12 +1683,12 @@ theorem dV_block_tile_some_eq_attentionBackwardRealCausal {M D Bk numKVBlocks : 
       (Tile.transpose []
         (Tile.ofReal fun idx : TileIndex [M, Bk] =>
           let j : Fin (Bk * numKVBlocks) :=
-            FA1Math.blockIndex Bk numKVBlocks block.val
+            StreamingAccumulator.blockIndex Bk numKVBlocks block.val
               (by have := block.isLt; omega) idx.2.1
           probabilityMasked (fun i j => decide (j.val ≤ i.val)) Q K LSE scale idx.1 j))
       (Tile.ofReal dO)).data idx =
       some ((attentionBackwardRealCausal Q K V dO LSE scale).dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   simpa [attentionBackwardRealCausal] using
     dV_block_tile_some_eq_attentionBackwardRealMasked
@@ -1708,12 +1708,12 @@ theorem maskedBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
         ((Tile.dot []
           (Tile.ofReal fun idx : TileIndex [M, Bk] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.2.1
             dSMasked visible Q K V dO LSE scale idx.1 j)
           (Tile.ofReal fun idx : TileIndex [Bk, D] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.1
             K (j, idx.2.1, PUnit.unit))).data idx) =
         some (dQBlockContributionMasked visible Q K V dO LSE scale block idx)) ∧
@@ -1723,24 +1723,24 @@ theorem maskedBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
           (Tile.transpose []
             (Tile.ofReal fun idx : TileIndex [M, Bk] =>
               let j : Fin (Bk * numKVBlocks) :=
-                FA1Math.blockIndex Bk numKVBlocks block.val
+                StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                   (by have := block.isLt; omega) idx.2.1
               dSMasked visible Q K V dO LSE scale idx.1 j))
           (Tile.ofReal Q)).data idx) =
         some ((attentionBackwardRealMasked visible Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ idx : TileIndex [Bk, D],
       (Tile.dot []
         (Tile.transpose []
           (Tile.ofReal fun idx : TileIndex [M, Bk] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.2.1
             probabilityMasked visible Q K LSE scale idx.1 j))
         (Tile.ofReal dO)).data idx =
         some ((attentionBackwardRealMasked visible Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact ⟨
     dQ_block_tile_some_eq_dQBlockContributionMasked visible Q K V dO LSE scale block,
@@ -1760,13 +1760,13 @@ theorem causalBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
         ((Tile.dot []
           (Tile.ofReal fun idx : TileIndex [M, Bk] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.2.1
             dSMasked (fun i j => decide (j.val ≤ i.val))
               Q K V dO LSE scale idx.1 j)
           (Tile.ofReal fun idx : TileIndex [Bk, D] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.1
             K (j, idx.2.1, PUnit.unit))).data idx) =
         some (dQBlockContributionCausal Q K V dO LSE scale block idx)) ∧
@@ -1776,26 +1776,26 @@ theorem causalBackward_block_tile_bridges_complete {M D Bk numKVBlocks : Nat}
           (Tile.transpose []
             (Tile.ofReal fun idx : TileIndex [M, Bk] =>
               let j : Fin (Bk * numKVBlocks) :=
-                FA1Math.blockIndex Bk numKVBlocks block.val
+                StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                   (by have := block.isLt; omega) idx.2.1
               dSMasked (fun i j => decide (j.val ≤ i.val))
                 Q K V dO LSE scale idx.1 j))
           (Tile.ofReal Q)).data idx) =
         some ((attentionBackwardRealCausal Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ idx : TileIndex [Bk, D],
       (Tile.dot []
         (Tile.transpose []
           (Tile.ofReal fun idx : TileIndex [M, Bk] =>
             let j : Fin (Bk * numKVBlocks) :=
-              FA1Math.blockIndex Bk numKVBlocks block.val
+              StreamingAccumulator.blockIndex Bk numKVBlocks block.val
                 (by have := block.isLt; omega) idx.2.1
             probabilityMasked (fun i j => decide (j.val ≤ i.val))
               Q K LSE scale idx.1 j))
         (Tile.ofReal dO)).data idx =
         some ((attentionBackwardRealCausal Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact ⟨
     dQ_block_tile_some_eq_dQBlockContributionCausal Q K V dO LSE scale block,
@@ -1911,7 +1911,7 @@ theorem probability_tile_eq {M S D : Nat}
           ((Tile.dot [] (Tile.ofReal Q) (Tile.transpose [] (Tile.ofReal K))).data
             (idx.1, idx.2.1, PUnit.unit)))
         ((Tile.ofReal fun idx : TileIndex [M] => LSE idx.1).data (idx.1, PUnit.unit))) = _
-  rw [FA1Math.scaled_data_eq' Q K scale idx.1 idx.2.1]
+  rw [StreamingAccumulator.scaled_data_eq' Q K scale idx.1 idx.2.1]
   simp [Tile.ofReal, probability]
 
 /-- Tile-level bridge for `dP = dO · Vᵀ`. -/

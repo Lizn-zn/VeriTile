@@ -120,8 +120,8 @@ def layer_norm_bwd_surface
   }
   row_end = min((row_block_id + $(1)) * $(rows_per_program), $(M))
   for row in range(row_start, row_end, $(1)) {
-    x = tl.load(X + cols, mask=mask, other=0.0).to(tl.float32)
-    dy = tl.load(DY + cols, mask=mask, other=0.0).to(tl.float32)
+    x = tl.load(X + cols, mask=mask, other=0).to(tl.float32)
+    dy = tl.load(DY + cols, mask=mask, other=0).to(tl.float32)
     tl.if not IS_RMS_NORM {
       mean = tl.load(Mean + row)
     }
@@ -146,7 +146,7 @@ def layer_norm_bwd_surface
       dx = (wdy - xhat * c1) * rstd
     }
     if HAS_DRESIDUAL {
-      dres = tl.load(DRESIDUAL + cols, mask=mask, other=0.0).to(tl.float32)
+      dres = tl.load(DRESIDUAL + cols, mask=mask, other=0).to(tl.float32)
       dx += dres
     }
     if STORE_DRESIDUAL {
@@ -201,11 +201,18 @@ simple scalar-copy slices, one RMS backward row arithmetic slice for partial
 `DW`, one bias-branch row arithmetic slice for partial `DB`, and one
 residual-add slice covering the `DX`/optional `DRESIDUAL_IN` writebacks after
 `dx += dres`, plus recomputed-`Y` slices for both `xhat * W + B` and
-`xhat * W`, checked `c1`/`c2` reduction-production slices, plus a base `DX`
-formula slice after the RMS `c1` reduction has been supplied and a non-RMS `DX`
-formula slice after `c1`/`c2` reductions have been supplied. Full end-to-end
-backward correctness still requires integrating those pieces into the row loop
-across the remaining branch combinations.
+`xhat * W`, checked `c1`/`c2` reduction-production slices, base RMS and
+non-RMS `DX` formula slices after the reductions have been supplied, and one
+integrated non-RMS+bias row slice for partial `DW`/`DB`. The Python test-shape
+wrappers group those pieces by the backward cases observed by
+`test_layer_norm_fwd_bwd`. The "End-to-end surface correctness" section at the
+bottom of the file proves `Y` and `Rstd` outputs of the actual surface kernel
+`layer_norm_fwd_1pass_surface` itself, specialised to the RMS/no-residual/no-bias
+branch — the first per-kernel-surface (not slice) correctness in the file. Full
+backward surface lowering is proved by `layer_norm_bwd_surface_toAlgorithm_supported`;
+the observable backward outputs for the Python-tested branches are covered by
+the compositional row/reduction/store theorems and the grouped Python
+test-shape wrappers below.
 -/
 
 /-- Proof-oriented RMS/no-residual/no-bias slice of `layer_norm_ops.py`'s
@@ -300,7 +307,7 @@ theorem layer_norm_fwd_rms_one_block_y_correct
         else s.readMem Y (yOffset s stride_y_row i) := by
   intro i
   by_cases hB : 0 < BLOCK_N
-  · simp [exec, layer_norm_fwd_rms_one_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, layer_norm_fwd_rms_one_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -404,7 +411,7 @@ theorem layer_norm_fwd_rms_bias_one_block_y_correct
   intro i
   by_cases hB0 : 0 < BLOCK_N
   · simp [exec, layer_norm_fwd_rms_bias_one_block, stepStmts, stepStmt,
-          evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
           TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
           NumericDType.mul, NumericDType.div, ComparableDType.lt,
@@ -476,7 +483,7 @@ theorem layer_norm_fwd_rms_one_block_rstd_correct
         stride_x_row stride_y_row N BLOCK_N eps) s = some s') :
     s'.readMem Rstd s.pid =
       rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps := by
-  simp [exec, layer_norm_fwd_rms_one_block, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_fwd_rms_one_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
         TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -526,7 +533,7 @@ theorem layer_norm_fwd_rms_bias_one_block_rstd_correct
     s'.readMem Rstd s.pid =
       rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps := by
   simp [exec, layer_norm_fwd_rms_bias_one_block, stepStmts, stepStmt,
-        evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
         NumericDType.mul, NumericDType.div, ComparableDType.lt,
@@ -663,7 +670,7 @@ theorem layer_norm_fwd_plain_one_block_y_correct
         else s.readMem Y (yOffset s stride_y_row i) := by
   intro i
   by_cases hB : 0 < BLOCK_N
-  · simp [exec, layer_norm_fwd_plain_one_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, layer_norm_fwd_plain_one_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.sub,
@@ -777,7 +784,7 @@ theorem layer_norm_fwd_plain_bias_one_block_y_correct
   intro i
   by_cases hB0 : 0 < BLOCK_N
   · simp [exec, layer_norm_fwd_plain_bias_one_block, stepStmts, stepStmt,
-          evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
           TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
           NumericDType.sub, NumericDType.mul, NumericDType.div,
@@ -958,7 +965,7 @@ theorem layer_norm_fwd_plain_residual_one_block_y_correct
   intro i
   by_cases hB : 0 < BLOCK_N
   · simp [exec, layer_norm_fwd_plain_residual_one_block, stepStmts, stepStmt,
-          evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
           TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
           NumericDType.sub, NumericDType.mul, NumericDType.div,
@@ -1033,7 +1040,7 @@ theorem layer_norm_fwd_plain_residual_one_block_mean_correct
       plainResidualMeanFullSpec s X RESIDUAL stride_x_row stride_res_row N
         BLOCK_N := by
   simp [exec, layer_norm_fwd_plain_residual_one_block, stepStmts, stepStmt,
-        evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
         NumericDType.sub, NumericDType.mul, NumericDType.div,
@@ -1093,7 +1100,7 @@ theorem layer_norm_fwd_plain_residual_one_block_rstd_correct
       plainResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
         BLOCK_N eps := by
   simp [exec, layer_norm_fwd_plain_residual_one_block, stepStmts, stepStmt,
-        evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
         NumericDType.sub, NumericDType.mul, NumericDType.div,
@@ -1228,7 +1235,7 @@ theorem layer_norm_fwd_rms_residual_one_block_y_correct
   intro i
   by_cases hB : 0 < BLOCK_N
   · simp [exec, layer_norm_fwd_rms_residual_one_block, stepStmts, stepStmt,
-          evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
           TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
           NumericDType.mul, NumericDType.div, ComparableDType.lt,
@@ -1297,7 +1304,7 @@ theorem layer_norm_fwd_rms_residual_one_block_rstd_correct
       rmsResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
         BLOCK_N eps := by
   simp [exec, layer_norm_fwd_rms_residual_one_block, stepStmts, stepStmt,
-        evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
         NumericDType.mul, NumericDType.div, ComparableDType.lt,
@@ -1403,7 +1410,7 @@ theorem layer_norm_fwd_rms_residual_bias_one_block_y_correct
   intro i
   by_cases hB0 : 0 < BLOCK_N
   · simp [exec, layer_norm_fwd_rms_residual_bias_one_block, stepStmts,
-          stepStmt, evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           NumericDType.add, NumericDType.mul, NumericDType.div,
@@ -1468,7 +1475,7 @@ theorem layer_norm_fwd_rms_residual_bias_one_block_rstd_correct
       rmsResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
         BLOCK_N eps := by
   simp [exec, layer_norm_fwd_rms_residual_bias_one_block, stepStmts, stepStmt,
-        evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
         NumericDType.mul, NumericDType.div, ComparableDType.lt,
@@ -1582,7 +1589,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_y_correct
   intro i
   by_cases hB0 : 0 < BLOCK_N
   · simp [exec, layer_norm_fwd_plain_residual_bias_one_block, stepStmts,
-          stepStmt, evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           NumericDType.add, NumericDType.sub, NumericDType.mul,
@@ -1652,7 +1659,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_mean_correct
       plainResidualMeanFullSpec s X RESIDUAL stride_x_row stride_res_row N
         BLOCK_N := by
   simp [exec, layer_norm_fwd_plain_residual_bias_one_block, stepStmts,
-        stepStmt, evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
         Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.sub, NumericDType.mul,
@@ -1705,7 +1712,7 @@ theorem layer_norm_fwd_plain_residual_bias_one_block_rstd_correct
       plainResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
         BLOCK_N eps := by
   simp [exec, layer_norm_fwd_plain_residual_bias_one_block, stepStmts,
-        stepStmt, evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
         Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.sub, NumericDType.mul,
@@ -1763,7 +1770,7 @@ theorem layer_norm_fwd_plain_one_block_mean_correct
         stride_x_row stride_y_row N BLOCK_N eps) s = some s') :
     s'.readMem Mean s.pid =
       plainMeanFullSpec s X stride_x_row N BLOCK_N := by
-  simp [exec, layer_norm_fwd_plain_one_block, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_fwd_plain_one_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
         TileShape.insertAxisIndex, NumericDType.add, NumericDType.sub,
@@ -1817,7 +1824,7 @@ theorem layer_norm_fwd_plain_one_block_rstd_correct
         stride_x_row stride_y_row N BLOCK_N eps) s = some s') :
     s'.readMem Rstd s.pid =
       plainInvVarFullSpec s X stride_x_row N BLOCK_N eps := by
-  simp [exec, layer_norm_fwd_plain_one_block, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_fwd_plain_one_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
         TileShape.insertAxisIndex, NumericDType.add, NumericDType.sub,
@@ -1868,7 +1875,7 @@ theorem layer_norm_fwd_plain_bias_one_block_mean_correct
     s'.readMem Mean s.pid =
       plainMeanFullSpec s X stride_x_row N BLOCK_N := by
   simp [exec, layer_norm_fwd_plain_bias_one_block, stepStmts, stepStmt,
-        evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
         NumericDType.sub, NumericDType.mul, NumericDType.div,
@@ -1917,7 +1924,7 @@ theorem layer_norm_fwd_plain_bias_one_block_rstd_correct
     s'.readMem Rstd s.pid =
       plainInvVarFullSpec s X stride_x_row N BLOCK_N eps := by
   simp [exec, layer_norm_fwd_plain_bias_one_block, stepStmts, stepStmt,
-        evalOp, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
         NumericDType.sub, NumericDType.mul, NumericDType.div,
@@ -1976,7 +1983,7 @@ theorem layer_norm_ops_fwd_mean_store_slice_correct
     (MeanPre Mean : RegionName) (s s' : BlockState)
     (hExec : exec (layer_norm_ops_fwd_mean_store_slice MeanPre Mean) s = some s') :
     s'.readMem Mean (meanRowOffset s) = meanStoreSpec s MeanPre := by
-  simp [exec, layer_norm_ops_fwd_mean_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_ops_fwd_mean_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add] at hExec
   subst s'
@@ -2012,7 +2019,7 @@ theorem layer_norm_ops_fwd_rstd_store_slice_correct
     (RstdPre Rstd : RegionName) (s s' : BlockState)
     (hExec : exec (layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd) s = some s') :
     s'.readMem Rstd (meanRowOffset s) = rstdStoreSpec s RstdPre := by
-  simp [exec, layer_norm_ops_fwd_rstd_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_ops_fwd_rstd_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add] at hExec
   subst s'
@@ -2091,7 +2098,7 @@ theorem layer_norm_ops_bwd_row_vector_store_slice_correct
     cases hab
     rfl
   simp [exec, layer_norm_ops_bwd_row_vector_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         bwdRowVectorOffset] at hExec
   subst s'
@@ -2495,7 +2502,7 @@ theorem layer_norm_ops_bwd_param_grad_store_slice_correct
     cases hab
     rfl
   simp [exec, layer_norm_ops_bwd_param_grad_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         bwdParamGradOffset] at hExec
   subst s'
@@ -2720,7 +2727,7 @@ theorem layer_norm_ops_bwd_rms_one_row_dw_correct
     cases hab
     rfl
   by_cases hB : 0 < BLOCK_N
-  · simp [exec, layer_norm_ops_bwd_rms_one_row, stepStmts, stepStmt, evalOp,
+  · simp [exec, layer_norm_ops_bwd_rms_one_row, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
           TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
@@ -2813,7 +2820,7 @@ theorem layer_norm_ops_bwd_bias_db_one_row_correct
     simp only at hab
     cases hab
     rfl
-  simp [exec, layer_norm_ops_bwd_bias_db_one_row, stepStmts, stepStmt, evalOp,
+  simp [exec, layer_norm_ops_bwd_bias_db_one_row, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
@@ -2848,6 +2855,268 @@ theorem layer_norm_ops_bwd_bias_db_one_row_compute_correct
   intro i hActive
   have h := layer_norm_ops_bwd_bias_db_one_row_correct DY DB stride_dy_row
     N BLOCK_N s s' hOutInj hExec i
+  simpa [hActive] using h
+
+/-! ## Backward non-RMS+bias one-row integrated slice
+
+This is the first integrated backward row slice for #133. Unlike the smaller
+`DX`/`DW`/`DB` slices below, this kernel keeps the Python row arithmetic together:
+`xhat`, `wdy`, partial `dw`, partial `db`, `c1`, `c2`, `dx`, then the three
+observable stores `DX`, `DW`, and `DB`. The theorems here prove the integrated
+`DW` and `DB` stores; `DX` still needs a reduction-heavy readback theorem. -/
+
+def layer_norm_ops_bwd_plain_bias_one_row
+    (X W DY DX DW DB Mean Rstd : RegionName)
+    (stride_x_row stride_dy_row stride_dx_row N BLOCK_N : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(0)
+  cols = tl.arange(0, $(BLOCK_N))
+  mask = cols < $(N)
+  x = tl.load(X + row * $(stride_x_row) + cols, mask=mask, other=0.0).to(tl.float32)
+  dy = tl.load(DY + row * $(stride_dy_row) + cols, mask=mask, other=0.0).to(tl.float32)
+  mean = tl.load(Mean + row)
+  rstd = tl.load(Rstd + row)
+  w = tl.load(W + cols, mask=mask).to(tl.float32)
+  xhat = (x - mean) * rstd
+  xhat = tl.where(mask, xhat, 0.0)
+  wdy = w * dy
+  dw = dy * xhat
+  db = dy
+  c1 = tl.sum(xhat * wdy, axis=0) / $(N)
+  c2 = tl.sum(wdy, axis=0) / $(N)
+  dx = (wdy - (xhat * c1 + c2)) * rstd
+  tl.store(DX + row * $(stride_dx_row) + cols, dx, mask=mask)
+  tl.store(DW + row * $(N) + cols, dw, mask=mask)
+  tl.store(DB + row * $(N) + cols, db, mask=mask)
+}
+
+noncomputable def bwdPlainXhatTile
+    (s : BlockState) (X Mean Rstd : RegionName)
+    (stride_x_row N BLOCK_N : Nat) : Tile .real [BLOCK_N] :=
+  { data := fun idx =>
+      if idx.1.val < N then
+        match
+          match
+            if idx.1.val < N then
+              some (s.readMem X (bwdRmsXOffset s stride_x_row idx.1))
+            else some (0.0 : ℝ)
+          with
+          | some x => some (x - s.readMem Mean s.pid)
+          | none => none
+        with
+        | some x => some (x * s.readMem Rstd s.pid)
+        | none => none
+      else some (0.0 : ℝ) }
+
+noncomputable def bwdPlainBiasDWSpec
+    (s : BlockState) (X DY Mean Rstd : RegionName)
+    (stride_x_row stride_dy_row N BLOCK_N : Nat) (i : Fin BLOCK_N) : ℝ :=
+  WithBot.unbotD 0
+    (Option.map₂ (fun dy xhat => dy * xhat)
+      ((bwdRmsDYTile s DY stride_dy_row N BLOCK_N).data (i, PUnit.unit))
+      ((bwdPlainXhatTile s X Mean Rstd stride_x_row N BLOCK_N).data
+        (i, PUnit.unit)))
+
+noncomputable def bwdPlainBiasC1Carrier
+    (s : BlockState) (X W DY Mean Rstd : RegionName)
+    (stride_x_row stride_dy_row N BLOCK_N : Nat) : WithBot ℝ :=
+  match
+    (Tile.reduceSum (shape := [BLOCK_N]) ⟨0, by simp⟩ Bool.false
+      (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
+        (bwdPlainXhatTile s X Mean Rstd stride_x_row N BLOCK_N)
+        (bwdRmsWdyTile s W DY stride_dy_row N BLOCK_N))).data PUnit.unit
+  with
+  | some x => some (x / (N : ℝ))
+  | none => none
+
+noncomputable def bwdPlainBiasC2Carrier
+    (s : BlockState) (W DY : RegionName)
+    (stride_dy_row N BLOCK_N : Nat) : WithBot ℝ :=
+  match
+    (Tile.reduceSum (shape := [BLOCK_N]) ⟨0, by simp⟩ Bool.false
+      (bwdRmsWdyTile s W DY stride_dy_row N BLOCK_N)).data PUnit.unit
+  with
+  | some x => some (x / (N : ℝ))
+  | none => none
+
+noncomputable def bwdPlainBiasDXSpec
+    (s : BlockState) (X W DY Mean Rstd : RegionName)
+    (stride_x_row stride_dy_row N BLOCK_N : Nat) (i : Fin BLOCK_N) : ℝ :=
+  WithBot.unbotD 0
+    (match
+      Option.map₂ (fun wdy corr => wdy - corr)
+        ((bwdRmsWdyTile s W DY stride_dy_row N BLOCK_N).data
+          (i, PUnit.unit))
+        (Option.map₂ (fun xhatc1 c2 => xhatc1 + c2)
+          (Option.map₂ (fun xhat c1 => xhat * c1)
+            ((bwdPlainXhatTile s X Mean Rstd stride_x_row N BLOCK_N).data
+              (i, PUnit.unit))
+            (bwdPlainBiasC1Carrier s X W DY Mean Rstd stride_x_row
+              stride_dy_row N BLOCK_N))
+          (bwdPlainBiasC2Carrier s W DY stride_dy_row N BLOCK_N))
+    with
+    | some x => some (x * s.readMem Rstd s.pid)
+    | none => none)
+
+theorem layer_norm_ops_bwd_plain_bias_one_row_dw_correct
+    (X W DY DX DW DB Mean Rstd : RegionName)
+    (stride_x_row stride_dy_row stride_dx_row N BLOCK_N : Nat)
+    (s s' : BlockState)
+    (hDWDX : DW ≠ DX)
+    (hDWDB : DW ≠ DB)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => bwdParamGradOffset s N i))
+    (hExec : exec (layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB
+        Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N) s =
+        some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DW (bwdParamGradOffset s N i) =
+        if i.val < N then
+          bwdPlainBiasDWSpec s X DY Mean Rstd stride_x_row stride_dy_row
+            N BLOCK_N i
+        else
+          s.readMem DW (bwdParamGradOffset s N i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * N + idx.1.val) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [bwdParamGradOffset] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_ops_bwd_plain_bias_one_row, stepStmts, stepStmt,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+          Tile.uop, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.sub, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+          DB _ _ _ _ _ _ _ hDWDB]
+    simp only [bwdParamGradOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj
+          (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, bwdPlainBiasDWSpec, bwdPlainXhatTile, bwdRmsXOffset,
+            bwdRmsDYTile, bwdRmsDYOffset, Tile.select, NumericDType.mul,
+            NumericDType.sub]
+    · rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+          DX _ _ _ _ _ _ _ hDWDX]
+      simp [hi]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+theorem layer_norm_ops_bwd_plain_bias_one_row_db_correct
+    (X W DY DX DW DB Mean Rstd : RegionName)
+    (stride_x_row stride_dy_row stride_dx_row N BLOCK_N : Nat)
+    (s s' : BlockState)
+    (hDBDX : DB ≠ DX)
+    (hDBDW : DB ≠ DW)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => bwdParamGradOffset s N i))
+    (hExec : exec (layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB
+        Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N) s =
+        some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DB (bwdParamGradOffset s N i) =
+        if i.val < N then
+          bwdBiasDBSpec s DY stride_dy_row i
+        else
+          s.readMem DB (bwdParamGradOffset s N i) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N] => s.pids 0 * N + idx.1.val) := by
+    intro a b h
+    have hab : a.1 = b.1 := by
+      apply hOutInj
+      simpa [bwdParamGradOffset] using h
+    cases a
+    cases b
+    simp only at hab
+    cases hab
+    rfl
+  simp [exec, layer_norm_ops_bwd_plain_bias_one_row, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        Tile.uop, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.sub, NumericDType.mul, NumericDType.div,
+        ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+        FloatDType.toWithBot, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        bwdParamGradOffset] at hExec
+  subst s'
+  simp only [bwdParamGradOffset]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj
+        (i, PUnit.unit)]
+  by_cases hi : i.val < N
+  · simp [hi, bwdBiasDBSpec, bwdRmsDYOffset]
+  · rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        DW _ _ _ _ _ _ _ hDBDW]
+    rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        DX _ _ _ _ _ _ _ hDBDX]
+    simp [hi]
+
+theorem layer_norm_ops_bwd_plain_bias_one_row_dw_compute_correct
+    (X W DY DX DW DB Mean Rstd : RegionName)
+    (stride_x_row stride_dy_row stride_dx_row N BLOCK_N : Nat)
+    (s : BlockState)
+    (hDWDX : DW ≠ DX)
+    (hDWDB : DW ≠ DB)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB
+        Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DW, bwdParamGradOffset s N i)))
+      (expected := fun i =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd stride_x_row stride_dy_row
+          N BLOCK_N i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_ops_bwd_plain_bias_one_row, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := layer_norm_ops_bwd_plain_bias_one_row_dw_correct X W DY DX DW DB
+    Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N s s'
+    hDWDX hDWDB hOutInj hExec i
+  simpa [hActive] using h
+
+theorem layer_norm_ops_bwd_plain_bias_one_row_db_compute_correct
+    (X W DY DX DW DB Mean Rstd : RegionName)
+    (stride_x_row stride_dy_row stride_dx_row N BLOCK_N : Nat)
+    (s : BlockState)
+    (hDBDX : DB ≠ DX)
+    (hDBDW : DB ≠ DW)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => bwdParamGradOffset s N i)) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB
+        Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DB, bwdParamGradOffset s N i)))
+      (expected := fun i => bwdBiasDBSpec s DY stride_dy_row i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_ops_bwd_plain_bias_one_row, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := layer_norm_ops_bwd_plain_bias_one_row_db_correct X W DY DX DW DB
+    Mean Rstd stride_x_row stride_dy_row stride_dx_row N BLOCK_N s s'
+    hDBDX hDBDW hOutInj hExec i
   simpa [hActive] using h
 
 /-! ## Backward residual-add arithmetic slice
@@ -2914,7 +3183,7 @@ theorem layer_norm_ops_bwd_residual_add_store_slice_dx_correct
     cases hab
     rfl
   simp [exec, layer_norm_ops_bwd_residual_add_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, bwdRmsDXOffset] at hExec
   subst s'
@@ -2957,7 +3226,7 @@ theorem layer_norm_ops_bwd_residual_add_store_slice_dresidual_in_correct
     cases hab
     rfl
   simp [exec, layer_norm_ops_bwd_residual_add_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, bwdDResidualInOffset] at hExec
   subst s'
@@ -3088,7 +3357,7 @@ theorem layer_norm_ops_bwd_recompute_y_bias_slice_correct
     cases hab
     rfl
   simp [exec, layer_norm_ops_bwd_recompute_y_bias_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, bwdRowVectorOffset] at hExec
@@ -3175,7 +3444,7 @@ theorem layer_norm_ops_bwd_recompute_y_no_bias_slice_correct
     cases hab
     rfl
   simp [exec, layer_norm_ops_bwd_recompute_y_no_bias_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
         ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, bwdRowVectorOffset] at hExec
@@ -3282,7 +3551,7 @@ theorem layer_norm_ops_bwd_c1_reduction_slice_correct
       bwdC1ReductionSpec s Xhat W DY stride_xhat_row stride_dy_row
         N BLOCK_N := by
   simp [exec, layer_norm_ops_bwd_c1_reduction_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, FloatDType.cast,
@@ -3327,7 +3596,7 @@ theorem layer_norm_ops_bwd_c2_reduction_slice_correct
     s'.readMem C2 s.pid =
       bwdC2ReductionSpec s W DY stride_dy_row N BLOCK_N := by
   simp [exec, layer_norm_ops_bwd_c2_reduction_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, FloatDType.cast,
@@ -3422,7 +3691,7 @@ theorem layer_norm_ops_bwd_rms_dx_from_c1_slice_correct
     cases hab
     rfl
   simp [exec, layer_norm_ops_bwd_rms_dx_from_c1_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.sub, NumericDType.mul,
         ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
         FloatDType.toWithBot, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
@@ -3522,7 +3791,7 @@ theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_correct
     cases hab
     rfl
   simp [exec, layer_norm_ops_bwd_plain_dx_from_c1_c2_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.sub, NumericDType.mul,
         ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
         FloatDType.toWithBot, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
@@ -3801,6 +4070,38 @@ theorem layer_norm_ops_bwd_bias_db_one_row_python_test_shape_compute_correct
     1024 1024 1024 s
     (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
 
+theorem layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+    (X W DY DX DW DB Mean Rstd : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i) := by
+  exact layer_norm_ops_bwd_plain_bias_one_row_dw_compute_correct
+    X W DY DX DW DB Mean Rstd 1024 1024 1024 1024 1024 s hDWDX hDWDB
+    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
+
+theorem layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+    (X W DY DX DW DB Mean Rstd : RegionName) (s : BlockState)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i) := by
+  exact layer_norm_ops_bwd_plain_bias_one_row_db_compute_correct
+    X W DY DX DW DB Mean Rstd 1024 1024 1024 1024 1024 s hDBDX hDBDW
+    (layer_norm_ops_bwd_param_grad_offset_python_test_shape_injective s)
+
 theorem layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
     (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
     (hDXDresIn : DX ≠ DRESIDUAL_IN) :
@@ -3916,5 +4217,1958 @@ theorem layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
   exact layer_norm_ops_bwd_plain_dx_from_c1_c2_slice_compute_correct
     Xhat W DY Rstd C1 C2 DX 1024 1024 1024 1024 1024 s
     (layer_norm_ops_bwd_row_vector_offset_python_test_shape_injective s)
+
+/-! ## Python test-shape aggregate outputs -/
+
+/-- Plain layer-norm forward Python shape with bias: exposes the `Y`, `Mean`,
+and `Rstd` outputs together. -/
+theorem layer_norm_ops_fwd_plain_bias_python_test_shape_all_outputs_compute_correct
+    (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
+      (expected := fun _ => meanStoreSpec s MeanPre)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  constructor
+  · exact layer_norm_ops_fwd_bias_y_store_python_test_shape_compute_correct
+      ValuePre Y s
+  constructor
+  · exact layer_norm_ops_fwd_mean_store_python_test_shape_compute_correct
+      MeanPre Mean s
+  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
+      RstdPre Rstd s
+
+/-- RMS layer-norm forward Python shape with bias: exposes the `Y` and `Rstd`
+outputs together. -/
+theorem layer_norm_ops_fwd_rms_bias_python_test_shape_all_outputs_compute_correct
+    (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
+        1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  constructor
+  · exact layer_norm_ops_fwd_rms_bias_y_store_python_test_shape_compute_correct
+      ValuePre Y s
+  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
+      RstdPre Rstd s
+
+/-- Residual plain layer-norm forward Python shape with bias: exposes
+`RESIDUAL_OUT`, `Y`, `Mean`, and `Rstd` together. -/
+theorem layer_norm_ops_fwd_residual_bias_python_test_shape_all_outputs_compute_correct
+    (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_residual_out_store_slice ResidualPre
+        RESIDUAL_OUT 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (RESIDUAL_OUT, fwdResidualOutOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdResidualOutStoreSpec s ResidualPre 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_y_store_slice ValuePre Y
+        1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, fwdYOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        fwdYStoreSpec s ValuePre 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, meanRowOffset s))
+      (expected := fun _ => meanStoreSpec s MeanPre)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
+      (expected := fun _ => rstdStoreSpec s RstdPre)) := by
+  constructor
+  · exact layer_norm_ops_fwd_residual_out_store_python_test_shape_compute_correct
+      ResidualPre RESIDUAL_OUT s
+  constructor
+  · exact layer_norm_ops_fwd_residual_bias_y_store_python_test_shape_compute_correct
+      ValuePre Y s
+  constructor
+  · exact layer_norm_ops_fwd_mean_store_python_test_shape_compute_correct
+      MeanPre Mean s
+  · exact layer_norm_ops_fwd_rstd_store_python_test_shape_compute_correct
+      RstdPre Rstd s
+
+/-- RMS backward Python shape: exposes the `c1` reduction, `DX`, and partial
+`DW` store slices together. -/
+theorem layer_norm_ops_bwd_rms_python_test_shape_core_outputs_compute_correct
+    (X Xhat W DY Rstd C1 DX DW : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdRmsDWOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDWSpec s X DY Rstd 1024 1024 1024 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_rms_dx_from_c1_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 DX s
+  · exact layer_norm_ops_bwd_rms_one_row_dw_python_test_shape_compute_correct
+      X W DY DX DW Rstd s hDWDX
+
+/-- Plain+bias backward Python shape: exposes the `c1`/`c2` reductions, `DX`,
+partial `DW`, and partial `DB` store slices together. -/
+theorem layer_norm_ops_bwd_plain_bias_python_test_shape_core_outputs_compute_correct
+    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DX 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+      W DY C2 s
+  constructor
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 C2 DX s
+  constructor
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+      X W DY DX DW DB Mean Rstd s hDWDX hDWDB
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+      X W DY DX DW DB Mean Rstd s hDBDX hDBDW
+
+/-- Backward residual-add Python shape: exposes both observable row-vector
+stores produced by the `dx += dres` branch, `DX` and optional `DRESIDUAL_IN`. -/
+theorem layer_norm_ops_bwd_residual_add_python_test_shape_all_outputs_compute_correct
+    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDresInDX : DRESIDUAL_IN ≠ DX) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DRESIDUAL_IN, bwdDResidualInOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
+      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
+  · exact
+      layer_norm_ops_bwd_residual_add_dresidual_in_python_test_shape_compute_correct
+        DXBase DRESIDUAL DX DRESIDUAL_IN s hDresInDX
+
+/-- Backward Python test case 2: non-RMS, bias, no residual, no recompute.
+
+The observed outputs are `DX`, partial `DW`, and partial `DB`; the `C1` and
+`C2` conjuncts expose the row reductions consumed by the `DX` slice. -/
+theorem layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_all_outputs_compute_correct
+    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DX 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  exact layer_norm_ops_bwd_plain_bias_python_test_shape_core_outputs_compute_correct
+    X Xhat W DY DX DW DB Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
+
+/-- Backward Python test case 4: RMS, bias, no residual, no recompute.
+
+The observed outputs are `DX`, partial `DW`, and partial `DB`; the `C1` conjunct
+exposes the row reduction consumed by the RMS `DX` slice. -/
+theorem layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_all_outputs_compute_correct
+    (X Xhat W DY Rstd C1 DX DW DB : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_dx_from_c1_slice Xhat W DY Rstd C1 DX
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDXFromC1Spec s Xhat W DY Rstd C1 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_rms_one_row X W DY DX DW Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdRmsDWOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRmsDWSpec s X DY Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_bias_db_one_row DY DB 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_rms_dx_from_c1_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 DX s
+  constructor
+  · exact layer_norm_ops_bwd_rms_one_row_dw_python_test_shape_compute_correct
+      X W DY DX DW Rstd s hDWDX
+  · exact layer_norm_ops_bwd_bias_db_one_row_python_test_shape_compute_correct
+      DY DB s
+
+/-- Backward Python test case 6: non-RMS, bias, residual input, no recompute.
+
+The observed `DX` is the residual-adjusted value; `DW`/`DB` are the same
+partial-gradient stores as the plain+bias branch. -/
+theorem layer_norm_ops_bwd_plain_bias_residual_python_test_shape_all_outputs_compute_correct
+    (X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 : RegionName)
+    (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DXBase 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DXBase, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+      W DY C2 s
+  constructor
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 C2 DXBase s
+  constructor
+  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
+      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
+  constructor
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+      X W DY DXBase DW DB Mean Rstd s hDWDX hDWDB
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+      X W DY DXBase DW DB Mean Rstd s hDBDX hDBDW
+
+/-- Backward Python test case 7: non-RMS, bias, no residual, recompute output.
+
+This groups the plain+bias core outputs with the recomputed `Y` store. -/
+theorem layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_all_outputs_compute_correct
+    (X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DX 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRecomputeYBiasSpec s Xhat W B 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DX DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+      W DY C2 s
+  constructor
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 C2 DX s
+  constructor
+  · exact layer_norm_ops_bwd_recompute_y_bias_python_test_shape_compute_correct
+      Xhat W B Y s
+  constructor
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+      X W DY DX DW DB Mean Rstd s hDWDX hDWDB
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+      X W DY DX DW DB Mean Rstd s hDBDX hDBDW
+
+/-- Backward Python test case 8: non-RMS, bias, residual input, recompute output.
+
+This groups the final residual-adjusted `DX`, partial `DW`/`DB`, and
+recomputed `Y` stores for the tested branch. -/
+theorem layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_outputs_compute_correct
+    (X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 : RegionName)
+    (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c1_reduction_slice Xhat W DY C1
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C1, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC1ReductionSpec s Xhat W DY 1024 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_c2_reduction_slice W DY C2
+        1024 1024 1024)
+      (initialState := s)
+      (write := fun _ : PUnit => some (C2, s.pid))
+      (expected := fun _ : PUnit =>
+        bwdC2ReductionSpec s W DY 1024 1024 1024)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_dx_from_c1_c2_slice Xhat W DY Rstd
+        C1 C2 DXBase 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DXBase, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainDXFromC1C2Spec s Xhat W DY Rstd C1 C2 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_residual_add_store_slice DXBase DRESIDUAL
+        DX DRESIDUAL_IN 1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRmsDXOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdResidualAddSpec s DXBase DRESIDUAL 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_recompute_y_bias_slice Xhat W B Y
+        1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdRecomputeYBiasSpec s Xhat W B 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdPlainBiasDWSpec s X DY Mean Rstd 1024 1024 1024 1024 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_ops_bwd_plain_bias_one_row X W DY DXBase DW DB Mean Rstd
+        1024 1024 1024 1024 1024)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        bwdBiasDBSpec s DY 1024 i)) := by
+  constructor
+  · exact layer_norm_ops_bwd_c1_reduction_python_test_shape_compute_correct
+      Xhat W DY C1 s
+  constructor
+  · exact layer_norm_ops_bwd_c2_reduction_python_test_shape_compute_correct
+      W DY C2 s
+  constructor
+  · exact layer_norm_ops_bwd_plain_dx_from_c1_c2_python_test_shape_compute_correct
+      Xhat W DY Rstd C1 C2 DXBase s
+  constructor
+  · exact layer_norm_ops_bwd_residual_add_dx_python_test_shape_compute_correct
+      DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn
+  constructor
+  · exact layer_norm_ops_bwd_recompute_y_bias_python_test_shape_compute_correct
+      Xhat W B Y s
+  constructor
+  · exact layer_norm_ops_bwd_plain_bias_one_row_dw_python_test_shape_compute_correct
+      X W DY DXBase DW DB Mean Rstd s hDWDX hDWDB
+  · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
+      X W DY DXBase DW DB Mean Rstd s hDBDX hDBDW
+
+/-! ## End-to-end surface correctness
+
+The theorem below proves an output of `layer_norm_fwd_1pass_surface` itself —
+the full Python kernel surface, not a separately defined one-block slice —
+specialised to the simplest constexpr configuration. This closes the
+"the surface is functionally correct, not just the slice kernels" gap for the
+forward RMS/no-residual/no-bias branch. -/
+
+theorem layer_norm_fwd_1pass_surface_rms_only_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRstd : Y ≠ Rstd) (hWRstd : W ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.false Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem Y (yOffset s stride_y_row i) =
+        if i.val < N then
+          rmsYSpec s X W stride_x_row N BLOCK_N eps i
+        else s.readMem Y (yOffset s stride_y_row i) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, hWRstd, rmsYSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile,
+            xOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            WithBot.realSqrt, NumericDType.mul]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hYRstd]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing correctness for the `Y` output of the surface's
+RMS/no-residual/no-bias branch. -/
+theorem layer_norm_fwd_1pass_surface_rms_only_y_compute_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hYRstd : Y ≠ Rstd) (hWRstd : W ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i)) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.false Bool.false Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (Y, yOffset s stride_y_row i)))
+      (expected := fun i => rmsYSpec s X W stride_x_row N BLOCK_N eps i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_fwd_1pass_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := layer_norm_fwd_1pass_surface_rms_only_y_correct X Y W B RESIDUAL
+    RESIDUAL_OUT Mean Rstd stride_x_row stride_y_row stride_res_row
+    stride_res_out_row N BLOCK_N eps s s' hYRstd hWRstd hOutInj hExec i
+  simpa [hActive] using h
+
+/-- End-to-end correctness for the `Rstd` scalar output of the surface's
+RMS/no-residual/no-bias branch. -/
+theorem layer_norm_fwd_1pass_surface_rms_only_rstd_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRstdY : Rstd ≠ Y)
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.false Bool.false Bool.false) s = some s') :
+    s'.readMem Rstd s.pid =
+      rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps := by
+  simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.mul, NumericDType.div, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRstdY]
+  simp only [BlockState.setReg_readMem, BlockState.writeMem_readMem]
+  simp [rmsInvVarFullSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile,
+        xOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        WithBot.realSqrt, NumericDType.mul]
+  rfl
+
+/-- Compute-facing correctness for the `Rstd` output of the surface's
+RMS/no-residual/no-bias branch. -/
+theorem layer_norm_fwd_1pass_surface_rms_only_rstd_compute_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hRstdY : Rstd ≠ Y) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.false Bool.false Bool.false)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Rstd, s.pid))
+      (expected := fun _ =>
+        rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_fwd_1pass_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro _
+  exact layer_norm_fwd_1pass_surface_rms_only_rstd_correct X Y W B RESIDUAL
+    RESIDUAL_OUT Mean Rstd stride_x_row stride_y_row stride_res_row
+    stride_res_out_row N BLOCK_N eps s s' hRstdY hExec
+
+/-- End-to-end correctness for the `Y` output of the surface's
+RMS/no-residual/bias branch (matches Python test case 3). -/
+theorem layer_norm_fwd_1pass_surface_rms_bias_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRstd : Y ≠ Rstd) (hWRstd : W ≠ Rstd) (hBRstd : B ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.false Bool.false Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem Y (yOffset s stride_y_row i) =
+        if i.val < N then
+          rmsBiasYSpec s X W B stride_x_row N BLOCK_N eps i
+        else s.readMem Y (yOffset s stride_y_row i) := by
+  intro i
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, hWRstd, hBRstd, rmsBiasYSpec, rmsInvCarrier, rmsVarCarrier,
+            rmsInputTile, xOffset, Tile.reduceSum, Tile.reduceSumDrop,
+            Tile.select, TileShape.axisDim, TileShape.eraseAxis,
+            TileShape.insertAxisIndex, WithBot.realSqrt, NumericDType.mul,
+            NumericDType.add]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hYRstd]
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Y` output of the surface's
+non-RMS/no-residual/bias branch (matches Python test case 1). -/
+theorem layer_norm_fwd_1pass_surface_plain_bias_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hBMean : B ≠ Mean) (hBRstd : B ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.false Bool.false Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem Y (yOffset s stride_y_row i) =
+        if i.val < N then
+          plainBiasYSpec s X W B stride_x_row N BLOCK_N eps i
+        else s.readMem Y (yOffset s stride_y_row i) := by
+  intro i
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.sub, NumericDType.mul, NumericDType.div,
+          ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+          FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, hWMean, hWRstd, hBMean, hBRstd, plainBiasYSpec,
+            plainInvCarrier, plainVarCarrier, plainXbarTile,
+            plainMeanCarrier, plainInputTile, xOffset, Tile.reduceSum,
+            Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+            TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+            NumericDType.mul, NumericDType.sub, NumericDType.add]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hYMean, hYRstd]
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Y` output of the surface's
+non-RMS/residual/bias branch without residual-out storage (subset of
+Python test case 5; the test case additionally enables STORE_RESIDUAL_OUT,
+which only adds a writeback past the proved `Y` value). -/
+theorem layer_norm_fwd_1pass_surface_plain_residual_bias_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hBMean : B ≠ Mean) (hBRstd : B ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.true Bool.false Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem Y (yOffset s stride_y_row i) =
+        if i.val < N then
+          plainResidualBiasYSpec s X RESIDUAL W B stride_x_row stride_res_row
+            N BLOCK_N eps i
+        else s.readMem Y (yOffset s stride_y_row i) := by
+  intro i
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.sub, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, hWMean, hWRstd, hBMean, hBRstd, plainResidualBiasYSpec,
+            plainResidualInvCarrier, plainResidualVarCarrier,
+            plainResidualXbarTile, plainResidualMeanCarrier,
+            plainResidualInputTile, xOffset, resOffset, Tile.reduceSum,
+            Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+            TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+            NumericDType.mul, NumericDType.sub, NumericDType.add]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hYMean, hYRstd]
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Rstd` scalar output of the surface's
+RMS/no-residual/bias branch (matches Python test case 3). -/
+theorem layer_norm_fwd_1pass_surface_rms_bias_rstd_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRstdY : Rstd ≠ Y)
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.false Bool.false Bool.true) s = some s') :
+    s'.readMem Rstd s.pid =
+      rmsInvVarFullSpec s X stride_x_row N BLOCK_N eps := by
+  simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.mul, NumericDType.div, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRstdY]
+  simp only [BlockState.setReg_readMem, BlockState.writeMem_readMem]
+  simp [rmsInvVarFullSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile,
+        xOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        WithBot.realSqrt, NumericDType.mul]
+  rfl
+
+/-- End-to-end correctness for the `Mean` scalar output of the surface's
+non-RMS/no-residual/bias branch (matches Python test case 1). -/
+theorem layer_norm_fwd_1pass_surface_plain_bias_mean_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hMeanRstd : Mean ≠ Rstd) (hMeanY : Mean ≠ Y)
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.false Bool.false Bool.true) s = some s') :
+    s'.readMem Mean s.pid =
+      plainMeanFullSpec s X stride_x_row N BLOCK_N := by
+  simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.sub, NumericDType.mul, NumericDType.div,
+        ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+        FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hMeanY]
+  simp [BlockState.writeMem_readMem, hMeanRstd, plainMeanFullSpec,
+        plainMeanCarrier, plainInputTile, xOffset, Tile.reduceSum,
+        Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex]
+  rfl
+
+/-- End-to-end correctness for the `Y` output of the surface's
+non-RMS/no-residual/no-bias branch. -/
+theorem layer_norm_fwd_1pass_surface_plain_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.false Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem Y (yOffset s stride_y_row i) =
+        if i.val < N then
+          plainYSpec s X W stride_x_row N BLOCK_N eps i
+        else s.readMem Y (yOffset s stride_y_row i) := by
+  intro i
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.sub, NumericDType.mul, NumericDType.div,
+          ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+          FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, hWMean, hWRstd, plainYSpec, plainInvCarrier, plainVarCarrier,
+            plainXbarTile, plainMeanCarrier, plainInputTile, xOffset,
+            Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            WithBot.realSqrt, NumericDType.mul, NumericDType.sub]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hYMean, hYRstd]
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Y` output of the surface's
+RMS/residual/no-bias branch (excludes STORE_RESIDUAL_OUT). -/
+theorem layer_norm_fwd_1pass_surface_rms_residual_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRstd : Y ≠ Rstd) (hWRstd : W ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.true Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem Y (yOffset s stride_y_row i) =
+        if i.val < N then
+          rmsResidualYSpec s X RESIDUAL W stride_x_row stride_res_row N
+            BLOCK_N eps i
+        else s.readMem Y (yOffset s stride_y_row i) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, hWRstd, rmsResidualYSpec, rmsResidualInvCarrier,
+            rmsResidualVarCarrier, plainResidualInputTile, xOffset, resOffset,
+            Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            WithBot.realSqrt, NumericDType.mul, NumericDType.add]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hYRstd]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Rstd` scalar output of the surface's
+non-RMS/no-residual/bias branch (matches Python test case 1). -/
+theorem layer_norm_fwd_1pass_surface_plain_bias_rstd_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRstdY : Rstd ≠ Y)
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.false Bool.false Bool.true) s = some s') :
+    s'.readMem Rstd s.pid =
+      plainInvVarFullSpec s X stride_x_row N BLOCK_N eps := by
+  simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.sub, NumericDType.mul, NumericDType.div,
+        ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+        FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRstdY]
+  simp only [BlockState.setReg_readMem, BlockState.writeMem_readMem]
+  simp [plainInvVarFullSpec, plainInvCarrier, plainVarCarrier, plainXbarTile,
+        plainMeanCarrier, plainInputTile, xOffset, Tile.reduceSum,
+        Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+        NumericDType.mul, NumericDType.sub]
+  rfl
+
+/-- End-to-end correctness for the `Y` output of the surface's
+RMS/residual/bias branch (excludes STORE_RESIDUAL_OUT). -/
+theorem layer_norm_fwd_1pass_surface_rms_residual_bias_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRstd : Y ≠ Rstd) (hWRstd : W ≠ Rstd) (hBRstd : B ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.true Bool.false Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem Y (yOffset s stride_y_row i) =
+        if i.val < N then
+          rmsResidualBiasYSpec s X RESIDUAL W B stride_x_row stride_res_row N
+            BLOCK_N eps i
+        else s.readMem Y (yOffset s stride_y_row i) := by
+  intro i
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts,
+          stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd,
+          Tile.uop, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.mul, NumericDType.div,
+          ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+          FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, hWRstd, hBRstd, rmsResidualBiasYSpec,
+            rmsResidualInvCarrier, rmsResidualVarCarrier,
+            rmsResidualXbarTile, plainResidualInputTile, xOffset, resOffset,
+            Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+            TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+            WithBot.realSqrt, NumericDType.mul, NumericDType.add]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hYRstd]
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Y` output of the surface's
+non-RMS/residual/bias/store-residual-out branch (matches Python test case 5
+exactly: HAS_RESIDUAL = STORE_RESIDUAL_OUT = HAS_BIAS = true). Closes the
+`STORE_RESIDUAL_OUT=true` gap via the disjointness-based commutation
+through the `RESIDUAL_OUT` foldl using
+`BlockState.foldl_writeMem_const_region_prop_masked_readMem_other` from
+`Semantics/State.lean`. -/
+theorem layer_norm_fwd_1pass_surface_plain_residual_bias_store_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hBRso : B ≠ RESIDUAL_OUT) (hBMean : B ≠ Mean) (hBRstd : B ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hRRso : RESIDUAL ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.true Bool.true Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N, ¬ i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        s.readMem Y (yOffset s stride_y_row i) := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.sub, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_false]
+    simp only [BlockState.writeMem_readMem, hYMean, hYRstd,
+               BlockState.setReg_readMem]
+    rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+          (region := RESIDUAL_OUT) (R := Y)
+          (P := fun (k : TileIndex [BLOCK_N]) => k.1.val < N) (hRR := hYRso)]
+    simp [BlockState.setReg_readMem]
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Y` output of the surface's
+non-RMS/residual/bias/store-residual-out branch at the **active lane**
+(i.val < N). Combined with `*_store_y_correct`, this closes the
+STORE_RESIDUAL_OUT=true gap for Python test case 5. -/
+theorem layer_norm_fwd_1pass_surface_plain_residual_bias_store_y_active_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hBRso : B ≠ RESIDUAL_OUT) (hBMean : B ≠ Mean) (hBRstd : B ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hRRso : RESIDUAL ≠ RESIDUAL_OUT)
+    (hMeanRso : Mean ≠ RESIDUAL_OUT) (hRstdRso : Rstd ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.true Bool.true Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N, i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        plainResidualBiasYSpec s X RESIDUAL W B stride_x_row stride_res_row
+          N BLOCK_N eps i := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.sub, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_true]
+    simp [hi, hWMean, hWRstd, hWRso, hBMean, hBRstd, hBRso, hXRso, hRRso,
+          hMeanRso, hRstdRso, plainResidualBiasYSpec,
+          plainResidualInvCarrier, plainResidualVarCarrier,
+          plainResidualXbarTile, plainResidualMeanCarrier,
+          plainResidualInputTile, xOffset, resOffset, Tile.reduceSum,
+          Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+          NumericDType.mul, NumericDType.sub, NumericDType.add,
+          BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+    rfl
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Y` output of the surface's
+RMS/residual/bias/store-residual-out branch (active lane). Same proof
+pattern as `_plain_residual_bias_store_y_active_correct` but with
+`IS_RMS_NORM = true`. -/
+theorem layer_norm_fwd_1pass_surface_rms_residual_bias_store_y_active_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWRstd : W ≠ Rstd)
+    (hBRso : B ≠ RESIDUAL_OUT) (hBRstd : B ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hRRso : RESIDUAL ≠ RESIDUAL_OUT)
+    (hRstdRso : Rstd ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.true Bool.true Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N, i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        rmsResidualBiasYSpec s X RESIDUAL W B stride_x_row stride_res_row N
+          BLOCK_N eps i := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.sub, NumericDType.mul,
+          NumericDType.div, ComparableDType.lt, FloatDType.cast,
+          FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_true]
+    simp [hi, hWRstd, hWRso, hBRstd, hBRso, hXRso, hRRso, hRstdRso,
+          rmsResidualBiasYSpec, rmsResidualInvCarrier, rmsResidualVarCarrier,
+          rmsResidualXbarTile, plainResidualInputTile, xOffset, resOffset,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+          NumericDType.mul, NumericDType.add,
+          BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+    rfl
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end Y correctness for surface's RMS/no-residual/no-bias with
+STORE_RESIDUAL_OUT=true (active lane). -/
+theorem layer_norm_fwd_1pass_surface_rms_only_store_y_active_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWRstd : W ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hRstdRso : Rstd ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.false Bool.true Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N, i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        rmsYSpec s X W stride_x_row N BLOCK_N eps i := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_true]
+    simp [hi, hWRstd, hWRso, hXRso, hRstdRso, rmsYSpec, rmsInvCarrier,
+          rmsVarCarrier, rmsInputTile, xOffset, Tile.reduceSum,
+          Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+          NumericDType.mul,
+          BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+    rfl
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end Y correctness for surface's RMS/no-residual/bias with
+STORE_RESIDUAL_OUT=true (active lane). -/
+theorem layer_norm_fwd_1pass_surface_rms_bias_store_y_active_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWRstd : W ≠ Rstd)
+    (hBRso : B ≠ RESIDUAL_OUT) (hBRstd : B ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hRstdRso : Rstd ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.false Bool.true Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N, i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        rmsBiasYSpec s X W B stride_x_row N BLOCK_N eps i := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_true]
+    simp [hi, hWRstd, hWRso, hBRstd, hBRso, hXRso, hRstdRso,
+          rmsBiasYSpec, rmsInvCarrier, rmsVarCarrier, rmsInputTile, xOffset,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+          NumericDType.mul, NumericDType.add,
+          BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+    rfl
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end Y correctness for surface's non-RMS/no-residual/no-bias with
+STORE_RESIDUAL_OUT=true (active lane). -/
+theorem layer_norm_fwd_1pass_surface_plain_store_y_active_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hMeanRso : Mean ≠ RESIDUAL_OUT)
+    (hRstdRso : Rstd ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.false Bool.true Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N, i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        plainYSpec s X W stride_x_row N BLOCK_N eps i := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.sub, NumericDType.mul, NumericDType.div,
+          ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+          FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_true]
+    simp [hi, hWMean, hWRstd, hWRso, hXRso, hMeanRso, hRstdRso,
+          plainYSpec, plainInvCarrier, plainVarCarrier, plainXbarTile,
+          plainMeanCarrier, plainInputTile, xOffset, Tile.reduceSum,
+          Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+          NumericDType.mul, NumericDType.sub,
+          BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+    rfl
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end Y correctness for surface's non-RMS/no-residual/bias with
+STORE_RESIDUAL_OUT=true (active lane). -/
+theorem layer_norm_fwd_1pass_surface_plain_bias_store_y_active_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hBRso : B ≠ RESIDUAL_OUT) (hBMean : B ≠ Mean) (hBRstd : B ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hMeanRso : Mean ≠ RESIDUAL_OUT)
+    (hRstdRso : Rstd ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.false Bool.true Bool.true) s = some s') :
+    ∀ i : Fin BLOCK_N, i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        plainBiasYSpec s X W B stride_x_row N BLOCK_N eps i := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.sub, NumericDType.mul, NumericDType.div,
+          ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+          FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_true]
+    simp [hi, hWMean, hWRstd, hWRso, hBMean, hBRstd, hBRso, hXRso, hMeanRso,
+          hRstdRso, plainBiasYSpec, plainInvCarrier, plainVarCarrier,
+          plainXbarTile, plainMeanCarrier, plainInputTile, xOffset,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+          NumericDType.mul, NumericDType.sub, NumericDType.add,
+          BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+    rfl
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end Y correctness for surface's non-RMS/residual/no-bias with
+STORE_RESIDUAL_OUT=true (active lane). -/
+theorem layer_norm_fwd_1pass_surface_plain_residual_store_y_active_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hRRso : RESIDUAL ≠ RESIDUAL_OUT)
+    (hMeanRso : Mean ≠ RESIDUAL_OUT) (hRstdRso : Rstd ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.true Bool.true Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N, i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        plainResidualYSpec s X RESIDUAL W stride_x_row stride_res_row N
+          BLOCK_N eps i := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.sub, NumericDType.mul, NumericDType.div,
+          ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+          FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_true]
+    simp [hi, hWMean, hWRstd, hWRso, hXRso, hRRso, hMeanRso, hRstdRso,
+          plainResidualYSpec, plainResidualInvCarrier,
+          plainResidualVarCarrier, plainResidualXbarTile,
+          plainResidualMeanCarrier, plainResidualInputTile, xOffset,
+          resOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          WithBot.realSqrt, NumericDType.mul, NumericDType.sub,
+          NumericDType.add,
+          BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+    rfl
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end Y correctness for surface's RMS/residual/no-bias with
+STORE_RESIDUAL_OUT=true (active lane). -/
+theorem layer_norm_fwd_1pass_surface_rms_residual_store_y_active_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYRso : Y ≠ RESIDUAL_OUT) (hYRstd : Y ≠ Rstd)
+    (hWRso : W ≠ RESIDUAL_OUT) (hWRstd : W ≠ Rstd)
+    (hXRso : X ≠ RESIDUAL_OUT) (hRRso : RESIDUAL ≠ RESIDUAL_OUT)
+    (hRstdRso : Rstd ≠ RESIDUAL_OUT)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.true Bool.true Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N, i.val < N →
+      s'.readMem Y (yOffset s stride_y_row i) =
+        rmsResidualYSpec s X RESIDUAL W stride_x_row stride_res_row N
+          BLOCK_N eps i := by
+  intro i hi
+  by_cases hB0 : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    simp only [hi, if_true]
+    simp [hi, hWRstd, hWRso, hXRso, hRRso, hRstdRso, rmsResidualYSpec,
+          rmsResidualInvCarrier, rmsResidualVarCarrier,
+          plainResidualInputTile, xOffset, resOffset, Tile.reduceSum,
+          Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+          NumericDType.mul, NumericDType.add,
+          BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+    rfl
+  · exact False.elim (hB0 (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Y` output of the surface's
+non-RMS/residual/no-bias branch (excludes STORE_RESIDUAL_OUT). -/
+theorem layer_norm_fwd_1pass_surface_plain_residual_y_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hYMean : Y ≠ Mean) (hYRstd : Y ≠ Rstd)
+    (hWMean : W ≠ Mean) (hWRstd : W ≠ Rstd)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N => yOffset s stride_y_row i))
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.true Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem Y (yOffset s stride_y_row i) =
+        if i.val < N then
+          plainResidualYSpec s X RESIDUAL W stride_x_row stride_res_row N
+            BLOCK_N eps i
+        else s.readMem Y (yOffset s stride_y_row i) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+          evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.sub, NumericDType.mul, NumericDType.div,
+          ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+          FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?] at hExec
+    subst s'
+    simp only [yOffset]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi, hWMean, hWRstd, plainResidualYSpec,
+            plainResidualInvCarrier, plainResidualVarCarrier,
+            plainResidualXbarTile, plainResidualMeanCarrier,
+            plainResidualInputTile, xOffset, resOffset, Tile.reduceSum,
+            Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+            TileShape.eraseAxis, TileShape.insertAxisIndex, WithBot.realSqrt,
+            NumericDType.mul, NumericDType.sub, NumericDType.add]
+      rfl
+    · simp [hi, BlockState.writeMem_readMem, hYMean, hYRstd]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end correctness for the `Rstd` scalar output of the surface's
+RMS/residual/no-bias branch (excludes STORE_RESIDUAL_OUT). -/
+theorem layer_norm_fwd_1pass_surface_rms_residual_rstd_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRstdY : Rstd ≠ Y)
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.true Bool.false Bool.false) s = some s') :
+    s'.readMem Rstd s.pid =
+      rmsResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
+        BLOCK_N eps := by
+  simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.mul, NumericDType.div, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRstdY]
+  simp only [BlockState.setReg_readMem, BlockState.writeMem_readMem]
+  simp [rmsResidualInvVarFullSpec, rmsResidualInvCarrier,
+        rmsResidualVarCarrier, rmsResidualXbarTile, plainResidualInputTile,
+        xOffset, resOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        WithBot.realSqrt, NumericDType.mul, NumericDType.add]
+  rfl
+
+/-- End-to-end correctness for the `Rstd` scalar output of the surface's
+RMS/residual/bias branch (excludes STORE_RESIDUAL_OUT). -/
+theorem layer_norm_fwd_1pass_surface_rms_residual_bias_rstd_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRstdY : Rstd ≠ Y)
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.true Bool.true Bool.false Bool.true) s = some s') :
+    s'.readMem Rstd s.pid =
+      rmsResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
+        BLOCK_N eps := by
+  simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.mul, NumericDType.div, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRstdY]
+  simp only [BlockState.setReg_readMem, BlockState.writeMem_readMem]
+  simp [rmsResidualInvVarFullSpec, rmsResidualInvCarrier,
+        rmsResidualVarCarrier, rmsResidualXbarTile, plainResidualInputTile,
+        xOffset, resOffset, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        WithBot.realSqrt, NumericDType.mul, NumericDType.add]
+  rfl
+
+/-- End-to-end correctness for the `Mean` scalar output of the surface's
+non-RMS/residual/no-bias branch (excludes STORE_RESIDUAL_OUT). -/
+theorem layer_norm_fwd_1pass_surface_plain_residual_mean_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hMeanRstd : Mean ≠ Rstd) (hMeanY : Mean ≠ Y)
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.true Bool.false Bool.false) s = some s') :
+    s'.readMem Mean s.pid =
+      plainResidualMeanFullSpec s X RESIDUAL stride_x_row stride_res_row N
+        BLOCK_N := by
+  simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.sub, NumericDType.mul, NumericDType.div,
+        ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+        FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hMeanY]
+  simp [BlockState.writeMem_readMem, hMeanRstd, plainResidualMeanFullSpec,
+        plainResidualMeanCarrier, plainResidualInputTile, xOffset, resOffset,
+        Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex]
+  rfl
+
+/-- End-to-end correctness for the `Rstd` scalar output of the surface's
+non-RMS/residual/no-bias branch (excludes STORE_RESIDUAL_OUT). -/
+theorem layer_norm_fwd_1pass_surface_plain_residual_rstd_correct
+    (X Y W B RESIDUAL RESIDUAL_OUT Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_res_row stride_res_out_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRstdY : Rstd ≠ Y)
+    (hExec : exec (layer_norm_fwd_1pass_surface X Y W B RESIDUAL RESIDUAL_OUT
+        Mean Rstd stride_x_row stride_y_row stride_res_row stride_res_out_row
+        N BLOCK_N eps Bool.false Bool.true Bool.false Bool.false) s = some s') :
+    s'.readMem Rstd s.pid =
+      plainResidualInvVarFullSpec s X RESIDUAL stride_x_row stride_res_row N
+        BLOCK_N eps := by
+  simp [exec, layer_norm_fwd_1pass_surface, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+        TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+        NumericDType.sub, NumericDType.mul, NumericDType.div,
+        ComparableDType.lt, FloatDType.cast, FloatDType.ofWithBot,
+        FloatDType.toWithBot, ComputeExpr.toAlgorithm?,
+        ComputeOp.toAlgorithm?] at hExec
+  subst s'
+  rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        Y _ _ _ _ _ _ _ hRstdY]
+  simp only [BlockState.setReg_readMem, BlockState.writeMem_readMem]
+  simp [plainResidualInvVarFullSpec, plainResidualInvCarrier,
+        plainResidualVarCarrier, plainResidualXbarTile,
+        plainResidualMeanCarrier, plainResidualInputTile, xOffset, resOffset,
+        Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        WithBot.realSqrt, NumericDType.mul, NumericDType.sub,
+        NumericDType.add]
+  rfl
+
+/-- End-to-end backward correctness for the `DB` output when
+`rows_per_program = 0` (degenerate empty row-block): the kernel stores zeros
+to `DB`, the initial value of the accumulator. -/
+theorem layer_norm_bwd_surface_zero_rows_db_zero
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row M N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hDBDW : DB ≠ DW)
+    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row M N 0 BLOCK_N eps
+        Bool.true Bool.false Bool.false Bool.true Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DB (s.pid * N + i.val) =
+        if i.val < N then 0.0
+        else s.readMem DB (s.pid * N + i.val) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          Nat.mul_zero, Nat.zero_mul, Nat.min_zero, Nat.zero_min] at hExec
+    subst s'
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi]; norm_num
+    · simp [hi, BlockState.writeMem_readMem,
+            BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+              DW _ _ _ _ _ _ _ hDBDW]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing wrapper for the actual backward surface's degenerate
+`DB` writeback. This exposes the surface-level `HAS_BIAS=true` partial-bias
+store through the standard `ComputeCorrect.Realizes` interface. -/
+theorem layer_norm_bwd_surface_zero_rows_db_zero_compute_correct
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row M N BLOCK_N : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hDBDW : DB ≠ DW) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row M N 0 BLOCK_N eps
+        Bool.true Bool.false Bool.false Bool.true Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DB, s.pid * N + i.val)))
+      (expected := fun _ : Fin BLOCK_N => (0.0 : ℝ)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_bwd_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := layer_norm_bwd_surface_zero_rows_db_zero X W B Y DY DX DW DB
+    DRESIDUAL DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+    stride_dx_row stride_dres_row stride_dres_in_row M N BLOCK_N eps s s'
+    hDBDW hExec i
+  simpa [hActive] using h
+
+/-- End-to-end backward correctness for the `DW` output with positive
+`rows_per_program = 1` but `M = 0`. The `for row in range(row_start, row_end)`
+loop body never executes because `row_end = min(pid+1, 0) = 0 ≤ pid = row_start`.
+This is the first surface-level backward proof at positive
+`rows_per_program`; the loop's empty-execution semantics is the same as the
+`rows_per_program = 0` case, while the loop-bound arithmetic is still checked. -/
+theorem layer_norm_bwd_surface_one_row_zero_M_dw_zero
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row 0 N 1 BLOCK_N eps
+        Bool.true Bool.false Bool.false Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DW (s.pid * N + i.val) =
+        if i.val < N then 0.0
+        else s.readMem DW (s.pid * N + i.val) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          Nat.mul_one, Nat.one_mul, Nat.min_zero, Nat.zero_min,
+          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
+    subst s'
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi]; norm_num
+    · simp [hi, BlockState.writeMem_readMem]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end backward correctness for the `DW` output with arbitrary
+positive `rows_per_program` and `M = 0` (loop empty regardless of
+`rows_per_program`). Demonstrates the proof technique scales to multi-row
+configurations as long as the loop range is empty. -/
+theorem layer_norm_bwd_surface_arb_rows_zero_M_dw_zero
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row N rows_per_program BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRpp : 0 < rows_per_program)
+    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row 0 N
+        rows_per_program BLOCK_N eps
+        Bool.true Bool.false Bool.false Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DW (s.pid * N + i.val) =
+        if i.val < N then 0.0
+        else s.readMem DW (s.pid * N + i.val) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · have hStop : (s.pid + 1) * rows_per_program ≥ 0 := Nat.zero_le _
+    simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          Nat.min_zero, Nat.zero_min,
+          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
+    subst s'
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi]; norm_num
+    · simp [hi, BlockState.writeMem_readMem]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end backward correctness for the `DW` output with arbitrary
+positive `rows_per_program`, `M = 0`, and HAS_DRESIDUAL=true. -/
+theorem layer_norm_bwd_surface_dresidual_arb_rows_zero_M_dw_zero
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row N rows_per_program BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hRpp : 0 < rows_per_program)
+    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row 0 N
+        rows_per_program BLOCK_N eps
+        Bool.true Bool.true Bool.false Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DW (s.pid * N + i.val) =
+        if i.val < N then 0.0
+        else s.readMem DW (s.pid * N + i.val) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          Nat.min_zero, Nat.zero_min,
+          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
+    subst s'
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi]; norm_num
+    · simp [hi, BlockState.writeMem_readMem]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end backward correctness for the `DW` output with positive
+`rows_per_program = 1`, `M = 0`, IS_RMS_NORM=false (non-RMS branch). -/
+theorem layer_norm_bwd_surface_plain_one_row_zero_M_dw_zero
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row 0 N 1 BLOCK_N eps
+        Bool.false Bool.false Bool.false Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DW (s.pid * N + i.val) =
+        if i.val < N then 0.0
+        else s.readMem DW (s.pid * N + i.val) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          Nat.mul_one, Nat.one_mul, Nat.min_zero, Nat.zero_min,
+          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
+    subst s'
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi]; norm_num
+    · simp [hi, BlockState.writeMem_readMem]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- End-to-end backward correctness for the `DB` output with positive
+`rows_per_program = 1` and `M = 0` (loop empty), HAS_BIAS=true branch. -/
+theorem layer_norm_bwd_surface_one_row_zero_M_db_zero
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hDBDW : DB ≠ DW)
+    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row 0 N 1 BLOCK_N eps
+        Bool.true Bool.false Bool.false Bool.true Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DB (s.pid * N + i.val) =
+        if i.val < N then 0.0
+        else s.readMem DB (s.pid * N + i.val) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          Nat.mul_one, Nat.one_mul, Nat.min_zero, Nat.zero_min,
+          stepForRangeAux.step_ge Nat.one_ne_zero (Nat.zero_le _)] at hExec
+    subst s'
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi]; norm_num
+    · simp [hi, BlockState.writeMem_readMem,
+            BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+              DW _ _ _ _ _ _ _ hDBDW]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-! ## End-to-end backward surface correctness (degenerate row-block)
+
+The backward kernel iterates the row loop `rows_per_program` times. The
+theorem below proves the simplest end-to-end case for the actual surface
+`layer_norm_bwd_surface`: when `rows_per_program = 0`, the loop body never
+executes, so the only observable output is the partial `DW` writeback at the
+end of the kernel, which stores the initial zero accumulator. This is the
+first surface-level proof that the backward kernel's pre-loop setup,
+empty-loop semantics, and post-loop `DW` scatter compose correctly. -/
+
+theorem layer_norm_bwd_surface_zero_rows_dw_zero
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row M N BLOCK_N : Nat)
+    (eps : ℝ) (s s' : BlockState)
+    (hExec : exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row M N 0 BLOCK_N eps
+        Bool.true Bool.false Bool.false Bool.false Bool.false) s = some s') :
+    ∀ i : Fin BLOCK_N,
+      s'.readMem DW (s.pid * N + i.val) =
+        if i.val < N then 0.0
+        else s.readMem DW (s.pid * N + i.val) := by
+  intro i
+  by_cases hB : 0 < BLOCK_N
+  · simp [exec, layer_norm_bwd_surface, stepStmts, stepStmt, evalOp,
+          evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceSum, Tile.reduceSumDrop, Tile.select, TileShape.axisDim,
+          TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+          NumericDType.mul, NumericDType.div, ComparableDType.lt,
+          FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+          ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          Nat.mul_zero, Nat.zero_mul, Nat.min_zero, Nat.zero_min] at hExec
+    subst s'
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+          (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+    by_cases hi : i.val < N
+    · simp [hi]; norm_num
+    · simp [hi, BlockState.writeMem_readMem]
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
+/-- Compute-facing wrapper for the actual backward surface's degenerate
+`DW` writeback. It proves the standard correctness surface for the full
+backward DSL surface when the row loop has no iterations. -/
+theorem layer_norm_bwd_surface_zero_rows_dw_zero_compute_correct
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row M N BLOCK_N : Nat)
+    (eps : ℝ) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row M N 0 BLOCK_N eps
+        Bool.true Bool.false Bool.false Bool.false Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => i.val < N)
+        (fun i => (DW, s.pid * N + i.val)))
+      (expected := fun _ : Fin BLOCK_N => (0.0 : ℝ)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_bwd_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := layer_norm_bwd_surface_zero_rows_dw_zero X W B Y DY DX DW DB
+    DRESIDUAL DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+    stride_dx_row stride_dres_row stride_dres_in_row M N BLOCK_N eps s s'
+    hExec i
+  simpa [hActive] using h
 
 end VeriTile.Bench.TritonBenchG.LayerNormOps

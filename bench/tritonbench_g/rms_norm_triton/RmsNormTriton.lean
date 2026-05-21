@@ -101,7 +101,7 @@ theorem rms_norm_kernel_correct
     cases hab
     rfl
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, rms_norm_kernel, stepStmts, stepStmt, evalOp,
+  · simp [exec, rms_norm_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,

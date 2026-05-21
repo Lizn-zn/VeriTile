@@ -62,18 +62,110 @@ theorem fa1_postLoop_correct_strided
     apply hInj
     simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
     exact h
-  simp [observeTileAt, fa1PostLoopStrided, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
-        Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
-        NumericDType.div, Option.bind,
-        TileShape.dropInsertedIndex]
+  let outTile : Tile .real [M, D] :=
+    ⟨fun i => some
+      (StreamingAccumulator.oPartial Q numKVBlocks K V scale numKVBlocks i /
+        StreamingAccumulator.lPartial Q numKVBlocks K scale numKVBlocks i.1)⟩
+  let oPtrs : Tile .nat [M, D] :=
+    ⟨fun i => batch * sOB + headIdx * sOH
+      + (qb * M + i.1.val) * sOM + i.2.1.val * sOD⟩
+  let sOut : BlockState :=
+    sLoop.setReg "out" .real [M, D] outTile
+  let sPtrs : BlockState :=
+    sOut.setReg "o_ptrs" .nat [M, D] oPtrs
+  let sFinal : BlockState :=
+    (TileShape.allIndices [M, D]).foldl
+      (fun acc i => acc.writeMem outReg (oPtrs.data i) (WithBot.unbotD 0 (outTile.data i)))
+      sPtrs
+  have hOut :
+      stepStmt
+          (Stmt.assign .real [M, D] "out"
+            (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [M, D] "o_acc")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i"))))
+          sLoop = some sOut := by
+    simp only [stepStmt, evalOp_div, Option.bind_eq_bind]
+    rw [show evalOp (Op.ref .real [M, D] "o_acc") sLoop =
+        some (Tile.ofReal fun idx : TileIndex [M, D] =>
+          StreamingAccumulator.oPartial Q numKVBlocks K V scale numKVBlocks idx) by
+        simp [evalOp, ho]]
+    simp only [Option.bind_some]
+    rw [evalOp_expandDim_one_real, hl]
+    simp [sOut, outTile, Tile.bop, NumericDType.div, Tile.ofReal]
+  have hPtrs :
+      stepStmt
+          (Stmt.assign .nat [M, D] "o_ptrs"
+            (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.add .nat Broadcast.scalarL
+                (Op.ref .nat [] "o_base_off")
+                (Op.mul .nat Broadcast.scalarR
+                  (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+                  (Op.constNat sOM)))
+              (Op.mul .nat Broadcast.scalarR
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+                (Op.constNat sOD))))
+          sOut = some sPtrs := by
+    have hbaseOut : sOut.regs .nat [] "o_base_off" =
+        some (Tile.scalar (batch * sOB + headIdx * sOH)) := by
+      simp [sOut, ho_base]
+    have hregmOut : sOut.regs .nat [M] "offs_m" =
+        some (Tile.vec fun i : Fin M => qb * M + i.val) := by
+      simp [sOut, hoffs_m]
+    have hregdOut : sOut.regs .nat [D] "offs_d" =
+        some (Tile.vec fun d : Fin D => d.val) := by
+      simp [sOut, hoffs_d]
+    simp only [stepStmt, evalOp_add, evalOp_mul, evalOp_constNat, Option.bind_eq_bind,
+      Option.bind_some]
+    rw [evalOp_ref, hbaseOut]
+    simp only [Option.bind_some]
+    rw [evalOp_expandDim_one_nat, hregmOut]
+    simp only [Option.bind_some]
+    rw [evalOp_expandDim_zero_nat, hregdOut]
+    simp [sPtrs, oPtrs, Tile.bop, NumericDType.add, NumericDType.mul, Tile.vec]
+  have hStore :
+      stepStmt
+          (Stmt.store .real [M, D]
+            (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+            (Op.ref .real [M, D] "out") MaskOpt.none)
+          sPtrs = some sFinal := by
+    simp [stepStmt, sOut, sPtrs, sFinal, outTile, oPtrs, BlockState.writeMemTyped_real]
+  have hStep : stepStmts (fa1PostLoopStrided outReg M D sOM sOD) sLoop = some sFinal := by
+    rw [show fa1PostLoopStrided outReg M D sOM sOD =
+        [ Stmt.assign .real [M, D] "out"
+            (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [M, D] "o_acc")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i")))
+        , Stmt.assign .nat [M, D] "o_ptrs"
+            (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.add .nat Broadcast.scalarL
+                (Op.ref .nat [] "o_base_off")
+                (Op.mul .nat Broadcast.scalarR
+                  (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+                  (Op.constNat sOM)))
+              (Op.mul .nat Broadcast.scalarR
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+                (Op.constNat sOD)))
+        , Stmt.store .real [M, D]
+            (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+            (Op.ref .real [M, D] "out") MaskOpt.none
+        ] by rfl]
+    rw [stepStmts.cons_some hOut]
+    rw [stepStmts.cons_some hPtrs]
+    rw [stepStmts.cons_some hStore]
+    exact stepStmts.nil
+  have h_inj_oPtrs : Function.Injective (fun i : TileIndex [M, D] => oPtrs.data i) := by
+    simpa [oPtrs] using h_inj_store
+  simp [observeTileAt, hStep, sFinal]
   rw [show batch * sOB + headIdx * sOH + qb * M * sOM
-        + idx.1.val * sOM + idx.2.1.val * sOD =
-      batch * sOB + headIdx * sOH
-        + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
-    simp [Nat.add_mul, Nat.add_assoc]]
-  rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
-  simp [FA1Math.streaming_eq_attentionReal hBk Q numKVBlocks hNumKVBlocks K V scale idx
-        (FA1Math.lPartial_final_ne_zero hBk Q numKVBlocks hNumKVBlocks K scale idx.1)]
+        + idx.1.val * sOM + idx.2.1.val * sOD = oPtrs.data idx by
+    simp [oPtrs, Nat.add_mul, Nat.add_assoc]]
+  rw [BlockState.scatter_readback_nd (s := sPtrs)
+    (offsetFn := fun i : TileIndex [M, D] => oPtrs.data i)
+    (valueFn := fun i : TileIndex [M, D] => WithBot.unbotD 0 (outTile.data i))
+    h_inj_oPtrs idx]
+  simp [attentionReal, outTile,
+        StreamingAccumulator.streaming_eq_attentionReal hBk Q numKVBlocks hNumKVBlocks K V scale idx
+        (StreamingAccumulator.lPartial_final_ne_zero hBk Q numKVBlocks hNumKVBlocks K scale idx.1)]
 
 /-- Causal strided readout stage, raw accumulator form. This theorem
 closes the operational tail of the causal kernel: assuming the causal
@@ -123,16 +215,108 @@ theorem fa1_postLoop_correct_strided_causal_raw
     apply hInj
     simp only [Nat.add_mul, Nat.add_assoc] at h ⊢
     exact h
-  simp [observeTileAt, fa1PostLoopStrided, stepStmts, stepStmt, evalOp, Tile.ofReal, hoffs_m, hoffs_d, hl, ho, ho_base,
-        Tile.bop, Tile.expandDim, NumericDType.add, NumericDType.mul,
-        NumericDType.div, Option.bind,
-        TileShape.dropInsertedIndex]
+  let outTile : Tile .real [M, D] :=
+    ⟨fun i => some
+      (FA1MathCausal.oPartial Bk (qb * M) Q numKVBlocks K V scale numKVBlocks i /
+        FA1MathCausal.lPartial Bk (qb * M) Q numKVBlocks K scale numKVBlocks i.1)⟩
+  let oPtrs : Tile .nat [M, D] :=
+    ⟨fun i => batch * sOB + headIdx * sOH
+      + (qb * M + i.1.val) * sOM + i.2.1.val * sOD⟩
+  let sOut : BlockState :=
+    sLoop.setReg "out" .real [M, D] outTile
+  let sPtrs : BlockState :=
+    sOut.setReg "o_ptrs" .nat [M, D] oPtrs
+  let sFinal : BlockState :=
+    (TileShape.allIndices [M, D]).foldl
+      (fun acc i => acc.writeMem outReg (oPtrs.data i) (WithBot.unbotD 0 (outTile.data i)))
+      sPtrs
+  have hOut :
+      stepStmt
+          (Stmt.assign .real [M, D] "out"
+            (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [M, D] "o_acc")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i"))))
+          sLoop = some sOut := by
+    simp only [stepStmt, evalOp_div, Option.bind_eq_bind]
+    rw [show evalOp (Op.ref .real [M, D] "o_acc") sLoop =
+        some (Tile.ofReal fun idx : TileIndex [M, D] =>
+          FA1MathCausal.oPartial Bk (qb * M) Q numKVBlocks K V scale numKVBlocks idx) by
+        simp [evalOp, ho]]
+    simp only [Option.bind_some]
+    rw [evalOp_expandDim_one_real, hl]
+    simp [sOut, outTile, Tile.bop, NumericDType.div, Tile.ofReal]
+  have hPtrs :
+      stepStmt
+          (Stmt.assign .nat [M, D] "o_ptrs"
+            (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.add .nat Broadcast.scalarL
+                (Op.ref .nat [] "o_base_off")
+                (Op.mul .nat Broadcast.scalarR
+                  (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+                  (Op.constNat sOM)))
+              (Op.mul .nat Broadcast.scalarR
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+                (Op.constNat sOD))))
+          sOut = some sPtrs := by
+    have hbaseOut : sOut.regs .nat [] "o_base_off" =
+        some (Tile.scalar (batch * sOB + headIdx * sOH)) := by
+      simp [sOut, ho_base]
+    have hregmOut : sOut.regs .nat [M] "offs_m" =
+        some (Tile.vec fun i : Fin M => qb * M + i.val) := by
+      simp [sOut, hoffs_m]
+    have hregdOut : sOut.regs .nat [D] "offs_d" =
+        some (Tile.vec fun d : Fin D => d.val) := by
+      simp [sOut, hoffs_d]
+    simp only [stepStmt, evalOp_add, evalOp_mul, evalOp_constNat, Option.bind_eq_bind,
+      Option.bind_some]
+    rw [evalOp_ref, hbaseOut]
+    simp only [Option.bind_some]
+    rw [evalOp_expandDim_one_nat, hregmOut]
+    simp only [Option.bind_some]
+    rw [evalOp_expandDim_zero_nat, hregdOut]
+    simp [sPtrs, oPtrs, Tile.bop, NumericDType.add, NumericDType.mul, Tile.vec]
+  have hStore :
+      stepStmt
+          (Stmt.store .real [M, D]
+            (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+            (Op.ref .real [M, D] "out") MaskOpt.none)
+          sPtrs = some sFinal := by
+    simp [stepStmt, sOut, sPtrs, sFinal, outTile, oPtrs, BlockState.writeMemTyped_real]
+  have hStep : stepStmts (fa1PostLoopStrided outReg M D sOM sOD) sLoop = some sFinal := by
+    rw [show fa1PostLoopStrided outReg M D sOM sOD =
+        [ Stmt.assign .real [M, D] "out"
+            (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [M, D] "o_acc")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [M] "l_i")))
+        , Stmt.assign .nat [M, D] "o_ptrs"
+            (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.add .nat Broadcast.scalarL
+                (Op.ref .nat [] "o_base_off")
+                (Op.mul .nat Broadcast.scalarR
+                  (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_m"))
+                  (Op.constNat sOM)))
+              (Op.mul .nat Broadcast.scalarR
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+                (Op.constNat sOD)))
+        , Stmt.store .real [M, D]
+            (MemAccess.region outReg (Op.ref .nat [M, D] "o_ptrs"))
+            (Op.ref .real [M, D] "out") MaskOpt.none
+        ] by rfl]
+    rw [stepStmts.cons_some hOut]
+    rw [stepStmts.cons_some hPtrs]
+    rw [stepStmts.cons_some hStore]
+    exact stepStmts.nil
+  have h_inj_oPtrs : Function.Injective (fun i : TileIndex [M, D] => oPtrs.data i) := by
+    simpa [oPtrs] using h_inj_store
+  simp [observeTileAt, hStep, sFinal]
   rw [show batch * sOB + headIdx * sOH + qb * M * sOM
-        + idx.1.val * sOM + idx.2.1.val * sOD =
-      batch * sOB + headIdx * sOH
-        + (qb * M + idx.1.val) * sOM + idx.2.1.val * sOD by
-    simp [Nat.add_mul, Nat.add_assoc]]
-  rw [BlockState.scatter_readback_nd _ _ _ h_inj_store idx]
+        + idx.1.val * sOM + idx.2.1.val * sOD = oPtrs.data idx by
+    simp [oPtrs, Nat.add_mul, Nat.add_assoc]]
+  rw [BlockState.scatter_readback_nd (s := sPtrs)
+    (offsetFn := fun i : TileIndex [M, D] => oPtrs.data i)
+    (valueFn := fun i : TileIndex [M, D] => WithBot.unbotD 0 (outTile.data i))
+    h_inj_oPtrs idx]
+  simp [outTile]
 
 theorem fa1_forward_correct
     {M D Bk numKVBlocks : Nat}

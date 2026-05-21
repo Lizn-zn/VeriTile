@@ -134,7 +134,7 @@ theorem l2_norm_bwd_kernel_correct
         else s.readMem DX outAddr := by
   intro i
   by_cases hB : 0 < BLOCK_N
-  · simp [exec, l2_norm_bwd_kernel, stepStmts, stepStmt, evalOp,
+  · simp [exec, l2_norm_bwd_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,

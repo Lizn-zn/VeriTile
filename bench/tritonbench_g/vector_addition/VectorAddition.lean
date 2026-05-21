@@ -42,7 +42,7 @@ theorem add_kernel_correct
         = some (if addr < n_elements then xs i + ys i
                 else s.readMem output_ptr addr) := by
   intro i
-  simp [observeAt, exec, add_kernel, stepStmts, stepStmt, evalOp,
+  simp [observeAt, exec, add_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   unfold InputLoadedAt at h_x h_y

@@ -137,7 +137,7 @@ theorem argmax_kernel_1_value_compute_correct
   subst s0
   intro _
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, Option.bind,
+  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
           TileShape.axisDim, TileShape.eraseAxis,
           NumericDType.add, NumericDType.mul, ComparableDType.lt,
@@ -148,7 +148,7 @@ theorem argmax_kernel_1_value_compute_correct
       exact hRegions h1)]
     simp
     congr
-  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, Option.bind,
+  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
           TileShape.axisDim, TileShape.eraseAxis,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
@@ -174,7 +174,7 @@ theorem argmax_kernel_1_index_compute_correct
   subst s0
   intro _
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, Option.bind,
+  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
           Tile.argMaxDrop, Tile.argBestDrop,
           TileShape.axisDim, TileShape.eraseAxis,
@@ -182,7 +182,7 @@ theorem argmax_kernel_1_index_compute_correct
           argmaxKernel1IndexSpec, argmaxKernel1InputTile, hB] at hExec ⊢
     cases hExec
     simp [BlockState.writeMemTyped_nat_readMemValue_nat]
-  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, Option.bind,
+  · simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
           TileShape.axisDim, TileShape.eraseAxis,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
@@ -220,14 +220,14 @@ theorem argmax_kernel_2_compute_correct
   subst s0
   intro _
   by_cases hB : 0 < BLOCK_MID
-  · simp [exec, argmax_kernel_2, stepStmts, stepStmt, evalOp, Option.bind,
+  · simp [exec, argmax_kernel_2, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.cop, Tile.ptrAdd, Tile.argMaxDrop, Tile.argBestDrop,
           TileShape.axisDim, TileShape.eraseAxis, ComparableDType.lt,
           argmaxKernel2Spec, argmaxKernel2IndexOffset,
           argmaxKernel2InputTile, hB] at hExec ⊢
     cases hExec
     simp [BlockState.writeMemTyped_int_readMemValue_int]
-  · simp [exec, argmax_kernel_2, stepStmts, stepStmt, evalOp, Option.bind,
+  · simp [exec, argmax_kernel_2, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.cop, Tile.ptrAdd, Tile.argMaxDrop, Tile.argBestDrop,
           TileShape.axisDim, TileShape.eraseAxis, ComparableDType.lt,
           argmaxKernel2Spec, argmaxKernel2IndexOffset,
@@ -463,7 +463,7 @@ theorem argmax_kernel_dim_single_block_compute_correct
   intro i hActive
   have hBNne : BLOCK_N ≠ 0 := Nat.pos_iff_ne_zero.mp hBN
   simp only [Region.cast] at hOutInj hActive ⊢
-  simp [exec, argmax_kernel, stepStmts, stepStmt, evalOp, Option.bind,
+  simp [exec, argmax_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
         Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         Tile.reduceMax, Tile.reduceMaxDrop, Tile.argMaxDrop, Tile.argBestDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,

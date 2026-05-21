@@ -142,7 +142,7 @@ theorem matmul_masked_output_store_slice_correct
         else
           s.readMem C (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
   intro idx
-  simp [exec, matmul_masked_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, matmul_masked_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         TileShape.dropInsertedIndex] at hExec

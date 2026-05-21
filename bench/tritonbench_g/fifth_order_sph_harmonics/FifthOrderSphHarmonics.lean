@@ -405,7 +405,7 @@ theorem fifth_order_fwd_y00_correct
     cases hab
     rfl
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_y00, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_y00, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -484,7 +484,7 @@ theorem fifth_order_fwd_channel_store_slice_correct
       simpa [outOffset] using h
     cases a; cases b
     simp only at hab; cases hab; rfl
-  simp [exec, fifth_order_fwd_channel_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, fifth_order_fwd_channel_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
   rw [← hExec]
@@ -688,7 +688,7 @@ theorem fifth_order_fwd_surface_y00_correct
   have hd10 := y0k_offset_disjoint s block_size col_offset output_stride hStride 10
     (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -873,7 +873,7 @@ theorem fifth_order_fwd_surface_y01_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 1
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -1059,7 +1059,7 @@ theorem fifth_order_fwd_surface_y02_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 2
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -1419,7 +1419,7 @@ theorem fifth_order_fwd_surface_y03_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 3
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -1578,7 +1578,7 @@ theorem fifth_order_fwd_surface_y04_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 4
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -1737,7 +1737,7 @@ theorem fifth_order_fwd_surface_y05_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 5
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -1896,7 +1896,7 @@ theorem fifth_order_fwd_surface_y06_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 6
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -2055,7 +2055,7 @@ theorem fifth_order_fwd_surface_y07_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 7
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -2214,7 +2214,7 @@ theorem fifth_order_fwd_surface_y08_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 8
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -2373,7 +2373,7 @@ theorem fifth_order_fwd_surface_y09_correct
   have hd10 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 10 9
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'
@@ -2532,7 +2532,7 @@ theorem fifth_order_fwd_surface_y10_correct
   have hd9 := y0jk_offset_disjoint s block_size col_offset output_stride hStride 9 10
     (by norm_num) (by norm_num) (by norm_num) i
   by_cases hB : 0 < block_size
-  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp,
+  · simp [exec, fifth_order_fwd_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
     subst s'

@@ -171,7 +171,7 @@ theorem attention_kernel_final_store_slice_correct
         = some (s.readMem Acc
             (accOffset s stride_acc_h stride_acc_m stride_acc_k BLOCK_M idx)) := by
   intro idx
-  simp [exec, attention_kernel_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, attention_kernel_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, mIndex, kIndex,
         accOffset, outOffset, TileShape.dropInsertedIndex]

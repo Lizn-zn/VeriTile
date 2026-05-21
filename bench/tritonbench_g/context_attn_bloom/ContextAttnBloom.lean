@@ -232,7 +232,7 @@ theorem context_attn_bloom_final_store_slice_correct
               stride_acc_b stride_acc_h stride_acc_m stride_acc_d BLOCK_M idx
           else s.readMem Out outAddr) := by
   intro idx
-  simp [exec, context_attn_bloom_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, context_attn_bloom_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         ComparableDType.lt, BlockState.readMemValue, promptLen, seqLen,
@@ -319,5 +319,76 @@ theorem context_attn_bloom_final_store_slice_compute_correct
     BLOCK_DMODEL s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+The checked Python test uses `Z = 1`, `H = 6`, `N_CTX = 500`, `D_HEAD = 96`.
+The contiguous `q/k/v/o` layout has row/head/dimension strides `(576, 96, 1)`;
+`BLOCK_DMODEL = next_power_of_2(96) = 128`, and `BLOCK_M` is `128` on the
+regular path or `64` on the Tesla branch. -/
+
+theorem context_attn_bloom_python_block128_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        outOffset s B_Start_Loc 576 96 1 128 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem context_attn_bloom_python_block64_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [64, 128] =>
+        outOffset s B_Start_Loc 576 96 1 64 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem context_attn_bloom_final_store_python_block128_compute_correct
+    (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_bloom_final_store_slice Acc B_Start_Loc B_Seqlen
+        B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] =>
+          active s B_Seqlen B_Prompt_Cache_Len 96 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 576 96 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 96 288000 96 576 1
+          128 idx) := by
+  exact context_attn_bloom_final_store_slice_compute_correct Acc B_Start_Loc
+    B_Seqlen B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 128 128
+    s (context_attn_bloom_python_block128_offset_injective s B_Start_Loc)
+
+theorem context_attn_bloom_final_store_python_block64_compute_correct
+    (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_bloom_final_store_slice Acc B_Start_Loc B_Seqlen
+        B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 128] =>
+          active s B_Seqlen B_Prompt_Cache_Len 96 64 idx)
+        (fun idx : TileIndex [64, 128] =>
+          (Out, outOffset s B_Start_Loc 576 96 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 128] =>
+        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 96 288000 96 576 1
+          64 idx) := by
+  exact context_attn_bloom_final_store_slice_compute_correct Acc B_Start_Loc
+    B_Seqlen B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 64 128
+    s (context_attn_bloom_python_block64_offset_injective s B_Start_Loc)
 
 end VeriTile.Bench.TritonBenchG.ContextAttnBloom

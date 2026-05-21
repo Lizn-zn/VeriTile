@@ -193,7 +193,7 @@ theorem attention_fwd_triton3_final_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, attention_fwd_triton3_final_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
         offZ, offH, mIndex, kIndex, active, accOffset, outOffset,
@@ -314,7 +314,7 @@ theorem attention_fwd_triton3_l_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, attention_fwd_triton3_l_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul]
   simp only [lRowOffset, Nat.add_assoc]
   rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
@@ -375,7 +375,7 @@ theorem attention_fwd_triton3_m_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, attention_fwd_triton3_m_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul]
   simp only [lRowOffset, Nat.add_assoc]
   rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
@@ -444,7 +444,7 @@ theorem attention_fwd_triton3_end_m_formula_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, attention_fwd_triton3_end_m_formula_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.uop, Tile.ptrAdd, NumericDType.add, NumericDType.mul]
   simp only [lRowOffset, Nat.add_assoc]
   rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]

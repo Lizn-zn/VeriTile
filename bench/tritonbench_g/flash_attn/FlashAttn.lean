@@ -259,7 +259,7 @@ theorem flash_attn_output_store_slice_correct
               (some (s.readMem OutBuffer
                 (bufferOffset s stride_buf_h stride_buf_m stride_buf_d BLOCK_M idx))))) := by
   intro idx
-  simp [exec, flash_attn_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, flash_attn_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, mIndex, dIndex,
         bufferOffset, outOffset, TileShape.dropInsertedIndex]
@@ -373,7 +373,7 @@ theorem flash_attn_l_store_slice_correct
       simpa [Nat.add_assoc] using hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
     rfl
-  simp [exec, flash_attn_l_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, flash_attn_l_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
         NumericDType.add, NumericDType.mul]
   simp only [lOffset, mIndex, Nat.add_assoc]

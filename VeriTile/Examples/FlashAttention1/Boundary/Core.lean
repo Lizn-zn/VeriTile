@@ -77,7 +77,7 @@ theorem fa1_preLoop_correct_strided_boundary
       ).setReg "q_ptrs" .nat [M, D] qPtrs
       ).setReg "q_mask" .bool [M, D] qMask
       ).setReg "q" .real [M, D] qLoaded
-      ).setReg "m_i" .real [M] ⟨fun _ => (⊥ : WithBot ℝ)⟩
+      ).setReg "m_i" .real [M] ⟨fun _ => (none : WithBot ℝ)⟩
       ).setReg "l_i" .real [M] (Tile.ofReal fun _ => 0)
       ).setReg "o_acc" .real [M, D] (Tile.ofReal fun _ => 0)
   have hQ_loaded_eq : qLoaded = Tile.ofReal Q := by
@@ -95,7 +95,10 @@ theorem fa1_preLoop_correct_strided_boundary
   · simp [fa1PreLoopStridedBoundary, stepStmts, stepStmt, evalOp,
       Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
       ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal, qPtrs, qMask, qLoaded, qBase, s0]
-    rfl
+    unfold evalOp
+    simp [Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal,
+      qPtrs, qMask, qLoaded, qBase, s0]
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s0]
     · simp [s0]
@@ -111,6 +114,8 @@ theorem fa1_preLoop_correct_strided_boundary
     · simp [s0]
     · simp [s0, hQ_loaded_eq]
     · simp [s0, FA1MathBoundary.mPartial]
+      funext idx
+      rfl
     · simp [s0, FA1MathBoundary.lPartial, Tile.ofReal]
     · simp [s0, FA1MathBoundary.oPartial, Tile.ofReal]
     · intro idx
@@ -190,7 +195,7 @@ theorem fa1_preLoop_correct_strided_boundaryD
       ).setReg "q_d_mask" .bool [M, Bd] qDMask
       ).setReg "q_mask" .bool [M, Bd] qMask
       ).setReg "q" .real [M, Bd] qLoaded
-      ).setReg "m_i" .real [M] ⟨fun _ => (⊥ : WithBot ℝ)⟩
+      ).setReg "m_i" .real [M] ⟨fun _ => (none : WithBot ℝ)⟩
       ).setReg "l_i" .real [M] (Tile.ofReal fun _ => 0)
       ).setReg "o_acc" .real [M, Bd] (Tile.ofReal fun _ => 0)
   have hQ_loaded_eq : qLoaded = Tile.ofReal (padHeadD (Bd := Bd) Q) := by
@@ -221,7 +226,10 @@ theorem fa1_preLoop_correct_strided_boundaryD
       Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
       ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal,
       qPtrs, qSeqMask, qDMask, qMask, qLoaded, qBase, s0]
-    rfl
+    unfold evalOp
+    simp [Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex, Tile.vec, Tile.ofReal,
+      qPtrs, qSeqMask, qDMask, qMask, qLoaded, qBase, s0]
   · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · simp [s0]
     · simp [s0]
@@ -237,6 +245,8 @@ theorem fa1_preLoop_correct_strided_boundaryD
     · simp [s0]
     · simp [s0, hQ_loaded_eq]
     · simp [s0, FA1MathBoundary.mPartial]
+      funext idx
+      rfl
     · simp [s0, FA1MathBoundary.lPartial, Tile.ofReal]
     · simp [s0, FA1MathBoundary.oPartial, Tile.ofReal]
     · intro idx
@@ -401,6 +411,10 @@ theorem fa1_postLoop_correct_strided_boundary_raw
         Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind,
         TileShape.dropInsertedIndex]
+  unfold evalOp
+  simp [hoffs_m, hoffs_d, hl, ho, ho_base, Tile.bop, Tile.cop, Tile.expandDim,
+    NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt, Option.bind,
+    TileShape.dropInsertedIndex]
   rw [show batch * sOB + headIdx * sOH + qb * M * sOM
         + idx.1.val * sOM + idx.2.1.val * sOD =
       batch * sOB + headIdx * sOH
@@ -461,6 +475,10 @@ theorem fa1_postLoop_correct_strided_causal_boundary_raw
         Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind,
         TileShape.dropInsertedIndex]
+  unfold evalOp
+  simp [hoffs_m, hoffs_d, hl, ho, ho_base, Tile.bop, Tile.cop, Tile.expandDim,
+    NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt, Option.bind,
+    TileShape.dropInsertedIndex]
   rw [show batch * sOB + headIdx * sOH + qb * M * sOM
         + idx.1.val * sOM + idx.2.1.val * sOD =
       batch * sOB + headIdx * sOH
@@ -542,6 +560,10 @@ theorem fa1_postLoop_correct_strided_boundaryD_raw
         Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind,
         TileShape.dropInsertedIndex]
+  unfold evalOp
+  simp [hoffs_m, hoffs_d, hl, ho, ho_base, Tile.bop, Tile.cop, Tile.expandDim,
+    NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt, Option.bind,
+    TileShape.dropInsertedIndex]
   rw [show batch * sOB + headIdx * sOH + qb * M * sOM
         + idx.1.val * sOM + idx.2.1.val * sOD =
       batch * sOB + headIdx * sOH
@@ -622,6 +644,10 @@ theorem fa1_postLoop_correct_strided_causal_boundaryD_raw
         Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, Option.bind,
         TileShape.dropInsertedIndex]
+  unfold evalOp
+  simp [hoffs_m, hoffs_d, hl, ho, ho_base, Tile.bop, Tile.cop, Tile.expandDim,
+    NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt, Option.bind,
+    TileShape.dropInsertedIndex]
   rw [show batch * sOB + headIdx * sOH + qb * M * sOM
         + idx.1.val * sOM + idx.2.1.val * sOD =
       batch * sOB + headIdx * sOH
@@ -1128,7 +1154,7 @@ theorem fa1_forward_correct_strided_boundaryD_of_step
   rw [FA1MathBoundary.streaming_eq_attentionReal hBk
       (padHeadD (Bd := Bd) Q) hSkLe
       (padHeadD (Bd := Bd) K) (padHeadD (Bd := Bd) V) scale idx hL]
-  exact FA1Math.attentionReal_padHeadD_eq hDLe Q K V scale idx hDIdx
+  exact VeriTile.Triton.attentionReal_padHeadD_eq hDLe Q K V scale idx hDIdx
 
 /-- D-tail causal-boundary strided forward correctness in canonical spec
 form, parameterized by the D-tail causal-boundary loop-step lemma. -/
@@ -1201,7 +1227,7 @@ theorem fa1_forward_correct_strided_causal_boundaryD_of_step
       (s.pids 0 * M)
       (padHeadD (Bd := Bd) Q) (padHeadD (Bd := Bd) K)
       (padHeadD (Bd := Bd) V) scale idx]
-  exact FA1Math.attentionRealCausalBlock_padHeadD_eq hDLe (s.pids 0 * M) Q K V scale idx hDIdx
+  exact VeriTile.Triton.attentionRealCausalBlock_padHeadD_eq hDLe (s.pids 0 * M) Q K V scale idx hDIdx
 
 
 end VeriTile.Examples

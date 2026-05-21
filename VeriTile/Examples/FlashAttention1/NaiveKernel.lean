@@ -46,7 +46,7 @@ theorem fa1NaiveDirectOut_eq_oFreeBoundary {M S D Bd : Nat}
   unfold fa1NaiveDirectOut
   simp [tile_elementwise,
         FA1MathBoundary.oFreeBoundary, FA1MathBoundary.lFreeBoundary,
-        FA1MathBoundary.blockIndex?, FA1Math.scaledScore]
+        FA1MathBoundary.blockIndex?, StreamingAccumulator.scaledScore]
   congr 1
   congr 1
   · apply Finset.sum_congr rfl
@@ -77,7 +77,7 @@ theorem fa1NaiveDirectOut_eq_attentionReal {M S D Bd : Nat}
   rw [FA1MathBoundary.oFreeBoundary_div_lFreeBoundary_eq_attentionReal S
       (padHeadD (Bd := Bd) Q) (padHeadD (Bd := Bd) K) (padHeadD (Bd := Bd) V)
       scale 1 (by omega) idx hPos]
-  exact FA1Math.attentionReal_padHeadD_eq hDLe Q K V scale idx hDIdx
+  exact VeriTile.Triton.attentionReal_padHeadD_eq hDLe Q K V scale idx hDIdx
 
 private theorem sum_causal_exp_scores_eq_some {M S D : Nat}
     (qStart : Nat) (Q : TileIndex [M, D] → ℝ) (K : TileIndex [S, D] → ℝ)
@@ -202,7 +202,7 @@ theorem fa1NaiveCausalDirectOut_eq_oFreeBoundary {M S D Bd : Nat}
             (⊥ : WithBot ℝ)) : WithBot ℝ)
     rw [hDen]
   simp [FA1MathCausalBoundary.oFreeBoundary, FA1MathCausalBoundary.lFreeBoundary,
-        FA1MathBoundary.blockIndex?, FA1Math.scaledScore]
+        FA1MathBoundary.blockIndex?, StreamingAccumulator.scaledScore]
 
 theorem fa1NaiveCausalDirectOut_eq_attentionRealCausalBlock {M S D Bd : Nat}
     (hS : 0 < S) (hDLe : D ≤ Bd) (qStart : Nat)
@@ -223,7 +223,7 @@ theorem fa1NaiveCausalDirectOut_eq_attentionRealCausalBlock {M S D Bd : Nat}
   rw [FA1MathCausalBoundary.oFreeBoundary_div_lFreeBoundary_eq_attentionRealCausalBlock S
       qStart (padHeadD (Bd := Bd) Q) (padHeadD (Bd := Bd) K) (padHeadD (Bd := Bd) V)
       scale 1 (by omega) idx hPos]
-  exact FA1Math.attentionRealCausalBlock_padHeadD_eq hDLe qStart Q K V scale idx hDIdx
+  exact VeriTile.Triton.attentionRealCausalBlock_padHeadD_eq hDLe qStart Q K V scale idx hDIdx
 
 private def fa1NaiveComputeBoundaryD (M S Bd : Nat) (scale : ℝ) : List Stmt :=
   [ Stmt.assign .real [M, S] "scores"
@@ -285,6 +285,9 @@ theorem fa1_naive_compute_boundaryD_correct
   refine ⟨s', ?_, ?_, ?_⟩
   · simp [fa1NaiveComputeBoundaryD, stepStmts, stepStmt, evalOp,
       hQ, hK, hV, scores, p, l, o, out, s1, s2, s3, s4, s',
+      Option.bind]
+    repeat unfold evalOp
+    simp [hQ, hK, hV, scores, p, l, o, out, s1, s2, s3, s4, s',
       Option.bind]
     rfl
   · simp [s', s4, out, fa1NaiveDirectOut, scores, p, l, o]
@@ -374,6 +377,11 @@ theorem fa1_naive_compute_causal_boundaryD_correct
       hOffsM, hOffsN, hQ, hK, hV, scoresRaw, causal, scores, p, l, o, out,
       s1, s2, s3, s4, s5, s6, s',
       Tile.bop, Tile.cop, Tile.expandDim, Tile.select,
+      NumericDType.add, NumericDType.mul, ComparableDType.ge,
+      TileShape.dropInsertedIndex, Option.bind]
+    repeat unfold evalOp
+    simp [hOffsM, hOffsN, hQ, hK, hV, scoresRaw, causal, scores, p, l, o, out,
+      s1, s2, s3, s4, s5, s6, s', Tile.bop, Tile.cop, Tile.expandDim, Tile.select,
       NumericDType.add, NumericDType.mul, ComparableDType.ge,
       TileShape.dropInsertedIndex, Option.bind]
     rfl
@@ -604,6 +612,13 @@ theorem fa1_naive_pre_boundaryD_correct
       hPids0, hPids1, hPids2,
       qBase, kBase, vBase, oBase, qPtrs, qSeqMask, qDMask, qMask,
       qLoaded, kPtrs, vPtrs, kvDMask, kLoaded, vLoaded, s0]
+    unfold evalOp
+    simp [Tile.bop, Tile.cop, Tile.expandDim, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, Option.bind, TileShape.dropInsertedIndex,
+      BlockState.readMem, Tile.vec, Tile.ofReal,
+      hPids0, hPids1, hPids2,
+      qBase, kBase, vBase, oBase, qPtrs, qSeqMask, qDMask, qMask,
+      qLoaded, kPtrs, vPtrs, kvDMask, kLoaded, vLoaded, s0]
     rfl
   · simp [s0, s19, s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1]
   · simp [s0, s19, s18, s17, s16, s15, s14, s13, s12, s11, s10, s9, s8, s7, s6, s5, s4, s3, s2, s1]
@@ -709,6 +724,11 @@ theorem fa1_naive_store_boundaryD_correct
         NumericDType.add, NumericDType.mul,
         ComparableDType.lt, Bool.and_eq_true, Option.bind,
         TileShape.dropInsertedIndex]
+  unfold evalOp
+  simp [hOffsM, hOffsD, hOBase, hOut, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.vec, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, Bool.and_eq_true, Option.bind,
+        TileShape.dropInsertedIndex]
   rw [show batch * sOB + headIdx * sOH + qb * M * sOM
         + idx.1.val * sOM + idx.2.1.val * sOD =
       batch * sOB + headIdx * sOH
@@ -778,6 +798,11 @@ theorem fa1_naive_store_causal_boundaryD_correct
   simp [observeTileAt, fa1NaiveStoreBoundaryD, stepStmts, stepStmt, evalOp, hOffsM, hOffsD, hOBase, hOut,
         Tile.bop, Tile.cop, Tile.expandDim, Tile.vec,
         NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, Bool.and_eq_true, Option.bind,
+        TileShape.dropInsertedIndex]
+  unfold evalOp
+  simp [hOffsM, hOffsD, hOBase, hOut, Tile.bop, Tile.cop, Tile.expandDim,
+        Tile.vec, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, Bool.and_eq_true, Option.bind,
         TileShape.dropInsertedIndex]
   rw [show batch * sOB + headIdx * sOH + qb * M * sOM

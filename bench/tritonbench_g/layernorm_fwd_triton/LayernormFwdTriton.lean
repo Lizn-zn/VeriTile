@@ -619,7 +619,7 @@ theorem layernormMeanPreLoop_step_regs
       st.regs .nat [] "H" = some (Tile.scalar (s.pids 1)) ∧
       (∀ R offset, st.readMem R offset = s.readMem R offset) := by
   unfold layernormMeanPreLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.ptrAdd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.ptrAdd,
     NumericDType.add, NumericDType.mul, Option.bind] at hStep
   subst st
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -658,7 +658,7 @@ theorem layernormMeanLoopBody_step_accumulator_update
                   ((layernormMeanChunkSpec s0 X stride_x_N stride_x_hn
                     N BLOCK_SIZE off).data idx)) } := by
   unfold layernormMeanLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hXPtr, Tile.bop, Tile.ptrAdd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hXPtr, Tile.bop, Tile.ptrAdd,
     NumericDType.add, ComparableDType.lt, Option.bind, hRead, xColOffset] at hStep
   subst st'
   simp [BlockState.setReg]
@@ -693,7 +693,7 @@ theorem layernormMeanLoopBody_step_preserves_context
           s0.pids 0 * stride_x_N + s0.pids 1 * stride_x_hn)) ∧
       (∀ R offset, st'.readMem R offset = st.readMem R offset) := by
   unfold layernormMeanLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hXPtr, Tile.bop, Tile.ptrAdd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hXPtr, Tile.bop, Tile.ptrAdd,
     NumericDType.add, ComparableDType.lt, Option.bind] at hStep
   subst st'
   refine ⟨?_, ?_⟩
@@ -807,7 +807,7 @@ theorem layernormMeanLoopContextInvariant_body_step_exists
         (st.setReg "off" .nat [] (Tile.scalar off)) with
   | none =>
       unfold layernormMeanLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hInv.2, hXPtr, Tile.bop, Tile.ptrAdd,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.2, hXPtr, Tile.bop, Tile.ptrAdd,
         NumericDType.add, ComparableDType.lt, Option.bind] at hStep
   | some st' =>
       refine ⟨st', rfl, ?_⟩
@@ -1167,7 +1167,7 @@ theorem layernormMeanPostLoop_step_to_var_init
     exact h.symm
   subst acc
   unfold layernormMeanPostLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, hMeanReg, Tile.bop, Tile.reduceSum,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hMeanReg, Tile.bop, Tile.reduceSum,
     Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
     TileShape.insertAxisIndex, NumericDType.div, Option.bind] at hStep
   subst stVar
@@ -1223,7 +1223,7 @@ theorem layernormVarLoopBody_step_accumulator_update
                   ((layernormVarChunkSpec s0 X stride_x_N stride_x_hn
                     N BLOCK_SIZE off).data idx)) } := by
   unfold layernormVarLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hXPtr, hMean, Tile.bop, Tile.ptrAdd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hXPtr, hMean, Tile.bop, Tile.ptrAdd,
     NumericDType.add, NumericDType.sub, NumericDType.mul, ComparableDType.lt,
     Option.bind, hRead, xColOffset] at hStep
   subst st'
@@ -1266,7 +1266,7 @@ theorem layernormVarLoopBody_step_preserves_context
           N BLOCK_SIZE)) ∧
       (∀ R offset, st'.readMem R offset = st.readMem R offset) := by
   unfold layernormVarLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hXPtr, hMean, Tile.bop, Tile.ptrAdd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hXPtr, hMean, Tile.bop, Tile.ptrAdd,
     NumericDType.add, NumericDType.sub, NumericDType.mul, ComparableDType.lt,
     Option.bind] at hStep
   subst st'
@@ -1337,7 +1337,7 @@ theorem layernormVarLoopContextInvariant_body_step_exists
         (st.setReg "off" .nat [] (Tile.scalar off)) with
   | none =>
       unfold layernormVarLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hInv.2, hXPtr, hMean, Tile.bop,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.2, hXPtr, hMean, Tile.bop,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         ComparableDType.lt, Option.bind] at hStep
   | some st' =>
@@ -1620,7 +1620,7 @@ theorem layernormVarPostLoop_step_to_out_init
     exact h.symm
   subst acc
   unfold layernormVarPostLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, hVarReg, Tile.bop, Tile.uop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hVarReg, Tile.bop, Tile.uop,
     Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
     TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
     NumericDType.div, Option.bind, WithBot.realSqrt] at hStep
@@ -1690,7 +1690,7 @@ theorem layernormOutLoopBody_step_write_current
       layernormYFullNSpec s0 X W stride_x_N stride_x_hn stride_w_hn
         N BLOCK_SIZE eps ⟨off + i.val, hActive⟩ := by
   unfold layernormOutLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hXPtr, hYPtr, hWPtr, hMean, hRstd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hXPtr, hYPtr, hWPtr, hMean, hRstd,
     Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
     ComparableDType.lt, Option.bind, hReadX, hReadW, xColOffset, yColOffset,
     wColOffset] at hStep
@@ -1761,7 +1761,7 @@ theorem layernormOutLoopBody_step_preserves_regs
         some (Tile.scalar (layernormRstdFullNSpec s0 X stride_x_N stride_x_hn
           N BLOCK_SIZE eps)) := by
   unfold layernormOutLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hXPtr, hYPtr, hWPtr, hMean, hRstd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hXPtr, hYPtr, hWPtr, hMean, hRstd,
     Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
     ComparableDType.lt, Option.bind, hReadX, hReadW, xColOffset, yColOffset,
     wColOffset] at hStep
@@ -1807,7 +1807,7 @@ theorem layernormOutLoopBody_step_preserves_reads
     (∀ offset, st'.readMem X offset = s0.readMem X offset) ∧
       (∀ offset, st'.readMem W offset = s0.readMem W offset) := by
   unfold layernormOutLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hXPtr, hYPtr, hWPtr, hMean, hRstd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hXPtr, hYPtr, hWPtr, hMean, hRstd,
     Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
     ComparableDType.lt, Option.bind, hReadX, hReadW, xColOffset, yColOffset,
     wColOffset] at hStep
@@ -1859,7 +1859,7 @@ theorem layernormOutLoopBody_step_preserves_old_output
     st'.readMem Y (yColOffset s0 stride_y_N stride_y_hn col.val) =
       st.readMem Y (yColOffset s0 stride_y_N stride_y_hn col.val) := by
   unfold layernormOutLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hXPtr, hYPtr, hWPtr, hMean, hRstd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hXPtr, hYPtr, hWPtr, hMean, hRstd,
     Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
     ComparableDType.lt, Option.bind, hReadX, hReadW, xColOffset, yColOffset,
     wColOffset] at hStep
@@ -1989,7 +1989,7 @@ theorem layernormOutLoopContextInvariant_body_step_exists
         (st.setReg "off" .nat [] (Tile.scalar off)) with
   | none =>
       unfold layernormOutLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hXPtr, hYPtr, hWPtr, hMean, hRstd,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hXPtr, hYPtr, hWPtr, hMean, hRstd,
         Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.sub,
         NumericDType.mul, ComparableDType.lt, Option.bind, hReadX, hReadW,
         xColOffset, yColOffset, wColOffset] at hStep
@@ -2150,7 +2150,7 @@ theorem layernormMeanLoopBody_step_preserves_ptrs_read
       (∀ offset, st'.readMem R offset = st.readMem R offset) := by
   rcases hCtx with ⟨hInv, hXPtr, _hReadX⟩
   unfold layernormMeanLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hInv.2, hXPtr, Tile.bop, Tile.ptrAdd,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.2, hXPtr, Tile.bop, Tile.ptrAdd,
     NumericDType.add, ComparableDType.lt, Option.bind] at hStep
   subst st'
   refine ⟨?_, ?_, ?_⟩
@@ -2246,7 +2246,7 @@ theorem layernormMeanPostLoop_step_preserves_ptrs_read
         some (Tile.scalar (Region.cast W, s0.pids 1 * stride_w_hn)) ∧
       (∀ offset, stVarInit.readMem R offset = stMean.readMem R offset) := by
   unfold layernormMeanPostLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, hMeanReg, Tile.bop, Tile.reduceSum,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hMeanReg, Tile.bop, Tile.reduceSum,
     Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
     TileShape.insertAxisIndex, NumericDType.div, Option.bind] at hStep
   subst stVarInit
@@ -2280,7 +2280,7 @@ theorem layernormVarLoopBody_step_preserves_ptrs_read
       (∀ offset, st'.readMem R offset = st.readMem R offset) := by
   rcases hCtx with ⟨hInv, hXPtr, hMean, _hReadX⟩
   unfold layernormVarLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hInv.2, hXPtr, hMean, Tile.bop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.2, hXPtr, hMean, Tile.bop,
     Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
     ComparableDType.lt, Option.bind] at hStep
   subst st'
@@ -2536,7 +2536,7 @@ theorem layernorm_fwd_triton_correct
           ComputeKernel.toAlgorithm?, ComputeStmt.listToAlgorithm?,
           ComputeStmt.toAlgorithm?, ComputeExpr.toAlgorithm?,
           ComputeOp.toAlgorithm?, Except.bind, Bind.bind, pure, Pure.pure] at hExec
-    simp only [exec, stepStmts, stepStmt, evalOp,
+    simp only [exec, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           stepForRangeAux.step_lt, stepForRangeAux.step_ge,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, Tile.select, TileShape.axisDim, TileShape.eraseAxis,
@@ -2545,7 +2545,7 @@ theorem layernorm_fwd_triton_correct
           Nat.not_lt.mpr hNle, hStep] at hExec
     simp [stepForRangeAux.step_lt hStep hNpos,
           stepForRangeAux.step_ge hStep hNle] at hExec
-    simp only [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop, Tile.ptrAdd,
+    simp only [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop, Tile.ptrAdd,
           Tile.uop, Tile.reduceSum, Tile.reduceSumDrop, Tile.select,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           NumericDType.add, NumericDType.sub, NumericDType.mul,

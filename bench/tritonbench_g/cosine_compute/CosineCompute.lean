@@ -49,7 +49,7 @@ theorem cos_func_correct
                 else s.readMem b addr) := by
   intro i
   have h_inj := injective_offset_singleton (n := BLOCK_SIZE) (s.pid * BLOCK_SIZE)
-  simp [observeAt, exec, cos_func, stepStmts, stepStmt, evalOp,
+  simp [observeAt, exec, cos_func, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.uop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, WithBot.realCos,
         FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot]

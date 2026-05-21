@@ -81,7 +81,7 @@ theorem fused_add_mul_activation_kernel_correct
         else s.readMem x_ptr outAddr := by
   intro i
   cases ACTIVATION_SIGMOID
-  · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp,
+  · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           tile_elementwise] at hExec
     subst s'
     simp only [fusedActivationOffset]
@@ -98,7 +98,7 @@ theorem fused_add_mul_activation_kernel_correct
       · simp [hi, fusedActivationSpec, fusedActivationInput, hx, hin, hb,
           ComparableDType.gt]
     · simp [hi]
-  · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp,
+  · simp [exec, fused_add_mul_activation_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           tile_elementwise] at hExec
     subst s'
     simp only [fusedActivationOffset]

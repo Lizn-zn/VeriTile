@@ -56,7 +56,7 @@ theorem kernel_correct
       s'.readMem Out (outAddr out_stridex out_stridey idx)
         = s.readMem M (matrixAddr matrix_stridex matrix_stridey idx) := by
   intro idx
-  simp [exec, kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.ptrAdd, Tile.expandDim, Tile.transpose,
         NumericDType.add, NumericDType.mul,
         TileShape.insertAxis, TileShape.dropInsertedIndex] at hExec

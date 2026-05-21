@@ -43,7 +43,7 @@ theorem square_kernel_correct
             n_cols BLOCK_SIZE) s).map (·.readMem output_ptr outAddr)
         = some (if i.val < n_cols then xs i * xs i else s.readMem output_ptr outAddr) := by
   intro i
-  simp [exec, square_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, square_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.mul,
         ComparableDType.lt]
   unfold InputRowLoadedAt at h_x

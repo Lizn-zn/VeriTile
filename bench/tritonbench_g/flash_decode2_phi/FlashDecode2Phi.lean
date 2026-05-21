@@ -137,7 +137,7 @@ theorem flash_decode2_phi_final_store_slice_correct
               stride_final_d i
           else s.readMem Out outAddr) := by
   intro i
-  simp [exec, flash_decode2_phi_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, flash_decode2_phi_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt, dIndex, active, finalOffset,
         outOffset]
@@ -206,5 +206,35 @@ theorem flash_decode2_phi_final_store_slice_compute_correct
     BLOCK_DMODEL s hOutInj i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+The checked Python tests allocate `Out` with shape `(2, 4, 64)`, so the
+contiguous output strides are `(256, 64, 1)`. `head_dim = 64` and
+`BLOCK_DMODEL = next_power_of_2(64) = 64`; the varied `block_seq` cases do not
+change the final output layout. -/
+
+theorem flash_decode2_phi_python_test_shape_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun i : Fin 64 => outOffset s 256 64 1 i) := by
+  intro a b h
+  simp [outOffset, dIndex] at h
+  exact Fin.ext (by omega)
+
+theorem flash_decode2_phi_final_store_python_test_shape_compute_correct
+    (Final Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_final_store_slice Final Out
+        64 256 64 1 256 64 1 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 64 i)
+        (fun i : Fin 64 => (Out, outOffset s 256 64 1 i)))
+      (expected := fun i : Fin 64 =>
+        finalStoreValue s Final 64 256 64 1 i) := by
+  exact flash_decode2_phi_final_store_slice_compute_correct Final Out
+    64 256 64 1 256 64 1 64 s
+    (flash_decode2_phi_python_test_shape_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.FlashDecode2Phi

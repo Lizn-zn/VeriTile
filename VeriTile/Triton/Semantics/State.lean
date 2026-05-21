@@ -1159,6 +1159,43 @@ theorem foldl_writeMem_const_region_prop_masked_readMem_other {α : Type}
     (regionFn := fun _ => region) offsetFn valueFn P l s R off
     (fun _ _ _ => hRR)
 
+/-- Bool-predicate variant of
+`foldl_writeMem_const_region_prop_masked_readMem_other`.
+
+Higher-order `simp`/`rw` against the `Prop`-predicate form fails when `P` is
+a complex masking λ because `[DecidablePred P]` synthesis runs *after*
+pattern unification. This variant takes `P : α → Bool` directly, which
+matches the `if (decide ...) then ... else ...` form `simp` normalises to,
+without needing to synthesise a `Decidable` instance.
+
+Targeted at multi-store surfaces (layer-norm forward with
+`STORE_RESIDUAL_OUT=true`, etc.) where reads of one region must commute
+past a masked foldl-scatter to another region. -/
+theorem foldl_writeMem_const_region_bool_masked_readMem_other {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Bool) (l : List α) (s : BlockState)
+    (R : RegionName) (off : Nat) (hRR : R ≠ region) :
+    BlockState.readMem ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s))
+      R off
+      = s.readMem R off := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hhd : P hd = true
+      · simp only [hhd, if_true]
+        rw [ih]
+        rw [writeMem_readMem]
+        rw [if_neg]
+        rintro ⟨hR, _⟩
+        exact hRR hR
+      · have : (P hd) = false := by
+          cases hP : P hd <;> simp_all
+        simp only [this]
+        exact ih _
+
 /-- Intra-region offset-disjointness companion to
 `foldl_writeMem_const_region_prop_masked_readMem_other`. When all writes
 in the foldl target the same `region` but at offsets disjoint from a given

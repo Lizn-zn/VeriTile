@@ -141,12 +141,21 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
       .makeBlockPtr region baseOffset parentShape blockShape strides offsets
   | .makeBlockPtrDyn region baseOffset parentShape blockShape strides offsets =>
       .makeBlockPtrDyn region baseOffset.eraseDType parentShape blockShape strides offsets
+  | .makeBlockPtrDynOffsets region baseOffset parentShape blockShape strides offsets =>
+      .makeBlockPtrDynOffsets region baseOffset.eraseDType parentShape blockShape
+        strides (offsets.map (·.eraseDType))
   | .advanceBlockPtr ptr deltas => .advanceBlockPtr ptr.eraseDType deltas
   | .load dtype mem mask => .load (VeriTile.Triton.eraseDType dtype) mem.eraseDType mask.eraseDType
   | .natToReal a => .natToReal a.eraseDType
 termination_by e => sizeOf e
 decreasing_by
-  all_goals (simp_wf; try omega; try decreasing_trivial)
+  all_goals
+    simp_wf
+    try omega
+    try
+      have hs := List.sizeOf_lt_of_mem (by assumption)
+      omega
+    try decreasing_trivial
 
 /-- Erase explicit floating dtype annotations from a memory access. The
 region's phantom dtype is independent of the access dtype, so we keep

@@ -64,7 +64,7 @@ theorem load_reduce_kernel_correct
   have h_inj := BlockState.tileIndex1d_offset_injective (BLOCK := BLOCK_M)
   by_cases hBM : 0 < BLOCK_M
   · by_cases hBN : 0 < BLOCK_N
-    · simp [exec, load_reduce_kernel, stepStmts, stepStmt, evalOp,
+    · simp [exec, load_reduce_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Tile.reduceMax, Tile.reduceMaxDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
             BlockPtr.address, BlockPtr.inBounds, hBN] at hExec
@@ -74,7 +74,7 @@ theorem load_reduce_kernel_correct
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         BlockPtr.address, hBN]
       congr with x
-    · simp [exec, load_reduce_kernel, stepStmts, stepStmt, evalOp,
+    · simp [exec, load_reduce_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Tile.reduceMax, Tile.reduceMaxDrop,
             TileShape.axisDim, TileShape.eraseAxis, hBN] at hExec
   · exact False.elim (hBM (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))

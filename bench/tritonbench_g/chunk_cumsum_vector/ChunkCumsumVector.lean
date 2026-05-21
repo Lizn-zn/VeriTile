@@ -46,6 +46,30 @@ theorem chunk_cumsum_vector_surface_toAlgorithm_supported
   simp [chunk_cumsum_vector_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
 
+/-- Single-iteration surface for Python cases where `T <= BT`.
+
+The checked cases are covered by the autotuned `BT = 16` configuration. In this
+path the loop executes once, `b_z` is the initial zero vector, and the observable
+output is the block-pointer load followed by the lower-triangular dot and
+boundary-checked block-pointer store. -/
+def chunk_cumsum_vector_single_block_surface
+    (S Z : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
+    ComputeKernel := triton {
+  i_s = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  o_i = tl.arange(0, $(BT))
+  m_s = tl.where(o_i[:, None] >= o_i[None, :], 1.0, 0.0)
+  p_s = tl.make_block_ptr(base=S + i_bh * $(s_s_h), shape=($(T), $(SSize)),
+    strides=($(s_s_t), $(s_s_d)), offsets=($(0), i_s * $(BS)),
+    block_shape=($(BT), $(BS)), order=(1, 0))
+  p_z = tl.make_block_ptr(base=Z + i_bh * $(s_s_h), shape=($(T), $(SSize)),
+    strides=($(s_s_t), $(s_s_d)), offsets=($(0), i_s * $(BS)),
+    block_shape=($(BT), $(BS)), order=(1, 0))
+  b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
+  b_c = tl.dot(m_s, b_s, allow_tf32=false)
+  tl.store(p_z, (b_c).to(p_z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+}
+
 /-- Proof-oriented block store slice of `chunk_cumsum_vector.py`'s
 `chunk_global_cumsum_vector_kernel`.
 
@@ -86,6 +110,19 @@ def tileOffset (s : BlockState) (s_s_h s_s_t s_s_d BT BS : Nat)
   s.pids 1 * s_s_h + tIndex s BT idx.1 * s_s_t +
     sIndex s BS idx.2.1 * s_s_d
 
+def singleBlockActive (s : BlockState) (T S BS : Nat)
+    (idx : TileIndex [BT, BS]) : Prop :=
+  idx.1.val < T ∧ sIndex s BS idx.2.1 < S
+
+instance singleBlockActiveDecidable (s : BlockState) (T S BS : Nat)
+    (idx : TileIndex [BT, BS]) : Decidable (singleBlockActive s T S BS idx) := by
+  unfold singleBlockActive
+  infer_instance
+
+def singleBlockTileOffset (s : BlockState) (s_s_h s_s_t s_s_d BS : Nat)
+    (idx : TileIndex [BT, BS]) : Nat :=
+  s.pids 1 * s_s_h + idx.1.val * s_s_t + sIndex s BS idx.2.1 * s_s_d
+
 noncomputable def storeValue (s : BlockState) (BC : RegionName)
     (s_s_h s_s_t s_s_d T S BT BS : Nat) (idx : TileIndex [BT, BS]) : ℝ :=
   WithBot.unbotD 0
@@ -106,7 +143,7 @@ theorem chunk_cumsum_vector_store_slice_correct
             storeValue s BC s_s_h s_s_t s_s_d T S BT BS idx
           else s.readMem Z outAddr) := by
   intro idx
-  simp [exec, chunk_cumsum_vector_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunk_cumsum_vector_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         tIndex, sIndex, active, tileOffset, TileShape.dropInsertedIndex]
@@ -201,6 +238,15 @@ noncomputable def sourceTile
         some (s.readMem SReg (tileOffset s s_s_h s_s_t s_s_d BT BS idx))
       else some (0.0 : ℝ) }
 
+noncomputable def singleBlockSourceTile
+    (s : BlockState) (SReg : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    Tile .real [BT, BS] :=
+  { data := fun idx =>
+      if singleBlockActive s T S BS idx then
+        some (s.readMem SReg (singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx))
+      else some (0.0 : ℝ) }
+
 noncomputable def carryValue
     (s : BlockState) (Carry : RegionName) (s_s_h s_s_d S BS : Nat)
     (j : Fin BS) : WithBot ℝ :=
@@ -219,6 +265,156 @@ noncomputable def cumsumStoreValue
         (sourceTile s SReg s_s_h s_s_t s_s_d T S BT BS)).data
           (idx.1, idx.2.1, PUnit.unit)))
 
+noncomputable def singleBlockStoreValue
+    (s : BlockState) (SReg : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) : ℝ :=
+  WithBot.unbotD 0
+    ((Tile.dot [] (lowerTriTile BT)
+      (singleBlockSourceTile s SReg s_s_h s_s_t s_s_d T S BT BS)).data
+        (idx.1, idx.2.1, PUnit.unit))
+
+set_option maxHeartbeats 800000 in
+theorem chunk_cumsum_vector_single_block_surface_correct
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BS] =>
+        singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)) :
+    ∀ idx : TileIndex [BT, BS],
+      let outAddr := singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx
+      (exec (chunk_cumsum_vector_single_block_surface SReg Z s_s_h s_s_t
+            s_s_d T S BT BS) s).map (·.readMem Z outAddr)
+        = some (if singleBlockActive s T S BS idx then
+            singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx
+          else s.readMem Z outAddr) := by
+  intro idx
+  simp [exec, chunk_cumsum_vector_single_block_surface, ComputeKernel.toAlgKernel,
+        ComputeStmt.toAlgorithm?, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, Option.bind, Option.map]
+  simp [stepStmt, evalOp, Option.bind, Option.map, Tile.bop,
+        Tile.cop, Tile.expandDim, Tile.dot, NumericDType.add,
+        NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+        singleBlockActive, singleBlockTileOffset, sIndex, singleBlockSourceTile,
+        lowerTriTile, TileShape.dropInsertedIndex]
+  simp [evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.dot, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, ComparableDType.ge, singleBlockActive,
+        singleBlockTileOffset, sIndex, singleBlockSourceTile, lowerTriTile,
+        TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BT, BS] → Nat :=
+    fun idx => s.pids 1 * s_s_h + idx.1.val * s_s_t +
+      (s.pids 0 * BS + idx.2.1.val) * s_s_d
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, singleBlockTileOffset, sIndex] using hOutInj
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive :
+      idx.1.val < T ∧ s.pids 0 * BS + idx.2.1.val < S
+  · simp [offsetFn, singleBlockActive, sIndex, singleBlockTileOffset,
+      singleBlockStoreValue, singleBlockSourceTile, lowerTriTile, Tile.dot,
+      BlockState.defaultCarrier, hActive]
+    norm_num
+  · simp [offsetFn, singleBlockActive, sIndex, singleBlockTileOffset,
+      hActive]
+
+theorem chunk_cumsum_vector_single_block_surface_compute_correct
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BS] =>
+        singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_cumsum_vector_single_block_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := chunk_cumsum_vector_single_block_surface_correct SReg Z s_s_h s_s_t
+    s_s_d T S BT BS s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
+set_option maxHeartbeats 800000 in
+theorem chunk_cumsum_vector_single_block_surface_active_compute_correct
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState)
+    (hNoCollision : ∀ idx : TileIndex [BT, BS], singleBlockActive s T S BS idx →
+      ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →
+        singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
+          singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_cumsum_vector_single_block_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  simp [exec, chunk_cumsum_vector_single_block_surface, ComputeKernel.toAlgKernel,
+        ComputeStmt.toAlgorithm?, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, Option.bind, Option.map] at hExec
+  simp [stepStmt, evalOp, Option.bind, Option.map, Tile.bop,
+        Tile.cop, Tile.expandDim, Tile.dot, NumericDType.add,
+        NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+        singleBlockActive, singleBlockTileOffset, sIndex, singleBlockSourceTile,
+        lowerTriTile, TileShape.dropInsertedIndex] at hExec
+  simp [evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.dot, NumericDType.add, NumericDType.mul,
+        ComparableDType.lt, ComparableDType.ge, singleBlockActive,
+        singleBlockTileOffset, sIndex, singleBlockSourceTile, lowerTriTile,
+        TileShape.dropInsertedIndex] at hExec
+  subst s'
+  let offsetFn : TileIndex [BT, BS] → Nat :=
+    fun idx => s.pids 1 * s_s_h + idx.1.val * s_s_t +
+      (s.pids 0 * BS + idx.2.1.val) * s_s_d
+  let valueFn : TileIndex [BT, BS] → ℝ :=
+    fun idx => WithBot.unbotD 0
+      (∑ x,
+        Option.map₂ (fun x1 x2 : ℝ => x1 * x2)
+          (if x <= idx.1 then some (1.0 : ℝ) else some (0.0 : ℝ))
+          (if x.val < T ∧ s.pids 0 * BS + idx.2.1.val < S then
+            some (s.readMem SReg
+              (s.pids 1 * s_s_h + x.val * s_s_t +
+                (s.pids 0 * BS + idx.2.1.val) * s_s_d))
+          else BlockState.defaultCarrier TileDType.real))
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if singleBlockActive s T S BS i then
+          acc.writeMem Z (offsetFn i) (valueFn i)
+        else acc)
+      _ (TileShape.allIndices [BT, BS])).readMem Z (offsetFn idx) =
+    singleBlockStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx
+  rw [BlockState.scatter_readback_prop_masked_nd_of_true _ _ _
+      (singleBlockActive s T S BS) idx hActive]
+  · simp [valueFn, singleBlockStoreValue, singleBlockSourceTile, lowerTriTile,
+      Tile.dot, singleBlockActive, singleBlockTileOffset, sIndex,
+      BlockState.defaultCarrier, hActive]
+    norm_num
+    rfl
+  intro k hk heq
+  exact hNoCollision idx hActive k hk
+    (by simpa [offsetFn, singleBlockTileOffset, sIndex] using heq)
+
 theorem chunk_cumsum_vector_cumsum_slice_correct
     (SReg Carry Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
     (s : BlockState)
@@ -232,7 +428,7 @@ theorem chunk_cumsum_vector_cumsum_slice_correct
             cumsumStoreValue s SReg Carry s_s_h s_s_t s_s_d T S BT BS idx
           else s.readMem Z outAddr) := by
   intro idx
-  simp [exec, chunk_cumsum_vector_cumsum_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunk_cumsum_vector_cumsum_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, Tile.dot, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, ComparableDType.ge, tIndex, sIndex, active,
@@ -305,7 +501,7 @@ theorem chunk_cumsum_vector_store_slice_active_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro idx hActive
-  simp [exec, chunk_cumsum_vector_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunk_cumsum_vector_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         tIndex, sIndex, active, tileOffset, TileShape.dropInsertedIndex] at hExec
@@ -358,7 +554,7 @@ theorem chunk_cumsum_vector_cumsum_slice_active_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro idx hActive
-  simp [exec, chunk_cumsum_vector_cumsum_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunk_cumsum_vector_cumsum_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, Tile.dot, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, ComparableDType.ge, tIndex, sIndex, active,
@@ -426,6 +622,93 @@ theorem chunk_cumsum_vector_python_case3_active_no_collision
   subst tk
   subst sk
   rfl
+
+theorem chunk_cumsum_vector_single_block_python_case1_active_no_collision
+    (s : BlockState) :
+    ∀ idx : TileIndex [16, 32], singleBlockActive s 4 5 32 idx →
+      ∀ k : TileIndex [16, 32], singleBlockActive s 4 5 32 k →
+        singleBlockTileOffset s 20 5 1 32 k =
+          singleBlockTileOffset s 20 5 1 32 idx → k = idx := by
+  rintro ⟨⟨ti, hti⟩, ⟨si, hsi⟩, _⟩ hi ⟨⟨tk, htk⟩, ⟨sk, hsk⟩, _⟩ hk h
+  simp [singleBlockActive, sIndex] at hi hk
+  simp [singleBlockTileOffset, sIndex] at h
+  have ht : tk = ti := by omega
+  have hs : sk = si := by omega
+  subst tk
+  subst sk
+  rfl
+
+theorem chunk_cumsum_vector_single_block_python_case2_active_no_collision
+    (s : BlockState) :
+    ∀ idx : TileIndex [16, 32], singleBlockActive s 8 10 32 idx →
+      ∀ k : TileIndex [16, 32], singleBlockActive s 8 10 32 k →
+        singleBlockTileOffset s 80 10 1 32 k =
+          singleBlockTileOffset s 80 10 1 32 idx → k = idx := by
+  rintro ⟨⟨ti, hti⟩, ⟨si, hsi⟩, _⟩ hi ⟨⟨tk, htk⟩, ⟨sk, hsk⟩, _⟩ hk h
+  simp [singleBlockActive, sIndex] at hi hk
+  simp [singleBlockTileOffset, sIndex] at h
+  have ht : tk = ti := by omega
+  have hs : sk = si := by omega
+  subst tk
+  subst sk
+  rfl
+
+theorem chunk_cumsum_vector_single_block_python_case3_active_no_collision
+    (s : BlockState) :
+    ∀ idx : TileIndex [16, 32], singleBlockActive s 1 5 32 idx →
+      ∀ k : TileIndex [16, 32], singleBlockActive s 1 5 32 k →
+        singleBlockTileOffset s 5 5 1 32 k =
+          singleBlockTileOffset s 5 5 1 32 idx → k = idx := by
+  rintro ⟨⟨ti, hti⟩, ⟨si, hsi⟩, _⟩ hi ⟨⟨tk, htk⟩, ⟨sk, hsk⟩, _⟩ hk h
+  simp [singleBlockActive, sIndex] at hi hk
+  simp [singleBlockTileOffset, sIndex] at h
+  have ht : tk = ti := by omega
+  have hs : sk = si := by omega
+  subst tk
+  subst sk
+  rfl
+
+theorem chunk_cumsum_vector_single_block_python_case1_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 20 5 1 4 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 4 5 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 20 5 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockStoreValue s SReg 20 5 1 4 5 16 32 idx) := by
+  exact chunk_cumsum_vector_single_block_surface_active_compute_correct SReg Z
+    20 5 1 4 5 16 32 s
+    (chunk_cumsum_vector_single_block_python_case1_active_no_collision s)
+
+theorem chunk_cumsum_vector_single_block_python_case2_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 80 10 1 8 10 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 8 10 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 80 10 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockStoreValue s SReg 80 10 1 8 10 16 32 idx) := by
+  exact chunk_cumsum_vector_single_block_surface_active_compute_correct SReg Z
+    80 10 1 8 10 16 32 s
+    (chunk_cumsum_vector_single_block_python_case2_active_no_collision s)
+
+theorem chunk_cumsum_vector_single_block_python_case3_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z 5 5 1 1 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => singleBlockActive s 1 5 32 idx)
+        (fun idx => (Z, singleBlockTileOffset s 5 5 1 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        singleBlockStoreValue s SReg 5 5 1 1 5 16 32 idx) := by
+  exact chunk_cumsum_vector_single_block_surface_active_compute_correct SReg Z
+    5 5 1 1 5 16 32 s
+    (chunk_cumsum_vector_single_block_python_case3_active_no_collision s)
 
 theorem chunk_cumsum_vector_store_python_case1_compute_correct
     (BC Z : RegionName) (s : BlockState) :

@@ -5,6 +5,7 @@ FA-1 forward Real specs, 4D layout wrappers, and view wrappers.
 -/
 
 import VeriTile.Examples.FlashAttention1.Common.Kernels
+import VeriTile.Triton.Math.Attention
 
 namespace VeriTile.Examples
 
@@ -53,9 +54,7 @@ plain `TileIndex → ℝ` inputs. Lifts through `Tile.ofReal`, runs
 noncomputable def attentionReal {M S D : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
     (scale : ℝ) : TileIndex [M, D] → ℝ :=
-  fun idx =>
-    ((attention (Tile.ofReal Q) (Tile.ofReal K) (Tile.ofReal V)
-        scale).data idx).unbotD 0
+  VeriTile.Triton.attentionReal Q K V scale
 
 /-! ## Causal math model
 

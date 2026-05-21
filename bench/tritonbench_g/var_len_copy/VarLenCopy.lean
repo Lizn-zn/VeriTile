@@ -145,7 +145,7 @@ theorem var_len_copy_one_chunk_correct
     cases hab
     rfl
   by_cases hBS : 0 < BLOCK_SIZE
-  · simp [exec, var_len_copy_one_chunk, stepStmts, stepStmt, evalOp,
+  · simp [exec, var_len_copy_one_chunk, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt,
           BlockState.readMemValue, hBS] at hExec
@@ -284,7 +284,7 @@ theorem var_len_copy_kernel_triton_small_length_correct
     cases hab; rfl
   have hBSne : BLOCK_SIZE ≠ 0 := Nat.pos_iff_ne_zero.mp hBS
   simp only [Region.cast] at hLen hLenPos hRawInj ⊢
-  simp [exec, var_len_copy_kernel_triton, stepStmts, stepStmt, evalOp,
+  simp [exec, var_len_copy_kernel_triton, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         hBS, hBSne, hLenPos, hLen,

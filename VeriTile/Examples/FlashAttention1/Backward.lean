@@ -680,13 +680,13 @@ private def FA1BackwardAtomicDQCausalPreAtomicFacts
     M D Bk numKVBlocks scale s).regs .real [Bk, D] "dK_block" =
     some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
       (attentionBackwardRealCausal Q K V dO LSE scale).dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) ∧
   (fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
     M D Bk numKVBlocks scale s).regs .real [Bk, D] "dV_block" =
     some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
       (attentionBackwardRealCausal Q K V dO LSE scale).dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
 
 /-- State immediately before the `tl.atomic_add(dQ, dQ_part)` in the
@@ -732,13 +732,13 @@ private def FA1BackwardAtomicDQPreAtomicFacts
     M D Bk numKVBlocks scale s).regs .real [Bk, D] "dK_block" =
     some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
       (attentionBackwardReal Q K V dO LSE scale).dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) ∧
   (fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
     M D Bk numKVBlocks scale s).regs .real [Bk, D] "dV_block" =
     some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
       (attentionBackwardReal Q K V dO LSE scale).dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
 
 set_option maxHeartbeats 2000000 in
@@ -779,19 +779,19 @@ private theorem fa1BackwardAtomicDQPreAtomic_facts
     fun i d => hdO i d PUnit.unit
   have hKBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
       s.readMem kReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        K (FA1Math.blockIndex Bk numKVBlocks block.val
+        K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
     intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hK0 (FA1Math.blockIndex Bk numKVBlocks block.val
+    simpa [StreamingAccumulator.blockIndex] using
+      hK0 (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) jLocal) d
   have hVBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
       s.readMem vReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        V (FA1Math.blockIndex Bk numKVBlocks block.val
+        V (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
     intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hV0 (FA1Math.blockIndex Bk numKVBlocks block.val
+    simpa [StreamingAccumulator.blockIndex] using
+      hV0 (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) jLocal) d
   simp [FA1BackwardAtomicDQPreAtomicFacts, fa1BackwardAtomicDQPreAtomicState,
       fa1BackwardAtomicDQKernel, stepStmts, stepStmt, evalOp, Option.bind, hPid,
@@ -802,7 +802,18 @@ private theorem fa1BackwardAtomicDQPreAtomic_facts
       probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
       dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
       dV_block_tile_some_eq_attentionBackwardReal, WithBot.sum_someTerm_eq_some,
-      exp_sum_mul_scale_eq, dS, rowCorrection, dP, probability, FA1Math.scaledScore]
+      exp_sum_mul_scale_eq, dS, rowCorrection, dP, probability, StreamingAccumulator.scaledScore]
+  repeat unfold evalOp
+  simp [FA1BackwardAtomicDQPreAtomicFacts, fa1BackwardAtomicDQPreAtomicState,
+      fa1BackwardAtomicDQKernel, stepStmts, stepStmt, Option.bind, hPid,
+      hQ0, hK0, hV0, hdO0, hLSE, hKBlock, hVBlock, Offset.rowMajor2D,
+      Offset.strided, TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, Tile.bop, Tile.uop,
+      Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop, Tile.ofReal,
+      probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
+      dQ_block_tile_some_eq_dQBlockContribution, dK_block_tile_some_eq_attentionBackwardReal,
+      dV_block_tile_some_eq_attentionBackwardReal, WithBot.sum_someTerm_eq_some,
+      exp_sum_mul_scale_eq, dS, rowCorrection, dP, probability, StreamingAccumulator.scaledScore]
   constructor
   · funext idx
     cases idx with
@@ -861,19 +872,19 @@ private theorem fa1BackwardAtomicDQCausalPreAtomic_facts
     fun i d => hdO i d PUnit.unit
   have hKBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
       s.readMem kReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        K (FA1Math.blockIndex Bk numKVBlocks block.val
+        K (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
     intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hK0 (FA1Math.blockIndex Bk numKVBlocks block.val
+    simpa [StreamingAccumulator.blockIndex] using
+      hK0 (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) jLocal) d
   have hVBlock : ∀ (jLocal : Fin Bk) (d : Fin D),
       s.readMem vReg ((block.val * Bk + jLocal.val) * D + d.val) =
-        V (FA1Math.blockIndex Bk numKVBlocks block.val
+        V (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) jLocal, d, PUnit.unit) := by
     intro jLocal d
-    simpa [FA1Math.blockIndex] using
-      hV0 (FA1Math.blockIndex Bk numKVBlocks block.val
+    simpa [StreamingAccumulator.blockIndex] using
+      hV0 (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) jLocal) d
   simp [FA1BackwardAtomicDQCausalPreAtomicFacts, fa1BackwardAtomicDQCausalPreAtomicState,
       fa1BackwardAtomicDQCausalKernel, stepStmts, stepStmt, evalOp, Option.bind, hPid,
@@ -884,7 +895,18 @@ private theorem fa1BackwardAtomicDQCausalPreAtomic_facts
       Tile.reduceSumDrop, Tile.ofReal,
       probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq,
       WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq, dS, rowCorrection, dP,
-      probability, FA1Math.scaledScore]
+      probability, StreamingAccumulator.scaledScore]
+  repeat unfold evalOp
+  simp [FA1BackwardAtomicDQCausalPreAtomicFacts, fa1BackwardAtomicDQCausalPreAtomicState,
+      fa1BackwardAtomicDQCausalKernel, stepStmts, stepStmt, Option.bind, hPid,
+      hQ0, hK0, hV0, hdO0, hLSE, hKBlock, hVBlock, Offset.rowMajor2D,
+      Offset.strided, TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.ge,
+      Tile.bop, Tile.cop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim,
+      Tile.reduceSumDrop, Tile.ofReal,
+      probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq,
+      WithBot.sum_someTerm_eq_some, exp_sum_mul_scale_eq, dS, rowCorrection, dP,
+      probability, StreamingAccumulator.scaledScore]
   constructor
   · funext idx
     cases idx with
@@ -1152,7 +1174,7 @@ theorem fa1BackwardAtomicDQPreAtomic_dKBlock
       M D Bk numKVBlocks scale s).regs .real [Bk, D] "dK_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardReal Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   exact (fa1BackwardAtomicDQPreAtomic_facts
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -1181,7 +1203,7 @@ theorem fa1BackwardAtomicDQPreAtomic_dVBlock
       M D Bk numKVBlocks scale s).regs .real [Bk, D] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardReal Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) := by
   exact (fa1BackwardAtomicDQPreAtomic_facts
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -1316,6 +1338,11 @@ theorem fa1BackwardStrippedKernelStrided_pointer_prefix
           s) := by
   simp [fa1BackwardStrippedStridedPointerState,
     fa1BackwardStrippedKernelStrided, stepStmts, stepStmt, evalOp, Option.bind,
+    TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+    NumericDType.add, NumericDType.mul, Tile.bop, Tile.expandDim]
+  repeat unfold evalOp
+  simp [fa1BackwardStrippedStridedPointerState,
+    fa1BackwardStrippedKernelStrided, stepStmts, stepStmt, Option.bind,
     TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
     NumericDType.add, NumericDType.mul, Tile.bop, Tile.expandDim]
 
@@ -1679,7 +1706,7 @@ noncomputable def fa1BackwardStrippedStridedMathState
     stride_dvb stride_dvh
     s
     ).setReg "scores" .real [M, S] (Tile.ofReal fun idx : TileIndex [M, S] =>
-      FA1Math.scaledScore Q K scale idx.1 idx.2.1)
+      StreamingAccumulator.scaledScore Q K scale idx.1 idx.2.1)
     ).setReg "p" .real [M, S] (Tile.ofReal fun idx : TileIndex [M, S] =>
       probability Q K LSE scale idx.1 idx.2.1)
     ).setReg "dV" .real [S, D] (Tile.ofReal bw.dV)
@@ -1896,7 +1923,17 @@ theorem fa1BackwardStrippedKernelStrided_math_suffix
     TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
     NumericDType.sub, hq, hk, hv, hdOReg, hlse,
     hdQBase, hdKBase, hdVBase, hoffsM, hoffsN, hoffsD,
-    FA1Math.scaledScore, probability, dP, rowCorrection, dS,
+    StreamingAccumulator.scaledScore, probability, dP, rowCorrection, dS,
+    attentionBackwardReal, Tile.ofReal, mul_comm, mul_left_comm, mul_assoc]
+  repeat unfold evalOp
+  simp [fa1BackwardStrippedStridedMathState, fa1BackwardStrippedKernelStrided,
+    stepStmts, stepStmt, Option.bind,
+    Tile.bop, Tile.uop, Tile.cop, Tile.dot, Tile.transpose, Tile.reduceSum,
+    Tile.reduceSumDrop, Tile.expandDim, TileShape.dropInsertedIndex,
+    TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
+    NumericDType.sub, hq, hk, hv, hdOReg, hlse,
+    hdQBase, hdKBase, hdVBase, hoffsM, hoffsN, hoffsD,
+    StreamingAccumulator.scaledScore, probability, dP, rowCorrection, dS,
     attentionBackwardReal, Tile.ofReal, mul_comm, mul_left_comm, mul_assoc]
   rfl
 
@@ -3934,12 +3971,12 @@ theorem fa1BackwardAtomicDQBoundaryKernel_tailStores_readback_from_preAtomic
     (hValK : sPre.regs .real [Bk, D] "dK_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hValV : sPre.regs .real [Bk, D] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hTailStep :
       stepStmts
@@ -3955,7 +3992,7 @@ theorem fa1BackwardAtomicDQBoundaryKernel_tailStores_readback_from_preAtomic
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -3963,15 +4000,15 @@ theorem fa1BackwardAtomicDQBoundaryKernel_tailStores_readback_from_preAtomic
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   let dKFn : TileIndex [Bk, D] → ℝ := fun idx =>
     (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   let dVFn : TileIndex [Bk, D] → ℝ := fun idx =>
     (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   have hTailStep' :
       stepStmts
@@ -4027,12 +4064,12 @@ theorem fa1BackwardAtomicDQCausalBoundaryKernel_tailStores_readback_from_preAtom
     (hValK : sPre.regs .real [Bk, D] "dK_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hValV : sPre.regs .real [Bk, D] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hTailStep :
       stepStmts
@@ -4048,7 +4085,7 @@ theorem fa1BackwardAtomicDQCausalBoundaryKernel_tailStores_readback_from_preAtom
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -4056,15 +4093,15 @@ theorem fa1BackwardAtomicDQCausalBoundaryKernel_tailStores_readback_from_preAtom
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   let dKFn : TileIndex [Bk, D] → ℝ := fun idx =>
     (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   let dVFn : TileIndex [Bk, D] → ℝ := fun idx =>
     (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   have hTailStep' :
       stepStmts
@@ -4121,13 +4158,13 @@ theorem fa1BackwardAtomicDQBoundaryDKernel_tailStores_readback_from_preAtomic
       some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hValV : sPre.regs .real [Bk, Bd] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hTailStep :
       stepStmts
@@ -4144,7 +4181,7 @@ theorem fa1BackwardAtomicDQBoundaryDKernel_tailStores_readback_from_preAtomic
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -4152,17 +4189,17 @@ theorem fa1BackwardAtomicDQBoundaryDKernel_tailStores_readback_from_preAtomic
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   let dKFn : TileIndex [Bk, Bd] → ℝ := fun idx =>
     (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale).dK
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   let dVFn : TileIndex [Bk, Bd] → ℝ := fun idx =>
     (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale).dV
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   have hTailStep' :
       stepStmts
@@ -4220,13 +4257,13 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_tailStores_readback_from_preAto
       some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hValV : sPre.regs .real [Bk, Bd] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hTailStep :
       stepStmts
@@ -4243,7 +4280,7 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_tailStores_readback_from_preAto
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -4251,17 +4288,17 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_tailStores_readback_from_preAto
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   let dKFn : TileIndex [Bk, Bd] → ℝ := fun idx =>
     (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale).dK
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   let dVFn : TileIndex [Bk, Bd] → ℝ := fun idx =>
     (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale).dV
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   have hTailStep' :
       stepStmts
@@ -4330,7 +4367,7 @@ theorem fa1BackwardAtomicDQKernel_tailStores_readback_from_inputs
             M D Bk numKVBlocks scale).toAlgKernel s)
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D) base D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -4339,18 +4376,18 @@ theorem fa1BackwardAtomicDQKernel_tailStores_readback_from_inputs
             M D Bk numKVBlocks scale).toAlgKernel s)
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D) base D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   let sPre : BlockState :=
     fa1BackwardAtomicDQPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale s
   let dKFn : TileIndex [Bk, D] → ℝ := fun idx =>
     (attentionBackwardReal Q K V dO LSE scale).dK
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   let dVFn : TileIndex [Bk, D] → ℝ := fun idx =>
     (attentionBackwardReal Q K V dO LSE scale).dV
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   have hPre :
       stepStmts
@@ -4507,7 +4544,7 @@ theorem fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs
             M D Bk numKVBlocks scale).toAlgKernel s)
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D) base D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -4516,18 +4553,18 @@ theorem fa1BackwardAtomicDQCausalKernel_tailStores_readback_from_inputs
             M D Bk numKVBlocks scale).toAlgKernel s)
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D) base D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   let sPre : BlockState :=
     fa1BackwardAtomicDQCausalPreAtomicState qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
       M D Bk numKVBlocks scale s
   let dKFn : TileIndex [Bk, D] → ℝ := fun idx =>
     (attentionBackwardRealCausal Q K V dO LSE scale).dK
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   let dVFn : TileIndex [Bk, D] → ℝ := fun idx =>
     (attentionBackwardRealCausal Q K V dO LSE scale).dV
-      (FA1Math.blockIndex Bk numKVBlocks block.val
+      (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
         (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)
   have hfacts :
       FA1BackwardAtomicDQCausalPreAtomicFacts
@@ -4821,14 +4858,14 @@ theorem gridLaunchedAtomic_masked_backward_correct
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealMasked visible Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealMasked visible Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealMasked visible Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -4842,7 +4879,7 @@ theorem gridLaunchedAtomic_masked_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -4850,7 +4887,7 @@ theorem gridLaunchedAtomic_masked_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   constructor
   · exact gridLaunchedAtomic_masked_dQ_correct
@@ -4931,14 +4968,14 @@ theorem gridLaunchedAtomic_boundary_backward_correct
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -4952,7 +4989,7 @@ theorem gridLaunchedAtomic_boundary_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -4960,7 +4997,7 @@ theorem gridLaunchedAtomic_boundary_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [attentionBackwardRealBoundary, dQBlockContributionBoundary] using
     gridLaunchedAtomic_masked_backward_correct
@@ -5030,14 +5067,14 @@ private theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -5051,7 +5088,7 @@ private theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -5059,7 +5096,7 @@ private theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact gridLaunchedAtomic_boundary_backward_correct
     (k := (fa1BackwardAtomicDQBoundaryKernel
@@ -5120,14 +5157,14 @@ private theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -5141,7 +5178,7 @@ private theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -5149,7 +5186,7 @@ private theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -5221,12 +5258,12 @@ theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner
     (hValK : ∀ block, (sPre block).regs .real [Bk, D] "dK_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hValV : ∀ block, (sPre block).regs .real [Bk, D] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardRealBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hTailStep : ∀ block,
       stepStmts
@@ -5247,7 +5284,7 @@ theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -5255,7 +5292,7 @@ theorem fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   refine fa1BackwardAtomicDQBoundaryKernel_gridLaunched_backward_correct_of_owner
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -5322,14 +5359,14 @@ theorem gridLaunchedAtomic_causalBoundary_backward_correct
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -5343,7 +5380,7 @@ theorem gridLaunchedAtomic_causalBoundary_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -5351,7 +5388,7 @@ theorem gridLaunchedAtomic_causalBoundary_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [attentionBackwardRealCausalBoundary, dQBlockContributionCausalBoundary] using
     gridLaunchedAtomic_masked_backward_correct
@@ -5418,14 +5455,14 @@ private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_co
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -5439,7 +5476,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_co
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -5447,7 +5484,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_co
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact gridLaunchedAtomic_causalBoundary_backward_correct
     (k := (fa1BackwardAtomicDQCausalBoundaryKernel
@@ -5505,14 +5542,14 @@ private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_co
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -5526,7 +5563,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_co
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -5534,7 +5571,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_co
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -5599,12 +5636,12 @@ theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of
     (hValK : ∀ block, (sPre block).regs .real [Bk, D] "dK_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hValV : ∀ block, (sPre block).regs .real [Bk, D] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, D] =>
         (attentionBackwardRealCausalBoundary (M := M) qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hTailStep : ∀ block,
       stepStmts
@@ -5625,7 +5662,7 @@ theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -5633,7 +5670,7 @@ theorem fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   refine fa1BackwardAtomicDQCausalBoundaryKernel_gridLaunched_backward_correct_of_owner
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -5704,7 +5741,7 @@ theorem gridLaunchedAtomic_boundaryD_backward_correct
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
       (hLaunch.frames (owner block)).final.readMem dVReg
@@ -5712,7 +5749,7 @@ theorem gridLaunchedAtomic_boundaryD_backward_correct
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale
@@ -5727,7 +5764,7 @@ theorem gridLaunchedAtomic_boundaryD_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -5735,7 +5772,7 @@ theorem gridLaunchedAtomic_boundaryD_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [attentionBackwardRealBoundaryD, dQBlockContributionBoundaryD] using
     gridLaunchedAtomic_boundary_backward_correct
@@ -5801,7 +5838,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
       (hLaunch.frames (owner block)).final.readMem dVReg
@@ -5809,7 +5846,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale
@@ -5824,7 +5861,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -5832,7 +5869,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact gridLaunchedAtomic_boundaryD_backward_correct
     (k := (fa1BackwardAtomicDQBoundaryDKernel
@@ -5891,7 +5928,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
       (hLaunch.frames (owner block)).final.readMem dVReg
@@ -5899,7 +5936,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale
@@ -5914,7 +5951,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -5922,7 +5959,7 @@ private theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -5988,13 +6025,13 @@ theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owne
       some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hValV : ∀ block, (sPre block).regs .real [Bk, Bd] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
         (attentionBackwardRealBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hTailStep : ∀ block,
       stepStmts
@@ -6016,7 +6053,7 @@ theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owne
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -6024,7 +6061,7 @@ theorem fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owne
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   refine fa1BackwardAtomicDQBoundaryDKernel_gridLaunched_backward_correct_of_owner
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -6092,7 +6129,7 @@ theorem gridLaunchedAtomic_causalBoundaryD_backward_correct
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
       (hLaunch.frames (owner block)).final.readMem dVReg
@@ -6100,7 +6137,7 @@ theorem gridLaunchedAtomic_causalBoundaryD_backward_correct
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale
@@ -6115,7 +6152,7 @@ theorem gridLaunchedAtomic_causalBoundaryD_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -6123,7 +6160,7 @@ theorem gridLaunchedAtomic_causalBoundaryD_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [attentionBackwardRealCausalBoundaryD, dQBlockContributionCausalBoundaryD] using
     gridLaunchedAtomic_causalBoundary_backward_correct
@@ -6189,7 +6226,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
       (hLaunch.frames (owner block)).final.readMem dVReg
@@ -6197,7 +6234,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale
@@ -6212,7 +6249,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -6220,7 +6257,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact gridLaunchedAtomic_causalBoundaryD_backward_correct
     (k := (fa1BackwardAtomicDQCausalBoundaryDKernel
@@ -6279,7 +6316,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, Bd],
       (hLaunch.frames (owner block)).final.readMem dVReg
@@ -6287,7 +6324,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
             (block.val * Bk * Bd) Bd idx) =
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
       qStart Q K V dO LSE scale
@@ -6302,7 +6339,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -6310,7 +6347,7 @@ private theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_c
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   exact fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -6376,13 +6413,13 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_o
       some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hValV : ∀ block, (sPre block).regs .real [Bk, Bd] "dV_block" =
       some (Tile.ofReal fun idx : TileIndex [Bk, Bd] =>
         (attentionBackwardRealCausalBoundaryD (M := M) (Bd := Bd)
           qStart Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)))
     (hTailStep : ∀ block,
       stepStmts
@@ -6404,7 +6441,7 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_o
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, Bd],
       observeTileAt
@@ -6412,7 +6449,7 @@ theorem fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_o
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := Bd)
           (block.val * Bk * Bd) Bd) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   refine fa1BackwardAtomicDQCausalBoundaryDKernel_gridLaunched_backward_correct_of_owner
     qReg kReg vReg dOReg lseReg dQReg dKReg dVReg
@@ -6594,7 +6631,7 @@ theorem fa1BackwardAtomicDQKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -6602,7 +6639,7 @@ theorem fa1BackwardAtomicDQKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   constructor
   · exact fa1BackwardAtomicDQKernel_gridLaunched_dQ_correct
@@ -6715,7 +6752,7 @@ theorem fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -6723,7 +6760,7 @@ theorem fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   constructor
   · exact fa1BackwardAtomicDQCausalKernel_gridLaunched_dQ_correct
@@ -8178,7 +8215,19 @@ theorem fa1BackwardStrippedKernel_correct
       dV_tile_some_eq_attentionBackwardReal, dQ_tile_eq_attentionBackwardReal,
       dK_tile_eq_attentionBackwardReal, dV_tile_eq_attentionBackwardReal,
       dS_tile_eq, rowCorrection_tile_eq, dP_tile_eq, probability_tile_eq,
-      WithBot.sum_someTerm_eq_some, dS, rowCorrection, dP, probability, FA1Math.scaledScore]
+      WithBot.sum_someTerm_eq_some, dS, rowCorrection, dP, probability, StreamingAccumulator.scaledScore]
+    repeat unfold evalOp
+    simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
+      stepStmts, stepStmt, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
+      Offset.rowMajor2D, Offset.strided,
+      TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
+      Tile.ofReal, dQ_tile_some_eq_attentionBackwardReal, dK_tile_some_eq_attentionBackwardReal,
+      dV_tile_some_eq_attentionBackwardReal, dQ_tile_eq_attentionBackwardReal,
+      dK_tile_eq_attentionBackwardReal, dV_tile_eq_attentionBackwardReal,
+      dS_tile_eq, rowCorrection_tile_eq, dP_tile_eq, probability_tile_eq,
+      WithBot.sum_someTerm_eq_some, dS, rowCorrection, dP, probability, StreamingAccumulator.scaledScore]
   have hTail := strippedBackward_finalStores_readback
     dQReg dKReg dVReg M S D
     (s := sPre)
@@ -8195,10 +8244,28 @@ theorem fa1BackwardStrippedKernel_correct
         Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
         dQ_tile_eq_attentionBackwardReal, dK_tile_eq_attentionBackwardReal,
         dV_tile_eq_attentionBackwardReal]
+      repeat unfold evalOp
+      simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
+        stepStmts, stepStmt, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
+        Offset.rowMajor2D, Offset.strided,
+        TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
+        Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
+        dQ_tile_eq_attentionBackwardReal, dK_tile_eq_attentionBackwardReal,
+        dV_tile_eq_attentionBackwardReal]
       )
     (hPtrsK := by
       simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
         stepStmts, stepStmt, evalOp, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
+        Offset.rowMajor2D, Offset.strided,
+        Tile.bop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
+        Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
+        dQ_tile_eq_attentionBackwardReal, dK_tile_eq_attentionBackwardReal,
+        dV_tile_eq_attentionBackwardReal]
+      repeat unfold evalOp
+      simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
+        stepStmts, stepStmt, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
         Offset.rowMajor2D, Offset.strided,
         Tile.bop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
         Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
@@ -8219,6 +8286,14 @@ theorem fa1BackwardStrippedKernel_correct
         Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
         dQ_tile_eq_attentionBackwardReal, dK_tile_eq_attentionBackwardReal,
         dV_tile_eq_attentionBackwardReal]
+      repeat unfold evalOp
+      simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
+        stepStmts, stepStmt, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
+        Offset.rowMajor2D, Offset.strided,
+        Tile.bop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
+        Tile.ofReal, probability_tile_eq, dP_tile_eq, rowCorrection_tile_eq, dS_tile_eq,
+        dQ_tile_eq_attentionBackwardReal, dK_tile_eq_attentionBackwardReal,
+        dV_tile_eq_attentionBackwardReal]
       funext idx
       cases idx with
       | mk i rest =>
@@ -8229,6 +8304,13 @@ theorem fa1BackwardStrippedKernel_correct
     (hValQ := by
       simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
         stepStmts, stepStmt, evalOp, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
+        Offset.rowMajor2D, Offset.strided,
+        Tile.bop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
+        Tile.ofReal, dQ_tile_some_eq_attentionBackwardReal, dQ_tile_eq_attentionBackwardReal,
+        dS_tile_eq, rowCorrection_tile_eq, dP_tile_eq, probability_tile_eq]
+      repeat unfold evalOp
+      simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
+        stepStmts, stepStmt, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
         Offset.rowMajor2D, Offset.strided,
         Tile.bop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
         Tile.ofReal, dQ_tile_some_eq_attentionBackwardReal, dQ_tile_eq_attentionBackwardReal,
@@ -8246,12 +8328,21 @@ theorem fa1BackwardStrippedKernel_correct
             Tile.reduceSumDrop, Tile.ofReal,
             dQ_tile_eq_attentionBackwardReal, dS_tile_eq, rowCorrection_tile_eq,
             dP_tile_eq, probability_tile_eq, WithBot.sum_someTerm_eq_some,
-            dS, rowCorrection, dP, probability, FA1Math.scaledScore]
+            dS, rowCorrection, dP, probability, StreamingAccumulator.scaledScore]
           simp [mul_comm, mul_left_comm, mul_assoc]
           rfl)
     (hValK := by
       simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
         stepStmts, stepStmt, evalOp, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
+        Offset.rowMajor2D, Offset.strided,
+        TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
+        Tile.ofReal, dK_tile_some_eq_attentionBackwardReal, dK_tile_eq_attentionBackwardReal,
+        dS_tile_eq, rowCorrection_tile_eq, dP_tile_eq, probability_tile_eq]
+      repeat unfold evalOp
+      simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
+        stepStmts, stepStmt, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
         Offset.rowMajor2D, Offset.strided,
         TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
@@ -8271,7 +8362,7 @@ theorem fa1BackwardStrippedKernel_correct
             Tile.reduceSumDrop, Tile.ofReal,
             dK_tile_eq_attentionBackwardReal, dS_tile_eq, rowCorrection_tile_eq,
             dP_tile_eq, probability_tile_eq, WithBot.sum_someTerm_eq_some,
-            dS, rowCorrection, dP, probability, FA1Math.scaledScore]
+            dS, rowCorrection, dP, probability, StreamingAccumulator.scaledScore]
           rw [mul_comm]
           apply congrArg (fun z : ℝ => scale * z)
           apply Finset.sum_congr rfl
@@ -8324,6 +8415,15 @@ theorem fa1BackwardStrippedKernel_correct
         Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
         Tile.ofReal, dV_tile_some_eq_attentionBackwardReal, dV_tile_eq_attentionBackwardReal,
         probability_tile_eq]
+      repeat unfold evalOp
+      simp [sPre, fa1BackwardStrippedPreStoreState, fa1BackwardStrippedKernel,
+        stepStmts, stepStmt, Option.bind, hQ0, hK0, hV0, hdO0, hLSE,
+        Offset.rowMajor2D, Offset.strided,
+        TileShape.dropInsertedIndex, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim, Tile.reduceSumDrop,
+        Tile.ofReal, dV_tile_some_eq_attentionBackwardReal, dV_tile_eq_attentionBackwardReal,
+        probability_tile_eq]
       funext idx
       cases idx with
       | mk i rest =>
@@ -8336,7 +8436,7 @@ theorem fa1BackwardStrippedKernel_correct
             Tile.bop, Tile.uop, Tile.dot, Tile.transpose, Tile.expandDim,
             Tile.reduceSumDrop, Tile.ofReal,
             dV_tile_eq_attentionBackwardReal, probability_tile_eq,
-            WithBot.sum_someTerm_eq_some, probability, FA1Math.scaledScore]
+            WithBot.sum_someTerm_eq_some, probability, StreamingAccumulator.scaledScore]
           apply Finset.sum_congr rfl
           intro x hx
           congr 1

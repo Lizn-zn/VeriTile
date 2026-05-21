@@ -87,10 +87,11 @@ theorem geglu_tanh_forward_kernel_correct
           TiledActivation.geluTanhFwd (as i) (bs i)
         else s.readMem C outAddr := by
   intro i
-  simp [exec, geglu_tanh_forward_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, geglu_tanh_forward_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   subst s'
   simp only [gegluTanhOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
         (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
   by_cases hi : i.val < n_cols
@@ -153,12 +154,13 @@ theorem geglu_tanh_backward_kernel_correct
         if i.val < n_cols then
           TiledActivation.geluTanhBwdB (dcs i) (as i)
         else s.readMem B outAddr) := by
-  simp [exec, geglu_tanh_backward_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, geglu_tanh_backward_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   subst s'
   constructor
   · intro i
     simp only [gegluTanhOffset]
+    rw [← Int.natCast_mul, Int.toNat_natCast]
     rw [BlockState.scatter_prop_masked_preserves_other_region
       (region := B) (R := A) (h_ne := hAB)
       (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
@@ -175,6 +177,7 @@ theorem geglu_tanh_backward_kernel_correct
     · simp [hi]
   · intro i
     simp only [gegluTanhOffset]
+    rw [← Int.natCast_mul, Int.toNat_natCast]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < n_cols

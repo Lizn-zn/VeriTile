@@ -149,7 +149,7 @@ theorem layernorm_forward_y_correct
         else s.readMem Y (yOutOffset s Y_row_stride i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp,
+  · simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -298,7 +298,7 @@ theorem layernorm_backward_dx_correct
         else s.readMem dY (dXOutOffset s dY_row_stride i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, layernorm_backward, stepStmts, stepStmt, evalOp, Option.bind,
+  · simp [exec, layernorm_backward, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -410,7 +410,7 @@ theorem layernorm_forward_inv_var_correct
           n_cols eps BLOCK_SIZE) s = some s') :
     s'.readMem r s.pid =
       invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps := by
-  simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp,
+  simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
         TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -467,7 +467,7 @@ theorem layernorm_forward_mean_correct
           n_cols eps BLOCK_SIZE) s = some s') :
     s'.readMem mu s.pid =
       meanFullSpec s X X_row_stride n_cols BLOCK_SIZE := by
-  simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp,
+  simp [exec, layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
         Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
         TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -526,7 +526,7 @@ theorem layernorm_forward_inv_var_store_slice_correct
     (InvVarPre r : RegionName) (s s' : BlockState)
     (hExec : exec (layernorm_forward_inv_var_store_slice InvVarPre r) s = some s') :
     s'.readMem r (rOutOffset s) = invVarStoreSpec s InvVarPre := by
-  simp [exec, layernorm_forward_inv_var_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, layernorm_forward_inv_var_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add] at hExec
   subst s'
@@ -563,7 +563,7 @@ theorem layernorm_forward_mean_store_slice_correct
     (MeanPre mu : RegionName) (s s' : BlockState)
     (hExec : exec (layernorm_forward_mean_store_slice MeanPre mu) s = some s') :
     s'.readMem mu (rOutOffset s) = meanStoreSpec s MeanPre := by
-  simp [exec, layernorm_forward_mean_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, layernorm_forward_mean_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add] at hExec
   subst s'

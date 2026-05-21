@@ -332,7 +332,7 @@ theorem rms_layernorm_forward_y_correct
         else s.readMem Y (yOutOffset s Y_row_stride i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+  · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -397,7 +397,7 @@ theorem gemma_rms_layernorm_forward_y_correct
         else s.readMem Y (yOutOffset s Y_row_stride i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -464,7 +464,7 @@ theorem rms_layernorm_backward_dy_correct
         else s.readMem dY (dyOutOffset s dY_row_stride i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, rms_layernorm_backward, stepStmts, stepStmt, evalOp,
+  · simp [exec, rms_layernorm_backward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.mul,
@@ -533,7 +533,7 @@ theorem gemma_rms_layernorm_backward_dy_correct
         else s.readMem dY (dyOutOffset s dY_row_stride i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, gemma_rms_layernorm_backward, stepStmts, stepStmt, evalOp,
+  · simp [exec, gemma_rms_layernorm_backward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -607,7 +607,7 @@ theorem rms_layernorm_forward_inv_var_store_slice_correct
       s = some s') :
     s'.readMem r (rOutOffset s r_row_stride) =
       invVarStoreSpec s InvVarPre r_row_stride := by
-  simp [exec, rms_layernorm_forward_inv_var_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, rms_layernorm_forward_inv_var_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul] at hExec
   subst s'
@@ -649,7 +649,7 @@ theorem rms_layernorm_forward_inv_var_correct
     s'.readMem r (rOutOffset s r_row_stride) =
       rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps := by
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+  · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -664,7 +664,7 @@ theorem rms_layernorm_forward_inv_var_correct
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
     rfl
-  · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+  · simp [exec, rms_layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -715,7 +715,7 @@ theorem gemma_rms_layernorm_forward_inv_var_correct
     s'.readMem r (rOutOffset s r_row_stride) =
       rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps := by
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -730,7 +730,7 @@ theorem gemma_rms_layernorm_forward_inv_var_correct
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           WithBot.realRsqrt, NumericDType.mul]
     rfl
-  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp,
+  · simp [exec, gemma_rms_layernorm_forward, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -768,5 +768,69 @@ theorem gemma_rms_layernorm_forward_inv_var_compute_correct
   intro _
   exact gemma_rms_layernorm_forward_inv_var_correct Y X W r Y_row_stride X_row_stride
     r_row_stride n_cols BLOCK_SIZE eps s s' hRegions hExec
+
+/-- Full forward output coverage for `_rms_layernorm_forward`: vector `Y` and
+row rstd/inv-var `r` are both characterized against the Python formula. -/
+theorem rms_layernorm_forward_all_outputs_compute_correct
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hYr : Y ≠ r) (hrY : r ≠ Y)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
+    (ComputeCorrect.Realizes
+      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (Y, yOutOffset s Y_row_stride i)))
+      (expected := fun i =>
+        rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols
+          BLOCK_SIZE eps i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
+      (expected := fun _ =>
+        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps)) := by
+  constructor
+  · exact rms_layernorm_forward_y_compute_correct Y X W r Y_row_stride
+      X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE eps s hYr
+      hOutInj
+  · exact rms_layernorm_forward_inv_var_compute_correct Y X W r Y_row_stride
+      X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE eps s hrY
+
+/-- Full forward output coverage for `_gemma_rms_layernorm_forward`: vector `Y`
+and row rstd/inv-var `r` are both characterized against the Python formula. -/
+theorem gemma_rms_layernorm_forward_all_outputs_compute_correct
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hYr : Y ≠ r) (hrY : r ≠ Y)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
+    (ComputeCorrect.Realizes
+      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
+        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (Y, yOutOffset s Y_row_stride i)))
+      (expected := fun i =>
+        gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
+        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
+      (expected := fun _ =>
+        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps)) := by
+  constructor
+  · exact gemma_rms_layernorm_forward_y_compute_correct Y X W r Y_row_stride
+      X_row_stride r_row_stride n_cols BLOCK_SIZE eps s hYr hOutInj
+  · exact gemma_rms_layernorm_forward_inv_var_compute_correct Y X W r
+      Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE eps s hrY
 
 end VeriTile.Bench.TritonBenchG.FastRmsLayernorm

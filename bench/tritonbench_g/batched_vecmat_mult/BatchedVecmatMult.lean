@@ -142,7 +142,7 @@ theorem batched_vecmat_one_row_block_correct
     cases hab
     rfl
   by_cases hBN : 0 < BLOCK_N
-  · simp [exec, batched_vecmat_one_row_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, batched_vecmat_one_row_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
           Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
@@ -296,7 +296,7 @@ theorem batched_vecmat_one_row_k_block_correct
     cases hab
     rfl
   by_cases hBN : 0 < BLOCK_N
-  · simp [exec, batched_vecmat_one_row_k_block, stepStmts, stepStmt, evalOp,
+  · simp [exec, batched_vecmat_one_row_k_block, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
           Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
@@ -434,7 +434,7 @@ theorem batched_vecmat_one_row_k_accum_slice_correct
     rfl
   by_cases hBN : 0 < BLOCK_N
   · simp [exec, batched_vecmat_one_row_k_accum_slice, stepStmts, stepStmt,
-          evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
           Tile.expandDim, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hBN] at hExec
@@ -597,7 +597,7 @@ theorem batched_vecmat_one_row_const_k_accum_slice_correct
     rfl
   by_cases hBN : 0 < BLOCK_N
   · simp [exec, batched_vecmat_one_row_const_k_accum_slice, stepStmts,
-          stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+          stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
           Tile.ptrAdd, Tile.expandDim, Tile.uop, Tile.reduceSum,
           Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
           TileShape.insertAxisIndex, NumericDType.add, NumericDType.mul,
@@ -767,7 +767,7 @@ theorem batched_vecmat_block_output_store_slice_correct
         blockOutputStoreSpec s VecmatPre dim_n BLOCK_M BLOCK_N idx := by
   intro idx
   simp [exec, batched_vecmat_block_output_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         Tile.expandDim, NumericDType.add, NumericDType.mul,
         TileShape.dropInsertedIndex] at hExec
   rw [← hExec]
@@ -822,5 +822,76 @@ theorem batched_vecmat_block_output_store_slice_compute_correct
   intro idx
   exact batched_vecmat_block_output_store_slice_correct VecmatPre output
     dim_n BLOCK_M BLOCK_N s s' hOutInj hExec idx
+
+/-! ## Python test-shape wrappers
+
+`test_vecmat` runs the same mathematical shape twice, varying only launch
+metadata (`num_warps`, `num_stages`).  The checked shape is `M = N = K = 128`
+with `block_m = 16`, `block_n = 32`, and `block_k = 64`, so the Python loop has
+exactly two K-block iterations before the final block output store. -/
+
+theorem batched_vecmat_python_row_output_offset_injective
+    (s : BlockState) :
+    Function.Injective (fun i : Fin 32 => outOffset s 128 32 i) := by
+  intro a b h
+  apply Fin.ext
+  simp [outOffset, nIndex] at h
+  omega
+
+theorem batched_vecmat_python_block_output_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [16, 32] => blockOutOffset s 128 16 32 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨na, hna⟩, _⟩
+    ⟨⟨mb, hmb⟩, ⟨nb, hnb⟩, _⟩ h
+  simp [blockOutOffset, mIndex, nIndex] at h
+  have hm : ma = mb := by omega
+  have hn : na = nb := by omega
+  subst mb
+  subst nb
+  rfl
+
+/-- Python `test_vecmat` all-output proof-slice coverage: the two concrete
+K-block accumulator updates and the final `16 × 32` output block writeback all
+realize the checked `(128, 128, 128)` shape. -/
+theorem batched_vecmat_python_test_shape_all_outputs_compute_correct
+    (Acc0 Acc1 A B VecmatPre output : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := batched_vecmat_one_row_const_k_accum_slice Acc0 A B Acc1
+        128 128 128 128 32 64 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => nIndex s 32 i < 128)
+        (fun i => (Acc1, outOffset s 128 32 i)))
+      (expected := fun i =>
+        vecmatConstKAccumSpec s Acc0 A B 128 128 128 128 32 64 0 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := batched_vecmat_one_row_const_k_accum_slice Acc1 A B VecmatPre
+        128 128 128 128 32 64 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => nIndex s 32 i < 128)
+        (fun i => (VecmatPre, outOffset s 128 32 i)))
+      (expected := fun i =>
+        vecmatConstKAccumSpec s Acc1 A B 128 128 128 128 32 64 1 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := batched_vecmat_block_output_store_slice VecmatPre output
+        128 16 32)
+      (initialState := s)
+      (write := fun idx : TileIndex [16, 32] =>
+        some (output, blockOutOffset s 128 16 32 idx))
+      (expected := fun idx =>
+        blockOutputStoreSpec s VecmatPre 128 16 32 idx)) := by
+  constructor
+  · exact batched_vecmat_test_first_k_accum_slice_compute_correct
+      Acc0 A B Acc1 128 128 128 32 s
+      (batched_vecmat_python_row_output_offset_injective s)
+  constructor
+  · exact batched_vecmat_test_second_k_accum_slice_compute_correct
+      Acc1 A B VecmatPre 128 128 128 32 s
+      (batched_vecmat_python_row_output_offset_injective s)
+  · exact batched_vecmat_block_output_store_slice_compute_correct VecmatPre
+      output 128 16 32 s
+      (batched_vecmat_python_block_output_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.BatchedVecmatMult

@@ -185,7 +185,8 @@ theorem atomicTraceEvents_atomicRMW_xchg_real_scalar_const
             input := MemCell.real input
             observed := some (s.mem region 0)
             result := some (s.mem region 0) }] := by
-  rfl
+  simp [atomicTraceEvents, foldAtomicRMWTraceIndices, evalMask,
+    BlockState.atomicRMWAt, MemCell.real, MemCell.of]
 
 /-- Trace emitted by an unmasked region-addressed `atomic_add` whose offset and
 payload tiles are read from registers. -/

@@ -49,7 +49,7 @@ theorem relu_kernel_correct
                 else s.readMem out_ptr addr) := by
   intro i
   by_cases hpid : s.pid = 0
-  · simp [observeAt, exec, relu_kernel, stepStmts, stepStmt, evalOp,
+  · simp [observeAt, exec, relu_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.select, NumericDType.add, NumericDType.mul,
           ComparableDType.lt, ComparableDType.eq, ComparableDType.ge, hpid]
     unfold InputLoadedAt at h_x
@@ -73,7 +73,7 @@ theorem relu_kernel_correct
         rw [max_eq_left h.le]
         norm_num
     · simp [hi]
-  · simp [observeAt, exec, relu_kernel, stepStmts, stepStmt, evalOp,
+  · simp [observeAt, exec, relu_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.select, NumericDType.add, NumericDType.mul,
           ComparableDType.lt, ComparableDType.eq, ComparableDType.ge, hpid]
 

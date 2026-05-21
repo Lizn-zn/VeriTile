@@ -108,6 +108,14 @@ private partial def staticPtrRootIsIntRegion? (stx : TSyntax `tritonExpr) : Bool
 private partial def intSourceExpr? : TSyntax `tritonExpr → Bool := fun stx =>
   match stx with
   | `(tritonExpr| $(($_:term : Int))) => Bool.true
+  | `(tritonExpr| tl.program_id($_:tritonExpr).to(tl.int32)) => Bool.true
+  | `(tritonExpr| tl.program_id($_:tritonExpr).to(tl.int64)) => Bool.true
+  | `(tritonExpr| tl.program_id($_:tritonExpr).to(tl.int16)) => Bool.true
+  | `(tritonExpr| tl.program_id($_:tritonExpr).to(tl.int8)) => Bool.true
+  | `(tritonExpr| tl.program_id(axis=$_:tritonExpr).to(tl.int32)) => Bool.true
+  | `(tritonExpr| tl.program_id(axis=$_:tritonExpr).to(tl.int64)) => Bool.true
+  | `(tritonExpr| tl.program_id(axis=$_:tritonExpr).to(tl.int16)) => Bool.true
+  | `(tritonExpr| tl.program_id(axis=$_:tritonExpr).to(tl.int8)) => Bool.true
   | `(tritonExpr| tl.load($p:tritonExpr, $_mask:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
       staticPtrRootIsIntRegion? p
   | `(tritonExpr| tl.load($p:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
@@ -632,6 +640,105 @@ private def propagateCmpDeps (natPins : List String)
   deps.foldl (fun acc (guards, rhsIds) =>
     if anyContained guards acc then addManyUnique acc rhsIds else acc) natPins
 
+private partial def intExprWithPins? (pins : List String) :
+    TSyntax `tritonExpr → Bool := fun stx =>
+  match stx with
+  | `(tritonExpr| $(($_:term : Int))) => Bool.true
+  | `(tritonExpr| $r:ident) => pins.contains r.getId.toString
+  | `(tritonExpr| tl.program_id($_:tritonExpr).to(tl.int32)) => Bool.true
+  | `(tritonExpr| tl.program_id($_:tritonExpr).to(tl.int64)) => Bool.true
+  | `(tritonExpr| tl.program_id($_:tritonExpr).to(tl.int16)) => Bool.true
+  | `(tritonExpr| tl.program_id($_:tritonExpr).to(tl.int8)) => Bool.true
+  | `(tritonExpr| tl.program_id(axis=$_:tritonExpr).to(tl.int32)) => Bool.true
+  | `(tritonExpr| tl.program_id(axis=$_:tritonExpr).to(tl.int64)) => Bool.true
+  | `(tritonExpr| tl.program_id(axis=$_:tritonExpr).to(tl.int16)) => Bool.true
+  | `(tritonExpr| tl.program_id(axis=$_:tritonExpr).to(tl.int8)) => Bool.true
+  | `(tritonExpr| tl.load($p:tritonExpr, $_mask:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      staticPtrRootIsIntRegion? p
+  | `(tritonExpr| tl.load($p:tritonExpr $[, $_kwargs:tritonMemKwarg]*)) =>
+      staticPtrRootIsIntRegion? p
+  | `(tritonExpr| $a:tritonExpr +  $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
+  | `(tritonExpr| $a:tritonExpr -  $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
+  | `(tritonExpr| $a:tritonExpr *  $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
+  | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
+  | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
+  | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
+  | `(tritonExpr| ($e:tritonExpr)) => intExprWithPins? pins e
+  | `(tritonExpr| ($e:tritonExpr).to(tl.int32)) => intExprWithPins? pins e
+  | `(tritonExpr| ($e:tritonExpr).to(tl.int64)) => intExprWithPins? pins e
+  | `(tritonExpr| ($e:tritonExpr).to(tl.int16)) => intExprWithPins? pins e
+  | `(tritonExpr| ($e:tritonExpr).to(tl.int8)) => intExprWithPins? pins e
+  | _ => Bool.false
+
+private def addAssignedInts (pins lhs : List String)
+    (rhs : List (TSyntax `tritonExpr)) : List String :=
+  (lhs.zip rhs).foldl
+    (fun acc (l, e) => if intExprWithPins? pins e then addUnique acc l else acc)
+    pins
+
+mutual
+
+private partial def scanIntStmts (pins : List String)
+    (stmts : List (TSyntax `tritonStmt)) : List String :=
+  stmts.foldl scanIntStmt pins
+
+private partial def scanIntStmt (pins : List String)
+    (stx : TSyntax `tritonStmt) : List String :=
+  match stx with
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* = $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) =>
+      let lhs := (#[lhs0, lhs1] ++ lhsRest).toList.map (fun i => i.getId.toString)
+      addAssignedInts pins lhs (#[rhs0, rhs1] ++ rhsRest).toList
+  | `(tritonStmt| $lhs0:ident, $lhs1:ident $[, $lhsRest:ident]* := $rhs0:tritonExpr, $rhs1:tritonExpr $[, $rhsRest:tritonExpr]*) =>
+      let lhs := (#[lhs0, lhs1] ++ lhsRest).toList.map (fun i => i.getId.toString)
+      addAssignedInts pins lhs (#[rhs0, rhs1] ++ rhsRest).toList
+  | `(tritonStmt| $i:ident := $e:tritonExpr) =>
+      addAssignedInts pins [i.getId.toString] [e]
+  | `(tritonStmt| $i:ident = $e:tritonExpr) =>
+      addAssignedInts pins [i.getId.toString] [e]
+  | `(tritonStmt| $i:ident += $e:tritonExpr) =>
+      if pins.contains i.getId.toString || intExprWithPins? pins e then addUnique pins i.getId.toString else pins
+  | `(tritonStmt| $i:ident -= $e:tritonExpr) =>
+      if pins.contains i.getId.toString || intExprWithPins? pins e then addUnique pins i.getId.toString else pins
+  | `(tritonStmt| $i:ident *= $e:tritonExpr) =>
+      if pins.contains i.getId.toString || intExprWithPins? pins e then addUnique pins i.getId.toString else pins
+  | `(tritonStmt| tl.for $i:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| tl.for $i:ident in $_:num { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| for $i:ident in range(0, $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| for $i:ident in range($($_:term), $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr) { $stmts:tritonStmt* }) =>
+      let pins' :=
+        if intExprWithPins? pins start || intExprWithPins? pins stop then addUnique pins i.getId.toString else pins
+      scanIntStmts pins' stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr, $step:tritonExpr) { $stmts:tritonStmt* }) =>
+      let pins' :=
+        if intExprWithPins? pins start || intExprWithPins? pins stop || intExprWithPins? pins step then
+          addUnique pins i.getId.toString
+        else pins
+      scanIntStmts pins' stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| for $i:ident in tl.static_range($($_:term)) { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| for $i:ident in tl.static_range($_:num) { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| tl.static_range $i:ident in $($_:term) { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| tl.static_range $i:ident in $_:num { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| tl.if $_cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
+      addManyUnique (scanIntStmts pins thenStmts.toList) (scanIntStmts pins elseStmts.toList)
+  | `(tritonStmt| tl.if $_cond:tritonExpr { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList
+  | `(tritonStmt| if $_cond:tritonExpr { $thenStmts:tritonStmt* } else { $elseStmts:tritonStmt* }) =>
+      addManyUnique (scanIntStmts pins thenStmts.toList) (scanIntStmts pins elseStmts.toList)
+  | `(tritonStmt| if $_cond:tritonExpr { $stmts:tritonStmt* }) =>
+      scanIntStmts pins stmts.toList
+  | _ => pins
+
+end
+
 private def propagatePtrDeps (ptrUses natPins : List String)
     (deps : List (String × List String × List String)) :
     List String × List String :=
@@ -675,7 +782,7 @@ def collectNatPinned (stmts : List (TSyntax `tritonStmt)) : List String :=
 def collectIntPinned (stmts : List (TSyntax `tritonStmt)) : List String :=
   let (info, _) := scanStmts [] stmts
   let signedDeps := info.intDeps.filter (fun name => info.signedSubPins.contains name)
-  addManyUnique (info.intPins.foldl addUnique []) signedDeps
+  addManyUnique (scanIntStmts [] stmts) signedDeps
 
 /-- Per-region element-dtype declarations gathered from in-body
 `region <name> : <dtype>` directives. Used by `expandLoad` /

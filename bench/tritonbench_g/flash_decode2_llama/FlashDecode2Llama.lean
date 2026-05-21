@@ -113,7 +113,7 @@ theorem flash_decode2_llama_final_store_slice_correct
             (finalOffset s stride_final_b stride_final_h stride_final_d i)) := by
   intro i
   simp [exec, flash_decode2_llama_final_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, dIndex, finalOffset, outOffset]
   have hRawInj : Function.Injective
       (fun idx : TileIndex [BLOCK_DMODEL] =>
@@ -155,5 +155,33 @@ theorem flash_decode2_llama_final_store_slice_compute_correct
     BLOCK_DMODEL s hOutInj i
   rw [hExec] at h
   exact Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+The checked Python tests allocate `O` with shape `(2, 4, 32)`, so the
+contiguous output strides are `(128, 32, 1)`. `mid_out` has `head_dim = 32`,
+so `BLOCK_DMODEL = 32`; the varying `B_Seqlen` and `block_seq` cases do not
+change the final output layout. -/
+
+theorem flash_decode2_llama_python_test_shape_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun i : Fin 32 => outOffset s 128 32 1 i) := by
+  intro a b h
+  simp [outOffset, dIndex] at h
+  exact Fin.ext (by omega)
+
+theorem flash_decode2_llama_final_store_python_test_shape_compute_correct
+    (Final O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_final_store_slice Final O
+        128 32 1 128 32 1 32)
+      (initialState := s)
+      (write := fun i : Fin 32 => some (O, outOffset s 128 32 1 i))
+      (expected := fun i : Fin 32 =>
+        s.readMem Final (finalOffset s 128 32 1 i)) := by
+  exact flash_decode2_llama_final_store_slice_compute_correct Final O
+    128 32 1 128 32 1 32 s
+    (flash_decode2_llama_python_test_shape_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.FlashDecode2Llama

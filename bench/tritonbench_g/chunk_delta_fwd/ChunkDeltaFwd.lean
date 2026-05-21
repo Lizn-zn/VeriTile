@@ -149,7 +149,7 @@ theorem chunk_delta_fwd_h_store_slice_correct
             storeValue s BH i_t s_h_h s_h_t K V BK BV idx
           else s.readMem HOut outAddr) := by
   intro idx
-  simp [exec, chunk_delta_fwd_h_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunk_delta_fwd_h_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         kIndex, vIndex, active, hOffset, TileShape.dropInsertedIndex]
@@ -265,7 +265,7 @@ theorem chunk_delta_fwd_v_new_store_slice_correct
             vNewStoreValue s BVN i_t i_c s_vo_h s_vo_t s_vo_d T V BT BC BV idx
           else s.readMem VNew outAddr) := by
   intro idx
-  simp [exec, chunk_delta_fwd_v_new_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunk_delta_fwd_v_new_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         cIndex, vIndex, vNewActive, vNewOffset, TileShape.dropInsertedIndex]
@@ -367,7 +367,7 @@ theorem chunk_delta_fwd_final_state_store_slice_correct
           else s.readMem FinalState outAddr) := by
   intro idx
   simp [exec, chunk_delta_fwd_final_state_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         kIndex, vIndex, active, finalStateOffset, TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BK, BV] → Nat :=
@@ -511,5 +511,89 @@ theorem chunk_delta_fwd_final_state_python_test_shape_compute_correct
   exact chunk_delta_fwd_final_state_store_slice_compute_correct BHFinal FinalState
     64 64 64 64 s
     (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
+
+/-- Python test-shape output coverage for chunk-delta forward: the loop-row `h`
+store, `v_new` store, and optional final-state store all realize their checked
+masked output shapes. -/
+theorem chunk_delta_fwd_python_test_shape_all_outputs_compute_correct
+    (BH HOut BVN VNew BHFinal FinalState : RegionName) (i_t : Fin 4)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_h_store_slice BH HOut
+        i_t.val 16384 64 64 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx => (HOut, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        storeValue s BH i_t.val 16384 64 64 64 64 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew
+        i_t.val 0 8192 64 1 128 64 32 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] =>
+          vNewActive s i_t.val 0 128 64 32 32 64 idx)
+        (fun idx => (VNew, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        vNewStoreValue s BVN i_t.val 0 8192 64 1 128 64 32 32 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState
+        64 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx => (FinalState, finalStateOffset s 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        finalStateStoreValue s BHFinal 64 64 64 64 idx)) := by
+  constructor
+  · exact chunk_delta_fwd_h_store_python_test_shape_compute_correct
+      BH HOut i_t s
+  constructor
+  · exact chunk_delta_fwd_v_new_store_python_test_shape_compute_correct
+      BVN VNew i_t s
+  · exact chunk_delta_fwd_final_state_python_test_shape_compute_correct
+      BHFinal FinalState s
+
+/-! ## Python test-case surface wrappers
+
+The checked Python helper calls the same kernel twice at `B = 2`, `H = 4`,
+`T = 128`, `K = V = 64`, `BT = 32`, with derived
+`BC = 32`, `BK = BV = 64`, `NT = 4`. The cases differ only in whether
+`initial_state` and `final_state` are present. -/
+
+theorem chunk_delta_fwd_python_test_case1_surface_toAlgorithm_supported
+    (k v d v_new h initial_state final_state : RegionName) :
+    ∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+      final_state
+      8192 128 1
+      8192 64 1
+      16384 64
+      4 128 64 64 32 32 64 64 4
+      Bool.false Bool.false).toAlgorithm? = Except.ok alg := by
+  exact chunk_delta_rule_fwd_h_surface_toAlgorithm_supported
+    k v d v_new h initial_state final_state
+    8192 128 1
+    8192 64 1
+    16384 64
+    4 128 64 64 32 32 64 64 4
+    Bool.false Bool.false
+
+theorem chunk_delta_fwd_python_test_case2_surface_toAlgorithm_supported
+    (k v d v_new h initial_state final_state : RegionName) :
+    ∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+      final_state
+      8192 128 1
+      8192 64 1
+      16384 64
+      4 128 64 64 32 32 64 64 4
+      Bool.true Bool.true).toAlgorithm? = Except.ok alg := by
+  exact chunk_delta_rule_fwd_h_surface_toAlgorithm_supported
+    k v d v_new h initial_state final_state
+    8192 128 1
+    8192 64 1
+    16384 64
+    4 128 64 64 32 32 64 64 4
+    Bool.true Bool.true
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd

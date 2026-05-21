@@ -166,7 +166,7 @@ theorem fwd_kernel_destindex_copy_kv_rope_correct_of_exec
             (outRopeAddr s Dest_loc stride_o_rope_bs stride_o_rope_d idx))
         = some (s.readMem KV_rope
             (sourceRopeAddr s stride_kv_rope_bs stride_kv_rope_d idx)) := by
-    simp [exec, fwd_kernel_destindex_copy_kv, stepStmts, stepStmt, evalOp,
+    simp [exec, fwd_kernel_destindex_copy_kv, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.ptrAdd, Tile.expandDim, NumericDType.add, NumericDType.mul,
           BlockState.readMemValue, Option.bind, Option.map,
           TileShape.insertAxis, TileShape.dropInsertedIndex]
@@ -247,7 +247,7 @@ theorem fwd_kernel_destindex_copy_kv_nope_correct_of_exec
             (outNopeAddr s Dest_loc stride_o_nope_bs stride_o_nope_d idx))
         = some (s.readMem KV_nope
             (sourceNopeAddr s stride_kv_nope_bs stride_kv_nope_d idx)) := by
-    simp [exec, fwd_kernel_destindex_copy_kv, stepStmts, stepStmt, evalOp,
+    simp [exec, fwd_kernel_destindex_copy_kv, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.ptrAdd, Tile.expandDim, NumericDType.add, NumericDType.mul,
           BlockState.readMemValue, Option.bind, Option.map,
           TileShape.insertAxis, TileShape.dropInsertedIndex]

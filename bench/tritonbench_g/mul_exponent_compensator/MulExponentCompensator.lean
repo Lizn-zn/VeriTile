@@ -42,7 +42,7 @@ theorem mul_kernel_correct
         = some (xs i * exponentCompensator) := by
   intro i
   have h_inj := injective_offset_singleton (n := BLOCK_SIZE) (s.pid * BLOCK_SIZE)
-  simp [observeAt, exec, mul_kernel, stepStmts, stepStmt, evalOp,
+  simp [observeAt, exec, mul_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, NumericDType.add, NumericDType.mul,
         exponentCompensator]
   unfold InputLoadedAt at h_x

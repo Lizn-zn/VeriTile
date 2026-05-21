@@ -94,7 +94,7 @@ theorem softmax_kernel_correct
   intro i
   by_cases hB : 0 < BLOCK_SIZE
   · cases HAS_MASK <;>
-      simp [exec, softmax_kernel, stepStmts, stepStmt, evalOp,
+      simp [exec, softmax_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,

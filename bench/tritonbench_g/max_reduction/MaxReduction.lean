@@ -141,7 +141,7 @@ theorem max_kernel_1_correct
     (hExec : exec (max_kernel_1 inp mid M BLOCK_SIZE) s = some s') :
     s'.readMem mid s.pid = maxKernel1Spec s inp M BLOCK_SIZE := by
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, max_kernel_1, stepStmts, stepStmt, evalOp,
+  · simp [exec, max_kernel_1, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
@@ -149,7 +149,7 @@ theorem max_kernel_1_correct
     cases hExec
     simp [BlockState.writeMem_readMem]
     congr
-  · simp [exec, max_kernel_1, stepStmts, stepStmt, evalOp,
+  · simp [exec, max_kernel_1, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis,
         NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
@@ -176,14 +176,14 @@ theorem max_kernel_2_correct
     (hExec : exec (max_kernel_2 mid out mid_size BLOCK_MID) s = some s') :
     s'.readMem out 0 = maxKernel2Spec s mid mid_size BLOCK_MID := by
   by_cases hB : 0 < BLOCK_MID
-  · simp [exec, max_kernel_2, stepStmts, stepStmt, evalOp,
+  · simp [exec, max_kernel_2, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis,
         ComparableDType.lt, maxKernel2Spec, maxKernel2InputTile, hB] at hExec ⊢
     cases hExec
     simp [BlockState.writeMem_readMem]
     congr
-  · simp [exec, max_kernel_2, stepStmts, stepStmt, evalOp,
+  · simp [exec, max_kernel_2, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis,
         ComparableDType.lt, hB] at hExec
@@ -225,7 +225,7 @@ theorem max_kernel_compute_correct
   intro i hActive
   by_cases hBM : 0 < BLOCK_M
   · by_cases hBN : 0 < BLOCK_N
-    · simp [exec, max_kernel, stepStmts, stepStmt, evalOp, Option.bind,
+    · simp [exec, max_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
             Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim,
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.argMaxDrop, Tile.argBestDrop,
             TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
@@ -258,7 +258,7 @@ theorem max_kernel_compute_correct
         simp [hActive, maxKernelIndexSpec,
           maxKernelInputTile, Tile.argMaxDrop, Tile.argBestDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex, hBN]
-    · simp [exec, max_kernel, stepStmts, stepStmt, evalOp, Option.bind,
+    · simp [exec, max_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim,
           Tile.reduceMax, Tile.reduceMaxDrop,
           TileShape.axisDim, TileShape.eraseAxis,

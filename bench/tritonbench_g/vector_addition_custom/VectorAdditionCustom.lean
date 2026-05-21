@@ -37,7 +37,7 @@ theorem add_kernel_correct
       observeAt (exec (_add_kernel A B C size BLOCK) s) C BLOCK s.pid i
         = some (if addr < size then as i + bs i else s.readMem C addr) := by
   intro i
-  simp [observeAt, exec, _add_kernel, stepStmts, stepStmt, evalOp,
+  simp [observeAt, exec, _add_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   unfold InputLoadedAt at h_a h_b

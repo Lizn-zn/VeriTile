@@ -84,7 +84,7 @@ theorem update_fn_kernel_exp_avg_slice_correct
         else s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, update_fn_kernel_exp_avg_slice, stepStmts, stepStmt, evalOp,
+  · simp [exec, update_fn_kernel_exp_avg_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
           NumericDType.sub, ComparableDType.lt] at hExec
     subst s'
@@ -175,7 +175,7 @@ theorem update_fn_kernel_exp_avg_correct
         else s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp,
+  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
@@ -231,7 +231,7 @@ theorem update_fn_kernel_p_correct
         else s.readMem p_ptr (outOffset s BLOCK_SIZE i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
-  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp,
+  · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
@@ -274,5 +274,37 @@ theorem update_fn_kernel_p_compute_correct
   have h := update_fn_kernel_p_correct p_ptr grad_ptr exp_avg_ptr
     lr wd beta1 beta2 n_elements BLOCK_SIZE s s' hRegions hExec i
   simpa [hActive] using h
+
+/-- Full compute-facing output coverage for Python `update_fn`: the parameter
+buffer `p_ptr` and momentum buffer `exp_avg_ptr` stores are both characterized
+for the full `update_fn_kernel`. -/
+theorem update_fn_kernel_all_outputs_compute_correct
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegions : p_ptr ≠ exp_avg_ptr) :
+    (ComputeCorrect.Realizes
+      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (p_ptr, outOffset s BLOCK_SIZE i)))
+      (expected := fun i =>
+        pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (exp_avg_ptr, outOffset s BLOCK_SIZE i)))
+      (expected := fun i =>
+        expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i)) := by
+  constructor
+  · exact update_fn_kernel_p_compute_correct p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE s hRegions
+  · exact update_fn_kernel_exp_avg_compute_correct p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE s (fun h => hRegions h.symm)
 
 end VeriTile.Bench.TritonBenchG.AdamUpdateTriton

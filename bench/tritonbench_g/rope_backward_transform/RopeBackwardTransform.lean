@@ -171,7 +171,7 @@ theorem rope_backward_q0_head_correct
     cases hab
     rfl
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rope_backward_q0_head, stepStmts, stepStmt, evalOp,
+  · simp [exec, rope_backward_q0_head, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt, hBH] at hExec
     rw [← hExec]
@@ -286,7 +286,7 @@ theorem rope_backward_q1_head_correct
       exact h
     cases a; cases b; simp only at hab; cases hab; rfl
   by_cases hBH : 0 < BLOCK_HALF
-  · simp [exec, rope_backward_q1_head, stepStmts, stepStmt, evalOp,
+  · simp [exec, rope_backward_q1_head, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, hBH] at hExec
@@ -476,6 +476,110 @@ theorem rope_backward_k1_python_test_shape_compute_correct
   apply Fin.ext
   simp [q1WriteOffset, dimIndex] at h
   omega
+
+/-- Public Python-shape backward branch summary: the checked
+`rope_backward_transform.py` shape realizes all four `BACKWARD_PASS=True`
+stores for Q/K and both rotary halves. -/
+theorem rope_backward_python_test_shape_all_stores_compute_correct
+    (Q K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeBackwardQ0Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeBackwardQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeBackwardQ0Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeBackwardQ1Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) := by
+  constructor
+  · exact rope_backward_q0_python_test_shape_compute_correct Q COS SIN
+      HEAD_IDX COS_ROW_IDX s
+  constructor
+  · exact rope_backward_q1_python_test_shape_compute_correct Q COS SIN
+      HEAD_IDX COS_ROW_IDX s
+  constructor
+  · exact rope_backward_k0_python_test_shape_compute_correct K COS SIN
+      HEAD_IDX COS_ROW_IDX s
+  · exact rope_backward_k1_python_test_shape_compute_correct K COS SIN
+      HEAD_IDX COS_ROW_IDX s
+
+/-- Naming-compatible output coverage wrapper for the Python backward branch.
+
+This is intentionally the same four-store surface as
+`rope_backward_python_test_shape_all_stores_compute_correct`, using the current
+`all_outputs_compute_correct` naming convention used by the audit surface
+wrappers. -/
+theorem rope_backward_python_test_shape_all_outputs_compute_correct
+    (Q K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeBackwardQ0Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeBackwardQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeBackwardQ0Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeBackwardQ1Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) := by
+  exact rope_backward_python_test_shape_all_stores_compute_correct
+    Q K COS SIN HEAD_IDX COS_ROW_IDX s
 
 /-! ## Full-kernel Q first-half store correctness (`BACKWARD_PASS = true`)
 

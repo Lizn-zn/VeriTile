@@ -219,7 +219,7 @@ theorem bmm_chunk_bwd_final_store_slice_correct
                 BLOCK_SIZE_N idx)
           else s.readMem Db outAddr) := by
   intro idx
-  simp [exec, bmm_chunk_bwd_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, bmm_chunk_bwd_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
@@ -396,7 +396,7 @@ theorem bmm_chunk_bwd_residual_final_store_slice_correct
           else s.readMem Db outAddr) := by
   intro idx
   simp [exec, bmm_chunk_bwd_residual_final_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
         pidC, pidH, pidM, pidN, mIndex, nIndex, active, accOffset, resOffset,
@@ -541,7 +541,7 @@ theorem bmm_chunk_bwd_final_store_slice_active_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro idx hActive
-  simp [exec, bmm_chunk_bwd_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, bmm_chunk_bwd_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
@@ -636,7 +636,7 @@ theorem bmm_chunk_bwd_residual_final_store_slice_active_compute_correct
   subst s0
   intro idx hActive
   simp [exec, bmm_chunk_bwd_residual_final_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
         pidC, pidH, pidM, pidN, mIndex, nIndex, active, accOffset, resOffset,

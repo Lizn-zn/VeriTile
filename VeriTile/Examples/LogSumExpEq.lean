@@ -94,6 +94,11 @@ theorem direct_lse_correct
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.mul, LSE]
+  repeat unfold evalOp
+  simp [observeLSE, exec, directLSEKernel, stepStmts, stepStmt,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, LSE]
   unfold InputLoadedAt at _h_x
   simp_rw [_h_x]
   rfl
@@ -108,6 +113,13 @@ theorem stable_lse_correct
       = some (stableLSEWithShift xs (tileMax hN xs)) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
   simp [observeLSE, exec, stableLSEKernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        stableLSEWithShift, tileMax]
+  repeat unfold evalOp
+  simp [observeLSE, exec, stableLSEKernel, stepStmts, stepStmt,
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,

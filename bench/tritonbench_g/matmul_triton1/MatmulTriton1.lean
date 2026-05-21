@@ -111,7 +111,7 @@ theorem matmul_output_store_slice_correct
         s.readMem Acc
           (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
   intro idx
-  simp [exec, matmul_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, matmul_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.expandDim, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, TileShape.dropInsertedIndex] at hExec
   rw [← hExec]
@@ -156,5 +156,40 @@ theorem matmul_output_store_slice_compute_correct
   intro idx
   exact matmul_output_store_slice_correct C Acc stride_cm stride_cn
     stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
+
+/-- Python test-shape output offsets are injective for the single
+`16 × 16` matmul tile. -/
+theorem matmul_triton1_python_test_shape_offset_injective
+    (s : BlockState) :
+    Function.Injective (cOffset s 16 1 16 16) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Python test-shape full surface lowering for `x.shape = y.shape =
+(16, 16)`, with block sizes equal to the matrix dimensions. -/
+theorem matmul_triton1_python_test_shape_surface_toAlgorithm_supported
+    (X Y Z : RegionName) :
+    ∃ alg, (matmul_triton1_surface X Y Z 16 16 16 16 16 16).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_triton1_surface_toAlgorithm_supported X Y Z 16 16 16 16 16 16
+
+/-- Public Python test-shape coverage summary: the full matmul surface lowers,
+and the final `16 × 16` output tile store realizes the checked result tensor. -/
+theorem matmul_triton1_python_test_shape_output_summary
+    (X Y Z Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_triton1_surface X Y Z 16 16 16 16 16 16).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_output_store_slice Z Acc 16 1 16 1 16 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [16, 16] =>
+        some (Z, cOffset s 16 1 16 16 idx))
+      (expected := fun idx =>
+        s.readMem Acc (accOffset s 16 1 16 16 idx))) := by
+  constructor
+  · exact matmul_triton1_python_test_shape_surface_toAlgorithm_supported X Y Z
+  · exact matmul_output_store_slice_compute_correct Z Acc 16 1 16 1 16 16 s
+      (matmul_triton1_python_test_shape_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.MatmulTriton1

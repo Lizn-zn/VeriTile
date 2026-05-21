@@ -73,7 +73,7 @@ theorem masked_select_kernel_correct
             (maskedSelectStoreOffset s prefix_sum_ptr n_elements BLOCK_SIZE i))
         = some (s.readMem inp_ptr (maskedSelectOffset s BLOCK_SIZE i)) := by
   intro i hActive
-  simp [exec, masked_select_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, masked_select_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, tile_elementwise,
         NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt,
         BlockState.readMemValue, Option.bind, Option.map]

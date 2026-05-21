@@ -79,7 +79,7 @@ theorem index_select_cat_fwd_kernel_correct
             s.readMem output_ptr
               (outputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) := by
   intro idx
-  simp [exec, index_select_cat_fwd_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, index_select_cat_fwd_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         BlockState.readMemValue, Option.bind, Option.map,

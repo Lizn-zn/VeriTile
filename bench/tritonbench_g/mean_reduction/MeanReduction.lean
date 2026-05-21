@@ -624,7 +624,7 @@ theorem meanPreLoop_step_regs
           meanRowActive s M BLOCK_M idx.1 } ∧
       (∀ offset, st.readMem X offset = s.readMem X offset) := by
   unfold meanPreLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.expandDim,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.expandDim,
     TileShape.dropInsertedIndex, Tile.ptrAdd, NumericDType.add,
     NumericDType.mul, BlockState.setReg, Option.bind] at hStep
   subst st
@@ -696,7 +696,7 @@ theorem meanLoopBody_step_accumulator_update
                 WithBot.unbotD 0
                   ((meanChunkLoadSpec s0 X M N BLOCK_M BLOCK_N off).data idx)) } := by
   unfold meanLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hX, hRow, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hX, hRow, Tile.bop, Tile.cop,
     Tile.expandDim, TileShape.dropInsertedIndex, Tile.ptrAdd,
     NumericDType.add, ComparableDType.lt, Option.bind, meanOutOffset,
     meanRowActive] at hStep
@@ -756,7 +756,7 @@ theorem meanLoopBody_step_preserves_context
           meanRowActive s0 M BLOCK_M idx.1 } ∧
       (∀ offset, st'.readMem X offset = st.readMem X offset) := by
   unfold meanLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hX, hRow, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hX, hRow, Tile.bop, Tile.cop,
     Tile.expandDim, TileShape.dropInsertedIndex, Tile.ptrAdd,
     NumericDType.add, ComparableDType.lt, Option.bind, meanOutOffset,
     meanRowActive] at hStep
@@ -841,7 +841,7 @@ theorem meanLoopContextInvariant_body_step_exists
         (st.setReg "off" .nat [] (Tile.scalar off)) with
   | none =>
       unfold meanLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hInv.2, hX, hRow, Tile.bop, Tile.cop,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.2, hX, hRow, Tile.bop, Tile.cop,
         Tile.expandDim, TileShape.dropInsertedIndex, Tile.ptrAdd,
         NumericDType.add, ComparableDType.lt, Option.bind, meanOutOffset,
         meanRowActive] at hStep
@@ -917,7 +917,7 @@ theorem meanPostLoop_step_alg_post
     (hBLOCK_N : 0 < BLOCK_N) (hoff : N ≤ off) :
     mean_dim_kernel_alg_post X Mean M N BLOCK_M BLOCK_N s0 st' := by
   unfold meanPostLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, hAcc, hMean, hMask, Tile.bop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hAcc, hMean, hMask, Tile.bop,
     Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.div,
     BlockState.setReg, Option.bind, Option.map] at hStep
   subst st'

@@ -68,7 +68,7 @@ theorem masked_add_kernel_correct
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [exec, masked_add_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, masked_add_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         tile_elementwise, Bool.and_eq_true] at hExec
   subst s'
   simp only [maskedAddOffset]

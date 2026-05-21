@@ -100,7 +100,7 @@ theorem log_softmax_kernel_correct
   intro idx
   by_cases hBM : 0 < BLOCK_M
   · by_cases hBN : 0 < BLOCK_N
-    · simp [exec, log_softmax_kernel, stepStmts, stepStmt, evalOp,
+    · simp [exec, log_softmax_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map,
             Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceMaxKeep,
@@ -134,7 +134,7 @@ theorem log_softmax_kernel_correct
         simp [hInactive]
         intro h
         exact False.elim (hActive h)
-    · simp [exec, log_softmax_kernel, stepStmts, stepStmt, evalOp,
+    · simp [exec, log_softmax_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map,
             Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceMaxKeep,
@@ -242,7 +242,7 @@ theorem log_softmax_backward_kernel_correct
   intro idx
   by_cases hBM : 0 < BLOCK_M
   · by_cases hBN : 0 < BLOCK_N
-    · simp [exec, log_softmax_backward_kernel, stepStmts, stepStmt, evalOp,
+    · simp [exec, log_softmax_backward_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
             Option.bind, Option.map,
             Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim, Tile.uop,
             Tile.reduceSum, Tile.reduceSumDrop, Tile.reduceSumKeep,

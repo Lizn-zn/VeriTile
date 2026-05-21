@@ -191,7 +191,7 @@ theorem matmul_output_store_slice_correct
             (some (s.readMem Acc
               (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx)))) := by
   intro idx
-  simp [exec, matmul_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, matmul_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.expandDim, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, TileShape.dropInsertedIndex] at hExec
   rw [← hExec]
@@ -239,5 +239,120 @@ theorem matmul_output_store_slice_compute_correct
   intro idx
   exact matmul_output_store_slice_correct C Acc stride_cm stride_cn
     stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
+
+/-- Contiguous `4096 × 4096` output tiles have injective addresses for the
+Python block widths used by `matmul_kernel.py`. -/
+theorem matmul_kernel_python_output_offset_injective
+    (s : BlockState) {BLOCK_SIZE_M BLOCK_SIZE_N : Nat}
+    (hN : BLOCK_SIZE_N ≤ 4096) :
+    Function.Injective (cOffset s 4096 1 BLOCK_SIZE_M BLOCK_SIZE_N) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Python case 1 full surface lowering for block shape `(64, 128, 64)`. -/
+theorem matmul_kernel_python_case1_surface_toAlgorithm_supported
+    (C A B : RegionName) :
+    ∃ alg, (matmul_kernel_surface C A B 64 128 64).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported C A B 64 128 64
+
+/-- Python case 2 full surface lowering for block shape `(128, 64, 128)`. -/
+theorem matmul_kernel_python_case2_surface_toAlgorithm_supported
+    (C A B : RegionName) :
+    ∃ alg, (matmul_kernel_surface C A B 128 64 128).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported C A B 128 64 128
+
+/-- Python case 3 full surface lowering for block shape `(256, 256, 64)`. -/
+theorem matmul_kernel_python_case3_surface_toAlgorithm_supported
+    (C A B : RegionName) :
+    ∃ alg, (matmul_kernel_surface C A B 256 256 64).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported C A B 256 256 64
+
+/-- Python case 4 full surface lowering for block shape `(32, 32, 32)`. -/
+theorem matmul_kernel_python_case4_surface_toAlgorithm_supported
+    (C A B : RegionName) :
+    ∃ alg, (matmul_kernel_surface C A B 32 32 32).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported C A B 32 32 32
+
+/-- Public Python case 1 coverage summary: the full surface lowers and the
+final fp16 output tile store realizes the side-effected `c` tensor. -/
+theorem matmul_kernel_python_case1_output_summary
+    (C A B Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface C A B 64 128 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_output_store_slice C Acc 4096 1 4096 1 64 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 128] =>
+        some (C, cOffset s 4096 1 64 128 idx))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 4096 1 64 128 idx)))))) := by
+  constructor
+  · exact matmul_kernel_python_case1_surface_toAlgorithm_supported C A B
+  · exact matmul_output_store_slice_compute_correct C Acc 4096 1 4096 1
+      64 128 s (matmul_kernel_python_output_offset_injective s (by omega))
+
+/-- Public Python case 2 coverage summary. -/
+theorem matmul_kernel_python_case2_output_summary
+    (C A B Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface C A B 128 64 128).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_output_store_slice C Acc 4096 1 4096 1 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (C, cOffset s 4096 1 128 64 idx))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 4096 1 128 64 idx)))))) := by
+  constructor
+  · exact matmul_kernel_python_case2_surface_toAlgorithm_supported C A B
+  · exact matmul_output_store_slice_compute_correct C Acc 4096 1 4096 1
+      128 64 s (matmul_kernel_python_output_offset_injective s (by omega))
+
+/-- Public Python case 3 coverage summary. -/
+theorem matmul_kernel_python_case3_output_summary
+    (C A B Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface C A B 256 256 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_output_store_slice C Acc 4096 1 4096 1 256 256)
+      (initialState := s)
+      (write := fun idx : TileIndex [256, 256] =>
+        some (C, cOffset s 4096 1 256 256 idx))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 4096 1 256 256 idx)))))) := by
+  constructor
+  · exact matmul_kernel_python_case3_surface_toAlgorithm_supported C A B
+  · exact matmul_output_store_slice_compute_correct C Acc 4096 1 4096 1
+      256 256 s (matmul_kernel_python_output_offset_injective s (by omega))
+
+/-- Public Python case 4 coverage summary. -/
+theorem matmul_kernel_python_case4_output_summary
+    (C A B Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface C A B 32 32 32).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_output_store_slice C Acc 4096 1 4096 1 32 32)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 32] =>
+        some (C, cOffset s 4096 1 32 32 idx))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 4096 1 32 32 idx)))))) := by
+  constructor
+  · exact matmul_kernel_python_case4_surface_toAlgorithm_supported C A B
+  · exact matmul_output_store_slice_compute_correct C Acc 4096 1 4096 1
+      32 32 s (matmul_kernel_python_output_offset_injective s (by omega))
 
 end VeriTile.Bench.TritonBenchG.MatmulKernel

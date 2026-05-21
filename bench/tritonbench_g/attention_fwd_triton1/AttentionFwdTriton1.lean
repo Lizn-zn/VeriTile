@@ -137,7 +137,7 @@ theorem attention_fwd_triton1_output_store_slice_correct
             (boOffset s stride_bo_bh stride_bo_t stride_bo_d BT idx)) := by
   intro idx
   simp [exec, attention_fwd_triton1_output_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, tIndex, dIndex,
         boOffset, outOffset, TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BT, BD] → Nat :=
@@ -271,7 +271,7 @@ theorem attention_fwd_triton1_h_store_slice_correct
       (fun idx : TileIndex [BD, BD] =>
         s.pids 0 * s_hh + (i_iter * BD + idx.1.val) * s_ht + idx.2.1.val) := by
     simpa [hOffset, hRow, hCol] using hOutInj
-  simp [exec, attention_fwd_triton1_h_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, attention_fwd_triton1_h_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         TileShape.dropInsertedIndex]
@@ -383,5 +383,53 @@ theorem attention_fwd_triton1_store_enabled_h_python_test_shape_compute_correct
   subst br
   subst bc
   rfl
+
+/-- Python test-shape output coverage for `attention_fwd_triton1`: the checked
+output-store variants and the `STORE=True` H-state store all realize their
+specialized output shapes. -/
+theorem attention_fwd_triton1_python_test_shape_all_outputs_compute_correct
+    (BO O BHPre H : RegionName) (i_iter : Nat) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_h_store_slice BHPre H i_iter
+        524288 128 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (H, hOffset s i_iter 524288 128 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        hStoreSpec s BHPre i_iter 524288 128 128 idx)) := by
+  constructor
+  · exact attention_fwd_triton1_output_python_test_shape_compute_correct BO O s
+  constructor
+  · exact attention_fwd_triton1_ifcond_first_output_python_test_shape_compute_correct
+      BO O s
+  constructor
+  · exact attention_fwd_triton1_recurrent_output_python_test_shape_compute_correct
+      BO O s
+  · exact attention_fwd_triton1_store_enabled_h_python_test_shape_compute_correct
+      BHPre H i_iter s
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1

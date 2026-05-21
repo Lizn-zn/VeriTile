@@ -38,7 +38,7 @@ theorem kernel_function_correct
         = some (if addr < n_elements then Real.sin (xs i)
                 else s.readMem output_ptr addr) := by
   intro i
-  simp [observeAt, exec, kernel_function, stepStmts, stepStmt, evalOp,
+  simp [observeAt, exec, kernel_function, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.uop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, WithBot.realSin]
   unfold InputLoadedAt at h_x

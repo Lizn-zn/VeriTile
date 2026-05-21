@@ -60,14 +60,14 @@ theorem gridLaunchedAtomic_scoreVariant_backward_correct
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealScoreVariant visible score scoreGrad Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealScoreVariant visible score scoreGrad Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealScoreVariant visible score scoreGrad Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -81,7 +81,7 @@ theorem gridLaunchedAtomic_scoreVariant_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -89,7 +89,7 @@ theorem gridLaunchedAtomic_scoreVariant_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   constructor
   · intro idx
@@ -171,14 +171,14 @@ theorem gridLaunchedAtomic_alibi_backward_correct
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealAlibi qStart slope Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealAlibi qStart slope Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealAlibi qStart slope Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -192,7 +192,7 @@ theorem gridLaunchedAtomic_alibi_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -200,7 +200,7 @@ theorem gridLaunchedAtomic_alibi_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [attentionBackwardRealAlibi] using
     gridLaunchedAtomic_scoreVariant_backward_correct
@@ -254,14 +254,14 @@ theorem gridLaunchedAtomic_slidingWindow_backward_correct
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealSlidingWindow qStart window Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealSlidingWindow qStart window Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealSlidingWindow qStart window Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -275,7 +275,7 @@ theorem gridLaunchedAtomic_slidingWindow_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -283,7 +283,7 @@ theorem gridLaunchedAtomic_slidingWindow_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [attentionBackwardRealSlidingWindow] using
     gridLaunchedAtomic_scoreVariant_backward_correct
@@ -337,14 +337,14 @@ theorem gridLaunchedAtomic_softcap_backward_correct
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealSoftcap softcap Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
           (Offset.rowMajor2D (rows := Bk) (cols := D)
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealSoftcap softcap Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealSoftcap softcap Q K V dO LSE scale
     (∀ idx : TileIndex [M, D],
@@ -358,7 +358,7 @@ theorem gridLaunchedAtomic_softcap_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -366,7 +366,7 @@ theorem gridLaunchedAtomic_softcap_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [attentionBackwardRealSoftcap] using
     gridLaunchedAtomic_scoreVariant_backward_correct
@@ -425,7 +425,7 @@ theorem gridLaunchedAtomic_alibiSlidingSoftcap_backward_correct
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealAlibiSlidingSoftcap qStart window slope softcap
           Q K V dO LSE scale).dK
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))
     (hDVBlock : ∀ block, ∀ idx : TileIndex [Bk, D],
       (hLaunch.frames (owner block)).final.readMem dVReg
@@ -433,7 +433,7 @@ theorem gridLaunchedAtomic_alibiSlidingSoftcap_backward_correct
             (block.val * Bk * D) D idx) =
         (attentionBackwardRealAlibiSlidingSoftcap qStart window slope softcap
           Q K V dO LSE scale).dV
-          (FA1Math.blockIndex Bk numKVBlocks block.val
+          (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
             (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit)) :
     let bw := attentionBackwardRealAlibiSlidingSoftcap qStart window slope softcap
       Q K V dO LSE scale
@@ -448,7 +448,7 @@ theorem gridLaunchedAtomic_alibiSlidingSoftcap_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -456,7 +456,7 @@ theorem gridLaunchedAtomic_alibiSlidingSoftcap_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [attentionBackwardRealAlibiSlidingSoftcap] using
     gridLaunchedAtomic_scoreVariant_backward_correct

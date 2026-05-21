@@ -230,7 +230,7 @@ theorem mixed_sparse_attention_output_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, mixed_sparse_attention_output_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
         IntegralDType.mod, ComparableDType.lt, BlockState.readMemValue, offZ,
         offH, seqLen, mIndex, dIndex, active, accOffset, outOffset,
@@ -306,5 +306,70 @@ theorem mixed_sparse_attention_output_store_slice_compute_correct
     stride_om stride_ok BLOCK_M BLOCK_DMODEL s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+The checked Python tests allocate `q/k/v/o` with shape `(2, 4, 128, 64)`,
+so the contiguous output strides are `(32768, 8192, 64, 1)`. Test cases use
+`BLOCK_DMODEL = 64` and either `BLOCK_M = BLOCK_N = 64` or the alternate
+`BLOCK_M = BLOCK_N = 32`. -/
+
+theorem mixed_sparse_attention_python_block64_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [64, 64] =>
+        outOffset s 4 32768 8192 64 1 64 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, offZ, offH, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem mixed_sparse_attention_python_block32_offset_injective
+    (s : BlockState) :
+    Function.Injective
+      (fun idx : TileIndex [32, 64] =>
+        outOffset s 4 32768 8192 64 1 32 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, offZ, offH, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem mixed_sparse_attention_output_store_python_block64_compute_correct
+    (Acc Seqlens Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
+        32768 8192 64 1 32768 8192 64 1 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        accStoreValue s Acc Seqlens 4 32768 8192 64 1 64 idx) := by
+  exact mixed_sparse_attention_output_store_slice_compute_correct Acc Seqlens
+    Out 4 32768 8192 64 1 32768 8192 64 1 64 64 s
+    (mixed_sparse_attention_python_block64_offset_injective s)
+
+theorem mixed_sparse_attention_output_store_python_block32_compute_correct
+    (Acc Seqlens Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
+        32768 8192 64 1 32768 8192 64 1 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => active s 4 Seqlens 32 idx)
+        (fun idx : TileIndex [32, 64] =>
+          (Out, outOffset s 4 32768 8192 64 1 32 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        accStoreValue s Acc Seqlens 4 32768 8192 64 1 32 idx) := by
+  exact mixed_sparse_attention_output_store_slice_compute_correct Acc Seqlens
+    Out 4 32768 8192 64 1 32768 8192 64 1 32 64 s
+    (mixed_sparse_attention_python_block32_offset_injective s)
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention

@@ -106,7 +106,7 @@ theorem index_select_cat_bwd_kernel_correct
         = some (s.readMem grad_output_ptr
             (gradOutputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) := by
   intro idx hActive
-  simp [exec, index_select_cat_bwd_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, index_select_cat_bwd_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.expandDim,
         NumericDType.add, NumericDType.mul, ComparableDType.lt,
         BlockState.readMemValue, Option.bind, Option.map,

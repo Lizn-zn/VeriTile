@@ -66,7 +66,7 @@ theorem quantize_global_scaled_store_slice_correct
             quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr BLOCK_SIZE scale127 i
           else s.readMem output_ptr outAddr) := by
   intro i
-  simp [exec, quantize_global_scaled_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, quantize_global_scaled_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, offset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _

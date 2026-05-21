@@ -148,8 +148,13 @@ theorem softmax_naive_correct
         Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.mul, NumericDType.div, naiveSpec]
-  unfold InputLoadedAt at _h_x
+  repeat unfold evalOp
+  simp [observeAt, exec, naiveSoftmaxKernel, stepStmts, stepStmt,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.div, naiveSpec]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
+  unfold InputLoadedAt at _h_x
   simp [_h_x]
   rfl
 
@@ -174,8 +179,14 @@ theorem softmax_stable_correct
         Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableSpec, tileMax]
-  unfold InputLoadedAt at _h_x
+  repeat unfold evalOp
+  simp [observeAt, exec, stableSoftmaxKernel, stepStmts, stepStmt,
+        Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+        Tile.reduceMax, Tile.reduceMaxDrop,
+        TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div, stableSpec, tileMax]
   rw [BlockState.scatter_readback_nd _ _ _ h_inj (i, PUnit.unit)]
+  unfold InputLoadedAt at _h_x
   simp [_h_x]
   rfl
 

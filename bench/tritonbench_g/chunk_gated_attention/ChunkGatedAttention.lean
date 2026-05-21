@@ -189,7 +189,7 @@ theorem chunk_gated_attention_store_slice_correct
             storeValue s BC s_s_h s_s_t s_s_d T S BT BS idx
           else s.readMem Z outAddr) := by
   intro idx
-  simp [exec, chunk_gated_attention_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunk_gated_attention_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         tIndex, sIndex, active, tileOffset, TileShape.dropInsertedIndex]
@@ -303,7 +303,7 @@ theorem chunk_gated_attention_cum_compute_slice_correct
           else s.readMem Z outAddr) := by
   intro idx
   simp [exec, chunk_gated_attention_cum_compute_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, Tile.dot, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, ComparableDType.ge, tIndex, sIndex, active,
         tileOffset, sourceTile, lowerTriTile, TileShape.dropInsertedIndex]
@@ -411,7 +411,7 @@ theorem chunk_gated_attention_h_state_store_slice_correct
           else s.readMem H outAddr) := by
   intro idx
   simp [exec, chunk_gated_attention_h_state_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         kIndexState, vIndexState, stateActive, hStateOffset,
         TileShape.dropInsertedIndex]
@@ -531,7 +531,7 @@ theorem chunk_gated_attention_final_state_store_slice_correct
           else s.readMem Ht outAddr) := by
   intro idx
   simp [exec, chunk_gated_attention_final_state_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         kIndexFinal, vIndexFinal, finalActive, finalStateOffset,
         TileShape.dropInsertedIndex]
@@ -722,5 +722,35 @@ theorem chunk_gated_attention_final_state_python_test_shape_compute_correct
   exact chunk_gated_attention_final_state_store_slice_compute_correct BHFinal Ht
     32 32 16 16 s
     (chunk_gated_attention_python_final_state_offset_injective s)
+
+/-- Python test-shape output coverage for chunk gated attention: every checked
+state-output surface (`h` at each loop row and final state) realizes its masked
+store shape. -/
+theorem chunk_gated_attention_python_test_shape_all_outputs_compute_correct
+    (BH H BHFinal Ht : RegionName) (i_t : Fin 4) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
+        4096 32 1 32 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        hStateStoreValue s BH i_t.val 4096 32 1 32 32 16 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
+        32 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        finalStateStoreValue s BHFinal 32 32 16 16 idx)) := by
+  constructor
+  · exact chunk_gated_attention_h_state_python_test_shape_compute_correct
+      BH H i_t s
+  · exact chunk_gated_attention_final_state_python_test_shape_compute_correct
+      BHFinal Ht s
 
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention

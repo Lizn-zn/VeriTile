@@ -144,7 +144,7 @@ theorem rmsnorm_triton_correct
     rfl
   by_cases hB : 0 < BLOCK_N_SIZE
   · have hStep : BLOCK_N_SIZE ≠ 0 := Nat.ne_of_gt hB
-    simp [exec, rmsnorm_triton, stepStmts, stepStmt, evalOp,
+    simp [exec, rmsnorm_triton, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
           stepForRangeAux.step_lt, stepForRangeAux.step_ge,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum,

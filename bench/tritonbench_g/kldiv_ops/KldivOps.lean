@@ -209,14 +209,16 @@ theorem kldiv_backward_default_correct
           defaultSpec s target_ptr target_stride i
         else s.readMem new_grads_ptr (outOffset s new_grads_stride i) := by
   intro i
-  simp [exec, kldiv_backward_default, stepStmts, stepStmt, evalOp,
+  simp [exec, kldiv_backward_default, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt] at hExec
   rw [← hExec]
   simp only [outOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
         (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   by_cases h : i.val < n_cols
   · simp [defaultSpec, inOffset, h]
   · simp [h]
@@ -235,14 +237,16 @@ theorem kldiv_backward_log_target_correct
           logTargetSpec s target_ptr target_stride i
         else s.readMem new_grads_ptr (outOffset s new_grads_stride i) := by
   intro i
-  simp [exec, kldiv_backward_log_target, stepStmts, stepStmt, evalOp,
+  simp [exec, kldiv_backward_log_target, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt] at hExec
   rw [← hExec]
   simp only [outOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
         (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   by_cases h : i.val < n_cols
   · simp [logTargetSpec, inOffset, h]
   · simp [h]
@@ -316,14 +320,16 @@ theorem kldiv_forward_default_none_correct
   intro i
   -- Disable the `@[simp]` Prop-form bridge so `simp` doesn't push `decide` into
   -- a classical Decidable. Keep the Bool comparison form intact.
-  simp [exec, kldiv_forward_default_none, stepStmts, stepStmt, evalOp,
+  simp [exec, kldiv_forward_default_none, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt, -ComparableDType.real_gt_eq_true] at hExec
   rw [← hExec]
   simp only [outOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
         (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   -- Reduce the Prod projection at the top.
   show (if i.val < n_cols then _ else _) =
     if i.val < n_cols then _ else s.readMem loss_ptr (s.pid * loss_stride + i.val)
@@ -340,6 +346,7 @@ theorem kldiv_forward_default_none_correct
       simp only [hbool, if_true]
       simp only [forwardDefaultSpec, inOffset, BlockState.pid_eq,
         max_eq_left (le_of_lt hgt)]
+      rw [← Int.natCast_mul, Int.toNat_natCast]
       simp [h]
     · push Not at hgt
       have hbool : ComparableDType.gt ComparableDType.real
@@ -350,6 +357,7 @@ theorem kldiv_forward_default_none_correct
       simp only [hbool, if_false]
       simp only [forwardDefaultSpec, inOffset, BlockState.pid_eq,
         max_eq_right hgt]
+      rw [← Int.natCast_mul, Int.toNat_natCast]
       simp [h]
   · rw [if_neg h, if_neg h]
     simp [BlockState.pid_eq]
@@ -397,7 +405,7 @@ theorem kldiv_forward_log_target_none_correct
           forwardLogTargetSpec s y_ptr gt_ptr y_stride gt_stride i
         else s.readMem loss_ptr (outOffset s loss_stride i) := by
   intro i
-  simp [exec, kldiv_forward_log_target_none, stepStmts, stepStmt, evalOp,
+  simp [exec, kldiv_forward_log_target_none, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt] at hExec
@@ -407,9 +415,12 @@ theorem kldiv_forward_log_target_none_correct
     intro a b h
     exact Prod.ext (Fin.ext (Nat.add_left_cancel h)) rfl
   simp only [outOffset]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
+  rw [← Int.natCast_mul, Int.toNat_natCast]
   by_cases h : i.val < n_cols
-  · simp [forwardLogTargetSpec, inOffset, h]
+  · rw [← Int.natCast_mul, Int.toNat_natCast]
+    simp [forwardLogTargetSpec, inOffset, h]
   · simp [h]
 
 /-- Compute-facing correctness for the forward log-target one-block slice. -/

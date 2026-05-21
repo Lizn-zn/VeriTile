@@ -136,7 +136,7 @@ theorem quantize_global_transpose_scaled_store_slice_correct
           else s.readMem B outAddr) := by
   intro idx
   simp [exec, quantize_global_transpose_scaled_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         rowIndex, colIndex, aOffset, bOffset, TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BLOCK_M, BLOCK_N] → Nat :=

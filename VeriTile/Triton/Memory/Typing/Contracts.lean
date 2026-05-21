@@ -42,7 +42,10 @@ def Op.PointerRegionsHaveDType (Γ : RegionTyping) (dtype : TileDType) :
       ptr.PointerRegionsHaveDType Γ dtype
   | _ => True
 termination_by ptr => sizeOf ptr
-decreasing_by all_goals (simp_wf; try omega)
+decreasing_by
+  all_goals
+    simp_wf
+    try omega
 
 /--
 All statically visible base regions inside a block pointer expression have dtype
@@ -54,6 +57,9 @@ def Op.BlockPointerRegionHasDType (Γ : RegionTyping) (dtype : TileDType) :
   | .makeBlockPtr region _ _ _ _ _ => Γ (Region.cast region) = dtype
   | .makeBlockPtrDyn region base _ _ _ _ =>
       Γ region = dtype ∧ base.RespectsRegionTyping Γ
+  | .makeBlockPtrDynOffsets region base _ _ _ offsets =>
+      Γ region = dtype ∧ base.RespectsRegionTyping Γ ∧
+        ∀ off ∈ offsets, off.RespectsRegionTyping Γ
   | .advanceBlockPtr ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
   | .broadcast ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
   | .full _ ptr => ptr.BlockPointerRegionHasDType Γ dtype
@@ -69,7 +75,14 @@ def Op.BlockPointerRegionHasDType (Γ : RegionTyping) (dtype : TileDType) :
   | .expandDim _ ptr => ptr.BlockPointerRegionHasDType Γ dtype
   | _ => True
 termination_by ptr => sizeOf ptr
-decreasing_by all_goals (simp_wf; try omega)
+decreasing_by
+  all_goals
+    simp_wf
+    try omega
+    try
+      have hmem : off ∈ offsets := by assumption
+      have hs := List.sizeOf_lt_of_mem hmem
+      omega
 
 /-- Memory-region dtype contract for memory address forms. -/
 def MemAccess.RespectsRegionTyping (Γ : RegionTyping) (dtype : TileDType) :
@@ -167,12 +180,21 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
       ptr.RespectsRegionTyping Γ ∧ off.RespectsRegionTyping Γ
   | .makeBlockPtr _ _ _ _ _ _ => True
   | .makeBlockPtrDyn _ base _ _ _ _ => base.RespectsRegionTyping Γ
+  | .makeBlockPtrDynOffsets _ base _ _ _ offsets =>
+      base.RespectsRegionTyping Γ ∧ ∀ off ∈ offsets, off.RespectsRegionTyping Γ
   | .advanceBlockPtr ptr _ => ptr.RespectsRegionTyping Γ
   | .load dtype mem mask =>
       mem.RespectsRegionTyping Γ dtype ∧ mask.RespectsRegionTyping Γ
   | .natToReal a => a.RespectsRegionTyping Γ
 termination_by op => sizeOf op
-decreasing_by all_goals (simp_wf; try omega)
+decreasing_by
+  all_goals
+    simp_wf
+    try omega
+    try
+      have hmem : off ∈ offsets := by assumption
+      have hs := List.sizeOf_lt_of_mem hmem
+      omega
 
 end
 

@@ -22,15 +22,15 @@ theorem fa1_block_read
     (n : Nat) (hn : n < numKVBlocks)
     (j : Fin Bk) (d : Fin D) :
     s.readMem region ((n * Bk + j.val) * D + d.val) =
-      X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
+      X (StreamingAccumulator.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
         d, PUnit.unit) := by
   rw [BlockState.readMem]
   have haddr :
       (n * Bk + j.val) * D + d.val =
         Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D
-          (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
+          (StreamingAccumulator.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
             d, PUnit.unit) := by
-    simp [Offset.rowMajor2D, Offset.strided, FA1Math.blockIndex]
+    simp [Offset.rowMajor2D, Offset.strided, StreamingAccumulator.blockIndex]
   rw [haddr]
   exact hX _
 
@@ -48,7 +48,7 @@ theorem fa1_block_load_tile_eq
       : Tile .real [Bk, D])
       =
       Tile.ofReal (fun idx : TileIndex [Bk, D] =>
-        X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
+        X (StreamingAccumulator.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
           idx.2.1, PUnit.unit)) := by
   apply load_tile_eq_of_InputAt_map
     (s := s) (region := region)
@@ -56,11 +56,11 @@ theorem fa1_block_load_tile_eq
       (n * Bk + idx.1.val) * D + idx.2.1.val)
     (offsetFn := Offset.rowMajor2D (rows := Bk * numKVBlocks) (cols := D) 0 D)
     (embed := fun idx : TileIndex [Bk, D] =>
-      (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
+      (StreamingAccumulator.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
         idx.2.1, PUnit.unit))
     (xs := X)
   · intro idx
-    simp [Offset.rowMajor2D, Offset.strided, FA1Math.blockIndex]
+    simp [Offset.rowMajor2D, Offset.strided, StreamingAccumulator.blockIndex]
   · exact hX
 
 /-- Strided variant of `fa1_block_read`: reading the `n`-th KV block at
@@ -79,16 +79,16 @@ theorem fa1_block_read_strided
     (n : Nat) (hn : n < numKVBlocks)
     (j : Fin Bk) (d : Fin D) :
     s.readMem region (base + (n * Bk + j.val) * sN + d.val * sD) =
-      X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
+      X (StreamingAccumulator.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
         d, PUnit.unit) := by
   rw [BlockState.readMem]
   have haddr :
       base + (n * Bk + j.val) * sN + d.val * sD =
         (fun idx : TileIndex [Bk * numKVBlocks, D] =>
             base + idx.1.val * sN + idx.2.1.val * sD)
-          (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
+          (StreamingAccumulator.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) j,
             d, PUnit.unit) := by
-    simp [FA1Math.blockIndex]
+    simp [StreamingAccumulator.blockIndex]
   rw [haddr]
   exact hX _
 
@@ -108,7 +108,7 @@ theorem fa1_block_load_tile_eq_strided
       : Tile .real [Bk, D])
       =
       Tile.ofReal (fun idx : TileIndex [Bk, D] =>
-        X (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
+        X (StreamingAccumulator.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
           idx.2.1, PUnit.unit)) := by
   apply load_tile_eq_of_InputAt_map
     (s := s) (region := region)
@@ -117,11 +117,11 @@ theorem fa1_block_load_tile_eq_strided
     (offsetFn := fun idx : TileIndex [Bk * numKVBlocks, D] =>
       base + idx.1.val * sN + idx.2.1.val * sD)
     (embed := fun idx : TileIndex [Bk, D] =>
-      (FA1Math.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
+      (StreamingAccumulator.blockIndex Bk numKVBlocks n (Nat.succ_le_iff.mpr hn) idx.1,
         idx.2.1, PUnit.unit))
     (xs := X)
   · intro idx
-    simp [FA1Math.blockIndex]
+    simp [StreamingAccumulator.blockIndex]
   · exact hX
 
 /-- Boundary-masked strided KV block load. Valid local lanes read the logical
@@ -261,7 +261,7 @@ theorem fa1_boundary_score_lane_eq
       rfl
     rw [h_sum]
     show (some _ : WithBot ℝ) = some _
-    unfold FA1Math.scaledScore
+    unfold StreamingAccumulator.scaledScore
     congr 1
     ring
   · rw [if_neg h]
@@ -321,7 +321,7 @@ theorem fa1_causal_boundary_score_lane_eq
         rfl
       rw [h_sum]
       show (some _ : WithBot ℝ) = some _
-      unfold FA1Math.scaledScore
+      unfold StreamingAccumulator.scaledScore
       congr 1
       ring
     · rw [if_neg hLe]

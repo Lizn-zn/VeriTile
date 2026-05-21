@@ -167,7 +167,7 @@ theorem token_softmax_final_store_slice_correct
               stride_softmax_h stride_softmax_bs i
           else s.readMem Prob_Out outAddr) := by
   intro i
-  simp [exec, token_softmax_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, token_softmax_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt, BlockState.readMemValue,
         seqLen, startLoc, tokenIndex, softmaxOffset, probOffset]
@@ -256,5 +256,131 @@ theorem token_softmax_final_store_slice_compute_correct
     stride_prob_bs BLOCK_SIZE s hOutInj i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+The checked Python tests use `N_CTX = 1025`, so
+`BLOCK_SIZE = next_power_of_2(1025) = 2048`. Case 1 allocates
+`Prob_Out.shape = (12, 4 * 1025)` with strides `(4100, 1)`, while case 2
+allocates `(12, 3 * 1025)` with strides `(3075, 1)` before varying the metadata
+sequence lengths. -/
+
+theorem token_softmax_bloom_python_case1_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun i : Fin 2048 => probOffset s B_Start_Loc 4100 1 i) := by
+  intro a b h
+  simp [probOffset, tokenIndex, startLoc] at h
+  exact Fin.ext (by omega)
+
+theorem token_softmax_bloom_python_case2_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun i : Fin 2048 => probOffset s B_Start_Loc 3075 1 i) := by
+  intro a b h
+  simp [probOffset, tokenIndex, startLoc] at h
+  exact Fin.ext (by omega)
+
+theorem token_softmax_bloom_final_store_python_case1_compute_correct
+    (Softmax B_Start_Loc B_Seqlen Prob_Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := token_softmax_final_store_slice Softmax B_Start_Loc B_Seqlen
+        Prob_Out 4100 1 4100 1 2048)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 2048 => active s B_Seqlen i)
+        (fun i : Fin 2048 => (Prob_Out, probOffset s B_Start_Loc 4100 1 i)))
+      (expected := fun i : Fin 2048 =>
+        softmaxStoreValue s Softmax B_Start_Loc B_Seqlen 4100 1 i) := by
+  exact token_softmax_final_store_slice_compute_correct Softmax B_Start_Loc
+    B_Seqlen Prob_Out 4100 1 4100 1 2048 s
+    (token_softmax_bloom_python_case1_offset_injective s B_Start_Loc)
+
+theorem token_softmax_bloom_final_store_python_case2_compute_correct
+    (Softmax B_Start_Loc B_Seqlen Prob_Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := token_softmax_final_store_slice Softmax B_Start_Loc B_Seqlen
+        Prob_Out 3075 1 3075 1 2048)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 2048 => active s B_Seqlen i)
+        (fun i : Fin 2048 => (Prob_Out, probOffset s B_Start_Loc 3075 1 i)))
+      (expected := fun i : Fin 2048 =>
+        softmaxStoreValue s Softmax B_Start_Loc B_Seqlen 3075 1 i) := by
+  exact token_softmax_final_store_slice_compute_correct Softmax B_Start_Loc
+    B_Seqlen Prob_Out 3075 1 3075 1 2048 s
+    (token_softmax_bloom_python_case2_offset_injective s B_Start_Loc)
+
+/-- Python case 1 full token-softmax surface lowering for
+`Logics.shape = Prob_Out.shape = (12, 4 * 1025)`. -/
+theorem token_softmax_bloom_python_case1_surface_toAlgorithm_supported
+    (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName) :
+    (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+        4100 1 4100 1 2048).toAlgorithm? =
+      Except.ok
+        (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+          4100 1 4100 1 2048).toAlgKernel := by
+  exact token_softmax_surface_toAlgorithm_supported Logics B_Start_Loc
+    B_Seqlen Prob_Out 4100 1 4100 1 2048
+
+/-- Python case 2 full token-softmax surface lowering for the allocated
+`(12, 3 * 1025)` logics/probability tensors and varied sequence metadata. -/
+theorem token_softmax_bloom_python_case2_surface_toAlgorithm_supported
+    (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName) :
+    (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+        3075 1 3075 1 2048).toAlgorithm? =
+      Except.ok
+        (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+          3075 1 3075 1 2048).toAlgKernel := by
+  exact token_softmax_surface_toAlgorithm_supported Logics B_Start_Loc
+    B_Seqlen Prob_Out 3075 1 3075 1 2048
+
+/-- Public Python case 1 coverage summary: the full stable-softmax surface
+lowers and the masked final probability writeback realizes the checked output
+shape. -/
+theorem token_softmax_bloom_python_case1_output_surface_summary
+    (Logics Softmax B_Start_Loc B_Seqlen Prob_Out : RegionName) (s : BlockState) :
+    (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+        4100 1 4100 1 2048).toAlgorithm? =
+      Except.ok
+        (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+          4100 1 4100 1 2048).toAlgKernel ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_softmax_final_store_slice Softmax B_Start_Loc B_Seqlen
+        Prob_Out 4100 1 4100 1 2048)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 2048 => active s B_Seqlen i)
+        (fun i : Fin 2048 => (Prob_Out, probOffset s B_Start_Loc 4100 1 i)))
+      (expected := fun i : Fin 2048 =>
+        softmaxStoreValue s Softmax B_Start_Loc B_Seqlen 4100 1 i)) := by
+  constructor
+  · exact token_softmax_bloom_python_case1_surface_toAlgorithm_supported
+      Logics B_Start_Loc B_Seqlen Prob_Out
+  · exact token_softmax_bloom_final_store_python_case1_compute_correct
+      Softmax B_Start_Loc B_Seqlen Prob_Out s
+
+/-- Public Python case 2 coverage summary. -/
+theorem token_softmax_bloom_python_case2_output_surface_summary
+    (Logics Softmax B_Start_Loc B_Seqlen Prob_Out : RegionName) (s : BlockState) :
+    (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+        3075 1 3075 1 2048).toAlgorithm? =
+      Except.ok
+        (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+          3075 1 3075 1 2048).toAlgKernel ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_softmax_final_store_slice Softmax B_Start_Loc B_Seqlen
+        Prob_Out 3075 1 3075 1 2048)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 2048 => active s B_Seqlen i)
+        (fun i : Fin 2048 => (Prob_Out, probOffset s B_Start_Loc 3075 1 i)))
+      (expected := fun i : Fin 2048 =>
+        softmaxStoreValue s Softmax B_Start_Loc B_Seqlen 3075 1 i)) := by
+  constructor
+  · exact token_softmax_bloom_python_case2_surface_toAlgorithm_supported
+      Logics B_Start_Loc B_Seqlen Prob_Out
+  · exact token_softmax_bloom_final_store_python_case2_compute_correct
+      Softmax B_Start_Loc B_Seqlen Prob_Out s
 
 end VeriTile.Bench.TritonBenchG.TokenSoftmaxBloom

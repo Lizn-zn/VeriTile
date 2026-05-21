@@ -525,7 +525,7 @@ theorem iv_dependent_matmul_masked_output_store_slice_correct
         else
           s.mem C (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
   intro idx
-  simp [exec, iv_dependent_matmul_masked_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, iv_dependent_matmul_masked_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         TileShape.dropInsertedIndex] at hExec
@@ -586,5 +586,33 @@ theorem iv_dependent_matmul_masked_output_store_slice_compute_correct
   have h := iv_dependent_matmul_masked_output_store_slice_correct C Acc M N stride_cm stride_cn
     stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
   simpa [hActive] using h
+
+/-- Python test-shape final-output coverage for all scheduling modes.
+
+The benchmark fixes `M = N = K = 256` and `BLOCK_SIZE_M = BLOCK_SIZE_N = 32`.
+All string-controlled scheduling modes feed the same final masked `C` store;
+this theorem pins the concrete row-major output shape so downstream references
+do not need to rebuild the 2D offset injectivity proof. -/
+theorem iv_dependent_matmul_python_test_shape_masked_output_store_compute_correct
+    (C Acc : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := iv_dependent_matmul_masked_output_store_slice C Acc
+        256 256 256 1 256 1 32 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 256 32 32)
+        (fun idx => (C, cOffset s 256 1 32 32 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 256 1 32 32 idx))))) := by
+  apply iv_dependent_matmul_masked_output_store_slice_compute_correct
+  rintro ⟨⟨ra, hra⟩, ⟨ca, hca⟩, _⟩ ⟨⟨rb, hrb⟩, ⟨cb, hcb⟩, _⟩ h
+  simp [cOffset, rowIndex, colIndex] at h
+  have hr : ra = rb := by omega
+  have hc : ca = cb := by omega
+  subst rb
+  subst cb
+  rfl
 
 end VeriTile.Bench.TritonBenchG.IvDependentMatmul

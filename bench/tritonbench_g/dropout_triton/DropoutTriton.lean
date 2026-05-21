@@ -55,7 +55,7 @@ theorem dropout_kernel_correct
           dropoutSpec s x_ptr x_keep_ptr p BLOCK_SIZE i
         else s.readMem output_ptr outAddr := by
   intro i
-  simp [exec, dropout_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, dropout_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.select,
         NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
         ComparableDType.lt] at hExec

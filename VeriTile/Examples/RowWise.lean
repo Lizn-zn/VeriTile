@@ -103,7 +103,14 @@ theorem rowWiseSum_correct
         rowWiseSumSpec, Triton.TiledReduction.tileSum]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
-  rfl
+  apply Exists.intro
+  constructor
+  · unfold evalOp
+    simp [Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+    rfl
+  · simp [BlockState.writeMem_readMem]
+    rfl
 
 /-- View-level surface for `rowWiseSum_correct`. -/
 theorem rowWiseSum_correct_exec_view
@@ -159,7 +166,14 @@ theorem rowWiseMax_correct
         rowWiseMaxSpec, Triton.TiledReduction.tileMax]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
-  rfl
+  apply Exists.intro
+  constructor
+  · unfold evalOp
+    simp [Tile.reduceMax, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+    rfl
+  · simp [BlockState.writeMem_readMem]
+    rfl
 
 /-- View-level surface for `rowWiseMax_correct`. -/
 theorem rowWiseMax_correct_exec_view

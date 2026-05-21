@@ -57,7 +57,7 @@ theorem swiglu_fwd_kernel_correct
       simpa [Nat.add_assoc] using hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab')
     rfl
-  simp [exec, swiglu_fwd_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, swiglu_fwd_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         tile_elementwise, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?] at hExec
   subst s'
   simp only [swigluOffset, Nat.add_assoc]

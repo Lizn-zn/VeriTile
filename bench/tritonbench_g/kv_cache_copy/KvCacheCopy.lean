@@ -53,6 +53,25 @@ def copy_to_kvcache_seqlen1_kernel
   }
 }
 
+/-- The full `kv_cache_copy.py` seqlen=1 copy surface lowers to the algorithm
+layer, including block-table/context-length address arithmetic and both K/V
+cache stores. -/
+theorem copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported
+    (K V KCache VCache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat)
+    (stride_kt stride_kh stride_kd
+      stride_vt stride_vh stride_vd
+      stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_kcd
+      stride_vcb stride_vch stride_vcs stride_vcd
+      stride_bts stride_btb block_size HEAD_DIM KCACHE_X : Nat) :
+    ∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
+      context_lengths stride_kt stride_kh stride_kd stride_vt stride_vh
+      stride_vd stride_kcb stride_kch stride_kcsplit_x stride_kcs stride_kcd
+      stride_vcb stride_vch stride_vcs stride_vcd stride_bts stride_btb
+      block_size HEAD_DIM KCACHE_X).toAlgorithm? = Except.ok alg := by
+  simp [copy_to_kvcache_seqlen1_kernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of the K-cache store in `kv_cache_copy.py`'s
 `_copy_to_kvcache_seqlen1_kernel` for one `split_x` partition.
 
@@ -287,7 +306,7 @@ theorem copy_to_kcache_one_xblock_correct
     cases hab
     rfl
   by_cases hBX : 0 < KCACHE_X
-  · simp [exec, copy_to_kcache_one_xblock, stepStmts, stepStmt, evalOp,
+  · simp [exec, copy_to_kcache_one_xblock, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt,
           BlockState.readMemValue, hBX] at hExec
@@ -424,7 +443,7 @@ theorem copy_to_kcache_seqlen1_xblock_correct
     cases hab
     rfl
   by_cases hBX : 0 < KCACHE_X
-  · simp [exec, copy_to_kcache_seqlen1_xblock, stepStmts, stepStmt, evalOp,
+  · simp [exec, copy_to_kcache_seqlen1_xblock, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
@@ -739,7 +758,7 @@ theorem copy_to_vcache_seqlen1_dblock_correct
     cases hab
     rfl
   by_cases hBD : 0 < BLOCK_D
-  · simp [exec, copy_to_vcache_seqlen1_dblock, stepStmts, stepStmt, evalOp,
+  · simp [exec, copy_to_vcache_seqlen1_dblock, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
@@ -878,7 +897,7 @@ theorem copy_to_vcache_one_dblock_correct
     cases hab
     rfl
   by_cases hBD : 0 < BLOCK_D
-  · simp [exec, copy_to_vcache_one_dblock, stepStmts, stepStmt, evalOp,
+  · simp [exec, copy_to_vcache_one_dblock, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop,
           NumericDType.add, NumericDType.mul, ComparableDType.lt,
           BlockState.readMemValue, hBD] at hExec
@@ -956,5 +975,155 @@ theorem copy_to_vcache_one_dblock_compute_correct
     stride_vch stride_vcs stride_vcd stride_bts stride_btb HEAD_DIM BLOCK_D
     s s' hOutInj hExec i
   simpa [hActive] using h
+
+/-! ## Python test-shape wrappers -/
+
+/-- Python case 1 full surface lowering for the legacy K-cache layout
+`[num_blocks, num_kv_heads, block_size, head_dim]`. -/
+theorem kv_cache_copy_python_case1_surface_toAlgorithm_supported
+    (K V KCache VCache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat) :
+    ∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
+      context_lengths 256 64 1 256 64 1 4096 1024 0 64 1
+      4096 1024 64 1 10 1 16 64 64).toAlgorithm? = Except.ok alg := by
+  exact copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported K V KCache
+    VCache BLOCK_TABLES context_lengths 256 64 1 256 64 1 4096 1024
+    0 64 1 4096 1024 64 1 10 1 16 64 64
+
+/-- Python case 2 full surface lowering for the new split-x K-cache layout
+`[num_blocks, num_kv_heads, head_dim // 8, block_size, 8]`. -/
+theorem kv_cache_copy_python_case2_surface_toAlgorithm_supported
+    (K V KCache VCache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat) :
+    ∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
+      context_lengths 256 64 1 256 64 1 4096 1024 128 8 1
+      4096 1024 64 1 10 1 16 64 8).toAlgorithm? = Except.ok alg := by
+  exact copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported K V KCache
+    VCache BLOCK_TABLES context_lengths 256 64 1 256 64 1 4096 1024
+    128 8 1 4096 1024 64 1 10 1 16 64 8
+
+theorem kv_cache_copy_python_old_kcache_offset_injective
+    (s : BlockState) (BLOCK_TABLES context_lengths : RegionName) :
+    Function.Injective
+      (fun i : Fin 64 =>
+        seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0
+          4096 1024 0 64 10 1 16 64 i) := by
+  intro a b h
+  simp [seqlen1KCacheOffset, seqlen1BlockId, seqlen1LastBlockIdx,
+    seqlen1OffsetLastBlock, seqlen1PastKvSeqLen] at h
+  exact Fin.ext (by omega)
+
+theorem kv_cache_copy_python_new_kcache_offset_injective
+    (s : BlockState) (BLOCK_TABLES context_lengths : RegionName) (split_x : Nat) :
+    Function.Injective
+      (fun i : Fin 8 =>
+        seqlen1KCacheOffset s BLOCK_TABLES context_lengths split_x
+          4096 1024 128 8 10 1 16 8 i) := by
+  intro a b h
+  simp [seqlen1KCacheOffset, seqlen1BlockId, seqlen1LastBlockIdx,
+    seqlen1OffsetLastBlock, seqlen1PastKvSeqLen] at h
+  exact Fin.ext (by omega)
+
+theorem kv_cache_copy_python_vcache_offset_injective
+    (s : BlockState) (BLOCK_TABLES context_lengths : RegionName) :
+    Function.Injective
+      (fun i : Fin 64 =>
+        seqlen1VCacheOffset s BLOCK_TABLES context_lengths
+          4096 1024 64 1 10 1 16 i) := by
+  intro a b h
+  simp [seqlen1VCacheOffset, seqlen1BlockId, seqlen1LastBlockIdx,
+    seqlen1OffsetLastBlock, seqlen1PastKvSeqLen, dimIndex] at h
+  exact Fin.ext (by omega)
+
+/-- Public Python case 1 coverage summary: full old-layout K/V cache surface
+lowers, and the K-cache plus V-cache writebacks realize the checked output
+strides. -/
+theorem kv_cache_copy_python_case1_all_outputs_summary
+    (K V KCache VCache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat) (s : BlockState) :
+    (∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
+      context_lengths 256 64 1 256 64 1 4096 1024 0 64 1
+      4096 1024 64 1 10 1 16 64 64).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
+        context_lengths 0 256 64 1 4096 1024 0 64 10 1 16 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => kActive 0 64 64 i)
+        (fun i => (KCache,
+          seqlen1KCacheOffset s BLOCK_TABLES context_lengths 0
+            4096 1024 0 64 10 1 16 64 i)))
+      (expected := fun i =>
+        s.readMem K (kSourceOffset s 0 256 64 1 64 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
+        context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active 64 i)
+        (fun i => (VCache,
+          seqlen1VCacheOffset s BLOCK_TABLES context_lengths
+            4096 1024 64 1 10 1 16 i)))
+      (expected := fun i =>
+        s.readMem V (vSourceOffset s 256 64 1 i))) := by
+  constructor
+  · exact kv_cache_copy_python_case1_surface_toAlgorithm_supported
+      K V KCache VCache BLOCK_TABLES context_lengths
+  constructor
+  · exact copy_to_kcache_seqlen1_old_layout_block_compute_correct K KCache
+      BLOCK_TABLES context_lengths 256 64 1 4096 1024 64 10 1 16 64 s
+      (kv_cache_copy_python_old_kcache_offset_injective s BLOCK_TABLES
+        context_lengths)
+  · exact copy_to_vcache_seqlen1_dblock_compute_correct V VCache BLOCK_TABLES
+      context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64 s
+      (kv_cache_copy_python_vcache_offset_injective s BLOCK_TABLES
+        context_lengths)
+
+/-- Public Python case 2 coverage summary: full new-layout K/V cache surface
+lowers, every `split_x : Fin 8` K-cache writeback realizes its x-block, and the
+V-cache writeback realizes the checked output strides. -/
+theorem kv_cache_copy_python_case2_all_outputs_summary
+    (K V KCache VCache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat) (s : BlockState) :
+    (∃ alg, (copy_to_kvcache_seqlen1_kernel K V KCache VCache BLOCK_TABLES
+      context_lengths 256 64 1 256 64 1 4096 1024 128 8 1
+      4096 1024 64 1 10 1 16 64 8).toAlgorithm? = Except.ok alg) ∧
+    (∀ split_x : Fin 8,
+      ComputeCorrect.Realizes
+        (kernel := copy_to_kcache_seqlen1_xblock K KCache BLOCK_TABLES
+          context_lengths split_x.val 256 64 1 4096 1024 128 8 10 1 16 64 8)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 8 => kActive split_x.val 64 8 i)
+          (fun i => (KCache,
+            seqlen1KCacheOffset s BLOCK_TABLES context_lengths split_x.val
+              4096 1024 128 8 10 1 16 8 i)))
+        (expected := fun i =>
+          s.readMem K (kSourceOffset s split_x.val 256 64 1 8 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := copy_to_vcache_seqlen1_dblock V VCache BLOCK_TABLES
+        context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active 64 i)
+        (fun i => (VCache,
+          seqlen1VCacheOffset s BLOCK_TABLES context_lengths
+            4096 1024 64 1 10 1 16 i)))
+      (expected := fun i =>
+        s.readMem V (vSourceOffset s 256 64 1 i))) := by
+  constructor
+  · exact kv_cache_copy_python_case2_surface_toAlgorithm_supported
+      K V KCache VCache BLOCK_TABLES context_lengths
+  constructor
+  · intro split_x
+    exact copy_to_kcache_seqlen1_new_layout_xblock_compute_correct K KCache
+      BLOCK_TABLES context_lengths split_x.val 256 64 1 4096 1024 128 8
+      10 1 16 64 8 s
+      (kv_cache_copy_python_new_kcache_offset_injective s BLOCK_TABLES
+        context_lengths split_x.val)
+  · exact copy_to_vcache_seqlen1_dblock_compute_correct V VCache BLOCK_TABLES
+      context_lengths 256 64 1 4096 1024 64 1 10 1 16 64 64 s
+      (kv_cache_copy_python_vcache_offset_injective s BLOCK_TABLES
+        context_lengths)
 
 end VeriTile.Bench.TritonBenchG.KvCacheCopy

@@ -178,7 +178,7 @@ theorem chunked_cumsum_dt_out_store_slice_correct
                 chunk_size BLOCK_SIZE_H idx)
           else s.readMem DtOut outAddr) := by
   intro idx
-  simp [exec, chunked_cumsum_dt_out_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunked_cumsum_dt_out_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         headIndex, chunkIndex, dtPreparedOffset, dtOutOffset,
@@ -313,7 +313,7 @@ theorem chunked_cumsum_dA_cs_store_slice_correct
                 chunk_size BLOCK_SIZE_H idx)
           else s.readMem DACumsum outAddr) := by
   intro idx
-  simp [exec, chunked_cumsum_dA_cs_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunked_cumsum_dA_cs_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         headIndex, chunkIndex, dtPreparedOffset, dACsOutOffset,
@@ -470,7 +470,7 @@ theorem chunked_cumsum_dA_cs_compute_slice_correct
               BLOCK_SIZE_CHUNK idx
           else s.readMem DACumsum outAddr) := by
   intro idx
-  simp [exec, chunked_cumsum_dA_cs_compute_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, chunked_cumsum_dA_cs_compute_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, Tile.scan, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, headIndex, chunkIndex, active, dtPreparedOffset,
@@ -607,5 +607,127 @@ theorem chunked_cumsum_dA_cs_compute_python_test_shape_compute_correct
   exact chunked_cumsum_dA_cs_compute_slice_compute_correct DtPrepared A DACumsum
     40 4 1 1 40 5 10 1 4 5 4 8 s
     (chunked_cumsum_dA_cs_python_test_shape_offset_injective s)
+
+/-- Python test-shape output coverage for chunked cumsum forward: `dt_out` and
+both `dA_cumsum` writeback surfaces realize the checked masked output shapes. -/
+theorem chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
+    (DtPrepared DtOut DAcs A DACumsum : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dt_out_store_slice DtPrepared DtOut
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] => (DtOut, dtOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DtPrepared (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DAcs (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
+        40 4 1 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx)) := by
+  constructor
+  · exact chunked_cumsum_dt_out_python_test_shape_compute_correct
+      DtPrepared DtOut s
+  constructor
+  · exact chunked_cumsum_dA_cs_store_python_test_shape_compute_correct
+      DAcs DACumsum s
+  · exact chunked_cumsum_dA_cs_compute_python_test_shape_compute_correct
+      DtPrepared A DACumsum s
+
+/-! ## Python test-case surface wrappers
+
+The Python regression calls `_chunk_cumsum_fwd` four times with the same
+contiguous shape and block metadata, varying only `HAS_DT_BIAS` and
+`DT_SOFTPLUS`. These wrappers pin those four entry points to the source-level
+surface, including the optional bias/softplus branches before the `dt_out` and
+`dA_cumsum` stores. -/
+
+theorem chunked_cumsum_fwd_python_test_case1_surface_toAlgorithm_supported
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) :
+    ∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      Bool.false Bool.false 4 8).toAlgorithm? = Except.ok alg := by
+  exact chunked_cumsum_fwd_surface_toAlgorithm_supported
+    dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+    2 10 4 5 dt_min dt_max
+    40 4 1 1 1
+    40 5 10 1
+    40 5 10 1
+    Bool.false Bool.false 4 8
+
+theorem chunked_cumsum_fwd_python_test_case2_surface_toAlgorithm_supported
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) :
+    ∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      Bool.false Bool.true 4 8).toAlgorithm? = Except.ok alg := by
+  exact chunked_cumsum_fwd_surface_toAlgorithm_supported
+    dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+    2 10 4 5 dt_min dt_max
+    40 4 1 1 1
+    40 5 10 1
+    40 5 10 1
+    Bool.false Bool.true 4 8
+
+theorem chunked_cumsum_fwd_python_test_case3_surface_toAlgorithm_supported
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) :
+    ∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      Bool.true Bool.false 4 8).toAlgorithm? = Except.ok alg := by
+  exact chunked_cumsum_fwd_surface_toAlgorithm_supported
+    dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+    2 10 4 5 dt_min dt_max
+    40 4 1 1 1
+    40 5 10 1
+    40 5 10 1
+    Bool.true Bool.false 4 8
+
+theorem chunked_cumsum_fwd_python_test_case4_surface_toAlgorithm_supported
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) :
+    ∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      Bool.true Bool.true 4 8).toAlgorithm? = Except.ok alg := by
+  exact chunked_cumsum_fwd_surface_toAlgorithm_supported
+    dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+    2 10 4 5 dt_min dt_max
+    40 4 1 1 1
+    40 5 10 1
+    40 5 10 1
+    Bool.true Bool.true 4 8
 
 end VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd

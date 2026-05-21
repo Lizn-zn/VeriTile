@@ -338,7 +338,7 @@ theorem matmul_masked_output_store_slice_correct
         else
           s.mem C (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
   intro idx
-  simp [exec, matmul_masked_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, matmul_masked_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         TileShape.dropInsertedIndex] at hExec
@@ -399,5 +399,133 @@ theorem matmul_masked_output_store_slice_compute_correct
   have h := matmul_masked_output_store_slice_correct C Acc M N stride_cm stride_cn
     stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
   simpa [hActive] using h
+
+/-- Row-major output offsets are injective for the `128 × 256` Python tile. -/
+theorem matmul_autotune_python_output_offset_injective_256
+    (s : BlockState) :
+    Function.Injective (cOffset s 256 1 128 256) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Row-major output offsets are injective for the `128 × 256` tile in the
+`N = 512` Python case. -/
+theorem matmul_autotune_python_output_offset_injective_512
+    (s : BlockState) :
+    Function.Injective (cOffset s 512 1 128 256) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Python case 1 full surface lowering for the first CUDA autotune config:
+`M=128`, `K=64`, `N=256`, no activation. -/
+theorem matmul_autotune_python_case1_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_autotune_surface A B C
+      128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_autotune_surface_toAlgorithm_supported A B C
+    128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false
+
+/-- Python case 2 full surface lowering for the leaky-ReLU activation path. -/
+theorem matmul_autotune_python_case2_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_autotune_surface A B C
+      128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_autotune_surface_toAlgorithm_supported A B C
+    128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true
+
+/-- Python case 2 activation-tail surface lowering from a precomputed
+accumulator tile. -/
+theorem matmul_autotune_python_case2_leaky_relu_tail_surface_toAlgorithm_supported
+    (Acc C : RegionName) :
+    ∃ alg, (matmul_autotune_leaky_relu_tail_surface Acc C
+      128 256 256 1 256 1 128 256).toAlgorithm? = Except.ok alg := by
+  exact matmul_autotune_leaky_relu_tail_surface_toAlgorithm_supported Acc C
+    128 256 256 1 256 1 128 256
+
+/-- Python case 3 full surface lowering for `M=256`, `K=128`, `N=512`,
+using the first CUDA autotune config. -/
+theorem matmul_autotune_python_case3_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_autotune_surface A B C
+      256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_autotune_surface_toAlgorithm_supported A B C
+    256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false
+
+/-- Public Python case 1 coverage summary: full surface plus masked fp16
+output-store tile for the observed result tensor. -/
+theorem matmul_autotune_python_case1_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_autotune_surface A B C
+      128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 128 256 256 1 256 1 128 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 128 256 128 256)
+        (fun idx => (C, cOffset s 256 1 128 256 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 256 1 128 256 idx)))))) := by
+  constructor
+  · exact matmul_autotune_python_case1_surface_toAlgorithm_supported A B C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      128 256 256 1 256 1 128 256 s
+      (matmul_autotune_python_output_offset_injective_256 s)
+
+/-- Public Python case 2 coverage summary: full activation surface,
+activation-tail surface, and masked fp16 output-store tile. -/
+theorem matmul_autotune_python_case2_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_autotune_surface A B C
+      128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (matmul_autotune_leaky_relu_tail_surface Acc C
+      128 256 256 1 256 1 128 256).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 128 256 256 1 256 1 128 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 128 256 128 256)
+        (fun idx => (C, cOffset s 256 1 128 256 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 256 1 128 256 idx)))))) := by
+  constructor
+  · exact matmul_autotune_python_case2_surface_toAlgorithm_supported A B C
+  constructor
+  · exact matmul_autotune_python_case2_leaky_relu_tail_surface_toAlgorithm_supported
+      Acc C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      128 256 256 1 256 1 128 256 s
+      (matmul_autotune_python_output_offset_injective_256 s)
+
+/-- Public Python case 3 coverage summary. -/
+theorem matmul_autotune_python_case3_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_autotune_surface A B C
+      256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 256 512 512 1 512 1 128 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 512 128 256)
+        (fun idx => (C, cOffset s 512 1 128 256 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 512 1 128 256 idx)))))) := by
+  constructor
+  · exact matmul_autotune_python_case3_surface_toAlgorithm_supported A B C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      256 512 512 1 512 1 128 256 s
+      (matmul_autotune_python_output_offset_injective_512 s)
 
 end VeriTile.Bench.TritonBenchG.MatmulTritonAutotune

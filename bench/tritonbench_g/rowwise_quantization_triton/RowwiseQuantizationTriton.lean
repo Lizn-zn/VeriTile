@@ -201,4 +201,52 @@ theorem quantize_rowwise_python_output_maxs_compute_correct
       (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals) := by
   exact quantize_rowwise_max_store_slice_compute_correct MaxVals output_maxs s
 
+/-- Python case 1 all-output coverage: scaled row output plus the per-row
+`output_maxs` writeback. -/
+theorem quantize_rowwise_python_case1_all_outputs_compute_correct
+    (x_ptr output_ptr MaxVals output_maxs : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
+        6 3 4 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 4 => i.val < 3)
+          (fun i => (output_ptr, offset s 3 i)))
+      (expected := fun i =>
+        quantizeRowwiseScaledSpec s x_ptr MaxVals 3 127.0 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
+      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals)) := by
+  constructor
+  · exact quantize_rowwise_python_case1_scaled_output_compute_correct
+      x_ptr output_ptr MaxVals s
+  · exact quantize_rowwise_python_output_maxs_compute_correct
+      MaxVals output_maxs s
+
+/-- Python case 3 all-output coverage: scaled row output plus the per-row
+`output_maxs` writeback. -/
+theorem quantize_rowwise_python_case3_all_outputs_compute_correct
+    (x_ptr output_ptr MaxVals output_maxs : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
+        10 5 8 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 8 => i.val < 5)
+          (fun i => (output_ptr, offset s 5 i)))
+      (expected := fun i =>
+        quantizeRowwiseScaledSpec s x_ptr MaxVals 5 127.0 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
+      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals)) := by
+  constructor
+  · exact quantize_rowwise_python_case3_scaled_output_compute_correct
+      x_ptr output_ptr MaxVals s
+  · exact quantize_rowwise_python_output_maxs_compute_correct
+      MaxVals output_maxs s
+
 end VeriTile.Bench.TritonBenchG.RowwiseQuantizationTriton

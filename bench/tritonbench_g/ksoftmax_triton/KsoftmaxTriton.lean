@@ -295,7 +295,7 @@ theorem ksoftmax_forward_plain_correct
         else s.readMem Y (yOffset s stride_ym stride_yn i) := by
   intro i
   by_cases hD : 0 < DEPTH
-  · simp [exec, ksoftmax_forward_plain, stepStmts, stepStmt, evalOp,
+  · simp [exec, ksoftmax_forward_plain, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
           Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,

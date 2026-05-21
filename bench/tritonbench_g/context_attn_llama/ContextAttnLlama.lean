@@ -229,7 +229,7 @@ theorem context_attn_llama_final_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, context_attn_llama_final_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
         BlockState.readMemValue, curBatch, curHead, promptLen, seqLen, startLoc,
@@ -312,5 +312,76 @@ theorem context_attn_llama_final_store_slice_compute_correct
     hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
+
+/-! ## Python test-shape wrappers
+
+The checked Python test uses `Z = 16`, `H = 16`, `N_CTX = 2048`, and
+`D_HEAD = 128`. The contiguous output layout has row/head/dimension strides
+`(2048, 128, 1)`. The launcher uses `BLOCK_DMODEL = 128` and either
+`BLOCK_M = 128` or the Tesla branch `BLOCK_M = 64`. -/
+
+theorem context_attn_llama_python_block128_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [128, 128] =>
+        outOffset s 16 B_Start_Loc 2048 128 1 128 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, curBatch, curHead, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem context_attn_llama_python_block64_offset_injective
+    (s : BlockState) (B_Start_Loc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [64, 128] =>
+        outOffset s 16 B_Start_Loc 2048 128 1 64 idx) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, startLoc, curBatch, curHead, mIndex, dIndex] at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb
+  subst db
+  rfl
+
+theorem context_attn_llama_final_store_python_block128_compute_correct
+    (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_llama_final_store_slice Acc B_Start_Loc B_Seqlen
+        B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] =>
+          active s 16 B_Seqlen B_Prompt_Cache_Len 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 16 4194304 128
+          2048 1 128 idx) := by
+  exact context_attn_llama_final_store_slice_compute_correct Acc B_Start_Loc
+    B_Seqlen B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1
+    128 128 s (context_attn_llama_python_block128_offset_injective s B_Start_Loc)
+
+theorem context_attn_llama_final_store_python_block64_compute_correct
+    (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_llama_final_store_slice Acc B_Start_Loc B_Seqlen
+        B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 128] =>
+          active s 16 B_Seqlen B_Prompt_Cache_Len 64 idx)
+        (fun idx : TileIndex [64, 128] =>
+          (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 128] =>
+        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 16 4194304 128
+          2048 1 64 idx) := by
+  exact context_attn_llama_final_store_slice_compute_correct Acc B_Start_Loc
+    B_Seqlen B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1
+    64 128 s (context_attn_llama_python_block64_offset_injective s B_Start_Loc)
 
 end VeriTile.Bench.TritonBenchG.ContextAttnLlama

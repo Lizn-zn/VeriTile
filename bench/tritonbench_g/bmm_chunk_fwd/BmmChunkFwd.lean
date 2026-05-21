@@ -226,7 +226,7 @@ theorem bmm_chunk_fwd_final_store_slice_correct
                 BLOCK_SIZE_N idx)
           else s.readMem Out outAddr) := by
   intro idx
-  simp [exec, bmm_chunk_fwd_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, bmm_chunk_fwd_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,
@@ -355,7 +355,7 @@ theorem bmm_chunk_fwd_final_store_slice_active_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro idx hActive
-  simp [exec, bmm_chunk_fwd_final_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, bmm_chunk_fwd_final_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.sub, NumericDType.mul,
         IntegralDType.floorDiv, IntegralDType.mod, ComparableDType.lt,

@@ -272,7 +272,7 @@ theorem cross_entropy_backward_store_slice_correct
     simp only at hab
     cases hab
     rfl
-  simp [exec, cross_entropy_backward_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, cross_entropy_backward_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt] at hExec
   rw [← hExec]
@@ -329,7 +329,7 @@ theorem cross_entropy_lse_store_slice_correct
     (LsumPre logsumexp_ptr : RegionName) (s s' : BlockState)
     (hExec : exec (cross_entropy_lse_store_slice LsumPre logsumexp_ptr) s = some s') :
     s'.readMem logsumexp_ptr (lseOutOffset s) = lseStoreSpec s LsumPre := by
-  simp [exec, cross_entropy_lse_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, cross_entropy_lse_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add] at hExec
   subst s'
@@ -368,7 +368,7 @@ theorem cross_entropy_loss_store_slice_correct
     (LossPre loss_ptr : RegionName) (s s' : BlockState)
     (hExec : exec (cross_entropy_loss_store_slice LossPre loss_ptr) s = some s') :
     s'.readMem loss_ptr (lseOutOffset s) = lossStoreSpec s LossPre := by
-  simp [exec, cross_entropy_loss_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, cross_entropy_loss_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add] at hExec
   subst s'

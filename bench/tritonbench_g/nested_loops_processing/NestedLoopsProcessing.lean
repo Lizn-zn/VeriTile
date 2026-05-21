@@ -85,7 +85,7 @@ theorem nested3_first_a1_store_correct
       s'.readMem out_ptr (matrixOffset stride_m stride_n idx) =
         s.readMem in_ptr (matrixOffset stride_m stride_n idx) := by
   intro idx
-  simp [exec, nested3_first_a1_store, stepStmts, stepStmt, evalOp,
+  simp [exec, nested3_first_a1_store, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.expandDim,
         NumericDType.add, NumericDType.mul,
         TileShape.insertAxis, TileShape.dropInsertedIndex] at hExec
@@ -161,7 +161,7 @@ theorem nested3_shifted_store_correct
       s'.readMem out_ptr (matrixOffsetShift stride_m stride_n SHIFT idx) =
         s.readMem in_ptr (matrixOffsetShift stride_m stride_n SHIFT idx) := by
   intro idx
-  simp [exec, nested3_shifted_store, stepStmts, stepStmt, evalOp,
+  simp [exec, nested3_shifted_store, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.expandDim,
         NumericDType.add, NumericDType.mul,
         TileShape.insertAxis, TileShape.dropInsertedIndex] at hExec
@@ -277,7 +277,7 @@ theorem nested3_shifted_copy_store_correct
       s'.readMem out_ptr (matrixOffsetShift stride_m stride_n OUT_SHIFT idx) =
         s.readMem in_ptr (matrixOffsetShift stride_m stride_n IN_SHIFT idx) := by
   intro idx
-  simp [exec, nested3_shifted_copy_store, stepStmts, stepStmt, evalOp,
+  simp [exec, nested3_shifted_copy_store, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.expandDim,
         NumericDType.add, NumericDType.mul,
         TileShape.insertAxis, TileShape.dropInsertedIndex] at hExec

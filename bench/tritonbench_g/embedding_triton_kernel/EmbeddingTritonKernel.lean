@@ -982,7 +982,7 @@ theorem embeddingPreLoop_step_regs
           s.readMemValue .nat (Region.cast input_ids) offset) ∧
       (∀ offset, st.readMem weight offset = s.readMem weight offset) := by
   unfold embeddingPreLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, Tile.bop, NumericDType.mul,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, NumericDType.mul,
     NumericDType.add, BlockState.setReg, Option.bind] at hStep
   subst st
   constructor
@@ -1035,7 +1035,7 @@ theorem embeddingLoopBody_step_current_chunk_write
       embeddingSpec2D s0 weight input_ids vob_start_id vob_end_id
         stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx := by
   unfold embeddingLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hOffsNN, hOffsD, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hOffsNN, hOffsD, Tile.bop, Tile.cop,
     Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
     NumericDType.sub, NumericDType.mul, ComparableDType.lt,
     ComparableDType.ge, Bool.and_eq_true, Option.bind, hInputRead,
@@ -1132,7 +1132,7 @@ theorem embeddingLoopBody_step_preserve_old
     st'.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx) =
       st.readMem out (outOffsetFull s0 stride_out_seq BLOCK_N oldIdx) := by
   unfold embeddingLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hOffsNN, hOffsD, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hOffsNN, hOffsD, Tile.bop, Tile.cop,
     Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
     NumericDType.sub, NumericDType.mul, ComparableDType.lt,
     ComparableDType.ge, Bool.and_eq_true, Option.bind, hInputRead,
@@ -1269,7 +1269,7 @@ theorem embeddingLoopBody_step_preserves_context
           s0.readMemValue .nat (Region.cast input_ids) offset) ∧
       (∀ offset, st'.readMem weight offset = s0.readMem weight offset) := by
   unfold embeddingLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hOffsNN, hOffsD, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hOffsNN, hOffsD, Tile.bop, Tile.cop,
     Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
     NumericDType.sub, NumericDType.mul, ComparableDType.lt,
     ComparableDType.ge, Bool.and_eq_true, Option.bind, hInputRead,
@@ -1474,7 +1474,7 @@ theorem embeddingLoopContextInvariant_body_step_exists
         (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) with
   | none =>
       unfold embeddingLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hOffsNN, hOffsD, Tile.bop, Tile.cop,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hOffsNN, hOffsD, Tile.bop, Tile.cop,
         Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
         NumericDType.sub, NumericDType.mul, ComparableDType.lt,
         ComparableDType.ge, Bool.and_eq_true, Option.bind, hInputRead,

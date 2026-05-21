@@ -278,7 +278,7 @@ theorem conv2d_output_store_slice_correct
               output_out_feat_stride output_height_stride output_width_stride
               BLOCK_BHW BLOCK_OUT_FEAT idx) := by
   intro idx
-  simp [exec, conv2d_output_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, conv2d_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         TileShape.dropInsertedIndex] at hExec

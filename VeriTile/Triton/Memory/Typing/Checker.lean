@@ -193,11 +193,22 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
       checkBlockPtrMetadata parentShape blockShape strides offsets
   | .makeBlockPtrDyn _ base parentShape blockShape strides offsets =>
       base.check ctx *> checkBlockPtrMetadata parentShape blockShape strides offsets
+  | .makeBlockPtrDynOffsets _ base parentShape blockShape strides offsets =>
+      base.check ctx *>
+      (if parentShape.length = strides.length ∧ parentShape.length = offsets.length ∧
+          blockShape.length ≤ parentShape.length then
+        .ok ()
+      else
+        .error (.blockPointerMetadataMismatch parentShape.length strides.length
+          offsets.length blockShape.length))
   | .advanceBlockPtr ptr _ => ptr.check ctx
   | .load dtype mem mask => mem.check ctx dtype *> mask.check ctx
   | .natToReal a => a.check ctx
 termination_by op => sizeOf op
-decreasing_by all_goals (simp_wf; try omega)
+decreasing_by
+  all_goals
+    simp_wf
+    try omega
 
 def Op.ptrProvenance (ctx : CheckCtx) : Op dtype shape → Except CheckError RegionName
   | .ptrBase region => .ok (Region.cast region)
@@ -230,7 +241,10 @@ def Op.ptrProvenance (ctx : CheckCtx) : Op dtype shape → Except CheckError Reg
       | none => .error (.missingPointerProvenance name)
   | _ => .error .unsupportedPointerProvenance
 termination_by op => sizeOf op
-decreasing_by all_goals (simp_wf; try omega)
+decreasing_by
+  all_goals
+    simp_wf
+    try omega
 
 def Op.blockPtrProvenance (ctx : CheckCtx) :
     Op dtype shape → Except CheckError RegionName
@@ -240,6 +254,15 @@ def Op.blockPtrProvenance (ctx : CheckCtx) :
   | .makeBlockPtrDyn region base parentShape blockShape strides offsets => do
       base.check ctx
       checkBlockPtrMetadata parentShape blockShape strides offsets
+      .ok region
+  | .makeBlockPtrDynOffsets region base parentShape blockShape strides offsets => do
+      base.check ctx
+      if parentShape.length = strides.length ∧ parentShape.length = offsets.length ∧
+          blockShape.length ≤ parentShape.length then
+        .ok ()
+      else
+        .error (.blockPointerMetadataMismatch parentShape.length strides.length
+          offsets.length blockShape.length)
       .ok region
   | .advanceBlockPtr ptr _ => ptr.blockPtrProvenance ctx
   | .broadcast ptr _ => ptr.blockPtrProvenance ctx

@@ -99,7 +99,7 @@ theorem l2_norm_fwd_1pass_kernel_correct
         else s.readMem Y outAddr := by
   intro i
   by_cases hB : 0 < BLOCK_N
-  · simp [exec, l2_norm_fwd_1pass_kernel, stepStmts, stepStmt, evalOp,
+  · simp [exec, l2_norm_fwd_1pass_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
           TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
           NumericDType.add, NumericDType.mul, NumericDType.div,

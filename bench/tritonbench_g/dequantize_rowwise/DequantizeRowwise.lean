@@ -52,7 +52,7 @@ theorem dequantize_rowwise_kernel_correct
             dequantizeRowwiseSpec s x_ptr state_x BLOCK_SIZE inv_127 i
           else s.readMem output_ptr outAddr) := by
   intro i
-  simp [exec, dequantize_rowwise_kernel, stepStmts, stepStmt, evalOp,
+  simp [exec, dequantize_rowwise_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _

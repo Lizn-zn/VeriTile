@@ -39,7 +39,7 @@ noncomputable def maskedScore {M S_k D : Nat}
   match FA1MathBoundary.blockIndex? S_k Bk k jLocal with
   | some j =>
       if j.val ≤ qStart + i.val then
-        (FA1Math.scaledScore Q K scale i j : ℝ)
+        (StreamingAccumulator.scaledScore Q K scale i j : ℝ)
       else
         ⊥
   | none => ⊥
@@ -51,7 +51,7 @@ noncomputable def maskedScore {M S_k D : Nat}
     (hLt : k * Bk + jLocal.val < S_k)
     (hLe : k * Bk + jLocal.val ≤ qStart + i.val) :
     maskedScore Bk k qStart Q K scale i jLocal =
-      ((FA1Math.scaledScore Q K scale i
+      ((StreamingAccumulator.scaledScore Q K scale i
         ⟨k * Bk + jLocal.val, hLt⟩ : ℝ) : WithBot ℝ) := by
   simp [maskedScore, FA1MathBoundary.blockIndex?_of_lt, hLt, hLe]
 
@@ -280,7 +280,7 @@ theorem block_scores_tile_eq {M S_k D Bk : Nat}
             Tile .bool [M, Bk])
         (Tile.ofReal (fun idx : TileIndex [M, Bk] =>
           match FA1MathBoundary.blockIndex? S_k Bk k idx.2.1 with
-          | some j => FA1Math.scaledScore Q K scale idx.1 j
+          | some j => StreamingAccumulator.scaledScore Q K scale idx.1 j
           | none => 0))
         (⟨fun _ : TileIndex [M, Bk] => (none : WithBot ℝ)⟩ : Tile .real [M, Bk]))
       (⟨fun _ : TileIndex [M, Bk] => (none : WithBot ℝ)⟩ : Tile .real [M, Bk])
@@ -415,7 +415,7 @@ noncomputable def lFreeBoundary {M S_k D : Nat} (Bk : Nat)
     match FA1MathBoundary.blockIndex? S_k Bk n.val jL with
     | some j =>
         if j.val ≤ qStart + i.val then
-          Real.exp (FA1Math.scaledScore Q K scale i j)
+          Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
         else
           0
     | none => 0))
@@ -430,7 +430,7 @@ noncomputable def oFreeBoundary {M S_k D : Nat} (Bk : Nat)
     match FA1MathBoundary.blockIndex? S_k Bk n.val jL with
     | some j =>
         (if j.val ≤ qStart + idx.1.val then
-          Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+          Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
         else
           0) * V (j, idx.2.1, PUnit.unit)
     | none => 0))
@@ -462,7 +462,7 @@ theorem lFreeBoundary_succ {M S_k D : Nat} (Bk : Nat)
         match FA1MathBoundary.blockIndex? S_k Bk k jL with
         | some j =>
             if j.val ≤ qStart + i.val then
-              Real.exp (FA1Math.scaledScore Q K scale i j)
+              Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
             else
               0
         | none => 0) := by
@@ -481,7 +481,7 @@ theorem oFreeBoundary_succ {M S_k D : Nat} (Bk : Nat)
         match FA1MathBoundary.blockIndex? S_k Bk k jL with
         | some j =>
             (if j.val ≤ qStart + idx.1.val then
-              Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+              Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
             else
               0) * V (j, idx.2.1, PUnit.unit)
         | none => 0) := by
@@ -498,20 +498,20 @@ theorem lFreeBoundary_eq_flat {M S_k D : Nat} (Bk : Nat)
       Finset.univ.sum (fun j' : Fin (Bk * numKVBlocks) =>
         if h : j'.val < S_k then
           if j'.val ≤ qStart + i.val then
-            Real.exp (FA1Math.scaledScore Q K scale i ⟨j'.val, h⟩)
+            Real.exp (StreamingAccumulator.scaledScore Q K scale i ⟨j'.val, h⟩)
           else
             0
         else
           0) := by
   unfold lFreeBoundary
   rw [← Finset.sum_product', Finset.univ_product_univ]
-  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
   · intro _; simp
   · intro j' _
-    set p := FA1Math.blockIndexEquiv Bk numKVBlocks j' with hp
+    set p := StreamingAccumulator.blockIndexEquiv Bk numKVBlocks j' with hp
     show (if h : j'.val < S_k then
             if j'.val ≤ qStart + i.val then
-              Real.exp (FA1Math.scaledScore Q K scale i ⟨j'.val, h⟩)
+              Real.exp (StreamingAccumulator.scaledScore Q K scale i ⟨j'.val, h⟩)
             else
               0
           else
@@ -519,12 +519,12 @@ theorem lFreeBoundary_eq_flat {M S_k D : Nat} (Bk : Nat)
         = (match FA1MathBoundary.blockIndex? S_k Bk p.1.val p.2 with
           | some j =>
               if j.val ≤ qStart + i.val then
-                Real.exp (FA1Math.scaledScore Q K scale i j)
+                Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
               else
                 0
           | none => 0)
     have hValEq : p.1.val * Bk + p.2.val = j'.val := by
-      have hBI := FA1Math.blockIndex_blockIndexEquiv (Bk := Bk) (N := numKVBlocks) j'
+      have hBI := StreamingAccumulator.blockIndex_blockIndexEquiv (Bk := Bk) (N := numKVBlocks) j'
       have h1 := congrArg Fin.val hBI
       change p.1.val * Bk + p.2.val = j'.val at h1
       exact h1
@@ -548,20 +548,20 @@ theorem oFreeBoundary_eq_flat {M S_k D : Nat} (Bk : Nat)
       Finset.univ.sum (fun j' : Fin (Bk * numKVBlocks) =>
         if h : j'.val < S_k then
           (if j'.val ≤ qStart + idx.1.val then
-            Real.exp (FA1Math.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
+            Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
           else
             0) * V (⟨j'.val, h⟩, idx.2.1, PUnit.unit)
         else
           0) := by
   unfold oFreeBoundary
   rw [← Finset.sum_product', Finset.univ_product_univ]
-  refine (Finset.sum_equiv (FA1Math.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
+  refine (Finset.sum_equiv (StreamingAccumulator.blockIndexEquiv Bk numKVBlocks) ?_ ?_).symm
   · intro _; simp
   · intro j' _
-    set p := FA1Math.blockIndexEquiv Bk numKVBlocks j' with hp
+    set p := StreamingAccumulator.blockIndexEquiv Bk numKVBlocks j' with hp
     show (if h : j'.val < S_k then
             (if j'.val ≤ qStart + idx.1.val then
-              Real.exp (FA1Math.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
+              Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
             else
               0) * V (⟨j'.val, h⟩, idx.2.1, PUnit.unit)
           else
@@ -569,12 +569,12 @@ theorem oFreeBoundary_eq_flat {M S_k D : Nat} (Bk : Nat)
         = (match FA1MathBoundary.blockIndex? S_k Bk p.1.val p.2 with
           | some j =>
               (if j.val ≤ qStart + idx.1.val then
-                Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+                Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
               else
                 0) * V (j, idx.2.1, PUnit.unit)
           | none => 0)
     have hValEq : p.1.val * Bk + p.2.val = j'.val := by
-      have hBI := FA1Math.blockIndex_blockIndexEquiv (Bk := Bk) (N := numKVBlocks) j'
+      have hBI := StreamingAccumulator.blockIndex_blockIndexEquiv (Bk := Bk) (N := numKVBlocks) j'
       have h1 := congrArg Fin.val hBI
       change p.1.val * Bk + p.2.val = j'.val at h1
       exact h1
@@ -598,14 +598,14 @@ theorem lFreeBoundary_final_eq_finSk_sum {M S_k D : Nat} (Bk : Nat)
     lFreeBoundary Bk qStart Q K scale numKVBlocks i =
       Finset.univ.sum (fun j : Fin S_k =>
         if j.val ≤ qStart + i.val then
-          Real.exp (FA1Math.scaledScore Q K scale i j)
+          Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
         else
           0) := by
   rw [lFreeBoundary_eq_flat]
   rw [show (Finset.univ.sum (fun j' : Fin (Bk * numKVBlocks) =>
         if h : j'.val < S_k then
           if j'.val ≤ qStart + i.val then
-            Real.exp (FA1Math.scaledScore Q K scale i ⟨j'.val, h⟩)
+            Real.exp (StreamingAccumulator.scaledScore Q K scale i ⟨j'.val, h⟩)
           else
             0
         else
@@ -615,7 +615,7 @@ theorem lFreeBoundary_final_eq_finSk_sum {M S_k D : Nat} (Bk : Nat)
           (fun j' : Fin (Bk * numKVBlocks) =>
             if h : j'.val < S_k then
               if j'.val ≤ qStart + i.val then
-                Real.exp (FA1Math.scaledScore Q K scale i ⟨j'.val, h⟩)
+                Real.exp (StreamingAccumulator.scaledScore Q K scale i ⟨j'.val, h⟩)
               else
                 0
             else
@@ -655,14 +655,14 @@ theorem oFreeBoundary_final_eq_finSk_sum {M S_k D : Nat} (Bk : Nat)
     oFreeBoundary Bk qStart Q K V scale numKVBlocks idx =
       Finset.univ.sum (fun j : Fin S_k =>
         (if j.val ≤ qStart + idx.1.val then
-          Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+          Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
         else
           0) * V (j, idx.2.1, PUnit.unit)) := by
   rw [oFreeBoundary_eq_flat]
   rw [show (Finset.univ.sum (fun j' : Fin (Bk * numKVBlocks) =>
         if h : j'.val < S_k then
           (if j'.val ≤ qStart + idx.1.val then
-            Real.exp (FA1Math.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
+            Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
           else
             0) * V (⟨j'.val, h⟩, idx.2.1, PUnit.unit)
         else
@@ -672,7 +672,7 @@ theorem oFreeBoundary_final_eq_finSk_sum {M S_k D : Nat} (Bk : Nat)
           (fun j' : Fin (Bk * numKVBlocks) =>
             if h : j'.val < S_k then
               (if j'.val ≤ qStart + idx.1.val then
-                Real.exp (FA1Math.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
+                Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 ⟨j'.val, h⟩)
               else
                 0) * V (⟨j'.val, h⟩, idx.2.1, PUnit.unit)
             else
@@ -808,7 +808,7 @@ theorem lPartial_eq_mShifted {M S_k D : Nat} {Bk : Nat}
               match FA1MathBoundary.blockIndex? S_k Bk k jL with
               | some j =>
                   if j.val ≤ qStart + i.val then
-                    Real.exp (FA1Math.scaledScore Q K scale i j)
+                    Real.exp (StreamingAccumulator.scaledScore Q K scale i j)
                   else
                     0
               | none => 0) := by
@@ -823,8 +823,8 @@ theorem lPartial_eq_mShifted {M S_k D : Nat} {Bk : Nat}
               (mPartial_succ_ne_bot hBk hSk qStart Q numKVBlocks K scale k hk i)
             rw [← hm]
             simp [hLe, WithBot.realSub]
-            rw [show FA1Math.scaledScore Q K scale i ⟨k * Bk + jLocal.val, hLt⟩ - m =
-                  -m + FA1Math.scaledScore Q K scale i ⟨k * Bk + jLocal.val, hLt⟩
+            rw [show StreamingAccumulator.scaledScore Q K scale i ⟨k * Bk + jLocal.val, hLt⟩ - m =
+                  -m + StreamingAccumulator.scaledScore Q K scale i ⟨k * Bk + jLocal.val, hLt⟩
                   by ring,
                 Real.exp_add]
           · rw [maskedScore_of_lt_of_not_le Bk k qStart Q K scale i jLocal hLt hLe]
@@ -914,7 +914,7 @@ theorem oPartial_eq_mShifted {M S_k D : Nat} {Bk : Nat}
               match FA1MathBoundary.blockIndex? S_k Bk k jL with
               | some j =>
                   (if j.val ≤ qStart + idx.1.val then
-                    Real.exp (FA1Math.scaledScore Q K scale idx.1 j)
+                    Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 j)
                   else
                     0) * V (j, idx.2.1, PUnit.unit)
               | none => 0) := by
@@ -929,8 +929,8 @@ theorem oPartial_eq_mShifted {M S_k D : Nat} {Bk : Nat}
               (mPartial_succ_ne_bot hBk hSk qStart Q numKVBlocks K scale k hk idx.1)
             rw [← hm]
             simp [hLe, WithBot.realSub]
-            rw [show FA1Math.scaledScore Q K scale idx.1 ⟨k * Bk + jLocal.val, hLt⟩ - m =
-                  -m + FA1Math.scaledScore Q K scale idx.1 ⟨k * Bk + jLocal.val, hLt⟩
+            rw [show StreamingAccumulator.scaledScore Q K scale idx.1 ⟨k * Bk + jLocal.val, hLt⟩ - m =
+                  -m + StreamingAccumulator.scaledScore Q K scale idx.1 ⟨k * Bk + jLocal.val, hLt⟩
                   by ring,
                 Real.exp_add]
             ring

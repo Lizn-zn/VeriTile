@@ -244,7 +244,7 @@ theorem decoding_fused_rotary_embedding_q_first_half_correct
     rfl
   by_cases hHalf : 0 < HALF_DIM
   · simp [exec, decoding_fused_rotary_embedding_q_first_half, stepStmts, stepStmt,
-          evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
           NumericDType.add, NumericDType.mul, NumericDType.sub, hHalf] at hExec
     rw [← hExec]
     simp only [qFirstOffset, qBase, dimIndex]
@@ -410,7 +410,7 @@ theorem decoding_fused_rotary_embedding_q_second_half_correct
     cases a; cases b; simp only at hab; cases hab; rfl
   by_cases hHalf : 0 < HALF_DIM
   · simp [exec, decoding_fused_rotary_embedding_q_second_half, stepStmts,
-          stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+          stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
           NumericDType.add, NumericDType.mul, NumericDType.sub, hHalf] at hExec
     rw [← hExec]
     simp only [qSecondOffset, qBase, dimIndex]
@@ -594,7 +594,7 @@ theorem decoding_fused_rotary_embedding_k_first_half_correct
     rfl
   by_cases hHalf : 0 < HALF_DIM
   · simp [exec, decoding_fused_rotary_embedding_k_first_half, stepStmts, stepStmt,
-          evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
           NumericDType.add, NumericDType.mul, NumericDType.sub, hHalf] at hExec
     rw [← hExec]
     simp only [kFirstOffset, kBase, dimIndex]
@@ -759,7 +759,7 @@ theorem decoding_fused_rotary_embedding_k_second_half_correct
     rfl
   by_cases hHalf : 0 < HALF_DIM
   · simp [exec, decoding_fused_rotary_embedding_k_second_half, stepStmts, stepStmt,
-          evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+          evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
           NumericDType.add, NumericDType.mul, NumericDType.sub, hHalf] at hExec
     rw [← hExec]
     simp only [kSecondOffset, kBase, dimIndex]
@@ -916,7 +916,7 @@ theorem decoding_fused_rotary_embedding_v_cache_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, decoding_fused_rotary_embedding_v_cache_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hExec
   rw [← hExec]
   simp only [vCacheOffset]
@@ -1028,7 +1028,7 @@ theorem decoding_fused_rotary_embedding_v_cache_guarded_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, decoding_fused_rotary_embedding_v_cache_guarded_store_slice,
-        stepStmts, stepStmt, evalOp, Option.bind, Option.map, Tile.bop,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop,
         Tile.cop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.eq] at hExec
   by_cases hHandle : s.pids 0 % KV_GROUP_NUM = 0
@@ -1138,7 +1138,7 @@ theorem decoding_fused_rotary_embedding_k_cache_first_half_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, decoding_fused_rotary_embedding_k_cache_first_half_store_slice,
-        stepStmts, stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hExec
   rw [← hExec]
   simp only [kCacheFirstOffset]
@@ -1235,7 +1235,7 @@ theorem decoding_fused_rotary_embedding_k_cache_second_half_store_slice_correct
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, decoding_fused_rotary_embedding_k_cache_second_half_store_slice,
-        stepStmts, stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul] at hExec
   rw [← hExec]
   simp only [kCacheSecondOffset]
@@ -1339,7 +1339,7 @@ theorem decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice_c
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice,
-        stepStmts, stepStmt, evalOp, Option.bind, Option.map, Tile.bop,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop,
         Tile.cop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.eq] at hExec
   by_cases hHandle : s.pids 0 % KV_GROUP_NUM = 0
@@ -1460,7 +1460,7 @@ theorem decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice_
     cases a; cases b
     simp only at hab; cases hab; rfl
   simp [exec, decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice,
-        stepStmts, stepStmt, evalOp, Option.bind, Option.map, Tile.bop,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop,
         Tile.cop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.eq] at hExec
   by_cases hHandle : s.pids 0 % KV_GROUP_NUM = 0
@@ -1810,6 +1810,57 @@ theorem decoding_fused_rotary_embedding_context_k_cache_second_half_old_layout_p
     Nat.mod_eq_of_lt ha64, Nat.mod_eq_of_lt hb64] at h
   omega
 
+/-- Python test case 2: new 5D K-cache layout
+`[num_blocks, kv_head_num, head_dim // 16, block_size, 16]`. -/
+theorem decoding_fused_rotary_embedding_context_k_cache_first_half_new_layout_python_test_shape_compute_correct
+    (OutK0Pre k_cache BLOCK_TABLES context_lengths : RegionName)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
+          OutK0Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths 4 1 4)
+          (decodingOffsetsInLastBlock s context_lengths 4)
+          2 16 1024 256 64 16 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin 32 => handleKv s 2)
+        (fun i => (k_cache,
+          decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
+            2 16 1024 256 64 16 1 4 1 4 i)))
+      (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i) := by
+  apply
+    decoding_fused_rotary_embedding_context_k_cache_first_half_guarded_store_slice_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [decodingKCacheFirstGuardedOffset, kCacheFirstGuardedOffset] at h
+  omega
+
+/-- Python test case 2: new 5D K-cache layout, second rotary half. -/
+theorem decoding_fused_rotary_embedding_context_k_cache_second_half_new_layout_python_test_shape_compute_correct
+    (OutK1Pre k_cache BLOCK_TABLES context_lengths : RegionName)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
+          OutK1Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths 4 1 4)
+          (decodingOffsetsInLastBlock s context_lengths 4)
+          2 16 1024 256 64 16 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin 32 => handleKv s 2)
+        (fun i => (k_cache,
+          decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
+            2 16 1024 256 64 16 1 4 1 4 32 i)))
+      (expected := fun i => kCacheSecondStoreSpec s OutK1Pre 32 i) := by
+  apply
+    decoding_fused_rotary_embedding_context_k_cache_second_half_guarded_store_slice_compute_correct
+  intro a b h
+  apply Fin.ext
+  simp [decodingKCacheSecondGuardedOffset, kCacheSecondGuardedOffset] at h
+  omega
+
 theorem decoding_fused_rotary_embedding_context_v_cache_python_test_shape_compute_correct
     (LoadedV v_cache BLOCK_TABLES context_lengths : RegionName)
     (s : BlockState) :
@@ -1831,5 +1882,203 @@ theorem decoding_fused_rotary_embedding_context_v_cache_python_test_shape_comput
   apply Fin.ext
   simp [decodingVCacheGuardedOffset, vCacheGuardedOffset] at h
   omega
+
+/-- Public Python-shape summary for the default 4D cache layout used by
+`fused_rotary_embedding.py`: Q and K rotary writebacks plus guarded K/V cache
+stores are all exposed as compute-correct outputs. -/
+theorem decoding_fused_rotary_embedding_old_layout_python_test_shape_all_outputs_compute_correct
+    (q k cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
+      context_lengths : RegionName)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_q_first_half q cos sin
+        512 64 1 64 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin 32 => True)
+        (fun i => (q, qFirstOffset s 512 64 1 i)))
+      (expected := fun i => qFirstSpec s q cos sin 512 64 1 64 1 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_q_second_half q cos sin
+        512 64 1 64 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin 32 => True)
+        (fun i => (q, qSecondOffset s 512 64 1 32 i)))
+      (expected := fun i => qSecondSpec s q cos sin 512 64 1 64 1 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_first_half k cos sin
+        256 64 1 64 1 32)
+      (initialState := s)
+      (write := fun i : Fin 32 => some (k, kFirstOffset s 256 64 1 i))
+      (expected := fun i => kFirstSpec s k cos sin 256 64 1 64 1 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
+        256 64 1 64 1 32)
+      (initialState := s)
+      (write := fun i : Fin 32 => some (k, kSecondOffset s 256 64 1 32 i))
+      (expected := fun i => kSecondSpec s k cos sin 256 64 1 64 1 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
+          OutK0Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths 4 1 4)
+          (decodingOffsetsInLastBlock s context_lengths 4)
+          2 64 1024 256 0 64 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin 32 => handleKv s 2)
+        (fun i => (k_cache,
+          decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
+            2 64 1024 256 0 64 1 4 1 4 i)))
+      (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
+          OutK1Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths 4 1 4)
+          (decodingOffsetsInLastBlock s context_lengths 4)
+          2 64 1024 256 0 64 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin 32 => handleKv s 2)
+        (fun i => (k_cache,
+          decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
+            2 64 1024 256 0 64 1 4 1 4 32 i)))
+      (expected := fun i => kCacheSecondStoreSpec s OutK1Pre 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_v_cache_guarded_store_slice
+        LoadedV v_cache
+        (decodingBlockId s BLOCK_TABLES context_lengths 4 1 4)
+        (decodingOffsetsInLastBlock s context_lengths 4)
+        2 1024 256 64 1 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin 64 => handleKv s 2)
+        (fun i => (v_cache,
+          decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths
+            2 1024 256 64 1 4 1 4 i)))
+      (expected := fun i => vCacheStoreSpec s LoadedV i)) := by
+  constructor
+  · exact decoding_fused_rotary_embedding_q_first_half_python_test_shape_compute_correct
+      q cos sin s
+  constructor
+  · exact decoding_fused_rotary_embedding_q_second_half_python_test_shape_compute_correct
+      q cos sin s
+  constructor
+  · exact decoding_fused_rotary_embedding_k_first_half_python_test_shape_compute_correct
+      k cos sin s
+  constructor
+  · exact decoding_fused_rotary_embedding_k_second_half_python_test_shape_compute_correct
+      k cos sin s
+  constructor
+  · exact
+      decoding_fused_rotary_embedding_context_k_cache_first_half_old_layout_python_test_shape_compute_correct
+        OutK0Pre k_cache BLOCK_TABLES context_lengths s
+  constructor
+  · exact
+      decoding_fused_rotary_embedding_context_k_cache_second_half_old_layout_python_test_shape_compute_correct
+        OutK1Pre k_cache BLOCK_TABLES context_lengths s
+  · exact decoding_fused_rotary_embedding_context_v_cache_python_test_shape_compute_correct
+      LoadedV v_cache BLOCK_TABLES context_lengths s
+
+/-- Public Python-shape summary for the new 5D K-cache layout used by
+`fused_rotary_embedding.py`'s second test case: Q and K rotary writebacks plus
+guarded K/V cache stores are all exposed as compute-correct outputs. -/
+theorem decoding_fused_rotary_embedding_new_layout_python_test_shape_all_outputs_compute_correct
+    (q k cos sin OutK0Pre OutK1Pre LoadedV k_cache v_cache BLOCK_TABLES
+      context_lengths : RegionName)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_q_first_half q cos sin
+        512 64 1 64 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin 32 => True)
+        (fun i => (q, qFirstOffset s 512 64 1 i)))
+      (expected := fun i => qFirstSpec s q cos sin 512 64 1 64 1 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_q_second_half q cos sin
+        512 64 1 64 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin 32 => True)
+        (fun i => (q, qSecondOffset s 512 64 1 32 i)))
+      (expected := fun i => qSecondSpec s q cos sin 512 64 1 64 1 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_first_half k cos sin
+        256 64 1 64 1 32)
+      (initialState := s)
+      (write := fun i : Fin 32 => some (k, kFirstOffset s 256 64 1 i))
+      (expected := fun i => kFirstSpec s k cos sin 256 64 1 64 1 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_k_second_half k cos sin
+        256 64 1 64 1 32)
+      (initialState := s)
+      (write := fun i : Fin 32 => some (k, kSecondOffset s 256 64 1 32 i))
+      (expected := fun i => kSecondSpec s k cos sin 256 64 1 64 1 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_first_half_guarded_store_slice
+          OutK0Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths 4 1 4)
+          (decodingOffsetsInLastBlock s context_lengths 4)
+          2 16 1024 256 64 16 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin 32 => handleKv s 2)
+        (fun i => (k_cache,
+          decodingKCacheFirstGuardedOffset s BLOCK_TABLES context_lengths
+            2 16 1024 256 64 16 1 4 1 4 i)))
+      (expected := fun i => kCacheFirstStoreSpec s OutK0Pre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel :=
+        decoding_fused_rotary_embedding_k_cache_second_half_guarded_store_slice
+          OutK1Pre k_cache
+          (decodingBlockId s BLOCK_TABLES context_lengths 4 1 4)
+          (decodingOffsetsInLastBlock s context_lengths 4)
+          2 16 1024 256 64 16 1 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin 32 => handleKv s 2)
+        (fun i => (k_cache,
+          decodingKCacheSecondGuardedOffset s BLOCK_TABLES context_lengths
+            2 16 1024 256 64 16 1 4 1 4 32 i)))
+      (expected := fun i => kCacheSecondStoreSpec s OutK1Pre 32 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := decoding_fused_rotary_embedding_v_cache_guarded_store_slice
+        LoadedV v_cache
+        (decodingBlockId s BLOCK_TABLES context_lengths 4 1 4)
+        (decodingOffsetsInLastBlock s context_lengths 4)
+        2 1024 256 64 1 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin 64 => handleKv s 2)
+        (fun i => (v_cache,
+          decodingVCacheGuardedOffset s BLOCK_TABLES context_lengths
+            2 1024 256 64 1 4 1 4 i)))
+      (expected := fun i => vCacheStoreSpec s LoadedV i)) := by
+  constructor
+  · exact decoding_fused_rotary_embedding_q_first_half_python_test_shape_compute_correct
+      q cos sin s
+  constructor
+  · exact decoding_fused_rotary_embedding_q_second_half_python_test_shape_compute_correct
+      q cos sin s
+  constructor
+  · exact decoding_fused_rotary_embedding_k_first_half_python_test_shape_compute_correct
+      k cos sin s
+  constructor
+  · exact decoding_fused_rotary_embedding_k_second_half_python_test_shape_compute_correct
+      k cos sin s
+  constructor
+  · exact
+      decoding_fused_rotary_embedding_context_k_cache_first_half_new_layout_python_test_shape_compute_correct
+        OutK0Pre k_cache BLOCK_TABLES context_lengths s
+  constructor
+  · exact
+      decoding_fused_rotary_embedding_context_k_cache_second_half_new_layout_python_test_shape_compute_correct
+        OutK1Pre k_cache BLOCK_TABLES context_lengths s
+  · exact decoding_fused_rotary_embedding_context_v_cache_python_test_shape_compute_correct
+      LoadedV v_cache BLOCK_TABLES context_lengths s
 
 end VeriTile.Bench.TritonBenchG.FusedRotaryEmbedding

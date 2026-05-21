@@ -9,6 +9,13 @@ import Batteries.Data.Nat.Bitwise
 
 namespace VeriTile.Triton
 
+@[simp] theorem option_match_bind {α β : Type}
+    (x : Option α) (f : α → Option β) :
+    (match x, f with
+      | none, _ => none
+      | some a, f => f a) = x.bind f := by
+  cases x <;> rfl
+
 noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype shape)
   | .const c, _ => some (Tile.scalar (some c : WithBot ℝ))
   | .constFloat h c, _ => some (Tile.scalar (h.ofReal c))
@@ -156,6 +163,18 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
         , blockShape := blockShape
         , strides := strides
         , offsets := offsets }⟩
+  | .makeBlockPtrDynOffsets region baseOffset parentShape blockShape strides offsets, s => do
+      let base ← evalOp baseOffset s
+      let offsets ← offsets.mapM (fun off => do
+        let v ← evalOp off s
+        some (v.data PUnit.unit))
+      some ⟨fun _ =>
+        { region := region
+        , baseOffset := base.data PUnit.unit
+        , parentShape := parentShape
+        , blockShape := blockShape
+        , strides := strides
+        , offsets := offsets }⟩
   | .advanceBlockPtr ptr deltas, s => do
       let p ← evalOp ptr s
       some ⟨fun i => (p.data i).advance deltas⟩
@@ -199,5 +218,421 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
           let others ← evalOp other s
           some ⟨fun i => if masks.data i then read i else others.data i⟩
   | .natToReal a, s => return Tile.natToReal (← evalOp a s)
+
+@[simp] theorem evalOp_programId (axis : Nat) (s : BlockState) :
+    evalOp (.programId axis) s = some (Tile.scalar (s.pids axis)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_const (c : ℝ) (s : BlockState) :
+    evalOp (.const c) s = some (Tile.scalar (some c : WithBot ℝ)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_constNat (n : Nat) (s : BlockState) :
+    evalOp (.constNat n) s = some (Tile.scalar n) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_negInf (s : BlockState) :
+    evalOp .negInf s = some (Tile.scalar (none : WithBot ℝ)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_arange (n : Nat) (s : BlockState) :
+    evalOp (.arange n) s = some (Tile.vec (fun i => i.val)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_ref (dtype : TileDType) (shape : TileShape)
+    (name : RegName) (s : BlockState) :
+    evalOp (.ref dtype shape name) s = s.regs dtype shape name := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_full (shape : TileShape) (e : Op dtype [])
+    (s : BlockState) :
+    evalOp (.full shape e) s = (do
+      let v ← evalOp e s
+      some ⟨fun _ => v.data PUnit.unit⟩) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_expandDim (axis : Fin (shape.length + 1))
+    (e : Op dtype shape) (s : BlockState) :
+    evalOp (.expandDim axis e) s = (do
+      let v ← evalOp e s
+      some (Tile.expandDim axis v)) := by
+  simp [evalOp]
+
+@[simp 1200] theorem evalOp_expandDim_ref
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (name : RegName) (s : BlockState) :
+    evalOp (.expandDim axis (.ref dtype shape name)) s = (do
+      let v ← s.regs dtype shape name
+      some (Tile.expandDim axis v)) := by
+  simp [evalOp]
+
+@[simp 1400] theorem evalOp_expandDim_ref_of_regs
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (name : RegName) (s : BlockState) (v : Tile dtype shape)
+    (h : s.regs dtype shape name = some v) :
+    evalOp (.expandDim axis (.ref dtype shape name)) s =
+      some (Tile.expandDim axis v) := by
+  simp [evalOp, h]
+
+@[simp] theorem evalOp_add (h : NumericDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b)
+    (s : BlockState) :
+    evalOp (.add h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.bop h.add bc vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_mul (h : NumericDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b)
+    (s : BlockState) :
+    evalOp (.mul h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.bop h.mul bc vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_sub (h : NumericDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b)
+    (s : BlockState) :
+    evalOp (.sub h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.bop h.sub bc vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_div (h : NumericDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b)
+    (s : BlockState) :
+    evalOp (.div h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.bop h.div bc vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_exp (x : Op .real shape) (s : BlockState) :
+    evalOp (.exp x) s = (do
+      let vx ← evalOp x s
+      some (Tile.uop WithBot.realExp vx)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_tanh (x : Op .real shape) (s : BlockState) :
+    evalOp (.tanh x) s = (do
+      let vx ← evalOp x s
+      some (Tile.uop WithBot.realTanh vx)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_natToReal (x : Op .nat shape) (s : BlockState) :
+    evalOp (.natToReal x) s = (do
+      let vx ← evalOp x s
+      some (Tile.natToReal vx)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_lt
+    (h : ComparableDType dtype) (bc : Broadcast a b shape)
+    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.lt h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.cop h.lt bc vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_where
+    (c : Op .bool shape) (x y : Op dtype shape) (s : BlockState) :
+    evalOp (.where c x y) s = (do
+      let vc ← evalOp c s
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.select vc vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_max2
+    (bc : Broadcast a b shape) (x : Op .real a) (y : Op .real b)
+    (s : BlockState) :
+    evalOp (.max2 bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.bop max bc vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_reduceMax
+    (axis : Fin shape.length) (keepDims : Bool) (x : Op .real shape)
+    (s : BlockState) :
+    evalOp (.reduceMax axis keepDims x) s = (do
+      let vx ← evalOp x s
+      Tile.reduceMax axis keepDims vx) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_reduceSum
+    (axis : Fin shape.length) (keepDims : Bool) (x : Op .real shape)
+    (s : BlockState) :
+    evalOp (.reduceSum axis keepDims x) s = (do
+      let vx ← evalOp x s
+      some (Tile.reduceSum axis keepDims vx)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_dot
+    (batch : TileShape) (x : Op .real (batch ++ [M, K]))
+    (y : Op .real (batch ++ [K, N])) (s : BlockState) :
+    evalOp (.dot (batch := batch) x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.dot batch vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_transpose
+    (batch : TileShape) (x : Op dtype (batch ++ [M, N])) (s : BlockState) :
+    evalOp (.transpose (batch := batch) x) s = (do
+      let vx ← evalOp x s
+      some (Tile.transpose batch vx)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_load_region_none {dtype : TileDType} {shape : TileShape}
+    (region : Region dtype) (offsets : Op .nat shape) (s : BlockState) :
+    evalOp (.load dtype (MemAccess.region region offsets) MaskOpt.none) s = (do
+      let offs ← evalOp offsets s
+      some ⟨fun i => s.readMemValue dtype (Region.cast region) (offs.data i)⟩) := by
+  simp [evalOp]
+
+@[simp 1100] theorem evalOp_ref_setReg_same (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (v : Tile dtype shape) :
+    evalOp (.ref dtype shape name) (s.setReg name dtype shape v) = some v := by
+  simp [evalOp]
+
+@[simp 1100] theorem evalOp_ref_setReg (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape) :
+    evalOp (.ref dtype' shape' name') (s.setReg name dtype shape v) =
+      if hName : name' = name then
+        if hDType : dtype' = dtype then
+          if hShape : shape' = shape then
+            some (castTile hDType hShape v)
+          else
+            none
+        else
+          none
+      else
+        evalOp (.ref dtype' shape' name') s := by
+  simp [evalOp, BlockState.setReg]
+
+@[simp 1100] theorem evalOp_ref_setReg_ne_name (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (h : name' ≠ name) :
+    evalOp (.ref dtype' shape' name') (s.setReg name dtype shape v) =
+      evalOp (.ref dtype' shape' name') s := by
+  simp [evalOp, h]
+
+@[simp 1100] theorem evalOp_ref_setReg_ne_dtype (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (hName : name' = name) (h : dtype' ≠ dtype) :
+    evalOp (.ref dtype' shape' name') (s.setReg name dtype shape v) = none := by
+  simp [evalOp, hName, h]
+
+@[simp 1100] theorem evalOp_ref_setReg_ne_shape (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape) (v : Tile dtype shape)
+    (hName : name' = name) (hDType : dtype' = dtype) (h : shape' ≠ shape) :
+    evalOp (.ref dtype' shape' name') (s.setReg name dtype shape v) = none := by
+  simp [evalOp, hName, hDType, h]
+
+@[simp 1500] theorem evalOp_expandDim_ref_setReg_same
+    (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape) :
+    evalOp (.expandDim axis (.ref dtype shape name)) (s.setReg name dtype shape v) =
+      some (Tile.expandDim axis v) := by
+  simp
+
+@[simp 1500] theorem evalOp_expandDim_ref_setReg
+    (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape)
+    (axis : Fin (shape'.length + 1)) (v : Tile dtype shape) :
+    evalOp (.expandDim axis (.ref dtype' shape' name')) (s.setReg name dtype shape v) =
+      if hName : name' = name then
+        if hDType : dtype' = dtype then
+          if hShape : shape' = shape then
+            some (Tile.expandDim axis (castTile hDType hShape v))
+          else
+            none
+        else
+          none
+      else
+        evalOp (.expandDim axis (.ref dtype' shape' name')) s := by
+  by_cases hName : name' = name
+  · subst hName
+    by_cases hDType : dtype' = dtype
+    · subst hDType
+      by_cases hShape : shape' = shape
+      · subst hShape
+        simp [evalOp, BlockState.setReg]
+      · simp [evalOp, BlockState.setReg, hShape]
+    · simp [evalOp, BlockState.setReg, hDType]
+  · simp [evalOp, BlockState.setReg, hName]
+
+@[simp 1500] theorem evalOp_expandDim_ref_setReg_ne_name
+    (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape)
+    (axis : Fin (shape'.length + 1)) (v : Tile dtype shape)
+    (h : name' ≠ name) :
+    evalOp (.expandDim axis (.ref dtype' shape' name')) (s.setReg name dtype shape v) =
+      evalOp (.expandDim axis (.ref dtype' shape' name')) s := by
+  simp [h]
+
+@[simp 1500] theorem bind_evalOp_expandDim_ref_setReg_same
+    {α : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α) :
+    (evalOp (.expandDim axis (.ref dtype shape name)) (s.setReg name dtype shape v)).bind f =
+      f (Tile.expandDim axis v) := by
+  simp
+
+@[simp 1500] theorem bind_evalOp_expandDim_ref_of_regs
+    {α : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α)
+    (h : s.regs dtype shape name = some v) :
+    (evalOp (.expandDim axis (.ref dtype shape name)) s).bind f =
+      f (Tile.expandDim axis v) := by
+  simp [h]
+
+@[simp 1500] theorem bind_evalOp_expandDim_ref_setReg_ne_name
+    {α : Type} (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape)
+    (axis : Fin (shape'.length + 1)) (v : Tile dtype shape)
+    (f : Tile dtype' (TileShape.insertAxis shape' axis 1) → Option α)
+    (h : name' ≠ name) :
+    (evalOp (.expandDim axis (.ref dtype' shape' name')) (s.setReg name dtype shape v)).bind f =
+    (evalOp (.expandDim axis (.ref dtype' shape' name')) s).bind f := by
+  simp [h]
+
+@[simp 1500] theorem bind_bind_evalOp_expandDim_ref_setReg_same
+    {α β : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α)
+    (g : α → Option β) :
+    ((evalOp (.expandDim axis (.ref dtype shape name)) (s.setReg name dtype shape v)).bind f).bind g =
+      (f (Tile.expandDim axis v)).bind g := by
+  simp
+
+@[simp 1500] theorem bind_bind_bind_evalOp_expandDim_ref_setReg_same
+    {α β γ : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α)
+    (g : α → Option β) (k : β → Option γ) :
+    (((evalOp (.expandDim axis (.ref dtype shape name)) (s.setReg name dtype shape v)).bind f).bind g).bind k =
+      ((f (Tile.expandDim axis v)).bind g).bind k := by
+  simp
+
+@[simp 1500] theorem bind_bind_bind_bind_evalOp_expandDim_ref_setReg_same
+    {α β γ δ : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α)
+    (g : α → Option β) (k : β → Option γ) (l : γ → Option δ) :
+    ((((evalOp (.expandDim axis (.ref dtype shape name)) (s.setReg name dtype shape v)).bind f).bind g).bind k).bind l =
+      (((f (Tile.expandDim axis v)).bind g).bind k).bind l := by
+  simp
+
+@[simp 1500] theorem bind_bind_evalOp_expandDim_ref_of_regs
+    {α β : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α)
+    (g : α → Option β) (h : s.regs dtype shape name = some v) :
+    ((evalOp (.expandDim axis (.ref dtype shape name)) s).bind f).bind g =
+      (f (Tile.expandDim axis v)).bind g := by
+  simp [h]
+
+@[simp 1500] theorem bind_bind_bind_evalOp_expandDim_ref_of_regs
+    {α β γ : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α)
+    (g : α → Option β) (k : β → Option γ)
+    (h : s.regs dtype shape name = some v) :
+    (((evalOp (.expandDim axis (.ref dtype shape name)) s).bind f).bind g).bind k =
+      ((f (Tile.expandDim axis v)).bind g).bind k := by
+  simp [h]
+
+@[simp 1500] theorem bind_bind_bind_bind_evalOp_expandDim_ref_of_regs
+    {α β γ δ : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α)
+    (g : α → Option β) (k : β → Option γ) (l : γ → Option δ)
+    (h : s.regs dtype shape name = some v) :
+    ((((evalOp (.expandDim axis (.ref dtype shape name)) s).bind f).bind g).bind k).bind l =
+      (((f (Tile.expandDim axis v)).bind g).bind k).bind l := by
+  simp [h]
+
+@[simp 1500] theorem bind_bind_evalOp_expandDim_ref_setReg_ne_name
+    {α β : Type} (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape)
+    (axis : Fin (shape'.length + 1)) (v : Tile dtype shape)
+    (f : Tile dtype' (TileShape.insertAxis shape' axis 1) → Option α)
+    (g : α → Option β) (h : name' ≠ name) :
+    ((evalOp (.expandDim axis (.ref dtype' shape' name')) (s.setReg name dtype shape v)).bind f).bind g =
+      ((evalOp (.expandDim axis (.ref dtype' shape' name')) s).bind f).bind g := by
+  simp [h]
+
+@[simp 1500] theorem bind_bind_bind_evalOp_expandDim_ref_setReg_ne_name
+    {α β γ : Type} (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape)
+    (axis : Fin (shape'.length + 1)) (v : Tile dtype shape)
+    (f : Tile dtype' (TileShape.insertAxis shape' axis 1) → Option α)
+    (g : α → Option β) (k : β → Option γ) (h : name' ≠ name) :
+    (((evalOp (.expandDim axis (.ref dtype' shape' name')) (s.setReg name dtype shape v)).bind f).bind g).bind k =
+      (((evalOp (.expandDim axis (.ref dtype' shape' name')) s).bind f).bind g).bind k := by
+  simp [h]
+
+@[simp 1500] theorem bind_bind_bind_bind_evalOp_expandDim_ref_setReg_ne_name
+    {α β γ δ : Type} (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape)
+    (axis : Fin (shape'.length + 1)) (v : Tile dtype shape)
+    (f : Tile dtype' (TileShape.insertAxis shape' axis 1) → Option α)
+    (g : α → Option β) (k : β → Option γ) (l : γ → Option δ)
+    (h : name' ≠ name) :
+    ((((evalOp (.expandDim axis (.ref dtype' shape' name')) (s.setReg name dtype shape v)).bind f).bind g).bind k).bind l =
+      ((((evalOp (.expandDim axis (.ref dtype' shape' name')) s).bind f).bind g).bind k).bind l := by
+  simp [h]
+
+@[simp 1500] theorem match_evalOp_expandDim_ref_setReg_same
+    {α : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α) :
+    (match evalOp (.expandDim axis (.ref dtype shape name)) (s.setReg name dtype shape v), f with
+      | none, _ => none
+      | some a, f => f a) =
+      f (Tile.expandDim axis v) := by
+  simp
+
+@[simp 1500] theorem match_evalOp_expandDim_ref_of_regs
+    {α : Type} (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (axis : Fin (shape.length + 1))
+    (v : Tile dtype shape)
+    (f : Tile dtype (TileShape.insertAxis shape axis 1) → Option α)
+    (h : s.regs dtype shape name = some v) :
+    (match evalOp (.expandDim axis (.ref dtype shape name)) s, f with
+      | none, _ => none
+      | some a, f => f a) =
+      f (Tile.expandDim axis v) := by
+  simp [h]
+
+@[simp 1500] theorem match_evalOp_expandDim_ref_setReg_ne_name
+    {α : Type} (s : BlockState) (name name' : RegName)
+    (dtype dtype' : TileDType) (shape shape' : TileShape)
+    (axis : Fin (shape'.length + 1)) (v : Tile dtype shape)
+    (f : Tile dtype' (TileShape.insertAxis shape' axis 1) → Option α)
+    (h : name' ≠ name) :
+    (match evalOp (.expandDim axis (.ref dtype' shape' name')) (s.setReg name dtype shape v), f with
+      | none, _ => none
+      | some a, f => f a) =
+      (match evalOp (.expandDim axis (.ref dtype' shape' name')) s, f with
+        | none, _ => none
+        | some a, f => f a) := by
+  simp [h]
 
 end VeriTile.Triton

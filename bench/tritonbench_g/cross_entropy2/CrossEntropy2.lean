@@ -169,7 +169,7 @@ theorem cross_entropy_bwd_store_slice_correct
     simp only at hab
     cases hab
     rfl
-  simp [exec, cross_entropy_bwd_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, cross_entropy_bwd_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
         NumericDType.mul, ComparableDType.lt] at hExec
   rw [← hExec]
@@ -231,7 +231,7 @@ theorem cross_entropy_lse_store_slice_correct
     (hExec : exec (cross_entropy_lse_store_slice LsePre lse_ptr n_rows) s = some s') :
     s'.readMem lse_ptr (lseOutOffset s n_rows) =
       lseStoreSpec s LsePre n_rows := by
-  simp [exec, cross_entropy_lse_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, cross_entropy_lse_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul] at hExec
   subst s'
@@ -273,7 +273,7 @@ theorem cross_entropy_loss_store_slice_correct
       s = some s') :
     s'.readMem loss_ptr (lseOutOffset s n_rows) =
       lossStoreSpec s LossPre n_rows := by
-  simp [exec, cross_entropy_loss_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, cross_entropy_loss_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul] at hExec
   subst s'
@@ -315,7 +315,7 @@ theorem cross_entropy_z_loss_store_slice_correct
       s = some s') :
     s'.readMem z_loss_ptr (lseOutOffset s n_rows) =
       zLossStoreSpec s ZLossPre n_rows := by
-  simp [exec, cross_entropy_z_loss_store_slice, stepStmts, stepStmt, evalOp,
+  simp [exec, cross_entropy_z_loss_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul] at hExec
   subst s'

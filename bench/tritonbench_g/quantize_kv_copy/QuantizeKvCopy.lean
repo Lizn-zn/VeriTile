@@ -15,8 +15,8 @@ set_option linter.unusedSimpArgs false
 This preserves destination-indexed grouped addressing, `tl.abs`, per-group
 scale computation, value writeback, and scale writeback. The Python kernel casts
 the scale to `OutScale.dtype.element_ty`; that cast is represented explicitly.
-The final quotient cast to int8 is preserved as a surface dtype annotation while
-the algorithm carrier records the real-valued quotient. -/
+The final quotient cast to int8 is preserved as a surface dtype annotation and
+lowers through the DSL's fixed-width cast placeholder. -/
 def destindex_copy_quantize_kv_group_real_surface
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g _stride_k_d
@@ -43,20 +43,19 @@ def destindex_copy_quantize_kv_group_real_surface
   tl.store(os_ptrs, data_scale, mask=offs_g < $(group_size))
 }
 
-/-- The grouped quantize-kv-copy surface is still blocked at algorithm erasure
-by the final quotient `to(tl.int8)` cast. The store-slice theorems below cover
-the real-valued quotient and scale writeback around this explicit gap. -/
-theorem destindex_copy_quantize_kv_group_real_surface_toAlgorithm_blocked
+/-- The grouped quantize-kv-copy surface lowers through algorithm erasure,
+including the final quotient `to(tl.int8)` cast placeholder. -/
+theorem destindex_copy_quantize_kv_group_real_surface_toAlgorithm_supported
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g stride_k_d
       stride_o_bs stride_o_h stride_o_g stride_o_d
       stride_os_bs stride_os_h stride_os_g
       group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat) :
-    ∃ err,
+    ∃ alg,
       (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
         stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
         stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
-        BLOCK_GROUP_NUM BLOCK_GROUP_DIM).toAlgorithm? = Except.error err := by
+        BLOCK_GROUP_NUM BLOCK_GROUP_DIM).toAlgorithm? = Except.ok alg := by
   simp [destindex_copy_quantize_kv_group_real_surface,
     ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
@@ -169,7 +168,7 @@ theorem destindex_copy_quantize_kv_group_value_store_slice_correct
           else s.readMem Out outAddr) := by
   intro idx
   simp [exec, destindex_copy_quantize_kv_group_value_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
         NumericDType.div, ComparableDType.lt, BlockState.readMemValue,
         groupIndex, dimIndex, destIndex, kOffset, outOffset, scaleOffset,
@@ -352,7 +351,7 @@ theorem destindex_copy_quantize_kv_group_scale_store_slice_correct
           else s.readMem OutScale outAddr) := by
   intro i
   simp [exec, destindex_copy_quantize_kv_group_scale_store_slice, stepStmts,
-        stepStmt, evalOp, Option.bind, Option.map, Tile.bop, Tile.cop,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         BlockState.readMemValue, destIndex, scaleSourceOffset, scaleOutOffset]
   let offsetFn : TileIndex [BLOCK_GROUP_NUM] → Nat :=
@@ -450,5 +449,91 @@ theorem destindex_copy_quantize_kv_group_test_g2_scale_store_compute_correct
   exact destindex_copy_quantize_kv_group_scale_store_slice_compute_correct Scale
     DestLoc OutScale stride_s_bs stride_s_h stride_os_bs stride_os_h 2 2
     s hOutInj
+
+/-! ## Python test-shape wrappers
+
+The checked Python tests use `head_num = 4`, `head_dim = 16`, and
+`quant_group_dim = 8`, so the grouped view has shape `(seq, 4, 2, 8)`.
+`K/Out` grouped strides are `(64, 16, 8, 1)`, and `Out_scale` strides are
+`(8, 2, 1)` across the normal, small-batch, and varied-destination cases. -/
+
+theorem destindex_copy_quantize_kv_group_python_value_offset_injective
+    (s : BlockState) (DestLoc : RegionName) :
+    Function.Injective
+      (fun idx : TileIndex [2, 8] =>
+        outOffset s DestLoc 64 16 8 1 idx) := by
+  rintro ⟨⟨ga, hga⟩, ⟨da, hda⟩, _⟩ ⟨⟨gb, hgb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [outOffset, destIndex, groupIndex, dimIndex] at h
+  have hg : ga = gb := by omega
+  have hd : da = db := by omega
+  subst gb
+  subst db
+  rfl
+
+theorem destindex_copy_quantize_kv_group_python_scale_offset_injective
+    (s : BlockState) (DestLoc : RegionName) :
+    Function.Injective
+      (fun i : Fin 2 => scaleOutOffset s DestLoc 8 2 i) := by
+  intro a b h
+  simp [scaleOutOffset, destIndex] at h
+  exact Fin.ext (by omega)
+
+theorem destindex_copy_quantize_kv_group_python_value_store_compute_correct
+    (K DestLoc Out OutScale : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_value_store_slice K DestLoc Out
+        OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 2 8)
+        (fun idx => (Out, outOffset s DestLoc 64 16 8 1 idx)))
+      (expected := fun idx =>
+        quantizeKvCopyGroupValueSpec s K DestLoc OutScale 64 16 8 1 8 2
+          1 idx) := by
+  exact destindex_copy_quantize_kv_group_value_store_slice_compute_correct K
+    DestLoc Out OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8 s
+    (destindex_copy_quantize_kv_group_python_value_offset_injective s DestLoc)
+
+theorem destindex_copy_quantize_kv_group_python_scale_store_compute_correct
+    (Scale DestLoc OutScale : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_scale_store_slice Scale DestLoc
+        OutScale 8 2 8 2 2 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 2 2)
+        (fun i => (OutScale, scaleOutOffset s DestLoc 8 2 i)))
+      (expected := fun i => quantizeKvCopyScaleSpec s Scale 8 2 i) := by
+  exact destindex_copy_quantize_kv_group_scale_store_slice_compute_correct
+    Scale DestLoc OutScale 8 2 8 2 2 2 s
+    (destindex_copy_quantize_kv_group_python_scale_offset_injective s DestLoc)
+
+/-- Python grouped quantize-KV-copy shape: exposes both the destination-indexed
+grouped value writeback and the per-group scale writeback. -/
+theorem destindex_copy_quantize_kv_group_python_all_outputs_compute_correct
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_value_store_slice K DestLoc Out
+        OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 2 8)
+        (fun idx => (Out, outOffset s DestLoc 64 16 8 1 idx)))
+      (expected := fun idx =>
+        quantizeKvCopyGroupValueSpec s K DestLoc OutScale 64 16 8 1 8 2
+          1 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_scale_store_slice Scale DestLoc
+        OutScale 8 2 8 2 2 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 2 2)
+        (fun i => (OutScale, scaleOutOffset s DestLoc 8 2 i)))
+      (expected := fun i => quantizeKvCopyScaleSpec s Scale 8 2 i)) := by
+  constructor
+  · exact destindex_copy_quantize_kv_group_python_value_store_compute_correct
+      K DestLoc Out OutScale s
+  · exact destindex_copy_quantize_kv_group_python_scale_store_compute_correct
+      Scale DestLoc OutScale s
 
 end VeriTile.Bench.TritonBenchG.QuantizeKvCopy

@@ -1120,7 +1120,7 @@ theorem diagSsmBackwardPreLoop_step_regs
         some { data := fun idx : TileIndex [BLOCK_SIZE] =>
           active st0 batch_size dim BLOCK_SIZE idx.1 } := by
   unfold diagSsmBackwardPreLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop,
     NumericDType.mul, NumericDType.add, IntegralDType.mod,
     ComparableDType.lt, Option.bind, colOffset, active] at hStep
   subst st
@@ -1655,7 +1655,7 @@ theorem diagSsmBackwardPostLoop_readback
           diagSsmBackwardGradLambdaAfter st0 s_ptr lambda_ptr y_ptr grad_y_ptr
             batch_size dim BLOCK_SIZE length i length) := by
   unfold diagSsmBackwardPostLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, hGradS, hGradLambda, hCol, hMask,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hGradS, hGradLambda, hCol, hMask,
     Option.bind] at hStep
   subst st'
   constructor
@@ -1698,7 +1698,7 @@ theorem diagSsmBackwardPostLoop_preserve_gradX
         BLOCK_SIZE) st = some st') :
     st'.readMem grad_x_ptr offset = st.readMem grad_x_ptr offset := by
   unfold diagSsmBackwardPostLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, hGradS, hGradLambda, hCol, hMask,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hGradS, hGradLambda, hCol, hMask,
     Option.bind] at hStep
   subst st'
   rw [diagSsmBackwardFinalGradLambdaScatter_preserve_region_tile st0 _ s_ptr
@@ -2005,28 +2005,28 @@ theorem diagSsmBackwardLoopContextInvariant_init_of_preloop
       hGradLambda, hLambda, hCol, hMask, ?_, ?_, ?_, ?_⟩
   · intro offset
     unfold diagSsmBackwardPreLoop at hStep
-    simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop,
       NumericDType.mul, NumericDType.add, IntegralDType.mod,
       ComparableDType.lt, Option.bind, colOffset, active] at hStep
     subst st
     rfl
   · intro offset
     unfold diagSsmBackwardPreLoop at hStep
-    simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop,
       NumericDType.mul, NumericDType.add, IntegralDType.mod,
       ComparableDType.lt, Option.bind, colOffset, active] at hStep
     subst st
     rfl
   · intro offset
     unfold diagSsmBackwardPreLoop at hStep
-    simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop,
       NumericDType.mul, NumericDType.add, IntegralDType.mod,
       ComparableDType.lt, Option.bind, colOffset, active] at hStep
     subst st
     rfl
   · intro offset
     unfold diagSsmBackwardPreLoop at hStep
-    simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop,
       NumericDType.mul, NumericDType.add, IntegralDType.mod,
       ComparableDType.lt, Option.bind, colOffset, active] at hStep
     subst st
@@ -2092,7 +2092,7 @@ theorem diagSsmBackwardLoopBody_step_preserves_context
       (∀ offset, st'.readMem grad_y_ptr offset = st0.readMem grad_y_ptr offset) ∧
       (∀ offset, st'.readMem lambda_ptr offset = st0.readMem lambda_ptr offset) := by
   unfold diagSsmBackwardLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hLambda, hGradS, hGradLambda, hCol,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hLambda, hGradS, hGradLambda, hCol,
     hMask, hSRead, hYRead, hGradYRead, hLambdaRead, Tile.bop, Tile.cop,
     NumericDType.add, NumericDType.mul, NumericDType.sub, IntegralDType.mod,
     ComparableDType.gt, Option.bind, timeOffset, active, colOffset,
@@ -2236,7 +2236,7 @@ theorem diagSsmBackwardLoopBody_step_regs
         some (diagSsmBackwardGradLambdaTile st0 s_ptr lambda_ptr y_ptr
           grad_y_ptr batch_size dim BLOCK_SIZE length (k + 1)) := by
   unfold diagSsmBackwardLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hGradS, hGradLambda, hLambda, hCol,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hGradS, hGradLambda, hLambda, hCol,
     hMask, hGradYRead, hSRead, hYRead, Tile.bop, Tile.cop, NumericDType.add,
     NumericDType.mul, NumericDType.sub, IntegralDType.mod, ComparableDType.gt,
     Option.bind, timeOffset, active, colOffset, diagSsmBackwardGradSTile_succ,
@@ -2321,7 +2321,7 @@ theorem diagSsmBackwardLoopInvariant_step_of_concrete_body
   · exact hRegs.2
   · intro idx hOld _hactive
     unfold diagSsmBackwardLoopBody at hStep
-    simp [stepStmts, stepStmt, evalOp, hPrev.1, hPrev.2.1, hLambda, hCol,
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hPrev.1, hPrev.2.1, hLambda, hCol,
       hMask, hGradYRead, hSRead, hYRead, Tile.bop, Tile.cop,
       NumericDType.add, NumericDType.mul, NumericDType.sub,
       IntegralDType.mod, ComparableDType.gt, Option.bind, timeOffset, active,
@@ -2367,7 +2367,7 @@ theorem diagSsmBackwardLoopInvariant_step_of_concrete_body
       · rfl
   · intro i hactive
     unfold diagSsmBackwardLoopBody at hStep
-    simp [stepStmts, stepStmt, evalOp, hPrev.1, hPrev.2.1, hLambda, hCol,
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hPrev.1, hPrev.2.1, hLambda, hCol,
       hMask, hGradYRead, hSRead, hYRead, Tile.bop, Tile.cop,
       NumericDType.add, NumericDType.mul, NumericDType.sub,
       IntegralDType.mod, ComparableDType.gt, Option.bind, timeOffset, active,
@@ -2482,7 +2482,7 @@ theorem diagSsmBackwardLoopContextInvariant_body_step_exists
         (st.setReg "i" .nat [] (Tile.scalar k)) with
   | none =>
       unfold diagSsmBackwardLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hInv.1, hInv.2.1, hLambda, hCol,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.1, hInv.2.1, hLambda, hCol,
         hMask, hGradYRead, hSRead, hYRead, Tile.bop, Tile.cop,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         IntegralDType.mod, ComparableDType.gt, Option.bind, timeOffset, active,
@@ -2679,7 +2679,7 @@ theorem diagSsmForwardPreLoop_step_regs
         some { data := fun idx : TileIndex [BLOCK_SIZE] =>
           active st0 batch_size dim BLOCK_SIZE idx.1 } := by
   unfold diagSsmForwardPreLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop,
     NumericDType.mul, NumericDType.add, IntegralDType.mod,
     ComparableDType.lt, Option.bind, colOffset, active,
     diagSsmMaskedStateTile, diagSsmStateAfter] at hStep
@@ -2736,7 +2736,7 @@ theorem diagSsmForwardLoopInvariant_step_of_concrete_body
     diagSsmForwardLoopInvariant st0 s_ptr x_ptr lambda_ptr y_ptr length
       batch_size dim BLOCK_SIZE (t + 1) st' := by
   unfold diagSsmForwardLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hS, hLambda, hCol, hMask, hXRead,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hS, hLambda, hCol, hMask, hXRead,
     Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul, Option.bind,
     timeOffset, active, colOffset, IntegralDType.mod,
     diagSsmMaskedStateTile_succ] at hStep
@@ -2848,7 +2848,7 @@ theorem diagSsmForwardLoopContextInvariant_init_of_preloop
       length batch_size dim BLOCK_SIZE hS, hLambda, hCol, hMask, ?_⟩
   intro offset
   unfold diagSsmForwardPreLoop at hStep
-  simp [stepStmts, stepStmt, evalOp, Tile.bop, Tile.cop,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Tile.bop, Tile.cop,
     NumericDType.mul, NumericDType.add, IntegralDType.mod,
     ComparableDType.lt, Option.bind, colOffset, active,
     diagSsmMaskedStateTile, diagSsmStateAfter] at hStep
@@ -2898,7 +2898,7 @@ theorem diagSsmForwardLoopBody_step_preserves_context
           active st0 batch_size dim BLOCK_SIZE idx.1 } ∧
       (∀ offset, st'.readMem x_ptr offset = st0.readMem x_ptr offset) := by
   unfold diagSsmForwardLoopBody at hStep
-  simp [stepStmts, stepStmt, evalOp, hS, hLambda, hCol, hMask, hXRead,
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hS, hLambda, hCol, hMask, hXRead,
     Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul, Option.bind,
     timeOffset, active, colOffset, IntegralDType.mod,
     diagSsmMaskedStateTile_succ] at hStep
@@ -2993,7 +2993,7 @@ theorem diagSsmForwardLoopContextInvariant_body_step_exists
         (st.setReg "t" .nat [] (Tile.scalar t)) with
   | none =>
       unfold diagSsmForwardLoopBody at hStep
-      simp [stepStmts, stepStmt, evalOp, hInv.1, hLambda, hCol, hMask,
+      simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hInv.1, hLambda, hCol, hMask,
         hXRead, Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         Option.bind, timeOffset, active, colOffset, IntegralDType.mod,
         diagSsmMaskedStateTile_succ] at hStep

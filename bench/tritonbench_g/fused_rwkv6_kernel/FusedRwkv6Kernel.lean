@@ -134,7 +134,7 @@ theorem fused_recurrent_rwkv6_output_store_slice_correct
           else s.readMem O outAddr) := by
   intro i
   simp [exec, fused_recurrent_rwkv6_output_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
         NumericDType.add, NumericDType.mul, ComparableDType.lt, vIndex,
         active, boOffset, outOffset]
   let offsetFn : TileIndex [BV] → Nat :=
@@ -247,7 +247,7 @@ theorem fused_recurrent_rwkv6_final_state_store_slice_correct
           else s.readMem Ht outAddr) := by
   intro idx
   simp [exec, fused_recurrent_rwkv6_final_state_store_slice, stepStmts, stepStmt,
-        evalOp, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
         vIndex2D, kIndex2D, finalActive, finalStateOffset,
         TileShape.dropInsertedIndex]
@@ -361,5 +361,77 @@ theorem fused_recurrent_rwkv6_final_state_python_test_shape_compute_correct
   exact fused_recurrent_rwkv6_final_state_store_slice_compute_correct BHFinal Ht
     8 8 8 8 s
     (fused_recurrent_rwkv6_final_state_python_test_shape_offset_injective s)
+
+/-- Python regression-shape output coverage for fused recurrent RWKV6: each
+time-slice output store and the optional final-state store realize the checked
+masked writeback shapes. -/
+theorem fused_recurrent_rwkv6_python_test_shape_all_outputs_compute_correct
+    (BO O BHFinal Ht : RegionName) (timeOffset : Fin 4) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_output_store_slice BO O timeOffset.val
+        2 3 4 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active s 8 8 i)
+        (fun i => (O, outOffset s timeOffset.val 2 3 4 8 8 i)))
+      (expected := fun i : Fin 8 => storeValue s BO 8 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal Ht
+        8 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [8, 8] => finalActive s 8 8 8 8 idx)
+        (fun idx : TileIndex [8, 8] =>
+          (Ht, finalStateOffset s 8 8 8 8 idx)))
+      (expected := fun idx : TileIndex [8, 8] =>
+        finalStateStoreValue s BHFinal 8 8 8 8 idx)) := by
+  constructor
+  · exact fused_recurrent_rwkv6_output_python_test_shape_compute_correct
+      BO O timeOffset s
+  · exact fused_recurrent_rwkv6_final_state_python_test_shape_compute_correct
+      BHFinal Ht s
+
+/-! ## Python test-case surface wrappers
+
+The Python regression uses `B = 2`, `H = 3`, `T = 4`, `K = V = 8`,
+`BK = BV = 8`, contiguous `q/k/w` head strides `32`, contiguous `v/o` head
+strides `32`, `scale = 0.5`, and default `reverse = false`. It varies only
+initial-state and final-state output flags across the four cases. -/
+
+theorem fused_recurrent_rwkv6_python_test_case1_surface_toAlgorithm_supported
+    (q k v w u o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
+      32 32 2 3 4 8 8 8 8 0.5
+      Bool.false Bool.false Bool.false).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported q k v w u o h0 ht
+    32 32 2 3 4 8 8 8 8 0.5
+    Bool.false Bool.false Bool.false
+
+theorem fused_recurrent_rwkv6_python_test_case2_surface_toAlgorithm_supported
+    (q k v w u o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
+      32 32 2 3 4 8 8 8 8 0.5
+      Bool.true Bool.false Bool.false).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported q k v w u o h0 ht
+    32 32 2 3 4 8 8 8 8 0.5
+    Bool.true Bool.false Bool.false
+
+theorem fused_recurrent_rwkv6_python_test_case3_surface_toAlgorithm_supported
+    (q k v w u o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
+      32 32 2 3 4 8 8 8 8 0.5
+      Bool.false Bool.true Bool.false).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported q k v w u o h0 ht
+    32 32 2 3 4 8 8 8 8 0.5
+    Bool.false Bool.true Bool.false
+
+theorem fused_recurrent_rwkv6_python_test_case4_surface_toAlgorithm_supported
+    (q k v w u o h0 ht : RegionName) :
+    ∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
+      32 32 2 3 4 8 8 8 8 0.5
+      Bool.true Bool.true Bool.false).toAlgorithm? = Except.ok alg := by
+  exact fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported q k v w u o h0 ht
+    32 32 2 3 4 8 8 8 8 0.5
+    Bool.true Bool.true Bool.false
 
 end VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel
