@@ -928,4 +928,304 @@ theorem decay_cumsum_backward_python_test_shape_all_outputs_compute_correct
   · exact bwd_decay_dg_step_python_test_shape_compute_correct
       CumGradPrev DQ DKReg Q K DG t_rel s
 
+/-! ## Python test-case surface wrappers
+
+The checked Python launch uses `B = 2`, `H = 2`, `T = 4`, `DK = 8`,
+`BT = 2`, `BK = 4`, `s_qk_h = 64`, and `scale = 1.0`. These wrappers pin the
+full surfaces to that layout so the carried forward cumsum, q/k decay prep,
+and reverse backward scan are all directly represented at the Python-tested
+shape. -/
+
+theorem fwd_decay_cumsum_python_test_surface_toAlgorithm_supported
+    (G GO : RegionName) :
+    ∃ alg, (fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0
+      2 4 8).toAlgorithm? = Except.ok alg := by
+  exact fwd_decay_cumsum_surface_toAlgorithm_supported G GO
+    64 32 8 2 2 4 1.0 2 4 8
+
+theorem prepare_qg_kg_python_test_surface_toAlgorithm_supported
+    (Q K G QG KG : RegionName) :
+    ∃ alg, (prepare_qg_kg_surface Q K G QG KG 64 8 2 4
+      1.0).toAlgorithm? = Except.ok alg := by
+  exact prepare_qg_kg_surface_toAlgorithm_supported Q K G QG KG
+    64 8 2 4 1.0
+
+theorem bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) :
+    (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
+      64 8 2 4).toAlgorithm? =
+      Except.ok
+        (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+          Q K G DG 64 8 2 4).toAlgKernel := by
+  exact bwd_decay_global_cumsum_surface_toAlgorithm_supported DQInner DQInter
+    DKInner DKInter Q K G DG 64 8 2 4
+
+/-- Python test-path summary for the q/k decay preparation kernel.
+
+This combines the checked full `prepare_qg_kg` surface with both Python-visible
+`q_g` and `k_g` row writebacks at the benchmark shape. -/
+theorem decay_cumsum_prepare_python_test_shape_summary
+    (Q K G QG KG QDecay KDecay : RegionName) (t_rel : Fin 2)
+    (s : BlockState) :
+    (∃ alg, (prepare_qg_kg_surface Q K G QG KG 64 8 2 4
+      1.0).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := prepare_qg_decay_store_slice Q QDecay QG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (QG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        prepareQgDecaySpec s Q QDecay 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := prepare_kg_decay_store_slice K KDecay KG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (KG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        prepareKgDecaySpec s K KDecay 64 8 t_rel.val 2 4 i)) := by
+  constructor
+  · exact prepare_qg_kg_python_test_surface_toAlgorithm_supported Q K G QG KG
+  · exact decay_cumsum_prepare_python_test_shape_all_outputs_compute_correct
+      Q QDecay QG K KDecay KG t_rel s
+
+/-- Python test-path summary for the forward decay cumsum kernel.
+
+The summary links the full forward surface to both the precomputed row-store
+and the checked one-step cumulative update at the benchmark shape. -/
+theorem decay_cumsum_forward_python_test_shape_summary
+    (G GO CumDecayPre CumPrev : RegionName) (t_rel : Fin 2)
+    (s : BlockState) :
+    (∃ alg, (fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0
+      2 4 8).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_store_slice CumDecayPre GO
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        fwdDecayCumsumSpec s CumDecayPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_step_store_slice CumPrev G GO
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        fwdDecayStepSpec s CumPrev G 64 8 t_rel.val 2 4 i)) := by
+  constructor
+  · exact fwd_decay_cumsum_python_test_surface_toAlgorithm_supported G GO
+  · exact decay_cumsum_forward_python_test_shape_all_outputs_compute_correct
+      CumDecayPre CumPrev G GO t_rel s
+
+/-- Python test-path summary for the reverse backward global cumsum kernel.
+
+This pairs the reverse-loop/pointer-decrement surface with the checked
+`dq_inter`, `dk_inter`, and `dg` output row proofs plus the one-step `dg`
+arithmetic update. -/
+theorem decay_cumsum_backward_python_test_shape_summary
+    (DQInner DQInter DKInner DKInter Q K G DG DQInterPre DKInterPre DGPre
+      CumGradPrev DQ DKReg : RegionName)
+    (t_rel : Fin 2) (s : BlockState) :
+    ((bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
+      64 8 2 4).toAlgorithm? =
+      Except.ok
+        (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+          Q K G DG 64 8 2 4).toAlgKernel) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DQInterPre DQInter
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DQInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DQInterPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DKInterPre DKInter
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DKInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DKInterPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DGPre DG 64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DGPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_dg_step_store_slice CumGradPrev DQ DKReg Q K DG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayDGStepSpec s CumGradPrev DQ DKReg Q K
+          64 8 t_rel.val 2 4 i)) := by
+  constructor
+  · exact bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
+      DQInner DQInter DKInner DKInter Q K G DG
+  · exact decay_cumsum_backward_python_test_shape_all_outputs_compute_correct
+      DQInterPre DQInter DKInterPre DKInter DGPre CumGradPrev DQ DKReg
+      Q K DG t_rel s
+
+/-- `output_summary` alias for the Python q/k decay preparation path. -/
+abbrev decay_cumsum_prepare_python_test_shape_output_summary
+    (Q K G QG KG QDecay KDecay : RegionName) (t_rel : Fin 2)
+    (s : BlockState) :=
+  decay_cumsum_prepare_python_test_shape_summary Q K G QG KG QDecay KDecay
+    t_rel s
+
+/-- `output_summary` alias for the Python forward decay-cumsum path. -/
+abbrev decay_cumsum_forward_python_test_shape_output_summary
+    (G GO CumDecayPre CumPrev : RegionName) (t_rel : Fin 2)
+    (s : BlockState) :=
+  decay_cumsum_forward_python_test_shape_summary G GO CumDecayPre CumPrev
+    t_rel s
+
+/-- `output_summary` alias for the Python backward decay-cumsum path. -/
+abbrev decay_cumsum_backward_python_test_shape_output_summary
+    (DQInner DQInter DKInner DKInter Q K G DG DQInterPre DKInterPre DGPre
+      CumGradPrev DQ DKReg : RegionName)
+    (t_rel : Fin 2) (s : BlockState) :=
+  decay_cumsum_backward_python_test_shape_summary DQInner DQInter DKInner
+    DKInter Q K G DG DQInterPre DKInterPre DGPre CumGradPrev DQ DKReg
+    t_rel s
+
+/-- Proposition for the Python q/k decay-preparation path. -/
+abbrev decay_cumsum_prepare_python_test_shape_prop
+    (Q K G QG KG QDecay KDecay : RegionName) (t_rel : Fin 2)
+    (s : BlockState) : Prop :=
+    (∃ alg, (prepare_qg_kg_surface Q K G QG KG 64 8 2 4
+      1.0).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := prepare_qg_decay_store_slice Q QDecay QG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (QG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        prepareQgDecaySpec s Q QDecay 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := prepare_kg_decay_store_slice K KDecay KG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (KG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        prepareKgDecaySpec s K KDecay 64 8 t_rel.val 2 4 i))
+
+/-- Proposition for the Python forward decay-cumsum path. -/
+abbrev decay_cumsum_forward_python_test_shape_prop
+    (G GO CumDecayPre CumPrev : RegionName) (t_rel : Fin 2)
+    (s : BlockState) : Prop :=
+    (∃ alg, (fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0
+      2 4 8).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_store_slice CumDecayPre GO
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        fwdDecayCumsumSpec s CumDecayPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_step_store_slice CumPrev G GO
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        fwdDecayStepSpec s CumPrev G 64 8 t_rel.val 2 4 i))
+
+/-- Proposition for the Python reverse backward global-cumsum path. -/
+abbrev decay_cumsum_backward_python_test_shape_prop
+    (DQInner DQInter DKInner DKInter Q K G DG DQInterPre DKInterPre DGPre
+      CumGradPrev DQ DKReg : RegionName)
+    (t_rel : Fin 2) (s : BlockState) : Prop :=
+    ((bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
+      64 8 2 4).toAlgorithm? =
+      Except.ok
+        (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+          Q K G DG 64 8 2 4).toAlgKernel) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DQInterPre DQInter
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DQInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DQInterPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DKInterPre DKInter
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DKInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DKInterPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_cumsum_store_slice DGPre DG 64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayCumsumSpec s DGPre 64 8 t_rel.val 2 4 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bwd_decay_dg_step_store_slice CumGradPrev DQ DKReg Q K DG
+        64 8 t_rel.val 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (DG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i =>
+        bwdDecayDGStepSpec s CumGradPrev DQ DKReg Q K
+          64 8 t_rel.val 2 4 i))
+
+/-- Combined checked-shape summary for `test_kernels` in `decay_cumsum.py`.
+
+This collects the three launched kernels, the observed `g_o`, `qg`, `kg`, and
+`dg` outputs, and the reverse global-cumsum `dq_inter`/`dk_inter` writebacks in
+one public target. -/
+theorem decay_cumsum_python_test_shape_complete_summary
+    (Q K G GO QG KG DG QDecay KDecay CumDecayPre CumPrev DQInner DQInter
+      DKInner DKInter DQInterPre DKInterPre DGPre CumGradPrev DQ DKReg :
+      RegionName)
+    (t_rel : Fin 2) (s : BlockState) :
+    decay_cumsum_prepare_python_test_shape_prop Q K G QG KG QDecay KDecay
+      t_rel s ∧
+    decay_cumsum_forward_python_test_shape_prop G GO CumDecayPre CumPrev
+      t_rel s ∧
+    decay_cumsum_backward_python_test_shape_prop DQInner DQInter DKInner
+      DKInter Q K G DG DQInterPre DKInterPre DGPre CumGradPrev DQ DKReg
+      t_rel s := by
+  constructor
+  · exact decay_cumsum_prepare_python_test_shape_summary Q K G QG KG QDecay
+      KDecay t_rel s
+  constructor
+  · exact decay_cumsum_forward_python_test_shape_summary G GO CumDecayPre
+      CumPrev t_rel s
+  · exact decay_cumsum_backward_python_test_shape_summary DQInner DQInter
+      DKInner DKInter Q K G DG DQInterPre DKInterPre DGPre CumGradPrev DQ
+      DKReg t_rel s
+
 end VeriTile.Bench.TritonBenchG.DecayCumsum
