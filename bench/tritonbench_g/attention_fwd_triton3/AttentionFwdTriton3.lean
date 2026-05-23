@@ -274,6 +274,130 @@ theorem attention_fwd_triton3_final_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-- Formula-level `END=True` output normalization and final store:
+`acc = acc / l_i[:, None]` before the masked `Out` writeback. This proves the
+observable active output cells against the Python epilogue arithmetic instead
+of treating the normalized accumulator as precomputed. -/
+def attention_fwd_triton3_end_output_formula_store_slice
+    (Acc LPre Out : RegionName)
+    (H N_CTX HEAD_ACTIVE
+      stride_acc_z stride_acc_h stride_acc_m stride_acc_k
+      stride_qz stride_qh stride_qm stride_qk
+      ROUND_CTX BLOCK_M BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
+  off_z = off_hz // $(H)
+  off_h = off_hz % $(H)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_k = tl.arange(0, $(BLOCK_DMODEL))
+  mask = (offs_m[:, None] < $(N_CTX)) & (offs_k[None, :] < $(HEAD_ACTIVE))
+  acc = tl.load(Acc + off_z * $(stride_acc_z) + off_h * $(stride_acc_h) +
+      offs_m[:, None] * $(stride_acc_m) + offs_k[None, :] * $(stride_acc_k),
+      mask=mask, other=0.0)
+  l_i = tl.load(LPre + off_hz * $(ROUND_CTX) + offs_m)
+  acc = acc / l_i[:, None]
+  tl.store(Out + off_z.to(tl.int64) * $(stride_qz) + off_h.to(tl.int64) * $(stride_qh) +
+      offs_m[:, None] * $(stride_qm) + offs_k[None, :] * $(stride_qk),
+      (acc).to(Out.dtype.element_ty), mask=mask)
+}
+
+noncomputable def endOutputStoreSpec
+    (s : BlockState) (Acc LPre : RegionName)
+    (H stride_acc_z stride_acc_h stride_acc_m stride_acc_k ROUND_CTX
+      BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  s.readMem Acc
+      (accOffset s H stride_acc_z stride_acc_h stride_acc_m stride_acc_k
+        BLOCK_M idx) /
+    s.readMem LPre (s.pids 1 * ROUND_CTX + mIndex s BLOCK_M idx.1)
+
+theorem attention_fwd_triton3_end_output_formula_store_slice_correct
+    (Acc LPre Out : RegionName)
+    (H N_CTX HEAD_ACTIVE
+      stride_acc_z stride_acc_h stride_acc_m stride_acc_k
+      stride_qz stride_qh stride_qm stride_qk
+      ROUND_CTX BLOCK_M BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
+    ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+      let outAddr := outOffset s H stride_qz stride_qh stride_qm stride_qk
+        BLOCK_M idx
+      (exec (attention_fwd_triton3_end_output_formula_store_slice Acc LPre Out
+            H N_CTX HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m
+            stride_acc_k stride_qz stride_qh stride_qm stride_qk ROUND_CTX
+            BLOCK_M BLOCK_DMODEL) s).map (·.readMem Out outAddr)
+        = some (if active s N_CTX HEAD_ACTIVE BLOCK_M idx then
+            endOutputStoreSpec s Acc LPre H stride_acc_z stride_acc_h
+              stride_acc_m stride_acc_k ROUND_CTX BLOCK_M idx
+          else s.readMem Out outAddr) := by
+  intro idx
+  simp [exec, attention_fwd_triton3_end_output_formula_store_slice,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+        Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, NumericDType.add,
+        NumericDType.mul, NumericDType.div, IntegralDType.floorDiv,
+        IntegralDType.mod, ComparableDType.lt, offZ, offH, mIndex, kIndex,
+        active, accOffset, outOffset, endOutputStoreSpec,
+        TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BLOCK_M, BLOCK_DMODEL] → Nat :=
+    fun idx =>
+      s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh +
+        (s.pids 0 * BLOCK_M + idx.1.val) * stride_qm +
+        idx.2.1.val * stride_qk
+  let P : TileIndex [BLOCK_M, BLOCK_DMODEL] → Prop :=
+    fun idx =>
+      s.pids 0 * BLOCK_M + idx.1.val < N_CTX ∧
+        idx.2.1.val < HEAD_ACTIVE
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, outOffset, offZ, offH, mIndex, kIndex] using hOutInj
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive :
+      s.pids 0 * BLOCK_M + idx.1.val < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE
+  · simp [offsetFn, P, active, accOffset, outOffset,
+      endOutputStoreSpec, offZ, offH, mIndex, kIndex, hActive]
+  · simp [offsetFn, P, active, accOffset, outOffset,
+      endOutputStoreSpec, offZ, offH, mIndex, kIndex, hActive]
+
+theorem attention_fwd_triton3_end_output_formula_store_slice_compute_correct
+    (Acc LPre Out : RegionName)
+    (H N_CTX HEAD_ACTIVE
+      stride_acc_z stride_acc_h stride_acc_m stride_acc_k
+      stride_qz stride_qh stride_qm stride_qk
+      ROUND_CTX BLOCK_M BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_output_formula_store_slice Acc LPre
+        Out H N_CTX HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m
+        stride_acc_k stride_qz stride_qh stride_qm stride_qk ROUND_CTX
+        BLOCK_M BLOCK_DMODEL)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          active s N_CTX HEAD_ACTIVE BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
+          outOffset s H stride_qz stride_qh stride_qm stride_qk BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        endOutputStoreSpec s Acc LPre H stride_acc_z stride_acc_h stride_acc_m
+          stride_acc_k ROUND_CTX BLOCK_M idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton3_end_output_formula_store_slice,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx hActive
+  have h := attention_fwd_triton3_end_output_formula_store_slice_correct
+    Acc LPre Out H N_CTX HEAD_ACTIVE stride_acc_z stride_acc_h stride_acc_m
+    stride_acc_k stride_qz stride_qh stride_qm stride_qk ROUND_CTX BLOCK_M
+    BLOCK_DMODEL s hOutInj idx
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
 /-- Proof-oriented L (log-sum-exp) row store slice of `attention_fwd_triton3.py`.
 Takes a precomputed `LPre` vector and proves the row writeback into `L` at
 offset `off_hz * ROUND_CTX + offs_m`. -/
@@ -473,5 +597,326 @@ theorem attention_fwd_triton3_end_m_formula_store_slice_compute_correct
     M off_hz ROUND_CTX BLOCK_M s hOutInj i
   rw [hExec] at h
   exact Option.some.inj h
+
+/-! ## Python test-shape summaries
+
+`attention_fwd_triton3.py`'s checked tests use
+`q/k/v/o.shape = (2, 4, 128, 64)`, `BLOCK_M = BLOCK_N = 64`,
+`ROUND_CTX = 128`, `H_KV = H = 4`, and `sm_scale = 1 / sqrt(64) = 1/8`.
+All four test cases run with `END = true`; the observed `M` row therefore
+comes from the formula epilogue `m_i += log2(l_i)`. -/
+
+theorem attention_fwd_triton3_final_store_python_test_shape_compute_correct
+    (Acc Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_final_store_slice Acc Out
+        4 128 64 32768 8192 64 1 32768 8192 64 1 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)) := by
+  apply attention_fwd_triton3_final_store_slice_compute_correct
+  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
+  simp [outOffset, offZ, offH, mIndex, kIndex] at h
+  have hm : ma = mb := by omega
+  have hk : ka = kb := by omega
+  subst mb
+  subst kb
+  rfl
+
+theorem attention_fwd_triton3_end_output_formula_python_test_shape_compute_correct
+    (Acc LPre Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_output_formula_store_slice Acc LPre
+        Out 4 128 64 32768 8192 64 1 32768 8192 64 1 128 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        endOutputStoreSpec s Acc LPre 4 32768 8192 64 1 128 64 idx) := by
+  apply attention_fwd_triton3_end_output_formula_store_slice_compute_correct
+  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
+  simp [outOffset, offZ, offH, mIndex, kIndex] at h
+  have hm : ma = mb := by omega
+  have hk : ka = kb := by omega
+  subst mb
+  subst kb
+  rfl
+
+theorem attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
+    (MPre LPre M : RegionName) (off_hz : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz 128 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (expected := fun i : Fin 64 =>
+        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+  apply attention_fwd_triton3_end_m_formula_store_slice_compute_correct
+  intro a b h
+  simp [lRowOffset] at h
+  apply Fin.ext
+  omega
+
+theorem attention_fwd_triton3_python_case1_surface_toAlgorithm_supported
+    (Q K V M Out L : RegionName) :
+    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0).toAlgorithm? =
+        Except.ok alg := by
+  exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
+    (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+    32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
+
+theorem attention_fwd_triton3_python_case2_surface_toAlgorithm_supported
+    (Q K V M Out L : RegionName) :
+    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1).toAlgorithm? =
+        Except.ok alg := by
+  exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
+    (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+    32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
+
+theorem attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
+    (Q K V M Out L : RegionName) :
+    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0).toAlgorithm? =
+        Except.ok alg := by
+  exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
+    (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+    32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
+
+theorem attention_fwd_triton3_python_case4_surface_toAlgorithm_supported
+    (Q K V M Out L : RegionName) :
+    ∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0).toAlgorithm? =
+        Except.ok alg := by
+  exact attention_fwd_triton3_surface_toAlgorithm_supported Q K V M Out L
+    (1 / 8 : ℝ) 32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+    32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
+
+theorem attention_fwd_triton3_python_case1_output_summary
+    (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat) (s : BlockState) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_final_store_slice Acc Out
+        4 128 64 32768 8192 64 1 32768 8192 64 1 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz 128 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (expected := fun i : Fin 64 =>
+        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+  constructor
+  · exact attention_fwd_triton3_python_case1_surface_toAlgorithm_supported
+      Q K V M Out L
+  constructor
+  · exact attention_fwd_triton3_final_store_python_test_shape_compute_correct
+      Acc Out s
+  · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
+      MPre LPre M off_hz s
+
+theorem attention_fwd_triton3_python_case2_output_summary
+    (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat) (s : BlockState) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_final_store_slice Acc Out
+        4 128 64 32768 8192 64 1 32768 8192 64 1 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz 128 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (expected := fun i : Fin 64 =>
+        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+  constructor
+  · exact attention_fwd_triton3_python_case2_surface_toAlgorithm_supported
+      Q K V M Out L
+  constructor
+  · exact attention_fwd_triton3_final_store_python_test_shape_compute_correct
+      Acc Out s
+  · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
+      MPre LPre M off_hz s
+
+theorem attention_fwd_triton3_python_case3_output_summary
+    (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat) (s : BlockState) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_final_store_slice Acc Out
+        4 128 64 32768 8192 64 1 32768 8192 64 1 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz 128 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (expected := fun i : Fin 64 =>
+        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+  constructor
+  · exact attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
+      Q K V M Out L
+  constructor
+  · exact attention_fwd_triton3_final_store_python_test_shape_compute_correct
+      Acc Out s
+  · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
+      MPre LPre M off_hz s
+
+theorem attention_fwd_triton3_python_case4_output_summary
+    (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat) (s : BlockState) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_final_store_slice Acc Out
+        4 128 64 32768 8192 64 1 32768 8192 64 1 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz 128 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (expected := fun i : Fin 64 =>
+        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+  constructor
+  · exact attention_fwd_triton3_python_case4_surface_toAlgorithm_supported
+      Q K V M Out L
+  constructor
+  · exact attention_fwd_triton3_final_store_python_test_shape_compute_correct
+      Acc Out s
+  · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
+      MPre LPre M off_hz s
+
+/-- Strengthened checked-shape END epilogue summary: in addition to the
+existing case summaries, expose the compute-correct `acc / l_i[:, None]`
+producer for the final `Out` writeback used when `END=True`. -/
+theorem attention_fwd_triton3_python_end_output_formula_summary
+    (Acc LPre Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_output_formula_store_slice Acc LPre
+        Out 4 128 64 32768 8192 64 1 32768 8192 64 1 128 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        endOutputStoreSpec s Acc LPre 4 32768 8192 64 1 128 64 idx) := by
+  exact attention_fwd_triton3_end_output_formula_python_test_shape_compute_correct
+    Acc LPre Out s
+
+/-- Combined checked-shape summary for `test_forward` in `attention_fwd_triton3.py`.
+
+This pins all four Python branch launches (`sliding_window`, complement window,
+plain full-window, and `INIT=False`) and exposes the END epilogue arithmetic
+that mutates the observable `Out` and `M` tensors. -/
+theorem attention_fwd_triton3_python_test_shape_complete_summary
+    (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat)
+    (s : BlockState) :
+    ((∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 1 1 1
+      ).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 64 1 1 64 64 64 1 0 1 0
+      ).toAlgorithm? = Except.ok alg)) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_output_formula_store_slice Acc LPre
+        Out 4 128 64 32768 8192 64 1 32768 8192 64 1 128 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        endOutputStoreSpec s Acc LPre 4 32768 8192 64 1 128 64 idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
+        off_hz 128 64)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (expected := fun i : Fin 64 =>
+        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+  constructor
+  · constructor
+    · exact attention_fwd_triton3_python_case1_surface_toAlgorithm_supported
+        Q K V M Out L
+    constructor
+    · exact attention_fwd_triton3_python_case2_surface_toAlgorithm_supported
+        Q K V M Out L
+    constructor
+    · exact attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
+        Q K V M Out L
+    · exact attention_fwd_triton3_python_case4_surface_toAlgorithm_supported
+        Q K V M Out L
+  constructor
+  · exact attention_fwd_triton3_python_end_output_formula_summary Acc LPre Out s
+  · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
+      MPre LPre M off_hz s
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3

@@ -1,5 +1,6 @@
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
@@ -76,6 +77,176 @@ theorem attention_fwd_kernel_surface_toAlgorithm_supported
       s_ht T scale BT BD NT STORE IFCOND).toAlgorithm? = Except.ok alg := by
   simp [attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
+
+/-! ## Forward accumulator arithmetic surfaces
+
+These proof-oriented surfaces expose the arithmetic producers for the `BO` and
+`BHPre` tiles consumed by the store-slice theorems below. They mirror the
+source loop body statements rather than starting from an opaque accumulator:
+
+* `b_s = tl.dot((b_q * scale).to(b_q.dtype), b_k)`
+* `b_o = tl.dot(b_s.to(b_q.dtype), b_v)`
+* `b_h = tl.dot(b_k, b_v)`
+-/
+
+def attention_fwd_triton1_bo_formula_slice
+    (QTile KTile VTile BO : RegionName) (scale : ℝ) (BT BD : Nat) :
+    ComputeKernel := triton {
+  offs_t = tl.arange(0, $(BT))
+  offs_d = tl.arange(0, $(BD))
+  offs_s = tl.arange(0, $(BT))
+  b_q = tl.load(QTile + offs_t[:, None] * $(BD) + offs_d[None, :])
+  b_q = (b_q * $((scale : ℝ))).to(b_q.dtype)
+  b_k = tl.load(KTile + offs_d[:, None] * $(BT) + offs_s[None, :])
+  b_v = tl.load(VTile + offs_s[:, None] * $(BD) + offs_d[None, :])
+  b_s = tl.dot(b_q, b_k, allow_tf32=false)
+  b_o = tl.dot((b_s).to(b_q.dtype), b_v, allow_tf32=false)
+  tl.store(BO + offs_t[:, None] * $(BD) + offs_d[None, :], b_o)
+}
+
+theorem attention_fwd_triton1_bo_formula_slice_toAlgorithm_supported
+    (QTile KTile VTile BO : RegionName) (scale : ℝ) (BT BD : Nat) :
+    ∃ alg, (attention_fwd_triton1_bo_formula_slice QTile KTile VTile BO
+      scale BT BD).toAlgorithm? = Except.ok alg := by
+  simp [attention_fwd_triton1_bo_formula_slice, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
+def attention_fwd_triton1_bh_formula_slice
+    (KTile VTile BH : RegionName) (BT BD : Nat) :
+    ComputeKernel := triton {
+  offs_d0 = tl.arange(0, $(BD))
+  offs_t = tl.arange(0, $(BT))
+  offs_d1 = tl.arange(0, $(BD))
+  b_k = tl.load(KTile + offs_d0[:, None] * $(BT) + offs_t[None, :])
+  b_v = tl.load(VTile + offs_t[:, None] * $(BD) + offs_d1[None, :])
+  b_h = tl.dot(b_k, b_v, allow_tf32=false)
+  tl.store(BH + offs_d0[:, None] * $(BD) + offs_d1[None, :], b_h)
+}
+
+theorem attention_fwd_triton1_bh_formula_slice_toAlgorithm_supported
+    (KTile VTile BH : RegionName) (BT BD : Nat) :
+    ∃ alg, (attention_fwd_triton1_bh_formula_slice KTile VTile BH
+      BT BD).toAlgorithm? = Except.ok alg := by
+  simp [attention_fwd_triton1_bh_formula_slice, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
+def localBoOffset (BD : Nat) (idx : TileIndex [BT, BD]) : Nat :=
+  idx.1.val * BD + idx.2.1.val
+
+def localBhOffset (BD : Nat) (idx : TileIndex [BD, BD]) : Nat :=
+  idx.1.val * BD + idx.2.1.val
+
+noncomputable def boFormulaSpec
+    (s : BlockState) (QTile KTile VTile : RegionName)
+    (scale : ℝ) (BT BD : Nat) (idx : TileIndex [BT, BD]) : ℝ :=
+  ∑ t : Fin BT,
+    (∑ d : Fin BD,
+      (s.readMem QTile (idx.1.val * BD + d.val) * scale) *
+        s.readMem KTile (d.val * BT + t.val)) *
+      s.readMem VTile (t.val * BD + idx.2.1.val)
+
+noncomputable def bhFormulaSpec
+    (s : BlockState) (KTile VTile : RegionName)
+    (BT BD : Nat) (idx : TileIndex [BD, BD]) : ℝ :=
+  ∑ t : Fin BT,
+    s.readMem KTile (idx.1.val * BT + t.val) *
+      s.readMem VTile (t.val * BD + idx.2.1.val)
+
+theorem attention_fwd_triton1_bo_formula_slice_correct
+    (QTile KTile VTile BO : RegionName) (scale : ℝ) (BT BD : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BD] => localBoOffset BD idx)) :
+    ∀ idx : TileIndex [BT, BD],
+      let outAddr := localBoOffset BD idx
+      (exec (attention_fwd_triton1_bo_formula_slice QTile KTile VTile BO
+            scale BT BD) s).map (·.readMem BO outAddr)
+        = some (boFormulaSpec s QTile KTile VTile scale BT BD idx) := by
+  intro idx
+  simp [exec, attention_fwd_triton1_bo_formula_slice,
+        ComputeKernel.toAlgKernel, ComputeStmt.toAlgorithm?,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+        Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.dot,
+        NumericDType.add, NumericDType.mul, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot, localBoOffset,
+        boFormulaSpec, TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BT, BD] → Nat :=
+    fun i => i.1.val * BD + i.2.1.val
+  have hInj : Function.Injective offsetFn := by
+    simpa [offsetFn, localBoOffset] using hOutInj
+  rw [BlockState.scatter_readback_nd _ _ _ hInj idx]
+
+theorem attention_fwd_triton1_bo_formula_slice_compute_correct
+    (QTile KTile VTile BO : RegionName) (scale : ℝ) (BT BD : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BD] => localBoOffset BD idx)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_bo_formula_slice QTile KTile VTile BO
+        scale BT BD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BT, BD] =>
+        some (BO, localBoOffset BD idx))
+      (expected := fun idx : TileIndex [BT, BD] =>
+        boFormulaSpec s QTile KTile VTile scale BT BD idx) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton1_bo_formula_slice, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have h := attention_fwd_triton1_bo_formula_slice_correct QTile KTile VTile
+    BO scale BT BD s hOutInj idx
+  rw [hExec] at h
+  exact Option.some.inj h
+
+theorem attention_fwd_triton1_bh_formula_slice_correct
+    (KTile VTile BH : RegionName) (BT BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BD, BD] => localBhOffset BD idx)) :
+    ∀ idx : TileIndex [BD, BD],
+      let outAddr := localBhOffset BD idx
+      (exec (attention_fwd_triton1_bh_formula_slice KTile VTile BH BT BD)
+          s).map (·.readMem BH outAddr)
+        = some (bhFormulaSpec s KTile VTile BT BD idx) := by
+  intro idx
+  simp [exec, attention_fwd_triton1_bh_formula_slice,
+        ComputeKernel.toAlgKernel, ComputeStmt.toAlgorithm?,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+        Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.dot,
+        NumericDType.add, NumericDType.mul, localBhOffset, bhFormulaSpec,
+        TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BD, BD] → Nat :=
+    fun i => i.1.val * BD + i.2.1.val
+  have hInj : Function.Injective offsetFn := by
+    simpa [offsetFn, localBhOffset] using hOutInj
+  rw [BlockState.scatter_readback_nd _ _ _ hInj idx]
+
+theorem attention_fwd_triton1_bh_formula_slice_compute_correct
+    (KTile VTile BH : RegionName) (BT BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BD, BD] => localBhOffset BD idx)) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_bh_formula_slice KTile VTile BH BT BD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BD, BD] =>
+        some (BH, localBhOffset BD idx))
+      (expected := fun idx : TileIndex [BD, BD] =>
+        bhFormulaSpec s KTile VTile BT BD idx) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton1_bh_formula_slice, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have h := attention_fwd_triton1_bh_formula_slice_correct KTile VTile BH
+    BT BD s hOutInj idx
+  rw [hExec] at h
+  exact Option.some.inj h
 
 /-- Surface transcription/proof-oriented output-store slice of `attention_fwd_triton1.py`'s
 `attention_fwd_kernel`.
@@ -235,7 +406,7 @@ Companion to the output_store_slice: takes a precomputed `BHPre` [BD, BD]
 tile and proves the per-iteration writeback into `H` at the canonical block
 offset `i_bh * s_hh + (i * BD + idx.1) * s_ht + idx.2.1`. -/
 def attention_fwd_triton1_h_store_slice
-    (BHPre H : RegionName) (i_iter s_hh s_ht BT BD : Nat) :
+    (BHPre H : RegionName) (i_iter s_hh s_ht _BT BD : Nat) :
     ComputeKernel := triton {
   i_bh = tl.program_id(0)
   offs_d0 = $(i_iter) * $(BD) + tl.arange(0, $(BD))
@@ -431,5 +602,245 @@ theorem attention_fwd_triton1_python_test_shape_all_outputs_compute_correct
       BO O s
   · exact attention_fwd_triton1_store_enabled_h_python_test_shape_compute_correct
       BHPre H i_iter s
+
+theorem attention_fwd_triton1_local_bo_offset_python_test_shape_injective :
+    Function.Injective
+      (fun idx : TileIndex [32, 128] => localBoOffset 128 idx) := by
+  rintro ⟨⟨ta, hta⟩, ⟨da, hda⟩, _⟩ ⟨⟨tb, htb⟩, ⟨db, hdb⟩, _⟩ h
+  simp [localBoOffset] at h
+  have ht : ta = tb := by omega
+  have hd : da = db := by omega
+  subst tb
+  subst db
+  rfl
+
+theorem attention_fwd_triton1_local_bh_offset_python_test_shape_injective :
+    Function.Injective
+      (fun idx : TileIndex [128, 128] => localBhOffset 128 idx) := by
+  rintro ⟨⟨ra, hra⟩, ⟨ca, hca⟩, _⟩ ⟨⟨rb, hrb⟩, ⟨cb, hcb⟩, _⟩ h
+  simp [localBhOffset] at h
+  have hr : ra = rb := by omega
+  have hc : ca = cb := by omega
+  subst rb
+  subst cb
+  rfl
+
+theorem attention_fwd_triton1_bo_formula_python_test_shape_compute_correct
+    (QTile KTile VTile BO : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_bo_formula_slice QTile KTile VTile BO
+        ((Real.sqrt (128 : ℝ))⁻¹) 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (BO, localBoOffset 128 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        boFormulaSpec s QTile KTile VTile ((Real.sqrt (128 : ℝ))⁻¹)
+          32 128 idx) := by
+  exact attention_fwd_triton1_bo_formula_slice_compute_correct QTile KTile
+    VTile BO ((Real.sqrt (128 : ℝ))⁻¹) 32 128 s
+    attention_fwd_triton1_local_bo_offset_python_test_shape_injective
+
+theorem attention_fwd_triton1_bh_formula_python_test_shape_compute_correct
+    (KTile VTile BHPre : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_bh_formula_slice KTile VTile BHPre
+        32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (BHPre, localBhOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bhFormulaSpec s KTile VTile 32 128 idx) := by
+  exact attention_fwd_triton1_bh_formula_slice_compute_correct KTile VTile
+    BHPre 32 128 s
+    attention_fwd_triton1_local_bh_offset_python_test_shape_injective
+
+/-- Python-shape arithmetic coverage for the `BO` and `BHPre` producer tiles.
+
+This pins the checked `BT = 32`, `BD = 128`, `scale = 1 / sqrt(128)` path for
+the direct output accumulator `BO`, and the recurrent-state accumulator
+`BHPre = dot(K, V)` used by the `STORE` branch summaries. -/
+theorem attention_fwd_triton1_python_test_shape_accumulator_formula_summary
+    (QTile KTile VTile BO BHPre : RegionName) (s : BlockState) :
+    (∃ alg, (attention_fwd_triton1_bo_formula_slice QTile KTile VTile BO
+      ((Real.sqrt (128 : ℝ))⁻¹) 32 128).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (attention_fwd_triton1_bh_formula_slice KTile VTile BHPre
+      32 128).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_bo_formula_slice QTile KTile VTile BO
+        ((Real.sqrt (128 : ℝ))⁻¹) 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (BO, localBoOffset 128 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        boFormulaSpec s QTile KTile VTile ((Real.sqrt (128 : ℝ))⁻¹)
+          32 128 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_bh_formula_slice KTile VTile BHPre
+        32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (BHPre, localBhOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bhFormulaSpec s KTile VTile 32 128 idx)) := by
+  constructor
+  · exact attention_fwd_triton1_bo_formula_slice_toAlgorithm_supported
+      QTile KTile VTile BO ((Real.sqrt (128 : ℝ))⁻¹) 32 128
+  constructor
+  · exact attention_fwd_triton1_bh_formula_slice_toAlgorithm_supported
+      KTile VTile BHPre 32 128
+  constructor
+  · exact attention_fwd_triton1_bo_formula_python_test_shape_compute_correct
+      QTile KTile VTile BO s
+  · exact attention_fwd_triton1_bh_formula_python_test_shape_compute_correct
+      KTile VTile BHPre s
+
+/-- Public Python-shape summary for the main `attention_fwd_triton1` cases.
+
+The checked Python tests instantiate `B = 2`, `H = 8`, `T = 1024`, `D = 128`,
+`BT = 32`, `BD = 128`, and `NT = 32`, with four `STORE`/`IFCOND`
+combinations. This summary records faithful full-surface lowering for those
+four branch combinations and ties them to the checked output-store/H-state
+writeback slices. The dot-product arithmetic that produces the precomputed
+`BO`/`BHPre` tiles remains represented by those slice inputs. -/
+theorem attention_fwd_triton1_python_test_shape_output_summary
+    (Q K V H O BO BHPre : RegionName) (i_iter : Nat) (s : BlockState) :
+    ((∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.true Bool.false).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.false Bool.true).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.true Bool.true).toAlgorithm? = Except.ok alg)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_h_store_slice BHPre H i_iter
+        524288 128 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (H, hOffset s i_iter 524288 128 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        hStoreSpec s BHPre i_iter 524288 128 128 idx)) := by
+  constructor
+  · constructor
+    · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.false Bool.false
+    constructor
+    · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.true Bool.false
+    constructor
+    · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.false Bool.true
+    · exact attention_fwd_kernel_surface_toAlgorithm_supported Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.true Bool.true
+  · exact attention_fwd_triton1_python_test_shape_all_outputs_compute_correct
+      BO O BHPre H i_iter s
+
+/-- Combined checked-shape summary for `attention_fwd_triton1.py`.
+
+This exposes the four Python branch surfaces, the observable `O`/`H`
+writebacks, and the arithmetic producers for the `BO` and `BHPre` tiles in
+one public target. -/
+theorem attention_fwd_triton1_python_test_shape_complete_summary
+    (Q K V H O BO BHPre : RegionName) (i_iter : Nat) (s : BlockState) :
+    (((∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.true Bool.false).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.false Bool.true).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 Bool.true Bool.true).toAlgorithm? = Except.ok alg)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        s.readMem BO (boOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_h_store_slice BHPre H i_iter
+        524288 128 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (H, hOffset s i_iter 524288 128 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        hStoreSpec s BHPre i_iter 524288 128 128 idx))) ∧
+    ((∃ alg, (attention_fwd_triton1_bo_formula_slice Q K V BO
+      ((Real.sqrt (128 : ℝ))⁻¹) 32 128).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (attention_fwd_triton1_bh_formula_slice K V BHPre
+      32 128).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_bo_formula_slice Q K V BO
+        ((Real.sqrt (128 : ℝ))⁻¹) 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (BO, localBoOffset 128 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        boFormulaSpec s Q K V ((Real.sqrt (128 : ℝ))⁻¹) 32 128 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_bh_formula_slice K V BHPre 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (BHPre, localBhOffset 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        bhFormulaSpec s K V 32 128 idx))) := by
+  constructor
+  · exact attention_fwd_triton1_python_test_shape_output_summary Q K V H O BO
+      BHPre i_iter s
+  · exact attention_fwd_triton1_python_test_shape_accumulator_formula_summary
+      Q K V BO BHPre s
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
