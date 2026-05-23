@@ -581,6 +581,62 @@ theorem rope_backward_python_test_shape_all_outputs_compute_correct
   exact rope_backward_python_test_shape_all_stores_compute_correct
     Q K COS SIN HEAD_IDX COS_ROW_IDX s
 
+/-- Public Python-path backward summary for `test_rope_backward`.
+
+The checked Python test fixes `batch_size = 2`, `seq_len = 4`,
+`n_q_head = n_kv_head = 8`, and `head_dim = 16`; after the transpose and
+contiguous copy, both Q and K rows have stride `8 * 16 = 128`, while cos/sin
+rows have stride `8`.  The summary ties that faithful `BACKWARD_PASS=true`
+surface to the four checked output slices for Q/K first and second halves. -/
+theorem rope_backward_python_backward_output_summary
+    (Q K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    (∃ alg, (triton_rope_surface Q K COS SIN
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeBackwardQ0Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeBackwardQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeBackwardQ0Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_backward_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeBackwardQ1Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) := by
+  constructor
+  · exact triton_rope_surface_toAlgorithm_supported Q K COS SIN
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true
+  · exact rope_backward_python_test_shape_all_outputs_compute_correct
+      Q K COS SIN HEAD_IDX COS_ROW_IDX s
+
 /-! ## Full-kernel Q first-half store correctness (`BACKWARD_PASS = true`)
 
 Per the #139 audit, the slice proofs above (one Q head, one row) aren't

@@ -478,4 +478,11 @@ theorem rope_embedding_python_test_shape_surface_output_summary
   · exact rope_embedding_python_test_shape_backward_surface_toAlgorithm_supported
       KGrad cos sin
 
+/-- `output_summary` alias for the Python fast RoPE embedding path. -/
+abbrev rope_embedding_python_test_shape_output_summary
+    (Q K QGrad KGrad cos sin : RegionName)
+    (sQ sK : BlockState) :=
+  rope_embedding_python_test_shape_surface_output_summary
+    Q K QGrad KGrad cos sin sQ sK
+
 end VeriTile.Bench.TritonBenchG.FastRopeEmbedding

@@ -29,6 +29,16 @@ def dequantize_rowwise_kernel
   tl.store(output_ptr + offsets, output, mask=row_mask)
 }
 
+/-- The Python `_dequantize_rowwise` kernel surface lowers to the algorithm
+layer, including the masked row load, per-row scale load, multiply by
+`inv_127`, and masked output store. -/
+theorem dequantize_rowwise_kernel_surface_toAlgorithm_supported
+    (x_ptr state_x output_ptr : RegionName)
+    (inv_127 : ℝ) (n_elements BLOCK_SIZE P2 : Nat) :
+    ∃ alg, (dequantize_rowwise_kernel x_ptr state_x output_ptr inv_127
+      n_elements BLOCK_SIZE P2).toAlgorithm? = Except.ok alg := by
+  simp [dequantize_rowwise_kernel]
+
 /-- Exact dequantized value written at active lane `i`. -/
 noncomputable def dequantizeRowwiseSpec
     (s : BlockState) (x_ptr state_x : RegionName)
@@ -52,7 +62,7 @@ theorem dequantize_rowwise_kernel_correct
             dequantizeRowwiseSpec s x_ptr state_x BLOCK_SIZE inv_127 i
           else s.readMem output_ptr outAddr) := by
   intro i
-  simp [exec, dequantize_rowwise_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+  simp [exec, dequantize_rowwise_kernel, stepStmts, stepStmt, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
@@ -135,5 +145,80 @@ theorem dequantize_rowwise_python_case4_compute_correct
       (expected := fun i => dequantizeRowwiseSpec s x_ptr state_x 32 (1.0 / 127) i) := by
   exact dequantize_rowwise_kernel_compute_correct x_ptr state_x output_ptr
     (1.0 / 127) 96 32 32 s
+
+/-- Public Python case-1 summary for `dequantize_rowwise`.
+
+The bundled case has shape `(2, 4)`, so each program row writes the four active
+lanes of one output row. -/
+theorem dequantize_rowwise_python_case1_output_summary
+    (x_ptr state_x output_ptr : RegionName) (s : BlockState) :
+    (∃ alg, (dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
+      8 4 4).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
+        8 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 4 => i.val < 4)
+          (fun i => (output_ptr, s.pid * 4 + i.val)))
+      (expected := fun i => dequantizeRowwiseSpec s x_ptr state_x 4 (1.0 / 127) i) := by
+  constructor
+  · exact dequantize_rowwise_kernel_surface_toAlgorithm_supported
+      x_ptr state_x output_ptr (1.0 / 127) 8 4 4
+  · exact dequantize_rowwise_python_case1_compute_correct x_ptr state_x output_ptr s
+
+/-- Public Python case-2 summary for `dequantize_rowwise`, shape `(10, 16)`. -/
+theorem dequantize_rowwise_python_case2_output_summary
+    (x_ptr state_x output_ptr : RegionName) (s : BlockState) :
+    (∃ alg, (dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
+      160 16 16).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
+        160 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 16 => i.val < 16)
+          (fun i => (output_ptr, s.pid * 16 + i.val)))
+      (expected := fun i => dequantizeRowwiseSpec s x_ptr state_x 16 (1.0 / 127) i) := by
+  constructor
+  · exact dequantize_rowwise_kernel_surface_toAlgorithm_supported
+      x_ptr state_x output_ptr (1.0 / 127) 160 16 16
+  · exact dequantize_rowwise_python_case2_compute_correct x_ptr state_x output_ptr s
+
+/-- Public Python case-3 summary for `dequantize_rowwise`, shape `(5, 8)`. -/
+theorem dequantize_rowwise_python_case3_output_summary
+    (x_ptr state_x output_ptr : RegionName) (s : BlockState) :
+    (∃ alg, (dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
+      40 8 8).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
+        40 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 8 => i.val < 8)
+          (fun i => (output_ptr, s.pid * 8 + i.val)))
+      (expected := fun i => dequantizeRowwiseSpec s x_ptr state_x 8 (1.0 / 127) i) := by
+  constructor
+  · exact dequantize_rowwise_kernel_surface_toAlgorithm_supported
+      x_ptr state_x output_ptr (1.0 / 127) 40 8 8
+  · exact dequantize_rowwise_python_case3_compute_correct x_ptr state_x output_ptr s
+
+/-- Public Python case-4 summary for `dequantize_rowwise`, shape `(3, 32)`. -/
+theorem dequantize_rowwise_python_case4_output_summary
+    (x_ptr state_x output_ptr : RegionName) (s : BlockState) :
+    (∃ alg, (dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
+      96 32 32).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := dequantize_rowwise_kernel x_ptr state_x output_ptr (1.0 / 127)
+        96 32 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 32 => i.val < 32)
+          (fun i => (output_ptr, s.pid * 32 + i.val)))
+      (expected := fun i => dequantizeRowwiseSpec s x_ptr state_x 32 (1.0 / 127) i) := by
+  constructor
+  · exact dequantize_rowwise_kernel_surface_toAlgorithm_supported
+      x_ptr state_x output_ptr (1.0 / 127) 96 32 32
+  · exact dequantize_rowwise_python_case4_compute_correct x_ptr state_x output_ptr s
 
 end VeriTile.Bench.TritonBenchG.DequantizeRowwise

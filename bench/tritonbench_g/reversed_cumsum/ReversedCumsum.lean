@@ -691,6 +691,43 @@ theorem reversed_cumsum_cumsum_python_case4_compute_correct
     1024 32 1 32 32 16 32 s
     (reversed_cumsum_python_case4_offset_injective s)
 
+/-- Python case 1 full-surface coverage for `B = 2`, `H = 3`, `T = 4`,
+`S = 5` with contiguous strides `(20, 5, 1)`, `BT = 16`, and `BS = 32`. -/
+theorem reversed_cumsum_python_case1_surface_toAlgorithm_supported
+    (SReg Z : RegionName) :
+    ∃ alg, (reversed_cumsum_surface SReg Z 20 5 1 4 5 16 32).toAlgorithm? =
+      Except.ok alg := by
+  exact reversed_cumsum_surface_toAlgorithm_supported SReg Z
+    20 5 1 4 5 16 32
+
+/-- Python case 2 full-surface coverage for `B = H = 1`, `T = 8`,
+`S = 8` with contiguous strides `(64, 8, 1)`. -/
+theorem reversed_cumsum_python_case2_surface_toAlgorithm_supported
+    (SReg Z : RegionName) :
+    ∃ alg, (reversed_cumsum_surface SReg Z 64 8 1 8 8 16 32).toAlgorithm? =
+      Except.ok alg := by
+  exact reversed_cumsum_surface_toAlgorithm_supported SReg Z
+    64 8 1 8 8 16 32
+
+/-- Python case 3 full-surface coverage for `B = 4`, `H = 2`, `T = 16`,
+`S = 16` with contiguous strides `(256, 16, 1)`. -/
+theorem reversed_cumsum_python_case3_surface_toAlgorithm_supported
+    (SReg Z : RegionName) :
+    ∃ alg, (reversed_cumsum_surface SReg Z 256 16 1 16 16 16 32).toAlgorithm? =
+      Except.ok alg := by
+  exact reversed_cumsum_surface_toAlgorithm_supported SReg Z
+    256 16 1 16 16 16 32
+
+/-- Python case 4 full-surface coverage for `B = 3`, `H = 3`, `T = 32`,
+`S = 32` with contiguous strides `(1024, 32, 1)`. This is the only bundled
+shape with two reverse-loop chunks at `BT = 16`. -/
+theorem reversed_cumsum_python_case4_surface_toAlgorithm_supported
+    (SReg Z : RegionName) :
+    ∃ alg, (reversed_cumsum_surface SReg Z 1024 32 1 32 32 16 32).toAlgorithm? =
+      Except.ok alg := by
+  exact reversed_cumsum_surface_toAlgorithm_supported SReg Z
+    1024 32 1 32 32 16 32
+
 /-- Python case 1 all-output coverage for `B = 2`, `H = 3`, `T = 4`,
 `S = 5`: the boundary-checked store slice and the computed reversed-cumsum
 slice both realize the active output lanes. -/
@@ -786,5 +823,117 @@ theorem reversed_cumsum_python_case4_all_outputs_compute_correct
   constructor
   · exact reversed_cumsum_store_python_case4_compute_correct BC Z s
   · exact reversed_cumsum_cumsum_python_case4_compute_correct SReg Carry Z s
+
+/-- Public Python case 1 summary: the full reversed-cumsum surface lowers and
+both store/cumsum output slices are checked for the contiguous `T = 4`,
+`S = 5` shape. -/
+theorem reversed_cumsum_python_case1_output_summary
+    (BC SReg Carry Z : RegionName) (s : BlockState) :
+    (∃ alg, (reversed_cumsum_surface SReg Z 20 5 1 4 5 16 32).toAlgorithm? =
+      Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_store_slice BC Z 20 5 1 4 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx)
+        (fun idx => (Z, tileOffset s 20 5 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        storeValue s BC 20 5 1 4 5 16 32 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_cumsum_slice SReg Carry Z 20 5 1 4 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx)
+        (fun idx => (Z, tileOffset s 20 5 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        cumsumStoreValue s SReg Carry 20 5 1 4 5 16 32 idx))) := by
+  constructor
+  · exact reversed_cumsum_python_case1_surface_toAlgorithm_supported SReg Z
+  · exact reversed_cumsum_python_case1_all_outputs_compute_correct
+      BC SReg Carry Z s
+
+/-- Public Python case 2 summary: the full reversed-cumsum surface lowers and
+both store/cumsum output slices are checked for the contiguous `T = 8`,
+`S = 8` shape. -/
+theorem reversed_cumsum_python_case2_output_summary
+    (BC SReg Carry Z : RegionName) (s : BlockState) :
+    (∃ alg, (reversed_cumsum_surface SReg Z 64 8 1 8 8 16 32).toAlgorithm? =
+      Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_store_slice BC Z 64 8 1 8 8 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 8 8 16 32 idx)
+        (fun idx => (Z, tileOffset s 64 8 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        storeValue s BC 64 8 1 8 8 16 32 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_cumsum_slice SReg Carry Z 64 8 1 8 8 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 8 8 16 32 idx)
+        (fun idx => (Z, tileOffset s 64 8 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        cumsumStoreValue s SReg Carry 64 8 1 8 8 16 32 idx))) := by
+  constructor
+  · exact reversed_cumsum_python_case2_surface_toAlgorithm_supported SReg Z
+  · exact reversed_cumsum_python_case2_all_outputs_compute_correct
+      BC SReg Carry Z s
+
+/-- Public Python case 3 summary: the full reversed-cumsum surface lowers and
+both store/cumsum output slices are checked for the contiguous `T = 16`,
+`S = 16` shape. -/
+theorem reversed_cumsum_python_case3_output_summary
+    (BC SReg Carry Z : RegionName) (s : BlockState) :
+    (∃ alg, (reversed_cumsum_surface SReg Z 256 16 1 16 16 16 32).toAlgorithm? =
+      Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_store_slice BC Z 256 16 1 16 16 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 16 16 16 32 idx)
+        (fun idx => (Z, tileOffset s 256 16 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        storeValue s BC 256 16 1 16 16 16 32 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_cumsum_slice SReg Carry Z 256 16 1 16 16 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 16 16 16 32 idx)
+        (fun idx => (Z, tileOffset s 256 16 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        cumsumStoreValue s SReg Carry 256 16 1 16 16 16 32 idx))) := by
+  constructor
+  · exact reversed_cumsum_python_case3_surface_toAlgorithm_supported SReg Z
+  · exact reversed_cumsum_python_case3_all_outputs_compute_correct
+      BC SReg Carry Z s
+
+/-- Public Python case 4 summary: the full reversed-cumsum surface lowers and
+both store/cumsum output slices are checked for the two-chunk `T = 32`,
+`S = 32` shape. -/
+theorem reversed_cumsum_python_case4_output_summary
+    (BC SReg Carry Z : RegionName) (s : BlockState) :
+    (∃ alg, (reversed_cumsum_surface SReg Z 1024 32 1 32 32 16 32).toAlgorithm? =
+      Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_store_slice BC Z 1024 32 1 32 32 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 32 32 16 32 idx)
+        (fun idx : TileIndex [16, 32] => (Z, tileOffset s 1024 32 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        storeValue s BC 1024 32 1 32 32 16 32 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_cumsum_slice SReg Carry Z 1024 32 1 32 32 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 32 32 16 32 idx)
+        (fun idx : TileIndex [16, 32] => (Z, tileOffset s 1024 32 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        cumsumStoreValue s SReg Carry 1024 32 1 32 32 16 32 idx))) := by
+  constructor
+  · exact reversed_cumsum_python_case4_surface_toAlgorithm_supported SReg Z
+  · exact reversed_cumsum_python_case4_all_outputs_compute_correct
+      BC SReg Carry Z s
 
 end VeriTile.Bench.TritonBenchG.ReversedCumsum

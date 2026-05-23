@@ -280,4 +280,117 @@ theorem chunk_gla_simple_output_python_case4_compute_correct
     2048 32 64 32 64 32 s
     (chunk_gla_simple_output_python_case4_offset_injective s)
 
+/-- Python case 1 full surface lowering: `B=2,H=4,T=128,K=64,V=64`,
+`BT=32`, `BK=64`, `BV=64`, and `scale=0.1`. -/
+theorem chunk_gla_simple_python_case1_surface_toAlgorithm_supported
+    (q k v h g o : RegionName) :
+    ∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
+      8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 32 64 64).toAlgorithm? =
+        Except.ok alg := by
+  exact chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o
+    8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 32 64 64
+
+/-- Python case 2 full surface lowering: same tensor layout with `BT=64` and
+`scale=0.1`. -/
+theorem chunk_gla_simple_python_case2_surface_toAlgorithm_supported
+    (q k v h g o : RegionName) :
+    ∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
+      8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 64 64 64).toAlgorithm? =
+        Except.ok alg := by
+  exact chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o
+    8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 64 64 64
+
+/-- Python case 3 full surface lowering: same tensor layout with `BT=64` and
+`scale=0.2`. -/
+theorem chunk_gla_simple_python_case3_surface_toAlgorithm_supported
+    (q k v h g o : RegionName) :
+    ∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
+      8192 64 8192 64 4096 64 (0.2 : ℝ) 128 64 64 64 64 64).toAlgorithm? =
+        Except.ok alg := by
+  exact chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o
+    8192 64 8192 64 4096 64 (0.2 : ℝ) 128 64 64 64 64 64
+
+/-- Python case 4 full surface lowering: `B=1,H=2,T=64,K=32,V=32`,
+`BT=64`, `BK=32`, `BV=32`, and `scale=0.2`. -/
+theorem chunk_gla_simple_python_case4_surface_toAlgorithm_supported
+    (q k v h g o : RegionName) :
+    ∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
+      2048 32 2048 32 1024 32 (0.2 : ℝ) 64 32 32 64 32 32).toAlgorithm? =
+        Except.ok alg := by
+  exact chunk_gla_simple_fwd_surface_toAlgorithm_supported q k v h g o
+    2048 32 2048 32 1024 32 (0.2 : ℝ) 64 32 32 64 32 32
+
+/-- Public Python case 1 coverage summary: full surface lowering plus final
+output-store ComputeCorrect for the observed contiguous output layout. -/
+theorem chunk_gla_simple_python_case1_output_summary
+    (q k v h g o BO : RegionName) (s : BlockState) :
+    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
+      8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 32 64 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_output_store_slice BO o 8192 64 128 64 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => active s 128 64 32 64 idx)
+        (fun idx : TileIndex [32, 64] => (o, tileOffset s 8192 64 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        storeValue s BO 8192 64 128 64 32 64 idx)) := by
+  constructor
+  · exact chunk_gla_simple_python_case1_surface_toAlgorithm_supported q k v h g o
+  · exact chunk_gla_simple_output_python_case1_compute_correct BO o s
+
+/-- Public Python case 2 coverage summary. -/
+theorem chunk_gla_simple_python_case2_output_summary
+    (q k v h g o BO : RegionName) (s : BlockState) :
+    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
+      8192 64 8192 64 4096 64 (0.1 : ℝ) 128 64 64 64 64 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_output_store_slice BO o 8192 64 128 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (o, tileOffset s 8192 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        storeValue s BO 8192 64 128 64 64 64 idx)) := by
+  constructor
+  · exact chunk_gla_simple_python_case2_surface_toAlgorithm_supported q k v h g o
+  · exact chunk_gla_simple_output_python_case2_compute_correct BO o s
+
+/-- Public Python case 3 coverage summary. -/
+theorem chunk_gla_simple_python_case3_output_summary
+    (q k v h g o BO : RegionName) (s : BlockState) :
+    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
+      8192 64 8192 64 4096 64 (0.2 : ℝ) 128 64 64 64 64 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_output_store_slice BO o 8192 64 128 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (o, tileOffset s 8192 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        storeValue s BO 8192 64 128 64 64 64 idx)) := by
+  constructor
+  · exact chunk_gla_simple_python_case3_surface_toAlgorithm_supported q k v h g o
+  · exact chunk_gla_simple_output_python_case3_compute_correct BO o s
+
+/-- Public Python case 4 coverage summary. -/
+theorem chunk_gla_simple_python_case4_output_summary
+    (q k v h g o BO : RegionName) (s : BlockState) :
+    (∃ alg, (chunk_gla_simple_fwd_surface q k v h g o
+      2048 32 2048 32 1024 32 (0.2 : ℝ) 64 32 32 64 32 32).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gla_simple_output_store_slice BO o 2048 32 64 32 64 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 32] => active s 64 32 64 32 idx)
+        (fun idx : TileIndex [64, 32] => (o, tileOffset s 2048 32 64 32 idx)))
+      (expected := fun idx : TileIndex [64, 32] =>
+        storeValue s BO 2048 32 64 32 64 32 idx)) := by
+  constructor
+  · exact chunk_gla_simple_python_case4_surface_toAlgorithm_supported q k v h g o
+  · exact chunk_gla_simple_output_python_case4_compute_correct BO o s
+
 end VeriTile.Bench.TritonBenchG.ChunkGlaSimple

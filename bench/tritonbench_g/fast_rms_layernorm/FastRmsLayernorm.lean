@@ -39,6 +39,17 @@ def rms_layernorm_forward
   tl.store(Y + col_offsets, output, mask=mask)
 }
 
+/-- The regular RMS layernorm forward surface lowers to the algorithm layer,
+including the row inverse-variance store and masked `Y` writeback. -/
+theorem rms_layernorm_forward_surface_toAlgorithm_supported
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) :
+    ∃ alg, (rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+      W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
+        Except.ok alg := by
+  simp [rms_layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Faithful transcription of `fast_rms_layernorm.py`'s
 `_gemma_rms_layernorm_forward`.
 
@@ -68,6 +79,18 @@ def gemma_rms_layernorm_forward
 
   tl.store(Y + col_offsets, output, mask=mask)
 }
+
+/-- The Gemma RMS layernorm forward surface lowers to the algorithm layer,
+including the row inverse-variance store and masked `Y` writeback. -/
+theorem gemma_rms_layernorm_forward_surface_toAlgorithm_supported
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) :
+    ∃ alg, (gemma_rms_layernorm_forward Y X W r Y_row_stride
+      X_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
+        Except.ok alg := by
+  simp [gemma_rms_layernorm_forward, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
 
 /-- Faithful transcription of `fast_rms_layernorm.py`'s
 `_rms_layernorm_backward` for `GEMMA = false`.
@@ -832,5 +855,78 @@ theorem gemma_rms_layernorm_forward_all_outputs_compute_correct
       X_row_stride r_row_stride n_cols BLOCK_SIZE eps s hYr hOutInj
   · exact gemma_rms_layernorm_forward_inv_var_compute_correct Y X W r
       Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE eps s hrY
+
+/-- Public forward summary for regular RMS layernorm: the full Python forward
+surface lowers, and the checked forward kernel characterizes both
+Python-observable outputs `Y` and `r`. -/
+theorem rms_layernorm_forward_output_summary
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hYr : Y ≠ r) (hrY : r ≠ Y)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
+    (∃ alg, (rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+      W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
+        Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (Y, yOutOffset s Y_row_stride i)))
+      (expected := fun i =>
+        rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols
+          BLOCK_SIZE eps i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
+      (expected := fun _ =>
+        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps))) := by
+  constructor
+  · exact rms_layernorm_forward_surface_toAlgorithm_supported Y X W r
+      Y_row_stride X_row_stride W_row_stride r_row_stride n_cols eps BLOCK_SIZE
+  · exact rms_layernorm_forward_all_outputs_compute_correct Y X W r
+      Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE
+      eps s hYr hrY hOutInj
+
+/-- Public forward summary for Gemma RMS layernorm: the full Python forward
+surface lowers, and the checked forward kernel characterizes both
+Python-observable outputs `Y` and `r`. -/
+theorem gemma_rms_layernorm_forward_output_summary
+    (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hYr : Y ≠ r) (hrY : r ≠ Y)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
+    (∃ alg, (gemma_rms_layernorm_forward Y X W r Y_row_stride
+      X_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
+        Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
+        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (Y, yOutOffset s Y_row_stride i)))
+      (expected := fun i =>
+        gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
+        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
+      (expected := fun _ =>
+        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps))) := by
+  constructor
+  · exact gemma_rms_layernorm_forward_surface_toAlgorithm_supported Y X W r
+      Y_row_stride X_row_stride r_row_stride n_cols eps BLOCK_SIZE
+  · exact gemma_rms_layernorm_forward_all_outputs_compute_correct Y X W r
+      Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE eps s hYr hrY
+      hOutInj
 
 end VeriTile.Bench.TritonBenchG.FastRmsLayernorm

@@ -338,4 +338,44 @@ theorem token_attn_mistral_python_case4_output_surface_summary
   · exact token_attn_mistral_final_store_python_test_shape_compute_correct
       Acc Out s
 
+/-- `output_summary` alias for Python Mistral token-attention case 1. -/
+abbrev token_attn_mistral_python_case1_output_summary
+    (Prob V Acc Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (s : BlockState) :=
+  token_attn_mistral_python_case1_output_surface_summary
+    Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+    B_Att_Start_Loc B_Att_Seqlen s
+
+/-- `output_summary` alias for Python Mistral token-attention case 2. -/
+abbrev token_attn_mistral_python_case2_output_summary
+    (Prob V Acc Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (s : BlockState) :=
+  token_attn_mistral_python_case2_output_surface_summary
+    Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+    B_Att_Start_Loc B_Att_Seqlen s
+
+/-- `output_summary` alias for Python Mistral token-attention case 3. -/
+abbrev token_attn_mistral_python_case3_output_summary
+    (Prob V Acc Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (s : BlockState) :=
+  token_attn_mistral_python_case3_output_surface_summary
+    Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+    B_Att_Start_Loc B_Att_Seqlen s
+
+/-- `output_summary` alias for Python Mistral token-attention case 4. -/
+abbrev token_attn_mistral_python_case4_output_summary
+    (Prob V Acc Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (s : BlockState) :=
+  token_attn_mistral_python_case4_output_surface_summary
+    Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+    B_Att_Start_Loc B_Att_Seqlen s
+
 end VeriTile.Bench.TritonBenchG.TokenAttnMistral

@@ -66,7 +66,7 @@ theorem quantize_global_scaled_store_slice_correct
             quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr BLOCK_SIZE scale127 i
           else s.readMem output_ptr outAddr) := by
   intro i
-  simp [exec, quantize_global_scaled_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+  simp [exec, quantize_global_scaled_store_slice, stepStmts, stepStmt, evalOp.eq_def,
         Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, offset]
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
@@ -217,5 +217,158 @@ theorem quantize_global_python_n4096_bs2048_compute_correct
         quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 2048 127.0 i) := by
   exact quantize_global_scaled_store_slice_compute_correct x_ptr absmax_inv_ptr
     output_ptr 4096 2048 127.0 s
+
+/-- Public Python summary for `quantize_global`, `n_elements = 1024`,
+`BLOCK_SIZE = 1024`.
+
+The faithful Python surface contains CUDA `llrint`, so algorithm projection is
+recorded as blocked; the checked store slice characterizes the real-valued
+pre-rounding quantity `127.0 * (x * absmax_inv)`. Python's returned `absmax` is
+computed by PyTorch before launching the Triton kernel and is outside this
+kernel proof. -/
+theorem quantize_global_python_n1024_bs1024_blocked_output_summary
+    (x_ptr absmax_inv_ptr output_ptr : RegionName) (s : BlockState) :
+    (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+      1024 1024).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
+        1024 1024 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 1024 => offset s 1024 i < 1024)
+          (fun i => (output_ptr, offset s 1024 i)))
+      (expected := fun i =>
+        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 1024 127.0 i) := by
+  constructor
+  · exact quantize_global_surface_toAlgorithm?_blocked x_ptr absmax_inv_ptr output_ptr
+      1024 1024
+  · exact quantize_global_python_n1024_bs1024_compute_correct
+      x_ptr absmax_inv_ptr output_ptr s
+
+/-- Public Python summary for `quantize_global`, `n_elements = 2048`,
+`BLOCK_SIZE = 1024`. -/
+theorem quantize_global_python_n2048_bs1024_blocked_output_summary
+    (x_ptr absmax_inv_ptr output_ptr : RegionName) (s : BlockState) :
+    (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+      2048 1024).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
+        2048 1024 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 1024 => offset s 1024 i < 2048)
+          (fun i => (output_ptr, offset s 1024 i)))
+      (expected := fun i =>
+        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 1024 127.0 i) := by
+  constructor
+  · exact quantize_global_surface_toAlgorithm?_blocked x_ptr absmax_inv_ptr output_ptr
+      2048 1024
+  · exact quantize_global_python_n2048_bs1024_compute_correct
+      x_ptr absmax_inv_ptr output_ptr s
+
+/-- Public Python summary for `quantize_global`, `n_elements = 2048`,
+`BLOCK_SIZE = 2048`. -/
+theorem quantize_global_python_n2048_bs2048_blocked_output_summary
+    (x_ptr absmax_inv_ptr output_ptr : RegionName) (s : BlockState) :
+    (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+      2048 2048).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
+        2048 2048 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 2048 => offset s 2048 i < 2048)
+          (fun i => (output_ptr, offset s 2048 i)))
+      (expected := fun i =>
+        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 2048 127.0 i) := by
+  constructor
+  · exact quantize_global_surface_toAlgorithm?_blocked x_ptr absmax_inv_ptr output_ptr
+      2048 2048
+  · exact quantize_global_python_n2048_bs2048_compute_correct
+      x_ptr absmax_inv_ptr output_ptr s
+
+/-- Public Python summary for `quantize_global`, `n_elements = 3072`,
+`BLOCK_SIZE = 1024`. -/
+theorem quantize_global_python_n3072_bs1024_blocked_output_summary
+    (x_ptr absmax_inv_ptr output_ptr : RegionName) (s : BlockState) :
+    (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+      3072 1024).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
+        3072 1024 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 1024 => offset s 1024 i < 3072)
+          (fun i => (output_ptr, offset s 1024 i)))
+      (expected := fun i =>
+        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 1024 127.0 i) := by
+  constructor
+  · exact quantize_global_surface_toAlgorithm?_blocked x_ptr absmax_inv_ptr output_ptr
+      3072 1024
+  · exact quantize_global_python_n3072_bs1024_compute_correct
+      x_ptr absmax_inv_ptr output_ptr s
+
+/-- Public Python summary for `quantize_global`, `n_elements = 3072`,
+`BLOCK_SIZE = 2048`. -/
+theorem quantize_global_python_n3072_bs2048_blocked_output_summary
+    (x_ptr absmax_inv_ptr output_ptr : RegionName) (s : BlockState) :
+    (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+      3072 2048).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
+        3072 2048 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 2048 => offset s 2048 i < 3072)
+          (fun i => (output_ptr, offset s 2048 i)))
+      (expected := fun i =>
+        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 2048 127.0 i) := by
+  constructor
+  · exact quantize_global_surface_toAlgorithm?_blocked x_ptr absmax_inv_ptr output_ptr
+      3072 2048
+  · exact quantize_global_python_n3072_bs2048_compute_correct
+      x_ptr absmax_inv_ptr output_ptr s
+
+/-- Public Python summary for `quantize_global`, `n_elements = 4096`,
+`BLOCK_SIZE = 1024`. -/
+theorem quantize_global_python_n4096_bs1024_blocked_output_summary
+    (x_ptr absmax_inv_ptr output_ptr : RegionName) (s : BlockState) :
+    (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+      4096 1024).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
+        4096 1024 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 1024 => offset s 1024 i < 4096)
+          (fun i => (output_ptr, offset s 1024 i)))
+      (expected := fun i =>
+        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 1024 127.0 i) := by
+  constructor
+  · exact quantize_global_surface_toAlgorithm?_blocked x_ptr absmax_inv_ptr output_ptr
+      4096 1024
+  · exact quantize_global_python_n4096_bs1024_compute_correct
+      x_ptr absmax_inv_ptr output_ptr s
+
+/-- Public Python summary for `quantize_global`, `n_elements = 4096`,
+`BLOCK_SIZE = 2048`. -/
+theorem quantize_global_python_n4096_bs2048_blocked_output_summary
+    (x_ptr absmax_inv_ptr output_ptr : RegionName) (s : BlockState) :
+    (∃ err, (quantize_global_surface x_ptr absmax_inv_ptr output_ptr
+      4096 2048).toAlgorithm? = Except.error err) ∧
+    ComputeCorrect.Realizes
+      (kernel := quantize_global_scaled_store_slice x_ptr absmax_inv_ptr output_ptr
+        4096 2048 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 2048 => offset s 2048 i < 4096)
+          (fun i => (output_ptr, offset s 2048 i)))
+      (expected := fun i =>
+        quantizeGlobalScaledSpec s x_ptr absmax_inv_ptr 2048 127.0 i) := by
+  constructor
+  · exact quantize_global_surface_toAlgorithm?_blocked x_ptr absmax_inv_ptr output_ptr
+      4096 2048
+  · exact quantize_global_python_n4096_bs2048_compute_correct
+      x_ptr absmax_inv_ptr output_ptr s
 
 end VeriTile.Bench.TritonBenchG.QuantizeGlobal

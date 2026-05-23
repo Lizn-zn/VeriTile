@@ -1126,4 +1126,18 @@ theorem kv_cache_copy_python_case2_all_outputs_summary
       (kv_cache_copy_python_vcache_offset_injective s BLOCK_TABLES
         context_lengths)
 
+/-- `output_summary` alias for Python case 1, old K-cache layout. -/
+abbrev kv_cache_copy_python_case1_output_summary
+    (K V KCache VCache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat) (s : BlockState) :=
+  kv_cache_copy_python_case1_all_outputs_summary K V KCache VCache
+    BLOCK_TABLES context_lengths s
+
+/-- `output_summary` alias for Python case 2, new split-x K-cache layout. -/
+abbrev kv_cache_copy_python_case2_output_summary
+    (K V KCache VCache : RegionName)
+    (BLOCK_TABLES context_lengths : Region .nat) (s : BlockState) :=
+  kv_cache_copy_python_case2_all_outputs_summary K V KCache VCache
+    BLOCK_TABLES context_lengths s
+
 end VeriTile.Bench.TritonBenchG.KvCacheCopy

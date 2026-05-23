@@ -851,6 +851,20 @@ theorem batched_vecmat_python_block_output_offset_injective
   subst nb
   rfl
 
+/-- Python `test_vecmat` full-surface coverage.
+
+The Python regression runs this same mathematical kernel twice with different
+launch metadata only. This wrapper fixes the checked `M = N = K = 128`,
+`block_m = 16`, `block_n = 32`, and `block_k = 64` surface, including the
+vectorized `BLOCK_M × BLOCK_N` accumulator, the two-iteration K loop, broadcast,
+reduction, transpose, and final output store. -/
+theorem batched_vecmat_python_test_surface_toAlgorithm_supported
+    (A B output : RegionName) :
+    ∃ alg, (batched_vecmat_surface A B output
+      128 128 128 16 32 64).toAlgorithm? = Except.ok alg := by
+  exact batched_vecmat_surface_toAlgorithm_supported A B output
+    128 128 128 16 32 64
+
 /-- Python `test_vecmat` all-output proof-slice coverage: the two concrete
 K-block accumulator updates and the final `16 × 32` output block writeback all
 realize the checked `(128, 128, 128)` shape. -/
@@ -893,5 +907,44 @@ theorem batched_vecmat_python_test_shape_all_outputs_compute_correct
   · exact batched_vecmat_block_output_store_slice_compute_correct VecmatPre
       output 128 16 32 s
       (batched_vecmat_python_block_output_offset_injective s)
+
+/-- Public Python `test_vecmat` summary: the full vectorized surface lowers for
+the checked `128 × 128 × 128` shape, and the two materialized K-block
+accumulator updates plus the final output block store realize the observable
+output proof slices. -/
+theorem batched_vecmat_python_test_shape_output_summary
+    (Acc0 Acc1 A B VecmatPre output : RegionName) (s : BlockState) :
+    (∃ alg, (batched_vecmat_surface A B output
+      128 128 128 16 32 64).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := batched_vecmat_one_row_const_k_accum_slice Acc0 A B Acc1
+        128 128 128 128 32 64 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => nIndex s 32 i < 128)
+        (fun i => (Acc1, outOffset s 128 32 i)))
+      (expected := fun i =>
+        vecmatConstKAccumSpec s Acc0 A B 128 128 128 128 32 64 0 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := batched_vecmat_one_row_const_k_accum_slice Acc1 A B VecmatPre
+        128 128 128 128 32 64 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => nIndex s 32 i < 128)
+        (fun i => (VecmatPre, outOffset s 128 32 i)))
+      (expected := fun i =>
+        vecmatConstKAccumSpec s Acc1 A B 128 128 128 128 32 64 1 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := batched_vecmat_block_output_store_slice VecmatPre output
+        128 16 32)
+      (initialState := s)
+      (write := fun idx : TileIndex [16, 32] =>
+        some (output, blockOutOffset s 128 16 32 idx))
+      (expected := fun idx =>
+        blockOutputStoreSpec s VecmatPre 128 16 32 idx))) := by
+  constructor
+  · exact batched_vecmat_python_test_surface_toAlgorithm_supported A B output
+  · exact batched_vecmat_python_test_shape_all_outputs_compute_correct
+      Acc0 Acc1 A B VecmatPre output s
 
 end VeriTile.Bench.TritonBenchG.BatchedVecmatMult

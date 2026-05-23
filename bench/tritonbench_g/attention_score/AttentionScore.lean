@@ -423,4 +423,24 @@ theorem attention_score_python_case4_output_surface_summary
   · exact attention_score_final_store_python_test_shape_compute_correct
       Score Out s
 
+/-- `output_summary` alias for Python attention-score case 1. -/
+abbrev attention_score_python_case1_output_summary
+    (Q K M Score Out : RegionName) (sm_scale : ℝ) (s : BlockState) :=
+  attention_score_python_case1_output_surface_summary Q K M Score Out sm_scale s
+
+/-- `output_summary` alias for Python attention-score case 2. -/
+abbrev attention_score_python_case2_output_summary
+    (Q K M Score Out : RegionName) (sm_scale : ℝ) (s : BlockState) :=
+  attention_score_python_case2_output_surface_summary Q K M Score Out sm_scale s
+
+/-- `output_summary` alias for Python attention-score case 3. -/
+abbrev attention_score_python_case3_output_summary
+    (Q K M Score Out : RegionName) (sm_scale : ℝ) (s : BlockState) :=
+  attention_score_python_case3_output_surface_summary Q K M Score Out sm_scale s
+
+/-- `output_summary` alias for Python attention-score case 4. -/
+abbrev attention_score_python_case4_output_summary
+    (Q K M Score Out : RegionName) (sm_scale : ℝ) (s : BlockState) :=
+  attention_score_python_case4_output_surface_summary Q K M Score Out sm_scale s
+
 end VeriTile.Bench.TritonBenchG.AttentionScore

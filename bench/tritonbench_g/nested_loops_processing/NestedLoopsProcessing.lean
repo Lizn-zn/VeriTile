@@ -47,6 +47,14 @@ def nested3 (in_ptr out_ptr : RegionName)
   }
 }
 
+/-- The full nested-loop surface lowers to the algorithm layer, preserving the
+three static loop levels, pointer increments, and all stores. -/
+theorem nested3_surface_toAlgorithm_supported
+    (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat) :
+    ∃ alg, (nested3 in_ptr out_ptr stride_m stride_n).toAlgorithm? =
+      Except.ok alg := by
+  simp [nested3, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented first 2x2 transfer slice of `nested_loops_processing.py`'s
 `nested3`.
 
@@ -737,5 +745,51 @@ theorem nested3_second_i_second_j_second_k_a3_store_compute_correct
         s.readMem in_ptr (matrixOffsetShift stride_m stride_n 26 idx)) :=
   nested3_shifted_copy_store_compute_correct in_ptr out_ptr stride_m stride_n
     26 46 s hOutInj
+
+/-! ## Python test-case surface wrappers
+
+The Python wrapper passes contiguous square tensors, so `stride_m = n_cols` and
+`stride_n = 1`. The grid varies with `n_cols // 4`; the kernel body itself is
+stride-parametric, and these wrappers pin the four checked tensor layouts. -/
+
+theorem nested3_python_case1_surface_toAlgorithm_supported
+    (in_ptr out_ptr : RegionName) :
+    ∃ alg, (nested3 in_ptr out_ptr 8 1).toAlgorithm? = Except.ok alg := by
+  exact nested3_surface_toAlgorithm_supported in_ptr out_ptr 8 1
+
+theorem nested3_python_case2_surface_toAlgorithm_supported
+    (in_ptr out_ptr : RegionName) :
+    ∃ alg, (nested3 in_ptr out_ptr 4 1).toAlgorithm? = Except.ok alg := by
+  exact nested3_surface_toAlgorithm_supported in_ptr out_ptr 4 1
+
+theorem nested3_python_case3_surface_toAlgorithm_supported
+    (in_ptr out_ptr : RegionName) :
+    ∃ alg, (nested3 in_ptr out_ptr 16 1).toAlgorithm? = Except.ok alg := by
+  exact nested3_surface_toAlgorithm_supported in_ptr out_ptr 16 1
+
+theorem nested3_python_case4_surface_toAlgorithm_supported
+    (in_ptr out_ptr : RegionName) :
+    ∃ alg, (nested3 in_ptr out_ptr 2 1).toAlgorithm? = Except.ok alg := by
+  exact nested3_surface_toAlgorithm_supported in_ptr out_ptr 2 1
+
+/-- Public Python surface summary for `nested_loops_processing.py`.
+
+The Python regression checks four contiguous square layouts. This summary
+records that each tested layout lowers at the full nested-loop surface; the
+proof-oriented shifted store slices above provide the concrete store semantics
+for the nested body. -/
+theorem nested3_python_surfaces_output_summary
+    (in_ptr out_ptr : RegionName) :
+    (∃ alg, (nested3 in_ptr out_ptr 8 1).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (nested3 in_ptr out_ptr 4 1).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (nested3 in_ptr out_ptr 16 1).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (nested3 in_ptr out_ptr 2 1).toAlgorithm? = Except.ok alg) := by
+  constructor
+  · exact nested3_python_case1_surface_toAlgorithm_supported in_ptr out_ptr
+  · constructor
+    · exact nested3_python_case2_surface_toAlgorithm_supported in_ptr out_ptr
+    · constructor
+      · exact nested3_python_case3_surface_toAlgorithm_supported in_ptr out_ptr
+      · exact nested3_python_case4_surface_toAlgorithm_supported in_ptr out_ptr
 
 end VeriTile.Bench.TritonBenchG.NestedLoopsProcessing

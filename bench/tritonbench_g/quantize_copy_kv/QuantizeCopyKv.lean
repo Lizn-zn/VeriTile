@@ -596,4 +596,76 @@ theorem destindex_copy_quantize_kv_python_d256_all_outputs_compute_correct
   · exact destindex_copy_quantize_kv_python_scale_store_compute_correct
       Scale DestLoc OutScale s
 
+/-- Public Python `D = 64` summary: the checked Python shape covers the full
+surface syntax and the two externally visible outputs (values and scales). -/
+theorem destindex_copy_quantize_kv_python_d64_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (∃ alg,
+      (destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
+        512 64 1 512 64 1 8 1 1 8 64 8).toAlgorithm? =
+          Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_value_store_slice K DestLoc Out
+        OutScale 512 64 1 512 64 1 8 1 8 8 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 8 64)
+        (fun idx => (Out, outOffset s DestLoc 512 64 1 idx)))
+      (expected := fun idx =>
+        quantizeCopyKvValueSpec s K DestLoc OutScale 512 64 1 8 1 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_scale_store_slice Scale DestLoc
+        OutScale 8 1 8 1 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 8 8)
+        (fun i => (OutScale, scaleOutOffset1 s DestLoc 8 1 i)))
+      (expected := fun i => quantizeCopyKvScaleSpec s Scale 8 1 i))) := by
+  constructor
+  · exact destindex_copy_quantize_kv_real_surface_toAlgorithm_supported K
+      DestLoc Out OutScale 512 64 1 512 64 1 8 1 1 8 64 8
+  · exact destindex_copy_quantize_kv_python_d64_all_outputs_compute_correct
+      K Scale DestLoc Out OutScale s
+
+/-- Public Python `D = 256` summary: the checked Python shape covers the full
+surface syntax and the two externally visible outputs (values and scales). -/
+theorem destindex_copy_quantize_kv_python_d256_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (∃ alg,
+      (destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
+        2048 256 1 2048 256 1 8 1 1 8 256 8).toAlgorithm? =
+          Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_value_store_slice K DestLoc Out
+        OutScale 2048 256 1 2048 256 1 8 1 8 8 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 8 256)
+        (fun idx => (Out, outOffset s DestLoc 2048 256 1 idx)))
+      (expected := fun idx =>
+        quantizeCopyKvValueSpec s K DestLoc OutScale 2048 256 1 8 1 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_scale_store_slice Scale DestLoc
+        OutScale 8 1 8 1 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 8 8)
+        (fun i => (OutScale, scaleOutOffset1 s DestLoc 8 1 i)))
+      (expected := fun i => quantizeCopyKvScaleSpec s Scale 8 1 i))) := by
+  constructor
+  · exact destindex_copy_quantize_kv_real_surface_toAlgorithm_supported K
+      DestLoc Out OutScale 2048 256 1 2048 256 1 8 1 1 8 256 8
+  · exact destindex_copy_quantize_kv_python_d256_all_outputs_compute_correct
+      K Scale DestLoc Out OutScale s
+
+/-- `output_summary` alias for the Python `D = 64` quantized KV copy case. -/
+abbrev destindex_copy_quantize_kv_python_d64_output_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
+  destindex_copy_quantize_kv_python_d64_summary K Scale DestLoc Out OutScale s
+
+/-- `output_summary` alias for the Python `D = 256` quantized KV copy case. -/
+abbrev destindex_copy_quantize_kv_python_d256_output_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
+  destindex_copy_quantize_kv_python_d256_summary K Scale DestLoc Out OutScale s
+
 end VeriTile.Bench.TritonBenchG.QuantizeCopyKv

@@ -339,6 +339,12 @@ theorem chunk_cumsum_scalar_single_block_python_test_shape_offset_injective
   simp [singleBlockVecOffset] at h
   exact Fin.ext (by omega)
 
+theorem chunk_cumsum_scalar_python_test_shape_surface_toAlgorithm_supported
+    (S O : RegionName) :
+    ∃ alg, (chunk_cumsum_scalar_surface S O 4 16).toAlgorithm? =
+      Except.ok alg := by
+  exact chunk_cumsum_scalar_surface_toAlgorithm_supported S O 4 16
+
 theorem chunk_cumsum_scalar_single_block_python_test_shape_compute_correct
     (S O : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
@@ -410,5 +416,45 @@ theorem chunk_cumsum_scalar_python_test_shape_all_outputs_compute_correct
   · exact chunk_cumsum_scalar_store_python_test_shape_compute_correct BO O s
   · exact chunk_cumsum_scalar_cumsum_python_test_shape_compute_correct
       S Carry O s
+
+/-- Public Python test-shape summary for scalar chunk cumsum: the full surface
+lowers and the single-block, store-only, and carry-cumsum output slices are
+compute-correct for the checked `T = 4`, `BT = 16` shape. -/
+theorem chunk_cumsum_scalar_python_test_shape_summary
+    (S BO Carry O : RegionName) (s : BlockState) :
+    (∃ alg, (chunk_cumsum_scalar_surface S O 4 16).toAlgorithm? =
+      Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_scalar_single_block_surface S O 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 16 => singleBlockActive s 4 i)
+        (fun i => (O, singleBlockVecOffset s 4 i)))
+      (expected := fun i : Fin 16 =>
+        singleBlockCumsumStoreValue s S 4 16 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_scalar_store_slice BO O 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 16 => active s 4 16 i)
+        (fun i => (O, vecOffset s 4 16 i)))
+      (expected := fun i : Fin 16 => storeValue s BO 4 16 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_scalar_cumsum_slice S Carry O 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 16 => active s 4 16 i)
+        (fun i => (O, vecOffset s 4 16 i)))
+      (expected := fun i : Fin 16 => cumsumStoreValue s S Carry 4 16 i))) := by
+  constructor
+  · exact chunk_cumsum_scalar_python_test_shape_surface_toAlgorithm_supported
+      S O
+  · exact chunk_cumsum_scalar_python_test_shape_all_outputs_compute_correct
+      S BO Carry O s
+
+/-- `output_summary` alias for the scalar Python chunk-cumsum path. -/
+abbrev chunk_cumsum_scalar_python_test_shape_output_summary
+    (S BO Carry O : RegionName) (s : BlockState) :=
+  chunk_cumsum_scalar_python_test_shape_summary S BO Carry O s
 
 end VeriTile.Bench.TritonBenchG.ChunkCumsumKernel

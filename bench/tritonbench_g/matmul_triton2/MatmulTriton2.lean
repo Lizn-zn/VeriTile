@@ -201,4 +201,95 @@ theorem matmul_masked_output_store_slice_compute_correct
     stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
   simpa [hActive] using h
 
+/-- Contiguous `256 × 256` output tiles have injective addresses for the first
+autotune block shape used in the Python test. -/
+theorem matmul_triton2_python_case1_output_offset_injective
+    (s : BlockState) :
+    Function.Injective (cOffset s 256 1 128 256) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Contiguous `64 × 64` output tiles have injective addresses for the
+`32 × 64` autotune block shape. -/
+theorem matmul_triton2_python_case2_output_offset_injective
+    (s : BlockState) :
+    Function.Injective (cOffset s 64 1 32 64) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Python case 1 full surface lowering: `256×256 @ 256×256` using the first
+autotune config. -/
+theorem matmul_triton2_python_case1_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_triton2_surface A B C
+      256 256 256 256 1 256 1 256 1 128 256 64 8).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_triton2_surface_toAlgorithm_supported A B C
+    256 256 256 256 1 256 1 256 1 128 256 64 8
+
+/-- Python case 2 full surface lowering: `64×64 @ 64×64` using an autotune
+config whose output block is address-injective for the Python stride. -/
+theorem matmul_triton2_python_case2_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_triton2_surface A B C
+      64 64 64 64 1 64 1 64 1 32 64 32 8).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_triton2_surface_toAlgorithm_supported A B C
+    64 64 64 64 1 64 1 64 1 32 64 32 8
+
+/-- Python case 3 full surface lowering: `16×16 @ 16×16`.
+
+The available autotune configs all have an N-block wider than the `16`-wide
+contiguous output, so the current store-slice proof's whole-tile address
+injectivity precondition is not available for this case. -/
+theorem matmul_triton2_python_case3_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_triton2_surface A B C
+      16 16 16 16 1 16 1 16 1 64 32 32 8).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_triton2_surface_toAlgorithm_supported A B C
+    16 16 16 16 1 16 1 16 1 64 32 32 8
+
+/-- Public Python case 1 coverage summary. -/
+theorem matmul_triton2_python_case1_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_triton2_surface A B C
+      256 256 256 256 1 256 1 256 1 128 256 64 8).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 256 256 256 1 256 1 128 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 256 128 256)
+        (fun idx => (C, cOffset s 256 1 128 256 idx)))
+      (expected := fun idx =>
+        s.readMem Acc (accOffset s 256 1 128 256 idx))) := by
+  constructor
+  · exact matmul_triton2_python_case1_surface_toAlgorithm_supported A B C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      256 256 256 1 256 1 128 256 s
+      (matmul_triton2_python_case1_output_offset_injective s)
+
+/-- Public Python case 2 coverage summary. -/
+theorem matmul_triton2_python_case2_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_triton2_surface A B C
+      64 64 64 64 1 64 1 64 1 32 64 32 8).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 64 64 64 1 64 1 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 64 64 32 64)
+        (fun idx => (C, cOffset s 64 1 32 64 idx)))
+      (expected := fun idx =>
+        s.readMem Acc (accOffset s 64 1 32 64 idx))) := by
+  constructor
+  · exact matmul_triton2_python_case2_surface_toAlgorithm_supported A B C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      64 64 64 1 64 1 32 64 s
+      (matmul_triton2_python_case2_output_offset_injective s)
+
 end VeriTile.Bench.TritonBenchG.MatmulTriton2

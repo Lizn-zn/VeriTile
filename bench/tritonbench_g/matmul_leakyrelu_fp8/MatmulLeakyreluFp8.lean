@@ -404,4 +404,170 @@ theorem matmul_masked_output_store_slice_compute_correct
     stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
   simpa [hActive] using h
 
+/-- Contiguous `256 × 256` output tiles have injective addresses for the first
+Python/autotune block shape. -/
+theorem matmul_leakyrelu_fp8_python_output_offset_injective_256
+    (s : BlockState) :
+    Function.Injective (cOffset s 256 1 128 256) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Contiguous `512 × 512` output tiles have injective addresses for the first
+Python/autotune block shape. -/
+theorem matmul_leakyrelu_fp8_python_output_offset_injective_512
+    (s : BlockState) :
+    Function.Injective (cOffset s 512 1 128 256) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Python case 1 full surface lowering: `256×64 @ 64×256`, activation off. -/
+theorem matmul_leakyrelu_fp8_python_case1_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_kernel_surface A B C
+      256 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported A B C
+    256 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false
+
+/-- Python case 2 full surface lowering: same dimensions with leaky ReLU. -/
+theorem matmul_leakyrelu_fp8_python_case2_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_kernel_surface A B C
+      256 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported A B C
+    256 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true
+
+/-- Python case 2 activation-tail surface lowering. -/
+theorem matmul_leakyrelu_fp8_python_case2_tail_surface_toAlgorithm_supported
+    (Acc C : RegionName) :
+    ∃ alg, (matmul_leaky_relu_tail_surface Acc C
+      256 256 256 1 256 1 128 256).toAlgorithm? = Except.ok alg := by
+  exact matmul_leaky_relu_tail_surface_toAlgorithm_supported Acc C
+    256 256 256 1 256 1 128 256
+
+/-- Python case 3 full surface lowering: `512×128 @ 128×512`, activation off. -/
+theorem matmul_leakyrelu_fp8_python_case3_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_kernel_surface A B C
+      512 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported A B C
+    512 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false
+
+/-- Python case 4 full surface lowering: larger dimensions with leaky ReLU. -/
+theorem matmul_leakyrelu_fp8_python_case4_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_kernel_surface A B C
+      512 512 128 128 1 512 1 512 1 128 256 64 8 Bool.true).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported A B C
+    512 512 128 128 1 512 1 512 1 128 256 64 8 Bool.true
+
+/-- Python case 4 activation-tail surface lowering. -/
+theorem matmul_leakyrelu_fp8_python_case4_tail_surface_toAlgorithm_supported
+    (Acc C : RegionName) :
+    ∃ alg, (matmul_leaky_relu_tail_surface Acc C
+      512 512 512 1 512 1 128 256).toAlgorithm? = Except.ok alg := by
+  exact matmul_leaky_relu_tail_surface_toAlgorithm_supported Acc C
+    512 512 512 1 512 1 128 256
+
+/-- Public Python case 1 coverage summary. -/
+theorem matmul_leakyrelu_fp8_python_case1_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface A B C
+      256 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 256 256 256 1 256 1 128 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 256 128 256)
+        (fun idx => (C, cOffset s 256 1 128 256 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 256 1 128 256 idx)))))) := by
+  constructor
+  · exact matmul_leakyrelu_fp8_python_case1_surface_toAlgorithm_supported A B C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      256 256 256 1 256 1 128 256 s
+      (matmul_leakyrelu_fp8_python_output_offset_injective_256 s)
+
+/-- Public Python case 2 coverage summary. -/
+theorem matmul_leakyrelu_fp8_python_case2_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface A B C
+      256 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (matmul_leaky_relu_tail_surface Acc C
+      256 256 256 1 256 1 128 256).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 256 256 256 1 256 1 128 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 256 128 256)
+        (fun idx => (C, cOffset s 256 1 128 256 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 256 1 128 256 idx)))))) := by
+  constructor
+  · exact matmul_leakyrelu_fp8_python_case2_surface_toAlgorithm_supported A B C
+  constructor
+  · exact matmul_leakyrelu_fp8_python_case2_tail_surface_toAlgorithm_supported Acc C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      256 256 256 1 256 1 128 256 s
+      (matmul_leakyrelu_fp8_python_output_offset_injective_256 s)
+
+/-- Public Python case 3 coverage summary. -/
+theorem matmul_leakyrelu_fp8_python_case3_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface A B C
+      512 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 512 512 512 1 512 1 128 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 512 512 128 256)
+        (fun idx => (C, cOffset s 512 1 128 256 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 512 1 128 256 idx)))))) := by
+  constructor
+  · exact matmul_leakyrelu_fp8_python_case3_surface_toAlgorithm_supported A B C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      512 512 512 1 512 1 128 256 s
+      (matmul_leakyrelu_fp8_python_output_offset_injective_512 s)
+
+/-- Public Python case 4 coverage summary. -/
+theorem matmul_leakyrelu_fp8_python_case4_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface A B C
+      512 512 128 128 1 512 1 512 1 128 256 64 8 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (matmul_leaky_relu_tail_surface Acc C
+      512 512 512 1 512 1 128 256).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 512 512 512 1 512 1 128 256)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 512 512 128 256)
+        (fun idx => (C, cOffset s 512 1 128 256 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 512 1 128 256 idx)))))) := by
+  constructor
+  · exact matmul_leakyrelu_fp8_python_case4_surface_toAlgorithm_supported A B C
+  constructor
+  · exact matmul_leakyrelu_fp8_python_case4_tail_surface_toAlgorithm_supported Acc C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      512 512 512 1 512 1 128 256 s
+      (matmul_leakyrelu_fp8_python_output_offset_injective_512 s)
+
 end VeriTile.Bench.TritonBenchG.MatmulLeakyreluFp8

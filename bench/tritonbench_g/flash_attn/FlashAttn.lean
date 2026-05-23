@@ -8,6 +8,7 @@ namespace VeriTile.Bench.TritonBenchG.FlashAttn
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Faithful DSL port of `flash_attn.py`'s `_fwd_kernel`. -/
 def flash_attn_fwd_kernel_surface
@@ -454,5 +455,108 @@ theorem flash_attn_python_l_store_compute_correct
   exact flash_attn_l_store_slice_compute_correct Max Denom L
     128 1 128 1 128 128 s
     (flash_attn_python_l_offset_injective s)
+
+/-- Python case 1 full surface lowering: causal forward attention for
+`B=2,H=2,SEQLEN=128,DIM=64`, `BLOCK_M=128`, `BLOCK_N=64`. -/
+theorem flash_attn_python_case1_surface_toAlgorithm_supported
+    (Q K V L O : RegionName) :
+    ∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      2 2 128 128 64 64 Bool.true).toAlgorithm? =
+        Except.ok alg := by
+  exact flash_attn_fwd_kernel_surface_toAlgorithm_supported Q K V L O (1.0 : ℝ)
+    16384 8192 64 1
+    16384 8192 64 1
+    16384 8192 64 1
+    16384 8192 64 1
+    2 2 128 128 64 64 Bool.true
+
+/-- Python case 2 full surface lowering: non-causal forward attention for the
+same checked layout. -/
+theorem flash_attn_python_case2_surface_toAlgorithm_supported
+    (Q K V L O : RegionName) :
+    ∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      2 2 128 128 64 64 Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact flash_attn_fwd_kernel_surface_toAlgorithm_supported Q K V L O (1.0 : ℝ)
+    16384 8192 64 1
+    16384 8192 64 1
+    16384 8192 64 1
+    16384 8192 64 1
+    2 2 128 128 64 64 Bool.false
+
+/-- Public Python case 1 coverage summary: full causal surface plus the
+observable output and `L` row stores. -/
+theorem flash_attn_python_case1_output_summary
+    (Q K V L O OutBuffer Max Denom : RegionName) (s : BlockState) :
+    (∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      2 2 128 128 64 64 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_output_store_slice OutBuffer O
+        8192 64 1 8192 64 1 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (O, outOffset s 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem OutBuffer
+              (bufferOffset s 8192 64 1 128 idx)))))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_l_store_slice Max Denom L 128 1 128 1 128 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
+      (expected := fun i =>
+        lStoreSpec s Max Denom 128 1 128 1 128 i)) := by
+  constructor
+  · exact flash_attn_python_case1_surface_toAlgorithm_supported Q K V L O
+  constructor
+  · exact flash_attn_python_output_store_compute_correct OutBuffer O s
+  · exact flash_attn_python_l_store_compute_correct Max Denom L s
+
+/-- Public Python case 2 coverage summary. -/
+theorem flash_attn_python_case2_output_summary
+    (Q K V L O OutBuffer Max Denom : RegionName) (s : BlockState) :
+    (∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      2 2 128 128 64 64 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_output_store_slice OutBuffer O
+        8192 64 1 8192 64 1 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (O, outOffset s 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem OutBuffer
+              (bufferOffset s 8192 64 1 128 idx)))))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_l_store_slice Max Denom L 128 1 128 1 128 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
+      (expected := fun i =>
+        lStoreSpec s Max Denom 128 1 128 1 128 i)) := by
+  constructor
+  · exact flash_attn_python_case2_surface_toAlgorithm_supported Q K V L O
+  constructor
+  · exact flash_attn_python_output_store_compute_correct OutBuffer O s
+  · exact flash_attn_python_l_store_compute_correct Max Denom L s
 
 end VeriTile.Bench.TritonBenchG.FlashAttn

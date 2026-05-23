@@ -92,12 +92,10 @@ slots. This slice starts after that arithmetic has selected `SIDX`, `BIDX`, and
 `BLOCK_H × BLOCK_D` K tile from `KStates`, and store it into `KCaches` under the
 original `num_heads/head_dim` mask.
 
-This file covers the Python wrapper's `quant_policy = 0` path. The
-`_fill_kv_cache_quant_kernel` paths for `quant_policy = 4/8` are intentionally
-not represented here yet: they require fixed-width `tl.uint8` rounding and
-int4 packing semantics, plus the quant helpers' `tl.float32` scale/zero-point
-intermediates, which are still listed as TritonBench-G dtype/packing gaps in
-`tritonbench_coverage.md`. -/
+This tile is the `quant_policy = 0` value path. The quantized value and
+metadata writebacks, plus the `_quant_int8`/`_quant_int4` helper surfaces for
+rounding, scale/zero metadata, and int4 packing, are represented separately
+below so each Python-tested branch has an explicit DSL artifact. -/
 def fill_k_cache_tile
     (KStates KCaches : RegionName) (BlockOffsets : Region .nat)
     (SIDX BIDX KV_BLOCK_IDX
@@ -621,6 +619,30 @@ theorem quant_int4_compute_store_slice_toAlgorithm_supported
       num_heads packed_head_dim BLOCK_H BLOCK_D).toAlgorithm? = Except.ok alg := by
   simp [quant_int4_compute_store_slice, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
+
+/-- Python test-layout quant helper coverage for `quant_policy = 8`.
+
+The checked KV-cache tests use four heads and sixteen value lanes for each
+K/V tile. This theorem records that the `_quant_int8` helper surface lowers
+with min/max reductions, scale/zero arithmetic, `+ 0.5` rounding, and uint8
+casts at that layout. -/
+theorem quant_int8_python_test_layout_surface_toAlgorithm_supported
+    (Val QVal ScaleOut ZeroOut : RegionName) :
+    ∃ alg, (quant_int8_compute_store_slice Val QVal ScaleOut ZeroOut
+      16 1 16 1 4 16 4 16).toAlgorithm? = Except.ok alg := by
+  exact quant_int8_compute_store_slice_toAlgorithm_supported Val QVal
+    ScaleOut ZeroOut 16 1 16 1 4 16 4 16
+
+/-- Python test-layout quant helper coverage for `quant_policy = 4`.
+
+The int4 helper uses paired eight-lane halves for the sixteen-lane K/V tile and
+packs them as `q_val1 + q_val2 * 16`, matching the Python helper surface. -/
+theorem quant_int4_python_test_layout_surface_toAlgorithm_supported
+    (Val1 Val2 QVal ScaleOut ZeroOut : RegionName) :
+    ∃ alg, (quant_int4_compute_store_slice Val1 Val2 QVal ScaleOut ZeroOut
+      16 1 16 1 8 1 4 8 4 8).toAlgorithm? = Except.ok alg := by
+  exact quant_int4_compute_store_slice_toAlgorithm_supported Val1 Val2 QVal
+    ScaleOut ZeroOut 16 1 16 1 8 1 4 8 4 8
 
 /-! ## Quantized scale/zero metadata stores -/
 
@@ -1325,6 +1347,48 @@ theorem fill_kv_cache_python_test_layout_all_outputs_compute_correct
   · exact fill_v_cache_tile_python_test_layout_compute_correct VStates
       VCaches BlockOffsets SIDX BIDX KV_BLOCK_IDX s
 
+/-- Public Python non-quantized cache-fill summary for the checked layout.
+
+The surface conjunct pins the faithful `_fill_kv_cache_kernel` launch for
+`num_heads = 4`, `head_dim = head_dim_v = 16`, `BLOCK = 4`, and contiguous
+K/V state/cache strides used by the benchmark. The output conjunct exposes the
+checked K-cache and V-cache tile writebacks for the selected source/cache
+block positions. -/
+theorem fill_kv_cache_python_test_layout_output_summary
+    (KStates VStates KCaches VCaches QStartLoc QSeqLens KVSeqLens
+      BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    (∃ alg, (fill_kv_cache_kernel_surface KStates VStates KCaches VCaches
+      QStartLoc QSeqLens KVSeqLens BlockOffsets
+      4 16 16 64 16 1 64 16 1 512 64 16 1 512 64 16 1 5 4 16 16 4
+      ).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile KStates KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem KStates (kSourceOffset s SIDX 64 16 1 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile VStates VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem VStates (vSourceOffset s SIDX 64 16 1 idx))) := by
+  constructor
+  · exact fill_kv_cache_kernel_surface_toAlgorithm_supported KStates VStates
+      KCaches VCaches QStartLoc QSeqLens KVSeqLens BlockOffsets
+      4 16 16 64 16 1 64 16 1 512 64 16 1 512 64 16 1 5 4 16 16 4
+  · exact fill_kv_cache_python_test_layout_all_outputs_compute_correct
+      KStates VStates KCaches VCaches BlockOffsets SIDX BIDX KV_BLOCK_IDX s
+
 /-- Python quantized cache-fill layout: K/V cache values plus K/V scale and
 zero-point metadata stores are compute-correct for the observed shape, assuming
 the quantized value tiles and metadata tiles have already been computed. -/
@@ -1405,5 +1469,186 @@ theorem fill_quant_kv_cache_python_test_layout_all_outputs_compute_correct
       VScalePre VScalesZeros BlockOffsets BIDX KV_BLOCK_IDX s
   · exact fill_quant_v_zero_store_python_test_layout_compute_correct
       VZeroPre VScalesZeros BlockOffsets BIDX KV_BLOCK_IDX s
+
+/-- Python `quant_policy = 8` summary for the checked cache-fill layout.
+
+This combines the `_quant_int8` helper surface, including min/max scale and
+zero computation plus the uint8 cast, with the checked K/V cache and metadata
+writeback obligations at the observed `H = 4`, `D = 16` test shape. -/
+theorem fill_quant_int8_kv_cache_python_test_layout_summary
+    (KStates VStates QKPre QVPre KScalePre KZeroPre VScalePre VZeroPre KCaches
+      VCaches KScalesZeros VScalesZeros BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    (∃ alg, (quant_int8_compute_store_slice KStates QKPre KScalePre KZeroPre
+      16 1 16 1 4 16 4 16).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (quant_int8_compute_store_slice VStates QVPre VScalePre VZeroPre
+      16 1 16 1 4 16 4 16).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile QKPre KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem QKPre (kSourceOffset s SIDX 64 16 1 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile QVPre VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem QVPre (vSourceOffset s SIDX 64 16 1 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KScalePre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s KScalePre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KZeroPre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s KZeroPre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VScalePre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s VScalePre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VZeroPre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s VZeroPre i)) := by
+  constructor
+  · exact quant_int8_python_test_layout_surface_toAlgorithm_supported KStates
+      QKPre KScalePre KZeroPre
+  constructor
+  · exact quant_int8_python_test_layout_surface_toAlgorithm_supported VStates
+      QVPre VScalePre VZeroPre
+  · exact fill_quant_kv_cache_python_test_layout_all_outputs_compute_correct
+      QKPre QVPre KScalePre KZeroPre VScalePre VZeroPre KCaches VCaches
+      KScalesZeros VScalesZeros BlockOffsets SIDX BIDX KV_BLOCK_IDX s
+
+/-- Python `quant_policy = 4` summary for the checked cache-fill layout.
+
+The int4 helper proof keeps both half-lane uint8 casts and the
+`q_val1 + q_val2 * 16` packing formula in the lowering surface, then reuses
+the same checked K/V cache and metadata writeback obligations. -/
+theorem fill_quant_int4_kv_cache_python_test_layout_summary
+    (KStatesLo KStatesHi VStatesLo VStatesHi QKPre QVPre KScalePre KZeroPre
+      VScalePre VZeroPre KCaches VCaches KScalesZeros VScalesZeros
+      BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :
+    (∃ alg, (quant_int4_compute_store_slice KStatesLo KStatesHi QKPre
+      KScalePre KZeroPre 16 1 16 1 8 1 4 8 4 8).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (quant_int4_compute_store_slice VStatesLo VStatesHi QVPre
+      VScalePre VZeroPre 16 1 16 1 8 1 4 8 4 8).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_k_cache_tile QKPre KCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (KCaches,
+          kCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem QKPre (kSourceOffset s SIDX 64 16 1 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_v_cache_tile QVPre VCaches BlockOffsets
+        SIDX BIDX KV_BLOCK_IDX 64 16 1 512 64 16 1 5 4 16 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 16 4 16)
+        (fun idx => (VCaches,
+          vCacheOffset s BlockOffsets BIDX KV_BLOCK_IDX 512 64 16 1 5 idx)))
+      (expected := fun idx =>
+        s.readMem QVPre (vSourceOffset s SIDX 64 16 1 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KScalePre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s KScalePre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice KZeroPre KScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (KScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s KZeroPre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VScalePre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 0 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 0 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s VScalePre i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fill_quant_meta_store_slice VZeroPre VScalesZeros BlockOffsets
+        BIDX KV_BLOCK_IDX 1 64 8 2 1 5 4 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 4 => metaActive s 4 4 i)
+        (fun i : Fin 4 => (VScalesZeros,
+          metaOffset s BlockOffsets BIDX KV_BLOCK_IDX 1 64 8 2 1 5 i)))
+      (expected := fun i : Fin 4 => metaStoreSpec s VZeroPre i)) := by
+  constructor
+  · exact quant_int4_python_test_layout_surface_toAlgorithm_supported KStatesLo
+      KStatesHi QKPre KScalePre KZeroPre
+  constructor
+  · exact quant_int4_python_test_layout_surface_toAlgorithm_supported VStatesLo
+      VStatesHi QVPre VScalePre VZeroPre
+  · exact fill_quant_kv_cache_python_test_layout_all_outputs_compute_correct
+      QKPre QVPre KScalePre KZeroPre VScalePre VZeroPre KCaches VCaches
+      KScalesZeros VScalesZeros BlockOffsets SIDX BIDX KV_BLOCK_IDX s
+
+/-- `output_summary` alias for the checked int8 quantized KV cache-fill path. -/
+abbrev fill_quant_int8_kv_cache_python_test_layout_output_summary
+    (KStates VStates QKPre QVPre KScalePre KZeroPre VScalePre VZeroPre KCaches
+      VCaches KScalesZeros VScalesZeros BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :=
+  fill_quant_int8_kv_cache_python_test_layout_summary KStates VStates QKPre
+    QVPre KScalePre KZeroPre VScalePre VZeroPre KCaches VCaches KScalesZeros
+    VScalesZeros BlockOffsets SIDX BIDX KV_BLOCK_IDX s
+
+/-- `output_summary` alias for the checked int4 quantized KV cache-fill path. -/
+abbrev fill_quant_int4_kv_cache_python_test_layout_output_summary
+    (KStatesLo KStatesHi VStatesLo VStatesHi QKPre QVPre KScalePre KZeroPre
+      VScalePre VZeroPre KCaches VCaches KScalesZeros VScalesZeros
+      BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :=
+  fill_quant_int4_kv_cache_python_test_layout_summary KStatesLo KStatesHi
+    VStatesLo VStatesHi QKPre QVPre KScalePre KZeroPre VScalePre VZeroPre
+    KCaches VCaches KScalesZeros VScalesZeros BlockOffsets SIDX BIDX
+    KV_BLOCK_IDX s
 
 end VeriTile.Bench.TritonBenchG.KvCacheFilling

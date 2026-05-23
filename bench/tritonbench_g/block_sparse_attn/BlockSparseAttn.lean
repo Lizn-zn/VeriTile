@@ -501,4 +501,86 @@ theorem block_sparse_attn_python_second_output_compute_correct
     4 16 2048 512 16 1 2048 512 32 16 16 s
     (block_sparse_attn_python_second_output_offset_injective s)
 
+/-- Public Python output-pair summary for the checked `(B,H,M,D)=(2,4,16,32)`
+layout. The full surface contains a CSR-driven dynamic loop that is not yet a
+stable `toAlgorithm?` target, so this summary deliberately covers only the two
+observable D-block stores from precomputed accumulators. -/
+theorem block_sparse_attn_python_output_pair_compute_correct
+    (Out Acc Acc2 : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_slice Acc Out 4 16
+        2048 512 16 1 2048 512 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        accStoreValue s Acc 4 16 2048 512 16 1 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_second_slice Acc2 Out 4 16
+        2048 512 16 1 2048 512 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (Out, out2Offset s 4 2048 512 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        accStoreValue s Acc2 4 16 2048 512 16 1 16 idx)) := by
+  constructor
+  · exact block_sparse_attn_python_first_output_compute_correct Acc Out s
+  · exact block_sparse_attn_python_second_output_compute_correct Acc2 Out s
+
+/-- `test_case_1` in `block_sparse_attn.py` uses `EVEN_M = true` and
+`EVEN_N = true`. The checked output surface is the common final two-D-block
+writeback for the Python shape `(B,H,M,D) = (2,4,16,32)` after the CSR loop has
+produced `acc` and `acc2`. -/
+abbrev block_sparse_attn_python_case1_output_summary
+    (Out Acc Acc2 : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_slice Acc Out 4 16
+        2048 512 16 1 2048 512 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        accStoreValue s Acc 4 16 2048 512 16 1 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_second_slice Acc2 Out 4 16
+        2048 512 16 1 2048 512 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (Out, out2Offset s 4 2048 512 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        accStoreValue s Acc2 4 16 2048 512 16 1 16 idx)) :=
+  block_sparse_attn_python_output_pair_compute_correct Out Acc Acc2 s
+
+/-- `test_case_2` in `block_sparse_attn.py` flips `EVEN_M = false` and
+`EVEN_N = false`; the final observable output writes still use the same
+Python-shape output layout and row mask. -/
+abbrev block_sparse_attn_python_case2_output_summary
+    (Out Acc Acc2 : RegionName) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_slice Acc Out 4 16
+        2048 512 16 1 2048 512 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Out, outOffset s 4 2048 512 32 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        accStoreValue s Acc 4 16 2048 512 16 1 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_second_slice Acc2 Out 4 16
+        2048 512 16 1 2048 512 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => active s 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (Out, out2Offset s 4 2048 512 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        accStoreValue s Acc2 4 16 2048 512 16 1 16 idx)) :=
+  block_sparse_attn_python_output_pair_compute_correct Out Acc Acc2 s
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn

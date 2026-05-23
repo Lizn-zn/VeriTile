@@ -2169,4 +2169,9 @@ theorem rotary_nopad_python_case1_all_outputs_surface_summary
       (rotary_nopad_python_k_second_offset_injective s)
       (rotary_nopad_python_k_offsets_disjoint s)
 
+/-- `output_summary` alias for the Python no-cache rotary embedding path. -/
+abbrev rotary_nopad_python_case1_output_summary
+    (Q K Cos Sin : RegionName) (s : BlockState) :=
+  rotary_nopad_python_case1_all_outputs_surface_summary Q K Cos Sin s
+
 end VeriTile.Bench.TritonBenchG.RotaryEmbNopad

@@ -399,4 +399,90 @@ theorem matmul_masked_output_store_slice_compute_correct
     stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
   simpa [hActive] using h
 
+/-- Contiguous `64 × 64` Python-test output tiles have injective addresses for
+the fixed `32 × 32` block shape in `matmul_leakyrelu.py`. -/
+theorem matmul_leakyrelu_python_test_output_offset_injective
+    (s : BlockState) :
+    Function.Injective (cOffset s 64 1 32 32) := by
+  intro a b h
+  simp [cOffset, rowIndex, colIndex] at h
+  ext <;> omega
+
+/-- Python test case 1 full surface lowering: `64×128 @ 128×64` with leaky
+ReLU enabled and `BLOCK_SIZE_M/N/K = 32`, `GROUP_SIZE_M = 4`. -/
+theorem matmul_leakyrelu_python_case1_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_kernel_surface A B C
+      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported A B C
+    64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true
+
+/-- Python test case 1 activation-tail surface lowering. -/
+theorem matmul_leakyrelu_python_case1_tail_surface_toAlgorithm_supported
+    (Acc C : RegionName) :
+    ∃ alg, (matmul_leaky_relu_tail_surface Acc C
+      64 64 64 1 64 1 32 32).toAlgorithm? = Except.ok alg := by
+  exact matmul_leaky_relu_tail_surface_toAlgorithm_supported Acc C
+    64 64 64 1 64 1 32 32
+
+/-- Python test case 2 full surface lowering: same dimensions with activation
+disabled. -/
+theorem matmul_leakyrelu_python_case2_surface_toAlgorithm_supported
+    (A B C : RegionName) :
+    ∃ alg, (matmul_kernel_surface A B C
+      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false).toAlgorithm? =
+        Except.ok alg := by
+  exact matmul_kernel_surface_toAlgorithm_supported A B C
+    64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false
+
+/-- Public Python case 1 coverage summary: full activated surface,
+activation-tail surface, and masked fp16 output-store tile. -/
+theorem matmul_leakyrelu_python_case1_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface A B C
+      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (matmul_leaky_relu_tail_surface Acc C
+      64 64 64 1 64 1 32 32).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 64 64 64 1 64 1 32 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 64 64 32 32)
+        (fun idx => (C, cOffset s 64 1 32 32 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 64 1 32 32 idx)))))) := by
+  constructor
+  · exact matmul_leakyrelu_python_case1_surface_toAlgorithm_supported A B C
+  constructor
+  · exact matmul_leakyrelu_python_case1_tail_surface_toAlgorithm_supported Acc C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      64 64 64 1 64 1 32 32 s
+      (matmul_leakyrelu_python_test_output_offset_injective s)
+
+/-- Public Python case 2 coverage summary. -/
+theorem matmul_leakyrelu_python_case2_output_summary
+    (A B C Acc : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface A B C
+      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_masked_output_store_slice C Acc 64 64 64 1 64 1 32 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 64 64 32 32)
+        (fun idx => (C, cOffset s 64 1 32 32 idx)))
+      (expected := fun idx =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (s.readMem Acc (accOffset s 64 1 32 32 idx)))))) := by
+  constructor
+  · exact matmul_leakyrelu_python_case2_surface_toAlgorithm_supported A B C
+  · exact matmul_masked_output_store_slice_compute_correct C Acc
+      64 64 64 1 64 1 32 32 s
+      (matmul_leakyrelu_python_test_output_offset_injective s)
+
 end VeriTile.Bench.TritonBenchG.MatmulLeakyrelu

@@ -43,6 +43,23 @@ def layer_norm_liger_forward_surface
   tl.store(Y_ptr + col_offsets, Y_row, mask=mask)
 }
 
+/-- The full Liger layer-norm forward surface lowers to the algorithm layer,
+including row `Mean`/`RSTD` stores and masked `Y` writeback. -/
+theorem layer_norm_liger_forward_surface_toAlgorithm_supported
+    (Y_ptr : RegionName) (Y_row_stride : Nat)
+    (X_ptr : RegionName) (X_row_stride : Nat)
+    (W_ptr : RegionName) (W_row_stride : Nat)
+    (B_ptr : RegionName) (B_row_stride : Nat)
+    (Mean_ptr : RegionName) (Mean_row_stride : Nat)
+    (RSTD_ptr : RegionName) (RSTD_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) :
+    ∃ alg, (layer_norm_liger_forward_surface Y_ptr Y_row_stride X_ptr
+      X_row_stride W_ptr W_row_stride B_ptr B_row_stride Mean_ptr
+      Mean_row_stride RSTD_ptr RSTD_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
+        Except.ok alg := by
+  simp [layer_norm_liger_forward_surface, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
 /-- Surface transcription of `layer_norm_liger.py`'s
 `_layer_norm_backward_kernel`.
 
@@ -525,5 +542,54 @@ theorem layer_norm_liger_forward_all_outputs_compute_correct
     · exact layer_norm_liger_forward_inv_var_compute_correct Y X W B Mean RSTD
         Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride n_cols
         BLOCK_SIZE eps s hRSTDY
+
+/-- Public forward summary for Liger layer norm: the full Python forward surface
+lowers, and the checked forward kernel characterizes all Python-observable
+forward outputs `Y`, `Mean`, and `RSTD`. -/
+theorem layer_norm_liger_forward_output_summary
+    (Y X W B Mean RSTD : RegionName)
+    (Y_row_stride X_row_stride W_row_stride B_row_stride
+      Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hYMean : Y ≠ Mean) (hYRSTD : Y ≠ RSTD)
+    (hMeanY : Mean ≠ Y) (hMeanRSTD : Mean ≠ RSTD)
+    (hRSTDY : RSTD ≠ Y)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOffset s Y_row_stride i)) :
+    (∃ alg, (layer_norm_liger_forward_surface Y Y_row_stride X
+      X_row_stride W W_row_stride B B_row_stride Mean Mean_row_stride RSTD
+      RSTD_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (Y, yOffset s Y_row_stride i)))
+      (expected := fun i =>
+        layernormYSpec s X W B X_row_stride n_cols BLOCK_SIZE eps i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := fun _ : PUnit => some (Mean, s.pid * Mean_row_stride))
+      (expected := fun _ =>
+        WithBot.unbotD 0
+          (layernormMeanCarrier s X X_row_stride n_cols BLOCK_SIZE))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_liger_forward Y X W B Mean RSTD Y_row_stride
+        X_row_stride Mean_row_stride RSTD_row_stride n_cols BLOCK_SIZE eps)
+      (initialState := s)
+      (write := fun _ : PUnit => some (RSTD, s.pid * RSTD_row_stride))
+      (expected := fun _ =>
+        WithBot.unbotD 0
+          (layernormInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)))) := by
+  constructor
+  · exact layer_norm_liger_forward_surface_toAlgorithm_supported Y
+      Y_row_stride X X_row_stride W W_row_stride B B_row_stride Mean
+      Mean_row_stride RSTD RSTD_row_stride n_cols eps BLOCK_SIZE
+  · exact layer_norm_liger_forward_all_outputs_compute_correct Y X W B
+      Mean RSTD Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride
+      n_cols BLOCK_SIZE eps s hYMean hYRSTD hMeanY hMeanRSTD hRSTDY hOutInj
 
 end VeriTile.Bench.TritonBenchG.LayerNormLiger

@@ -8,6 +8,7 @@ namespace VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Faithful transcription of `fused_rwkv6_kernel.py`'s
 `fused_recurrent_rwkv6_fwd_kernel` as used by the exported benchmark helper.
@@ -433,5 +434,118 @@ theorem fused_recurrent_rwkv6_python_test_case4_surface_toAlgorithm_supported
   exact fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported q k v w u o h0 ht
     32 32 2 3 4 8 8 8 8 0.5
     Bool.true Bool.true Bool.false
+
+/-- Public Python case 1 summary: no initial state and no final-state output.
+The Python observable result is the per-time output buffer. -/
+theorem fused_recurrent_rwkv6_python_test_case1_output_summary
+    (q k v w u o h0 ht BO : RegionName) (timeOffset : Fin 4)
+    (s : BlockState) :
+    (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
+      32 32 2 3 4 8 8 8 8 0.5
+      Bool.false Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_output_store_slice BO o timeOffset.val
+        2 3 4 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active s 8 8 i)
+        (fun i => (o, outOffset s timeOffset.val 2 3 4 8 8 i)))
+      (expected := fun i : Fin 8 => storeValue s BO 8 8 i)) := by
+  constructor
+  · exact fused_recurrent_rwkv6_python_test_case1_surface_toAlgorithm_supported
+      q k v w u o h0 ht
+  · exact fused_recurrent_rwkv6_output_python_test_shape_compute_correct
+      BO o timeOffset s
+
+/-- Public Python case 2 summary: initial state is loaded, but no final-state
+output is returned by the wrapper. -/
+theorem fused_recurrent_rwkv6_python_test_case2_output_summary
+    (q k v w u o h0 ht BO : RegionName) (timeOffset : Fin 4)
+    (s : BlockState) :
+    (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
+      32 32 2 3 4 8 8 8 8 0.5
+      Bool.true Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_output_store_slice BO o timeOffset.val
+        2 3 4 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active s 8 8 i)
+        (fun i => (o, outOffset s timeOffset.val 2 3 4 8 8 i)))
+      (expected := fun i : Fin 8 => storeValue s BO 8 8 i)) := by
+  constructor
+  · exact fused_recurrent_rwkv6_python_test_case2_surface_toAlgorithm_supported
+      q k v w u o h0 ht
+  · exact fused_recurrent_rwkv6_output_python_test_shape_compute_correct
+      BO o timeOffset s
+
+/-- Public Python case 3 summary: no initial state, with final-state output. -/
+theorem fused_recurrent_rwkv6_python_test_case3_output_summary
+    (q k v w u o h0 ht BO BHFinal : RegionName) (timeOffset : Fin 4)
+    (s : BlockState) :
+    (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
+      32 32 2 3 4 8 8 8 8 0.5
+      Bool.false Bool.true Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_output_store_slice BO o timeOffset.val
+        2 3 4 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active s 8 8 i)
+        (fun i => (o, outOffset s timeOffset.val 2 3 4 8 8 i)))
+      (expected := fun i : Fin 8 => storeValue s BO 8 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal ht
+        8 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [8, 8] => finalActive s 8 8 8 8 idx)
+        (fun idx : TileIndex [8, 8] =>
+          (ht, finalStateOffset s 8 8 8 8 idx)))
+      (expected := fun idx : TileIndex [8, 8] =>
+        finalStateStoreValue s BHFinal 8 8 8 8 idx)) := by
+  constructor
+  · exact fused_recurrent_rwkv6_python_test_case3_surface_toAlgorithm_supported
+      q k v w u o h0 ht
+  constructor
+  · exact fused_recurrent_rwkv6_output_python_test_shape_compute_correct
+      BO o timeOffset s
+  · exact fused_recurrent_rwkv6_final_state_python_test_shape_compute_correct
+      BHFinal ht s
+
+/-- Public Python case 4 summary: initial state and final-state output both
+enabled. -/
+theorem fused_recurrent_rwkv6_python_test_case4_output_summary
+    (q k v w u o h0 ht BO BHFinal : RegionName) (timeOffset : Fin 4)
+    (s : BlockState) :
+    (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
+      32 32 2 3 4 8 8 8 8 0.5
+      Bool.true Bool.true Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_output_store_slice BO o timeOffset.val
+        2 3 4 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active s 8 8 i)
+        (fun i => (o, outOffset s timeOffset.val 2 3 4 8 8 i)))
+      (expected := fun i : Fin 8 => storeValue s BO 8 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := fused_recurrent_rwkv6_final_state_store_slice BHFinal ht
+        8 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [8, 8] => finalActive s 8 8 8 8 idx)
+        (fun idx : TileIndex [8, 8] =>
+          (ht, finalStateOffset s 8 8 8 8 idx)))
+      (expected := fun idx : TileIndex [8, 8] =>
+        finalStateStoreValue s BHFinal 8 8 8 8 idx)) := by
+  constructor
+  · exact fused_recurrent_rwkv6_python_test_case4_surface_toAlgorithm_supported
+      q k v w u o h0 ht
+  constructor
+  · exact fused_recurrent_rwkv6_output_python_test_shape_compute_correct
+      BO o timeOffset s
+  · exact fused_recurrent_rwkv6_final_state_python_test_shape_compute_correct
+      BHFinal ht s
 
 end VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel

@@ -1145,4 +1145,28 @@ theorem rope_embedding_python_case4_forward_backward_summary
   · exact rope_embedding_python_case4_backward_first_half_compute_correct dY cos sin sDY
   · exact rope_embedding_python_case4_backward_second_half_compute_correct dY cos sin sDY
 
+/-- `output_summary` alias for Python RoPE embedding case 1, covering the
+checked forward `Q_out` stores and backward `dY_out` stores. -/
+abbrev rope_embedding_python_case1_output_summary
+    (Q dY cos sin : RegionName) (sQ sDY : BlockState) :=
+  rope_embedding_python_case1_forward_backward_summary Q dY cos sin sQ sDY
+
+/-- `output_summary` alias for Python RoPE embedding case 2, covering the
+checked forward `Q_out` stores and backward `dY_out` stores. -/
+abbrev rope_embedding_python_case2_output_summary
+    (Q dY cos sin : RegionName) (sQ sDY : BlockState) :=
+  rope_embedding_python_case2_forward_backward_summary Q dY cos sin sQ sDY
+
+/-- `output_summary` alias for Python RoPE embedding case 3, covering the
+checked forward `Q_out` stores and backward `dY_out` stores. -/
+abbrev rope_embedding_python_case3_output_summary
+    (Q dY cos sin : RegionName) (sQ sDY : BlockState) :=
+  rope_embedding_python_case3_forward_backward_summary Q dY cos sin sQ sDY
+
+/-- `output_summary` alias for Python RoPE embedding case 4, covering the
+checked forward `Q_out` stores and backward `dY_out` stores. -/
+abbrev rope_embedding_python_case4_output_summary
+    (Q dY cos sin : RegionName) (sQ sDY : BlockState) :=
+  rope_embedding_python_case4_forward_backward_summary Q dY cos sin sQ sDY
+
 end VeriTile.Bench.TritonBenchG.RopeEmbedding

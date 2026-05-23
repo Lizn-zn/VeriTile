@@ -596,4 +596,98 @@ theorem chunk_delta_fwd_python_test_case2_surface_toAlgorithm_supported
     4 128 64 64 32 32 64 64 4
     Bool.true Bool.true
 
+/-- Public Python case 1 summary: no initial state and no final-state output.
+The full surface lowers and the checked h/v_new/final-state proof slices remain
+available for the concrete Python shape. -/
+theorem chunk_delta_fwd_python_test_case1_output_summary
+    (k v d v_new h initial_state final_state
+      BH HOut BVN VNew BHFinal FinalState : RegionName)
+    (i_t : Fin 4) (s : BlockState) :
+    (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+      final_state
+      8192 128 1
+      8192 64 1
+      16384 64
+      4 128 64 64 32 32 64 64 4
+      Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_h_store_slice BH HOut
+        i_t.val 16384 64 64 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx => (HOut, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        storeValue s BH i_t.val 16384 64 64 64 64 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew
+        i_t.val 0 8192 64 1 128 64 32 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] =>
+          vNewActive s i_t.val 0 128 64 32 32 64 idx)
+        (fun idx => (VNew, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        vNewStoreValue s BVN i_t.val 0 8192 64 1 128 64 32 32 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState
+        64 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx => (FinalState, finalStateOffset s 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        finalStateStoreValue s BHFinal 64 64 64 64 idx))) := by
+  constructor
+  · exact chunk_delta_fwd_python_test_case1_surface_toAlgorithm_supported
+      k v d v_new h initial_state final_state
+  · exact chunk_delta_fwd_python_test_shape_all_outputs_compute_correct
+      BH HOut BVN VNew BHFinal FinalState i_t s
+
+/-- Public Python case 2 summary: initial state and final-state output enabled. -/
+theorem chunk_delta_fwd_python_test_case2_output_summary
+    (k v d v_new h initial_state final_state
+      BH HOut BVN VNew BHFinal FinalState : RegionName)
+    (i_t : Fin 4) (s : BlockState) :
+    (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+      final_state
+      8192 128 1
+      8192 64 1
+      16384 64
+      4 128 64 64 32 32 64 64 4
+      Bool.true Bool.true).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_h_store_slice BH HOut
+        i_t.val 16384 64 64 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx => (HOut, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        storeValue s BH i_t.val 16384 64 64 64 64 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew
+        i_t.val 0 8192 64 1 128 64 32 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] =>
+          vNewActive s i_t.val 0 128 64 32 32 64 idx)
+        (fun idx => (VNew, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        vNewStoreValue s BVN i_t.val 0 8192 64 1 128 64 32 32 64 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState
+        64 64 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
+        (fun idx => (FinalState, finalStateOffset s 64 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        finalStateStoreValue s BHFinal 64 64 64 64 idx))) := by
+  constructor
+  · exact chunk_delta_fwd_python_test_case2_surface_toAlgorithm_supported
+      k v d v_new h initial_state final_state
+  · exact chunk_delta_fwd_python_test_shape_all_outputs_compute_correct
+      BH HOut BVN VNew BHFinal FinalState i_t s
+
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd

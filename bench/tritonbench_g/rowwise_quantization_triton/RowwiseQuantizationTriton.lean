@@ -249,4 +249,63 @@ theorem quantize_rowwise_python_case3_all_outputs_compute_correct
   · exact quantize_rowwise_python_output_maxs_compute_correct
       MaxVals output_maxs s
 
+/-- Public Python case 1 summary for rowwise quantization.
+
+The faithful surface is intentionally recorded as blocked at algorithm erasure
+by CUDA `llrint`. The accompanying proof slices cover the real-valued scaled
+output before backend rounding/cast and the per-row `output_maxs` writeback. -/
+theorem quantize_rowwise_python_case1_blocked_output_summary
+    (x_ptr output_ptr MaxVals output_maxs : RegionName) (s : BlockState) :
+    (∃ err,
+      (quantize_rowwise_real_surface x_ptr output_ptr output_maxs
+        6 3 4).toAlgorithm? = Except.error err) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
+        6 3 4 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 4 => i.val < 3)
+          (fun i => (output_ptr, offset s 3 i)))
+      (expected := fun i =>
+        quantizeRowwiseScaledSpec s x_ptr MaxVals 3 127.0 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
+      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals))) := by
+  constructor
+  · exact quantize_rowwise_real_surface_toAlgorithm_blocked
+      x_ptr output_ptr output_maxs 6 3 4
+  · exact quantize_rowwise_python_case1_all_outputs_compute_correct
+      x_ptr output_ptr MaxVals output_maxs s
+
+/-- Public Python case 3 summary for rowwise quantization.
+
+As in case 1, this keeps the faithful `llrint` blocker explicit while exposing
+the checked real-valued scaled output and `output_maxs` proof slices. -/
+theorem quantize_rowwise_python_case3_blocked_output_summary
+    (x_ptr output_ptr MaxVals output_maxs : RegionName) (s : BlockState) :
+    (∃ err,
+      (quantize_rowwise_real_surface x_ptr output_ptr output_maxs
+        10 5 8).toAlgorithm? = Except.error err) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_scaled_store_slice x_ptr output_ptr MaxVals
+        10 5 8 127.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin 8 => i.val < 5)
+          (fun i => (output_ptr, offset s 5 i)))
+      (expected := fun i =>
+        quantizeRowwiseScaledSpec s x_ptr MaxVals 5 127.0 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := quantize_rowwise_max_store_slice MaxVals output_maxs)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar output_maxs (maxOffset s))
+      (expected := fun _ : PUnit => quantizeRowwiseMaxSpec s MaxVals))) := by
+  constructor
+  · exact quantize_rowwise_real_surface_toAlgorithm_blocked
+      x_ptr output_ptr output_maxs 10 5 8
+  · exact quantize_rowwise_python_case3_all_outputs_compute_correct
+      x_ptr output_ptr MaxVals output_maxs s
+
 end VeriTile.Bench.TritonBenchG.RowwiseQuantizationTriton

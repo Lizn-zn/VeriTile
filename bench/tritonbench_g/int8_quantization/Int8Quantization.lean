@@ -677,9 +677,13 @@ real tile obtained by the DSL-shaped masked load followed by scalar
 noncomputable def perBlockInt8ScaleInputTile
     (s : BlockState) (X : RegionName) (L C BLK : Nat) (preScale : ℝ) :
     Tile .real [BLK, C] :=
+  let rowMask : Tile .bool [BLK, 1] :=
+    { data := fun i => decide (s.pids 0 * BLK + i.1.val < L) }
+  let mask2d : Tile .bool [BLK, C] :=
+    Tile.remap Broadcast.nil.consL.consSame.leftIndex rowMask
   { data := fun idx =>
       match
-        if s.pids 0 * BLK + idx.1.val < L then
+        if mask2d.data idx = Bool.true then
           some (s.readMem X (xOffset s L C BLK idx))
         else
           some (s.undef X (xOffset s L C BLK idx)) with
@@ -793,12 +797,22 @@ theorem per_block_int8_python_case1_full_surfaces_toAlgorithm_supported
     (∃ alg, (q_kernel_per_block_int8_surface Q QInt8 QScale
       256 64 128 2).toAlgorithm? = Except.ok alg) ∧
     (∃ alg, (k_kernel_per_block_int8_surface K KInt8 KScale
-      256 64 64 4).toAlgorithm? = Except.ok alg) := by
+      256 64 64 4).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (per_block_int8_scale_compute_store_slice Q QScale
+      256 64 128 2 (qPreScale 64)).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (per_block_int8_scale_compute_store_slice K KScale
+      256 64 64 4 kPreScale).toAlgorithm? = Except.ok alg) := by
   constructor
   · exact q_kernel_per_block_int8_python_case1_surface_toAlgorithm_supported
       Q QInt8 QScale
-  · exact k_kernel_per_block_int8_python_case1_surface_toAlgorithm_supported
-      K KInt8 KScale
+  · constructor
+    · exact k_kernel_per_block_int8_python_case1_surface_toAlgorithm_supported
+        K KInt8 KScale
+    · constructor
+      · exact per_block_int8_scale_compute_store_slice_toAlgorithm_supported
+          Q QScale 256 64 128 2 (qPreScale 64)
+      · exact per_block_int8_scale_compute_store_slice_toAlgorithm_supported
+          K KScale 256 64 64 4 kPreScale
 
 /-- Python test case 2 full-surface coverage for both q and k branches. -/
 theorem per_block_int8_python_case2_full_surfaces_toAlgorithm_supported
@@ -806,11 +820,123 @@ theorem per_block_int8_python_case2_full_surfaces_toAlgorithm_supported
     (∃ alg, (q_kernel_per_block_int8_surface Q QInt8 QScale
       512 128 128 4).toAlgorithm? = Except.ok alg) ∧
     (∃ alg, (k_kernel_per_block_int8_surface K KInt8 KScale
-      512 128 64 8).toAlgorithm? = Except.ok alg) := by
+      512 128 64 8).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (per_block_int8_scale_compute_store_slice Q QScale
+      512 128 128 4 (qPreScale 128)).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (per_block_int8_scale_compute_store_slice K KScale
+      512 128 64 8 kPreScale).toAlgorithm? = Except.ok alg) := by
   constructor
   · exact q_kernel_per_block_int8_python_case2_surface_toAlgorithm_supported
       Q QInt8 QScale
-  · exact k_kernel_per_block_int8_python_case2_surface_toAlgorithm_supported
-      K KInt8 KScale
+  · constructor
+    · exact k_kernel_per_block_int8_python_case2_surface_toAlgorithm_supported
+        K KInt8 KScale
+    · constructor
+      · exact per_block_int8_scale_compute_store_slice_toAlgorithm_supported
+          Q QScale 512 128 128 4 (qPreScale 128)
+      · exact per_block_int8_scale_compute_store_slice_toAlgorithm_supported
+          K KScale 512 128 64 8 kPreScale
+
+/-- Public Python case-1 summary for `per_block_int8`.
+
+This combines the faithful Q/K surfaces, including the `to(tl.int8)` cast
+placeholder, with the existing all-output proof slices for `q_int8`, `q_scale`,
+`k_int8`, and `k_scale` at `B = 2`, `L = 256`, `C = 64`. The value-store slice
+characterizes the real scaled value before fixed-width int8 rounding/cast; the
+surface conjunct keeps the original cast operation visible for the Python path. -/
+theorem per_block_int8_python_case1_output_summary
+    (Q K QInt8 KInt8 QScalePre KScalePre QScale KScale : RegionName)
+    (s : BlockState) :
+    ((∃ alg, (q_kernel_per_block_int8_surface Q QInt8 QScale
+      256 64 128 2).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (k_kernel_per_block_int8_surface K KInt8 KScale
+      256 64 64 4).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (per_block_int8_scale_compute_store_slice Q QScale
+      256 64 128 2 (qPreScale 64)).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (per_block_int8_scale_compute_store_slice K KScale
+      256 64 64 4 kPreScale).toAlgorithm? = Except.ok alg)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice Q QInt8 QScale
+        256 64 128 2 (qPreScale 64))
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 128 64)
+        (fun idx => (QInt8, xOffset s 256 64 128 idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s Q QScale 256 64 128 2 (qPreScale 64) idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice QScalePre QScale 2)
+      (initialState := s)
+      (write := fun _ : PUnit => some (QScale, scaleOffset s 2))
+      (expected := fun _ => scaleStoreSpec s QScalePre 2)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice K KInt8 KScale
+        256 64 64 4 kPreScale)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 64 64)
+        (fun idx => (KInt8, xOffset s 256 64 64 idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s K KScale 256 64 64 4 kPreScale idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice KScalePre KScale 4)
+      (initialState := s)
+      (write := fun _ : PUnit => some (KScale, scaleOffset s 4))
+      (expected := fun _ => scaleStoreSpec s KScalePre 4)) := by
+  constructor
+  · exact per_block_int8_python_case1_full_surfaces_toAlgorithm_supported
+      Q K QInt8 KInt8 QScale KScale
+  · exact per_block_int8_python_case1_all_outputs_compute_correct
+      Q K QInt8 KInt8 QScalePre KScalePre QScale KScale s
+
+/-- Public Python case-2 summary for `per_block_int8`.
+
+As in case 1, the summary pairs faithful full-surface lowering with checked
+all-output real-valued slices for the Python test shape
+`B = 1`, `L = 512`, `C = 128`. -/
+theorem per_block_int8_python_case2_output_summary
+    (Q K QInt8 KInt8 QScalePre KScalePre QScale KScale : RegionName)
+    (s : BlockState) :
+    ((∃ alg, (q_kernel_per_block_int8_surface Q QInt8 QScale
+      512 128 128 4).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (k_kernel_per_block_int8_surface K KInt8 KScale
+      512 128 64 8).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (per_block_int8_scale_compute_store_slice Q QScale
+      512 128 128 4 (qPreScale 128)).toAlgorithm? = Except.ok alg) ∧
+     (∃ alg, (per_block_int8_scale_compute_store_slice K KScale
+      512 128 64 8 kPreScale).toAlgorithm? = Except.ok alg)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice Q QInt8 QScale
+        512 128 128 4 (qPreScale 128))
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 512 128 128)
+        (fun idx => (QInt8, xOffset s 512 128 128 idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s Q QScale 512 128 128 4 (qPreScale 128) idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice QScalePre QScale 4)
+      (initialState := s)
+      (write := fun _ : PUnit => some (QScale, scaleOffset s 4))
+      (expected := fun _ => scaleStoreSpec s QScalePre 4)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scaled_store_slice K KInt8 KScale
+        512 128 64 8 kPreScale)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 512 64 128)
+        (fun idx => (KInt8, xOffset s 512 128 64 idx)))
+      (expected := fun idx =>
+        perBlockInt8ScaledSpec s K KScale 512 128 64 8 kPreScale idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := per_block_int8_scale_store_slice KScalePre KScale 8)
+      (initialState := s)
+      (write := fun _ : PUnit => some (KScale, scaleOffset s 8))
+      (expected := fun _ => scaleStoreSpec s KScalePre 8)) := by
+  constructor
+  · exact per_block_int8_python_case2_full_surfaces_toAlgorithm_supported
+      Q K QInt8 KInt8 QScale KScale
+  · exact per_block_int8_python_case2_all_outputs_compute_correct
+      Q K QInt8 KInt8 QScalePre KScalePre QScale KScale s
 
 end VeriTile.Bench.TritonBenchG.Int8Quantization

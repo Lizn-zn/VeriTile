@@ -269,4 +269,11 @@ theorem softmax_reducev_python_test_shape_output_surface_summary
   · exact softmax_reducev_python_test_shape_final_output_compute_correct
       Acc ESum Out s
 
+/-- `output_summary` alias for the Python reduce-V softmax path. -/
+abbrev softmax_reducev_python_test_shape_output_summary
+    (Logics V Acc ESum Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat) (s : BlockState) :=
+  softmax_reducev_python_test_shape_output_surface_summary
+    Logics V Acc ESum Out BLoc BStartLoc BSeqLen s
+
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev

@@ -38,6 +38,16 @@ def mv_kernel
   tl.store(C_ptrs, acc[:, None], mask=n_mask)
 }
 
+/-- The full matrix-vector multiplication surface lowers to the algorithm
+layer, including the `M` loop, masked loads, vector multiply, reduction, and
+masked output store. -/
+theorem mv_kernel_surface_toAlgorithm_supported
+    (A B C : RegionName)
+    (N M stride_an stride_am stride_bm stride_cn BLOCK_N BLOCK_M : Nat) :
+    ∃ alg, (mv_kernel A B C N M stride_an stride_am stride_bm stride_cn
+      BLOCK_N BLOCK_M).toAlgorithm? = Except.ok alg := by
+  simp [mv_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
 /-- Proof-oriented one-`BLOCK_M` slice of `matrix_vector_multip.py`'s
 `mv_kernel`.
 
@@ -190,4 +200,106 @@ theorem mv_kernel_one_block_compute_correct
   have h := mv_kernel_one_block_correct A B C N M stride_an stride_am stride_bm
     stride_cn BLOCK_N BLOCK_M s s' hOutInj hExec i
   simpa [hActive] using h
+
+/-! ## Python test-case wrappers
+
+The bundled Python test constructs contiguous tensors for shapes `(N, M) =
+(4, 3)` and `(32, 16)`. Triton's autotune choices all have `BLOCK_M >= 32`, so
+each checked path executes a single `M` block; the wrappers below leave
+`BLOCK_N`/`BLOCK_M` explicit to cover the autotuned choices while pinning the
+Python tensor strides. -/
+
+theorem mv_kernel_python_stride1_output_offset_injective
+    (s : BlockState) (BLOCK_N : Nat) :
+    Function.Injective (fun i : Fin BLOCK_N => cOffset s 1 BLOCK_N i) := by
+  intro a b h
+  apply Fin.ext
+  simpa [cOffset, nIndex] using h
+
+theorem mv_kernel_python_case2_surface_toAlgorithm_supported
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) :
+    ∃ alg, (mv_kernel A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
+      Except.ok alg := by
+  exact mv_kernel_surface_toAlgorithm_supported A B C 4 3 3 1 1 1
+    BLOCK_N BLOCK_M
+
+theorem mv_kernel_python_case3_surface_toAlgorithm_supported
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) :
+    ∃ alg, (mv_kernel A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
+      Except.ok alg := by
+  exact mv_kernel_surface_toAlgorithm_supported A B C 32 16 16 1 1 1
+    BLOCK_N BLOCK_M
+
+theorem mv_kernel_python_case2_one_block_compute_correct
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := mv_kernel_one_block A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 4)
+        (fun i => (C, cOffset s 1 BLOCK_N i)))
+      (expected := fun i =>
+        mvSpec s A B 4 3 3 1 1 BLOCK_N BLOCK_M i) := by
+  exact mv_kernel_one_block_compute_correct A B C 4 3 3 1 1 1
+    BLOCK_N BLOCK_M s (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
+
+theorem mv_kernel_python_case3_one_block_compute_correct
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := mv_kernel_one_block A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 32)
+        (fun i => (C, cOffset s 1 BLOCK_N i)))
+      (expected := fun i =>
+        mvSpec s A B 32 16 16 1 1 BLOCK_N BLOCK_M i) := by
+  exact mv_kernel_one_block_compute_correct A B C 32 16 16 1 1 1
+    BLOCK_N BLOCK_M s (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
+
+/-- Public Python case-2 summary for `mv_kernel`.
+
+The bundled Python case uses a contiguous `4 x 3` matrix and length-3 vector.
+Autotune choices have `BLOCK_M >= 32`, so the checked correctness slice covers
+the single `M` block executed by this case while the surface conjunct keeps the
+full loop-shaped Python kernel lowerable. -/
+theorem mv_kernel_python_case2_output_summary
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
+    (∃ alg, (mv_kernel A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
+      Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := mv_kernel_one_block A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 4)
+        (fun i => (C, cOffset s 1 BLOCK_N i)))
+      (expected := fun i =>
+        mvSpec s A B 4 3 3 1 1 BLOCK_N BLOCK_M i) := by
+  constructor
+  · exact mv_kernel_python_case2_surface_toAlgorithm_supported A B C
+      BLOCK_N BLOCK_M
+  · exact mv_kernel_python_case2_one_block_compute_correct A B C
+      BLOCK_N BLOCK_M s
+
+/-- Public Python case-3 summary for `mv_kernel`.
+
+The bundled random case uses a contiguous `32 x 16` matrix and length-16
+vector. As above, `BLOCK_M >= 32` makes the proof-oriented one-block slice
+cover the Python-tested reduction path. -/
+theorem mv_kernel_python_case3_output_summary
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
+    (∃ alg, (mv_kernel A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
+      Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := mv_kernel_one_block A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 32)
+        (fun i => (C, cOffset s 1 BLOCK_N i)))
+      (expected := fun i =>
+        mvSpec s A B 32 16 16 1 1 BLOCK_N BLOCK_M i) := by
+  constructor
+  · exact mv_kernel_python_case3_surface_toAlgorithm_supported A B C
+      BLOCK_N BLOCK_M
+  · exact mv_kernel_python_case3_one_block_compute_correct A B C
+      BLOCK_N BLOCK_M s
 end VeriTile.Bench.TritonBenchG.MatrixVectorMultip

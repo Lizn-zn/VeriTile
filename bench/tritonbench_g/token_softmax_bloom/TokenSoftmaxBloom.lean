@@ -383,4 +383,18 @@ theorem token_softmax_bloom_python_case2_output_surface_summary
   · exact token_softmax_bloom_final_store_python_case2_compute_correct
       Softmax B_Start_Loc B_Seqlen Prob_Out s
 
+/-- `output_summary` alias for Python Bloom token-softmax case 1. -/
+abbrev token_softmax_bloom_python_case1_output_summary
+    (Logics Softmax B_Start_Loc B_Seqlen Prob_Out : RegionName)
+    (s : BlockState) :=
+  token_softmax_bloom_python_case1_output_surface_summary
+    Logics Softmax B_Start_Loc B_Seqlen Prob_Out s
+
+/-- `output_summary` alias for Python Bloom token-softmax case 2. -/
+abbrev token_softmax_bloom_python_case2_output_summary
+    (Logics Softmax B_Start_Loc B_Seqlen Prob_Out : RegionName)
+    (s : BlockState) :=
+  token_softmax_bloom_python_case2_output_surface_summary
+    Logics Softmax B_Start_Loc B_Seqlen Prob_Out s
+
 end VeriTile.Bench.TritonBenchG.TokenSoftmaxBloom

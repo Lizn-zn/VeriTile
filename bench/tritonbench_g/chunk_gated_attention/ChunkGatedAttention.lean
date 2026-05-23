@@ -753,4 +753,77 @@ theorem chunk_gated_attention_python_test_shape_all_outputs_compute_correct
   · exact chunk_gated_attention_final_state_python_test_shape_compute_correct
       BHFinal Ht s
 
+/-- Public Python test-shape summary for `chunk_gated_attention.py`.
+
+This packages the checked `fwd_pre` cumulative surface, the four Python
+`fwd_inner` branch surfaces, and the observable state outputs (`h` loop rows and
+optional `ht`) for the benchmark shape
+`B=2, H=4, T=128, S=64, K=32, V=32, BT=32, BK=BV=16`. -/
+theorem chunk_gated_attention_python_test_shape_output_summary
+    (G GCum K V H H0 Ht BH BHFinal : RegionName) (i_t : Fin 4)
+    (s : BlockState) :
+    (∃ alg, (chunk_gated_attention_cum_surface G GCum 8192 64 1
+      128 64 32 16).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (chunk_gated_attention_h_surface K V GCum H H0 Ht
+      4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      Bool.false Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (chunk_gated_attention_h_surface K V GCum H H0 Ht
+      4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      Bool.true Bool.true Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (chunk_gated_attention_h_surface K V GCum H H0 Ht
+      4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      Bool.false Bool.true Bool.true).toAlgorithm? = Except.ok alg) ∧
+    (∃ alg, (chunk_gated_attention_h_surface K V GCum H H0 Ht
+      4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      Bool.true Bool.false Bool.true).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
+        4096 32 1 32 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        hStateStoreValue s BH i_t.val 4096 32 1 32 32 16 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
+        32 32 16 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (Ht, finalStateOffset s 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        finalStateStoreValue s BHFinal 32 32 16 16 idx)) := by
+  constructor
+  · exact chunk_gated_attention_cum_surface_toAlgorithm_supported G GCum
+      8192 64 1 128 64 32 16
+  constructor
+  · exact chunk_gated_attention_h_surface_toAlgorithm_supported K V GCum H H0
+      Ht 4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      Bool.false Bool.false Bool.false
+  constructor
+  · exact chunk_gated_attention_h_surface_toAlgorithm_supported K V GCum H H0
+      Ht 4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      Bool.true Bool.true Bool.false
+  constructor
+  · exact chunk_gated_attention_h_surface_toAlgorithm_supported K V GCum H H0
+      Ht 4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      Bool.false Bool.true Bool.true
+  constructor
+  · exact chunk_gated_attention_h_surface_toAlgorithm_supported K V GCum H H0
+      Ht 4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      Bool.true Bool.false Bool.true
+  · exact chunk_gated_attention_python_test_shape_all_outputs_compute_correct
+      BH H BHFinal Ht i_t s
+
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention

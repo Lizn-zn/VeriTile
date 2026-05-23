@@ -730,4 +730,193 @@ theorem chunked_cumsum_fwd_python_test_case4_surface_toAlgorithm_supported
     40 5 10 1
     Bool.true Bool.true 4 8
 
+/-- Public Python case 1 summary: no bias and no softplus. The full surface
+lowers and the checked `dt_out`/`dA_cumsum` output slices are compute-correct. -/
+theorem chunked_cumsum_fwd_python_test_case1_output_summary
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
+    (dt_min dt_max : ℝ) (s : BlockState) :
+    (∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      Bool.false Bool.false 4 8).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dt_out_store_slice DtPrepared DtOut
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] => (DtOut, dtOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DtPrepared (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DAcs (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
+        40 4 1 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
+  constructor
+  · exact chunked_cumsum_fwd_python_test_case1_surface_toAlgorithm_supported
+      dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
+  · exact chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
+      DtPrepared DtOut DAcs A DACumsum s
+
+/-- Public Python case 2 summary: bias enabled and softplus disabled. -/
+theorem chunked_cumsum_fwd_python_test_case2_output_summary
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
+    (dt_min dt_max : ℝ) (s : BlockState) :
+    (∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      Bool.false Bool.true 4 8).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dt_out_store_slice DtPrepared DtOut
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] => (DtOut, dtOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DtPrepared (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DAcs (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
+        40 4 1 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
+  constructor
+  · exact chunked_cumsum_fwd_python_test_case2_surface_toAlgorithm_supported
+      dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
+  · exact chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
+      DtPrepared DtOut DAcs A DACumsum s
+
+/-- Public Python case 3 summary: no bias and softplus enabled. -/
+theorem chunked_cumsum_fwd_python_test_case3_output_summary
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
+    (dt_min dt_max : ℝ) (s : BlockState) :
+    (∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      Bool.true Bool.false 4 8).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dt_out_store_slice DtPrepared DtOut
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] => (DtOut, dtOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DtPrepared (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DAcs (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
+        40 4 1 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
+  constructor
+  · exact chunked_cumsum_fwd_python_test_case3_surface_toAlgorithm_supported
+      dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
+  · exact chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
+      DtPrepared DtOut DAcs A DACumsum s
+
+/-- Public Python case 4 summary: both bias and softplus enabled. -/
+theorem chunked_cumsum_fwd_python_test_case4_output_summary
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
+      DtPrepared DtOut DAcs A DACumsum : RegionName)
+    (dt_min dt_max : ℝ) (s : BlockState) :
+    (∃ alg, (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      Bool.true Bool.true 4 8).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dt_out_store_slice DtPrepared DtOut
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] => (DtOut, dtOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DtPrepared (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_store_slice DAcs DACumsum
+        40 4 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        s.readMem DAcs (dtPreparedOffset s 40 4 1 5 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_dA_cs_compute_slice DtPrepared A DACumsum
+        40 4 1 1 40 5 10 1 4 5 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (DACumsum, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        dAComputedCumsumSpec s DtPrepared A 40 4 1 1 4 5 4 8 idx))) := by
+  constructor
+  · exact chunked_cumsum_fwd_python_test_case4_surface_toAlgorithm_supported
+      dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
+  · exact chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
+      DtPrepared DtOut DAcs A DACumsum s
+
 end VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd

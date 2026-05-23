@@ -556,6 +556,59 @@ theorem rope_transform_python_test_shape_all_outputs_compute_correct
       · exact rope_transform_k1_python_test_shape_compute_correct K COS SIN
           HEAD_IDX COS_ROW_IDX s
 
+/-- Public Python forward summary for `rope_transform.py`: the full
+`BACKWARD_PASS = false` surface lowers for the checked test shape, and the
+one-head proof slices cover the four Python-observable forward stores
+(Q/K first and second halves). -/
+theorem rope_transform_python_forward_output_summary
+    (Q K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX : Nat)
+    (s : BlockState) :
+    (∃ alg, (triton_rope_surface Q K COS SIN
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := rope_transform_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeQ0Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_transform_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (Q, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeQ1Spec s Q COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_transform_k0_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, qOffset s HEAD_IDX 128 16 (dimIndex i))))
+      (expected := fun i =>
+        ropeQ0Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := rope_transform_k1_head K COS SIN HEAD_IDX COS_ROW_IDX
+        128 8 8 16 8 8 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 8 => active HEAD_IDX 8 8 i)
+        (fun i => (K, q1WriteOffset s HEAD_IDX 128 16 8 i)))
+      (expected := fun i =>
+        ropeQ1Spec s K COS SIN HEAD_IDX COS_ROW_IDX 128 8 8 16 8 i))) := by
+  constructor
+  · exact triton_rope_surface_toAlgorithm_supported Q K COS SIN
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false
+  · exact rope_transform_python_test_shape_all_outputs_compute_correct
+      Q K COS SIN HEAD_IDX COS_ROW_IDX s
+
 /-! ## Full-kernel 2D forward correctness (`BACKWARD_PASS = false`)
 
 The single-head slice proofs above pin one Q/K head and one dim slice, but the

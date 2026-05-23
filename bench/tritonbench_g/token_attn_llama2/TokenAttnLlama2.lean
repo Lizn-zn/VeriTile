@@ -448,4 +448,32 @@ theorem token_attn_llama2_python_case4_output_surface_summary
   · exact token_attn_llama2_score_store_python_max64_compute_correct
       AttValue B_Start_Loc B_Seqlen Att_Out s
 
+/-- `output_summary` alias for Python LLaMA2 token-attention case 1. -/
+abbrev token_attn_llama2_python_case1_output_summary
+    (Q K AttValue Att_Out : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :=
+  token_attn_llama2_python_case1_output_surface_summary
+    Q K AttValue Att_Out sm_scale B_Loc B_Start_Loc B_Seqlen s
+
+/-- `output_summary` alias for Python LLaMA2 token-attention case 2. -/
+abbrev token_attn_llama2_python_case2_output_summary
+    (Q K AttValue Att_Out : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :=
+  token_attn_llama2_python_case2_output_surface_summary
+    Q K AttValue Att_Out sm_scale B_Loc B_Start_Loc B_Seqlen s
+
+/-- `output_summary` alias for Python LLaMA2 token-attention case 3. -/
+abbrev token_attn_llama2_python_case3_output_summary
+    (Q K AttValue Att_Out : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :=
+  token_attn_llama2_python_case3_output_surface_summary
+    Q K AttValue Att_Out sm_scale B_Loc B_Start_Loc B_Seqlen s
+
+/-- `output_summary` alias for Python LLaMA2 token-attention case 4. -/
+abbrev token_attn_llama2_python_case4_output_summary
+    (Q K AttValue Att_Out : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :=
+  token_attn_llama2_python_case4_output_surface_summary
+    Q K AttValue Att_Out sm_scale B_Loc B_Start_Loc B_Seqlen s
+
 end VeriTile.Bench.TritonBenchG.TokenAttnLlama2

@@ -38,6 +38,16 @@ def update_fn_kernel
   tl.store(offset_exp_avg_ptr, exp_avg, mask=mask)
 }
 
+/-- The full Adam update surface lowers to the algorithm layer, including both
+masked stores to `p_ptr` and `exp_avg_ptr`. -/
+theorem update_fn_kernel_surface_toAlgorithm_supported
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) :
+    ∃ alg, (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgorithm? =
+        Except.ok alg := by
+  simp [update_fn_kernel, ComputeExpr.toAlgorithm?]
+
 /-- Proof-oriented `exp_avg` update slice of `adam_update_triton.py`'s
 `update_fn_kernel`.
 
@@ -306,5 +316,40 @@ theorem update_fn_kernel_all_outputs_compute_correct
       lr wd beta1 beta2 n_elements BLOCK_SIZE s hRegions
   · exact update_fn_kernel_exp_avg_compute_correct p_ptr grad_ptr exp_avg_ptr
       lr wd beta1 beta2 n_elements BLOCK_SIZE s (fun h => hRegions h.symm)
+
+/-- Public Python `update_fn` summary: the full surface lowers and both
+Python-observable stores of the full kernel, `p_ptr` and `exp_avg_ptr`, are
+compute-correct under the disjoint-output-region side condition. -/
+theorem update_fn_kernel_output_summary
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegions : p_ptr ≠ exp_avg_ptr) :
+    (∃ alg, (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgorithm? =
+        Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (p_ptr, outOffset s BLOCK_SIZE i)))
+      (expected := fun i =>
+        pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (exp_avg_ptr, outOffset s BLOCK_SIZE i)))
+      (expected := fun i =>
+        expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i))) := by
+  constructor
+  · exact update_fn_kernel_surface_toAlgorithm_supported p_ptr grad_ptr
+      exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE
+  · exact update_fn_kernel_all_outputs_compute_correct p_ptr grad_ptr
+      exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE s hRegions
 
 end VeriTile.Bench.TritonBenchG.AdamUpdateTriton

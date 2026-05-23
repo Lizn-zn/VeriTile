@@ -536,4 +536,41 @@ theorem destindex_copy_quantize_kv_group_python_all_outputs_compute_correct
   · exact destindex_copy_quantize_kv_group_python_scale_store_compute_correct
       Scale DestLoc OutScale s
 
+/-- Public Python grouped summary: the checked grouped shape covers the full
+surface syntax and the two externally visible outputs (values and scales). -/
+theorem destindex_copy_quantize_kv_group_python_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (∃ alg,
+      (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        64 16 8 1 64 16 8 1 8 2 1 2 2 8).toAlgorithm? =
+          Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_value_store_slice K DestLoc Out
+        OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 2 8)
+        (fun idx => (Out, outOffset s DestLoc 64 16 8 1 idx)))
+      (expected := fun idx =>
+        quantizeKvCopyGroupValueSpec s K DestLoc OutScale 64 16 8 1 8 2
+          1 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_scale_store_slice Scale DestLoc
+        OutScale 8 2 8 2 2 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 2 2)
+        (fun i => (OutScale, scaleOutOffset s DestLoc 8 2 i)))
+      (expected := fun i => quantizeKvCopyScaleSpec s Scale 8 2 i))) := by
+  constructor
+  · exact destindex_copy_quantize_kv_group_real_surface_toAlgorithm_supported K
+      DestLoc Out OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8
+  · exact destindex_copy_quantize_kv_group_python_all_outputs_compute_correct
+      K Scale DestLoc Out OutScale s
+
+/-- `output_summary` alias for the grouped Python quantized KV copy case. -/
+abbrev destindex_copy_quantize_kv_group_python_output_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
+  destindex_copy_quantize_kv_group_python_summary K Scale DestLoc Out OutScale s
+
 end VeriTile.Bench.TritonBenchG.QuantizeKvCopy

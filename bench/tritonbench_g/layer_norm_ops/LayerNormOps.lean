@@ -4799,6 +4799,82 @@ theorem layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_o
   · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
       X W DY DXBase DW DB Mean Rstd s hDBDX hDBDW
 
+/-- `output_summary` alias for the plain+bias forward Python layer-norm path. -/
+abbrev layer_norm_ops_fwd_plain_bias_python_test_shape_output_summary
+    (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState) :=
+  layer_norm_ops_fwd_plain_bias_python_test_shape_all_outputs_compute_correct
+    ValuePre MeanPre RstdPre Y Mean Rstd s
+
+/-- `output_summary` alias for the RMS+bias forward Python layer-norm path. -/
+abbrev layer_norm_ops_fwd_rms_bias_python_test_shape_output_summary
+    (ValuePre RstdPre Y Rstd : RegionName) (s : BlockState) :=
+  layer_norm_ops_fwd_rms_bias_python_test_shape_all_outputs_compute_correct
+    ValuePre RstdPre Y Rstd s
+
+/-- `output_summary` alias for the residual plain+bias forward Python path. -/
+abbrev layer_norm_ops_fwd_residual_bias_python_test_shape_output_summary
+    (ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd : RegionName)
+    (s : BlockState) :=
+  layer_norm_ops_fwd_residual_bias_python_test_shape_all_outputs_compute_correct
+    ResidualPre ValuePre MeanPre RstdPre RESIDUAL_OUT Y Mean Rstd s
+
+/-- `output_summary` alias for the residual-add backward Python path. -/
+abbrev layer_norm_ops_bwd_residual_add_python_test_shape_output_summary
+    (DXBase DRESIDUAL DX DRESIDUAL_IN : RegionName) (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDresInDX : DRESIDUAL_IN ≠ DX) :=
+  layer_norm_ops_bwd_residual_add_python_test_shape_all_outputs_compute_correct
+    DXBase DRESIDUAL DX DRESIDUAL_IN s hDXDresIn hDresInDX
+
+/-- `output_summary` alias for backward case 2: plain+bias, no residual,
+no recompute. -/
+abbrev layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_output_summary
+    (X Xhat W DY DX DW DB Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :=
+  layer_norm_ops_bwd_plain_bias_no_residual_python_test_shape_all_outputs_compute_correct
+    X Xhat W DY DX DW DB Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
+
+/-- `output_summary` alias for backward case 4: RMS+bias, no residual,
+no recompute. -/
+abbrev layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_output_summary
+    (X Xhat W DY Rstd C1 DX DW DB : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) :=
+  layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_all_outputs_compute_correct
+    X Xhat W DY Rstd C1 DX DW DB s hDWDX
+
+/-- `output_summary` alias for backward case 6: plain+bias with residual. -/
+abbrev layer_norm_ops_bwd_plain_bias_residual_python_test_shape_output_summary
+    (X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 : RegionName)
+    (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :=
+  layer_norm_ops_bwd_plain_bias_residual_python_test_shape_all_outputs_compute_correct
+    X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2
+    s hDXDresIn hDWDX hDWDB hDBDX hDBDW
+
+/-- `output_summary` alias for backward case 7: plain+bias with recomputed
+output. -/
+abbrev layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_output_summary
+    (X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 : RegionName) (s : BlockState)
+    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :=
+  layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_all_outputs_compute_correct
+    X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
+
+/-- `output_summary` alias for backward case 8: plain+bias residual path with
+recomputed output. -/
+abbrev layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_output_summary
+    (X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 : RegionName)
+    (s : BlockState)
+    (hDXDresIn : DX ≠ DRESIDUAL_IN)
+    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
+    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :=
+  layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_outputs_compute_correct
+    X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2
+    s hDXDresIn hDWDX hDWDB hDBDX hDBDW
+
 /-! ## End-to-end surface correctness
 
 The theorem below proves an output of `layer_norm_fwd_1pass_surface` itself —

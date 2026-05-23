@@ -772,4 +772,109 @@ theorem bmm_chunk_bwd_python_case2_residual_compute_correct
     (bmm_chunk_bwd_python_grouped_active_no_collision num_pid_n
       BLOCK_SIZE_M BLOCK_SIZE_N s)
 
+/-- Python case 1 full surface lowering: ungrouped, no residual, fp16 dot dtype. -/
+theorem bmm_chunk_bwd_python_case1_surface_toAlgorithm_supported
+    (A Dout Db Res : RegionName)
+    (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS : Nat) :
+    ∃ alg, (bmm_chunk_bwd_surface A Dout Db Res
+      128 32 64 1
+      8192 64 0 1
+      4096 1024 0 32 1
+      8192 64 0 1
+      0 0 0 0
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS TileDType.fp16
+      Bool.false).toAlgorithm? = Except.ok alg := by
+  exact bmm_chunk_bwd_surface_toAlgorithm_supported A Dout Db Res
+    128 32 64 1
+    8192 64 0 1
+    4096 1024 0 32 1
+    8192 64 0 1
+    0 0 0 0
+    BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS TileDType.fp16
+    Bool.false
+
+/-- Python case 2 full surface lowering: grouped with residual, fp16 dot dtype. -/
+theorem bmm_chunk_bwd_python_case2_surface_toAlgorithm_supported
+    (A Dout Db Res : RegionName)
+    (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS : Nat) :
+    ∃ alg, (bmm_chunk_bwd_surface A Dout Db Res
+      128 32 64 4
+      32768 256 64 1
+      16384 4096 1024 32 1
+      32768 256 64 1
+      32768 256 64 1
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS TileDType.fp16
+      Bool.true).toAlgorithm? = Except.ok alg := by
+  exact bmm_chunk_bwd_surface_toAlgorithm_supported A Dout Db Res
+    128 32 64 4
+    32768 256 64 1
+    16384 4096 1024 32 1
+    32768 256 64 1
+    32768 256 64 1
+    BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS TileDType.fp16
+    Bool.true
+
+/-- Public Python case 1 summary: full surface lowering plus final `Db`
+store ComputeCorrect for the observed ungrouped output layout. -/
+theorem bmm_chunk_bwd_python_case1_output_summary
+    (A Dout Acc Db Res : RegionName)
+    (num_pid_n BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS : Nat)
+    (s : BlockState) :
+    (∃ alg, (bmm_chunk_bwd_surface A Dout Db Res
+      128 32 64 1
+      8192 64 0 1
+      4096 1024 0 32 1
+      8192 64 0 1
+      0 0 0 0
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS TileDType.fp16
+      Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bmm_chunk_bwd_final_store_slice Acc Db num_pid_n 1 32 64
+        8192 2048 0 64 1 8192 64 0 1 BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_pid_n 32 64 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Db,
+          dbOffset s num_pid_n 1 32 8192 64 0 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        s.readMem Acc
+          (accOffset s num_pid_n 1 8192 2048 0 64 1
+            BLOCK_SIZE_M BLOCK_SIZE_N idx))) := by
+  constructor
+  · exact bmm_chunk_bwd_python_case1_surface_toAlgorithm_supported A Dout Db Res
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS
+  · exact bmm_chunk_bwd_python_case1_compute_correct Acc Db num_pid_n
+      BLOCK_SIZE_M BLOCK_SIZE_N s
+
+/-- Public Python case 2 summary. -/
+theorem bmm_chunk_bwd_python_case2_output_summary
+    (A Dout Acc Db Res : RegionName)
+    (num_pid_n BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS : Nat)
+    (s : BlockState) :
+    (∃ alg, (bmm_chunk_bwd_surface A Dout Db Res
+      128 32 64 4
+      32768 256 64 1
+      16384 4096 1024 32 1
+      32768 256 64 1
+      32768 256 64 1
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS TileDType.fp16
+      Bool.true).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bmm_chunk_bwd_residual_final_store_slice Acc Res Db num_pid_n 4
+        32 64 32768 8192 2048 256 1 32768 8192 64 256 1
+        32768 256 64 1 BLOCK_SIZE_M BLOCK_SIZE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_pid_n 32 64 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Db,
+          dbOffset s num_pid_n 4 32 32768 256 64 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        residualFinalSpec s Acc Res num_pid_n 4 32768 8192 2048 256 1
+          32768 8192 64 256 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  constructor
+  · exact bmm_chunk_bwd_python_case2_surface_toAlgorithm_supported A Dout Db Res
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_CS
+  · exact bmm_chunk_bwd_python_case2_residual_compute_correct Acc Res Db num_pid_n
+      BLOCK_SIZE_M BLOCK_SIZE_N s
+
 end VeriTile.Bench.TritonBenchG.BmmChunkBwd

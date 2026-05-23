@@ -339,4 +339,32 @@ theorem ksoftmax_forward_plain_compute_correct
     stride_ym stride_yn stride_xm stride_xn K DEPTH s s' hOutInj hExec i
   simpa [hActive] using h
 
+/-- Public plain-forward summary: the Python surface for
+`LOG=false`, no mask, non-causal, and no fp16 accumulator cast lowers, and the
+corresponding checked slice proves the softmax computation over the output row.
+-/
+theorem ksoftmax_forward_plain_output_summary
+    (Y X M : RegionName)
+    (stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin DEPTH => yOffset s stride_ym stride_yn i)) :
+    (∃ alg, (ksoftmax_forward_surface Y X M stride_ym stride_yn stride_xm
+      stride_xn stride_m K DEPTH Bool.false Bool.false Bool.false Bool.false
+      Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := ksoftmax_forward_plain Y X
+        stride_ym stride_yn stride_xm stride_xn K DEPTH)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin DEPTH => i.val < K)
+        (fun i => (Y, yOffset s stride_ym stride_yn i)))
+      (expected := fun i => ksoftmaxSpec s X stride_xm stride_xn K DEPTH i)) := by
+  constructor
+  · exact ksoftmax_forward_surface_toAlgorithm_supported Y X M
+      stride_ym stride_yn stride_xm stride_xn stride_m K DEPTH
+      Bool.false Bool.false Bool.false Bool.false Bool.false
+  · exact ksoftmax_forward_plain_compute_correct Y X
+      stride_ym stride_yn stride_xm stride_xn K DEPTH s hOutInj
+
 end VeriTile.Bench.TritonBenchG.KsoftmaxTriton
