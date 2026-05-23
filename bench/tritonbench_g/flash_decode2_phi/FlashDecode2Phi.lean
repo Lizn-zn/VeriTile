@@ -237,4 +237,50 @@ theorem flash_decode2_phi_final_store_python_test_shape_compute_correct
     64 256 64 1 256 64 1 64 s
     (flash_decode2_phi_python_test_shape_offset_injective s)
 
+/-- Public Python test-shape summary for `flash_decode2_phi.py`.
+
+The Python tests use `mid_out : (2, 4, 3, 64)`, `Out : (2, 4, 64)`, and four
+`block_seq` values (`16`, `17`, `8`, `32`). This records all four faithful
+stage2 surfaces and ties them to the observable masked final `Out` writeback
+slice. The loop-reduced normalized vector is represented by the
+proof-oriented `Final` region in the store slice. -/
+theorem flash_decode2_phi_python_test_shape_output_summary
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final Out : RegionName)
+    (s : BlockState) :
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 16 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 17 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 8 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 32 64).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_final_store_slice Final Out
+        64 256 64 1 256 64 1 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 64 i)
+        (fun i : Fin 64 => (Out, outOffset s 256 64 1 i)))
+      (expected := fun i : Fin 64 =>
+        finalStoreValue s Final 64 256 64 1 i) := by
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 16 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 17 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 8 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 32 64
+  · exact flash_decode2_phi_final_store_python_test_shape_compute_correct
+      Final Out s
+
 end VeriTile.Bench.TritonBenchG.FlashDecode2Phi

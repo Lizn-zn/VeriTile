@@ -1036,4 +1036,40 @@ theorem rotary_transform_ops_python_case4_surface_toAlgorithm_supported
     CU_SEQLENS SEQLEN_OFFSETS 0 4 8 4 96 24 8 1 96 24 8 1 32 8
     Bool.true Bool.false Bool.false Bool.false
 
+/-- Public Python surface summary for `rotary_transform_ops.py`.
+
+This records all four checked Python launch surfaces. The proof-oriented
+one-row `o0`/`o1` slices above cover the non-interleaved branch, while the full
+2D value proof remains gated on the documented cast-load simp extension and is
+not overclaimed by this summary. -/
+theorem rotary_transform_ops_python_surfaces_output_summary
+    (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat) :
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      0 4 8 4 96 24 8 1 96 24 8 1 32 8
+      Bool.false Bool.false Bool.false Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      0 4 8 4 0 24 8 1 0 24 8 1 32 8
+      Bool.false Bool.true Bool.false Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      0 4 8 4 96 24 8 1 96 24 8 1 32 4
+      Bool.false Bool.false Bool.true Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      0 4 8 4 96 24 8 1 96 24 8 1 32 8
+      Bool.true Bool.false Bool.false Bool.false).toAlgorithm? =
+        Except.ok alg) := by
+  constructor
+  · exact rotary_transform_ops_python_case1_surface_toAlgorithm_supported OUT
+      X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+  constructor
+  · exact rotary_transform_ops_python_case2_surface_toAlgorithm_supported OUT
+      X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+  constructor
+  · exact rotary_transform_ops_python_case3_surface_toAlgorithm_supported OUT
+      X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+  · exact rotary_transform_ops_python_case4_surface_toAlgorithm_supported OUT
+      X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+
 end VeriTile.Bench.TritonBenchG.RotaryTransformOps

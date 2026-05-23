@@ -842,4 +842,40 @@ theorem rotary_transform_python_case4_surface_toAlgorithm_supported
     CU_SEQLENS SEQLEN_OFFSETS 128 128 4 32 128 1 32768 256 64 1
     32768 256 64 1 32 8 Bool.false Bool.false Bool.false Bool.false
 
+/-- Public Python surface summary for `rotary_transform.py`.
+
+This records all four checked Python launch surfaces. The value-level row
+slices above cover proof-oriented `o0`/`o1` stores for the non-interleaved
+branch; the stronger full 2D value proof remains a documented surface-contract
+follow-up rather than being overclaimed here. -/
+theorem rotary_transform_python_surfaces_output_summary
+    (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat) :
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      128 128 4 32 128 1 32768 256 64 1 32768 256 64 1 32 8
+      Bool.false Bool.false Bool.false Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      128 128 4 32 128 1 0 256 64 1 0 256 64 1 32 4
+      Bool.false Bool.true Bool.true Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      128 128 4 32 128 1 32768 256 64 1 32768 256 64 1 32 8
+      Bool.false Bool.false Bool.false Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
+      128 128 4 32 128 1 32768 256 64 1 32768 256 64 1 32 8
+      Bool.false Bool.false Bool.false Bool.false).toAlgorithm? =
+        Except.ok alg) := by
+  constructor
+  · exact rotary_transform_python_case1_surface_toAlgorithm_supported OUT X
+      COS SIN CU_SEQLENS SEQLEN_OFFSETS
+  constructor
+  · exact rotary_transform_python_case2_surface_toAlgorithm_supported OUT X
+      COS SIN CU_SEQLENS SEQLEN_OFFSETS
+  constructor
+  · exact rotary_transform_python_case3_surface_toAlgorithm_supported OUT X
+      COS SIN CU_SEQLENS SEQLEN_OFFSETS
+  · exact rotary_transform_python_case4_surface_toAlgorithm_supported OUT X
+      COS SIN CU_SEQLENS SEQLEN_OFFSETS
+
 end VeriTile.Bench.TritonBenchG.RotaryTransform

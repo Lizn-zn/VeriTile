@@ -8,6 +8,7 @@ namespace VeriTile.Bench.TritonBenchG.AttentionKernel
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option linter.unusedVariables false
 
 /-- Faithful DSL port of `attention_kernel.py`'s `_fwd_kernel_aligned`. -/
 def attention_kernel_fwd_kernel_aligned_surface
@@ -252,5 +253,33 @@ theorem attention_kernel_final_store_python_test_shape_compute_correct
   subst mb
   subst kb
   rfl
+
+/-- Public Python test-shape summary for `attention_kernel.py`.
+
+This records the faithful full aligned attention surface for the checked
+relative-position-bias launch and ties it to the observable final `Out`
+writeback slice. The online-softmax accumulator is represented by the
+proof-oriented `Acc` tile in the store slice. -/
+theorem attention_kernel_python_test_shape_output_summary
+    (Q K V B0 Acc Out : RegionName) (s : BlockState) :
+    (∃ alg, (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
+      0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
+      16384 128 2 4 128 0 64 128 128 64 64
+      FloatDType.fp16).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_kernel_final_store_slice Acc Out
+        16384 128 1 16384 128 1 64 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 128] =>
+        some (Out, outOffset s 16384 128 1 64 idx))
+      (expected := fun idx : TileIndex [64, 128] =>
+        s.readMem Acc (accOffset s 16384 128 1 64 idx)) := by
+  constructor
+  · exact attention_kernel_fwd_kernel_aligned_surface_toAlgorithm_supported
+      Q K V B0 Out 0.1 16384 128 1 16384 128 1 16384 128 1
+      16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+      FloatDType.fp16
+  · exact attention_kernel_final_store_python_test_shape_compute_correct
+      Acc Out s
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel

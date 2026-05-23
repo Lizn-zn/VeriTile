@@ -184,4 +184,29 @@ theorem flash_decode2_llama_final_store_python_test_shape_compute_correct
     128 32 1 128 32 1 32 s
     (flash_decode2_llama_python_test_shape_offset_injective s)
 
+/-- Public Python test-shape summary for `flash_decode2_llama.py`.
+
+The Python tests use `mid_out : (2, 4, 3, 32)`, `O : (2, 4, 32)`, and
+`block_seq = 8`. This records the faithful full stage2 surface and ties it to
+the observable final `O` writeback slice. The loop-reduced normalized vector is
+represented by the proof-oriented `Final` region in the store slice. -/
+theorem flash_decode2_llama_python_test_shape_output_summary
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final O : RegionName)
+    (s : BlockState) :
+    (∃ alg, (flash_decode2_llama_surface B_Seqlen Mid_O Mid_O_LogExpSum O
+      384 96 32 1 12 3 1 128 32 1 8 32).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_final_store_slice Final O
+        128 32 1 128 32 1 32)
+      (initialState := s)
+      (write := fun i : Fin 32 => some (O, outOffset s 128 32 1 i))
+      (expected := fun i : Fin 32 =>
+        s.readMem Final (finalOffset s 128 32 1 i)) := by
+  constructor
+  · exact flash_decode2_llama_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum O 384 96 32 1 12 3 1 128 32 1 8 32
+  · exact flash_decode2_llama_final_store_python_test_shape_compute_correct
+      Final O s
+
 end VeriTile.Bench.TritonBenchG.FlashDecode2Llama
