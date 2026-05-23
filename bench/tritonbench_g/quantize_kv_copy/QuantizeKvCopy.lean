@@ -16,7 +16,7 @@ This preserves destination-indexed grouped addressing, `tl.abs`, per-group
 scale computation, value writeback, and scale writeback. The Python kernel casts
 the scale to `OutScale.dtype.element_ty`; that cast is represented explicitly.
 The final quotient cast to int8 is preserved as a surface dtype annotation and
-lowers through the DSL's fixed-width cast placeholder. -/
+lowers through the DSL's fixed-width cast surface. -/
 def destindex_copy_quantize_kv_group_real_surface
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g _stride_k_d
@@ -44,7 +44,7 @@ def destindex_copy_quantize_kv_group_real_surface
 }
 
 /-- The grouped quantize-kv-copy surface lowers through algorithm erasure,
-including the final quotient `to(tl.int8)` cast placeholder. -/
+including the final quotient `to(tl.int8)` cast surface. -/
 theorem destindex_copy_quantize_kv_group_real_surface_toAlgorithm_supported
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_g stride_k_d
@@ -570,6 +570,14 @@ theorem destindex_copy_quantize_kv_group_python_summary
 
 /-- `output_summary` alias for the grouped Python quantized KV copy case. -/
 abbrev destindex_copy_quantize_kv_group_python_output_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
+  destindex_copy_quantize_kv_group_python_summary K Scale DestLoc Out OutScale s
+
+/-- Complete checked-shape target for `quantize_kv_copy.py`.
+
+The grouped summary covers the benchmark group layout, the reduction/scale
+surface, and both observable value and per-group scale stores. -/
+abbrev destindex_copy_quantize_kv_group_python_test_shape_complete_summary
     (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
   destindex_copy_quantize_kv_group_python_summary K Scale DestLoc Out OutScale s
 

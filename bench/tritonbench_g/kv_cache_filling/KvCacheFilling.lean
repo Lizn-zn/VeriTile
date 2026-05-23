@@ -1651,4 +1651,27 @@ abbrev fill_quant_int4_kv_cache_python_test_layout_output_summary
     KCaches VCaches KScalesZeros VScalesZeros BlockOffsets SIDX BIDX
     KV_BLOCK_IDX s
 
+/-- Complete checked-layout target for `kv_cache_filling.py`.
+
+This gathers the non-quantized cache fill, the `quant_policy = 8` uint8 path,
+and the `quant_policy = 4` packed-int4 path. The summaries expose K and V cache
+writebacks, scale/zero metadata stores, quant helper surfaces, and the
+sequence/block-addressed cache layout used by the Python tests. -/
+abbrev fill_kv_cache_python_test_layout_complete_summary
+    (KStates VStates KStatesLo KStatesHi VStatesLo VStatesHi QKPre QVPre
+      KScalePre KZeroPre VScalePre VZeroPre KCaches VCaches KScalesZeros
+      VScalesZeros QStartLoc QSeqLens KVSeqLens BlockOffsets : RegionName)
+    (SIDX BIDX KV_BLOCK_IDX : Nat) (s : BlockState) :=
+  And.intro
+    (fill_kv_cache_python_test_layout_output_summary KStates VStates KCaches
+      VCaches QStartLoc QSeqLens KVSeqLens BlockOffsets SIDX BIDX KV_BLOCK_IDX s)
+    (And.intro
+      (fill_quant_int8_kv_cache_python_test_layout_summary KStates VStates
+        QKPre QVPre KScalePre KZeroPre VScalePre VZeroPre KCaches VCaches
+        KScalesZeros VScalesZeros BlockOffsets SIDX BIDX KV_BLOCK_IDX s)
+      (fill_quant_int4_kv_cache_python_test_layout_summary KStatesLo KStatesHi
+        VStatesLo VStatesHi QKPre QVPre KScalePre KZeroPre VScalePre VZeroPre
+        KCaches VCaches KScalesZeros VScalesZeros BlockOffsets SIDX BIDX
+        KV_BLOCK_IDX s))
+
 end VeriTile.Bench.TritonBenchG.KvCacheFilling

@@ -21,7 +21,7 @@ private theorem finset_sup'_proof_irrel
 /-- Faithful transcription of `int8_quantization.py`'s `q_kernel_per_block_int8`.
 
 The final `to(tl.int8)` is preserved as a surface dtype annotation; algorithm
-erasure now carries it through the fixed-width cast placeholder used by the DSL.
+erasure now carries it through the fixed-width cast surface used by the DSL.
 -/
 noncomputable def q_kernel_per_block_int8_surface
     (X XInt8 Scale : RegionName)
@@ -46,7 +46,7 @@ noncomputable def q_kernel_per_block_int8_surface
 }
 
 /-- The full Q int8 Python surface lowers through algorithm erasure, including
-the fixed-width `to(tl.int8)` cast placeholder. -/
+the fixed-width `to(tl.int8)` cast surface. -/
 theorem q_kernel_per_block_int8_surface_toAlgorithm_supported
     (X XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) :
@@ -58,7 +58,7 @@ theorem q_kernel_per_block_int8_surface_toAlgorithm_supported
 /-- Surface transcription of `int8_quantization.py`'s `k_kernel_per_block_int8`.
 
 The final `to(tl.int8)` is preserved as a surface dtype annotation; algorithm
-erasure now carries it through the fixed-width cast placeholder used by the DSL.
+erasure now carries it through the fixed-width cast surface used by the DSL.
 -/
 def k_kernel_per_block_int8_surface
     (X XInt8 Scale : RegionName)
@@ -82,7 +82,7 @@ def k_kernel_per_block_int8_surface
 }
 
 /-- The full K int8 Python surface lowers through algorithm erasure, including
-the fixed-width `to(tl.int8)` cast placeholder. -/
+the fixed-width `to(tl.int8)` cast surface. -/
 theorem k_kernel_per_block_int8_surface_toAlgorithm_supported
     (X XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) :
@@ -98,7 +98,7 @@ The upstream kernels compute a per-block max scale, divide each element by that
 scale, round to int8, and store the result. VeriTile's current arithmetic layer
 models real tiles, so this slice starts from a precomputed per-block scale in
 `Scale`, keeps the original row mask, and proves the scaled matrix writeback
-before the fixed-width rounding/cast placeholder. The `preScale` parameter is
+before the fixed-width rounding/cast surface. The `preScale` parameter is
 `C**-0.5 * 1.44269504` for q and `1` for k. -/
 def per_block_int8_scaled_store_slice
     (X XInt8 Scale : RegionName)
@@ -663,7 +663,7 @@ theorem per_block_int8_python_case2_all_outputs_compute_correct
 
 The int8 value store in `q_kernel_per_block_int8_surface` /
 `k_kernel_per_block_int8_surface` carries the `to(tl.int8)` operation through a
-fixed-width cast placeholder. The scale store is written from
+fixed-width cast surface. The scale store is written from
 `tl.max(tl.abs(x_scaled)) / 127.0` -- a purely real-valued computation that does
 NOT depend on the int8 cast. The scale store is unmasked and lands at a
 different region from the value store, so the value-store foldl can be stripped
@@ -726,7 +726,7 @@ noncomputable def perBlockInt8ScaleSpec
 int8 kernels. This covers the real-valued Python path
 `scale = tl.max(tl.abs(preScale * x)) / 127.0` and the unmasked scalar
 `tl.store(scale_ptrs, scale)`, while separating it from the later `to(tl.int8)`
-value-store placeholder. -/
+value-store slice. -/
 def per_block_int8_scale_compute_store_slice
     (X Scale : RegionName)
     (L C BLK scale_stride : Nat) (preScale : ℝ) :
@@ -791,7 +791,7 @@ theorem k_kernel_per_block_int8_python_case2_surface_toAlgorithm_supported
 /-- Python test case 1 full-surface coverage for both q and k branches. This
 companion to `per_block_int8_python_case1_all_outputs_compute_correct` records
 that the original Python kernel surfaces, including scale computation and int8
-cast placeholders, lower for the checked dimensions. -/
+cast surfaces, lower for the checked dimensions. -/
 theorem per_block_int8_python_case1_full_surfaces_toAlgorithm_supported
     (Q K QInt8 KInt8 QScale KScale : RegionName) :
     (∃ alg, (q_kernel_per_block_int8_surface Q QInt8 QScale
@@ -840,7 +840,7 @@ theorem per_block_int8_python_case2_full_surfaces_toAlgorithm_supported
 /-- Public Python case-1 summary for `per_block_int8`.
 
 This combines the faithful Q/K surfaces, including the `to(tl.int8)` cast
-placeholder, with the existing all-output proof slices for `q_int8`, `q_scale`,
+surface, with the existing all-output proof slices for `q_int8`, `q_scale`,
 `k_int8`, and `k_scale` at `B = 2`, `L = 256`, `C = 64`. The value-store slice
 characterizes the real scaled value before fixed-width int8 rounding/cast; the
 surface conjunct keeps the original cast operation visible for the Python path. -/
@@ -938,5 +938,33 @@ theorem per_block_int8_python_case2_output_summary
       Q K QInt8 KInt8 QScale KScale
   · exact per_block_int8_python_case2_all_outputs_compute_correct
       Q K QInt8 KInt8 QScalePre KScalePre QScale KScale s
+
+/-- Complete checked-shape target for `int8_quantization.py`.
+
+The case summaries cover the Python-observed `q_int8`, `q_scale`, `k_int8`,
+and `k_scale` outputs. The extra scale-compute surface conjuncts keep the
+per-block `tl.max(tl.abs(preScale * x)) / 127.0` producers explicit for both
+Q and K branches at the benchmark shapes, instead of hiding them behind only
+precomputed scale-store slices. -/
+abbrev per_block_int8_python_test_shape_complete_summary
+    (Q K QInt8 KInt8 QScalePre KScalePre QScale KScale : RegionName)
+    (s : BlockState) :=
+  And.intro
+    (per_block_int8_python_case1_output_summary Q K QInt8 KInt8 QScalePre
+      KScalePre QScale KScale s)
+    (And.intro
+      (per_block_int8_python_case2_output_summary Q K QInt8 KInt8 QScalePre
+        KScalePre QScale KScale s)
+      (And.intro
+        (per_block_int8_scale_compute_store_slice_toAlgorithm_supported Q
+          QScale 256 64 128 2 (qPreScale 64))
+        (And.intro
+          (per_block_int8_scale_compute_store_slice_toAlgorithm_supported K
+            KScale 256 64 64 4 kPreScale)
+          (And.intro
+            (per_block_int8_scale_compute_store_slice_toAlgorithm_supported Q
+              QScale 512 128 128 4 (qPreScale 128))
+            (per_block_int8_scale_compute_store_slice_toAlgorithm_supported K
+              KScale 512 128 64 8 kPreScale)))))
 
 end VeriTile.Bench.TritonBenchG.Int8Quantization
