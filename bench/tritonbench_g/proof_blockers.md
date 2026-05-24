@@ -19,6 +19,12 @@ quantization rows whose local blocker is end-to-end scale/value coupling track
 under #158. Rows whose local blocker is primarily attention, matmul,
 recurrence, reduction, or explicit blocked-summary work track under the
 corresponding family issue.
+The broad #149 attention/softmax bucket has been split as well:
+`attention-final-store-lift` tracks summaries that still connect a faithful
+surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
+tiles under #161, while `attention-online-softmax-recurrence` tracks online
+softmax, score/probability recurrence, mask/exp scaling, and flash-decode
+reduction obligations under #162.
 The broad #153 rotary/cache bucket has also been split into narrower value
 proof follow-ups: `rope-head-slice-lift` covers RoPE summaries whose Python
 surface is faithful but whose value proof is still stated over Q/K head slices,

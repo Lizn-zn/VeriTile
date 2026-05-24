@@ -27,6 +27,8 @@ MANIFEST = PORTS_ROOT / "proof_gap_manifest.tsv"
 
 ISSUE_BY_FAMILY = {
     "attention-softmax-accumulator": "#149",
+    "attention-final-store-lift": "#161",
+    "attention-online-softmax-recurrence": "#162",
     "fixed-width-int8-cast-semantics": "#154",
     "loss-reduction-aggregation": "#151",
     "matmul-dot-accumulator": "#148",
@@ -101,7 +103,9 @@ def family_for(name: str, text: str) -> str:
     if "outside this triton" in hay and "matmul" in hay:
         return "matmul-dot-accumulator"
     if any(k in hay for k in ("attention", "attn", "softmax", "flash", "decode", "score", "prob")):
-        return "attention-softmax-accumulator"
+        if any(k in hay for k in ("final-store", "final store", "store slice", "precomputed")):
+            return "attention-final-store-lift"
+        return "attention-online-softmax-recurrence"
     if any(k in hay for k in ("matmul", "gemm", "dot", "bmm", "vecmat", "conv2d")):
         return "matmul-dot-accumulator"
     if any(k in hay for k in ("cumsum", "recurrent", "recurrence", "rwkv", "hgrn", "gla", "retention")):
