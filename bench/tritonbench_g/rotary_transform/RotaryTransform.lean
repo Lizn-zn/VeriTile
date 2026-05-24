@@ -846,8 +846,8 @@ theorem rotary_transform_python_case4_surface_toAlgorithm_supported
 
 This records all four checked Python launch surfaces. The value-level row
 slices above cover proof-oriented `o0`/`o1` stores for the non-interleaved
-branch; the stronger full 2D value proof remains a documented surface-contract
-follow-up rather than being overclaimed here. -/
+branch; the stronger `rotary-2d-tile-value-lift` full 2D value proof remains
+a documented #153 follow-up rather than being overclaimed here. -/
 theorem rotary_transform_python_surfaces_output_summary
     (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat) :
     (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
