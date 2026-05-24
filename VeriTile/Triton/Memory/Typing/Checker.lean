@@ -134,6 +134,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .castFloat _ _ e => e.check ctx
   | .castNatToInt e => e.check ctx
   | .castIntToNat e => e.check ctx
+  | .castRealToInt8 e => e.check ctx
   | .add _ _ a b => a.check ctx *> b.check ctx
   | .sub _ _ a b => a.check ctx *> b.check ctx
   | .mul _ _ a b => a.check ctx *> b.check ctx

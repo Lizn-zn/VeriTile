@@ -82,6 +82,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
       simpa [eraseDType_float src, eraseDType_float dst] using e.eraseDType
   | .castNatToInt e => .castNatToInt e.eraseDType
   | .castIntToNat e => .castIntToNat e.eraseDType
+  | .castRealToInt8 e => .castRealToInt8 e.eraseDType
   | .add h bc a b => .add h.eraseDType bc a.eraseDType b.eraseDType
   | .sub h bc a b => .sub h.eraseDType bc a.eraseDType b.eraseDType
   | .mul h bc a b => .mul h.eraseDType bc a.eraseDType b.eraseDType
