@@ -559,7 +559,8 @@ theorem rope_transform_python_test_shape_all_outputs_compute_correct
 /-- Public Python forward summary for `rope_transform.py`: the full
 `BACKWARD_PASS = false` surface lowers for the checked test shape, and the
 one-head proof slices cover the four Python-observable forward stores
-(Q/K first and second halves). -/
+(Q/K first and second halves). The remaining #153 blocker is the
+`rope-head-slice-lift` from head slices to the full head tile. -/
 theorem rope_transform_python_forward_output_summary
     (Q K COS SIN : RegionName)
     (HEAD_IDX COS_ROW_IDX : Nat)

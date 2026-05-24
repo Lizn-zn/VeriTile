@@ -12,6 +12,7 @@ refine this baseline rather than changing the user-facing spec.
 
 import VeriTile.Examples.FlashAttention1.Core
 import VeriTile.Examples.FlashAttention1.Backward
+import VeriTile.Triton.Semantics.StreamingAccumulator
 import VeriTile.Triton.Math.Softmax
 import VeriTile.Triton.Launch.Grid
 
@@ -144,8 +145,8 @@ noncomputable def fa2TwoBlockDenomLeft {M D Bk : Nat}
     (scale : ℝ) (mBlock : ℝ) (i : Fin M) : ℝ :=
   Finset.univ.sum fun j : Fin Bk =>
     Real.exp
-      (FA1Math.scaledScore Q K scale i
-        (FA1Math.blockIndex Bk 2 0 two_block0_le j) - mBlock)
+      (StreamingAccumulator.scaledScore Q K scale i
+        (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j) - mBlock)
 
 /-- Right-fragment denominator contribution. -/
 noncomputable def fa2TwoBlockDenomRight {M D Bk : Nat}
@@ -153,16 +154,16 @@ noncomputable def fa2TwoBlockDenomRight {M D Bk : Nat}
     (scale : ℝ) (mBlock : ℝ) (i : Fin M) : ℝ :=
   Finset.univ.sum fun j : Fin Bk =>
     Real.exp
-      (FA1Math.scaledScore Q K scale i
-        (FA1Math.blockIndex Bk 2 1 two_block1_le j) - mBlock)
+      (StreamingAccumulator.scaledScore Q K scale i
+        (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j) - mBlock)
 
 /-- Left-fragment numerator contribution. -/
 noncomputable def fa2TwoBlockNumerLeft {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
     (scale : ℝ) (mBlock : ℝ) (idx : TileIndex [M, D]) : ℝ :=
   Finset.univ.sum fun j : Fin Bk =>
-    let key := FA1Math.blockIndex Bk 2 0 two_block0_le j
-    Real.exp (FA1Math.scaledScore Q K scale idx.1 key - mBlock) *
+    let key := StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j
+    Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 key - mBlock) *
       V (key, idx.2.1, PUnit.unit)
 
 /-- Right-fragment numerator contribution. -/
@@ -170,8 +171,8 @@ noncomputable def fa2TwoBlockNumerRight {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
     (scale : ℝ) (mBlock : ℝ) (idx : TileIndex [M, D]) : ℝ :=
   Finset.univ.sum fun j : Fin Bk =>
-    let key := FA1Math.blockIndex Bk 2 1 two_block1_le j
-    Real.exp (FA1Math.scaledScore Q K scale idx.1 key - mBlock) *
+    let key := StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j
+    Real.exp (StreamingAccumulator.scaledScore Q K scale idx.1 key - mBlock) *
       V (key, idx.2.1, PUnit.unit)
 
 /-- Two-fragment FA-2 forward output for one `(query, head-dim)` coordinate. -/
@@ -192,10 +193,10 @@ private theorem fa2_two_block_denominator_common_shift {M D Bk : Nat}
     (scale : ℝ) (m : ℝ) (i : Fin M) :
     fa2TwoBlockDenomLeft Q K scale m i +
       fa2TwoBlockDenomRight Q K scale m i =
-      Real.exp (0 - m) * FA1Math.lFree Q K scale 2 (le_refl 2) i := by
-  rw [FA1Math.lFree_succ Q K scale 1 two_block1_le i,
-    FA1Math.lFree_succ Q K scale 0 two_block0_le i,
-    FA1Math.lFree_zero]
+      Real.exp (0 - m) * StreamingAccumulator.lFree Q K scale 2 (le_refl 2) i := by
+  rw [StreamingAccumulator.lFree_succ Q K scale 1 two_block1_le i,
+    StreamingAccumulator.lFree_succ Q K scale 0 two_block0_le i,
+    StreamingAccumulator.lFree_zero]
   simp only [zero_add, fa2TwoBlockDenomLeft, fa2TwoBlockDenomRight]
   rw [mul_add]
   rw [Finset.mul_sum, Finset.mul_sum]
@@ -216,10 +217,10 @@ private theorem fa2_two_block_numerator_common_shift {M D Bk : Nat}
     (scale : ℝ) (m : ℝ) (idx : TileIndex [M, D]) :
     fa2TwoBlockNumerLeft Q K V scale m idx +
       fa2TwoBlockNumerRight Q K V scale m idx =
-      Real.exp (0 - m) * FA1Math.oFree Q K V scale 2 (le_refl 2) idx := by
-  rw [FA1Math.oFree_succ Q K V scale 1 two_block1_le idx,
-    FA1Math.oFree_succ Q K V scale 0 two_block0_le idx,
-    FA1Math.oFree_zero]
+      Real.exp (0 - m) * StreamingAccumulator.oFree Q K V scale 2 (le_refl 2) idx := by
+  rw [StreamingAccumulator.oFree_succ Q K V scale 1 two_block1_le idx,
+    StreamingAccumulator.oFree_succ Q K V scale 0 two_block0_le idx,
+    StreamingAccumulator.oFree_zero]
   simp only [zero_add, fa2TwoBlockNumerLeft, fa2TwoBlockNumerRight]
   rw [mul_add]
   rw [Finset.mul_sum, Finset.mul_sum]
@@ -241,22 +242,22 @@ the executable FA-2 kernel will target. -/
 theorem fa2_two_block_forward_eq_attentionReal {M D Bk : Nat}
     (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [Bk * 2, D] → ℝ)
     (scale : ℝ) (mLeft mRight mMerged : ℝ) (idx : TileIndex [M, D])
-    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
     fa2TwoBlockForwardSpec Q K V scale mLeft mRight mMerged idx =
       attentionReal Q K V scale idx := by
   unfold fa2TwoBlockForwardSpec fa2TwoBlockDenomLeft fa2TwoBlockDenomRight
     fa2TwoBlockNumerLeft fa2TwoBlockNumerRight
   rw [fa2_two_fragment_attention_ratio_eq_flat
     (scoresLeft := fun j : Fin Bk =>
-      FA1Math.scaledScore Q K scale idx.1
-        (FA1Math.blockIndex Bk 2 0 two_block0_le j))
+      StreamingAccumulator.scaledScore Q K scale idx.1
+        (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j))
     (valuesLeft := fun j : Fin Bk =>
-      V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
+      V (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
     (scoresRight := fun j : Fin Bk =>
-      FA1Math.scaledScore Q K scale idx.1
-        (FA1Math.blockIndex Bk 2 1 two_block1_le j))
+      StreamingAccumulator.scaledScore Q K scale idx.1
+        (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j))
     (valuesRight := fun j : Fin Bk =>
-      V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
+      V (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
     (mLeft := mLeft) (mRight := mRight) (mMerged := mMerged)]
   change
     (fa2TwoBlockNumerLeft Q K V scale mMerged idx +
@@ -267,7 +268,7 @@ theorem fa2_two_block_forward_eq_attentionReal {M D Bk : Nat}
   rw [fa2_two_block_numerator_common_shift Q K V scale mMerged idx,
     fa2_two_block_denominator_common_shift Q K scale mMerged idx.1,
     mul_div_mul_left _ _ (Real.exp_ne_zero (0 - mMerged))]
-  exact FA1Math.oFree_div_lFree_eq_attentionReal Q K V scale idx hlFree
+  exact StreamingAccumulator.oFree_div_lFree_eq_attentionReal Q K V scale idx hlFree
 
 /-- 4D slice-facing version of the two-fragment FA-2 forward bridge.  This is
 the theorem shape that later FA-2 kernels can use at a fixed
@@ -279,7 +280,7 @@ theorem fa2_two_block_forward_eq_attentionReal4D
     (scale : ℝ) (b : Fin B) (h : Fin H) (i : Fin S_q) (d : Fin D)
     (mLeft mRight mMerged : ℝ)
     (hlFree :
-      FA1Math.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
+      StreamingAccumulator.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
     fa2TwoBlockForwardSpec (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
         scale mLeft mRight mMerged (i, d, PUnit.unit) =
       attentionReal4D Q K V scale (b, h, i, d, PUnit.unit) := by
@@ -298,7 +299,7 @@ theorem fa1_eq_fa2_two_block_forward4D
     (scale : ℝ) (b : Fin B) (h : Fin H) (i : Fin S_q) (d : Fin D)
     (mLeft mRight mMerged : ℝ)
     (hlFree :
-      FA1Math.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
+      StreamingAccumulator.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
     attentionReal4D Q K V scale (b, h, i, d, PUnit.unit) =
       fa2TwoBlockForwardSpec (sliceBH Q b h) (sliceBH K b h) (sliceBH V b h)
         scale mLeft mRight mMerged (i, d, PUnit.unit) := by
@@ -617,7 +618,7 @@ theorem fa2BackwardAtomicDQKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -625,7 +626,7 @@ theorem fa2BackwardAtomicDQKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardAtomicDQKernel, fa2BackwardReal] using
     FA1Backward.fa1BackwardAtomicDQKernel_gridLaunched_backward_correct
@@ -704,7 +705,7 @@ theorem fa2BackwardAtomicDQTwoBlockKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk 2 block.val
+        (StreamingAccumulator.blockIndex Bk 2 block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin 2, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -712,7 +713,7 @@ theorem fa2BackwardAtomicDQTwoBlockKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk 2 block.val
+        (StreamingAccumulator.blockIndex Bk 2 block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardAtomicDQTwoBlockKernel, fa2TwoBlockBackwardDQSpec] using
     fa2BackwardAtomicDQKernel_gridLaunched_backward_correct
@@ -995,7 +996,7 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk 2 block.val
+        (StreamingAccumulator.blockIndex Bk 2 block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin 2, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -1003,7 +1004,7 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk 2 block.val
+        (StreamingAccumulator.blockIndex Bk 2 block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardAtomicDQTwoBlockPartitionKernel,
     fa2BackwardAtomicDQTwoBlockKernel, fa2BackwardAtomicDQKernel,
@@ -1205,7 +1206,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_c
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk 2 block.val
+        (StreamingAccumulator.blockIndex Bk 2 block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin 2, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -1213,7 +1214,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_c
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk 2 block.val
+        (StreamingAccumulator.blockIndex Bk 2 block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardAtomicDQCausalTwoBlockPartitionKernel,
     fa2BackwardCausalReal, fa2TwoBlockCausalBackwardDQSpec] using
@@ -1291,7 +1292,7 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct
           (block.val * Bk * D) D) idx =
       some (bw.dK
         (b, h,
-          FA1Math.blockIndex Bk 2 block.val
+          StreamingAccumulator.blockIndex Bk 2 block.val
             (by have := block.isLt; omega) idx.1,
           idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin 2, ∀ idx : TileIndex [Bk, D],
@@ -1301,7 +1302,7 @@ theorem fa2BackwardAtomicDQTwoBlockPartitionKernel_gridLaunched_backward_correct
           (block.val * Bk * D) D) idx =
       some (bw.dV
         (b, h,
-          FA1Math.blockIndex Bk 2 block.val
+          StreamingAccumulator.blockIndex Bk 2 block.val
             (by have := block.isLt; omega) idx.1,
           idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardReal4D, FA1Backward.attentionBackwardReal4D, sliceBH,
@@ -1382,7 +1383,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_c
           (block.val * Bk * D) D) idx =
       some (bw.dK
         (b, h,
-          FA1Math.blockIndex Bk 2 block.val
+          StreamingAccumulator.blockIndex Bk 2 block.val
             (by have := block.isLt; omega) idx.1,
           idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin 2, ∀ idx : TileIndex [Bk, D],
@@ -1392,7 +1393,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockPartitionKernel_gridLaunched_backward_c
           (block.val * Bk * D) D) idx =
       some (bw.dV
         (b, h,
-          FA1Math.blockIndex Bk 2 block.val
+          StreamingAccumulator.blockIndex Bk 2 block.val
             (by have := block.isLt; omega) idx.1,
           idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardCausalReal4D, FA1Backward.attentionBackwardReal4DCausal,
@@ -1486,7 +1487,7 @@ theorem fa2BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin numKVBlocks, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -1494,7 +1495,7 @@ theorem fa2BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk numKVBlocks block.val
+        (StreamingAccumulator.blockIndex Bk numKVBlocks block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardAtomicDQCausalKernel, fa2BackwardCausalReal] using
     FA1Backward.fa1BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
@@ -1565,7 +1566,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockKernel_gridLaunched_backward_correct
         dKReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dK
-        (FA1Math.blockIndex Bk 2 block.val
+        (StreamingAccumulator.blockIndex Bk 2 block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) ∧
     (∀ block : Fin 2, ∀ idx : TileIndex [Bk, D],
       observeTileAt
@@ -1573,7 +1574,7 @@ theorem fa2BackwardAtomicDQCausalTwoBlockKernel_gridLaunched_backward_correct
         dVReg (Offset.rowMajor2D (rows := Bk) (cols := D)
           (block.val * Bk * D) D) idx =
       some (bw.dV
-        (FA1Math.blockIndex Bk 2 block.val
+        (StreamingAccumulator.blockIndex Bk 2 block.val
           (by have := block.isLt; omega) idx.1, idx.2.1, PUnit.unit))) := by
   simpa [fa2BackwardAtomicDQCausalTwoBlockKernel, fa2TwoBlockCausalBackwardDQSpec] using
     fa2BackwardAtomicDQCausalKernel_gridLaunched_backward_correct
@@ -1610,14 +1611,93 @@ theorem fa2ScalarScoreMaxKernel_correct_view
   intro s0 s' hExec hs0
   subst s0
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hBk.ne'
-  simp [exec, fa2ScalarScoreMaxKernel, stepStmts, stepStmt, evalOp,
+  simp [exec, fa2ScalarScoreMaxKernel, stepStmts, stepStmt, VeriTile.Triton.evalOp_reduceMax,
         Tile.reduceMax, Tile.reduceMaxDrop, TileShape.axisDim,
         TileShape.eraseAxis, TileShape.insertAxisIndex, tileMax,
-        BlockState.writeMemTyped_real] at hExec ⊢
-  subst s'
+        BlockState.writeMemTyped_real, hBk] at hExec ⊢
+  set stScores : BlockState :=
+    (((s.setReg "pid" TileDType.nat [] (Tile.scalar (s.pids 0))).setReg
+        "offs" TileDType.nat [n + 1]
+        (Tile.bop NumericDType.nat.add Broadcast.scalarL
+          (Tile.bop NumericDType.nat.mul Broadcast.nil
+            (Tile.scalar (s.pids 0)) (Tile.scalar (n + 1)))
+          (Tile.vec fun i => i.val))).setReg
+      "scores" TileDType.real [n + 1]
+      { data := fun i =>
+          some (s.readMem scoreReg
+            (NumericDType.nat.add
+              (NumericDType.nat.mul (s.pids 0) (n + 1)) i.1)) }) with hStScores
+  have hMaxEval :
+      evalOp (Op.reduceMax 0 Bool.false (Op.ref TileDType.real [n + 1] "scores")) stScores =
+        some (Tile.scalar
+          ((Finset.univ : Finset (Fin (n + 1))).sup
+            (fun j : Fin (n + 1) =>
+              ((s.readMem scoreReg (s.pids 0 * (n + 1) + j.val) : ℝ) : WithBot ℝ)))) := by
+    subst stScores
+    rw [VeriTile.Triton.evalOp_reduceMax]
+    unfold Tile.reduceMax
+    simp [Tile.reduceMaxDrop, NumericDType.add, NumericDType.mul]
+    split
+    · congr 2
+      funext idx
+      change (((Finset.univ : Finset (Fin (n + 1))).sup'
+          (by exact ⟨⟨0, hBk⟩, Finset.mem_univ _⟩)
+          (fun j : Fin (n + 1) =>
+            s.readMem scoreReg (s.pids 0 * (n + 1) + j.val)) : ℝ) : WithBot ℝ) =
+        (Finset.univ : Finset (Fin (n + 1))).sup
+          (fun j : Fin (n + 1) =>
+            ((s.readMem scoreReg (s.pids 0 * (n + 1) + j.val) : ℝ) : WithBot ℝ))
+      rw [← WithBot.sup'_coe]
+      rw [Finset.sup'_eq_sup]
+    · have : 0 < TileShape.axisDim [n + 1] (0 : Fin [n + 1].length) := by
+        change 0 < n + 1
+        exact hBk
+      contradiction
   intro _
   simp [ComputeCorrect.WriteMap.scalar]
   unfold InputLoadedAt at hScores
+  have hExecReduced :
+      (match
+          (some (Tile.scalar
+            ((Finset.univ : Finset (Fin (n + 1))).sup
+              (fun j : Fin (n + 1) =>
+                ((s.readMem scoreReg (s.pids 0 * (n + 1) + j.val) : ℝ) : WithBot ℝ))))).bind
+            fun v => some (stScores.setReg "m" TileDType.real [] v) with
+        | some s' =>
+          match
+            (s'.regs TileDType.real [] "m").bind fun values =>
+              (s'.regs TileDType.nat [] "pid").bind fun a =>
+                some (s'.writeMem mReg (a.data PUnit.unit)
+                  (WithBot.unbotD 0 (values.data PUnit.unit))) with
+          | some s' => some s'
+          | none => none
+        | none => none) = some s' := by
+    rw [← hMaxEval]
+    exact hExec
+  simp [hStScores, BlockState.writeMem_readMem, Finset.sup'_eq_sup,
+    WithBot.unbotD_sup'_some] at hExecReduced
+  subst s'
+  simp [BlockState.writeMem_readMem]
+  change WithBot.unbotD (0 : ℝ)
+      ((Finset.univ : Finset (Fin (n + 1))).sup
+        (fun j : Fin (n + 1) =>
+          ((s.readMem scoreReg (s.pids 0 * (n + 1) + j.val) : ℝ) : WithBot ℝ))) =
+    TiledLogSumExp.blockMax hBk scores
+  rw [← Finset.sup'_eq_sup
+    (H := (⟨⟨0, hBk⟩, Finset.mem_univ _⟩ :
+      (Finset.univ : Finset (Fin (n + 1))).Nonempty))]
+  rw [WithBot.sup'_coe
+    (s := (Finset.univ : Finset (Fin (n + 1))))
+    (h := (⟨⟨0, hBk⟩, Finset.mem_univ _⟩ :
+      (Finset.univ : Finset (Fin (n + 1))).Nonempty))
+    (f := fun j : Fin (n + 1) =>
+      s.readMem scoreReg (s.pids 0 * (n + 1) + j.val))]
+  change (Finset.univ.sup'
+      (⟨⟨0, hBk⟩, Finset.mem_univ _⟩ :
+        (Finset.univ : Finset (Fin (n + 1))).Nonempty)
+      (fun j : Fin (n + 1) =>
+        s.readMem scoreReg (s.pids 0 * (n + 1) + j.val))) =
+    TiledLogSumExp.blockMax hBk scores
   simpa [NumericDType.add, NumericDType.mul, TiledLogSumExp.blockMax, BlockState.pid] using
     congrArg
       (fun f : Fin (n + 1) → ℝ =>
@@ -1756,7 +1836,7 @@ theorem fa2ScalarValueFragmentKernel_correct_view
     (s : BlockState) (V : TileIndex [Bk * N, D] → ℝ)
     (hV : ∀ idx : TileIndex [Bk, D],
       s.readMem vReg ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
-        V (FA1Math.blockIndex Bk N keyBlock
+        V (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
           idx.2.1, PUnit.unit)) :
     ComputeCorrect.Realizes
@@ -1765,7 +1845,7 @@ theorem fa2ScalarValueFragmentKernel_correct_view
       (write := fun j : Fin Bk =>
         some (valueReg, s.pid * Bk + j.val))
       (expected := fun j : Fin Bk =>
-        V (FA1Math.blockIndex Bk N keyBlock
+        V (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) j,
           d, PUnit.unit)) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
@@ -1782,7 +1862,7 @@ theorem fa2ScalarValueFragmentKernel_correct_view
     injective_offset_singleton _
   rw [BlockState.scatter_readback_nd _ _ _ hInj (j, PUnit.unit)]
   have hRead := hV (j, d, PUnit.unit)
-  simpa [FA1Math.blockIndex, Nat.mul_assoc, Nat.add_assoc] using hRead
+  simpa [StreamingAccumulator.blockIndex, Nat.mul_assoc, Nat.add_assoc] using hRead
 
 /-- State-parametric handoff for a staged value fragment.  If a later consumer
 state has the same scalar pid and agrees with the value producer final state on
@@ -1799,12 +1879,12 @@ theorem fa2ScalarValueFragmentKernel_loaded_of_agrees
     (hMem : ∀ offset, consumer.readMem valueReg offset = sValue.readMem valueReg offset)
     (hV : ∀ idx : TileIndex [Bk, D],
       s.readMem vReg ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
-        V (FA1Math.blockIndex Bk N keyBlock
+        V (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
           idx.2.1, PUnit.unit)) :
     InputLoadedAt consumer valueReg Bk
       (fun j : Fin Bk =>
-        V (FA1Math.blockIndex Bk N keyBlock
+        V (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) j,
           d, PUnit.unit)) := by
   have hview := fa2ScalarValueFragmentKernel_correct_view
@@ -1820,7 +1900,7 @@ theorem fa2ScalarValueFragmentKernel_loaded_of_agrees
     consumer.readMem valueReg (consumer.pid * Bk + j.val) =
         sValue.readMem valueReg (consumer.pid * Bk + j.val) := hMem _
     _ = sValue.readMem valueReg (s.pid * Bk + j.val) := by rw [hPid]
-    _ = V (FA1Math.blockIndex Bk N keyBlock
+    _ = V (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) j,
           d, PUnit.unit) := by
       simpa using hOut
@@ -1846,25 +1926,25 @@ theorem fa2ScalarValueFragmentKernel_twoBlock_loaded_of_agrees
       s.readMem vReg (idx.1.val * D + idx.2.1.val) = V idx) :
     InputLoadedAt consumer valueLeftReg Bk
       (fun j : Fin Bk =>
-        V (FA1Math.blockIndex Bk 2 0 two_block0_le j, d, PUnit.unit)) ∧
+        V (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j, d, PUnit.unit)) ∧
     InputLoadedAt consumer valueRightReg Bk
       (fun j : Fin Bk =>
-        V (FA1Math.blockIndex Bk 2 1 two_block1_le j, d, PUnit.unit)) := by
+        V (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j, d, PUnit.unit)) := by
   have hVLeft : ∀ idx : TileIndex [Bk, D],
       s.readMem vReg ((0 * Bk + idx.1.val) * D + idx.2.1.val) =
-        V (FA1Math.blockIndex Bk 2 0 two_block0_le idx.1,
+        V (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le idx.1,
           idx.2.1, PUnit.unit) := by
     intro idx
-    simpa [FA1Math.blockIndex] using
-      hV (FA1Math.blockIndex Bk 2 0 two_block0_le idx.1,
+    simpa [StreamingAccumulator.blockIndex] using
+      hV (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le idx.1,
         idx.2.1, PUnit.unit)
   have hVRight : ∀ idx : TileIndex [Bk, D],
       s.readMem vReg ((1 * Bk + idx.1.val) * D + idx.2.1.val) =
-        V (FA1Math.blockIndex Bk 2 1 two_block1_le idx.1,
+        V (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le idx.1,
           idx.2.1, PUnit.unit) := by
     intro idx
-    simpa [FA1Math.blockIndex] using
-      hV (FA1Math.blockIndex Bk 2 1 two_block1_le idx.1,
+    simpa [StreamingAccumulator.blockIndex] using
+      hV (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le idx.1,
         idx.2.1, PUnit.unit)
   constructor
   · exact fa2ScalarValueFragmentKernel_loaded_of_agrees
@@ -1932,6 +2012,10 @@ theorem fa2ScalarFragmentSummaryKernel_correct_view
       TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
       NumericDType.sub, WithBot.realExp, fa2ScalarFragmentDenom,
       BlockState.writeMemTyped_real] at hExec ⊢
+    repeat unfold evalOp at hExec
+    simp [Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+      NumericDType.sub, WithBot.realExp] at hExec
     subst s'
     simp [hOutNe, TileShape.insertAxisIndex]
     refine Finset.sum_congr rfl ?_
@@ -1942,6 +2026,10 @@ theorem fa2ScalarFragmentSummaryKernel_correct_view
       TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
       NumericDType.sub, WithBot.realExp, fa2ScalarFragmentNumer,
       BlockState.writeMemTyped_real] at hExec ⊢
+    repeat unfold evalOp at hExec
+    simp [Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+      NumericDType.sub, WithBot.realExp] at hExec
     subst s'
     simp [TileShape.insertAxisIndex]
     refine Finset.sum_congr rfl ?_
@@ -1985,14 +2073,14 @@ theorem fa2ScoreFragmentSpec_eq_scaledScore {M D Bk N : Nat}
     fa2ScoreFragmentSpec
         Q
         (fun localIdx : TileIndex [Bk, D] =>
-          K (FA1Math.blockIndex Bk N keyBlock
+          K (StreamingAccumulator.blockIndex Bk N keyBlock
               (Nat.succ_le_iff.mpr hKeyBlock) localIdx.1,
             localIdx.2.1, PUnit.unit))
         scale idx =
-      FA1Math.scaledScore Q K scale idx.1
-        (FA1Math.blockIndex Bk N keyBlock
+      StreamingAccumulator.scaledScore Q K scale idx.1
+        (StreamingAccumulator.blockIndex Bk N keyBlock
           (Nat.succ_le_iff.mpr hKeyBlock) idx.2.1) := by
-  unfold fa2ScoreFragmentSpec FA1Math.scaledScore
+  unfold fa2ScoreFragmentSpec StreamingAccumulator.scaledScore
   ring_nf
 
 /-- Executable FA-2 QK score-fragment producer.
@@ -2046,9 +2134,12 @@ theorem fa2ScoreFragmentKernel_correct_view
   simp [exec, fa2ScoreFragmentKernel, stepStmts, stepStmt, evalOp, Option.bind,
     Tile.bop, Tile.dot, Tile.transpose, NumericDType.add, NumericDType.mul,
     BlockState.writeMemTyped_real, fa2ScoreFragmentSpec] at hExec ⊢
+  repeat unfold evalOp at hExec
+  simp [Option.bind, Tile.bop, Tile.dot, Tile.transpose, NumericDType.add,
+    NumericDType.mul, BlockState.writeMemTyped_real, fa2ScoreFragmentSpec] at hExec
   subst s'
   intro i j
-  simp only [TileShape.dropInsertedIndex] at *
+  simp [TileShape.dropInsertedIndex] at *
   have h_inj : Function.Injective
       (fun idx : TileIndex [M, Bk] =>
         s.pids 0 * (M * Bk) + idx.1.val * Bk + idx.2.1.val) := by
@@ -2064,11 +2155,11 @@ theorem fa2ScoreFragmentKernel_correct_view
   congr 1
   refine Finset.sum_congr rfl ?_
   intro d _
-  simp [hQ (i, d, PUnit.unit), hK (j, d, PUnit.unit)]
+  simp [hQ i d PUnit.unit, hK j d PUnit.unit]
 
 /-- Global-score view of `fa2ScoreFragmentKernel_correct_view`: when the local
 K fragment is the `keyBlock` slice of a global K tensor, the executable score
-producer writes the global `FA1Math.scaledScore` values expected by the later
+producer writes the global `StreamingAccumulator.scaledScore` values expected by the later
 attention pipeline. -/
 theorem fa2ScoreFragmentKernel_scaledScore_correct_view
     {M D Bk N : Nat}
@@ -2083,7 +2174,7 @@ theorem fa2ScoreFragmentKernel_scaledScore_correct_view
     (hK : ∀ idx : TileIndex [Bk, D],
       s.readMem kReg
           ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
-        K (FA1Math.blockIndex Bk N keyBlock
+        K (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
           idx.2.1, PUnit.unit)) :
     ComputeCorrect.Realizes
@@ -2093,13 +2184,13 @@ theorem fa2ScoreFragmentKernel_scaledScore_correct_view
         some (scoreReg,
           s.pid * (M * Bk) + idx.1.val * Bk + idx.2.1.val))
       (expected := fun idx : TileIndex [M, Bk] =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk N keyBlock
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) idx.2.1)) := by
   have hview := fa2ScoreFragmentKernel_correct_view
     qReg kReg scoreReg M D Bk keyBlock scale s Q
     (fun idx : TileIndex [Bk, D] =>
-      K (FA1Math.blockIndex Bk N keyBlock
+      K (StreamingAccumulator.blockIndex Bk N keyBlock
           (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
         idx.2.1, PUnit.unit))
     hQ hK
@@ -2138,15 +2229,15 @@ theorem fa2ScoreFragmentKernel_scaledScore_row_loaded
     (hK : ∀ idx : TileIndex [Bk, D],
       s.readMem kReg
           ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
-        K (FA1Math.blockIndex Bk N keyBlock
+        K (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
           idx.2.1, PUnit.unit)) :
     InputLoadedAt
       (sScore.withPids (fun ax => if ax = 0 then s.pid * M + row.val else sScore.pids ax))
       scoreReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale row
-          (FA1Math.blockIndex Bk N keyBlock
+        StreamingAccumulator.scaledScore Q K scale row
+          (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) j)) := by
   have hview := fa2ScoreFragmentKernel_scaledScore_correct_view
     qReg kReg scoreReg keyBlock hKeyBlock scale s Q K hQ hK
@@ -2187,13 +2278,13 @@ theorem fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
     (hK : ∀ idx : TileIndex [Bk, D],
       s.readMem kReg
           ((keyBlock * Bk + idx.1.val) * D + idx.2.1.val) =
-        K (FA1Math.blockIndex Bk N keyBlock
+        K (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) idx.1,
           idx.2.1, PUnit.unit)) :
     InputLoadedAt consumer scoreReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale row
-          (FA1Math.blockIndex Bk N keyBlock
+        StreamingAccumulator.scaledScore Q K scale row
+          (StreamingAccumulator.blockIndex Bk N keyBlock
             (Nat.succ_le_iff.mpr hKeyBlock) j)) := by
   have hLoaded := fa2ScoreFragmentKernel_scaledScore_row_loaded
     qReg kReg scoreReg keyBlock hKeyBlock scale s sScore Q K row hExec hQ hK
@@ -2231,27 +2322,27 @@ theorem fa2ScoreFragmentKernel_twoBlock_rows_loaded_of_agrees
       s.readMem kReg (idx.1.val * D + idx.2.1.val) = K idx) :
     InputLoadedAt consumer scoreLeftReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale row
-          (FA1Math.blockIndex Bk 2 0 two_block0_le j)) ∧
+        StreamingAccumulator.scaledScore Q K scale row
+          (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j)) ∧
     InputLoadedAt consumer scoreRightReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale row
-          (FA1Math.blockIndex Bk 2 1 two_block1_le j)) := by
+        StreamingAccumulator.scaledScore Q K scale row
+          (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)) := by
   have hKLeft : ∀ idx : TileIndex [Bk, D],
       s.readMem kReg ((0 * Bk + idx.1.val) * D + idx.2.1.val) =
-        K (FA1Math.blockIndex Bk 2 0 two_block0_le idx.1,
+        K (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le idx.1,
           idx.2.1, PUnit.unit) := by
     intro idx
-    simpa [FA1Math.blockIndex] using
-      hK (FA1Math.blockIndex Bk 2 0 two_block0_le idx.1,
+    simpa [StreamingAccumulator.blockIndex] using
+      hK (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le idx.1,
         idx.2.1, PUnit.unit)
   have hKRight : ∀ idx : TileIndex [Bk, D],
       s.readMem kReg ((1 * Bk + idx.1.val) * D + idx.2.1.val) =
-        K (FA1Math.blockIndex Bk 2 1 two_block1_le idx.1,
+        K (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le idx.1,
           idx.2.1, PUnit.unit) := by
     intro idx
-    simpa [FA1Math.blockIndex] using
-      hK (FA1Math.blockIndex Bk 2 1 two_block1_le idx.1,
+    simpa [StreamingAccumulator.blockIndex] using
+      hK (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le idx.1,
         idx.2.1, PUnit.unit)
   constructor
   · exact fa2ScoreFragmentKernel_scaledScore_row_loaded_of_agrees
@@ -2347,6 +2438,12 @@ theorem fa2ScalarTwoBlockForwardKernel_correct_view
     WithBot.realExp, WithBot.realDiv, fa2ScalarFragmentDenom,
     fa2ScalarFragmentNumer, fa2ScalarTwoBlockForwardTileSpec,
     BlockState.writeMemTyped_real] at hRead ⊢
+  repeat unfold evalOp at hRead
+  simp [Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+    NumericDType.sub, NumericDType.div, WithBot.realExp, WithBot.realDiv,
+    fa2ScalarFragmentDenom, fa2ScalarFragmentNumer,
+    fa2ScalarTwoBlockForwardTileSpec, BlockState.writeMemTyped_real] at hRead
   subst s'
   intro _
   simp [ComputeCorrect.WriteMap.scalar, TileShape.insertAxisIndex]
@@ -2422,22 +2519,22 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
     (mLeft mRight mMerged : ℝ)
     (hScoresLeft : InputLoadedAt s scoreLeftReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j)))
     (hValuesLeft : InputLoadedAt s valueLeftReg Bk
       (fun j : Fin Bk =>
-        V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit)))
+        V (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit)))
     (hScoresRight : InputLoadedAt s scoreRightReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)))
     (hValuesRight : InputLoadedAt s valueRightReg Bk
       (fun j : Fin Bk =>
-        V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit)))
+        V (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit)))
     (hmLeft : s.readMem mLeftReg s.pid = mLeft)
     (hmRight : s.readMem mRightReg s.pid = mRight)
     (hmMerged : s.readMem mMergedReg s.pid = mMerged)
-    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
     ComputeCorrect.Realizes
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
@@ -2449,15 +2546,15 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
     scoreLeftReg valueLeftReg scoreRightReg valueRightReg
     mLeftReg mRightReg mMergedReg outReg Bk s
     (fun j : Fin Bk =>
-      FA1Math.scaledScore Q K scale idx.1
-        (FA1Math.blockIndex Bk 2 0 two_block0_le j))
+      StreamingAccumulator.scaledScore Q K scale idx.1
+        (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j))
     (fun j : Fin Bk =>
-      V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
+      V (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
     (fun j : Fin Bk =>
-      FA1Math.scaledScore Q K scale idx.1
-        (FA1Math.blockIndex Bk 2 1 two_block1_le j))
+      StreamingAccumulator.scaledScore Q K scale idx.1
+        (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j))
     (fun j : Fin Bk =>
-      V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
+      V (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
     mLeft mRight mMerged
     hScoresLeft hValuesLeft hScoresRight hValuesRight hmLeft hmRight hmMerged
   apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
@@ -2473,15 +2570,15 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_view
   have hSpec :
       fa2ScalarTwoBlockForwardTileSpec
         (fun j : Fin Bk =>
-          FA1Math.scaledScore Q K scale idx.1
-            (FA1Math.blockIndex Bk 2 0 two_block0_le j))
+          StreamingAccumulator.scaledScore Q K scale idx.1
+            (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j))
         (fun j : Fin Bk =>
-          V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
+          V (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit))
         (fun j : Fin Bk =>
-          FA1Math.scaledScore Q K scale idx.1
-            (FA1Math.blockIndex Bk 2 1 two_block1_le j))
+          StreamingAccumulator.scaledScore Q K scale idx.1
+            (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j))
         (fun j : Fin Bk =>
-          V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
+          V (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit))
         mLeft mRight mMerged =
         attentionReal Q K V scale idx := by
     unfold fa2ScalarTwoBlockForwardTileSpec fa2ScalarFragmentDenom
@@ -2526,14 +2623,14 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_producers_view
       sProducer.readMem kReg (kIdx.1.val * D + kIdx.2.1.val) = K kIdx)
     (hValuesLeft : InputLoadedAt consumer valueLeftReg Bk
       (fun j : Fin Bk =>
-        V (FA1Math.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit)))
+        V (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j, idx.2.1, PUnit.unit)))
     (hValuesRight : InputLoadedAt consumer valueRightReg Bk
       (fun j : Fin Bk =>
-        V (FA1Math.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit)))
+        V (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j, idx.2.1, PUnit.unit)))
     (hmLeft : consumer.readMem mLeftReg consumer.pid = mLeft)
     (hmRight : consumer.readMem mRightReg consumer.pid = mRight)
     (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
-    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
     ComputeCorrect.Realizes
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
@@ -2600,7 +2697,7 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_producers_vi
     (hmLeft : consumer.readMem mLeftReg consumer.pid = mLeft)
     (hmRight : consumer.readMem mRightReg consumer.pid = mRight)
     (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
-    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
     ComputeCorrect.Realizes
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
@@ -2686,14 +2783,14 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producer
       sValueProducer.readMem vReg (vIdx.1.val * D + vIdx.2.1.val) = V vIdx)
     (hScoresLeftForMax : InputLoadedAt sMaxLeftInput scoreLeftReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j)))
     (hScoresRightForMax : InputLoadedAt sMaxRightInput scoreRightReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)))
     (hmMerged : consumer.readMem mMergedReg consumer.pid = mMerged)
-    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
     ComputeCorrect.Realizes
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
@@ -2702,11 +2799,11 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_producer
       (write := ComputeCorrect.WriteMap.scalar outReg consumer.pid)
       (expected := fun _ : PUnit => attentionReal Q K V scale idx) := by
   let scoresLeft : Fin Bk → ℝ := fun j =>
-    FA1Math.scaledScore Q K scale idx.1
-      (FA1Math.blockIndex Bk 2 0 two_block0_le j)
+    StreamingAccumulator.scaledScore Q K scale idx.1
+      (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j)
   let scoresRight : Fin Bk → ℝ := fun j =>
-    FA1Math.scaledScore Q K scale idx.1
-      (FA1Math.blockIndex Bk 2 1 two_block1_le j)
+    StreamingAccumulator.scaledScore Q K scale idx.1
+      (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)
   have hmLeft : consumer.readMem mLeftReg consumer.pid = tileMax hBk scoresLeft :=
     fa2ScalarScoreMaxKernel_loaded_of_agrees
       scoreLeftReg mLeftReg Bk hBk sMaxLeftInput sMaxLeft consumer
@@ -2803,13 +2900,13 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_p
       sValueProducer.readMem vReg (vIdx.1.val * D + vIdx.2.1.val) = V vIdx)
     (hScoresLeftForMax : InputLoadedAt sMaxLeftInput scoreLeftReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j)))
     (hScoresRightForMax : InputLoadedAt sMaxRightInput scoreRightReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore Q K scale idx.1
-          (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
-    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+        StreamingAccumulator.scaledScore Q K scale idx.1
+          (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)))
+    (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
     ComputeCorrect.Realizes
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
@@ -2818,11 +2915,11 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal_of_score_value_max_merged_p
       (write := ComputeCorrect.WriteMap.scalar outReg consumer.pid)
       (expected := fun _ : PUnit => attentionReal Q K V scale idx) := by
   let scoresLeft : Fin Bk → ℝ := fun j =>
-    FA1Math.scaledScore Q K scale idx.1
-      (FA1Math.blockIndex Bk 2 0 two_block0_le j)
+    StreamingAccumulator.scaledScore Q K scale idx.1
+      (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j)
   let scoresRight : Fin Bk → ℝ := fun j =>
-    FA1Math.scaledScore Q K scale idx.1
-      (FA1Math.blockIndex Bk 2 1 two_block1_le j)
+    StreamingAccumulator.scaledScore Q K scale idx.1
+      (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)
   have hmLeftForMerged :
       sMergedInput.readMem mLeftReg sMergedInput.pid = tileMax hBk scoresLeft :=
     fa2ScalarScoreMaxKernel_loaded_of_agrees
@@ -2870,25 +2967,25 @@ theorem fa2ScalarTwoBlockForwardKernel_attentionReal4D_view
     (mLeft mRight mMerged : ℝ)
     (hScoresLeft : InputLoadedAt s scoreLeftReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore (sliceBH Q b h) (sliceBH K b h) scale i
-          (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+        StreamingAccumulator.scaledScore (sliceBH Q b h) (sliceBH K b h) scale i
+          (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j)))
     (hValuesLeft : InputLoadedAt s valueLeftReg Bk
       (fun j : Fin Bk =>
-        (sliceBH V b h) (FA1Math.blockIndex Bk 2 0 two_block0_le j,
+        (sliceBH V b h) (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j,
           d, PUnit.unit)))
     (hScoresRight : InputLoadedAt s scoreRightReg Bk
       (fun j : Fin Bk =>
-        FA1Math.scaledScore (sliceBH Q b h) (sliceBH K b h) scale i
-          (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
+        StreamingAccumulator.scaledScore (sliceBH Q b h) (sliceBH K b h) scale i
+          (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)))
     (hValuesRight : InputLoadedAt s valueRightReg Bk
       (fun j : Fin Bk =>
-        (sliceBH V b h) (FA1Math.blockIndex Bk 2 1 two_block1_le j,
+        (sliceBH V b h) (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j,
           d, PUnit.unit)))
     (hmLeft : s.readMem mLeftReg s.pid = mLeft)
     (hmRight : s.readMem mRightReg s.pid = mRight)
     (hmMerged : s.readMem mMergedReg s.pid = mMerged)
     (hlFree :
-      FA1Math.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
+      StreamingAccumulator.lFree (sliceBH Q b h) (sliceBH K b h) scale 2 (le_refl 2) i ≠ 0) :
     ComputeCorrect.Realizes
       (kernel := fa2ScalarTwoBlockForwardKernel
         scoreLeftReg valueLeftReg scoreRightReg valueRightReg
@@ -2922,30 +3019,30 @@ theorem fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view
     (hScoresLeft : ∀ gridIdx : GridIndex g,
       InputLoadedAt (s.withGridIndex gridIdx) scoreLeftReg Bk
         (fun j : Fin Bk =>
-          FA1Math.scaledScore
+          StreamingAccumulator.scaledScore
             (sliceBH Q (coord gridIdx).1 (coord gridIdx).2.1)
             (sliceBH K (coord gridIdx).1 (coord gridIdx).2.1) scale
             (coord gridIdx).2.2.1
-            (FA1Math.blockIndex Bk 2 0 two_block0_le j)))
+            (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j)))
     (hValuesLeft : ∀ gridIdx : GridIndex g,
       InputLoadedAt (s.withGridIndex gridIdx) valueLeftReg Bk
         (fun j : Fin Bk =>
           (sliceBH V (coord gridIdx).1 (coord gridIdx).2.1)
-            (FA1Math.blockIndex Bk 2 0 two_block0_le j,
+            (StreamingAccumulator.blockIndex Bk 2 0 two_block0_le j,
               (coord gridIdx).2.2.2.1, PUnit.unit)))
     (hScoresRight : ∀ gridIdx : GridIndex g,
       InputLoadedAt (s.withGridIndex gridIdx) scoreRightReg Bk
         (fun j : Fin Bk =>
-          FA1Math.scaledScore
+          StreamingAccumulator.scaledScore
             (sliceBH Q (coord gridIdx).1 (coord gridIdx).2.1)
             (sliceBH K (coord gridIdx).1 (coord gridIdx).2.1) scale
             (coord gridIdx).2.2.1
-            (FA1Math.blockIndex Bk 2 1 two_block1_le j)))
+            (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j)))
     (hValuesRight : ∀ gridIdx : GridIndex g,
       InputLoadedAt (s.withGridIndex gridIdx) valueRightReg Bk
         (fun j : Fin Bk =>
           (sliceBH V (coord gridIdx).1 (coord gridIdx).2.1)
-            (FA1Math.blockIndex Bk 2 1 two_block1_le j,
+            (StreamingAccumulator.blockIndex Bk 2 1 two_block1_le j,
               (coord gridIdx).2.2.2.1, PUnit.unit)))
     (hmLeft : ∀ gridIdx : GridIndex g,
       (s.withGridIndex gridIdx).readMem mLeftReg (s.withGridIndex gridIdx).pid =
@@ -2957,7 +3054,7 @@ theorem fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view
       (s.withGridIndex gridIdx).readMem mMergedReg (s.withGridIndex gridIdx).pid =
         mMerged gridIdx)
     (hlFree : ∀ gridIdx : GridIndex g,
-      FA1Math.lFree
+      StreamingAccumulator.lFree
           (sliceBH Q (coord gridIdx).1 (coord gridIdx).2.1)
           (sliceBH K (coord gridIdx).1 (coord gridIdx).2.1)
           scale 2 (le_refl 2) (coord gridIdx).2.2.1 ≠ 0) :
@@ -2990,6 +3087,11 @@ theorem fa2ScalarTwoBlockForwardKernel_forAll_attentionReal4D_view
             sIdx = some s' := by
     simp [exec, fa2ScalarTwoBlockForwardKernel, stepStmts, stepStmt, evalOp,
       Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+      NumericDType.sub, NumericDType.div, WithBot.realExp, WithBot.realDiv,
+      BlockState.writeMemTyped_real]
+    repeat unfold evalOp
+    simp [Tile.bop, Tile.uop, Tile.reduceSum, Tile.reduceSumDrop,
       TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
       NumericDType.sub, NumericDType.div, WithBot.realExp, WithBot.realDiv,
       BlockState.writeMemTyped_real]
@@ -3114,7 +3216,7 @@ theorem fa2ScalarTwoFragmentMergeKernel_attentionReal_view
       lRight = fa2TwoBlockDenomRight Q K scale mRight idx.1)
     (hoRight :
       oRight = fa2TwoBlockNumerRight Q K V scale mRight idx)
-    (hlFree : FA1Math.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
+    (hlFree : StreamingAccumulator.lFree Q K scale 2 (le_refl 2) idx.1 ≠ 0) :
     ComputeCorrect.Realizes
       (kernel := fa2ScalarTwoFragmentMergeKernel
         mLeftReg lLeftReg oLeftReg mRightReg lRightReg oRightReg mMergedReg outReg)

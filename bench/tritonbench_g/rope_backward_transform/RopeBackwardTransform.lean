@@ -587,7 +587,9 @@ The checked Python test fixes `batch_size = 2`, `seq_len = 4`,
 `n_q_head = n_kv_head = 8`, and `head_dim = 16`; after the transpose and
 contiguous copy, both Q and K rows have stride `8 * 16 = 128`, while cos/sin
 rows have stride `8`.  The summary ties that faithful `BACKWARD_PASS=true`
-surface to the four checked output slices for Q/K first and second halves. -/
+surface to the four checked output slices for Q/K first and second halves. The
+remaining #153 blocker is the `rope-head-slice-lift` from head slices to the
+full head tile. -/
 theorem rope_backward_python_backward_output_summary
     (Q K COS SIN : RegionName)
     (HEAD_IDX COS_ROW_IDX : Nat)

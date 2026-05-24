@@ -1040,8 +1040,8 @@ theorem rotary_transform_ops_python_case4_surface_toAlgorithm_supported
 
 This records all four checked Python launch surfaces. The proof-oriented
 one-row `o0`/`o1` slices above cover the non-interleaved branch, while the full
-2D value proof remains gated on the documented cast-load simp extension and is
-not overclaimed by this summary. -/
+2D `rotary-2d-tile-value-lift` proof remains gated on the documented cast-load
+simp extension and is not overclaimed by this summary. -/
 theorem rotary_transform_ops_python_surfaces_output_summary
     (OUT X COS SIN : RegionName) (CU_SEQLENS SEQLEN_OFFSETS : Region .nat) :
     (∃ alg, (rotary_kernel_surface OUT X COS SIN CU_SEQLENS SEQLEN_OFFSETS
