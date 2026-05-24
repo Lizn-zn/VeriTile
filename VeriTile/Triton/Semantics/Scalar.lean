@@ -5,6 +5,8 @@ Scalar carrier operations and typed dtype witness semantics.
 -/
 
 import Mathlib.Data.Real.Basic
+import Mathlib.Data.Real.Archimedean
+import Mathlib.Algebra.Order.Floor.Ring
 import VeriTile.Triton.Core
 
 namespace VeriTile.Triton
@@ -45,6 +47,36 @@ defines `0 * ⊥ = 0`, but we want `0 * ⊥ = ⊥`). -/
 @[simp] def WithBot.realSub : WithBot ℝ → WithBot ℝ → WithBot ℝ := Option.map₂ (· - ·)
 @[simp] def WithBot.realMul : WithBot ℝ → WithBot ℝ → WithBot ℝ := Option.map₂ (· * ·)
 @[simp] noncomputable def WithBot.realDiv : WithBot ℝ → WithBot ℝ → WithBot ℝ := Option.map₂ (· / ·)
+
+def tritonInt8Min : Int := -128
+
+def tritonInt8Max : Int := 127
+
+noncomputable def tritonTruncTowardZero (x : ℝ) : Int :=
+  if 0 ≤ x then Int.floor x else -Int.floor (-x)
+
+noncomputable def tritonInt8CastInRange (x : ℝ) : Prop :=
+  tritonInt8Min ≤ tritonTruncTowardZero x ∧
+    tritonTruncTowardZero x ≤ tritonInt8Max
+
+/--
+Value-level semantics for Triton's `.to(tl.int8)` on VeriTile real tiles.
+
+The cast truncates finite real inputs toward zero into VeriTile's unbounded
+`.int` carrier. Quantization proofs that need hardware-width behavior can state
+`tritonInt8CastInRange`; under that obligation no saturation or wraparound path
+is exercised. `⊥` lanes map to zero, matching the existing masked-load default
+convention for erased lanes.
+-/
+noncomputable def WithBot.realToInt8 : WithBot ℝ → Int
+  | some x => tritonTruncTowardZero x
+  | none => 0
+
+@[simp] theorem WithBot.realToInt8_some (x : ℝ) :
+    WithBot.realToInt8 (some x) = tritonTruncTowardZero x := rfl
+
+@[simp] theorem WithBot.realToInt8_none :
+    WithBot.realToInt8 (none : WithBot ℝ) = 0 := rfl
 
 namespace NumericDType
 

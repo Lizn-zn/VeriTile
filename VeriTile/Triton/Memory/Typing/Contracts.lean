@@ -119,6 +119,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .castFloat _ _ e => e.RespectsRegionTyping Γ
   | .castNatToInt e => e.RespectsRegionTyping Γ
   | .castIntToNat e => e.RespectsRegionTyping Γ
+  | .castRealToInt8 e => e.RespectsRegionTyping Γ
   | .add _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .sub _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .mul _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ

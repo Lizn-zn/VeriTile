@@ -86,6 +86,7 @@ inductive Op : TileDType → TileShape → Type where
   | castFloat : (src dst : FloatDType) → Op src.toTileDType shape → Op dst.toTileDType shape
   | castNatToInt : Op .nat shape → Op .int shape
   | castIntToNat : Op .int shape → Op .nat shape
+  | castRealToInt8 : Op .real shape → Op .int shape
   | add       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | sub       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | mul       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out

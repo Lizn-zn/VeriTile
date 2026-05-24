@@ -69,6 +69,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .castFloat _ _ e => e.MemorySafe bounds
   | .castNatToInt e => e.MemorySafe bounds
   | .castIntToNat e => e.MemorySafe bounds
+  | .castRealToInt8 e => e.MemorySafe bounds
   | .add _ _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .sub _ _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .mul _ _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
