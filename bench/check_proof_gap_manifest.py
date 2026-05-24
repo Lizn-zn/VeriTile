@@ -32,6 +32,8 @@ ISSUE_BY_FAMILY = {
     "matmul-dot-accumulator": "#148",
     "proof-slice-precomputed-value": "#152",
     "quantization-semantic-followup": "#154",
+    "rope-head-slice-lift": "#153",
+    "rotary-2d-tile-value-lift": "#153",
     "recurrent-cumsum-loop": "#150",
     "reduction-layernorm-aggregation": "#151",
     "rotary-cache-path": "#153",
@@ -108,6 +110,18 @@ def family_for(name: str, text: str) -> str:
         return "fixed-width-int8-cast-semantics"
     if any(k in hay for k in ("int8", "int4", "uint8", "quant", "llrint", "round", "pack")):
         return "quantization-semantic-followup"
+    if any(k in hay for k in ("rope_transform", "rope_backward", "one-head proof", "head slices")):
+        return "rope-head-slice-lift"
+    if "rotary" in hay and any(
+        k in hay
+        for k in (
+            "full 2d value proof",
+            "one-row",
+            "proof-oriented `o0`/`o1`",
+            "cast-load simp extension",
+        )
+    ):
+        return "rotary-2d-tile-value-lift"
     if any(k in hay for k in ("rotary", "rope", "cache", "kv")):
         return "rotary-cache-path"
     if any(k in hay for k in ("norm", "layernorm", "rms", "reduction", "mean", "max", "sum")):

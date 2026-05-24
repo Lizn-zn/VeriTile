@@ -17,6 +17,11 @@ The broad #147 quantization bucket has been split: real-to-int8 cast semantics
 now track under #154, while rows whose local blocker is primarily attention,
 matmul, recurrence, reduction, or explicit blocked-summary work track under the
 corresponding family issue.
+The broad #153 rotary/cache bucket has also been split into narrower value
+proof follow-ups: `rope-head-slice-lift` covers RoPE summaries whose Python
+surface is faithful but whose value proof is still stated over Q/K head slices,
+and `rotary-2d-tile-value-lift` covers rotary summaries with row-level `o0` /
+`o1` value proofs that still need the full `[BLOCK_M, BLOCK_HALF]` tile lift.
 
 ## Translation-Surface Blockers
 

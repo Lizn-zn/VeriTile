@@ -71,7 +71,11 @@ surface.
   `full_value_candidate`, 108 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
-  to the former broad #147 quantization bucket.
+  to the former broad #147 quantization bucket or the former broad #153
+  rotary/cache bucket. The #153 rows now split into `rope-head-slice-lift`
+  for RoPE Q/K head-slice value proofs and `rotary-2d-tile-value-lift` for
+  row-level rotary `o0`/`o1` proofs that still need the full
+  `[BLOCK_M, BLOCK_HALF]` 2D tile lift.
 
 ## Remaining Blockers
 
