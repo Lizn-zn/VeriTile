@@ -96,6 +96,18 @@ def context_for(lines: list[str], idx: int) -> str:
 
 def family_for(name: str, text: str) -> str:
     hay = f"{name}\n{text}".lower()
+    if ("blocked_output_summary" in name.lower() or "blocked" in hay) and any(
+        k in hay
+        for k in (
+            "llrint",
+            "to(tl.int8)",
+            ".to(tl.int8)",
+            "int8",
+            "quantize",
+            "rounding/cast",
+        )
+    ):
+        return "fixed-width-int8-cast-semantics"
     if "blocked_output_summary" in name.lower() or "blocked" in hay:
         return "semantic-blocker"
     if "outside this triton" in hay and "matmul" in hay:

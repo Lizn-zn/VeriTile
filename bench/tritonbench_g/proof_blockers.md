@@ -24,6 +24,9 @@ proof follow-ups: `rope-head-slice-lift` covers RoPE summaries whose Python
 surface is faithful but whose value proof is still stated over Q/K head slices,
 and `rotary-2d-tile-value-lift` covers rotary summaries with row-level `o0` /
 `o1` value proofs that still need the full `[BLOCK_M, BLOCK_HALF]` tile lift.
+The explicit blocked-output summaries formerly tracked by the broad #152
+`semantic-blocker` bucket are all quantization `llrint` / int8-cast blockers
+and now track under the open #154 `fixed-width-int8-cast-semantics` family.
 
 ## Translation-Surface Blockers
 
