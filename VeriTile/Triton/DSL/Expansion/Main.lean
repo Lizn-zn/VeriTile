@@ -805,9 +805,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           | .int =>
               match e'.dtype with
               | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
-                  let sh ← e'.shape.term
-                  let ref ← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__")
-                  pure ⟨ref, .int, e'.shape, none, none⟩
+                  let srcProof ← e'.dtype.floatProof
+                  let realTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+                  pure ⟨← `(Op.castRealToInt8 $realTerm), .int, e'.shape, none, none⟩
               | .nat =>
                   pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
               | _ => pure e'
@@ -875,9 +875,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               pure ⟨← `(Op.castIntToNat $e'.term), .nat, e'.shape, none, none⟩
           | .real, .int | .fp32, .int | .fp16, .int | .bf16, .int
           | .floatVar _, .int =>
-              let sh ← e'.shape.term
-              let ref ← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__")
-              pure ⟨ref, .int, e'.shape, none, none⟩
+              let srcProof ← e'.dtype.floatProof
+              let realTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨← `(Op.castRealToInt8 $realTerm), .int, e'.shape, none, none⟩
           | .nat, .int =>
               pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
           | _, .int =>
@@ -1165,9 +1165,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       | .int =>
           match e'.dtype with
           | .real | .fp32 | .fp16 | .bf16 | .floatVar _ =>
-              let sh ← e'.shape.term
-              let ref ← `(Op.ref TileDType.int $sh "__compute_float_to_int_cast_unprojected__")
-              pure ⟨ref, .int, e'.shape, none, none⟩
+              let srcProof ← e'.dtype.floatProof
+              let realTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨← `(Op.castRealToInt8 $realTerm), .int, e'.shape, none, none⟩
           | .nat =>
               pure ⟨← `(Op.castNatToInt $e'.term), .int, e'.shape, none, none⟩
           | _ => pure e'

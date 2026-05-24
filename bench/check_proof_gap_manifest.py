@@ -31,7 +31,7 @@ ISSUE_BY_FAMILY = {
     "loss-reduction-aggregation": "#151",
     "matmul-dot-accumulator": "#148",
     "proof-slice-precomputed-value": "#152",
-    "quantization-semantic-followup": "#154",
+    "quantization-semantic-followup": "#158",
     "rope-head-slice-lift": "#153",
     "rotary-2d-tile-value-lift": "#153",
     "recurrent-cumsum-loop": "#150",
@@ -118,7 +118,7 @@ def family_for(name: str, text: str) -> str:
         return "matmul-dot-accumulator"
     if any(k in hay for k in ("cumsum", "recurrent", "recurrence", "rwkv", "hgrn", "gla", "retention")):
         return "recurrent-cumsum-loop"
-    if any(k in hay for k in ("to(tl.int8)", ".to(tl.int8)", "int8-cast", "fixed-width int8")):
+    if "int8" in hay and any(k in hay for k in ("unprojected", "cast semantics missing")):
         return "fixed-width-int8-cast-semantics"
     if any(k in hay for k in ("int8", "int4", "uint8", "quant", "llrint", "round", "pack")):
         return "quantization-semantic-followup"

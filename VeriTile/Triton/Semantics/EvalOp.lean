@@ -41,6 +41,9 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .castIntToNat a, s => do
       let va ← evalOp a s
       some ⟨fun i => (va.data i).toNat⟩
+  | .castRealToInt8 a, s => do
+      let va ← evalOp a s
+      some ⟨fun i => WithBot.realToInt8 (va.data i)⟩
   | .add h bc a b, s => do
       let va ← evalOp a s
       let vb ← evalOp b s
