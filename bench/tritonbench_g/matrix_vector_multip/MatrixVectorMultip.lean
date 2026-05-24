@@ -256,50 +256,63 @@ theorem mv_kernel_python_case3_one_block_compute_correct
   exact mv_kernel_one_block_compute_correct A B C 32 16 16 1 1 1
     BLOCK_N BLOCK_M s (mv_kernel_python_stride1_output_offset_injective s BLOCK_N)
 
-/-- Public Python case-2 summary for `mv_kernel`.
+/-- Factored Python case-2 theorem surface for `mv_kernel`.
 
-The bundled Python case uses a contiguous `4 x 3` matrix and length-3 vector.
-Autotune choices have `BLOCK_M >= 32`, so the checked correctness slice covers
-the single `M` block executed by this case while the surface conjunct keeps the
-full loop-shaped Python kernel lowerable. -/
+The shape tuple is benchmark-local glue, while the reusable reduction/store
+mechanics stay in the earlier one-block correctness theorem. -/
+abbrev mv_kernel_python_case2_prop
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) : Prop :=
+  (∃ alg, (mv_kernel A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
+    Except.ok alg) ∧
+  ComputeCorrect.Realizes
+    (kernel := mv_kernel_one_block A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M)
+    (initialState := s)
+    (write := ComputeCorrect.WriteMap.writeIf
+      (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 4)
+      (fun i => (C, cOffset s 1 BLOCK_N i)))
+    (expected := fun i =>
+      mvSpec s A B 4 3 3 1 1 BLOCK_N BLOCK_M i)
+
+/-- Factored Python case-3 theorem surface for `mv_kernel`. -/
+abbrev mv_kernel_python_case3_prop
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) : Prop :=
+  (∃ alg, (mv_kernel A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
+    Except.ok alg) ∧
+  ComputeCorrect.Realizes
+    (kernel := mv_kernel_one_block A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M)
+    (initialState := s)
+    (write := ComputeCorrect.WriteMap.writeIf
+      (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 32)
+      (fun i => (C, cOffset s 1 BLOCK_N i)))
+    (expected := fun i =>
+      mvSpec s A B 32 16 16 1 1 BLOCK_N BLOCK_M i)
+
+/-- Public Python case-2 summary for `mv_kernel`. -/
 theorem mv_kernel_python_case2_output_summary
     (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    (∃ alg, (mv_kernel A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
-      Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := mv_kernel_one_block A B C 4 3 3 1 1 1 BLOCK_N BLOCK_M)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 4)
-        (fun i => (C, cOffset s 1 BLOCK_N i)))
-      (expected := fun i =>
-        mvSpec s A B 4 3 3 1 1 BLOCK_N BLOCK_M i) := by
+    mv_kernel_python_case2_prop A B C BLOCK_N BLOCK_M s := by
   constructor
   · exact mv_kernel_python_case2_surface_toAlgorithm_supported A B C
       BLOCK_N BLOCK_M
   · exact mv_kernel_python_case2_one_block_compute_correct A B C
       BLOCK_N BLOCK_M s
 
-/-- Public Python case-3 summary for `mv_kernel`.
-
-The bundled random case uses a contiguous `32 x 16` matrix and length-16
-vector. As above, `BLOCK_M >= 32` makes the proof-oriented one-block slice
-cover the Python-tested reduction path. -/
+/-- Public Python case-3 summary for `mv_kernel`. -/
 theorem mv_kernel_python_case3_output_summary
     (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
-    (∃ alg, (mv_kernel A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M).toAlgorithm? =
-      Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := mv_kernel_one_block A B C 32 16 16 1 1 1 BLOCK_N BLOCK_M)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N => nIndex s BLOCK_N i < 32)
-        (fun i => (C, cOffset s 1 BLOCK_N i)))
-      (expected := fun i =>
-        mvSpec s A B 32 16 16 1 1 BLOCK_N BLOCK_M i) := by
+    mv_kernel_python_case3_prop A B C BLOCK_N BLOCK_M s := by
   constructor
   · exact mv_kernel_python_case3_surface_toAlgorithm_supported A B C
       BLOCK_N BLOCK_M
   · exact mv_kernel_python_case3_one_block_compute_correct A B C
       BLOCK_N BLOCK_M s
+
+/-- Combined checked-shape summary for `matrix_vector_multip.py`. -/
+theorem mv_kernel_python_test_shape_complete_summary
+    (A B C : RegionName) (BLOCK_N BLOCK_M : Nat) (s : BlockState) :
+    mv_kernel_python_case2_prop A B C BLOCK_N BLOCK_M s ∧
+    mv_kernel_python_case3_prop A B C BLOCK_N BLOCK_M s := by
+  constructor
+  · exact mv_kernel_python_case2_output_summary A B C BLOCK_N BLOCK_M s
+  · exact mv_kernel_python_case3_output_summary A B C BLOCK_N BLOCK_M s
 end VeriTile.Bench.TritonBenchG.MatrixVectorMultip
