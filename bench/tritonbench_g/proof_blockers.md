@@ -13,6 +13,10 @@ The stronger proof-status inventory for #146 lives in
 specific follow-up issue plus a blocker family. The manifest is intentionally conservative:
 `full_value_candidate` means no local proof-gap marker was found in the summary
 context, not that future human review is forbidden from downgrading it.
+The broad #147 quantization bucket has been split: real-to-int8 cast semantics
+now track under #154, while rows whose local blocker is primarily attention,
+matmul, recurrence, reduction, or explicit blocked-summary work track under the
+corresponding family issue.
 
 ## Translation-Surface Blockers
 

@@ -70,7 +70,8 @@ surface.
   declarations across 76 files. It classifies 57 as conservative
   `full_value_candidate`, 108 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
-  issue and blocker family in `proof_gap_manifest.tsv`.
+  issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
+  to the former broad #147 quantization bucket.
 
 ## Remaining Blockers
 

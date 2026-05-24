@@ -27,10 +27,11 @@ MANIFEST = PORTS_ROOT / "proof_gap_manifest.tsv"
 
 ISSUE_BY_FAMILY = {
     "attention-softmax-accumulator": "#149",
+    "fixed-width-int8-cast-semantics": "#154",
     "loss-reduction-aggregation": "#151",
     "matmul-dot-accumulator": "#148",
     "proof-slice-precomputed-value": "#152",
-    "quantization-rounding-packing": "#147",
+    "quantization-semantic-followup": "#154",
     "recurrent-cumsum-loop": "#150",
     "reduction-layernorm-aggregation": "#151",
     "rotary-cache-path": "#153",
@@ -95,14 +96,18 @@ def family_for(name: str, text: str) -> str:
     hay = f"{name}\n{text}".lower()
     if "blocked_output_summary" in name.lower() or "blocked" in hay:
         return "semantic-blocker"
-    if any(k in hay for k in ("int8", "int4", "uint8", "quant", "llrint", "round", "pack")):
-        return "quantization-rounding-packing"
+    if "outside this triton" in hay and "matmul" in hay:
+        return "matmul-dot-accumulator"
     if any(k in hay for k in ("attention", "attn", "softmax", "flash", "decode", "score", "prob")):
         return "attention-softmax-accumulator"
     if any(k in hay for k in ("matmul", "gemm", "dot", "bmm", "vecmat", "conv2d")):
         return "matmul-dot-accumulator"
     if any(k in hay for k in ("cumsum", "recurrent", "recurrence", "rwkv", "hgrn", "gla", "retention")):
         return "recurrent-cumsum-loop"
+    if any(k in hay for k in ("to(tl.int8)", ".to(tl.int8)", "int8-cast", "fixed-width int8")):
+        return "fixed-width-int8-cast-semantics"
+    if any(k in hay for k in ("int8", "int4", "uint8", "quant", "llrint", "round", "pack")):
+        return "quantization-semantic-followup"
     if any(k in hay for k in ("rotary", "rope", "cache", "kv")):
         return "rotary-cache-path"
     if any(k in hay for k in ("norm", "layernorm", "rms", "reduction", "mean", "max", "sum")):
