@@ -56,6 +56,13 @@ else
   printf 'ok correctness surface scan\n'
 fi
 
+if python3 bench/check_proof_gap_manifest.py; then
+  printf 'ok proof-gap manifest scan\n'
+else
+  printf 'FAIL proof-gap manifest scan\n'
+  failures=$((failures + 1))
+fi
+
 known_algorithm_blockers=()
 
 unexpected_algorithm_blockers=()

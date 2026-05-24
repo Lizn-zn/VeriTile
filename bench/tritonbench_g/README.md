@@ -38,6 +38,12 @@ currently reports no matches.
 
 There are no current explicit algorithm-layer `hAlg` blockers. Any future
 proof blockers should be listed in [`proof_blockers.md`](./proof_blockers.md).
+The stronger #146 proof-status audit is tracked in
+[`proof_gap_manifest.tsv`](./proof_gap_manifest.tsv) and checked by
+[`../check_proof_gap_manifest.py`](../check_proof_gap_manifest.py). That
+manifest classifies every current `output_summary` as either a conservative
+`full_value_candidate`, a `public_summary_with_proof_gap` linked to a specific
+follow-up issue and blocker family, or an explicit `blocked_summary`.
 
 ## Build
 
@@ -49,6 +55,9 @@ bench/check_ports.sh
 
 # mechanical audit gates for the current TritonBench-G sweep
 bench/audit_tritonbench_g.sh
+
+# proof-level classification for every output_summary
+python3 bench/check_proof_gap_manifest.py
 
 # subset by kernel name
 bench/check_ports.sh vector_addition softmax_triton1
@@ -71,6 +80,9 @@ the Python `@triton.jit` kernel body and Lean `triton { ... }` body. Ordered
 `tl.*(...)` call sequences are checked as well, so unannotated call reordering
 is rejected mechanically. Top-level statement left-hand-side sequences are also
 checked, including `+=`, annotated assignments, and tuple assignments.
+It also checks that `proof_gap_manifest.tsv` is fresh against the Lean source,
+so newly added or renamed `output_summary` declarations cannot bypass the #146
+proof-status classification.
 It is a mechanical gate only; line-by-line faithfulness still follows
 [`review_criteria.md`](./review_criteria.md), and unresolved proof obligations
 remain tracked in [`proof_blockers.md`](./proof_blockers.md).

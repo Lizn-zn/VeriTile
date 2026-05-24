@@ -6,6 +6,14 @@ correctness blocker.
 The mechanical audit still remains a translation-consistency gate, not a
 substitute for future human line review against `review_criteria.md`.
 
+The stronger proof-status inventory for #146 lives in
+`proof_gap_manifest.tsv` and is checked by
+`bench/check_proof_gap_manifest.py`. It classifies every current
+`output_summary` declaration and links each remaining non-full proof gap to a
+specific follow-up issue plus a blocker family. The manifest is intentionally conservative:
+`full_value_candidate` means no local proof-gap marker was found in the summary
+context, not that future human review is forbidden from downgrading it.
+
 ## Translation-Surface Blockers
 
 No current TritonBench-G port has an active documented translation-surface

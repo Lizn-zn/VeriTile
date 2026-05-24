@@ -15,6 +15,7 @@ surface.
 | Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, statement lhs order, and documented translation-surface blockers. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
 | Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/helper-call/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current unannotated mechanical mismatch and no documented translation-surface blocker remains. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
+| Classify stronger proof gaps from #146. | `bench/check_proof_gap_manifest.py` extracts every `output_summary` declaration and checks it against `proof_gap_manifest.tsv`. | Passing; 178 summaries are classified across 76 files. |
 | Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
 | Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers and no stale translation-surface blocker entries. | Passing; no algorithm-layer or translation-surface blocker remains. |
 
@@ -64,6 +65,12 @@ surface.
 - Correctness-surface scan:
   every `bench/tritonbench_g/*/*.lean` file now contains a
   `ComputeCorrect.Realizes` target or theorem.
+- Proof-gap manifest scan:
+  `bench/check_proof_gap_manifest.py` reports 178 `output_summary`
+  declarations across 76 files. It classifies 57 as conservative
+  `full_value_candidate`, 108 as `public_summary_with_proof_gap`, and 13 as
+  `blocked_summary`. Every non-full candidate is linked to a specific follow-up
+  issue and blocker family in `proof_gap_manifest.tsv`.
 
 ## Remaining Blockers
 
@@ -74,4 +81,5 @@ translation-scope marker, it must be covered by `proof_blockers.md`, and
 The current documented blocker set is:
 
 Passing `lake build` alone is still not sufficient evidence for future changes;
-this audit must continue to run the translation-consistency gates above.
+this audit must continue to run the translation-consistency gates above and the
+#146 proof-gap manifest check.
