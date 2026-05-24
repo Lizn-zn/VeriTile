@@ -64,7 +64,7 @@ def blockIndex (Bk numKVBlocks k : Nat) (h : k + 1 ≤ numKVBlocks)
 
 /-- Running per-row max of scaled scores over the first `k` KV blocks.
 Seeded at `⊥` so the `max` is right at `k = 0` (no scores seen).
-Closely mirrors `onlineSoftmaxM` from `Examples/OnlineSoftmax.lean`. -/
+Closely mirrors the standard online-softmax max recurrence. -/
 noncomputable def mPartial {M D : Nat} (Bk : Nat)
     (Q : TileIndex [M, D] → ℝ) (numKVBlocks : Nat)
     (K : TileIndex [Bk * numKVBlocks, D] → ℝ) (scale : ℝ) :
