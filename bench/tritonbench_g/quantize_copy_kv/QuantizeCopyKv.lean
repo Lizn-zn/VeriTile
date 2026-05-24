@@ -16,7 +16,7 @@ This preserves destination-indexed addressing, `tl.abs`, the per-head
 `tl.max(..., axis=1)` scale computation, value writeback, and scale writeback.
 The Python kernel casts the scale to fp16 before broadcasting it and casts the
 quotient to int8; both casts are preserved as surface dtype annotations and
-lower through the DSL's fixed-width cast placeholders. -/
+lower through the DSL's fixed-width cast surfaces. -/
 def destindex_copy_quantize_kv_real_surface
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
@@ -42,7 +42,7 @@ def destindex_copy_quantize_kv_real_surface
 }
 
 /-- The quantize-copy-kv surface lowers through algorithm erasure, including the
-final quotient `to(tl.int8)` cast placeholder. -/
+final quotient `to(tl.int8)` cast surface. -/
 theorem destindex_copy_quantize_kv_real_surface_toAlgorithm_supported
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
@@ -64,7 +64,7 @@ The full kernel computes a per-head `data_scale` with `max(abs(src_data))`,
 casts the quotient to int8, and stores both the quantized values and the scale.
 VeriTile's current arithmetic layer models real tiles, so this slice starts from
 a precomputed per-head scale in `OutScale` and proves the masked destination
-indexed value writeback before the fixed-width int8 cast placeholder. -/
+indexed value writeback before the fixed-width int8 cast surface. -/
 def destindex_copy_quantize_kv_value_store_slice
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
@@ -304,7 +304,7 @@ theorem destindex_copy_quantize_kv_test_h8_d256_value_store_compute_correct
 The full kernel computes `data_scale = max(abs(src_data), axis=1) / 127` and
 stores it to `Out_scale` with destination-indexed addressing. This slice starts
 from a precomputed per-head `Scale` region and proves the observed scale store
-surface independently of the integer value-store cast placeholder. -/
+surface independently of the integer value-store cast surface. -/
 def destindex_copy_quantize_kv_scale_store_slice
     (Scale : RegionName) (DestLoc : Region .nat) (OutScale : RegionName)
     (stride_s_bs stride_s_h stride_os_bs stride_os_h
@@ -667,5 +667,18 @@ abbrev destindex_copy_quantize_kv_python_d64_output_summary
 abbrev destindex_copy_quantize_kv_python_d256_output_summary
     (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
   destindex_copy_quantize_kv_python_d256_summary K Scale DestLoc Out OutScale s
+
+/-- Complete checked-shape target for `quantize_copy_kv.py`.
+
+The Python tests exercise both `D = 64` and `D = 256`; each case summary keeps
+the faithful max/scale/int8-cast surface and proves the externally visible
+value and scale outputs for the corresponding layout. -/
+abbrev destindex_copy_quantize_kv_python_test_shape_complete_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
+  And.intro
+    (destindex_copy_quantize_kv_python_d64_summary K Scale DestLoc Out
+      OutScale s)
+    (destindex_copy_quantize_kv_python_d256_summary K Scale DestLoc Out
+      OutScale s)
 
 end VeriTile.Bench.TritonBenchG.QuantizeCopyKv

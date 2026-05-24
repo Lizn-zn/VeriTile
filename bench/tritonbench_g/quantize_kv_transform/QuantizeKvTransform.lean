@@ -17,7 +17,7 @@ This preserves destination-indexed addressing, the `head_num/head_dim` mask,
 Python kernel casts the scale to `OutScale.dtype.element_ty`; that cast is
 represented explicitly. The final quotient cast to int8 is preserved as a
 surface dtype annotation and lowers through the DSL's fixed-width cast
-placeholder. -/
+surface. -/
 def destindex_copy_quantize_kv_transform_real_surface
     (K : RegionName) (DestLoc : Region .nat) (Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
@@ -45,7 +45,7 @@ def destindex_copy_quantize_kv_transform_real_surface
 }
 
 /-- The full real-valued quantize-kv-transform surface lowers through algorithm
-erasure, including the final quotient `to(tl.int8)` cast placeholder. -/
+erasure, including the final quotient `to(tl.int8)` cast surface. -/
 theorem destindex_copy_quantize_kv_transform_real_surface_toAlgorithm_supported
     (K DestLoc Out OutScale : RegionName)
     (stride_k_bs stride_k_h stride_k_d
@@ -1006,5 +1006,20 @@ abbrev destindex_copy_quantize_kv_transform_python_h1_d1_output_summary
     (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
   destindex_copy_quantize_kv_transform_python_h1_d1_summary K Scale DestLoc
     Out OutScale s
+
+/-- Complete checked-shape target for `quantize_kv_transform.py`.
+
+This collects all Python-tested shapes while preserving the faithful
+max/scale/int8-cast surface and the corresponding value/scale output proofs. -/
+abbrev destindex_copy_quantize_kv_transform_python_test_shape_complete_summary
+    (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
+  And.intro
+    (destindex_copy_quantize_kv_transform_python_h12_d96_summary K Scale
+      DestLoc Out OutScale s)
+    (And.intro
+      (destindex_copy_quantize_kv_transform_python_h8_d64_summary K Scale
+        DestLoc Out OutScale s)
+      (destindex_copy_quantize_kv_transform_python_h1_d1_summary K Scale
+        DestLoc Out OutScale s))
 
 end VeriTile.Bench.TritonBenchG.QuantizeKvTransform
