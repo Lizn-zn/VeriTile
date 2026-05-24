@@ -662,58 +662,73 @@ theorem iv_dependent_matmul_python_test_shape_masked_output_store_compute_correc
   subst cb
   rfl
 
+/-- Python test-shape surface coverage for all string-controlled scheduling
+modes in `iv_dependent_matmul.py`.
+
+This is intentionally kernel-local glue: the scheduling surfaces depend on the
+benchmark's concrete layout and string modes, so #112 keeps them out of
+`Semantics/`. -/
+abbrev iv_dependent_matmul_python_test_shape_surfaces_prop
+    (A B C : RegionName) : Prop :=
+  (∃ alg, (iv_dependent_matmul_pre_load_surface A B C
+    256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
+      Except.ok alg) ∧
+  (∃ alg, (iv_dependent_matmul_post_load_surface A B C
+    256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
+      Except.ok alg) ∧
+  (∃ alg, (iv_dependent_matmul_post_pre_mixed_surface A B C
+    256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
+      Except.ok alg) ∧
+  (∃ alg, (iv_dependent_matmul_post_load_two_iters_surface A B C
+    256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
+      Except.ok alg) ∧
+  (∃ alg, (iv_dependent_matmul_post_load_three_iters_surface A B C
+    256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
+      Except.ok alg)
+
+/-- Python test-shape final output prop for the shared masked fp16 store. -/
+abbrev iv_dependent_matmul_python_test_shape_output_prop
+    (C Acc : RegionName) (s : BlockState) : Prop :=
+  ComputeCorrect.Realizes
+    (kernel := iv_dependent_matmul_masked_output_store_slice C Acc
+      256 256 256 1 256 1 32 32)
+    (initialState := s)
+    (write := ComputeCorrect.WriteMap.writeIf
+      (active s 256 256 32 32)
+      (fun idx => (C, cOffset s 256 1 32 32 idx)))
+    (expected := fun idx =>
+      MemCell.of .fp16
+        (FloatDType.real.cast FloatDType.fp16
+          (some (s.readMem Acc (accOffset s 256 1 32 32 idx)))))
+
 /-- Public Python test-shape summary for `iv_dependent_matmul.py`.
 
-The Python regression runs five string-controlled scheduling modes at
-`M = N = K = 256` and `BLOCK_SIZE_M = BLOCK_SIZE_N = BLOCK_SIZE_K = 32`. This
-summary records that all five faithful scheduling surfaces lower for the tested
-shape and pairs them with the shared final masked fp16 output-store proof. The
-dot-product accumulation is represented by the proof-oriented `Acc` tile in the
-store slice. -/
+The long proposition is factored into surface and output props so downstream
+targets can refer to either side without duplicating the benchmark-specific
+shape tuple. -/
 theorem iv_dependent_matmul_python_test_shape_output_summary
     (A B C Acc : RegionName) (s : BlockState) :
-    (∃ alg, (iv_dependent_matmul_pre_load_surface A B C
-      256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
-        Except.ok alg) ∧
-    (∃ alg, (iv_dependent_matmul_post_load_surface A B C
-      256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
-        Except.ok alg) ∧
-    (∃ alg, (iv_dependent_matmul_post_pre_mixed_surface A B C
-      256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
-        Except.ok alg) ∧
-    (∃ alg, (iv_dependent_matmul_post_load_two_iters_surface A B C
-      256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
-        Except.ok alg) ∧
-    (∃ alg, (iv_dependent_matmul_post_load_three_iters_surface A B C
-      256 256 256 256 1 256 1 256 1 32 32 32).toAlgorithm? =
-        Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := iv_dependent_matmul_masked_output_store_slice C Acc
-        256 256 256 1 256 1 32 32)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 256 256 32 32)
-        (fun idx => (C, cOffset s 256 1 32 32 idx)))
-      (expected := fun idx =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem Acc (accOffset s 256 1 32 32 idx))))) := by
+    iv_dependent_matmul_python_test_shape_surfaces_prop A B C ∧
+    iv_dependent_matmul_python_test_shape_output_prop C Acc s := by
   constructor
-  · exact iv_dependent_matmul_python_test_pre_load_surface_toAlgorithm_supported
-      A B C
   · constructor
-    · exact iv_dependent_matmul_python_test_post_load_surface_toAlgorithm_supported
+    · exact iv_dependent_matmul_python_test_pre_load_surface_toAlgorithm_supported
         A B C
     · constructor
-      · exact iv_dependent_matmul_python_test_post_pre_mixed_surface_toAlgorithm_supported
+      · exact iv_dependent_matmul_python_test_post_load_surface_toAlgorithm_supported
           A B C
       · constructor
-        · exact iv_dependent_matmul_python_test_post_load_two_iters_surface_toAlgorithm_supported
-            A B C
-        · constructor
-          · exact iv_dependent_matmul_python_test_post_load_three_iters_surface_toAlgorithm_supported
+        · exact
+            iv_dependent_matmul_python_test_post_pre_mixed_surface_toAlgorithm_supported
               A B C
-          · exact iv_dependent_matmul_python_test_shape_masked_output_store_compute_correct
-              C Acc s
+        · constructor
+          · exact
+              iv_dependent_matmul_python_test_post_load_two_iters_surface_toAlgorithm_supported
+                A B C
+          · exact
+              iv_dependent_matmul_python_test_post_load_three_iters_surface_toAlgorithm_supported
+                A B C
+  · exact iv_dependent_matmul_python_test_shape_masked_output_store_compute_correct
+      C Acc s
 
 end VeriTile.Bench.TritonBenchG.IvDependentMatmul

@@ -772,18 +772,22 @@ theorem nested3_python_case4_surface_toAlgorithm_supported
     ∃ alg, (nested3 in_ptr out_ptr 2 1).toAlgorithm? = Except.ok alg := by
   exact nested3_surface_toAlgorithm_supported in_ptr out_ptr 2 1
 
-/-- Public Python surface summary for `nested_loops_processing.py`.
+/-- Python-tested surface layouts for `nested_loops_processing.py`.
 
-The Python regression checks four contiguous square layouts. This summary
-records that each tested layout lowers at the full nested-loop surface; the
-proof-oriented shifted store slices above provide the concrete store semantics
-for the nested body. -/
+The nested-loop body store proofs above remain per-store facts; this prop keeps
+the Python layout list as a single local theorem surface without promoting
+kernel-specific square sizes into `Semantics/`. -/
+abbrev nested3_python_surfaces_prop
+    (in_ptr out_ptr : RegionName) : Prop :=
+  (∃ alg, (nested3 in_ptr out_ptr 8 1).toAlgorithm? = Except.ok alg) ∧
+  (∃ alg, (nested3 in_ptr out_ptr 4 1).toAlgorithm? = Except.ok alg) ∧
+  (∃ alg, (nested3 in_ptr out_ptr 16 1).toAlgorithm? = Except.ok alg) ∧
+  (∃ alg, (nested3 in_ptr out_ptr 2 1).toAlgorithm? = Except.ok alg)
+
+/-- Public Python surface summary for `nested_loops_processing.py`. -/
 theorem nested3_python_surfaces_output_summary
     (in_ptr out_ptr : RegionName) :
-    (∃ alg, (nested3 in_ptr out_ptr 8 1).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (nested3 in_ptr out_ptr 4 1).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (nested3 in_ptr out_ptr 16 1).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (nested3 in_ptr out_ptr 2 1).toAlgorithm? = Except.ok alg) := by
+    nested3_python_surfaces_prop in_ptr out_ptr := by
   constructor
   · exact nested3_python_case1_surface_toAlgorithm_supported in_ptr out_ptr
   · constructor
