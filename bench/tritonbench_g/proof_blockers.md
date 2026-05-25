@@ -16,9 +16,14 @@ context, not that future human review is forbidden from downgrading it.
 The broad #147 quantization bucket has been split. Real-to-int8 cast semantics
 track under #154 and now have an executable DSL/AST semantics path; remaining
 quantization rows whose local blocker is end-to-end scale/value coupling track
-under #158. Rows whose local blocker is primarily attention, matmul,
-recurrence, reduction, or explicit blocked-summary work track under the
-corresponding family issue.
+under #158. Rows whose local blocker is primarily attention, recurrence,
+reduction, or explicit blocked-summary work track under the corresponding
+family issue.
+The broad #148 matmul/dot bucket has been split into narrower accumulator
+proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
+`dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
+`matmul-output-store-accumulator`, `matmul-activation-tail-accumulator`, and
+`matmul-tma-output-store-accumulator`.
 The broad #153 rotary/cache bucket has also been split into narrower value
 proof follow-ups: `rope-head-slice-lift` covers RoPE summaries whose Python
 surface is faithful but whose value proof is still stated over Q/K head slices,
