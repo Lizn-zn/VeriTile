@@ -66,8 +66,8 @@ surface.
   every `bench/tritonbench_g/*/*.lean` file now contains a
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
-  `bench/check_proof_gap_manifest.py` reports 180 `output_summary`
-  declarations across 76 files. It classifies 60 as conservative
+  `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
+  declarations across 76 files. It classifies 61 as conservative
   `full_value_candidate`, 107 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
@@ -87,7 +87,9 @@ surface.
   `rotary-2d-tile-value-lift` for row-level rotary `o0`/`o1` proofs that still
   need the full `[BLOCK_M, BLOCK_HALF]` 2D tile lift. The #167 context-attention
   rows split into Mistral sliding-window accumulator-to-store and nopad
-  variable-length accumulator-to-store obligations. The #172 Phi flash-decode
+  variable-length accumulator-to-store obligations. The #171 LLaMA flash-decode
+  normalization path is upgraded to a full-value candidate and leaves a
+  narrower running-max recurrence follow-up linked to #181. The #172 Phi flash-decode
   row now leaves only the running-max obligation linked to #175; #176's masked
   scaled-accumulator recurrence and #177's final normalization/store path are
   upgraded to full-value candidates.

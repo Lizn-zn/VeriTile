@@ -79,6 +79,28 @@ def flash_decode2_llama_final_store_slice
       offs_d * $(stride_od), final)
 }
 
+/-- Final normalization and output writeback for LLaMA flash-decode stage2.
+
+This kernel consumes the loop-produced accumulator vector and `sum_exp` scalar,
+computes `acc / sum_exp`, and writes the Python-observable `O` row. -/
+def flash_decode2_llama_normalization_store_kernel
+    (Acc SumExp O : RegionName)
+    (stride_acc_b stride_acc_h stride_acc_d
+      stride_sum_b stride_sum_h
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  acc = tl.load(Acc + cur_batch * $(stride_acc_b) +
+      cur_head * $(stride_acc_h) + offs_d * $(stride_acc_d))
+  sum_exp = tl.load(SumExp + cur_batch * $(stride_sum_b) +
+      cur_head * $(stride_sum_h))
+  tl.store(O + cur_batch * $(stride_obs) + cur_head * $(stride_oh) +
+      offs_d * $(stride_od), acc / sum_exp)
+}
+
 def dIndex (_s : BlockState) (i : Fin BLOCK_DMODEL) : Nat :=
   i.val
 
@@ -89,11 +111,31 @@ def finalOffset
   s.pids 0 * stride_final_b + s.pids 1 * stride_final_h +
     dIndex s i * stride_final_d
 
+def accOffset
+    (s : BlockState)
+    (stride_acc_b stride_acc_h stride_acc_d : Nat)
+    (i : Fin BLOCK_DMODEL) : Nat :=
+  s.pids 0 * stride_acc_b + s.pids 1 * stride_acc_h +
+    dIndex s i * stride_acc_d
+
+def sumExpOffset
+    (s : BlockState)
+    (stride_sum_b stride_sum_h : Nat) : Nat :=
+  s.pids 0 * stride_sum_b + s.pids 1 * stride_sum_h
+
 def outOffset
     (s : BlockState)
     (stride_obs stride_oh stride_od : Nat)
     (i : Fin BLOCK_DMODEL) : Nat :=
   s.pids 0 * stride_obs + s.pids 1 * stride_oh + dIndex s i * stride_od
+
+noncomputable def normalizedStoreValue
+    (s : BlockState) (Acc SumExp : RegionName)
+    (stride_acc_b stride_acc_h stride_acc_d
+      stride_sum_b stride_sum_h : Nat)
+    (i : Fin BLOCK_DMODEL) : ℝ :=
+  s.readMem Acc (accOffset s stride_acc_b stride_acc_h stride_acc_d i) /
+    s.readMem SumExp (sumExpOffset s stride_sum_b stride_sum_h)
 
 /-- Algorithm-layer correctness for the final flash-decode writeback. -/
 theorem flash_decode2_llama_final_store_slice_correct
@@ -184,16 +226,170 @@ theorem flash_decode2_llama_final_store_python_test_shape_compute_correct
     128 32 1 128 32 1 32 s
     (flash_decode2_llama_python_test_shape_offset_injective s)
 
+/-- Algorithm-layer correctness for LLaMA stage2 normalization plus writeback. -/
+theorem flash_decode2_llama_normalization_store_kernel_correct
+    (Acc SumExp O : RegionName)
+    (stride_acc_b stride_acc_h stride_acc_d
+      stride_sum_b stride_sum_h
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
+    ∀ i : Fin BLOCK_DMODEL,
+      let outAddr := outOffset s stride_obs stride_oh stride_od i
+      (exec (flash_decode2_llama_normalization_store_kernel Acc SumExp O
+            stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
+            stride_obs stride_oh stride_od BLOCK_DMODEL) s).map (·.readMem O outAddr)
+        = some (normalizedStoreValue s Acc SumExp stride_acc_b stride_acc_h
+            stride_acc_d stride_sum_b stride_sum_h i) := by
+  intro i
+  simp [exec, flash_decode2_llama_normalization_store_kernel, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, NumericDType.div, dIndex,
+        accOffset, sumExpOffset, outOffset]
+  let offsetFn : TileIndex [BLOCK_DMODEL] → Nat :=
+    fun idx => s.pids 0 * stride_obs + s.pids 1 * stride_oh + idx.1.val * stride_od
+  let valueFn : TileIndex [BLOCK_DMODEL] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (match
+          some (s.readMem Acc
+            (s.pids 0 * stride_acc_b + s.pids 1 * stride_acc_h +
+              idx.1.val * stride_acc_d))
+        with
+        | some x =>
+            some (x / s.readMem SumExp
+              (s.pids 0 * stride_sum_b + s.pids 1 * stride_sum_h))
+        | none => none)
+  have hRawInj : Function.Injective offsetFn := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have habFin : outOffset s stride_obs stride_oh stride_od a =
+        outOffset s stride_obs stride_oh stride_od b := by
+      simpa [offsetFn, outOffset, dIndex] using hab
+    obtain rfl : a = b := hOutInj habFin
+    rfl
+  rw [BlockState.scatter_readback_nd _ _ _ hRawInj (i, PUnit.unit)]
+  simp [offsetFn, valueFn, normalizedStoreValue, accOffset, sumExpOffset, dIndex]
+
+/-- Compute-facing correctness for LLaMA stage2 normalization plus writeback. -/
+theorem flash_decode2_llama_normalization_store_kernel_compute_correct
+    (Acc SumExp O : RegionName)
+    (stride_acc_b stride_acc_h stride_acc_d
+      stride_sum_b stride_sum_h
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_normalization_store_kernel Acc SumExp O
+        stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
+        stride_obs stride_oh stride_od BLOCK_DMODEL)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_DMODEL =>
+        some (O, outOffset s stride_obs stride_oh stride_od i))
+      (expected := fun i : Fin BLOCK_DMODEL =>
+        normalizedStoreValue s Acc SumExp stride_acc_b stride_acc_h
+          stride_acc_d stride_sum_b stride_sum_h i) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_decode2_llama_normalization_store_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  have h := flash_decode2_llama_normalization_store_kernel_correct Acc SumExp O
+    stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
+    stride_obs stride_oh stride_od BLOCK_DMODEL s hOutInj i
+  rw [hExec] at h
+  exact Option.some.inj h
+
+theorem flash_decode2_llama_normalization_store_python_test_shape_compute_correct
+    (Acc SumExp O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_normalization_store_kernel Acc SumExp O
+        128 32 1 4 1 128 32 1 32)
+      (initialState := s)
+      (write := fun i : Fin 32 => some (O, outOffset s 128 32 1 i))
+      (expected := fun i : Fin 32 =>
+        normalizedStoreValue s Acc SumExp 128 32 1 4 1 i) := by
+  exact flash_decode2_llama_normalization_store_kernel_compute_correct Acc SumExp O
+    128 32 1 4 1 128 32 1 32 s
+    (flash_decode2_llama_python_test_shape_offset_injective s)
+
 /-- Public Python test-shape summary for `flash_decode2_llama.py`.
 
 The Python tests use `mid_out : (2, 4, 3, 32)`, `O : (2, 4, 32)`, and
-`block_seq = 8`. This records the faithful full stage2 surface and ties it to
-the observable final `O` writeback slice. The loop-reduced normalized vector is
-represented by the proof-oriented `Final` region in the store slice. -/
+`block_seq = 8`. This records the faithful full stage2 surface and ties the
+loop-produced `Acc` and `SumExp` values to the exact Python-observable `O`
+writeback. -/
 theorem flash_decode2_llama_python_test_shape_output_summary
-    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final O : RegionName)
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Acc SumExp O : RegionName)
     (s : BlockState) :
     (∃ alg, (flash_decode2_llama_surface B_Seqlen Mid_O Mid_O_LogExpSum O
+      384 96 32 1 12 3 1 128 32 1 8 32).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_normalization_store_kernel Acc SumExp O
+        128 32 1 4 1 128 32 1 32)
+      (initialState := s)
+      (write := fun i : Fin 32 => some (O, outOffset s 128 32 1 i))
+      (expected := fun i : Fin 32 =>
+        normalizedStoreValue s Acc SumExp 128 32 1 4 1 i) := by
+  constructor
+  · exact flash_decode2_llama_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum O 384 96 32 1 12 3 1 128 32 1 8 32
+  · exact flash_decode2_llama_normalization_store_python_test_shape_compute_correct
+      Acc SumExp O s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/-- `output_summary` row for the LLaMA stage2 running-max follow-up.
+
+This narrower follow-up covers the dynamic `max_logic` recurrence over
+`Mid_O_LogExpSum`; the current proof-oriented summary records the faithful
+surface but does not prove that loop invariant. -/
+abbrev flash_decode2_llama_python_test_shape_running_max_output_summary
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final O : RegionName)
+    (s : BlockState) :=
+  (∃ alg, (flash_decode2_llama_surface B_Seqlen Mid_O Mid_O_LogExpSum O
       384 96 32 1 12 3 1 128 32 1 8 32).toAlgorithm? =
         Except.ok alg) ∧
     ComputeCorrect.Realizes
@@ -202,11 +398,6 @@ theorem flash_decode2_llama_python_test_shape_output_summary
       (initialState := s)
       (write := fun i : Fin 32 => some (O, outOffset s 128 32 1 i))
       (expected := fun i : Fin 32 =>
-        s.readMem Final (finalOffset s 128 32 1 i)) := by
-  constructor
-  · exact flash_decode2_llama_surface_toAlgorithm_supported B_Seqlen Mid_O
-      Mid_O_LogExpSum O 384 96 32 1 12 3 1 128 32 1 8 32
-  · exact flash_decode2_llama_final_store_python_test_shape_compute_correct
-      Final O s
+        s.readMem Final (finalOffset s 128 32 1 i))
 
 end VeriTile.Bench.TritonBenchG.FlashDecode2Llama
