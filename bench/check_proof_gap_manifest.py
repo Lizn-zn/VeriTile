@@ -40,6 +40,9 @@ ISSUE_BY_FAMILY = {
     "flash-decode-normalized-vector-store": "#168",
     "flash-decode-llama-stage2-normalization": "#171",
     "flash-decode-phi-stage2-normalization": "#172",
+    "flash-decode-phi-running-max-recurrence": "#175",
+    "flash-decode-phi-masked-accumulator-recurrence": "#176",
+    "flash-decode-phi-normalization-store": "#177",
     "attention-online-softmax-recurrence": "#162",
     "fixed-width-int8-cast-semantics": "#154",
     "loss-reduction-aggregation": "#151",
@@ -161,6 +164,12 @@ def family_for(name: str, text: str) -> str:
         return "context-attention-streaming-acc-store"
     if "flash_decode2_llama" in hay:
         return "flash-decode-llama-stage2-normalization"
+    if "flash_decode2_phi" in lname and "running_max" in lname:
+        return "flash-decode-phi-running-max-recurrence"
+    if "flash_decode2_phi" in lname and "masked_accumulator" in lname:
+        return "flash-decode-phi-masked-accumulator-recurrence"
+    if "flash_decode2_phi" in lname and "normalization_store" in lname:
+        return "flash-decode-phi-normalization-store"
     if "flash_decode2_phi" in hay:
         return "flash-decode-phi-stage2-normalization"
     if "flash_decode2" in hay:
