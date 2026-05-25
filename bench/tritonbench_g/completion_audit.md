@@ -72,11 +72,15 @@ surface.
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
   to the former broad #147 quantization bucket, the former broad #148
-  matmul/dot bucket, the former broad #153 rotary/cache bucket, or the broad
-  #152 `semantic-blocker` bucket. The #148 rows now split into GEMV K-loop,
-  BMM final-store, dequantized cross-kernel, IV-dependent output-store, plain
-  matmul output-store, activation-tail, and TMA output-store accumulator
-  blockers. The #152 blocked summaries now migrate to the open #154
+  matmul/dot bucket, the former broad #149 attention/softmax bucket, the former
+  broad #153 rotary/cache bucket, or the broad #152 `semantic-blocker` bucket.
+  The #148 rows now split into GEMV K-loop, BMM final-store, dequantized
+  cross-kernel, IV-dependent output-store, plain matmul output-store,
+  activation-tail, and TMA output-store accumulator blockers. The #149 rows
+  now split into #161 final-store lift blockers plus #162 forward online
+  softmax recurrence, score/probability reduction, context/decode reduction,
+  token-attention reduction, and backward score-reduction blockers. The #152
+  blocked summaries now migrate to the open #154
   `fixed-width-int8-cast-semantics` issue because their concrete blocker is
   CUDA `llrint` / int8-cast semantics; the #153 rows split into
   `rope-head-slice-lift` for RoPE Q/K head-slice value proofs and
