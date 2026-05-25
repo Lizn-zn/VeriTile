@@ -27,8 +27,10 @@ softmax, score/probability recurrence, mask/exp scaling, and flash-decode
 reduction obligations under #162.
 The #161 final-store bucket has been split again into kernel-specific producer
 obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
-`dense-attention-acc-store` (#166), `context-attention-streaming-acc-store`
-(#167), and `flash-decode-normalized-vector-store` (#168).
+`dense-attention-acc-store` (#166),
+`context-attention-mistral-sliding-window-acc-store` (#167),
+`context-attention-nopad-varlen-acc-store` (#167), and
+`flash-decode-normalized-vector-store` (#168).
 The broad #148 matmul/dot bucket has been split into narrower accumulator
 proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,

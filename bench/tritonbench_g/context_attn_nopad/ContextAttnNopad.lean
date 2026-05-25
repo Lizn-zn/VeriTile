@@ -319,7 +319,9 @@ theorem context_attn_nopad_final_store_python_test_shape_compute_correct
 This records the faithful full `_fwd_kernel` surface for the checked
 contiguous layout and ties it to the observable final `Out` writeback slice.
 The streaming softmax accumulator is represented by the proof-oriented `Acc`
-tile in the store slice. -/
+tile in the store slice. The remaining #167 blocker is
+`context-attention-nopad-varlen-acc-store`: connecting that variable-length
+nopad streaming accumulator path to this final masked writeback. -/
 theorem context_attn_nopad_python_test_shape_output_summary
     (Q K V Acc B_Start_Loc B_Seqlen Out : RegionName) (s : BlockState) :
     (∃ alg, (context_attn_nopad_fwd_kernel_surface Q K V

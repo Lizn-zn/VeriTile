@@ -332,7 +332,9 @@ theorem context_attn_mistral_final_store_python_test_shape_compute_correct
 This records the faithful full `_fwd_kernel` surface for the checked
 contiguous Mistral layout and ties it to the observable final `Out` writeback
 slice. The streaming attention accumulator is represented by the
-proof-oriented `Acc` tile in the store slice. -/
+proof-oriented `Acc` tile in the store slice. The remaining #167 blocker is
+`context-attention-mistral-sliding-window-acc-store`: connecting that
+sliding-window streaming accumulator path to this final masked writeback. -/
 theorem context_attn_mistral_python_test_shape_output_summary
     (Q K V Acc B_Start_Loc B_Seqlen Out : RegionName) (s : BlockState) :
     (∃ alg, (context_attn_mistral_fwd_kernel_surface Q K V
