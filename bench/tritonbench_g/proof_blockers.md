@@ -27,8 +27,10 @@ softmax, score/probability recurrence, mask/exp scaling, and flash-decode
 reduction obligations under #162.
 The #161 final-store bucket has been split again into kernel-specific producer
 obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
-`dense-attention-acc-store` (#166), `context-attention-streaming-acc-store`
-(#167), and `flash-decode-normalized-vector-store` (#168).
+`dense-attention-acc-store` (#166),
+`context-attention-mistral-sliding-window-acc-store` (#167),
+`context-attention-nopad-varlen-acc-store` (#167), and
+`flash-decode-normalized-vector-store` (#168).
 The #168 flash-decode normalized-vector bucket has been split into
 kernel-specific stage2 recurrence obligations:
 `flash-decode-llama-stage2-normalization` (#171) and

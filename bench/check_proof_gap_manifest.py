@@ -29,6 +29,8 @@ ISSUE_BY_FAMILY = {
     "attention-softmax-accumulator": "#149",
     "attention-final-store-lift": "#161",
     "attention-fwd-triton1-bo-bhpre-producers": "#165",
+    "context-attention-mistral-sliding-window-acc-store": "#167",
+    "context-attention-nopad-varlen-acc-store": "#167",
     "context-attention-streaming-acc-store": "#167",
     "dense-attention-acc-store": "#166",
     "flash-decode-normalized-vector-store": "#168",
@@ -145,7 +147,11 @@ def family_for(name: str, text: str) -> str:
         return "attention-fwd-triton1-bo-bhpre-producers"
     if "attention_kernel" in hay:
         return "dense-attention-acc-store"
-    if any(k in hay for k in ("context_attn_mistral", "context_attn_nopad")):
+    if "context_attn_mistral" in hay:
+        return "context-attention-mistral-sliding-window-acc-store"
+    if "context_attn_nopad" in hay:
+        return "context-attention-nopad-varlen-acc-store"
+    if "context-attention" in hay:
         return "context-attention-streaming-acc-store"
     if "flash_decode2_llama" in hay:
         return "flash-decode-llama-stage2-normalization"
