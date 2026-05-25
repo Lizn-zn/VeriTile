@@ -34,8 +34,12 @@ obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
 `flash-decode-normalized-vector-store` (#168).
 The #168 flash-decode normalized-vector bucket has been split into
 kernel-specific stage2 recurrence obligations:
-`flash-decode-llama-stage2-normalization` (#171) and
+the now-discharged `flash-decode-llama-stage2-normalization` (#171) and
 `flash-decode-phi-stage2-normalization` (#172).
+The #171 LLaMA stage2 normalization bucket now connects loop-produced `Acc` and
+`SumExp` values to the final `O` writeback as a full-value candidate; the
+remaining LLaMA running-max recurrence tracks under
+`flash-decode-llama-running-max-recurrence` (#181).
 The #172 Phi stage2 recurrence bucket has been split into narrower
 obligations: `flash-decode-phi-running-max-recurrence` (#175),
 the now-discharged `flash-decode-phi-masked-accumulator-recurrence` (#176),

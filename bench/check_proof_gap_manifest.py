@@ -39,6 +39,7 @@ ISSUE_BY_FAMILY = {
     "dense-attention-acc-store": "#166",
     "flash-decode-normalized-vector-store": "#168",
     "flash-decode-llama-stage2-normalization": "#171",
+    "flash-decode-llama-running-max-recurrence": "#181",
     "flash-decode-phi-stage2-normalization": "#172",
     "flash-decode-phi-running-max-recurrence": "#175",
     "flash-decode-phi-masked-accumulator-recurrence": "#176",
@@ -162,6 +163,8 @@ def family_for(name: str, text: str) -> str:
         return "context-attention-nopad-varlen-acc-store"
     if "context-attention" in hay:
         return "context-attention-streaming-acc-store"
+    if "flash_decode2_llama" in lname and "running_max" in lname:
+        return "flash-decode-llama-running-max-recurrence"
     if "flash_decode2_llama" in hay:
         return "flash-decode-llama-stage2-normalization"
     if "flash_decode2_phi" in lname and "running_max" in lname:
