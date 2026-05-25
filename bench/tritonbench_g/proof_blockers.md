@@ -16,9 +16,13 @@ context, not that future human review is forbidden from downgrading it.
 The broad #147 quantization bucket has been split. Real-to-int8 cast semantics
 track under #154 and now have an executable DSL/AST semantics path; remaining
 quantization rows whose local blocker is end-to-end scale/value coupling track
-under #158. Rows whose local blocker is primarily attention, recurrence,
-reduction, or explicit blocked-summary work track under the corresponding
-family issue.
+under #158. Rows whose local blocker is primarily recurrence, reduction, or
+explicit blocked-summary work track under the corresponding family issue.
+The broad #149 attention bucket has been split into narrower #162 recurrence
+and reduction proof follow-ups: `attention-online-softmax-recurrence`,
+`attention-score-probability-reduction`, `attention-context-decode-reduction`,
+`flash-decode-reduction`, `token-attention-reduction`, and
+`attention-backward-score-reduction`.
 The broad #148 matmul/dot bucket has been split into narrower accumulator
 proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
