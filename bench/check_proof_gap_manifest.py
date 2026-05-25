@@ -26,13 +26,21 @@ PORTS_ROOT = ROOT / "bench" / "tritonbench_g"
 MANIFEST = PORTS_ROOT / "proof_gap_manifest.tsv"
 
 ISSUE_BY_FAMILY = {
+    "attention-softmax-accumulator": "#149",
     "attention-backward-score-reduction": "#162",
     "attention-context-decode-reduction": "#162",
-    "attention-forward-online-softmax-recurrence": "#162",
-    "attention-softmax-accumulator": "#149",
     "attention-final-store-lift": "#161",
-    "attention-online-softmax-recurrence": "#162",
+    "attention-forward-online-softmax-recurrence": "#162",
+    "attention-fwd-triton1-bo-bhpre-producers": "#165",
     "attention-score-probability-reduction": "#162",
+    "context-attention-mistral-sliding-window-acc-store": "#167",
+    "context-attention-nopad-varlen-acc-store": "#167",
+    "context-attention-streaming-acc-store": "#167",
+    "dense-attention-acc-store": "#166",
+    "flash-decode-normalized-vector-store": "#168",
+    "flash-decode-llama-stage2-normalization": "#171",
+    "flash-decode-phi-stage2-normalization": "#172",
+    "attention-online-softmax-recurrence": "#162",
     "fixed-width-int8-cast-semantics": "#154",
     "loss-reduction-aggregation": "#151",
     "bmm-final-store-accumulator": "#148",
@@ -141,6 +149,22 @@ def family_for(name: str, text: str) -> str:
         return "matmul-activation-tail-accumulator"
     if any(k in hay for k in ("matmul_kernel", "matmul_triton")):
         return "matmul-output-store-accumulator"
+    if "attention_fwd_triton1" in hay:
+        return "attention-fwd-triton1-bo-bhpre-producers"
+    if "attention_kernel" in hay:
+        return "dense-attention-acc-store"
+    if "context_attn_mistral" in hay:
+        return "context-attention-mistral-sliding-window-acc-store"
+    if "context_attn_nopad" in hay:
+        return "context-attention-nopad-varlen-acc-store"
+    if "context-attention" in hay:
+        return "context-attention-streaming-acc-store"
+    if "flash_decode2_llama" in hay:
+        return "flash-decode-llama-stage2-normalization"
+    if "flash_decode2_phi" in hay:
+        return "flash-decode-phi-stage2-normalization"
+    if "flash_decode2" in hay:
+        return "flash-decode-normalized-vector-store"
     if "triton_attention_bwd" in lname:
         return "attention-backward-score-reduction"
     if any(k in lname for k in ("token_attn", "token_softmax", "softmax_reducev")):

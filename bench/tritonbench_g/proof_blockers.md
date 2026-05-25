@@ -16,9 +16,9 @@ context, not that future human review is forbidden from downgrading it.
 The broad #147 quantization bucket has been split. Real-to-int8 cast semantics
 track under #154 and now have an executable DSL/AST semantics path; remaining
 quantization rows whose local blocker is end-to-end scale/value coupling track
-under #158. Rows whose local blocker is primarily matmul, recurrence,
-reduction, or explicit blocked-summary work track under the corresponding
-family issue.
+under #158. Rows whose local blocker is primarily attention, matmul,
+recurrence, reduction, or explicit blocked-summary work track under the
+corresponding family issue.
 The broad #149 attention/softmax bucket has been split as well:
 `attention-final-store-lift` tracks summaries that still connect a faithful
 surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
@@ -26,6 +26,16 @@ tiles under #161, while the #162 rows now split further into
 `attention-forward-online-softmax-recurrence`,
 `attention-score-probability-reduction`, `attention-context-decode-reduction`,
 `token-attention-reduction`, and `attention-backward-score-reduction`.
+The #161 final-store bucket has been split again into kernel-specific producer
+obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
+`dense-attention-acc-store` (#166),
+`context-attention-mistral-sliding-window-acc-store` (#167),
+`context-attention-nopad-varlen-acc-store` (#167), and
+`flash-decode-normalized-vector-store` (#168).
+The #168 flash-decode normalized-vector bucket has been split into
+kernel-specific stage2 recurrence obligations:
+`flash-decode-llama-stage2-normalization` (#171) and
+`flash-decode-phi-stage2-normalization` (#172).
 The broad #148 matmul/dot bucket has been split into narrower accumulator
 proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,

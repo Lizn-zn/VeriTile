@@ -85,7 +85,9 @@ surface.
   CUDA `llrint` / int8-cast semantics; the #153 rows split into
   `rope-head-slice-lift` for RoPE Q/K head-slice value proofs and
   `rotary-2d-tile-value-lift` for row-level rotary `o0`/`o1` proofs that still
-  need the full `[BLOCK_M, BLOCK_HALF]` 2D tile lift.
+  need the full `[BLOCK_M, BLOCK_HALF]` 2D tile lift. The #167 context-attention
+  rows split into Mistral sliding-window accumulator-to-store and nopad
+  variable-length accumulator-to-store obligations.
 
 ## Remaining Blockers
 
