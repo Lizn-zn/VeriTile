@@ -34,16 +34,21 @@ obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
 `flash-decode-normalized-vector-store` (#168).
 The #168 flash-decode normalized-vector bucket has been split into
 kernel-specific stage2 recurrence obligations:
-`flash-decode-llama-stage2-normalization` (#171) and
+the now-discharged `flash-decode-llama-stage2-normalization` (#171) and
 `flash-decode-phi-stage2-normalization` (#172).
+The #171 LLaMA stage2 normalization bucket now connects loop-produced `Acc` and
+`SumExp` values to the final `O` writeback as a full-value candidate; the
+remaining LLaMA running-max recurrence tracks under
+`flash-decode-llama-running-max-recurrence` (#181).
 The #172 Phi stage2 recurrence bucket has been split into narrower
 obligations: the now-discharged `flash-decode-phi-running-max-recurrence`
-(#175), `flash-decode-phi-masked-accumulator-recurrence` (#176), and the
-now-discharged `flash-decode-phi-normalization-store` (#177). The #175 path now
-states and proves the Python test-shape running `max_logic` recurrence as a
-full-value candidate, and the #177 path connects the Python test-shape `Acc`
-and `SumExp` outputs to the final masked `Out` writeback as a full-value
-candidate in `proof_gap_manifest.tsv`.
+(#175), the now-discharged `flash-decode-phi-masked-accumulator-recurrence`
+(#176), and the now-discharged `flash-decode-phi-normalization-store` (#177).
+The #175 path states and proves the Python test-shape running `max_logic`
+recurrence, #176 carries the Python test-shape masked `Mid_O` load through the
+`AccOut` and `SumExpOut` recurrence step, and #177 connects the Python
+test-shape `Acc` and `SumExp` outputs to the final masked `Out` writeback; all
+three are full-value candidates in `proof_gap_manifest.tsv`.
 The broad #148 matmul/dot bucket has been split into narrower accumulator
 proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
