@@ -35,6 +35,10 @@ The #168 flash-decode normalized-vector bucket has been split into
 kernel-specific stage2 recurrence obligations:
 `flash-decode-llama-stage2-normalization` (#171) and
 `flash-decode-phi-stage2-normalization` (#172).
+The #172 Phi stage2 recurrence bucket has been split into narrower
+obligations: `flash-decode-phi-running-max-recurrence` (#175),
+`flash-decode-phi-masked-accumulator-recurrence` (#176), and
+`flash-decode-phi-normalization-store` (#177).
 The broad #148 matmul/dot bucket has been split into narrower accumulator
 proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
