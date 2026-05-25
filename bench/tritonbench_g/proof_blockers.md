@@ -22,9 +22,10 @@ corresponding family issue.
 The broad #149 attention/softmax bucket has been split as well:
 `attention-final-store-lift` tracks summaries that still connect a faithful
 surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
-tiles under #161, while `attention-online-softmax-recurrence` tracks online
-softmax, score/probability recurrence, mask/exp scaling, and flash-decode
-reduction obligations under #162.
+tiles under #161, while the #162 rows now split further into
+`attention-forward-online-softmax-recurrence`,
+`attention-score-probability-reduction`, `attention-context-decode-reduction`,
+`token-attention-reduction`, and `attention-backward-score-reduction`.
 The #161 final-store bucket has been split again into kernel-specific producer
 obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
 `dense-attention-acc-store` (#166),

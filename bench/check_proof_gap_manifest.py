@@ -27,8 +27,12 @@ MANIFEST = PORTS_ROOT / "proof_gap_manifest.tsv"
 
 ISSUE_BY_FAMILY = {
     "attention-softmax-accumulator": "#149",
+    "attention-backward-score-reduction": "#162",
+    "attention-context-decode-reduction": "#162",
     "attention-final-store-lift": "#161",
+    "attention-forward-online-softmax-recurrence": "#162",
     "attention-fwd-triton1-bo-bhpre-producers": "#165",
+    "attention-score-probability-reduction": "#162",
     "context-attention-mistral-sliding-window-acc-store": "#167",
     "context-attention-nopad-varlen-acc-store": "#167",
     "context-attention-streaming-acc-store": "#167",
@@ -58,6 +62,7 @@ ISSUE_BY_FAMILY = {
     "reduction-layernorm-aggregation": "#151",
     "rotary-cache-path": "#153",
     "semantic-blocker": "#152",
+    "token-attention-reduction": "#162",
 }
 
 SUMMARY_RE = re.compile(r"\b(?:theorem|abbrev)\s+([A-Za-z0-9_'.]*output_summary[A-Za-z0-9_'.]*)\b")
@@ -115,7 +120,7 @@ def context_for(lines: list[str], idx: int) -> str:
 
 
 def family_for(name: str, text: str) -> str:
-    lower_name = name.lower()
+    lname = name.lower()
     hay = f"{name}\n{text}".lower()
     if ("blocked_output_summary" in name.lower() or "blocked" in hay) and any(
         k in hay
@@ -159,16 +164,38 @@ def family_for(name: str, text: str) -> str:
         return "context-attention-streaming-acc-store"
     if "flash_decode2_llama" in hay:
         return "flash-decode-llama-stage2-normalization"
-    if "flash_decode2_phi" in lower_name and "running_max" in lower_name:
+    if "flash_decode2_phi" in lname and "running_max" in lname:
         return "flash-decode-phi-running-max-recurrence"
-    if "flash_decode2_phi" in lower_name and "masked_accumulator" in lower_name:
+    if "flash_decode2_phi" in lname and "masked_accumulator" in lname:
         return "flash-decode-phi-masked-accumulator-recurrence"
-    if "flash_decode2_phi" in lower_name and "normalization_store" in lower_name:
+    if "flash_decode2_phi" in lname and "normalization_store" in lname:
         return "flash-decode-phi-normalization-store"
     if "flash_decode2_phi" in hay:
         return "flash-decode-phi-stage2-normalization"
     if "flash_decode2" in hay:
         return "flash-decode-normalized-vector-store"
+    if "triton_attention_bwd" in lname:
+        return "attention-backward-score-reduction"
+    if any(k in lname for k in ("token_attn", "token_softmax", "softmax_reducev")):
+        return "token-attention-reduction"
+    if any(k in lname for k in ("attention_score", "ksoftmax", "mixed_sparse_attention", "block_sparse_attn")):
+        return "attention-score-probability-reduction"
+    if any(k in lname for k in ("context_attn_bloom", "context_attn_fwd", "context_attn_llama")):
+        return "attention-context-decode-reduction"
+    if any(
+        k in lname
+        for k in (
+            "attention_forward",
+            "attention_fwd_triton2",
+            "attention_fwd_triton3",
+            "attn_fwd",
+            "chunk_gated_attention",
+            "flash_attn",
+            "lightning_attention",
+            "triton_attention_forward",
+        )
+    ):
+        return "attention-forward-online-softmax-recurrence"
     if any(k in hay for k in ("attention", "attn", "softmax", "flash", "decode", "score", "prob")):
         if any(k in hay for k in ("final-store", "final store", "store slice", "precomputed")):
             return "attention-final-store-lift"
