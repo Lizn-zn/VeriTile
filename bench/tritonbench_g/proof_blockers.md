@@ -25,11 +25,19 @@ surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Pro
 tiles under #161, while `attention-online-softmax-recurrence` tracks online
 softmax, score/probability recurrence, mask/exp scaling, and flash-decode
 reduction obligations under #162.
+The broad #148 matmul/dot bucket has been split into narrower accumulator
+proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
+`dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
+`matmul-output-store-accumulator`, `matmul-activation-tail-accumulator`, and
+`matmul-tma-output-store-accumulator`.
 The broad #153 rotary/cache bucket has also been split into narrower value
 proof follow-ups: `rope-head-slice-lift` covers RoPE summaries whose Python
 surface is faithful but whose value proof is still stated over Q/K head slices,
 and `rotary-2d-tile-value-lift` covers rotary summaries with row-level `o0` /
 `o1` value proofs that still need the full `[BLOCK_M, BLOCK_HALF]` tile lift.
+The explicit blocked-output summaries formerly tracked by the broad #152
+`semantic-blocker` bucket are all quantization `llrint` / int8-cast blockers
+and now track under the open #154 `fixed-width-int8-cast-semantics` family.
 
 ## Translation-Surface Blockers
 

@@ -31,7 +31,14 @@ ISSUE_BY_FAMILY = {
     "attention-online-softmax-recurrence": "#162",
     "fixed-width-int8-cast-semantics": "#154",
     "loss-reduction-aggregation": "#151",
+    "bmm-final-store-accumulator": "#148",
+    "dequant-matmul-cross-kernel-surface": "#148",
+    "gemv-k-loop-accumulator": "#148",
+    "iv-dependent-matmul-output-store": "#148",
+    "matmul-activation-tail-accumulator": "#148",
     "matmul-dot-accumulator": "#148",
+    "matmul-output-store-accumulator": "#148",
+    "matmul-tma-output-store-accumulator": "#148",
     "proof-slice-precomputed-value": "#152",
     "quantization-semantic-followup": "#158",
     "rope-head-slice-lift": "#153",
@@ -98,10 +105,36 @@ def context_for(lines: list[str], idx: int) -> str:
 
 def family_for(name: str, text: str) -> str:
     hay = f"{name}\n{text}".lower()
+    if ("blocked_output_summary" in name.lower() or "blocked" in hay) and any(
+        k in hay
+        for k in (
+            "llrint",
+            "to(tl.int8)",
+            ".to(tl.int8)",
+            "int8",
+            "quantize",
+            "rounding/cast",
+        )
+    ):
+        return "fixed-width-int8-cast-semantics"
     if "blocked_output_summary" in name.lower() or "blocked" in hay:
         return "semantic-blocker"
+    if "dequantize_matmul" in hay:
+        return "dequant-matmul-cross-kernel-surface"
     if "outside this triton" in hay and "matmul" in hay:
         return "matmul-dot-accumulator"
+    if "batched_vecmat" in hay or "vecmat" in hay:
+        return "gemv-k-loop-accumulator"
+    if "bmm_chunk" in hay:
+        return "bmm-final-store-accumulator"
+    if "iv_dependent_matmul" in hay:
+        return "iv-dependent-matmul-output-store"
+    if "matmul_tma" in hay:
+        return "matmul-tma-output-store-accumulator"
+    if any(k in hay for k in ("matmul_leakyrelu", "matmul_autotune")):
+        return "matmul-activation-tail-accumulator"
+    if any(k in hay for k in ("matmul_kernel", "matmul_triton")):
+        return "matmul-output-store-accumulator"
     if any(k in hay for k in ("attention", "attn", "softmax", "flash", "decode", "score", "prob")):
         if any(k in hay for k in ("final-store", "final store", "store slice", "precomputed")):
             return "attention-final-store-lift"
