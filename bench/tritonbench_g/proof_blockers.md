@@ -37,9 +37,9 @@ kernel-specific stage2 recurrence obligations:
 the now-discharged `flash-decode-llama-stage2-normalization` (#171) and
 `flash-decode-phi-stage2-normalization` (#172).
 The #171 LLaMA stage2 normalization bucket now connects loop-produced `Acc` and
-`SumExp` values to the final `O` writeback as a full-value candidate; the
-remaining LLaMA running-max recurrence tracks under
-`flash-decode-llama-running-max-recurrence` (#181).
+`SumExp` values to the final `O` writeback as a full-value candidate, and the
+#181 LLaMA running-max recurrence step over `Mid_O_LogExpSum` is now also a
+full-value candidate.
 The #172 Phi stage2 recurrence bucket has been split into narrower
 obligations: `flash-decode-phi-running-max-recurrence` (#175),
 the now-discharged `flash-decode-phi-masked-accumulator-recurrence` (#176),

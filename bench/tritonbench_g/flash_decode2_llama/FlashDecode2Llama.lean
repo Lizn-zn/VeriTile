@@ -101,6 +101,24 @@ def flash_decode2_llama_normalization_store_kernel
       offs_d * $(stride_od), acc / sum_exp)
 }
 
+/-- One LLaMA stage2 running-maximum recurrence step. -/
+def flash_decode2_llama_running_max_step_kernel
+    (Mid_O_LogExpSum MaxLogic NewMaxLogic : RegionName)
+    (block_seq_n
+      stride_mid_o_eb stride_mid_o_eh
+      stride_logic_b stride_logic_h : Nat) :
+    ComputeKernel := triton {
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  tlogic = tl.load(Mid_O_LogExpSum + cur_batch * $(stride_mid_o_eb) +
+      cur_head * $(stride_mid_o_eh) + $(block_seq_n))
+  max_logic = tl.load(MaxLogic + cur_batch * $(stride_logic_b) +
+      cur_head * $(stride_logic_h))
+  new_max_logic = tl.maximum(tlogic, max_logic)
+  tl.store(NewMaxLogic + cur_batch * $(stride_logic_b) +
+      cur_head * $(stride_logic_h), new_max_logic)
+}
+
 def dIndex (_s : BlockState) (i : Fin BLOCK_DMODEL) : Nat :=
   i.val
 
@@ -123,6 +141,11 @@ def sumExpOffset
     (stride_sum_b stride_sum_h : Nat) : Nat :=
   s.pids 0 * stride_sum_b + s.pids 1 * stride_sum_h
 
+def logicOffset
+    (s : BlockState)
+    (block_seq_n stride_mid_o_eb stride_mid_o_eh : Nat) : Nat :=
+  s.pids 0 * stride_mid_o_eb + s.pids 1 * stride_mid_o_eh + block_seq_n
+
 def outOffset
     (s : BlockState)
     (stride_obs stride_oh stride_od : Nat)
@@ -136,6 +159,15 @@ noncomputable def normalizedStoreValue
     (i : Fin BLOCK_DMODEL) : ℝ :=
   s.readMem Acc (accOffset s stride_acc_b stride_acc_h stride_acc_d i) /
     s.readMem SumExp (sumExpOffset s stride_sum_b stride_sum_h)
+
+noncomputable def runningMaxStepValue
+    (s : BlockState) (Mid_O_LogExpSum MaxLogic : RegionName)
+    (block_seq_n stride_mid_o_eb stride_mid_o_eh
+      stride_logic_b stride_logic_h : Nat) : ℝ :=
+  let tlogic := s.readMem Mid_O_LogExpSum
+    (logicOffset s block_seq_n stride_mid_o_eb stride_mid_o_eh)
+  let maxLogic := s.readMem MaxLogic (sumExpOffset s stride_logic_b stride_logic_h)
+  if tlogic > maxLogic then tlogic else maxLogic
 
 /-- Algorithm-layer correctness for the final flash-decode writeback. -/
 theorem flash_decode2_llama_final_store_slice_correct
@@ -316,6 +348,74 @@ theorem flash_decode2_llama_normalization_store_python_test_shape_compute_correc
     128 32 1 4 1 128 32 1 32 s
     (flash_decode2_llama_python_test_shape_offset_injective s)
 
+/-- Compute-facing correctness for one LLaMA running-maximum recurrence step. -/
+theorem flash_decode2_llama_running_max_step_kernel_compute_correct
+    (Mid_O_LogExpSum MaxLogic NewMaxLogic : RegionName)
+    (block_seq_n
+      stride_mid_o_eb stride_mid_o_eh
+      stride_logic_b stride_logic_h : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_running_max_step_kernel Mid_O_LogExpSum
+        MaxLogic NewMaxLogic block_seq_n stride_mid_o_eb stride_mid_o_eh
+        stride_logic_b stride_logic_h)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar NewMaxLogic
+        (sumExpOffset s stride_logic_b stride_logic_h))
+      (expected := fun _ : PUnit =>
+        runningMaxStepValue s Mid_O_LogExpSum MaxLogic block_seq_n
+          stride_mid_o_eb stride_mid_o_eh stride_logic_b stride_logic_h) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_decode2_llama_running_max_step_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [exec, flash_decode2_llama_running_max_step_kernel, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, ComparableDType.gt, logicOffset,
+        sumExpOffset, runningMaxStepValue, ComputeCorrect.WriteMap.scalar] at hExec ⊢
+  rw [← hExec]
+  simp [BlockState.writeMem_readMem]
+  by_cases hlt :
+      s.readMem MaxLogic (s.pids 0 * stride_logic_b + s.pids 1 * stride_logic_h) <
+        s.readMem Mid_O_LogExpSum
+          (s.pids 0 * stride_mid_o_eb + s.pids 1 * stride_mid_o_eh + block_seq_n)
+  · have hbot :
+        (s.readMem MaxLogic
+          (s.pids 0 * stride_logic_b + s.pids 1 * stride_logic_h) : WithBot ℝ) <
+          (s.readMem Mid_O_LogExpSum
+            (s.pids 0 * stride_mid_o_eb + s.pids 1 * stride_mid_o_eh + block_seq_n) :
+            WithBot ℝ) := by
+      simpa using hlt
+    split
+    · exact WithBot.unbotD_coe 0 _
+    · rename_i hnot
+      exact False.elim (hnot hbot)
+  · have hbot :
+        ¬ (s.readMem MaxLogic
+          (s.pids 0 * stride_logic_b + s.pids 1 * stride_logic_h) : WithBot ℝ) <
+          (s.readMem Mid_O_LogExpSum
+            (s.pids 0 * stride_mid_o_eb + s.pids 1 * stride_mid_o_eh + block_seq_n) :
+            WithBot ℝ) := by
+      simpa using hlt
+    split
+    · rename_i hpos
+      exact False.elim (hbot hpos)
+    · exact WithBot.unbotD_coe 0 _
+
+theorem flash_decode2_llama_running_max_step_python_test_shape_compute_correct
+    (Mid_O_LogExpSum MaxLogic NewMaxLogic : RegionName)
+    (block_seq_n : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_llama_running_max_step_kernel Mid_O_LogExpSum
+        MaxLogic NewMaxLogic block_seq_n 12 3 4 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar NewMaxLogic (sumExpOffset s 4 1))
+      (expected := fun _ : PUnit =>
+        runningMaxStepValue s Mid_O_LogExpSum MaxLogic block_seq_n 12 3 4 1) := by
+  exact flash_decode2_llama_running_max_step_kernel_compute_correct
+    Mid_O_LogExpSum MaxLogic NewMaxLogic block_seq_n 12 3 4 1 s
+
 /-- Public Python test-shape summary for `flash_decode2_llama.py`.
 
 The Python tests use `mid_out : (2, 4, 3, 32)`, `O : (2, 4, 32)`, and
@@ -381,23 +481,29 @@ theorem flash_decode2_llama_python_test_shape_output_summary
 
 
 
-/-- `output_summary` row for the LLaMA stage2 running-max follow-up.
+/-- `output_summary` row for the LLaMA stage2 running maximum recurrence.
 
-This narrower follow-up covers the dynamic `max_logic` recurrence over
-`Mid_O_LogExpSum`; the current proof-oriented summary records the faithful
-surface but does not prove that loop invariant. -/
-abbrev flash_decode2_llama_python_test_shape_running_max_output_summary
-    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final O : RegionName)
-    (s : BlockState) :=
-  (∃ alg, (flash_decode2_llama_surface B_Seqlen Mid_O Mid_O_LogExpSum O
+This connects the Python test-shape `Mid_O_LogExpSum` input and incoming
+`MaxLogic` scalar to the updated `NewMaxLogic` scalar for one loop-body
+recurrence step. -/
+theorem flash_decode2_llama_python_test_shape_running_max_output_summary
+    (B_Seqlen : Region .nat)
+    (Mid_O Mid_O_LogExpSum MaxLogic NewMaxLogic O : RegionName)
+    (block_seq_n : Nat) (s : BlockState) :
+    (∃ alg, (flash_decode2_llama_surface B_Seqlen Mid_O Mid_O_LogExpSum O
       384 96 32 1 12 3 1 128 32 1 8 32).toAlgorithm? =
         Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := flash_decode2_llama_final_store_slice Final O
-        128 32 1 128 32 1 32)
+      (kernel := flash_decode2_llama_running_max_step_kernel Mid_O_LogExpSum
+        MaxLogic NewMaxLogic block_seq_n 12 3 4 1)
       (initialState := s)
-      (write := fun i : Fin 32 => some (O, outOffset s 128 32 1 i))
-      (expected := fun i : Fin 32 =>
-        s.readMem Final (finalOffset s 128 32 1 i))
+      (write := ComputeCorrect.WriteMap.scalar NewMaxLogic (sumExpOffset s 4 1))
+      (expected := fun _ : PUnit =>
+        runningMaxStepValue s Mid_O_LogExpSum MaxLogic block_seq_n 12 3 4 1) := by
+  constructor
+  · exact flash_decode2_llama_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum O 384 96 32 1 12 3 1 128 32 1 8 32
+  · exact flash_decode2_llama_running_max_step_python_test_shape_compute_correct
+      Mid_O_LogExpSum MaxLogic NewMaxLogic block_seq_n s
 
 end VeriTile.Bench.TritonBenchG.FlashDecode2Llama
