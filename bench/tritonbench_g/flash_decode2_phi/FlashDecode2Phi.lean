@@ -83,6 +83,31 @@ def flash_decode2_phi_final_store_slice
       offs_d * $(stride_od), final, mask=mask)
 }
 
+/-- Final normalization and output writeback for Phi flash-decode stage2.
+
+This kernel consumes the loop-produced accumulator vector and `sum_exp` scalar,
+computes `acc / sum_exp`, and writes the masked Python-observable `Out` row. -/
+def flash_decode2_phi_normalization_store_kernel
+    (Acc SumExp Out : RegionName)
+    (head_dim
+      stride_acc_b stride_acc_h stride_acc_d
+      stride_sum_b stride_sum_h
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  mask = offs_d < $(head_dim)
+  acc = tl.load(Acc + cur_batch * $(stride_acc_b) +
+      cur_head * $(stride_acc_h) + offs_d * $(stride_acc_d),
+      mask=mask, other=0.0)
+  sum_exp = tl.load(SumExp + cur_batch * $(stride_sum_b) +
+      cur_head * $(stride_sum_h))
+  tl.store(Out + cur_batch * $(stride_obs) + cur_head * $(stride_oh) +
+      offs_d * $(stride_od), acc / sum_exp, mask=mask)
+}
+
 def dIndex (_s : BlockState) (i : Fin BLOCK_DMODEL) : Nat :=
   i.val
 
@@ -101,6 +126,18 @@ def finalOffset
   s.pids 0 * stride_final_b + s.pids 1 * stride_final_h +
     dIndex s i * stride_final_d
 
+def accOffset
+    (s : BlockState)
+    (stride_acc_b stride_acc_h stride_acc_d : Nat)
+    (i : Fin BLOCK_DMODEL) : Nat :=
+  s.pids 0 * stride_acc_b + s.pids 1 * stride_acc_h +
+    dIndex s i * stride_acc_d
+
+def sumExpOffset
+    (s : BlockState)
+    (stride_sum_b stride_sum_h : Nat) : Nat :=
+  s.pids 0 * stride_sum_b + s.pids 1 * stride_sum_h
+
 def outOffset
     (s : BlockState)
     (stride_obs stride_oh stride_od : Nat)
@@ -115,6 +152,17 @@ noncomputable def finalStoreValue
     (if active s head_dim i then
       some (s.readMem Final
         (finalOffset s stride_final_b stride_final_h stride_final_d i))
+    else some (0.0 : ℝ))
+
+noncomputable def normalizedStoreValue
+    (s : BlockState) (Acc SumExp : RegionName)
+    (head_dim stride_acc_b stride_acc_h stride_acc_d
+      stride_sum_b stride_sum_h : Nat)
+    (i : Fin BLOCK_DMODEL) : ℝ :=
+  WithBot.unbotD 0
+    (if active s head_dim i then
+      some (s.readMem Acc (accOffset s stride_acc_b stride_acc_h stride_acc_d i) /
+        s.readMem SumExp (sumExpOffset s stride_sum_b stride_sum_h))
     else some (0.0 : ℝ))
 
 /-- Algorithm-layer correctness for the masked final flash-decode writeback. -/
@@ -237,6 +285,111 @@ theorem flash_decode2_phi_final_store_python_test_shape_compute_correct
     64 256 64 1 256 64 1 64 s
     (flash_decode2_phi_python_test_shape_offset_injective s)
 
+/-- Algorithm-layer correctness for Phi stage2 normalization plus writeback. -/
+theorem flash_decode2_phi_normalization_store_kernel_correct
+    (Acc SumExp Out : RegionName)
+    (head_dim
+      stride_acc_b stride_acc_h stride_acc_d
+      stride_sum_b stride_sum_h
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
+    ∀ i : Fin BLOCK_DMODEL,
+      let outAddr := outOffset s stride_obs stride_oh stride_od i
+      (exec (flash_decode2_phi_normalization_store_kernel Acc SumExp Out head_dim
+            stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
+            stride_obs stride_oh stride_od BLOCK_DMODEL) s).map (·.readMem Out outAddr)
+        = some (if active s head_dim i then
+            normalizedStoreValue s Acc SumExp head_dim stride_acc_b stride_acc_h
+              stride_acc_d stride_sum_b stride_sum_h i
+          else s.readMem Out outAddr) := by
+  intro i
+  simp [exec, flash_decode2_phi_normalization_store_kernel, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt,
+        dIndex, active, accOffset, sumExpOffset, outOffset]
+  let offsetFn : TileIndex [BLOCK_DMODEL] → Nat :=
+    fun idx => s.pids 0 * stride_obs + s.pids 1 * stride_oh + idx.1.val * stride_od
+  let valueFn : TileIndex [BLOCK_DMODEL] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (match
+          if idx.1.val < head_dim then
+            some (s.readMem Acc
+              (s.pids 0 * stride_acc_b + s.pids 1 * stride_acc_h +
+                idx.1.val * stride_acc_d))
+          else some (0.0 : ℝ)
+        with
+        | some x =>
+            some (x / s.readMem SumExp
+              (s.pids 0 * stride_sum_b + s.pids 1 * stride_sum_h))
+        | none => none)
+  let P : TileIndex [BLOCK_DMODEL] → Prop :=
+    fun idx => idx.1.val < head_dim
+  have hOffsetInj : Function.Injective offsetFn := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have habFin : outOffset s stride_obs stride_oh stride_od a =
+        outOffset s stride_obs stride_oh stride_od b := by
+      simpa [offsetFn, outOffset, dIndex] using hab
+    obtain rfl : a = b := hOutInj habFin
+    rfl
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
+  by_cases hi : i.val < head_dim
+  · simp [P, offsetFn, valueFn, active, normalizedStoreValue, accOffset,
+      sumExpOffset, dIndex, hi]
+  · simp [P, offsetFn, active, normalizedStoreValue, dIndex, hi]
+
+/-- Compute-facing correctness for Phi stage2 normalization plus writeback. -/
+theorem flash_decode2_phi_normalization_store_kernel_compute_correct
+    (Acc SumExp Out : RegionName)
+    (head_dim
+      stride_acc_b stride_acc_h stride_acc_d
+      stride_sum_b stride_sum_h
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_normalization_store_kernel Acc SumExp Out
+        head_dim stride_acc_b stride_acc_h stride_acc_d stride_sum_b
+        stride_sum_h stride_obs stride_oh stride_od BLOCK_DMODEL)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_DMODEL => active s head_dim i)
+        (fun i => (Out, outOffset s stride_obs stride_oh stride_od i)))
+      (expected := fun i : Fin BLOCK_DMODEL =>
+        normalizedStoreValue s Acc SumExp head_dim stride_acc_b stride_acc_h
+          stride_acc_d stride_sum_b stride_sum_h i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_decode2_phi_normalization_store_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := flash_decode2_phi_normalization_store_kernel_correct Acc SumExp Out
+    head_dim stride_acc_b stride_acc_h stride_acc_d stride_sum_b stride_sum_h
+    stride_obs stride_oh stride_od BLOCK_DMODEL s hOutInj i
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
+theorem flash_decode2_phi_normalization_store_python_test_shape_compute_correct
+    (Acc SumExp Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_normalization_store_kernel Acc SumExp Out
+        64 256 64 1 4 1 256 64 1 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 64 i)
+        (fun i : Fin 64 => (Out, outOffset s 256 64 1 i)))
+      (expected := fun i : Fin 64 =>
+        normalizedStoreValue s Acc SumExp 64 256 64 1 4 1 i) := by
+  exact flash_decode2_phi_normalization_store_kernel_compute_correct Acc SumExp Out
+    64 256 64 1 4 1 256 64 1 64 s
+    (flash_decode2_phi_python_test_shape_offset_injective s)
+
 /-- Internal Python test-shape summary for `flash_decode2_phi.py`.
 
 The Python tests use `mid_out : (2, 4, 3, 64)`, `Out : (2, 4, 64)`, and four
@@ -283,6 +436,50 @@ theorem flash_decode2_phi_python_test_shape_summary
   · exact flash_decode2_phi_final_store_python_test_shape_compute_correct
       Final Out s
 
+/-- `output_summary` row for Phi final normalization and writeback.
+
+This connects the Python test-shape accumulator and `sum_exp` outputs to the
+exact Python-observable `Out` row, including `head_dim = 64` masking and
+contiguous `(256, 64, 1)` output strides. -/
+theorem flash_decode2_phi_python_test_shape_normalization_store_output_summary
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Acc SumExp Out : RegionName)
+    (s : BlockState) :
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 16 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 17 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 8 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 32 64).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_normalization_store_kernel Acc SumExp Out
+        64 256 64 1 4 1 256 64 1 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 64 i)
+        (fun i : Fin 64 => (Out, outOffset s 256 64 1 i)))
+      (expected := fun i : Fin 64 =>
+        normalizedStoreValue s Acc SumExp 64 256 64 1 4 1 i) := by
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 16 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 17 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 8 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 32 64
+  · exact flash_decode2_phi_normalization_store_python_test_shape_compute_correct
+      Acc SumExp Out s
+
 /-- `output_summary` row for the Phi stage2 running-max proof gap.
 
 This narrower follow-up covers the dynamic `max_logic` recurrence over
@@ -300,17 +497,6 @@ This narrower follow-up covers the masked `Mid_O` loads, `old_scale` /
 `exp_logic` updates, and `sum_exp` recurrence; the current proof-oriented
 summary still uses a precomputed normalized `Final` vector. -/
 abbrev flash_decode2_phi_python_test_shape_masked_accumulator_output_summary
-    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final Out : RegionName)
-    (s : BlockState) :=
-  flash_decode2_phi_python_test_shape_summary B_Seqlen Mid_O Mid_O_LogExpSum
-    Final Out s
-
-/-- `output_summary` row for the Phi final normalization/store proof gap.
-
-This narrower follow-up covers connecting the dynamic `acc / sum_exp` result
-to the masked final `Out` writeback; the current proof-oriented store slice
-starts from a precomputed `Final` vector. -/
-abbrev flash_decode2_phi_python_test_shape_normalization_store_output_summary
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final Out : RegionName)
     (s : BlockState) :=
   flash_decode2_phi_python_test_shape_summary B_Seqlen Mid_O Mid_O_LogExpSum
