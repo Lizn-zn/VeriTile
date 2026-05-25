@@ -28,6 +28,10 @@ MANIFEST = PORTS_ROOT / "proof_gap_manifest.tsv"
 ISSUE_BY_FAMILY = {
     "attention-softmax-accumulator": "#149",
     "attention-final-store-lift": "#161",
+    "attention-fwd-triton1-bo-bhpre-producers": "#165",
+    "context-attention-streaming-acc-store": "#167",
+    "dense-attention-acc-store": "#166",
+    "flash-decode-normalized-vector-store": "#168",
     "attention-online-softmax-recurrence": "#162",
     "fixed-width-int8-cast-semantics": "#154",
     "loss-reduction-aggregation": "#151",
@@ -135,6 +139,14 @@ def family_for(name: str, text: str) -> str:
         return "matmul-activation-tail-accumulator"
     if any(k in hay for k in ("matmul_kernel", "matmul_triton")):
         return "matmul-output-store-accumulator"
+    if "attention_fwd_triton1" in hay:
+        return "attention-fwd-triton1-bo-bhpre-producers"
+    if "attention_kernel" in hay:
+        return "dense-attention-acc-store"
+    if any(k in hay for k in ("context_attn_mistral", "context_attn_nopad")):
+        return "context-attention-streaming-acc-store"
+    if "flash_decode2" in hay:
+        return "flash-decode-normalized-vector-store"
     if any(k in hay for k in ("attention", "attn", "softmax", "flash", "decode", "score", "prob")):
         if any(k in hay for k in ("final-store", "final store", "store slice", "precomputed")):
             return "attention-final-store-lift"
