@@ -26,12 +26,13 @@ PORTS_ROOT = ROOT / "bench" / "tritonbench_g"
 MANIFEST = PORTS_ROOT / "proof_gap_manifest.tsv"
 
 ISSUE_BY_FAMILY = {
-    "attention-softmax-accumulator": "#149",
     "attention-backward-score-reduction": "#162",
     "attention-context-decode-reduction": "#162",
+    "attention-forward-online-softmax-recurrence": "#162",
+    "attention-softmax-accumulator": "#149",
+    "attention-final-store-lift": "#161",
     "attention-online-softmax-recurrence": "#162",
     "attention-score-probability-reduction": "#162",
-    "flash-decode-reduction": "#162",
     "fixed-width-int8-cast-semantics": "#154",
     "loss-reduction-aggregation": "#151",
     "bmm-final-store-accumulator": "#148",
@@ -142,20 +143,18 @@ def family_for(name: str, text: str) -> str:
         return "matmul-output-store-accumulator"
     if "triton_attention_bwd" in lname:
         return "attention-backward-score-reduction"
-    if "flash_decode" in lname:
-        return "flash-decode-reduction"
-    if "context_attn" in lname:
-        return "attention-context-decode-reduction"
     if any(k in lname for k in ("token_attn", "token_softmax", "softmax_reducev")):
         return "token-attention-reduction"
     if any(k in lname for k in ("attention_score", "ksoftmax", "mixed_sparse_attention", "block_sparse_attn")):
         return "attention-score-probability-reduction"
+    if any(k in lname for k in ("context_attn_bloom", "context_attn_fwd", "context_attn_llama")):
+        return "attention-context-decode-reduction"
     if any(
         k in lname
         for k in (
             "attention_forward",
-            "attention_fwd",
-            "attention_kernel",
+            "attention_fwd_triton2",
+            "attention_fwd_triton3",
             "attn_fwd",
             "chunk_gated_attention",
             "flash_attn",
@@ -163,9 +162,11 @@ def family_for(name: str, text: str) -> str:
             "triton_attention_forward",
         )
     ):
-        return "attention-online-softmax-recurrence"
+        return "attention-forward-online-softmax-recurrence"
     if any(k in hay for k in ("attention", "attn", "softmax", "flash", "decode", "score", "prob")):
-        return "attention-softmax-accumulator"
+        if any(k in hay for k in ("final-store", "final store", "store slice", "precomputed")):
+            return "attention-final-store-lift"
+        return "attention-online-softmax-recurrence"
     if any(k in hay for k in ("matmul", "gemm", "dot", "bmm", "vecmat", "conv2d")):
         return "matmul-dot-accumulator"
     if any(k in hay for k in ("cumsum", "recurrent", "recurrence", "rwkv", "hgrn", "gla", "retention")):

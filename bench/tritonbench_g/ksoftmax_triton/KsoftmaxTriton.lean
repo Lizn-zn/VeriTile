@@ -341,7 +341,8 @@ theorem ksoftmax_forward_plain_compute_correct
 
 /-- Public plain-forward summary: the Python surface for
 `LOG=false`, no mask, non-causal, and no fp16 accumulator cast lowers, and the
-corresponding checked slice proves the softmax computation over the output row.
+corresponding checked proof realizes the softmax computation over the output row
+from `x` to `y`.
 -/
 theorem ksoftmax_forward_plain_output_summary
     (Y X M : RegionName)

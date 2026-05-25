@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 178 `output_summary`
-  declarations across 76 files. It classifies 57 as conservative
-  `full_value_candidate`, 108 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 58 as conservative
+  `full_value_candidate`, 107 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
   to the former broad #147 quantization bucket, the former broad #148
@@ -77,10 +77,10 @@ surface.
   The #148 rows now split into GEMV K-loop, BMM final-store, dequantized
   cross-kernel, IV-dependent output-store, plain matmul output-store,
   activation-tail, and TMA output-store accumulator blockers. The #149 rows
-  now split into #162 online-softmax recurrence, score/probability reduction,
-  context/decode reduction, flash-decode reduction, token-attention reduction,
-  and backward score-reduction blockers. The #152 blocked summaries now migrate
-  to the open #154
+  now split into #161 final-store lift blockers plus #162 forward online
+  softmax recurrence, score/probability reduction, context/decode reduction,
+  token-attention reduction, and backward score-reduction blockers. The #152
+  blocked summaries now migrate to the open #154
   `fixed-width-int8-cast-semantics` issue because their concrete blocker is
   CUDA `llrint` / int8-cast semantics; the #153 rows split into
   `rope-head-slice-lift` for RoPE Q/K head-slice value proofs and
