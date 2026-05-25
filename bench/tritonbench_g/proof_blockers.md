@@ -29,6 +29,10 @@ The #161 final-store bucket has been split again into kernel-specific producer
 obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
 `dense-attention-acc-store` (#166), `context-attention-streaming-acc-store`
 (#167), and `flash-decode-normalized-vector-store` (#168).
+The #168 flash-decode normalized-vector bucket has been split into
+kernel-specific stage2 recurrence obligations:
+`flash-decode-llama-stage2-normalization` (#171) and
+`flash-decode-phi-stage2-normalization` (#172).
 The broad #148 matmul/dot bucket has been split into narrower accumulator
 proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
