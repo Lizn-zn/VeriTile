@@ -108,6 +108,73 @@ def flash_decode2_phi_normalization_store_kernel
       offs_d * $(stride_od), acc / sum_exp, mask=mask)
 }
 
+/-- One Phi stage2 accumulator recurrence step.
+
+This kernel models the loop-body arithmetic after the next running maximum has
+already been supplied: it loads the masked `Mid_O` row, applies `old_scale` and
+`exp_logic`, and writes the updated accumulator vector. -/
+def flash_decode2_phi_accumulator_step_kernel
+    (Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic AccOut : RegionName)
+    (block_seq_n
+      head_dim
+      stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb stride_mid_o_eh
+      stride_acc_b stride_acc_h stride_acc_d
+      stride_logic_b stride_logic_h
+      BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  mask = offs_d < $(head_dim)
+  tv = tl.load(Mid_O + cur_batch * $(stride_mid_ob) +
+      cur_head * $(stride_mid_oh) + $(block_seq_n) * $(stride_mid_os) +
+      offs_d * $(stride_mid_od), mask=mask, other=0.0)
+  tlogic = tl.load(Mid_O_LogExpSum + cur_batch * $(stride_mid_o_eb) +
+      cur_head * $(stride_mid_o_eh) + $(block_seq_n))
+  acc = tl.load(AccIn + cur_batch * $(stride_acc_b) +
+      cur_head * $(stride_acc_h) + offs_d * $(stride_acc_d),
+      mask=mask, other=0.0)
+  max_logic = tl.load(MaxLogic + cur_batch * $(stride_logic_b) +
+      cur_head * $(stride_logic_h))
+  new_max_logic = tl.load(NewMaxLogic + cur_batch * $(stride_logic_b) +
+      cur_head * $(stride_logic_h))
+  old_scale = tl.exp(max_logic - new_max_logic)
+  acc = acc * old_scale
+  exp_logic = tl.exp(tlogic - new_max_logic)
+  acc = acc + exp_logic * tv
+  tl.store(AccOut + cur_batch * $(stride_acc_b) +
+      cur_head * $(stride_acc_h) + offs_d * $(stride_acc_d), acc, mask=mask)
+}
+
+/-- Scalar companion for the same Phi stage2 recurrence step.
+
+It proves the `sum_exp = sum_exp * old_scale + exp_logic` update with the same
+Python test-shape addressing used by the vector accumulator step. -/
+def flash_decode2_phi_sum_exp_step_kernel
+    (Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic SumExpOut : RegionName)
+    (block_seq_n
+      stride_mid_o_eb stride_mid_o_eh
+      stride_sum_b stride_sum_h
+      stride_logic_b stride_logic_h : Nat) :
+    ComputeKernel := triton {
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  tlogic = tl.load(Mid_O_LogExpSum + cur_batch * $(stride_mid_o_eb) +
+      cur_head * $(stride_mid_o_eh) + $(block_seq_n))
+  sum_exp = tl.load(SumExpIn + cur_batch * $(stride_sum_b) +
+      cur_head * $(stride_sum_h))
+  max_logic = tl.load(MaxLogic + cur_batch * $(stride_logic_b) +
+      cur_head * $(stride_logic_h))
+  new_max_logic = tl.load(NewMaxLogic + cur_batch * $(stride_logic_b) +
+      cur_head * $(stride_logic_h))
+  old_scale = tl.exp(max_logic - new_max_logic)
+  exp_logic = tl.exp(tlogic - new_max_logic)
+  sum_exp = sum_exp * old_scale + exp_logic
+  tl.store(SumExpOut + cur_batch * $(stride_sum_b) +
+      cur_head * $(stride_sum_h), sum_exp)
+}
+
 def dIndex (_s : BlockState) (i : Fin BLOCK_DMODEL) : Nat :=
   i.val
 
@@ -138,6 +205,18 @@ def sumExpOffset
     (stride_sum_b stride_sum_h : Nat) : Nat :=
   s.pids 0 * stride_sum_b + s.pids 1 * stride_sum_h
 
+def midOffset
+    (s : BlockState)
+    (block_seq_n stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od : Nat)
+    (i : Fin BLOCK_DMODEL) : Nat :=
+  s.pids 0 * stride_mid_ob + s.pids 1 * stride_mid_oh +
+    block_seq_n * stride_mid_os + dIndex s i * stride_mid_od
+
+def logicOffset
+    (s : BlockState)
+    (block_seq_n stride_mid_o_eb stride_mid_o_eh : Nat) : Nat :=
+  s.pids 0 * stride_mid_o_eb + s.pids 1 * stride_mid_o_eh + block_seq_n
+
 def outOffset
     (s : BlockState)
     (stride_obs stride_oh stride_od : Nat)
@@ -164,6 +243,48 @@ noncomputable def normalizedStoreValue
       some (s.readMem Acc (accOffset s stride_acc_b stride_acc_h stride_acc_d i) /
         s.readMem SumExp (sumExpOffset s stride_sum_b stride_sum_h))
     else some (0.0 : ℝ))
+
+noncomputable def oldScaleValue
+    (s : BlockState) (MaxLogic NewMaxLogic : RegionName)
+    (stride_logic_b stride_logic_h : Nat) : ℝ :=
+  Real.exp (s.readMem MaxLogic (sumExpOffset s stride_logic_b stride_logic_h) -
+    s.readMem NewMaxLogic (sumExpOffset s stride_logic_b stride_logic_h))
+
+noncomputable def expLogicValue
+    (s : BlockState) (Mid_O_LogExpSum NewMaxLogic : RegionName)
+    (block_seq_n stride_mid_o_eb stride_mid_o_eh
+      stride_logic_b stride_logic_h : Nat) : ℝ :=
+  Real.exp (s.readMem Mid_O_LogExpSum
+      (logicOffset s block_seq_n stride_mid_o_eb stride_mid_o_eh) -
+    s.readMem NewMaxLogic (sumExpOffset s stride_logic_b stride_logic_h))
+
+noncomputable def accumulatorStepValue
+    (s : BlockState) (Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic : RegionName)
+    (block_seq_n head_dim
+      stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb stride_mid_o_eh
+      stride_acc_b stride_acc_h stride_acc_d
+      stride_logic_b stride_logic_h : Nat)
+    (i : Fin BLOCK_DMODEL) : ℝ :=
+  WithBot.unbotD 0
+    (if active s head_dim i then
+      some (s.readMem AccIn (accOffset s stride_acc_b stride_acc_h stride_acc_d i) *
+          oldScaleValue s MaxLogic NewMaxLogic stride_logic_b stride_logic_h +
+        expLogicValue s Mid_O_LogExpSum NewMaxLogic block_seq_n stride_mid_o_eb
+          stride_mid_o_eh stride_logic_b stride_logic_h *
+        s.readMem Mid_O
+          (midOffset s block_seq_n stride_mid_ob stride_mid_oh stride_mid_os
+            stride_mid_od i))
+    else some (0.0 : ℝ))
+
+noncomputable def sumExpStepValue
+    (s : BlockState) (Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic : RegionName)
+    (block_seq_n stride_mid_o_eb stride_mid_o_eh
+      stride_sum_b stride_sum_h stride_logic_b stride_logic_h : Nat) : ℝ :=
+  s.readMem SumExpIn (sumExpOffset s stride_sum_b stride_sum_h) *
+      oldScaleValue s MaxLogic NewMaxLogic stride_logic_b stride_logic_h +
+    expLogicValue s Mid_O_LogExpSum NewMaxLogic block_seq_n stride_mid_o_eb
+      stride_mid_o_eh stride_logic_b stride_logic_h
 
 /-- Algorithm-layer correctness for the masked final flash-decode writeback. -/
 theorem flash_decode2_phi_final_store_slice_correct
@@ -284,6 +405,198 @@ theorem flash_decode2_phi_final_store_python_test_shape_compute_correct
   exact flash_decode2_phi_final_store_slice_compute_correct Final Out
     64 256 64 1 256 64 1 64 s
     (flash_decode2_phi_python_test_shape_offset_injective s)
+
+/-- Algorithm-layer correctness for one masked Phi accumulator update. -/
+theorem flash_decode2_phi_accumulator_step_kernel_correct
+    (Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic AccOut : RegionName)
+    (block_seq_n
+      head_dim
+      stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb stride_mid_o_eh
+      stride_acc_b stride_acc_h stride_acc_d
+      stride_logic_b stride_logic_h
+      BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (hAccOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => accOffset s stride_acc_b stride_acc_h stride_acc_d i)) :
+    ∀ i : Fin BLOCK_DMODEL,
+      let outAddr := accOffset s stride_acc_b stride_acc_h stride_acc_d i
+      (exec (flash_decode2_phi_accumulator_step_kernel Mid_O Mid_O_LogExpSum
+            AccIn MaxLogic NewMaxLogic AccOut block_seq_n head_dim
+            stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+            stride_mid_o_eb stride_mid_o_eh stride_acc_b stride_acc_h
+            stride_acc_d stride_logic_b stride_logic_h BLOCK_DMODEL) s).map
+          (·.readMem AccOut outAddr)
+        = some (if active s head_dim i then
+            accumulatorStepValue s Mid_O Mid_O_LogExpSum AccIn MaxLogic
+              NewMaxLogic block_seq_n head_dim stride_mid_ob stride_mid_oh
+              stride_mid_os stride_mid_od stride_mid_o_eb stride_mid_o_eh
+              stride_acc_b stride_acc_h stride_acc_d stride_logic_b
+              stride_logic_h i
+          else s.readMem AccOut outAddr) := by
+  intro i
+  simp [exec, flash_decode2_phi_accumulator_step_kernel, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.sub, NumericDType.mul, ComparableDType.lt,
+        dIndex, active, midOffset, logicOffset, accOffset, sumExpOffset,
+        oldScaleValue, expLogicValue]
+  let offsetFn : TileIndex [BLOCK_DMODEL] → Nat :=
+    fun idx => s.pids 0 * stride_acc_b + s.pids 1 * stride_acc_h +
+      idx.1.val * stride_acc_d
+  let valueFn : TileIndex [BLOCK_DMODEL] → ℝ :=
+    fun idx =>
+      WithBot.unbotD 0
+        (Option.map₂ (fun x y => x + y)
+          (match
+            if idx.1.val < head_dim then
+              some (s.readMem AccIn
+                (s.pids 0 * stride_acc_b + s.pids 1 * stride_acc_h +
+                  idx.1.val * stride_acc_d))
+            else some (0.0 : ℝ)
+          with
+          | some x =>
+              some (x * Real.exp
+                (s.readMem MaxLogic
+                    (s.pids 0 * stride_logic_b + s.pids 1 * stride_logic_h) -
+                  s.readMem NewMaxLogic
+                    (s.pids 0 * stride_logic_b + s.pids 1 * stride_logic_h)))
+          | none => none)
+          (match
+            if idx.1.val < head_dim then
+              some (s.readMem Mid_O
+                (s.pids 0 * stride_mid_ob + s.pids 1 * stride_mid_oh +
+                  block_seq_n * stride_mid_os + idx.1.val * stride_mid_od))
+            else some (0.0 : ℝ)
+          with
+          | some y =>
+              some (Real.exp
+                (s.readMem Mid_O_LogExpSum
+                    (s.pids 0 * stride_mid_o_eb +
+                      s.pids 1 * stride_mid_o_eh + block_seq_n) -
+                  s.readMem NewMaxLogic
+                    (s.pids 0 * stride_logic_b + s.pids 1 * stride_logic_h)) * y)
+          | none => none))
+  let P : TileIndex [BLOCK_DMODEL] → Prop :=
+    fun idx => idx.1.val < head_dim
+  have hOffsetInj : Function.Injective offsetFn := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have habFin : accOffset s stride_acc_b stride_acc_h stride_acc_d a =
+        accOffset s stride_acc_b stride_acc_h stride_acc_d b := by
+      simpa [offsetFn, accOffset, dIndex] using hab
+    obtain rfl : a = b := hAccOutInj habFin
+    rfl
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
+  by_cases hi : i.val < head_dim
+  · simp [P, offsetFn, valueFn, active, accumulatorStepValue, oldScaleValue,
+      expLogicValue, midOffset, logicOffset, accOffset, sumExpOffset, dIndex, hi]
+  · simp [P, offsetFn, active, accumulatorStepValue, dIndex, hi]
+
+/-- Compute-facing correctness for one masked Phi accumulator update. -/
+theorem flash_decode2_phi_accumulator_step_kernel_compute_correct
+    (Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic AccOut : RegionName)
+    (block_seq_n
+      head_dim
+      stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od
+      stride_mid_o_eb stride_mid_o_eh
+      stride_acc_b stride_acc_h stride_acc_d
+      stride_logic_b stride_logic_h
+      BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (hAccOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => accOffset s stride_acc_b stride_acc_h stride_acc_d i)) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_accumulator_step_kernel Mid_O Mid_O_LogExpSum
+        AccIn MaxLogic NewMaxLogic AccOut block_seq_n head_dim stride_mid_ob
+        stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb
+        stride_mid_o_eh stride_acc_b stride_acc_h stride_acc_d stride_logic_b
+        stride_logic_h BLOCK_DMODEL)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_DMODEL => active s head_dim i)
+        (fun i => (AccOut, accOffset s stride_acc_b stride_acc_h stride_acc_d i)))
+      (expected := fun i : Fin BLOCK_DMODEL =>
+        accumulatorStepValue s Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic
+          block_seq_n head_dim stride_mid_ob stride_mid_oh stride_mid_os
+          stride_mid_od stride_mid_o_eb stride_mid_o_eh stride_acc_b
+          stride_acc_h stride_acc_d stride_logic_b stride_logic_h i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_decode2_phi_accumulator_step_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := flash_decode2_phi_accumulator_step_kernel_correct Mid_O
+    Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic AccOut block_seq_n head_dim
+    stride_mid_ob stride_mid_oh stride_mid_os stride_mid_od stride_mid_o_eb
+    stride_mid_o_eh stride_acc_b stride_acc_h stride_acc_d stride_logic_b
+    stride_logic_h BLOCK_DMODEL s hAccOutInj i
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
+theorem flash_decode2_phi_accumulator_step_python_test_shape_compute_correct
+    (Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic AccOut : RegionName)
+    (block_seq_n : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_accumulator_step_kernel Mid_O Mid_O_LogExpSum
+        AccIn MaxLogic NewMaxLogic AccOut block_seq_n 64 768 192 64 1
+        12 3 256 64 1 4 1 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 64 i)
+        (fun i : Fin 64 => (AccOut, accOffset s 256 64 1 i)))
+      (expected := fun i : Fin 64 =>
+        accumulatorStepValue s Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic
+          block_seq_n 64 768 192 64 1 12 3 256 64 1 4 1 i) := by
+  exact flash_decode2_phi_accumulator_step_kernel_compute_correct Mid_O
+    Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic AccOut block_seq_n 64
+    768 192 64 1 12 3 256 64 1 4 1 64 s
+    (flash_decode2_phi_python_test_shape_offset_injective s)
+
+/-- Compute-facing correctness for one Phi `sum_exp` recurrence update. -/
+theorem flash_decode2_phi_sum_exp_step_kernel_compute_correct
+    (Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic SumExpOut : RegionName)
+    (block_seq_n
+      stride_mid_o_eb stride_mid_o_eh
+      stride_sum_b stride_sum_h
+      stride_logic_b stride_logic_h : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_sum_exp_step_kernel Mid_O_LogExpSum SumExpIn
+        MaxLogic NewMaxLogic SumExpOut block_seq_n stride_mid_o_eb
+        stride_mid_o_eh stride_sum_b stride_sum_h stride_logic_b stride_logic_h)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar SumExpOut
+        (sumExpOffset s stride_sum_b stride_sum_h))
+      (expected := fun _ : PUnit =>
+        sumExpStepValue s Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic
+          block_seq_n stride_mid_o_eb stride_mid_o_eh stride_sum_b stride_sum_h
+          stride_logic_b stride_logic_h) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_decode2_phi_sum_exp_step_kernel]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [exec, flash_decode2_phi_sum_exp_step_kernel, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.sub, NumericDType.mul, sumExpOffset,
+        logicOffset, oldScaleValue, expLogicValue, sumExpStepValue,
+        ComputeCorrect.WriteMap.scalar] at hExec ⊢
+  rw [← hExec]
+  simp [BlockState.writeMem_readMem]
+
+theorem flash_decode2_phi_sum_exp_step_python_test_shape_compute_correct
+    (Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic SumExpOut : RegionName)
+    (block_seq_n : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_sum_exp_step_kernel Mid_O_LogExpSum SumExpIn
+        MaxLogic NewMaxLogic SumExpOut block_seq_n 12 3 4 1 4 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar SumExpOut (sumExpOffset s 4 1))
+      (expected := fun _ : PUnit =>
+        sumExpStepValue s Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic
+          block_seq_n 12 3 4 1 4 1) := by
+  exact flash_decode2_phi_sum_exp_step_kernel_compute_correct Mid_O_LogExpSum
+    SumExpIn MaxLogic NewMaxLogic SumExpOut block_seq_n 12 3 4 1 4 1 s
 
 /-- Algorithm-layer correctness for Phi stage2 normalization plus writeback. -/
 theorem flash_decode2_phi_normalization_store_kernel_correct
@@ -480,23 +793,71 @@ theorem flash_decode2_phi_python_test_shape_normalization_store_output_summary
   · exact flash_decode2_phi_normalization_store_python_test_shape_compute_correct
       Acc SumExp Out s
 
+/-- `output_summary` row for Phi masked accumulator recurrence.
+
+This connects the Python test-shape `Mid_O` and `Mid_O_LogExpSum` inputs to
+one loop-body update of `AccOut` and `SumExpOut`, including the `head_dim = 64`
+mask and the `(768, 192, 64, 1)` / `(12, 3, 1)` source strides. -/
+theorem flash_decode2_phi_python_test_shape_masked_accumulator_output_summary
+    (B_Seqlen : Region .nat)
+    (Mid_O Mid_O_LogExpSum AccIn SumExpIn MaxLogic NewMaxLogic AccOut SumExpOut
+      Out : RegionName)
+    (block_seq_n : Nat) (s : BlockState) :
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 16 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 17 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 8 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 32 64).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_accumulator_step_kernel Mid_O Mid_O_LogExpSum
+        AccIn MaxLogic NewMaxLogic AccOut block_seq_n 64 768 192 64 1 12 3
+        256 64 1 4 1 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 64 i)
+        (fun i : Fin 64 => (AccOut, accOffset s 256 64 1 i)))
+      (expected := fun i : Fin 64 =>
+        accumulatorStepValue s Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic
+          block_seq_n 64 768 192 64 1 12 3 256 64 1 4 1 i) ∧
+    ComputeCorrect.Realizes
+      (kernel := flash_decode2_phi_sum_exp_step_kernel Mid_O_LogExpSum SumExpIn
+        MaxLogic NewMaxLogic SumExpOut block_seq_n 12 3 4 1 4 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.scalar SumExpOut (sumExpOffset s 4 1))
+      (expected := fun _ : PUnit =>
+        sumExpStepValue s Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic
+          block_seq_n 12 3 4 1 4 1) := by
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 16 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 17 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 8 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 32 64
+  constructor
+  · exact flash_decode2_phi_accumulator_step_python_test_shape_compute_correct
+      Mid_O Mid_O_LogExpSum AccIn MaxLogic NewMaxLogic AccOut block_seq_n s
+  · exact flash_decode2_phi_sum_exp_step_python_test_shape_compute_correct
+      Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic SumExpOut block_seq_n s
+
 /-- `output_summary` row for the Phi stage2 running-max proof gap.
 
 This narrower follow-up covers the dynamic `max_logic` recurrence over
 `Mid_O_LogExpSum`; the current proof-oriented summary records the faithful
 surfaces but does not prove the loop invariant. -/
 abbrev flash_decode2_phi_python_test_shape_running_max_output_summary
-    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final Out : RegionName)
-    (s : BlockState) :=
-  flash_decode2_phi_python_test_shape_summary B_Seqlen Mid_O Mid_O_LogExpSum
-    Final Out s
-
-/-- `output_summary` row for the Phi masked scaled-accumulator proof gap.
-
-This narrower follow-up covers the masked `Mid_O` loads, `old_scale` /
-`exp_logic` updates, and `sum_exp` recurrence; the current proof-oriented
-summary still uses a precomputed normalized `Final` vector. -/
-abbrev flash_decode2_phi_python_test_shape_masked_accumulator_output_summary
     (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final Out : RegionName)
     (s : BlockState) :=
   flash_decode2_phi_python_test_shape_summary B_Seqlen Mid_O Mid_O_LogExpSum

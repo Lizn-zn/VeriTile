@@ -38,10 +38,12 @@ kernel-specific stage2 recurrence obligations:
 `flash-decode-phi-stage2-normalization` (#172).
 The #172 Phi stage2 recurrence bucket has been split into narrower
 obligations: `flash-decode-phi-running-max-recurrence` (#175),
-`flash-decode-phi-masked-accumulator-recurrence` (#176), and the now-discharged
-`flash-decode-phi-normalization-store` (#177). The #177 path now connects the
-Python test-shape `Acc` and `SumExp` outputs to the final masked `Out`
-writeback as a full-value candidate in `proof_gap_manifest.tsv`.
+the now-discharged `flash-decode-phi-masked-accumulator-recurrence` (#176),
+and the now-discharged `flash-decode-phi-normalization-store` (#177). The #176
+path now carries the Python test-shape masked `Mid_O` load through the
+`AccOut` and `SumExpOut` recurrence step, while #177 connects the Python
+test-shape `Acc` and `SumExp` outputs to the final masked `Out` writeback; both
+are full-value candidates in `proof_gap_manifest.tsv`.
 The broad #148 matmul/dot bucket has been split into narrower accumulator
 proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
