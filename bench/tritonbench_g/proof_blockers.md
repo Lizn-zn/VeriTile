@@ -24,8 +24,8 @@ The broad #150 recurrent/cumsum bucket has been split by mechanism:
 one-block or one-iteration carry/cumsum slices, the now-discharged
 `decay-cumsum-scan-fold` (#186) tracks `decay_cumsum.py` summaries now
 connected to full prepare, forward cumsum, and backward global-cumsum surfaces,
-`recurrent-state-loop-fold` (#187) tracks chunk-gate, HGRN, and RWKV recurrent
-state loops,
+the now-discharged `recurrent-state-loop-fold` (#187) connects chunk-gate,
+HGRN, and RWKV recurrent state summaries to their full producer surfaces,
 the now-discharged `gla-output-tile-producer` (#188) tracks
 `chunk_gla_simple.py` summaries whose proof used to start from a precomputed
 output tile, and
