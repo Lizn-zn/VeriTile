@@ -24,8 +24,9 @@ The broad #150 recurrent/cumsum bucket has been split by mechanism:
 one-block or one-iteration carry/cumsum slices, `decay-cumsum-scan-fold` (#186)
 tracks `decay_cumsum.py` forward/backward scan folds, `recurrent-state-loop-fold`
 (#187) tracks chunk-gate, HGRN, and RWKV recurrent state loops,
-`gla-output-tile-producer` (#188) tracks `chunk_gla_simple.py` summaries whose
-proof starts from a precomputed output tile, and
+the now-discharged `gla-output-tile-producer` (#188) tracks
+`chunk_gla_simple.py` summaries whose proof used to start from a precomputed
+output tile, and
 `reverse-cumsum-directional-scan` (#94) tracks reverse cumsum direction
 semantics.
 The broad #149 attention/softmax bucket has been split as well:
