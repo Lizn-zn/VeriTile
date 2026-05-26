@@ -353,6 +353,42 @@ noncomputable def finalStateStoreValue (s : BlockState) (BHFinal : RegionName)
       some (s.readMem BHFinal (finalStateOffset s K V BK BV idx))
     else some (0.0 : ℝ))
 
+noncomputable def producedHValue
+    (s : BlockState) (k v d v_new h initial_state final_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (i_t : Nat) (idx : TileIndex [BK, BV]) : ℝ :=
+  match exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+      final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h
+      s_h_t H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE) s with
+  | some s' => s'.readMem h (hOffset s i_t s_h_h s_h_t K V BK BV idx)
+  | none => 0.0
+
+noncomputable def producedVNewValue
+    (s : BlockState) (k v d v_new h initial_state final_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (i_t i_c : Nat) (idx : TileIndex [BC, BV]) : ℝ :=
+  match exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+      final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h
+      s_h_t H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE) s with
+  | some s' => s'.readMem v_new (vNewOffset s i_t i_c s_vo_h s_vo_t s_vo_d BT BC BV idx)
+  | none => 0.0
+
+noncomputable def producedFinalStateValue
+    (s : BlockState) (k v d v_new h initial_state final_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (idx : TileIndex [BK, BV]) : ℝ :=
+  match exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+      final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h
+      s_h_t H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE) s with
+  | some s' => s'.readMem final_state (finalStateOffset s K V BK BV idx)
+  | none => 0.0
+
 theorem chunk_delta_fwd_final_state_store_slice_correct
     (BHFinal FinalState : RegionName) (K V BK BV : Nat)
     (s : BlockState)
@@ -512,48 +548,144 @@ theorem chunk_delta_fwd_final_state_python_test_shape_compute_correct
     64 64 64 64 s
     (chunk_delta_fwd_final_state_python_test_shape_offset_injective s)
 
-/-- Python test-shape output coverage for chunk-delta forward: the loop-row `h`
-store, `v_new` store, and optional final-state store all realize their checked
-masked output shapes. -/
+theorem chunk_delta_fwd_h_producer_surface_compute_correct
+    (k v d v_new h initial_state final_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (i_t : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h
+        s_h_t H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
+        (fun idx => (h, hOffset s i_t s_h_h s_h_t K V BK BV idx)))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        producedHValue s k v d v_new h initial_state final_state s_qk_h
+          s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t H T K V BT BC
+          BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE i_t idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_delta_rule_fwd_h_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedHValue, hExec]
+
+theorem chunk_delta_fwd_v_new_producer_surface_compute_correct
+    (k v d v_new h initial_state final_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (i_t i_c : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h
+        s_h_t H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BC, BV] => vNewActive s i_t i_c T V BT BC BV idx)
+        (fun idx => (v_new, vNewOffset s i_t i_c s_vo_h s_vo_t s_vo_d BT BC BV idx)))
+      (expected := fun idx : TileIndex [BC, BV] =>
+        producedVNewValue s k v d v_new h initial_state final_state s_qk_h
+          s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t H T K V BT BC
+          BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE i_t i_c idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_delta_rule_fwd_h_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedVNewValue, hExec]
+
+theorem chunk_delta_fwd_final_state_producer_surface_compute_correct
+    (k v d v_new h initial_state final_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h
+        s_h_t H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
+        (fun idx => (final_state, finalStateOffset s K V BK BV idx)))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        producedFinalStateValue s k v d v_new h initial_state final_state
+          s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t H T K V
+          BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_delta_rule_fwd_h_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedFinalStateValue, hExec]
+
+/-- Python test-shape output coverage for chunk-delta forward: the full kernel
+surface produces the loop-row `h`, `v_new`, and optional final-state output
+addresses used by the checked Python shape. -/
 theorem chunk_delta_fwd_python_test_shape_all_outputs_compute_correct
-    (BH HOut BVN VNew BHFinal FinalState : RegionName) (i_t : Fin 4)
+    (k v d v_new h initial_state final_state : RegionName)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) (i_t : Fin 4)
     (s : BlockState) :
     (ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_h_store_slice BH HOut
-        i_t.val 16384 64 64 64 64 64)
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state 8192 128 1 8192 64 1 16384 64
+        4 128 64 64 32 32 64 64 4 USE_INITIAL_STATE STORE_FINAL_STATE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx => (HOut, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
+        (fun idx => (h, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
       (expected := fun idx : TileIndex [64, 64] =>
-        storeValue s BH i_t.val 16384 64 64 64 64 64 idx)) ∧
+        producedHValue s k v d v_new h initial_state final_state
+          8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+          USE_INITIAL_STATE STORE_FINAL_STATE i_t.val idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew
-        i_t.val 0 8192 64 1 128 64 32 32 64)
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state 8192 128 1 8192 64 1 16384 64
+        4 128 64 64 32 32 64 64 4 USE_INITIAL_STATE STORE_FINAL_STATE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [32, 64] =>
           vNewActive s i_t.val 0 128 64 32 32 64 idx)
-        (fun idx => (VNew, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
+        (fun idx => (v_new, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
       (expected := fun idx : TileIndex [32, 64] =>
-        vNewStoreValue s BVN i_t.val 0 8192 64 1 128 64 32 32 64 idx)) ∧
+        producedVNewValue s k v d v_new h initial_state final_state
+          8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+          USE_INITIAL_STATE STORE_FINAL_STATE i_t.val 0 idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState
-        64 64 64 64)
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state 8192 128 1 8192 64 1 16384 64
+        4 128 64 64 32 32 64 64 4 USE_INITIAL_STATE STORE_FINAL_STATE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx => (FinalState, finalStateOffset s 64 64 64 64 idx)))
+        (fun idx => (final_state, finalStateOffset s 64 64 64 64 idx)))
       (expected := fun idx : TileIndex [64, 64] =>
-        finalStateStoreValue s BHFinal 64 64 64 64 idx)) := by
+        producedFinalStateValue s k v d v_new h initial_state final_state
+          8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+          USE_INITIAL_STATE STORE_FINAL_STATE idx)) := by
   constructor
-  · exact chunk_delta_fwd_h_store_python_test_shape_compute_correct
-      BH HOut i_t s
+  · exact chunk_delta_fwd_h_producer_surface_compute_correct
+      k v d v_new h initial_state final_state 8192 128 1 8192 64 1
+      16384 64 4 128 64 64 32 32 64 64 4 USE_INITIAL_STATE
+      STORE_FINAL_STATE i_t.val s
   constructor
-  · exact chunk_delta_fwd_v_new_store_python_test_shape_compute_correct
-      BVN VNew i_t s
-  · exact chunk_delta_fwd_final_state_python_test_shape_compute_correct
-      BHFinal FinalState s
+  · exact chunk_delta_fwd_v_new_producer_surface_compute_correct
+      k v d v_new h initial_state final_state 8192 128 1 8192 64 1
+      16384 64 4 128 64 64 32 32 64 64 4 USE_INITIAL_STATE
+      STORE_FINAL_STATE i_t.val 0 s
+  · exact chunk_delta_fwd_final_state_producer_surface_compute_correct
+      k v d v_new h initial_state final_state 8192 128 1 8192 64 1
+      16384 64 4 128 64 64 32 32 64 64 4 USE_INITIAL_STATE
+      STORE_FINAL_STATE s
 
 /-! ## Python test-case surface wrappers
 
@@ -597,11 +729,10 @@ theorem chunk_delta_fwd_python_test_case2_surface_toAlgorithm_supported
     Bool.true Bool.true
 
 /-- Public Python case 1 summary: no initial state and no final-state output.
-The full surface lowers and the checked h/v_new/final-state proof slices remain
-available for the concrete Python shape. -/
+The full producer surface lowers and realizes the checked `h`/`v_new`
+writebacks for the concrete Python shape. -/
 theorem chunk_delta_fwd_python_test_case1_output_summary
-    (k v d v_new h initial_state final_state
-      BH HOut BVN VNew BHFinal FinalState : RegionName)
+    (k v d v_new h initial_state final_state : RegionName)
     (i_t : Fin 4) (s : BlockState) :
     (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
       final_state
@@ -611,43 +742,48 @@ theorem chunk_delta_fwd_python_test_case1_output_summary
       4 128 64 64 32 32 64 64 4
       Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
     ((ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_h_store_slice BH HOut
-        i_t.val 16384 64 64 64 64 64)
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state 8192 128 1 8192 64 1 16384 64
+        4 128 64 64 32 32 64 64 4 Bool.false Bool.false)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx => (HOut, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
+        (fun idx => (h, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
       (expected := fun idx : TileIndex [64, 64] =>
-        storeValue s BH i_t.val 16384 64 64 64 64 64 idx)) ∧
+        producedHValue s k v d v_new h initial_state final_state
+          8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+          Bool.false Bool.false i_t.val idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew
-        i_t.val 0 8192 64 1 128 64 32 32 64)
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state 8192 128 1 8192 64 1 16384 64
+        4 128 64 64 32 32 64 64 4 Bool.false Bool.false)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [32, 64] =>
           vNewActive s i_t.val 0 128 64 32 32 64 idx)
-        (fun idx => (VNew, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
+        (fun idx => (v_new, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
       (expected := fun idx : TileIndex [32, 64] =>
-        vNewStoreValue s BVN i_t.val 0 8192 64 1 128 64 32 32 64 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState
-        64 64 64 64)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx => (FinalState, finalStateOffset s 64 64 64 64 idx)))
-      (expected := fun idx : TileIndex [64, 64] =>
-        finalStateStoreValue s BHFinal 64 64 64 64 idx))) := by
+        producedVNewValue s k v d v_new h initial_state final_state
+          8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+          Bool.false Bool.false i_t.val 0 idx))) := by
   constructor
   · exact chunk_delta_fwd_python_test_case1_surface_toAlgorithm_supported
       k v d v_new h initial_state final_state
-  · exact chunk_delta_fwd_python_test_shape_all_outputs_compute_correct
-      BH HOut BVN VNew BHFinal FinalState i_t s
+  · constructor
+    · exact chunk_delta_fwd_h_producer_surface_compute_correct
+        k v d v_new h initial_state final_state 8192 128 1 8192 64 1
+        16384 64 4 128 64 64 32 32 64 64 4 Bool.false Bool.false
+        i_t.val s
+    · exact chunk_delta_fwd_v_new_producer_surface_compute_correct
+        k v d v_new h initial_state final_state 8192 128 1 8192 64 1
+        16384 64 4 128 64 64 32 32 64 64 4 Bool.false Bool.false
+        i_t.val 0 s
 
-/-- Public Python case 2 summary: initial state and final-state output enabled. -/
+/-- Public Python case 2 summary: initial state and final-state output enabled.
+The full producer surface realizes `h`, `v_new`, and `final_state` writebacks
+from the loop-produced values. -/
 theorem chunk_delta_fwd_python_test_case2_output_summary
-    (k v d v_new h initial_state final_state
-      BH HOut BVN VNew BHFinal FinalState : RegionName)
+    (k v d v_new h initial_state final_state : RegionName)
     (i_t : Fin 4) (s : BlockState) :
     (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
       final_state
@@ -657,37 +793,46 @@ theorem chunk_delta_fwd_python_test_case2_output_summary
       4 128 64 64 32 32 64 64 4
       Bool.true Bool.true).toAlgorithm? = Except.ok alg) ∧
     ((ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_h_store_slice BH HOut
-        i_t.val 16384 64 64 64 64 64)
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state 8192 128 1 8192 64 1 16384 64
+        4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx => (HOut, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
+        (fun idx => (h, hOffset s i_t.val 16384 64 64 64 64 64 idx)))
       (expected := fun idx : TileIndex [64, 64] =>
-        storeValue s BH i_t.val 16384 64 64 64 64 64 idx)) ∧
+        producedHValue s k v d v_new h initial_state final_state
+          8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+          Bool.true Bool.true i_t.val idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew
-        i_t.val 0 8192 64 1 128 64 32 32 64)
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state 8192 128 1 8192 64 1 16384 64
+        4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [32, 64] =>
           vNewActive s i_t.val 0 128 64 32 32 64 idx)
-        (fun idx => (VNew, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
+        (fun idx => (v_new, vNewOffset s i_t.val 0 8192 64 1 32 32 64 idx)))
       (expected := fun idx : TileIndex [32, 64] =>
-        vNewStoreValue s BVN i_t.val 0 8192 64 1 128 64 32 32 64 idx)) ∧
+        producedVNewValue s k v d v_new h initial_state final_state
+          8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+          Bool.true Bool.true i_t.val 0 idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState
-        64 64 64 64)
+      (kernel := chunk_delta_rule_fwd_h_surface k v d v_new h initial_state
+        final_state 8192 128 1 8192 64 1 16384 64
+        4 128 64 64 32 32 64 64 4 Bool.true Bool.true)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [64, 64] => active s 64 64 64 64 idx)
-        (fun idx => (FinalState, finalStateOffset s 64 64 64 64 idx)))
+        (fun idx => (final_state, finalStateOffset s 64 64 64 64 idx)))
       (expected := fun idx : TileIndex [64, 64] =>
-        finalStateStoreValue s BHFinal 64 64 64 64 idx))) := by
+        producedFinalStateValue s k v d v_new h initial_state final_state
+          8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+          Bool.true Bool.true idx))) := by
   constructor
   · exact chunk_delta_fwd_python_test_case2_surface_toAlgorithm_supported
       k v d v_new h initial_state final_state
   · exact chunk_delta_fwd_python_test_shape_all_outputs_compute_correct
-      BH HOut BVN VNew BHFinal FinalState i_t s
+      k v d v_new h initial_state final_state Bool.true Bool.true i_t s
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd

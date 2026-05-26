@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 67 as conservative
-  `full_value_candidate`, 101 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 69 as conservative
+  `full_value_candidate`, 99 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
   to the former broad #147 quantization bucket, the former broad #148
@@ -81,9 +81,11 @@ surface.
   activation-tail, and TMA output-store accumulator blockers. The #149 rows
   now split into #161 final-store lift blockers plus #162 forward online
   softmax recurrence, score/probability reduction, context/decode reduction,
-  token-attention reduction, and backward score-reduction blockers. The #151
-  rows now split into #190 chunk-delta forward recurrence-store producers and
-  #191 LayerNorm backward residual/recompute aggregation blockers. The #152
+  token-attention reduction, and backward score-reduction blockers. The #190
+  chunk-delta forward rows are now full-value candidates backed by the full
+  producer surface for `h`, `v_new`, and optional `final_state`; the remaining
+  #151 split rows track under #191 LayerNorm backward residual/recompute
+  aggregation blockers. The #152
   blocked summaries now migrate to the open #154
   `fixed-width-int8-cast-semantics` issue because their concrete blocker is
   CUDA `llrint` / int8-cast semantics; the #153 rows split into
