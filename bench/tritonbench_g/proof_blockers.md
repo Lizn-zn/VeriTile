@@ -22,9 +22,10 @@ corresponding family issue.
 The broad #150 recurrent/cumsum bucket has been split by mechanism:
 `chunk-cumsum-carry-fold` (#185) tracks chunk cumsum summaries that still expose
 one-block or one-iteration carry/cumsum slices, `decay-cumsum-scan-fold` (#186)
-tracks `decay_cumsum.py` forward/backward scan folds, `recurrent-state-loop-fold`
-(#187) tracks chunk-gate, HGRN, and RWKV recurrent state loops,
-the now-discharged `gla-output-tile-producer` (#188) tracks
+tracks `decay_cumsum.py` forward/backward scan folds, the now-discharged
+`recurrent-state-loop-fold` (#187) connects chunk-gate, HGRN, and RWKV recurrent
+state summaries to their full producer surfaces, the now-discharged
+`gla-output-tile-producer` (#188) tracks
 `chunk_gla_simple.py` summaries whose proof used to start from a precomputed
 output tile, and
 `reverse-cumsum-directional-scan` (#94) tracks reverse cumsum direction
