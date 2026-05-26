@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 62 as conservative
-  `full_value_candidate`, 106 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 63 as conservative
+  `full_value_candidate`, 105 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
   to the former broad #147 quantization bucket, the former broad #148
@@ -89,9 +89,8 @@ surface.
   rows split into Mistral sliding-window accumulator-to-store and nopad
   variable-length accumulator-to-store obligations. The #171 LLaMA flash-decode
   normalization path and #181 LLaMA running-max recurrence step are upgraded to
-  full-value candidates. The #172 Phi flash-decode row now leaves only the
-  running-max obligation linked to #175; #176's masked scaled-accumulator
-  recurrence and #177's final normalization/store path are upgraded to
+  full-value candidates. The #172 Phi flash-decode row now has #175 running-max,
+  #176 masked scaled-accumulator, and #177 final normalization/store upgraded to
   full-value candidates.
 
 ## Remaining Blockers

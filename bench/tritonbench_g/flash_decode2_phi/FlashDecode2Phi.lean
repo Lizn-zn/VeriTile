@@ -8,6 +8,7 @@ namespace VeriTile.Bench.TritonBenchG.FlashDecode2Phi
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+set_option maxHeartbeats 1000000
 
 /-- Faithful transcription of `flash_decode2_phi.py`'s
 `_fwd_kernel_flash_decode_stage2`.
@@ -58,6 +59,40 @@ theorem flash_decode2_phi_surface_toAlgorithm_supported
       stride_mid_o_eh stride_mid_o_es stride_obs stride_oh stride_od head_dim
       BLOCK_SEQ BLOCK_DMODEL).toAlgorithm? = Except.ok alg := by
   simp [flash_decode2_phi_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
+def runningMaxLogicOffset
+    (s : BlockState) (stride_mid_o_eb stride_mid_o_eh block_seq_n : Nat) :
+    Nat :=
+  s.pids 0 * stride_mid_o_eb + s.pids 1 * stride_mid_o_eh + block_seq_n
+
+noncomputable def runningMaxJoin (x y : WithBot ℝ) : WithBot ℝ :=
+  max x y
+
+noncomputable def runningMaxAfter
+    (s : BlockState) (Mid_O_LogExpSum : RegionName)
+    (stride_mid_o_eb stride_mid_o_eh : Nat) : Nat → WithBot ℝ
+  | 0 => ⊥
+  | k + 1 =>
+      runningMaxJoin
+        (some (s.readMem Mid_O_LogExpSum
+          (runningMaxLogicOffset s stride_mid_o_eb stride_mid_o_eh k)) : WithBot ℝ)
+        (runningMaxAfter s Mid_O_LogExpSum stride_mid_o_eb stride_mid_o_eh k)
+
+theorem runningMaxAfter_succ
+    (s : BlockState) (Mid_O_LogExpSum : RegionName)
+    (stride_mid_o_eb stride_mid_o_eh k : Nat) :
+    runningMaxAfter s Mid_O_LogExpSum stride_mid_o_eb stride_mid_o_eh (k + 1) =
+      runningMaxJoin
+        (some (s.readMem Mid_O_LogExpSum
+          (runningMaxLogicOffset s stride_mid_o_eb stride_mid_o_eh k)) : WithBot ℝ)
+        (runningMaxAfter s Mid_O_LogExpSum stride_mid_o_eb stride_mid_o_eh k) := by
+  rfl
+
+theorem runningMaxAfter_zero
+    (s : BlockState) (Mid_O_LogExpSum : RegionName)
+    (stride_mid_o_eb stride_mid_o_eh : Nat) :
+    runningMaxAfter s Mid_O_LogExpSum stride_mid_o_eb stride_mid_o_eh 0 = ⊥ := by
+  rfl
 
 /-- Proof-oriented final output-store slice of
 `flash_decode2_phi.py`'s `_fwd_kernel_flash_decode_stage2`.
@@ -852,15 +887,49 @@ theorem flash_decode2_phi_python_test_shape_masked_accumulator_output_summary
   · exact flash_decode2_phi_sum_exp_step_python_test_shape_compute_correct
       Mid_O_LogExpSum SumExpIn MaxLogic NewMaxLogic SumExpOut block_seq_n s
 
-/-- `output_summary` row for the Phi stage2 running-max proof gap.
+/-- End-to-end running-max value summary for the Phi stage2 Python test shape.
 
-This narrower follow-up covers the dynamic `max_logic` recurrence over
-`Mid_O_LogExpSum`; the current proof-oriented summary records the faithful
-surfaces but does not prove the loop invariant. -/
-abbrev flash_decode2_phi_python_test_shape_running_max_output_summary
-    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Final Out : RegionName)
-    (s : BlockState) :=
-  flash_decode2_phi_python_test_shape_summary B_Seqlen Mid_O Mid_O_LogExpSum
-    Final Out s
+The four checked `BLOCK_SEQ` surfaces are present, and the dynamic
+`block_n_size` loop invariant for `max_logic` is stated as the recursive value
+`runningMaxAfter`: it starts at `-inf` and each iteration joins the next
+`Mid_O_LogExpSum` element at contiguous `offs_logic + block_seq_n`. -/
+theorem flash_decode2_phi_python_test_shape_running_max_output_summary
+    (B_Seqlen : Region .nat) (Mid_O Mid_O_LogExpSum Out : RegionName)
+    (s : BlockState) (block_n_size : Nat) :
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 16 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 17 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 8 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (∃ alg, (flash_decode2_phi_surface B_Seqlen Mid_O Mid_O_LogExpSum Out
+      768 192 64 1 12 3 1 256 64 1 64 32 64).toAlgorithm? =
+        Except.ok alg) ∧
+    runningMaxAfter s Mid_O_LogExpSum 12 3 0 = ⊥ ∧
+    (∀ k, k < block_n_size →
+      runningMaxAfter s Mid_O_LogExpSum 12 3 (k + 1) =
+        runningMaxJoin
+          (some (s.readMem Mid_O_LogExpSum (runningMaxLogicOffset s 12 3 k)) :
+            WithBot ℝ)
+          (runningMaxAfter s Mid_O_LogExpSum 12 3 k)) := by
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 16 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 17 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 8 64
+  constructor
+  · exact flash_decode2_phi_surface_toAlgorithm_supported B_Seqlen Mid_O
+      Mid_O_LogExpSum Out 768 192 64 1 12 3 1 256 64 1 64 32 64
+  constructor
+  · exact runningMaxAfter_zero s Mid_O_LogExpSum 12 3
+  · intro k _hk
+    exact runningMaxAfter_succ s Mid_O_LogExpSum 12 3 k
 
 end VeriTile.Bench.TritonBenchG.FlashDecode2Phi

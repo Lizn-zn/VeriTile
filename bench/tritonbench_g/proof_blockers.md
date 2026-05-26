@@ -41,13 +41,14 @@ The #171 LLaMA stage2 normalization bucket now connects loop-produced `Acc` and
 #181 LLaMA running-max recurrence step over `Mid_O_LogExpSum` is now also a
 full-value candidate.
 The #172 Phi stage2 recurrence bucket has been split into narrower
-obligations: `flash-decode-phi-running-max-recurrence` (#175),
-the now-discharged `flash-decode-phi-masked-accumulator-recurrence` (#176),
-and the now-discharged `flash-decode-phi-normalization-store` (#177). The #176
-path now carries the Python test-shape masked `Mid_O` load through the
-`AccOut` and `SumExpOut` recurrence step, while #177 connects the Python
-test-shape `Acc` and `SumExp` outputs to the final masked `Out` writeback; both
-are full-value candidates in `proof_gap_manifest.tsv`.
+obligations: the now-discharged `flash-decode-phi-running-max-recurrence`
+(#175), the now-discharged `flash-decode-phi-masked-accumulator-recurrence`
+(#176), and the now-discharged `flash-decode-phi-normalization-store` (#177).
+The #175 path states and proves the Python test-shape running `max_logic`
+recurrence, #176 carries the Python test-shape masked `Mid_O` load through the
+`AccOut` and `SumExpOut` recurrence step, and #177 connects the Python
+test-shape `Acc` and `SumExp` outputs to the final masked `Out` writeback; all
+three are full-value candidates in `proof_gap_manifest.tsv`.
 The broad #148 matmul/dot bucket has been split into narrower accumulator
 proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
