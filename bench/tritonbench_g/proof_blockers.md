@@ -37,12 +37,12 @@ tiles under #161, while the #162 rows now split further into
 `attention-score-probability-reduction`, `attention-context-decode-reduction`,
 `token-attention-reduction`, and `attention-backward-score-reduction`.
 The broad #151 reduction/layernorm aggregation bucket has been split into
-narrower follow-ups: `chunk-delta-forward-recurrence-store` (#190) covers the
-two chunk-delta forward summaries whose h/v_new/final-state stores still start
-from precomputed recurrence tiles, and
-`layernorm-backward-residual-recompute-aggregation` (#191) covers the three
-LayerNorm backward residual/recompute summaries that still compose row-level
-C1/C2 reductions, DX/Y writebacks, and partial DW/DB slices.
+narrower follow-ups: the now-discharged
+`chunk-delta-forward-recurrence-store` (#190) connects the two chunk-delta
+forward summaries to the full producer surface for `h`, `v_new`, and optional
+`final_state`, while `layernorm-backward-residual-recompute-aggregation` (#191)
+covers the three LayerNorm backward residual/recompute summaries that still
+compose row-level C1/C2 reductions, DX/Y writebacks, and partial DW/DB slices.
 The #161 final-store bucket has been split again into kernel-specific producer
 obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
 `dense-attention-acc-store` (#166),
