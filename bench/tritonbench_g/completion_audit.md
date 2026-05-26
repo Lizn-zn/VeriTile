@@ -73,7 +73,8 @@ surface.
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
   to the former broad #147 quantization bucket, the former broad #148
   matmul/dot bucket, the former broad #149 attention/softmax bucket, the former
-  broad #153 rotary/cache bucket, or the broad #152 `semantic-blocker` bucket.
+  broad #150 recurrent/cumsum bucket, the former broad #153 rotary/cache bucket,
+  or the broad #152 `semantic-blocker` bucket.
   The #148 rows now split into GEMV K-loop, BMM final-store, dequantized
   cross-kernel, IV-dependent output-store, plain matmul output-store,
   activation-tail, and TMA output-store accumulator blockers. The #149 rows
@@ -87,7 +88,10 @@ surface.
   `rotary-2d-tile-value-lift` for row-level rotary `o0`/`o1` proofs that still
   need the full `[BLOCK_M, BLOCK_HALF]` 2D tile lift. The #167 context-attention
   rows split into Mistral sliding-window accumulator-to-store and nopad
-  variable-length accumulator-to-store obligations. The #171 LLaMA flash-decode
+  variable-length accumulator-to-store obligations. The #150 rows now split into
+  #185 chunk cumsum carry folds, #186 decay cumsum scan folds, #187 recurrent
+  state loop folds, #188 GLA output tile producers, and #94 reverse cumsum
+  directional scan semantics. The #171 LLaMA flash-decode
   normalization path and #181 LLaMA running-max recurrence step are upgraded to
   full-value candidates. The #172 Phi flash-decode row now has #175 running-max,
   #176 masked scaled-accumulator, and #177 final normalization/store upgraded to

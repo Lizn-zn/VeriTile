@@ -59,7 +59,12 @@ ISSUE_BY_FAMILY = {
     "quantization-semantic-followup": "#158",
     "rope-head-slice-lift": "#153",
     "rotary-2d-tile-value-lift": "#153",
+    "chunk-cumsum-carry-fold": "#185",
+    "decay-cumsum-scan-fold": "#186",
+    "gla-output-tile-producer": "#188",
     "recurrent-cumsum-loop": "#150",
+    "recurrent-state-loop-fold": "#187",
+    "reverse-cumsum-directional-scan": "#94",
     "reduction-layernorm-aggregation": "#151",
     "rotary-cache-path": "#153",
     "semantic-blocker": "#152",
@@ -205,6 +210,16 @@ def family_for(name: str, text: str) -> str:
         return "attention-online-softmax-recurrence"
     if any(k in hay for k in ("matmul", "gemm", "dot", "bmm", "vecmat", "conv2d")):
         return "matmul-dot-accumulator"
+    if "reversed_cumsum" in hay:
+        return "reverse-cumsum-directional-scan"
+    if "chunk_gla_simple" in hay:
+        return "gla-output-tile-producer"
+    if "decay_cumsum" in hay:
+        return "decay-cumsum-scan-fold"
+    if any(k in hay for k in ("chunk_cumsum", "chunked_cumsum")):
+        return "chunk-cumsum-carry-fold"
+    if any(k in hay for k in ("chunk_gate_recurrence", "fused_recurrent_hgrn", "fused_recurrent_rwkv6")):
+        return "recurrent-state-loop-fold"
     if any(k in hay for k in ("cumsum", "recurrent", "recurrence", "rwkv", "hgrn", "gla", "retention")):
         return "recurrent-cumsum-loop"
     if "int8" in hay and any(k in hay for k in ("unprojected", "cast semantics missing")):
