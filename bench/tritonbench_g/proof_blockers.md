@@ -21,9 +21,11 @@ recurrence, reduction, or explicit blocked-summary work track under the
 corresponding family issue.
 The broad #150 recurrent/cumsum bucket has been split by mechanism:
 `chunk-cumsum-carry-fold` (#185) tracks chunk cumsum summaries that still expose
-one-block or one-iteration carry/cumsum slices, `decay-cumsum-scan-fold` (#186)
-tracks `decay_cumsum.py` forward/backward scan folds, `recurrent-state-loop-fold`
-(#187) tracks chunk-gate, HGRN, and RWKV recurrent state loops,
+one-block or one-iteration carry/cumsum slices, the now-discharged
+`decay-cumsum-scan-fold` (#186) tracks `decay_cumsum.py` summaries now
+connected to full prepare, forward cumsum, and backward global-cumsum surfaces,
+`recurrent-state-loop-fold` (#187) tracks chunk-gate, HGRN, and RWKV recurrent
+state loops,
 the now-discharged `gla-output-tile-producer` (#188) tracks
 `chunk_gla_simple.py` summaries whose proof used to start from a precomputed
 output tile, and
