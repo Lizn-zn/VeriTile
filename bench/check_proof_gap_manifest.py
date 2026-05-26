@@ -36,6 +36,7 @@ ISSUE_BY_FAMILY = {
     "context-attention-mistral-sliding-window-acc-store": "#167",
     "context-attention-nopad-varlen-acc-store": "#167",
     "context-attention-streaming-acc-store": "#167",
+    "dense-attention-online-softmax-recurrence": "#199",
     "dense-attention-acc-store": "#166",
     "flash-decode-normalized-vector-store": "#168",
     "flash-decode-llama-stage2-normalization": "#171",
@@ -162,6 +163,8 @@ def family_for(name: str, text: str) -> str:
         return "matmul-output-store-accumulator"
     if "attention_fwd_triton1" in hay:
         return "attention-fwd-triton1-bo-bhpre-producers"
+    if "attention_kernel" in hay and "online-softmax recurrence" in hay:
+        return "dense-attention-online-softmax-recurrence"
     if "attention_kernel" in hay:
         return "dense-attention-acc-store"
     if "context_attn_mistral" in hay:

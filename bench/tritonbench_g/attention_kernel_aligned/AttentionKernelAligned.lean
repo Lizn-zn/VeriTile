@@ -110,16 +110,17 @@ theorem attention_kernel_aligned_fwd_kernel_aligned_surface_toAlgorithm_supporte
   simp [attention_kernel_aligned_fwd_kernel_aligned_surface,
     ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
-/-- Surface transcription/proof-oriented final output-store slice of
-`attention_kernel_aligned.py`'s `_fwd_kernel_aligned`.
+/-- Final output-store slice of `attention_kernel_aligned.py`'s
+`_fwd_kernel_aligned`.
 
-The full kernel computes relative-position-biased attention with aligned Q/K/V
-block pointers. This slice starts from a precomputed normalized `Acc` tile and
-proves the final unmasked block-pointer writeback into `Out`. The inner
-`tl.float32` online-softmax state is outside this slice. -/
+This slice includes the Python `acc = acc / l_i[:, None]` statement immediately
+before the unmasked block-pointer writeback into `Out`. Producing the
+unnormalized streaming-softmax `Acc` and `L` inputs remains the narrower
+recurrence obligation. -/
 def attention_kernel_aligned_final_store_slice
-    (Acc Out : RegionName)
+    (Acc L Out : RegionName)
     (stride_acc_h stride_acc_m stride_acc_k
+      stride_l_h stride_l_m
       stride_oh stride_om stride_on
       BLOCK_M BLOCK_DMODEL : Nat) :
     ComputeKernel := triton {
@@ -129,6 +130,8 @@ def attention_kernel_aligned_final_store_slice
   offs_k = tl.arange(0, $(BLOCK_DMODEL))
   acc = tl.load(Acc + off_hz * $(stride_acc_h) +
       offs_m[:, None] * $(stride_acc_m) + offs_k[None, :] * $(stride_acc_k))
+  l_i = tl.load(L + off_hz * $(stride_l_h) + offs_m * $(stride_l_m))
+  acc = acc / l_i[:, None]
   tl.store(Out + off_hz * $(stride_oh) +
       offs_m[:, None] * $(stride_om) + offs_k[None, :] * $(stride_on),
       (acc).to(Out.dtype.element_ty))
@@ -147,6 +150,21 @@ def accOffset
   s.pids 1 * stride_acc_h +
     mIndex s BLOCK_M idx.1 * stride_acc_m + kIndex idx * stride_acc_k
 
+def lOffset
+    (s : BlockState)
+    (stride_l_h stride_l_m BLOCK_M : Nat)
+    (i : Fin BLOCK_M) : Nat :=
+  s.pids 1 * stride_l_h + mIndex s BLOCK_M i * stride_l_m
+
+noncomputable def normalizedAccValue
+    (s : BlockState) (Acc L : RegionName)
+    (stride_acc_h stride_acc_m stride_acc_k stride_l_h stride_l_m
+      BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  s.readMem Acc
+      (accOffset s stride_acc_h stride_acc_m stride_acc_k BLOCK_M idx) /
+    s.readMem L (lOffset s stride_l_h stride_l_m BLOCK_M idx.1)
+
 def outOffset
     (s : BlockState)
     (stride_oh stride_om stride_on BLOCK_M : Nat)
@@ -156,8 +174,9 @@ def outOffset
 
 /-- Algorithm-layer correctness for the final output store. -/
 theorem attention_kernel_aligned_final_store_slice_correct
-    (Acc Out : RegionName)
+    (Acc L Out : RegionName)
     (stride_acc_h stride_acc_m stride_acc_k
+      stride_l_h stride_l_m
       stride_oh stride_om stride_on
       BLOCK_M BLOCK_DMODEL : Nat)
     (s : BlockState)
@@ -166,16 +185,18 @@ theorem attention_kernel_aligned_final_store_slice_correct
         outOffset s stride_oh stride_om stride_on BLOCK_M idx)) :
     ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
       let outAddr := outOffset s stride_oh stride_om stride_on BLOCK_M idx
-      (exec (attention_kernel_aligned_final_store_slice Acc Out stride_acc_h
-            stride_acc_m stride_acc_k stride_oh stride_om stride_on BLOCK_M
-            BLOCK_DMODEL) s).map (·.readMem Out outAddr)
-        = some (s.readMem Acc
-            (accOffset s stride_acc_h stride_acc_m stride_acc_k BLOCK_M idx)) := by
+      (exec (attention_kernel_aligned_final_store_slice Acc L Out stride_acc_h
+            stride_acc_m stride_acc_k stride_l_h stride_l_m stride_oh
+            stride_om stride_on BLOCK_M BLOCK_DMODEL) s).map
+          (·.readMem Out outAddr)
+        = some (normalizedAccValue s Acc L stride_acc_h stride_acc_m
+            stride_acc_k stride_l_h stride_l_m BLOCK_M idx) := by
   intro idx
   simp [exec, attention_kernel_aligned_final_store_slice, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, mIndex, kIndex,
-        accOffset, outOffset, TileShape.dropInsertedIndex]
+        Tile.ptrAdd, NumericDType.add, NumericDType.mul, NumericDType.div,
+        mIndex, kIndex, accOffset, lOffset, normalizedAccValue, outOffset,
+        TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BLOCK_M, BLOCK_DMODEL] → Nat :=
     fun idx =>
       s.pids 1 * stride_oh + (s.pids 0 * BLOCK_M + idx.1.val) * stride_om +
@@ -185,22 +206,26 @@ theorem attention_kernel_aligned_final_store_slice_correct
       s.readMem Acc
         (s.pids 1 * stride_acc_h +
           (s.pids 0 * BLOCK_M + idx.1.val) * stride_acc_m +
-          idx.2.1.val * stride_acc_k)
+          idx.2.1.val * stride_acc_k) /
+        s.readMem L
+          (s.pids 1 * stride_l_h +
+            (s.pids 0 * BLOCK_M + idx.1.val) * stride_l_m)
   have hOffsetInj : Function.Injective offsetFn := by
     simpa [offsetFn, outOffset, mIndex, kIndex] using hOutInj
   change (List.foldl
       (fun (acc : BlockState) i => acc.writeMem Out (offsetFn i) (valueFn i))
       _ (TileShape.allIndices [BLOCK_M, BLOCK_DMODEL])).readMem Out
         (offsetFn idx) =
-    s.readMem Acc
-      (accOffset s stride_acc_h stride_acc_m stride_acc_k BLOCK_M idx)
+    normalizedAccValue s Acc L stride_acc_h stride_acc_m stride_acc_k
+      stride_l_h stride_l_m BLOCK_M idx
   rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
-  simp [valueFn, accOffset, mIndex, kIndex]
+  simp [valueFn, accOffset, lOffset, normalizedAccValue, mIndex, kIndex]
 
 /-- Compute-facing correctness for the final output store. -/
 theorem attention_kernel_aligned_final_store_slice_compute_correct
-    (Acc Out : RegionName)
+    (Acc L Out : RegionName)
     (stride_acc_h stride_acc_m stride_acc_k
+      stride_l_h stride_l_m
       stride_oh stride_om stride_on
       BLOCK_M BLOCK_DMODEL : Nat)
     (s : BlockState)
@@ -208,23 +233,23 @@ theorem attention_kernel_aligned_final_store_slice_compute_correct
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s stride_oh stride_om stride_on BLOCK_M idx)) :
     ComputeCorrect.Realizes
-      (kernel := attention_kernel_aligned_final_store_slice Acc Out
-        stride_acc_h stride_acc_m stride_acc_k stride_oh stride_om stride_on
-        BLOCK_M BLOCK_DMODEL)
+      (kernel := attention_kernel_aligned_final_store_slice Acc L Out
+        stride_acc_h stride_acc_m stride_acc_k stride_l_h stride_l_m
+        stride_oh stride_om stride_on BLOCK_M BLOCK_DMODEL)
       (initialState := s)
       (write := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         some (Out, outOffset s stride_oh stride_om stride_on BLOCK_M idx))
       (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        s.readMem Acc
-          (accOffset s stride_acc_h stride_acc_m stride_acc_k BLOCK_M idx)) := by
+        normalizedAccValue s Acc L stride_acc_h stride_acc_m stride_acc_k
+          stride_l_h stride_l_m BLOCK_M idx) := by
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [attention_kernel_aligned_final_store_slice]
   intro s0 s' hExec hs0
   subst s0
   intro idx
-  have h := attention_kernel_aligned_final_store_slice_correct Acc Out
-    stride_acc_h stride_acc_m stride_acc_k stride_oh stride_om stride_on
-    BLOCK_M BLOCK_DMODEL s hOutInj idx
+  have h := attention_kernel_aligned_final_store_slice_correct Acc L Out
+    stride_acc_h stride_acc_m stride_acc_k stride_l_h stride_l_m stride_oh
+    stride_om stride_on BLOCK_M BLOCK_DMODEL s hOutInj idx
   rw [hExec] at h
   exact Option.some.inj h
 
@@ -236,15 +261,15 @@ Contiguous `[B, H, N_CTX, D_MODEL]` tensors are passed to the kernel with
 per-head strides `(8192, 64, 1)`. -/
 
 theorem attention_kernel_aligned_final_store_python_test_shape_compute_correct
-    (Acc Out : RegionName) (s : BlockState) :
+    (Acc L Out : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
-      (kernel := attention_kernel_aligned_final_store_slice Acc Out
-        8192 64 1 8192 64 1 32 64)
+      (kernel := attention_kernel_aligned_final_store_slice Acc L Out
+        8192 64 1 128 1 8192 64 1 32 64)
       (initialState := s)
       (write := fun idx : TileIndex [32, 64] =>
         some (Out, outOffset s 8192 64 1 32 idx))
       (expected := fun idx : TileIndex [32, 64] =>
-        s.readMem Acc (accOffset s 8192 64 1 32 idx)) := by
+        normalizedAccValue s Acc L 8192 64 1 128 1 32 idx) := by
   apply attention_kernel_aligned_final_store_slice_compute_correct
   rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
   simp [outOffset, mIndex, kIndex] at h
@@ -258,28 +283,29 @@ theorem attention_kernel_aligned_final_store_python_test_shape_compute_correct
 
 This records the faithful full aligned attention surface for the checked
 relative-position-bias launch and ties it to the observable final `Out`
-writeback slice. The online-softmax accumulator is represented by the
-proof-oriented `Acc` tile in the store slice. -/
+writeback. This discharges the dense final-store `Acc` handoff; the remaining
+not claimed value path is the online-softmax recurrence that produces `Acc`
+and `L`. -/
 theorem attention_kernel_aligned_python_test_shape_output_summary
-    (Q K V B0 Acc Out : RegionName) (s : BlockState) :
+    (Q K V B0 Acc L Out : RegionName) (s : BlockState) :
     (∃ alg, (attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out
       1.0 8192 64 1 8192 64 1 8192 64 1 8192 64 1
       8192 128 2 4 128 0 64 128 64 32 64
       FloatDType.fp16).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := attention_kernel_aligned_final_store_slice Acc Out
-        8192 64 1 8192 64 1 32 64)
+      (kernel := attention_kernel_aligned_final_store_slice Acc L Out
+        8192 64 1 128 1 8192 64 1 32 64)
       (initialState := s)
       (write := fun idx : TileIndex [32, 64] =>
         some (Out, outOffset s 8192 64 1 32 idx))
       (expected := fun idx : TileIndex [32, 64] =>
-        s.readMem Acc (accOffset s 8192 64 1 32 idx)) := by
+        normalizedAccValue s Acc L 8192 64 1 128 1 32 idx) := by
   constructor
   · exact attention_kernel_aligned_fwd_kernel_aligned_surface_toAlgorithm_supported
       Q K V B0 Out 1.0 8192 64 1 8192 64 1 8192 64 1
       8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
       FloatDType.fp16
   · exact attention_kernel_aligned_final_store_python_test_shape_compute_correct
-      Acc Out s
+      Acc L Out s
 
 end VeriTile.Bench.TritonBenchG.AttentionKernelAligned

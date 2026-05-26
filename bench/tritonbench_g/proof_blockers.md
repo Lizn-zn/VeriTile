@@ -48,7 +48,9 @@ backward residual/recompute summaries that used to compose row-level C1/C2
 reductions, DX/Y writebacks, and partial DW/DB slices.
 The #161 final-store bucket has been split again into kernel-specific producer
 obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
-`dense-attention-acc-store` (#166),
+the now-discharged `dense-attention-acc-store` (#166), whose remaining
+Q/K/V streaming-softmax `Acc`/`L` producer proof is tracked by the narrower
+`dense-attention-online-softmax-recurrence` (#199),
 `context-attention-mistral-sliding-window-acc-store` (#167),
 `context-attention-nopad-varlen-acc-store` (#167), and
 `flash-decode-normalized-vector-store` (#168).
