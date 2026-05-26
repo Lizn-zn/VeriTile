@@ -40,9 +40,10 @@ The broad #151 reduction/layernorm aggregation bucket has been split into
 narrower follow-ups: the now-discharged
 `chunk-delta-forward-recurrence-store` (#190) connects the two chunk-delta
 forward summaries to the full producer surface for `h`, `v_new`, and optional
-`final_state`, while `layernorm-backward-residual-recompute-aggregation` (#191)
-covers the three LayerNorm backward residual/recompute summaries that still
-compose row-level C1/C2 reductions, DX/Y writebacks, and partial DW/DB slices.
+`final_state`, while the now-discharged
+`layernorm-backward-residual-recompute-aggregation` (#191) covers the LayerNorm
+backward residual/recompute summaries that used to compose row-level C1/C2
+reductions, DX/Y writebacks, and partial DW/DB slices.
 The #161 final-store bucket has been split again into kernel-specific producer
 obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
 `dense-attention-acc-store` (#166),
@@ -71,6 +72,10 @@ proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
 `dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
 `matmul-output-store-accumulator`, `matmul-activation-tail-accumulator`, and
 `matmul-tma-output-store-accumulator`.
+The #191 layer-norm backward residual/recompute paths now connect the checked
+Python test-shape outputs to the full backward surface for DX, recomputed Y,
+and partial DW/DB, so the affected `layer_norm_ops.py` summaries are
+full-value candidates.
 The broad #153 rotary/cache bucket has also been split into narrower value
 proof follow-ups: `rope-head-slice-lift` covers RoPE summaries whose Python
 surface is faithful but whose value proof is still stated over Q/K head slices,

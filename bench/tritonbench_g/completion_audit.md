@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 69 as conservative
-  `full_value_candidate`, 99 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 72 as conservative
+  `full_value_candidate`, 96 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
   to the former broad #147 quantization bucket, the former broad #148
@@ -81,11 +81,10 @@ surface.
   activation-tail, and TMA output-store accumulator blockers. The #149 rows
   now split into #161 final-store lift blockers plus #162 forward online
   softmax recurrence, score/probability reduction, context/decode reduction,
-  token-attention reduction, and backward score-reduction blockers. The #190
-  chunk-delta forward rows are now full-value candidates backed by the full
-  producer surface for `h`, `v_new`, and optional `final_state`; the remaining
-  #151 split rows track under #191 LayerNorm backward residual/recompute
-  aggregation blockers. The #152
+  token-attention reduction, and backward score-reduction blockers. The #151
+  rows now split into the now-discharged #190 chunk-delta forward
+  recurrence-store producers and the now-discharged #191 LayerNorm backward
+  residual/recompute aggregation paths. The #152
   blocked summaries now migrate to the open #154
   `fixed-width-int8-cast-semantics` issue because their concrete blocker is
   CUDA `llrint` / int8-cast semantics; the #153 rows split into
@@ -96,7 +95,9 @@ surface.
   variable-length accumulator-to-store obligations. The #150 rows now split into
   #185 chunk cumsum carry folds, #186 decay cumsum scan folds, #187 recurrent
   state loop folds, the now-discharged #188 GLA output tile producers, and #94
-  reverse cumsum directional scan semantics. The #171 LLaMA flash-decode
+  reverse cumsum directional scan semantics. The #191 layer-norm backward
+  residual/recompute rows are upgraded to full-value candidates by connecting
+  the Python test-shape outputs to the full backward surface. The #171 LLaMA flash-decode
   normalization path and #181 LLaMA running-max recurrence step are upgraded to
   full-value candidates. The #172 Phi flash-decode row now has #175 running-max,
   #176 masked scaled-accumulator, and #177 final normalization/store upgraded to

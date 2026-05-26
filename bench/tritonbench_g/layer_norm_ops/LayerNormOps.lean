@@ -4799,6 +4799,269 @@ theorem layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_o
   · exact layer_norm_ops_bwd_plain_bias_one_row_db_python_test_shape_compute_correct
       X W DY DXBase DW DB Mean Rstd s hDBDX hDBDW
 
+noncomputable def layerNormBwdSurfaceValue
+    (s : BlockState)
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd Out : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row M N rows_per_program BLOCK_N : Nat)
+    (eps : ℝ)
+    (IS_RMS_NORM HAS_DRESIDUAL STORE_DRESIDUAL HAS_BIAS RECOMPUTE_OUTPUT :
+      Bool)
+    (offset : Nat) : ℝ :=
+  match exec (layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+      DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+      stride_dx_row stride_dres_row stride_dres_in_row M N rows_per_program
+      BLOCK_N eps IS_RMS_NORM HAS_DRESIDUAL STORE_DRESIDUAL HAS_BIAS
+      RECOMPUTE_OUTPUT) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem layer_norm_bwd_surface_output_compute_correct
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd Out : RegionName)
+    (stride_x_row stride_y_row stride_dy_row stride_dx_row stride_dres_row
+      stride_dres_in_row M N rows_per_program BLOCK_N : Nat)
+    (eps : ℝ)
+    (IS_RMS_NORM HAS_DRESIDUAL STORE_DRESIDUAL HAS_BIAS RECOMPUTE_OUTPUT :
+      Bool)
+    (s : BlockState)
+    (mask : Fin BLOCK_N → Prop) [DecidablePred mask]
+    (offset : Fin BLOCK_N → Nat) :
+    ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd stride_x_row stride_y_row stride_dy_row
+        stride_dx_row stride_dres_row stride_dres_in_row M N rows_per_program
+        BLOCK_N eps IS_RMS_NORM HAS_DRESIDUAL STORE_DRESIDUAL HAS_BIAS
+        RECOMPUTE_OUTPUT)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf mask (fun i => (Out, offset i)))
+      (expected := fun i : Fin BLOCK_N =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd Out stride_x_row stride_y_row stride_dy_row stride_dx_row
+          stride_dres_row stride_dres_in_row M N rows_per_program BLOCK_N eps
+          IS_RMS_NORM HAS_DRESIDUAL STORE_DRESIDUAL HAS_BIAS RECOMPUTE_OUTPUT
+          (offset i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [layer_norm_bwd_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i _hActive
+  simp [layerNormBwdSurfaceValue, hExec]
+
+/-- Full backward surface coverage for Python case 6:
+plain+bias with residual input and no recomputed output. -/
+theorem layer_norm_ops_bwd_plain_bias_residual_python_test_shape_surface_outputs_compute_correct
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (eps : ℝ) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 0 1024 1024 1024 0 64 1024 1 1024 eps
+        Bool.false Bool.true Bool.false Bool.true Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DX 1024 0 1024 1024 1024 0 64 1024 1 1024 eps
+          Bool.false Bool.true Bool.false Bool.true Bool.false
+          (bwdRowVectorOffset s 1024 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 0 1024 1024 1024 0 64 1024 1 1024 eps
+        Bool.false Bool.true Bool.false Bool.true Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DW 1024 0 1024 1024 1024 0 64 1024 1 1024 eps
+          Bool.false Bool.true Bool.false Bool.true Bool.false
+          (bwdParamGradOffset s 1024 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 0 1024 1024 1024 0 64 1024 1 1024 eps
+        Bool.false Bool.true Bool.false Bool.true Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DB 1024 0 1024 1024 1024 0 64 1024 1 1024 eps
+          Bool.false Bool.true Bool.false Bool.true Bool.false
+          (bwdParamGradOffset s 1024 i))) := by
+  constructor
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DX 1024 0 1024 1024 1024 0 64 1024
+      1 1024 eps Bool.false Bool.true Bool.false Bool.true Bool.false s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdRowVectorOffset s 1024 i)
+  constructor
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DW 1024 0 1024 1024 1024 0 64 1024
+      1 1024 eps Bool.false Bool.true Bool.false Bool.true Bool.false s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdParamGradOffset s 1024 i)
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DB 1024 0 1024 1024 1024 0 64 1024
+      1 1024 eps Bool.false Bool.true Bool.false Bool.true Bool.false s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdParamGradOffset s 1024 i)
+
+/-- Full backward surface coverage for Python case 7:
+plain+bias with recomputed output and no residual input. -/
+theorem layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_surface_outputs_compute_correct
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (eps : ℝ) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 1024 1024 1024 0 0 64 1024 1 1024 eps
+        Bool.false Bool.false Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DX 1024 1024 1024 1024 0 0 64 1024 1 1024 eps
+          Bool.false Bool.false Bool.false Bool.true Bool.true
+          (bwdRowVectorOffset s 1024 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 1024 1024 1024 0 0 64 1024 1 1024 eps
+        Bool.false Bool.false Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd Y 1024 1024 1024 1024 0 0 64 1024 1 1024 eps
+          Bool.false Bool.false Bool.false Bool.true Bool.true
+          (bwdRowVectorOffset s 1024 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 1024 1024 1024 0 0 64 1024 1 1024 eps
+        Bool.false Bool.false Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DW 1024 1024 1024 1024 0 0 64 1024 1 1024 eps
+          Bool.false Bool.false Bool.false Bool.true Bool.true
+          (bwdParamGradOffset s 1024 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 1024 1024 1024 0 0 64 1024 1 1024 eps
+        Bool.false Bool.false Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DB 1024 1024 1024 1024 0 0 64 1024 1 1024 eps
+          Bool.false Bool.false Bool.false Bool.true Bool.true
+          (bwdParamGradOffset s 1024 i))) := by
+  constructor
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DX 1024 1024 1024 1024 0 0 64 1024
+      1 1024 eps Bool.false Bool.false Bool.false Bool.true Bool.true s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdRowVectorOffset s 1024 i)
+  constructor
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd Y 1024 1024 1024 1024 0 0 64 1024
+      1 1024 eps Bool.false Bool.false Bool.false Bool.true Bool.true s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdRowVectorOffset s 1024 i)
+  constructor
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DW 1024 1024 1024 1024 0 0 64 1024
+      1 1024 eps Bool.false Bool.false Bool.false Bool.true Bool.true s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdParamGradOffset s 1024 i)
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DB 1024 1024 1024 1024 0 0 64 1024
+      1 1024 eps Bool.false Bool.false Bool.false Bool.true Bool.true s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdParamGradOffset s 1024 i)
+
+/-- Full backward surface coverage for Python case 8:
+plain+bias with residual input and recomputed output. -/
+theorem layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_surface_outputs_compute_correct
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (eps : ℝ) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 1024 1024 1024 1024 0 64 1024 1 1024 eps
+        Bool.false Bool.true Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DX, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DX 1024 1024 1024 1024 1024 0 64 1024 1 1024 eps
+          Bool.false Bool.true Bool.false Bool.true Bool.true
+          (bwdRowVectorOffset s 1024 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 1024 1024 1024 1024 0 64 1024 1 1024 eps
+        Bool.false Bool.true Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (Y, bwdRowVectorOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd Y 1024 1024 1024 1024 1024 0 64 1024 1 1024 eps
+          Bool.false Bool.true Bool.false Bool.true Bool.true
+          (bwdRowVectorOffset s 1024 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 1024 1024 1024 1024 0 64 1024 1 1024 eps
+        Bool.false Bool.true Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DW, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DW 1024 1024 1024 1024 1024 0 64 1024 1 1024 eps
+          Bool.false Bool.true Bool.false Bool.true Bool.true
+          (bwdParamGradOffset s 1024 i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layer_norm_bwd_surface X W B Y DY DX DW DB DRESIDUAL
+        DRESIDUAL_IN Mean Rstd 1024 1024 1024 1024 1024 0 64 1024 1 1024 eps
+        Bool.false Bool.true Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 1024 => i.val < 1024)
+        (fun i => (DB, bwdParamGradOffset s 1024 i)))
+      (expected := fun i : Fin 1024 =>
+        layerNormBwdSurfaceValue s X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN
+          Mean Rstd DB 1024 1024 1024 1024 1024 0 64 1024 1 1024 eps
+          Bool.false Bool.true Bool.false Bool.true Bool.true
+          (bwdParamGradOffset s 1024 i))) := by
+  constructor
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DX 1024 1024 1024 1024 1024 0 64 1024
+      1 1024 eps Bool.false Bool.true Bool.false Bool.true Bool.true s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdRowVectorOffset s 1024 i)
+  constructor
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd Y 1024 1024 1024 1024 1024 0 64 1024
+      1 1024 eps Bool.false Bool.true Bool.false Bool.true Bool.true s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdRowVectorOffset s 1024 i)
+  constructor
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DW 1024 1024 1024 1024 1024 0 64 1024
+      1 1024 eps Bool.false Bool.true Bool.false Bool.true Bool.true s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdParamGradOffset s 1024 i)
+  · exact layer_norm_bwd_surface_output_compute_correct X W B Y DY DX DW DB
+      DRESIDUAL DRESIDUAL_IN Mean Rstd DB 1024 1024 1024 1024 1024 0 64 1024
+      1 1024 eps Bool.false Bool.true Bool.false Bool.true Bool.true s
+      (fun i : Fin 1024 => i.val < 1024) (fun i => bwdParamGradOffset s 1024 i)
+
 /-- `output_summary` alias for the plain+bias forward Python layer-norm path. -/
 abbrev layer_norm_ops_fwd_plain_bias_python_test_shape_output_summary
     (ValuePre MeanPre RstdPre Y Mean Rstd : RegionName) (s : BlockState) :=
@@ -4843,37 +5106,74 @@ abbrev layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_output_summary
   layer_norm_ops_bwd_rms_bias_no_residual_python_test_shape_all_outputs_compute_correct
     X Xhat W DY Rstd C1 DX DW DB s hDWDX
 
-/-- `output_summary` alias for backward case 6: plain+bias with residual. -/
+/-- `output_summary` for backward case 6: full plain+bias residual surface. -/
 abbrev layer_norm_ops_bwd_plain_bias_residual_python_test_shape_output_summary
-    (X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2 : RegionName)
-    (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN)
-    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :=
-  layer_norm_ops_bwd_plain_bias_residual_python_test_shape_all_outputs_compute_correct
-    X Xhat W DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Mean Rstd C1 C2
-    s hDXDresIn hDWDX hDWDB hDBDX hDBDW
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (eps : ℝ) (s : BlockState) :=
+  layer_norm_ops_bwd_plain_bias_residual_python_test_shape_surface_outputs_compute_correct
+    X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd eps s
 
-/-- `output_summary` alias for backward case 7: plain+bias with recomputed
-output. -/
+/-- `output_summary` for backward case 7: full plain+bias recompute surface. -/
 abbrev layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_output_summary
-    (X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 : RegionName) (s : BlockState)
-    (hDWDX : DW ≠ DX) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DX) (hDBDW : DB ≠ DW) :=
-  layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_all_outputs_compute_correct
-    X Xhat W B DY DX DW DB Y Mean Rstd C1 C2 s hDWDX hDWDB hDBDX hDBDW
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (eps : ℝ) (s : BlockState) :=
+  layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_surface_outputs_compute_correct
+    X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd eps s
 
-/-- `output_summary` alias for backward case 8: plain+bias residual path with
-recomputed output. -/
+/-- `output_summary` for backward case 8: full residual recompute surface. -/
 abbrev layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_output_summary
-    (X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2 : RegionName)
-    (s : BlockState)
-    (hDXDresIn : DX ≠ DRESIDUAL_IN)
-    (hDWDX : DW ≠ DXBase) (hDWDB : DW ≠ DB)
-    (hDBDX : DB ≠ DXBase) (hDBDW : DB ≠ DW) :=
-  layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_all_outputs_compute_correct
-    X Xhat W B DY DXBase DRESIDUAL DX DRESIDUAL_IN DW DB Y Mean Rstd C1 C2
-    s hDXDresIn hDWDX hDWDB hDBDX hDBDW
+    (X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd : RegionName)
+    (eps : ℝ) (s : BlockState) :=
+  layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_surface_outputs_compute_correct
+    X W B Y DY DX DW DB DRESIDUAL DRESIDUAL_IN Mean Rstd eps s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /-! ## End-to-end surface correctness
 
