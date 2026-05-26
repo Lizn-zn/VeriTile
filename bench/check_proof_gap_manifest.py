@@ -47,6 +47,8 @@ ISSUE_BY_FAMILY = {
     "attention-online-softmax-recurrence": "#162",
     "fixed-width-int8-cast-semantics": "#154",
     "loss-reduction-aggregation": "#151",
+    "chunk-delta-forward-recurrence-store": "#190",
+    "layernorm-backward-residual-recompute-aggregation": "#191",
     "bmm-final-store-accumulator": "#148",
     "dequant-matmul-cross-kernel-surface": "#148",
     "gemv-k-loop-accumulator": "#148",
@@ -207,6 +209,12 @@ def family_for(name: str, text: str) -> str:
         return "matmul-dot-accumulator"
     if any(k in hay for k in ("cumsum", "recurrent", "recurrence", "rwkv", "hgrn", "gla", "retention")):
         return "recurrent-cumsum-loop"
+    if "chunk_delta_fwd" in lname:
+        return "chunk-delta-forward-recurrence-store"
+    if "layer_norm_ops_bwd_plain_bias" in lname and any(
+        k in lname for k in ("residual", "recompute")
+    ):
+        return "layernorm-backward-residual-recompute-aggregation"
     if "int8" in hay and any(k in hay for k in ("unprojected", "cast semantics missing")):
         return "fixed-width-int8-cast-semantics"
     if any(k in hay for k in ("int8", "int4", "uint8", "quant", "llrint", "round", "pack")):
