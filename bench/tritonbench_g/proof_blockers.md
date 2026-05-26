@@ -19,6 +19,15 @@ quantization rows whose local blocker is end-to-end scale/value coupling track
 under #158. Rows whose local blocker is primarily attention, matmul,
 recurrence, reduction, or explicit blocked-summary work track under the
 corresponding family issue.
+The broad #150 recurrent/cumsum bucket has been split by mechanism:
+`chunk-cumsum-carry-fold` (#185) tracks chunk cumsum summaries that still expose
+one-block or one-iteration carry/cumsum slices, `decay-cumsum-scan-fold` (#186)
+tracks `decay_cumsum.py` forward/backward scan folds, `recurrent-state-loop-fold`
+(#187) tracks chunk-gate, HGRN, and RWKV recurrent state loops,
+`gla-output-tile-producer` (#188) tracks `chunk_gla_simple.py` summaries whose
+proof starts from a precomputed output tile, and
+`reverse-cumsum-directional-scan` (#94) tracks reverse cumsum direction
+semantics.
 The broad #149 attention/softmax bucket has been split as well:
 `attention-final-store-lift` tracks summaries that still connect a faithful
 surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
