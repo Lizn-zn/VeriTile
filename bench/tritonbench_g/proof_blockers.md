@@ -51,7 +51,7 @@ The #161 final-store bucket has been split again into kernel-specific producer
 obligations: the now-discharged
 `attention-fwd-triton1-bo-bhpre-producers` (#165),
 the now-discharged `dense-attention-acc-store` (#166), whose remaining
-Q/K/V streaming-softmax `Acc`/`L` producer proof is tracked by the narrower
+Q/K/V streaming-softmax `Acc`/`L` producer proof is now discharged by
 `dense-attention-online-softmax-recurrence` (#199),
 `context-attention-mistral-sliding-window-acc-store` (#167),
 `context-attention-nopad-varlen-acc-store` (#167), and

@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 91 as conservative
-  `full_value_candidate`, 77 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 93 as conservative
+  `full_value_candidate`, 75 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
   to the former broad #147 quantization bucket, the former broad #148
@@ -94,8 +94,9 @@ surface.
   rows split into Mistral sliding-window accumulator-to-store and nopad
   variable-length accumulator-to-store obligations. The #166 dense-attention
   final-store rows now include the `acc / l_i[:, None]` normalization in the
-  output-store proof and split the remaining Q/K/V streaming-softmax `Acc`/`L`
-  producer recurrence into #199. The #165 attention-fwd-triton1 row is upgraded
+  output-store proof, and #199 upgrades those dense-attention summaries to
+  full-value candidates by connecting the Q/K/V streaming-softmax producer path
+  directly to the observable `Out` writeback. The #165 attention-fwd-triton1 row is upgraded
   to a full-value candidate by connecting checked O/H outputs directly to the
   full Python-shape surface. The #150 rows now split into
   the now-discharged #185 chunk cumsum carry folds, the now-discharged #186
