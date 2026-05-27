@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 93 as conservative
-  `full_value_candidate`, 75 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 98 as conservative
+  `full_value_candidate`, 70 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a currently open
   follow-up issue and blocker family in `proof_gap_manifest.tsv`.
   The 29 remaining #148 rows are split by blocker family into GEMV K-loop,
@@ -108,7 +108,10 @@ surface.
   normalization path and #181 LLaMA running-max recurrence step are upgraded to
   full-value candidates. The #172 Phi flash-decode row now has #175 running-max,
   #176 masked scaled-accumulator, and #177 final normalization/store upgraded to
-  full-value candidates.
+  full-value candidates. The #158 quantization follow-up rows are upgraded to
+  full-value candidates by connecting the checked int8, quantize-copy-kv,
+  grouped quantize-kv-copy, and quantize-kv-transform outputs directly to their
+  full Python-shape surfaces.
 
 ## Remaining Blockers
 
@@ -119,9 +122,9 @@ translation-scope marker, it must be covered by `proof_blockers.md`, and
 The current proof-gap blocker set is exactly the non-full rows in
 `proof_gap_manifest.tsv`: #148 has 29 matmul/dot accumulator rows, #162 has
 31 attention recurrence/reduction rows, #154 has 13 fixed-width int8 blocked
-summaries, #158 has 5 quantization follow-up rows, #153 has 4 RoPE/rotary
-tile-lift rows, #94 has 4 reverse-cumsum directional-scan rows, and #167 has
-2 context-attention accumulator-store rows.
+summaries, #153 has 4 RoPE/rotary tile-lift rows, #94 has 4 reverse-cumsum
+directional-scan rows, and #167 has 2 context-attention accumulator-store
+rows.
 
 Passing `lake build` alone is still not sufficient evidence for future changes;
 this audit must continue to run the translation-consistency gates above and the
