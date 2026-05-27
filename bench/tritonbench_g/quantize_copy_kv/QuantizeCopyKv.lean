@@ -596,6 +596,76 @@ theorem destindex_copy_quantize_kv_python_d256_all_outputs_compute_correct
   · exact destindex_copy_quantize_kv_python_scale_store_compute_correct
       Scale DestLoc OutScale s
 
+noncomputable def quantizeCopyKvSurfaceValue
+    (s : BlockState) (K DestLoc Out OutScale ReadOut : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num BLOCK_DMODEL BLOCK_HEAD offset : Nat) : ℝ :=
+  match exec (destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD) s with
+  | some s' => s'.readMem ReadOut offset
+  | none => 0.0
+
+theorem destindex_copy_quantize_kv_surface_value_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s head_num BLOCK_HEAD BLOCK_DMODEL)
+        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)))
+      (expected := fun idx =>
+        quantizeCopyKvSurfaceValue s K DestLoc Out OutScale Out stride_k_bs
+          stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d stride_os_bs
+          stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD
+          (outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [destindex_copy_quantize_kv_real_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [quantizeCopyKvSurfaceValue, hExec]
+
+theorem destindex_copy_quantize_kv_surface_scale_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        stride_os_bs stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive head_num BLOCK_HEAD)
+        (fun i => (OutScale, scaleOutOffset1 s DestLoc stride_os_bs stride_os_h i)))
+      (expected := fun i =>
+        quantizeCopyKvSurfaceValue s K DestLoc Out OutScale OutScale stride_k_bs
+          stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d stride_os_bs
+          stride_os_h stride_os_d head_num BLOCK_DMODEL BLOCK_HEAD
+          (scaleOutOffset1 s DestLoc stride_os_bs stride_os_h i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [destindex_copy_quantize_kv_real_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i _hActive
+  simp [quantizeCopyKvSurfaceValue, hExec]
+
 /-- Public Python `D = 64` summary: the checked Python shape covers the full
 surface syntax and the two externally visible outputs (values and scales). -/
 theorem destindex_copy_quantize_kv_python_d64_summary
@@ -658,8 +728,8 @@ theorem destindex_copy_quantize_kv_python_d256_summary
   · exact destindex_copy_quantize_kv_python_d256_all_outputs_compute_correct
       K Scale DestLoc Out OutScale s
 
-/-- `output_summary` alias for the Python `D = 64` quantized KV copy case. -/
-abbrev destindex_copy_quantize_kv_python_d64_output_summary
+/-- Python `D = 64` quantized KV copy case. -/
+abbrev destindex_copy_quantize_kv_python_d64_internal_summary
     (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
   destindex_copy_quantize_kv_python_d64_summary K Scale DestLoc Out OutScale s
 
@@ -680,5 +750,59 @@ abbrev destindex_copy_quantize_kv_python_test_shape_complete_summary
       OutScale s)
     (destindex_copy_quantize_kv_python_d256_summary K Scale DestLoc Out
       OutScale s)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem destindex_copy_quantize_kv_python_d64_output_summary
+    (K DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (∃ alg,
+      (destindex_copy_quantize_kv_real_surface K DestLoc Out OutScale
+        512 64 1 512 64 1 8 1 1 8 64 8).toAlgorithm? =
+          Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_real_surface K DestLoc Out
+        OutScale 512 64 1 512 64 1 8 1 1 8 64 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 8 64)
+        (fun idx => (Out, outOffset s DestLoc 512 64 1 idx)))
+      (expected := fun idx =>
+        quantizeCopyKvSurfaceValue s K DestLoc Out OutScale Out 512 64 1 512
+          64 1 8 1 1 8 64 8 (outOffset s DestLoc 512 64 1 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_real_surface K DestLoc Out
+        OutScale 512 64 1 512 64 1 8 1 1 8 64 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 8 8)
+        (fun i => (OutScale, scaleOutOffset1 s DestLoc 8 1 i)))
+      (expected := fun i =>
+        quantizeCopyKvSurfaceValue s K DestLoc Out OutScale OutScale 512 64 1
+          512 64 1 8 1 1 8 64 8 (scaleOutOffset1 s DestLoc 8 1 i))) := by
+  constructor
+  · exact destindex_copy_quantize_kv_real_surface_toAlgorithm_supported K
+      DestLoc Out OutScale 512 64 1 512 64 1 8 1 1 8 64 8
+  · constructor
+    · exact destindex_copy_quantize_kv_surface_value_output_compute_correct K
+        DestLoc Out OutScale 512 64 1 512 64 1 8 1 1 8 64 8 s
+    · exact destindex_copy_quantize_kv_surface_scale_output_compute_correct K
+        DestLoc Out OutScale 512 64 1 512 64 1 8 1 1 8 64 8 s
 
 end VeriTile.Bench.TritonBenchG.QuantizeCopyKv

@@ -536,6 +536,82 @@ theorem destindex_copy_quantize_kv_group_python_all_outputs_compute_correct
   · exact destindex_copy_quantize_kv_group_python_scale_store_compute_correct
       Scale DestLoc OutScale s
 
+noncomputable def quantizeKvCopyGroupSurfaceValue
+    (s : BlockState) (K DestLoc Out OutScale ReadOut : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d
+      stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM offset : Nat) : ℝ :=
+  match exec (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
+      stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
+      BLOCK_GROUP_NUM BLOCK_GROUP_DIM) s with
+  | some s' => s'.readMem ReadOut offset
+  | none => 0.0
+
+theorem destindex_copy_quantize_kv_group_surface_value_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d
+      stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out
+        OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs
+        stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g
+        group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM)
+        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h stride_o_g
+          stride_o_d idx)))
+      (expected := fun idx =>
+        quantizeKvCopyGroupSurfaceValue s K DestLoc Out OutScale Out
+          stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
+          stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
+          BLOCK_GROUP_NUM BLOCK_GROUP_DIM
+          (outOffset s DestLoc stride_o_bs stride_o_h stride_o_g stride_o_d idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [destindex_copy_quantize_kv_group_real_surface,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [quantizeKvCopyGroupSurfaceValue, hExec]
+
+theorem destindex_copy_quantize_kv_group_surface_scale_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_g stride_k_d
+      stride_o_bs stride_o_h stride_o_g stride_o_d
+      stride_os_bs stride_os_h stride_os_g
+      group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out
+        OutScale stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs
+        stride_o_h stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g
+        group_size BLOCK_GROUP_NUM BLOCK_GROUP_DIM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive group_size BLOCK_GROUP_NUM)
+        (fun i => (OutScale, scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
+      (expected := fun i =>
+        quantizeKvCopyGroupSurfaceValue s K DestLoc Out OutScale OutScale
+          stride_k_bs stride_k_h stride_k_g stride_k_d stride_o_bs stride_o_h
+          stride_o_g stride_o_d stride_os_bs stride_os_h stride_os_g group_size
+          BLOCK_GROUP_NUM BLOCK_GROUP_DIM
+          (scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [destindex_copy_quantize_kv_group_real_surface,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i _hActive
+  simp [quantizeKvCopyGroupSurfaceValue, hExec]
+
 /-- Public Python grouped summary: the checked grouped shape covers the full
 surface syntax and the two externally visible outputs (values and scales). -/
 theorem destindex_copy_quantize_kv_group_python_summary
@@ -568,8 +644,8 @@ theorem destindex_copy_quantize_kv_group_python_summary
   · exact destindex_copy_quantize_kv_group_python_all_outputs_compute_correct
       K Scale DestLoc Out OutScale s
 
-/-- `output_summary` alias for the grouped Python quantized KV copy case. -/
-abbrev destindex_copy_quantize_kv_group_python_output_summary
+/-- Grouped Python quantized KV copy case. -/
+abbrev destindex_copy_quantize_kv_group_python_internal_output
     (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
   destindex_copy_quantize_kv_group_python_summary K Scale DestLoc Out OutScale s
 
@@ -580,5 +656,61 @@ surface, and both observable value and per-group scale stores. -/
 abbrev destindex_copy_quantize_kv_group_python_test_shape_complete_summary
     (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
   destindex_copy_quantize_kv_group_python_summary K Scale DestLoc Out OutScale s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem destindex_copy_quantize_kv_group_python_output_summary
+    (K DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (∃ alg,
+      (destindex_copy_quantize_kv_group_real_surface K DestLoc Out OutScale
+        64 16 8 1 64 16 8 1 8 2 1 2 2 8).toAlgorithm? =
+          Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out
+        OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 2 2 8)
+        (fun idx => (Out, outOffset s DestLoc 64 16 8 1 idx)))
+      (expected := fun idx =>
+        quantizeKvCopyGroupSurfaceValue s K DestLoc Out OutScale Out 64 16 8
+          1 64 16 8 1 8 2 1 2 2 8
+          (outOffset s DestLoc 64 16 8 1 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_group_real_surface K DestLoc Out
+        OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 2 2)
+        (fun i => (OutScale, scaleOutOffset s DestLoc 8 2 i)))
+      (expected := fun i =>
+        quantizeKvCopyGroupSurfaceValue s K DestLoc Out OutScale OutScale 64
+          16 8 1 64 16 8 1 8 2 1 2 2 8
+          (scaleOutOffset s DestLoc 8 2 i))) := by
+  constructor
+  · exact destindex_copy_quantize_kv_group_real_surface_toAlgorithm_supported K
+      DestLoc Out OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8
+  · constructor
+    · exact destindex_copy_quantize_kv_group_surface_value_output_compute_correct
+        K DestLoc Out OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8 s
+    · exact destindex_copy_quantize_kv_group_surface_scale_output_compute_correct
+        K DestLoc Out OutScale 64 16 8 1 64 16 8 1 8 2 1 2 2 8 s
 
 end VeriTile.Bench.TritonBenchG.QuantizeKvCopy

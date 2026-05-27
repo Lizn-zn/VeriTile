@@ -14,9 +14,11 @@ specific follow-up issue plus a blocker family. The manifest is intentionally co
 `full_value_candidate` means no local proof-gap marker was found in the summary
 context, not that future human review is forbidden from downgrading it.
 The broad #147 quantization bucket has been split. Real-to-int8 cast semantics
-track under #154 and now have an executable DSL/AST semantics path; remaining
-quantization rows whose local blocker is end-to-end scale/value coupling track
-under #158. Rows whose local blocker is primarily attention, matmul,
+track under #154 and now have an executable DSL/AST semantics path. The
+now-discharged #158 quantization scale/value coupling rows connect the checked
+int8, quantize-copy-kv, grouped quantize-kv-copy, and quantize-kv-transform
+outputs directly to their full Python-shape surfaces. Rows whose local blocker
+is primarily attention, matmul,
 recurrence, reduction, or explicit blocked-summary work track under the
 corresponding family issue.
 The broad #150 recurrent/cumsum bucket has been split by mechanism:
