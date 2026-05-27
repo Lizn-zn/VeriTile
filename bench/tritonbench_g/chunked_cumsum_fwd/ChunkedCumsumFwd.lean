@@ -730,9 +730,130 @@ theorem chunked_cumsum_fwd_python_test_case4_surface_toAlgorithm_supported
     40 5 10 1
     Bool.true Bool.true 4 8
 
+noncomputable def chunkedCumsumFwdSurfaceValue
+    (s : BlockState)
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr Out : RegionName)
+    (dt_min dt_max : ℝ) (DT_SOFTPLUS HAS_DT_BIAS : Bool)
+    (offset : Nat) : ℝ :=
+  match exec (chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+      dA_cumsum_ptr
+      2 10 4 5 dt_min dt_max
+      40 4 1 1 1
+      40 5 10 1
+      40 5 10 1
+      DT_SOFTPLUS HAS_DT_BIAS 4 8) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem chunked_cumsum_fwd_surface_dt_out_compute_correct
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) (DT_SOFTPLUS HAS_DT_BIAS : Bool)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+        dA_cumsum_ptr
+        2 10 4 5 dt_min dt_max
+        40 4 1 1 1
+        40 5 10 1
+        40 5 10 1
+        DT_SOFTPLUS HAS_DT_BIAS 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (dt_out_ptr, dtOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        chunkedCumsumFwdSurfaceValue s dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+          dA_cumsum_ptr dt_out_ptr dt_min dt_max DT_SOFTPLUS HAS_DT_BIAS
+          (dtOutOffset s 40 5 10 1 4 idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunked_cumsum_fwd_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [chunkedCumsumFwdSurfaceValue, hExec]
+
+theorem chunked_cumsum_fwd_surface_dA_cumsum_compute_correct
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) (DT_SOFTPLUS HAS_DT_BIAS : Bool)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+        dA_cumsum_ptr
+        2 10 4 5 dt_min dt_max
+        40 4 1 1 1
+        40 5 10 1
+        40 5 10 1
+        DT_SOFTPLUS HAS_DT_BIAS 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (dA_cumsum_ptr, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        chunkedCumsumFwdSurfaceValue s dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+          dA_cumsum_ptr dA_cumsum_ptr dt_min dt_max DT_SOFTPLUS HAS_DT_BIAS
+          (dACsOutOffset s 40 5 10 1 4 idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunked_cumsum_fwd_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [chunkedCumsumFwdSurfaceValue, hExec]
+
+theorem chunked_cumsum_fwd_python_test_surface_outputs_compute_correct
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) (DT_SOFTPLUS HAS_DT_BIAS : Bool)
+    (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+        dA_cumsum_ptr
+        2 10 4 5 dt_min dt_max
+        40 4 1 1 1
+        40 5 10 1
+        40 5 10 1
+        DT_SOFTPLUS HAS_DT_BIAS 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (dt_out_ptr, dtOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        chunkedCumsumFwdSurfaceValue s dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+          dA_cumsum_ptr dt_out_ptr dt_min dt_max DT_SOFTPLUS HAS_DT_BIAS
+          (dtOutOffset s 40 5 10 1 4 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunked_cumsum_fwd_surface dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+        dA_cumsum_ptr
+        2 10 4 5 dt_min dt_max
+        40 4 1 1 1
+        40 5 10 1
+        40 5 10 1
+        DT_SOFTPLUS HAS_DT_BIAS 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 4 5 4 8)
+        (fun idx : TileIndex [4, 8] =>
+          (dA_cumsum_ptr, dACsOutOffset s 40 5 10 1 4 idx)))
+      (expected := fun idx : TileIndex [4, 8] =>
+        chunkedCumsumFwdSurfaceValue s dt_ptr A_ptr dt_bias_ptr dt_out_ptr
+          dA_cumsum_ptr dA_cumsum_ptr dt_min dt_max DT_SOFTPLUS HAS_DT_BIAS
+          (dACsOutOffset s 40 5 10 1 4 idx))) := by
+  constructor
+  · exact chunked_cumsum_fwd_surface_dt_out_compute_correct dt_ptr A_ptr
+      dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max DT_SOFTPLUS
+      HAS_DT_BIAS s
+  · exact chunked_cumsum_fwd_surface_dA_cumsum_compute_correct dt_ptr A_ptr
+      dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max DT_SOFTPLUS
+      HAS_DT_BIAS s
+
 /-- Public Python case 1 summary: no bias and no softplus. The full surface
 lowers and the checked `dt_out`/`dA_cumsum` output slices are compute-correct. -/
-theorem chunked_cumsum_fwd_python_test_case1_output_summary
+theorem chunked_cumsum_fwd_python_test_case1_slice_summary
     (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
       DtPrepared DtOut DAcs A DACumsum : RegionName)
     (dt_min dt_max : ℝ) (s : BlockState) :
@@ -779,7 +900,7 @@ theorem chunked_cumsum_fwd_python_test_case1_output_summary
       DtPrepared DtOut DAcs A DACumsum s
 
 /-- Public Python case 2 summary: bias enabled and softplus disabled. -/
-theorem chunked_cumsum_fwd_python_test_case2_output_summary
+theorem chunked_cumsum_fwd_python_test_case2_slice_summary
     (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
       DtPrepared DtOut DAcs A DACumsum : RegionName)
     (dt_min dt_max : ℝ) (s : BlockState) :
@@ -826,7 +947,7 @@ theorem chunked_cumsum_fwd_python_test_case2_output_summary
       DtPrepared DtOut DAcs A DACumsum s
 
 /-- Public Python case 3 summary: no bias and softplus enabled. -/
-theorem chunked_cumsum_fwd_python_test_case3_output_summary
+theorem chunked_cumsum_fwd_python_test_case3_slice_summary
     (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
       DtPrepared DtOut DAcs A DACumsum : RegionName)
     (dt_min dt_max : ℝ) (s : BlockState) :
@@ -873,7 +994,7 @@ theorem chunked_cumsum_fwd_python_test_case3_output_summary
       DtPrepared DtOut DAcs A DACumsum s
 
 /-- Public Python case 4 summary: both bias and softplus enabled. -/
-theorem chunked_cumsum_fwd_python_test_case4_output_summary
+theorem chunked_cumsum_fwd_python_test_case4_slice_summary
     (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr
       DtPrepared DtOut DAcs A DACumsum : RegionName)
     (dt_min dt_max : ℝ) (s : BlockState) :
@@ -918,5 +1039,50 @@ theorem chunked_cumsum_fwd_python_test_case4_output_summary
       dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max
   · exact chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
       DtPrepared DtOut DAcs A DACumsum s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/-- `output_summary` for chunked cumsum forward Python case 1 surface. -/
+abbrev chunked_cumsum_fwd_python_test_case1_output_summary
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) (s : BlockState) :=
+  chunked_cumsum_fwd_python_test_surface_outputs_compute_correct dt_ptr A_ptr
+    dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max Bool.false Bool.false s
+
+/-- `output_summary` for chunked cumsum forward Python case 2 surface. -/
+abbrev chunked_cumsum_fwd_python_test_case2_output_summary
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) (s : BlockState) :=
+  chunked_cumsum_fwd_python_test_surface_outputs_compute_correct dt_ptr A_ptr
+    dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max Bool.false Bool.true s
+
+/-- `output_summary` for chunked cumsum forward Python case 3 surface. -/
+abbrev chunked_cumsum_fwd_python_test_case3_output_summary
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) (s : BlockState) :=
+  chunked_cumsum_fwd_python_test_surface_outputs_compute_correct dt_ptr A_ptr
+    dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max Bool.true Bool.false s
+
+/-- `output_summary` for chunked cumsum forward Python case 4 surface. -/
+abbrev chunked_cumsum_fwd_python_test_case4_output_summary
+    (dt_ptr A_ptr dt_bias_ptr dt_out_ptr dA_cumsum_ptr : RegionName)
+    (dt_min dt_max : ℝ) (s : BlockState) :=
+  chunked_cumsum_fwd_python_test_surface_outputs_compute_correct dt_ptr A_ptr
+    dt_bias_ptr dt_out_ptr dA_cumsum_ptr dt_min dt_max Bool.true Bool.true s
 
 end VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd

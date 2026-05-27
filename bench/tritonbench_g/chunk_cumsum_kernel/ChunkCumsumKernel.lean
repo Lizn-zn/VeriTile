@@ -345,6 +345,45 @@ theorem chunk_cumsum_scalar_python_test_shape_surface_toAlgorithm_supported
       Except.ok alg := by
   exact chunk_cumsum_scalar_surface_toAlgorithm_supported S O 4 16
 
+noncomputable def chunkCumsumScalarSurfaceValue
+    (s : BlockState) (S O Out : RegionName) (offset : Nat) : ℝ :=
+  match exec (chunk_cumsum_scalar_surface S O 4 16) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem chunk_cumsum_scalar_surface_output_compute_correct
+    (S O Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_scalar_surface S O 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 16 => singleBlockActive s 4 i)
+        (fun i => (Out, singleBlockVecOffset s 4 i)))
+      (expected := fun i : Fin 16 =>
+        chunkCumsumScalarSurfaceValue s S O Out
+          (singleBlockVecOffset s 4 i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_cumsum_scalar_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i _hActive
+  simp [chunkCumsumScalarSurfaceValue, hExec]
+
+theorem chunk_cumsum_scalar_python_test_shape_surface_outputs_compute_correct
+    (S O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_scalar_surface S O 4 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 16 => singleBlockActive s 4 i)
+        (fun i => (O, singleBlockVecOffset s 4 i)))
+      (expected := fun i : Fin 16 =>
+        chunkCumsumScalarSurfaceValue s S O O
+          (singleBlockVecOffset s 4 i)) := by
+  exact chunk_cumsum_scalar_surface_output_compute_correct S O O s
+
 theorem chunk_cumsum_scalar_single_block_python_test_shape_compute_correct
     (S O : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
@@ -452,9 +491,27 @@ theorem chunk_cumsum_scalar_python_test_shape_summary
   · exact chunk_cumsum_scalar_python_test_shape_all_outputs_compute_correct
       S BO Carry O s
 
-/-- `output_summary` alias for the scalar Python chunk-cumsum path. -/
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/-- `output_summary` for the scalar Python chunk-cumsum surface. -/
 abbrev chunk_cumsum_scalar_python_test_shape_output_summary
-    (S BO Carry O : RegionName) (s : BlockState) :=
-  chunk_cumsum_scalar_python_test_shape_summary S BO Carry O s
+    (S O : RegionName) (s : BlockState) :=
+  chunk_cumsum_scalar_python_test_shape_surface_outputs_compute_correct S O s
 
 end VeriTile.Bench.TritonBenchG.ChunkCumsumKernel

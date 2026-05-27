@@ -821,10 +821,80 @@ theorem chunk_cumsum_vector_python_case3_surface_toAlgorithm_supported
   exact chunk_cumsum_vector_surface_toAlgorithm_supported SReg Z
     5 5 1 1 5 16 32
 
+noncomputable def chunkCumsumVectorSurfaceValue
+    (s : BlockState) (SReg Z Out : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (offset : Nat) : ℝ :=
+  match exec (chunk_cumsum_vector_surface SReg Z s_s_h s_s_t s_s_d T S BT BS) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem chunk_cumsum_vector_surface_output_compute_correct
+    (SReg Z Out : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_surface SReg Z s_s_h s_s_t s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => active s T S BT BS idx)
+        (fun idx => (Out, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        chunkCumsumVectorSurfaceValue s SReg Z Out s_s_h s_s_t s_s_d T S BT BS
+          (tileOffset s s_s_h s_s_t s_s_d BT BS idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_cumsum_vector_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [chunkCumsumVectorSurfaceValue, hExec]
+
+theorem chunk_cumsum_vector_python_case1_surface_outputs_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_surface SReg Z 20 5 1 4 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 4 5 16 32 idx)
+        (fun idx => (Z, tileOffset s 20 5 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        chunkCumsumVectorSurfaceValue s SReg Z Z 20 5 1 4 5 16 32
+          (tileOffset s 20 5 1 16 32 idx)) := by
+  exact chunk_cumsum_vector_surface_output_compute_correct SReg Z Z
+    20 5 1 4 5 16 32 s
+
+theorem chunk_cumsum_vector_python_case2_surface_outputs_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_surface SReg Z 80 10 1 8 10 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 8 10 16 32 idx)
+        (fun idx => (Z, tileOffset s 80 10 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        chunkCumsumVectorSurfaceValue s SReg Z Z 80 10 1 8 10 16 32
+          (tileOffset s 80 10 1 16 32 idx)) := by
+  exact chunk_cumsum_vector_surface_output_compute_correct SReg Z Z
+    80 10 1 8 10 16 32 s
+
+theorem chunk_cumsum_vector_python_case3_surface_outputs_compute_correct
+    (SReg Z : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_cumsum_vector_surface SReg Z 5 5 1 1 5 16 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 32] => active s 1 5 16 32 idx)
+        (fun idx => (Z, tileOffset s 5 5 1 16 32 idx)))
+      (expected := fun idx : TileIndex [16, 32] =>
+        chunkCumsumVectorSurfaceValue s SReg Z Z 5 5 1 1 5 16 32
+          (tileOffset s 5 5 1 16 32 idx)) := by
+  exact chunk_cumsum_vector_surface_output_compute_correct SReg Z Z
+    5 5 1 1 5 16 32 s
+
 /-- Public Python case 1 summary: full vector-cumsum surface plus both
 boundary store and carry-cumsum output slices for `B = 2`, `H = 3`, `T = 4`,
 `S = 5`. -/
-theorem chunk_cumsum_vector_python_case1_output_summary
+theorem chunk_cumsum_vector_python_case1_slice_summary
     (BC SReg Carry Z : RegionName) (s : BlockState) :
     (∃ alg, (chunk_cumsum_vector_surface SReg Z 20 5 1 4 5 16 32).toAlgorithm? =
       Except.ok alg) ∧
@@ -855,7 +925,7 @@ theorem chunk_cumsum_vector_python_case1_output_summary
 /-- Public Python case 2 summary: full vector-cumsum surface plus both
 boundary store and carry-cumsum output slices for `B = H = 1`, `T = 8`,
 `S = 10`. -/
-theorem chunk_cumsum_vector_python_case2_output_summary
+theorem chunk_cumsum_vector_python_case2_slice_summary
     (BC SReg Carry Z : RegionName) (s : BlockState) :
     (∃ alg, (chunk_cumsum_vector_surface SReg Z 80 10 1 8 10 16 32).toAlgorithm? =
       Except.ok alg) ∧
@@ -885,7 +955,7 @@ theorem chunk_cumsum_vector_python_case2_output_summary
 
 /-- Public Python case 3 summary: full vector-cumsum surface plus both
 boundary store and carry-cumsum output slices for `B = H = T = 1`, `S = 5`. -/
-theorem chunk_cumsum_vector_python_case3_output_summary
+theorem chunk_cumsum_vector_python_case3_slice_summary
     (BC SReg Carry Z : RegionName) (s : BlockState) :
     (∃ alg, (chunk_cumsum_vector_surface SReg Z 5 5 1 1 5 16 32).toAlgorithm? =
       Except.ok alg) ∧
@@ -912,5 +982,37 @@ theorem chunk_cumsum_vector_python_case3_output_summary
   · exact chunk_cumsum_vector_store_python_case3_compute_correct BC Z s
   · exact chunk_cumsum_vector_cumsum_python_case3_compute_correct
       SReg Carry Z s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/-- `output_summary` for vector chunk-cumsum Python case 1 surface. -/
+abbrev chunk_cumsum_vector_python_case1_output_summary
+    (SReg Z : RegionName) (s : BlockState) :=
+  chunk_cumsum_vector_python_case1_surface_outputs_compute_correct SReg Z s
+
+/-- `output_summary` for vector chunk-cumsum Python case 2 surface. -/
+abbrev chunk_cumsum_vector_python_case2_output_summary
+    (SReg Z : RegionName) (s : BlockState) :=
+  chunk_cumsum_vector_python_case2_surface_outputs_compute_correct SReg Z s
+
+/-- `output_summary` for vector chunk-cumsum Python case 3 surface. -/
+abbrev chunk_cumsum_vector_python_case3_output_summary
+    (SReg Z : RegionName) (s : BlockState) :=
+  chunk_cumsum_vector_python_case3_surface_outputs_compute_correct SReg Z s
 
 end VeriTile.Bench.TritonBenchG.ChunkCumsumVector
