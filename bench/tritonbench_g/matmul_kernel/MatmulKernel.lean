@@ -278,9 +278,34 @@ theorem matmul_kernel_python_case4_surface_toAlgorithm_supported
         Except.ok alg := by
   exact matmul_kernel_surface_toAlgorithm_supported C A B 32 32 32
 
+noncomputable def matmulKernelSurfaceCell
+    (s : BlockState) (C A B Out : RegionName)
+    (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K offset : Nat) : MemCell :=
+  match exec (matmul_kernel_surface C A B BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K) s with
+  | some s' => s'.mem Out offset
+  | none => 0
+
+theorem matmul_kernel_surface_output_compute_correct
+    (C A B : RegionName) (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := matmul_kernel_surface C A B BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] =>
+        some (C, cOffset s 4096 1 BLOCK_SIZE_M BLOCK_SIZE_N idx))
+      (expected := fun idx =>
+        matmulKernelSurfaceCell s C A B C BLOCK_SIZE_M BLOCK_SIZE_N
+          BLOCK_SIZE_K (cOffset s 4096 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [matmul_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [matmulKernelSurfaceCell, hExec]
+
 /-- Public Python case 1 coverage summary: the full surface lowers and the
 final fp16 output tile store realizes the side-effected `c` tensor. -/
-theorem matmul_kernel_python_case1_output_summary
+theorem matmul_kernel_python_case1_store_summary
     (C A B Acc : RegionName) (s : BlockState) :
     (∃ alg, (matmul_kernel_surface C A B 64 128 64).toAlgorithm? =
         Except.ok alg) ∧
@@ -299,7 +324,7 @@ theorem matmul_kernel_python_case1_output_summary
       64 128 s (matmul_kernel_python_output_offset_injective s (by omega))
 
 /-- Public Python case 2 coverage summary. -/
-theorem matmul_kernel_python_case2_output_summary
+theorem matmul_kernel_python_case2_store_summary
     (C A B Acc : RegionName) (s : BlockState) :
     (∃ alg, (matmul_kernel_surface C A B 128 64 128).toAlgorithm? =
         Except.ok alg) ∧
@@ -318,7 +343,7 @@ theorem matmul_kernel_python_case2_output_summary
       128 64 s (matmul_kernel_python_output_offset_injective s (by omega))
 
 /-- Public Python case 3 coverage summary. -/
-theorem matmul_kernel_python_case3_output_summary
+theorem matmul_kernel_python_case3_store_summary
     (C A B Acc : RegionName) (s : BlockState) :
     (∃ alg, (matmul_kernel_surface C A B 256 256 64).toAlgorithm? =
         Except.ok alg) ∧
@@ -337,7 +362,7 @@ theorem matmul_kernel_python_case3_output_summary
       256 256 s (matmul_kernel_python_output_offset_injective s (by omega))
 
 /-- Public Python case 4 coverage summary. -/
-theorem matmul_kernel_python_case4_output_summary
+theorem matmul_kernel_python_case4_store_summary
     (C A B Acc : RegionName) (s : BlockState) :
     (∃ alg, (matmul_kernel_surface C A B 32 32 32).toAlgorithm? =
         Except.ok alg) ∧
@@ -354,5 +379,88 @@ theorem matmul_kernel_python_case4_output_summary
   · exact matmul_kernel_python_case4_surface_toAlgorithm_supported C A B
   · exact matmul_output_store_slice_compute_correct C Acc 4096 1 4096 1
       32 32 s (matmul_kernel_python_output_offset_injective s (by omega))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem matmul_kernel_python_case1_output_summary
+    (C A B : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface C A B 64 128 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_kernel_surface C A B 64 128 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 128] =>
+        some (C, cOffset s 4096 1 64 128 idx))
+      (expected := fun idx =>
+        matmulKernelSurfaceCell s C A B C 64 128 64
+          (cOffset s 4096 1 64 128 idx))) := by
+  constructor
+  · exact matmul_kernel_python_case1_surface_toAlgorithm_supported C A B
+  · exact matmul_kernel_surface_output_compute_correct C A B 64 128 64 s
+
+theorem matmul_kernel_python_case2_output_summary
+    (C A B : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface C A B 128 64 128).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_kernel_surface C A B 128 64 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (C, cOffset s 4096 1 128 64 idx))
+      (expected := fun idx =>
+        matmulKernelSurfaceCell s C A B C 128 64 128
+          (cOffset s 4096 1 128 64 idx))) := by
+  constructor
+  · exact matmul_kernel_python_case2_surface_toAlgorithm_supported C A B
+  · exact matmul_kernel_surface_output_compute_correct C A B 128 64 128 s
+
+theorem matmul_kernel_python_case3_output_summary
+    (C A B : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface C A B 256 256 64).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_kernel_surface C A B 256 256 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [256, 256] =>
+        some (C, cOffset s 4096 1 256 256 idx))
+      (expected := fun idx =>
+        matmulKernelSurfaceCell s C A B C 256 256 64
+          (cOffset s 4096 1 256 256 idx))) := by
+  constructor
+  · exact matmul_kernel_python_case3_surface_toAlgorithm_supported C A B
+  · exact matmul_kernel_surface_output_compute_correct C A B 256 256 64 s
+
+theorem matmul_kernel_python_case4_output_summary
+    (C A B : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_kernel_surface C A B 32 32 32).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_kernel_surface C A B 32 32 32)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 32] =>
+        some (C, cOffset s 4096 1 32 32 idx))
+      (expected := fun idx =>
+        matmulKernelSurfaceCell s C A B C 32 32 32
+          (cOffset s 4096 1 32 32 idx))) := by
+  constructor
+  · exact matmul_kernel_python_case4_surface_toAlgorithm_supported C A B
+  · exact matmul_kernel_surface_output_compute_correct C A B 32 32 32 s
 
 end VeriTile.Bench.TritonBenchG.MatmulKernel

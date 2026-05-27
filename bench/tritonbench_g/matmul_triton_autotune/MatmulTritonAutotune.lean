@@ -455,9 +455,47 @@ theorem matmul_autotune_python_case3_surface_toAlgorithm_supported
   exact matmul_autotune_surface_toAlgorithm_supported A B C
     256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false
 
+noncomputable def matmulAutotuneSurfaceCell
+    (s : BlockState) (A B C Out : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat)
+    (ACTIVATION : Bool) (offset : Nat) : MemCell :=
+  match exec (matmul_autotune_surface A B C M N K stride_am stride_ak stride_bk
+      stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
+      GROUP_SIZE_M ACTIVATION) s with
+  | some s' => s'.mem Out offset
+  | none => 0
+
+theorem matmul_autotune_surface_output_compute_correct
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat)
+    (ACTIVATION : Bool) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := matmul_autotune_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N
+        BLOCK_SIZE_K GROUP_SIZE_M ACTIVATION)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s M N BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (C, cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        matmulAutotuneSurfaceCell s A B C C M N K stride_am stride_ak
+          stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N
+          BLOCK_SIZE_K GROUP_SIZE_M ACTIVATION
+          (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [matmul_autotune_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [matmulAutotuneSurfaceCell, hExec]
+
 /-- Public Python case 1 coverage summary: full surface plus masked fp16
 output-store tile for the observed result tensor. -/
-theorem matmul_autotune_python_case1_output_summary
+theorem matmul_autotune_python_case1_store_summary
     (A B C Acc : RegionName) (s : BlockState) :
     (∃ alg, (matmul_autotune_surface A B C
       128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false).toAlgorithm? =
@@ -480,7 +518,7 @@ theorem matmul_autotune_python_case1_output_summary
 
 /-- Public Python case 2 coverage summary: full activation surface,
 activation-tail surface, and masked fp16 output-store tile. -/
-theorem matmul_autotune_python_case2_output_summary
+theorem matmul_autotune_python_case2_store_summary
     (A B C Acc : RegionName) (s : BlockState) :
     (∃ alg, (matmul_autotune_surface A B C
       128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true).toAlgorithm? =
@@ -507,7 +545,7 @@ theorem matmul_autotune_python_case2_output_summary
       (matmul_autotune_python_output_offset_injective_256 s)
 
 /-- Public Python case 3 coverage summary. -/
-theorem matmul_autotune_python_case3_output_summary
+theorem matmul_autotune_python_case3_store_summary
     (A B C Acc : RegionName) (s : BlockState) :
     (∃ alg, (matmul_autotune_surface A B C
       256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false).toAlgorithm? =
@@ -527,5 +565,87 @@ theorem matmul_autotune_python_case3_output_summary
   · exact matmul_masked_output_store_slice_compute_correct C Acc
       256 512 512 1 512 1 128 256 s
       (matmul_autotune_python_output_offset_injective_512 s)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem matmul_autotune_python_case1_output_summary
+    (A B C : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_autotune_surface A B C
+      128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_autotune_surface A B C
+        128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 128 256 128 256)
+        (fun idx => (C, cOffset s 256 1 128 256 idx)))
+      (expected := fun idx =>
+        matmulAutotuneSurfaceCell s A B C C
+          128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false
+          (cOffset s 256 1 128 256 idx))) := by
+  constructor
+  · exact matmul_autotune_python_case1_surface_toAlgorithm_supported A B C
+  · exact matmul_autotune_surface_output_compute_correct A B C
+      128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.false s
+
+theorem matmul_autotune_python_case2_output_summary
+    (A B C : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_autotune_surface A B C
+      128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_autotune_surface A B C
+        128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 128 256 128 256)
+        (fun idx => (C, cOffset s 256 1 128 256 idx)))
+      (expected := fun idx =>
+        matmulAutotuneSurfaceCell s A B C C
+          128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true
+          (cOffset s 256 1 128 256 idx))) := by
+  constructor
+  · exact matmul_autotune_python_case2_surface_toAlgorithm_supported A B C
+  · exact matmul_autotune_surface_output_compute_correct A B C
+      128 256 64 64 1 256 1 256 1 128 256 64 8 Bool.true s
+
+theorem matmul_autotune_python_case3_output_summary
+    (A B C : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_autotune_surface A B C
+      256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_autotune_surface A B C
+        256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 256 512 128 256)
+        (fun idx => (C, cOffset s 512 1 128 256 idx)))
+      (expected := fun idx =>
+        matmulAutotuneSurfaceCell s A B C C
+          256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false
+          (cOffset s 512 1 128 256 idx))) := by
+  constructor
+  · exact matmul_autotune_python_case3_surface_toAlgorithm_supported A B C
+  · exact matmul_autotune_surface_output_compute_correct A B C
+      256 512 128 128 1 512 1 512 1 128 256 64 8 Bool.false s
 
 end VeriTile.Bench.TritonBenchG.MatmulTritonAutotune

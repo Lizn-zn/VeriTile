@@ -75,11 +75,10 @@ recurrence, #176 carries the Python test-shape masked `Mid_O` load through the
 `AccOut` and `SumExpOut` recurrence step, and #177 connects the Python
 test-shape `Acc` and `SumExp` outputs to the final masked `Out` writeback; all
 three are full-value candidates in `proof_gap_manifest.tsv`.
-The broad #148 matmul/dot bucket has been split into narrower accumulator
-proof follow-ups: `gemv-k-loop-accumulator`, `bmm-final-store-accumulator`,
-`dequant-matmul-cross-kernel-surface`, `iv-dependent-matmul-output-store`,
-`matmul-output-store-accumulator`, `matmul-activation-tail-accumulator`, and
-`matmul-tma-output-store-accumulator`.
+The broad #148 matmul/dot bucket is now discharged: GEMV, BMM, dequantization,
+IV-dependent matmul, plain matmul, activation-tail, and TMA summaries connect
+their checked outputs directly to full Python-shape surfaces and are
+full-value candidates in `proof_gap_manifest.tsv`.
 The #191 layer-norm backward residual/recompute paths now connect the checked
 Python test-shape outputs to the full backward surface for DX, recomputed Y,
 and partial DW/DB, so the affected `layer_norm_ops.py` summaries are

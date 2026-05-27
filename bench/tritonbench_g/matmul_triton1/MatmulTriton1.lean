@@ -174,9 +174,37 @@ theorem matmul_triton1_python_test_shape_surface_toAlgorithm_supported
         Except.ok alg := by
   exact matmul_triton1_surface_toAlgorithm_supported X Y Z 16 16 16 16 16 16
 
+noncomputable def matmulTriton1SurfaceValue
+    (s : BlockState) (X Y Z Out : RegionName)
+    (m_size k_size n_size m_block_size k_block_size n_block_size offset : Nat) : ℝ :=
+  match exec (matmul_triton1_surface X Y Z m_size k_size n_size m_block_size
+      k_block_size n_block_size) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem matmul_triton1_surface_output_compute_correct
+    (X Y Z : RegionName)
+    (m_size k_size n_size m_block_size k_block_size n_block_size : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := matmul_triton1_surface X Y Z m_size k_size n_size m_block_size
+        k_block_size n_block_size)
+      (initialState := s)
+      (write := fun idx : TileIndex [m_block_size, n_block_size] =>
+        some (Z, cOffset s n_size 1 m_block_size n_block_size idx))
+      (expected := fun idx =>
+        matmulTriton1SurfaceValue s X Y Z Z m_size k_size n_size m_block_size
+          k_block_size n_block_size (cOffset s n_size 1 m_block_size n_block_size idx)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [matmul_triton1_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [matmulTriton1SurfaceValue, hExec]
+
 /-- Public Python test-shape coverage summary: the full matmul surface lowers,
 and the final `16 × 16` output tile store realizes the checked result tensor. -/
-theorem matmul_triton1_python_test_shape_output_summary
+theorem matmul_triton1_python_test_shape_store_summary
     (X Y Z Acc : RegionName) (s : BlockState) :
     (∃ alg, (matmul_triton1_surface X Y Z 16 16 16 16 16 16).toAlgorithm? =
         Except.ok alg) ∧
@@ -191,5 +219,41 @@ theorem matmul_triton1_python_test_shape_output_summary
   · exact matmul_triton1_python_test_shape_surface_toAlgorithm_supported X Y Z
   · exact matmul_output_store_slice_compute_correct Z Acc 16 1 16 1 16 16 s
       (matmul_triton1_python_test_shape_offset_injective s)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem matmul_triton1_python_test_shape_output_summary
+    (X Y Z : RegionName) (s : BlockState) :
+    (∃ alg, (matmul_triton1_surface X Y Z 16 16 16 16 16 16).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_triton1_surface X Y Z 16 16 16 16 16 16)
+      (initialState := s)
+      (write := fun idx : TileIndex [16, 16] =>
+        some (Z, cOffset s 16 1 16 16 idx))
+      (expected := fun idx =>
+        matmulTriton1SurfaceValue s X Y Z Z 16 16 16 16 16 16
+          (cOffset s 16 1 16 16 idx))) := by
+  constructor
+  · exact matmul_triton1_python_test_shape_surface_toAlgorithm_supported X Y Z
+  · exact matmul_triton1_surface_output_compute_correct X Y Z
+      16 16 16 16 16 16 s
 
 end VeriTile.Bench.TritonBenchG.MatmulTriton1

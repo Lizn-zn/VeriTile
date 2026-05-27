@@ -67,14 +67,14 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 98 as conservative
-  `full_value_candidate`, 70 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 127 as conservative
+  `full_value_candidate`, 41 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a currently open
   follow-up issue and blocker family in `proof_gap_manifest.tsv`.
-  The 29 remaining #148 rows are split by blocker family into GEMV K-loop,
-  BMM final-store, dequantized cross-kernel, IV-dependent output-store, plain
-  matmul output-store, activation-tail, and TMA output-store accumulator
-  obligations. The 31 remaining #162 rows are split into forward online
+  The #148 matmul/dot rows are upgraded to full-value candidates by connecting
+  GEMV, BMM, dequantization, IV-dependent matmul, plain matmul, activation-tail,
+  and TMA summaries directly to their full Python-shape surfaces. The 31
+  remaining #162 rows are split into forward online
   softmax recurrence, score/probability reduction, context/decode reduction,
   token-attention reduction, and backward score-reduction obligations. The #151
   rows now split into the now-discharged #190 chunk-delta forward

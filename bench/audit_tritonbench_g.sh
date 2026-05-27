@@ -72,12 +72,14 @@ while IFS= read -r lean_file; do
   fi
   rel="${lean_file#${PROJECT_ROOT}/}"
   known=false
-  for blocker in "${known_algorithm_blockers[@]}"; do
-    if [ "${rel}" = "${blocker}" ]; then
-      known=true
-      break
-    fi
-  done
+  if [ "${#known_algorithm_blockers[@]}" -gt 0 ]; then
+    for blocker in "${known_algorithm_blockers[@]}"; do
+      if [ "${rel}" = "${blocker}" ]; then
+        known=true
+        break
+      fi
+    done
+  fi
   if [ "${known}" = false ]; then
     unexpected_algorithm_blockers+=("${rel}")
   fi
