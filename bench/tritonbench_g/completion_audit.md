@@ -69,30 +69,25 @@ surface.
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
   declarations across 76 files. It classifies 98 as conservative
   `full_value_candidate`, 70 as `public_summary_with_proof_gap`, and 13 as
-  `blocked_summary`. Every non-full candidate is linked to a specific follow-up
-  issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
-  to the former broad #147 quantization bucket, the former broad #148
-  matmul/dot bucket, the former broad #149 attention/softmax bucket, the former
-  broad #150 recurrent/cumsum bucket, the former broad #151 reduction/layernorm
-  bucket, the former broad #153 rotary/cache bucket, or the broad #152
-  `semantic-blocker` bucket.
-  The #148 rows now split into GEMV K-loop, BMM final-store, dequantized
-  cross-kernel, IV-dependent output-store, plain matmul output-store,
-  activation-tail, and TMA output-store accumulator blockers. The #149 rows
-  now split into #161 final-store lift blockers plus #162 forward online
+  `blocked_summary`. Every non-full candidate is linked to a currently open
+  follow-up issue and blocker family in `proof_gap_manifest.tsv`.
+  The 29 remaining #148 rows are split by blocker family into GEMV K-loop,
+  BMM final-store, dequantized cross-kernel, IV-dependent output-store, plain
+  matmul output-store, activation-tail, and TMA output-store accumulator
+  obligations. The 31 remaining #162 rows are split into forward online
   softmax recurrence, score/probability reduction, context/decode reduction,
-  token-attention reduction, and backward score-reduction blockers. The #151
+  token-attention reduction, and backward score-reduction obligations. The #151
   rows now split into the now-discharged #190 chunk-delta forward
   recurrence-store producers and the now-discharged #191 LayerNorm backward
   residual/recompute aggregation paths. The #152
   blocked summaries now migrate to the open #154
   `fixed-width-int8-cast-semantics` issue because their concrete blocker is
-  CUDA `llrint` / int8-cast semantics; the #153 rows split into
+  CUDA `llrint` / int8-cast semantics; the 4 remaining #153 rows split into
   `rope-head-slice-lift` for RoPE Q/K head-slice value proofs and
   `rotary-2d-tile-value-lift` for row-level rotary `o0`/`o1` proofs that still
-  need the full `[BLOCK_M, BLOCK_HALF]` 2D tile lift. The #167 context-attention
-  rows split into Mistral sliding-window accumulator-to-store and nopad
-  variable-length accumulator-to-store obligations. The #166 dense-attention
+  need the full `[BLOCK_M, BLOCK_HALF]` 2D tile lift. The 2 remaining #167
+  context-attention rows split into Mistral sliding-window accumulator-to-store
+  and nopad variable-length accumulator-to-store obligations. The #166 dense-attention
   final-store rows now include the `acc / l_i[:, None]` normalization in the
   output-store proof, and #199 upgrades those dense-attention summaries to
   full-value candidates by connecting the Q/K/V streaming-softmax producer path
@@ -124,7 +119,12 @@ No explicit TritonBench-G `hAlg` blocker remains, and no documented
 translation-surface blocker remains. If a future Lean port reintroduces a
 translation-scope marker, it must be covered by `proof_blockers.md`, and
 `bench/audit_tritonbench_g.sh` enforces that coverage.
-The current documented blocker set is:
+The current proof-gap blocker set is exactly the non-full rows in
+`proof_gap_manifest.tsv`: #148 has 29 matmul/dot accumulator rows, #162 has
+31 attention recurrence/reduction rows, #154 has 13 fixed-width int8 blocked
+summaries, #153 has 4 RoPE/rotary tile-lift rows, #94 has 4 reverse-cumsum
+directional-scan rows, and #167 has 2 context-attention accumulator-store
+rows.
 
 Passing `lake build` alone is still not sufficient evidence for future changes;
 this audit must continue to run the translation-consistency gates above and the
