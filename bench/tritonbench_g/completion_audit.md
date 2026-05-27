@@ -92,11 +92,14 @@ surface.
   `rotary-2d-tile-value-lift` for row-level rotary `o0`/`o1` proofs that still
   need the full `[BLOCK_M, BLOCK_HALF]` 2D tile lift. The #167 context-attention
   rows split into Mistral sliding-window accumulator-to-store and nopad
-  variable-length accumulator-to-store obligations. The #150 rows now split into
-  #185 chunk cumsum carry folds, the now-discharged #186 decay cumsum scan
-  folds, the now-discharged #187 recurrent state loop folds, the now-discharged
-  #188 GLA output tile producers, and #94 reverse cumsum directional scan
-  semantics. The #191 layer-norm backward
+  variable-length accumulator-to-store obligations. The #166 dense-attention
+  final-store rows now include the `acc / l_i[:, None]` normalization in the
+  output-store proof and split the remaining Q/K/V streaming-softmax `Acc`/`L`
+  producer recurrence into #199. The #150 rows now split into #185 chunk cumsum
+  carry folds, the now-discharged #186 decay cumsum scan folds, the
+  now-discharged #187 recurrent state loop folds, the now-discharged #188 GLA
+  output tile producers, and #94 reverse cumsum directional scan semantics.
+  The #191 layer-norm backward
   residual/recompute rows are upgraded to full-value candidates by connecting
   the Python test-shape outputs to the full backward surface. The #186
   decay-cumsum rows are upgraded to full-value candidates by connecting the
