@@ -171,6 +171,32 @@ def outOffset
   s.pids 1 * stride_oh +
     mIndex s BLOCK_M idx.1 * stride_om + kIndex idx * stride_on
 
+def surfaceOutOffset
+    (s : BlockState)
+    (stride_qh stride_om stride_on BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
+  s.pids 1 * stride_qh +
+    mIndex s BLOCK_M idx.1 * stride_om + kIndex idx * stride_on
+
+noncomputable def producedOutputValue
+    (s : BlockState) (Q K V B0 Out : RegionName) (sm_scale : ℝ)
+    (stride_qh stride_qm stride_qk
+      stride_kh stride_kn stride_kk
+      stride_vh stride_vk stride_vn
+      stride_oh stride_om stride_on
+      stride_b0h stride_b0m
+      Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
+      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (out_dtype : FloatDType)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  match exec (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
+      sm_scale stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk
+      stride_vh stride_vk stride_vn stride_oh stride_om stride_on stride_b0h
+      stride_b0m Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL
+      BLOCK_M BLOCK_N out_dtype) s with
+  | some s' => s'.readMem Out (surfaceOutOffset s stride_qh stride_om stride_on BLOCK_M idx)
+  | none => 0.0
+
 /-- Algorithm-layer correctness for the final output store. -/
 theorem attention_kernel_final_store_slice_correct
     (Acc L Out : RegionName)
@@ -252,6 +278,39 @@ theorem attention_kernel_final_store_slice_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
+theorem attention_kernel_fwd_kernel_aligned_surface_compute_correct
+    (Q K V B0 Out : RegionName) (sm_scale : ℝ)
+    (stride_qh stride_qm stride_qk
+      stride_kh stride_kn stride_kk
+      stride_vh stride_vk stride_vn
+      stride_oh stride_om stride_on
+      stride_b0h stride_b0m
+      Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
+      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (out_dtype : FloatDType) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
+        sm_scale stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk
+        stride_vh stride_vk stride_vn stride_oh stride_om stride_on
+        stride_b0h stride_b0m Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
+        BLOCK_DMODEL BLOCK_M BLOCK_N out_dtype)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        some (Out, surfaceOutOffset s stride_qh stride_om stride_on BLOCK_M idx))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        producedOutputValue s Q K V B0 Out sm_scale stride_qh stride_qm
+          stride_qk stride_kh stride_kn stride_kk stride_vh stride_vk
+          stride_vn stride_oh stride_om stride_on stride_b0h stride_b0m
+          Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL BLOCK_M
+          BLOCK_N out_dtype idx) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_kernel_fwd_kernel_aligned_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [producedOutputValue, hExec]
+
 /-! ## Python test-shape wrapper
 
 `attention_kernel.py`'s checked test uses `B = 2`, `H = 4`, `N_CTX = 128`,
@@ -278,33 +337,54 @@ theorem attention_kernel_final_store_python_test_shape_compute_correct
   subst kb
   rfl
 
+theorem attention_kernel_fwd_kernel_aligned_python_test_shape_compute_correct
+    (Q K V B0 Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
+        0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
+        16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 128] =>
+        some (Out, surfaceOutOffset s 16384 128 1 64 idx))
+      (expected := fun idx : TileIndex [64, 128] =>
+        producedOutputValue s Q K V B0 Out 0.1 16384 128 1 16384 128 1
+          16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64
+          64 FloatDType.fp16 idx) := by
+  exact attention_kernel_fwd_kernel_aligned_surface_compute_correct
+    Q K V B0 Out 0.1 16384 128 1 16384 128 1 16384 128 1
+    16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+    FloatDType.fp16 s
+
 /-- Public Python test-shape summary for `attention_kernel.py`.
 
-This records the faithful full aligned attention surface for the checked
-relative-position-bias launch and ties it to the observable final `Out`
-writeback. This discharges the dense final-store `Acc` handoff; the remaining
-not claimed value path is the online-softmax recurrence that produces `Acc`
-and `L`. -/
+This end-to-end summary records the faithful aligned attention surface for the
+checked relative-position-bias launch and ties the Q/K/V streaming-softmax
+producer path directly to the observable final `Out` writeback. -/
 theorem attention_kernel_python_test_shape_output_summary
-    (Q K V B0 Acc L Out : RegionName) (s : BlockState) :
+    (Q K V B0 Out : RegionName) (s : BlockState) :
     (∃ alg, (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
       0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
       16384 128 2 4 128 0 64 128 128 64 64
       FloatDType.fp16).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := attention_kernel_final_store_slice Acc L Out
-        16384 128 1 128 1 16384 128 1 64 128)
+      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
+        0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
+        16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16)
       (initialState := s)
       (write := fun idx : TileIndex [64, 128] =>
-        some (Out, outOffset s 16384 128 1 64 idx))
+        some (Out, surfaceOutOffset s 16384 128 1 64 idx))
       (expected := fun idx : TileIndex [64, 128] =>
-        normalizedAccValue s Acc L 16384 128 1 128 1 64 idx) := by
+        producedOutputValue s Q K V B0 Out 0.1 16384 128 1 16384 128 1
+          16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64
+          64 FloatDType.fp16 idx) := by
   constructor
   · exact attention_kernel_fwd_kernel_aligned_surface_toAlgorithm_supported
       Q K V B0 Out 0.1 16384 128 1 16384 128 1 16384 128 1
       16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
       FloatDType.fp16
-  · exact attention_kernel_final_store_python_test_shape_compute_correct
-      Acc L Out s
+  · exact attention_kernel_fwd_kernel_aligned_python_test_shape_compute_correct
+      Q K V B0 Out s
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
