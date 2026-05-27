@@ -887,6 +887,79 @@ theorem destindex_copy_quantize_kv_transform_python_h1_d1_all_outputs_compute_co
   · exact destindex_copy_quantize_kv_transform_python_h1_scale_store_compute_correct
       Scale DestLoc OutScale s
 
+noncomputable def quantizeKvTransformSurfaceValue
+    (s : BlockState) (K DestLoc Out OutScale ReadOut : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD offset : Nat) : ℝ :=
+  match exec (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+      stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+      BLOCK_HEAD) s with
+  | some s' => s'.readMem ReadOut offset
+  | none => 0.0
+
+theorem destindex_copy_quantize_kv_transform_surface_value_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out
+        OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h
+        stride_o_d stride_os_bs stride_os_h stride_os_d head_num head_dim
+        BLOCK_DMODEL BLOCK_HEAD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s head_num head_dim BLOCK_HEAD BLOCK_DMODEL)
+        (fun idx => (Out, outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)))
+      (expected := fun idx =>
+        quantizeKvTransformSurfaceValue s K DestLoc Out OutScale Out
+          stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+          stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+          BLOCK_HEAD (outOffset s DestLoc stride_o_bs stride_o_h stride_o_d idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [destindex_copy_quantize_kv_transform_real_surface,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [quantizeKvTransformSurfaceValue, hExec]
+
+theorem destindex_copy_quantize_kv_transform_surface_scale_output_compute_correct
+    (K DestLoc Out OutScale : RegionName)
+    (stride_k_bs stride_k_h stride_k_d
+      stride_o_bs stride_o_h stride_o_d
+      stride_os_bs stride_os_h stride_os_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc Out
+        OutScale stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h
+        stride_o_d stride_os_bs stride_os_h stride_os_d head_num head_dim
+        BLOCK_DMODEL BLOCK_HEAD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive head_num BLOCK_HEAD)
+        (fun i => (OutScale, scaleOutOffset s DestLoc stride_os_bs stride_os_h i)))
+      (expected := fun i =>
+        quantizeKvTransformSurfaceValue s K DestLoc Out OutScale OutScale
+          stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+          stride_os_bs stride_os_h stride_os_d head_num head_dim BLOCK_DMODEL
+          BLOCK_HEAD (scaleOutOffset s DestLoc stride_os_bs stride_os_h i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [destindex_copy_quantize_kv_transform_real_surface,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i _hActive
+  simp [quantizeKvTransformSurfaceValue, hExec]
+
 /-- Public Python `H = 12, D = 96` summary: the checked shape covers the full
 surface syntax and the two externally visible outputs (values and scales). -/
 theorem destindex_copy_quantize_kv_transform_python_h12_d96_summary
@@ -989,8 +1062,8 @@ theorem destindex_copy_quantize_kv_transform_python_h1_d1_summary
       destindex_copy_quantize_kv_transform_python_h1_d1_all_outputs_compute_correct
         K Scale DestLoc Out OutScale s
 
-/-- `output_summary` alias for the Python `H = 12, D = 96` transform case. -/
-abbrev destindex_copy_quantize_kv_transform_python_h12_d96_output_summary
+/-- Python `H = 12, D = 96` transform case. -/
+abbrev destindex_copy_quantize_kv_transform_python_h12_d96_internal_output
     (K Scale DestLoc Out OutScale : RegionName) (s : BlockState) :=
   destindex_copy_quantize_kv_transform_python_h12_d96_summary K Scale DestLoc
     Out OutScale s
@@ -1021,5 +1094,64 @@ abbrev destindex_copy_quantize_kv_transform_python_test_shape_complete_summary
         DestLoc Out OutScale s)
       (destindex_copy_quantize_kv_transform_python_h1_d1_summary K Scale
         DestLoc Out OutScale s))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem destindex_copy_quantize_kv_transform_python_h12_d96_output_summary
+    (K DestLoc Out OutScale : RegionName) (s : BlockState) :
+    (∃ alg,
+      (destindex_copy_quantize_kv_transform_real_surface K DestLoc Out OutScale
+        1152 96 1 1152 96 1 12 1 1 12 96 128 16).toAlgorithm? =
+          Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc
+        Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 12 96 16 128)
+        (fun idx => (Out, outOffset s DestLoc 1152 96 1 idx)))
+      (expected := fun idx =>
+        quantizeKvTransformSurfaceValue s K DestLoc Out OutScale Out 1152 96
+          1 1152 96 1 12 1 1 12 96 128 16
+          (outOffset s DestLoc 1152 96 1 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := destindex_copy_quantize_kv_transform_real_surface K DestLoc
+        Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (scaleActive 12 16)
+        (fun i => (OutScale, scaleOutOffset s DestLoc 12 1 i)))
+      (expected := fun i =>
+        quantizeKvTransformSurfaceValue s K DestLoc Out OutScale OutScale
+          1152 96 1 1152 96 1 12 1 1 12 96 128 16
+          (scaleOutOffset s DestLoc 12 1 i))) := by
+  constructor
+  · exact
+      destindex_copy_quantize_kv_transform_real_surface_toAlgorithm_supported K
+        DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16
+  · constructor
+    · exact
+        destindex_copy_quantize_kv_transform_surface_value_output_compute_correct
+          K DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16 s
+    · exact
+        destindex_copy_quantize_kv_transform_surface_scale_output_compute_correct
+          K DestLoc Out OutScale 1152 96 1 1152 96 1 12 1 1 12 96 128 16 s
 
 end VeriTile.Bench.TritonBenchG.QuantizeKvTransform

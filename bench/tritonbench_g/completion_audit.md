@@ -15,7 +15,7 @@ surface.
 | Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, statement lhs order, and documented translation-surface blockers. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
 | Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/helper-call/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No current unannotated mechanical mismatch and no documented translation-surface blocker remains. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
-| Classify stronger proof gaps from #146. | `bench/check_proof_gap_manifest.py` extracts every `output_summary` declaration and checks it against `proof_gap_manifest.tsv`. | Passing; 180 summaries are classified across 76 files. |
+| Classify stronger proof gaps from #146. | `bench/check_proof_gap_manifest.py` extracts every `output_summary` declaration and checks it against `proof_gap_manifest.tsv`. | Passing; 181 summaries are classified across 76 files. |
 | Do not count placeholder proofs as complete. | Placeholder scan for `True := by`, `trivial`, `sorry`, and `admit` reports no matches. | Passing. |
 | Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers and no stale translation-surface blocker entries. | Passing; no algorithm-layer or translation-surface blocker remains. |
 
@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 93 as conservative
-  `full_value_candidate`, 75 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 98 as conservative
+  `full_value_candidate`, 70 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a specific follow-up
   issue and blocker family in `proof_gap_manifest.tsv`; no row remains linked
   to the former broad #147 quantization bucket, the former broad #148
@@ -113,7 +113,10 @@ surface.
   normalization path and #181 LLaMA running-max recurrence step are upgraded to
   full-value candidates. The #172 Phi flash-decode row now has #175 running-max,
   #176 masked scaled-accumulator, and #177 final normalization/store upgraded to
-  full-value candidates.
+  full-value candidates. The #158 quantization follow-up rows are upgraded to
+  full-value candidates by connecting the checked int8, quantize-copy-kv,
+  grouped quantize-kv-copy, and quantize-kv-transform outputs directly to their
+  full Python-shape surfaces.
 
 ## Remaining Blockers
 
