@@ -48,7 +48,8 @@ forward summaries to the full producer surface for `h`, `v_new`, and optional
 backward residual/recompute summaries that used to compose row-level C1/C2
 reductions, DX/Y writebacks, and partial DW/DB slices.
 The #161 final-store bucket has been split again into kernel-specific producer
-obligations: `attention-fwd-triton1-bo-bhpre-producers` (#165),
+obligations: the now-discharged
+`attention-fwd-triton1-bo-bhpre-producers` (#165),
 the now-discharged `dense-attention-acc-store` (#166), whose remaining
 Q/K/V streaming-softmax `Acc`/`L` producer proof is now discharged by
 `dense-attention-online-softmax-recurrence` (#199),
