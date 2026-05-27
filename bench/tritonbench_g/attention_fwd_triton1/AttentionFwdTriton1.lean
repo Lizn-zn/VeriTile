@@ -78,6 +78,15 @@ theorem attention_fwd_kernel_surface_toAlgorithm_supported
   simp [attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
 
+noncomputable def attentionFwdTriton1SurfaceValue
+    (s : BlockState) (Q K V H O Out : RegionName)
+    (STORE IFCOND : Bool) (offset : Nat) : ℝ :=
+  match exec (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+      32 128 32 STORE IFCOND) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
 /-! ## Forward accumulator arithmetic surfaces
 
 These proof-oriented surfaces expose the arithmetic producers for the `BO` and
@@ -485,6 +494,48 @@ theorem attention_fwd_triton1_store_enabled_h_store_slice_compute_correct
   exact attention_fwd_triton1_h_store_slice_compute_correct BHPre H
     i_iter s_hh s_ht BT BD s hOutInj
 
+theorem attention_fwd_triton1_surface_output_compute_correct
+    (Q K V H O Out : RegionName) (STORE IFCOND : Bool)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 STORE IFCOND)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (Out, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        attentionFwdTriton1SurfaceValue s Q K V H O Out STORE IFCOND
+          (outOffset s 131072 128 1 32 idx)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [attentionFwdTriton1SurfaceValue, hExec]
+
+theorem attention_fwd_triton1_surface_h_compute_correct
+    (Q K V H O : RegionName) (IFCOND : Bool)
+    (i_iter : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.true IFCOND)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (H, hOffset s i_iter 524288 128 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        attentionFwdTriton1SurfaceValue s Q K V H O H Bool.true IFCOND
+          (hOffset s i_iter 524288 128 128 idx)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [attentionFwdTriton1SurfaceValue, hExec]
+
 /-! ## Python test-shape wrappers
 
 The checked `attention_fwd_triton1.py` main cases use `B = 2`, `H = 8`,
@@ -702,7 +753,7 @@ combinations. This summary records faithful full-surface lowering for those
 four branch combinations and ties them to the checked output-store/H-state
 writeback slices. The dot-product arithmetic that produces the precomputed
 `BO`/`BHPre` tiles remains represented by those slice inputs. -/
-theorem attention_fwd_triton1_python_test_shape_output_summary
+theorem attention_fwd_triton1_python_test_shape_slice_summary
     (Q K V H O BO BHPre : RegionName) (i_iter : Nat) (s : BlockState) :
     ((∃ alg, (attention_fwd_kernel_surface Q K V H O
       131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
@@ -838,9 +889,108 @@ theorem attention_fwd_triton1_python_test_shape_complete_summary
       (expected := fun idx : TileIndex [128, 128] =>
         bhFormulaSpec s K V 32 128 idx))) := by
   constructor
-  · exact attention_fwd_triton1_python_test_shape_output_summary Q K V H O BO
+  · exact attention_fwd_triton1_python_test_shape_slice_summary Q K V H O BO
       BHPre i_iter s
   · exact attention_fwd_triton1_python_test_shape_accumulator_formula_summary
       Q K V BO BHPre s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/-- `output_summary` for the checked `attention_fwd_triton1` surface. -/
+theorem attention_fwd_triton1_python_test_shape_output_summary
+    (Q K V H O : RegionName) (i_iter : Nat) (s : BlockState) :
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.false Bool.false)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        attentionFwdTriton1SurfaceValue s Q K V H O O Bool.false Bool.false
+          (outOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.true Bool.false)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        attentionFwdTriton1SurfaceValue s Q K V H O O Bool.true Bool.false
+          (outOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.false Bool.true)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        attentionFwdTriton1SurfaceValue s Q K V H O O Bool.false Bool.true
+          (outOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.true Bool.true)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        attentionFwdTriton1SurfaceValue s Q K V H O O Bool.true Bool.true
+          (outOffset s 131072 128 1 32 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.true Bool.false)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (H, hOffset s i_iter 524288 128 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        attentionFwdTriton1SurfaceValue s Q K V H O H Bool.true Bool.false
+          (hOffset s i_iter 524288 128 128 idx))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128 : ℝ))⁻¹)
+        32 128 32 Bool.true Bool.true)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (H, hOffset s i_iter 524288 128 128 idx))
+      (expected := fun idx : TileIndex [128, 128] =>
+        attentionFwdTriton1SurfaceValue s Q K V H O H Bool.true Bool.true
+          (hOffset s i_iter 524288 128 128 idx))) := by
+  constructor
+  · exact attention_fwd_triton1_surface_output_compute_correct Q K V H O O
+      Bool.false Bool.false s
+  constructor
+  · exact attention_fwd_triton1_surface_output_compute_correct Q K V H O O
+      Bool.true Bool.false s
+  constructor
+  · exact attention_fwd_triton1_surface_output_compute_correct Q K V H O O
+      Bool.false Bool.true s
+  constructor
+  · exact attention_fwd_triton1_surface_output_compute_correct Q K V H O O
+      Bool.true Bool.true s
+  constructor
+  · exact attention_fwd_triton1_surface_h_compute_correct Q K V H O
+      Bool.false i_iter s
+  · exact attention_fwd_triton1_surface_h_compute_correct Q K V H O
+      Bool.true i_iter s
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
