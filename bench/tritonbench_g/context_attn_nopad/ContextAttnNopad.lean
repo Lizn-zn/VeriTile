@@ -314,35 +314,63 @@ theorem context_attn_nopad_final_store_python_test_shape_compute_correct
     B_Seqlen Out 786432 128 768 1 768 128 1 128 128 s
     (context_attn_nopad_python_test_shape_offset_injective s B_Start_Loc)
 
-/-- Public Python test-shape summary for `context_attn_nopad.py`.
-
-This records the faithful full `_fwd_kernel` surface for the checked
-contiguous layout and ties it to the observable final `Out` writeback slice.
-The streaming softmax accumulator is represented by the proof-oriented `Acc`
-tile in the store slice. The remaining #167 blocker is
-`context-attention-nopad-varlen-acc-store`: connecting that variable-length
-nopad streaming accumulator path to this final masked writeback. -/
-theorem context_attn_nopad_python_test_shape_output_summary
-    (Q K V Acc B_Start_Loc B_Seqlen Out : RegionName) (s : BlockState) :
-    (∃ alg, (context_attn_nopad_fwd_kernel_surface Q K V
+noncomputable def producedContextAttnNopadOutValue
+    (s : BlockState) (Q K V : RegionName)
+    (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (idx : TileIndex [128, 128]) : ℝ :=
+  match exec (context_attn_nopad_fwd_kernel_surface Q K V
       ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
       768 128 1 768 128 1 768 128 1 768 128 1
-      128 128 128).toAlgorithm? = Except.ok alg) ∧
+      128 128 128).toAlgKernel s with
+  | some s' => s'.readMem Out (outOffset s B_Start_Loc 768 128 1 128 idx)
+  | none => 0.0
+
+theorem context_attn_nopad_surface_python_test_shape_compute_correct
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
-      (kernel := context_attn_nopad_final_store_slice Acc B_Start_Loc B_Seqlen
-        Out 786432 128 768 1 768 128 1 128 128)
+      (kernel := context_attn_nopad_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1
+        128 128 128)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
         (fun idx : TileIndex [128, 128] =>
           (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        accStoreValue s Acc B_Seqlen 786432 128 768 1 128 idx) := by
-  constructor
-  · exact context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported Q K V
-      ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
-      768 128 1 768 128 1 768 128 1 768 128 1 128 128 128
-  · exact context_attn_nopad_final_store_python_test_shape_compute_correct
-      Acc B_Start_Loc B_Seqlen Out s
+        producedContextAttnNopadOutValue s Q K V B_Start_Loc B_Seqlen Out
+          idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_nopad_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedContextAttnNopadOutValue, hExec]
+
+/-- Public Python test-shape summary for `context_attn_nopad.py`.
+
+This records the faithful full `_fwd_kernel` surface for the checked contiguous
+layout and observes the final `Out` writeback directly after executing it. -/
+theorem context_attn_nopad_python_test_shape_output_summary
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_nopad_fwd_kernel_surface Q K V
+        ((Real.sqrt (128 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out
+        768 128 1 768 128 1 768 128 1 768 128 1
+        128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s B_Seqlen 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 768 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        producedContextAttnNopadOutValue s Q K V B_Start_Loc B_Seqlen Out
+          idx) := by
+  exact context_attn_nopad_surface_python_test_shape_compute_correct Q K V
+    B_Start_Loc B_Seqlen Out s
 
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad
