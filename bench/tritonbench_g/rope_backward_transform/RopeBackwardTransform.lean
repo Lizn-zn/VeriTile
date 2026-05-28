@@ -80,6 +80,39 @@ theorem triton_rope_surface_toAlgorithm_supported
       pad_hd BLOCK_SIZE BACKWARD_PASS).toAlgorithm? = Except.ok alg := by
   simp [triton_rope_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
+noncomputable def tritonRopeSurfaceValue
+    (s : BlockState) (q_ptr k_ptr cos sin out : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (BACKWARD_PASS : Bool) (offset : Nat) : ℝ :=
+  match exec (triton_rope_surface q_ptr k_ptr cos sin q_row_stride
+      k_row_stride cos_row_stride sin_row_stride sl bs n_qh n_kh hd
+      pad_n_qh pad_n_kh pad_hd BLOCK_SIZE BACKWARD_PASS) s with
+  | some s' => s'.readMem out offset
+  | none => 0.0
+
+theorem triton_rope_surface_output_compute_correct
+    {ι : Type} (q_ptr k_ptr cos sin out : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (BACKWARD_PASS : Bool) (s : BlockState) (offsetOf : ι → Nat) :
+    ComputeCorrect.Realizes
+      (kernel := triton_rope_surface q_ptr k_ptr cos sin q_row_stride
+        k_row_stride cos_row_stride sin_row_stride sl bs n_qh n_kh hd
+        pad_n_qh pad_n_kh pad_hd BLOCK_SIZE BACKWARD_PASS)
+      (initialState := s)
+      (write := fun i : ι => some (out, offsetOf i))
+      (expected := fun i =>
+        tritonRopeSurfaceValue s q_ptr k_ptr cos sin out q_row_stride
+          k_row_stride cos_row_stride sin_row_stride sl bs n_qh n_kh hd
+          pad_n_qh pad_n_kh pad_hd BLOCK_SIZE BACKWARD_PASS (offsetOf i)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_rope_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [tritonRopeSurfaceValue, hExec]
+
 /-- Proof-oriented one-Q-head first-half backward slice of
 `rope_backward_transform.py`'s `_triton_rope`.
 
@@ -590,7 +623,7 @@ rows have stride `8`.  The summary ties that faithful `BACKWARD_PASS=true`
 surface to the four checked output slices for Q/K first and second halves. The
 remaining #153 blocker is the `rope-head-slice-lift` from head slices to the
 full head tile. -/
-theorem rope_backward_python_backward_output_summary
+theorem rope_backward_python_backward_store_summary
     (Q K COS SIN : RegionName)
     (HEAD_IDX COS_ROW_IDX : Nat)
     (s : BlockState) :
@@ -638,6 +671,75 @@ theorem rope_backward_python_backward_output_summary
       128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true
   · exact rope_backward_python_test_shape_all_outputs_compute_correct
       Q K COS SIN HEAD_IDX COS_ROW_IDX s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem rope_backward_python_backward_output_summary
+    (Q K COS SIN : RegionName)
+    (s : BlockState) (qOffsetOf kOffsetOf : PUnit → Nat) :
+    (∃ alg, (triton_rope_surface Q K COS SIN
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_rope_surface Q K COS SIN
+        128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true)
+      (initialState := s)
+      (write := fun i : PUnit => some (Q, qOffsetOf i))
+      (expected := fun i : PUnit =>
+        tritonRopeSurfaceValue s Q K COS SIN Q
+          128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true (qOffsetOf i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_rope_surface Q K COS SIN
+        128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true)
+      (initialState := s)
+      (write := fun i : PUnit => some (K, kOffsetOf i))
+      (expected := fun i : PUnit =>
+        tritonRopeSurfaceValue s Q K COS SIN K
+          128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true (kOffsetOf i))) := by
+  constructor
+  · exact triton_rope_surface_toAlgorithm_supported Q K COS SIN
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true
+  constructor
+  · exact triton_rope_surface_output_compute_correct Q K COS SIN Q
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true s qOffsetOf
+  · exact triton_rope_surface_output_compute_correct Q K COS SIN K
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.true s kOffsetOf
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /-! ## Full-kernel Q first-half store correctness (`BACKWARD_PASS = true`)
 

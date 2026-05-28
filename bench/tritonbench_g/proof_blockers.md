@@ -86,12 +86,10 @@ The #191 layer-norm backward residual/recompute paths now connect the checked
 Python test-shape outputs to the full backward surface for DX, recomputed Y,
 and partial DW/DB, so the affected `layer_norm_ops.py` summaries are
 full-value candidates.
-The broad #153 rotary/cache bucket has also been split into narrower value
-proof follow-ups. The rotary 2D tile rows and the forward rope-transform row
-are now discharged: their checked surfaces connect to full-surface output
-readbacks. The remaining `rope-head-slice-lift` row covers a RoPE backward
-summary whose Python surface is faithful but whose value proof is still stated
-over Q/K head slices.
+The broad #153 rotary/cache bucket is now discharged. The rotary 2D tile rows,
+forward rope-transform row, and backward rope-transform row connect their
+checked surfaces to full-surface output readbacks and are full-value candidates
+in `proof_gap_manifest.tsv`.
 The explicit blocked-output summaries formerly tracked by the broad #152
 `semantic-blocker` bucket are all quantization `llrint` / int8-cast blockers
 and now track under the open #154 `fixed-width-int8-cast-semantics` family.
