@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 138 as conservative
-  `full_value_candidate`, 30 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 139 as conservative
+  `full_value_candidate`, 29 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a currently open
   follow-up issue and blocker family in `proof_gap_manifest.tsv`.
   The #148 matmul/dot rows are upgraded to full-value candidates by connecting
@@ -77,7 +77,7 @@ surface.
   Bloom token-softmax case-1 summaries, the softmax-reduceV summary, and the
   reduce-V, Mistral, and LLaMA2 token-attention case-1 summaries are also
   upgraded by connecting the checked probability/output directly to their full
-  Python-shape surfaces. The 20
+  Python-shape surfaces. The 19
   remaining #162 rows are split into forward online
   softmax recurrence and score/probability reduction obligations. The #151
   rows now split into the now-discharged #190 chunk-delta forward
