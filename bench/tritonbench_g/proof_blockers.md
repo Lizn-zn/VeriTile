@@ -38,9 +38,11 @@ checked surfaces to full-surface output readbacks.
 The broad #149 attention/softmax bucket has been split as well:
 `attention-final-store-lift` tracks summaries that still connect a faithful
 surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
-tiles under #161, while the remaining #162 rows now track
+tiles under #161, while the remaining #162 row now tracks
 `attention-forward-online-softmax-recurrence`. The `triton_attention.py` forward
 row now connects `Out`, `L`, and `M` readbacks to the full forward surface.
+Flash-attention case 2 now connects `O` and `L` readbacks to the full
+non-causal forward surface.
 All mixed-sparse attention cases now connect `Out` readbacks to the full
 mixed-sparse forward surface.
 The lightning-attention row now connects `Out`/`DQ`/`DK`/`DV` readbacks to
@@ -64,7 +66,7 @@ obligations: the now-discharged
 the now-discharged `dense-attention-acc-store` (#166), whose remaining
 Q/K/V streaming-softmax `Acc`/`L` producer proof is now discharged by
 `dense-attention-online-softmax-recurrence` (#199),
-`context-attention-mistral-sliding-window-acc-store` (#167),
+the now-discharged `context-attention-mistral-sliding-window-acc-store` (#167),
 `context-attention-nopad-varlen-acc-store` (#167), and
 `flash-decode-normalized-vector-store` (#168).
 The #168 flash-decode normalized-vector bucket has been split into
