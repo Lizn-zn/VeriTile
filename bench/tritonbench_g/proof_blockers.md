@@ -40,7 +40,9 @@ surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Pro
 tiles under #161, while the #162 rows now split further into
 `attention-forward-online-softmax-recurrence`,
 `attention-score-probability-reduction`, `attention-context-decode-reduction`,
-`token-attention-reduction`, and `attention-backward-score-reduction`.
+`token-attention-reduction`, and `attention-backward-score-reduction`. The
+LLaMA token-softmax case-1 row is now discharged by connecting the checked
+probability output directly to the full Python-shape softmax surface.
 The broad #151 reduction/layernorm aggregation bucket has been split into
 narrower follow-ups: the now-discharged
 `chunk-delta-forward-recurrence-store` (#190) connects the two chunk-delta
