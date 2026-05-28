@@ -241,6 +241,54 @@ theorem softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
   exact softmax_reducev_surface_toAlgorithm_supported Logics V Out BLoc
     BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 0
 
+noncomputable def softmaxReducevSurfaceValue
+    (s : BlockState) (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat)
+    (max_input_len
+      stride_logic_h stride_logic_bs
+      stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od
+      stride_b_loc_b stride_b_loc_s
+      BLOCK_DMODEL BLOCK_N : Nat)
+    (other_kv_index : Int) (offset : Nat) : ℝ :=
+  match exec (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      max_input_len stride_logic_h stride_logic_bs stride_vbs stride_vh
+      stride_vd stride_obs stride_oh stride_od stride_b_loc_b stride_b_loc_s
+      BLOCK_DMODEL BLOCK_N other_kv_index) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem softmax_reducev_surface_output_compute_correct
+    (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat)
+    (max_input_len
+      stride_logic_h stride_logic_bs
+      stride_vbs stride_vh stride_vd
+      stride_obs stride_oh stride_od
+      stride_b_loc_b stride_b_loc_s
+      BLOCK_DMODEL BLOCK_N : Nat)
+    (other_kv_index : Int) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+        max_input_len stride_logic_h stride_logic_bs stride_vbs stride_vh
+        stride_vd stride_obs stride_oh stride_od stride_b_loc_b stride_b_loc_s
+        BLOCK_DMODEL BLOCK_N other_kv_index)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_DMODEL =>
+        some (Out, outOffset s stride_obs stride_oh stride_od i))
+      (expected := fun i =>
+        softmaxReducevSurfaceValue s Logics V Out BLoc BStartLoc BSeqLen
+          max_input_len stride_logic_h stride_logic_bs stride_vbs stride_vh
+          stride_vd stride_obs stride_oh stride_od stride_b_loc_b
+          stride_b_loc_s BLOCK_DMODEL BLOCK_N other_kv_index
+          (outOffset s stride_obs stride_oh stride_od i)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [softmax_reducev_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [softmaxReducevSurfaceValue, hExec]
+
 /-- Public Python case coverage summary: the full checked surface lowers for
 both sentinel choices, and the final normalized `o` vector writeback realizes
 the Python output shape. -/
@@ -269,11 +317,69 @@ theorem softmax_reducev_python_test_shape_output_surface_summary
   · exact softmax_reducev_python_test_shape_final_output_compute_correct
       Acc ESum Out s
 
-/-- `output_summary` alias for the Python reduce-V softmax path. -/
-abbrev softmax_reducev_python_test_shape_output_summary
+/-- Python reduce-V softmax final-store coverage. -/
+abbrev softmax_reducev_python_test_shape_store_summary
     (Logics V Acc ESum Out : RegionName) (BLoc : Region .int)
     (BStartLoc BSeqLen : Region .nat) (s : BlockState) :=
   softmax_reducev_python_test_shape_output_surface_summary
     Logics V Acc ESum Out BLoc BStartLoc BSeqLen s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem softmax_reducev_python_test_shape_output_summary
+    (Logics V Out : RegionName) (BLoc : Region .int)
+    (BStartLoc BSeqLen : Region .nat) (s : BlockState) :
+    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+        128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1))
+      (initialState := s)
+      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
+      (expected := fun i : Fin 64 =>
+        softmaxReducevSurfaceValue s Logics V Out BLoc BStartLoc BSeqLen
+          128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)
+          (outOffset s 128 64 1 i))) ∧
+    (∃ alg, (softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+      128 256 1 8192 64 1 128 64 1 128 1 64 64 0).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+        128 256 1 8192 64 1 128 64 1 128 1 64 64 0)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (Out, outOffset s 128 64 1 i))
+      (expected := fun i : Fin 64 =>
+        softmaxReducevSurfaceValue s Logics V Out BLoc BStartLoc BSeqLen
+          128 256 1 8192 64 1 128 64 1 128 1 64 64 0
+          (outOffset s 128 64 1 i))) := by
+  constructor
+  · exact softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported
+      Logics V Out BLoc BStartLoc BSeqLen
+  constructor
+  · exact softmax_reducev_surface_output_compute_correct Logics V Out BLoc
+      BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1) s
+  constructor
+  · exact softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported
+      Logics V Out BLoc BStartLoc BSeqLen
+  · exact softmax_reducev_surface_output_compute_correct Logics V Out BLoc
+      BStartLoc BSeqLen 128 256 1 8192 64 1 128 64 1 128 1 64 64 0 s
 
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
