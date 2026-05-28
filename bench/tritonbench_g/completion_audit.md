@@ -85,10 +85,10 @@ surface.
   residual/recompute aggregation paths. The #152
   blocked summaries now migrate to the open #154
   `fixed-width-int8-cast-semantics` issue because their concrete blocker is
-  CUDA `llrint` / int8-cast semantics; the 3 remaining #153 rows split into
-  `rope-head-slice-lift` for RoPE Q/K head-slice value proofs and
-  `rotary-2d-tile-value-lift` for the remaining rotary `o0`/`o1` proof that
-  still needs the full `[BLOCK_M, BLOCK_HALF]` 2D tile lift. The 2 remaining #167
+  CUDA `llrint` / int8-cast semantics; the 2 remaining #153 rows are
+  `rope-head-slice-lift` RoPE Q/K head-slice value proofs. The rotary-transform
+  and rotary-transform-ops rows now connect their checked surfaces to
+  full-surface output readbacks. The 2 remaining #167
   context-attention rows split into Mistral sliding-window accumulator-to-store
   and nopad variable-length accumulator-to-store obligations. The #166 dense-attention
   final-store rows now include the `acc / l_i[:, None]` normalization in the
@@ -125,7 +125,7 @@ translation-scope marker, it must be covered by `proof_blockers.md`, and
 The current proof-gap blocker set is exactly the non-full rows in
 `proof_gap_manifest.tsv`: #162 has 18 attention recurrence/reduction rows,
 #154 has 13 fixed-width int8 blocked
-summaries, #153 has 3 RoPE/rotary tile-lift rows, #94 has 4 reverse-cumsum
+summaries, #153 has 2 RoPE head-slice rows, #94 has 4 reverse-cumsum
 directional-scan rows, and #167 has 2 context-attention accumulator-store
 rows.
 
