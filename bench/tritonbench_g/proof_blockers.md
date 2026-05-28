@@ -32,9 +32,9 @@ HGRN, and RWKV recurrent state summaries to their full producer surfaces,
 the now-discharged `gla-output-tile-producer` (#188) tracks
 `chunk_gla_simple.py` summaries whose proof used to start from a precomputed
 output tile, and
-`reverse-cumsum-directional-scan` (#94) tracks reverse cumsum direction
-semantics. The reversed-cumsum case 2, case 3, and case 4 rows now connect
-the checked surfaces to full-surface output readbacks.
+the now-discharged `reverse-cumsum-directional-scan` (#94) tracks reverse
+cumsum direction semantics. All reversed-cumsum case rows now connect the
+checked surfaces to full-surface output readbacks.
 The broad #149 attention/softmax bucket has been split as well:
 `attention-final-store-lift` tracks summaries that still connect a faithful
 surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
