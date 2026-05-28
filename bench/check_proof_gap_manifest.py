@@ -124,7 +124,19 @@ class Summary:
 
 def context_for(lines: list[str], idx: int) -> str:
     start = max(0, idx - 18)
+    for j in range(idx - 1, start - 1, -1):
+        if SUMMARY_RE.search(lines[j]):
+            start = j + 1
+            break
+    for j in range(idx - 1, start - 1, -1):
+        if lines[j].lstrip().startswith("/--"):
+            start = j
+            break
     end = min(len(lines), idx + 38)
+    for j in range(idx + 1, end):
+        if SUMMARY_RE.search(lines[j]):
+            end = j
+            break
     return "\n".join(lines[start:end])
 
 
