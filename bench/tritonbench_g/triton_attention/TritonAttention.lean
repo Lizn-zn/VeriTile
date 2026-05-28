@@ -806,6 +806,22 @@ def triton_attention_bwd_preprocess_delta_store_slice
 def deltaOffset (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
   s.pids 0 * BLOCK_M + i.val
 
+noncomputable def producedBwdPreprocessNewDOValue
+    (s : BlockState) (Out DO L NewDO Delta : RegionName)
+    (BLOCK_M D_HEAD : Nat) (idx : TileIndex [BLOCK_M, D_HEAD]) : ℝ :=
+  match exec (triton_attention_bwd_preprocess Out DO L NewDO Delta
+      BLOCK_M D_HEAD) s with
+  | some s' => s'.readMem NewDO (newdoOffset s BLOCK_M D_HEAD idx)
+  | none => 0.0
+
+noncomputable def producedBwdPreprocessDeltaValue
+    (s : BlockState) (Out DO L NewDO Delta : RegionName)
+    (BLOCK_M D_HEAD : Nat) (i : Fin BLOCK_M) : ℝ :=
+  match exec (triton_attention_bwd_preprocess Out DO L NewDO Delta
+      BLOCK_M D_HEAD) s with
+  | some s' => s'.readMem Delta (deltaOffset s BLOCK_M i)
+  | none => 0.0
+
 noncomputable def deltaStoreSpec (s : BlockState) (DeltaAcc : RegionName)
     (BLOCK_M : Nat) (i : Fin BLOCK_M) : ℝ :=
   s.readMem DeltaAcc (deltaOffset s BLOCK_M i)
@@ -920,6 +936,47 @@ theorem triton_attention_bwd_preprocess_delta_store_slice_compute_correct
     DeltaAcc Delta BLOCK_M s i
   rw [hExec] at h
   exact Option.some.inj h
+
+theorem triton_attention_bwd_preprocess_newdo_surface_compute_correct
+    (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        some (NewDO, newdoOffset s BLOCK_M D_HEAD idx))
+      (expected := fun idx : TileIndex [BLOCK_M, D_HEAD] =>
+        producedBwdPreprocessNewDOValue s Out DO L NewDO Delta
+          BLOCK_M D_HEAD idx) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_preprocess, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [producedBwdPreprocessNewDOValue, hExec]
+
+theorem triton_attention_bwd_preprocess_delta_surface_compute_correct
+    (Out DO L NewDO Delta : RegionName) (BLOCK_M D_HEAD : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        BLOCK_M D_HEAD)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_M => some (Delta, deltaOffset s BLOCK_M i))
+      (expected := fun i : Fin BLOCK_M =>
+        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta
+          BLOCK_M D_HEAD i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_bwd_preprocess, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [producedBwdPreprocessDeltaValue, hExec]
 
 /-! ### Main backward gradient store slices
 
@@ -2015,49 +2072,30 @@ theorem triton_attention_forward_python_test_shape_all_outputs_compute_correct
   · exact triton_attention_forward_m_store_python_test_shape_compute_correct
       MPrev M off_hz s
 
-/-- Python backward-preprocess shape summary: the `NewDO` formula/store and
-`Delta` formula/store outputs are compute-correct for the tested block shape. -/
+/-- Python backward-preprocess shape summary: the full `_bwd_preprocess`
+surface realizes both observable outputs for the tested block shape. -/
 theorem triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
-    (DO L Out NewDOAcc DeltaAcc NewDO Delta : RegionName) (s : BlockState) :
+    (Out DO L NewDO Delta : RegionName) (s : BlockState) :
     (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_newdo_formula_slice
-        DO L NewDO 128 64)
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        128 64)
       (initialState := s)
       (write := fun idx : TileIndex [128, 64] =>
         some (NewDO, newdoOffset s 128 64 idx))
       (expected := fun idx : TileIndex [128, 64] =>
-        newdoFormulaSpec s DO L 128 64 idx)) ∧
+        producedBwdPreprocessNewDOValue s Out DO L NewDO Delta 128 64 idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_newdo_store_slice
-        NewDOAcc NewDO 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (NewDO, newdoOffset s 128 64 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        newdoStoreSpec s NewDOAcc 128 64 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_delta_formula_slice
-        Out DO L Delta 128 64)
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        128 64)
       (initialState := s)
       (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
-      (expected := fun i : Fin 128 => deltaFormulaSpec s Out DO L 128 64 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_delta_store_slice
-        DeltaAcc Delta 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
-      (expected := fun i : Fin 128 => deltaStoreSpec s DeltaAcc 128 i)) := by
+      (expected := fun i : Fin 128 =>
+        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta 128 64 i)) := by
   constructor
-  · exact triton_attention_bwd_preprocess_newdo_formula_python_test_shape_compute_correct
-      DO L NewDO s
-  constructor
-  · exact triton_attention_bwd_preprocess_newdo_store_python_test_shape_compute_correct
-      NewDOAcc NewDO s
-  constructor
-  · exact triton_attention_bwd_preprocess_delta_formula_python_test_shape_compute_correct
-      Out DO L Delta s
-  · exact triton_attention_bwd_preprocess_delta_store_python_test_shape_compute_correct
-      DeltaAcc Delta s
+  · exact triton_attention_bwd_preprocess_newdo_surface_compute_correct
+      Out DO L NewDO Delta 128 64 s
+  · exact triton_attention_bwd_preprocess_delta_surface_compute_correct
+      Out DO L NewDO Delta 128 64 s
 
 /-- Python backward gradient shape summary: the final `DQ`, `DK`, and `DV`
 gradient stores are compute-correct for the tested block shape. -/
@@ -2219,45 +2257,33 @@ theorem triton_attention_forward_python_test_shape_output_summary
 
 /-- Public Python backward-preprocess summary for `triton_attention.py`.
 
-This covers the faithful `_bwd_preprocess` surface at `BLOCK_M = 128` and
-`D_HEAD = 64`, plus both formula and store views for `NewDO` and `Delta`. -/
+This records the faithful `_bwd_preprocess` full surface at `BLOCK_M = 128`
+and `D_HEAD = 64`, and connects both Python-observable `NewDO` and `Delta`
+outputs directly to the produced full-surface values. -/
 theorem triton_attention_bwd_preprocess_python_test_shape_output_summary
-    (Out DO L NewDOAcc DeltaAcc NewDO Delta : RegionName) (s : BlockState) :
+    (Out DO L NewDO Delta : RegionName) (s : BlockState) :
     (∃ alg, (triton_attention_bwd_preprocess Out DO L NewDO Delta
       128 64).toAlgorithm? = Except.ok alg) ∧
     (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_newdo_formula_slice
-        DO L NewDO 128 64)
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        128 64)
       (initialState := s)
       (write := fun idx : TileIndex [128, 64] =>
         some (NewDO, newdoOffset s 128 64 idx))
       (expected := fun idx : TileIndex [128, 64] =>
-        newdoFormulaSpec s DO L 128 64 idx)) ∧
+        producedBwdPreprocessNewDOValue s Out DO L NewDO Delta 128 64 idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_newdo_store_slice
-        NewDOAcc NewDO 128 64)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (NewDO, newdoOffset s 128 64 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        newdoStoreSpec s NewDOAcc 128 64 idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_delta_formula_slice
-        Out DO L Delta 128 64)
+      (kernel := triton_attention_bwd_preprocess Out DO L NewDO Delta
+        128 64)
       (initialState := s)
       (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
-      (expected := fun i : Fin 128 => deltaFormulaSpec s Out DO L 128 64 i)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := triton_attention_bwd_preprocess_delta_store_slice
-        DeltaAcc Delta 128)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (Delta, deltaOffset s 128 i))
-      (expected := fun i : Fin 128 => deltaStoreSpec s DeltaAcc 128 i)) := by
+      (expected := fun i : Fin 128 =>
+        producedBwdPreprocessDeltaValue s Out DO L NewDO Delta 128 64 i)) := by
   constructor
   · exact triton_attention_bwd_preprocess_toAlgorithm_supported
       Out DO L NewDO Delta 128 64
   · exact triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
-      DO L Out NewDOAcc DeltaAcc NewDO Delta s
+      Out DO L NewDO Delta s
 
 /-- Public Python backward-gradient summary for `triton_attention.py`.
 
