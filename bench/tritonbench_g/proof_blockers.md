@@ -43,6 +43,8 @@ tiles under #161, while the remaining #162 rows now track
 row now connects `Out`, `L`, and `M` readbacks to the full forward surface.
 All mixed-sparse attention cases now connect `Out` readbacks to the full
 mixed-sparse forward surface.
+The lightning-attention row now connects `Out`/`DQ`/`DK`/`DV` readbacks to
+launched full surfaces.
 The token-attention-reduction rows
 are now discharged: the LLaMA and Bloom token-softmax case-1 rows, the
 softmax-reduceV row, and the reduce-V, Mistral, and LLaMA2 token-attention

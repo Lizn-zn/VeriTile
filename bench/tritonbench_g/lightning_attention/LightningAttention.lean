@@ -1211,7 +1211,7 @@ This ties the exact Python-launched forward/backward DSL surfaces to the
 observable result tuple `Out`, `DQ`, `DK`, and `DV`. The arithmetic loop bodies
 are preserved as surfaces; the compute-correct part remains at the existing
 masked output-slice granularity. -/
-theorem lightning_attention_python_test_shape_output_summary
+theorem lightning_attention_python_test_shape_store_summary
     (Q K V Out DO DQ DK DV OAcc OIntra OInter DQInter DQPre DKPre DVPre :
       RegionName)
     (s : BlockState) :
@@ -1236,6 +1236,221 @@ theorem lightning_attention_python_test_shape_output_summary
     exact lightning_attention_bwd_python_test_shape_all_outputs_compute_correct
       DQInter DQPre DKPre DVPre DQ DK DV s
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+noncomputable def lightningAttentionForwardSurfaceOutValue
+    (s : BlockState) (Q K V Out : RegionName)
+    (idx : TileIndex [64, 32]) : ℝ :=
+  match exec (lightning_attention_forward_surface Q K V Out
+      2 8 128 64 128 64 2 32) s with
+  | some s' => s'.readMem Out (tileOffset s 128 128 64 32 idx)
+  | none => 0.0
+
+noncomputable def lightningAttentionBwdInterDQValue
+    (s : BlockState) (Q K V DO DQ DK DV : RegionName)
+    (idx : TileIndex [64, 64]) : ℝ :=
+  match exec (lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+      2 8 128 64 128 64 2 32 2) s with
+  | some s' => s'.readMem DQ (gradTileOffset s 128 64 64 64 idx)
+  | none => 0.0
+
+noncomputable def lightningAttentionBwdInterDKValue
+    (s : BlockState) (Q K V DO DQ DK DV : RegionName)
+    (idx : TileIndex [64, 64]) : ℝ :=
+  match exec (lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+      2 8 128 64 128 64 2 32 2) s with
+  | some s' => s'.readMem DK (gradTileOffset s 128 64 64 64 idx)
+  | none => 0.0
+
+noncomputable def lightningAttentionBwdInterDVValue
+    (s : BlockState) (Q K V DO DQ DK DV : RegionName)
+    (idx : TileIndex [64, 128]) : ℝ :=
+  match exec (lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+      2 8 128 64 128 64 2 32 2) s with
+  | some s' => s'.readMem DV (gradTileOffset s 128 128 64 128 idx)
+  | none => 0.0
+
+theorem lightning_attention_forward_surface_out_python_test_shape_compute_correct
+    (Q K V Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := lightning_attention_forward_surface Q K V Out
+        2 8 128 64 128 64 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 32] => active s 128 64 idx)
+        (fun idx : TileIndex [64, 32] =>
+          (Out, tileOffset s 128 128 64 32 idx)))
+      (expected := fun idx : TileIndex [64, 32] =>
+        lightningAttentionForwardSurfaceOutValue s Q K V Out idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [lightning_attention_forward_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [lightningAttentionForwardSurfaceOutValue, hExec]
+
+theorem lightning_attention_bwd_inter_dq_python_test_shape_compute_correct
+    (Q K V DO DQ DK DV : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+        2 8 128 64 128 64 2 32 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (DQ, gradTileOffset s 128 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        lightningAttentionBwdInterDQValue s Q K V DO DQ DK DV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [lightning_attention_bwd_inter_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [lightningAttentionBwdInterDQValue, hExec]
+
+theorem lightning_attention_bwd_inter_dk_python_test_shape_compute_correct
+    (Q K V DO DQ DK DV : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+        2 8 128 64 128 64 2 32 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (DK, gradTileOffset s 128 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        lightningAttentionBwdInterDKValue s Q K V DO DQ DK DV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [lightning_attention_bwd_inter_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [lightningAttentionBwdInterDKValue, hExec]
+
+theorem lightning_attention_bwd_inter_dv_python_test_shape_compute_correct
+    (Q K V DO DQ DK DV : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+        2 8 128 64 128 64 2 32 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 128] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 128] =>
+          (DV, gradTileOffset s 128 128 64 128 idx)))
+      (expected := fun idx : TileIndex [64, 128] =>
+        lightningAttentionBwdInterDVValue s Q K V DO DQ DK DV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [lightning_attention_bwd_inter_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [lightningAttentionBwdInterDVValue, hExec]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem lightning_attention_python_test_shape_output_summary
+    (Q K V Out DO DQ DK DV : RegionName) (s : BlockState) :
+    lightning_attention_python_test_shape_surface_prop Q K V Out DO DQ DK DV ∧
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_forward_surface Q K V Out
+        2 8 128 64 128 64 2 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 32] => active s 128 64 idx)
+        (fun idx : TileIndex [64, 32] =>
+          (Out, tileOffset s 128 128 64 32 idx)))
+      (expected := fun idx : TileIndex [64, 32] =>
+        lightningAttentionForwardSurfaceOutValue s Q K V Out idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+        2 8 128 64 128 64 2 32 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (DQ, gradTileOffset s 128 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        lightningAttentionBwdInterDQValue s Q K V DO DQ DK DV idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+        2 8 128 64 128 64 2 32 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (DK, gradTileOffset s 128 64 64 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        lightningAttentionBwdInterDKValue s Q K V DO DQ DK DV idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := lightning_attention_bwd_inter_surface Q K V DO DQ DK DV
+        2 8 128 64 128 64 2 32 2)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 128] => activeGrad s 128 64 idx)
+        (fun idx : TileIndex [64, 128] =>
+          (DV, gradTileOffset s 128 128 64 128 idx)))
+      (expected := fun idx : TileIndex [64, 128] =>
+        lightningAttentionBwdInterDVValue s Q K V DO DQ DK DV idx)) := by
+  constructor
+  · constructor
+    · exact lightning_attention_forward_surface_toAlgorithm_supported Q K V Out
+        2 8 128 64 128 64 2 32
+    constructor
+    · exact lightning_attention_bwd_intra_surface_toAlgorithm_supported Q K V
+        DO DQ DK DV 2 8 128 64 128 64 2 32 2
+    · exact lightning_attention_bwd_inter_surface_toAlgorithm_supported Q K V
+        DO DQ DK DV 2 8 128 64 128 64 2 32 2
+  constructor
+  · exact lightning_attention_forward_surface_out_python_test_shape_compute_correct
+      Q K V Out s
+  constructor
+  · exact lightning_attention_bwd_inter_dq_python_test_shape_compute_correct
+      Q K V DO DQ DK DV s
+  constructor
+  · exact lightning_attention_bwd_inter_dk_python_test_shape_compute_correct
+      Q K V DO DQ DK DV s
+  · exact lightning_attention_bwd_inter_dv_python_test_shape_compute_correct
+      Q K V DO DQ DK DV s
+
 /-- Combined checked-shape summary for `test_lightning_attention2_no_decay`.
 
 This exposes the launched forward/backward surfaces, observable `Out`/`DQ`/`DK`/`DV`
@@ -1256,7 +1471,7 @@ theorem lightning_attention_python_test_shape_complete_summary
       (expected := fun idx : TileIndex [64, 64] =>
         dqInterDotSpec s DO KVTrans 64 128 64 idx) := by
   constructor
-  · exact lightning_attention_python_test_shape_output_summary Q K V Out DO DQ
+  · exact lightning_attention_python_test_shape_store_summary Q K V Out DO DQ
       DK DV OAcc OIntra OInter DQInter DQPre DKPre DVPre s
   · exact lightning_attention_bwd_dq_inter_python_test_shape_formula_summary DO
       KVTrans DQInter s
