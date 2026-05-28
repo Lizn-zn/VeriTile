@@ -208,6 +208,32 @@ noncomputable def accStoreValue
           BLOCK_M idx))
     else some (0.0 : ℝ))
 
+noncomputable def producedBloomBlock128OutValue
+    (s : BlockState)
+    (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
+      B_Prompt_Cache_Len : RegionName)
+    (idx : TileIndex [128, 128]) : ℝ :=
+  match exec (context_attn_bloom_fwd_kernel_surface Q K V
+      ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
+      B_req_idx B_Prompt_Cache_Len
+      576 96 1 576 96 1 576 96 1 576 96 1
+      7500 1 1 96 128 128 128) s with
+  | some s' => s'.readMem Out (outOffset s B_Start_Loc 576 96 1 128 idx)
+  | none => 0.0
+
+noncomputable def producedBloomBlock64OutValue
+    (s : BlockState)
+    (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
+      B_Prompt_Cache_Len : RegionName)
+    (idx : TileIndex [64, 128]) : ℝ :=
+  match exec (context_attn_bloom_fwd_kernel_surface Q K V
+      ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
+      B_req_idx B_Prompt_Cache_Len
+      576 96 1 576 96 1 576 96 1 576 96 1
+      7500 1 1 96 64 128 128) s with
+  | some s' => s'.readMem Out (outOffset s B_Start_Loc 576 96 1 64 idx)
+  | none => 0.0
+
 /-- Algorithm-layer correctness for the masked BLOOM context-attention output
 store. -/
 theorem context_attn_bloom_final_store_slice_correct
@@ -391,15 +417,67 @@ theorem context_attn_bloom_final_store_python_block64_compute_correct
     B_Seqlen B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 64 128
     s (context_attn_bloom_python_block64_offset_injective s B_Start_Loc)
 
+theorem context_attn_bloom_surface_python_block128_compute_correct
+    (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
+      B_Prompt_Cache_Len : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_bloom_fwd_kernel_surface Q K V
+        ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
+        B_req_idx B_Prompt_Cache_Len
+        576 96 1 576 96 1 576 96 1 576 96 1
+        7500 1 1 96 128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] =>
+          active s B_Seqlen B_Prompt_Cache_Len 96 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s B_Start_Loc 576 96 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        producedBloomBlock128OutValue s Q K V B_Start_Loc B_Seqlen Out
+          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_bloom_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedBloomBlock128OutValue, hExec]
+
+theorem context_attn_bloom_surface_python_block64_compute_correct
+    (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
+      B_Prompt_Cache_Len : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_bloom_fwd_kernel_surface Q K V
+        ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
+        B_req_idx B_Prompt_Cache_Len
+        576 96 1 576 96 1 576 96 1 576 96 1
+        7500 1 1 96 64 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 128] =>
+          active s B_Seqlen B_Prompt_Cache_Len 96 64 idx)
+        (fun idx : TileIndex [64, 128] =>
+          (Out, outOffset s B_Start_Loc 576 96 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 128] =>
+        producedBloomBlock64OutValue s Q K V B_Start_Loc B_Seqlen Out
+          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_bloom_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedBloomBlock64OutValue, hExec]
+
 /-- Public Python test-shape summary for `context_attn_bloom.py`.
 
 This records the faithful full BLOOM `_fwd_kernel` surface for the checked
-layout and both Python launcher block-size branches, then ties those surfaces
-to the observable final `Out` writeback slices. The streaming attention
-accumulator is represented by the proof-oriented `Acc` tile in the store
-slice. -/
+layout and both Python launcher block-size branches, with the observable final
+`Out` writes connected directly to the produced full-surface values. -/
 theorem context_attn_bloom_python_test_shape_output_summary
-    (Q K V Acc B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
+    (Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
       B_Prompt_Cache_Len Out : RegionName) (s : BlockState) :
     (∃ alg, (context_attn_bloom_fwd_kernel_surface Q K V
       ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
@@ -412,8 +490,11 @@ theorem context_attn_bloom_python_test_shape_output_summary
       576 96 1 576 96 1 576 96 1 576 96 1
       7500 1 1 96 64 128 128).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := context_attn_bloom_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 128 128)
+      (kernel := context_attn_bloom_fwd_kernel_surface Q K V
+        ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
+        B_req_idx B_Prompt_Cache_Len
+        576 96 1 576 96 1 576 96 1 576 96 1
+        7500 1 1 96 128 128 128)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [128, 128] =>
@@ -421,11 +502,14 @@ theorem context_attn_bloom_python_test_shape_output_summary
         (fun idx : TileIndex [128, 128] =>
           (Out, outOffset s B_Start_Loc 576 96 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 96 288000 96 576 1
-          128 idx) ∧
+        producedBloomBlock128OutValue s Q K V B_Start_Loc B_Seqlen Out
+          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) ∧
     ComputeCorrect.Realizes
-      (kernel := context_attn_bloom_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out 96 288000 96 576 1 576 96 1 64 128)
+      (kernel := context_attn_bloom_fwd_kernel_surface Q K V
+        ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
+        B_req_idx B_Prompt_Cache_Len
+        576 96 1 576 96 1 576 96 1 576 96 1
+        7500 1 1 96 64 128 128)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [64, 128] =>
@@ -433,8 +517,8 @@ theorem context_attn_bloom_python_test_shape_output_summary
         (fun idx : TileIndex [64, 128] =>
           (Out, outOffset s B_Start_Loc 576 96 1 64 idx)))
       (expected := fun idx : TileIndex [64, 128] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 96 288000 96 576 1
-          64 idx) := by
+        producedBloomBlock64OutValue s Q K V B_Start_Loc B_Seqlen Out
+          Req_to_tokens B_req_idx B_Prompt_Cache_Len idx) := by
   constructor
   · exact context_attn_bloom_fwd_kernel_surface_toAlgorithm_supported Q K V
       ((Real.sqrt (96 : ℝ))⁻¹) B_Start_Loc B_Seqlen Out Req_to_tokens
@@ -446,9 +530,9 @@ theorem context_attn_bloom_python_test_shape_output_summary
       B_req_idx B_Prompt_Cache_Len 576 96 1 576 96 1 576 96 1 576 96 1
       7500 1 1 96 64 128 128
   constructor
-  · exact context_attn_bloom_final_store_python_block128_compute_correct Acc
-      B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out s
-  · exact context_attn_bloom_final_store_python_block64_compute_correct Acc
-      B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out s
+  · exact context_attn_bloom_surface_python_block128_compute_correct Q K V
+      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len s
+  · exact context_attn_bloom_surface_python_block64_compute_correct Q K V
+      B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx B_Prompt_Cache_Len s
 
 end VeriTile.Bench.TritonBenchG.ContextAttnBloom
