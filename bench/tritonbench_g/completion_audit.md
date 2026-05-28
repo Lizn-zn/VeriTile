@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 157 as conservative
-  `full_value_candidate`, 11 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 159 as conservative
+  `full_value_candidate`, 9 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a currently open
   follow-up issue and blocker family in `proof_gap_manifest.tsv`.
   The #148 matmul/dot rows are upgraded to full-value candidates by connecting
@@ -77,7 +77,7 @@ surface.
   Bloom token-softmax case-1 summaries, the softmax-reduceV summary, and the
   reduce-V, Mistral, and LLaMA2 token-attention case-1 summaries are also
   upgraded by connecting the checked probability/output directly to their full
-  Python-shape surfaces. The 9
+  Python-shape surfaces. The 7
   remaining #162 rows are split into forward online
   softmax recurrence and score/probability reduction obligations. The #151
   rows now split into the now-discharged #190 chunk-delta forward
@@ -98,8 +98,8 @@ surface.
   to a full-value candidate by connecting checked O/H outputs directly to the
   full Python-shape surface. The `triton_attention.py` forward row now reads
   back Python-observable `Out`, `L`, and `M` stores from the full forward
-  surface. The mixed-sparse attention case 4 row now reads back `Out` from the
-  full mixed-sparse forward surface. The #150 rows now split into
+  surface. The mixed-sparse attention case 3 and case 4 rows now read back
+  `Out` from the full mixed-sparse forward surface. The #150 rows now split into
   the now-discharged #185 chunk cumsum carry folds, the now-discharged #186
   decay cumsum scan folds, the now-discharged #187 recurrent state loop folds,
   the now-discharged #188 GLA output tile producers, and the now-discharged #94
@@ -127,7 +127,7 @@ translation-surface blocker remains. If a future Lean port reintroduces a
 translation-scope marker, it must be covered by `proof_blockers.md`, and
 `bench/audit_tritonbench_g.sh` enforces that coverage.
 The current proof-gap blocker set is exactly the non-full rows in
-`proof_gap_manifest.tsv`: #162 has 9 attention recurrence/reduction rows,
+`proof_gap_manifest.tsv`: #162 has 7 attention recurrence/reduction rows,
 #154 has 13 fixed-width int8 blocked
 summaries, and #167 has 2 context-attention accumulator-store
 rows.

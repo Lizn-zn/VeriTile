@@ -303,8 +303,10 @@ theorem block_sparse_attn_output_store_slice_correct
     else s.readMem Out (offsetFn idx)
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
   by_cases hActive : s.pids 0 * BLOCK_M + idx.1.val < total_seq_len
-  · rfl
-  · rfl
+  · simp [P, valueFn, accStoreValue, active, accOffset, offB, offH, mIndex,
+      dIndex, hActive]
+  · simp [P, valueFn, accStoreValue, active, accOffset, offB, offH, mIndex,
+      dIndex, hActive]
 
 /-- Compute-facing correctness for the first block-sparse output store. -/
 theorem block_sparse_attn_output_store_slice_compute_correct
@@ -536,8 +538,8 @@ theorem block_sparse_attn_case1_surface_first_output_compute_correct
           layoutCols idx) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
+  · simp [ComputeKernel.toAlgKernel, block_sparse_attention_kernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro idx _hActive
@@ -560,8 +562,8 @@ theorem block_sparse_attn_case1_surface_second_output_compute_correct
           layoutCols idx) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [block_sparse_attention_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
+  · simp [ComputeKernel.toAlgKernel, block_sparse_attention_kernel,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
   intro idx _hActive
