@@ -74,7 +74,7 @@ surface.
   The #148 matmul/dot rows are upgraded to full-value candidates by connecting
   GEMV, BMM, dequantization, IV-dependent matmul, plain matmul, activation-tail,
   and TMA summaries directly to their full Python-shape surfaces. The LLaMA and
-  Bloom token-softmax case-1 summaries plus the reduce-V and Mistral
+  Bloom token-softmax case-1 summaries plus the reduce-V, Mistral, and LLaMA2
   token-attention case-1 summaries are also upgraded by connecting the checked
   probability/output directly to their full Python-shape surfaces. The 26
   remaining #162 rows are split into forward online
@@ -123,7 +123,7 @@ translation-surface blocker remains. If a future Lean port reintroduces a
 translation-scope marker, it must be covered by `proof_blockers.md`, and
 `bench/audit_tritonbench_g.sh` enforces that coverage.
 The current proof-gap blocker set is exactly the non-full rows in
-`proof_gap_manifest.tsv`: #162 has 27 attention recurrence/reduction rows,
+`proof_gap_manifest.tsv`: #162 has 26 attention recurrence/reduction rows,
 #154 has 13 fixed-width int8 blocked
 summaries, #153 has 4 RoPE/rotary tile-lift rows, #94 has 4 reverse-cumsum
 directional-scan rows, and #167 has 2 context-attention accumulator-store

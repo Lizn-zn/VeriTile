@@ -310,6 +310,49 @@ theorem token_attn_llama2_score_store_python_max32_compute_correct
     B_Start_Loc B_Seqlen Att_Out 32 128 32 128 32 32 s
     (token_attn_llama2_python_max32_offset_injective s B_Start_Loc)
 
+noncomputable def tokenAttnLlama2SurfaceValue
+    (s : BlockState) (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
+    (max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd att_stride_h att_stride_bs kv_group_num
+      BLOCK_DMODEL BLOCK_N offset : Nat) : ℝ :=
+  match exec (token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+      B_Seqlen Att_Out max_input_len stride_b_loc_b stride_b_loc_s stride_qbs
+      stride_qh stride_qd stride_kbs stride_kh stride_kd att_stride_h
+      att_stride_bs kv_group_num BLOCK_DMODEL BLOCK_N) s with
+  | some s' => s'.readMem Att_Out offset
+  | none => 0.0
+
+theorem token_attn_llama2_surface_output_compute_correct
+    (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
+    (max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd att_stride_h att_stride_bs kv_group_num
+      BLOCK_DMODEL BLOCK_N : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+        B_Seqlen Att_Out max_input_len stride_b_loc_b stride_b_loc_s stride_qbs
+        stride_qh stride_qd stride_kbs stride_kh stride_kd att_stride_h
+        att_stride_bs kv_group_num BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => active s B_Seqlen max_input_len BLOCK_N i)
+        (fun i => (Att_Out, outOffset s B_Start_Loc att_stride_h att_stride_bs BLOCK_N i)))
+      (expected := fun i =>
+        tokenAttnLlama2SurfaceValue s Q K sm_scale B_Loc B_Start_Loc
+          B_Seqlen Att_Out max_input_len stride_b_loc_b stride_b_loc_s
+          stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+          att_stride_h att_stride_bs kv_group_num BLOCK_DMODEL BLOCK_N
+          (outOffset s B_Start_Loc att_stride_h att_stride_bs BLOCK_N i)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [token_attn_llama2_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i _hActive
+  simp [tokenAttnLlama2SurfaceValue, hExec]
+
 /-- Python case 1 full score surface lowering for `max_input_len = 64` and
 `d_model = 32`. -/
 theorem token_attn_llama2_python_case1_surface_toAlgorithm_supported
@@ -448,32 +491,151 @@ theorem token_attn_llama2_python_case4_output_surface_summary
   · exact token_attn_llama2_score_store_python_max64_compute_correct
       AttValue B_Start_Loc B_Seqlen Att_Out s
 
-/-- `output_summary` alias for Python LLaMA2 token-attention case 1. -/
-abbrev token_attn_llama2_python_case1_output_summary
+/-- Python LLaMA2 token-attention case 1 score-store coverage. -/
+abbrev token_attn_llama2_python_case1_store_summary
     (Q K AttValue Att_Out : RegionName) (sm_scale : ℝ)
     (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :=
   token_attn_llama2_python_case1_output_surface_summary
     Q K AttValue Att_Out sm_scale B_Loc B_Start_Loc B_Seqlen s
 
-/-- `output_summary` alias for Python LLaMA2 token-attention case 2. -/
-abbrev token_attn_llama2_python_case2_output_summary
+/-- Python LLaMA2 token-attention case 2 score-store coverage. -/
+abbrev token_attn_llama2_python_case2_store_summary
     (Q K AttValue Att_Out : RegionName) (sm_scale : ℝ)
     (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :=
   token_attn_llama2_python_case2_output_surface_summary
     Q K AttValue Att_Out sm_scale B_Loc B_Start_Loc B_Seqlen s
 
-/-- `output_summary` alias for Python LLaMA2 token-attention case 3. -/
-abbrev token_attn_llama2_python_case3_output_summary
+/-- Python LLaMA2 token-attention case 3 score-store coverage. -/
+abbrev token_attn_llama2_python_case3_store_summary
     (Q K AttValue Att_Out : RegionName) (sm_scale : ℝ)
     (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :=
   token_attn_llama2_python_case3_output_surface_summary
     Q K AttValue Att_Out sm_scale B_Loc B_Start_Loc B_Seqlen s
 
-/-- `output_summary` alias for Python LLaMA2 token-attention case 4. -/
-abbrev token_attn_llama2_python_case4_output_summary
+/-- Python LLaMA2 token-attention case 4 score-store coverage. -/
+abbrev token_attn_llama2_python_case4_store_summary
     (Q K AttValue Att_Out : RegionName) (sm_scale : ℝ)
     (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :=
   token_attn_llama2_python_case4_output_surface_summary
     Q K AttValue Att_Out sm_scale B_Loc B_Start_Loc B_Seqlen s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem token_attn_llama2_python_case1_output_summary
+    (Q K Att_Out : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :
+    (∃ alg, (token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+      B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+        B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => active s B_Seqlen 64 32 i)
+        (fun i : Fin 32 =>
+          (Att_Out, outOffset s B_Start_Loc 256 64 32 i)))
+      (expected := fun i : Fin 32 =>
+        tokenAttnLlama2SurfaceValue s Q K sm_scale B_Loc B_Start_Loc
+          B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32
+          (outOffset s B_Start_Loc 256 64 32 i))) := by
+  constructor
+  · exact token_attn_llama2_python_case1_surface_toAlgorithm_supported
+      Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out
+  · exact token_attn_llama2_surface_output_compute_correct Q K sm_scale
+      B_Loc B_Start_Loc B_Seqlen Att_Out 64 64 1 8192 2048 32
+      8192 2048 32 256 64 1 32 32 s
+
+theorem token_attn_llama2_python_case2_output_summary
+    (Q K Att_Out : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :
+    (∃ alg, (token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+      B_Seqlen Att_Out 32 64 1 8192 2048 32 8192 2048 32 128 32 1 32 32).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+        B_Seqlen Att_Out 32 64 1 8192 2048 32 8192 2048 32 128 32 1 32 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => active s B_Seqlen 32 32 i)
+        (fun i : Fin 32 =>
+          (Att_Out, outOffset s B_Start_Loc 128 32 32 i)))
+      (expected := fun i : Fin 32 =>
+        tokenAttnLlama2SurfaceValue s Q K sm_scale B_Loc B_Start_Loc
+          B_Seqlen Att_Out 32 64 1 8192 2048 32 8192 2048 32 128 32 1 32 32
+          (outOffset s B_Start_Loc 128 32 32 i))) := by
+  constructor
+  · exact token_attn_llama2_python_case2_surface_toAlgorithm_supported
+      Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out
+  · exact token_attn_llama2_surface_output_compute_correct Q K sm_scale
+      B_Loc B_Start_Loc B_Seqlen Att_Out 32 64 1 8192 2048 32
+      8192 2048 32 128 32 1 32 32 s
+
+theorem token_attn_llama2_python_case3_output_summary
+    (Q K Att_Out : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :
+    (∃ alg, (token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+      B_Seqlen Att_Out 64 64 1 16384 4096 64 16384 4096 64 256 64 1 64 32).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+        B_Seqlen Att_Out 64 64 1 16384 4096 64 16384 4096 64 256 64 1 64 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => active s B_Seqlen 64 32 i)
+        (fun i : Fin 32 =>
+          (Att_Out, outOffset s B_Start_Loc 256 64 32 i)))
+      (expected := fun i : Fin 32 =>
+        tokenAttnLlama2SurfaceValue s Q K sm_scale B_Loc B_Start_Loc
+          B_Seqlen Att_Out 64 64 1 16384 4096 64 16384 4096 64 256 64 1 64 32
+          (outOffset s B_Start_Loc 256 64 32 i))) := by
+  constructor
+  · exact token_attn_llama2_python_case3_surface_toAlgorithm_supported
+      Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out
+  · exact token_attn_llama2_surface_output_compute_correct Q K sm_scale
+      B_Loc B_Start_Loc B_Seqlen Att_Out 64 64 1 16384 4096 64
+      16384 4096 64 256 64 1 64 32 s
+
+theorem token_attn_llama2_python_case4_output_summary
+    (Q K Att_Out : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (s : BlockState) :
+    (∃ alg, (token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+      B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc
+        B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 32 => active s B_Seqlen 64 32 i)
+        (fun i : Fin 32 =>
+          (Att_Out, outOffset s B_Start_Loc 256 64 32 i)))
+      (expected := fun i : Fin 32 =>
+        tokenAttnLlama2SurfaceValue s Q K sm_scale B_Loc B_Start_Loc
+          B_Seqlen Att_Out 64 64 1 8192 2048 32 8192 2048 32 256 64 1 32 32
+          (outOffset s B_Start_Loc 256 64 32 i))) := by
+  constructor
+  · exact token_attn_llama2_python_case4_surface_toAlgorithm_supported
+      Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out
+  · exact token_attn_llama2_surface_output_compute_correct Q K sm_scale
+      B_Loc B_Start_Loc B_Seqlen Att_Out 64 64 1 8192 2048 32
+      8192 2048 32 256 64 1 32 32 s
 
 end VeriTile.Bench.TritonBenchG.TokenAttnLlama2
