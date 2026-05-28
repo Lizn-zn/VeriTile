@@ -492,9 +492,8 @@ theorem flash_attn_python_case2_surface_toAlgorithm_supported
     16384 8192 64 1
     2 2 128 128 64 64 Bool.false
 
-/-- Public Python case 1 coverage summary: full causal surface plus the
-observable output and `L` row stores. -/
-theorem flash_attn_python_case1_output_summary
+/-- Python case 1 store-slice coverage retained for the final-store proof. -/
+theorem flash_attn_python_case1_store_summary
     (Q K V L O OutBuffer Max Denom : RegionName) (s : BlockState) :
     (∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
       16384 8192 64 1
@@ -663,5 +662,110 @@ theorem flash_attn_python_case2_output_summary
   constructor
   · exact flash_attn_python_case2_surface_o_compute_correct Q K V L O s
   · exact flash_attn_python_case2_surface_l_compute_correct Q K V L O s
+
+noncomputable def flashAttnCase1SurfaceOValue
+    (s : BlockState) (Q K V L O : RegionName)
+    (idx : TileIndex [128, 64]) : ℝ :=
+  match exec (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      2 2 128 128 64 64 Bool.true) s with
+  | some s' => s'.readMem O (outOffset s 8192 64 1 128 idx)
+  | none => 0.0
+
+noncomputable def flashAttnCase1SurfaceLValue
+    (s : BlockState) (Q K V L O : RegionName) (i : Fin 128) : ℝ :=
+  match exec (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      2 2 128 128 64 64 Bool.true) s with
+  | some s' => s'.readMem L (lOffset s 128 128 i)
+  | none => 0.0
+
+theorem flash_attn_python_case1_surface_o_compute_correct
+    (Q K V L O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1
+        16384 8192 64 1
+        16384 8192 64 1
+        16384 8192 64 1
+        2 2 128 128 64 64 Bool.true)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (O, outOffset s 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        flashAttnCase1SurfaceOValue s Q K V L O idx) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [flashAttnCase1SurfaceOValue, hExec]
+
+theorem flash_attn_python_case1_surface_l_compute_correct
+    (Q K V L O : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1
+        16384 8192 64 1
+        16384 8192 64 1
+        16384 8192 64 1
+        2 2 128 128 64 64 Bool.true)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
+      (expected := fun i : Fin 128 =>
+        flashAttnCase1SurfaceLValue s Q K V L O i) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [flashAttnCase1SurfaceLValue, hExec]
+
+/-- Public Python case 1 coverage summary for the full causal surface. -/
+theorem flash_attn_python_case1_output_summary
+    (Q K V L O : RegionName) (s : BlockState) :
+    (∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      16384 8192 64 1
+      2 2 128 128 64 64 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1
+        16384 8192 64 1
+        16384 8192 64 1
+        16384 8192 64 1
+        2 2 128 128 64 64 Bool.true)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (O, outOffset s 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        flashAttnCase1SurfaceOValue s Q K V L O idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1
+        16384 8192 64 1
+        16384 8192 64 1
+        16384 8192 64 1
+        2 2 128 128 64 64 Bool.true)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
+      (expected := fun i : Fin 128 =>
+        flashAttnCase1SurfaceLValue s Q K V L O i)) := by
+  constructor
+  · exact flash_attn_python_case1_surface_toAlgorithm_supported Q K V L O
+  constructor
+  · exact flash_attn_python_case1_surface_o_compute_correct Q K V L O s
+  · exact flash_attn_python_case1_surface_l_compute_correct Q K V L O s
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
