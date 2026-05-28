@@ -193,6 +193,30 @@ noncomputable def accStoreValue
           BLOCK_M idx))
     else some (0.0 : ℝ))
 
+noncomputable def producedContextFwdBlock128OutValue
+    (s : BlockState)
+    (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (idx : TileIndex [128, 128]) : ℝ :=
+  match exec (context_attn_fwd_kernel_int8kv_surface Q K V
+      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+      B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+      2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+      2048 128 1 1 16 128 128 128) s with
+  | some s' => s'.readMem Out (outOffset s 16 B_Start_Loc 2048 128 1 128 idx)
+  | none => 0.0
+
+noncomputable def producedContextFwdBlock64OutValue
+    (s : BlockState)
+    (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (idx : TileIndex [64, 128]) : ℝ :=
+  match exec (context_attn_fwd_kernel_int8kv_surface Q K V
+      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+      B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+      2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+      2048 128 1 1 16 128 64 128) s with
+  | some s' => s'.readMem Out (outOffset s 16 B_Start_Loc 2048 128 1 64 idx)
+  | none => 0.0
+
 /-- Algorithm-layer correctness for the masked context-attention output store. -/
 theorem context_attn_fwd_final_store_slice_correct
     (Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
@@ -372,15 +396,67 @@ theorem context_attn_fwd_final_store_python_block64_compute_correct
     B_Seqlen B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1
     64 128 s (context_attn_fwd_python_block64_offset_injective s B_Start_Loc)
 
+theorem context_attn_fwd_surface_python_block128_compute_correct
+    (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_fwd_kernel_int8kv_surface Q K V
+        (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+        B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 128 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] =>
+          active s 16 B_Seqlen B_Prompt_Cache_Len 128 idx)
+        (fun idx : TileIndex [128, 128] =>
+          (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        producedContextFwdBlock128OutValue s Q K V Out B_Start_Loc B_Seqlen
+          B_Prompt_Cache_Len idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_fwd_kernel_int8kv_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedContextFwdBlock128OutValue, hExec]
+
+theorem context_attn_fwd_surface_python_block64_compute_correct
+    (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := context_attn_fwd_kernel_int8kv_surface Q K V
+        (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+        B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 128] =>
+          active s 16 B_Seqlen B_Prompt_Cache_Len 64 idx)
+        (fun idx : TileIndex [64, 128] =>
+          (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 128] =>
+        producedContextFwdBlock64OutValue s Q K V Out B_Start_Loc B_Seqlen
+          B_Prompt_Cache_Len idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [context_attn_fwd_kernel_int8kv_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedContextFwdBlock64OutValue, hExec]
+
 /-- Public Python test-shape summary for `context_attn_fwd.py`.
 
 This records the faithful full int8-KV `_fwd_kernel` surface for the checked
-layout and both Python launcher block-size branches, then ties those surfaces
-to the observable final `Out` writeback slices. The streaming attention
-accumulator is represented by the proof-oriented `Acc` tile in the store
-slice. -/
+layout and both Python launcher block-size branches, with the observable final
+`Out` writes connected directly to the produced full-surface values. -/
 theorem context_attn_fwd_python_test_shape_output_summary
-    (Q K V Acc B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
+    (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
     (s : BlockState) :
     (∃ alg, (context_attn_fwd_kernel_int8kv_surface Q K V
       (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
@@ -393,8 +469,11 @@ theorem context_attn_fwd_python_test_shape_output_summary
       2048 128 1 8388608 262144 128 1 8388608 262144 128 1
       2048 128 1 1 16 128 64 128).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := context_attn_fwd_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1 128 128)
+      (kernel := context_attn_fwd_kernel_int8kv_surface Q K V
+        (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+        B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 128 128)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [128, 128] =>
@@ -402,11 +481,14 @@ theorem context_attn_fwd_python_test_shape_output_summary
         (fun idx : TileIndex [128, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 16 4194304 128
-          2048 1 128 idx) ∧
+        producedContextFwdBlock128OutValue s Q K V Out B_Start_Loc B_Seqlen
+          B_Prompt_Cache_Len idx) ∧
     ComputeCorrect.Realizes
-      (kernel := context_attn_fwd_final_store_slice Acc B_Start_Loc B_Seqlen
-        B_Prompt_Cache_Len Out 16 4194304 128 2048 1 2048 128 1 64 128)
+      (kernel := context_attn_fwd_kernel_int8kv_surface Q K V
+        (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
+        B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 64 128)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [64, 128] =>
@@ -414,8 +496,8 @@ theorem context_attn_fwd_python_test_shape_output_summary
         (fun idx : TileIndex [64, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 64 idx)))
       (expected := fun idx : TileIndex [64, 128] =>
-        accStoreValue s Acc B_Seqlen B_Prompt_Cache_Len 16 4194304 128
-          2048 1 64 idx) := by
+        producedContextFwdBlock64OutValue s Q K V Out B_Start_Loc B_Seqlen
+          B_Prompt_Cache_Len idx) := by
   constructor
   · exact context_attn_fwd_kernel_int8kv_surface_toAlgorithm_supported Q K V
       (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
@@ -429,9 +511,9 @@ theorem context_attn_fwd_python_test_shape_output_summary
       2048 128 1 8388608 262144 128 1 8388608 262144 128 1
       2048 128 1 1 16 128 64 128
   constructor
-  · exact context_attn_fwd_final_store_python_block128_compute_correct Acc
-      B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out s
-  · exact context_attn_fwd_final_store_python_block64_compute_correct Acc
-      B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out s
+  · exact context_attn_fwd_surface_python_block128_compute_correct Q K V Out
+      B_Start_Loc B_Seqlen B_Prompt_Cache_Len s
+  · exact context_attn_fwd_surface_python_block64_compute_correct Q K V Out
+      B_Start_Loc B_Seqlen B_Prompt_Cache_Len s
 
 end VeriTile.Bench.TritonBenchG.ContextAttnFwd
