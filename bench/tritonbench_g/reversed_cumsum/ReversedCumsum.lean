@@ -908,7 +908,7 @@ theorem reversed_cumsum_python_case2_output_summary
 /-- Public Python case 3 summary: the full reversed-cumsum surface lowers and
 both store/cumsum output slices are checked for the contiguous `T = 16`,
 `S = 16` shape. -/
-theorem reversed_cumsum_python_case3_output_summary
+theorem reversed_cumsum_python_case3_store_summary
     (BC SReg Carry Z : RegionName) (s : BlockState) :
     (∃ alg, (reversed_cumsum_surface SReg Z 256 16 1 16 16 16 32).toAlgorithm? =
       Except.ok alg) ∧
@@ -932,6 +932,79 @@ theorem reversed_cumsum_python_case3_output_summary
   · exact reversed_cumsum_python_case3_surface_toAlgorithm_supported SReg Z
   · exact reversed_cumsum_python_case3_all_outputs_compute_correct
       BC SReg Carry Z s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem reversed_cumsum_python_case3_output_summary
+    (SReg Z : RegionName) (s : BlockState) (offsetOf : PUnit → Nat) :
+    (∃ alg, (reversed_cumsum_surface SReg Z 256 16 1 16 16 16 32).toAlgorithm? =
+      Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_surface SReg Z 256 16 1 16 16 16 32)
+      (initialState := s)
+      (write := fun i : PUnit => some (Z, offsetOf i))
+      (expected := fun i : PUnit =>
+        reversedCumsumSurfaceValue s SReg Z Z 256 16 1 16 16 16 32
+          (offsetOf i))) := by
+  constructor
+  · exact reversed_cumsum_python_case3_surface_toAlgorithm_supported SReg Z
+  · exact reversed_cumsum_surface_output_compute_correct SReg Z Z
+      256 16 1 16 16 16 32 s offsetOf
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /-- Public Python case 4 summary: the full reversed-cumsum surface lowers and
 both store/cumsum output slices are checked for the two-chunk `T = 32`,
