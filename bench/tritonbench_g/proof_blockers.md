@@ -42,8 +42,8 @@ tiles under #161, while the #162 rows now split further into
 `attention-forward-online-softmax-recurrence`,
 and `attention-score-probability-reduction`. The `triton_attention.py` forward
 row now connects `Out`, `L`, and `M` readbacks to the full forward surface.
-The mixed-sparse attention case 4 row now connects `Out` readbacks to the full
-mixed-sparse forward surface.
+The mixed-sparse attention case 3 and case 4 rows now connect `Out` readbacks
+to the full mixed-sparse forward surface.
 The token-attention-reduction rows
 are now discharged: the LLaMA and Bloom token-softmax case-1 rows, the
 softmax-reduceV row, and the reduce-V, Mistral, and LLaMA2 token-attention
