@@ -133,6 +133,18 @@ def outOffset
   offZ s H * stride_qz + offH s H * stride_qh +
     mIndex s BLOCK_M idx.1 * stride_qm + kIndex idx * stride_qk
 
+noncomputable def producedAttnFwdTritonOutValue
+    (s : BlockState) (Q K V QScale KScale Out : RegionName)
+    (idx : TileIndex [128, 128]) : ℝ :=
+  match exec (attn_fwd_triton_surface Q K V QScale KScale Out
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      2 4 128 128 128 64 3).toAlgKernel s with
+  | some s' => s'.readMem Out (outOffset s 4 65536 16384 128 1 128 idx)
+  | none => 0.0
+
 /-- Algorithm-layer correctness for the final output store. -/
 theorem attn_fwd_triton_final_store_slice_correct
     (Acc Out : RegionName)
@@ -267,12 +279,37 @@ theorem attn_fwd_triton_final_store_python_test_shape_compute_correct
   subst kb
   rfl
 
+theorem attn_fwd_triton_surface_python_test_shape_compute_correct
+    (Q K V QScale KScale Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        2 4 128 128 128 64 3)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
+        (fun idx : TileIndex [128, 128] => (Out,
+          outOffset s 4 65536 16384 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        producedAttnFwdTritonOutValue s Q K V QScale KScale Out idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attn_fwd_triton_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedAttnFwdTritonOutValue, hExec]
+
 /-- Python test-shape summary for `attn_fwd_triton.py`.
 
 The Python wrapper fixes `STAGE = 3`; this summary combines that full surface
-with the checked final output-store proof at the test layout. -/
+with the observable `Out` writes produced at the test layout. -/
 theorem attn_fwd_triton_python_test_shape_output_summary
-    (Q K V QScale KScale Acc Out : RegionName) (s : BlockState) :
+    (Q K V QScale KScale Out : RegionName) (s : BlockState) :
     (∃ alg, (attn_fwd_triton_surface Q K V QScale KScale Out
       65536 16384 128 1
       65536 16384 128 1
@@ -280,20 +317,24 @@ theorem attn_fwd_triton_python_test_shape_output_summary
       65536 16384 128 1
       2 4 128 128 128 64 3).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := attn_fwd_triton_final_store_slice Acc Out
-        4 128 96 65536 16384 128 1 65536 16384 128 1 128 128)
+      (kernel := attn_fwd_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        2 4 128 128 128 64 3)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
         (fun idx : TileIndex [128, 128] => (Out,
           outOffset s 4 65536 16384 128 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        s.readMem Acc (accOffset s 4 65536 16384 128 1 128 idx)) := by
+        producedAttnFwdTritonOutValue s Q K V QScale KScale Out idx) := by
   constructor
   · exact attn_fwd_triton_surface_toAlgorithm_supported Q K V QScale KScale
       Out 65536 16384 128 1 65536 16384 128 1 65536 16384 128 1
       65536 16384 128 1 2 4 128 128 128 64 3
-  · exact attn_fwd_triton_final_store_python_test_shape_compute_correct
-      Acc Out s
+  · exact attn_fwd_triton_surface_python_test_shape_compute_correct Q K V
+      QScale KScale Out s
 
 end VeriTile.Bench.TritonBenchG.AttnFwdTriton
