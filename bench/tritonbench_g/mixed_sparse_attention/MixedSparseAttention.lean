@@ -480,7 +480,7 @@ theorem mixed_sparse_attention_python_case1_output_summary
       Acc Seqlens Out s
 
 /-- Public Python case 2 summary. -/
-theorem mixed_sparse_attention_python_case2_output_summary
+theorem mixed_sparse_attention_python_case2_store_summary
     (Q K V Out Acc : RegionName)
     (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
     (∃ alg, (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
@@ -506,6 +506,139 @@ theorem mixed_sparse_attention_python_case2_output_summary
       Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols
   · exact mixed_sparse_attention_output_store_python_block32_compute_correct
       Acc Seqlens Out s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+noncomputable def mixedSparseAttentionCase2SurfaceOutValue
+    (s : BlockState) (Q K V Out : RegionName)
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (idx : TileIndex [32, 64]) : ℝ :=
+  match exec (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 2 4 8 32 32 64 FloatDType.fp16) s with
+  | some s' => s'.readMem Out (outOffset s 4 32768 8192 64 1 32 idx)
+  | none => 0.0
+
+theorem mixed_sparse_attention_python_case2_surface_output_compute_correct
+    (Q K V Out : RegionName)
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 2 4 8 32 32 64 FloatDType.fp16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => active s 4 Seqlens 32 idx)
+        (fun idx : TileIndex [32, 64] =>
+          (Out, outOffset s 4 32768 8192 64 1 32 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        mixedSparseAttentionCase2SurfaceOutValue s Q K V Out Seqlens
+          Blocks BlockOffsets ColCounts Cols idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [mixed_sparse_attention_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [mixedSparseAttentionCase2SurfaceOutValue, hExec]
+
+theorem mixed_sparse_attention_python_case2_output_summary
+    (Q K V Out : RegionName)
+    (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat) (s : BlockState) :
+    (∃ alg, (mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+      (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 2 4 8 32 32 64 FloatDType.fp16).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := mixed_sparse_attention_fwd_kernel_surface Q K V Seqlens
+        (0.1 : ℝ) Blocks BlockOffsets ColCounts Cols Out
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 2 4 8 32 32 64 FloatDType.fp16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => active s 4 Seqlens 32 idx)
+        (fun idx : TileIndex [32, 64] =>
+          (Out, outOffset s 4 32768 8192 64 1 32 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        mixedSparseAttentionCase2SurfaceOutValue s Q K V Out Seqlens
+          Blocks BlockOffsets ColCounts Cols idx)) := by
+  constructor
+  · exact mixed_sparse_attention_python_case2_surface_toAlgorithm_supported
+      Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols
+  · exact mixed_sparse_attention_python_case2_surface_output_compute_correct
+      Q K V Out Seqlens Blocks BlockOffsets ColCounts Cols s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /-- Public Python case 3 summary. -/
 theorem mixed_sparse_attention_python_case3_store_summary
