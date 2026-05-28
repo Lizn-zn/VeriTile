@@ -41,7 +41,7 @@ tiles under #161, while the #162 rows now split further into
 `attention-forward-online-softmax-recurrence`,
 `attention-score-probability-reduction`, `attention-context-decode-reduction`,
 `token-attention-reduction`, and `attention-backward-score-reduction`. The
-LLaMA and Bloom token-softmax case-1 rows plus the reduce-V and Mistral
+LLaMA and Bloom token-softmax case-1 rows plus the reduce-V, Mistral, and LLaMA2
 token-attention case-1 rows are now discharged by connecting the checked
 probability/output directly to their full Python-shape surfaces.
 The broad #151 reduction/layernorm aggregation bucket has been split into
