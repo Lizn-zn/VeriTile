@@ -939,37 +939,117 @@ theorem attention_fwd_triton3_python_case2_output_summary
   · exact attention_fwd_triton3_case2_surface_m_compute_correct Q K V M Out
       L s
 
-theorem attention_fwd_triton3_python_case3_output_summary
-    (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat) (s : BlockState) :
-    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
-      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
-      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
-      ).toAlgorithm? = Except.ok alg) ∧
+noncomputable def producedAttentionFwdTriton3Case3OutValue
+    (s : BlockState) (Q K V M Out L : RegionName)
+    (idx : TileIndex [64, 64]) : ℝ :=
+  match exec (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0).toAlgKernel s with
+  | some s' => s'.readMem Out (outOffset s 4 32768 8192 64 1 64 idx)
+  | none => 0.0
+
+noncomputable def producedAttentionFwdTriton3Case3MValue
+    (s : BlockState) (Q K V M Out L : RegionName) (i : Fin 64) : ℝ :=
+  match exec (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0).toAlgKernel s with
+  | some s' => s'.readMem M (lRowOffset s (s.pids 1) 128 64 i)
+  | none => 0.0
+
+theorem attention_fwd_triton3_case3_surface_out_compute_correct
+    (Q K V M Out L : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_final_store_slice Acc Out
-        4 128 64 32768 8192 64 1 32768 8192 64 1 64 64)
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
         (fun idx : TileIndex [64, 64] => (Out,
           outOffset s 4 32768 8192 64 1 64 idx)))
       (expected := fun idx : TileIndex [64, 64] =>
-        s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)) ∧
+        producedAttentionFwdTriton3Case3OutValue s Q K V M Out L idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedAttentionFwdTriton3Case3OutValue]
+  rw [inv_eq_one_div, hExec]
+
+theorem attention_fwd_triton3_case3_surface_m_compute_correct
+    (Q K V M Out L : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
-      (kernel := attention_fwd_triton3_end_m_formula_store_slice MPre LPre M
-        off_hz 128 64)
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
       (initialState := s)
-      (write := fun i : Fin 64 => some (M, lRowOffset s off_hz 128 64 i))
+      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
       (expected := fun i : Fin 64 =>
-        endMStoreSpec s MPre LPre off_hz 128 64 i) := by
+        producedAttentionFwdTriton3Case3MValue s Q K V M Out L i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton3_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [producedAttentionFwdTriton3Case3MValue]
+  rw [inv_eq_one_div, hExec]
+
+theorem attention_fwd_triton3_python_case3_output_summary
+    (Q K V M Out L : RegionName) (s : BlockState) :
+    (∃ alg, (attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+      32768 8192 64 1 32768 8192 64 1 32768 8192 64 1
+      32768 8192 64 1 2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0
+      ).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 128 64 64 idx)
+        (fun idx : TileIndex [64, 64] => (Out,
+          outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        producedAttentionFwdTriton3Case3OutValue s Q K V M Out L idx) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton3_surface Q K V M Out L (1 / 8 : ℝ)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 4 128 128 128 0 0 1 1 64 64 64 1 1 0 0)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (M, lRowOffset s (s.pids 1) 128 64 i))
+      (expected := fun i : Fin 64 =>
+        producedAttentionFwdTriton3Case3MValue s Q K V M Out L i) := by
   constructor
   · exact attention_fwd_triton3_python_case3_surface_toAlgorithm_supported
       Q K V M Out L
   constructor
-  · exact attention_fwd_triton3_final_store_python_test_shape_compute_correct
-      Acc Out s
-  · exact attention_fwd_triton3_end_m_formula_python_test_shape_compute_correct
-      MPre LPre M off_hz s
+  · exact attention_fwd_triton3_case3_surface_out_compute_correct Q K V M Out
+      L s
+  · exact attention_fwd_triton3_case3_surface_m_compute_correct Q K V M Out
+      L s
 
 theorem attention_fwd_triton3_python_case4_output_summary
     (Q K V M Out L Acc MPre LPre : RegionName) (off_hz : Nat) (s : BlockState) :
