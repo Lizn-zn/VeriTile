@@ -2515,7 +2515,8 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
         ← `(ComputeStmt.effectMarker "tl.debug_barrier"), env, Bool.true)
   | `(tritonStmt| tl.static_print($_msg:term)) =>
       pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
-        ← `(ComputeStmt.effectMarker "tl.static_print"), env, Bool.true)
+        ← `(ComputeStmt.alg (Stmt.ifThen (Op.constBool Bool.false) [])), env,
+        Bool.false)
   | `(tritonStmt| tl.for $i:ident in $($n:term) { $stmts:tritonStmt* }) => do
       let nameLit ← identAsStr i
       let bodyEnv := (i.getId.toString, DInfo.nat, SInfo.scalar, none) :: env

@@ -16,7 +16,7 @@ bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_python_c
 bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_python_case1_output_summary	public_summary_with_proof_gap	attention-score-probability-reduction	#162	slice
+bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_python_case1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_python_case2_output_summary	public_summary_with_proof_gap	attention-score-probability-reduction	#162	slice
 bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_python_case1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
