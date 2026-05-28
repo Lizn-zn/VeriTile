@@ -723,6 +723,133 @@ theorem chunk_gated_attention_final_state_python_test_shape_compute_correct
     32 32 16 16 s
     (chunk_gated_attention_python_final_state_offset_injective s)
 
+def cumSurfaceTIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
+  s.pids 1 * BT + i.val
+
+def cumSurfaceSIndex (s : BlockState) (BS : Nat) (j : Fin BS) : Nat :=
+  s.pids 0 * BS + j.val
+
+def cumSurfaceActive (s : BlockState) (T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) : Prop :=
+  cumSurfaceTIndex s BT idx.1 < T ∧ cumSurfaceSIndex s BS idx.2.1 < S
+
+instance cumSurfaceActiveDecidable (s : BlockState) (T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) :
+    Decidable (cumSurfaceActive s T S BT BS idx) := by
+  unfold cumSurfaceActive
+  infer_instance
+
+def cumSurfaceOffset (s : BlockState) (s_s_h s_s_t s_s_d BT BS : Nat)
+    (idx : TileIndex [BT, BS]) : Nat :=
+  s.pids 2 * s_s_h + cumSurfaceTIndex s BT idx.1 * s_s_t +
+    cumSurfaceSIndex s BS idx.2.1 * s_s_d
+
+noncomputable def producedChunkGatedAttentionCumValue
+    (s : BlockState) (SReg Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) : ℝ :=
+  match exec (chunk_gated_attention_cum_surface SReg Z s_s_h s_s_t s_s_d
+      T S BT BS).toAlgKernel s with
+  | some s' => s'.readMem Z (cumSurfaceOffset s s_s_h s_s_t s_s_d BT BS idx)
+  | none => 0.0
+
+theorem chunk_gated_attention_cum_surface_compute_correct
+    (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_cum_surface SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => cumSurfaceActive s T S BT BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, cumSurfaceOffset s s_s_h s_s_t s_s_d BT BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        producedChunkGatedAttentionCumValue s SReg Z s_s_h s_s_t s_s_d
+          T S BT BS idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_gated_attention_cum_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedChunkGatedAttentionCumValue, hExec]
+
+noncomputable def producedChunkGatedAttentionHStateValue
+    (s : BlockState) (K V G H H0 HT : RegionName)
+    (GATEK USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (i_t : Fin 4) (idx : TileIndex [16, 16]) : ℝ :=
+  match exec (chunk_gated_attention_h_surface K V G H H0 HT
+      4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      GATEK USE_INITIAL_STATE STORE_FINAL_STATE).toAlgKernel s with
+  | some s' => s'.readMem H (hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)
+  | none => 0.0
+
+noncomputable def producedChunkGatedAttentionFinalStateValue
+    (s : BlockState) (K V G H H0 HT : RegionName)
+    (GATEK USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (idx : TileIndex [16, 16]) : ℝ :=
+  match exec (chunk_gated_attention_h_surface K V G H H0 HT
+      4096 1 128 4096 32 1 4096 32 1
+      128 32 32 4096 4096 32 16 16 4
+      GATEK USE_INITIAL_STATE STORE_FINAL_STATE).toAlgKernel s with
+  | some s' => s'.readMem HT (finalStateOffset s 32 32 16 16 idx)
+  | none => 0.0
+
+theorem chunk_gated_attention_h_surface_state_compute_correct
+    (K V G H H0 HT : RegionName)
+    (GATEK USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (i_t : Fin 4) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_surface K V G H H0 HT
+        4096 1 128 4096 32 1 4096 32 1
+        128 32 32 4096 4096 32 16 16 4
+        GATEK USE_INITIAL_STATE STORE_FINAL_STATE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        producedChunkGatedAttentionHStateValue s K V G H H0 HT GATEK
+          USE_INITIAL_STATE STORE_FINAL_STATE i_t idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_gated_attention_h_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedChunkGatedAttentionHStateValue, hExec]
+
+theorem chunk_gated_attention_h_surface_final_state_compute_correct
+    (K V G H H0 HT : RegionName)
+    (GATEK USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_surface K V G H H0 HT
+        4096 1 128 4096 32 1 4096 32 1
+        128 32 32 4096 4096 32 16 16 4
+        GATEK USE_INITIAL_STATE STORE_FINAL_STATE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (HT, finalStateOffset s 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        producedChunkGatedAttentionFinalStateValue s K V G H H0 HT GATEK
+          USE_INITIAL_STATE STORE_FINAL_STATE idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_gated_attention_h_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedChunkGatedAttentionFinalStateValue, hExec]
+
 /-- Python test-shape output coverage for chunk gated attention: every checked
 state-output surface (`h` at each loop row and final state) realizes its masked
 store shape. -/
@@ -760,70 +887,113 @@ This packages the checked `fwd_pre` cumulative surface, the four Python
 optional `ht`) for the benchmark shape
 `B=2, H=4, T=128, S=64, K=32, V=32, BT=32, BK=BV=16`. -/
 theorem chunk_gated_attention_python_test_shape_output_summary
-    (G GCum K V H H0 Ht BH BHFinal : RegionName) (i_t : Fin 4)
-    (s : BlockState) :
-    (∃ alg, (chunk_gated_attention_cum_surface G GCum 8192 64 1
-      128 64 32 16).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (chunk_gated_attention_h_surface K V GCum H H0 Ht
-      4096 1 128 4096 32 1 4096 32 1
-      128 32 32 4096 4096 32 16 16 4
-      Bool.false Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (chunk_gated_attention_h_surface K V GCum H H0 Ht
-      4096 1 128 4096 32 1 4096 32 1
-      128 32 32 4096 4096 32 16 16 4
-      Bool.true Bool.true Bool.false).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (chunk_gated_attention_h_surface K V GCum H H0 Ht
-      4096 1 128 4096 32 1 4096 32 1
-      128 32 32 4096 4096 32 16 16 4
-      Bool.false Bool.true Bool.true).toAlgorithm? = Except.ok alg) ∧
-    (∃ alg, (chunk_gated_attention_h_surface K V GCum H H0 Ht
-      4096 1 128 4096 32 1 4096 32 1
-      128 32 32 4096 4096 32 16 16 4
-      Bool.true Bool.false Bool.true).toAlgorithm? = Except.ok alg) ∧
+    (G GCum K V H H0 Ht : RegionName) (i_t : Fin 4) (s : BlockState) :
     (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t.val
-        4096 32 1 32 32 16 16)
+      (kernel := chunk_gated_attention_cum_surface G GCum 8192 64 1
+        128 64 32 16)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 16] => cumSurfaceActive s 128 64 32 16 idx)
+        (fun idx : TileIndex [32, 16] =>
+          (GCum, cumSurfaceOffset s 8192 64 1 32 16 idx)))
+      (expected := fun idx : TileIndex [32, 16] =>
+        producedChunkGatedAttentionCumValue s G GCum 8192 64 1
+          128 64 32 16 idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_surface K V GCum H H0 Ht
+        4096 1 128 4096 32 1 4096 32 1
+        128 32 32 4096 4096 32 16 16 4
+        Bool.false Bool.false Bool.false)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
         (fun idx : TileIndex [16, 16] =>
           (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
       (expected := fun idx : TileIndex [16, 16] =>
-        hStateStoreValue s BH i_t.val 4096 32 1 32 32 16 16 idx)) ∧
+        producedChunkGatedAttentionHStateValue s K V GCum H H0 Ht
+          Bool.false Bool.false Bool.false i_t idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
-        32 32 16 16)
+      (kernel := chunk_gated_attention_h_surface K V GCum H H0 Ht
+        4096 1 128 4096 32 1 4096 32 1
+        128 32 32 4096 4096 32 16 16 4
+        Bool.true Bool.true Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        producedChunkGatedAttentionHStateValue s K V GCum H H0 Ht
+          Bool.true Bool.true Bool.false i_t idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_surface K V GCum H H0 Ht
+        4096 1 128 4096 32 1 4096 32 1
+        128 32 32 4096 4096 32 16 16 4
+        Bool.false Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        producedChunkGatedAttentionHStateValue s K V GCum H H0 Ht
+          Bool.false Bool.true Bool.true i_t idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_surface K V GCum H H0 Ht
+        4096 1 128 4096 32 1 4096 32 1
+        128 32 32 4096 4096 32 16 16 4
+        Bool.false Bool.true Bool.true)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
-        (fun idx : TileIndex [16, 16] =>
-          (Ht, finalStateOffset s 32 32 16 16 idx)))
+        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
       (expected := fun idx : TileIndex [16, 16] =>
-        finalStateStoreValue s BHFinal 32 32 16 16 idx)) := by
+        producedChunkGatedAttentionFinalStateValue s K V GCum H H0 Ht
+          Bool.false Bool.true Bool.true idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_surface K V GCum H H0 Ht
+        4096 1 128 4096 32 1 4096 32 1
+        128 32 32 4096 4096 32 16 16 4
+        Bool.true Bool.false Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => stateActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] =>
+          (H, hStateOffset s i_t.val 4096 32 1 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        producedChunkGatedAttentionHStateValue s K V GCum H H0 Ht
+          Bool.true Bool.false Bool.true i_t idx)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := chunk_gated_attention_h_surface K V GCum H H0 Ht
+        4096 1 128 4096 32 1 4096 32 1
+        128 32 32 4096 4096 32 16 16 4
+        Bool.true Bool.false Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [16, 16] => finalActive s 32 32 16 16 idx)
+        (fun idx : TileIndex [16, 16] => (Ht, finalStateOffset s 32 32 16 16 idx)))
+      (expected := fun idx : TileIndex [16, 16] =>
+        producedChunkGatedAttentionFinalStateValue s K V GCum H H0 Ht
+          Bool.true Bool.false Bool.true idx)) := by
   constructor
-  · exact chunk_gated_attention_cum_surface_toAlgorithm_supported G GCum
-      8192 64 1 128 64 32 16
+  · exact chunk_gated_attention_cum_surface_compute_correct G GCum
+      8192 64 1 128 64 32 16 s
   constructor
-  · exact chunk_gated_attention_h_surface_toAlgorithm_supported K V GCum H H0
-      Ht 4096 1 128 4096 32 1 4096 32 1
-      128 32 32 4096 4096 32 16 16 4
-      Bool.false Bool.false Bool.false
+  · exact chunk_gated_attention_h_surface_state_compute_correct K V GCum H H0 Ht
+      Bool.false Bool.false Bool.false i_t s
   constructor
-  · exact chunk_gated_attention_h_surface_toAlgorithm_supported K V GCum H H0
-      Ht 4096 1 128 4096 32 1 4096 32 1
-      128 32 32 4096 4096 32 16 16 4
-      Bool.true Bool.true Bool.false
+  · exact chunk_gated_attention_h_surface_state_compute_correct K V GCum H H0 Ht
+      Bool.true Bool.true Bool.false i_t s
   constructor
-  · exact chunk_gated_attention_h_surface_toAlgorithm_supported K V GCum H H0
-      Ht 4096 1 128 4096 32 1 4096 32 1
-      128 32 32 4096 4096 32 16 16 4
-      Bool.false Bool.true Bool.true
+  · exact chunk_gated_attention_h_surface_state_compute_correct K V GCum H H0 Ht
+      Bool.false Bool.true Bool.true i_t s
   constructor
-  · exact chunk_gated_attention_h_surface_toAlgorithm_supported K V GCum H H0
-      Ht 4096 1 128 4096 32 1 4096 32 1
-      128 32 32 4096 4096 32 16 16 4
-      Bool.true Bool.false Bool.true
-  · exact chunk_gated_attention_python_test_shape_all_outputs_compute_correct
-      BH H BHFinal Ht i_t s
+  · exact chunk_gated_attention_h_surface_final_state_compute_correct K V GCum H H0 Ht
+      Bool.false Bool.true Bool.true s
+  constructor
+  · exact chunk_gated_attention_h_surface_state_compute_correct K V GCum H H0 Ht
+      Bool.true Bool.false Bool.true i_t s
+  · exact chunk_gated_attention_h_surface_final_state_compute_correct K V GCum H H0 Ht
+      Bool.true Bool.false Bool.true s
 
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention
