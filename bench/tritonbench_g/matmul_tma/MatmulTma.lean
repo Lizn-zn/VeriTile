@@ -425,8 +425,39 @@ theorem matmul_tma_python_case8_surface_toAlgorithm_supported
   exact matmul_tma_load_store_surface_toAlgorithm_supported A B C
     128 128 128 1 128 1 128 128 1 128 128 128 Bool.true
 
+noncomputable def matmulTmaSurfaceCell
+    (s : BlockState) (A B C Out : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) (OUTPUT_F16 : Bool) (offset : Nat) : MemCell :=
+  match exec (matmul_tma_load_store_surface A B C M N K stride_am stride_ak
+      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K OUTPUT_F16) s with
+  | some s' => s'.mem Out offset
+  | none => 0
+
+theorem matmul_tma_surface_output_compute_correct
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) (OUTPUT_F16 : Bool) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := matmul_tma_load_store_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K OUTPUT_F16)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        some (C, cOffset s stride_cm stride_cn BLOCK_M BLOCK_N idx))
+      (expected := fun idx =>
+        matmulTmaSurfaceCell s A B C C M N K stride_am stride_ak stride_bk
+          stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K OUTPUT_F16
+          (cOffset s stride_cm stride_cn BLOCK_M BLOCK_N idx)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [matmul_tma_load_store_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [matmulTmaSurfaceCell, hExec]
+
 /-- Public Python float32-output summary for a concrete TMA test branch. -/
-theorem matmul_tma_python_f32_output_summary
+theorem matmul_tma_python_f32_store_summary
     (A B C Acc : RegionName) (s : BlockState)
     (hSurface :
       ∃ alg, (matmul_tma_load_store_surface A B C
@@ -451,7 +482,7 @@ theorem matmul_tma_python_f32_output_summary
 /-- Public Python float32-output summary for any of the transpose-stride TMA
 test branches. The input strides identify the branch; the observed output
 layout is always contiguous `128 × 128`. -/
-theorem matmul_tma_python_f32_branch_output_summary
+theorem matmul_tma_python_f32_branch_store_summary
     (A B C Acc : RegionName) (s : BlockState)
     (stride_am stride_ak stride_bk stride_bn : Nat)
     (hSurface :
@@ -475,7 +506,7 @@ theorem matmul_tma_python_f32_branch_output_summary
       (matmul_tma_python_test_output_offset_injective s)
 
 /-- Public Python fp16-output summary for a concrete TMA test branch. -/
-theorem matmul_tma_python_f16_output_summary
+theorem matmul_tma_python_f16_store_summary
     (A B C Acc : RegionName) (s : BlockState)
     (hSurface :
       ∃ alg, (matmul_tma_load_store_surface A B C
@@ -501,7 +532,7 @@ theorem matmul_tma_python_f16_output_summary
 
 /-- Public Python fp16-output summary for any of the transpose-stride TMA test
 branches. -/
-theorem matmul_tma_python_f16_branch_output_summary
+theorem matmul_tma_python_f16_branch_store_summary
     (A B C Acc : RegionName) (s : BlockState)
     (stride_am stride_ak stride_bk stride_bn : Nat)
     (hSurface :
@@ -525,5 +556,126 @@ theorem matmul_tma_python_f16_branch_output_summary
   · exact matmul_output_store_f16_slice_compute_correct C Acc
       128 1 128 1 128 128 s
       (matmul_tma_python_test_output_offset_injective s)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem matmul_tma_python_f32_output_summary
+    (A B C : RegionName) (s : BlockState)
+    (hSurface :
+      ∃ alg, (matmul_tma_load_store_surface A B C
+        128 128 128 128 1 128 1 128 1 128 128 128 Bool.false).toAlgorithm? =
+          Except.ok alg) :
+    (∃ alg, (matmul_tma_load_store_surface A B C
+      128 128 128 128 1 128 1 128 1 128 128 128 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_tma_load_store_surface A B C
+        128 128 128 128 1 128 1 128 1 128 128 128 Bool.false)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (C, cOffset s 128 1 128 128 idx))
+      (expected := fun idx =>
+        matmulTmaSurfaceCell s A B C C
+          128 128 128 128 1 128 1 128 1 128 128 128 Bool.false
+          (cOffset s 128 1 128 128 idx))) := by
+  constructor
+  · exact hSurface
+  · exact matmul_tma_surface_output_compute_correct A B C
+      128 128 128 128 1 128 1 128 1 128 128 128 Bool.false s
+
+theorem matmul_tma_python_f32_branch_output_summary
+    (A B C : RegionName) (s : BlockState)
+    (stride_am stride_ak stride_bk stride_bn : Nat)
+    (hSurface :
+      ∃ alg, (matmul_tma_load_store_surface A B C
+        128 128 128 stride_am stride_ak stride_bk stride_bn
+        128 1 128 128 128 Bool.false).toAlgorithm? = Except.ok alg) :
+    (∃ alg, (matmul_tma_load_store_surface A B C
+      128 128 128 stride_am stride_ak stride_bk stride_bn
+      128 1 128 128 128 Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_tma_load_store_surface A B C
+        128 128 128 stride_am stride_ak stride_bk stride_bn
+        128 1 128 128 128 Bool.false)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (C, cOffset s 128 1 128 128 idx))
+      (expected := fun idx =>
+        matmulTmaSurfaceCell s A B C C
+          128 128 128 stride_am stride_ak stride_bk stride_bn
+          128 1 128 128 128 Bool.false (cOffset s 128 1 128 128 idx))) := by
+  constructor
+  · exact hSurface
+  · exact matmul_tma_surface_output_compute_correct A B C
+      128 128 128 stride_am stride_ak stride_bk stride_bn
+      128 1 128 128 128 Bool.false s
+
+theorem matmul_tma_python_f16_output_summary
+    (A B C : RegionName) (s : BlockState)
+    (hSurface :
+      ∃ alg, (matmul_tma_load_store_surface A B C
+        128 128 128 128 1 128 1 128 1 128 128 128 Bool.true).toAlgorithm? =
+          Except.ok alg) :
+    (∃ alg, (matmul_tma_load_store_surface A B C
+      128 128 128 128 1 128 1 128 1 128 128 128 Bool.true).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_tma_load_store_surface A B C
+        128 128 128 128 1 128 1 128 1 128 128 128 Bool.true)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (C, cOffset s 128 1 128 128 idx))
+      (expected := fun idx =>
+        matmulTmaSurfaceCell s A B C C
+          128 128 128 128 1 128 1 128 1 128 128 128 Bool.true
+          (cOffset s 128 1 128 128 idx))) := by
+  constructor
+  · exact hSurface
+  · exact matmul_tma_surface_output_compute_correct A B C
+      128 128 128 128 1 128 1 128 1 128 128 128 Bool.true s
+
+theorem matmul_tma_python_f16_branch_output_summary
+    (A B C : RegionName) (s : BlockState)
+    (stride_am stride_ak stride_bk stride_bn : Nat)
+    (hSurface :
+      ∃ alg, (matmul_tma_load_store_surface A B C
+        128 128 128 stride_am stride_ak stride_bk stride_bn
+        128 1 128 128 128 Bool.true).toAlgorithm? = Except.ok alg) :
+    (∃ alg, (matmul_tma_load_store_surface A B C
+      128 128 128 stride_am stride_ak stride_bk stride_bn
+      128 1 128 128 128 Bool.true).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := matmul_tma_load_store_surface A B C
+        128 128 128 stride_am stride_ak stride_bk stride_bn
+        128 1 128 128 128 Bool.true)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 128] =>
+        some (C, cOffset s 128 1 128 128 idx))
+      (expected := fun idx =>
+        matmulTmaSurfaceCell s A B C C
+          128 128 128 stride_am stride_ak stride_bk stride_bn
+          128 1 128 128 128 Bool.true (cOffset s 128 1 128 128 idx))) := by
+  constructor
+  · exact hSurface
+  · exact matmul_tma_surface_output_compute_correct A B C
+      128 128 128 stride_am stride_ak stride_bk stride_bn
+      128 1 128 128 128 Bool.true s
 
 end VeriTile.Bench.TritonBenchG.MatmulTma

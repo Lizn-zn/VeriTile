@@ -865,6 +865,33 @@ theorem batched_vecmat_python_test_surface_toAlgorithm_supported
   exact batched_vecmat_surface_toAlgorithm_supported A B output
     128 128 128 16 32 64
 
+noncomputable def batchedVecmatSurfaceValue
+    (s : BlockState) (A B output Out : RegionName)
+    (dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K offset : Nat) : ℝ :=
+  match exec (batched_vecmat_surface A B output dim_m dim_n dim_k BLOCK_M
+      BLOCK_N BLOCK_K) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem batched_vecmat_surface_output_compute_correct
+    (A B output : RegionName)
+    (dim_m dim_n dim_k BLOCK_M BLOCK_N BLOCK_K : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := batched_vecmat_surface A B output dim_m dim_n dim_k
+        BLOCK_M BLOCK_N BLOCK_K)
+      (initialState := s)
+      (write := fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        some (output, blockOutOffset s dim_n BLOCK_M BLOCK_N idx))
+      (expected := fun idx =>
+        batchedVecmatSurfaceValue s A B output output dim_m dim_n dim_k
+          BLOCK_M BLOCK_N BLOCK_K (blockOutOffset s dim_n BLOCK_M BLOCK_N idx)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [batched_vecmat_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  simp [batchedVecmatSurfaceValue, hExec]
+
 /-- Python `test_vecmat` all-output proof-slice coverage: the two concrete
 K-block accumulator updates and the final `16 × 32` output block writeback all
 realize the checked `(128, 128, 128)` shape. -/
@@ -912,7 +939,7 @@ theorem batched_vecmat_python_test_shape_all_outputs_compute_correct
 the checked `128 × 128 × 128` shape, and the two materialized K-block
 accumulator updates plus the final output block store realize the observable
 output proof slices. -/
-theorem batched_vecmat_python_test_shape_output_summary
+theorem batched_vecmat_python_test_shape_store_summary
     (Acc0 Acc1 A B VecmatPre output : RegionName) (s : BlockState) :
     (∃ alg, (batched_vecmat_surface A B output
       128 128 128 16 32 64).toAlgorithm? = Except.ok alg) ∧
@@ -946,5 +973,41 @@ theorem batched_vecmat_python_test_shape_output_summary
   · exact batched_vecmat_python_test_surface_toAlgorithm_supported A B output
   · exact batched_vecmat_python_test_shape_all_outputs_compute_correct
       Acc0 Acc1 A B VecmatPre output s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem batched_vecmat_python_test_shape_output_summary
+    (A B output : RegionName) (s : BlockState) :
+    (∃ alg, (batched_vecmat_surface A B output
+      128 128 128 16 32 64).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := batched_vecmat_surface A B output 128 128 128 16 32 64)
+      (initialState := s)
+      (write := fun idx : TileIndex [16, 32] =>
+        some (output, blockOutOffset s 128 16 32 idx))
+      (expected := fun idx =>
+        batchedVecmatSurfaceValue s A B output output 128 128 128 16 32 64
+          (blockOutOffset s 128 16 32 idx))) := by
+  constructor
+  · exact batched_vecmat_python_test_surface_toAlgorithm_supported A B output
+  · exact batched_vecmat_surface_output_compute_correct A B output
+      128 128 128 16 32 64 s
 
 end VeriTile.Bench.TritonBenchG.BatchedVecmatMult

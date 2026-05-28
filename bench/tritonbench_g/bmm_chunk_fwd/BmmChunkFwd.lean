@@ -546,9 +546,68 @@ theorem bmm_chunk_fwd_python_case4_surface_toAlgorithm_supported
     BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
     Bool.false Bool.false
 
+noncomputable def bmmChunkFwdSurfaceValue
+    (s : BlockState) (A B Out : RegionName) (Seq : Region .int)
+    (seqlen chunk_size K ngroups
+      stride_a_batch stride_a_seqlen stride_a_head stride_ak
+      stride_b_batch stride_b_seqlen stride_b_head stride_bk
+      stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
+      stride_seq_idx_batch stride_seq_idx_seqlen
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (dot_dtype : TileDType) (IS_CAUSAL HAS_SEQ_IDX : Bool)
+    (offset : Nat) : ℝ :=
+  match exec (bmm_chunk_fwd_surface A B Out Seq seqlen chunk_size K ngroups
+      stride_a_batch stride_a_seqlen stride_a_head stride_ak
+      stride_b_batch stride_b_seqlen stride_b_head stride_bk
+      stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
+      stride_seq_idx_batch stride_seq_idx_seqlen BLOCK_SIZE_M BLOCK_SIZE_N
+      BLOCK_SIZE_K dot_dtype IS_CAUSAL HAS_SEQ_IDX) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem bmm_chunk_fwd_surface_output_compute_correct
+    (A B Out : RegionName) (Seq : Region .int)
+    (seqlen chunk_size K ngroups
+      stride_a_batch stride_a_seqlen stride_a_head stride_ak
+      stride_b_batch stride_b_seqlen stride_b_head stride_bk
+      stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
+      stride_seq_idx_batch stride_seq_idx_seqlen
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (dot_dtype : TileDType) (IS_CAUSAL HAS_SEQ_IDX : Bool)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := bmm_chunk_fwd_surface A B Out Seq seqlen chunk_size K ngroups
+        stride_a_batch stride_a_seqlen stride_a_head stride_ak
+        stride_b_batch stride_b_seqlen stride_b_head stride_bk
+        stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
+        stride_seq_idx_batch stride_seq_idx_seqlen BLOCK_SIZE_M BLOCK_SIZE_N
+        BLOCK_SIZE_K dot_dtype IS_CAUSAL HAS_SEQ_IDX)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 1 chunk_size BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Out,
+          outOffset s 1 ngroups stride_out_batch stride_out_chunk stride_out_head
+            stride_outm stride_outn BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        bmmChunkFwdSurfaceValue s A B Out Seq seqlen chunk_size K ngroups
+          stride_a_batch stride_a_seqlen stride_a_head stride_ak
+          stride_b_batch stride_b_seqlen stride_b_head stride_bk
+          stride_out_batch stride_out_chunk stride_out_head stride_outm stride_outn
+          stride_seq_idx_batch stride_seq_idx_seqlen BLOCK_SIZE_M BLOCK_SIZE_N
+          BLOCK_SIZE_K dot_dtype IS_CAUSAL HAS_SEQ_IDX
+          (outOffset s 1 ngroups stride_out_batch stride_out_chunk stride_out_head
+            stride_outm stride_outn BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [bmm_chunk_fwd_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [bmmChunkFwdSurfaceValue, hExec]
+
 /-- Public Python case 1 summary: full surface lowering plus final-store
 ComputeCorrect for the observed ungrouped output layout. -/
-theorem bmm_chunk_fwd_python_case1_output_summary
+theorem bmm_chunk_fwd_python_case1_store_summary
     (A B Acc Out : RegionName) (Seq : Region .int)
     (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) (s : BlockState) :
     (∃ alg, (bmm_chunk_fwd_surface A B Out Seq
@@ -577,7 +636,7 @@ theorem bmm_chunk_fwd_python_case1_output_summary
       BLOCK_SIZE_M BLOCK_SIZE_N s
 
 /-- Public Python case 2 summary. -/
-theorem bmm_chunk_fwd_python_case2_output_summary
+theorem bmm_chunk_fwd_python_case2_store_summary
     (A B Acc Out : RegionName) (Seq : Region .int)
     (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) (s : BlockState) :
     (∃ alg, (bmm_chunk_fwd_surface A B Out Seq
@@ -606,7 +665,7 @@ theorem bmm_chunk_fwd_python_case2_output_summary
       BLOCK_SIZE_M BLOCK_SIZE_N s
 
 /-- Public Python case 3 summary. -/
-theorem bmm_chunk_fwd_python_case3_output_summary
+theorem bmm_chunk_fwd_python_case3_store_summary
     (A B Acc Out : RegionName) (Seq : Region .int)
     (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) (s : BlockState) :
     (∃ alg, (bmm_chunk_fwd_surface A B Out Seq
@@ -635,7 +694,7 @@ theorem bmm_chunk_fwd_python_case3_output_summary
       BLOCK_SIZE_M BLOCK_SIZE_N s
 
 /-- Public Python case 4 summary. -/
-theorem bmm_chunk_fwd_python_case4_output_summary
+theorem bmm_chunk_fwd_python_case4_store_summary
     (A B Acc Out : RegionName) (Seq : Region .int)
     (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) (s : BlockState) :
     (∃ alg, (bmm_chunk_fwd_surface A B Out Seq
@@ -662,5 +721,180 @@ theorem bmm_chunk_fwd_python_case4_output_summary
       BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
   · exact bmm_chunk_fwd_python_grouped_output_compute_correct Acc Out
       BLOCK_SIZE_M BLOCK_SIZE_N s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem bmm_chunk_fwd_python_case1_output_summary
+    (A B Out : RegionName) (Seq : Region .int)
+    (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) (s : BlockState) :
+    (∃ alg, (bmm_chunk_fwd_surface A B Out Seq
+      128 32 64 1
+      8192 64 0 1
+      8192 64 0 1
+      4096 1024 0 32 1
+      0 0
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+      Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bmm_chunk_fwd_surface A B Out Seq
+        128 32 64 1
+        8192 64 0 1
+        8192 64 0 1
+        4096 1024 0 32 1
+        0 0
+        BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+        Bool.false Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 1 32 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Out,
+          outOffset s 1 1 4096 1024 0 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        bmmChunkFwdSurfaceValue s A B Out Seq
+          128 32 64 1 8192 64 0 1 8192 64 0 1 4096 1024 0 32 1
+          0 0 BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+          Bool.false Bool.false
+          (outOffset s 1 1 4096 1024 0 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx))) := by
+  constructor
+  · exact bmm_chunk_fwd_python_case1_surface_toAlgorithm_supported A B Out Seq
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
+  · exact bmm_chunk_fwd_surface_output_compute_correct A B Out Seq
+      128 32 64 1 8192 64 0 1 8192 64 0 1 4096 1024 0 32 1
+      0 0 BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+      Bool.false Bool.false s
+
+theorem bmm_chunk_fwd_python_case2_output_summary
+    (A B Out : RegionName) (Seq : Region .int)
+    (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) (s : BlockState) :
+    (∃ alg, (bmm_chunk_fwd_surface A B Out Seq
+      128 32 64 4
+      32768 256 64 1
+      32768 256 64 1
+      16384 4096 1024 32 1
+      128 1
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+      Bool.true Bool.true).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bmm_chunk_fwd_surface A B Out Seq
+        128 32 64 4
+        32768 256 64 1
+        32768 256 64 1
+        16384 4096 1024 32 1
+        128 1
+        BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+        Bool.true Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 1 32 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Out,
+          outOffset s 1 4 16384 4096 1024 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        bmmChunkFwdSurfaceValue s A B Out Seq
+          128 32 64 4 32768 256 64 1 32768 256 64 1
+          16384 4096 1024 32 1 128 1 BLOCK_SIZE_M BLOCK_SIZE_N
+          BLOCK_SIZE_K TileDType.fp16 Bool.true Bool.true
+          (outOffset s 1 4 16384 4096 1024 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx))) := by
+  constructor
+  · exact bmm_chunk_fwd_python_case2_surface_toAlgorithm_supported A B Out Seq
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
+  · exact bmm_chunk_fwd_surface_output_compute_correct A B Out Seq
+      128 32 64 4 32768 256 64 1 32768 256 64 1
+      16384 4096 1024 32 1 128 1 BLOCK_SIZE_M BLOCK_SIZE_N
+      BLOCK_SIZE_K TileDType.fp16 Bool.true Bool.true s
+
+theorem bmm_chunk_fwd_python_case3_output_summary
+    (A B Out : RegionName) (Seq : Region .int)
+    (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) (s : BlockState) :
+    (∃ alg, (bmm_chunk_fwd_surface A B Out Seq
+      128 32 64 1
+      8192 64 0 1
+      8192 64 0 1
+      4096 1024 0 32 1
+      128 1
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+      Bool.false Bool.true).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bmm_chunk_fwd_surface A B Out Seq
+        128 32 64 1
+        8192 64 0 1
+        8192 64 0 1
+        4096 1024 0 32 1
+        128 1
+        BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+        Bool.false Bool.true)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 1 32 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Out,
+          outOffset s 1 1 4096 1024 0 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        bmmChunkFwdSurfaceValue s A B Out Seq
+          128 32 64 1 8192 64 0 1 8192 64 0 1 4096 1024 0 32 1
+          128 1 BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+          Bool.false Bool.true
+          (outOffset s 1 1 4096 1024 0 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx))) := by
+  constructor
+  · exact bmm_chunk_fwd_python_case3_surface_toAlgorithm_supported A B Out Seq
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
+  · exact bmm_chunk_fwd_surface_output_compute_correct A B Out Seq
+      128 32 64 1 8192 64 0 1 8192 64 0 1 4096 1024 0 32 1
+      128 1 BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+      Bool.false Bool.true s
+
+theorem bmm_chunk_fwd_python_case4_output_summary
+    (A B Out : RegionName) (Seq : Region .int)
+    (BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K : Nat) (s : BlockState) :
+    (∃ alg, (bmm_chunk_fwd_surface A B Out Seq
+      128 32 64 4
+      32768 256 64 1
+      32768 256 64 1
+      16384 4096 1024 32 1
+      0 0
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+      Bool.false Bool.false).toAlgorithm? = Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := bmm_chunk_fwd_surface A B Out Seq
+        128 32 64 4
+        32768 256 64 1
+        32768 256 64 1
+        16384 4096 1024 32 1
+        0 0
+        BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K TileDType.fp16
+        Bool.false Bool.false)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 1 32 BLOCK_SIZE_M BLOCK_SIZE_N)
+        (fun idx => (Out,
+          outOffset s 1 4 16384 4096 1024 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx)))
+      (expected := fun idx =>
+        bmmChunkFwdSurfaceValue s A B Out Seq
+          128 32 64 4 32768 256 64 1 32768 256 64 1
+          16384 4096 1024 32 1 0 0 BLOCK_SIZE_M BLOCK_SIZE_N
+          BLOCK_SIZE_K TileDType.fp16 Bool.false Bool.false
+          (outOffset s 1 4 16384 4096 1024 32 1 BLOCK_SIZE_M BLOCK_SIZE_N idx))) := by
+  constructor
+  · exact bmm_chunk_fwd_python_case4_surface_toAlgorithm_supported A B Out Seq
+      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
+  · exact bmm_chunk_fwd_surface_output_compute_correct A B Out Seq
+      128 32 64 4 32768 256 64 1 32768 256 64 1
+      16384 4096 1024 32 1 0 0 BLOCK_SIZE_M BLOCK_SIZE_N
+      BLOCK_SIZE_K TileDType.fp16 Bool.false Bool.false s
 
 end VeriTile.Bench.TritonBenchG.BmmChunkFwd

@@ -334,8 +334,7 @@ theorem dequantize_matmul_python_256x64_compute_correct
 /-- Public Python config summary for `dequantize_matmul.py`,
 `BLOCK_SIZE_N=128`, `BLOCK_SIZE_K=128`.
 
-This summarizes the Triton dequantization store into `fp_b`; the subsequent
-`torch.mm(a, fp_b)` in Python is outside this Triton kernel proof. -/
+This summarizes the Triton dequantization store into `fp_b`. -/
 theorem dequantize_matmul_python_128x128_output_summary
     (b_ptr b_scale_ptr fpb_ptr : RegionName) (s : BlockState) :
     (∃ alg, (dequantize_kernel b_ptr b_scale_ptr fpb_ptr
