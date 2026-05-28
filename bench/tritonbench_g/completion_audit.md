@@ -100,7 +100,8 @@ surface.
   the now-discharged #185 chunk cumsum carry folds, the now-discharged #186
   decay cumsum scan folds, the now-discharged #187 recurrent state loop folds,
   the now-discharged #188 GLA output tile producers, and #94 reverse cumsum
-  directional scan semantics. The #191 layer-norm backward
+  directional scan semantics. The two-chunk reversed-cumsum case 4 row now
+  connects its checked surface to a full-surface output readback. The #191 layer-norm backward
   residual/recompute rows are upgraded to full-value candidates by connecting
   the Python test-shape outputs to the full backward surface. The #186
   decay-cumsum rows are upgraded to full-value candidates by connecting the
@@ -125,7 +126,7 @@ translation-scope marker, it must be covered by `proof_blockers.md`, and
 The current proof-gap blocker set is exactly the non-full rows in
 `proof_gap_manifest.tsv`: #162 has 17 attention recurrence/reduction rows,
 #154 has 13 fixed-width int8 blocked
-summaries, #94 has 4 reverse-cumsum
+summaries, #94 has 3 reverse-cumsum
 directional-scan rows, and #167 has 2 context-attention accumulator-store
 rows.
 
