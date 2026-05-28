@@ -46,6 +46,31 @@ theorem reversed_cumsum_surface_toAlgorithm_supported
       = Except.ok alg := by
   simp [reversed_cumsum_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
+noncomputable def reversedCumsumSurfaceValue
+    (st : BlockState) (SReg Z Out : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (offset : Nat) : ℝ :=
+  match exec (reversed_cumsum_surface SReg Z s_s_h s_s_t s_s_d T S BT BS) st with
+  | some st' => st'.readMem Out offset
+  | none => 0.0
+
+theorem reversed_cumsum_surface_output_compute_correct
+    {ι : Type} (SReg Z Out : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (st : BlockState) (offsetOf : ι → Nat) :
+    ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_surface SReg Z s_s_h s_s_t s_s_d T S BT BS)
+      (initialState := st)
+      (write := fun i : ι => some (Out, offsetOf i))
+      (expected := fun i =>
+        reversedCumsumSurfaceValue st SReg Z Out s_s_h s_s_t s_s_d T S BT BS
+          (offsetOf i)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [reversed_cumsum_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [reversedCumsumSurfaceValue, hExec]
+
 /-- Specialized transcription of `reversed_cumsum.py`'s
 `chunk_global_reversed_cumsum_vector_kernel` for the single-`BT` block path.
 
@@ -911,7 +936,7 @@ theorem reversed_cumsum_python_case3_output_summary
 /-- Public Python case 4 summary: the full reversed-cumsum surface lowers and
 both store/cumsum output slices are checked for the two-chunk `T = 32`,
 `S = 32` shape. -/
-theorem reversed_cumsum_python_case4_output_summary
+theorem reversed_cumsum_python_case4_store_summary
     (BC SReg Carry Z : RegionName) (s : BlockState) :
     (∃ alg, (reversed_cumsum_surface SReg Z 1024 32 1 32 32 16 32).toAlgorithm? =
       Except.ok alg) ∧
@@ -935,5 +960,39 @@ theorem reversed_cumsum_python_case4_output_summary
   · exact reversed_cumsum_python_case4_surface_toAlgorithm_supported SReg Z
   · exact reversed_cumsum_python_case4_all_outputs_compute_correct
       BC SReg Carry Z s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem reversed_cumsum_python_case4_output_summary
+    (SReg Z : RegionName) (s : BlockState) (offsetOf : PUnit → Nat) :
+    (∃ alg, (reversed_cumsum_surface SReg Z 1024 32 1 32 32 16 32).toAlgorithm? =
+      Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := reversed_cumsum_surface SReg Z 1024 32 1 32 32 16 32)
+      (initialState := s)
+      (write := fun i : PUnit => some (Z, offsetOf i))
+      (expected := fun i : PUnit =>
+        reversedCumsumSurfaceValue s SReg Z Z 1024 32 1 32 32 16 32
+          (offsetOf i))) := by
+  constructor
+  · exact reversed_cumsum_python_case4_surface_toAlgorithm_supported SReg Z
+  · exact reversed_cumsum_surface_output_compute_correct SReg Z Z
+      1024 32 1 32 32 16 32 s offsetOf
 
 end VeriTile.Bench.TritonBenchG.ReversedCumsum
