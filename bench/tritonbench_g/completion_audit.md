@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 144 as conservative
-  `full_value_candidate`, 24 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 145 as conservative
+  `full_value_candidate`, 23 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a currently open
   follow-up issue and blocker family in `proof_gap_manifest.tsv`.
   The #148 matmul/dot rows are upgraded to full-value candidates by connecting
@@ -85,8 +85,8 @@ surface.
   residual/recompute aggregation paths. The #152
   blocked summaries now migrate to the open #154
   `fixed-width-int8-cast-semantics` issue because their concrete blocker is
-  CUDA `llrint` / int8-cast semantics; the 1 remaining #153 row is a
-  `rope-head-slice-lift` RoPE Q/K head-slice value proof. The rope-transform,
+  CUDA `llrint` / int8-cast semantics; the #153 RoPE/rotary rows are now
+  upgraded to full-value candidates. The rope-backward, rope-transform,
   rotary-transform, and rotary-transform-ops rows now connect their checked
   surfaces to full-surface output readbacks. The 2 remaining #167
   context-attention rows split into Mistral sliding-window accumulator-to-store
@@ -125,7 +125,7 @@ translation-scope marker, it must be covered by `proof_blockers.md`, and
 The current proof-gap blocker set is exactly the non-full rows in
 `proof_gap_manifest.tsv`: #162 has 17 attention recurrence/reduction rows,
 #154 has 13 fixed-width int8 blocked
-summaries, #153 has 1 RoPE head-slice row, #94 has 4 reverse-cumsum
+summaries, #94 has 4 reverse-cumsum
 directional-scan rows, and #167 has 2 context-attention accumulator-store
 rows.
 
