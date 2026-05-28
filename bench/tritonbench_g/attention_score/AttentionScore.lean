@@ -423,10 +423,59 @@ theorem attention_score_python_case4_output_surface_summary
   · exact attention_score_final_store_python_test_shape_compute_correct
       Score Out s
 
-/-- `output_summary` alias for Python attention-score case 1. -/
-abbrev attention_score_python_case1_output_summary
-    (Q K M Score Out : RegionName) (sm_scale : ℝ) (s : BlockState) :=
-  attention_score_python_case1_output_surface_summary Q K M Score Out sm_scale s
+noncomputable def producedAttentionScoreCase1OutValue
+    (s : BlockState) (Q K M Out : RegionName) (sm_scale : ℝ)
+    (i : Fin 64) : ℝ :=
+  match exec (attention_score_kernel Q K M Out
+      32768 8192 64 1 32768 8192 64 1 512 128 1
+      2 4 4 128 128 128 0 64 64 64 64 sm_scale
+      Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel s with
+  | some s' => s'.readMem Out (outOffset s 512 128 64 i)
+  | none => 0.0
+
+theorem attention_score_case1_surface_compute_correct
+    (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 128 64 i)
+        (fun i => (Out, outOffset s 512 128 64 i)))
+      (expected := fun i : Fin 64 =>
+        producedAttentionScoreCase1OutValue s Q K M Out sm_scale i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_score_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i _hActive
+  simp [producedAttentionScoreCase1OutValue, hExec]
+
+theorem attention_score_python_case1_output_summary
+    (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState) :
+    (∃ alg, (attention_score_kernel Q K M Out
+      32768 8192 64 1 32768 8192 64 1 512 128 1
+      2 4 4 128 128 128 0 64 64 64 64 sm_scale
+      Bool.true Bool.false Bool.true Bool.true rfl).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => active s 128 64 i)
+        (fun i => (Out, outOffset s 512 128 64 i)))
+      (expected := fun i : Fin 64 =>
+        producedAttentionScoreCase1OutValue s Q K M Out sm_scale i) := by
+  constructor
+  · exact attention_score_python_case1_surface_toAlgorithm_supported
+      Q K M Out sm_scale
+  · exact attention_score_case1_surface_compute_correct Q K M Out sm_scale s
 
 /-- `output_summary` alias for Python attention-score case 2. -/
 abbrev attention_score_python_case2_output_summary
