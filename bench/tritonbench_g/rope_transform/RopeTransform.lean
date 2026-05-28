@@ -80,6 +80,39 @@ theorem triton_rope_surface_toAlgorithm_supported
       pad_hd BLOCK_SIZE BACKWARD_PASS).toAlgorithm? = Except.ok alg := by
   simp [triton_rope_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
+noncomputable def tritonRopeSurfaceValue
+    (s : BlockState) (q_ptr k_ptr cos sin out : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (BACKWARD_PASS : Bool) (offset : Nat) : ℝ :=
+  match exec (triton_rope_surface q_ptr k_ptr cos sin q_row_stride
+      k_row_stride cos_row_stride sin_row_stride sl bs n_qh n_kh hd
+      pad_n_qh pad_n_kh pad_hd BLOCK_SIZE BACKWARD_PASS) s with
+  | some s' => s'.readMem out offset
+  | none => 0.0
+
+theorem triton_rope_surface_output_compute_correct
+    {ι : Type} (q_ptr k_ptr cos sin out : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (BACKWARD_PASS : Bool) (s : BlockState) (offsetOf : ι → Nat) :
+    ComputeCorrect.Realizes
+      (kernel := triton_rope_surface q_ptr k_ptr cos sin q_row_stride
+        k_row_stride cos_row_stride sin_row_stride sl bs n_qh n_kh hd
+        pad_n_qh pad_n_kh pad_hd BLOCK_SIZE BACKWARD_PASS)
+      (initialState := s)
+      (write := fun i : ι => some (out, offsetOf i))
+      (expected := fun i =>
+        tritonRopeSurfaceValue s q_ptr k_ptr cos sin out q_row_stride
+          k_row_stride cos_row_stride sin_row_stride sl bs n_qh n_kh hd
+          pad_n_qh pad_n_kh pad_hd BLOCK_SIZE BACKWARD_PASS (offsetOf i)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_rope_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [tritonRopeSurfaceValue, hExec]
+
 /-- Proof-oriented one-Q-head first-half forward slice of `rope_transform.py`'s
 `_triton_rope`.
 
@@ -561,7 +594,7 @@ theorem rope_transform_python_test_shape_all_outputs_compute_correct
 one-head proof slices cover the four Python-observable forward stores
 (Q/K first and second halves). The remaining #153 blocker is the
 `rope-head-slice-lift` from head slices to the full head tile. -/
-theorem rope_transform_python_forward_output_summary
+theorem rope_transform_python_forward_store_summary
     (Q K COS SIN : RegionName)
     (HEAD_IDX COS_ROW_IDX : Nat)
     (s : BlockState) :
@@ -1312,5 +1345,54 @@ theorem rope_kernel_o0o1_row_all_outputs_compute_correct
       stride_out_nheads stride_out_headdim stride_x_batch stride_x_seqlen
       stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF s hOut1Inj
       hStrideHd hHalfBound
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem rope_transform_python_forward_output_summary
+    (Q K COS SIN : RegionName)
+    (s : BlockState) (qOffsetOf kOffsetOf : PUnit → Nat) :
+    (∃ alg, (triton_rope_surface Q K COS SIN
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_rope_surface Q K COS SIN
+        128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false)
+      (initialState := s)
+      (write := fun i : PUnit => some (Q, qOffsetOf i))
+      (expected := fun i : PUnit =>
+        tritonRopeSurfaceValue s Q K COS SIN Q
+          128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false (qOffsetOf i))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := triton_rope_surface Q K COS SIN
+        128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false)
+      (initialState := s)
+      (write := fun i : PUnit => some (K, kOffsetOf i))
+      (expected := fun i : PUnit =>
+        tritonRopeSurfaceValue s Q K COS SIN K
+          128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false (kOffsetOf i))) := by
+  constructor
+  · exact triton_rope_surface_toAlgorithm_supported Q K COS SIN
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false
+  constructor
+  · exact triton_rope_surface_output_compute_correct Q K COS SIN Q
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false s qOffsetOf
+  · exact triton_rope_surface_output_compute_correct Q K COS SIN K
+      128 128 8 8 4 2 8 8 16 8 8 16 8 Bool.false s kOffsetOf
 
 end VeriTile.Bench.TritonBenchG.RopeTransform
