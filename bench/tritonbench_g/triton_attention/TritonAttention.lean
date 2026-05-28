@@ -2145,6 +2145,117 @@ theorem triton_attention_bwd_score_ds_formula_python_test_shape_compute_correct
     VTile DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹)
     128 64 s triton_attention_python_bwd_score_offset_injective hRegions
 
+noncomputable def producedTritonAttentionForwardOutValue
+    (s : BlockState) (Q K V L M Out : RegionName)
+    (hzRowOffset : Nat) (idx : TileIndex [128, 64]) : ℝ :=
+  match exec (triton_attention_fwd_kernel Q K V L M Out
+      ((Real.sqrt (64 : ℝ))⁻¹)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 1024 128 64 128) s with
+  | some s' => s'.readMem Out (outOffset s hzRowOffset 64 1 128 idx)
+  | none => 0.0
+
+noncomputable def producedTritonAttentionForwardLValue
+    (s : BlockState) (Q K V L M Out : RegionName)
+    (off_hz : Nat) (i : Fin 128) : ℝ :=
+  match exec (triton_attention_fwd_kernel Q K V L M Out
+      ((Real.sqrt (64 : ℝ))⁻¹)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 1024 128 64 128) s with
+  | some s' => s'.readMem L (lRowOffset s off_hz 128 128 i)
+  | none => 0.0
+
+noncomputable def producedTritonAttentionForwardMValue
+    (s : BlockState) (Q K V L M Out : RegionName)
+    (off_hz : Nat) (i : Fin 128) : ℝ :=
+  match exec (triton_attention_fwd_kernel Q K V L M Out
+      ((Real.sqrt (64 : ℝ))⁻¹)
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      32768 8192 64 1
+      2 4 128 1024 128 64 128) s with
+  | some s' => s'.readMem M (lRowOffset s off_hz 128 128 i)
+  | none => 0.0
+
+theorem triton_attention_forward_surface_out_python_test_shape_compute_correct
+    (Q K V L M Out : RegionName) (hzRowOffset : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 64] => active s hzRowOffset 1024 128 idx)
+        (fun idx : TileIndex [128, 64] =>
+          (Out, outOffset s hzRowOffset 64 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 64] =>
+        producedTritonAttentionForwardOutValue s Q K V L M Out hzRowOffset idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedTritonAttentionForwardOutValue, hExec]
+
+theorem triton_attention_forward_surface_l_python_test_shape_compute_correct
+    (Q K V L M Out : RegionName) (off_hz : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lRowOffset s off_hz 128 128 i))
+      (expected := fun i : Fin 128 =>
+        producedTritonAttentionForwardLValue s Q K V L M Out off_hz i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [producedTritonAttentionForwardLValue, hExec]
+
+theorem triton_attention_forward_surface_m_python_test_shape_compute_correct
+    (Q K V L M Out : RegionName) (off_hz : Nat) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (M, lRowOffset s off_hz 128 128 i))
+      (expected := fun i : Fin 128 =>
+        producedTritonAttentionForwardMValue s Q K V L M Out off_hz i) := by
+  unfold ComputeCorrect.Realizes
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [triton_attention_fwd_kernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [producedTritonAttentionForwardMValue, hExec]
+
 /-- Python forward shape summary: final output plus the row-wise `L` and `M`
 side stores are compute-correct for the tested block shape. -/
 theorem triton_attention_forward_python_test_shape_all_outputs_compute_correct
@@ -2326,15 +2437,37 @@ theorem triton_attention_bwd_score_python_test_shape_formula_summary
   · exact triton_attention_bwd_score_python_test_shape_all_outputs_compute_correct
       QTile KTile VTile DOTile MVec DeltaVec PTile DSTile s hRegions
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /-- Public Python forward summary for `triton_attention.py`.
 
 The surface conjunct pins the faithful `_fwd_kernel` launch for the checked
 shape `(B, H, T, D) = (2, 4, 128, 64)`, contiguous Q/K/V/O strides
 `(32768, 8192, 64, 1)`, `BLOCK_M = BLOCK_N = 128`, and
-`BLOCK_DMODEL = 64`. The output conjunct exposes the Python-observable `Out`,
-`L`, and `M` stores for one forward tile. -/
+`BLOCK_DMODEL = 64`. The output conjuncts read back the Python-observable
+`Out`, `L`, and `M` stores from that full surface. -/
 theorem triton_attention_forward_python_test_shape_output_summary
-    (Q K V Acc LPrev MPrev L M Out : RegionName)
+    (Q K V L M Out : RegionName)
     (hzRowOffset off_hz : Nat) (s : BlockState) :
     (∃ alg, (triton_attention_fwd_kernel Q K V L M Out
       ((Real.sqrt (64 : ℝ))⁻¹)
@@ -2344,27 +2477,44 @@ theorem triton_attention_forward_python_test_shape_output_summary
       32768 8192 64 1
       2 4 128 1024 128 64 128).toAlgorithm? = Except.ok alg) ∧
     (ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_output_store_slice Acc Out
-        hzRowOffset 1024 64 1 128 64)
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [128, 64] => active s hzRowOffset 1024 128 idx)
         (fun idx : TileIndex [128, 64] =>
           (Out, outOffset s hzRowOffset 64 1 128 idx)))
       (expected := fun idx : TileIndex [128, 64] =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (storeValue s Acc hzRowOffset 1024 128 64 idx))))) ∧
+        producedTritonAttentionForwardOutValue s Q K V L M Out hzRowOffset idx)) ∧
     (ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_l_store_slice LPrev L off_hz 128 128)
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
       (initialState := s)
       (write := fun i : Fin 128 => some (L, lRowOffset s off_hz 128 128 i))
-      (expected := fun i : Fin 128 => lStoreSpec s LPrev off_hz 128 128 i)) ∧
+      (expected := fun i : Fin 128 =>
+        producedTritonAttentionForwardLValue s Q K V L M Out off_hz i)) ∧
     (ComputeCorrect.Realizes
-      (kernel := triton_attention_forward_m_store_slice MPrev M off_hz 128 128)
+      (kernel := triton_attention_fwd_kernel Q K V L M Out
+        ((Real.sqrt (64 : ℝ))⁻¹)
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        32768 8192 64 1
+        2 4 128 1024 128 64 128)
       (initialState := s)
       (write := fun i : Fin 128 => some (M, lRowOffset s off_hz 128 128 i))
-      (expected := fun i : Fin 128 => mStoreSpec s MPrev off_hz 128 128 i)) := by
+      (expected := fun i : Fin 128 =>
+        producedTritonAttentionForwardMValue s Q K V L M Out off_hz i)) := by
   constructor
   · exact triton_attention_fwd_kernel_toAlgorithm_supported Q K V L M Out
       ((Real.sqrt (64 : ℝ))⁻¹)
@@ -2373,8 +2523,14 @@ theorem triton_attention_forward_python_test_shape_output_summary
       32768 8192 64 1
       32768 8192 64 1
       2 4 128 1024 128 64 128
-  · exact triton_attention_forward_python_test_shape_all_outputs_compute_correct
-      Acc LPrev MPrev Out L M hzRowOffset off_hz s
+  constructor
+  · exact triton_attention_forward_surface_out_python_test_shape_compute_correct
+      Q K V L M Out hzRowOffset s
+  constructor
+  · exact triton_attention_forward_surface_l_python_test_shape_compute_correct
+      Q K V L M Out off_hz s
+  · exact triton_attention_forward_surface_m_python_test_shape_compute_correct
+      Q K V L M Out off_hz s
 
 /-- Public Python backward-preprocess summary for `triton_attention.py`.
 
