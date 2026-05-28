@@ -40,7 +40,9 @@ The broad #149 attention/softmax bucket has been split as well:
 surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
 tiles under #161, while the #162 rows now split further into
 `attention-forward-online-softmax-recurrence`,
-and `attention-score-probability-reduction`. The token-attention-reduction rows
+and `attention-score-probability-reduction`. The `triton_attention.py` forward
+row now connects `Out`, `L`, and `M` readbacks to the full forward surface.
+The token-attention-reduction rows
 are now discharged: the LLaMA and Bloom token-softmax case-1 rows, the
 softmax-reduceV row, and the reduce-V, Mistral, and LLaMA2 token-attention
 case-1 rows all connect the checked probability/output directly to their full
