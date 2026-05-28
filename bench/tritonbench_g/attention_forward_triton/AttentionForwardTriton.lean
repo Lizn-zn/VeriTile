@@ -225,6 +225,18 @@ def outOffset
   offZ s H * stride_qz + offH s H * stride_qh +
     mIndex s BLOCK_M idx.1 * stride_qm + kIndex idx * stride_qk
 
+noncomputable def producedAttentionForwardOutValue
+    (s : BlockState) (Q K V QScale KScale Out : RegionName)
+    (idx : TileIndex [128, 128]) : ℝ :=
+  match exec (attention_forward_triton_surface Q K V QScale KScale Out
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      65536 16384 128 1
+      2 4 128 128 128 64 128 96 1) s with
+  | some s' => s'.readMem Out (outOffset s 4 65536 16384 128 1 128 idx)
+  | none => 0.0
+
 /-- Algorithm-layer correctness for the attention-forward final output store. -/
 theorem attention_forward_triton_final_store_slice_correct
     (Acc Out : RegionName)
@@ -360,13 +372,38 @@ theorem attention_forward_triton_final_store_python_test_shape_compute_correct
   subst kb
   rfl
 
+theorem attention_forward_triton_surface_python_test_shape_compute_correct
+    (Q K V QScale KScale Out : RegionName) (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := attention_forward_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        2 4 128 128 128 64 128 96 1)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
+        (fun idx : TileIndex [128, 128] => (Out,
+          outOffset s 4 65536 16384 128 1 128 idx)))
+      (expected := fun idx : TileIndex [128, 128] =>
+        producedAttentionForwardOutValue s Q K V QScale KScale Out idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_forward_triton_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx _hActive
+  simp [producedAttentionForwardOutValue, hExec]
+
 /-- Python test-shape summary for `attention_forward_triton.py`.
 
 This combines the checked full-surface lowering for the Python launch
-parameters with the final observable output-store proof at the contiguous
-`[B,H,N_CTX,HEAD_DIM] = [2,4,128,128]` layout. -/
+parameters with the final observable `Out` writes produced directly by that
+full surface at the contiguous `[B,H,N_CTX,HEAD_DIM] = [2,4,128,128]` layout. -/
 theorem attention_forward_triton_python_test_shape_output_summary
-    (Q K V QScale KScale Acc Out : RegionName) (s : BlockState) :
+    (Q K V QScale KScale Out : RegionName) (s : BlockState) :
     (∃ alg, (attention_forward_triton_surface Q K V QScale KScale Out
       65536 16384 128 1
       65536 16384 128 1
@@ -374,20 +411,24 @@ theorem attention_forward_triton_python_test_shape_output_summary
       65536 16384 128 1
       2 4 128 128 128 64 128 96 1).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := attention_forward_triton_final_store_slice Acc Out
-        4 128 96 65536 16384 128 1 65536 16384 128 1 128 128)
+      (kernel := attention_forward_triton_surface Q K V QScale KScale Out
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        65536 16384 128 1
+        2 4 128 128 128 64 128 96 1)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
         (fun idx : TileIndex [128, 128] => (Out,
           outOffset s 4 65536 16384 128 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        s.readMem Acc (accOffset s 4 65536 16384 128 1 128 idx)) := by
+        producedAttentionForwardOutValue s Q K V QScale KScale Out idx) := by
   constructor
   · exact attention_forward_triton_surface_toAlgorithm_supported Q K V QScale
       KScale Out 65536 16384 128 1 65536 16384 128 1 65536 16384
       128 1 65536 16384 128 1 2 4 128 128 128 64 128 96 1
-  · exact attention_forward_triton_final_store_python_test_shape_compute_correct
-      Acc Out s
+  · exact attention_forward_triton_surface_python_test_shape_compute_correct
+      Q K V QScale KScale Out s
 
 end VeriTile.Bench.TritonBenchG.AttentionForwardTriton
