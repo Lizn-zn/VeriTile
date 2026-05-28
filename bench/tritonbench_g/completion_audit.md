@@ -67,13 +67,15 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 127 as conservative
-  `full_value_candidate`, 41 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 128 as conservative
+  `full_value_candidate`, 40 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a currently open
   follow-up issue and blocker family in `proof_gap_manifest.tsv`.
   The #148 matmul/dot rows are upgraded to full-value candidates by connecting
   GEMV, BMM, dequantization, IV-dependent matmul, plain matmul, activation-tail,
-  and TMA summaries directly to their full Python-shape surfaces. The 31
+  and TMA summaries directly to their full Python-shape surfaces. The LLaMA
+  token-softmax case-1 summary is also upgraded by connecting the checked
+  probability output directly to the full Python-shape softmax surface. The 30
   remaining #162 rows are split into forward online
   softmax recurrence, score/probability reduction, context/decode reduction,
   token-attention reduction, and backward score-reduction obligations. The #151
@@ -120,8 +122,8 @@ translation-surface blocker remains. If a future Lean port reintroduces a
 translation-scope marker, it must be covered by `proof_blockers.md`, and
 `bench/audit_tritonbench_g.sh` enforces that coverage.
 The current proof-gap blocker set is exactly the non-full rows in
-`proof_gap_manifest.tsv`: #148 has 29 matmul/dot accumulator rows, #162 has
-31 attention recurrence/reduction rows, #154 has 13 fixed-width int8 blocked
+`proof_gap_manifest.tsv`: #162 has 30 attention recurrence/reduction rows,
+#154 has 13 fixed-width int8 blocked
 summaries, #153 has 4 RoPE/rotary tile-lift rows, #94 has 4 reverse-cumsum
 directional-scan rows, and #167 has 2 context-attention accumulator-store
 rows.
