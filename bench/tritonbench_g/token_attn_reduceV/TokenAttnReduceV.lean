@@ -219,6 +219,47 @@ theorem token_attn_reducev_python_case3_surface_toAlgorithm_supported
     Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1
     256 64 1 1 64 128
 
+noncomputable def tokenAttnReduceVSurfaceValue
+    (s : BlockState) (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num BLOCK_DMODEL BLOCK_N offset : Nat) : ℝ :=
+  match exec (token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+      B_Start_Loc B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+      stride_ph stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh
+      stride_od kv_group_num BLOCK_DMODEL BLOCK_N) s with
+  | some s' => s'.readMem Out offset
+  | none => 0.0
+
+theorem token_attn_reducev_surface_output_compute_correct
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num BLOCK_DMODEL BLOCK_N : Nat)
+    (s : BlockState) :
+    ComputeCorrect.Realizes
+      (kernel := token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+        B_Start_Loc B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+        stride_ph stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh
+        stride_od kv_group_num BLOCK_DMODEL BLOCK_N)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_DMODEL =>
+        some (Out, outOffset s stride_obs stride_oh stride_od i))
+      (expected := fun i =>
+        tokenAttnReduceVSurfaceValue s Prob V Out Req_to_tokens B_req_idx
+          B_Start_Loc B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+          stride_ph stride_pbs stride_vbs stride_vh stride_vd stride_obs
+          stride_oh stride_od kv_group_num BLOCK_DMODEL BLOCK_N
+          (outOffset s stride_obs stride_oh stride_od i)) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [token_attn_reducev_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  simp [tokenAttnReduceVSurfaceValue, hExec]
+
 /-- Public Python case 1 coverage summary: the full gather/reduceV surface
 lowers and the final output vector store realizes the checked output shape. -/
 theorem token_attn_reducev_python_case1_output_surface_summary
@@ -283,28 +324,116 @@ theorem token_attn_reducev_python_case3_output_surface_summary
   · exact token_attn_reducev_final_store_python_test_shape_compute_correct
       Acc Out s
 
-/-- `output_summary` alias for Python reduce-V token-attention case 1. -/
-abbrev token_attn_reducev_python_case1_output_summary
+/-- Python reduce-V token-attention case 1 final-store coverage. -/
+abbrev token_attn_reducev_python_case1_store_summary
     (Prob V Acc Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
     (s : BlockState) :=
   token_attn_reducev_python_case1_output_surface_summary
     Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen s
 
-/-- `output_summary` alias for Python reduce-V token-attention case 2. -/
-abbrev token_attn_reducev_python_case2_output_summary
+/-- Python reduce-V token-attention case 2 final-store coverage. -/
+abbrev token_attn_reducev_python_case2_store_summary
     (Prob V Acc Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
     (s : BlockState) :=
   token_attn_reducev_python_case2_output_surface_summary
     Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen s
 
-/-- `output_summary` alias for Python reduce-V token-attention case 3. -/
-abbrev token_attn_reducev_python_case3_output_summary
+/-- Python reduce-V token-attention case 3 final-store coverage. -/
+abbrev token_attn_reducev_python_case3_store_summary
     (Prob V Acc Out : RegionName)
     (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
     (s : BlockState) :=
   token_attn_reducev_python_case3_output_surface_summary
     Prob V Acc Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+theorem token_attn_reducev_python_case1_output_summary
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
+    (s : BlockState) :
+    (∃ alg, (token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+      B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 128).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+        B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 128)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
+      (expected := fun i : Fin 64 =>
+        tokenAttnReduceVSurfaceValue s Prob V Out Req_to_tokens B_req_idx
+          B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 128
+          (outOffset s 256 64 1 i))) := by
+  constructor
+  · exact token_attn_reducev_python_case1_surface_toAlgorithm_supported
+      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+  · exact token_attn_reducev_surface_output_compute_correct Prob V Out
+      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1
+      256 64 1 1 64 128 s
+
+theorem token_attn_reducev_python_case2_output_summary
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
+    (s : BlockState) :
+    (∃ alg, (token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+      B_Start_Loc B_Seqlen 64 1 64 1 4096 64 1 256 64 1 1 64 128).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+        B_Start_Loc B_Seqlen 64 1 64 1 4096 64 1 256 64 1 1 64 128)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
+      (expected := fun i : Fin 64 =>
+        tokenAttnReduceVSurfaceValue s Prob V Out Req_to_tokens B_req_idx
+          B_Start_Loc B_Seqlen 64 1 64 1 4096 64 1 256 64 1 1 64 128
+          (outOffset s 256 64 1 i))) := by
+  constructor
+  · exact token_attn_reducev_python_case2_surface_toAlgorithm_supported
+      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+  · exact token_attn_reducev_surface_output_compute_correct Prob V Out
+      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 64 1 64 1 4096 64 1
+      256 64 1 1 64 128 s
+
+theorem token_attn_reducev_python_case3_output_summary
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : Region .nat)
+    (s : BlockState) :
+    (∃ alg, (token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+      B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 128).toAlgorithm? =
+        Except.ok alg) ∧
+    (ComputeCorrect.Realizes
+      (kernel := token_attn_reducev_surface Prob V Out Req_to_tokens B_req_idx
+        B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 128)
+      (initialState := s)
+      (write := fun i : Fin 64 => some (Out, outOffset s 256 64 1 i))
+      (expected := fun i : Fin 64 =>
+        tokenAttnReduceVSurfaceValue s Prob V Out Req_to_tokens B_req_idx
+          B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 64 128
+          (outOffset s 256 64 1 i))) := by
+  constructor
+  · exact token_attn_reducev_python_case3_surface_toAlgorithm_supported
+      Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+  · exact token_attn_reducev_surface_output_compute_correct Prob V Out
+      Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1
+      256 64 1 1 64 128 s
 
 end VeriTile.Bench.TritonBenchG.TokenAttnReduceV
