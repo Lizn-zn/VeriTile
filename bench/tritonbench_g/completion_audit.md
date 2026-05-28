@@ -67,8 +67,8 @@ surface.
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
   `bench/check_proof_gap_manifest.py` reports 181 `output_summary`
-  declarations across 76 files. It classifies 166 as conservative
-  `full_value_candidate`, 2 as `public_summary_with_proof_gap`, and 13 as
+  declarations across 76 files. It classifies 167 as conservative
+  `full_value_candidate`, 1 as `public_summary_with_proof_gap`, and 13 as
   `blocked_summary`. Every non-full candidate is linked to a currently open
   follow-up issue and blocker family in `proof_gap_manifest.tsv`.
   The #148 matmul/dot rows are upgraded to full-value candidates by connecting
@@ -77,8 +77,9 @@ surface.
   Bloom token-softmax case-1 summaries, the softmax-reduceV summary, and the
   reduce-V, Mistral, and LLaMA2 token-attention case-1 summaries are also
   upgraded by connecting the checked probability/output directly to their full
-  Python-shape surfaces. The remaining #162 row is a forward online
-  softmax recurrence obligation. The #151
+  Python-shape surfaces. The #162 attention recurrence rows are now discharged
+  by connecting both flash-attention case summaries to their full forward
+  surfaces. The #151
   rows now split into the now-discharged #190 chunk-delta forward
   recurrence-store producers and the now-discharged #191 LayerNorm backward
   residual/recompute aggregation paths. The #152
@@ -97,8 +98,8 @@ surface.
   to a full-value candidate by connecting checked O/H outputs directly to the
   full Python-shape surface. The `triton_attention.py` forward row now reads
   back Python-observable `Out`, `L`, and `M` stores from the full forward
-  surface. Flash-attention case 2 now reads back `O` and `L` from the full
-  non-causal forward surface. All mixed-sparse attention cases now read back
+  surface. Flash-attention cases 1 and 2 now read back `O` and `L` from their
+  full causal and non-causal forward surfaces. All mixed-sparse attention cases now read back
   `Out` from the full mixed-sparse forward surface. The lightning-attention row
   now reads back `Out`/`DQ`/`DK`/`DV` from launched full surfaces. The #150 rows now split into
   the now-discharged #185 chunk cumsum carry folds, the now-discharged #186
@@ -128,8 +129,7 @@ translation-surface blocker remains. If a future Lean port reintroduces a
 translation-scope marker, it must be covered by `proof_blockers.md`, and
 `bench/audit_tritonbench_g.sh` enforces that coverage.
 The current proof-gap blocker set is exactly the non-full rows in
-`proof_gap_manifest.tsv`: #162 has 1 attention recurrence row,
-#154 has 13 fixed-width int8 blocked
+`proof_gap_manifest.tsv`: #154 has 13 fixed-width int8 blocked
 summaries, and #167 has 1 context-attention accumulator-store row.
 
 Passing `lake build` alone is still not sufficient evidence for future changes;

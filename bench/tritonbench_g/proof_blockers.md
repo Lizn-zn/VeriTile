@@ -38,11 +38,10 @@ checked surfaces to full-surface output readbacks.
 The broad #149 attention/softmax bucket has been split as well:
 `attention-final-store-lift` tracks summaries that still connect a faithful
 surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
-tiles under #161, while the remaining #162 row now tracks
-`attention-forward-online-softmax-recurrence`. The `triton_attention.py` forward
+tiles under #161. The #162 attention recurrence rows are now discharged. The `triton_attention.py` forward
 row now connects `Out`, `L`, and `M` readbacks to the full forward surface.
-Flash-attention case 2 now connects `O` and `L` readbacks to the full
-non-causal forward surface.
+Flash-attention cases 1 and 2 now connect `O` and `L` readbacks to their full
+causal and non-causal forward surfaces.
 All mixed-sparse attention cases now connect `Out` readbacks to the full
 mixed-sparse forward surface.
 The lightning-attention row now connects `Out`/`DQ`/`DK`/`DV` readbacks to
