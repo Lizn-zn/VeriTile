@@ -18,6 +18,7 @@ import VeriTile.Triton.Math.Activation
 import VeriTile.Triton.Math.L2Norm
 import VeriTile.Triton.Math.LogSumExp
 import VeriTile.Triton.Math.Loss
+import VeriTile.Triton.Math.Optimizer
 import VeriTile.Triton.Math.Reduction
 import VeriTile.Triton.Math.RMSNorm
 import VeriTile.Triton.Math.Softmax
