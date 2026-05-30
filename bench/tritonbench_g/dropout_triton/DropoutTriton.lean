@@ -3,6 +3,48 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `dropout_triton` — strict per-kernel correctness
+
+`_dropout` is inverted dropout with a *given* keep-mask: program `pid` loads
+block `[pid·BLOCK_SIZE, (pid+1)·BLOCK_SIZE)` of the input `x_ptr` and the keep
+buffer `x_keep_ptr`, computes `tl.where(x_keep, x / (1 - p), 0.0)` lane-wise,
+and stores to `output_ptr`, masked by `offsets < n_elements`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_dropout[grid](...)`, the grid size
+`cdiv(n_elements, BLOCK_SIZE)`, and how the runtime composes per-program writes
+into one buffer) is the *trusted boundary*, not a proof obligation here. Because
+`pid` is universally quantified, the per-program statement covers every program
+of the grid.
+
+## Proof architecture
+
+```
+dropout_kernel_output_summary                 ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ dropout_kernel_compute_correct           ← ComputeCorrect over the masked store
+       └─ dropout_kernel_correct              ← algorithm-layer readback per lane
+```
+
+The spec `dropoutSpec` reads the keep-mask and input *from memory* at this
+lane's offset and returns `x / (1 - p)` when the mask is set, else `0`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The RNG is **not** modeled here: the upstream `_dropout` takes the
+keep-mask `x_keep_ptr` as an explicit input buffer (the random keep/drop
+decision is made by the caller), so the per-lane keep bit is read from memory
+via `s.readMemValue .bool x_keep_ptr ...` and treated as given — the existing
+theorems assume nothing about how it was produced. `x_keep_ptr` is a typed
+boolean region. No output/input disjointness is assumed: the inputs are read
+into registers before the scatter, so the result is correct even if
+`output_ptr` aliases `x_ptr` or `x_keep_ptr`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.DropoutTriton
 
 open VeriTile.Triton
@@ -91,5 +133,28 @@ theorem dropout_kernel_compute_correct
   have h := dropout_kernel_correct x_ptr x_keep_ptr output_ptr
     n_elements p BLOCK_SIZE s s' hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `_dropout`: the DSL surface lowers to the
+algorithm layer, and the masked store to `output_ptr` is compute-correct — every
+active lane holds `dropoutSpec` (the keep-gated scaled input), out-of-bounds
+lanes are preserved. -/
+theorem dropout_kernel_output_summary
+    (x_ptr x_keep_ptr output_ptr : RegionName)
+    (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat)
+    (s : BlockState) :
+    (∃ alg, (dropout_kernel x_ptr x_keep_ptr output_ptr
+        n_elements p BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := dropout_kernel x_ptr x_keep_ptr output_ptr
+        n_elements p BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => dropoutOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (output_ptr, dropoutOffset s BLOCK_SIZE i)))
+      (expected := fun i => dropoutSpec s x_ptr x_keep_ptr p BLOCK_SIZE i) := by
+  refine ⟨?_, ?_⟩
+  · simp [dropout_kernel, ComputeExpr.toAlgorithm?]
+  · exact dropout_kernel_compute_correct x_ptr x_keep_ptr output_ptr
+      n_elements p BLOCK_SIZE s
 
 end VeriTile.Bench.TritonBenchG.DropoutTriton

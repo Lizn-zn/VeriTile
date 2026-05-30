@@ -4,6 +4,44 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 
+/-!
+# `cosine_compute` — strict per-kernel correctness
+
+`cos_func` is an elementwise cosine: program `pid` loads block
+`[pid·BLOCK_SIZE, (pid+1)·BLOCK_SIZE)` of input `a`, casts each lane to float32,
+applies `tl.cos`, and stores `cos(x)` to output `b`, masked by
+`offset < n_elements`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`cos_func[(grid_size,1,1)](...)`, the grid size
+`cdiv(n_elements, block_size)`, the host-side `block_size` choice, and how the
+runtime composes per-program writes into one buffer) is the *trusted boundary*,
+not a proof obligation here. Because `pid` is universally quantified, the
+per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+cos_func_output_summary                       ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ cos_func_compute_correct                 ← ComputeCorrect over the masked store
+       └─ cos_func_correct                    ← algorithm-layer readback per lane
+```
+
+The spec is plain elementwise `Real.cos (xs i)` — no optimizer/reduction oracle
+applies. Inputs are presented via `InputLoadedAt` (the values each lane loads).
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The `(a_value).to(tl.float32)` cast reduces to the identity at the
+algorithm layer (post-erasure all dtypes unify to `ℝ`). No output/input
+disjointness is assumed: the input is read into registers before the scatter, so
+the result is correct even if `b` aliases `a`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.CosineCompute
 
 open VeriTile.Triton VeriTile.Examples
@@ -86,5 +124,24 @@ theorem cos_func_compute_correct
   rw [hExec] at hi
   simp [observeAt, hActive] at hi
   exact hi
+
+/-- Per-kernel output summary for `cos_func`: the DSL surface lowers to the
+algorithm layer, and the masked store to `b` is compute-correct — every active
+lane holds `Real.cos (xs i)`, out-of-bounds lanes are preserved. -/
+theorem cos_func_output_summary
+    (a b : RegionName)
+    (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
+    (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
+    (h_x : InputLoadedAt s a BLOCK_SIZE xs) :
+    (∃ alg, (cos_func a b n_elements BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := cos_func a b n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
+          (fun i => (b, s.pid * BLOCK_SIZE + i.val)))
+      (expected := fun i => Real.cos (xs i)) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact cos_func_compute_correct a b n_elements BLOCK_SIZE hBlockSize s xs h_x
 
 end VeriTile.Bench.TritonBenchG.CosineCompute
