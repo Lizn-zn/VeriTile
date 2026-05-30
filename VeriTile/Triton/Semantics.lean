@@ -6,6 +6,7 @@ Parent module for the typed operational semantics of the Triton subset.
 
 import VeriTile.Triton.Semantics.Scalar
 import VeriTile.Triton.Semantics.State
+import VeriTile.Triton.Semantics.Offset
 import VeriTile.Triton.Semantics.Eval
 import VeriTile.Triton.Semantics.TiledIndexing
 import VeriTile.Triton.Semantics.MaskedReduction

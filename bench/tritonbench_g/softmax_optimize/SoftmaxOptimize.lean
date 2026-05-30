@@ -104,15 +104,13 @@ def softmax_kernel_online_v2_one_tile
   tl.store(output_ptrs, out, mask=mask)
 }
 
-def outOffset (s : BlockState) (N : Nat) (i : Fin TILE_N) : Nat :=
-  s.pid * N + i.val
 
 noncomputable def softmaxOptimizeInputTile
     (s : BlockState) (input_ptr : RegionName) (N TILE_N : Nat) :
     Tile .real [TILE_N] :=
   { data := fun idx =>
       if idx.1.val < N then
-        some (s.readMem input_ptr (outOffset s N idx.1))
+        some (s.readMem input_ptr (linearOffset s N idx.1))
       else none }
 
 noncomputable def softmaxOptimizeSpec
@@ -137,10 +135,10 @@ theorem softmax_kernel_online_v2_one_tile_correct
     (hExec : exec (softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N)
         s = some s') :
     ∀ i : Fin TILE_N,
-      s'.readMem output_ptr (outOffset s N i) =
+      s'.readMem output_ptr (linearOffset s N i) =
         if i.val < N then
           softmaxOptimizeSpec s input_ptr N TILE_N i
-        else s.readMem output_ptr (outOffset s N i) := by
+        else s.readMem output_ptr (linearOffset s N i) := by
   intro i
   by_cases hT : 0 < TILE_N
   · simp [exec, softmax_kernel_online_v2_one_tile, stepStmts, stepStmt, evalOp, evalOp.eq_def,
@@ -150,11 +148,11 @@ theorem softmax_kernel_online_v2_one_tile_correct
           NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
           ComparableDType.lt, hT] at hExec
     subst s'
-    simp [BlockState.pid_eq, outOffset]
+    simp [BlockState.pid_eq, linearOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : i.val < N
-    · simp [hi, softmaxOptimizeSpec, softmaxOptimizeInputTile, outOffset,
+    · simp [hi, softmaxOptimizeSpec, softmaxOptimizeInputTile, linearOffset,
             Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum,
             Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
             TileShape.insertAxisIndex, hT]
@@ -172,7 +170,7 @@ theorem softmax_kernel_online_v2_one_tile_compute_correct
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun i : Fin TILE_N => i.val < N)
-        (fun i => (output_ptr, outOffset s N i)))
+        (fun i => (output_ptr, linearOffset s N i)))
       (expected := fun i => softmaxOptimizeSpec s input_ptr N TILE_N i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
