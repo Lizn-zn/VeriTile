@@ -341,6 +341,79 @@ noncomputable def adamWritesFP
       (fun i : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + i.1.val)
       (fun i : TileIndex [BLOCK_SIZE] => s.pid * BLOCK_SIZE + i.1.val < n_elements))
 
+/-! ### Generic `writeMem` (real) write-footprint helpers
+
+The framework ships `WriteWithin` constructors for `writeMemTyped` foldls
+(`BlockState.foldl_writeMemTypedAt_prop_writeWithin`). The lowered real stores
+here use `BlockState.writeMem` directly, so we supply the parallel pair. These
+are layout-free and could be hoisted to `Memory/Frame/Basic.lean`. -/
+
+theorem writeMem_writeWithin {P : WriteFootprint} {s : BlockState}
+    (region : RegionName) (offset : Nat) (v : ℝ) (hmem : P (region, offset)) :
+    BlockState.WriteWithin P s (s.writeMem region offset v) := by
+  intro r o hnot
+  by_cases h : r = region ∧ o = offset
+  · rcases h with ⟨rfl, rfl⟩; exact absurd hmem hnot
+  · simp [BlockState.writeMem, h]
+
+theorem foldl_writeMem_prop_writeWithin {α : Type} {P : WriteFootprint}
+    (region : RegionName) (offFn : α → Nat) (vFn : α → ℝ)
+    (active : α → Prop) [DecidablePred active] (l : List α) (s : BlockState)
+    (hmem : ∀ i ∈ l, active i → P (region, offFn i)) :
+    BlockState.WriteWithin P s
+      (l.foldl
+        (fun acc i =>
+          if active i then acc.writeMem region (offFn i) (vFn i) else acc) s) := by
+  induction l generalizing s with
+  | nil => exact BlockState.writeWithin_refl P s
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hact : active hd
+      · simp only [hact, if_true]
+        exact BlockState.writeWithin_trans
+          (writeMem_writeWithin region (offFn hd) (vFn hd)
+            (hmem hd List.mem_cons_self hact))
+          (ih _ (fun i hi hai => hmem i (List.mem_cons_of_mem hd hi) hai))
+      · simp only [hact, if_false]
+        exact ih s (fun i hi hai => hmem i (List.mem_cons_of_mem hd hi) hai)
+
+/-- Frame write-footprint: a single program of `update_fn_kernel` only writes
+the two masked blocks `adamWritesFP` (its `p_ptr` and `exp_avg_ptr` lanes). All
+other memory — other regions, and out-of-block / masked-off cells — is
+untouched. This discharges the `h_writeWithin` field of each grid frame. -/
+theorem adam_writeWithin
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (hRegions : p_ptr ≠ exp_avg_ptr) (s : BlockState) :
+    Kernel.ExecWritesWithin
+      (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel s
+      (adamWritesFP p_ptr exp_avg_ptr n_elements BLOCK_SIZE s) := by
+  intro s' hExec
+  simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
+  subst s'
+  refine BlockState.writeWithin_trans (s₁ := ?mid1) ?hsp ?houter
+  case houter =>
+    refine foldl_writeMem_prop_writeWithin (region := exp_avg_ptr)
+      (active := fun i : TileIndex [BLOCK_SIZE] =>
+        s.pids 0 * BLOCK_SIZE + i.1.val < n_elements) _ _ _ _ ?_
+    intro i _ hact
+    exact Or.inr ⟨rfl, i, hact, rfl⟩
+  case hsp =>
+    refine BlockState.writeWithin_trans (s₁ := ?mid2) ?hbase ?hinner
+    case hinner =>
+      refine foldl_writeMem_prop_writeWithin (region := p_ptr)
+        (active := fun i : TileIndex [BLOCK_SIZE] =>
+          s.pids 0 * BLOCK_SIZE + i.1.val < n_elements) _ _ _ _ ?_
+      intro i _ hact
+      exact Or.inl ⟨rfl, i, hact, rfl⟩
+    case hbase =>
+      intro r o _
+      simp [BlockState.setReg_mem]
+
 /-- 1-D launch grid of `m` programs. -/
 abbrev adamGrid (m : Nat) : Grid := { dims := [m] }
 
