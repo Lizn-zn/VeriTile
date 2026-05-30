@@ -3,6 +3,54 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `attn_fwd_causal` — strict per-kernel correctness
+
+`attn_fwd_causal.py`'s `_attn_fwd` is a causal FlashAttention forward kernel:
+program `(start_m, off_hz)` streams `K`/`V` blocks for one `(batch·head, query
+block)` tile, maintaining the online-softmax running max `m_i`, denominator
+`l_i`, and accumulator `acc` (with per-block causal masking and `q_scale ·
+k_scale` quantization), then stores the normalized `acc / l_i` to `Out`, masked
+to the first 96 head lanes and `offs_m < N_CTX`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_attn_fwd[grid](...)` with `grid = (cdiv(N_CTX,
+BLOCK_M), Z·H, 1)`, the scheduling over query blocks and `(batch, head)`, and
+how the runtime composes per-program writes into the output buffer) is the
+*trusted boundary*, not a proof obligation here. Because the program ids
+`start_m`/`off_hz` are universally quantified (via `s`), the per-program
+statements cover every program of the grid.
+
+## Proof architecture
+
+```
+attn_fwd_causal_python_test_shape_output_summary           ← TOP THEOREM
+  ├─ attn_fwd_causal_surface_toAlgorithm_supported          surface lowers to the algorithm layer
+  └─ attn_fwd_causal_surface_python_test_shape_compute_correct
+       └─ attn_fwd_causal_final_store_python_test_shape_compute_correct
+            └─ attn_fwd_causal_final_store_slice_compute_correct
+                 └─ attn_fwd_causal_final_store_slice_correct   ← algorithm-layer readback per lane
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float; the `exp2`, the `tl.dot`
+`float16` accumulation, and `q_scale · k_scale` quantization are not modeled at
+the bit level); `@triton.autotune`/`num_warps`/`num_stages` are not modeled.
+The verified result is **final-store scoped**: the proof establishes that the
+masked store copies the accumulator slice `Acc` to `Out` at the correct,
+injective output offsets and preserves inactive lanes — the value written is
+`producedAttnFwdCausalOutValue` / `s.readMem Acc (...)`, an opaque carrier for
+the online-softmax recurrence (`m_i`, `l_i`, `acc` updates, causal mask, the
+final `acc / l_i` normalization), which is **not** re-derived as a closed-form
+attention formula here. Side condition: the test-shape wrapper fixes the
+concrete layout (`B = 2`, `H = 4`, `N_CTX = HEAD_DIM = BLOCK_M = 128`,
+`BLOCK_N = 64`, strides `(65536, 16384, 128, 1)`, mask = first 96 head lanes)
+and uses `STAGE = 1`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.AttnFwdCausal
 
 open VeriTile.Triton

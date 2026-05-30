@@ -3,6 +3,57 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `mixed_sparse_attention` — strict per-kernel correctness
+
+`mixed_sparse_attention.py`'s `_triton_mixed_sparse_attn_fwd_kernel` is a
+mixed block-sparse + column-sparse FlashAttention forward: program
+`(start_m, off_hz)` loads its query tile (early-exits when `start_m·BLOCK_M ≥
+seqlen`), runs the online-softmax recurrence (`m_i`, `l_i`, accumulator `acc`)
+over the per-row selected dense key blocks (`block_count`/`block_offset`) and
+individual sparse columns (`column_count`/`column_index`) with `qk_scale =
+sm_scale · log2(e)`, then stores `acc` to `Out`, masked by `offs_m < seqlen`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`grid = (cdiv(N_CTX, BLOCK_M), Z·H, 1)`, the sparsity
+schedule supplied via `block_*`/`column_*` index tensors, and how the runtime
+composes per-program writes into `Out`) is the *trusted boundary*, not a proof
+obligation here. Because the program ids `start_m`/`off_hz` are universally
+quantified (via `s`), the per-program statements cover every program of the
+grid.
+
+## Proof architecture
+
+```
+mixed_sparse_attention_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS (one per test case)
+  ├─ mixed_sparse_attention_python_case{i}_surface_toAlgorithm_supported   surface lowers to algorithm layer
+  └─ mixed_sparse_attention_python_case{i}_surface_output_compute_correct
+       └─ mixed_sparse_attention_output_store_python_block{64,32}_compute_correct
+            └─ mixed_sparse_attention_output_store_slice_compute_correct
+                 └─ mixed_sparse_attention_output_store_slice_correct       algorithm-layer readback per lane
+```
+(Offset injectivity discharged by `mixed_sparse_attention_python_block{64,32}_offset_injective`;
+the matching `_case{i}_store_summary` theorems package the store-only facts.)
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp2`, `tl.dot`, and the
+`sm_scale · log2(e)` scaling are not modeled at the bit level);
+`@triton.autotune` is not modeled. The verified result is **final-store
+scoped**: the proof establishes that the masked `Out` store copies the
+accumulator slice `Acc` at the correct, injective output offsets and preserves
+inactive lanes (the `offs_m < seqlen` and `start_m·BLOCK_M ≥ seqlen`
+early-exit masking) — the written value is
+`mixedSparseAttentionCase{i}SurfaceOutValue`, an opaque carrier for the
+online-softmax + mixed-sparsity recurrence (which dense blocks and which sparse
+columns are visited), which is **not** re-derived as a closed-form attention
+formula here. Side conditions: layout `(Z,H,N_CTX) = (2,4,128)`, `BLOCK_DMODEL
+= 64`, `fp16`; cases differ by `(BLOCK_M, BLOCK_N)` (64 or 32), `sm_scale`, and
+the `seqlens` tensor, matching the four Python test cases.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.MixedSparseAttention
 
 open VeriTile.Triton

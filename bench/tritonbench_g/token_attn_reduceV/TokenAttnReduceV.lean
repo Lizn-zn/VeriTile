@@ -3,6 +3,53 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `token_attn_reduceV` — strict per-kernel correctness
+
+`_fwd_kernel_token_att2` is the LightLLM token-attention "reduce over V" kernel:
+program `(cur_batch, cur_head)` streams the sequence in `BLOCK_N` chunks,
+gathers `V` rows through the `Req_to_tokens` paged-KV index, accumulates
+`acc += sum(prob[:, None] * v_value, axis=0)` into a `BLOCK_DMODEL` register, and
+stores the reduced vector to `Out[cur_batch, cur_head, :]`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_token_att2[(batch, head)](...)`, the grid
+over `(batch, head)`, block scheduling, and how the runtime composes per-program
+writes into the `Out` buffer) is the *trusted boundary*, not a proof obligation
+here. Because the program ids `cur_batch`/`cur_head` are universally quantified
+(via `BlockState`), the per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+token_attn_reducev_python_case1_output_summary        ← TOP THEOREM (also case2/case3)
+  ├─ token_attn_reducev_python_caseN_surface_toAlgorithm_supported  surface lowers
+  │    └─ token_attn_reducev_surface_toAlgorithm_supported
+  └─ token_attn_reducev_surface_output_compute_correct  ← ComputeCorrect of the store
+       ├─ token_attn_reducev_python_test_shape_offset_injective
+       └─ token_attn_reducev_final_store_python_test_shape_compute_correct
+            └─ token_attn_reducev_final_store_slice_compute_correct
+                 └─ token_attn_reducev_final_store_slice_correct  (per-lane readback)
+```
+
+The three `output_summary` theorems pin the kernel at the Python test shapes
+(`BLOCK_DMODEL = 64`, `BLOCK_N = 128`/`64`).
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` /
+`num_warps` / `num_stages` are not modeled. The `acc.to(Out.dtype.element_ty)`
+cast reduces to the identity at the algorithm layer (post-erasure all dtypes
+unify to `ℝ`). The verified statement is scoped to the **final reduced-vector
+store** to `Out`: the expected value is the surface-level `tokenAttnReduceVSurfaceValue`
+read off at each `outOffset`, established compute-correct for the universally
+quantified program ids over a one-block output footprint. The streaming
+gather/accumulate loop body feeds that value; the side conditions are the
+offset-injectivity of the `Out` slice at the test shapes.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.TokenAttnReduceV
 
 open VeriTile.Triton

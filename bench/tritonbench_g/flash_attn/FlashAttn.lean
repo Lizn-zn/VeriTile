@@ -3,6 +3,61 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `flash_attn` — strict per-kernel correctness
+
+`flash_attn.py`'s `_fwd_kernel` is a FlashAttention forward over
+`tl.make_block_ptr` tiles: program `(start_m, off_bs_head)` loads its query
+block, streams `K`/`V` blocks (`hi = (start_m+1)·BLOCK_M` when `IS_CAUSAL`,
+else `SEQLEN`) running the online-softmax recurrence (running `max`, `denom`,
+`out_buffer`) with `qk_scale = sm_scale · log2(e)` and per-block causal
+masking, then stores the normalized `out_buffer / denom` to `O` and the
+log-sum-exp `max + log2(denom)` to `L`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`grid = (cdiv(SEQLEN, BLOCK_M), BS·HEAD, 1)`, the
+`num_warps`/`num_stages` choice, and how the runtime composes per-program
+writes into the `O`/`L` buffers) is the *trusted boundary*, not a proof
+obligation here. Because the program ids `start_m`/`off_bs_head` are
+universally quantified (via `s`), the per-program statements cover every
+program of the grid.
+
+## Proof architecture
+
+```
+flash_attn_python_case1_output_summary / _case2_output_summary    ← TOP THEOREMS (IS_CAUSAL = true / false)
+  ├─ flash_attn_python_case{i}_surface_toAlgorithm_supported        surface lowers to the algorithm layer
+  ├─ flash_attn_python_case{i}_surface_o_compute_correct            O store (out_buffer / denom)
+  │    └─ flash_attn_python_output_store_compute_correct
+  │         └─ flash_attn_output_store_slice_compute_correct
+  │              └─ flash_attn_output_store_slice_correct            algorithm-layer readback per lane
+  └─ flash_attn_python_case{i}_surface_l_compute_correct            L store (max + log2 denom)
+       └─ flash_attn_python_l_store_compute_correct
+            └─ flash_attn_l_store_slice_compute_correct
+                 └─ flash_attn_l_store_slice_correct
+```
+(Offset injectivity discharged by `flash_attn_python_{output,l}_offset_injective`;
+`flash_attn_python_case{i}_store_summary` package the store-only facts.)
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp2`, `log2`, `tl.dot`,
+and the `sm_scale · log2(e)` scaling are not modeled at the bit level);
+`@triton.autotune`/`num_warps`/`num_stages` are not modeled. The verified
+result is **final-store scoped**: the proof establishes that the two stores
+write the accumulator slices to `O` and `L` at the correct, injective offsets —
+the written values are `flashAttnCase{i}Surface{O,L}Value`, opaque carriers for
+the online-softmax recurrence (running `max`, `denom`, `out_buffer`, the final
+`out_buffer / denom` normalization and `max + log2 denom` log-sum-exp), which
+are **not** re-derived as a closed-form attention formula here. Both `O` and
+`L` stores are unmasked (full tile). The causal mask schedule (the per-program
+`hi` bound) lives in that opaque carrier. Side conditions: layout
+`(BS,HEAD,SEQLEN,DIM) = (2,2,128,64)`, `BLOCK_M = 128`, `BLOCK_N = 64`, strides
+`(16384, 8192, 64, 1)`; case 1 is `IS_CAUSAL = true`, case 2 is `false`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FlashAttn
 
 open VeriTile.Triton

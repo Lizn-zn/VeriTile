@@ -3,6 +3,74 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `flash_decode2_phi` — strict per-kernel correctness
+
+`_fwd_kernel_flash_decode_stage2` is the Phi flash-decoding **stage-2**
+reduction: program `(cur_batch, cur_head)` iterates over the `block_n_size`
+partial blocks produced by stage-1, combining per-block partial outputs `Mid_O`
+and log-sum-exp scalars `Mid_O_LogExpSum` via the online-softmax recurrence
+(running max `max_logic`, rescaled `acc` and `sum_exp`), then stores the
+normalized `acc / sum_exp` to `Out[cur_batch, cur_head, :]`. Unlike the LLaMA
+variant, all `Mid_O` loads and the final store are masked by `offs_d < head_dim`
+(here `BLOCK_DMODEL = next_power_of_2(head_dim)` may exceed `head_dim`).
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_flash_decode_stage2[(batch, head_num)](...)`,
+the grid over `(batch, head)`, the host `BLOCK_DMODEL = next_power_of_2(Lk)` /
+`BLOCK_SEQ` choices, the stage-1 kernel that produced `Mid_O`, and how the runtime
+composes per-program writes into `Out`) is the *trusted boundary*, not a proof
+obligation here. Because the program ids `cur_batch`/`cur_head` are universally
+quantified (via `BlockState`), the per-program statements cover every program of
+the grid.
+
+## Proof architecture
+
+```
+flash_decode2_phi_python_test_shape_summary                  ← TOP THEOREM (masked final store)
+  ├─ flash_decode2_phi_surface_toAlgorithm_supported  (×4 BLOCK_SEQ surfaces)
+  └─ flash_decode2_phi_final_store_python_test_shape_compute_correct
+       └─ flash_decode2_phi_final_store_slice_compute_correct
+            └─ flash_decode2_phi_final_store_slice_correct
+
+flash_decode2_phi_python_test_shape_normalization_store_output_summary  ← TOP (acc/sum_exp store)
+  └─ flash_decode2_phi_normalization_store_python_test_shape_compute_correct
+       └─ flash_decode2_phi_normalization_store_kernel_compute_correct
+            └─ flash_decode2_phi_normalization_store_kernel_correct
+
+flash_decode2_phi_python_test_shape_masked_accumulator_output_summary  ← TOP (one loop step)
+  ├─ flash_decode2_phi_accumulator_step_python_test_shape_compute_correct
+  │    └─ flash_decode2_phi_accumulator_step_kernel_compute_correct
+  │         └─ flash_decode2_phi_accumulator_step_kernel_correct
+  └─ flash_decode2_phi_sum_exp_step_python_test_shape_compute_correct
+       └─ flash_decode2_phi_sum_exp_step_kernel_compute_correct
+
+flash_decode2_phi_python_test_shape_running_max_output_summary  ← TOP (running-max invariant)
+  using runningMaxAfter (runningMaxAfter_zero / runningMaxAfter_succ)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float, so the `-inf` init, `exp`,
+running-max rescaling, and the final division are real-valued);
+`@triton.autotune` / `num_warps` / `num_stages` are not modeled. The verification
+is split across four separately-proven faces rather than one whole-loop theorem,
+all at the Python test shape (`head_dim = 64`, `BLOCK_DMODEL = 64`, four
+`BLOCK_SEQ ∈ {16, 17, 8, 32}` surfaces, `batch = 2`, `head = 4`, `seq_block = 3`):
+(1) the **masked final store** to `Out` (`finalStoreValue`, mask `active s 64 i`
+= `offs_d < head_dim`); (2) the **final normalization store** (`acc / sum_exp` =
+`normalizedStoreValue`); (3) one **masked accumulator step** plus the matching
+**sum-exp step** of the loop body (`accumulatorStepValue` / `sumExpStepValue`);
+and (4) the **running-max loop invariant** stated recursively as `runningMaxAfter`
+(starts `-inf`, joins each `Mid_O_LogExpSum` element). Masked-off lanes
+(`offs_d ≥ head_dim`) are preserved. The intermediate `Acc`/`SumExp`/`MaxLogic`
+register state is taken as given for the store faces; the full loop is not
+unrolled into one closed-form spec, so the end-to-end statement is the
+composition of these faces with the (trusted) loop scheduling.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FlashDecode2Phi
 
 open VeriTile.Triton

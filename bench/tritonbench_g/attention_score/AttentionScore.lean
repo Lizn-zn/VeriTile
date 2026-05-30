@@ -3,6 +3,66 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `attention_score` — strict per-kernel correctness
+
+`_score_kernel` computes attention *scores* (per-key column sums of the softmax
+probabilities), not the attention output. Program `(start_n, off_hz)` fixes one
+`BLOCK_N` block of keys for one (batch, head), loads `k`, then loops over the
+query blocks (`start_m` by `BLOCK_M`) accumulating `o += sum(p, axis=0)` where
+`p = exp2(dot(q,k)·qk_scale - m)` are the precomputed-`M`-normalized softmax
+weights, with optional sliding-window/`IS_EVEN_N` masking via `where(mask, p,
+0)`. The accumulated column sums `o` are stored to `Out`, masked by
+`o_range < NKV_CTX`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_score_kernel[grid](...)`, the grid over
+`(cdiv(NKV_CTX, BLOCK_N), Z·H)`, block scheduling, the `@triton.heuristics`
+`IS_EVEN_M`/`IS_EVEN_N` selection, and how the runtime composes per-program
+writes into one buffer) is the *trusted boundary*, not a proof obligation here.
+Because `start_n`/`off_hz` are universally quantified, the per-program statement
+covers every program of the grid.
+
+## Proof architecture
+
+The four `output_summary` theorems mirror the four Python test cases
+(case1: sliding window non-complement; case2: complement; case3: no sliding
+window; case4: smaller sliding-window size). `case1` is a standalone theorem;
+`case2`/`case3`/`case4` are `abbrev` aliases for the corresponding
+`*_output_surface_summary` theorems.
+
+```
+attention_score_python_case1_output_summary                  ← TOP THEOREM
+  ├─ attention_score_python_case1_surface_toAlgorithm_supported   surface lowers to algorithm layer
+  └─ attention_score_case1_surface_compute_correct                masked Out store (producedAttentionScoreCase1OutValue)
+
+attention_score_python_case{2,3,4}_output_summary            ← abbrev = *_output_surface_summary
+  └─ attention_score_python_case{2,3,4}_output_surface_summary
+       └─ attention_score_python_case{2,3,4}_surface_toAlgorithm_supported (+ surface store)
+
+attention_score_final_store_python_test_shape_compute_correct
+  └─ attention_score_final_store_slice_compute_correct        ← ComputeCorrect over the masked Out store
+       └─ attention_score_final_store_slice_correct           ← algorithm-layer readback per lane
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the output-dtype cast
+collapses to the identity post-erasure; `@triton.autotune`/`@triton.heuristics`
+and `num_warps`/`num_stages` are not modeled. The summaries are stated at the
+Python test shape (`B=2, H=4, N_CTX=NKV_CTX=128, D_MODEL=64,
+BLOCK_M=BLOCK_N=64`, contiguous strides) with the case-specific
+`SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW` flags and window sizes baked into
+the launch arguments; `sm_scale` is kept universally quantified. The `Out`
+writeback is stated against `producedAttentionScoreCase1OutValue` (the
+single-program surface value at each offset), capturing the full query-block
+accumulation loop. This is a single-program (single key-block) scope;
+cross-program composition into the full score buffer is the trusted host
+boundary.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.AttentionScore
 
 open VeriTile.Triton

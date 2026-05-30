@@ -3,6 +3,55 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `token_attn_mistral` — strict per-kernel correctness
+
+`_fwd_kernel_token_att2` is the Mistral token-decode PV-accumulation stage. Each
+program `(cur_batch, cur_head)` streams over the attention-window tokens
+(`cur_batch_start_index = max(cur_batch_seq_len - sliding_window, 0)`), loads the
+per-token probabilities `Prob` and the value rows `V` gathered through
+`Req_to_tokens`, accumulates `acc = Σ p_value · v` into a `[BLOCK_DMODEL]`
+vector, and stores it to `Out`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_token_att2[grid](...)` over `(batch, head)`,
+the scheduling, and how the runtime composes per-program writes into one buffer)
+is the *trusted boundary*, not a proof obligation here. Because the program ids
+`(cur_batch, cur_head)` are universally quantified, the per-program statement
+covers every program of the grid.
+
+## Proof architecture
+
+```
+token_attn_mistral_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS (one per Python test case)
+  ├─ token_attn_mistral_python_case{i}_surface_toAlgorithm_supported   surface lowers to the algorithm layer
+  └─ token_attn_mistral_surface_output_compute_correct                 full surface, final store
+       └─ token_attn_mistral_final_store_python_test_shape_compute_correct
+            └─ token_attn_mistral_final_store_slice_compute_correct
+                 └─ token_attn_mistral_final_store_slice_correct        algorithm-layer readback per lane
+(supporting: token_attn_mistral_python_test_shape_offset_injective;
+ also: token_attn_mistral_python_case{i}_output_surface_summary — surface-only variants)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. Each per-case `output_summary` shows the surface kernel lowers to the
+algorithm layer AND the store to `Out` is compute-correct: every lane of the
+`[BLOCK_DMODEL]` output holds the surface-produced accumulator
+`tokenAttnMistralSurfaceValue` (`Σ p·v` with the sliding-window `start_index`
+offset and `Req_to_tokens` value gather folded in). The final store is
+**unmasked** (the whole `[BLOCK_DMODEL]` vector is written) and includes a
+`.to(Out.dtype)` cast that reduces to the identity at the algorithm layer; the
+PV-accumulation loop is carried *inside* the surface kernel and reflected in the
+produced-value spec rather than re-proven as a closed-form identity. The
+summaries are instantiated at the four Python test-function shapes (varying
+`BLOCK_DMODEL`/strides/`sliding_window`); other shapes are not covered by the top
+theorems.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.TokenAttnMistral
 
 open VeriTile.Triton

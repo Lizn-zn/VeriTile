@@ -4,6 +4,59 @@ import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `attention_fwd_triton1` — strict per-kernel correctness
+
+`attention_fwd_kernel` is a linear (chunked) attention forward kernel: program
+`i_bh` (one batch-head) carries a `[BD, BD]` recurrent state `b_h` across the
+`cdiv(T, BT)` time chunks. Per chunk it loads `Q`/`K`/`V` block pointers, scales
+`b_q` by `scale`, forms `b_s = dot(b_q, b_k)` and the local output
+`b_o = dot(b_s, b_v)`, optionally adds the inter-chunk term `dot(b_q, b_h)`,
+updates `b_h += dot(b_k, b_v)`, optionally stores `b_h` to `h` (`STORE`), and
+stores `b_o` to `o`. The `IFCOND` flag selects whether the first chunk skips the
+recurrent add (resetting `b_h = dot(b_k, b_v)` instead).
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`attention_fwd_kernel[grid](...)`, the grid over
+`batch·n_heads`, scheduling, and how the runtime composes per-program writes
+into one buffer) is the *trusted boundary*, not a proof obligation here. Because
+`i_bh` is universally quantified, the per-program statement covers every program
+of the grid.
+
+## Proof architecture
+
+```
+attention_fwd_triton1_python_test_shape_output_summary       ← TOP THEOREM
+  ├─ attention_fwd_triton1_surface_output_compute_correct     O store, 4 STORE/IFCOND branches
+  │    └─ attention_fwd_triton1_output_store_slice_compute_correct
+  │         └─ attention_fwd_triton1_output_store_slice_correct
+  └─ attention_fwd_triton1_surface_h_compute_correct          H store, 2 STORE branches
+       └─ attention_fwd_triton1_h_store_slice_compute_correct
+            └─ attention_fwd_triton1_h_store_slice_correct
+
+(supporting arithmetic-producer summaries, factored out as slice inputs:
+   attention_fwd_triton1_bo_formula_slice_compute_correct      ← boFormulaSpec
+   attention_fwd_triton1_bh_formula_slice_compute_correct      ← bhFormulaSpec)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); dtype casts collapse to
+the identity post-erasure; `@triton.autotune` / `num_warps`/`num_stages` are not
+modeled. The output summary is stated at the Python test shape
+(`B=2, H=8, T=1024, D=128, BT=32, BD=128, NT=32`, `scale = 1/sqrt(128)`,
+contiguous strides) and covers all four `STORE`/`IFCOND` combinations. The
+`O`/`H` writebacks are stated against `attentionFwdTriton1SurfaceValue` (the
+single-program surface value at each offset). The dot-product arithmetic that
+produces the `b_o`/`b_h` tiles is captured by the separate `bo_formula`/
+`bh_formula` slice summaries (`boFormulaSpec`/`bhFormulaSpec`) and fed in as
+slice inputs to keep the writeback statements tractable. This is a
+single-program (single batch-head) scope; cross-program composition is the
+trusted host boundary.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
 
 open VeriTile.Triton

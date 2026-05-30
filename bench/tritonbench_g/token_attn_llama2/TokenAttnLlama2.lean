@@ -4,6 +4,53 @@ import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `token_attn_llama2` — strict per-kernel correctness
+
+`_fwd_kernel_token_att1` is the Llama2 token-decode QK-score stage. Each program
+`(cur_batch, cur_head, start_n)` loads the single query vector `q`, gathers a
+`BLOCK_N` block of cached key tokens through `B_Loc` (offset by
+`cur_batch_start_index = max_input_len - cur_batch_seq_len`), computes the
+per-token score `att_value = sum(q * k) * sm_scale`, and stores it to `Att_Out`,
+masked by `offs_n_new < cur_batch_end_index`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_token_att1[grid](...)` with
+`grid = (batch, head, cdiv(max_input_len, BLOCK))`, the scheduling, and how the
+runtime composes per-program writes into one buffer) is the *trusted boundary*,
+not a proof obligation here. Because the program ids
+`(cur_batch, cur_head, start_n)` are universally quantified, the per-program
+statement covers every program of the grid.
+
+## Proof architecture
+
+```
+token_attn_llama2_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS (one per Python test case)
+  ├─ token_attn_llama2_python_case{i}_surface_toAlgorithm_supported   surface lowers to the algorithm layer
+  └─ token_attn_llama2_surface_output_compute_correct                 full surface, masked score store
+       ├─ token_attn_llama2_score_store_python_max{64,32}_compute_correct
+       │    └─ token_attn_llama2_score_store_slice_compute_correct
+       │         └─ token_attn_llama2_score_store_slice_correct        algorithm-layer readback per lane
+       └─ token_attn_llama2_python_max{64,32}_offset_injective
+(also: token_attn_llama2_python_case{i}_output_surface_summary — surface-only variants)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` /
+`num_warps` are not modeled. Each per-case `output_summary` shows the surface
+kernel lowers to the algorithm layer AND the masked store to `Att_Out` is
+compute-correct: every active lane (`offs_n_new < cur_batch_end_index`) holds the
+surface-produced score `tokenAttnLlama2SurfaceValue` (`sum(q·k)·sm_scale` with
+the `B_Loc` gather and varlen `start_index` offset folded in), and out-of-bounds
+lanes are preserved. The `start_mark` loop is the `block_mask`-guarded single
+iteration of the upstream kernel. The summaries are instantiated at the four
+Python test-function shapes (varying `BLOCK_DMODEL ∈ {32, 64}` and
+`max_input_len`/`batch`); other shapes are not covered by the top theorems.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.TokenAttnLlama2
 
 open VeriTile.Triton
