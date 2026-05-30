@@ -5,6 +5,82 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Optimizer
 import VeriTile.Triton.Launch.Composition
 
+/-!
+# `adam_update_triton` — proof architecture
+
+The Python kernel is named "adam" but implements **Lion** (Chen et al.): a
+sign-based parameter update driven by a single momentum buffer, with decoupled
+weight decay. Per launch, program `pid` updates the block
+`[pid·BLOCK_SIZE, (pid+1)·BLOCK_SIZE)` of two buffers — `p_ptr` (parameters) and
+`exp_avg_ptr` (momentum) — masked to `< n_elements`.
+
+The verification is layered. Each layer is built from the one below it; the
+"single program" layers are then composed into a whole-grid statement.
+
+```
+update_fn_kernel_launchCorrect                       ← FINAL THEOREM
+  · unconditional; packages the result as two reusable `Kernel.LaunchCorrect`
+    instances (p_ptr ⇒ lionParam, exp_avg_ptr ⇒ lionMomentum).
+  · witnessed by `adamLaunch`; correctness from `…_unconditional`.
+  │
+  ├─ adamLaunch : GridLaunchedOrdinary                ← the CONSTRUCTED launch
+  │   · frames + pairwise write-disjointness + merged memory (h_final := rfl).
+  │   ├─ adamFrame  (one ExecFrame per program)
+  │   │   ├─ adam_exec_isSome      — progress: `exec` always returns `some`.
+  │   │   └─ adam_writeWithin      — each program writes ONLY its two masked
+  │   │       blocks; everything else is untouched.  ⟵ the hard footprint proof
+  │   │       (writeMem foldl `WriteWithin` helpers + 3-leg `writeWithin_trans`:
+  │   │        setReg base → p_ptr store → exp_avg_ptr store).
+  │   └─ adamFrames_disjoint       — distinct programs write distinct cells.
+  │       ├─ block_offset_inj      — pid·B+i = pid'·B+j (i,j<B) ⇒ pid = pid'.
+  │       └─ adamGrid_idx_ext      — a 1-D grid index is its axis-0 value.
+  │
+  └─ update_fn_kernel_grid_correct_unconditional      ← raw `∀ k < n` form
+      · discharges the workhorse's launch/footprint/coverage hypotheses using
+        `adamLaunch`, `adam_cdiv_covers`, and `fun idx => rfl`.
+      │
+      └─ update_fn_kernel_grid_merged_correct          ← RELATIONAL workhorse
+          · GIVEN a disjoint launch + per-program footprints = `adamWritesFP`,
+            every in-bounds global cell of the merged memory = the Lion oracle.
+          ├─ update_fn_kernel_p_correct / _exp_avg_correct   (per-program)
+          │     · one program's masked store realizes pFullSpec / expAvgFullSpec,
+          │       which are thin wrappers over `lionParam` / `lionMomentum`
+          │       (the math lives once in `VeriTile.Triton.Math.Optimizer`).
+          ├─ GridLaunchedOrdinary.observeOrdinaryCell        (read merged cell)
+          ├─ grid_offset_covers_exactly_once                 (each k owned once)
+          └─ adam_cdiv_covers                                (grid covers [0,n))
+```
+
+## Why the layers
+
+* **Single-program correctness** (`…_p_correct`, `…_exp_avg_correct`) is the
+  arithmetic core: execute the kernel on one `BlockState` and read back the two
+  masked stores. The specs `pFullSpec` / `expAvgFullSpec` are *oracle wrappers*
+  — they apply the layout-free Lion oracle to the values this lane loads, so the
+  formula is stated once, in `Math.Optimizer`, and never duplicated here.
+
+* **Relational whole-grid** (`…_grid_merged_correct`) composes programs. It does
+  NOT execute the grid; the concurrent launch is supplied as a
+  `GridLaunchedOrdinary` witness (the codebase convention for real kernels). It
+  characterizes the *single merged memory* `sFinal` at every global index `k`,
+  using coverage (each `k` is owned by exactly one program, `pid = k / BLOCK`)
+  and disjointness (no two programs write the same cell).
+
+* **Unconditional** (`…_grid_correct_unconditional`, `…_launchCorrect`)
+  *constructs* the launch witness — proving the grid execution succeeds
+  (`adam_exec_isSome`), bounds each program's writes (`adam_writeWithin`), and
+  shows programs do not collide (`adamFrames_disjoint`) — so the relational
+  hypotheses disappear. The final theorem has only the basic side conditions
+  `0 < BLOCK_SIZE` and `p_ptr ≠ exp_avg_ptr`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled; the grid is composed by `mergeFrames` rather than executed
+concurrently. These are the standard VeriTile conventions, shared with the
+FlashAttention examples.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.AdamUpdateTriton
 
 open VeriTile.Triton
