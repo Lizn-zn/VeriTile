@@ -81,7 +81,7 @@ concurrently. These are the standard VeriTile conventions, shared with the
 FlashAttention examples.
 -/
 
-namespace VeriTile.Bench.TritonBenchG.AdamUpdateTriton
+namespace VeriTile.Examples.AdamUpdateGridLaunch
 
 open VeriTile.Triton
 
@@ -769,4 +769,4 @@ theorem update_fn_kernel_launchCorrect
       exact (hcorrect k hk).2
     · rw [if_neg hk] at hwrite; exact absurd hwrite (by simp)
 
-end VeriTile.Bench.TritonBenchG.AdamUpdateTriton
+end VeriTile.Examples.AdamUpdateGridLaunch

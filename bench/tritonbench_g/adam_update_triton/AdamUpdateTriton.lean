@@ -20,8 +20,8 @@ nothing on the host side. The verification target is exactly the artifact the
 user wrote (`@triton.jit def update_fn_kernel`); the launch `kernel[grid](...)`,
 the grid size `triton.cdiv(...)`, and how the runtime composes per-program
 memories into one buffer are the *trusted boundary*, not proof obligations here.
-(A whole-grid / launch-composition treatment lives separately in
-`AdamUpdateTriton_Full.lean`.)
+(A whole-grid / launch-composition treatment lives separately as the worked
+example `VeriTile.Examples.AdamUpdateGridLaunch`.)
 
 ## Proof architecture
 
@@ -311,7 +311,9 @@ launch theorem.  It says three things about executing one Triton program/block:
 The side condition `p_ptr ≠ exp_avg_ptr` rules out aliasing between the two
 output regions, so the second masked store cannot overwrite the first output.
 Grid coverage, `cdiv n_elements BLOCK_SIZE`, and cross-program disjointness are
-separate whole-grid obligations; they are not claimed by this theorem. -/
+separate whole-grid obligations handled by the worked example
+`VeriTile.Examples.AdamUpdateGridLaunch`, outside the scope of this per-kernel
+theorem. -/
 theorem update_fn_kernel_output_summary
     (p_ptr grad_ptr exp_avg_ptr : RegionName)
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
