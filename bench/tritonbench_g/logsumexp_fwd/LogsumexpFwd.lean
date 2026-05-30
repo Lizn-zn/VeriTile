@@ -8,6 +8,56 @@ import VeriTile.Triton.Semantics.MaskedReduction
 import VeriTile.Examples.Common
 import VeriTile.Examples.LogSumExpEq
 
+/-!
+# `logsumexp_fwd` — strict per-kernel correctness
+
+`logsumexp_fwd_kernel` is a row-wise log-sum-exp: program `(i_n, i_d)` loads the
+`B`-sized block `[i_d·B, (i_d+1)·B)` of row `i_n` from `x`, optionally scales it
+by `scale` (`HAS_SCALE`), computes the numerically-stable
+`log(∑ exp(b_x − max b_x)) + max b_x`, and stores the per-block result to
+`z[i_n·cdiv(D, B) + i_d]`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`logsumexp_fwd_kernel[grid](...)`, the grid size
+`(N, cdiv(D, B))`, and how the runtime composes per-program writes into `z`) is
+the *trusted boundary*. The grid-level theorem below is stated in the
+per-program-local `Kernel.ForAllProgramsSome` form (one statement quantified
+over every grid index), not a unified merged-state launch. Because the
+program-id is universally quantified, the per-program statement covers every
+program of the grid. The kernel deliberately stops at the Triton boundary; it
+does **not** model the Python wrapper's later `z.logsumexp(-1)` cross-block
+reduction.
+
+## Proof architecture
+
+```
+logsumexp_fwd_kernel_output_summary               ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)                 surface lowers to the algorithm layer
+  └─ logsumexp_fwd_kernel_compute_correct         ← ComputeCorrect, single-block row D=B=n+1
+       └─ logsumexp_fwd_kernel_correct            ← full-row LSE readback
+            └─ logsumexp_fwd_kernel_correct_full  ← tail-block masked-lane core
+logsumexp_fwd_kernel_grid_blockLSE_correct        ← whole-grid per-block blockLSE
+  └─ logsumexp_fwd_kernel_correct_full            (shared masked-lane core)
+```
+
+The spec is the standard mathematical `LSE` / `blockLSE` / `partialLSE_full`
+from the `VeriTile.Triton.Math.LogSumExp` (`TiledLogSumExp`) oracle — the math
+is *not* inline-duplicated here.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` and the
+`@triton.heuristics` `HAS_SCALE` selection are not modeled (`HAS_SCALE` is a
+plain `Bool` parameter, both branches proved). Out-of-range lanes in the tail
+block are loaded with `other = -float("inf")` (= `⊥ : WithBot ℝ`); the reduction
+is proved to depend only on the valid lanes (`withBot_sup'_partial`,
+`sum_exp_masked_eq`), so padded-block values never contaminate the result. The
+`.to(tl.int64)` casts on the program ids erase to identity at the algorithm
+layer.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.LogsumexpFwd
 
 open VeriTile.Triton VeriTile.Triton.TiledLogSumExp VeriTile.Examples
@@ -304,5 +354,26 @@ theorem logsumexp_fwd_kernel_grid_blockLSE_correct
       rw [partialLSE_full_eq_blockLSE
         (xs (sIdx.pids 0)) (sIdx.pids 1) h_tail HAS_SCALE scale] at hview
       simpa [sIdx, h_tail] using hview
+
+/-- Per-kernel output summary for `logsumexp_fwd_kernel`: the DSL surface lowers
+to the algorithm layer, and in the single-block configuration `D = B = n + 1`
+(pid axis-1 = 0) the store to `z[i_n]` is compute-correct — it holds the
+standard mathematical row `LSE xs HAS_SCALE scale`. -/
+theorem logsumexp_fwd_kernel_output_summary
+    (x z : RegionName)
+    (n : Nat) (HAS_SCALE : Bool) (scale : ℝ)
+    (s : BlockState)
+    (xs : Fin (n+1) → ℝ)
+    (h_x : ∀ j : Fin (n+1), s.readMem x (s.pids 0 * (n+1) + j.val) = xs j)
+    (h_pid1 : s.pids 1 = 0) :
+    (∃ alg, (logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := logsumexp_fwd_kernel x z (n+1) (n+1) HAS_SCALE scale)
+      (initialState := s)
+      (write := fun _ : PUnit => some (z, s.pids 0))
+      (expected := fun _ => LSE xs HAS_SCALE scale) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact logsumexp_fwd_kernel_compute_correct x z n HAS_SCALE scale s xs h_x h_pid1
 
 end VeriTile.Bench.TritonBenchG.LogsumexpFwd

@@ -3,6 +3,51 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `nested_loops_processing` — strict per-kernel correctness
+
+`nested3` walks two pointers (`a_ptrs` into `in_ptr`, `c_ptrs` into `out_ptr`)
+through three nested static `range(0, 2)` loops, loading `2×2` tiles `a1`/`a2`/
+`a3` and storing them into successive `2×2` output blocks while advancing the
+pointers by `2 * stride_n` between stores. Each store is a faithful copy of a
+shifted input tile into a shifted output tile.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`nested3[grid](...)`, the grid size `n_cols // 4`, the
+strides passed from the host, and cross-program composition of `out_ptr`) is the
+*trusted boundary*, not a proof obligation here. The program id enters only via
+`BlockState`, so the per-program statement covers every program.
+
+## Proof architecture
+
+```
+nested3_python_surfaces_output_summary          ← TOP THEOREM (the four checked layouts lower)
+  └─ nested3_python_case{1..4}_surface_toAlgorithm_supported
+       └─ nested3_surface_toAlgorithm_supported  (full nested-loop surface lowers)
+
+nested3_first_a1_store_compute_correct          ← per-store ComputeCorrect (initial a1 block)
+  └─ nested3_first_a1_store_correct
+nested3_shifted_store_compute_correct           ← shifted source=dest copy slice
+nested3_shifted_copy_store_compute_correct      ← generic IN_SHIFT≠OUT_SHIFT copy slice
+  └─ instantiated per (i, j, k) iteration as the nested3_second_*_store_compute_correct family
+```
+
+Each `*_store_compute_correct` shows the corresponding `2×2` block is copied
+verbatim from the (shifted) input region to the (shifted) output region.
+
+## Modeling boundary
+
+Values are over `ℝ` (not bit-accurate; the Python test uses `int32` but the
+kernel only copies, so the modeling is exact up to the `ℝ` carrier);
+`@triton.autotune` is not present. The full kernel's per-iteration pointer
+arithmetic is unrolled into explicit per-store slices (`nested3_shifted_*`) with
+the shift constants tracked by hand; the full surface is verified only to lower
+(`toAlgorithm?`). Each block scatter requires its `2×2` output offset map to be
+injective (`hOutInj` on `matrixOffset` / `matrixOffsetShift`).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.NestedLoopsProcessing
 
 open VeriTile.Triton
