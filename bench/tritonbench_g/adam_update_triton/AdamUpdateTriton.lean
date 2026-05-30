@@ -507,53 +507,6 @@ theorem update_fn_kernel_grid_merged_correct
     rw [hsf, hEcorr, expAvgFullSpec, hoff]
     simp only [hread]
 
-/-- Reusable packaging of whole-grid correctness as `Kernel.LaunchCorrect`: both
-Python-observable outputs of `update_fn` realize the Lion oracle in the single
-merged memory. `p_ptr` realizes `lionParam` and `exp_avg_ptr` realizes
-`lionMomentum` at every in-bounds global index, for any disjoint launch whose
-per-program footprints match `adamWritesFP`. -/
-theorem update_fn_kernel_launchCorrect
-    (p_ptr grad_ptr exp_avg_ptr : RegionName)
-    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE m : Nat)
-    (hB : 0 < BLOCK_SIZE) (hRegions : p_ptr ≠ exp_avg_ptr)
-    (s : BlockState)
-    (hcover : ∀ k, k < n_elements → k / BLOCK_SIZE < m) :
-    Kernel.LaunchCorrect
-      (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel (adamGrid m) s
-      (fun idx => adamWritesFP p_ptr exp_avg_ptr n_elements BLOCK_SIZE
-        (s.withGridIndex idx))
-      (fun k : Nat => if k < n_elements then some (p_ptr, k) else none)
-      (fun k => TiledOptimizer.lionParam (s.readMem p_ptr k)
-        (s.readMem exp_avg_ptr k) (s.readMem grad_ptr k) lr wd beta1) ∧
-    Kernel.LaunchCorrect
-      (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel (adamGrid m) s
-      (fun idx => adamWritesFP p_ptr exp_avg_ptr n_elements BLOCK_SIZE
-        (s.withGridIndex idx))
-      (fun k : Nat => if k < n_elements then some (exp_avg_ptr, k) else none)
-      (fun k => TiledOptimizer.lionMomentum (s.readMem exp_avg_ptr k)
-        (s.readMem grad_ptr k) beta2) := by
-  refine ⟨?_, ?_⟩
-  · intro sFinal hL hFrames k addr hwrite
-    dsimp only at hwrite
-    by_cases hk : k < n_elements
-    · rw [if_pos hk, Option.some.injEq] at hwrite
-      subst hwrite
-      exact (update_fn_kernel_grid_merged_correct p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE m hB hRegions s sFinal
-        hcover hL hFrames k hk).1
-    · rw [if_neg hk] at hwrite; exact absurd hwrite (by simp)
-  · intro sFinal hL hFrames k addr hwrite
-    dsimp only at hwrite
-    by_cases hk : k < n_elements
-    · rw [if_pos hk, Option.some.injEq] at hwrite
-      subst hwrite
-      exact (update_fn_kernel_grid_merged_correct p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE m hB hRegions s sFinal
-        hcover hL hFrames k hk).2
-    · rw [if_neg hk] at hwrite; exact absurd hwrite (by simp)
-
 /-! ## Unconditional whole-grid launch
 
 The relational results above take the launch witness as a hypothesis. This
@@ -693,5 +646,51 @@ theorem update_fn_kernel_grid_correct_unconditional
     (adamLaunch p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
       n_elements BLOCK_SIZE m hB hRegions s)
     (fun idx => rfl) k hk
+
+/-- **Unconditional `LaunchCorrect` packaging.** Both Python-observable outputs
+of `update_fn` satisfy the reusable `Kernel.LaunchCorrect` contract outright (no
+launch/footprint hypotheses): launching `update_fn_kernel` over the
+`cdiv n_elements BLOCK_SIZE`-program grid yields a merged memory in which
+`p_ptr` realizes `lionParam` and `exp_avg_ptr` realizes `lionMomentum` at every
+in-bounds global index. The launch witness is the constructed `adamLaunch`. -/
+theorem update_fn_kernel_launchCorrect
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (hB : 0 < BLOCK_SIZE) (hRegions : p_ptr ≠ exp_avg_ptr) (s : BlockState) :
+    Kernel.LaunchCorrect
+      (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel
+      (adamGrid ((n_elements + BLOCK_SIZE - 1) / BLOCK_SIZE)) s
+      (fun k : Nat => if k < n_elements then some (p_ptr, k) else none)
+      (fun k => TiledOptimizer.lionParam (s.readMem p_ptr k)
+        (s.readMem exp_avg_ptr k) (s.readMem grad_ptr k) lr wd beta1) ∧
+    Kernel.LaunchCorrect
+      (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel
+      (adamGrid ((n_elements + BLOCK_SIZE - 1) / BLOCK_SIZE)) s
+      (fun k : Nat => if k < n_elements then some (exp_avg_ptr, k) else none)
+      (fun k => TiledOptimizer.lionMomentum (s.readMem exp_avg_ptr k)
+        (s.readMem grad_ptr k) beta2) := by
+  set m := (n_elements + BLOCK_SIZE - 1) / BLOCK_SIZE with hm
+  have hcorrect := update_fn_kernel_grid_correct_unconditional
+    p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE hB hRegions s
+  refine ⟨⟨_, adamLaunch p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+      n_elements BLOCK_SIZE m hB hRegions s, ?_⟩,
+    ⟨_, adamLaunch p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+      n_elements BLOCK_SIZE m hB hRegions s, ?_⟩⟩
+  · intro k addr hwrite
+    dsimp only at hwrite
+    by_cases hk : k < n_elements
+    · rw [if_pos hk, Option.some.injEq] at hwrite
+      subst hwrite
+      exact (hcorrect k hk).1
+    · rw [if_neg hk] at hwrite; exact absurd hwrite (by simp)
+  · intro k addr hwrite
+    dsimp only at hwrite
+    by_cases hk : k < n_elements
+    · rw [if_pos hk, Option.some.injEq] at hwrite
+      subst hwrite
+      exact (hcorrect k hk).2
+    · rw [if_neg hk] at hwrite; exact absurd hwrite (by simp)
 
 end VeriTile.Bench.TritonBenchG.AdamUpdateTriton
