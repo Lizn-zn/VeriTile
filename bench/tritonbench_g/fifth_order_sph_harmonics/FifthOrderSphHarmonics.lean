@@ -3,6 +3,55 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `fifth_order_sph_harmonics` — strict per-kernel correctness
+
+`fifth_order_fwd` evaluates the eleven real fifth-order spherical-harmonic
+basis polynomials elementwise: each program loads a `block_size` tile of
+`(x, y, z)` coordinates, computes the shared monomial intermediates and the
+eleven polynomials `Y00..Y10` (each a fixed-constant polynomial in `x, y, z`),
+and writes each channel with a strided store into `output_ptr`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program
+`@triton.jit` body. The host launch (grid over coordinate blocks via
+`calculate_lastdim_num_blocks`, and how the runtime composes per-program
+strided writes) is the *trusted boundary*. Because `tl.program_id(0)` is
+universally quantified, the per-program statement covers every program.
+
+## Proof architecture
+
+```
+fifth_order_fwd_surface_y00_output_summary       ← TOP THEOREM (channel Y00)
+  ├─ (toAlgorithm? = Except.ok _)                 surface lowers to the algorithm layer
+  └─ fifth_order_fwd_surface_y00_compute_correct  ComputeCorrect over the Y00 strided store
+       └─ fifth_order_fwd_surface_y00_correct      per-lane readback of y00Spec
+
+fifth_order_fwd_surface_y0k_compute_correct       ← per-channel (k = 0..10)
+  └─ fifth_order_fwd_surface_y0k_correct           per-lane readback of y0kSpec
+```
+
+The eleven `fifth_order_fwd_surface_y0{0..10}_compute_correct` theorems each
+verify one output channel of the full surface kernel against its polynomial
+spec `y0kSpec`. `fifth_order_fwd_y00_compute_correct` is the proof-oriented
+single-channel projection.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype `.to(...)` casts
+erase to the identity. The kernel is purely elementwise (no recurrence): each
+output is a polynomial in the loaded `(x, y, z)` lane values, modeled with
+`Option.map₂` over the loaded coordinates so out-of-range loads propagate.
+The eleven forward channels `Y00..Y10` are each verified; the backward kernel
+`fifth_order_bwd` is transcribed and its disjointness infrastructure
+(`coord_dim_offset_disjoint`) is provided, but the ~30-constant-per-dimension
+gradient polynomials are **not** verified (left for future work, stated
+honestly in the backward-section doc). Side conditions: per-channel
+output-store-offset injectivity (`hOutInj`) and a stride bound (`hStride :
+10 < output_stride`) so the eleven channel columns are disjoint.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FifthOrderSphHarmonics
 
 open VeriTile.Triton
@@ -2704,5 +2753,36 @@ theorem coord_dim_offset_disjoint
     have h5 : idx.1.val * 3 + od < i.val * 3 := Nat.lt_of_lt_of_le h3 h4
     have h6 : i.val * 3 ≤ i.val * 3 + gd := Nat.le_add_right _ _
     exact absurd hkey.symm (Nat.ne_of_lt (Nat.lt_of_lt_of_le h5 h6))
+
+/-- Per-kernel output summary for `fifth_order_fwd` (representative channel
+`Y00`): the DSL surface lowers to the algorithm layer, and the strided `Y00`
+store to `output_ptr` is compute-correct — every active lane holds the
+spherical-harmonic polynomial value `y00Spec`, inactive lanes are preserved.
+Mirrors `add_kernel_output_summary`. The remaining channels `Y01..Y10` are
+covered by the sibling `fifth_order_fwd_surface_y0k_compute_correct`
+theorems. -/
+theorem fifth_order_fwd_surface_y00_output_summary
+    (coord_ptr output_ptr : RegionName)
+    (block_size coord_numel output_numel col_offset output_stride : Nat)
+    (s : BlockState)
+    (hStride : 10 < output_stride)
+    (hOutInj : Function.Injective
+      (fun i : Fin block_size => outOffset s block_size col_offset output_stride i)) :
+    (∃ alg, (fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
+        output_numel col_offset output_stride).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
+        output_numel col_offset output_stride)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin block_size =>
+          outOffset s block_size col_offset output_stride i < output_numel)
+        (fun i => (output_ptr, outOffset s block_size col_offset output_stride i)))
+      (expected := fun i => y00Spec s coord_ptr block_size coord_numel i) := by
+  refine ⟨⟨(fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
+      output_numel col_offset output_stride).toAlgKernel, ?_⟩, ?_⟩
+  · simp [fifth_order_fwd_surface]
+  · exact fifth_order_fwd_surface_y00_compute_correct coord_ptr output_ptr block_size
+      coord_numel output_numel col_offset output_stride s hStride hOutInj
 
 end VeriTile.Bench.TritonBenchG.FifthOrderSphHarmonics

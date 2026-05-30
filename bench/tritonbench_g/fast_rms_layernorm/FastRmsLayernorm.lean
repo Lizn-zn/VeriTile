@@ -3,6 +3,65 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `fast_rms_layernorm` — strict per-kernel correctness
+
+`_rms_layernorm_forward` is the Unsloth fast RMSNorm forward: each program
+`row_idx` normalizes one row of `X` by its root-mean-square, scales by per-column
+weights `W`, and writes `Y = (X * inv_var) * W` together with the per-row
+reciprocal std `r = inv_var`. A `_gemma_rms_layernorm_forward` variant uses the
+`(W + 1)` Gemma scaling, and a `_rms_layernorm_backward` kernel (plain and Gemma)
+is also transcribed and its `dY` gradient verified.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies, for one program (one row). The host launch (grid over rows
+`(n_rows,)`, the host-side `BLOCK_SIZE` choice via `calculate_settings`, the
+`GEMMA` heuristic dispatch, scheduling, and how the runtime composes per-row
+writes into the buffers) is the *trusted boundary*, not a proof obligation here.
+Because `row_idx = tl.program_id(0)` is universally quantified (via `s.pid`), the
+per-program statement covers every row of the grid.
+
+## Proof architecture
+
+```
+rms_layernorm_forward_output_summary          ← TOP THEOREM (plain forward)
+  ├─ rms_layernorm_forward_surface_toAlgorithm_supported   surface lowers
+  └─ rms_layernorm_forward_all_outputs_compute_correct
+       ├─ rms_layernorm_forward_y_compute_correct   ← masked Y store
+       │    └─ rms_layernorm_forward_y_correct
+       └─ rms_layernorm_forward_inv_var_compute_correct  ← scalar rstd store into r
+            └─ rms_layernorm_forward_inv_var_correct
+gemma_rms_layernorm_forward_output_summary    ← TOP THEOREM (Gemma forward)
+  └─ gemma_rms_layernorm_forward_all_outputs_compute_correct  (analogous)
+rms_layernorm_backward_dy_compute_correct     ← backward dY (plain)
+gemma_rms_layernorm_backward_dy_compute_correct  ← backward dY (Gemma)
+```
+
+The two forward summaries are the public top theorems. The RMS row math
+(`rmsInputTile`, `rmsSumCarrier`, `rmsInvVarCarrier`, `rmsLayernormYSpec`,
+`gemmaRmsLayernormYSpec`) is defined inline in this file rather than reusing
+`VeriTile.Triton.Math.RMSNorm`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `.to(tl.float32)` load
+casts and the `normed.to(W_row.dtype)` cast reduce to identity at the algorithm
+layer (post-erasure all dtypes unify to `ℝ`). The reduction
+`tl.sum(X_row * X_row) / n_cols` sums over the *padded* `BLOCK_SIZE` block, but
+out-of-range lanes are masked to `0` (load `other=0`), so the sum equals the
+logical row length `n_cols`. The reciprocal std is
+`inv_var = rsqrt(meanSq + eps) = 1 / sqrt(meanSq + eps)` (`rmsInvVarCarrier`);
+the affine step is `(X * inv_var) * W` (plain) or `(X * inv_var) * (W + 1)`
+(Gemma). The scalar `r` store is characterized via `rmsInvVarSpec`
+(`WithBot.unbotD 0` of the carrier). This is a single-block kernel: `BLOCK_SIZE`
+covers the whole row in one pass, with the `col_offsets < n_cols` mask handling
+the padded tail. Output/input disjointness (`Y ≠ r`, `r ≠ Y`) is assumed. The
+`@triton.heuristics` GEMMA dispatch is modeled by the two separate forward
+kernels rather than a runtime branch. `@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FastRmsLayernorm
 
 open VeriTile.Triton

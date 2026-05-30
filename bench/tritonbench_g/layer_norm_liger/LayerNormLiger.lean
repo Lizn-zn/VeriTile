@@ -3,6 +3,62 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `layer_norm_liger` — strict per-kernel correctness
+
+`_layer_norm_forward_kernel` is the Liger LayerNorm forward: each program
+`row_idx` normalizes one row of `X` by its mean and variance, applies affine
+scale `W` and bias `B`, and writes the normalized row
+`Y = (X - mean) * rstd * W + B` together with the per-row mean `Mean` and
+reciprocal std `RSTD`, where `rstd = 1 / sqrt(var + eps)`. The Liger backward
+surface is also transcribed (lowering checked).
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body, for one program (one row). The host launch (grid over rows `(n_rows,)`,
+the host-side `BLOCK_SIZE` choice via `calculate_settings`, scheduling, and how
+the runtime composes per-row writes into the buffers) is the *trusted boundary*,
+not a proof obligation here. Because `row_idx = tl.program_id(0)` is universally
+quantified (via `s.pid`), the per-program statement covers every row of the grid.
+
+## Proof architecture
+
+```
+layer_norm_liger_forward_output_summary       ← TOP THEOREM
+  ├─ layer_norm_liger_forward_surface_toAlgorithm_supported   surface lowers
+  └─ layer_norm_liger_forward_all_outputs_compute_correct
+       ├─ layer_norm_liger_forward_y_compute_correct      ← masked Y store
+       │    └─ layer_norm_liger_forward_y_correct
+       ├─ layer_norm_liger_forward_mean_compute_correct   ← scalar mean store
+       │    └─ layer_norm_liger_forward_mean_correct
+       └─ layer_norm_liger_forward_inv_var_compute_correct ← scalar rstd store
+            └─ layer_norm_liger_forward_inv_var_correct
+```
+
+The summary characterizes all three Python-observable forward outputs `Y`,
+`Mean`, and `RSTD`. There are additional proof-oriented store-slice theorems
+(`layer_norm_liger_forward_mean_store_slice_*`,
+`layer_norm_liger_forward_rstd_store_slice_*`) that isolate the scalar stores;
+the layernorm row math is defined inline in this file rather than reusing
+`VeriTile.Triton.Math.RMSNorm`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The reductions
+`tl.sum(X_row) / n_cols` and `tl.sum((X_row - mean)²) / n_cols` sum over the
+*padded* `BLOCK_SIZE` block, but out-of-range lanes are masked to `0` (load
+`other=0`), so each sum equals the logical row length `n_cols`. The reciprocal
+std is `rstd = rsqrt(var + eps) = 1 / sqrt(var + eps)`
+(`layernormInvVarCarrier`); the affine step is `(X - mean) * rstd * W + B`. The
+scalar `Mean` / `RSTD` stores are characterized via `WithBot.unbotD 0` of their
+carriers. This is a single-block kernel: `BLOCK_SIZE` covers the whole row in one
+pass, with the `col_offsets < n_cols` mask handling the padded tail.
+Output/output disjointness among `Y`, `Mean`, `RSTD` is assumed (`Y ≠ Mean`,
+`Y ≠ RSTD`, `Mean ≠ Y`, `Mean ≠ RSTD`, `RSTD ≠ Y`). `@triton.autotune` is not
+modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.LayerNormLiger
 
 open VeriTile.Triton

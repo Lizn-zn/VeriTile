@@ -4,6 +4,53 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Activation
 
+/-!
+# `swiglu_backward` — strict per-kernel correctness
+
+`_swiglu_bwd_kernel` is the backward pass of SwiGLU: program `(row, col_block)`
+loads the gate `X`, value `Y`, and upstream gradient `DOUT`, recomputes
+`x_sigmoid = σ(x)`, and writes the two input gradients `dx`→`DX`, `dy`→`DY`, plus
+optionally (when `RECOMPUTE_OUTPUT`) the forward output `out = x·σ(x)·y`→`OUT`.
+All stores are masked by `cols < ncols`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_swiglu_bwd_kernel[grid](...)`, the 2-D grid
+`(M, cdiv(N, BLOCK_N))`, the `@triton.autotune` choice of `BLOCK_N`, the
+`@triton.heuristics` setting of `RECOMPUTE_OUTPUT`, and how the runtime composes
+per-program writes into one buffer) is the *trusted boundary*, not a proof
+obligation here. Because both program ids (`pids 0`, `pids 1`) are universally
+quantified, the per-program statement covers every program of the grid; the
+proof case-splits on the `RECOMPUTE_OUTPUT` flag, covering both heuristic
+outcomes.
+
+## Proof architecture
+
+```
+swiglu_bwd_kernel_output_summary              ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ swiglu_bwd_kernel_compute_correct        ← ComputeCorrect over three masked stores
+       └─ swiglu_bwd_kernel_correct           ← algorithm-layer readback per lane, per channel
+```
+
+## Modeling boundary
+
+The spec is an **oracle wrapper** over `VeriTile.Triton.Math.Activation`: the
+SwiGLU math (`TiledActivation.swigluBwdA/B`, `TiledActivation.swiglu`, built on
+`TiledActivation.silu`) lives once in `Math.Activation` and is reused here, so
+this file only checks that the kernel realizes those oracles lane-wise.
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `.to(tl.float32)` load
+casts reduce to the identity at the algorithm layer (post-erasure all dtypes
+unify to `ℝ`); `@triton.autotune` is not modeled. The kernel writes up to three
+channels (`DX`, `DY`, and conditionally `OUT`); the readback theorem assumes the
+three output regions are pairwise distinct (`DX ≠ DY`, `OUT ≠ DX`, `OUT ≠ DY`) so
+later stores cannot clobber earlier channels, and is stated as a `Sum`-indexed
+multi-output `ComputeCorrect` (not a single `writeIf`). The `RECOMPUTE_OUTPUT`
+control-flow branch is verified for both `true` and `false`. Inputs are presented
+as `s.readMem`-resolved tiles.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.SwigluBackward
 
 open VeriTile.Triton
@@ -314,5 +361,58 @@ theorem swiglu_bwd_kernel_compute_correct
           exact hi
         · simp [hRecompute, hActive]
       · simp [hRecompute]
+
+/-- Per-kernel output summary for `_swiglu_bwd_kernel`: the DSL surface lowers to
+the algorithm layer, and the (up to three) masked stores are compute-correct —
+every active lane writes `swigluBwdA` to `DX`, `swigluBwdB` to `DY`, and, when
+`RECOMPUTE_OUTPUT`, the forward `swiglu` to `OUT`; channels are indexed by `Sum`
+and out-of-bounds / disabled lanes are preserved. Assumes the three output
+regions are pairwise distinct. -/
+theorem swiglu_bwd_kernel_output_summary
+    (X Y DOUT OUT DX DY : RegionName)
+    (stride_x_row stride_y_row stride_dout_row stride_out_row
+      stride_dx_row stride_dy_row ncols BLOCK_N : Nat)
+    (RECOMPUTE_OUTPUT : Bool)
+    (s : BlockState)
+    (xs ys douts : Fin BLOCK_N → ℝ)
+    (hDXDY : DX ≠ DY) (hOUTDX : OUT ≠ DX) (hOUTDY : OUT ≠ DY)
+    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i)
+    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i)
+    (h_dout : ∀ i : Fin BLOCK_N, s.readMem DOUT (swigluOffset s stride_dout_row BLOCK_N i) = douts i) :
+    (∃ alg, (swiglu_bwd_kernel X Y DOUT OUT DX DY
+        stride_x_row stride_y_row stride_dout_row stride_out_row
+        stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := swiglu_bwd_kernel X Y DOUT OUT DX DY
+        stride_x_row stride_y_row stride_dout_row stride_out_row
+        stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT)
+      (initialState := s)
+      (write := fun i : Sum (Sum (Fin BLOCK_N) (Fin BLOCK_N)) (Fin BLOCK_N) =>
+        match i with
+        | .inl (.inl lane) =>
+            if s.pids 1 * BLOCK_N + lane.val < ncols then
+              some (DX, swigluOffset s stride_dx_row BLOCK_N lane)
+            else none
+        | .inl (.inr lane) =>
+            if s.pids 1 * BLOCK_N + lane.val < ncols then
+              some (DY, swigluOffset s stride_dy_row BLOCK_N lane)
+            else none
+        | .inr lane =>
+            if RECOMPUTE_OUTPUT then
+              if s.pids 1 * BLOCK_N + lane.val < ncols then
+                some (OUT, swigluOffset s stride_out_row BLOCK_N lane)
+              else none
+            else none)
+      (expected := fun i =>
+        match i with
+        | .inl (.inl lane) => TiledActivation.swigluBwdA (douts lane) (xs lane) (ys lane)
+        | .inl (.inr lane) => TiledActivation.swigluBwdB (douts lane) (xs lane)
+        | .inr lane => TiledActivation.swiglu (xs lane) (ys lane)) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact swiglu_bwd_kernel_compute_correct X Y DOUT OUT DX DY
+    stride_x_row stride_y_row stride_dout_row stride_out_row
+    stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT
+    s xs ys douts hDXDY hOUTDX hOUTDY h_x h_y h_dout
 
 end VeriTile.Bench.TritonBenchG.SwigluBackward

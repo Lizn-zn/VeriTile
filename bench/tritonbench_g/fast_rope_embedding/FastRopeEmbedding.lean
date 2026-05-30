@@ -3,6 +3,49 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `fast_rope_embedding` — strict per-kernel correctness
+
+`_rope_embedding` applies rotary position embedding to one row: each program
+loads a `[head_dim]` row split into a first half `q0` and second half `q1`,
+and writes the rotated pair `out0 = q0 * cos - q1 * sin`,
+`out1 = q1 * cos + q0 * sin` (sign flipped in the `BACKWARD_PASS` branch),
+iterating over a fixed four-head group.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program
+`@triton.jit` body. The host launch (grid over rows, the `calculate_settings`
+`BLOCK_SIZE` / `num_warps` choice, and how the runtime composes per-program
+writes) is the *trusted boundary*. Because the program id is universally
+quantified, the per-program statement covers every program.
+
+## Proof architecture
+
+```
+rope_embedding_python_test_shape_surface_output_summary    ← TOP THEOREM
+  (alias: rope_embedding_python_test_shape_output_summary)
+  ├─ rope_embedding_python_test_shape_{forward,backward}_surface_toAlgorithm_supported
+  │      surface lowers to the algorithm layer
+  ├─ rope_embedding_python_test_shape_first_half_compute_correct
+  │      └─ rope_embedding_q_first_half_compute_correct
+  │           └─ rope_embedding_q_first_half_correct   per-lane readback
+  └─ rope_embedding_python_test_shape_second_half_compute_correct
+       └─ rope_embedding_q_second_half_compute_correct
+            └─ rope_embedding_q_second_half_correct
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype `.to(...)` casts
+erase to the identity. The rotary `cos` / `sin` factors are precomputed
+inputs loaded per lane (`InputLoadedAt`); rotation is the elementwise affine
+combination per rotary pair, proved as two masked faces (first-half and
+second-half stores). The `BACKWARD_PASS` branch (sin sign flip) is modeled.
+The fixed four-head group loop is part of the verified body. Side conditions:
+first/second store-offset injectivity hypotheses.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FastRopeEmbedding
 
 open VeriTile.Triton

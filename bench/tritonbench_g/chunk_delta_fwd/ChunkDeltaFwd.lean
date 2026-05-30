@@ -3,6 +3,65 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `chunk_delta_fwd` — strict per-kernel correctness
+
+`chunk_delta_rule_fwd_kernel_h` is the chunked forward state pass of the delta
+rule for linear attention: program `(i_k, i_v, i_bh)` carries a `[BK, BV]` state
+`b_h` across `NT` time chunks, storing the running state into `h`, computing the
+corrected values `b_v -= b_d · b_h` (stored into `v_new`), and updating the
+state by `b_h += b_k · b_v` per inner `BC`-chunk, optionally seeded from
+`initial_state` and flushed to `final_state`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`chunk_delta_rule_fwd_kernel_h[(NK, NV, B*H)]`, the 3-D
+grid over key/value feature blocks and batch·head rows, the autotuned warp
+counts, the host-computed `BK/BV/BC/NT` and `NK == 1` assertion, and how the
+runtime composes per-program writes into one buffer) is the *trusted boundary*,
+not a proof obligation here. Because the program ids are universally quantified,
+the per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+chunk_delta_fwd_python_test_case{1,2}_output_summary           ← TOP THEOREMS
+  ├─ chunk_delta_fwd_python_test_case{n}_surface_toAlgorithm_supported
+  │     └─ chunk_delta_rule_fwd_h_surface_toAlgorithm_supported full surface lowers
+  └─ chunk_delta_fwd_python_test_shape_all_outputs_compute_correct
+       ├─ chunk_delta_fwd_h_producer_surface_compute_correct          (state store h)
+       ├─ chunk_delta_fwd_v_new_producer_surface_compute_correct      (corrected v_new)
+       └─ chunk_delta_fwd_final_state_producer_surface_compute_correct (final_state)
+
+per-store slice lemmas (modeled exactly, fed materialized state buffers):
+  chunk_delta_fwd_h_store_slice_compute_correct
+    └─ chunk_delta_fwd_h_store_slice_correct
+  chunk_delta_fwd_v_new_store_slice_compute_correct
+    └─ chunk_delta_fwd_v_new_store_slice_correct
+  chunk_delta_fwd_final_state_store_slice_compute_correct
+    └─ chunk_delta_fwd_final_state_store_slice_correct
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` (the
+warp-count config set) is not modeled — proofs fix the two checked Python shapes
+(`B,H,T,K,V = 2,4,128,64,64`, `BT = 32`, derived `BK = BV = BC = 64`... see the
+`8192/128/...` literal arguments), case 1 without and case 2 with
+initial/final state. The dynamic `.to(b_k.dtype)` / `.to(p_*.dtype.element_ty)`
+casts erase to the identity at the algorithm layer (post-erasure all dtypes
+unify to `ℝ`). The two matmuls (`tl.dot(b_d, b_h)` and `tl.dot(b_k, b_v)`) and
+each masked block store are modeled exactly per face; the cross-chunk
+state-carry fold — the outer `NT` loop that threads `b_h` and the inner
+`ceil(BT/BC)` loop that accumulates `b_h_cumsum` — is left as the trusted
+boundary. The producer values (`producedHValue`, `producedVNewValue`,
+`producedFinalStateValue`) are defined as the actual surface readback, so the
+output-summary theorems certify that the modeled store faces agree with the
+executed surface at the verified shapes rather than re-deriving the fold.
+Output offset injectivity is a side condition (discharged for the test shapes).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
 
 open VeriTile.Triton

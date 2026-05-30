@@ -60,11 +60,14 @@ bench/tritonbench_g/dequantize_rowwise/DequantizeRowwise.lean	dequantize_rowwise
 bench/tritonbench_g/dequantize_rowwise/DequantizeRowwise.lean	dequantize_rowwise_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/dequantize_rowwise/DequantizeRowwise.lean	dequantize_rowwise_python_case3_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/dequantize_rowwise/DequantizeRowwise.lean	dequantize_rowwise_python_case4_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_forward_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/dropout_triton/DropoutTriton.lean	dropout_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/fast_layernorm/FastLayernorm.lean	layernorm_forward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	rms_layernorm_forward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	gemma_rms_layernorm_forward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_rope_embedding/FastRopeEmbedding.lean	rope_embedding_python_test_shape_surface_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_rope_embedding/FastRopeEmbedding.lean	rope_embedding_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/fifth_order_sph_harmonics/FifthOrderSphHarmonics.lean	fifth_order_fwd_surface_y00_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_python_case1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_python_test_shape_output_summary	full_value_candidate	none		exact python-observable
@@ -83,6 +86,8 @@ bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwk
 bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_python_test_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_python_test_case3_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_python_test_case4_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/geglu_tanh_triton/GegluTanhTriton.lean	geglu_tanh_forward_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/geglu_tanh_triton/GegluTanhTriton.lean	geglu_tanh_backward_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/int8_quantization/Int8Quantization.lean	per_block_int8_python_case1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/int8_quantization/Int8Quantization.lean	per_block_int8_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/iv_dependent_matmul/IvDependentMatmul.lean	iv_dependent_matmul_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -93,6 +98,10 @@ bench/tritonbench_g/kv_cache_copy/KvCacheCopy.lean	kv_cache_copy_python_case2_ou
 bench/tritonbench_g/kv_cache_filling/KvCacheFilling.lean	fill_kv_cache_python_test_layout_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/kv_cache_filling/KvCacheFilling.lean	fill_quant_int8_kv_cache_python_test_layout_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/kv_cache_filling/KvCacheFilling.lean	fill_quant_int4_kv_cache_python_test_layout_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/l2_norm_bwd/L2NormBwd.lean	l2_norm_bwd_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/l2_norm_triton1/L2NormTriton1.lean	l2_norm_fwd_1pass_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/l2_norm_triton2/L2NormTriton2.lean	l2_norm_fwd_1pass_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/l2_norm_triton2/L2NormTriton2.lean	l2_norm_bwd_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/layer_norm_liger/LayerNormLiger.lean	layer_norm_liger_forward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_fwd_plain_bias_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_fwd_rms_bias_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -103,6 +112,7 @@ bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_rms_bias
 bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_plain_bias_residual_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_plain_bias_recompute_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/layernorm_fwd_triton/LayernormFwdTriton.lean	layernorm_fwd_triton_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -162,6 +172,9 @@ bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_c
 bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case3_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_python_case4_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rms_norm_triton/RmsNormTriton.lean	rms_norm_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/rmsnorm_fused_llama/RmsnormFusedLlama.lean	rms_norm_fwd_fused_llama_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/rmsnorm_implementation/RmsnormImplementation.lean	rmsnorm_implementation_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_triton_output_summary	public_summary_with_proof_gap	reduction-layernorm-aggregation	#151	one-block
 bench/tritonbench_g/rope_backward_transform/RopeBackwardTransform.lean	rope_backward_python_backward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_python_case1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
@@ -185,6 +198,10 @@ bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean	softmax_kernel_output_su
 bench/tritonbench_g/softmax_triton2/SoftmaxTriton2.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/softmax_triton3/SoftmaxTriton3.lean	softmax_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/square_matrix/SquareMatrix.lean	square_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/swiglu_backward/SwigluBackward.lean	swiglu_bwd_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/swiglu_fwd/SwigluFwd.lean	swiglu_fwd_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_forward_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_backward_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_python_case1_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_python_case2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_python_case3_output_summary	full_value_candidate	none		no proof-gap marker in summary context

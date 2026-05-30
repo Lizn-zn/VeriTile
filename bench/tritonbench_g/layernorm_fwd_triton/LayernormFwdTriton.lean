@@ -4,6 +4,60 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 
+/-!
+# `layernorm_fwd_triton` — strict per-kernel correctness
+
+`_layer_norm_fwd_kernel` is a tutorial-style LayerNorm forward: each program
+`(Seq, H)` normalizes one row of `X` by its mean and variance, scales by
+per-head weights `W`, and writes `Y = ((x - mean) * rstd) * w` where
+`rstd = 1 / sqrt(var + eps)`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body, for one program. The host launch (`_layer_norm_fwd_kernel[grid](...)` with
+`grid = (X.shape[0], X.shape[1])`, the host-side `BLOCK_SIZE = 128` choice,
+scheduling, and how the runtime composes per-program writes into one buffer) is
+the *trusted boundary*, not a proof obligation here. Because the two program ids
+`Seq = tl.program_id(0)` and `H = tl.program_id(1)` are universally quantified
+(via `s.pids 0` / `s.pids 1`), the per-program statement covers every program of
+the 2D grid.
+
+## Proof architecture
+
+```
+layernorm_fwd_triton_compute_fullN_correct    ← TOP THEOREM (general N, multi-block)
+  └─ layernorm_fwd_triton_fullN_correct        ← algorithm-layer readback per column
+       ├─ layernorm_fwd_triton_staged_fullN_correct_from_preloop
+       ├─ layernormMeanForRange_context_*       ← mean-loop forRange invariant
+       ├─ layernormVarForRange_context_*        ← var-loop forRange invariant
+       └─ layernormOutForRange_fullN_of_init    ← output-loop forRange invariant
+            └─ layernormOutLoopBody_step_output_invariant
+layernorm_fwd_triton_compute_correct          ← one-block slice (0 < N ≤ BLOCK_SIZE)
+  └─ layernorm_fwd_triton_correct
+```
+
+`layernorm_fwd_triton_compute_fullN_correct` is the strongest result: it covers
+arbitrary `N` (mean / var / output loops each tiled over `BLOCK_SIZE` and closed
+by `forRange` loop invariants). The one-block `*_compute_correct` is the
+single-iteration specialization.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `.to(tl.float32)`
+input/weight casts and the store cast `(y).to(X.dtype.element_ty)` reduce to
+identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`). Both
+reduction loops (`_mean`, `_var`) sum over the *padded* `BLOCK_SIZE` blocks, but
+out-of-range lanes are masked to `0` (load `other=0.0`, plus the explicit
+`tl.where` for the centered values), so each sum equals the logical row length
+`N`. The mean is `(∑ x) / N`, the variance `(∑ (x - mean)²) / N`, and
+`rstd = 1 / sqrt(var + eps)`; the affine step is `(x - mean) * rstd * w`. The
+fullN theorem requires only `0 < BLOCK_SIZE` plus output/input region
+disjointness (`X ≠ Y`, `W ≠ Y`); the one-block slice additionally assumes
+`0 < N ≤ BLOCK_SIZE`. The kernel's unused `stride_*_hd` strides are carried as
+unused Lean parameters. `@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.LayernormFwdTriton
 
 open VeriTile.Triton
@@ -2600,4 +2654,44 @@ theorem layernorm_fwd_triton_compute_correct
     stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd
     N BLOCK_SIZE eps s s' hNpos hNle hOutInj hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `_layer_norm_fwd_kernel`: the DSL surface
+lowers to the algorithm layer, and the masked store to `Y` is compute-correct
+for arbitrary `N` — every output column holds the full-`N` LayerNorm spec
+`layernormYFullNSpec`. Built on the multi-block `*_compute_fullN_correct`
+result; requires only `0 < BLOCK_SIZE` and output/input disjointness. -/
+theorem layernorm_fwd_triton_output_summary
+    (X W Y : RegionName)
+    (stride_x_N stride_x_hn stride_x_hd
+      stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd
+      N BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hBlockPos : 0 < BLOCK_SIZE)
+    (hXYNe : X ≠ Y)
+    (hWYNe : W ≠ Y) :
+    (∃ alg, (layernorm_fwd_triton X W Y
+        stride_x_N stride_x_hn stride_x_hd
+        stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd
+        N BLOCK_SIZE eps).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := layernorm_fwd_triton X W Y
+        stride_x_N stride_x_hn stride_x_hd
+        stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd
+        N BLOCK_SIZE eps)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin N => True)
+        (fun i => (Y, yColOffset s stride_y_N stride_y_hn i.val)))
+      (expected := fun i =>
+        layernormYFullNSpec s X W stride_x_N stride_x_hn stride_w_hn
+          N BLOCK_SIZE eps i) := by
+  refine ⟨?_, ?_⟩
+  · simp only [layernorm_fwd_triton, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+    exact ⟨_, rfl⟩
+  · exact layernorm_fwd_triton_compute_fullN_correct X W Y
+      stride_x_N stride_x_hn stride_x_hd
+      stride_y_N stride_y_hn stride_y_hd stride_w_hn stride_w_hd
+      N BLOCK_SIZE eps s hBlockPos hXYNe hWYNe
+
 end VeriTile.Bench.TritonBenchG.LayernormFwdTriton

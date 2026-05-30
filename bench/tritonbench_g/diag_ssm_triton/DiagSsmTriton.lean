@@ -4,6 +4,55 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 
+/-!
+# `diag_ssm_triton` — strict per-kernel correctness
+
+`diag_ssm_forward_kernel` is a diagonal state-space model (SSM) scan: each
+program owns a `BLOCK_SIZE` column slice and carries the state `s` across a
+`0..length` time loop, updating `s = s * Lambda + x_t` and writing `s` to the
+output at each step (`Lambda` is the per-dim diagonal transition broadcast by
+`col_offsets % dim`). `diag_ssm_backward_kernel` runs the matching
+reverse-time gradient scan.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies (forward and backward). The host launch (1-D grid over
+column blocks and how the runtime composes per-program writes) is the
+*trusted boundary*. Because `tl.program_id(0)` is universally quantified, the
+per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+diag_ssm_forward_kernel_output_summary           ← TOP THEOREM (forward)
+  ├─ (toAlgorithm? = Except.ok _)                 surface lowers to the algorithm layer
+  └─ diag_ssm_forward_kernel_compute_correct      ComputeCorrect over the time-step stores
+       └─ diag_ssm_forward_kernel_correct
+            └─ diag_ssm_forward_kernel_compute_correct_of_algorithm
+                 └─ diag_ssm_forward_kernel_alg_post_of_exec
+                      └─ diagSsmForwardForLoop_context_of_preloop   (loop-invariant fold)
+
+diag_ssm_backward_kernel_compute_correct          ← TOP THEOREM (backward)
+  └─ diag_ssm_backward_kernel_compute_correct_of_algorithm
+       └─ diag_ssm_backward_kernel_alg_post_of_exec
+            └─ diagSsmBackwardForLoop_context_of_preloop            (loop-invariant fold)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; the real-valued kernel is
+modeled (the complex variants `diag_ssm_*_kernel_complex` are transcribed but
+not the proof target). The recurrent state-carry is verified in full here: a
+`LoopInvariant` argument folds the `0..length` time loop, proving that after
+execution every active output offset holds the SSM spec value
+`diagSsmForwardSpecAt` (and the backward gradient specs) — i.e. the cross-step
+state recurrence is proved, not trusted. Dtype casts erase to the identity.
+`@triton.autotune` is not modeled. Side conditions: output-store-offset
+injectivity (`hOutInj`) and output/input region-distinctness hypotheses
+(e.g. `x_ptr ≠ y_ptr`, the gradient-region distinctness chain) are explicit.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.DiagSsmTriton
 
 open VeriTile.Triton
@@ -3272,5 +3321,26 @@ theorem diag_ssm_forward_kernel_compute_correct
       length batch_size dim BLOCK_SIZE s :=
   diag_ssm_forward_kernel_compute_correct_of_algorithm s_ptr x_ptr lambda_ptr
     y_ptr length batch_size dim BLOCK_SIZE s hOutInj hXOutNe
+
+/-- Per-kernel output summary for `diag_ssm_forward_kernel`: the DSL surface
+lowers to the algorithm layer, and the time-step stores to `y_ptr` are
+compute-correct — after the `0..length` recurrent scan every active output
+offset holds the diagonal-SSM spec value `diagSsmForwardSpecAt`, and inactive
+lanes are preserved. Mirrors `add_kernel_output_summary`. -/
+theorem diag_ssm_forward_kernel_output_summary
+    (s_ptr x_ptr lambda_ptr y_ptr : RegionName)
+    (length batch_size dim BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [length, BLOCK_SIZE] =>
+        diagSsmForwardOutOffset s batch_size dim BLOCK_SIZE idx))
+    (hXOutNe : x_ptr ≠ y_ptr) :
+    (∃ alg, (diag_ssm_forward_kernel s_ptr x_ptr lambda_ptr y_ptr
+        length batch_size dim BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    diag_ssm_forward_kernel_correct_target s_ptr x_ptr lambda_ptr y_ptr
+      length batch_size dim BLOCK_SIZE s := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact diag_ssm_forward_kernel_compute_correct s_ptr x_ptr lambda_ptr y_ptr
+    length batch_size dim BLOCK_SIZE s hOutInj hXOutNe
 
 end VeriTile.Bench.TritonBenchG.DiagSsmTriton
