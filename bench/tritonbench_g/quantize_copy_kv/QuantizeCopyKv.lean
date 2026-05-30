@@ -3,6 +3,57 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `quantize_copy_kv` — strict per-kernel correctness
+
+`_fwd_kernel_destindex_copy_quantize_kv` copies and int8-quantizes a KV cache
+entry to a destination-indexed slot: program `cur_index` loads `dest_index =
+Dest_loc[cur_index]`, loads the `[BLOCK_HEAD, BLOCK_DMODEL]` source tile (head-
+masked by `offs_h < head_num`, `other=0.0`), computes a per-head scale
+`max(|src|, axis=1) / 127` cast to fp16, divides and casts the quotient to int8,
+and stores both the quantized values (at `Out[dest_index]`) and the per-head
+scale (at `Out_scale[dest_index]`), each head-masked.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_destindex_copy_quantize_kv[grid](...)`, the
+grid `(seq_len,)`, `BLOCK_HEAD = next_power_of_2(head_num)`, the strides, and the
+runtime composition of per-program destination-indexed writes) is the *trusted
+boundary*. `cur_index` is universally quantified, so the per-program statement
+covers every program of the grid. Destination-index injectivity (no two programs
+write the same slot) is supplied as a hypothesis / no-collision lemma, not
+assumed of the host.
+
+## Proof architecture
+
+```
+destindex_copy_quantize_kv_python_d64_output_summary    ← TOP THEOREM
+  ├─ ..._real_surface_toAlgorithm_supported             surface lowers to the algorithm layer
+  ├─ ..._surface_value_output_compute_correct           value store ComputeCorrect
+  └─ ..._surface_scale_output_compute_correct           scale store ComputeCorrect
+       ├─ ..._value_store_slice_compute_correct / _correct   per-lane value readback
+       ├─ ..._scale_store_slice_compute_correct / _correct   per-head scale readback
+       └─ ..._python_..._offset_injective                    no-collision lemmas
+```
+
+The value spec is the destination-indexed scaled store `src / scale`
+(`quantizeCopyKvValueSpec`); the scale spec is the stored per-head scalar.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float. The honesty point is the
+quantization tail. The proofs model: the per-head scale `max(|src|) / 127`, the
+masked `other=0.0` load default, the destination-indexed addressing, and the
+real-valued scaled value `src / scale`; the value-store slices take the per-head
+scale as a precomputed `OutScale` input and prove the masked writeback up to the
+fixed-width cast. The full surface (including the scale's `.to(tl.float16)` and
+the quotient's `(src / scale).to(tl.int8)` annotations) lowers through algorithm
+erasure, where those casts are the **identity over `ℝ`**. The bit-accurate effect
+of the fp16 scale rounding and the int8 saturating cast is **not** numerically
+modeled. `@triton.autotune` is not present here.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.QuantizeCopyKv
 
 open VeriTile.Triton

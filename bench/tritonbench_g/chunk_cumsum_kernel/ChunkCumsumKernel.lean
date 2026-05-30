@@ -3,6 +3,60 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `chunk_cumsum_kernel` — strict per-kernel correctness
+
+`chunk_global_cumsum_scalar_kernel` computes a global scalar cumulative sum
+along the time axis: program `i_bh` (one per batch·head row) walks the `T`-long
+row of `s` in chunks of `BT`, and for each chunk emits the running prefix sum
+`tl.cumsum(b_s) + b_z` while carrying the chunk total `b_z` forward across
+iterations, storing the result into `o`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`chunk_global_cumsum_scalar_kernel[(B*H,)](...)`, the
+grid over batch·head rows, the autotuned `BT`, and how the runtime composes
+per-program writes into one buffer) is the *trusted boundary*, not a proof
+obligation here. Because the program ids are universally quantified, the
+per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+chunk_cumsum_scalar_python_test_shape_summary                  ← TOP THEOREM
+  ├─ chunk_cumsum_scalar_python_test_shape_surface_toAlgorithm_supported
+  │     └─ chunk_cumsum_scalar_surface_toAlgorithm_supported   full surface lowers
+  └─ chunk_cumsum_scalar_python_test_shape_all_outputs_compute_correct
+       ├─ chunk_cumsum_scalar_single_block_python_test_shape_compute_correct
+       │     └─ chunk_cumsum_scalar_single_block_surface_compute_correct
+       │          └─ chunk_cumsum_scalar_single_block_surface_correct
+       ├─ chunk_cumsum_scalar_store_python_test_shape_compute_correct
+       │     └─ chunk_cumsum_scalar_store_slice_compute_correct
+       │          └─ chunk_cumsum_scalar_store_slice_correct
+       └─ chunk_cumsum_scalar_cumsum_python_test_shape_compute_correct
+            └─ chunk_cumsum_scalar_cumsum_slice_compute_correct
+                 └─ chunk_cumsum_scalar_cumsum_slice_correct
+
+chunk_cumsum_scalar_python_test_shape_output_summary           (= outputs-compute-correct alias)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` (the
+`BT ∈ {16,32,64}` config set) is not modeled — proofs fix the checked Python
+shape `T = 4` with `BT = 16`, where the chunk loop has a single iteration. The
+`.to(tl.float32)` / `.to(p_o.dtype.element_ty)` casts erase to the identity at
+the algorithm layer (post-erasure all dtypes unify to `ℝ`). The per-chunk
+cumsum face (`Tile.scan .sum`) and the chunk-local store are modeled exactly;
+the cross-chunk fold that threads the scalar carry `b_z` over multiple
+iterations is left as the trusted boundary — the carry is presented as a
+materialized buffer (`Carry`) in `chunk_cumsum_scalar_cumsum_slice`, and the
+single-block surface covers the `T = 4`, `BT = 16` case where the carry is the
+initial zero. Output injectivity is a side condition (discharged for the test
+shape). Side conditions: store offsets are injective per program.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ChunkCumsumKernel
 
 open VeriTile.Triton

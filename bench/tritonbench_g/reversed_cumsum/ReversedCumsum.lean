@@ -3,6 +3,57 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `reversed_cumsum` — strict per-kernel correctness
+
+`chunk_global_reversed_cumsum_vector_kernel` computes a global reversed
+cumulative sum over the time axis of a `[B, H, T, S]` tensor. For each
+`(i_s, i_bh)` program it traverses the `T` axis in reverse `BT`-sized chunks,
+carrying an across-chunk accumulator `b_z`; per chunk it loads `b_s`, forms
+`b_z[None, :] + tl.dot(m_s, b_s)` with the upper-triangular mask `m_s` (the
+within-chunk reversed prefix sum), stores the result, then updates `b_z`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`kernel[grid]` with `grid = (cdiv(S, BS), B·H)`, the
+`BS = 32` choice, the per-head strides, and cross-program composition of `z`) is
+the *trusted boundary*, not a proof obligation here. Program ids enter only via
+`BlockState`, so the per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+reversed_cumsum_python_case{1..4}_output_summary  ← TOP THEOREMS (per checked shape)
+  ├─ (toAlgorithm? = Except.ok _) via reversed_cumsum_python_case{i}_surface_toAlgorithm_supported
+  │    └─ reversed_cumsum_surface_toAlgorithm_supported  (full reverse-loop surface lowers)
+  └─ reversed_cumsum_surface_output_compute_correct      (each written lane = the executed value)
+
+per-slice value-level correctness (the computational content):
+  reversed_cumsum_single_block_surface_compute_correct → ..._correct   (single-BT chunk, b_z = 0)
+  reversed_cumsum_cumsum_slice_compute_correct         → ..._correct   (one chunk with carry)
+  reversed_cumsum_store_slice_compute_correct          → ..._correct   (boundary-checked writeback)
+       └─ cumsumStoreValue / storeValue  (`Tile.dot` with upperTriTile + carryValue)
+  + active-masked variants (reversed_cumsum_*_active_compute_correct) and the
+    per-Python-shape case{1..4} compute-correct instantiations.
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled (the kernel runs at fixed `BT`/`BS`). The `tl.dot(m_s, b_s,
+allow_tf32=False)` reversed prefix sum is modeled by `Tile.dot` with
+`upperTriTile`; the `.to(tl.float32)` / `.to(p_z.dtype.element_ty)` casts reduce
+to the identity post-erasure. `boundary_check` / masked loads use `other=0.0`.
+The full multi-chunk reverse surface is verified only to lower (`toAlgorithm?`)
+and that its outputs equal the executed values
+(`reversed_cumsum_surface_output_compute_correct`); the value-level reversed-cumsum
+content is proven on the single-block and per-chunk slices. For shapes with
+`S < BS` the store scatter requires only active-lane collision freedom
+(`reversed_cumsum_*_active_compute_correct`); the `S = 32` shape has a fully
+injective block offset map (`reversed_cumsum_python_case4_offset_injective`).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ReversedCumsum
 
 open VeriTile.Triton

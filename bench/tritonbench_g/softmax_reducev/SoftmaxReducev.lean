@@ -3,6 +3,56 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `softmax_reducev` — strict per-kernel correctness
+
+`_fwd_kernel` is the fused online-softmax + reduce-over-V attention kernel:
+program `(cur_batch, cur_head)` streams the sequence in `BLOCK_N` chunks,
+gathers V rows through the `B_Loc` paged-KV index, and maintains the flash-style
+running statistics — running max `e_max`, rescaled running sum `e_sum`, and
+rescaled accumulator `acc` — then normalizes `acc / e_sum` and stores the
+`BLOCK_DMODEL` result to `Out[cur_batch, cur_head, :]`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel[(batch, head)](...)`, the grid over
+`(batch, head)`, the host `BLOCK = 64` / `BLOCK_DMODEL = v.shape[-1]` choices,
+`num_warps` / `num_stages`, and how the runtime composes per-program writes into
+`Out`) is the *trusted boundary*, not a proof obligation here. Because the
+program ids `cur_batch`/`cur_head` are universally quantified (via `BlockState`),
+the per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+softmax_reducev_python_test_shape_output_summary      ← TOP THEOREM
+  ├─ softmax_reducev_python_case_other_neg_one_surface_toAlgorithm_supported  surface lowers
+  ├─ softmax_reducev_python_case_other_zero_surface_toAlgorithm_supported     (other_kv_index = 0)
+  │    └─ softmax_reducev_surface_toAlgorithm_supported
+  └─ softmax_reducev_surface_output_compute_correct     ← ComputeCorrect of the store
+       ├─ softmax_reducev_python_output_offset_injective
+       └─ softmax_reducev_python_test_shape_final_output_compute_correct
+            └─ softmax_reducev_final_store_slice_compute_correct
+                 └─ softmax_reducev_final_store_slice_correct  (per-lane normalized readback)
+```
+
+The top theorem covers both `other_kv_index ∈ {-1, 0}` test variants at the
+Python test shape (`BLOCK_DMODEL = 64`, `BLOCK_N = 64`).
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float, so the `-inf` init,
+`exp`, running-max rescaling, and the final division are real-valued);
+`@triton.autotune` / `num_warps` / `num_stages` are not modeled. The verified
+statement is scoped to the **final normalized store** to `Out`: the expected
+value is `acc / e_sum` (`softmaxReducevFinalSpec` / `softmaxReducevSurfaceValue`)
+read off at each `outOffset`, over a one-block output footprint with the program
+ids universally quantified. The streaming online-softmax loop (running max,
+rescale-and-accumulate, paged-V gather) feeds those `Acc`/`ESum` values; the side
+condition is the offset-injectivity of the `Out` slice at the test shape.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.SoftmaxReducev
 
 open VeriTile.Triton

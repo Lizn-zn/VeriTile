@@ -3,6 +3,55 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `attention_fwd_triton2` — strict per-kernel correctness
+
+`_attn_fwd` is a flash-attention forward kernel: program `(start_m, off_hz)`
+loads a `BLOCK_M`-row tile of `Q` for one (batch, head), then over the key/value
+context (`_attn_fwd_inner`, stepping by `BLOCK_N`) runs the online-softmax
+recurrence — block scores `qk = q·k · q_scale · k_scale`, running max `m_i`,
+rescaled denominator `l_i`, and accumulator `acc` updated with `exp2(qk - m_ij)`
+weights — and finally stores `acc / l_i` to `Out` (here a `bfloat16` output),
+masked to the first 96 head lanes. This is a near-clone of
+`attention_forward_triton` differing in output dtype and the explicit
+`v.to(tl.float16)` cast in the `acc += dot(p, v)` step.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_attn_fwd[grid](...)`, the grid over
+`(cdiv(N_CTX, BLOCK_M), Z·H)`, block scheduling, and how the runtime composes
+per-program writes into one buffer) is the *trusted boundary*, not a proof
+obligation here. Because `start_m`/`off_hz` are universally quantified, the
+per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+attention_fwd_triton2_python_test_shape_output_summary       ← TOP THEOREM
+  ├─ attention_fwd_triton2_surface_toAlgorithm_supported      surface lowers to the algorithm layer
+  └─ attention_fwd_triton2_surface_python_test_shape_compute_correct
+       └─ (full surface produces producedAttentionFwdTriton2OutValue at the masked Out store)
+
+attention_fwd_triton2_final_store_python_test_shape_compute_correct
+  └─ attention_fwd_triton2_final_store_slice_compute_correct  ← ComputeCorrect over the masked Out store
+       └─ attention_fwd_triton2_final_store_slice_correct     ← algorithm-layer readback per lane
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `float16`/`float32`/
+`bfloat16` casts collapse to the identity post-erasure; `@triton.autotune` /
+`num_warps`/`num_stages` are not modeled. The output summary is stated at the
+Python test shape (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128, BLOCK_N=64`,
+contiguous strides, 96 active head lanes). The surface theorem captures the full
+single-program online-softmax body via `producedAttentionFwdTriton2OutValue`;
+the `final_store` lemmas isolate the masked final `acc / l_i` store (in-bounds
+lanes get the accumulator value, out-of-bounds lanes preserved). This is a
+single-program scope; cross-program composition into the full
+`[Z,H,N_CTX,HEAD_DIM]` output is the trusted host boundary.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton2
 
 open VeriTile.Triton

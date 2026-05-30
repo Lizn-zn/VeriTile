@@ -3,6 +3,54 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `dequantize_matmul` — strict per-kernel correctness
+
+`dequantize_kernel` is the dequantization prologue of an int8 matmul: program
+`(k_block_idx, n_block_idx)` loads a `[BLOCK_SIZE_K, BLOCK_SIZE_N]` tile of the
+int8 weight `b`, loads the per-column scale `b_scale`, and stores the
+dequantized `int_b * scale_b` into `fpb`, masked by
+`(k·K + offs_k < K) & (n·N + offs_n < N)`. The downstream `torch.mm(a, fp_b)` is
+host code, not part of this kernel.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`dequantize_kernel[grid](...)`, the 2-D grid
+`(cdiv(K, BSK), cdiv(N, BSN))`, the strides, the subsequent `torch.mm`, and the
+runtime composition of per-program writes) is the *trusted boundary*. Both
+program ids (`k_block_idx`, `n_block_idx`) are universally quantified, so the
+per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+dequantize_matmul_python_<BSN>x<BSK>_output_summary    ← TOP THEOREMS (4 shapes)
+  ├─ (toAlgorithm? = Except.ok _)                       surface lowers to algorithm
+  └─ dequantize_matmul_python_<BSN>x<BSK>_compute_correct
+       └─ dequantize_kernel_compute_correct             ComputeCorrect over the store
+            ├─ dequantize_kernel_correct                algorithm-layer readback per lane
+            └─ dequantize_matmul_python_..._offset_injective   no-collision lemmas
+```
+
+The four shapes (128x128, 64x256, 32x256, 256x64) mirror the `@triton.autotune`
+configs exercised by the Python test. The spec is the elementwise dequantize
+`int_b * scale_b`, with the masked `other=0.0` default modeled on lanes that
+fall outside `K`/`N`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float. The quantization semantics
+here are the **dequantization direction only**: the proof models `int_b *
+scale_b` as a plain real product, where `int_b` is the value loaded from the
+int8 weight region and `scale_b` the loaded float scale. There is no rounding or
+int cast on the output side, so this kernel has no `to(tl.int8)` / `llrint`
+blocker — `int_b` is taken as the loaded real value and the store is exact. The
+masked `other=0.0` default is modeled. `@triton.autotune` is not modeled;
+instead the four representative `(BLOCK_SIZE_N, BLOCK_SIZE_K)` configs are
+instantiated as separate theorems.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.DequantizeMatmul
 
 open VeriTile.Triton

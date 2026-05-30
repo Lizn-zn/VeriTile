@@ -4,6 +4,54 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 
+/-!
+# `embedding_triton_kernel` — strict per-kernel correctness
+
+`embedding_kernel` is a vocabulary embedding lookup: program `pid` walks its
+`BLOCK_N`-wide sequence window in `BLOCK_NN`-sized chunks, loads each token id,
+shifts it by `vob_start_id`, and gathers the corresponding `weight` row into the
+`out` buffer, masked by the context length and hidden size.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body, including the full `for start_nn in range(0, BLOCK_N, BLOCK_NN)` loop. The
+host launch (`embedding_kernel[grid](...)`, the grid size `cdiv(n_ctx, BLOCK_N)`,
+the host-side `BLOCK_DMODEL = next_power_of_2(hidden)` choice, and how the runtime
+composes per-program writes) is the *trusted boundary*, not a proof obligation
+here. Because `pids 0` is universally quantified, the per-program statement
+covers every program of the grid.
+
+## Proof architecture
+
+```
+embedding_kernel_output_summary                       ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)                      surface lowers to the algorithm layer
+  └─ embedding_kernel_compute_correct                  ← ComputeCorrect over the masked gather
+       └─ embedding_kernel_compute_correct_of_algorithm
+            └─ embedding_kernel_alg_post_of_exec       loop-invariant readback per active cell
+                 └─ (embeddingLoopInvariant / embeddingProjectedBody_alg_post …)
+```
+
+The loop is discharged via an explicit `embeddingLoopInvariant` carried across the
+`range` iterations; the final state realizes the per-cell gather spec
+`embeddingSpecFull`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The proof is established for the `BLOCK_NN = 1` chunking (`hOne`), which
+is exactly the host configuration. Correctness requires a per-cell injectivity
+hypothesis `hOutInj` on the output offsets (no-duplicate-destination across loop
+iterations) and the alias side conditions `input_ids ≠ out`, `weight ≠ out` (the
+gathered token ids and weight rows are read before the scatter; aliasing the
+output would corrupt later iterations). The gathered weight-row offset is
+data-dependent (read from `input_ids`). The `other=vob_end_id`/`other=0.0`
+out-of-range fills and dtype casts reduce to identity at the algorithm layer. The
+statement is scoped to *store-active* cells; masked-out cells are not part of the
+realized write map.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
 
 open VeriTile.Triton
@@ -1681,4 +1729,31 @@ theorem embedding_kernel_compute_correct
     vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
     hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s hOne hOutInj hInputOutNe
     hWeightOutNe
+
+/-- Per-kernel output summary for `embedding_kernel`: the DSL surface lowers to
+the algorithm layer, and the full embedding-gather loop is compute-correct — under
+the no-duplicate-destination hypothesis `hOutInj`, the chunking `hOne`, and the
+alias side conditions, every store-active cell holds the gathered weight row
+`embeddingSpecFull`. -/
+theorem embedding_kernel_output_summary
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        outOffsetFull s stride_out_seq BLOCK_N idx))
+    (hOne : BLOCK_NN = 1)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out) :
+    (∃ alg, (embedding_kernel weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN).toAlgorithm? = Except.ok alg) ∧
+    embedding_kernel_correct_target weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact embedding_kernel_compute_correct weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+    hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s hOutInj hOne hInputOutNe hWeightOutNe
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel

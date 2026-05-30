@@ -3,6 +3,69 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `rotary_emb_nopad` — strict per-kernel correctness
+
+`rotary_embedding_kernel` applies the half-split (non-interleaved) rotary
+position embedding in place to padding-free Q/K token buffers: each program owns
+one head (`program_id(0)`) and one token-block (`program_id(1)`), loads the
+per-token `cos`/`sin` half-dim vectors, and rewrites the two head-dim halves via
+`(q0*cos - q1*sin, q0*sin + q1*cos)` for Q, and the same for K only on the GQA
+group leader (`cur_head_idx % KV_GROUP_NUM == 0`). The file also covers the
+`fused_rotary_embedding_v2` KV-cache writeback variant.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (the `(Q_HEAD_NUM, token-blocks)` grid, the
+`HEAD_DIM`/`BLOCK_TOKENS`/`KV_GROUP_NUM` choices, the token/head stride
+bookkeeping, the v2 paged-KV-cache block/last-block index computation, and how
+the runtime composes per-program writes into one buffer) is the *trusted
+boundary*, not a proof obligation here. Because the head, token-block, and
+per-lane indices are universally quantified, the per-program statement covers
+every program of the grid.
+
+## Proof architecture
+
+```
+rotary_nopad_python_case1_output_summary              ← TOP (abbrev alias)
+  = rotary_nopad_python_case1_all_outputs_surface_summary
+      ├─ rotary_nopad_python_case1_surface_toAlgorithm_supported
+      │     └─ rotary_embedding_kernel_surface_toAlgorithm_supported
+      ├─ rotary_embedding_q_surface_q0_compute_correct → rotary_embedding_q_surface_q0_correct   (Q first half)
+      ├─ rotary_embedding_q_surface_q1_compute_correct → rotary_embedding_q_surface_q1_correct   (Q second half)
+      ├─ rotary_embedding_k_surface_k0_compute_correct → rotary_embedding_k_surface_k0_correct   (K first half)
+      └─ rotary_embedding_k_surface_k1_compute_correct → rotary_embedding_k_surface_k1_correct   (K second half)
+
+block-level lemmas (single head/token-block scope):
+  rotary_embedding_q0/q1/k0/k1_block_compute_correct → *_block_correct
+
+fused-v2 KV-cache + Q writeback track:
+  fused_rotary_v2_kv_cache_first/second_half_store_slice_compute_correct → *_correct
+  fused_rotary_v2_context_kv_cache_first/second_half_store_slice_compute_correct
+  fused_rotary_v2_q_first/second_half_store_slice_compute_correct → *_correct
+```
+
+Offset injectivity/disjointness is supplied by
+`rotary_nopad_python_q_first/second_offset_injective`,
+`rotary_nopad_python_q_offsets_disjoint`, and the matching `k_*` lemmas.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype casts erase to the
+identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`).
+`cos`/`sin` are modeled as **precomputed inputs** loaded from memory, not
+computed. Scoping is **one half-store at a time** (q0/q1/k0/k1), each over the
+active lanes (`tokens_range < q_total_tokens`, `cur_head_idx < Q_HEAD_NUM`, and
+for K the GQA-leader predicate); out-of-bounds lanes are preserved verbatim. The
+top summary covers the no-cache `case1` Python shape (contiguous
+`(512, 8, 64)` Q / `(256, 2, 64)` K, `HEAD_DIM = 64`, `BLOCK_TOKENS = 4`,
+`KV_GROUP_NUM = 4`). The `fused_rotary_embedding_v2` KV-cache/Q track is verified
+at the per-store-slice level (including the context paged-cache offsets) but is
+**not folded into a single top-level v2 summary** here — honestly, only `case1`
+has a public `output_summary`. `@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RotaryEmbNopad
 
 open VeriTile.Triton

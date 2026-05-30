@@ -3,6 +3,67 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `layer_norm_ops` — strict per-kernel correctness
+
+`_layer_norm_fwd_1pass_kernel` is a one-pass row-wise layer/RMS norm: program
+`row` advances `X`/`Y` by their row strides, loads one row (masked by
+`cols < N`, masked lanes read as `0`), optionally adds a residual and stores the
+residual-out, computes `mean`/`var` (or just `var` for RMS norm), `rstd`, side-
+stores `Mean`/`Rstd`, then stores `x_hat * w (+ b)` back masked by `cols < N`.
+The companion `_layer_norm_bwd_kernel` computes the backward gradients
+(`DX`/`DW`/`DB`/`DRESIDUAL_IN`).
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies. The host launches (the one-program-per-row forward grid,
+the row-blocked backward grid with its cross-program `DW`/`DB` partial-sum
+reduction, the `BLOCK_N = next_power_of_2(N)` choice, and how the runtime
+composes per-program writes / accumulates partials into one buffer) are the
+*trusted boundary*, not a proof obligation here. Because `row`/`pid` is
+universally quantified, each per-program statement covers every program of the
+grid.
+
+## Proof architecture
+
+The full Python surfaces lower to the algorithm layer:
+
+```
+layer_norm_fwd_1pass_surface_toAlgorithm_supported   forward surface lowers
+layer_norm_bwd_surface_toAlgorithm_supported          backward surface lowers
+```
+
+Arithmetic correctness is decomposed into per-output-store *slices* over the
+forward one-block surface, each with a `*_correct` (algorithm-layer readback)
+and `*_compute_correct` (ComputeCorrect) pair, covering the constexpr matrix of
+{plain, RMS} × {bias, no-bias} × {residual, no-residual} for the `Y`, `Mean`,
+`Rstd`, and `RESIDUAL_OUT` stores, plus the backward writeback slices. The
+public `*_output_summary` abbrevs (e.g.
+`layer_norm_ops_bwd_plain_bias_residual_recompute_python_test_shape_output_summary`)
+alias the composed `*_compute_correct` results at the tested Python shapes. For
+example, the forward `Y` slices reduce through `layer_norm_ops_fwd_y_store_slice_compute_correct`:
+
+```
+layer_norm_ops_fwd_y_store_slice_compute_correct      ← masked Y store ComputeCorrect
+  └─ layer_norm_ops_fwd_y_store_slice_correct          ← algorithm-layer readback per lane
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The numerous `.to(tl.float32)` / `.to(Y.dtype.element_ty)` casts reduce
+to the identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`).
+The `sum`/`var` reductions run over the full `BLOCK_N` block, but masked lanes
+load `0` (matching `other=0.0`) and the RMS/plain branches use
+`tl.where(cols < N, …, 0.0)`, so the reduction-over-padded-block matches the
+upstream semantics. Store slices assume injective output offsets and, where the
+backward kernel writes distinct buffers, region-disaliasing side conditions
+(e.g. `DW ≠ DX`). The backward cross-program `DW`/`DB` partial accumulation is
+part of the trusted host boundary; the verified slices cover the per-program
+contributions.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.LayerNormOps
 
 open VeriTile.Triton

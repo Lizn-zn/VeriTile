@@ -3,6 +3,72 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `chunk_gated_attention` — strict per-kernel correctness
+
+`chunk_gated_attention.py` defines two `@triton.jit` kernels for chunked gated
+linear attention (`fla`-style):
+
+* `chunk_gated_abc_fwd_kernel_cum` — per chunk `(i_s, i_t, i_bh)`, computes the
+  intra-chunk cumulative normalizer `b_o = m_s @ b_s` (lower-triangular causal
+  matmul over `g`) via block pointers and stores it to `o`.
+* `chunk_gated_abc_fwd_kernel_h` — per `(i_v, i_k, i_bh)`, runs the chunk-level
+  recurrence over `NT` time chunks: optionally seeded from `h0`, each step
+  *stores the current state* `b_h` into the `h` rows, gates `b_k`/`b_h` by
+  `exp(b_gn ...)` (the `GATEK` branch selects K-side vs V-side gating), and
+  accumulates `b_h += b_k @ b_v`; the final state is optionally written to `ht`.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies. The host launch (`fwd_pre` / `fwd_inner` grids over
+`(cdiv(S,BS), NT, B*H)` and `(NV, NK, B*H)`, the `@triton.autotune` `BS`/warps
+selection, block scheduling, and how the runtime composes per-program writes into
+`o`/`h`/`ht`) is the *trusted boundary*, not a proof obligation here. Because the
+program ids `i_s`/`i_t`/`i_bh` (and `i_v`/`i_k`) are universally quantified (via
+`BlockState`), the per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+chunk_gated_attention_python_test_shape_output_summary        ← TOP THEOREM
+  ├─ chunk_gated_attention_cum_surface_compute_correct          (cumulative-normalizer store)
+  │    ├─ chunk_gated_attention_cum_surface_toAlgorithm_supported
+  │    └─ chunk_gated_attention_cum_compute_slice_compute_correct
+  │         └─ chunk_gated_attention_cum_compute_slice_correct
+  ├─ chunk_gated_attention_h_surface_state_compute_correct      (per-chunk h-state store; ×4 flag combos)
+  │    ├─ chunk_gated_attention_h_surface_toAlgorithm_supported
+  │    └─ chunk_gated_attention_h_state_store_slice_compute_correct
+  │         └─ chunk_gated_attention_h_state_store_slice_correct
+  └─ chunk_gated_attention_h_surface_final_state_compute_correct (final ht store)
+       └─ chunk_gated_attention_final_state_store_slice_compute_correct
+            └─ chunk_gated_attention_final_state_store_slice_correct
+```
+
+The four `(USE_INITIAL_STATE, GATEK, STORE_FINAL_STATE)` flag combinations in the
+summary match the four Python `fwd_inner` test cases. Offset-injectivity side
+lemmas (`*_offset_injective`) at the bench shape underpin the store readbacks.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float; `allow_tf32=False` is moot);
+`@triton.autotune` (the `BS ∈ {16,32,64}` × `num_warps` configs) and
+`num_warps`/`num_stages` are not modeled. The `.to(...)` casts reduce to the
+identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`). The
+verification is scoped to the **block-pointer stores** with `boundary_check`
+modeled as the `*Active` write predicates over `TileIndex [BT, BS]` /
+`TileIndex [BK, BV]` footprints at the bench shape
+(`B=2, H=4, T=128, S=64, K=32, V=32, BT=32, BK=BV=16`): (1) the cumulative
+normalizer store to `o`/`GCum` (expected `producedChunkGatedAttentionCumValue`,
+the causal `m_s @ b_s`); (2) each per-chunk `h`-state store
+(`producedChunkGatedAttentionHStateValue`); and (3) the optional final-state store
+to `ht` (`producedChunkGatedAttentionFinalStateValue`). The recurrence's gating
+and `b_k @ b_v` accumulation feed those produced values; the `NT`-step loop is
+not unrolled into one closed-form spec, so the end-to-end statement is the
+composition of the verified per-store faces with the (trusted) loop scheduling.
+Out-of-boundary tile lanes are preserved (mask=false ⇒ no store).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ChunkGatedAttention
 
 open VeriTile.Triton

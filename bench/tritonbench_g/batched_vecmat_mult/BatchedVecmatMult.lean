@@ -3,6 +3,65 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `batched_vecmat_mult` — strict per-kernel correctness
+
+`batched_vecmat_kernel` is a batched vector-matrix multiply: for batch row tile
+`m_index` and column tile `n_index`, program `(m,n)` loops over K blocks,
+loading an `A` tile `[block_m, block_k]` and a `B` tile
+`[block_m, block_n, block_k]`, broadcasts `A`, reduces `tl.sum(expanded_a * b,
+axis=2)`, transposes, accumulates into `vecmat`, and stores the
+`[block_m, block_n]` tile to `output`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`batched_vecmat_kernel[grid](...)`, the grid
+`(M//block_m, N//block_n)`, scheduling, and how the runtime composes per-program
+writes into one buffer) is the *trusted boundary*, not a proof obligation here.
+Program ids are universally quantified, so the per-program statements cover
+every program of the grid.
+
+## Proof architecture
+
+```
+batched_vecmat_python_test_shape_output_summary  ← TOP THEOREM
+  ├─ batched_vecmat_python_test_surface_toAlgorithm_supported  surface lowers
+  │    └─ batched_vecmat_surface_toAlgorithm_supported
+  └─ batched_vecmat_surface_output_compute_correct  ← ComputeCorrect over output
+
+batched_vecmat_python_test_shape_store_summary   ← K-accum + store slice summary
+  └─ batched_vecmat_python_test_shape_all_outputs_compute_correct
+       ├─ batched_vecmat_one_row_const_k_accum_slice_compute_correct  (per K block)
+       │    └─ batched_vecmat_one_row_const_k_accum_slice_correct  (vecmatConstKAccumSpec)
+       └─ batched_vecmat_block_output_store_slice_compute_correct
+            └─ batched_vecmat_block_output_store_slice_correct  ← 2D output readback
+
+supporting reduction slices (verified):
+  batched_vecmat_one_row_block_correct      ← vecmatSpec  (the tl.sum reduction)
+  batched_vecmat_one_row_k_block_correct    ← vecmatSpecK (one K-block, with k offset)
+  batched_vecmat_one_row_k_accum_slice_correct  ← vecmatAccumSpecK (accum += reduction)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point is the
+**K-loop dot/reduction accumulator** `vecmat += tl.trans(tl.sum(expanded_a * b,
+axis=2))`. Unlike the matmul ports, the per-iteration reduction itself **is**
+modeled: `vecmatSpec`/`vecmatSpecK` are genuine `Tile.reduceSum` specs and the
+one-row slices prove the masked store equals that reduction; the
+`*_const_k_accum_slice` theorems prove a single materialized accumulator step
+`acc_out = acc_in + reduction` (`vecmatConstKAccumSpec`). What is **left as a
+blocker** is the full fold across all `dim_k // block_k` iterations: the
+top-level `batched_vecmat_python_test_shape_output_summary` characterizes the
+`output` store via the opaque `batchedVecmatSurfaceValue` (whatever the full
+surface accumulated), and the store-summary chains only two concrete K-block
+steps for the tested `128×128×128`, `block_k=64` shape rather than a general
+induction over k. So the multi-step accumulation across K blocks is the
+trusted/blocked part. `num_warps`/`num_stages` are not modeled. No
+output/input disjointness is assumed beyond an injective output offset map.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.BatchedVecmatMult
 
 open VeriTile.Triton

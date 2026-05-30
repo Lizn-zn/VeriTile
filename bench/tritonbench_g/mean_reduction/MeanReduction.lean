@@ -5,6 +5,48 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.LoopInvariant
 import VeriTile.Examples.Common
 
+/-!
+# `mean_reduction` — strict per-kernel correctness
+
+`mean_dim_kernel` reduces a `[M, N]` row-major matrix `X` along its `N` axis:
+program `pid` owns rows `[pid·BLOCK_M, …)`, accumulates each row over `N` in
+`BLOCK_N`-wide chunks inside `for off in range(0, N, BLOCK_N)`, then writes the
+row mean `tl.sum(_mean, axis=1) / N` to `Mean`, masked by `row < M`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body, including the `for off` accumulation loop, proven by a loop invariant
+(`meanLoopContextInvariant`). The host launch (`mean_dim_kernel[grid](...)`,
+the grid size `cdiv(M, BLOCK_M)`, the host `BLOCK_M = BLOCK_N = 8` choice, the
+`dim_compress` permutation/contiguity, and cross-program composition of `Mean`)
+is the *trusted boundary*, not a proof obligation here. The program id enters
+only via `BlockState`, so the per-program statement covers every program.
+
+## Proof architecture
+
+```
+mean_dim_kernel_output_summary                  ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)               surface lowers to the algorithm layer
+  └─ mean_dim_kernel_compute_correct            ← mean_dim_kernel_correct_target
+       └─ mean_dim_kernel_compute_correct_of_algorithm
+            └─ mean_dim_kernel_alg_post_of_exec
+                 └─ meanProjectedBody_alg_post   (pre-loop ∘ forRange ∘ post-loop)
+                      └─ meanLoopContextInvariant (forRange_inv loop invariant)
+                           └─ meanSpec  (per-row `Finset.sum` over `Fin N`, / N)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled (the kernel is launched with fixed `BLOCK_M`/`BLOCK_N`). The
+`.to(tl.float32)` cast on each loaded chunk reduces to the identity at the
+algorithm layer (post-erasure all dtypes unify to `ℝ`). The masked load uses
+`other=0.0`, so out-of-range columns contribute `0` to the row sum. The output
+scatter relies on `meanOutOffset_injective` (the per-row output offset map is
+injective). The only side condition is `BLOCK_N ≠ 0` (a nonempty inner chunk).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.MeanReduction
 
 open VeriTile.Triton VeriTile.Examples
@@ -1032,5 +1074,20 @@ theorem mean_dim_kernel_compute_correct
     (hStepNe : BLOCK_N ≠ 0) :
     mean_dim_kernel_correct_target X Mean M N BLOCK_M BLOCK_N s :=
   mean_dim_kernel_compute_correct_of_algorithm X Mean M N BLOCK_M BLOCK_N s hStepNe
+
+/-- Per-kernel output summary for `mean_dim_kernel`: the DSL surface lowers to
+the algorithm layer, and the masked store to `Mean` is compute-correct — every
+active row lane holds the row mean `meanSpec`, out-of-bounds rows are preserved.
+The only side condition is `BLOCK_N ≠ 0`. -/
+theorem mean_dim_kernel_output_summary
+    (X Mean : RegionName)
+    (M N BLOCK_M BLOCK_N : Nat) (s : BlockState)
+    (hStepNe : BLOCK_N ≠ 0) :
+    (∃ alg, (mean_dim_kernel X Mean M N BLOCK_M BLOCK_N).toAlgorithm? =
+        Except.ok alg) ∧
+    mean_dim_kernel_correct_target X Mean M N BLOCK_M BLOCK_N s := by
+  refine ⟨?_, ?_⟩
+  · simp [mean_dim_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact mean_dim_kernel_compute_correct X Mean M N BLOCK_M BLOCK_N s hStepNe
 
 end VeriTile.Bench.TritonBenchG.MeanReduction

@@ -3,6 +3,68 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `attention_fwd_triton3` — strict per-kernel correctness
+
+`_attn_fwd` is a flash-attention forward kernel with optional sliding-window
+masking and a chunked `INIT`/`END` resume protocol. Program `(start_m, off_hz)`
+loads a `BLOCK_M`-row `Q` tile for one (batch, head); `_attn_fwd_inner` loops
+over the key/value context stepping by `BLOCK_N`, running the online-softmax
+recurrence (`qk = dot(q,k)·qk_scale`, optional sliding-window/`IS_EVEN_N`
+masking via `where(..., -inf)`, running max `m_i`, denominator `l_i`,
+accumulator `acc` with `exp2` weights). On `INIT` the state is fresh, otherwise
+`m_i`/`l_i`/`acc` are reloaded from `M`/`L`/`Out`. The epilogue either finalizes
+(`END`: `m_i += log2(l_i)`, `acc /= l_i`) or stores intermediate `l_i`, then
+writes `m_i` to `M` and `acc` to `Out`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_attn_fwd[grid](...)`, the grid over
+`(cdiv(N_CTX, BLOCK_M), Z·H)`, block scheduling, the `@triton.heuristics`
+`IS_EVEN_M`/`IS_EVEN_N` selection, and how the runtime composes per-program
+writes into one buffer) is the *trusted boundary*, not a proof obligation here.
+Because `start_m`/`off_hz` are universally quantified, the per-program statement
+covers every program of the grid.
+
+## Proof architecture
+
+The four `output_summary` theorems mirror the four Python test cases
+(case1: sliding window, non-complement; case2: complement sliding window;
+case3: no sliding window; case4: `init=False` resume). Each is structurally
+identical:
+
+```
+attention_fwd_triton3_python_caseN_output_summary            ← TOP THEOREMS (N = 1..4)
+  ├─ attention_fwd_triton3_python_caseN_surface_toAlgorithm_supported   surface lowers to algorithm layer
+  ├─ attention_fwd_triton3_caseN_surface_out_compute_correct   masked Out store (END finalize)
+  └─ attention_fwd_triton3_caseN_surface_m_compute_correct     M-row store
+
+(supporting per-store slice lemmas, factored out:
+   attention_fwd_triton3_final_store_slice_compute_correct
+   attention_fwd_triton3_end_output_formula_store_slice_compute_correct
+   attention_fwd_triton3_end_m_formula_store_slice_compute_correct
+   attention_fwd_triton3_l_store_slice_compute_correct
+   attention_fwd_triton3_m_store_slice_compute_correct)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); dtype casts collapse to
+the identity post-erasure; `@triton.autotune`/`@triton.heuristics` and
+`num_warps`/`num_stages` are not modeled. The summaries are stated at the Python
+test shape (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=BLOCK_N=64`,
+`sm_scale = 1/8`, contiguous strides, 64 active lanes) with the case-specific
+`SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW`/`INIT` flags baked into the launch
+arguments. The `Out`/`M` writebacks are stated against
+`producedAttentionFwdTriton3CaseN{Out,M}Value` (the single-program surface value
+at each offset); the `END`-branch finalize (`acc / l_i`, `m_i + log2 l_i`) is
+reflected in those produced values via the `end_output_formula`/`end_m_formula`
+slices. This is a single-program scope; cross-program composition into the full
+output (and the cross-launch `INIT`/`END` chunked accumulation that case4
+resumes from) is the trusted host boundary.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
 
 open VeriTile.Triton

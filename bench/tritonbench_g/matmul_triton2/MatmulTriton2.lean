@@ -3,6 +3,64 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `matmul_triton2` — strict per-kernel correctness
+
+`matmul_kernel` is an autotuned, group-scheduled tiled GEMM: program `pid` is
+mapped through an L2-grouping schedule (`GROUP_SIZE_M`) to a tile coordinate
+`(pid_m, pid_n)`, accumulates a `BLOCK_SIZE_M × BLOCK_SIZE_N` output tile via
+`accumulator += tl.dot(a, b)` over the K dimension (with `offs_k < K - k·BLOCK_K`
+masking on the loads), and stores the tile into `C` masked by
+`(offs_am < M) & (offs_bn < N)`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`matmul_kernel[grid](...)`, the grid size
+`cdiv(M, BLOCK_M) · cdiv(N, BLOCK_N)`, the grouped-pid scheduling, autotune
+config selection, and how the runtime composes per-program output tiles into one
+`C` buffer) is the *trusted boundary*, not a proof obligation here. Because the
+program coordinates are universally quantified over `s`, the per-program
+statement covers every program of the grid.
+
+## Proof architecture
+
+```
+matmul_triton2_python_case{1,2}_output_summary             ← TOP THEOREMS (full surface)
+  ├─ matmul_triton2_python_case{1,2}_surface_toAlgorithm_supported  full surface lowers to algorithm layer
+  │    └─ matmul_triton2_surface_toAlgorithm_supported
+  └─ matmul_triton2_surface_output_compute_correct          ← ComputeCorrect of the masked surface output tile
+
+matmul_triton2_python_case{1,2}_store_summary              ← store-slice summaries
+  ├─ matmul_triton2_python_case{1,2}_surface_toAlgorithm_supported
+  └─ matmul_masked_output_store_slice_compute_correct       ← ComputeCorrect over the masked output store
+       ├─ matmul_masked_output_store_slice_correct          ← algorithm-layer masked scatter readback
+       └─ matmul_triton2_python_case{1,2}_output_offset_injective  output-address injectivity
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` /
+`num_warps` / `num_stages` are not modeled (the autotune config is fixed per
+case). The **K-loop dot-accumulator** — the `accumulator += tl.dot(a, b)`
+reduction over `range(0, cdiv(K, BLOCK_SIZE_K))` — is the key honesty point. The
+full surface (`matmul_triton2_surface`) lowers to the algorithm layer and its
+masked output store is proved compute-correct against `matmulTriton2SurfaceValue`
+(the actual executed cell), but that spec is *the kernel's own emitted value*,
+not an independent `Σ_k a·b` matrix-product reference: the dot reduction itself
+is not re-derived against a mathematical GEMM here. What is independently
+verified is the **masked output store** (`matmul_masked_output_store_slice`):
+starting from a precomputed accumulator tile `Acc`, the masked 2D writeback into
+`C` (active lanes get `Acc`, out-of-bounds lanes preserved) is proved correct,
+including output-address injectivity. Only Python cases 1 and 2 get store-slice
+coverage: case 3 (`16×16`) has every available autotune N-block wider than the
+`16`-wide contiguous output, so the whole-tile address-injectivity precondition
+does not hold — this is recorded honestly (case 3 has only a surface-lowering
+lemma, no store summary). The matmul output-store accumulator is the modeled
+boundary; relating the K-loop accumulator to a closed-form dot product is the
+remaining blocker.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.MatmulTriton2
 
 open VeriTile.Triton

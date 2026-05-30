@@ -3,6 +3,51 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `fused_rwkv6_kernel` — strict per-kernel correctness
+
+`fused_recurrent_rwkv6_fwd_kernel` is the RWKV-6 forward recurrent state scan:
+each program carries a `[BV, BK]` state matrix `b_h` across the `0..T` time
+loop, computing per-step `o_t = (b_h + u * k_t ⊗ v_t) · q_t` and updating
+`b_h = b_h * exp(w_t) + k_t ⊗ v_t`, with an optional initial-state seed and an
+optional final-state store.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program
+`@triton.jit` body. The exported autograd helper always launches with the
+default `reverse = false`, so pointer movement is modeled forward. The host
+launch (3-D grid over `(i_v, i_k, i_bh)`, and how the runtime composes
+per-program writes) is the *trusted boundary*. Because the program ids are
+universally quantified, the per-program statement covers every program.
+
+## Proof architecture
+
+```
+fused_recurrent_rwkv6_python_test_case{1..4}_output_summary   ← TOP THEOREMS
+  ├─ fused_recurrent_rwkv6_python_test_case{n}_surface_toAlgorithm_supported
+  │      surface lowers to the algorithm layer
+  ├─ fused_recurrent_rwkv6_output_producer_surface_compute_correct
+  │      └─ fused_recurrent_rwkv6_output_store_slice_compute_correct
+  │           └─ fused_recurrent_rwkv6_output_store_slice_correct   per-lane readback
+  └─ fused_recurrent_rwkv6_final_state_producer_surface_compute_correct
+       └─ fused_recurrent_rwkv6_final_state_store_slice_compute_correct
+            └─ fused_recurrent_rwkv6_final_state_store_slice_correct
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype `.to(...)` casts
+erase to the identity. The recurrent state-carry: the store-slice lemmas prove
+the per-output **masked face** (the `o` writeback at a given time offset and
+the `ht` final-state writeback) against precomputed-row specs; the `0..T`
+state-fold that threads `b_h` across steps is exercised by the surface
+lowering but the cross-step recurrence is the trusted loop boundary. The
+`USE_INITIAL_STATE` and `STORE_FINAL_STATE` branches are modeled; `REVERSE`
+is fixed to the exported default. Side conditions: store-offset injectivity
+and output/input region-distinctness where required.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel
 
 open VeriTile.Triton

@@ -3,6 +3,77 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `chunk_gate_recurrence` — strict per-kernel correctness
+
+`chunk_gate_recurrence.py` implements a gated chunk recurrence for linear
+attention. `_fwd_recurrence` carries a `[BLOCK_MODEL_K, BLOCK_MODEL_V]`
+state `acc` across `NUM_BLOCK` chunks, seeded from `last_kv` (or zero), and at
+each step updates `acc = acc * d_i + S_i`, storing `acc` into `O`.
+`_bwd_recurrence` runs the matching reverse recurrence
+`Dacc = Dacc * d_i + DS_i`, emitting per-chunk gradients `DI`, `DG`
+(`sum(Dacc * S_i)`), and the boundary gradient `DL`.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies of both `_fwd_recurrence` and `_bwd_recurrence`. The host
+launch (`grid = (B*H, D_k//BLOCK_MODEL_K, D_v//BLOCK_MODEL_V)`, the fixed
+`BLOCK_MODEL_K = 64`, `BLOCK_MODEL_V = 16`, the divisibility assertions, and how
+the runtime composes per-program writes into one buffer) is the *trusted
+boundary*, not a proof obligation here. Because the program ids are universally
+quantified, the per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+chunk_gate_recurrence_forward_python_test_shape_summary        ← TOP (forward)
+  ├─ chunk_gate_recurrence_python_test_{with,no}_last_kv_fwd_surface_toAlgorithm_supported
+  │     └─ chunk_gate_recurrence_fwd_surface_toAlgorithm_supported
+  └─ chunk_gate_recurrence_forward_python_test_shape_all_outputs_compute_correct
+       ├─ chunk_gate_recurrence_fwd_initial_surface_compute_correct
+       └─ chunk_gate_recurrence_fwd_step_surface_compute_correct
+
+chunk_gate_recurrence_backward_python_test_shape_summary       ← TOP (backward)
+  ├─ chunk_gate_recurrence_python_test_bwd_surface_toAlgorithm_supported
+  │     └─ chunk_gate_recurrence_bwd_surface_toAlgorithm_supported
+  └─ chunk_gate_recurrence_backward_python_test_shape_all_outputs_compute_correct
+       ├─ chunk_gate_recurrence_bwd_DI_surface_compute_correct
+       ├─ chunk_gate_recurrence_bwd_DG_surface_compute_correct
+       └─ chunk_gate_recurrence_bwd_DL_surface_compute_correct
+
+per-store slice lemmas (modeled exactly, fed materialized state buffers):
+  forward:  forward_store_slice / initial_last_kv_store_slice /
+            initial_zero_store_slice / forward_step_store_slice
+  backward: bwd_dacc_step_DI_store_slice / bwd_dg_step_store_slice /
+            bwd_DI_store_slice / bwd_DG_store_slice / bwd_DL_store_slice
+each with a `*_correct` (algorithm-layer readback) and
+`*_compute_correct` (ComputeCorrect) face, plus `*_python_test_shape_*` wrappers.
+
+chunk_gate_recurrence_{forward,backward}_python_test_shape_output_summary  (aliases)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The fixed block sizes
+`BLOCK_MODEL_K = 64`, `BLOCK_MODEL_V = 16` are the Python defaults; the
+`.to(tl.float32)` / `.to(_.dtype.element_ty)` casts erase to the identity at the
+algorithm layer (post-erasure all dtypes unify to `ℝ`). Each single recurrence
+step face — the gated update `acc * d_i + S_i` (forward) and
+`Dacc * d_i + DS_i` plus the `sum(Dacc * S_i)` reduction (backward) — and each
+masked block store are modeled exactly. The cross-chunk recurrence fold — the
+forward `range(NUM_BLOCK-1)` loop threading `acc`, and the reverse
+`range(NUM_BLOCK-1)` loop threading `Dacc` from the last chunk plus the
+post-loop `DL` step — is left as the trusted boundary: the carried state is
+presented to each step slice as a materialized previous-state buffer
+(`AccPrev` / `DaccPrev` / `DaccPre`), and the produced values
+(`producedFwd*Value`, `producedBwd*Value`) are defined as the actual surface
+readback so the output summaries certify the modeled step faces agree with the
+executed surface at the verified shape. There is no `@triton.autotune` on these
+kernels. Output offset injectivity / non-collision is a side condition
+(discharged for the test shape).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ChunkGateRecurrence
 
 open VeriTile.Triton

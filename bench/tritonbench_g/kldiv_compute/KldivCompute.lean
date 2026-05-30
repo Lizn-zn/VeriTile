@@ -5,6 +5,47 @@ import VeriTile.Triton.Math.Loss
 import VeriTile.Triton.DSL
 import VeriTile.Examples.Common
 
+/-!
+# `kldiv_compute` — strict per-kernel correctness
+
+`kldivergence_kernel` is an elementwise pointwise KL term: program `pid` loads
+block `[pid·BLOCK_SIZE, (pid+1)·BLOCK_SIZE)` of inputs `x` and `y`, computes
+`x · log(x / y)` lane-wise, and stores the result to `output_ptr`, masked by
+`offsets < n_elements`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`kldivergence_kernel[(num_blocks,)](...)`, the grid size
+`cdiv(n_elements, BLOCK_SIZE)`, and how the runtime composes per-program writes
+into one buffer) is the *trusted boundary*, not a proof obligation here. Because
+`pid` is universally quantified, the per-program statement covers every program
+of the grid.
+
+## Proof architecture
+
+```
+kldivergence_kernel_output_summary            ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ kldivergence_kernel_compute_correct      ← ComputeCorrect over the masked store
+       └─ kldivergence_kernel_correct         ← algorithm-layer readback per lane
+```
+
+The per-lane spec is `klDivSpec (xs i) (ys i)` from the
+`VeriTile.Triton.Math.Loss` (`TiledLoss`) oracle — the math is *not*
+inline-duplicated here. Inputs are presented via `InputLoadedAt` (the values
+each lane loads).
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The masked store leaves out-of-bounds lanes (`offsets ≥ n_elements`)
+untouched, so the reduction never depends on padded-block values. No
+output/input disjointness is assumed: both inputs are read into registers
+before the scatter, so the result is correct even if `output_ptr` aliases `x_ptr`
+or `y_ptr`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.KldivCompute
 
 open VeriTile.Triton VeriTile.Examples
@@ -81,5 +122,28 @@ theorem kldivergence_kernel_compute_correct
   rw [hExec] at hi
   simp [observeAt, hActive] at hi
   exact hi
+
+/-- Per-kernel output summary for `kldivergence_kernel`: the DSL surface lowers
+to the algorithm layer, and the masked store to `output_ptr` is compute-correct
+— every active lane holds `klDivSpec (xs i) (ys i)`, out-of-bounds lanes are
+preserved. -/
+theorem kldivergence_kernel_output_summary
+    (x_ptr y_ptr output_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
+    (s : BlockState) (xs ys : Fin BLOCK_SIZE → ℝ)
+    (h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs)
+    (h_y : InputLoadedAt s y_ptr BLOCK_SIZE ys) :
+    (∃ alg, (kldivergence_kernel x_ptr y_ptr output_ptr n_elements BLOCK_SIZE).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := kldivergence_kernel x_ptr y_ptr output_ptr n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
+          (fun i => (output_ptr, s.pid * BLOCK_SIZE + i.val)))
+      (expected := fun i => klDivSpec (xs i) (ys i)) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact kldivergence_kernel_compute_correct x_ptr y_ptr output_ptr n_elements
+    BLOCK_SIZE hBlockSize s xs ys h_x h_y
 
 end VeriTile.Bench.TritonBenchG.KldivCompute

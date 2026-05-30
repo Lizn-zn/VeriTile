@@ -3,6 +3,80 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `decay_cumsum` — strict per-kernel correctness
+
+`decay_cumsum.py` holds three gated-decay kernels for linear attention.
+`fwd_decay_cumsum` walks `BT` time steps accumulating a running decay
+`cum_decay += g * inv_ln2` and storing it into `g_o`. `prepare_qg_kg` scales the
+query/key blocks by the exponentiated decay (`q *= exp2(g) * scale`,
+`k *= exp2(last_decay - g)`), storing `qg`/`kg`. `bwd_decay_global_cumsum` runs
+the reverse pass, combining inner/inter gradients with `exp2` decays and
+accumulating `cum_grad_dg += dq*q - dk*k` into `dg`.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies of all three kernels. The host launch (each
+`launch_*` with `grid = (DK//BK, T//BT, B*H)`, the host-computed strides
+`s_qk_* = H*T*DK / T*DK / DK`, the block sizes `BT, BK`, and how the runtime
+composes per-program writes into one buffer) is the *trusted boundary*, not a
+proof obligation here. Because the program ids are universally quantified, the
+per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+decay_cumsum_python_test_shape_complete_summary               ← TOP THEOREM
+  ├─ decay_cumsum_prepare_python_test_shape_summary
+  │     ├─ prepare_qg_kg_python_test_surface_toAlgorithm_supported
+  │     └─ decay_cumsum_prepare_python_test_shape_all_outputs_compute_correct
+  │          ├─ prepare_qg_decay_python_test_shape_compute_correct
+  │          └─ prepare_kg_decay_python_test_shape_compute_correct
+  ├─ decay_cumsum_forward_python_test_shape_summary
+  │     ├─ fwd_decay_cumsum_python_test_surface_toAlgorithm_supported
+  │     └─ decay_cumsum_forward_python_test_shape_all_outputs_compute_correct
+  │          ├─ fwd_decay_cumsum_store_python_test_shape_compute_correct
+  │          └─ fwd_decay_cumsum_step_python_test_shape_compute_correct
+  └─ decay_cumsum_backward_python_test_shape_summary
+        ├─ bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
+        └─ decay_cumsum_backward_python_test_shape_all_outputs_compute_correct
+             ├─ bwd_decay_cumsum_dq_inter_python_test_shape_compute_correct
+             ├─ bwd_decay_cumsum_dk_inter_python_test_shape_compute_correct
+             ├─ bwd_decay_cumsum_dg_python_test_shape_compute_correct
+             └─ bwd_decay_dg_step_python_test_shape_compute_correct
+
+per-store slice lemmas (modeled exactly, fed materialized state buffers):
+  prepare:  prepare_qg_decay_store_slice / prepare_kg_decay_store_slice
+  forward:  fwd_decay_cumsum_store_slice / fwd_decay_cumsum_step_store_slice
+  backward: bwd_decay_cumsum_store_slice / bwd_decay_dg_step_store_slice
+each with a `*_correct` (algorithm-layer readback) and `*_compute_correct` face.
+
+decay_cumsum_{prepare,forward,backward}_python_test_shape_output_summary (aliases)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). There is no
+`@triton.autotune` on these kernels; proofs fix the checked Python shape
+`B,H,T,DK = 2,2,4,8`, `BT,BK = 2,4`, `scale = 1`. The `.to(tl.float32)` /
+`.to(_.dtype.element_ty)` casts erase to the identity at the algorithm layer
+(post-erasure all dtypes unify to `ℝ`). The `inv_ln2` / `tl.math.exp2` decay
+factors are modeled as their real-valued counterparts. Each single time-step
+face — the forward `cum_decay += g * inv_ln2`, the per-step `qg`/`kg` scaling,
+and the backward `dq_inter *= exp2(g)`, `dk_inter *= exp2(last_g - g)`,
+`cum_grad_dg += dq*q - dk*k` — and each masked store are modeled exactly. The
+cross-step cumulative folds — the forward `range(BT)` loop threading
+`cum_decay`, and the reverse `range(BT-1,-1,-1)` loop threading `cum_grad_dg`
+plus the `last_g` capture — are left as the trusted boundary: the carried state
+is presented to each step slice as a materialized previous-state buffer
+(`CumPrev` / `CumGradPrev` / `*InterPre`), and the surface-output values
+(`decay{Prepare,Forward,Backward}SurfaceValue`) are defined as the actual
+surface readback so the summaries certify the modeled step faces agree with the
+executed surface at the verified shape. Output offset injectivity is a side
+condition (discharged for the test shape).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.DecayCumsum
 
 open VeriTile.Triton

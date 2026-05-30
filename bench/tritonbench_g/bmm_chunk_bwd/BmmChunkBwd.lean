@@ -3,6 +3,64 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `bmm_chunk_bwd` — strict per-kernel correctness
+
+`_bmm_chunk_bwd_kernel` is the chunked batched matmul backward of Mamba-style
+SSMs: for each (m, n) program in a (batch, chunk·group) grid it accumulates
+`acc += tl.dot(dout, a)` over chunk-size blocks (`BLOCK_SIZE_CS`), optionally
+adds a residual (`HAS_RESIDUAL`), downcasts to the db dtype, and stores the
+`BLOCK_SIZE_M×BLOCK_SIZE_N` gradient tile to `db` under a
+`(m<chunk_size_limit)&(n<K)` mask.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_bmm_chunk_bwd_kernel[grid](...)`, the 3D grid over
+m·n tiles / batch / chunk·groups, the `@triton.autotune` config selection,
+`num_warps`/`num_stages`, and how the runtime composes per-program writes into
+one buffer) is the *trusted boundary*, not a proof obligation here. Program ids
+are universally quantified, so the per-program statements cover every program
+of the grid.
+
+## Proof architecture
+
+```
+bmm_chunk_bwd_python_case1_output_summary     ← TOP THEOREMS
+bmm_chunk_bwd_python_case2_output_summary       (case1 = no residual,
+                                                 case2 = grouped + residual)
+  ├─ bmm_chunk_bwd_python_caseN_surface_toAlgorithm_supported  surface lowers
+  │    └─ bmm_chunk_bwd_surface_toAlgorithm_supported
+  └─ bmm_chunk_bwd_surface_output_compute_correct  ← ComputeCorrect over db store
+
+bmm_chunk_bwd_python_caseN_store_summary      ← final-store-slice summaries
+  ├─ bmm_chunk_bwd_final_store_slice_compute_correct (and _active_ variant)
+  │    └─ bmm_chunk_bwd_final_store_slice_correct  ← algorithm-layer masked readback
+  └─ bmm_chunk_bwd_residual_final_store_slice_compute_correct (and _active_ variant)
+       └─ bmm_chunk_bwd_residual_final_store_slice_correct  ← acc + residual readback
+  (+ bmm_chunk_bwd_python_case{1,2}_(residual_)compute_correct,
+     bmm_chunk_bwd_python_{ungrouped,grouped}_active_no_collision  ← injectivity)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point is the
+**chunk-loop dot-accumulator** `acc += tl.dot(dout, a)` iterated over
+`cdiv(chunk_size_limit, BLOCK_SIZE_CS)`. This inner contraction is **left as a
+blocker** — the surface-level `*_output_summary` theorems characterize the db
+store per case via the opaque `bmmChunkBwdSurfaceValue s ...` (whatever the
+surface accumulated) rather than proving it equals the mathematical
+sum-over-`cs` product. The verified store slices prove only the masked 2D
+writeback (mask `(m<chunk_size_limit)&(n<K)`, batch/chunk/head offset
+addressing): `bmm_chunk_bwd_final_store_slice` writes the precomputed
+accumulator, and `bmm_chunk_bwd_residual_final_store_slice` writes
+`acc + residual` (the `HAS_RESIDUAL` add, `residualFinalSpec`). So the
+dot-product value is the trusted/blocked part; the residual add itself **is**
+modeled in the residual slice. `@triton.autotune`, `num_warps`/`num_stages`,
+and `dot_dtype` are not modeled. No output/input disjointness is assumed beyond
+an injective db offset map (established per tested shape).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.BmmChunkBwd
 
 open VeriTile.Triton

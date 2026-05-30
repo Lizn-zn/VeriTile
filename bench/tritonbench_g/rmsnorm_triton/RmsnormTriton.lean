@@ -3,6 +3,54 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `rmsnorm_triton` — strict per-kernel correctness
+
+`rmsnorm_triton` is a 3D `(batch, M, K)` RMS normalization over the last
+dimension: programs `(pid_batch, pid_m)` accumulate `var += pow(x, 2)` over a
+`BLOCK_N_SIZE`-tiled loop across `N_SIZE` columns (masked by `offs_n < N_SIZE`,
+masked lanes read as `0`), reduce to `var = sum/N_SIZE`, take
+`rstd = rsqrt(var + eps)`, then in a second loop store `(x * rstd) * rms_w` back,
+masked by `offs_n < N_SIZE`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`rmsnorm_triton[(batch, M)](...)`, the 2D
+program-per-(batch,row) grid, the host `BLOCK_N_SIZE=1024` choice, and how the
+runtime composes per-row writes into one buffer) is the *trusted boundary*, not
+a proof obligation here. Because `(pid_batch, pid_m)` are universally
+quantified, the per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+rmsnorm_triton_output_summary                 ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ rmsnorm_triton_compute_correct           ← ComputeCorrect over the masked store
+       └─ rmsnorm_triton_correct              ← algorithm-layer readback per lane
+                                                 (one-block launch shape N_SIZE ≤ BLOCK_N_SIZE)
+```
+
+The spec threads `rmsVarCarrier` (`reduceSum (x*x) / N_SIZE`) and
+`rmsInvCarrier` (`rsqrt (var + eps)`) into `rmsnormSpec = (x * inv) * w`
+lane-wise. In-bounds lanes hold `rmsnormSpec`, out-of-bounds lanes are
+preserved.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The `.to(tl.float32)` casts on the loaded `x` reduce to the identity at
+the algorithm layer (post-erasure all dtypes unify to `ℝ`);
+`tl.extra.cuda.libdevice.pow(·, 2)` is modeled as `x*x` and `tl.math.rsqrt` as
+exact `WithBot.realRsqrt`. The correctness theorem is proved under the wrapper's
+single-block launch shape (`0 < N_SIZE`, `N_SIZE ≤ BLOCK_N_SIZE`, here
+`N_SIZE = K`, `BLOCK_N_SIZE = 1024`), so the tiled loop runs exactly once; the
+`pow`/store reductions run over the full `BLOCK_N_SIZE` block, but masked lanes
+load `0` (matching `other=0.0`), matching the upstream semantics. Correctness
+assumes the output offsets are injective (`hOutInj`).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RmsnormTriton
 
 open VeriTile.Triton
@@ -199,4 +247,41 @@ theorem rmsnorm_triton_compute_correct
     stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps
     s s' hNpos hNle hOutInj hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `rmsnorm_triton`: the DSL surface lowers to the
+algorithm layer, and the masked store to `output_ptr` is compute-correct under
+the wrapper's one-block launch shape (`N_SIZE ≤ BLOCK_N_SIZE`) — every in-bounds
+lane holds `rmsnormSpec`, out-of-bounds lanes are preserved. -/
+theorem rmsnorm_triton_output_summary
+    (x_ptr rms_w_ptr output_ptr : RegionName)
+    (stride_x_batch stride_x_m stride_x_k stride_rms_w
+      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hNpos : 0 < N_SIZE) (hNle : N_SIZE ≤ BLOCK_N_SIZE)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N_SIZE =>
+        outOffset s stride_out_batch stride_out_m stride_out_k i)) :
+    (∃ alg, (rmsnorm_triton x_ptr rms_w_ptr output_ptr
+        stride_x_batch stride_x_m stride_x_k stride_rms_w
+        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := rmsnorm_triton x_ptr rms_w_ptr output_ptr
+        stride_x_batch stride_x_m stride_x_k stride_rms_w
+        stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N_SIZE => i.val < N_SIZE)
+        (fun i => (output_ptr,
+          outOffset s stride_out_batch stride_out_m stride_out_k i)))
+      (expected := fun i =>
+        rmsnormSpec s x_ptr rms_w_ptr stride_x_batch stride_x_m stride_x_k
+          stride_rms_w N_SIZE BLOCK_N_SIZE eps i) := by
+  refine ⟨?_, ?_⟩
+  · simp [rmsnorm_triton, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact rmsnorm_triton_compute_correct x_ptr rms_w_ptr output_ptr
+      stride_x_batch stride_x_m stride_x_k stride_rms_w
+      stride_out_batch stride_out_m stride_out_k N_SIZE BLOCK_N_SIZE eps
+      s hNpos hNle hOutInj
+
 end VeriTile.Bench.TritonBenchG.RmsnormTriton

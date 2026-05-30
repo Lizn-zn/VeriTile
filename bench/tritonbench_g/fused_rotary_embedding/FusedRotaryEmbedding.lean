@@ -3,6 +3,53 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `fused_rotary_embedding` — strict per-kernel correctness
+
+`decoding_fused_rotary_embedding_kernel` fuses rotary position embedding with
+a paged KV-cache fill for decoding: each program unconditionally rotates the Q
+row (`out0 = q0 * cos - q1 * sin`, `out1 = q1 * cos + q0 * sin`), and — guarded
+by `cur_head_idx % KV_GROUP_NUM == 0` — rotates the K row and scatters the
+rotated K and the V row into the paged `k_cache` / `v_cache` at offsets driven
+by `BLOCK_TABLES` and `context_lengths`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program
+`@triton.jit` body. The host launch (decoding grid, page-table layout, and how
+the runtime composes per-program cache writes) is the *trusted boundary*.
+Because the program ids are universally quantified, the per-program statement
+covers every program. Both the old and new cache layouts are covered.
+
+## Proof architecture
+
+```
+decoding_fused_rotary_embedding_{old,new}_layout_python_test_shape_output_summary  ← TOP
+  ├─ decoding_fused_rotary_embedding_kernel_surface_toAlgorithm_supported
+  │      surface lowers to the algorithm layer
+  └─ decoding_fused_rotary_embedding_{old,new}_layout_python_test_shape_all_outputs_compute_correct
+       ├─ q_{first,second}_half_python_test_shape_compute_correct
+       │      └─ q_{first,second}_half_compute_correct ⊳ q_{first,second}_half_correct
+       ├─ k_{first,second}_half_python_test_shape_compute_correct
+       │      └─ k_{first,second}_half_compute_correct ⊳ k_{first,second}_half_correct
+       ├─ context_k_cache_{first,second}_half_{old,new}_layout_python_test_shape_compute_correct
+       │      └─ k_cache_*_guarded_store_slice_compute_correct ⊳ *_store_slice_correct
+       └─ context_v_cache_python_test_shape_compute_correct
+            └─ v_cache_guarded_store_slice_compute_correct ⊳ v_cache_store_slice_correct
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype `.to(...)` casts
+erase to the identity. The rotary `cos` / `sin` factors are precomputed inputs
+loaded per lane; rotation is proved as masked first-half and second-half faces
+for both Q and K. The `cur_head_idx % KV_GROUP_NUM == 0` guard on the K-rotary and
+K/V cache-fill path is modeled (the guard predicate `handleKv` gates the
+writeback). The paged-cache offsets read `BLOCK_TABLES` and `context_lengths`
+as natural-number index regions. `@triton.autotune` is not modeled. Side
+conditions: store-offset injectivity and cache-region distinctness hypotheses.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FusedRotaryEmbedding
 
 open VeriTile.Triton

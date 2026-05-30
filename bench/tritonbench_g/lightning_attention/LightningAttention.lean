@@ -4,6 +4,50 @@ import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `lightning_attention` — strict per-kernel correctness
+
+`_fwd_kernel` is the lightning-attention forward recurrent tile scan: each
+program walks `NUM_BLOCK` key/value tiles, carrying a `[d, e]` key-value
+accumulator `kv` across the loop, combining an intra-block (masked, decayed)
+attention term with an inter-block term `q · kv` to produce the output tile.
+The backward kernels (`_bwd_intra`, `_bwd_inter`) compute the `dq`/`dk`/`dv`
+gradients with the matching reverse recurrence.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies (forward, backward-intra, backward-inter). The host
+launch (grid shape, block-model tiling, and how the runtime composes
+per-program tile writes) is the *trusted boundary*. Because the program ids
+are universally quantified, each per-program statement covers every program.
+
+## Proof architecture
+
+```
+lightning_attention_python_test_shape_complete_summary    ← TOP THEOREM
+  └─ lightning_attention_python_test_shape_output_summary  launched-surface summary
+       ├─ lightning_attention_{forward,bwd_intra,bwd_inter}_surface_toAlgorithm_supported
+       ├─ lightning_attention_forward_surface_out_python_test_shape_compute_correct
+       │      └─ lightning_attention_forward_store_slice_compute_correct
+       │           └─ lightning_attention_forward_store_slice_correct  per-lane readback
+       └─ lightning_attention_bwd_inter_{dq,dk,dv}_python_test_shape_compute_correct
+            └─ lightning_attention_bwd_{dq,dk,dv}_store_slice_compute_correct
+                 └─ lightning_attention_bwd_grad_store_slice_correct
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype `.to(...)` casts
+erase to the identity. The recurrent tile-carry: the store-slice lemmas prove
+the per-tile **masked face** (the `Out` / `DQ` / `DK` / `DV` tile writeback)
+against precomputed-tile specs; the `NUM_BLOCK` loop fold that threads the
+`kv` accumulator across tiles is exercised by the surface lowering but the
+cross-tile recurrence is the trusted loop boundary. The intra-block decay
+masking and the `dot` tile products are modeled. Side conditions: tile-offset
+injectivity and output region-distinctness hypotheses where required.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.LightningAttention
 
 open VeriTile.Triton

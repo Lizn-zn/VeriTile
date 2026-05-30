@@ -3,6 +3,61 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `quantize_kv_transform` — strict per-kernel correctness
+
+`_fwd_kernel_destindex_copy_quantize_kv` copies and int8-quantizes a KV cache
+entry to a destination-indexed slot, with both head and dim masking: program
+`cur_index` loads `dest_index = Dest_loc[cur_index]`, loads the
+`[BLOCK_HEAD, BLOCK_DMODEL]` source tile masked by
+`(offs_h < head_num) & (offs_d < head_dim)` (`other=0.0`), computes a per-head
+scale `max(|src|, axis=1) / 127` cast to `Out_scale`'s element type, divides and
+casts the quotient to int8, and stores the quantized values (at `Out[dest_index]`,
+head-and-dim masked) and the per-head scale (at `Out_scale[dest_index]`, head
+masked).
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_destindex_copy_quantize_kv[grid](...)`, the
+grid `(seq_len,)`, `BLOCK_HEAD = next_power_of_2(head_num)` and `BLOCK_DMODEL =
+next_power_of_2(head_dim)`, the strides, and the runtime composition of
+per-program destination-indexed writes) is the *trusted boundary*. `cur_index`
+is universally quantified, so the per-program statement covers every program of
+the grid; destination-index injectivity is supplied as a no-collision lemma.
+
+## Proof architecture
+
+```
+destindex_copy_quantize_kv_transform_python_h12_d96_output_summary   ← TOP THEOREM
+  ├─ ..._transform_real_surface_toAlgorithm_supported    surface lowers to the algorithm layer
+  ├─ ..._transform_surface_value_output_compute_correct  value store ComputeCorrect
+  └─ ..._transform_surface_scale_output_compute_correct  scale store ComputeCorrect
+       ├─ ..._transform_value_store_slice_compute_correct / _correct / _active   value readback
+       ├─ ..._transform_scale_store_slice_compute_correct / _correct             scale readback
+       └─ ..._transform_python_..._offset_injective / _no_collision              no-collision lemmas
+```
+
+Three shapes (h12_d96, h8_d64, h1_d1) mirror the Python test sizes, including
+the degenerate `head_dim` cases the dim mask is built for. The value spec is the
+destination-indexed scaled store `src / scale`; the scale spec is the stored
+per-head scalar.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float. The honesty point is the
+quantization tail. The proofs model: the per-head scale `max(|src|) / 127`, the
+combined head-and-dim mask with `other=0.0` load default, the
+destination-indexed addressing, and the real-valued scaled value `src / scale`;
+the value-store slices take the per-head scale as a precomputed `OutScale` input
+and prove the masked writeback up to the fixed-width cast. The full surface
+(including the scale's `.to(...)` output-dtype annotation and the quotient's
+`(src / scale).to(tl.int8)` annotation) lowers through algorithm erasure, where
+those casts are the **identity over `ℝ`**. The bit-accurate effect of the
+scale-dtype rounding and the int8 saturating cast is **not** numerically
+modeled. `@triton.autotune` is not present here.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.QuantizeKvTransform
 
 open VeriTile.Triton

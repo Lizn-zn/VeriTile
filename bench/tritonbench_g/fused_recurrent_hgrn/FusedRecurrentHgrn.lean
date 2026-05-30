@@ -3,6 +3,54 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `fused_recurrent_hgrn` — strict per-kernel correctness
+
+`fused_recurrent_hgrn_fwd_kernel` is the HGRN forward recurrent state scan:
+each program carries a hidden-state vector `b_h` across a `0..T` time loop,
+updating `b_h = b_h * exp(g_t) + (1 - exp(g_t)) * x_t` per step, optionally
+seeded by an initial state and optionally storing the final state. The
+companion backward kernel performs the reverse-time gradient scan.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies (forward and backward). The host launch (grid shape,
+`@triton.autotune` config selection over `BD`, and how the runtime composes
+per-program writes into one buffer) is the *trusted boundary*, not a proof
+obligation here. Because the program ids are universally quantified, each
+per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+fused_recurrent_hgrn_python_test_shape_complete_summary   ← TOP THEOREM
+  ├─ fused_recurrent_hgrn_test_case{1..4}_output_summary   per-case summaries
+  │    ├─ *_surface_toAlgorithm_supported                  surface lowers to algorithm layer
+  │    └─ *_python_test_shape_all_outputs_compute_correct  ComputeCorrect over all stores
+  │         ├─ fused_recurrent_hgrn_output_store_slice_compute_correct
+  │         ├─ fused_recurrent_hgrn_forward_step_store_slice_compute_correct
+  │         ├─ fused_recurrent_hgrn_final_state_store_slice_compute_correct
+  │         ├─ fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
+  │         └─ fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
+  └─ (each *_compute_correct over a *_correct algorithm-layer readback per lane)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype `.to(...)` casts
+erase to the identity post-erasure. `@triton.autotune` (the `BD` config sweep)
+is not modeled — `BD` is a free parameter. The recurrent state-carry: each
+verified store-slice lemma proves the per-step / per-output **masked face**
+(one time step's writeback) against its precomputed-row spec; the full `0..T`
+loop fold that threads `b_h` across steps is exercised by the surface
+lowering (`toAlgorithm_supported`) but the cross-step state recurrence itself
+is the trusted loop boundary. The optional `USE_INITIAL_STATE` and
+`STORE_FINAL_STATE` branches and the reverse-time backward indexing are both
+modeled. Side conditions: store-offset injectivity and region-distinctness
+hypotheses where outputs must not alias.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn
 
 open VeriTile.Triton

@@ -4,6 +4,56 @@ import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `token_softmax_llama` — strict per-kernel correctness
+
+`_fwd_kernel_token_softmax` is the LightLLM/LLaMA token-attention softmax:
+program `(cur_batch, cur_head)` loads one row of `Logics` (the `cur_batch`'s
+slice given by `B_Start_Loc`/`B_Seqlen`, masked with `-inf` past
+`cur_batch_seq_len`), computes the numerically-stable softmax
+(`row - max`, `exp`, `/ sum`), and stores the result into `Prob_Out`, masked by
+`col_offsets < cur_batch_seq_len`. (Kernel body is identical to the Bloom
+variant; only the Python test shapes differ.)
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_token_softmax[(batch, head_num)](...)`, the
+grid over `(batch, head)`, the host `BLOCK_SIZE = next_power_of_2(max_input_len)`
+choice, `num_warps`, and how the runtime composes per-program writes into
+`Prob_Out`) is the *trusted boundary*, not a proof obligation here. Because the
+program ids `cur_batch`/`cur_head` are universally quantified (via `BlockState`),
+the per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+token_softmax_llama_python_case1_output_summary       ← TOP THEOREM (also case2)
+  ├─ token_softmax_llama_python_caseN_surface_toAlgorithm_supported  surface lowers
+  │    └─ token_softmax_surface_toAlgorithm_supported
+  └─ token_softmax_surface_output_compute_correct       ← ComputeCorrect of the store
+       ├─ token_softmax_llama_python_caseN_offset_injective
+       └─ token_softmax_llama_final_store_python_caseN_compute_correct
+            └─ token_softmax_final_store_slice_compute_correct
+                 └─ token_softmax_final_store_slice_correct  (per-lane masked readback)
+```
+
+The two `output_summary` theorems pin the kernel at the Python test shapes.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float, so the `-inf` masking and
+the `exp`/division are real-valued); `@triton.autotune` / `num_warps` are not
+modeled. The `(...).to(tl.float32)` cast reduces to the identity at the algorithm
+layer (post-erasure all dtypes unify to `ℝ`). The verified statement is scoped to
+the **final masked probability store** into `Prob_Out`: the expected value is the
+surface-level `tokenSoftmaxSurfaceValue` read off at each `probOffset`, with the
+write-mask `active s B_Seqlen i` (`col_offsets < cur_batch_seq_len`). The
+max/exp/sum reduction body feeds that value; the side condition is the
+offset-injectivity of the `Prob_Out` slice at the test shapes. Out-of-range lanes
+are preserved (mask=false ⇒ no store).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.TokenSoftmaxLlama
 
 open VeriTile.Triton

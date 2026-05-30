@@ -3,6 +3,60 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `block_sparse_attn` — strict per-kernel correctness
+
+`block_sparse_attn.py`'s `block_sparse_attention_kernel` is a block-sparse
+(CSR-mask) FlashAttention forward for prompt-only / right-padded inputs:
+program `(start_m, off_bh)` loads its query tile, walks only the active key
+blocks named by the per-head CSR `row_indices`/`col_indices`, runs the
+online-softmax recurrence (`m_i`, `l_i`, accumulators `acc`/`acc2`) with causal
+masking and `softmax_scale`, and finally stores `acc` (and, when
+`NUM_D_BLOCKS ≥ 2`, `acc2` at `+BLOCK_D`) to `out`, masked by `offs_m <
+q_seq_len`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`grid = (cdiv(q_seq_len, BLOCK_M), B·num_heads)`, the
+GQA head mapping, the CSR sparsity schedule, and how the runtime composes
+per-program writes into `out`) is the *trusted boundary*, not a proof
+obligation here. Because the program ids `start_m`/`off_bh` are universally
+quantified (via `s`), the per-program statements cover every program of the
+grid.
+
+## Proof architecture
+
+```
+block_sparse_attn_python_case1_output_summary / _case2_output_summary   ← TOP (abbrev, EVEN_M/N = true / false)
+  ├─ block_sparse_attn_case{1,2}_surface_first_output_compute_correct    first D-block store of the full surface
+  │    └─ block_sparse_attn_python_first_output_compute_correct
+  │         └─ block_sparse_attn_output_store_slice_compute_correct
+  │              └─ block_sparse_attn_output_store_slice_correct          algorithm-layer readback per lane
+  └─ block_sparse_attn_case{1,2}_surface_second_output_compute_correct   second D-block store (+BLOCK_D)
+       └─ block_sparse_attn_python_second_output_compute_correct
+            └─ block_sparse_attn_output_store_second_slice_compute_correct
+                 └─ block_sparse_attn_output_store_second_slice_correct
+```
+(Offset injectivity discharged by `block_sparse_attn_python_{first,second}_output_offset_injective`.)
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp`, `tl.dot`, and the
+`softmax_scale` multiply are not modeled at the bit level); `@triton.autotune`
+is not modeled. The verified result is **final-store scoped**: the proof
+establishes that the two masked `out` stores write the accumulator slices
+`Acc`/`Acc2` at the correct, injective output offsets and preserve inactive
+lanes — the written value is `producedBlockSparseAttnCase{1,2}Out{,2}Value` /
+`accStoreValue` `Acc`, an opaque carrier for the online-softmax + sparse-mask
+recurrence, which is **not** re-derived as a closed-form attention formula here.
+The sparse-mask schedule itself (which key blocks the CSR loop visits) lives in
+that opaque carrier and the trusted host boundary. Side conditions: the
+test-shape summaries fix the concrete layout `(B,H,M,D) = (2,4,16,32)` with
+`NUM_D_BLOCKS = 2`; case 1 uses `EVEN_M = EVEN_N = true`, case 2 uses
+`EVEN_M = EVEN_N = false`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
 open VeriTile.Triton

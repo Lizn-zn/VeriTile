@@ -3,6 +3,55 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `context_attn_nopad` — strict per-kernel correctness
+
+`_fwd_kernel` is varlen ("no padding") context (prefill) attention. Each program
+`(cur_batch, cur_head, start_m)` loads a `[BLOCK_M, BLOCK_DMODEL]` query tile,
+runs an online-softmax (`m_i`/`l_i`/`acc`) loop over the key/value tokens with a
+plain causal mask (`offs_m >= start_n + offs_n`), and stores the accumulated
+`acc` tile to `Out`, masked by `offs_m < cur_batch_seq_len`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel[grid](...)` with
+`grid = (batch, head, cdiv(...))`, the scheduling over batch / head / sequence
+blocks, and how the runtime composes per-program writes into one buffer) is the
+*trusted boundary*, not a proof obligation here. Because the program ids
+`(cur_batch, cur_head, start_m)` are universally quantified, the per-program
+statement covers every program of the grid.
+
+## Proof architecture
+
+```
+context_attn_nopad_python_test_shape_output_summary         ← TOP THEOREM
+  └─ context_attn_nopad_surface_python_test_shape_compute_correct   full surface, final store
+       └─ context_attn_nopad_final_store_python_test_shape_compute_correct
+            └─ context_attn_nopad_final_store_slice_compute_correct
+                 └─ context_attn_nopad_final_store_slice_correct      algorithm-layer readback per lane
+(supporting: context_attn_nopad_python_test_shape_offset_injective,
+             context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The verified compute claim is scoped to the **final masked writeback**
+of the accumulated `acc` tile into `Out`: every active lane
+(`offs_m < cur_batch_seq_len`, with `offs_d < head_dim` folded into the slice)
+holds the surface-produced `acc` value (`producedContextAttnNopadOutValue`), and
+out-of-bounds lanes are preserved. The online-softmax streaming loop
+(`m_i`/`l_i`/`acc` updates, `tl.dot`, the causal mask) is carried *inside* the
+surface kernel and reflected in the produced-value spec rather than re-proven as
+a closed-form softmax identity. Note the top theorem bundles only the
+compute-correct claim; `toAlgorithm?` lowering is available separately as
+`context_attn_nopad_fwd_kernel_surface_toAlgorithm_supported` but is not folded
+into this summary. The summary is instantiated at the single Python test shape
+(`BLOCK_M=BLOCK_DMODEL=BLOCK_N=128`); other shapes are not covered by the top
+theorem.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ContextAttnNopad
 
 open VeriTile.Triton

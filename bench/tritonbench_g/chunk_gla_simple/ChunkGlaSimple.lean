@@ -3,6 +3,59 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `chunk_gla_simple` — strict per-kernel correctness
+
+`chunk_simple_gla_fwd_kernel_o` is the chunked output pass of simple gated
+linear attention: program `(i_v, i_t, i_bh)` accumulates the inter-chunk term
+`b_o += q · h` and the intra-chunk score `b_s += q · k` over key blocks, then
+applies the gate decay (`b_o * exp(b_g)`, `b_s * exp(b_g_i - b_g_j)`), masks
+`b_s` to the causal lower triangle, adds the intra-chunk contribution
+`b_s · v`, scales by `scale`, and stores the `[BT, BV]` result into `o`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`chunk_simple_gla_fwd_kernel_o[(NV, NT, B*H)]`, the 3-D
+grid over value blocks, time chunks, and batch·head rows, the host-computed
+`BK/BV`, and how the runtime composes per-program writes into one buffer) is
+the *trusted boundary*, not a proof obligation here. Because the program ids
+are universally quantified, the per-program statement covers every program of
+the grid.
+
+## Proof architecture
+
+```
+chunk_gla_simple_python_case{1,2,3,4}_output_summary           ← TOP THEOREMS
+  ├─ chunk_gla_simple_python_case{n}_surface_toAlgorithm_supported
+  │     └─ chunk_gla_simple_fwd_surface_toAlgorithm_supported   full surface lowers
+  └─ chunk_gla_simple_python_case{n}_fwd_surface_compute_correct
+       └─ chunk_gla_simple_fwd_surface_compute_correct          (ComputeCorrect on o store)
+
+output store slice (modeled exactly):
+  chunk_gla_simple_output_store_slice_compute_correct
+    └─ chunk_gla_simple_output_store_slice_correct
+  + chunk_gla_simple_output_python_case{n}_compute_correct  (per-case offset-injective)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` (the
+single `num_warps=4` config) is not modeled — proofs fix the four checked Python
+shapes (`BT,K,V,...` per case). The `.to(b_v.dtype)` / `.to(p_o.dtype.element_ty)`
+casts erase to the identity at the algorithm layer (post-erasure all dtypes
+unify to `ℝ`). The output store face is modeled exactly; the produced value
+(`producedOutputValue`) is defined as the actual surface readback, so the
+output-summary theorems certify the modeled store agrees with the executed
+surface at each verified shape. The inner `ceil(K/BK)` key-block accumulation
+loop over the two matmuls `q·h` and `q·k`, the gate `exp` decay, the causal
+mask, and the `b_s·v` matmul are exercised through the full surface execution
+(the surface lowers to the algorithm layer and the masked store is realized);
+the cross-key-block reduction fold is carried inside that execution rather than
+re-derived as a closed form. Output offset injectivity is a side condition
+(discharged per Python case via `*_offset_injective`).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ChunkGlaSimple
 
 open VeriTile.Triton

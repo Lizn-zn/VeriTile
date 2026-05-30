@@ -3,6 +3,51 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `softmax_optimize` — strict per-kernel correctness
+
+`softmax_kernel_online_v2` is an online (streaming) row softmax: program `pid_m`
+sweeps a row of `N` columns in `TILE_N`-wide tiles, maintaining a running max `m`
+and running normalizer `z` (the standard online-softmax recurrence), finalizes
+`m`/`z`, then sweeps again to write `exp(inp - m) / z` per column.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`softmax_kernel_online_v2[(M,1,1)](...)`, the grid size,
+the host-side `TILE_N = min(4096, next_power_of_2(N))` choice, and how the
+runtime composes per-program writes into one buffer) is the *trusted boundary*,
+not a proof obligation here. Because `pid_m` (= `s.pid`) is universally
+quantified, the per-program statement covers every row of the grid.
+
+## Proof architecture
+
+```
+softmax_kernel_online_v2_one_tile_output_summary       ← TOP THEOREM (one-tile slice)
+  ├─ (toAlgorithm? = Except.ok _)                       slice lowers to the algorithm layer
+  └─ softmax_kernel_online_v2_one_tile_compute_correct  ← ComputeCorrect over the masked store
+       └─ softmax_kernel_online_v2_one_tile_correct     ← algorithm-layer readback per lane
+
+softmax_kernel_online_v2_surface_toAlgorithm_supported  full surface lowers (lowering only)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. **This port is partial / blocked.** The full online-recurrence surface
+`softmax_kernel_online_v2_surface` is only proved to *lower* to the algorithm
+layer (`..._surface_toAlgorithm_supported`); its full value correctness is not
+established. Cellwise value correctness is proved against the one-tile
+specialization `softmax_kernel_online_v2_one_tile` (the `N ≤ TILE_N` regime where
+the online loops collapse to a single masked tile), whose `softmaxOptimizeSpec`
+is the stable softmax: `reduceMax` over the padded tile, `exp(row - rowMax)`,
+`reduceSum`, then division. Masked lanes are `⊥` matching
+`other=-float("inf")`; out-of-bounds lanes (`i ≥ N`) are preserved. The
+`.to(output_ptr.dtype.element_ty)` cast is the identity post-erasure. The spec
+references `Tile.reduceMax` / `Tile.reduceSum` directly, not
+`VeriTile.Triton.Math.*`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.SoftmaxOptimize
 
 open VeriTile.Triton
@@ -181,5 +226,27 @@ theorem softmax_kernel_online_v2_one_tile_compute_correct
   have h := softmax_kernel_online_v2_one_tile_correct output_ptr input_ptr N TILE_N
     s s' hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for the one-tile slice of
+`softmax_kernel_online_v2`: the slice lowers to the algorithm layer, and the
+masked store to `output_ptr` is compute-correct — every active lane (`i < N`)
+holds the stable-softmax value `softmaxOptimizeSpec`, out-of-bounds lanes are
+preserved. (Covers the `N ≤ TILE_N` collapsed-loop regime; the full online
+surface is only proved to lower, see `..._surface_toAlgorithm_supported`.) -/
+theorem softmax_kernel_online_v2_one_tile_output_summary
+    (output_ptr input_ptr : RegionName)
+    (N TILE_N : Nat)
+    (s : BlockState) :
+    (∃ alg, (softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin TILE_N => i.val < N)
+        (fun i => (output_ptr, linearOffset s N i)))
+      (expected := fun i => softmaxOptimizeSpec s input_ptr N TILE_N i) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact softmax_kernel_online_v2_one_tile_compute_correct output_ptr input_ptr N TILE_N s
 
 end VeriTile.Bench.TritonBenchG.SoftmaxOptimize

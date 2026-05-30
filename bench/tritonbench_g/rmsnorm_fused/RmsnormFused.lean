@@ -4,6 +4,53 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.Math.RMSNorm
 import VeriTile.Triton.DSL
 
+/-!
+# `rmsnorm_fused` — strict per-kernel correctness
+
+`rms_norm_fwd_fused` is a fused RMSNorm forward: each program `row` normalizes
+one row of `X` by its root-mean-square, scales by per-column weights `W`, and
+writes `Y[row] = (x / sqrt(mean(x²) + eps)) * w`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body, for one program (one row). The host launch
+(`rms_norm_fwd_fused[(M,)](...)`, the grid over rows `M`, the host-side
+`BLOCK_SIZE` choice, scheduling, and how the runtime composes per-row writes
+into one buffer) is the *trusted boundary*, not a proof obligation here. Because
+`row = tl.program_id(0)` is universally quantified (via `s.pid`), the per-program
+statement covers every row of the grid.
+
+## Proof architecture
+
+```
+rms_norm_fwd_fused_output_summary             ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ rms_norm_fwd_fused_compute_correct       ← ComputeCorrect over the masked store
+       └─ rms_norm_fwd_fused_correct          ← algorithm-layer readback per lane
+            └─ rmsnormCarrierSpec_eq_rmsnormSpec
+                 └─ rmsVarCarrier_eq_rmsMeanSq (uses VeriTile.Triton.Math.RMSNorm /
+                                                TiledL2Norm reduction lemmas)
+```
+
+The row spec is `TiledRMSNorm.rmsAffine` from `VeriTile.Triton.Math.RMSNorm`
+(reusing `TiledRMSNorm.rmsMeanSq` / `TiledL2Norm` reduction lemmas rather than
+inlining the reduction math).
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `.to(tl.float32)`
+casts reduce to identity at the algorithm layer (post-erasure all dtypes unify
+to `ℝ`). The reduction `tl.sum(_var) / N` sums over the *padded* `BLOCK_SIZE`
+block, but out-of-range lanes are masked to `0` (load `other=0.0` plus the
+explicit `tl.where`), so the sum equals the logical row length `N`. The
+reciprocal std is `rstd = 1 / sqrt(meanSq + eps)`; the affine step is
+`x_hat * w`. The Python wrapper picks `BLOCK_SIZE ≥ N` (raising otherwise), so
+correctness is stated under the `0 < N ≤ BLOCK_SIZE` precondition, where both
+`range(0, N, BLOCK_SIZE)` loops execute exactly the `off = 0` iteration (single
+block). `@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RmsnormFused
 
 open VeriTile.Triton
@@ -208,5 +255,31 @@ theorem rms_norm_fwd_fused_compute_correct
   have h := rms_norm_fwd_fused_correct X Y W stride N BLOCK_SIZE eps
     s s' hNpos hNle hOutInj hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `rms_norm_fwd_fused`: the DSL surface lowers to
+the algorithm layer, and the masked store to `Y` is compute-correct — every
+active lane (`i.val < N`) holds the RMSNorm spec `rmsnormSpec`, out-of-bounds
+lanes are preserved. Stated under the `0 < N ≤ BLOCK_SIZE` single-block launch
+precondition chosen by the Python wrapper. -/
+theorem rms_norm_fwd_fused_output_summary
+    (X Y W : RegionName) (stride N BLOCK_SIZE : Nat) (eps : ℝ)
+    (s : BlockState)
+    (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOffset s stride i)) :
+    (∃ alg, (rms_norm_fwd_fused X Y W stride N BLOCK_SIZE eps).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := rms_norm_fwd_fused X Y W stride N BLOCK_SIZE eps)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < N)
+        (fun i => (Y, yOffset s stride i)))
+      (expected := fun i => rmsnormSpec s X W stride N BLOCK_SIZE eps i) := by
+  refine ⟨?_, ?_⟩
+  · simp only [rms_norm_fwd_fused, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    exact ⟨_, rfl⟩
+  · exact rms_norm_fwd_fused_compute_correct X Y W stride N BLOCK_SIZE eps
+      s hNpos hNle hOutInj
 
 end VeriTile.Bench.TritonBenchG.RmsnormFused

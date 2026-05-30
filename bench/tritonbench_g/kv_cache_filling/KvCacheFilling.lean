@@ -3,6 +3,62 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `kv_cache_filling` — strict per-kernel correctness
+
+`_fill_kv_cache_kernel` is a prefill/decode paged KV-cache fill: program
+`(batch_id, block_id)` computes sequence/block positions from `QStartLoc`,
+`QSeqLens`, `KVSeqLens` and the `BlockOffsets` table, then loops over the
+cache-block token slots, gathering `BLOCK_H × BLOCK_D` K and V tiles from
+`KStates` / `VStates` and scattering them into `KCaches` / `VCaches`, masked by
+`h_off < num_heads` and `d_off < head_dim`. The Python wrapper also has int8 /
+int4 quantized paths that additionally write rounded values plus per-head
+scale/zero metadata.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (grid over `(batch, blocks)`, the start-loc / seqlen /
+block-offset inputs, and how the runtime composes per-program scatters into the
+paged cache buffers) is the *trusted boundary*, not a proof obligation here.
+Because the program ids are universally quantified, the per-program statement
+covers every program of the grid.
+
+## Proof architecture
+
+```
+fill_kv_cache_python_test_layout_output_summary        ← TOP THEOREM (quant_policy 0)
+fill_quant_int8_kv_cache_python_test_layout_summary     ← TOP THEOREM (int8 path)
+fill_quant_int4_kv_cache_python_test_layout_summary     ← TOP THEOREM (int4 path)
+  ├─ fill_kv_cache_kernel_surface_toAlgorithm_supported              surface lowers
+  ├─ fill_kv_cache_python_test_layout_all_outputs_compute_correct
+  │    ├─ fill_k_cache_tile_python_test_layout_compute_correct → _compute_correct → _correct
+  │    └─ fill_v_cache_tile_python_test_layout_compute_correct → _compute_correct → _correct
+  ├─ fill_quant_kv_cache_python_test_layout_all_outputs_compute_correct  (quant value stores)
+  └─ fill_quant_meta_store_slice_compute_correct → _correct                (scale/zero metadata)
+       (k_scale / k_zero / v_scale / v_zero specializations)
+```
+Single-tile lemmas (`fill_k_cache_tile_*`, `fill_v_cache_tile_*`,
+`fill_quant_meta_store_slice_*`) and Python test-shape / test-layout wrappers
+(`*_test_h4_d16_*`, `*_python_test_layout_*`, offset-injectivity lemmas) feed
+the three top summaries.
+
+## Modeling boundary
+
+Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); dtype casts are
+erased (post-erasure all dtypes unify to `ℝ`). This is a **partial / blocked**
+verification: the cache stores are proved per masked K/V tile and per
+scale/zero metadata slice at the **Python test shapes** (`num_heads = 4`,
+`head_dim = head_dim_v = 16`, `BLOCK = 4`, contiguous strides) for selected
+`SIDX` / `BIDX` / `KV_BLOCK_IDX` source/cache block positions — not the full
+data-dependent loop bounds. The destination block offset is gathered from
+`BlockOffsets`; offset-injectivity (no two cells of one program alias) is
+discharged by explicit lemmas for those shapes. The int8 quant value stores are
+modeled as a copy of the (rounded) source value at the algorithm layer (the
+rounding is `ℝ`-erased); int4 packing is represented at its store surface.
+`@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.KvCacheFilling
 
 open VeriTile.Triton

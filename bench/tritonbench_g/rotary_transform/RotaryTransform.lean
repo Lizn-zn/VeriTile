@@ -3,6 +3,59 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `rotary_transform` — strict per-kernel correctness
+
+`rotary_kernel` applies the rotary position embedding out-of-place, writing to
+`OUT` from `X`: each program owns one seq-block (`program_id(0)`), one batch
+(`program_id(1)`), and one head (`program_id(2)`). On the non-interleaved branch
+(`INTERLEAVED = false`) it loads the per-row `cos`/`sin` half-dim vectors and the
+two head-dim halves `x0`/`x1`, then stores `(x0*cos - x1*sin, x0*sin + x1*cos)`
+(the `sin := -sin` conjugate when `CONJUGATE = true`).
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body, on the non-interleaved branch. The host launch (the
+`(seq-blocks, batch, heads)` grid, `BLOCK_M`/`BLOCK_K` choices, the varlen
+`CU_SEQLENS` base-pointer arithmetic, the `pid_m * BLOCK_M >= seqlen` early
+return, and how the runtime composes per-program writes into one buffer) is the
+*trusted boundary*, not a proof obligation here. Because the seq-block, batch,
+head, and per-lane indices are universally quantified, the per-program statement
+covers every program of the grid.
+
+## Proof architecture
+
+```
+rotary_transform_python_surfaces_output_summary       ← TOP THEOREM
+  ├─ rotary_transform_python_case{1,2,3,4}_surface_toAlgorithm_supported   surfaces lower to the algorithm layer
+  │     └─ rotary_kernel_surface_toAlgorithm_supported
+  └─ rotary_kernel_surface_output_compute_correct (×4 cases)
+        ← ComputeCorrect over OUT stores (= rotaryTransformSurfaceValue spec)
+
+supporting per-row store track:
+  rotary_kernel_o0_row_compute_correct  → rotary_kernel_o0_row_correct        (first half o0)
+  rotary_kernel_o1_row_compute_correct  → rotary_kernel_o1_row_correct        (second half o1)
+  rotary_kernel_o0o1_row_o0_correct / rotary_kernel_o0o1_row_o1_correct       (combined row)
+
+surfaces_store_summary collects the four case `toAlgorithm` lowerings.
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; the `.to(tl.float32)`
+register casts erase to the identity at the algorithm layer (post-erasure all
+dtypes unify to `ℝ`). `cos`/`sin` are modeled as **precomputed inputs** loaded
+from memory, not computed; the `CONJUGATE` flag selects the `sin := -sin` spec.
+The four `caseN` instantiations cover the Python-observable shapes (varying
+`IS_VARLEN`, `IS_SEQLEN_OFFSETS_TENSOR`, and `CONJUGATE`; all non-interleaved).
+The top summary is the **full-surface** `rotary_kernel_surface_output_compute_correct`
+result per case. Honestly, the per-row store lemmas establish a single
+`BLOCK_M × (BLOCK_K/2)` row tile; the stronger `rotary-2d-tile-value-lift` full
+2D value proof is a documented #153 follow-up and is **not** claimed here. The
+interleaved branch and `@triton.autotune` are not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RotaryTransform
 
 open VeriTile.Triton

@@ -3,6 +3,58 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `rotary_emb` — strict per-kernel correctness
+
+`_rotary_kernel` applies the interleaved rotary position embedding in place to Q
+and K: each program owns one head-block (`program_id(0)`) and one seq-block
+(`program_id(1)`), and over even/odd dimension pairs rewrites
+`(q0*cos0 - q1*sin0, q0*sin1 + q1*cos1)` for Q (and the analogous pair for K),
+where `cos`/`sin` are loaded per sequence position at the even (`dim_range0`) and
+odd (`dim_range1`) dimension lanes.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (the `(head-blocks, seq-blocks)` grid, the
+`BLOCK_HEAD`/`BLOCK_SEQ`/`BLOCK_DMODEL` choices, the stride bookkeeping, and how
+the runtime composes per-program writes into one buffer) is the *trusted
+boundary*, not a proof obligation here. Because the head-block, seq-block, and
+per-lane indices are universally quantified, the per-program statement covers
+every program of the grid.
+
+## Proof architecture
+
+```
+rotary_emb_python_case{1,2,3,4}_output_summary        ← TOP THEOREMS
+  ├─ rotary_kernel_surface_toAlgorithm_supported       surface lowers to the algorithm layer
+  └─ rotary_emb_python_caseN_all_outputs_compute_correct
+       ├─ rotary_emb_q0_block_compute_correct → rotary_emb_q0_block_correct   (Q even lanes)
+       ├─ rotary_emb_q1_block_compute_correct → rotary_emb_q1_block_correct   (Q odd lanes)
+       ├─ rotary_emb_k0_block_compute_correct → rotary_emb_k0_block_correct   (K even lanes)
+       └─ rotary_emb_k1_block_compute_correct → rotary_emb_k1_block_correct   (K odd lanes)
+```
+
+The interleaved even/odd offset families are shown disjoint by
+`rotary_emb_python_q_even/odd_offset_injective` and
+`rotary_emb_python_k_even/odd_offset_injective`. There are also
+`rotary_emb_q_surface_toAlgorithm_supported` / `rotary_emb_k_surface_toAlgorithm_supported`
+splits and `qFullOffset`/`activeFullQ` full-tile scaffolding.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype casts erase to the
+identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`).
+`cos`/`sin` are modeled as **precomputed inputs** loaded from memory at the even
+and odd dimension lanes, not computed. Scoping is **one block-store at a time**
+(q0/q1/k0/k1), each over the active lanes (`cur_seq_range < max_total_len` and
+`cur_head_range < HEAD_Q`/`HEAD_K`); out-of-bounds lanes are preserved verbatim.
+The four `caseN` summaries instantiate the proved generic lemmas at the concrete
+contiguous shapes of the Python test cases (case 1 `(total_len, 8, 64)`,
+`BLOCK_HEAD = 4`, `BLOCK_SEQ = 16`, `BLOCK_DMODEL = 64`; the others vary
+`head_dim`/`BLOCK_DMODEL`). `@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RotaryEmb
 
 open VeriTile.Triton

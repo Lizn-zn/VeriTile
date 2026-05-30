@@ -3,6 +3,65 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `apply_penalty` — strict per-kernel correctness
+
+`_fwd_kernel_apply_penalty` applies repetition / frequency / presence penalties
+to a row of logits in place. For program `cur_batch`, it gathers that batch's
+token ids/counts from `[cur_batch_start, cur_batch_end)`, loads the corresponding
+logits, applies `rep = logit/rep_pen if logit>0 else logit*rep_pen`, subtracts
+`count·freq_pen` and `pres_pen`, and scatters the result back into `Logits` at
+the gathered token positions (masked by the per-batch length).
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_apply_penalty[(Logits.shape[0],)](...)`, the
+grid size, the `BLOCK_P`/`num_warps` choices, and the `Logits.is_contiguous()`
+assumption) is the *trusted boundary*, not a proof obligation here. The batch id
+`cur_batch` (= `s.pids 0`) is universally quantified, so the per-program
+statement covers every batch of the grid.
+
+## Proof architecture
+
+This is a **data-dependent gather-scatter** kernel: the store address itself
+comes from a load (`batch_ids = tl.load(p_token_ids + ...)`), so a clean
+end-to-end cellwise correctness theorem is not in place. What is provided is the
+formula-level spec plus a substantive masked-scatter readback infrastructure:
+
+```
+apply_penalty_toAlgorithm_supported                    surface lowers to algorithm layer
+
+penaltyValue / penaltyStoreValue                       formula-level + exec-shaped specs
+  └─ penaltyStoreValue_active_eq_penaltyValue          active-lane reduction
+storeOffset / activeStoreAddr / storeOffset_eq_active  store-address forms
+
+apply_penalty_masked_scatter_readback(_from)           active-lane scatter readback (penaltyValue)
+apply_penalty_masked_scatter_store_value_readback_*    exec-shaped scatter readback (penaltyStoreValue)
+  └─ scatter_readback_prop_masked_list_active_injective (bench-local masked-injective readback)
+       └─ foldl_writeMem_masked_preserves_local
+
+apply_penalty_correct_target                           the correctness Prop (stated, NOT proved)
+```
+
+`apply_penalty_correct_target` is the intended cellwise correctness statement,
+defined as a `Prop` but **not discharged**; the "status" section at the end of
+the file documents the remaining bridge. There is **no** main-kernel
+`*_compute_correct` and hence (by design) **no** output-summary theorem.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The masked load uses `other=0`/`other=0.0` for out-of-range token slots.
+Because the store address is data-dependent (gathered token ids), the masked
+scatter readback weakens global offset injectivity to **injectivity over the
+active (masked-true) token-id subset** (`hUniq : Function.Injective (tokenId …)`,
+i.e. distinct tokens) — inactive lanes alias to `base + 0` but never write. The
+integer-to-float promotion in `batch_ids_count * cur_freqency` and the
+`tl.where(logit > 0, …)` branch are modeled directly. The specs reference the
+`ℝ` ordered-field operations directly, not `VeriTile.Triton.Math.*`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ApplyPenalty
 
 open VeriTile.Triton

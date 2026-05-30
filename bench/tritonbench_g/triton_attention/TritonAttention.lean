@@ -4,6 +4,75 @@ import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `triton_attention` — strict per-kernel correctness
+
+`triton_attention.py` is a full FlashAttention training pipeline of three
+`@triton.jit` kernels: `_fwd_kernel` (online-softmax forward, stores the output
+`Out` plus the running `L`/`M` log-sum-exp rows), `_bwd_preprocess` (computes
+`NewDO = DO` and the per-row `Delta = sum(DO·O)`), and `_bwd_kernel` (the main
+backward producing the `DQ`/`DK`/`DV` gradients, with the score-side `P`/`DS`
+arithmetic as an inner step). Scaling is `1/√D`.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies. The host launch (`grid = (cdiv(T, BLOCK), B·H, 1)`, the
+`torch.autograd.Function` orchestration that chains forward → preprocess →
+backward, and how the runtime composes per-program writes into each buffer) is
+the *trusted boundary*, not a proof obligation here. Because the program ids
+are universally quantified (via `s`), the per-program statements cover every
+program of each grid.
+
+## Proof architecture
+
+```
+triton_attention_bwd_python_test_shape_complete_summary             ← TOP THEOREM (bwd grads + score)
+  ├─ triton_attention_bwd_grads_python_test_shape_output_summary
+  │    ├─ triton_attention_bwd_kernel_toAlgorithm_supported
+  │    └─ triton_attention_bwd_grads_python_test_shape_all_outputs_compute_correct
+  │         └─ triton_attention_bwd_kernel_{dq,dk,dv}_python_test_shape_compute_correct
+  │              └─ triton_attention_bwd_{dq,dkdv}_store_slice_compute_correct ...
+  └─ triton_attention_bwd_score_python_test_shape_formula_summary
+       └─ triton_attention_bwd_score_{p,ds}_formula_python_test_shape_compute_correct
+            └─ triton_attention_bwd_score_{p,ds}_formula_slice_compute_correct   ← closed-form P/DS
+
+triton_attention_forward_python_test_shape_output_summary           ← TOP (forward Out/L/M)
+  └─ triton_attention_forward_surface_{out,l,m}_python_test_shape_compute_correct
+       └─ triton_attention_forward_{output,l,m}_store_slice_compute_correct → ..._correct
+
+triton_attention_bwd_preprocess_python_test_shape_output_summary    ← TOP (preprocess NewDO/Delta)
+  └─ triton_attention_bwd_preprocess_python_test_shape_all_outputs_compute_correct
+       └─ triton_attention_bwd_preprocess_{newdo,delta}_surface_compute_correct
+            └─ ..._{store,formula}_slice_compute_correct → ..._correct
+```
+(Offset injectivity discharged by the `triton_attention_python_*_offset_injective` lemmas.)
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp2`/`log2`, the
+`tl.dot` `float16` accumulations, and `1/√D` scaling are not modeled at the bit
+level); `@triton.autotune`/`num_warps`/`num_stages` are not modeled. The
+modeling depth differs by kernel:
+
+* **Forward** (`Out`, `L`, `M`) and **backward grads** (`DQ`, `DK`, `DV`) are
+  **final-store scoped**: the proofs establish the masked/full stores write the
+  accumulator slices at the correct, injective offsets and preserve inactive
+  lanes; the written values are the opaque `producedTritonAttentionForward*` /
+  `producedBwdKernelD{Q,K,V}Value` carriers for the online-softmax forward and
+  backward recurrences, which are **not** re-derived as closed-form formulas.
+* **Backward preprocess** and the **backward score `P`/`DS` step** are verified
+  against explicit closed-form specs (`bwdScorePFormulaSpec`,
+  `bwdScoreDSFormulaSpec`, and the `newdo`/`delta` formula slices), not opaque
+  carriers — these inner arithmetic steps are checked, the surrounding loop
+  composition is trusted.
+
+Side conditions: the test-shape summaries fix `(B,H,T,D) = (2,4,128,64)`,
+`BLOCK_M = 128`, `BLOCK_DMODEL = 64`, strides `(32768, 8192, 64, 1)`,
+`num_block = 1`, `sm_scale = 1/√64`; the complete backward summary additionally
+requires `PTile ≠ DSTile`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.TritonAttention
 
 open VeriTile.Triton

@@ -3,6 +3,68 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `rope_embedding` — strict per-kernel correctness
+
+`_rope_embedding` applies the rotary position embedding `Q*cos + rotate_half(Q)*sin`
+in place: each program owns one row (`program_id(0)`) and one head-group
+(`program_id(1)`), loads the `cos`/`sin` half-dim vectors for that row, and for
+every head in its group rewrites the first/second rotary halves of `Q` via the
+pair `(Q1*cos - Q2*sin, Q2*cos + Q1*sin)`. The `BACKWARD_PASS` heuristic flips
+`sin1 := -sin1`, giving the transpose of the forward rotation.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (the `(n_rows, n_groups)` grid, the `calculate_settings`
+block-size/`num_warps` choice, the `divmod`-derived group count, the in-place
+transpose/reshape bookkeeping in `_rope_embedding_forward_impl` /
+`_rope_embedding_backward_impl`, and how the runtime composes per-program writes
+into one buffer) is the *trusted boundary*, not a proof obligation here. Because
+the row position, head-group, and per-head index are universally quantified, the
+per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+rope_embedding_python_case{1,2,3,4}_output_summary    ← TOP (abbrev aliases)
+  = rope_embedding_python_case{1,2,3,4}_forward_backward_summary
+      ├─ rope_embedding_python_caseN_forward_surface_toAlgorithm_supported
+      ├─ rope_embedding_python_caseN_backward_surface_toAlgorithm_supported
+      │     └─ rope_embedding_surface_toAlgorithm_supported
+      ├─ rope_embedding_python_caseN_first_half_compute_correct
+      │     └─ rope_embedding_forward_first_half_compute_correct
+      │          └─ rope_embedding_forward_first_half_correct
+      ├─ rope_embedding_python_caseN_second_half_compute_correct
+      │     └─ rope_embedding_forward_second_half_compute_correct
+      │          └─ rope_embedding_forward_second_half_correct
+      ├─ rope_embedding_python_caseN_backward_first_half_compute_correct
+      │     └─ rope_embedding_backward_first_half_compute_correct
+      │          └─ rope_embedding_backward_first_half_correct
+      └─ rope_embedding_python_caseN_backward_second_half_compute_correct
+            └─ rope_embedding_backward_second_half_compute_correct
+                 └─ rope_embedding_backward_second_half_correct
+```
+
+The two offset families are shown disjoint by
+`rope_embedding_python_first_offset_injective` /
+`rope_embedding_python_second_offset_injective`, which the half-store
+compute-correctness lemmas consume.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; the `.to(sin1.dtype)`
+register casts erase to the identity at the algorithm layer (post-erasure all
+dtypes unify to `ℝ`). `cos`/`sin` are modeled as **precomputed inputs** loaded
+from memory (the kernel does not compute them); the forward spec uses them as
+loaded and the backward spec uses the `sin1 := -sin1` flip. Scoping is
+**one head-half store at a time** (`first_half`/`second_half`), each over the
+active lanes `col_offsets < head_dim//2`; out-of-bounds lanes are preserved
+verbatim. The four `caseN` summaries instantiate the proved generic lemmas at
+the concrete shapes of the Python `test_case_{1..4}` (and the `BACKWARD_PASS`
+heuristic is modeled by the `Bool` argument; `@triton.autotune` is not modeled).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RopeEmbedding
 
 open VeriTile.Triton

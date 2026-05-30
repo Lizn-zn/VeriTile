@@ -3,6 +3,66 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `chunk_cumsum_vector` — strict per-kernel correctness
+
+`chunk_global_cumsum_vector_kernel` computes a global cumulative sum over the
+time axis for `[T, S]` value tiles: program `(i_s, i_bh)` walks the `T`-rows of
+the row's value matrix in chunks of `BT`, computing the in-chunk prefix sum as a
+lower-triangular matmul `tl.dot(m_s, b_s)`, adding the carried column-vector
+total `b_z`, and storing the `[BT, BS]` result into `z` while accumulating the
+chunk column sums into `b_z`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`chunk_global_cumsum_vector_kernel[(cdiv(S,BS), B*H)]`,
+the 2-D grid over feature blocks and batch·head rows, the autotuned `BT`, the
+fixed `BS = 32`, and how the runtime composes per-program writes into one
+buffer) is the *trusted boundary*, not a proof obligation here. Because the
+program ids are universally quantified, the per-program statements cover every
+program of the grid.
+
+## Proof architecture
+
+```
+chunk_cumsum_vector_python_case{1,2,3}_slice_summary           ← TOP THEOREMS
+  ├─ chunk_cumsum_vector_python_case{n}_surface_toAlgorithm_supported
+  │     └─ chunk_cumsum_vector_surface_toAlgorithm_supported   full surface lowers
+  ├─ chunk_cumsum_vector_single_block_python_case{n}_compute_correct
+  │     └─ chunk_cumsum_vector_single_block_surface_active_compute_correct
+  │          └─ chunk_cumsum_vector_single_block_surface_correct
+  ├─ chunk_cumsum_vector_store_python_case{n}_compute_correct
+  │     └─ chunk_cumsum_vector_store_slice_active_compute_correct
+  │          └─ chunk_cumsum_vector_store_slice_correct
+  └─ chunk_cumsum_vector_cumsum_python_case{n}_compute_correct
+       └─ chunk_cumsum_vector_cumsum_slice_active_compute_correct
+            └─ chunk_cumsum_vector_cumsum_slice_correct
+
+chunk_cumsum_vector_python_case{1,2,3}_output_summary          (= surface-outputs aliases)
+chunk_cumsum_vector_python_case{n}_surface_outputs_compute_correct
+  └─ chunk_cumsum_vector_surface_output_compute_correct
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` (the
+`BT ∈ {16,32,64}` config set) is not modeled — proofs fix the three checked
+Python shapes (`T,S = 4,5`; `8,10`; `1,5`) with `BS = 32`. The `.to(tl.float32)`
+/ `.to(p_z.dtype.element_ty)` casts erase to the identity at the algorithm
+layer (post-erasure all dtypes unify to `ℝ`). The in-chunk prefix sum is modeled
+exactly as the lower-triangular matmul `lowerTriTile · sourceTile` (matching the
+kernel's `tl.dot(m_s, b_s)`); the chunk-local store is modeled exactly; the
+cross-chunk fold that threads the column-vector carry `b_z` over multiple
+iterations is left as the trusted boundary — the carry is presented as a
+materialized buffer (`Carry`) in `chunk_cumsum_vector_cumsum_slice`, and the
+single-block surface covers the single-chunk case where the carry is the initial
+zero. The Python shapes here all have `T ≤ BT`, so the single-block surface is
+exact. Output non-collision is a side condition (discharged per Python case via
+`*_active_no_collision`). Side conditions: store offsets do not collide on
+active lanes.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ChunkCumsumVector
 
 open VeriTile.Triton

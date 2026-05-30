@@ -3,6 +3,55 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `rmsnorm_fused_llama` — strict per-kernel correctness
+
+`_rms_norm_fwd_fused` is the Llama-style fused RMSNorm forward: each program
+`row` normalizes one row of `X` by its root-mean-square, scales by per-column
+weights `W`, casts the result to float16, and writes
+`Y[row] = fp16((x / sqrt(mean(x²) + eps)) * w)`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body, for one program (one row). The host launch
+(`_rms_norm_fwd_fused[(M,)](...)`, the grid over rows `M`, the host-fixed
+`BLOCK_SIZE = 16384`, scheduling, and how the runtime composes per-row writes
+into one buffer) is the *trusted boundary*, not a proof obligation here. Because
+`row = tl.program_id(0)` is universally quantified (via `s.pid`), the per-program
+statement covers every row of the grid.
+
+## Proof architecture
+
+```
+rms_norm_fwd_fused_llama_output_summary       ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ rms_norm_fwd_fused_llama_compute_correct ← ComputeCorrect over the masked fp16 store
+       └─ rms_norm_fwd_fused_llama_correct    ← algorithm-layer readback per lane
+            └─ scatter_memcell_fp16_prop_masked_nd  (fp16 masked-scatter readback)
+                 └─ foldl_writeMemTyped_fp16_preserves
+```
+
+The RMSNorm row math (`rmsInputTile`, `rmsVarCarrier`, `rmsInvCarrier`,
+`rmsnormCarrierSpec` / `rmsnormSpec`) is defined inline in this file rather than
+reusing `VeriTile.Triton.Math.RMSNorm`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `.to(tl.float32)`
+input/weight casts reduce to identity at the algorithm layer. The **store cast
+to float16 is modeled explicitly**: the spec writes the `MemCell.of .fp16`
+obtained by `FloatDType.real.cast FloatDType.fp16`, so the fp16 rounding of the
+final value is part of the proved statement (not erased). The reduction
+`tl.sum(_var) / N` sums over the *padded* `BLOCK_SIZE` block, but out-of-range
+lanes are masked to `0` (load `other=0.0`), so the sum equals the logical row
+length `N`. The reciprocal std is `rstd = 1 / sqrt(meanSq + eps)`; the affine
+step is `x_hat * w`. Correctness is stated under the `0 < N ≤ BLOCK_SIZE`
+single-block precondition (Python fixes `BLOCK_SIZE = 16384` after checking
+`N ≤ BLOCK_SIZE`), where both `range(0, N, BLOCK_SIZE)` loops execute exactly the
+`off = 0` iteration. `@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RmsnormFusedLlama
 
 open VeriTile.Triton
@@ -269,5 +318,35 @@ theorem rms_norm_fwd_fused_llama_compute_correct
   have h := rms_norm_fwd_fused_llama_correct X Y W stride N BLOCK_SIZE eps
     s s' hNpos hNle hOutInj hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `_rms_norm_fwd_fused` (Llama): the DSL surface
+lowers to the algorithm layer, and the masked fp16 store to `Y` is
+compute-correct — every active lane (`i.val < N`) holds the fp16-cast RMSNorm
+spec, out-of-bounds lanes are preserved. Stated under the `0 < N ≤ BLOCK_SIZE`
+single-block launch precondition chosen by the Python wrapper. -/
+theorem rms_norm_fwd_fused_llama_output_summary
+    (X Y W : RegionName) (stride N BLOCK_SIZE : Nat) (eps : ℝ)
+    (s : BlockState)
+    (hNpos : 0 < N) (hNle : N ≤ BLOCK_SIZE)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOffset s stride i)) :
+    (∃ alg, (rms_norm_fwd_fused_llama X Y W stride N BLOCK_SIZE eps).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := rms_norm_fwd_fused_llama X Y W stride N BLOCK_SIZE eps)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < N)
+        (fun i => (Y, yOffset s stride i)))
+      (expected := fun i =>
+        MemCell.of .fp16
+          (FloatDType.real.cast FloatDType.fp16
+            (some (rmsnormSpec s X W stride N BLOCK_SIZE eps i)))) := by
+  refine ⟨?_, ?_⟩
+  · simp only [rms_norm_fwd_fused_llama, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+    exact ⟨_, rfl⟩
+  · exact rms_norm_fwd_fused_llama_compute_correct X Y W stride N BLOCK_SIZE eps
+      s hNpos hNle hOutInj
 
 end VeriTile.Bench.TritonBenchG.RmsnormFusedLlama

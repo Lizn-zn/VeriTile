@@ -3,6 +3,47 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `triton_softmax` — strict per-kernel correctness
+
+`softmax_kernel` is a row-wise numerically-stable softmax: program `row_idx`
+loads one row of width `BLOCK_SIZE` (masked by `arange < n_cols`, with
+`other=-inf`), subtracts the row max, exponentiates, normalizes by the row sum,
+and stores the row back.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`softmax_kernel[(n_rows,)](...)`, the grid size, the
+host-side `BLOCK_SIZE = min(next_power_of_2(n_cols), 1024)` choice, the row
+strides, and how the runtime composes per-program writes into one buffer) is the
+*trusted boundary*, not a proof obligation here. Because `row_idx` (= `s.pid`) is
+universally quantified, the per-program statement covers every row of the grid.
+
+## Proof architecture
+
+```
+softmax_kernel_output_summary                 ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ softmax_kernel_compute_correct           ← ComputeCorrect over the masked store
+       └─ softmax_kernel_correct              ← algorithm-layer readback per lane
+```
+
+The per-lane spec `softmaxSpec` is the stable softmax: `reduceMax` over the
+padded row, lane-wise `exp(row - rowMax)`, `reduceSum` for the denominator, then
+the normalizing division.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The row reduction (`tl.max` / `tl.sum`) runs over the full padded
+`BLOCK_SIZE` tile, with masked lanes set to `⊥` matching `other=-float("inf")`,
+so padding lanes do not contribute to the max or sum. Out-of-bounds lanes
+(`i ≥ n_cols`) are not stored, preserving the prior output value. The spec
+references `Tile.reduceMax` / `Tile.reduceSum` / `WithBot.realExp` directly, not
+`VeriTile.Triton.Math.*`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.TritonSoftmax
 
 open VeriTile.Triton
@@ -105,5 +146,28 @@ theorem softmax_kernel_compute_correct
   have h := softmax_kernel_correct output_ptr input_ptr input_row_stride
     output_row_stride n_cols BLOCK_SIZE s s' hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `softmax_kernel`: the DSL surface lowers to the
+algorithm layer, and the masked store to `output_ptr` is compute-correct — every
+active lane (`i < n_cols`) holds the stable-softmax value `softmaxSpec`, and
+out-of-bounds lanes are preserved. -/
+theorem softmax_kernel_output_summary
+    (output_ptr input_ptr : RegionName)
+    (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat)
+    (s : BlockState) :
+    (∃ alg, (softmax_kernel output_ptr input_ptr input_row_stride
+        output_row_stride n_cols BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := softmax_kernel output_ptr input_ptr input_row_stride
+        output_row_stride n_cols BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+          (fun i => (output_ptr, s.pid * output_row_stride + i.val)))
+      (expected := fun i =>
+        softmaxSpec s input_ptr input_row_stride n_cols BLOCK_SIZE i) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact softmax_kernel_compute_correct output_ptr input_ptr input_row_stride
+    output_row_stride n_cols BLOCK_SIZE s
 
 end VeriTile.Bench.TritonBenchG.TritonSoftmax

@@ -3,6 +3,61 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `bmm_chunk_fwd` — strict per-kernel correctness
+
+`_bmm_chunk_fwd_kernel` is the chunked batched matmul forward of Mamba-style
+SSMs: for each (chunk-row, chunk-col) program in a (batch, chunk·group) grid it
+accumulates `acc += tl.dot(a, b)` over `K` blocks, optionally zeroes
+cross-sequence pairs (`HAS_SEQ_IDX`) and the causal upper triangle
+(`IS_CAUSAL`), and stores the `BLOCK_SIZE_M×BLOCK_SIZE_N` chunk tile to `out`
+under a `(m<chunk_size)&(n<chunk_size)` mask.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_bmm_chunk_fwd_kernel[grid](...)`, the 3D grid over
+chunk tiles / batch / chunk·groups, the `@triton.autotune` config selection,
+`num_warps`/`num_stages`, and how the runtime composes per-program writes into
+one buffer) is the *trusted boundary*, not a proof obligation here. Program ids
+are universally quantified, so the per-program statements cover every program
+of the grid.
+
+## Proof architecture
+
+```
+bmm_chunk_fwd_python_case1_output_summary     ← TOP THEOREMS (per Python case)
+bmm_chunk_fwd_python_case2_output_summary       (cases 1–4: grouped / seq_idx /
+bmm_chunk_fwd_python_case3_output_summary        causal combinations)
+bmm_chunk_fwd_python_case4_output_summary
+  ├─ bmm_chunk_fwd_python_caseN_surface_toAlgorithm_supported  surface lowers
+  │    └─ bmm_chunk_fwd_surface_toAlgorithm_supported
+  └─ bmm_chunk_fwd_surface_output_compute_correct  ← ComputeCorrect over out store
+
+bmm_chunk_fwd_python_caseN_store_summary      ← final-store-slice summaries
+  └─ bmm_chunk_fwd_final_store_slice_compute_correct (and _active_ variant)
+       └─ bmm_chunk_fwd_final_store_slice_correct  ← algorithm-layer masked readback
+  (+ bmm_chunk_fwd_python_{ungrouped,grouped}_output_compute_correct,
+     bmm_chunk_fwd_python_chunk32_active_no_collision  ← injectivity for the tested shape)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point is the
+**K-loop dot-accumulator** `acc += tl.dot(a, b)` iterated over
+`cdiv(K, BLOCK_SIZE_K)`. This inner contraction is **left as a blocker** — the
+surface-level `*_output_summary` theorems characterize the out store per case
+via the opaque `bmmChunkFwdSurfaceValue s ...` (whatever the surface
+accumulated) rather than proving it equals the mathematical sum-over-`K`
+product; the verified `bmm_chunk_fwd_final_store_slice` proves only the masked
+2D chunk writeback (acc tile to out, mask `(m<chunk_size)&(n<chunk_size)`,
+batch/chunk/head/group offset addressing) from a precomputed accumulator. So
+the dot-product value plus the `seq_idx` masking and `IS_CAUSAL` early-return
+are the trusted/blocked part. `@triton.autotune`, `num_warps`/`num_stages`,
+and `dot_dtype` are not modeled. No output/input disjointness is assumed beyond
+an injective out offset map (established per tested shape).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.BmmChunkFwd
 
 open VeriTile.Triton

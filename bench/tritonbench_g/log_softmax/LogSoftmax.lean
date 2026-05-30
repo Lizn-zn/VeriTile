@@ -3,6 +3,53 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `log_softmax` — strict per-kernel correctness
+
+`log_softmax_kernel` is a row-wise log-softmax over a 3-D `[M, N, K]` tensor:
+program `(pid_m, pid_k)` loads the `[BLOCK_M, BLOCK_N]` tile at stride
+`m·N·K + n·K + pid_k`, computes `log(exp(inp − rowmax) / ∑ exp(inp − rowmax))`
+along the `N` (axis 1) dimension, and stores the result, masked by
+`m_offset < M ∧ n_offset < N`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body, for both the forward `log_softmax_kernel` and the
+`log_softmax_backward_kernel`. The host launch (the autotuned/heuristic grid
+`(cdiv(M, BLOCK_M), K)`, the `BLOCK_N` heuristic, and how the runtime composes
+per-program writes into one buffer) is the *trusted boundary*. Because the
+program ids are universally quantified, the per-program statement covers every
+program of the grid.
+
+## Proof architecture
+
+```
+log_softmax_kernel_output_summary                    ← TOP THEOREM (forward)
+  ├─ (toAlgorithm? = Except.ok _)                    surface lowers to the algorithm layer
+  └─ log_softmax_kernel_compute_correct              ← ComputeCorrect over the masked store
+       └─ log_softmax_kernel_correct                 ← algorithm-layer readback per cell
+log_softmax_backward_kernel_compute_correct          ← companion backward kernel
+  └─ log_softmax_backward_kernel_correct
+```
+
+The per-cell spec (`logSoftmaxSpec`) is built inline from the tiled primitives
+`Tile.reduceMax`/`reduceSum`/`bop`/`uop` rather than from a
+`VeriTile.Triton.Math.Softmax` oracle — the softmax math is inline-duplicated in
+this file. The backward spec (`logSoftmaxBackwardSpec`) is likewise inline.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` and
+`@triton.heuristics` are not modeled. The `.to(tl.float32)` casts reduce to the
+identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`).
+Out-of-tile lanes are loaded with `other = -float("inf")` (forward); the masked
+store leaves inactive cells (`¬(m < M ∧ n < N)`) untouched, so the result never
+depends on padded-block values. Correctness is conditional on the side
+hypothesis `hOutInj`: the per-tile output offset map `outOffset` is injective
+(no two active lanes alias the same output cell).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.LogSoftmax
 
 open VeriTile.Triton
@@ -304,5 +351,29 @@ theorem log_softmax_backward_kernel_compute_correct
   have h := log_softmax_backward_kernel_correct out_ptr out_grad_ptr in_grad_ptr
     M N K BLOCK_M BLOCK_N s s' hOutInj hExec idx
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `log_softmax_kernel`: the DSL surface lowers to
+the algorithm layer, and the masked store to `output_ptr` is compute-correct —
+every active cell holds `logSoftmaxSpec ...`, inactive cells are preserved.
+Conditional on the output-offset injectivity side hypothesis `hOutInj`. -/
+theorem log_softmax_kernel_output_summary
+    (output_ptr input_ptr : RegionName)
+    (M N K BLOCK_M BLOCK_N : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_N] => outOffset s N K BLOCK_M idx)) :
+    (∃ alg, (log_softmax_kernel output_ptr input_ptr M N K BLOCK_M BLOCK_N).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := log_softmax_kernel output_ptr input_ptr M N K BLOCK_M BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_N] => active s M N BLOCK_M idx)
+        (fun idx => (output_ptr, outOffset s N K BLOCK_M idx)))
+      (expected := fun idx => logSoftmaxSpec s input_ptr M N K BLOCK_M BLOCK_N idx) := by
+  refine ⟨?_, ?_⟩
+  · simp [log_softmax_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact log_softmax_kernel_compute_correct output_ptr input_ptr M N K BLOCK_M BLOCK_N
+      s hOutInj
 
 end VeriTile.Bench.TritonBenchG.LogSoftmax

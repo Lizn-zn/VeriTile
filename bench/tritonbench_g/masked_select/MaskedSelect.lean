@@ -3,6 +3,46 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `masked_select` — strict per-kernel correctness
+
+`masked_select_kernel` is a compaction scatter: program `pid` loads block
+`[pid·BLOCK_SIZE, (pid+1)·BLOCK_SIZE)` of the input, the boolean select mask, and
+a precomputed exclusive-prefix-sum of the mask; each selected lane scatters its
+input value to `out_ptr[prefix_sum − 1]`, i.e. its compacted output slot.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`masked_select_kernel[grid](...)`, the grid size
+`cdiv(n_elements, BLOCK_SIZE)`, the host-side `prefix_sum`/output allocation, and
+how the runtime composes per-program writes) is the *trusted boundary*, not a
+proof obligation here. Because `pid` is universally quantified, the per-program
+statement covers every program of the grid.
+
+## Proof architecture
+
+```
+masked_select_kernel_compute_correct          ← ComputeCorrect over the masked scatter
+  └─ masked_select_kernel_correct_of_exec      executed-state readback per active lane
+       └─ masked_select_kernel_correct         ← algorithm-layer readback per active lane
+```
+
+The spec is the value-preserving gather/scatter `out[prefix_sum i − 1] = inp i`
+on active lanes — no optimizer/reduction oracle applies.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The destination offset is data-dependent (read from `prefix_sum_ptr`),
+so a per-lane injectivity hypothesis `hOutInj` on the store offsets is required
+as a side condition — it captures the no-duplicate-destination property that the
+host's prefix-sum guarantees. The `.to(tl.int1)` mask cast and dtype casts
+reduce to identity at the algorithm layer. The statement is scoped to *active*
+lanes (in-bounds and selected); out-of-bounds or unselected lanes are not part
+of the realized write map.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.MaskedSelect
 
 open VeriTile.Triton
@@ -179,5 +219,33 @@ theorem masked_select_kernel_compute_correct
   intro i hActive
   exact masked_select_kernel_correct_of_exec inp_ptr select_mask_ptr prefix_sum_ptr
     out_ptr n_elements BLOCK_SIZE s hOutInj s' hExec i hActive
+
+/-- Per-kernel output summary for `masked_select_kernel`: the DSL surface lowers
+to the algorithm layer, and the data-dependent compaction scatter to `out_ptr` is
+compute-correct — under the no-duplicate-destination hypothesis `hOutInj`, every
+active (in-bounds and selected) lane scatters its input value to its compacted
+slot. -/
+theorem masked_select_kernel_output_summary
+    (inp_ptr select_mask_ptr prefix_sum_ptr out_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE =>
+        maskedSelectStoreOffset s prefix_sum_ptr n_elements BLOCK_SIZE i)) :
+    (∃ alg, (masked_select_kernel inp_ptr select_mask_ptr prefix_sum_ptr out_ptr
+        n_elements BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := masked_select_kernel inp_ptr select_mask_ptr prefix_sum_ptr out_ptr
+        n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s select_mask_ptr n_elements BLOCK_SIZE)
+        (fun i => (out_ptr,
+          maskedSelectStoreOffset s prefix_sum_ptr n_elements BLOCK_SIZE i)))
+      (expected := fun i => s.readMem inp_ptr (maskedSelectOffset s BLOCK_SIZE i)) := by
+  refine ⟨?_, ?_⟩
+  · simp [masked_select_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact masked_select_kernel_compute_correct inp_ptr select_mask_ptr prefix_sum_ptr
+      out_ptr n_elements BLOCK_SIZE s hOutInj
 
 end VeriTile.Bench.TritonBenchG.MaskedSelect

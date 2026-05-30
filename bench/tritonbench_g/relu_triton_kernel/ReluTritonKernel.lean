@@ -5,6 +5,45 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Activation
 import VeriTile.Examples.Common
 
+/-!
+# `relu_triton_kernel` — strict per-kernel correctness
+
+`relu_kernel` is an elementwise ReLU: program `pid` loads block
+`[pid·block_size, (pid+1)·block_size)` of `x_ptr`, computes
+`tl.where(x >= 0, x, 0.0)` lane-wise, and — *only when `pid == 0`* — stores the
+result to `out_ptr`, masked by `offsets < N`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`relu_kernel[grid](...)`, the grid size
+`cdiv(N, BLOCK_SIZE)`, and how the runtime composes per-program writes into one
+buffer) is the *trusted boundary*, not a proof obligation here. Because `pid` is
+universally quantified, the per-program statement covers every program of the
+grid — including the `pid == 0` write-gate, which is part of the verified body.
+
+## Proof architecture
+
+```
+relu_kernel_output_summary                    ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ relu_kernel_compute_correct              ← ComputeCorrect over the masked store
+       └─ relu_kernel_correct                 ← algorithm-layer readback per lane
+```
+
+The spec is the reusable `TiledActivation.relu` oracle applied to the values
+this lane loads. Inputs are presented via `InputLoadedAt`. The store is gated by
+`pid == 0`, so the write predicate is `s.pid = 0 ∧ addr < N`; programs with
+`pid ≠ 0` leave the observed output cells untouched.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. No output/input disjointness is assumed: the input is read into
+registers before the (gated) scatter, so the result is correct even if `out_ptr`
+aliases `x_ptr`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ReluTritonKernel
 
 open VeriTile.Triton VeriTile.Examples
@@ -100,5 +139,26 @@ theorem relu_kernel_compute_correct
   have hlt : i.val < N := by
     simpa [hActive.1] using hActive.2
   simpa [observeAt, hActive.1, hlt] using hi
+
+/-- Per-kernel output summary for `relu_kernel`: the DSL surface lowers to the
+algorithm layer, and the `pid == 0`-gated masked store to `out_ptr` is
+compute-correct — every active lane (with `pid = 0` and in bounds) holds
+`TiledActivation.relu (xs i)`, all other observed cells are preserved. -/
+theorem relu_kernel_output_summary
+    (x_ptr out_ptr : RegionName)
+    (N block_size : Nat) (hBlockSize : 0 < block_size)
+    (s : BlockState) (xs : Fin block_size → ℝ)
+    (h_x : InputLoadedAt s x_ptr block_size xs) :
+    (∃ alg, (relu_kernel x_ptr out_ptr N block_size).toAlgorithm? =
+        Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := relu_kernel x_ptr out_ptr N block_size)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+          (fun i : Fin block_size => s.pid = 0 ∧ s.pid * block_size + i.val < N)
+          (fun i => (out_ptr, s.pid * block_size + i.val)))
+      (expected := fun i => TiledActivation.relu (xs i)) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact relu_kernel_compute_correct x_ptr out_ptr N block_size hBlockSize s xs h_x
 
 end VeriTile.Bench.TritonBenchG.ReluTritonKernel

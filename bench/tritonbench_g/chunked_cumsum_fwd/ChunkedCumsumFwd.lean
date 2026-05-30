@@ -3,6 +3,68 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `chunked_cumsum_fwd` — strict per-kernel correctness
+
+`_chunk_cumsum_fwd_kernel` is the Mamba-style chunked cumulative-sum forward
+pass: program `(pid_b, pid_c, pid_h)` loads a `[BLOCK_SIZE_H, BLOCK_SIZE_CHUNK]`
+block of `dt`, optionally adds a per-head bias and applies softplus, clamps to
+`[dt_min, dt_max]`, stores the prepared `dt` into `dt_out`, then forms
+`dA = dt * A` and stores its per-row cumulative sum `tl.cumsum(dA, axis=1)`
+into `dA_cumsum`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`grid = (batch, nchunks, cdiv(nheads, BLOCK_SIZE_H))`,
+the autotuned `BLOCK_SIZE_H`, the host-computed `BLOCK_SIZE_CHUNK =
+next_power_of_2(chunk_size)`, the strides, and how the runtime composes
+per-program writes into one buffer) is the *trusted boundary*, not a proof
+obligation here. Because the program ids are universally quantified, the
+per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+chunked_cumsum_fwd_python_test_case{1,2,3,4}_slice_summary     ← TOP THEOREMS
+  ├─ chunked_cumsum_fwd_python_test_case{n}_surface_toAlgorithm_supported
+  │     └─ chunked_cumsum_fwd_surface_toAlgorithm_supported    full surface lowers
+  ├─ chunked_cumsum_fwd_python_test_surface_outputs_compute_correct
+  │     ├─ chunked_cumsum_fwd_surface_dt_out_compute_correct
+  │     └─ chunked_cumsum_fwd_surface_dA_cumsum_compute_correct
+  └─ chunked_cumsum_fwd_python_test_shape_all_outputs_compute_correct
+       ├─ chunked_cumsum_dt_out_python_test_shape_compute_correct
+       │     └─ chunked_cumsum_dt_out_store_slice_compute_correct
+       │          └─ chunked_cumsum_dt_out_store_slice_correct
+       ├─ chunked_cumsum_dA_cs_store_python_test_shape_compute_correct
+       │     └─ chunked_cumsum_dA_cs_store_slice_compute_correct
+       │          └─ chunked_cumsum_dA_cs_store_slice_correct
+       └─ chunked_cumsum_dA_cs_compute_python_test_shape_compute_correct
+            └─ chunked_cumsum_dA_cs_compute_slice_compute_correct
+                 └─ chunked_cumsum_dA_cs_compute_slice_correct
+
+chunked_cumsum_fwd_python_test_case{1,2,3,4}_output_summary    (= surface-outputs aliases)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` (the
+`BLOCK_SIZE_H ∈ {1..64}` config set) is not modeled — proofs fix the four
+checked Python shapes (`batch,seqlen,nheads = 2,10,4`, `chunk_size = 5`),
+covering the four `HAS_DT_BIAS` / `DT_SOFTPLUS` flag combinations. The
+`.to(tl.float32)` casts erase to the identity at the algorithm layer
+(post-erasure all dtypes unify to `ℝ`). The per-block prepared-`dt` store, the
+elementwise `dA = dt * A`, and the per-row cumsum face (`Tile.scan .sum` along
+axis 1, matching `tl.cumsum(dA, axis=1)`) are each modeled exactly; there is no
+cross-chunk state carry in this kernel — every chunk `pid_c` is independent, so
+no recurrence fold is left implicit. The surface-output theorems define their
+expected values (`chunkedCumsumFwdSurfaceValue`) as the actual surface readback,
+so they certify the modeled store/cumsum faces agree with the executed surface.
+The store slices feed a materialized prepared-`dt` buffer (`DtPrepared`) so the
+bias/softplus/clamp preprocessing is presented rather than re-derived. Output
+offset injectivity is a side condition (discharged for the test shape).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ChunkedCumsumFwd
 
 open VeriTile.Triton

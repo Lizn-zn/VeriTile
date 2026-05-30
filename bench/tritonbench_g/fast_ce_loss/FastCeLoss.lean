@@ -3,6 +3,60 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `fast_ce_loss` — strict per-kernel correctness
+
+`_cross_entropy_forward` computes, per row program, the row log-sum-exp of the
+logits (with optional logit scaling and softcapping), and the cross-entropy loss
+`logsumexp − x_label` (or `0` for the ignored `-100` label), storing both. The
+`_chunked_cross_entropy_forward` variant computes a per-chunk log-sum-exp and the
+partial `-x_label` loss in chunk 0. `_cross_entropy_backward` builds the softmax
+gradient `exp(x − logsumexp)`, subtracts one at the label, applies the scaling /
+softcap derivative factors, and writes `dloss · y` back in place, masked by
+`col_offsets < VOCAB_SIZE`.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies. The host launch (the grids `(n_rows,)` /
+`(n_rows, cdiv(VOCAB_SIZE, BLOCK_SIZE))`, scheduling, and how the runtime
+composes per-program writes / reduces the per-chunk log-sum-exp side outputs) is
+the *trusted boundary*. Because the program ids are universally quantified, the
+per-program statements cover every program of the grid.
+
+## Proof architecture
+
+```
+cross_entropy_forward_surface_toAlgorithm_supported         ← fwd surface lowers
+chunked_cross_entropy_forward_surface_toAlgorithm_supported ← chunked fwd lowers
+cross_entropy_backward_surface_toAlgorithm_supported        ← bwd surface lowers
+cross_entropy_backward_store_slice_compute_correct          ← masked dloss·y writeback
+  └─ cross_entropy_backward_store_slice_correct
+cross_entropy_lse_store_slice_compute_correct               ← scalar logsumexp writeback
+  └─ cross_entropy_lse_store_slice_correct
+cross_entropy_loss_store_slice_compute_correct              ← scalar loss writeback
+  └─ cross_entropy_loss_store_slice_correct
+```
+
+The full forward / chunked-forward / backward kernels are proved only to *lower*
+to the algorithm layer (`toAlgorithm? = Except.ok _`); their end-to-end value
+specs are **not** discharged, so no per-kernel `output_summary` is asserted. The
+discharged ComputeCorrect results are the proof-oriented store *slices*
+(precomputed `Grad`/`LsumPre`/`LossPre` tiles → masked or scalar writeback).
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.heuristics` and
+`@triton.autotune` are not modeled (`DO_SOFTCAPPING`/`DO_LOGIT_SCALING` are plain
+`Bool` parameters). The hard-coded `label_idx != -100` sentinel is preserved as
+the literal `-100`. The `.to(tl.float32)`/`.to(tl.int32)`/`.to(tl.int64)` casts
+erase to identity at the algorithm layer. The forward logits load uses
+`other = -float("inf")` for out-of-vocab lanes. The masked backward store leaves
+inactive lanes (`col_offsets ≥ VOCAB_SIZE`) untouched and assumes the per-tile
+output offset is injective. The spec is built inline; it does not reference a
+`VeriTile.Triton.Math.*` oracle.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FastCeLoss
 
 open VeriTile.Triton

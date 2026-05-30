@@ -3,6 +3,53 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `matrix_vector_multip` — strict per-kernel correctness
+
+`mv_kernel` computes a matrix-vector product `C = A · B`: program `pid` owns rows
+`[pid·BLOCK_N, …)` of `A`, loops over the `M` columns in `BLOCK_M`-wide chunks
+accumulating `a * b`, reduces over the `M` axis (`tl.sum(acc, axis=1)`), and
+stores the resulting length-`BLOCK_N` vector to `C`, masked by `offset_n < N`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`mv_kernel[grid](...)`, the grid size `cdiv(N, BLOCK_N)`,
+the strides passed from the host, and how the runtime composes per-program
+writes into `C`) is the *trusted boundary*, not a proof obligation here. The
+program id enters only via `BlockState`, so the per-program statement covers
+every program of the grid.
+
+## Proof architecture
+
+```
+mv_kernel_python_test_shape_complete_summary    ← TOP THEOREM (both checked shapes)
+  ├─ mv_kernel_python_case2_output_summary       (N=4, M=3)
+  │    ├─ (toAlgorithm? = Except.ok _) via mv_kernel_python_case2_surface_toAlgorithm_supported
+  │    └─ mv_kernel_python_case2_one_block_compute_correct
+  └─ mv_kernel_python_case3_output_summary        (N=32, M=16)
+       ├─ (toAlgorithm? = Except.ok _) via mv_kernel_python_case3_surface_toAlgorithm_supported
+       └─ mv_kernel_python_case3_one_block_compute_correct
+            └─ mv_kernel_one_block_compute_correct → mv_kernel_one_block_correct
+                 └─ mvSpec / mvProdTile  (row-wise `Tile.reduceSum` of `a * b`)
+```
+
+`mv_kernel_surface_toAlgorithm_supported` separately establishes that the full
+looping surface (not just the one-block slice) lowers to the algorithm layer.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled — its config grid all uses `BLOCK_M ≥ 32`, so for the bundled test
+shapes (`M ∈ {3, 16}`) the `M` loop executes exactly one block; the
+`mv_kernel_one_block` slice captures that single-block path, with the full
+looping surface verified only to lower (`toAlgorithm?`). The `.to(tl.float32)`
+casts reduce to the identity post-erasure. Masked loads use `other=0.0`. The
+output scatter requires the per-row offset map to be injective
+(`mv_kernel_python_stride1_output_offset_injective` for the contiguous Python
+strides).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.MatrixVectorMultip
 
 open VeriTile.Triton

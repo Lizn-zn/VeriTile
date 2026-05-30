@@ -4,6 +4,45 @@ import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Activation
 
+/-!
+# `swiglu_fwd` — strict per-kernel correctness
+
+`_swiglu_fwd_kernel` is the forward SwiGLU: program `(row, col_block)` loads a
+tile of gate `X` and value `Y` for its row, computes `swiglu(x, y) = x · σ(x) · y`
+lane-wise, and stores the result to `OUT`, masked by `cols < ncols`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_swiglu_fwd_kernel[grid](...)`, the 2-D grid
+`(M, cdiv(N, BLOCK_N))`, the `@triton.autotune` choice of `BLOCK_N`, and how the
+runtime composes per-program writes into one buffer) is the *trusted boundary*,
+not a proof obligation here. Because both program ids (`pids 0`, `pids 1`) are
+universally quantified, the per-program statement covers every program of the
+grid.
+
+## Proof architecture
+
+```
+swiglu_fwd_kernel_output_summary              ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  └─ swiglu_fwd_kernel_compute_correct        ← ComputeCorrect over the masked store
+       └─ swiglu_fwd_kernel_correct           ← algorithm-layer readback per lane
+```
+
+## Modeling boundary
+
+The spec is an **oracle wrapper** over `VeriTile.Triton.Math.Activation`: the
+SwiGLU math (`TiledActivation.swiglu`, built on `TiledActivation.silu`) lives
+once in `Math.Activation` and is reused here, so this file only checks that the
+kernel realizes that oracle lane-wise. Arithmetic is over `ℝ` (not bit-accurate
+IEEE float); the `.to(tl.float32)` casts reduce to the identity at the algorithm
+layer (post-erasure all dtypes unify to `ℝ`); `@triton.autotune` is not modeled.
+Inputs `X` and `Y` are presented as `s.readMem`-resolved tiles `xs`/`ys`. No
+output/input disjointness is assumed: both inputs are read into registers before
+the scatter, so the result is correct even if `OUT` aliases `X` or `Y`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.SwigluFwd
 
 open VeriTile.Triton
@@ -96,5 +135,30 @@ theorem swiglu_fwd_kernel_compute_correct
     stride_out_row ncols BLOCK_N s s' xs ys h_x h_y hExec i
   simp [hActive] at hi
   exact hi
+
+/-- Per-kernel output summary for `_swiglu_fwd_kernel`: the DSL surface lowers to
+the algorithm layer, and the masked store to `OUT` is compute-correct — every
+active lane holds `TiledActivation.swiglu (xs i) (ys i)`, out-of-bounds lanes are
+preserved. -/
+theorem swiglu_fwd_kernel_output_summary
+    (X Y OUT : RegionName)
+    (stride_x_row stride_y_row stride_out_row ncols BLOCK_N : Nat)
+    (s : BlockState)
+    (xs ys : Fin BLOCK_N → ℝ)
+    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i)
+    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i) :
+    (∃ alg, (swiglu_fwd_kernel X Y OUT stride_x_row stride_y_row stride_out_row
+        ncols BLOCK_N).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := swiglu_fwd_kernel X Y OUT stride_x_row stride_y_row stride_out_row
+        ncols BLOCK_N)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => s.pids 1 * BLOCK_N + i.val < ncols)
+        (fun i => (OUT, swigluOffset s stride_out_row BLOCK_N i)))
+      (expected := fun i => TiledActivation.swiglu (xs i) (ys i)) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact swiglu_fwd_kernel_compute_correct X Y OUT stride_x_row stride_y_row
+    stride_out_row ncols BLOCK_N s xs ys h_x h_y
 
 end VeriTile.Bench.TritonBenchG.SwigluFwd

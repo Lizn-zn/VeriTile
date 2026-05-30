@@ -3,6 +3,61 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `fast_layernorm` — strict per-kernel correctness
+
+`layernorm_forward` is the Unsloth fast LayerNorm forward: each program `row_idx`
+normalizes one row of `X` by its mean and variance, applies affine scale `W` and
+bias `b`, and writes the normalized row `Y = ((X - mean) * inv_var) * W + b`
+together with the per-row reciprocal std `r = inv_var` and mean `mu`. A companion
+`layernorm_backward` kernel is also transcribed and its `dX` output verified.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies, for one program (one row). The host launch (grid over rows,
+the host-side `BLOCK_SIZE` choice, scheduling, and how the runtime composes
+per-row writes into the buffers) is the *trusted boundary*, not a proof
+obligation here. Because `row_idx = tl.program_id(0)` is universally quantified
+(via `s.pid`), the per-program statement covers every row of the grid.
+
+## Proof architecture
+
+```
+layernorm_forward_output_summary              ← TOP THEOREM (forward, all outputs)
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  ├─ layernorm_forward_y_compute_correct       ← masked Y store
+  │    └─ layernorm_forward_y_correct
+  ├─ layernorm_forward_inv_var_compute_correct ← scalar rstd store into r
+  │    └─ layernorm_forward_inv_var_correct
+  └─ layernorm_forward_mean_compute_correct    ← scalar mean store into mu
+       └─ layernorm_forward_mean_correct
+layernorm_backward_dx_compute_correct         ← backward dX (separate kernel)
+  └─ layernorm_backward_dx_correct
+```
+
+There are additional proof-oriented store-slice theorems
+(`layernorm_forward_inv_var_store_slice_*`, `layernorm_forward_mean_store_slice_*`)
+that isolate individual scalar stores; the layernorm row math is defined inline
+in this file rather than reusing `VeriTile.Triton.Math.RMSNorm`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `.to(tl.float32)`
+load casts reduce to identity at the algorithm layer (post-erasure all dtypes
+unify to `ℝ`). The reductions `tl.sum(X_row) / n_cols` and `tl.sum(XX*XX) /
+n_cols` sum over the *padded* `BLOCK_SIZE` block, but out-of-range lanes are
+masked to `0` (load `other=0`), so each sum equals the logical row length
+`n_cols`. The reciprocal std is `inv_var = rsqrt(row_var + eps) =
+1 / sqrt(var + eps)`; the affine step is `(XX * inv_var) * W + b`. The scalar
+stores `r` and `mu` are characterized via `WithBot.unbotD 0` wrappers
+(`invVarFullSpec`, `meanFullSpec`). This is a single-block kernel: `BLOCK_SIZE`
+covers the whole row in one pass, with the `col_offsets < n_cols` mask handling
+the padded tail. Output/input region disjointness is assumed where a store
+region must not alias another output (`Y ≠ r`, `Y ≠ mu`, `r ≠ Y`, `r ≠ mu`,
+`mu ≠ Y`). `@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.FastLayernorm
 
 open VeriTile.Triton
@@ -583,5 +638,54 @@ theorem layernorm_forward_mean_store_slice_compute_correct
   subst s0
   intro _
   exact layernorm_forward_mean_store_slice_correct MeanPre mu s s' hExec
+
+/-- Per-kernel output summary for `layernorm_forward`: the DSL surface lowers to
+the algorithm layer, and the kernel is compute-correct on all three
+Python-observable outputs — the masked `Y` store (every active lane holds the
+affine LayerNorm spec `layernormYSpec`), the scalar reciprocal-std store into `r`
+(`invVarFullSpec`), and the scalar mean store into `mu` (`meanFullSpec`). -/
+theorem layernorm_forward_output_summary
+    (Y X W bias r mu : RegionName)
+    (Y_row_stride X_row_stride n_cols BLOCK_SIZE : Nat)
+    (eps : ℝ) (s : BlockState)
+    (hYr : Y ≠ r) (hYmu : Y ≠ mu)
+    (hRY : r ≠ Y) (hRmu : r ≠ mu)
+    (hMuY : mu ≠ Y)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
+    (∃ alg, (layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+        n_cols eps BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ((ComputeCorrect.Realizes
+      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+        n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
+        (fun i => (Y, yOutOffset s Y_row_stride i)))
+      (expected := fun i =>
+        layernormYSpec s X W bias X_row_stride n_cols BLOCK_SIZE eps i)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+        n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (r, s.pid))
+      (expected := fun _ =>
+        invVarFullSpec s X X_row_stride n_cols BLOCK_SIZE eps)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := layernorm_forward Y X W bias r mu Y_row_stride X_row_stride
+        n_cols eps BLOCK_SIZE)
+      (initialState := s)
+      (write := fun _ : PUnit => some (mu, s.pid))
+      (expected := fun _ =>
+        meanFullSpec s X X_row_stride n_cols BLOCK_SIZE))) := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · simp only [layernorm_forward, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    exact ⟨_, rfl⟩
+  · exact layernorm_forward_y_compute_correct Y X W bias r mu Y_row_stride
+      X_row_stride n_cols BLOCK_SIZE eps s hYr hYmu hOutInj
+  · exact layernorm_forward_inv_var_compute_correct Y X W bias r mu Y_row_stride
+      X_row_stride n_cols BLOCK_SIZE eps s hRY hRmu
+  · exact layernorm_forward_mean_compute_correct Y X W bias r mu Y_row_stride
+      X_row_stride n_cols BLOCK_SIZE eps s hMuY
 
 end VeriTile.Bench.TritonBenchG.FastLayernorm

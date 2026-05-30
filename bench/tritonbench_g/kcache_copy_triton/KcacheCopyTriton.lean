@@ -3,6 +3,58 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `kcache_copy_triton` — strict per-kernel correctness
+
+`_copy_to_kcache_seqlen_n_kernel` is a paged K-cache scatter: program
+`(cur_token_idx, cur_kv_head_idx, split_x_idx)` derives the sequence id and a
+signed token shift, reads `seq_lengths` and the `BLOCK_TABLES` block table to
+locate the destination block / in-block slot, gathers one contiguous
+`KCACHE_X` split-x block of `K`, and scatters it into `KCache` for that head /
+split. It supports the legacy `[num_blocks, num_kv_heads, block_size, head_dim]`
+layout (`KCACHE_X = HEAD_DIM`, one split) and the new split-x
+`[num_blocks, num_kv_heads, head_dim // x, block_size, x]` layout.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (grid over `(num_tokens, num_kv_heads, head_dim/x)`, the
+block-table / seq-length inputs, and how the runtime composes per-program
+scatters into the paged K-cache) is the *trusted boundary*, not a proof
+obligation here. Because the program ids are universally quantified, the
+per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+copy_to_kcache_seqlen_n1_surface_output_summary       ← TOP THEOREM (decode path)
+  ├─ copy_to_kcache_seqlen_n1_surface_toAlgorithm_supported    surface lowers
+  └─ copy_to_kcache_seqlen_n1_surface_compute_correct  ← ComputeCorrect over the scatter
+       └─ copy_to_kcache_seqlen_n1_surface_correct       executed-state readback per cell
+            ├─ copy_to_kcache_seqlen_n1_old_layout_block_compute_correct   (legacy layout)
+            └─ copy_to_kcache_seqlen_n1_new_layout_xblock_compute_correct  (split-x layout)
+```
+The `n_tokens > 1` (prefill) path is covered at the surface-lowering level only
+(`copy_to_kcache_seqlen_n_kernel{,_signed}_toAlgorithm_supported` plus the
+Python `n = 2` test-shape lowerings and the `signedPastKvSeqLen` position
+sanity check). The post-arithmetic split-x slice
+`copy_to_kcache_split_x_block_{correct,compute_correct}` proves the store once
+the cache slot has been selected.
+
+## Modeling boundary
+
+Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); dtype casts are
+erased (post-erasure all numeric dtypes unify to `ℝ`; the signed kernel keeps
+explicit `int64`/`uint64` casts on the index path). This is **partial**: full
+cellwise readback correctness is proved for the `n_tokens = 1` decode path; the
+`n_tokens > 1` path is verified only up to surface lowering (its negative
+`cur_token_shift` arithmetic is outside the Nat-only pointer readback). The
+destination block id is gathered from `BLOCK_TABLES` and the in-block slot from
+`seq_lengths`; the readback theorems carry an `hOutInj` injectivity side
+condition (no two cells of one program alias). `@triton.autotune` is not
+modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.KcacheCopyTriton
 
 open VeriTile.Triton
@@ -670,5 +722,45 @@ theorem copy_to_kcache_split_x_block_compute_correct
     LAST_BLOCK_IDX OFFSET_LAST_BLOCK stride_kt stride_kh stride_kd stride_kcb
     stride_kch stride_kcsplit_x stride_kcs stride_bts stride_btb KCACHE_X
     s s' hOutInj hExec i
+
+/-- Per-kernel output summary for the `n_tokens = 1` decode-path K-cache copy:
+the DSL surface lowers to the algorithm layer, and the paged split-x scatter to
+`KCache` is compute-correct — every cell holds the matching cell of `K` at the
+block-table / seq-length-selected cache slot. -/
+theorem copy_to_kcache_seqlen_n1_surface_output_summary
+    (K KCache BLOCK_TABLES seq_lengths : RegionName)
+    (stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
+      stride_kcs stride_bts stride_btb block_size KCACHE_X : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin KCACHE_X =>
+        n1KCacheOffset s BLOCK_TABLES seq_lengths stride_kcb stride_kch
+          stride_kcsplit_x stride_kcs stride_bts stride_btb block_size i)) :
+    (∃ alg,
+      (copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES seq_lengths
+        stride_kt stride_kh stride_kd stride_kcb stride_kch stride_kcsplit_x
+        stride_kcs 0 stride_bts stride_btb block_size 1 0
+        KCACHE_X).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := copy_to_kcache_seqlen_n1_surface K KCache BLOCK_TABLES
+        seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
+        stride_kcsplit_x stride_kcs 0 stride_bts stride_btb block_size 1 0
+        KCACHE_X)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _i : Fin KCACHE_X => True)
+        (fun i => (KCache,
+          n1KCacheOffset s BLOCK_TABLES seq_lengths stride_kcb stride_kch
+            stride_kcsplit_x stride_kcs stride_bts stride_btb block_size i)))
+      (expected := fun i =>
+        s.readMem K (kSourceOffset s stride_kt stride_kh stride_kd KCACHE_X i)) := by
+  refine ⟨?_, ?_⟩
+  · exact copy_to_kcache_seqlen_n1_surface_toAlgorithm_supported K KCache
+      BLOCK_TABLES seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
+      stride_kcsplit_x stride_kcs 0 stride_bts stride_btb block_size 1 0 KCACHE_X
+  · exact copy_to_kcache_seqlen_n1_surface_compute_correct K KCache BLOCK_TABLES
+      seq_lengths stride_kt stride_kh stride_kd stride_kcb stride_kch
+      stride_kcsplit_x stride_kcs stride_bts stride_btb block_size KCACHE_X
+      s hOutInj
 
 end VeriTile.Bench.TritonBenchG.KcacheCopyTriton

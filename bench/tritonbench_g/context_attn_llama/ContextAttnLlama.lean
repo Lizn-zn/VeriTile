@@ -3,6 +3,58 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `context_attn_llama` — strict per-kernel correctness
+
+`_fwd_kernel` is Llama-style varlen context (prefill) attention. Each program
+`(start_m, cur_bh)` decodes its batch/head as `cur_batch = cur_bh // H`,
+`cur_head = cur_bh % H`, loads a `[BLOCK_M, BLOCK_DMODEL]` query tile, streams
+over the cached key/value tokens gathered through `Req_to_tokens`, runs an
+online-softmax (`m_i`/`l_i`/`acc`) loop with a `prompt_cache_len`-offset causal
+mask, and stores the accumulated `acc` tile to `Out`, masked by
+`offs_m < cur_batch_seq_len`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel[grid](...)`, the grid over sequence blocks ×
+`(batch·head)`, the scheduling, and how the runtime composes per-program writes
+into one buffer) is the *trusted boundary*, not a proof obligation here. Because
+the program ids `(start_m, cur_bh)` are universally quantified, the per-program
+statement covers every program of the grid.
+
+## Proof architecture
+
+```
+context_attn_llama_python_test_shape_output_summary        ← TOP THEOREM (bundles both block shapes)
+  ├─ context_attn_llama_fwd_kernel_surface_toAlgorithm_supported   surface lowers to the algorithm layer
+  ├─ context_attn_llama_surface_python_block128_compute_correct    full surface, BLOCK_M=128 final store
+  │    └─ context_attn_llama_final_store_python_block128_compute_correct
+  │         └─ context_attn_llama_final_store_slice_compute_correct
+  │              └─ context_attn_llama_final_store_slice_correct    algorithm-layer readback per lane
+  └─ context_attn_llama_surface_python_block64_compute_correct     full surface, BLOCK_M=64 final store
+       └─ context_attn_llama_final_store_python_block64_compute_correct
+            └─ context_attn_llama_final_store_slice_compute_correct
+(supporting: context_attn_llama_python_block128_offset_injective,
+             context_attn_llama_python_block64_offset_injective)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` and
+`num_warps` are not modeled. The verified compute claim is scoped to the **final
+masked writeback** of the accumulated `acc` tile into `Out`: every active lane
+(`offs_m < cur_batch_seq_len`, with `offs_d < head_dim` folded into the slice)
+holds the surface-produced `acc` value
+(`producedContextLlamaBlock128/64OutValue`), and out-of-bounds lanes are preserved. The
+online-softmax streaming loop (`m_i`/`l_i`/`acc` updates, `tl.dot`, the
+`Req_to_tokens` gathers, the `prompt_cache_len`-offset causal mask) is carried
+*inside* the surface kernel and reflected in the produced-value spec rather than
+re-proven as a closed-form softmax identity. The summary is instantiated at the
+Python test shape (`H=16`, `BLOCK_DMODEL=BLOCK_N=128`, `BLOCK_M ∈ {128, 64}`);
+other shapes are not covered by the top theorem.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.ContextAttnLlama
 
 open VeriTile.Triton

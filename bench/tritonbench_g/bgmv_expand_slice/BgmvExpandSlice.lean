@@ -3,6 +3,51 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `bgmv_expand_slice` — strict per-kernel correctness
+
+`_bgmv_expand_slice_kernel` is a batched LoRA expand GEMV with a slice offset:
+program `(pid_sn, cur_batch)` loads the batch's input vector, selects the LoRA-B
+weight via `lora_indices[cur_batch]` (with the `-1` sentinel skipping the batch),
+and for each output-`n` block reduces `sum(tiled_a * tiled_b, axis=1)` over the
+rank dimension `K`, storing into the output slice shifted by `slice_offset`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_bgmv_expand_slice_kernel[grid](...)`, the 2D grid
+`(SPLIT_N, batches)`, the host setup, and how the runtime composes per-program
+writes) is the *trusted boundary*, not a proof obligation here. Because the
+program ids are universally quantified, the per-program statement covers every
+program of the grid.
+
+## Proof architecture
+
+```
+bgmv_expand_slice_surface_toAlgorithm_supported        full surface (loop + branches + slice) lowers to the algorithm layer
+bgmv_expand_slice_one_block_compute_correct            ← ComputeCorrect over the masked GEMV store (one n-block)
+  └─ bgmv_expand_slice_one_block_correct               ← algorithm-layer readback per active lane
+```
+
+The full kernel surface is shown to lower to the algorithm layer. The numeric
+correctness is proved on `bgmv_expand_slice_one_block`, a proof-oriented slice
+fixing one `n` block; the spec `bgmvSpec` is the `reduceSum` over `K` of the
+masked elementwise product, stored at the slice-offset output address.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. **This is a partial / blocked verification:** the surface theorem only
+establishes lowering, while value-level correctness is proved for the single
+`n`-block slice with `ADD_INPUTS = false` and no `CAST_TYPE`; the multi-block
+`for n` loop, the `ADD_INPUTS` accumulation, and the `EVEN_K`/cast variants are
+not folded into the numeric theorem. The GEMV `tl.sum` accumulator is modeled
+exactly as `Tile.reduceSum` over `ℝ` (no float reassociation claimed). The
+LoRA-B base is data-dependent (read from `lora_indices`); a per-lane injectivity
+hypothesis `hOutInj` on the slice-offset output offsets is required as a side
+condition. The statement is scoped to *active* lanes (`n < split_n_length`).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.BgmvExpandSlice
 
 open VeriTile.Triton
@@ -283,5 +328,43 @@ theorem bgmv_expand_slice_one_block_compute_correct
     lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K
     s s' hOutInj hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for the one-block BGMV expand slice: the DSL surface
+lowers to the algorithm layer, and the masked GEMV store to the slice-offset
+output is compute-correct — under the no-duplicate-destination hypothesis
+`hOutInj`, every active lane (`n < split_n_length`) holds the rank-`K` reduction
+`bgmvSpec`. -/
+theorem bgmv_expand_slice_one_block_output_summary
+    (input_ptr lora_ptr out_ptr lora_indices : RegionName)
+    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
+      lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_N =>
+        outOffset s split_n_length cm_stride cn_stride slice_offset BLOCK_N i)) :
+    (∃ alg, (bgmv_expand_slice_one_block input_ptr lora_ptr out_ptr
+        lora_indices K split_n_length xm_stride xk_stride l0_stride
+        lora_k_stride lora_n_stride cm_stride cn_stride slice_offset
+        BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := bgmv_expand_slice_one_block input_ptr lora_ptr out_ptr
+        lora_indices K split_n_length xm_stride xk_stride l0_stride
+        lora_k_stride lora_n_stride cm_stride cn_stride slice_offset
+        BLOCK_N BLOCK_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_N => nIndex i < split_n_length)
+        (fun i => (out_ptr,
+          outOffset s split_n_length cm_stride cn_stride slice_offset BLOCK_N i)))
+      (expected := fun i =>
+        bgmvSpec s input_ptr lora_ptr lora_indices K split_n_length
+          xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
+          BLOCK_N BLOCK_K i) := by
+  refine ⟨?_, ?_⟩
+  · simp [bgmv_expand_slice_one_block, ComputeExpr.toAlgorithm?,
+          ComputeOp.toAlgorithm?]
+  · exact bgmv_expand_slice_one_block_compute_correct input_ptr lora_ptr out_ptr
+      lora_indices K split_n_length xm_stride xk_stride l0_stride lora_k_stride
+      lora_n_stride cm_stride cn_stride slice_offset BLOCK_N BLOCK_K s hOutInj
 
 end VeriTile.Bench.TritonBenchG.BgmvExpandSlice

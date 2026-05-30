@@ -3,6 +3,48 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `var_len_copy` — strict per-kernel correctness
+
+`var_len_copy_kernel_triton` is a variable-length segment copy: program `a_id`
+reads the segment `length` and the `old_start` / `new_start` offsets from the
+per-segment metadata buffers, then loops over `BLOCK_SIZE`-wide chunks of the
+segment, copying `old_a_location[old_start + i + offset]` into
+`new_a_location[new_start + i + offset]`, masked by `offset < length`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (grid over segments, the start/length metadata inputs,
+and how the runtime composes per-segment copies into the destination buffer) is
+the *trusted boundary*, not a proof obligation here. Because `a_id = pid` is
+universally quantified, the per-program statement covers every program of the
+grid.
+
+## Proof architecture
+
+```
+var_len_copy_kernel_triton_small_length_output_summary    ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)                          surface lowers (incl. the for-loop)
+  └─ var_len_copy_kernel_triton_small_length_compute_correct  ← ComputeCorrect over the copy
+       └─ var_len_copy_kernel_triton_small_length_correct     algorithm-layer readback per lane
+```
+The per-chunk slice `var_len_copy_one_chunk_{correct,compute_correct}` proves a
+single fixed chunk index, underlying the single-iteration full-kernel proof.
+
+## Modeling boundary
+
+Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); the `int32`
+metadata is typed as Nat regions (loads recover the `.nat` channel). This is a
+**partial / blocked** verification: the full kernel is proved only under the
+Python-tested **small-length regime** `0 < length ≤ BLOCK_SIZE` (lengths
+50/150/200 with `BLOCK_SIZE = 256`), where the `range(0, length, BLOCK_SIZE)`
+loop runs exactly once (`chunk = 0`); longer multi-chunk segments are not
+covered by the full-kernel theorem (only by the per-chunk slice). The proofs
+carry an `hOutInj` injectivity side condition on the destination offsets (no two
+lanes of one program alias). `@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.VarLenCopy
 
 open VeriTile.Triton
@@ -359,5 +401,48 @@ theorem var_len_copy_kernel_triton_small_length_compute_correct
     old_a_start old_a_len old_a_location new_a_start new_a_location BLOCK_SIZE
     s s' hBS hLen hLenPos hOutInj hExec i
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `var_len_copy_kernel_triton` under the
+Python-tested small-length regime `0 < length ≤ BLOCK_SIZE`: the DSL surface
+lowers to the algorithm layer, and the masked segment copy to `new_a_location`
+is compute-correct — every active lane (`< length`) holds the matching
+`old_a_location` lane, out-of-segment lanes are preserved. -/
+theorem var_len_copy_kernel_triton_small_length_output_summary
+    (old_a_start old_a_len : Region .nat) (old_a_location : RegionName)
+    (new_a_start : Region .nat) (new_a_location : RegionName)
+    (BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hBS : 0 < BLOCK_SIZE)
+    (hLen :
+      s.readMemValue .nat (Region.cast old_a_len : RegionName) (s.pids 0)
+        ≤ BLOCK_SIZE)
+    (hLenPos :
+      0 < s.readMemValue .nat (Region.cast old_a_len : RegionName) (s.pids 0))
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE =>
+        s.readMemValue .nat (Region.cast new_a_start : RegionName) (s.pids 0)
+          + i.val)) :
+    (∃ alg, (var_len_copy_kernel_triton old_a_start old_a_len old_a_location
+        new_a_start new_a_location BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := var_len_copy_kernel_triton old_a_start old_a_len old_a_location
+        new_a_start new_a_location BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE =>
+          i.val < s.readMemValue .nat (Region.cast old_a_len : RegionName) (s.pids 0))
+        (fun i =>
+          (new_a_location,
+            s.readMemValue .nat (Region.cast new_a_start : RegionName) (s.pids 0)
+              + i.val)))
+      (expected := fun i =>
+        s.readMem old_a_location
+          (s.readMemValue .nat (Region.cast old_a_start : RegionName) (s.pids 0)
+            + i.val)) := by
+  refine ⟨?_, ?_⟩
+  · simp [var_len_copy_kernel_triton, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact var_len_copy_kernel_triton_small_length_compute_correct
+      old_a_start old_a_len old_a_location new_a_start new_a_location BLOCK_SIZE
+      s hBS hLen hLenPos hOutInj
 
 end VeriTile.Bench.TritonBenchG.VarLenCopy
