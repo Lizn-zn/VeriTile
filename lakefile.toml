@@ -18,6 +18,7 @@ globs = [
   "VeriTile.Examples.MemorySafety",
   "VeriTile.Examples.MemoryFrame",
   "VeriTile.Examples.GridComposition",
+  "VeriTile.Examples.AdamUpdateGridLaunch",
   "VeriTile.Examples.LoopInvariant",
   "VeriTile.Examples.SoftmaxEq",
   "VeriTile.Examples.LogSumExpEq",

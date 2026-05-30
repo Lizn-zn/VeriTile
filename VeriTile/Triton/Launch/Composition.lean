@@ -183,6 +183,24 @@ theorem writeWithin {k : Kernel} {g : Grid} {s sFinal : BlockState}
 
 end GridLaunchedOrdinary
 
+/-- Whole-grid single-memory output correctness.
+
+The launcher-facing analogue of `ComputeCorrect.Realizes`, lifted from a single
+program to the merged whole-grid memory. `LaunchCorrect k g s write expected`
+holds when there *exists* an ordinary disjoint launch of `k` over grid `g` from
+initial state `s` whose single merged final memory realizes `expected` at every
+active output cell selected by `write` (a `WriteMap`-style partial address map
+indexed by `ι`).
+
+Bundling the launch witness makes this an unconditional contract: a kernel
+satisfies `LaunchCorrect` outright (by constructing one valid disjoint launch),
+with no launch/footprint side hypotheses for callers to discharge. -/
+def LaunchCorrect {ι : Type} (k : Kernel) (g : Grid) (s : BlockState)
+    (write : ι → Option MemCellAddr) (expected : ι → ℝ) : Prop :=
+  ∃ sFinal, ∃ _ : Kernel.GridLaunchedOrdinary k g s sFinal,
+    ∀ (i : ι) (addr : MemCellAddr), write i = some addr →
+      sFinal.readMem addr.1 addr.2 = expected i
+
 end Kernel
 
 end VeriTile.Triton

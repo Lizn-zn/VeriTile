@@ -144,6 +144,39 @@ theorem writeMemTyped_writeWithin {P : WriteFootprint} {s : BlockState}
     exact False.elim (hnot hmem)
   · cases dtype <;> simp [writeMemTyped, writeMemAs, h]
 
+/-- Single real `writeMem` stays within a footprint that contains its cell. -/
+theorem writeMem_writeWithin {P : WriteFootprint} {s : BlockState}
+    (region : RegionName) (offset : Nat) (v : ℝ) (hmem : P (region, offset)) :
+    WriteWithin P s (s.writeMem region offset v) := by
+  intro r o hnot
+  by_cases h : r = region ∧ o = offset
+  · rcases h with ⟨rfl, rfl⟩; exact absurd hmem hnot
+  · simp [writeMem, h]
+
+/-- A masked scatter of real `writeMem`s over a list stays within a footprint
+that contains every active cell. The `writeMem` (real) analogue of
+`foldl_writeMemTypedAt_prop_writeWithin`. -/
+theorem foldl_writeMem_prop_writeWithin {α : Type} {P : WriteFootprint}
+    (region : RegionName) (offFn : α → Nat) (vFn : α → ℝ)
+    (active : α → Prop) [DecidablePred active] (l : List α) (s : BlockState)
+    (hmem : ∀ i ∈ l, active i → P (region, offFn i)) :
+    WriteWithin P s
+      (l.foldl
+        (fun acc i =>
+          if active i then acc.writeMem region (offFn i) (vFn i) else acc) s) := by
+  induction l generalizing s with
+  | nil => exact writeWithin_refl P s
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hact : active hd
+      · simp only [hact, if_true]
+        exact writeWithin_trans
+          (writeMem_writeWithin region (offFn hd) (vFn hd)
+            (hmem hd List.mem_cons_self hact))
+          (ih _ (fun i hi hai => hmem i (List.mem_cons_of_mem hd hi) hai))
+      · simp only [hact, if_false]
+        exact ih s (fun i hi hai => hmem i (List.mem_cons_of_mem hd hi) hai)
+
 theorem foldl_writeMemTypedAt_masked_writeWithin {α : Type} {P : WriteFootprint}
     (dtype : TileDType) (regionFn : α → RegionName) (offsetFn : α → Nat)
     (valueFn : α → TileCarrier dtype) (mask : α → Bool) (l : List α)
