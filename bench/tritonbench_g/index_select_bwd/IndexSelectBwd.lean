@@ -3,6 +3,48 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `index_select_bwd` — strict per-kernel correctness
+
+`index_select_cat_bwd_kernel` is the backward of an index-select/cat: for the
+`(pid0, pid1)` tile of `(index, column)` blocks it loads the `grad_output` tile,
+gathers the destination row from `index_ptr`, and scatters the gradient into
+`grad_source` at the indexed row, column-by-column.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`index_select_cat_bwd_kernel[grid](...)`, the 2D grid
+sizes `cdiv(num_indices, BLOCK_SIZE_INDEX)` × `cdiv(num_cols, BLOCK_SIZE_COL)`,
+the stride/shape validation, and how the runtime composes per-program writes) is
+the *trusted boundary*, not a proof obligation here. Because the program ids
+`pids 0`, `pids 1` are universally quantified, the per-program statement covers
+every program of the grid.
+
+## Proof architecture
+
+```
+index_select_cat_bwd_kernel_compute_correct       ← ComputeCorrect over the indexed scatter
+  └─ index_select_cat_bwd_kernel_correct_of_exec   executed-state readback per active cell
+       └─ index_select_cat_bwd_kernel_correct      ← algorithm-layer readback per active cell
+```
+
+The spec is the gather/scatter `grad_source[index[row], col] = grad_output[row, col]`
+on active cells — no optimizer/reduction oracle applies.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The destination row is data-dependent (read from `index_ptr`), so a
+per-cell injectivity hypothesis `hStoreInj` on the scatter offsets is required as
+a side condition — it captures the no-duplicate-destination property the caller
+must supply (overlapping indices would race in the underlying scatter). The
+`.to(tl.float32)` cast on `grad_output` reduces to the identity at the algorithm
+layer (post-erasure all dtypes unify to `ℝ`). The statement is scoped to *active*
+cells (`row < num_indices` and `col < num_cols`); masked-out cells are not part of
+the realized write map.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.IndexSelectBwd
 
 open VeriTile.Triton
@@ -221,5 +263,40 @@ theorem index_select_cat_bwd_kernel_compute_correct
     grad_output_ptr num_rows num_indices num_cols stride0 stride1
     BLOCK_SIZE_INDEX BLOCK_SIZE_COL s hStoreInj s' hExec idx hActive
   exact h
+
+/-- Per-kernel output summary for `index_select_cat_bwd_kernel`: the DSL surface
+lowers to the algorithm layer, and the indexed scatter into `grad_source` is
+compute-correct — under the no-duplicate-destination hypothesis `hStoreInj`, every
+active cell writes `grad_output[row, col]` to `grad_source[index[row], col]`. -/
+theorem index_select_cat_bwd_kernel_output_summary
+    (grad_source_ptr : RegionName) (index_ptr : Region .nat) (grad_output_ptr : RegionName)
+    (num_rows num_indices num_cols stride0 stride1
+      BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
+    (s : BlockState)
+    (hStoreInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL] =>
+        gradSourceStoreAddr s index_ptr num_indices stride0 stride1
+          BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) :
+    (∃ alg, (index_select_cat_bwd_kernel grad_source_ptr index_ptr grad_output_ptr
+        num_rows num_indices num_cols stride0 stride1
+        BLOCK_SIZE_INDEX BLOCK_SIZE_COL).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := index_select_cat_bwd_kernel grad_source_ptr index_ptr grad_output_ptr
+        num_rows num_indices num_cols stride0 stride1
+        BLOCK_SIZE_INDEX BLOCK_SIZE_COL)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_indices num_cols BLOCK_SIZE_INDEX BLOCK_SIZE_COL)
+        (fun idx => (grad_source_ptr,
+          gradSourceStoreAddr s index_ptr num_indices stride0 stride1
+            BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)))
+      (expected := fun idx =>
+        s.readMem grad_output_ptr
+          (gradOutputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) := by
+  refine ⟨?_, ?_⟩
+  · simp [index_select_cat_bwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact index_select_cat_bwd_kernel_compute_correct grad_source_ptr index_ptr
+      grad_output_ptr num_rows num_indices num_cols stride0 stride1
+      BLOCK_SIZE_INDEX BLOCK_SIZE_COL s hStoreInj
 
 end VeriTile.Bench.TritonBenchG.IndexSelectBwd

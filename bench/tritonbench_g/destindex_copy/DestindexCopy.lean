@@ -3,6 +3,51 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `destindex_copy` — strict per-kernel correctness
+
+`_fwd_kernel_destindex_copy_kv` is a dual KV-cache scatter (MLA nope/rope
+split): program `cur_index` reads `Dest_loc[cur_index]` for a destination row,
+loads the per-program `nope` and `rope` source rows from `KV_nope` / `KV_rope`,
+and stores them into `O_nope` / `O_rope` at the dest-indexed row. There is no
+load/store mask — every `[1, BLOCK_DMODEL_*]` lane is copied.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_destindex_copy_kv[grid](...)`, the grid size
+`(seq_len,)`, `BLOCK_DMODEL_*` rounding to powers of two, and how the runtime
+composes the per-program scatters into the two output buffers) is the *trusted
+boundary*, not a proof obligation here. Because `cur_index = pid` is universally
+quantified, the per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+fwd_kernel_destindex_copy_kv_output_summary           ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)                      surface lowers to the algorithm layer
+  ├─ fwd_kernel_destindex_copy_kv_nope_compute_correct ← ComputeCorrect for the O_nope scatter
+  │    └─ fwd_kernel_destindex_copy_kv_nope_correct_of_exec
+  └─ fwd_kernel_destindex_copy_kv_rope_compute_correct ← ComputeCorrect for the O_rope scatter
+       └─ fwd_kernel_destindex_copy_kv_rope_correct_of_exec
+```
+
+`preStoreState` materializes the register/memory state just before the two
+stores, so each store's readback is proved against the other store's writes.
+
+## Modeling boundary
+
+Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); the `float16`
+dtype cast is erased (post-erasure all dtypes unify to `ℝ`). The destination
+row index is data-dependent: `dest_index = Dest_loc[cur_index]`, read from the
+nat region `Dest_loc`. The `nope` readback uses `O_nope ≠ O_rope` (the two
+output buffers are distinct, so the `rope` store does not clobber `O_nope`).
+Both stores carry an injectivity side condition (`hOutNopeInj` / `hOutRopeInj`)
+that each program's output offset map is injective over its tile. The kernel's
+unused head-count / head-stride arguments are kept at the signature boundary.
+`@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.DestindexCopy
 
 open VeriTile.Triton
@@ -417,5 +462,76 @@ theorem fwd_kernel_destindex_copy_kv_rope_compute_correct
     stride_o_rope_bs stride_o_rope_h stride_o_rope_d
     kv_nope_head_num kv_rope_head_num
     BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE s s' hOutRopeInj hExec idx
+
+/-- Per-kernel output summary for `_fwd_kernel_destindex_copy_kv`: the DSL
+surface lowers to the algorithm layer, and both dest-indexed scatters are
+compute-correct — every `O_nope` cell holds the matching `KV_nope` cell and
+every `O_rope` cell holds the matching `KV_rope` cell. -/
+theorem fwd_kernel_destindex_copy_kv_output_summary
+    (KV_nope KV_rope : RegionName) (Dest_loc : Region .nat) (O_nope O_rope : RegionName)
+    (stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
+      stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
+      stride_o_nope_bs stride_o_nope_h stride_o_nope_d
+      stride_o_rope_bs stride_o_rope_h stride_o_rope_d
+      kv_nope_head_num kv_rope_head_num
+      BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE : Nat)
+    (s : BlockState)
+    (hRegion : O_nope ≠ O_rope)
+    (hOutNopeInj : Function.Injective
+      (fun idx : TileIndex [1, BLOCK_DMODEL_NOPE] =>
+        outNopeAddr s Dest_loc stride_o_nope_bs stride_o_nope_d idx))
+    (hOutRopeInj : Function.Injective
+      (fun idx : TileIndex [1, BLOCK_DMODEL_ROPE] =>
+        outRopeAddr s Dest_loc stride_o_rope_bs stride_o_rope_d idx)) :
+    (∃ alg, (fwd_kernel_destindex_copy_kv KV_nope KV_rope Dest_loc O_nope O_rope
+        stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
+        stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
+        stride_o_nope_bs stride_o_nope_h stride_o_nope_d
+        stride_o_rope_bs stride_o_rope_h stride_o_rope_d
+        kv_nope_head_num kv_rope_head_num
+        BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := fwd_kernel_destindex_copy_kv KV_nope KV_rope Dest_loc O_nope O_rope
+        stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
+        stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
+        stride_o_nope_bs stride_o_nope_h stride_o_nope_d
+        stride_o_rope_bs stride_o_rope_h stride_o_rope_d
+        kv_nope_head_num kv_rope_head_num
+        BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE)
+      (initialState := s)
+      (write := fun idx : TileIndex [1, BLOCK_DMODEL_NOPE] =>
+        some (O_nope, outNopeAddr s Dest_loc stride_o_nope_bs stride_o_nope_d idx))
+      (expected := fun idx : TileIndex [1, BLOCK_DMODEL_NOPE] =>
+        s.readMem KV_nope (sourceNopeAddr s stride_kv_nope_bs stride_kv_nope_d idx)) ∧
+    ComputeCorrect.Realizes
+      (kernel := fwd_kernel_destindex_copy_kv KV_nope KV_rope Dest_loc O_nope O_rope
+        stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
+        stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
+        stride_o_nope_bs stride_o_nope_h stride_o_nope_d
+        stride_o_rope_bs stride_o_rope_h stride_o_rope_d
+        kv_nope_head_num kv_rope_head_num
+        BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE)
+      (initialState := s)
+      (write := fun idx : TileIndex [1, BLOCK_DMODEL_ROPE] =>
+        some (O_rope, outRopeAddr s Dest_loc stride_o_rope_bs stride_o_rope_d idx))
+      (expected := fun idx : TileIndex [1, BLOCK_DMODEL_ROPE] =>
+        s.readMem KV_rope (sourceRopeAddr s stride_kv_rope_bs stride_kv_rope_d idx)) := by
+  refine ⟨⟨_, rfl⟩, ?_, ?_⟩
+  · exact fwd_kernel_destindex_copy_kv_nope_compute_correct
+      KV_nope KV_rope Dest_loc O_nope O_rope
+      stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
+      stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
+      stride_o_nope_bs stride_o_nope_h stride_o_nope_d
+      stride_o_rope_bs stride_o_rope_h stride_o_rope_d
+      kv_nope_head_num kv_rope_head_num
+      BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE s hRegion hOutNopeInj
+  · exact fwd_kernel_destindex_copy_kv_rope_compute_correct
+      KV_nope KV_rope Dest_loc O_nope O_rope
+      stride_kv_nope_bs stride_kv_nope_h stride_kv_nope_d
+      stride_kv_rope_bs stride_kv_rope_h stride_kv_rope_d
+      stride_o_nope_bs stride_o_nope_h stride_o_nope_d
+      stride_o_rope_bs stride_o_rope_h stride_o_rope_d
+      kv_nope_head_num kv_rope_head_num
+      BLOCK_DMODEL_NOPE BLOCK_DMODEL_ROPE s hOutRopeInj
 
 end VeriTile.Bench.TritonBenchG.DestindexCopy

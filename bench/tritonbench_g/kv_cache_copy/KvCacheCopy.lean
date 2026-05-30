@@ -3,6 +3,61 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `kv_cache_copy` — strict per-kernel correctness
+
+`_copy_to_kvcache_seqlen1_kernel` is a decode-stage paged KV-cache scatter:
+program `(cur_seq_idx, cur_kv_head_idx)` reads `context_lengths[cur_seq_idx]`
+and the per-sequence block table to locate the destination block / slot, then
+gathers the seq-len-1 K/V rows from `K` / `V` and scatters them into the paged
+`KCache` / `VCache` for that head. It supports two cache layouts: the legacy
+`[num_blocks, num_kv_heads, block_size, head_dim]` and the split-x
+`[num_blocks, num_kv_heads, head_dim // x, block_size, x]` layout, the latter
+walked over a `static_range(HEAD_DIM // KCACHE_X)` of x-blocks.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (grid over `(num_seqs, num_kv_heads)`, the block-table /
+context-length inputs, and how the runtime composes per-program scatters into
+the paged cache buffers) is the *trusted boundary*, not a proof obligation here.
+Because the program ids are universally quantified, the per-program statement
+covers every program of the grid.
+
+## Proof architecture
+
+```
+kv_cache_copy_python_case1_all_outputs_summary         ← TOP THEOREM (old layout)
+kv_cache_copy_python_case2_all_outputs_summary         ← TOP THEOREM (split-x layout)
+  ├─ kv_cache_copy_python_case{1,2}_surface_toAlgorithm_supported   surface lowers
+  │    └─ copy_to_kvcache_seqlen1_kernel_toAlgorithm_supported
+  ├─ K-cache scatter ComputeCorrect
+  │    ├─ copy_to_kcache_seqlen1_old_layout_block_compute_correct   (case 1)
+  │    │    └─ copy_to_kcache_seqlen1_xblock_compute_correct → _xblock_correct
+  │    └─ copy_to_kcache_seqlen1_new_layout_xblock_compute_correct  (case 2, ∀ split_x)
+  ├─ V-cache scatter ComputeCorrect
+  │    └─ copy_to_vcache_seqlen1_dblock_compute_correct → _dblock_correct
+  └─ offset-injectivity lemmas
+       kv_cache_copy_python_{old,new}_kcache_offset_injective,
+       kv_cache_copy_python_vcache_offset_injective
+```
+(`kv_cache_copy_python_case{1,2}_output_summary` are abbrev aliases of the
+two top theorems.) Single-x-block lemmas `copy_to_kcache_one_xblock_*` /
+`copy_to_vcache_one_dblock_*` underlie the seqlen1 versions.
+
+## Modeling boundary
+
+Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); dtype casts are
+erased (post-erasure all dtypes unify to `ℝ`). The destination block id and
+in-block slot are data-dependent: `block_id` is gathered from `BLOCK_TABLES`
+and `offsets_in_last_block` from `context_lengths[cur_seq_idx] - 1`. The
+top theorems are stated at the **Python test shapes** (`HEAD_DIM = 64`,
+`KCACHE_X ∈ {64, 8}`, block_size 16, etc.), with explicit offset-injectivity
+lemmas (no two cells of one program alias) proved by `omega` for those shapes.
+The split-x case quantifies over every `split_x : Fin (HEAD_DIM // KCACHE_X)`.
+`@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.KvCacheCopy
 
 open VeriTile.Triton

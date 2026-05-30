@@ -3,6 +3,51 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `destindex_copy_kv2` — strict per-kernel correctness
+
+`_fwd_kernel_destindex_copy_kv` is a KV-cache scatter: program `cur_index`
+reads `Dest_loc[cur_index]` to obtain a destination row, loads the
+`[head, dim]` tile of source `K` for that program, and stores it into `Out`
+at the dest-indexed row. Unlike the kv1 variant the store mask is only
+`offs_h < head_num` (the dim axis is always in-bounds because `BLOCK_DMODEL`
+equals `head_dim`).
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_destindex_copy_kv[grid](...)`, the grid size
+`(seq_len,)`, `BLOCK_HEAD` rounding to a power of two, `BLOCK_DMODEL = head_dim`,
+and how the runtime composes the per-program scatters into one `Out` buffer) is
+the *trusted boundary*, not a proof obligation here. Because `cur_index = pid`
+is universally quantified, the per-program statement covers every program of
+the grid.
+
+## Proof architecture
+
+```
+fwd_kernel_destindex_copy_kv_output_summary       ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)                 surface lowers to the algorithm layer
+  └─ fwd_kernel_destindex_copy_kv_compute_correct ← ComputeCorrect over the masked scatter
+       └─ fwd_kernel_destindex_copy_kv_correct_of_exec   executed-state readback per cell
+            └─ fwd_kernel_destindex_copy_kv_correct      algorithm-layer readback per cell
+```
+
+The spec is a pure copy: every active (`head < head_num`) `[head, dim]` cell of
+`Out` at the dest-indexed row holds the matching cell of `K`; inactive head
+rows are preserved.
+
+## Modeling boundary
+
+Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); the `float16`
+dtype cast is erased (post-erasure all dtypes unify to `ℝ`). The destination
+row index is data-dependent: `dest_index = Dest_loc[cur_index]`, read from the
+nat region `Dest_loc`; the proofs carry an `hOutInj` side condition that the
+output offset map is injective over the tile (no two cells of one program
+alias), which the host guarantees via distinct dest rows / strides.
+`@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.DestindexCopyKv2
 
 open VeriTile.Triton
@@ -199,5 +244,36 @@ theorem fwd_kernel_destindex_copy_kv_compute_correct
     stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
     head_num BLOCK_DMODEL BLOCK_HEAD s hOutInj s' hExec idx
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `_fwd_kernel_destindex_copy_kv`: the DSL
+surface lowers to the algorithm layer, and the dest-indexed masked scatter to
+`Out` is compute-correct — every active (`head < head_num`) cell holds the
+matching cell of `K`, inactive head rows are preserved. -/
+theorem fwd_kernel_destindex_copy_kv_output_summary
+    (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      head_num BLOCK_DMODEL BLOCK_HEAD : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
+        outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)) :
+    (∃ alg, (fwd_kernel_destindex_copy_kv K Dest_loc Out
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        head_num BLOCK_DMODEL BLOCK_HEAD).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := fwd_kernel_destindex_copy_kv K Dest_loc Out
+        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+        head_num BLOCK_DMODEL BLOCK_HEAD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] => active head_num idx)
+        (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
+          (Out, outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)))
+      (expected := fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
+        s.readMem K (sourceAddr s stride_k_bs stride_k_h stride_k_d idx)) := by
+  refine ⟨⟨_, rfl⟩, ?_⟩
+  exact fwd_kernel_destindex_copy_kv_compute_correct K Dest_loc Out
+    stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+    head_num BLOCK_DMODEL BLOCK_HEAD s hOutInj
 
 end VeriTile.Bench.TritonBenchG.DestindexCopyKv2

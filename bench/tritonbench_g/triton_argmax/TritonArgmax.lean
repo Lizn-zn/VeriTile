@@ -3,6 +3,59 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `triton_argmax` — strict per-kernel correctness
+
+`triton_argmax.py` provides three `@triton.jit` kernels: `argmax_kernel_1`
+(stage 1, per-block max value + index over a flattened input), `argmax_kernel_2`
+(stage 2, picks the global argmax across the per-block partials), and the
+dim-specific `argmax_kernel` (per-row argmax over axis `dim`). Together they
+implement `torch.argmax` (flat and along a dimension).
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies. The host launch (grid sizes, the two-stage composition for
+the flat path, `block_size`/`block_mid`/`BLOCK_M`/`BLOCK_N` choices, the
+`INT64_INDEX` dtype selection, and how the runtime composes per-program writes)
+is the *trusted boundary*, not a proof obligation here. Program ids are
+universally quantified, so each per-program statement covers every program of its
+grid.
+
+## Proof architecture
+
+This is a multi-kernel port; there is no single top theorem. Each verified
+program has its own compute-facing correctness theorem:
+
+```
+argmax_kernel_1_value_compute_correct            stage-1 max value channel
+  └─ argmaxKernel1ValueSpec  (reduceMax over masked block)
+argmax_kernel_1_index_compute_correct            stage-1 argmax index channel
+  └─ argmaxKernel1IndexSpec  (argMaxDrop + pid·BLOCK_SIZE shift)
+argmax_kernel_2_compute_correct                  stage-2 global argmax gather
+  └─ argmaxKernel2Spec
+argmax_kernel_dim_single_block_compute_correct   dim-specific, single-block regime
+  └─ argmaxKernelDimSingleBlockSpec
+       └─ scatter_readback_int_prop_masked_nd     (bench-local int-channel readback)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (max values) with `Nat`/`Int` index channels;
+`@triton.autotune` is not modeled. Row reductions (`tl.max` with
+`return_indices`, `tl.argmax`) run over the full padded block, with masked lanes
+set to `⊥` matching `other=-float("inf")`. The `INT64_INDEX` branch is the
+identity at the algorithm layer; the proofs target the `INT64_INDEX=false`
+constexpr branch. The dim-specific `argmax_kernel` is proved only in the
+**single-block regime** `0 < N ≤ BLOCK_N` exercised by the Python tests, where
+the `for start_n in range(0, N, BLOCK_N)` loop runs exactly once; the multi-tile
+streaming `update`-guarded recurrence is outside this slice. Tie-breaking follows
+`return_indices_tie_break_left=True` via `argMaxDrop`. Offset injectivity /
+buffer-aliasing side conditions (e.g. `mid_value ≠ mid_index`, output offset
+injectivity) are explicit hypotheses. The specs reference `Tile.reduceMax` /
+`Tile.argMaxDrop` directly, not `VeriTile.Triton.Math.*`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.TritonArgmax
 
 open VeriTile.Triton

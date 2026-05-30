@@ -3,6 +3,63 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `softmax_flaggems` — strict per-kernel correctness
+
+`softmax_flaggems.py` is the FlagGems softmax family: forward kernels
+`softmax_kernel_inner` (softmax dim is innermost, `K=1`) and
+`softmax_kernel_non_inner` (softmax along a non-inner dim, 2D `[TILE_N, TILE_K]`
+tiles), plus the corresponding backward (VJP) kernels
+`softmax_backward_kernel_inner` and `softmax_backward_kernel_non_inner`. Each has
+a one-tile-per-CTA fast path and a multi-tile online fallback.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies. The host launch (grid sizes, `@triton.heuristics`-chosen
+`TILE_N`/`TILE_K`/`ONE_TILE_PER_CTA`/`num_warps`, the dim→`(M,N,K)` reshaping,
+and how the runtime composes per-program writes) is the *trusted boundary*, not a
+proof obligation here. Program ids are universally quantified, so each
+per-program statement covers every program of its grid.
+
+## Proof architecture
+
+This is a multi-kernel port; there is no single top theorem. Each verified
+program slice has its own compute-facing correctness theorem:
+
+```
+softmax_kernel_inner_one_tile_compute_correct                 forward, inner, 1-tile
+  └─ softmax_kernel_inner_one_tile_correct  (softmaxFlaggemsSpec)
+softmax_kernel_non_inner_one_tile_compute_correct             forward, non-inner, 1-tile
+  └─ softmax_kernel_non_inner_one_tile_correct  (softmaxFlaggemsNonInnerSpec)
+       └─ nonInnerOffset_injective
+softmax_backward_kernel_inner_one_tile_compute_correct        backward, inner, 1-tile
+  └─ softmax_backward_kernel_inner_one_tile_correct  (innerBwdSpec)
+softmax_backward_kernel_non_inner_one_tile_compute_correct    backward, non-inner, 1-tile
+  └─ softmax_backward_kernel_non_inner_one_tile_correct  (nonInnerBwdSpec)
+
+softmax_kernel_non_inner_surface  (def only; multi-tile fallback not value-verified)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` and
+`@triton.heuristics` are not modeled. **This port is partial.** Value
+correctness is proved against the **`ONE_TILE_PER_CTA=true` (single-tile)
+specializations**; the multi-tile online `m`/`z` recurrence fallbacks (and the
+full `softmax_kernel_non_inner_surface`) are not value-verified. Forward specs
+are the stable softmax (`reduceMax` over the padded tile, `exp(x - max)`,
+`reduceSum`, division), reducing along axis 0 for the non-inner 2D case and axis
+0 of the row for the inner case; masked lanes are `⊥` matching
+`other=-float("inf")`. Backward specs are the softmax VJP
+`out * (out_grad - sum(out * out_grad))` reducing along the appropriate axis.
+The `.to(output_ptr.dtype.element_ty)` cast is the identity post-erasure.
+Offset injectivity is an explicit hypothesis (`nonInnerOffset_injective` requires
+`pid_k·TILE_K + TILE_K ≤ K`; the inner backward takes injectivity as a
+hypothesis, which holds when `TILE_N ≤ N`). The specs reference
+`Tile.reduceMax` / `Tile.reduceSum` directly, not `VeriTile.Triton.Math.*`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
 
 open VeriTile.Triton

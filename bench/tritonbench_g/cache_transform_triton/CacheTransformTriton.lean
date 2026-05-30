@@ -3,6 +3,56 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `cache_transform_triton` — strict per-kernel correctness
+
+`cache_transform_triton.py` has two kernels that gather rows of a precomputed
+cos/sin rotary cache into per-token output buffers:
+* `prefill_cache_kernel` — program `(idx0, idx1)` computes a flat token `idx`,
+  derives the original sequence row `ori_seq_idx = idx - max(cumsum_lens ≤ idx)`
+  via a `tl.where` / `tl.max` reduction over `cumsum_lengths`, then copies the
+  `HIDDEN_DIM` cos/sin cache row into `cos_output` / `sin_output`, masked by
+  `idx < total_length`.
+* `decoding_cache_kernel` — program `pid` takes a `BLOCK_SIZE × HIDDEN_DIM`
+  tile, reads the source row `lengths[idx]` per token, and copies the cos/sin
+  cache rows into the outputs, masked by `idx < NUM_SEQS`.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies. The host launch (grid sizing, `cumsum`/`lengths` inputs,
+and cross-program composition into the output buffers) is the *trusted
+boundary*, not a proof obligation here. Because the program ids are universally
+quantified, each per-program statement covers every program of its grid.
+
+## Proof architecture
+
+```
+prefill_cache_kernel_output_summary               ← TOP THEOREM (prefill)
+  ├─ (toAlgorithm? = Except.ok _)                  surface lowers (incl. where/max reduction)
+  └─ prefill_cache_kernel_compute_correct          ← ComputeCorrect over cos+sin scatter
+       └─ prefill_cache_kernel_correct             algorithm-layer readback per cell
+decoding_cache_kernel_output_summary              ← TOP THEOREM (decode)
+  ├─ (toAlgorithm? = Except.ok _)                  surface lowers
+  └─ decoding_cache_kernel_compute_correct         ← ComputeCorrect over cos+sin scatter
+       └─ decoding_cache_kernel_correct            algorithm-layer readback per cell
+```
+Single-store slices (`prefill_cache_{cos,sin}_store_slice_*`,
+`decoding_cache_one_seq_block_*`, `decoding_cache_kernel_sin_*`) decompose the
+two-output proofs.
+
+## Modeling boundary
+
+Arithmetic/values are over `ℝ` (not bit-accurate IEEE float); dtype casts are
+erased. The source row index is data-dependent: prefill derives it from a
+`max(where(cumsum_lens ≤ idx, cumsum_lens, 0))` reduction (modeled as
+`reduceMaxNatDrop`, total via a `0 < N_ELEMENTS` hypothesis), decode reads it
+from `lengths`. Both top theorems require `cos_output ≠ sin_output` (the two
+output buffers are distinct, so neither store clobbers the other) and an
+`hOutInj` injectivity side condition (no two cells of one program alias).
+`@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.CacheTransformTriton
 
 open VeriTile.Triton
@@ -883,5 +933,102 @@ theorem prefill_cache_kernel_compute_correct
         simp [hActive] at hi ⊢
         exact hi
       · simp [hActive]
+
+/-- Per-kernel output summary for `prefill_cache_kernel`: the DSL surface lowers
+to the algorithm layer (including the `where`/`max` source-row reduction), and
+both masked cos/sin scatters are compute-correct — every active cell holds the
+matching cos/sin cache cell at the derived source row, inactive cells are
+preserved. -/
+theorem prefill_cache_kernel_output_summary
+    (cos_cache sin_cache : RegionName) (cumsum_lengths : Region .nat)
+    (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegion : cos_output ≠ sin_output)
+    (hN : 0 < N_ELEMENTS)
+    (hOutInj : Function.Injective
+      (fun i : Fin HIDDEN_DIM =>
+        prefillOutOffset s cache_stride hidden_stride BLOCK_SIZE i)) :
+    (∃ alg, (prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
+        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
+        BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := prefill_cache_kernel cos_cache sin_cache cumsum_lengths cos_output
+        sin_output cache_stride hidden_stride total_length HIDDEN_DIM N_ELEMENTS
+        BLOCK_SIZE)
+      (initialState := s)
+      (write := fun i : Sum (Fin HIDDEN_DIM) (Fin HIDDEN_DIM) =>
+        match i with
+        | .inl idx =>
+            if prefillActive s total_length BLOCK_SIZE then
+              some (cos_output, prefillOutOffset s cache_stride hidden_stride
+                BLOCK_SIZE idx)
+            else none
+        | .inr idx =>
+            if prefillActive s total_length BLOCK_SIZE then
+              some (sin_output, prefillOutOffset s cache_stride hidden_stride
+                BLOCK_SIZE idx)
+            else none)
+      (expected := fun i =>
+        match i with
+        | .inl idx =>
+            s.readMem cos_cache
+              (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
+                BLOCK_SIZE N_ELEMENTS idx)
+        | .inr idx =>
+            s.readMem sin_cache
+              (prefillCacheOffset s cumsum_lengths cache_stride hidden_stride
+                BLOCK_SIZE N_ELEMENTS idx)) := by
+  refine ⟨?_, ?_⟩
+  · simp [prefill_cache_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact prefill_cache_kernel_compute_correct cos_cache sin_cache cumsum_lengths
+      cos_output sin_output cache_stride hidden_stride total_length HIDDEN_DIM
+      N_ELEMENTS BLOCK_SIZE s hRegion hN hOutInj
+
+/-- Per-kernel output summary for `decoding_cache_kernel`: the DSL surface lowers
+to the algorithm layer, and both masked cos/sin scatters are compute-correct —
+every active cell holds the matching cos/sin cache cell at the `lengths`-selected
+source row, inactive cells are preserved. -/
+theorem decoding_cache_kernel_output_summary
+    (cos_cache sin_cache : RegionName) (lengths : Region .nat) (cos_output sin_output : RegionName)
+    (cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegion : cos_output ≠ sin_output)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE, HIDDEN_DIM] =>
+        decodeOutOffset s cache_stride hidden_stride BLOCK_SIZE idx)) :
+    (∃ alg, (decoding_cache_kernel cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS
+        BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := decoding_cache_kernel cos_cache sin_cache lengths cos_output
+        sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS BLOCK_SIZE)
+      (initialState := s)
+      (write := fun i : Sum (TileIndex [BLOCK_SIZE, HIDDEN_DIM])
+          (TileIndex [BLOCK_SIZE, HIDDEN_DIM]) =>
+        match i with
+        | .inl idx =>
+            if decodeActive s NUM_SEQS BLOCK_SIZE idx then
+              some (cos_output, decodeOutOffset s cache_stride hidden_stride
+                BLOCK_SIZE idx)
+            else none
+        | .inr idx =>
+            if decodeActive s NUM_SEQS BLOCK_SIZE idx then
+              some (sin_output, decodeOutOffset s cache_stride hidden_stride
+                BLOCK_SIZE idx)
+            else none)
+      (expected := fun i =>
+        match i with
+        | .inl idx =>
+            s.readMem cos_cache
+              (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)
+        | .inr idx =>
+            s.readMem sin_cache
+              (decodeCacheOffset s lengths cache_stride hidden_stride BLOCK_SIZE idx)) := by
+  refine ⟨?_, ?_⟩
+  · simp [decoding_cache_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact decoding_cache_kernel_compute_correct cos_cache sin_cache lengths
+      cos_output sin_output cache_stride hidden_stride HIDDEN_DIM NUM_SEQS
+      BLOCK_SIZE s hRegion hOutInj
 
 end VeriTile.Bench.TritonBenchG.CacheTransformTriton

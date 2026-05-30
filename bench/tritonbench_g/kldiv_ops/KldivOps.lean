@@ -3,6 +3,63 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `kldiv_ops` — strict per-kernel correctness
+
+`kldiv_ops.py` is the Liger-style KL-divergence kernel pair: forward
+`_kldiv_kernel_forward` (per row `pid`, streams `n_cols` in `BLOCK_SIZE` tiles,
+computing `y_true * (log(max(y_true, eps)) - y)` or, for `log_target`,
+`exp(y_true) * (y_true - y)`; stores per element for `reduction=none` or
+accumulates a sum otherwise) and backward `_kldiv_kernel_backward` (`-target`,
+or `-exp(target)` for `log_target`).
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies. The host launch (grid `(BT,)`, the `BLOCK_SIZE`/`num_warps`
+choices, the `reduction`-mode mapping and host-side post-reduction
+`sum/mean/batchmean`, and how the runtime composes per-program writes) is the
+*trusted boundary*, not a proof obligation here. The row id `pid` is universally
+quantified, so each per-program statement covers every row of the grid.
+
+## Proof architecture
+
+This is a multi-branch port (`log_target` × `reduction` × forward/backward);
+there is no single top theorem. Each verified constexpr branch has its own
+compute-facing correctness theorem:
+
+```
+kldiv_backward_default_compute_correct          (-target)        ← defaultSpec
+  └─ kldiv_backward_default_correct
+kldiv_backward_log_target_compute_correct       (-exp target)    ← logTargetSpec
+  └─ kldiv_backward_log_target_correct
+kldiv_forward_default_none_compute_correct      (reduction=none) ← forwardDefaultSpec
+  └─ kldiv_forward_default_none_correct
+       └─ ComparableDType.real_gt_some_some_eq_true_iff  (eps-clamp bridge)
+kldiv_forward_log_target_none_compute_correct   (reduction=none) ← forwardLogTargetSpec
+  └─ kldiv_forward_log_target_none_correct
+
+kldiv_forward_surface_toAlgorithm_supported     full surface lowers (lowering only)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` /
+`num_warps` are not modeled. **This port is partial.** The full
+reduction-mode forward surface `kldiv_forward_surface` (with eps clamp and the
+accumulated `loss_sum`) is only proved to *lower* to the algorithm layer; value
+correctness targets the `reduction=0` (none) elementwise branches plus both
+backward branches. The KL loss spec is the per-element expression
+`y_true * (log(max(y_true, eps)) - y)` / `exp(y_true) * (y_true - y)`; the
+`tl.maximum(y_true, eps)` clamp is bridged through
+`ComparableDType.real_gt_some_some_eq_true_iff` and a `max_eq_left`/`max_eq_right`
+case split. The forward-none and backward branches are modeled as one-block
+slices (one `BLOCK_SIZE` iteration after the row-pointer advance); masked lanes
+use `other=0.0` and out-of-bounds lanes (`i ≥ n_cols`) are preserved. Output
+offset injectivity is an explicit hypothesis. The specs reference `Real.log` /
+`Real.exp` directly, not `VeriTile.Triton.Math.*`.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.KldivOps
 
 open VeriTile.Triton

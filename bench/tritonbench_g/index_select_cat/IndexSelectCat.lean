@@ -3,6 +3,47 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `index_select_cat` — strict per-kernel correctness
+
+`index_select_cat_fwd_kernel` is the forward index-select/cat: for the
+`(pid0, pid1)` tile of `(index, column)` blocks it gathers the source row from
+`index_ptr`, loads `source[index[i], col]`, and stores it contiguously into
+`output[i, col]`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`index_select_cat_fwd_kernel[grid](...)`, the 2D grid
+sizes `cdiv(num_indices, BLOCK_SIZE_INDEX)` × `cdiv(num_cols, BLOCK_SIZE_COL)`,
+the index-truncation logic, and how the runtime composes per-program writes) is
+the *trusted boundary*, not a proof obligation here. Because the program ids
+`pids 0`, `pids 1` are universally quantified, the per-program statement covers
+every program of the grid.
+
+## Proof architecture
+
+```
+index_select_cat_fwd_kernel_compute_correct       ← ComputeCorrect over the contiguous store
+  └─ index_select_cat_fwd_kernel_correct_of_exec   executed-state readback per cell
+       └─ index_select_cat_fwd_kernel_correct      ← algorithm-layer readback per cell
+```
+
+The spec is the gather/store `output[i, col] = source[index[i], col]` on active
+cells, with out-of-range cells preserved — no optimizer/reduction oracle applies.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is not
+modeled. The output offset is the contiguous `i·stride0 + col·stride1`, which is
+injective in `(i, col)`; the per-cell injectivity hypothesis `hOutInj` captures
+this so a pointwise readback holds. The gathered source row offset is
+data-dependent (read from `index_ptr`) but only feeds the *value*, not the
+destination. The algorithm-layer `correct` theorem gives the full active/inactive
+case split (inactive cells preserved); the compute-facing theorem restricts to
+*active* cells (`row < num_indices` and `col < num_cols`).
+-/
+
 namespace VeriTile.Bench.TritonBenchG.IndexSelectCat
 
 open VeriTile.Triton
@@ -152,5 +193,35 @@ theorem index_select_cat_fwd_kernel_compute_correct
     num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL
     s hOutInj s' hExec idx
   simpa [hActive] using h
+
+/-- Per-kernel output summary for `index_select_cat_fwd_kernel`: the DSL surface
+lowers to the algorithm layer, and the contiguous store to `output_ptr` is
+compute-correct — under the injectivity hypothesis `hOutInj`, every active cell
+holds the gathered value `source[index[i], col]`. -/
+theorem index_select_cat_fwd_kernel_output_summary
+    (output_ptr source_ptr index_ptr : RegionName)
+    (num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL] =>
+        outputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) :
+    (∃ alg, (index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
+        num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX
+        BLOCK_SIZE_COL).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
+        num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s num_indices num_cols BLOCK_SIZE_INDEX BLOCK_SIZE_COL)
+        (fun idx => (output_ptr,
+          outputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)))
+      (expected := fun idx =>
+        s.readMem source_ptr
+          (sourceAddr s index_ptr stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) := by
+  refine ⟨?_, ?_⟩
+  · simp [index_select_cat_fwd_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact index_select_cat_fwd_kernel_compute_correct output_ptr source_ptr index_ptr
+      num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL s hOutInj
 
 end VeriTile.Bench.TritonBenchG.IndexSelectCat
