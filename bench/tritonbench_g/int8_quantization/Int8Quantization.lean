@@ -3,6 +3,56 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `int8_quantization` — strict per-kernel correctness
+
+`q_kernel_per_block_int8` / `k_kernel_per_block_int8` process a `[BLK, C]` block
+of the query / key matrix into int8: each program loads its block (row-masked by
+`offs_m < L`), computes a per-block scale `max(|x|) / 127`, divides every element
+by that scale, adds a half-ULP sign-dependent rounding bias, casts to int8, and
+stores both the quantized block and the scalar scale. The Q kernel additionally
+pre-scales `x` by `C**-0.5 * 1.44269504`.
+
+## Scope
+
+This file verifies **the Triton kernels themselves** — the per-program
+`@triton.jit` bodies for both Q and K. The host launch
+(`q_kernel_per_block_int8[grid](...)`, the 2-D grid `((L+BLK-1)//BLK, B)`, the
+host-side `view`/reshape and scale-tensor allocation, the runtime composition of
+per-program writes) is the *trusted boundary*, not a proof obligation. The two
+program ids (`off_blk`, `off_b`) are universally quantified, so the per-program
+statements cover every program of the grid.
+
+## Proof architecture
+
+```
+per_block_int8_python_case1_output_summary        ← TOP THEOREM (case 1)
+per_block_int8_python_case2_output_summary        ← TOP THEOREM (case 2)
+  ├─ per_block_int8_python_caseN_internal_summary
+  │    ├─ ..._full_surfaces_toAlgorithm_supported  full Q/K surface lowers
+  │    └─ ..._all_outputs_compute_correct          all real-valued slices
+  ├─ q/k_kernel_..._scaled_store_slice_compute_correct   value writeback
+  ├─ ..._scale_store_slice_compute_correct               scalar scale writeback
+  │    └─ per_block_int8_scaled_store_slice_correct       algorithm-layer readback
+  └─ ..._offset_injective                                no-collision lemmas
+```
+
+The value spec is the real-valued scaled store `(preScale * x) / scale`
+(`perBlockInt8ScaledSpec`); the scale spec is the stored per-block scalar.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float. The honesty point is the
+quantization tail: the proofs model the **pre-rounding scaled value**
+`(preScale * x) / scale` and the per-block scale `max(|x|) / 127`, and verify
+that the full Python surface (including the `x += 0.5 * sign(x)` rounding bias
+and the fixed-width `(x).to(tl.int8)` cast annotation) lowers through algorithm
+erasure. The bit-accurate effect of the half-ULP rounding bias and the int8
+saturating cast is **not** numerically modeled: post-erasure all dtypes unify to
+`ℝ`, so `to(tl.int8)` is the identity at the algorithm layer. `@triton.autotune`
+is not present here; the Q pre-scale constant is carried symbolically.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.Int8Quantization
 
 open VeriTile.Triton

@@ -3,6 +3,60 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `matmul_triton_autotune` — strict per-kernel correctness
+
+`matmul_kernel` is an autotuned, group-scheduled tiled matmul `C = A × B`:
+it derives `pid_m`/`pid_n` via the L2-grouping order, accumulates the
+`BLOCK_SIZE_M×BLOCK_SIZE_N` tile through a `tl.dot` loop over the `K`
+dimension, optionally applies a `leaky_relu` activation, downcasts to fp16,
+and stores the tile to `C` under a `(row<M) & (col<N)` mask.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`matmul_kernel[grid](...)`, the grid
+`cdiv(M,BLOCK_M)·cdiv(N,BLOCK_N)`, the `@triton.autotune` config selection,
+`num_warps`/`num_stages`, and how the runtime composes per-program writes into
+one buffer) is the *trusted boundary*, not a proof obligation here. Program ids
+are universally quantified, so the per-program statements cover every program
+of the grid.
+
+## Proof architecture
+
+```
+matmul_autotune_python_case1_output_summary   ← TOP THEOREMS (per Python case)
+matmul_autotune_python_case2_output_summary
+matmul_autotune_python_case3_output_summary
+  ├─ matmul_autotune_python_caseN_surface_toAlgorithm_supported  surface lowers
+  │    └─ matmul_autotune_surface_toAlgorithm_supported
+  └─ matmul_autotune_surface_output_compute_correct  ← ComputeCorrect over C store
+
+matmul_autotune_python_caseN_store_summary    ← masked store-slice summaries
+  └─ matmul_masked_output_store_slice_compute_correct ← ComputeCorrect, masked store
+       └─ matmul_masked_output_store_slice_correct     ← algorithm-layer fp16 readback
+  (+ matmul_autotune_leaky_relu_tail_surface_toAlgorithm_supported for the
+     leaky-ReLU activation tail)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point is the
+**K-loop dot-accumulator**: `accumulator = tl.dot(a, b, accumulator)` iterated
+over `cdiv(K, BLOCK_SIZE_K)`. This inner contraction is **left as a blocker** —
+the surface-level `*_output_summary` theorems characterize the C store as
+`matmulAutotuneSurfaceCell s ...` (whatever the surface accumulated) rather than
+proving it equals the mathematical sum-over-`K` product; the
+`matmul_masked_output_store_slice` proves only the masked 2D fp16 writeback
+(acc tile to C, mask `(row<M)&(col<N)`, fp16 downcast as `castFloat`) from a
+precomputed accumulator. So the dot-product value and the `leaky_relu`
+activation composition are the trusted/blocked part. `@triton.autotune`,
+`num_warps`/`num_stages`, and the autotune-config choice are not modeled; the
+group-scheduling index math is transcribed but its correctness is folded into
+the trusted surface. No output/input disjointness is assumed beyond an
+injective C offset map.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.MatmulTritonAutotune
 
 open VeriTile.Triton

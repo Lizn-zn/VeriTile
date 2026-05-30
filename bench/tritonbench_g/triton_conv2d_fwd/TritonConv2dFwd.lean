@@ -3,6 +3,54 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `triton_conv2d_fwd` — strict per-kernel correctness
+
+`conv2d_forward_kernel` is a grouped 2D convolution forward pass: each program
+covers a flattened batch/height/width tile and an output-feature tile, runs
+nested `kernel_height × kernel_width × in_feat` loops with masked input/weight
+loads and `tl.dot` accumulation (optional fp16 cast / tf32), then stores the
+`BLOCK_BHW × BLOCK_OUT_FEAT` accumulator to `Output` under a batch/feature/
+height/width bounds mask.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (the 3D grid over flattened BHW / output-feature /
+group, the scheduling, and how the runtime composes per-program writes into one
+buffer) is the *trusted boundary*, not a proof obligation here. Program ids are
+universally quantified, so the per-program statements cover every program of
+the grid.
+
+## Proof architecture
+
+```
+conv2d_output_store_slice_output_summary      ← TOP THEOREM
+  ├─ (toAlgorithm? = Except.ok _)             store slice lowers to the algorithm layer
+  └─ conv2d_output_store_slice_compute_correct  ← ComputeCorrect, masked store
+       └─ conv2d_output_store_slice_correct      ← algorithm-layer masked 2D readback
+
+conv2d_forward_surface_toAlgorithm_supported  ← full surface lowers (separately)
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point is the
+**convolution dot-accumulator**: `accum += tl.dot(input_block, weight_block)`
+nested over `kernel_height × kernel_width × in_feat` with masked loads and
+padding-aware input offsets. This accumulation (the actual convolution value)
+is **left as a blocker** — `conv2d_forward_surface_toAlgorithm_supported`
+proves only that the full surface lowers to the algorithm layer, and the
+verified `conv2d_output_store_slice` characterizes only the final masked 2D
+writeback (acc tile to Output, with the multi-clause batch/feat/height/width
+mask) from a precomputed accumulator. So the conv dot value, padding masking,
+and the fp16/tf32 cast composition are the trusted/blocked part. `num_warps`
+and grouped-launch scheduling are not modeled. The flattened BHW index
+decomposition (`//`/`%` into batch/height/width) is transcribed faithfully and
+appears in both the store offset and the mask. No output/input disjointness is
+assumed beyond an injective Output offset map.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.TritonConv2dFwd
 
 open VeriTile.Triton
@@ -365,5 +413,45 @@ theorem conv2d_output_store_slice_compute_correct
     output_width_stride acc_bhw_stride acc_feat_stride BLOCK_BHW BLOCK_OUT_FEAT
     s s' hOutInj hExec idx
   simpa [hActive] using h
+
+/-- Per-kernel output summary for the conv2d final output store: the store-slice
+DSL surface lowers to the algorithm layer, and the masked store to `Output` is
+compute-correct — every active lane holds the precomputed accumulator value and
+out-of-bounds lanes are preserved. The convolution dot-accumulator that fills
+`Acc` is the trusted boundary (see the module docstring). -/
+theorem conv2d_output_store_slice_output_summary
+    (Output Acc : RegionName)
+    (batch_dim out_height out_width OUT_GROUP_DIM
+      output_batch_stride output_out_feat_stride output_height_stride output_width_stride
+      acc_bhw_stride acc_feat_stride BLOCK_BHW BLOCK_OUT_FEAT : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (outputOffset s out_height out_width OUT_GROUP_DIM output_batch_stride
+        output_out_feat_stride output_height_stride output_width_stride
+        BLOCK_BHW BLOCK_OUT_FEAT)) :
+    (∃ alg, (conv2d_output_store_slice Output Acc batch_dim out_height out_width
+        OUT_GROUP_DIM output_batch_stride output_out_feat_stride output_height_stride
+        output_width_stride acc_bhw_stride acc_feat_stride BLOCK_BHW
+        BLOCK_OUT_FEAT).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := conv2d_output_store_slice Output Acc batch_dim out_height out_width
+        OUT_GROUP_DIM output_batch_stride output_out_feat_stride output_height_stride
+        output_width_stride acc_bhw_stride acc_feat_stride BLOCK_BHW BLOCK_OUT_FEAT)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s batch_dim out_height out_width OUT_GROUP_DIM BLOCK_BHW BLOCK_OUT_FEAT)
+        (fun idx => (Output,
+          outputOffset s out_height out_width OUT_GROUP_DIM output_batch_stride
+            output_out_feat_stride output_height_stride output_width_stride
+            BLOCK_BHW BLOCK_OUT_FEAT idx)))
+      (expected := fun idx =>
+        s.readMem Acc (accOffset s acc_bhw_stride acc_feat_stride
+          BLOCK_BHW BLOCK_OUT_FEAT idx)) := by
+  refine ⟨?_, ?_⟩
+  · simp [conv2d_output_store_slice, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  · exact conv2d_output_store_slice_compute_correct Output Acc batch_dim out_height
+      out_width OUT_GROUP_DIM output_batch_stride output_out_feat_stride
+      output_height_stride output_width_stride acc_bhw_stride acc_feat_stride
+      BLOCK_BHW BLOCK_OUT_FEAT s hOutInj
 
 end VeriTile.Bench.TritonBenchG.TritonConv2dFwd

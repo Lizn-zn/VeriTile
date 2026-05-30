@@ -3,6 +3,67 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `rope_backward_transform` — strict per-kernel correctness
+
+`_triton_rope` (here exercised on the `BACKWARD_PASS = true` branch) applies the
+rotary position embedding's backward rotation in place to fused Q/K gradient
+buffers: each program owns one row (`program_id(0)`), loads the per-row
+`cos`/`sin` half-dim vectors, and for every head rewrites the two rotary halves of
+both `q_ptr` and `k_ptr` via the sign-flipped pair `(t1*cos + t2*sin,
+t2*cos - t1*sin)` — the transpose of the forward rotation.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (the `(n_row,)` grid, the `next_power_of_2` padding choices
+`pad_n_qh`/`pad_n_kh`/`pad_hd`, `BLOCK_SIZE`, the contiguity/transpose bookkeeping
+in `rope_backward`, and how the runtime composes per-program writes into one
+buffer) is the *trusted boundary*, not a proof obligation here. Because the row
+position and per-head/per-dim indices are universally quantified, the per-program
+statement covers every program of the grid.
+
+## Proof architecture
+
+```
+rope_backward_python_backward_output_summary          ← TOP THEOREM
+  ├─ triton_rope_surface_toAlgorithm_supported         surface lowers to the algorithm layer
+  └─ triton_rope_surface_output_compute_correct        ← ComputeCorrect over Q and K stores
+       (= tritonRopeSurfaceValue spec, full-surface BACKWARD_PASS = true)
+
+supporting head-slice + per-store track:
+rope_backward_python_backward_store_summary
+  ├─ triton_rope_surface_toAlgorithm_supported
+  └─ rope_backward_python_test_shape_all_stores_compute_correct
+       (= rope_backward_python_test_shape_all_outputs_compute_correct)
+       ├─ rope_backward_q0_python_test_shape_compute_correct → rope_backward_q0_head_compute_correct → rope_backward_q0_head_correct
+       ├─ rope_backward_q1_python_test_shape_compute_correct → rope_backward_q1_head_compute_correct → rope_backward_q1_head_correct
+       ├─ rope_backward_k0_python_test_shape_compute_correct → rope_backward_k0_head_compute_correct
+       └─ rope_backward_k1_python_test_shape_compute_correct → rope_backward_k1_head_compute_correct
+```
+
+Full-kernel store disjointness/injectivity for the Python test shape is supplied
+by `qFullFirst/SecondOffset_python_test_shape_injective`,
+`kFullFirst/SecondOffset_python_test_shape_injective`, and
+`qFirstHalf_ne_qSecondHalf` / `kFirstHalf_ne_kSecondHalf`.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float; the `.to(sin_row.dtype)`
+register casts erase to the identity at the algorithm layer (post-erasure all
+dtypes unify to `ℝ`). `cos`/`sin` are modeled as **precomputed inputs** loaded
+from memory, not computed; the backward spec uses them with the
+`BACKWARD_PASS = true` sign convention. The top summary is the **full-surface**
+backward result (`triton_rope_surface_output_compute_correct`) at the Python test
+shape (`batch=2`, `seq=4`, `n_qh = n_kh = 8`, `head_dim = 16`, so Q/K row stride
+`128`, cos/sin row stride `8`); the per-store `store_summary` proves the four
+Python-observable stores (Q/K first and second halves) one head-slice at a time
+and, honestly, is **not yet lifted** from a single head slice to the full head
+tile — the `rope-head-slice-lift` step (issue #153) remains a trusted gap on that
+track. The `BACKWARD_PASS` flag is modeled by the `Bool` argument;
+`@triton.autotune` is not modeled.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RopeBackwardTransform
 
 open VeriTile.Triton

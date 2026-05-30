@@ -3,6 +3,57 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `quantize_kv_copy` — strict per-kernel correctness (grouped)
+
+`_fwd_kernel_destindex_copy_quantize_kv` is the grouped-quantization KV copy:
+program `(cur_index, cur_head)` loads `dest_index = Dest_loc[cur_index]`, loads
+the `[BLOCK_GROUP_NUM, BLOCK_GROUP_DIM]` source tile for that head (group-masked
+by `offs_g < group_size`, `other=0.0`), computes a per-group scale
+`max(|src|, axis=1) / 127` cast to `Out_scale`'s element type, divides and casts
+the quotient to int8, and stores both the quantized values (at `Out[dest_index]`)
+and the per-group scale (at `Out_scale[dest_index]`), each group-masked.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_fwd_kernel_destindex_copy_quantize_kv[grid](...)`, the
+2-D grid `(seq_len, head_num)`, the `quant_group_dim = 8` choice, the strides,
+and the runtime composition of per-program destination-indexed writes) is the
+*trusted boundary*. Both program ids (`cur_index`, `cur_head`) are universally
+quantified, so the per-program statement covers every program of the grid;
+destination-index injectivity is supplied as a no-collision lemma.
+
+## Proof architecture
+
+```
+destindex_copy_quantize_kv_group_python_output_summary    ← TOP THEOREM
+  ├─ ..._group_real_surface_toAlgorithm_supported          surface lowers to the algorithm layer
+  ├─ ..._group_surface_value_output_compute_correct        value store ComputeCorrect
+  └─ ..._group_surface_scale_output_compute_correct        scale store ComputeCorrect
+       ├─ ..._group_value_store_slice_compute_correct / _correct   per-lane value readback
+       ├─ ..._group_scale_store_slice_compute_correct / _correct   per-group scale readback
+       └─ ..._group_python_..._offset_injective                    no-collision lemmas
+```
+
+The value spec is the destination-indexed scaled store `src / scale`
+(per-group); the scale spec is the stored per-group scalar.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float. The honesty point is the
+quantization tail. The proofs model: the per-group scale `max(|src|) / 127`, the
+masked `other=0.0` load default, the grouped destination-indexed addressing, and
+the real-valued scaled value `src / scale`; the value-store slices take the
+per-group scale as a precomputed `OutScale` input and prove the masked writeback
+up to the fixed-width cast. The full surface (including the scale's `.to(...)`
+output-dtype annotation and the quotient's `(src / scale).to(tl.int8)`
+annotation) lowers through algorithm erasure, where those casts are the
+**identity over `ℝ`**. The bit-accurate effect of the scale-dtype rounding and
+the int8 saturating cast is **not** numerically modeled. `@triton.autotune` is
+not present here.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.QuantizeKvCopy
 
 open VeriTile.Triton

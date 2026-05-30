@@ -3,6 +3,49 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `dequantize_rowwise` — strict per-kernel correctness
+
+`_dequantize_rowwise` dequantizes one row per program: program `pid` loads its
+row from `x_ptr` (a `P2`-wide power-of-two arange masked by `arange < BLOCK_SIZE`),
+loads the per-row max `state_x[pid]`, and stores `max_val * x * inv_127` to
+`output_ptr`, masked by the same row mask.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_dequantize_rowwise[grid](...)`, the grid `(x.shape[0],)`
+of one program per row, the host-side `P2 = 2^ceil(log2(cols))` and `BLOCK_SIZE
+= cols` choices, the `inv_127 = 1/127` constant, and the runtime composition of
+per-program writes) is the *trusted boundary*. `pid` is universally quantified,
+so the per-program statement covers every row of the grid.
+
+## Proof architecture
+
+```
+dequantize_rowwise_python_caseN_output_summary    ← TOP THEOREMS (4 cases)
+  ├─ (toAlgorithm? = Except.ok _)                  surface lowers to the algorithm layer
+  └─ dequantize_rowwise_python_caseN_compute_correct
+       └─ dequantize_rowwise_kernel_compute_correct   ComputeCorrect over the masked store
+            └─ dequantize_rowwise_kernel_correct       algorithm-layer readback per lane
+```
+
+The four cases mirror the Python test shapes. The spec is the elementwise
+dequantize `state_x[pid] * x * inv_127` (`dequantizeRowwiseSpec`); the active
+mask is `arange < BLOCK_SIZE` (the kernel's `n_elements` argument is unused by
+the body and kept as `_n_elements`).
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float. The quantization semantics
+here are the **dequantization direction only**: `x` is the loaded int8 value
+taken as a real number and the output is the exact real product `max_val * x *
+inv_127`. There is no rounding or int cast on the output side, so this kernel has
+no `to(tl.int8)` / `llrint` blocker and the full surface lowers through algorithm
+erasure. The output dtype is `float16` upstream, modeled as `ℝ` (post-erasure all
+dtypes unify). `@triton.autotune` is not present here.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.DequantizeRowwise
 
 open VeriTile.Triton

@@ -3,6 +3,60 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `iv_dependent_matmul` — strict per-kernel correctness
+
+`iv_dependent_matmul_kernel` is a tiled matmul `C = A × B` whose A/B pointer
+updates depend on a string constexpr `type` selecting one of five
+induction-variable scheduling modes (`pre_load`, `post_load`,
+`post_pre_mixed`, `post_load_two_iters`, `post_load_three_iters`). Each program
+derives `pid_m`/`pid_n`, accumulates the `BLOCK_SIZE_M×BLOCK_SIZE_N` tile via a
+`tl.dot` loop over `K` (with mode-specific pointer prefetching), downcasts to
+fp16, and stores under a `(row<M) & (col<N)` mask.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`iv_dependent_matmul_kernel[grid](...)`, the grid,
+scheduling, and how the runtime composes per-program writes into one buffer) is
+the *trusted boundary*, not a proof obligation here. Program ids are
+universally quantified, so the per-program statements cover every program of
+the grid.
+
+## Proof architecture
+
+```
+iv_dependent_matmul_python_test_shape_output_summary  ← TOP THEOREM
+  ├─ iv_dependent_matmul_python_test_shape_surfaces_prop  (all 5 modes lower)
+  │    └─ iv_dependent_matmul_python_test_<mode>_surface_toAlgorithm_supported
+  │         └─ iv_dependent_matmul_<mode>_surface_toAlgorithm_supported
+  └─ iv_dependent_matmul_surface_output_compute_correct  ← ComputeCorrect, per mode
+
+iv_dependent_matmul_python_test_shape_store_summary   ← masked store-slice summary
+  └─ iv_dependent_matmul_python_test_shape_masked_output_store_compute_correct
+       └─ iv_dependent_matmul_masked_output_store_slice_compute_correct
+            └─ iv_dependent_matmul_masked_output_store_slice_correct  ← fp16 readback
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point is the
+**K-loop dot-accumulator**: `accumulator += tl.dot(a, b)` iterated over
+`cdiv(K, BLOCK_SIZE_K)`, with each mode mutating the A/B pointers differently.
+This inner contraction (and the equivalence of the five scheduling modes) is
+**left as a blocker** — the surface-level `*_output_summary` theorems
+characterize the C store per mode as `ivDependentMatmulSurfaceCell ... s C ...`
+(whatever each surface accumulated) rather than proving it equals the
+mathematical sum-over-`K` product or proving the five modes agree. The
+`iv_dependent_matmul_masked_output_store_slice` proves only the masked 2D fp16
+writeback (acc tile to C, mask `(row<M)&(col<N)`, fp16 downcast as `castFloat`)
+from a precomputed accumulator. So the dot-product value and the
+scheduling-mode equivalence are the trusted/blocked part. The string-valued
+`type` branch is split into five separate surface defs rather than encoded as a
+runtime string; `@triton.autotune`/`num_warps` are not modeled. No output/input
+disjointness is assumed beyond an injective C offset map.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.IvDependentMatmul
 
 open VeriTile.Triton

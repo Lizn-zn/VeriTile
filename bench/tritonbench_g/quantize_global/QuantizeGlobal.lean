@@ -3,6 +3,52 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `quantize_global` — strict per-kernel correctness (blocked tail)
+
+`_quantize_global` quantizes a flat tensor to int8: program `pid` loads its block
+`[pid·BLOCK_SIZE, (pid+1)·BLOCK_SIZE)` of `x`, loads the scalar `absmax_inv`, and
+stores `llrint(127.0 * (x * absmax_inv))` to `output_ptr`, masked by
+`offsets < n_elements`. The host computes `absmax = |x|.max()` and
+`absmax_inv = 1/absmax` before the launch.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_quantize_global[grid](...)`, the grid
+`cdiv(n_elements, BLOCK_SIZE)`, the PyTorch-side `absmax` reduction returned
+alongside the output, and the runtime composition of per-program writes) is the
+*trusted boundary*. `pid` is universally quantified, so the per-program statement
+covers every program of the grid.
+
+## Proof architecture
+
+```
+quantize_global_python_n<N>_bs<B>_blocked_output_summary   ← TOP THEOREMS (7 shapes)
+  ├─ quantize_global_surface_toAlgorithm?_blocked          full surface does NOT lower
+  └─ quantize_global_python_n<N>_bs<B>_compute_correct
+       └─ quantize_global_scaled_store_slice_compute_correct   ComputeCorrect over the store
+            └─ quantize_global_scaled_store_slice_correct       algorithm-layer readback per lane
+```
+
+The spec is the pre-rounding scaled value `127.0 * (x * absmax_inv)`
+(`quantizeGlobalScaledSpec`); seven `(n_elements, BLOCK_SIZE)` shapes mirror the
+`@triton.autotune` configs and Python test sizes.
+
+## Modeling boundary
+
+Arithmetic is over `ℝ`, not bit-accurate IEEE float. This is the **honestly
+blocked** quantization case: the faithful Python surface contains CUDA
+`tl.extra.cuda.libdevice.llrint` plus the int8 store, and that surface is proven
+*not* to lower through algorithm projection
+(`quantize_global_surface_toAlgorithm?_blocked` returns `Except.error`). What is
+verified is the real-valued pre-rounding store slice — the masked addressing, the
+scalar `absmax_inv` load, and the value `127.0 * (x * absmax_inv)` — exactly up
+to the `llrint` rounding / int8 cast, which are left as the blocker and are
+**not** numerically modeled. `@triton.autotune` is not modeled; representative
+configs are instantiated as separate theorems.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.QuantizeGlobal
 
 open VeriTile.Triton

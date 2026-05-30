@@ -203,6 +203,7 @@ bench/tritonbench_g/token_softmax_llama/TokenSoftmaxLlama.lean	token_softmax_lla
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_preprocess_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_python_test_shape_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_store_slice_output_summary	public_summary_with_proof_gap	matmul-dot-accumulator	#148	precomputed
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/vector_addition/VectorAddition.lean	add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/vector_addition_custom/VectorAdditionCustom.lean	add_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context

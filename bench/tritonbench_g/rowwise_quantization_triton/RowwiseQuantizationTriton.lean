@@ -3,6 +3,56 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `rowwise_quantization_triton` — strict per-kernel correctness
+
+`_quantize_rowwise` is a per-row int8 quantizer: program `pid` loads one row of
+`x` (a `P2`-wide tile masked to the first `BLOCK_SIZE` lanes), computes
+`max_val = max(|x|)` over the row, rounds `127.0 · (x / max_val)` to int8 via
+CUDA `llrint`, stores the row to `output_ptr`, and writes `max_val` to
+`output_maxs + pid`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`_quantize_rowwise[grid](...)`, the grid size
+`x.shape[0]`, the host-side `BLOCK_SIZE`/`P2` choice, and how the runtime
+composes per-program writes into one buffer) is the *trusted boundary*, not a
+proof obligation here. Because `pid` is universally quantified over `s`, the
+per-program statement covers every program of the grid.
+
+## Proof architecture
+
+```
+quantize_rowwise_python_case{1,3}_blocked_output_summary       ← TOP THEOREMS
+  ├─ quantize_rowwise_real_surface_toAlgorithm_blocked         faithful surface blocked at erasure (llrint)
+  └─ quantize_rowwise_python_case{1,3}_all_outputs_compute_correct
+       ├─ quantize_rowwise_python_case{1,3}_scaled_output_compute_correct  scaled row output
+       │    └─ quantize_rowwise_scaled_store_slice_compute_correct   ← ComputeCorrect over the masked row store
+       │         └─ quantize_rowwise_scaled_store_slice_correct       ← algorithm-layer readback per lane
+       └─ quantize_rowwise_python_output_maxs_compute_correct    per-row max writeback
+            └─ quantize_rowwise_max_store_slice_compute_correct  ← ComputeCorrect over the output_maxs scalar store
+```
+
+The pre-rounding spec is `scale127 · (x i / max_val)` per lane
+(`quantizeRowwiseScaledSpec`) and `max_val` for the scalar
+(`quantizeRowwiseMaxSpec`).
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` /
+`num_warps` / `num_stages` are not modeled. The **faithful surface**
+(`quantize_rowwise_real_surface`) is *blocked* at algorithm erasure: the CUDA
+`tl.extra.cuda.libdevice.llrint` rounding and int8 cast are outside VeriTile's
+real-tile arithmetic layer, so `toAlgorithm?` returns `Except.error`. What is
+positively verified is the pre-rounding *scaled-store slice*: starting from a
+precomputed per-row maximum `MaxVals`, the masked row writeback of
+`scale127 · (x / max_val)`, plus the `output_maxs` scalar writeback. The
+`max(|x|)` reduction is therefore taken as the precomputed `MaxVals` input here,
+and the `llrint` rounding / int8 cast is the honest blocker recorded in each
+summary.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.RowwiseQuantizationTriton
 
 open VeriTile.Triton

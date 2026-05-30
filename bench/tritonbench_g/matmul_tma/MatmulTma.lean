@@ -3,6 +3,59 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 
+/-!
+# `matmul_tma` — strict per-kernel correctness
+
+`matmul_tma_load_store` is a single-tile matmul that uses TMA block pointers:
+it builds `tl.make_block_ptr` views of `A`, `B`, `C`, loads the `BLOCK_M×BLOCK_K`
+and `BLOCK_K×BLOCK_N` tiles, computes `tl.dot(a, b)`, optionally downcasts the
+result to fp16, and stores the `BLOCK_M×BLOCK_N` tile back into `C`.
+
+## Scope
+
+This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
+body. The host launch (`matmul_tma_load_store[(1, 1)](...)`, the grid/CTA
+scheduling, `num_warps`/`num_ctas`, and how the runtime composes per-program
+writes into one buffer) is the *trusted boundary*, not a proof obligation here.
+Program ids are universally quantified, so the per-program statements cover
+every program of the grid.
+
+## Proof architecture
+
+```
+matmul_tma_python_f32_output_summary          ← TOP THEOREM (f32 branch)
+matmul_tma_python_f16_output_summary          ← TOP THEOREM (fp16 branch)
+matmul_tma_python_f32_branch_output_summary   ← TOP THEOREM (any transpose, f32)
+matmul_tma_python_f16_branch_output_summary   ← TOP THEOREM (any transpose, fp16)
+  ├─ (toAlgorithm? = Except.ok _)             surface lowers to the algorithm layer
+  │    via matmul_tma_load_store_surface_toAlgorithm_supported
+  └─ matmul_tma_surface_output_compute_correct  ← ComputeCorrect over the C store
+
+matmul_tma_python_f32_store_summary           ← store-slice summaries (f32 / fp16)
+matmul_tma_python_f16_store_summary
+  └─ matmul_output_store_slice_compute_correct  ← ComputeCorrect for the 2D store
+       └─ matmul_output_store_slice_correct      ← algorithm-layer 2D readback
+  └─ matmul_output_store_f16_slice_compute_correct
+       └─ matmul_output_store_f16_slice_correct  ← fp16 memcell readback
+```
+
+## Modeling boundary
+
+Arithmetic is over `ℝ` (not bit-accurate IEEE float). The honesty point for a
+matmul is the **K-loop dot-accumulator**: here the single tile is computed by
+`tl.dot(a, b)`, and the inner contraction over `K` is **left as a blocker** —
+the surface-level `matmul_tma_*_output_summary` theorems characterize the C
+store as `s'.mem C ...` (whatever the surface computed) rather than proving it
+equals the mathematical sum-over-`K` dot product; the `matmul_output_store_*`
+slices prove only the 2D writeback (acc tile to C, with the fp16 downcast as a
+`Op.castFloat`) given a precomputed accumulator. So the dot-product value
+itself is the trusted/blocked part. TMA block-pointer `order` tuples are
+scheduling metadata erased at the surface; `@triton.autotune`/`num_warps`/
+`num_ctas` are not modeled. The fp16 downcast is modeled as `castFloat` (real
+to fp16 store); no output/input disjointness is assumed beyond an injective C
+offset map.
+-/
+
 namespace VeriTile.Bench.TritonBenchG.MatmulTma
 
 open VeriTile.Triton
