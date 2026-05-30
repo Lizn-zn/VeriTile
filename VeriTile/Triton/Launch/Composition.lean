@@ -183,6 +183,27 @@ theorem writeWithin {k : Kernel} {g : Grid} {s sFinal : BlockState}
 
 end GridLaunchedOrdinary
 
+/-- Whole-grid single-memory output correctness.
+
+The launcher-facing analogue of `ComputeCorrect.Realizes`, lifted from a single
+program to the merged whole-grid memory. `LaunchCorrect k g s footprint write
+expected` holds when, for *every* ordinary disjoint launch of `k` over grid `g`
+from initial state `s` whose per-program write footprints match `footprint`,
+the single merged final memory realizes `expected` at every active output cell
+selected by `write` (a `WriteMap`-style partial address map indexed by `ι`).
+
+Quantifying over all launch witnesses `sFinal` makes this the schedule-agnostic
+contract: any valid concurrent ordering yields the same characterized memory.
+The `footprint` hypothesis pins each program's writes, which is what lets the
+merge observation locate the writer of each output cell. -/
+def LaunchCorrect {ι : Type} (k : Kernel) (g : Grid) (s : BlockState)
+    (footprint : GridIndex g → WriteFootprint)
+    (write : ι → Option MemCellAddr) (expected : ι → ℝ) : Prop :=
+  ∀ sFinal (hL : Kernel.GridLaunchedOrdinary k g s sFinal),
+    (∀ idx, (hL.frames idx).writes = footprint idx) →
+    ∀ (i : ι) (addr : MemCellAddr), write i = some addr →
+      sFinal.readMem addr.1 addr.2 = expected i
+
 end Kernel
 
 end VeriTile.Triton
