@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Optimizer
 
 namespace VeriTile.Bench.TritonBenchG.AdamUpdateTriton
 
@@ -70,15 +71,12 @@ def update_fn_kernel_exp_avg_slice
   tl.store(offset_exp_avg_ptr, exp_avg, mask=mask)
 }
 
-def outOffset (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pid * BLOCK_SIZE + i.val
-
 noncomputable def expAvgSpec
     (s : BlockState) (grad_ptr exp_avg_ptr : RegionName)
     (beta2 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  (s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) -
-      s.readMem grad_ptr (outOffset s BLOCK_SIZE i)) *
-    beta2 + s.readMem grad_ptr (outOffset s BLOCK_SIZE i)
+  (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i) -
+      s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) *
+    beta2 + s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)
 
 /-- Algorithm-layer correctness for the `exp_avg` update slice. -/
 theorem update_fn_kernel_exp_avg_slice_correct
@@ -88,21 +86,21 @@ theorem update_fn_kernel_exp_avg_slice_correct
     (hExec : exec (update_fn_kernel_exp_avg_slice grad_ptr exp_avg_ptr
         beta2 n_elements BLOCK_SIZE) s = some s') :
     ∀ i : Fin BLOCK_SIZE,
-      s'.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) =
-        if outOffset s BLOCK_SIZE i < n_elements then
+      s'.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i) =
+        if linearOffset s BLOCK_SIZE i < n_elements then
           expAvgSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i
-        else s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) := by
+        else s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, update_fn_kernel_exp_avg_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
           Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
           NumericDType.sub, ComparableDType.lt] at hExec
     subst s'
-    simp only [outOffset]
+    simp only [linearOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : s.pids 0 * BLOCK_SIZE + i.val < n_elements
-    · simp [hi, expAvgSpec, outOffset]
+    · simp [hi, expAvgSpec, linearOffset]
     · simp [hi]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
@@ -116,8 +114,8 @@ theorem update_fn_kernel_exp_avg_slice_compute_correct
         beta2 n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (exp_avg_ptr, outOffset s BLOCK_SIZE i)))
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i => expAvgSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
@@ -140,16 +138,16 @@ buffers). -/
 noncomputable def expAvgFullSpec
     (s : BlockState) (grad_ptr exp_avg_ptr : RegionName)
     (beta2 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  (s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) -
-      s.readMem grad_ptr (outOffset s BLOCK_SIZE i)) *
-    beta2 + s.readMem grad_ptr (outOffset s BLOCK_SIZE i)
+  (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i) -
+      s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) *
+    beta2 + s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)
 
 noncomputable def pFullSpec
     (s : BlockState) (p_ptr grad_ptr exp_avg_ptr : RegionName)
     (lr wd beta1 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
   by
     classical
-    let off := outOffset s BLOCK_SIZE i
+    let off := linearOffset s BLOCK_SIZE i
     let pTile : TileCarrier TileDType.real := some (s.readMem p_ptr off)
     let gradTile : TileCarrier TileDType.real := some (s.readMem grad_ptr off)
     let expAvgTile : TileCarrier TileDType.real := some (s.readMem exp_avg_ptr off)
@@ -169,6 +167,60 @@ noncomputable def pFullSpec
           else
             some lr))
 
+/-! ### Bridge to the reusable Lion oracle (`VeriTile.Triton.Math.Optimizer`)
+
+The transcription specs above mirror the kernel's realized arithmetic
+(`β·(m − g) + g` momentum, branch-based sign step). These bridges connect them
+to the layout-free Lion definitions so the public correctness statement is
+against the standard optimizer oracle, not a kernel-shaped restatement. -/
+
+/-- The `exp_avg` transcription spec is the Lion momentum EMA. -/
+theorem expAvgFullSpec_eq_lionMomentum
+    (s : BlockState) (grad_ptr exp_avg_ptr : RegionName)
+    (beta2 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) :
+    expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i =
+      TiledOptimizer.lionMomentum
+        (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) beta2 := by
+  unfold expAvgFullSpec TiledOptimizer.lionMomentum
+  ring
+
+/-- The `p` transcription spec is the Lion decoupled-weight-decay parameter
+update. -/
+theorem pFullSpec_eq_lionParam
+    (s : BlockState) (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) :
+    pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i =
+      TiledOptimizer.lionParam
+        (s.readMem p_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) lr wd beta1 := by
+  classical
+  unfold pFullSpec TiledOptimizer.lionParam TiledOptimizer.lionUpdateDir
+  simp only [Option.map₂, Option.map, Option.bind]
+  set m := s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i) with hm
+  set g := s.readMem grad_ptr (linearOffset s BLOCK_SIZE i) with hg
+  set p := s.readMem p_ptr (linearOffset s BLOCK_SIZE i) with hp
+  -- the kernel's factored direction `(m − g)·β₁ + g` is the oracle direction.
+  have heq : (m - g) * beta1 + g = beta1 * m + (1 - beta1) * g := by ring
+  split_ifs with c1 c2
+  · -- direction = 0
+    have hd : beta1 * m + (1 - beta1) * g = 0 := heq ▸ Option.some_inj.mp c1
+    simp only [WithBot.some_eq_coe, WithBot.unbotD_coe, hd, Real.sign_zero]
+    ring
+  · -- direction > 0
+    have hd : (0 : ℝ) < beta1 * m + (1 - beta1) * g := heq ▸ WithBot.coe_lt_coe.mp c2
+    simp only [WithBot.some_eq_coe, WithBot.unbotD_coe, Real.sign_of_pos hd]
+    norm_num
+    ring
+  · -- direction < 0
+    have hne : (m - g) * beta1 + g ≠ 0 := fun hc => c1 (congrArg some hc)
+    have hnp : ¬ (0 : ℝ) < (m - g) * beta1 + g := fun hc => c2 (WithBot.coe_lt_coe.mpr hc)
+    have hd : beta1 * m + (1 - beta1) * g < 0 :=
+      heq ▸ lt_of_le_of_ne (not_lt.mp hnp) hne
+    simp only [WithBot.some_eq_coe, WithBot.unbotD_coe, Real.sign_of_neg hd]
+    ring
+
 /-- Algorithm-layer correctness for the `exp_avg` store of the full
 `update_fn_kernel`. -/
 theorem update_fn_kernel_exp_avg_correct
@@ -179,10 +231,10 @@ theorem update_fn_kernel_exp_avg_correct
     (hExec : exec (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE) s = some s') :
     ∀ i : Fin BLOCK_SIZE,
-      s'.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) =
-        if outOffset s BLOCK_SIZE i < n_elements then
+      s'.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i) =
+        if linearOffset s BLOCK_SIZE i < n_elements then
           expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i
-        else s.readMem exp_avg_ptr (outOffset s BLOCK_SIZE i) := by
+        else s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
@@ -190,13 +242,13 @@ theorem update_fn_kernel_exp_avg_correct
           NumericDType.add, NumericDType.mul, NumericDType.sub,
           ComparableDType.lt, ComparableDType.gt, ComparableDType.ne] at hExec
     subst s'
-    simp only [outOffset]
+    simp only [linearOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
           p_ptr _ _ _ _ _ _ _ hRegions]
     by_cases hi : s.pids 0 * BLOCK_SIZE + i.val < n_elements
-    · simp [hi, expAvgFullSpec, outOffset]
+    · simp [hi, expAvgFullSpec, linearOffset]
     · simp [hi]
   · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
 
@@ -212,8 +264,8 @@ theorem update_fn_kernel_exp_avg_compute_correct
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (exp_avg_ptr, outOffset s BLOCK_SIZE i)))
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i => expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
@@ -235,10 +287,10 @@ theorem update_fn_kernel_p_correct
     (hExec : exec (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
         lr wd beta1 beta2 n_elements BLOCK_SIZE) s = some s') :
     ∀ i : Fin BLOCK_SIZE,
-      s'.readMem p_ptr (outOffset s BLOCK_SIZE i) =
-        if outOffset s BLOCK_SIZE i < n_elements then
+      s'.readMem p_ptr (linearOffset s BLOCK_SIZE i) =
+        if linearOffset s BLOCK_SIZE i < n_elements then
           pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i
-        else s.readMem p_ptr (outOffset s BLOCK_SIZE i) := by
+        else s.readMem p_ptr (linearOffset s BLOCK_SIZE i) := by
   intro i
   by_cases hB : 0 < BLOCK_SIZE
   · simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
@@ -248,12 +300,12 @@ theorem update_fn_kernel_p_correct
     subst s'
     rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
           exp_avg_ptr _ _ _ _ _ _ _ hRegions]
-    simp only [outOffset]
+    simp only [linearOffset]
     rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
           (BlockState.tileIndex1d_base_offset_injective _) (i, PUnit.unit)]
     by_cases hi : s.pids 0 * BLOCK_SIZE + i.val < n_elements
     · unfold pFullSpec
-      simp only [outOffset, hi, if_true, Option.map, Option.map₂,
+      simp only [linearOffset, hi, if_true, Option.map, Option.map₂,
         BlockState.pid_eq]
       rfl
     · simp [hi]
@@ -271,8 +323,8 @@ theorem update_fn_kernel_p_compute_correct
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (p_ptr, outOffset s BLOCK_SIZE i)))
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i =>
         pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
@@ -298,8 +350,8 @@ theorem update_fn_kernel_all_outputs_compute_correct
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (p_ptr, outOffset s BLOCK_SIZE i)))
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i =>
         pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
     (ComputeCorrect.Realizes
@@ -307,8 +359,8 @@ theorem update_fn_kernel_all_outputs_compute_correct
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (exp_avg_ptr, outOffset s BLOCK_SIZE i)))
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i =>
         expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i)) := by
   constructor
@@ -333,8 +385,8 @@ theorem update_fn_kernel_output_summary
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (p_ptr, outOffset s BLOCK_SIZE i)))
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i =>
         pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
     (ComputeCorrect.Realizes
@@ -342,8 +394,8 @@ theorem update_fn_kernel_output_summary
         lr wd beta1 beta2 n_elements BLOCK_SIZE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => outOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (exp_avg_ptr, outOffset s BLOCK_SIZE i)))
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
       (expected := fun i =>
         expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i))) := by
   constructor
@@ -351,5 +403,56 @@ theorem update_fn_kernel_output_summary
       exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE
   · exact update_fn_kernel_all_outputs_compute_correct p_ptr grad_ptr
       exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE s hRegions
+
+/-- Oracle-facing summary: both Python-observable stores of `update_fn` are
+compute-correct against the reusable Lion optimizer oracle in
+`VeriTile.Triton.Math.Optimizer` — `p_ptr` realizes `lionParam` and
+`exp_avg_ptr` realizes `lionMomentum` — under the disjoint-output-region side
+condition. -/
+theorem update_fn_kernel_lion_outputs_compute_correct
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (s : BlockState)
+    (hRegions : p_ptr ≠ exp_avg_ptr) :
+    (ComputeCorrect.Realizes
+      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
+      (expected := fun i => TiledOptimizer.lionParam
+        (s.readMem p_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) lr wd beta1)) ∧
+    (ComputeCorrect.Realizes
+      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
+        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
+      (expected := fun i => TiledOptimizer.lionMomentum
+        (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) beta2)) := by
+  have h := update_fn_kernel_all_outputs_compute_correct p_ptr grad_ptr
+    exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE s hRegions
+  have hp : (fun i => pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1
+        BLOCK_SIZE i) =
+      (fun i => TiledOptimizer.lionParam
+        (s.readMem p_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) lr wd beta1) := by
+    funext i
+    exact pFullSpec_eq_lionParam s p_ptr grad_ptr exp_avg_ptr lr wd beta1
+      BLOCK_SIZE i
+  have he : (fun i => expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i) =
+      (fun i => TiledOptimizer.lionMomentum
+        (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i))
+        (s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) beta2) := by
+    funext i
+    exact expAvgFullSpec_eq_lionMomentum s grad_ptr exp_avg_ptr beta2
+      BLOCK_SIZE i
+  exact ⟨hp ▸ h.1, he ▸ h.2⟩
 
 end VeriTile.Bench.TritonBenchG.AdamUpdateTriton
