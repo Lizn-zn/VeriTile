@@ -590,4 +590,144 @@ theorem update_fn_kernel_launchCorrect
         hcover hL hFrames k hk).2
     · rw [if_neg hk] at hwrite; exact absurd hwrite (by simp)
 
+/-! ## Unconditional whole-grid launch
+
+The relational results above take the launch witness as a hypothesis. This
+section *constructs* it: progress (`exec` always succeeds), the per-program
+frame, and pairwise disjointness, yielding an unconditional whole-grid theorem
+with no launch/footprint side hypotheses. -/
+
+/-- Progress: `update_fn_kernel` always executes to a defined state. -/
+theorem adam_exec_isSome
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) (s : BlockState) :
+    (exec (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE) s).isSome := by
+  simp [exec, update_fn_kernel, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt, ComparableDType.gt, ComparableDType.ne]
+
+/-- Distinct program blocks address distinct cells: `p₁·B + i = p₂·B + j` with
+`i, j < B` forces `p₁ = p₂`. -/
+theorem block_offset_inj (B : Nat) (hB : 0 < B) {p1 p2 i j : Nat}
+    (hi : i < B) (hj : j < B) (h : p1 * B + i = p2 * B + j) : p1 = p2 := by
+  have hd : (p1 * B + i) / B = (p2 * B + j) / B := by rw [h]
+  rwa [Nat.add_comm (p1 * B) i, Nat.mul_comm p1 B, Nat.add_mul_div_left _ _ hB,
+       Nat.div_eq_of_lt hi, Nat.zero_add, Nat.add_comm (p2 * B) j,
+       Nat.mul_comm p2 B, Nat.add_mul_div_left _ _ hB, Nat.div_eq_of_lt hj,
+       Nat.zero_add] at hd
+
+/-- The per-program execution frame for `update_fn_kernel`. -/
+noncomputable def adamFrame
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE m : Nat)
+    (hRegions : p_ptr ≠ exp_avg_ptr) (s : BlockState)
+    (idx : GridIndex (adamGrid m)) :
+    Kernel.ExecFrame
+      (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel
+      (s.withGridIndex idx) :=
+  { final := (exec (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE) (s.withGridIndex idx)).get
+        (adam_exec_isSome p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+          n_elements BLOCK_SIZE (s.withGridIndex idx))
+    writes := adamWritesFP p_ptr exp_avg_ptr n_elements BLOCK_SIZE
+        (s.withGridIndex idx)
+    h_exec := (Option.some_get _).symm
+    h_writeWithin :=
+      adam_writeWithin p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+        n_elements BLOCK_SIZE hRegions (s.withGridIndex idx) _
+        (Option.some_get _).symm }
+
+/-- A 1-D grid index is determined by its single axis-0 value. -/
+theorem adamGrid_idx_ext {m : Nat} {idx₁ idx₂ : GridIndex (adamGrid m)}
+    (h : (idx₁ ⟨0, by simp [Grid.rank]⟩) = (idx₂ ⟨0, by simp [Grid.rank]⟩)) :
+    idx₁ = idx₂ := by
+  funext a
+  have ha : a = ⟨0, by simp [Grid.rank]⟩ := by
+    apply Fin.ext
+    have hlt := a.isLt
+    have hr : (adamGrid m).rank = 1 := rfl
+    omega
+  subst ha; exact h
+
+/-- Two distinct programs write disjoint cells. -/
+theorem adamWritesFP_disjoint
+    (p_ptr exp_avg_ptr : RegionName) (n_elements BLOCK_SIZE : Nat)
+    (hRegions : p_ptr ≠ exp_avg_ptr) (hB : 0 < BLOCK_SIZE)
+    {s₁ s₂ : BlockState} (hpid : s₁.pid ≠ s₂.pid) :
+    WriteFootprint.disjoint
+      (adamWritesFP p_ptr exp_avg_ptr n_elements BLOCK_SIZE s₁)
+      (adamWritesFP p_ptr exp_avg_ptr n_elements BLOCK_SIZE s₂) := by
+  rintro ⟨r, o⟩ h₁ h₂
+  unfold adamWritesFP WriteFootprint.union WriteFootprint.activeTileImage at h₁ h₂
+  rcases h₁ with ⟨hr₁, i₁, _, ho₁⟩ | ⟨hr₁, i₁, _, ho₁⟩ <;>
+    rcases h₂ with ⟨hr₂, i₂, _, ho₂⟩ | ⟨hr₂, i₂, _, ho₂⟩
+  · exact hpid (block_offset_inj BLOCK_SIZE hB i₁.1.isLt i₂.1.isLt (ho₁.trans ho₂.symm))
+  · exact hRegions (hr₁.symm.trans hr₂)
+  · exact hRegions (hr₂.symm.trans hr₁)
+  · exact hpid (block_offset_inj BLOCK_SIZE hB i₁.1.isLt i₂.1.isLt (ho₁.trans ho₂.symm))
+
+/-- Pairwise write-disjointness of all program frames. -/
+theorem adamFrames_disjoint
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE m : Nat)
+    (hB : 0 < BLOCK_SIZE) (hRegions : p_ptr ≠ exp_avg_ptr) (s : BlockState) :
+    Kernel.GridWritesDisjoint
+      (fun idx => adamFrame p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+        n_elements BLOCK_SIZE m hRegions s idx) := by
+  intro idx₁ idx₂ hne
+  apply adamWritesFP_disjoint p_ptr exp_avg_ptr n_elements BLOCK_SIZE hRegions hB
+  -- distinct grid indices have distinct program ids
+  rw [BlockState.withGridIndex_pid _ _ (by simp [Grid.rank]),
+      BlockState.withGridIndex_pid _ _ (by simp [Grid.rank])]
+  intro hval
+  exact hne (adamGrid_idx_ext (Fin.ext hval))
+
+/-- The constructed disjoint ordinary launch of `update_fn_kernel`. -/
+noncomputable def adamLaunch
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE m : Nat)
+    (hB : 0 < BLOCK_SIZE) (hRegions : p_ptr ≠ exp_avg_ptr) (s : BlockState) :
+    Kernel.GridLaunchedOrdinary
+      (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+        lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgKernel (adamGrid m) s
+      (Kernel.mergeFrames (adamGrid m) s
+        (fun idx => adamFrame p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+          n_elements BLOCK_SIZE m hRegions s idx)) :=
+  { frames := fun idx => adamFrame p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+      n_elements BLOCK_SIZE m hRegions s idx
+    h_disjoint := adamFrames_disjoint p_ptr grad_ptr exp_avg_ptr
+      lr wd beta1 beta2 n_elements BLOCK_SIZE m hB hRegions s
+    h_final := rfl }
+
+/-- **Unconditional whole-grid single-memory correctness.** Launching
+`update_fn_kernel` over the `cdiv n_elements BLOCK_SIZE`-program grid produces a
+merged final memory in which every in-bounds global index realizes the Lion
+oracle — `p_ptr` holds `lionParam`, `exp_avg_ptr` holds `lionMomentum` — with no
+launch or footprint side hypotheses. -/
+theorem update_fn_kernel_grid_correct_unconditional
+    (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
+    (hB : 0 < BLOCK_SIZE) (hRegions : p_ptr ≠ exp_avg_ptr) (s : BlockState) :
+    let m := (n_elements + BLOCK_SIZE - 1) / BLOCK_SIZE
+    let sFinal := Kernel.mergeFrames (adamGrid m) s
+      (fun idx => adamFrame p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+        n_elements BLOCK_SIZE m hRegions s idx)
+    ∀ k, k < n_elements →
+      sFinal.readMem p_ptr k =
+        TiledOptimizer.lionParam (s.readMem p_ptr k)
+          (s.readMem exp_avg_ptr k) (s.readMem grad_ptr k) lr wd beta1 ∧
+      sFinal.readMem exp_avg_ptr k =
+        TiledOptimizer.lionMomentum (s.readMem exp_avg_ptr k)
+          (s.readMem grad_ptr k) beta2 := by
+  intro m sFinal k hk
+  exact update_fn_kernel_grid_merged_correct p_ptr grad_ptr exp_avg_ptr
+    lr wd beta1 beta2 n_elements BLOCK_SIZE m hB hRegions s sFinal
+    (fun k hk => adam_cdiv_covers n_elements BLOCK_SIZE hB hk)
+    (adamLaunch p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2
+      n_elements BLOCK_SIZE m hB hRegions s)
+    (fun idx => rfl) k hk
+
 end VeriTile.Bench.TritonBenchG.AdamUpdateTriton
