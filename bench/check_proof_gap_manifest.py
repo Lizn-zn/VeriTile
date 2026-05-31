@@ -85,8 +85,10 @@ SUMMARY_RE = re.compile(r"\b(?:theorem|abbrev)\s+([A-Za-z0-9_'.]*output_summary[
 # summaries must be recorded as proof gaps, not `full_value_candidate`.
 SELF_REF_EXEC_RE = re.compile(r"\bmatch\s+exec\b")
 DECL_SPLIT_RE = re.compile(
-    r"\n(?=(?:noncomputable\s+)?(?:def|theorem|abbrev)\s|/--|@\[|namespace\s|end\s)")
-DEF_NAME_RE = re.compile(r"^(?:noncomputable\s+)?def\s+([A-Za-z0-9_']+)")
+    r"\n(?=(?:noncomputable\s+|private\s+)*(?:def|theorem|abbrev)\s|/--|@\[|namespace\s|end\s)")
+_DECL_HEAD_RE = re.compile(
+    r"^(?:noncomputable\s+|private\s+)*(def|theorem|abbrev)\s+([A-Za-z0-9_']+)")
+DEF_NAME_RE = re.compile(r"^(?:noncomputable\s+|private\s+)*def\s+([A-Za-z0-9_']+)")
 
 
 def find_self_ref_value_defs(full_text: str) -> set[str]:
@@ -99,12 +101,45 @@ def find_self_ref_value_defs(full_text: str) -> set[str]:
     return names
 
 
-def summary_expected_is_self_ref(ctx: str, self_ref_names: set[str]) -> bool:
+def build_decl_blocks(full_text: str) -> dict[str, tuple[str, str]]:
+    """Map each declaration name to `(kind, block_text)` (kind ∈ def/theorem/abbrev)."""
+    blocks: dict[str, tuple[str, str]] = {}
+    for block in DECL_SPLIT_RE.split(full_text):
+        m = _DECL_HEAD_RE.match(block.lstrip("\n"))
+        if m:
+            blocks.setdefault(m.group(2), (m.group(1), block))
+    return blocks
+
+
+def _alias_target(block: str, decl_blocks: dict[str, tuple[str, str]]) -> str | None:
+    """For an `abbrev … := TARGET …` block, return the aliased declaration name."""
+    m = re.search(r":=\s*([A-Za-z_][A-Za-z0-9_'.]*)", block)
+    if not m:
+        return None
+    head = m.group(1).split(".")[0]
+    return head if head in decl_blocks else None
+
+
+def resolved_summary_text(name: str, decl_blocks: dict[str, tuple[str, str]]) -> str:
+    """Text of the summary declaration, following `abbrev` alias chains to the
+    underlying theorem that actually carries the `expected :=` clause."""
+    texts: list[str] = []
+    seen: set[str] = set()
+    cur: str | None = name
+    while cur and cur not in seen and cur in decl_blocks:
+        seen.add(cur)
+        kind, block = decl_blocks[cur]
+        texts.append(block)
+        cur = _alias_target(block, decl_blocks) if kind == "abbrev" else None
+    return "\n".join(texts)
+
+
+def summary_expected_is_self_ref(text: str, self_ref_names: set[str]) -> bool:
     """True when the summary's `expected :=` refers to a self-referential value."""
     if not self_ref_names:
         return False
-    marker = ctx.find("expected :=")
-    region = ctx[marker:] if marker != -1 else ctx
+    marker = text.find("expected :=")
+    region = text[marker:] if marker != -1 else text
     return any(re.search(r"\b" + re.escape(n) + r"\b", region) for n in self_ref_names)
 
 GAP_MARKERS = (
@@ -337,11 +372,13 @@ def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, st
         family = "none"
     else:
         family = family_for(name, text)
-        if family == "none":
+        if family == "none" and self_ref:
             # A self-referential summary with no domain-specific family still
             # has a genuine value gap; record it under the generic family.
+            # (Only for genuine self-refs — leaving family="none" for any other
+            # unrecognized gap lets `validate_rows` flag missing family coverage.)
             family = "self-referential-output-value"
-    issue = ISSUE_BY_FAMILY[family] if level != "full_value_candidate" else ""
+    issue = ISSUE_BY_FAMILY.get(family, "") if level != "full_value_candidate" else ""
     return level, family, issue
 
 
@@ -351,6 +388,7 @@ def collect() -> list[Summary]:
         rel = lean_file.relative_to(ROOT).as_posix()
         full_text = lean_file.read_text()
         self_ref_names = find_self_ref_value_defs(full_text)
+        decl_blocks = build_decl_blocks(full_text)
         lines = full_text.splitlines()
         for i, line in enumerate(lines):
             match = SUMMARY_RE.search(line)
@@ -358,7 +396,11 @@ def collect() -> list[Summary]:
                 continue
             name = match.group(1)
             ctx = context_for(lines, i)
-            self_ref = summary_expected_is_self_ref(ctx, self_ref_names)
+            # Resolve `abbrev` aliases to the underlying theorem so a summary that
+            # merely aliases a `…_compute_correct` is checked against that target's
+            # `expected :=` clause, not just the alias line.
+            self_ref = summary_expected_is_self_ref(
+                ctx + "\n" + resolved_summary_text(name, decl_blocks), self_ref_names)
             level, family, issue = classify(name, ctx, self_ref)
             rows.append(
                 Summary(
