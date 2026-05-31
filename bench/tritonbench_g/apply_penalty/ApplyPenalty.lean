@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Optimizer
 
 /-!
 # `apply_penalty` — strict per-kernel correctness
@@ -166,19 +167,21 @@ theorem storeOffset_eq_active
   unfold storeOffset activeStoreAddr
   simp [hAct]
 
+/-- Per-lane `Logits` output spec: the reusable Lion penalty oracle
+(`VeriTile.Triton.Math.Optimizer.lionPenalty`) applied to the values this lane
+loads — the logit at the gathered token, its count, and the three penalties. -/
 noncomputable def penaltyValue
     (s : BlockState)
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b : Nat) (i : Fin BLOCK_P) : ℝ :=
-  let logit := s.readMem Logits
-    (s.pids 0 * stride_logit_b + tokenId s p_token_ids p_cumsum_seq_len i)
-  let repetition := s.readMem repetition_penalty (s.pids 0)
-  let repeated := if logit > 0 then logit / repetition else logit * repetition
-  repeated
-    - (s.readMemValue .nat p_token_counts (tokenOffset s p_cumsum_seq_len i) : ℝ)
-      * s.readMem freqency_penalty (s.pids 0)
-    - s.readMem presence_penalty (s.pids 0)
+  TiledOptimizer.lionPenalty
+    (s.readMem Logits
+      (s.pids 0 * stride_logit_b + tokenId s p_token_ids p_cumsum_seq_len i))
+    (s.readMemValue .nat p_token_counts (tokenOffset s p_cumsum_seq_len i) : ℝ)
+    (s.readMem repetition_penalty (s.pids 0))
+    (s.readMem freqency_penalty (s.pids 0))
+    (s.readMem presence_penalty (s.pids 0))
 
 /-- Store-value shape produced by the expanded kernel execution.
 
@@ -241,8 +244,8 @@ theorem penaltyStoreValue_active_eq_penaltyValue
       penaltyValue s Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
         stride_logit_b i := by
-  simp [penaltyStoreValue, penaltyValue, hAct, storeOffset_eq_active,
-    activeStoreAddr]
+  simp [penaltyStoreValue, penaltyValue, TiledOptimizer.lionPenalty, hAct,
+    storeOffset_eq_active, activeStoreAddr]
   by_cases hPos :
       0.0 < s.readMem Logits
         (s.pids 0 * stride_logit_b +
@@ -649,38 +652,6 @@ theorem apply_penalty_masked_scatter_readback
     freqency_penalty repetition_penalty p_token_ids p_token_counts
     p_cumsum_seq_len stride_logit_b BLOCK_P s s hUniq
 
-/-- Generic readback congruence: two masked `writeMem` scatters with
-memory-equal base states and lane-wise equal (offset, value) on active lanes
-produce the same readback. Combines base-memory equality with step-function
-equality, avoiding the need to name the (huge) executed step lambda. -/
-private theorem foldl_step_readMem_congr {α : Type} {region : RegionName}
-    (off₁ off₂ : α → Nat) (val₁ val₂ : α → ℝ)
-    (P : α → Prop) [DecidablePred P] (R : RegionName) (o : Nat)
-    (l : List α) (s t : BlockState)
-    (hmem : ∀ r oo, s.mem r oo = t.mem r oo)
-    (hstep : ∀ a ∈ l, P a → off₁ a = off₂ a ∧ val₁ a = val₂ a) :
-    (l.foldl (fun acc a =>
-        if P a then acc.writeMem region (off₁ a) (val₁ a) else acc) s).readMem R o
-      = (l.foldl (fun acc a =>
-        if P a then acc.writeMem region (off₂ a) (val₂ a) else acc) t).readMem R o := by
-  induction l generalizing s t with
-  | nil => simp [BlockState.readMem, hmem]
-  | cons hd tl ih =>
-      rw [List.foldl_cons, List.foldl_cons]
-      by_cases hP : P hd
-      · simp only [hP, if_true]
-        obtain ⟨hoff, hval⟩ := hstep hd List.mem_cons_self hP
-        apply ih
-        · intro r oo
-          simp only [BlockState.writeMem, hoff, hval]
-          by_cases h : r = region ∧ oo = off₂ hd
-          · simp [h, hmem]
-          · simp [h, hmem]
-        · intro a ha hPa
-          exact hstep a (List.mem_cons_of_mem hd ha) hPa
-      · simp only [hP, if_false]
-        exact ih s t hmem (fun a ha hPa => hstep a (List.mem_cons_of_mem hd ha) hPa)
-
 theorem apply_penalty_correct
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
@@ -729,7 +700,7 @@ theorem apply_penalty_correct
   -- (4) The executed foldl (over the register-set base `execBase`) and the
   -- spec foldl (over `s`) read back equally: base memories agree (`setReg`
   -- preserves memory) and the per-lane offset/value agree on active lanes.
-  apply foldl_step_readMem_congr
+  apply BlockState.foldl_step_readMem_congr
   · intro r oo; simp
   · -- per-lane step equality on active lanes
     intro k _hk hAct
@@ -744,12 +715,12 @@ theorem apply_penalty_correct
           (s.pids 0 * stride_logit_b +
             s.readMemValue .nat p_token_ids.cast
               (s.readMemValue .nat p_cumsum_seq_len.cast (s.pids 0) + k.1.val)) <;>
-        · simp only [penaltyValue, storeOffset, tokenId, tokenOffset, batchStart,
-            batchEnd, NumericDType.div, NumericDType.mul, WithBot.realDiv,
-            WithBot.realMul, Option.map₂, Option.map, Option.bind,
-            Option.bind_some, Function.comp, hAct, if_true, if_false,
-            WithBot.coe_lt_coe, WithBot.unbotD_coe, WithBot.some_eq_coe,
-            hPos, h00]
+        · simp only [penaltyValue, TiledOptimizer.lionPenalty, storeOffset,
+            tokenId, tokenOffset, batchStart, batchEnd, NumericDType.div,
+            NumericDType.mul, WithBot.realDiv, WithBot.realMul, Option.map₂,
+            Option.map, Option.bind, Option.bind_some, Function.comp, hAct,
+            if_true, if_false, WithBot.coe_lt_coe, WithBot.unbotD_coe,
+            WithBot.some_eq_coe, hPos, h00]
 
 /-- **Compute-facing `ComputeCorrect` for `apply_penalty`.** Under distinct
 active token ids, the masked in-place store to `Logits` realizes the Lion-style

@@ -342,6 +342,39 @@ theorem foldl_atomicAddAt_prop_writeWithin {α : Type} {P : WriteFootprint}
       · simp only [hactive, if_false]
         exact ih s (fun i hi hai => hmem i (List.mem_cons_of_mem hd hi) hai)
 
+/-- Readback congruence for masked real `writeMem` scatters: if the base states
+agree in memory and the active lanes write the same `(offset, value)`, the two
+scatters read back equally at every cell. Lets a data-dependent gather/scatter
+proof bridge its executed step function (and register-set base) to a clean spec
+step (over `s`) without naming the executed step lambda. -/
+theorem foldl_step_readMem_congr {α : Type} {region : RegionName}
+    (off₁ off₂ : α → Nat) (val₁ val₂ : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (R : RegionName) (o : Nat)
+    (l : List α) (s t : BlockState)
+    (hmem : ∀ r oo, s.mem r oo = t.mem r oo)
+    (hstep : ∀ a ∈ l, P a → off₁ a = off₂ a ∧ val₁ a = val₂ a) :
+    (l.foldl (fun acc a =>
+        if P a then acc.writeMem region (off₁ a) (val₁ a) else acc) s).readMem R o
+      = (l.foldl (fun acc a =>
+        if P a then acc.writeMem region (off₂ a) (val₂ a) else acc) t).readMem R o := by
+  induction l generalizing s t with
+  | nil => simp [readMem, hmem]
+  | cons hd tl ih =>
+      rw [List.foldl_cons, List.foldl_cons]
+      by_cases hP : P hd
+      · simp only [hP, if_true]
+        obtain ⟨hoff, hval⟩ := hstep hd List.mem_cons_self hP
+        apply ih
+        · intro r oo
+          simp only [writeMem, hoff, hval]
+          by_cases h : r = region ∧ oo = off₂ hd
+          · simp [h, hmem]
+          · simp [h, hmem]
+        · intro a ha hPa
+          exact hstep a (List.mem_cons_of_mem hd ha) hPa
+      · simp only [hP, if_false]
+        exact ih s t hmem (fun a ha hPa => hstep a (List.mem_cons_of_mem hd ha) hPa)
+
 end BlockState
 
 end VeriTile.Triton
