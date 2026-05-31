@@ -147,10 +147,6 @@ def storeOffset
     else
       0
 
-def adjustedOffset (s : BlockState) (p_cumsum_seq_len : RegionName)
-    (i : Fin BLOCK_P) : Nat :=
-  tokenOffset s p_cumsum_seq_len i
-
 /-- The "active" store address (no mask conditional) used for the readback
 spec. When `active s i` holds, this equals `storeOffset s ... i`. -/
 def activeStoreAddr
@@ -257,11 +253,9 @@ theorem penaltyStoreValue_active_eq_penaltyValue
     intro hPos'
     nlinarith
 
-/-- Formula-level correctness target for the Python apply-penalty store.
-
-The masked scatter readback part is captured by
-`apply_penalty_masked_scatter_readback`; the remaining full-kernel bridge is
-to reduce the executed kernel state to that foldl/write form. -/
+/-- Formula-level correctness target for the Python apply-penalty store:
+every active token position holds `penaltyValue`, inactive positions are
+preserved. Discharged by `apply_penalty_correct`. -/
 def apply_penalty_correct_target
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
@@ -357,80 +351,6 @@ private theorem scatter_readback_prop_masked_list_active_injective {α : Type}
           rw [hstep]]
     exact foldl_writeMem_masked_preserves_local offsetFn valueFn (fun k => decide (P k))
       (offsetFn i) l s h_preserve
-
-theorem apply_penalty_masked_scatter_store_value_readback_from
-    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
-    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b BLOCK_P : Nat) (sInit s : BlockState)
-    (hUniq :
-      Function.Injective
-        (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i)) :
-    ∀ i : Fin BLOCK_P,
-      ((List.finRange BLOCK_P).foldl
-          (fun (acc : BlockState) (k : Fin BLOCK_P) =>
-            if active s p_cumsum_seq_len k then
-              acc.writeMem Logits
-                (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b k)
-                (penaltyStoreValue s Logits presence_penalty freqency_penalty
-                  repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-                  stride_logit_b k)
-            else
-              acc)
-          sInit).readMem Logits
-          (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i) =
-        if active s p_cumsum_seq_len i then
-          penaltyStoreValue s Logits presence_penalty freqency_penalty
-            repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-            stride_logit_b i
-        else
-          sInit.readMem Logits
-            (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i) := by
-  intro i
-  have h_readback :=
-    scatter_readback_prop_masked_list_active_injective
-      (region := (Logits : RegionName))
-      (List.finRange BLOCK_P) sInit
-      (fun k : Fin BLOCK_P =>
-        activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b k)
-      (fun k : Fin BLOCK_P =>
-        penaltyStoreValue s Logits presence_penalty freqency_penalty
-          repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-          stride_logit_b k)
-      (fun k : Fin BLOCK_P => active s p_cumsum_seq_len k)
-      i (List.nodup_finRange BLOCK_P) (List.mem_finRange i)
-      (by
-        intro k _hk _hAct heq
-        apply hUniq
-        unfold activeStoreAddr at heq
-        exact Nat.add_left_cancel heq)
-  have hfun :
-      (fun (acc : BlockState) (k : Fin BLOCK_P) =>
-        if active s p_cumsum_seq_len k then
-          acc.writeMem Logits
-            (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b k)
-            (penaltyStoreValue s Logits presence_penalty freqency_penalty
-              repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-              stride_logit_b k)
-        else
-          acc)
-        =
-      (fun (acc : BlockState) (k : Fin BLOCK_P) =>
-        if (fun k : Fin BLOCK_P => active s p_cumsum_seq_len k) k then
-          acc.writeMem Logits
-            ((fun k : Fin BLOCK_P =>
-              activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b k) k)
-            ((fun k : Fin BLOCK_P =>
-              penaltyStoreValue s Logits presence_penalty freqency_penalty
-                repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-                stride_logit_b k) k)
-        else
-          acc) := by
-    funext (acc : BlockState) (k : Fin BLOCK_P)
-    by_cases hAct : active s p_cumsum_seq_len k
-    · simp [hAct, storeOffset_eq_active]
-    · simp [hAct]
-  rw [hfun]
-  simpa using h_readback
 
 theorem apply_penalty_masked_scatter_store_value_readback_tile_from
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
@@ -546,111 +466,6 @@ theorem apply_penalty_masked_scatter_store_value_readback_tile_from'
   exact apply_penalty_masked_scatter_store_value_readback_tile_from
     Logits presence_penalty freqency_penalty repetition_penalty p_token_ids
     p_token_counts p_cumsum_seq_len stride_logit_b BLOCK_P sInit s hUniq
-
-theorem apply_penalty_masked_scatter_readback_from
-    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
-    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b BLOCK_P : Nat) (sInit s : BlockState)
-    (hUniq :
-      Function.Injective
-        (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i)) :
-    ∀ i : Fin BLOCK_P,
-      ((List.finRange BLOCK_P).foldl
-          (fun (acc : BlockState) (k : Fin BLOCK_P) =>
-            if active s p_cumsum_seq_len k then
-              acc.writeMem Logits
-                (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b k)
-                (penaltyValue s Logits presence_penalty freqency_penalty
-                  repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-                  stride_logit_b k)
-            else
-              acc)
-          sInit).readMem Logits
-          (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i) =
-        if active s p_cumsum_seq_len i then
-          penaltyValue s Logits presence_penalty freqency_penalty
-            repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-            stride_logit_b i
-        else
-          sInit.readMem Logits
-            (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i) := by
-  intro i
-  have h_readback :=
-    scatter_readback_prop_masked_list_active_injective
-      (region := (Logits : RegionName))
-      (List.finRange BLOCK_P) sInit
-      (fun k : Fin BLOCK_P =>
-        activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b k)
-      (fun k : Fin BLOCK_P =>
-        penaltyValue s Logits presence_penalty freqency_penalty
-          repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-          stride_logit_b k)
-      (fun k : Fin BLOCK_P => active s p_cumsum_seq_len k)
-      i (List.nodup_finRange BLOCK_P) (List.mem_finRange i)
-      (by
-        intro k _hk _hAct heq
-        apply hUniq
-        unfold activeStoreAddr at heq
-        exact Nat.add_left_cancel heq)
-  have hfun :
-      (fun (acc : BlockState) (k : Fin BLOCK_P) =>
-        if active s p_cumsum_seq_len k then
-          acc.writeMem Logits
-            (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b k)
-            (penaltyValue s Logits presence_penalty freqency_penalty
-              repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-              stride_logit_b k)
-        else
-          acc)
-        =
-      (fun (acc : BlockState) (k : Fin BLOCK_P) =>
-        if (fun k : Fin BLOCK_P => active s p_cumsum_seq_len k) k then
-          acc.writeMem Logits
-            ((fun k : Fin BLOCK_P =>
-              activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b k) k)
-            ((fun k : Fin BLOCK_P =>
-              penaltyValue s Logits presence_penalty freqency_penalty
-                repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-                stride_logit_b k) k)
-        else
-          acc) := by
-    funext (acc : BlockState) (k : Fin BLOCK_P)
-    by_cases hAct : active s p_cumsum_seq_len k
-    · simp [hAct, storeOffset_eq_active]
-    · simp [hAct]
-  rw [hfun]
-  simpa using h_readback
-
-theorem apply_penalty_masked_scatter_readback
-    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
-    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b BLOCK_P : Nat) (s : BlockState)
-    (hUniq :
-      Function.Injective
-        (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i)) :
-    ∀ i : Fin BLOCK_P,
-      ((List.finRange BLOCK_P).foldl
-          (fun (acc : BlockState) (k : Fin BLOCK_P) =>
-            if active s p_cumsum_seq_len k then
-              acc.writeMem Logits
-                (storeOffset s p_token_ids p_cumsum_seq_len stride_logit_b k)
-                (penaltyValue s Logits presence_penalty freqency_penalty
-                  repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-                  stride_logit_b k)
-            else
-              acc)
-          s).readMem Logits
-          (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i) =
-        if active s p_cumsum_seq_len i then
-          penaltyValue s Logits presence_penalty freqency_penalty
-            repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-            stride_logit_b i
-        else
-          s.readMem Logits
-            (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i) := by
-  exact apply_penalty_masked_scatter_readback_from Logits presence_penalty
-    freqency_penalty repetition_penalty p_token_ids p_token_counts
-    p_cumsum_seq_len stride_logit_b BLOCK_P s s hUniq
 
 theorem apply_penalty_correct
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
