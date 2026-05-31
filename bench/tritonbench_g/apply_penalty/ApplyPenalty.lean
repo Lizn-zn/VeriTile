@@ -55,8 +55,11 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is no
 modeled. The masked load uses `other=0`/`other=0.0` for out-of-range token slots.
 Because the store address is data-dependent (gathered token ids), the masked
 scatter readback weakens global offset injectivity to **injectivity over the
-active (masked-true) token-id subset** (`hUniq : Function.Injective (tokenId …)`,
-i.e. distinct tokens) — inactive lanes alias to `base + 0` but never write. The
+active (masked-true) lanes only** (`hUniq : ∀ i j, active i → active j →
+tokenId i = tokenId j → i = j`, i.e. distinct tokens *within the batch window*).
+This is satisfiable for normal padded blocks (inactive/out-of-window lanes may
+hold default or duplicated token ids and are simply not constrained); the
+correctness claim is correspondingly restricted to the active lanes. The
 integer-to-float promotion in `batch_ids_count * cur_freqency` and the
 `tl.where(logit > 0, …)` branch are modeled directly. The specs reference the
 `ℝ` ordered-field operations directly, not `VeriTile.Triton.Math.*`.
@@ -253,23 +256,21 @@ theorem penaltyStoreValue_active_eq_penaltyValue
     intro hPos'
     nlinarith
 
-/-- Formula-level correctness target for the Python apply-penalty store:
-every active token position holds `penaltyValue`, inactive positions are
-preserved. Discharged by `apply_penalty_correct`. -/
+/-- Formula-level correctness target for the Python apply-penalty store: every
+**active** token position holds `penaltyValue`. Discharged by
+`apply_penalty_correct`. Only active lanes are claimed — inactive (out-of-window)
+lanes neither store nor have a well-defined gathered address, and the kernel /
+`WriteMap.writeIf` only assert the active subset. -/
 def apply_penalty_correct_target
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b BLOCK_P : Nat) (s s' : BlockState) : Prop :=
-  ∀ i : Fin BLOCK_P,
+  ∀ i : Fin BLOCK_P, active s p_cumsum_seq_len i →
     s'.readMem Logits
         (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i) =
-      if active s p_cumsum_seq_len i then
-        penaltyValue s Logits presence_penalty freqency_penalty
-          repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-          stride_logit_b i
-      else
-        s.readMem Logits
-          (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i)
+      penaltyValue s Logits presence_penalty freqency_penalty
+        repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
+        stride_logit_b i
 
 /-! ### Bench-local masked-injectivity scatter readback
 
@@ -356,10 +357,11 @@ theorem apply_penalty_masked_scatter_store_value_readback_tile_from
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b BLOCK_P : Nat) (sInit s : BlockState)
-    (hUniq :
-      Function.Injective
-        (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i)) :
-    ∀ idx : TileIndex [BLOCK_P],
+    (hUniq : ∀ i j : Fin BLOCK_P,
+      active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
+      tokenId s p_token_ids p_cumsum_seq_len i =
+        tokenId s p_token_ids p_cumsum_seq_len j → i = j) :
+    ∀ idx : TileIndex [BLOCK_P], active s p_cumsum_seq_len idx.1 →
       ((TileShape.allIndices [BLOCK_P]).foldl
           (fun (acc : BlockState) (k : TileIndex [BLOCK_P]) =>
             if active s p_cumsum_seq_len k.1 then
@@ -372,16 +374,12 @@ theorem apply_penalty_masked_scatter_store_value_readback_tile_from
               acc)
           sInit).readMem Logits
           (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b idx.1) =
-        if active s p_cumsum_seq_len idx.1 then
           penaltyStoreValue s Logits presence_penalty freqency_penalty
             repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-            stride_logit_b idx.1
-        else
-          sInit.readMem Logits
-            (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b idx.1) := by
-  intro idx
+            stride_logit_b idx.1 := by
+  intro idx hActIdx
   have h_readback :=
-    scatter_readback_prop_masked_list_active_injective
+    BlockState.scatter_readback_prop_masked_list_of_true
       (region := (Logits : RegionName))
       (TileShape.allIndices [BLOCK_P]) sInit
       (fun k : TileIndex [BLOCK_P] =>
@@ -392,10 +390,11 @@ theorem apply_penalty_masked_scatter_store_value_readback_tile_from
           stride_logit_b k.1)
       (fun k : TileIndex [BLOCK_P] => active s p_cumsum_seq_len k.1)
       idx (TileShape.allIndices_nodup [BLOCK_P]) (TileShape.mem_allIndices [BLOCK_P] idx)
+      hActIdx
       (by
-        intro k _hk _hAct heq
+        intro k _hk hAct heq
         have hFin : k.1 = idx.1 := by
-          apply hUniq
+          apply hUniq k.1 idx.1 hAct hActIdx
           unfold activeStoreAddr at heq
           exact Nat.add_left_cancel heq
         cases k with
@@ -440,10 +439,11 @@ theorem apply_penalty_masked_scatter_store_value_readback_tile_from'
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b BLOCK_P : Nat) {sInit : BlockState} (s : BlockState)
-    (hUniq :
-      Function.Injective
-        (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i)) :
-    ∀ idx : TileIndex [BLOCK_P],
+    (hUniq : ∀ i j : Fin BLOCK_P,
+      active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
+      tokenId s p_token_ids p_cumsum_seq_len i =
+        tokenId s p_token_ids p_cumsum_seq_len j → i = j) :
+    ∀ idx : TileIndex [BLOCK_P], active s p_cumsum_seq_len idx.1 →
       ((TileShape.allIndices [BLOCK_P]).foldl
           (fun (acc : BlockState) (k : TileIndex [BLOCK_P]) =>
             if active s p_cumsum_seq_len k.1 then
@@ -456,13 +456,9 @@ theorem apply_penalty_masked_scatter_store_value_readback_tile_from'
               acc)
           sInit).readMem Logits
           (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b idx.1) =
-        if active s p_cumsum_seq_len idx.1 then
           penaltyStoreValue s Logits presence_penalty freqency_penalty
             repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-            stride_logit_b idx.1
-        else
-          sInit.readMem Logits
-            (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b idx.1) := by
+            stride_logit_b idx.1 := by
   exact apply_penalty_masked_scatter_store_value_readback_tile_from
     Logits presence_penalty freqency_penalty repetition_penalty p_token_ids
     p_token_counts p_cumsum_seq_len stride_logit_b BLOCK_P sInit s hUniq
@@ -471,8 +467,10 @@ theorem apply_penalty_correct
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b stride_logit_s BLOCK_P : Nat) (s s' : BlockState)
-    (hUniq : Function.Injective
-        (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i))
+    (hUniq : ∀ i j : Fin BLOCK_P,
+      active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
+      tokenId s p_token_ids p_cumsum_seq_len i =
+        tokenId s p_token_ids p_cumsum_seq_len j → i = j)
     (hExec : exec (apply_penalty Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
         stride_logit_b stride_logit_s BLOCK_P) s = some s') :
@@ -480,38 +478,28 @@ theorem apply_penalty_correct
       repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
       stride_logit_b BLOCK_P s s' := by
   unfold apply_penalty_correct_target
-  intro i
+  intro i hActive
   simp [exec, apply_penalty, stepStmts, stepStmt, evalOp, evalOp.eq_def,
         Tile.bop, Tile.cop, Tile.ptrAdd, Tile.select,
         NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComparableDType.lt, ComparableDType.gt] at hExec
   subst s'
-  -- (2) Target's `penaltyValue` → exec-shaped `penaltyStoreValue` (active lanes).
-  rw [show (if active s p_cumsum_seq_len i then
-              penaltyValue s Logits presence_penalty freqency_penalty
-                repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-                stride_logit_b i
-            else
-              s.readMem Logits
-                (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i))
-        = (if active s p_cumsum_seq_len i then
-              penaltyStoreValue s Logits presence_penalty freqency_penalty
-                repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-                stride_logit_b i
-            else
-              s.readMem Logits
-                (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i))
-        from by
-          by_cases hAct : active s p_cumsum_seq_len i
-          · rw [if_pos hAct, if_pos hAct,
-                penaltyStoreValue_active_eq_penaltyValue _ _ _ _ _ _ _ _ _ _ hAct]
-          · rw [if_neg hAct, if_neg hAct]]
+  -- (2) Target's `penaltyValue` → exec-shaped `penaltyStoreValue` (active lane).
+  rw [show penaltyValue s Logits presence_penalty freqency_penalty
+            repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
+            stride_logit_b i
+        = penaltyStoreValue s Logits presence_penalty freqency_penalty
+            repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
+            stride_logit_b i
+        from (penaltyStoreValue_active_eq_penaltyValue _ _ _ _ _ _ _ _ _ _
+          hActive).symm]
   -- (3) Bridge to the exec-shaped tile readback lemma (RHS matches up to defeq).
   refine Eq.trans ?bridge
     (apply_penalty_masked_scatter_store_value_readback_tile_from'
+      (sInit := s)
       Logits presence_penalty freqency_penalty repetition_penalty
       p_token_ids p_token_counts p_cumsum_seq_len stride_logit_b BLOCK_P
-      s hUniq (i, PUnit.unit))
+      s hUniq (i, PUnit.unit) hActive)
   -- (4) The executed foldl (over the register-set base `execBase`) and the
   -- spec foldl (over `s`) read back equally: base memories agree (`setReg`
   -- preserves memory) and the per-lane offset/value agree on active lanes.
@@ -544,8 +532,10 @@ theorem apply_penalty_compute_correct
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b stride_logit_s BLOCK_P : Nat) (s : BlockState)
-    (hUniq : Function.Injective
-        (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i)) :
+    (hUniq : ∀ i j : Fin BLOCK_P,
+      active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
+      tokenId s p_token_ids p_cumsum_seq_len i =
+        tokenId s p_token_ids p_cumsum_seq_len j → i = j) :
     ComputeCorrect.Realizes
       (kernel := apply_penalty Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
@@ -566,8 +556,8 @@ theorem apply_penalty_compute_correct
   intro i hActive
   have h := apply_penalty_correct Logits presence_penalty freqency_penalty
     repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-    stride_logit_b stride_logit_s BLOCK_P s s' hUniq hExec i
-  simpa [ComputeCorrect.OutputReadable.read, hActive] using h
+    stride_logit_b stride_logit_s BLOCK_P s s' hUniq hExec i hActive
+  simpa [ComputeCorrect.OutputReadable.read] using h
 
 /-- **Per-kernel output summary for `apply_penalty`.** The DSL surface lowers to
 the algorithm layer, and (under distinct active token ids) the masked in-place
@@ -576,8 +566,10 @@ theorem apply_penalty_output_summary
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
     (stride_logit_b stride_logit_s BLOCK_P : Nat) (s : BlockState)
-    (hUniq : Function.Injective
-        (fun i : Fin BLOCK_P => tokenId s p_token_ids p_cumsum_seq_len i)) :
+    (hUniq : ∀ i j : Fin BLOCK_P,
+      active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
+      tokenId s p_token_ids p_cumsum_seq_len i =
+        tokenId s p_token_ids p_cumsum_seq_len j → i = j) :
     (∃ alg, (apply_penalty Logits presence_penalty freqency_penalty
       repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
       stride_logit_b stride_logit_s BLOCK_P).toAlgorithm? = Except.ok alg) ∧
@@ -605,12 +597,12 @@ theorem apply_penalty_output_summary
 
 Cellwise correctness is fully discharged: `apply_penalty_correct` proves
 `apply_penalty_correct_target` (every active token position of `Logits` holds
-`penaltyValue`, inactive positions preserved) under
-`hUniq : Function.Injective (tokenId s p_token_ids p_cumsum_seq_len)`, and
-`apply_penalty_compute_correct` / `apply_penalty_output_summary` lift it to the
-`ComputeCorrect.Realizes` / output-summary surface. The supporting readback and
-value-bridge lemmas above (`*_scatter_readback*`,
-`penaltyStoreValue_active_eq_penaltyValue`, `foldl_step_readMem_congr`) are the
-reusable pieces of that proof. -/
+`penaltyValue`) under the *active-lane* uniqueness premise
+`hUniq : ∀ i j, active i → active j → tokenId i = tokenId j → i = j` — satisfiable
+for padded blocks, unlike global injectivity. `apply_penalty_compute_correct` /
+`apply_penalty_output_summary` lift it to the `ComputeCorrect.Realizes` /
+output-summary surface. The supporting readback and value-bridge lemmas above
+(`*_scatter_readback*`, `penaltyStoreValue_active_eq_penaltyValue`,
+`foldl_step_readMem_congr`) are the reusable pieces of that proof. -/
 
 end VeriTile.Bench.TritonBenchG.ApplyPenalty
