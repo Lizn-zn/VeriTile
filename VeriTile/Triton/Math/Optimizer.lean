@@ -43,6 +43,14 @@ noncomputable def lionUpdateDir (m g β₁ : ℝ) : ℝ :=
 noncomputable def lionParam (p m g lr wd β₁ : ℝ) : ℝ :=
   (1 - lr * wd) * p - lr * Real.sign (lionUpdateDir m g β₁)
 
+/-! ## Lion repetition/frequency/presence penalty -/
+
+/-- Lion's per-token logit penalty (repetition + frequency + presence): the
+sign-based repetition rescale `logit/rep if logit>0 else logit·rep`, then
+subtract `count·freq` and `pres`. -/
+noncomputable def lionPenalty (logit count rep freq pres : ℝ) : ℝ :=
+  (if logit > 0 then logit / rep else logit * rep) - count * freq - pres
+
 /-! ## Bridging identities
 
 Triton kernels commonly compute the momentum/direction in the factored form
