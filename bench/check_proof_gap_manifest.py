@@ -72,9 +72,75 @@ ISSUE_BY_FAMILY = {
     "rotary-cache-path": "#153",
     "semantic-blocker": "#152",
     "token-attention-reduction": "#162",
+    "self-referential-output-value": "#146",
 }
 
 SUMMARY_RE = re.compile(r"\b(?:theorem|abbrev)\s+([A-Za-z0-9_'.]*output_summary[A-Za-z0-9_'.]*)\b")
+
+# A "self-referential" output value is a `def` whose body re-executes the kernel
+# and reads the kernel's own store back out (`match exec ... | some s' => s'.readMem ...`).
+# When a summary's `expected` is such a value, the value half of its
+# `ComputeCorrect.Realizes` is a tautology (`output = output`): it proves only
+# surface-lowering + progress, NOT that the computed values are correct. Such
+# summaries must be recorded as proof gaps, not `full_value_candidate`.
+SELF_REF_EXEC_RE = re.compile(r"\bmatch\s+exec\b")
+DECL_SPLIT_RE = re.compile(
+    r"\n(?=(?:noncomputable\s+|private\s+)*(?:def|theorem|abbrev)\s|/--|@\[|namespace\s|end\s)")
+_DECL_HEAD_RE = re.compile(
+    r"^(?:noncomputable\s+|private\s+)*(def|theorem|abbrev)\s+([A-Za-z0-9_']+)")
+DEF_NAME_RE = re.compile(r"^(?:noncomputable\s+|private\s+)*def\s+([A-Za-z0-9_']+)")
+
+
+def find_self_ref_value_defs(full_text: str) -> set[str]:
+    """Names of value `def`s whose body re-reads the kernel's own execution."""
+    names: set[str] = set()
+    for block in DECL_SPLIT_RE.split(full_text):
+        m = DEF_NAME_RE.match(block.lstrip("\n"))
+        if m and SELF_REF_EXEC_RE.search(block):
+            names.add(m.group(1))
+    return names
+
+
+def build_decl_blocks(full_text: str) -> dict[str, tuple[str, str]]:
+    """Map each declaration name to `(kind, block_text)` (kind ∈ def/theorem/abbrev)."""
+    blocks: dict[str, tuple[str, str]] = {}
+    for block in DECL_SPLIT_RE.split(full_text):
+        m = _DECL_HEAD_RE.match(block.lstrip("\n"))
+        if m:
+            blocks.setdefault(m.group(2), (m.group(1), block))
+    return blocks
+
+
+def _alias_target(block: str, decl_blocks: dict[str, tuple[str, str]]) -> str | None:
+    """For an `abbrev … := TARGET …` block, return the aliased declaration name."""
+    m = re.search(r":=\s*([A-Za-z_][A-Za-z0-9_'.]*)", block)
+    if not m:
+        return None
+    head = m.group(1).split(".")[0]
+    return head if head in decl_blocks else None
+
+
+def resolved_summary_text(name: str, decl_blocks: dict[str, tuple[str, str]]) -> str:
+    """Text of the summary declaration, following `abbrev` alias chains to the
+    underlying theorem that actually carries the `expected :=` clause."""
+    texts: list[str] = []
+    seen: set[str] = set()
+    cur: str | None = name
+    while cur and cur not in seen and cur in decl_blocks:
+        seen.add(cur)
+        kind, block = decl_blocks[cur]
+        texts.append(block)
+        cur = _alias_target(block, decl_blocks) if kind == "abbrev" else None
+    return "\n".join(texts)
+
+
+def summary_expected_is_self_ref(text: str, self_ref_names: set[str]) -> bool:
+    """True when the summary's `expected :=` refers to a self-referential value."""
+    if not self_ref_names:
+        return False
+    marker = text.find("expected :=")
+    region = text[marker:] if marker != -1 else text
+    return any(re.search(r"\b" + re.escape(n) + r"\b", region) for n in self_ref_names)
 
 GAP_MARKERS = (
     "proof-oriented",
@@ -272,7 +338,7 @@ def family_for(name: str, text: str) -> str:
     return "none"
 
 
-def evidence_for(text: str, level: str) -> str:
+def evidence_for(text: str, level: str, self_ref: bool = False) -> str:
     lower = text.lower()
     if level == "blocked_summary":
         for marker in ("blocked_output_summary", "blocked", "current arithmetic layer", "llrint"):
@@ -283,6 +349,8 @@ def evidence_for(text: str, level: str) -> str:
         for marker in GAP_MARKERS:
             if marker in lower:
                 return marker
+        if self_ref:
+            return "self-referential expected (= executed kernel output)"
         return "summary lacks full-value marker"
     for marker in FULL_VALUE_MARKERS:
         if marker in lower:
@@ -290,18 +358,27 @@ def evidence_for(text: str, level: str) -> str:
     return "no proof-gap marker in summary context"
 
 
-def classify(name: str, text: str) -> tuple[str, str, str]:
+def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, str]:
     lower_name = name.lower()
     lower = text.lower()
     if "blocked_output_summary" in lower_name or re.search(r"\bblocked\b", lower):
         level = "blocked_summary"
-    elif any(marker in lower for marker in GAP_MARKERS):
+    elif self_ref or any(marker in lower for marker in GAP_MARKERS):
         level = "public_summary_with_proof_gap"
     else:
         level = "full_value_candidate"
 
-    family = family_for(name, text) if level != "full_value_candidate" else "none"
-    issue = ISSUE_BY_FAMILY[family] if level != "full_value_candidate" else ""
+    if level == "full_value_candidate":
+        family = "none"
+    else:
+        family = family_for(name, text)
+        if family == "none" and self_ref:
+            # A self-referential summary with no domain-specific family still
+            # has a genuine value gap; record it under the generic family.
+            # (Only for genuine self-refs — leaving family="none" for any other
+            # unrecognized gap lets `validate_rows` flag missing family coverage.)
+            family = "self-referential-output-value"
+    issue = ISSUE_BY_FAMILY.get(family, "") if level != "full_value_candidate" else ""
     return level, family, issue
 
 
@@ -309,14 +386,22 @@ def collect() -> list[Summary]:
     rows: list[Summary] = []
     for lean_file in sorted(PORTS_ROOT.glob("*/*.lean")):
         rel = lean_file.relative_to(ROOT).as_posix()
-        lines = lean_file.read_text().splitlines()
+        full_text = lean_file.read_text()
+        self_ref_names = find_self_ref_value_defs(full_text)
+        decl_blocks = build_decl_blocks(full_text)
+        lines = full_text.splitlines()
         for i, line in enumerate(lines):
             match = SUMMARY_RE.search(line)
             if not match:
                 continue
             name = match.group(1)
             ctx = context_for(lines, i)
-            level, family, issue = classify(name, ctx)
+            # Resolve `abbrev` aliases to the underlying theorem so a summary that
+            # merely aliases a `…_compute_correct` is checked against that target's
+            # `expected :=` clause, not just the alias line.
+            self_ref = summary_expected_is_self_ref(
+                ctx + "\n" + resolved_summary_text(name, decl_blocks), self_ref_names)
+            level, family, issue = classify(name, ctx, self_ref)
             rows.append(
                 Summary(
                     file=rel,
@@ -324,7 +409,7 @@ def collect() -> list[Summary]:
                     coverage_level=level,
                     blocker_family=family,
                     issue=issue,
-                    evidence=evidence_for(ctx, level),
+                    evidence=evidence_for(ctx, level, self_ref),
                 )
             )
     return rows

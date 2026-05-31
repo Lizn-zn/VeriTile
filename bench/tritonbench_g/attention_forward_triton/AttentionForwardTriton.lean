@@ -36,18 +36,28 @@ attention_forward_triton_final_store_python_test_shape_compute_correct
        └─ attention_forward_triton_final_store_slice_correct     ← algorithm-layer readback per lane
 ```
 
-## Modeling boundary
+## Modeling boundary and proof-gap honesty
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `float16`/`float32`
 casts collapse to the identity post-erasure; `@triton.autotune` /
 `num_warps`/`num_stages` are not modeled. The output summary is stated at the
 Python test shape (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128, BLOCK_N=64`,
-contiguous strides, 96 active head lanes). The surface theorem captures the
-full single-program online-softmax body via `producedAttentionForwardOutValue`;
-the `final_store` lemmas isolate the masked final `acc / l_i` store (in-bounds
-lanes get the accumulator value, out-of-bounds lanes preserved). This is a
-single-program scope: cross-program composition into the full `[Z,H,N_CTX,
-HEAD_DIM]` output is the trusted host boundary.
+contiguous strides, 96 active head lanes).
+
+**The top `output_summary` is NOT a closed-form value proof.** Its `expected`,
+`producedAttentionForwardOutValue`, is defined as the kernel's *own* executed
+output (`match exec … | some s' => s'.readMem …`), so the value half of its
+`ComputeCorrect.Realizes` is a tautology (`output = output`). What it genuinely
+establishes is (a) the surface lowers to the algorithm layer and (b) execution
+makes progress (runs to `some`) writing exactly the masked output cells — it
+does **not** verify the online-softmax recurrence against an independent
+specification (tracked as `attention-forward-online-softmax-recurrence`, #162,
+in `proof_gap_manifest.tsv`). The genuine value content here is the
+`final_store` slice: it proves the masked final `acc / l_i` writeback copies a
+*precomputed* accumulator `Acc` to the right `Out` cells (in-bounds lanes get
+the `Acc` value, out-of-bounds preserved) — i.e. the store/masking is correct,
+the accumulator value itself is assumed. Cross-program composition into the full
+`[Z,H,N_CTX,HEAD_DIM]` output is the trusted host boundary.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttentionForwardTriton
