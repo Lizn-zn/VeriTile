@@ -1957,7 +1957,37 @@ theorem attn_step (Q K V Q_scale K_scale Out : RegionName) (s0 : BlockState)
   · -- acc = oP (c+1)
     rw [haccF, hc1]; refine congrArg some ?_; ext idx
     rw [hacc1d, halphad, hpTd, hvloadd]
-    sorry
+    refine acc_eq BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks (i / BLOCK_N) HEAD_ACTIVE hc qT kT vT kS
+      _ _ _ _ idx.1 idx.2.1 ?_ ?_ ?_ ?_
+    · rfl
+    · exact alpha_eq BLOCK_M BLOCK_N numKVBlocks (i / BLOCK_N) qT kT kS _ mijT idx.1 rfl
+        (hmij_eq (idx.1, PUnit.unit))
+    · intro jL
+      refine exp2_some (fun a b => kscore BLOCK_N numKVBlocks qT kT kS a (i / BLOCK_N) hc b
+        - mR qT kT kS a (i / BLOCK_N + 1)) _ idx.1 jL ?_
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+        TileShape.dropInsertedIndex, TileShape.insertAxisIndex, hqk idx.1 jL,
+        hmij_eq (idx.1, PUnit.unit),
+        mP_eq_coe qT kT kS hBN idx.1 (i / BLOCK_N + 1) (Nat.le_add_left 1 (i / BLOCK_N)) hc,
+        NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
+    · intro jL
+      have hjL : jL.val < BLOCK_N * numKVBlocks - i := by
+        have hle : i + BLOCK_N ≤ BLOCK_N * numKVBlocks := by
+          rw [hi]
+          calc i / BLOCK_N * BLOCK_N + BLOCK_N = (i / BLOCK_N + 1) * BLOCK_N := by ring
+            _ ≤ numKVBlocks * BLOCK_N := Nat.mul_le_mul_right _ hc
+            _ = BLOCK_N * numKVBlocks := by ring
+        have := jL.isLt; omega
+      simp only [decide_eq_true_eq.mpr hjL, Bool.true_and, Region.cast_id]
+      by_cases hd : idx.2.1.val < HEAD_ACTIVE
+      · rw [if_pos (decide_eq_true_eq.mpr hd), dif_pos hd]
+        refine congrArg some ?_
+        show s0.readMem V _ = vTile s0 V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks)
+            HEAD_ACTIVE (gkey BLOCK_N numKVBlocks (i / BLOCK_N) hc jL, ⟨idx.2.1.val, hd⟩, PUnit.unit)
+        unfold vTile gkey
+        congr 1
+        ring
+      · rw [if_neg (by simp only [decide_eq_true_eq]; exact hd), dif_neg hd]
   · rw [hqF]
   · rw [hqsF]
   · rw [hnF]
