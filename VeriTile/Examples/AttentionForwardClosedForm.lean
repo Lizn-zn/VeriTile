@@ -398,6 +398,14 @@ theorem load_ptr_none_real {shape : TileShape}
   ext i
   simp [BlockState.readMemValue_real]
 
+/-- `castFloat` eval: applies the (model-identity) float cast pointwise. Used for
+the `qk` dot-cast and the `p` fp16 round-trip in the loop body. -/
+theorem evalOp_castFloat_real {shape : TileShape} (src dst : FloatDType)
+    (a : Op src.toTileDType shape) (s : BlockState) (t : Tile src.toTileDType shape)
+    (h : evalOp a s = some t) :
+    evalOp (.castFloat src dst a) s = some ⟨fun i => src.cast dst (t.data i)⟩ := by
+  simp only [evalOp, h]; rfl
+
 def attention_forward_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
