@@ -1003,6 +1003,43 @@ theorem attention_forward_triton_exec_reduction
   refine ⟨sfin, ?_, hpostFin⟩
   rw [exec, hbody, stepStmts.append_some hpre_eq, stepStmts.cons_some hLoopStmt, hTail]
 
+/-- **Step-lemma math heart**: the masked dot of the loaded `q`/`k` tiles equals
+`rawScore` over the row-masked query / key tiles, evaluated at the global key
+`gkey(c, jL)`. The `q` row-mask folds into `qTileMasked`; the `k` boundary mask
+`jL < N_CTX − c·BLOCK_N` is always satisfied (`gkey < N_CTX`); the head mask is
+discharged by `dot_headMasked`. -/
+theorem dot_qk_eq (s : BlockState) (Q K : RegionName)
+    (H sqz sqh HD BM BN BD HA nB c : Nat)
+    (hHA : HA ≤ BD) (hc : c < nB)
+    (r : Fin BM) (jL : Fin BN)
+    (q : Tile .real [BM, BD]) (k : Tile .real [BD, BN])
+    (hq : ∀ (i : Fin BM) (e : Fin BD), q.data (i, e, PUnit.unit)
+        = some (if (mIndex s BM i < BN * nB ∧ e.val < HA)
+            then s.readMem Q (baseOffset s H sqz sqh + mIndex s BM i * HD + e.val) else 0))
+    (hk : ∀ (e : Fin BD) (j : Fin BN), k.data (e, j, PUnit.unit)
+        = some (if (j.val < BN * nB - c * BN ∧ e.val < HA)
+            then s.readMem K (baseOffset s H sqz sqh + e.val + j.val * HD + c * BN * HD) else 0)) :
+    (Tile.dot [] q k).data (r, jL, PUnit.unit)
+      = some (rawScore (qTileMasked s Q H sqz sqh HD BM HA (BN * nB))
+          (kTile s K H sqz sqh HD (BN * nB) HA) r (gkey BN nB c hc jL)) := by
+  have hjLlt : jL.val < BN * nB - c * BN := by
+    have : c * BN + BN ≤ BN * nB := by
+      calc c * BN + BN = (c + 1) * BN := by ring
+        _ ≤ nB * BN := Nat.mul_le_mul_right _ hc
+        _ = BN * nB := by ring
+    omega
+  rw [dot_headMasked hHA
+      (fun i e => if mIndex s BM i < BN * nB then s.readMem Q (baseOffset s H sqz sqh + mIndex s BM i * HD + e.val) else 0)
+      (fun e j => s.readMem K (baseOffset s H sqz sqh + e.val + j.val * HD + c * BN * HD))
+      r jL q k
+      (by intro e; rw [hq r e]; by_cases he : e.val < HA <;> by_cases hr : mIndex s BM r < BN * nB <;>
+            simp [he, hr])
+      (by intro e; rw [hk e jL]; simp [hjLlt])]
+  refine congrArg some (Finset.sum_congr rfl (fun e _ => ?_))
+  simp only [qTileMasked, kTile, gkey, Fin.val_castLE]
+  congr 2
+  ring
+
 /-- **Loop invariant for the exec proof** (counter `i = block c · BLOCK_N`).
 
 Captures the full register state after the `c`-th key block: program ids and the
