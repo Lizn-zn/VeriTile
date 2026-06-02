@@ -32,8 +32,8 @@ clean per-key address.
 
 Proof: the multi-phase online-softmax recurrence argument. The pure-math heart
 (`attentionRealBase2PerKeyScale_eq_streaming`, `osStep_foldl_eq_batch` in
-`Math/Attention.lean`) is done and sorry-free; the remaining `sorry` is the
-`exec`-side loop unfolding (Phase 3).
+`Math/Attention.lean`) and the full `exec`-side loop unfolding (Phase 3) are both
+complete and sorry-free.
 -/
 
 namespace VeriTile.Examples.AttentionForwardClosedForm
@@ -2138,15 +2138,19 @@ kernel's own executed value.
 
 Layout contracts: `N_CTX = BLOCK_N · numKVBlocks`, `stride_qm = stride_kn =
 HEAD_DIM` and head stride `1` (so the per-block pointer advance composes into a
-per-key address), `0 < BLOCK_N`, `HEAD_ACTIVE ≤ BLOCK_DMODEL`.
+per-key address), `0 < BLOCK_N`, `HEAD_ACTIVE ≤ BLOCK_DMODEL`,
+`HEAD_ACTIVE ≤ HEAD_DIM` (store-offset injectivity), clean initial `undef`.
 
-Proof pending — Phase 3 `exec`-side loop unfolding; the math core is sorry-free
-in `Math/Attention.lean`. -/
+**Proven sorry-free** via the full `exec`-side loop unfolding: `preLoop`
+(`P 0`) + `attn_step` (one-block invariant advance, the 19-statement loop body) +
+`attn_postLoop` (`acc /= l_i` + masked store = closed form), composed by
+`attention_forward_triton_exec_reduction`/`forRange_inv`. -/
 theorem attention_forward_triton_closed_form_correct
     (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
     (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
       HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)
     (hBN : 0 < BLOCK_N) (hActiveLe : HEAD_ACTIVE ≤ BLOCK_DMODEL)
+    (hHD : HEAD_ACTIVE ≤ HEAD_DIM) (hundef : ∀ rg o, s.undef rg o = 0)
     (idx : TileIndex [BLOCK_M, BLOCK_DMODEL])
     (hActive : mIndex s BLOCK_M idx.1 < BLOCK_N * numKVBlocks
       ∧ idx.2.1.val < HEAD_ACTIVE) :
@@ -2167,6 +2171,39 @@ theorem attention_forward_triton_closed_form_correct
         (keyScale s Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N
           (BLOCK_N * numKVBlocks))
         (idx.1, ⟨idx.2.1.val, hActive.2⟩, PUnit.unit) := by
-  sorry
+  have hnB : 1 ≤ numKVBlocks := by
+    rcases numKVBlocks with _ | n
+    · exact absurd hActive.1 (by simp)
+    · omega
+  obtain ⟨sfin, hexec, hpost⟩ := attention_forward_triton_exec_reduction Q K V Q_scale K_scale Out s
+    stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE hBN
+    (attnInvariant Q K V Q_scale K_scale Out s stride_qz stride_qh H BLOCK_M BLOCK_N numKVBlocks
+      HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE)
+    (attnLoopBody BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE HEAD_DIM numKVBlocks)
+    (attnAccAssign BLOCK_M BLOCK_DMODEL)
+    (attnStoreStmt BLOCK_M BLOCK_DMODEL BLOCK_N numKVBlocks HEAD_ACTIVE)
+    (attn_body_split Q K V Q_scale K_scale Out stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
+      HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE)
+    (preLoop Q K V Q_scale K_scale Out s stride_qz stride_qh H BLOCK_M BLOCK_N numKVBlocks
+      HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE hundef)
+    (fun i st hinv => by
+      simp only [attnInvariant] at hinv
+      obtain ⟨_, hieq, hcle, _⟩ := hinv
+      calc i = i / BLOCK_N * BLOCK_N := hieq
+        _ ≤ numKVBlocks * BLOCK_N := Nat.mul_le_mul_right _ hcle
+        _ = BLOCK_N * numKVBlocks := Nat.mul_comm _ _)
+    (fun i st hlt hinv => attn_step Q K V Q_scale K_scale Out s stride_qz stride_qh H BLOCK_M BLOCK_N
+      numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE hBN hActiveLe i st hlt hinv)
+    (fun sfin => sfin.readMem Out (outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M BLOCK_DMODEL idx)
+      = attentionRealBase2PerKeyScale
+          (qTile s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE)
+          (kTile s K H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+          (vTile s V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+          (keyScale s Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N (BLOCK_N * numKVBlocks))
+          (idx.1, ⟨idx.2.1.val, hActive.2⟩, PUnit.unit))
+    (fun st hinv => attn_postLoop Q K V Q_scale K_scale Out s stride_qz stride_qh H BLOCK_M BLOCK_N
+      numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE hBN hnB hHD idx hActive st hinv)
+  rw [hexec]
+  exact hpost
 
 end VeriTile.Examples.AttentionForwardClosedForm
