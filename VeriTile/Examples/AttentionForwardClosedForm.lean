@@ -543,6 +543,35 @@ theorem kptr_adv_eval (s : BlockState) (a b : Nat) (BNv HD : Nat) (kptr : Tile .
   rw [evalOp_ptrAdd]
   simp [evalOp_ref, hkp, evalOp_mul, evalOp_constNat, NumericDType.mul, Tile.bop]
 
+/-- **`K_scale_ptr += 1` statement eval.** -/
+theorem ksptr_adv_eval (s : BlockState) (ksptr : Tile .ptr []) (name : RegName)
+    (hks : s.regs .ptr [] name = some ksptr) :
+    evalOp (Op.ptrAdd Broadcast.nil (Op.ref .ptr [] name) (Op.constNat 1)) s
+      = some (Tile.ptrAdd Broadcast.nil ksptr (Tile.scalar 1)) := by
+  rw [evalOp_ptrAdd]; simp [evalOp_ref, hks, evalOp_constNat]
+
+/-- **`acc += tl.dot(p, v)` statement eval** (the numerator accumulation). The `p`
+fp16 round-trip `castFloat fp16 (castFloat real fp16 p)` reduces to `p` (cast
+identity); the `dot` is coerced like `qk`. -/
+theorem acc2_op_eval (s : BlockState) (BM BN BD : Nat)
+    (acc1tile : Tile .real [BM,BD]) (ptile : Tile .real [BM,BN]) (vtile : Tile .real [BN,BD])
+    (hacc : s.regs .real [BM,BD] "acc" = some acc1tile)
+    (hpf16 : s.regs .fp16 [BM,BN] "p" = some (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ptile.data i)⟩ : Tile .fp16 [BM,BN]))
+    (hv : s.regs .real [BN,BD] "v" = some vtile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) (Op.ref .real [BM,BD] "acc")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM,BN] "p")) (Op.ref .real [BN,BD] "v"))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acc1tile
+          (Tile.dot [] ptile vtile)) := by
+  have hcb : evalOp (Op.castFloat .fp16 .real (Op.ref .fp16 [BM,BN] "p")) s = some ptile := by
+    rw [evalOp_castFloat]; simp [hpf16]; ext i; simp [FloatDType.cast]
+  have hcb2 : @evalOp TileDType.real [BM,BN] (Op.castFloat .fp16 .real (Op.ref .fp16 [BM,BN] "p")) s = some ptile := hcb
+  have hdotN : evalOp (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM,BN] "p")) (Op.ref .real [BN,BD] "v")) s
+      = some (Tile.dot [] ptile vtile) := by rw [evalOp_dot]; simp [hcb2, hv]
+  have hdotN2 : @evalOp TileDType.real [BM,BD]
+      (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM,BN] "p")) (Op.ref .real [BN,BD] "v")) s
+      = some (Tile.dot [] ptile vtile) := hdotN
+  rw [evalOp_add]; simp only [evalOp_ref, hacc, hdotN2, Option.bind_eq_bind, Option.bind_some]; rfl
+
 def attention_forward_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
