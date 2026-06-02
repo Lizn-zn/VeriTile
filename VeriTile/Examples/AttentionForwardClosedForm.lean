@@ -108,6 +108,11 @@ theorem evalOp_ptrAdd {a b shape} (bc : Broadcast a b shape)
 theorem evalOp_ptrBase (region : RegionName) (s : BlockState) :
     evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
 
+/-- Eval helper for `exp2` (`tl.math.exp2`): `Tile.uop realExp2` over the operand. -/
+theorem evalOp_exp2 {shape : TileShape} (a : Op .real shape) (s : BlockState) :
+    evalOp (.exp2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realExp2 va)) := by
+  simp [evalOp]
+
 /-- **Worked pointer-eval template** (the `Q_ptrs`/`O_block_ptr` shape):
 `ptrAdd (ptrBase Q) (qvk_offset + offs_m[:,None]·HEAD_DIM + offs_k[None,:]·1)`
 evaluates, lane `(i,e)`, to the address `qvk + i·HEAD_DIM + e`. Same recipe as
@@ -456,6 +461,29 @@ theorem mij_op_eval (s : BlockState) (BM BN : Nat)
         (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk")) s = some rmaxT := hrmaxN
   rw [evalOp_where]
   simp only [evalOp_gt, evalOp_ref, hmi, hrmax, Option.bind_eq_bind, Option.bind_some]
+
+/-- **`p` statement eval** (`tl.math.exp2(qk)`): `Tile.uop realExp2` over `qk`. -/
+theorem p_op_eval (s : BlockState) (BM BN : Nat) (qk2tile : Tile .real [BM,BN])
+    (hqk : s.regs .real [BM,BN] "qk" = some qk2tile) :
+    evalOp (Op.exp2 (Op.ref .real [BM,BN] "qk")) s = some (Tile.uop WithBot.realExp2 qk2tile) := by
+  rw [evalOp_exp2]; simp [hqk]
+
+/-- **`alpha` statement eval** (`tl.math.exp2(m_i − m_ij)`). -/
+theorem alpha_op_eval (s : BlockState) (BM : Nat) (mi mij : Tile .real [BM])
+    (hmi : s.regs .real [BM] "m_i" = some mi) (hmij : s.regs .real [BM] "m_ij" = some mij) :
+    evalOp (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BM] "m_i") (Op.ref .real [BM] "m_ij"))) s
+      = some (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mi mij)) := by
+  rw [evalOp_exp2]; simp [evalOp_sub, hmi, hmij]
+
+/-- **`l_i` statement eval** (`l_i · alpha + l_ij`). -/
+theorem li_op_eval (s : BlockState) (BM : Nat) (li alpha lij : Tile .real [BM])
+    (hli : s.regs .real [BM] "l_i" = some li) (ha : s.regs .real [BM] "alpha" = some alpha) (hlij : s.regs .real [BM] "l_ij" = some lij) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BM] "l_i") (Op.ref .real [BM] "alpha"))
+        (Op.ref .real [BM] "l_ij")) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) li alpha) lij) := by
+  rw [evalOp_add]; simp [evalOp_mul, hli, ha, hlij]
 
 def attention_forward_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
