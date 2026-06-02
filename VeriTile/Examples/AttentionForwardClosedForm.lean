@@ -511,6 +511,38 @@ theorem lij_op_eval (s : BlockState) (BM BN : Nat) (ptile : Tile .real [BM,BN])
       = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) ptile) := by
   rw [evalOp_reduceSum]; simp only [evalOp_ref, hp, Option.bind_some]; rfl
 
+/-- **`acc`-rescale statement eval** (`acc · alpha[:, None]`). Mirrors `qk2`'s
+expandDim coercion. -/
+theorem acc1_op_eval (s : BlockState) (BM BD : Nat) (hax : 1 < [BM].length.succ)
+    (acctile : Tile .real [BM,BD]) (alpha : Tile .real [BM])
+    (hacc : s.regs .real [BM,BD] "acc" = some acctile) (ha : s.regs .real [BM] "alpha" = some alpha) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil)) (Op.ref .real [BM,BD] "acc")
+        (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "alpha"))) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile
+          (Tile.expandDim ⟨1, hax⟩ alpha)) := by
+  have hexpN : evalOp (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "alpha")) s = some (Tile.expandDim ⟨1, hax⟩ alpha) := by
+    rw [evalOp_expandDim]; simp [ha]
+  have hexp2 : @evalOp TileDType.real [BM, 1] (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "alpha")) s
+      = some (Tile.expandDim ⟨1, hax⟩ alpha) := hexpN
+  rw [evalOp_mul]; simp only [evalOp_ref, hacc, hexp2, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- **`p`-to-fp16 statement eval** (`(p).to(tl.float16)`): pointwise float cast. -/
+theorem pfp16_op_eval (s : BlockState) (BM BN : Nat) (ptile : Tile .real [BM,BN])
+    (hp : s.regs .real [BM,BN] "p" = some ptile) :
+    evalOp (Op.castFloat .real .fp16 (Op.ref .real [BM,BN] "p")) s
+      = some (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ptile.data i)⟩ : Tile .fp16 [BM,BN]) := by
+  rw [evalOp_castFloat]; simp [hp]
+
+/-- **Pointer-advance statement eval** (`K_ptrs += BLOCK_N · HEAD_DIM`, also `V_ptrs`):
+`ptrAdd` of the register by the scalar `BLOCK_N · HEAD_DIM`. -/
+theorem kptr_adv_eval (s : BlockState) (a b : Nat) (BNv HD : Nat) (kptr : Tile .ptr [a, b])
+    (name : RegName) (hkp : s.regs .ptr [a, b] name = some kptr) :
+    evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [a, b] name)
+        (Op.mul .nat Broadcast.nil (Op.constNat BNv) (Op.constNat HD))) s
+      = some (Tile.ptrAdd Broadcast.scalarR kptr (Tile.scalar (BNv * HD))) := by
+  rw [evalOp_ptrAdd]
+  simp [evalOp_ref, hkp, evalOp_mul, evalOp_constNat, NumericDType.mul, Tile.bop]
+
 def attention_forward_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
