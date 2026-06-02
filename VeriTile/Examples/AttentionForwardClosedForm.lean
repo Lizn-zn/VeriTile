@@ -1877,6 +1877,51 @@ theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
   · exact ⟨rmaxT, mijT, alphaT, pT, lijT, acc1T, vloadT, hrm, rfl, rfl, rfl, rfl, rfl, rfl,
       by simp, by simp, by simp⟩
 
+set_option maxHeartbeats 8000000 in
+/-- **Step lemma**: the loop body advances the invariant by one key block. Combines
+the validated execution chain (`attn_loopBody_steps`) with the streaming-softmax
+recurrence bridges (`mij_eq`/`li_eq`/`acc_eq`, fed by `qk_eq` and
+`reduceMaxDrop_data_row`). The pointer registers advance `c → c+1`
+(`Nat.add_div_right`); the boundary `v`-mask is always satisfied for in-range
+blocks (`jL < BN ≤ BN·(nB−c)`), so the `v` load matches `vTile` at the global key. -/
+theorem attn_step (Q K V Q_scale K_scale Out : RegionName) (s0 : BlockState)
+    (stride_qz stride_qh H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (hBN : 0 < BLOCK_N) (hHA : HEAD_ACTIVE ≤ BLOCK_DMODEL)
+    (i : Nat) (s : BlockState) (hilt : i < BLOCK_N * numKVBlocks)
+    (hinv : attnInvariant Q K V Q_scale K_scale Out s0 stride_qz stride_qh H BLOCK_M BLOCK_N
+        numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE i s) :
+    ∃ s', stepStmts (attnLoopBody BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE HEAD_DIM numKVBlocks)
+        (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ attnInvariant Q K V Q_scale K_scale Out s0 stride_qz stride_qh H BLOCK_M BLOCK_N
+          numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE (i + BLOCK_N) s' := by
+  have hax : 1 < [BLOCK_M].length.succ := by simp
+  have hc : i / BLOCK_N < numKVBlocks := (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [Nat.mul_comm]; exact hilt)
+  have hc1 : (i + BLOCK_N) / BLOCK_N = i / BLOCK_N + 1 := Nat.add_div_right i hBN
+  simp only [attnInvariant] at hinv
+  obtain ⟨hpids, hi, hcle, hmi, hli, hacc, hq, hqs, hn, hm, hk, hO, hKp, hKs, hVp, hundef, hmem⟩ := hinv
+  -- streaming functions (match the invariant's lets)
+  set qT := qTileMasked s0 Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE (BLOCK_N * numKVBlocks) with hqTdef
+  set kT := kTile s0 K H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE with hkTdef
+  set vT := vTile s0 V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE with hvTdef
+  set kS := keyScale s0 Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N (BLOCK_N * numKVBlocks) with hkSdef
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hKpF, hKsF, hVpF, hqF, hqsF, hnF, hmF, hkF, hOF,
+      rmaxT, mijT, alphaT, pT, lijT, acc1T, vloadT, hrm, hmijd, halphad, hpTd, hlijd, hacc1d, hvloadd,
+      hm_iF, hl_iF, haccF⟩ :=
+    attn_loopBody_steps BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks HEAD_ACTIVE HEAD_DIM hBN hax
+      (s.setReg "start_n" .nat [] (Tile.scalar i)) i
+      (s0.readMem Q_scale (s0.pids 1 * cdiv (BLOCK_N * numKVBlocks) BLOCK_M + s0.pids 0))
+      (⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] => (K.cast, baseOffset s0 H stride_qz stride_qh + idx.1.val + idx.2.1.val * HEAD_DIM + i / BLOCK_N * BLOCK_N * HEAD_DIM)⟩)
+      (Tile.scalar (K_scale.cast, s0.pids 1 * cdiv (BLOCK_N * numKVBlocks) BLOCK_N + i / BLOCK_N))
+      (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => (V.cast, baseOffset s0 H stride_qz stride_qh + idx.1.val * HEAD_DIM + idx.2.1.val + i / BLOCK_N * BLOCK_N * HEAD_DIM)⟩)
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (if (mIndex s0 BLOCK_M idx.1 < BLOCK_N * numKVBlocks ∧ idx.2.1.val < HEAD_ACTIVE) then s0.readMem Q (baseOffset s0 H stride_qz stride_qh + mIndex s0 BLOCK_M idx.1 * HEAD_DIM + idx.2.1.val) else 0)⟩)
+      (⟨fun r : TileIndex [BLOCK_M] => mP BLOCK_N numKVBlocks qT kT kS r.1 (i / BLOCK_N)⟩)
+      (⟨fun r : TileIndex [BLOCK_M] => ((lP qT kT kS r.1 (i / BLOCK_N) : ℝ) : WithBot ℝ)⟩)
+      (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => if h : idx.2.1.val < HEAD_ACTIVE then ((oP qT kT vT kS idx.1 ⟨idx.2.1.val, h⟩ (i / BLOCK_N) : ℝ) : WithBot ℝ) else some 0⟩)
+      (by simp [hn]) (by simp) (by simp [hKp]) (by simp [hKs]) (by simp [hVp]) (by simp [hq])
+      (by simp [hqs]) (by simp [hmi]) (by simp [hli]) (by simp [hacc]) (by intro rg o; simp [hundef])
+  refine ⟨sF, hchain, ?_⟩
+  sorry
+
 /-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
 For arbitrary batch/head strides, head count, block sizes, KV-block count,
