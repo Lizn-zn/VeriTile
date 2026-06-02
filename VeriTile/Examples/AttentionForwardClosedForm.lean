@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `attention_forward_triton` — closed-form correctness (WIP scaffold)
@@ -40,6 +41,340 @@ namespace VeriTile.Examples.AttentionForwardClosedForm
 open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
+
+/-! ## exec-stepping helpers
+
+`evalOp` has `@[simp]` lemmas for `add`/`mul`/`sub`/`div` but none for the
+integral `floorDiv`/`mod` cases (both appear in this kernel's prefix:
+`off_z = off_hz // H`, `off_h = off_hz % H`, `vk_offset = qvk_offset // HEAD_DIM`).
+These fill that gap so the deterministic prefix steps under `simp`.
+
+**Validated stepping recipe** (proven on the 8-statement scalar prefix): the
+compiled body reduces by `rfl`, so
+`rw [show body.take N = [⟨concrete stmts⟩] from rfl]` exposes the statement list,
+then `simp [stepStmts, stepStmt, evalOp_floorDiv, evalOp_mod, Option.bind]` steps
+all assigns (the `@[simp] evalOp_*` and `setReg` lemmas thread register lookups
+through the accumulated `setReg` chain automatically). -/
+theorem evalOp_floorDiv {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.floorDiv h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
+  simp [evalOp]
+
+theorem evalOp_mod {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.mod h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
+  simp [evalOp]
+
+/-- Eval helper for `boolAnd` (the `k_mask` boundary∧head masks): no `@[simp]`
+form exists, like `floorDiv`/`mod`. -/
+theorem evalOp_boolAnd {a b shape} (bc : Broadcast a b shape)
+    (x y : Op .bool _) (s : BlockState) :
+    evalOp (.boolAnd bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s;
+      some (Tile.bop (fun p q : Bool => p && q) bc vx vy)) := by
+  simp [evalOp]
+
+/-- Specialized `expandDim` axis-0 eval over a `nat` register (canonical axis,
+explicit `[1,D]` result shape — so `rw`/`conv` match it without the
+proof-term/`insertAxis`-unification friction of the generic lemma). The
+exec-stepping **recipe** that finally works on the `triton{}`-elaborated surface:
+`conv` to focus the receiver, `rw` this (or `unfold evalOp` for concrete inner
+ops), collapse with `Option.bind_eq_bind/bind_some/pure_def`, then `ext`. -/
+@[simp] theorem evalOp_expandDim_zero_nat {D : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .nat [1, D] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] name)) s =
+      (s.regs .nat [D] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [1, D] => v.data (i.2.1, PUnit.unit) } : Tile .nat [1, D])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
+
+/-- Axis-1 `expandDim` over a `nat` register (the `offs_m[:, None]` column
+broadcast in the `Q_ptrs`/`O_block_ptr` pointer offsets). -/
+@[simp] theorem evalOp_expandDim_one_nat {M : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .nat [M, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] name)) s =
+      (s.regs .nat [M] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
+
+/-- Eval helper for `ptrAdd` (the `Q_ptrs`/`K_ptrs`/`V_ptrs`/`O_block_ptr`
+constructions). -/
+theorem evalOp_ptrAdd {a b shape} (bc : Broadcast a b shape)
+    (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState) :
+    evalOp (.ptrAdd bc ptr off) s = (do
+      let ptrs ← evalOp ptr s; let offs ← evalOp off s;
+      some (Tile.ptrAdd bc ptrs offs)) := by simp [evalOp]
+
+/-- Eval helper for `ptrBase` (the base region pointer `Q`/`K`/`V`/`Out`). -/
+theorem evalOp_ptrBase (region : RegionName) (s : BlockState) :
+    evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
+
+/-- **Worked pointer-eval template** (the `Q_ptrs`/`O_block_ptr` shape):
+`ptrAdd (ptrBase Q) (qvk_offset + offs_m[:,None]·HEAD_DIM + offs_k[None,:]·1)`
+evaluates, lane `(i,e)`, to the address `qvk + i·HEAD_DIM + e`. Same recipe as
+`kmask_eval`: `simp only` over the arithmetic + canonical-axis expandDim lemmas
+(which fire after the `Option.bind` collapse), then `ext` for the `ptrAdd` data. -/
+theorem qptrs_eval (s : BlockState) (Q : RegionName) (BM BD HEAD_DIM qvk : Nat) (g : Fin BM → Nat)
+    (hqvk : s.regs .nat [] "qvk_offset" = some (Tile.scalar qvk))
+    (hm : s.regs .nat [BM] "offs_m" = some (Tile.vec g))
+    (hk : s.regs .nat [BD] "offs_k" = some (Tile.vec (fun e : Fin BD => e.val))) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+        (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+              (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BD] "offs_k"))
+            (Op.constNat 1)))) s
+      = some (⟨fun idx : TileIndex [BM, BD] =>
+          (Q.cast, qvk + g idx.1 * HEAD_DIM + idx.2.1.val * 1)⟩ : Tile .ptr [BM, BD]) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, evalOp_expandDim_one_nat,
+    evalOp_expandDim_zero_nat, hqvk, hm, hk, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec]
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec, NumericDType.add, NumericDType.mul]
+
+/-- **Worked q-load mask eval** (`(offs_m[:,None] < N_CTX) ∧ (arange[None,:] <
+HEAD_ACTIVE)`, shape `[BLOCK_M, BLOCK_DMODEL]`): `q_mask[r,e] = (r < N_CTX) ∧
+(e < HEAD_ACTIVE)`. The `q` analogue of `kmask_eval` (axes swapped: row mask on
+`offs_m`, column mask on the head arange). -/
+theorem qmask_eval (s : BlockState) (BM BD NC HA : Nat) (g : Fin BM → Nat)
+    (hm : s.regs .nat [BM] "offs_m" = some (Tile.vec g)) :
+    evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+          (Op.constNat NC))
+        (Op.expandDim ⟨0, by simp⟩ (Op.lt .nat Broadcast.scalarR (Op.arange BD) (Op.constNat HA)))) s
+      = some ⟨fun idx : TileIndex [BM, BD] =>
+          (decide (g idx.1 < NC) && decide (idx.2.1.val < HA))⟩ := by
+  rw [evalOp_boolAnd]
+  conv_lhs => arg 1; rw [evalOp_lt]; arg 1; rw [evalOp_expandDim_one_nat, hm]
+  simp only [Option.bind_eq_bind, Option.bind_some, evalOp_constNat]
+  conv_lhs => arg 1; unfold evalOp
+  simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def, evalOp_lt, evalOp_arange,
+    evalOp_constNat]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.bop, Tile.cop, Tile.expandDim, Tile.vec, ComparableDType.lt]
+
+/-- `K_ptrs` eval: `ptrAdd (ptrBase K) (qvk + offs_k[:,None] + offs_n[None,:]·HEAD_DIM)`,
+shape `[BLOCK_DMODEL, BLOCK_N]`, address `qvk + e + j·HEAD_DIM` (note `offs_k` term
+has no stride multiply). -/
+theorem kptrs_eval (s : BlockState) (K : RegionName) (BD BN HEAD_DIM qvk : Nat)
+    (hqvk : s.regs .nat [] "qvk_offset" = some (Tile.scalar qvk))
+    (hk : s.regs .nat [BD] "offs_k" = some (Tile.vec (fun e : Fin BD => e.val)))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+        (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BD] "offs_k")))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n"))
+            (Op.constNat HEAD_DIM)))) s
+      = some (⟨fun idx : TileIndex [BD, BN] => (K.cast, qvk + idx.1.val + idx.2.1.val * HEAD_DIM)⟩ : Tile .ptr [BD, BN]) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, evalOp_expandDim_one_nat,
+    evalOp_expandDim_zero_nat, hqvk, hk, hn, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec]
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec, NumericDType.add, NumericDType.mul]
+
+/-- `V_ptrs` eval: `ptrAdd (ptrBase V) (qvk + offs_n[:,None]·HEAD_DIM + offs_k[None,:]·1)`,
+shape `[BLOCK_N, BLOCK_DMODEL]`, address `qvk + j·HEAD_DIM + e`. -/
+theorem vptrs_eval (s : BlockState) (V : RegionName) (BN BD HEAD_DIM qvk : Nat)
+    (hqvk : s.regs .nat [] "qvk_offset" = some (Tile.scalar qvk))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hk : s.regs .nat [BD] "offs_k" = some (Tile.vec (fun e : Fin BD => e.val))) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
+        (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+            (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat HEAD_DIM)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BD] "offs_k")) (Op.constNat 1)))) s
+      = some (⟨fun idx : TileIndex [BN, BD] => (V.cast, qvk + idx.1.val * HEAD_DIM + idx.2.1.val * 1)⟩ : Tile .ptr [BN, BD]) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, evalOp_expandDim_one_nat,
+    evalOp_expandDim_zero_nat, hqvk, hn, hk, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec]
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec, NumericDType.add, NumericDType.mul]
+
+/-- `Q_scale_ptr` eval (scalar): `ptrBase Q_scale + (q_scale_offset + start_m)`. -/
+theorem qscaleptr_eval (s : BlockState) (Q_scale : RegionName) (qso sm : Nat)
+    (hq : s.regs .nat [] "q_scale_offset" = some (Tile.scalar qso))
+    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar sm)) :
+    evalOp (Op.ptrAdd Broadcast.nil (Op.ptrBase Q_scale)
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "q_scale_offset") (Op.ref .nat [] "start_m"))) s
+      = some (Tile.scalar (Q_scale.cast, qso + sm)) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase]
+  simp only [evalOp_add, evalOp_ref, hq, hsm, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  · simp [Tile.ptrAdd, Tile.bop]
+  · simp [Tile.ptrAdd, Tile.bop, NumericDType.add]
+
+/-- `K_scale_ptr` eval (scalar): `ptrBase K_scale + k_scale_offset`. -/
+theorem kscaleptr_eval (s : BlockState) (K_scale : RegionName) (kso : Nat)
+    (hk : s.regs .nat [] "k_scale_offset" = some (Tile.scalar kso)) :
+    evalOp (Op.ptrAdd Broadcast.nil (Op.ptrBase K_scale) (Op.ref .nat [] "k_scale_offset")) s
+      = some (Tile.scalar (K_scale.cast, kso)) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase]
+  simp only [evalOp_ref, hk, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  · simp [Tile.ptrAdd]
+  · simp [Tile.ptrAdd]
+
+/-- `m_i` init eval: `tl.zeros − inf = full 0 + (−∞)` → the all-`⊥` tile (matches
+`mP … 0`). -/
+theorem mi_init_eval (s : BlockState) (BM : Nat) :
+    evalOp (Op.add .real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf) s
+      = some (⟨fun _ : TileIndex [BM] => (⊥ : WithBot ℝ)⟩ : Tile .real [BM]) := by
+  simp only [evalOp_add, evalOp_full, evalOp_negInf, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext r
+  simp only [Tile.bop_data, NumericDType.add]
+  rfl
+
+/-- `l_i` init eval: `tl.zeros + 1.0` → the all-`1` tile (matches `lP … 0`). -/
+theorem li_init_eval (s : BlockState) (BM : Nat) :
+    evalOp (Op.add .real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0)) s
+      = some (⟨fun _ : TileIndex [BM] => some (1 : ℝ)⟩ : Tile .real [BM]) := by
+  simp only [evalOp_add, evalOp_full, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext r
+  simp [Tile.bop_data, NumericDType.add]
+  norm_num
+
+/-- `acc` init eval: `tl.zeros` → the all-`0` tile (matches `oP … 0`). -/
+theorem acc_init_eval (s : BlockState) (BM BD : Nat) :
+    evalOp (Op.full [BM, BD] (Op.const 0)) s
+      = some (⟨fun _ : TileIndex [BM, BD] => some (0 : ℝ)⟩ : Tile .real [BM, BD]) := by
+  simp [evalOp_full, evalOp_const, Option.bind]
+
+/-- **Worked statement-eval template** (the `k_mask` boundary∧head boolean), for a
+block with `offs_n[j] = j`, `start_n = SN`. Demonstrates the end-to-end recipe on
+the surface's actual `boolAnd`/`lt`/`expandDim`/`arange`/`sub` Op shapes:
+`k_mask[e,j] = (j < N_CTX − start_n) ∧ (e < HEAD_ACTIVE)`. -/
+theorem kmask_eval (s : BlockState) (BD BN NC SN HA : Nat)
+    (hoffs : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.boolAnd Broadcast.nil.consR.consL
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat NC) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨1, by simp⟩ (Op.lt .nat Broadcast.scalarR (Op.arange BD) (Op.constNat HA)))) s
+      = some ⟨fun idx : TileIndex [BD, BN] =>
+          (decide (idx.2.1.val < NC - SN) && decide (idx.1.val < HA))⟩ := by
+  rw [evalOp_boolAnd]
+  conv_lhs => rw [evalOp_lt]; arg 1; rw [evalOp_expandDim_zero_nat, hoffs]
+  simp only [Option.bind_eq_bind, Option.bind_some, evalOp_sub, evalOp_constNat, evalOp_ref, hsn]
+  conv_lhs => arg 1; unfold evalOp
+  simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def, evalOp_lt, evalOp_arange,
+    evalOp_constNat]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.bop, Tile.cop, Tile.expandDim, Tile.vec, ComparableDType.lt, NumericDType.sub]
+
+/-- **Head-masked dot reduction** (the crux tile-op of the step lemma). When the
+contraction-axis lanes `e ≥ HEAD_ACTIVE` of both operands are masked to `some 0`
+(which is what the kernel's `q`/`k` masked loads produce on a clean state,
+`undef = 0`), `tl.dot q k` at `(r, jL)` collapses from the full `Fin BD` sum to
+the active `Fin HA` sum — i.e. the unscaled score `rawScore`. The `WithBot`
+products are all `some`, so the sum coerces out; `sum_padHeadD_eq` drops the
+inactive lanes. -/
+theorem dot_headMasked {BD HA N M : Nat} (hHA : HA ≤ BD)
+    (f : Fin M → Fin BD → ℝ) (g : Fin BD → Fin N → ℝ)
+    (r : Fin M) (jL : Fin N)
+    (q : Tile .real [M, BD]) (k : Tile .real [BD, N])
+    (hq : ∀ e : Fin BD, q.data (r, e, PUnit.unit) = some (if e.val < HA then f r e else 0))
+    (hk : ∀ e : Fin BD, k.data (e, jL, PUnit.unit) = some (if e.val < HA then g e jL else 0)) :
+    (Tile.dot [] q k).data (r, jL, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin HA =>
+          f r (Fin.castLE hHA e) * g (Fin.castLE hHA e) jL)) := by
+  rw [Tile.dot_nil_data]
+  have hterm : (fun e : Fin BD =>
+        Option.map₂ (· * ·) (q.data (r, e, PUnit.unit)) (k.data (e, jL, PUnit.unit)))
+      = (fun e : Fin BD => ((if e.val < HA then f r e * g e jL else 0 : ℝ) : WithBot ℝ)) := by
+    funext e
+    rw [hq e, hk e]
+    by_cases he : e.val < HA
+    · simp only [if_pos he]; rfl
+    · simp only [if_neg he, Option.map₂, Option.bind, Option.map, mul_zero]; rfl
+  rw [hterm, ← WithBot.coe_sum]
+  congr 1
+  rw [show (fun e : Fin BD => if e.val < HA then f r e * g e jL else 0)
+        = (fun e : Fin BD => if h : e.val < HA then
+            (fun d : Fin HA => f r (Fin.castLE hHA d) * g (Fin.castLE hHA d) jL) ⟨e.val, h⟩ else 0) from ?_]
+  · exact sum_padHeadD_eq hHA (fun d : Fin HA => f r (Fin.castLE hHA d) * g (Fin.castLE hHA d) jL)
+  · funext e
+    by_cases he : e.val < HA
+    · have hcast : Fin.castLE hHA (⟨e.val, he⟩ : Fin HA) = e := Fin.ext (by simp)
+      simp only [if_pos he, dif_pos he, hcast]
+    · simp [he]
+
+/-- **reduceSum over axis 1** (the `l_ij = tl.sum(p, 1)` / accumulator column
+reductions). An all-`some` `[M,N]` tile row-reduces to `some` of the real row
+sum. -/
+theorem reduceSum_some {M N : Nat} (h : Fin M → Fin N → ℝ) (x : Tile .real [M, N]) (r : Fin M)
+    (hx : ∀ jL : Fin N, x.data (r, jL, PUnit.unit) = some (h r jL)) :
+    (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [M,N].length) x).data (r, PUnit.unit)
+      = some (Finset.univ.sum (fun jL : Fin N => h r jL)) := by
+  rw [Tile.reduceSumDrop_data]
+  have key : ∀ k : Fin N, x.data
+      (TileShape.insertAxisIndex [M, N] (⟨1, by simp⟩ : Fin [M,N].length) (r, PUnit.unit) k)
+      = ((h r k : ℝ) : WithBot ℝ) := fun k => by
+    rw [show (TileShape.insertAxisIndex [M, N] (⟨1, by simp⟩ : Fin [M,N].length) (r, PUnit.unit) k)
+          = (r, k, PUnit.unit) from rfl]; exact hx k
+  calc (Finset.univ.sum (fun k : Fin N => x.data
+          (TileShape.insertAxisIndex [M, N] (⟨1, by simp⟩ : Fin [M,N].length) (r, PUnit.unit) k)))
+      = Finset.univ.sum (fun k : Fin N => ((h r k : ℝ) : WithBot ℝ)) :=
+        Finset.sum_congr rfl (fun k _ => key k)
+    _ = some (Finset.univ.sum (fun jL : Fin N => h r jL)) := by rw [← WithBot.coe_sum]; rfl
+
+/-- **exp2 elementwise** (`p = tl.math.exp2(qk)`, `alpha = exp2(m_i - m_ij)`).
+`WithBot.realExp2` on a `some` cell is `some (pow2 ·)`. -/
+theorem exp2_some {M N : Nat} (h : Fin M → Fin N → ℝ) (x : Tile .real [M, N])
+    (r : Fin M) (jL : Fin N) (hx : x.data (r, jL, PUnit.unit) = some (h r jL)) :
+    (Tile.uop WithBot.realExp2 x).data (r, jL, PUnit.unit) = some (pow2 (h r jL)) := by
+  show WithBot.realExp2 (x.data (r, jL, PUnit.unit)) = _
+  rw [hx]; simp [WithBot.realExp2, pow2, mul_comm]
+
+/-- `WithBot` sup of coerced reals over a nonempty index = `some` of the real
+`sup'`. Bridges the kernel's `tl.max(qk, 1)` (`reduceMaxDrop` uses `Finset.sup'`)
+to `mP`'s block-max (`Finset.sup` of coerced per-key scores). -/
+theorem sup_coe_eq {N : Nat} (hN : 0 < N) (g : Fin N → ℝ) :
+    Finset.univ.sup (fun i : Fin N => ((g i : ℝ) : WithBot ℝ))
+      = some (Finset.univ.sup' ⟨⟨0, hN⟩, Finset.mem_univ _⟩ g) :=
+  (Finset.coe_sup' ⟨⟨0, hN⟩, Finset.mem_univ _⟩ g).symm
+
+/-- **Masked pointer-load characterization** (the `k`/`v`/`q` loads). On a clean
+state (`undef = 0`), a masked `.ptr` load yields, per lane, `some (readMem …)`
+where the mask holds and `some 0` where it doesn't — i.e.
+`some (if mask then readMem else 0)`. This is what feeds the `hq`/`hk`
+hypotheses of `dot_headMasked` (masked-off head lanes become `some 0`). -/
+theorem load_ptr_mask_real {shape : TileShape}
+    (ptrOp : Op .ptr shape) (maskOp : Op .bool shape) (s : BlockState)
+    (ptrs : Tile .ptr shape) (masks : Tile .bool shape)
+    (hp : evalOp ptrOp s = some ptrs) (hm : evalOp maskOp s = some masks)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    evalOp (.load .real (.ptr ptrOp) (.mask maskOp)) s
+      = some ⟨fun i => some (if masks.data i then
+          s.readMem (ptrs.data i).1 (ptrs.data i).2 else 0)⟩ := by
+  simp only [evalOp, hp, hm, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp only [BlockState.readMemValue_real, hundef]
+  cases hmi : masks.data i <;> simp [hmi]
+
+/-- No-mask `.ptr` load (used for `q_scale`): reads `readMem` at each pointer. -/
+theorem load_ptr_none_real {shape : TileShape}
+    (ptrOp : Op .ptr shape) (s : BlockState) (ptrs : Tile .ptr shape)
+    (hp : evalOp ptrOp s = some ptrs) :
+    evalOp (.load .real (.ptr ptrOp) .none) s
+      = some ⟨fun i => some (s.readMem (ptrs.data i).1 (ptrs.data i).2)⟩ := by
+  simp only [evalOp, hp]
+  refine congrArg some ?_
+  ext i
+  simp [BlockState.readMemValue_real]
 
 def attention_forward_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
@@ -160,6 +495,358 @@ noncomputable def keyScale (s : BlockState) (Q_scale K_scale : RegionName)
     s.readMem Q_scale (s.pids 1 * cdiv N_CTX BLOCK_M + s.pids 0) *
       s.readMem K_scale (s.pids 1 * cdiv N_CTX BLOCK_N + j.val / BLOCK_N)
 
+/-! ## Seeded exp2 / per-key-scale streaming partials (WIP foundation)
+
+The exec-side loop invariant tracks the kernel's running `(m_i, l_i, acc)` after
+`b` processed key-blocks. The kernel seeds `m_i = ⊥ (-inf)`, `l_i = 1`, `acc = 0`
+and updates per block. These are the base-2, per-key-scale analogue of
+`VeriTile/Triton/Semantics/StreamingAccumulator.lean`'s base-`e` partials.
+
+Note the `l_i = 1` seed (this kernel, unlike FA-1's `l_i = 0`): it is zeroed by
+block 0's `α = pow2(⊥ − m₁) = 0`, so for `b ≥ 1` the partials match a clean
+`l`-seed-`0` recurrence. `mP_ne_bot` records that the running max is finite once
+`b ≥ 1`, which is what makes the `α`-rescale algebra
+`pow2(m_b − m_{b+1}) · pow2(−m_b) = pow2(−m_{b+1})` valid. -/
+
+/-- Unscaled score `Σ_e Q[i,e]·K[j,e]` (contraction over the active head dim). -/
+def rawScore {Mq Sk Dh : Nat} (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [Sk, Dh] → ℝ)
+    (i : Fin Mq) (j : Fin Sk) : ℝ :=
+  Finset.univ.sum (fun e : Fin Dh => Q (i, e, PUnit.unit) * K (j, e, PUnit.unit))
+
+/-- Global key index of local lane `jL` in block `b` (`b < numKVBlocks`). -/
+def gkey (BN nB : Nat) (b : Nat) (hb : b < nB) (jL : Fin BN) : Fin (BN * nB) :=
+  ⟨b * BN + jL.val, by
+    calc b * BN + jL.val < (b + 1) * BN := by ring_nf; omega
+      _ ≤ nB * BN := Nat.mul_le_mul_right _ hb
+      _ = BN * nB := by ring⟩
+
+/-- Per-key score for output row `i`, key `(b, jL)`: `keyScale · rawScore`. -/
+def kscore {Mq Dh : Nat} (BN nB : Nat)
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ)
+    (i : Fin Mq) (b : Nat) (hb : b < nB) (jL : Fin BN) : ℝ :=
+  keyScale (gkey BN nB b hb jL) * rawScore Q K i (gkey BN nB b hb jL)
+
+/-- Running per-row max of per-key scores over the first `c` blocks, seeded `⊥`. -/
+noncomputable def mP {Mq Dh : Nat} (BN nB : Nat)
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) : Nat → WithBot ℝ
+  | 0 => (⊥ : WithBot ℝ)
+  | c + 1 =>
+      if h : c + 1 ≤ nB then
+        max (mP BN nB Q K keyScale i c)
+          (Finset.univ.sup (fun jL : Fin BN =>
+            ((kscore BN nB Q K keyScale i c (by omega) jL : ℝ) : WithBot ℝ)))
+      else
+        mP BN nB Q K keyScale i c
+
+/-- The running max is finite (`≠ ⊥`) once at least one nonempty block is seen. -/
+theorem mP_ne_bot {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (hBN : 0 < BN) (i : Fin Mq)
+    (c : Nat) (hc1 : 1 ≤ c) (hc : c ≤ nB) :
+    mP BN nB Q K keyScale i c ≠ (⊥ : WithBot ℝ) := by
+  obtain ⟨c, rfl⟩ : ∃ c', c = c' + 1 := ⟨c - 1, by omega⟩
+  simp only [mP, dif_pos hc]
+  have hle := Finset.le_sup (f := fun jL : Fin BN =>
+      ((kscore BN nB Q K keyScale i c (by omega) jL : ℝ) : WithBot ℝ))
+      (Finset.mem_univ (⟨0, hBN⟩ : Fin BN))
+  intro hmax
+  rw [max_eq_bot] at hmax
+  rw [hmax.2] at hle
+  exact absurd (le_bot_iff.mp hle) (WithBot.coe_ne_bot)
+
+/-- Real running max (the kernel's `m_i`, with `⊥` read as `0` — only used at
+`b ≥ 1` where it is genuinely finite, see `mP_ne_bot`). -/
+noncomputable def mR {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) (c : Nat) : ℝ :=
+  (mP BN nB Q K keyScale i c).unbotD 0
+
+/-- `m`-free running denominator `Σ_{b<c} Σ_jL pow2(kscore b jL)` (no max shift). -/
+noncomputable def lFree2 {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) : Nat → ℝ
+  | 0 => 0
+  | c + 1 =>
+      if h : c + 1 ≤ nB then
+        lFree2 Q K keyScale i c +
+          Finset.univ.sum (fun jL : Fin BN => pow2 (kscore BN nB Q K keyScale i c (by omega) jL))
+      else lFree2 Q K keyScale i c
+
+/-- Online-softmax rescale multiplier `α = exp2(m_b − m_{b+1})`. -/
+noncomputable def alphaP {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) (c : Nat) : ℝ :=
+  (WithBot.realExp2 (WithBot.realSub (mP BN nB Q K keyScale i c)
+    (mP BN nB Q K keyScale i (c + 1)))).unbotD 0
+
+/-- Running per-row denominator `l_i` after `c` blocks (kernel seed `l = 1`). -/
+noncomputable def lP {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) : Nat → ℝ
+  | 0 => 1
+  | c + 1 =>
+      if h : c + 1 ≤ nB then
+        alphaP Q K keyScale i c * lP Q K keyScale i c +
+          Finset.univ.sum (fun jL : Fin BN =>
+            pow2 (kscore BN nB Q K keyScale i c (by omega) jL - mR Q K keyScale i (c + 1)))
+      else lP Q K keyScale i c
+
+theorem mP_eq_coe {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (hBN : 0 < BN) (i : Fin Mq)
+    (c : Nat) (hc1 : 1 ≤ c) (hc : c ≤ nB) :
+    mP BN nB Q K keyScale i c = ((mR Q K keyScale i c : ℝ) : WithBot ℝ) := by
+  have hne := mP_ne_bot Q K keyScale hBN i c hc1 hc
+  unfold mR
+  cases h : mP BN nB Q K keyScale i c with
+  | bot => exact absurd h hne
+  | coe r => simp
+
+theorem realExp2_unbotD_coe (r : ℝ) :
+    (WithBot.realExp2 ((r : ℝ) : WithBot ℝ)).unbotD 0 = pow2 r := by
+  simp [pow2, mul_comm]
+
+theorem alphaP_zero {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) :
+    alphaP Q K keyScale i 0 = 0 := by
+  unfold alphaP
+  rw [show mP BN nB Q K keyScale i 0 = (⊥ : WithBot ℝ) from rfl,
+      WithBot.realSub_bot_left, WithBot.realExp2_bot]
+  rfl
+
+theorem alphaP_succ {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (hBN : 0 < BN) (i : Fin Mq)
+    (c : Nat) (hc1 : 1 ≤ c) (hc : c + 1 ≤ nB) :
+    alphaP Q K keyScale i c = pow2 (mR Q K keyScale i c - mR Q K keyScale i (c + 1)) := by
+  unfold alphaP
+  rw [mP_eq_coe Q K keyScale hBN i c hc1 (by omega),
+      mP_eq_coe Q K keyScale hBN i (c + 1) (by omega) hc]
+  rw [WithBot.realSub_coe_coe, realExp2_unbotD_coe]
+
+/-- Factor the max-shift out of a per-block denominator sum. -/
+theorem block_sum_shift {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) (c : Nat) (hc : c < nB) (m : ℝ) :
+    Finset.univ.sum (fun jL : Fin BN =>
+        pow2 (kscore BN nB Q K keyScale i c (by omega) jL - m))
+      = pow2 (-m) * Finset.univ.sum (fun jL : Fin BN =>
+          pow2 (kscore BN nB Q K keyScale i c (by omega) jL)) := by
+  rw [Finset.mul_sum]
+  apply Finset.sum_congr rfl
+  intro jL _
+  rw [show kscore BN nB Q K keyScale i c (by omega) jL - m
+        = (-m) + kscore BN nB Q K keyScale i c (by omega) jL by ring, pow2_add]
+
+/-- **Denominator consistency.** For `1 ≤ c ≤ nB`, the kernel's running
+denominator `l_i` equals `pow2(−m_i)` times the max-free reference sum — the
+exp2/per-key-scale analogue of `StreamingAccumulator`'s base-`e` consistency.
+The `α`-rescale telescopes the max shift; the `l = 1` seed is killed at `c = 0`
+by `alphaP_zero`. -/
+theorem lP_eq {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (hBN : 0 < BN) (i : Fin Mq) :
+    ∀ c, 1 ≤ c → c ≤ nB →
+      lP Q K keyScale i c = pow2 (-(mR Q K keyScale i c)) * lFree2 Q K keyScale i c := by
+  intro c hc1 hc
+  induction c, hc1 using Nat.le_induction with
+  | base =>
+    have h1 : (1 : Nat) ≤ nB := hc
+    simp only [lP, dif_pos h1, alphaP_zero Q K keyScale i, zero_mul, zero_add]
+    rw [block_sum_shift Q K keyScale i 0 (by omega)]
+    simp only [lFree2, dif_pos h1]
+    ring
+  | succ c hc1 ih =>
+    have hc' : c ≤ nB := by omega
+    have ihc := ih hc'
+    simp only [lP, dif_pos hc]
+    rw [ihc, alphaP_succ Q K keyScale hBN i c hc1 hc,
+        block_sum_shift Q K keyScale i c (by omega)]
+    simp only [lFree2, dif_pos hc]
+    rw [show pow2 (mR Q K keyScale i c - mR Q K keyScale i (c+1))
+            * (pow2 (-(mR Q K keyScale i c)) * lFree2 Q K keyScale i c)
+          = pow2 ((mR Q K keyScale i c - mR Q K keyScale i (c+1)) + (-(mR Q K keyScale i c)))
+              * lFree2 Q K keyScale i c by rw [pow2_add]; ring]
+    rw [show (mR Q K keyScale i c - mR Q K keyScale i (c+1)) + (-(mR Q K keyScale i c))
+          = -(mR Q K keyScale i (c+1)) by ring]
+    ring
+
+/-- `m`-free running numerator `Σ_{b<c} Σ_jL pow2(kscore)·V[gkey, d]`. -/
+noncomputable def oFree2 {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K V : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) (d : Fin Dh) : Nat → ℝ
+  | 0 => 0
+  | c + 1 =>
+      if h : c + 1 ≤ nB then
+        oFree2 Q K V keyScale i d c +
+          Finset.univ.sum (fun jL : Fin BN =>
+            pow2 (kscore BN nB Q K keyScale i c (by omega) jL)
+              * V (gkey BN nB c (by omega) jL, d, PUnit.unit))
+      else oFree2 Q K V keyScale i d c
+
+/-- Running per-row unnormalized output `acc[i,d]` after `c` blocks. -/
+noncomputable def oP {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K V : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) (d : Fin Dh) : Nat → ℝ
+  | 0 => 0
+  | c + 1 =>
+      if h : c + 1 ≤ nB then
+        alphaP Q K keyScale i c * oP Q K V keyScale i d c +
+          Finset.univ.sum (fun jL : Fin BN =>
+            pow2 (kscore BN nB Q K keyScale i c (by omega) jL - mR Q K keyScale i (c + 1))
+              * V (gkey BN nB c (by omega) jL, d, PUnit.unit))
+      else oP Q K V keyScale i d c
+
+/-- Numerator analogue of `block_sum_shift`. -/
+theorem block_sum_shift_v {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K V : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) (d : Fin Dh) (c : Nat) (hc : c < nB) (m : ℝ) :
+    Finset.univ.sum (fun jL : Fin BN =>
+        pow2 (kscore BN nB Q K keyScale i c (by omega) jL - m)
+          * V (gkey BN nB c (by omega) jL, d, PUnit.unit))
+      = pow2 (-m) * Finset.univ.sum (fun jL : Fin BN =>
+          pow2 (kscore BN nB Q K keyScale i c (by omega) jL)
+            * V (gkey BN nB c (by omega) jL, d, PUnit.unit)) := by
+  rw [Finset.mul_sum]
+  apply Finset.sum_congr rfl
+  intro jL _
+  rw [show kscore BN nB Q K keyScale i c (by omega) jL - m
+        = (-m) + kscore BN nB Q K keyScale i c (by omega) jL by ring, pow2_add]
+  ring
+
+/-- **Numerator consistency** (the `acc` analogue of `lP_eq`). -/
+theorem oP_eq {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K V : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (hBN : 0 < BN) (i : Fin Mq) (d : Fin Dh) :
+    ∀ c, 1 ≤ c → c ≤ nB →
+      oP Q K V keyScale i d c = pow2 (-(mR Q K keyScale i c)) * oFree2 Q K V keyScale i d c := by
+  intro c hc1 hc
+  induction c, hc1 using Nat.le_induction with
+  | base =>
+    have h1 : (1 : Nat) ≤ nB := hc
+    simp only [oP, dif_pos h1, alphaP_zero Q K keyScale i, zero_mul, zero_add]
+    rw [block_sum_shift_v Q K V keyScale i d 0 (by omega)]
+    simp only [oFree2, dif_pos h1]
+    ring
+  | succ c hc1 ih =>
+    have hc' : c ≤ nB := by omega
+    have ihc := ih hc'
+    simp only [oP, dif_pos hc]
+    rw [ihc, alphaP_succ Q K keyScale hBN i c hc1 hc,
+        block_sum_shift_v Q K V keyScale i d c (by omega)]
+    simp only [oFree2, dif_pos hc]
+    rw [show pow2 (mR Q K keyScale i c - mR Q K keyScale i (c+1))
+            * (pow2 (-(mR Q K keyScale i c)) * oFree2 Q K V keyScale i d c)
+          = pow2 ((mR Q K keyScale i c - mR Q K keyScale i (c+1)) + (-(mR Q K keyScale i c)))
+              * oFree2 Q K V keyScale i d c by rw [pow2_add]; ring]
+    rw [show (mR Q K keyScale i c - mR Q K keyScale i (c+1)) + (-(mR Q K keyScale i c))
+          = -(mR Q K keyScale i (c+1)) by ring]
+    ring
+
+/-- **Ratio invariance.** The running max shift cancels in `acc / l_i`
+(`pow2` is never zero), so the kernel's normalized output after `c ≥ 1` blocks
+equals the max-free `oFree2 / lFree2`. -/
+theorem ratioP {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K V : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (hBN : 0 < BN) (i : Fin Mq) (d : Fin Dh)
+    (c : Nat) (hc1 : 1 ≤ c) (hc : c ≤ nB) :
+    oP Q K V keyScale i d c / lP Q K keyScale i c
+      = oFree2 Q K V keyScale i d c / lFree2 Q K keyScale i c := by
+  rw [oP_eq Q K V keyScale hBN i d c hc1 hc, lP_eq Q K keyScale hBN i c hc1 hc,
+      mul_div_mul_left _ _ (ne_of_gt (pow2_pos _))]
+
+/-! ### Closed-form bridge: the all-blocks ratio IS `attentionRealBase2PerKeyScale`
+
+The kernel's loop covers keys block-by-block; `lFree2`/`oFree2` are block-grid
+sums. Reindexing the grid to the flat per-key domain (`sum_fin_eq_block_grid`,
+with `gkey = cast ∘ finProdFinEquiv`) turns them into the closed-form
+denominator/numerator, whose ratio is exactly `attentionRealBase2PerKeyScale`. -/
+
+/-- `gkey b a` (global key `b·BN + a`) is the block-grid reindex element. -/
+theorem gkey_eq_cast {BN nB : Nat} (b : Fin nB) (a : Fin BN) :
+    gkey BN nB b.val b.isLt a = Fin.cast (Nat.mul_comm nB BN) (finProdFinEquiv (b, a)) := by
+  apply Fin.ext; simp [gkey, finProdFinEquiv_apply_val]; ring
+
+theorem lFree2_range {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) : ∀ c,
+    lFree2 Q K keyScale i c
+      = Finset.sum (Finset.range c) (fun b =>
+          if h : b < nB then
+            Finset.univ.sum (fun jL : Fin BN => pow2 (kscore BN nB Q K keyScale i b h jL))
+          else 0) := by
+  intro c
+  induction c with
+  | zero => simp [lFree2]
+  | succ c ih =>
+    rw [Finset.sum_range_succ, ← ih]
+    by_cases h : c + 1 ≤ nB
+    · simp only [lFree2, dif_pos h, dif_pos (show c < nB by omega)]
+    · simp only [lFree2, dif_neg h, dif_neg (show ¬ c < nB by omega), add_zero]
+
+theorem lFree2_flat {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) :
+    lFree2 Q K keyScale i nB
+      = Finset.univ.sum (fun j : Fin (BN * nB) => pow2 (keyScale j * rawScore Q K i j)) := by
+  rw [lFree2_range Q K keyScale i nB,
+      ← Fin.sum_univ_eq_sum_range (fun b => if h : b < nB then
+            Finset.univ.sum (fun jL : Fin BN => pow2 (kscore BN nB Q K keyScale i b h jL)) else 0) nB,
+      sum_fin_eq_block_grid BN nB (fun j => pow2 (keyScale j * rawScore Q K i j))]
+  apply Finset.sum_congr rfl; intro b _
+  rw [dif_pos b.isLt]; apply Finset.sum_congr rfl; intro a _; rw [← gkey_eq_cast]; rfl
+
+theorem oFree2_range {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K V : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) (d : Fin Dh) : ∀ c,
+    oFree2 Q K V keyScale i d c
+      = Finset.sum (Finset.range c) (fun b =>
+          if h : b < nB then
+            Finset.univ.sum (fun jL : Fin BN =>
+              pow2 (kscore BN nB Q K keyScale i b h jL) * V (gkey BN nB b h jL, d, PUnit.unit))
+          else 0) := by
+  intro c
+  induction c with
+  | zero => simp [oFree2]
+  | succ c ih =>
+    rw [Finset.sum_range_succ, ← ih]
+    by_cases h : c + 1 ≤ nB
+    · simp only [oFree2, dif_pos h, dif_pos (show c < nB by omega)]
+    · simp only [oFree2, dif_neg h, dif_neg (show ¬ c < nB by omega), add_zero]
+
+theorem oFree2_flat {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K V : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (i : Fin Mq) (d : Fin Dh) :
+    oFree2 Q K V keyScale i d nB
+      = Finset.univ.sum (fun j : Fin (BN * nB) =>
+          pow2 (keyScale j * rawScore Q K i j) * V (j, d, PUnit.unit)) := by
+  rw [oFree2_range Q K V keyScale i d nB,
+      ← Fin.sum_univ_eq_sum_range (fun b => if h : b < nB then
+            Finset.univ.sum (fun jL : Fin BN =>
+              pow2 (kscore BN nB Q K keyScale i b h jL) * V (gkey BN nB b h jL, d, PUnit.unit))
+          else 0) nB,
+      sum_fin_eq_block_grid BN nB
+        (fun j => pow2 (keyScale j * rawScore Q K i j) * V (j, d, PUnit.unit))]
+  apply Finset.sum_congr rfl; intro b _
+  rw [dif_pos b.isLt]; apply Finset.sum_congr rfl; intro a _; rw [← gkey_eq_cast]; rfl
+
+/-- **The math heart of the closed-form proof.** The kernel's normalized output
+`acc / l_i` after all `nB` blocks (`oP / lP`) equals the closed-form base-2,
+per-key-scaled attention `attentionRealBase2PerKeyScale`. Combines ratio
+invariance (`ratioP`) with the block-grid→flat reindex of `lFree2`/`oFree2`.
+Sorry-free; the remaining work is purely the `exec`-side production of `oP`/`lP`
+in the `m_i`/`l_i`/`acc` registers (preLoop + step + postLoop). -/
+theorem closed_form_eq {Mq Dh : Nat} {BN nB : Nat}
+    (Q : TileIndex [Mq, Dh] → ℝ) (K V : TileIndex [BN * nB, Dh] → ℝ)
+    (keyScale : Fin (BN * nB) → ℝ) (hBN : 0 < BN) (hnB : 1 ≤ nB) (i : Fin Mq) (d : Fin Dh) :
+    oP Q K V keyScale i d nB / lP Q K keyScale i nB
+      = attentionRealBase2PerKeyScale Q K V keyScale (i, d, PUnit.unit) := by
+  rw [ratioP Q K V keyScale hBN i d nB hnB le_rfl, oFree2_flat, lFree2_flat]
+  simp only [attentionRealBase2PerKeyScale, pow2, rawScore]
+
 /-! ## Exec-proof roadmap (Phase 3, multi-session grind)
 
 The compiled body (`(surface …).toAlgKernel.body`, verified via dump) is:
@@ -227,6 +914,320 @@ list (no transcription); each `sᵢ` is an explicit nested `setReg` with the val
 bop/ptrAdd/expandDim/dot/reduceSum/…) resolves refs (setReg_* @[simp]) + reduces tile ops;
 scalar results close by defeq (`congr 1`). ptr stmts (Q_ptrs…) use `evalOp_expandDim` +
 `Tile.ptrAdd_data`; masked loads use the load clause (`evalOp_load_region_none` + mask). -/
+
+/-- **Phase-3 top-level exec reduction (sorry-free).**
+
+Reduces the closed-form `exec` obligation to the three FA-1-style phase
+obligations against an arbitrary loop invariant `P : Nat → BlockState → Prop`
+(the counter is the key offset `i = block · BLOCK_N`):
+
+* `hpre`  — the 22-statement prefix runs to some `s0` with `P 0 s0` (preLoop);
+* `hPle` + `hstep` — `P` is bounded by the loop `stop` and each `loopBody`
+  iteration advances the counter by `BLOCK_N` preserving `P` (the `osBlockStep`
+  loop step);
+* `hpost` — from `P (BLOCK_N · numKVBlocks)` the `acc /= l_i` + masked store tail
+  runs to some final state satisfying the user's `post` (postLoop + math bridge).
+
+The body decomposition (`body = take 22 ++ forRange :: accAssign :: store :: []`,
+which holds by `rfl`), the `forRange_inv` loop induction, and the loop-exit
+alignment `final = stop` (from the bound `hPle` and `forRange_inv`'s
+`stop ≤ final`) are all discharged here. Only `hpre`/`hstep`/`hpost` remain —
+those are the genuine multi-thousand-line FA-1 analogues (preLoop, the
+`osBlockStep` step, postLoop), tracked in the roadmap above. -/
+theorem attention_forward_triton_exec_reduction
+    (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
+      HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)
+    (hBN : 0 < BLOCK_N)
+    (P : Nat → BlockState → Prop)
+    (loopBody : List Stmt) (accAssign storeStmt : Stmt)
+    (hbody : (attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE).toAlgKernel.body
+      = (attention_forward_triton_surface Q K V Q_scale K_scale Out
+          stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+          stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+          Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+          HEAD_ACTIVE STAGE).toAlgKernel.body.take 22
+        ++ (Stmt.forRange "start_n" 0 (BLOCK_N * numKVBlocks) BLOCK_N loopBody
+            :: accAssign :: storeStmt :: []))
+    (hpre : ∃ s0, stepStmts ((attention_forward_triton_surface Q K V Q_scale K_scale Out
+          stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+          stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+          Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+          HEAD_ACTIVE STAGE).toAlgKernel.body.take 22) s = some s0 ∧ P 0 s0)
+    (hPle : ∀ i st, P i st → i ≤ BLOCK_N * numKVBlocks)
+    (hstep : ∀ i st, i < BLOCK_N * numKVBlocks → P i st →
+        ∃ st', stepStmts loopBody (st.setReg "start_n" .nat [] (Tile.scalar i)) = some st'
+          ∧ P (i + BLOCK_N) st')
+    (post : BlockState → Prop)
+    (hpost : ∀ st, P (BLOCK_N * numKVBlocks) st →
+        ∃ sfin, stepStmts (accAssign :: storeStmt :: []) st = some sfin ∧ post sfin) :
+    ∃ sfin, exec (attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE).toAlgKernel s = some sfin ∧ post sfin := by
+  obtain ⟨s0, hpre_eq, hP0⟩ := hpre
+  obtain ⟨final, sLoop, hLoopStmt, hfinal, hPLoop⟩ :=
+    forRange_inv (idx := "start_n") (start := 0) (stop := BLOCK_N * numKVBlocks)
+      (step := BLOCK_N) (by omega) hP0 hstep
+  have hfinalEq : final = BLOCK_N * numKVBlocks :=
+    le_antisymm (hPle _ _ hPLoop) hfinal
+  subst hfinalEq
+  obtain ⟨sfin, hTail, hpostFin⟩ := hpost sLoop hPLoop
+  refine ⟨sfin, ?_, hpostFin⟩
+  rw [exec, hbody, stepStmts.append_some hpre_eq, stepStmts.cons_some hLoopStmt, hTail]
+
+/-- **Loop invariant for the exec proof** (counter `i = block c · BLOCK_N`).
+
+Captures the full register state after the `c`-th key block: program ids and the
+loop-invariant registers (`q` loaded under the head/row mask, `q_scale`, `offs_*`,
+`O_block_ptr`) fixed; `m_i`/`l_i`/`acc` equal the seeded streaming partials
+`mP`/`lP`/`oP` over the first `c` blocks; and the `K_ptrs`/`K_scale_ptr`/`V_ptrs`
+pointers advanced by `c` steps. `preLoop` establishes `P 0`, `step` advances `P`
+by one block, and `postLoop` reads the closed form off `P numKVBlocks` via
+`closed_form_eq`. (Strides specialized to the closed-form contract:
+`stride_qm = stride_kn = HEAD_DIM`, head stride `1`.) -/
+noncomputable def attnInvariant
+    (Q K V Q_scale K_scale Out : RegionName) (s0 : BlockState)
+    (stride_qz stride_qh H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (i : Nat) (s : BlockState) : Prop :=
+  let nB := numKVBlocks; let c := i / BLOCK_N; let N_CTX := BLOCK_N * nB
+  let base := baseOffset s0 H stride_qz stride_qh
+  let qT := qTile s0 Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE
+  let kT := kTile s0 K H stride_qz stride_qh HEAD_DIM N_CTX HEAD_ACTIVE
+  let vT := vTile s0 V H stride_qz stride_qh HEAD_DIM N_CTX HEAD_ACTIVE
+  let kS := keyScale s0 Q_scale K_scale N_CTX BLOCK_M BLOCK_N N_CTX
+  s.pids = s0.pids ∧ i = c * BLOCK_N ∧ c ≤ nB ∧
+  (s.regs .real [BLOCK_M] "m_i" = some ⟨fun r : TileIndex [BLOCK_M] => mP BLOCK_N nB qT kT kS r.1 c⟩) ∧
+  (s.regs .real [BLOCK_M] "l_i" = some ⟨fun r : TileIndex [BLOCK_M] => ((lP qT kT kS r.1 c : ℝ) : WithBot ℝ)⟩) ∧
+  (s.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        if h : idx.2.1.val < HEAD_ACTIVE then ((oP qT kT vT kS idx.1 ⟨idx.2.1.val, h⟩ c : ℝ) : WithBot ℝ) else some 0⟩) ∧
+  (s.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        some (if (mIndex s0 BLOCK_M idx.1 < N_CTX ∧ idx.2.1.val < HEAD_ACTIVE)
+          then s0.readMem Q (base + mIndex s0 BLOCK_M idx.1 * HEAD_DIM + idx.2.1.val) else 0)⟩) ∧
+  (s.regs .real [] "q_scale" = some (Tile.scalar (some (s0.readMem Q_scale (s0.pids 1 * cdiv N_CTX BLOCK_M + s0.pids 0))))) ∧
+  (s.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))) ∧
+  (s.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => mIndex s0 BLOCK_M r))) ∧
+  (s.regs .nat [BLOCK_DMODEL] "offs_k" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))) ∧
+  (s.regs .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        (Out.cast, base + mIndex s0 BLOCK_M idx.1 * HEAD_DIM + idx.2.1.val)⟩) ∧
+  (s.regs .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs" = some ⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+        (K.cast, base + idx.1.val + idx.2.1.val * HEAD_DIM + c * BLOCK_N * HEAD_DIM)⟩) ∧
+  (s.regs .ptr [] "K_scale_ptr" = some (Tile.scalar (K_scale.cast, s0.pids 1 * cdiv N_CTX BLOCK_N + c))) ∧
+  (s.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs" = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        (V.cast, base + idx.1.val * HEAD_DIM + idx.2.1.val + c * BLOCK_N * HEAD_DIM)⟩)
+
+/-- **preLoop chunk 1** (statements 0–10): the 8 scalar offsets + the 3 index
+vectors. Steps to a state with all the register readbacks the pointer/load/init
+chunks need downstream. -/
+theorem preLoop_scalars (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat) :
+    ∃ s11, stepStmts ((attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE).toAlgKernel.body.take 11) s = some s11
+      ∧ s11.pids = s.pids
+      ∧ s11.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
+      ∧ s11.regs .nat [] "qvk_offset" = some (Tile.scalar (s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh))
+      ∧ s11.regs .nat [] "q_scale_offset" = some (Tile.scalar (s.pids 1 * cdiv (BLOCK_N * numKVBlocks) BLOCK_M))
+      ∧ s11.regs .nat [] "k_scale_offset" = some (Tile.scalar (s.pids 1 * cdiv (BLOCK_N * numKVBlocks) BLOCK_N))
+      ∧ s11.regs .nat [BLOCK_M] "offs_m" = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 0 * BLOCK_M + r.val))
+      ∧ s11.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      ∧ s11.regs .nat [BLOCK_DMODEL] "offs_k" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))
+      ∧ s11.undef = s.undef
+      ∧ s11.mem = s.mem := by
+  rw [show ((attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE).toAlgKernel.body.take 11)
+      = [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+          Stmt.assign .nat [] "off_hz" (Op.programId 1),
+          Stmt.assign .nat [] "off_z" (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)),
+          Stmt.assign .nat [] "off_h" (Op.mod .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)),
+          Stmt.assign .nat [] "qvk_offset" (Op.add .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat stride_qz))
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat stride_qh))),
+          Stmt.assign .nat [] "vk_offset" (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "qvk_offset") (Op.constNat HEAD_DIM)),
+          Stmt.assign .nat [] "q_scale_offset" (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+              (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.constNat (BLOCK_N * numKVBlocks)) (Op.constNat BLOCK_M)) (Op.constNat 1)) (Op.constNat BLOCK_M))),
+          Stmt.assign .nat [] "k_scale_offset" (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz")
+              (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.constNat (BLOCK_N * numKVBlocks)) (Op.constNat BLOCK_N)) (Op.constNat 1)) (Op.constNat BLOCK_N))),
+          Stmt.assign .nat [BLOCK_M] "offs_m" (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)),
+          Stmt.assign .nat [BLOCK_N] "offs_n" (Op.arange BLOCK_N),
+          Stmt.assign .nat [BLOCK_DMODEL] "offs_k" (Op.arange BLOCK_DMODEL) ] from rfl]
+  simp [stepStmts, stepStmt, evalOp_floorDiv, evalOp_mod, Option.bind, BlockState.setReg,
+    Tile.bop, Tile.vec, NumericDType.add, NumericDType.mul, NumericDType.div, NumericDType.sub, cdiv]
+
+set_option maxHeartbeats 1000000 in
+/-- **preLoop** (statements 0–21): from a clean input state (`undef = 0`), the
+prologue steps to a state satisfying `attnInvariant … 0` — the base case of the
+loop induction (`m_i = ⊥`, `l_i = 1`, `acc = 0`, `q`/`q_scale` loaded, pointers
+seeded). -/
+theorem preLoop (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s', stepStmts ((attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE).toAlgKernel.body.take 22) s = some s'
+      ∧ attnInvariant Q K V Q_scale K_scale Out s
+          stride_qz stride_qh H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE 0 s' := by
+  obtain ⟨s11, h11, hpids, hstart, hqvk, hqso, hkso, hm, hn, hk, huf, hmem⟩ :=
+    preLoop_scalars Q K V Q_scale K_scale Out s
+      stride_qz stride_qh stride_qz H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE
+  set qvk : Nat := s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh with hqvk_def
+  set gm : Fin BLOCK_M → Nat := fun r => s.pids 0 * BLOCK_M + (r : Nat) with hgm_def
+  have hrm : s11.readMem = s.readMem := by funext rg o; simp [BlockState.readMem, hmem]
+  rw [show ((attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE).toAlgKernel.body.take 22)
+      = ((attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE).toAlgKernel.body.take 11) ++
+      [ Stmt.assign .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs"
+          (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+            (Op.add .nat Broadcast.nil.consL.consR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+                  (Op.constNat HEAD_DIM)))
+              (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k"))
+                (Op.constNat 1)))),
+        Stmt.assign .ptr [] "Q_scale_ptr"
+          (Op.ptrAdd Broadcast.nil (Op.ptrBase Q_scale)
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "q_scale_offset") (Op.ref .nat [] "start_m"))),
+        Stmt.assign .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs"
+          (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+            (Op.add .nat Broadcast.nil.consL.consR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")))
+              (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+                (Op.constNat HEAD_DIM)))),
+        Stmt.assign .ptr [] "K_scale_ptr"
+          (Op.ptrAdd Broadcast.nil (Op.ptrBase K_scale) (Op.ref .nat [] "k_scale_offset")),
+        Stmt.assign .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"
+          (Op.ptrAdd Broadcast.scalarL (Op.ptrBase V)
+            (Op.add .nat Broadcast.nil.consL.consR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")) (Op.constNat HEAD_DIM)))
+              (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k")) (Op.constNat 1)))),
+        Stmt.assign .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"
+          (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+            (Op.add .nat Broadcast.nil.consL.consR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "qvk_offset")
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+                  (Op.constNat HEAD_DIM)))
+              (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_k"))
+                (Op.constNat 1)))),
+        Stmt.assign .real [BLOCK_M] "m_i"
+          (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf),
+        Stmt.assign .real [BLOCK_M] "l_i"
+          (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) (Op.const 1.0)),
+        Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc" (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)),
+        Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "q"
+          (Op.load .real (.ptr (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs"))
+            (.mask (Op.boolAnd Broadcast.nil.consL.consR
+              (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+                (Op.constNat (BLOCK_N * numKVBlocks)))
+              (Op.expandDim ⟨0, by simp⟩ (Op.lt .nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))),
+        Stmt.assign .real [] "q_scale"
+          (Op.load .real (.ptr (Op.ref .ptr [] "Q_scale_ptr")) .none) ] from rfl,
+      stepStmts.append_some h11,
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (qptrs_eval s11 Q BLOCK_M BLOCK_DMODEL HEAD_DIM qvk gm hqvk hm hk)),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (qscaleptr_eval _ Q_scale (s.pids 1 * cdiv (BLOCK_N * numKVBlocks) BLOCK_M) (s.pids 0)
+        (by simp [hqso]) (by simp [hstart]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (kptrs_eval _ K BLOCK_DMODEL BLOCK_N HEAD_DIM qvk (by simp [hqvk]) (by simp [hk]) (by simp [hn]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (kscaleptr_eval _ K_scale (s.pids 1 * cdiv (BLOCK_N * numKVBlocks) BLOCK_N) (by simp [hkso]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (vptrs_eval _ V BLOCK_N BLOCK_DMODEL HEAD_DIM qvk (by simp [hqvk]) (by simp [hn]) (by simp [hk]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (qptrs_eval _ Out BLOCK_M BLOCK_DMODEL HEAD_DIM qvk gm (by simp [hqvk]) (by simp [hm]) (by simp [hk]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some (mi_init_eval _ BLOCK_M)),
+    stepStmts.cons_some (stepStmt_assign_eq_some (li_init_eval _ BLOCK_M)),
+    stepStmts.cons_some (stepStmt_assign_eq_some (acc_init_eval _ BLOCK_M BLOCK_DMODEL)),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (load_ptr_mask_real (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "Q_ptrs") _ _
+        (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Q.cast, qvk + gm idx.1 * HEAD_DIM + idx.2.1.val * 1)⟩ : Tile .ptr [BLOCK_M, BLOCK_DMODEL])
+        _ (by simp) (qmask_eval _ BLOCK_M BLOCK_DMODEL (BLOCK_N * numKVBlocks) HEAD_ACTIVE gm (by simp [hm]))
+        (by intro rg o; simp [huf, hundef]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (load_ptr_none_real (Op.ref .ptr [] "Q_scale_ptr")
+        _ (Tile.scalar (Q_scale.cast, s.pids 1 * cdiv (BLOCK_N * numKVBlocks) BLOCK_M + s.pids 0))
+        (by simp))),
+    stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by simp [hpids], by simp, by simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- m_i = mP … 0 = ⊥
+    simp only [Nat.zero_div, mP]
+    simp
+  · -- l_i = lP … 0 = 1
+    simp only [Nat.zero_div, lP]
+    simp
+    rfl
+  · -- acc = oP … 0 = 0
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx
+    by_cases h : idx.2.1.val < HEAD_ACTIVE
+    · simp only [dif_pos h, oP, Nat.zero_div]; rfl
+    · simp [h]
+  · -- q (masked load)
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx
+    simp [hrm, baseOffset, hqvk_def, mIndex, hgm_def, Bool.and_eq_true, decide_eq_true_eq, mul_one]
+  · -- q_scale
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    simp [hrm]
+  · -- offs_n
+    simp [hn]
+  · -- offs_m
+    simp only [BlockState.setReg]
+    rw [hm]
+    refine congrArg some ?_
+    ext r
+    simp [Tile.vec, mIndex, hgm_def]
+  · -- offs_k
+    simp [hk]
+  · -- O_block_ptr
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [baseOffset, hqvk_def, mIndex, hgm_def, mul_one]
+  · -- K_ptrs
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [baseOffset, hqvk_def, Nat.zero_div]
+  · -- K_scale_ptr
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    simp [Nat.zero_div]
+  · -- V_ptrs
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [baseOffset, hqvk_def, Nat.zero_div, mul_one]
 
 /-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
