@@ -1255,7 +1255,8 @@ noncomputable def attnInvariant
         (K.cast, base + idx.1.val + idx.2.1.val * HEAD_DIM + c * BLOCK_N * HEAD_DIM)⟩) ∧
   (s.regs .ptr [] "K_scale_ptr" = some (Tile.scalar (K_scale.cast, s0.pids 1 * cdiv N_CTX BLOCK_N + c))) ∧
   (s.regs .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs" = some ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-        (V.cast, base + idx.1.val * HEAD_DIM + idx.2.1.val + c * BLOCK_N * HEAD_DIM)⟩)
+        (V.cast, base + idx.1.val * HEAD_DIM + idx.2.1.val + c * BLOCK_N * HEAD_DIM)⟩) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 /-- **preLoop chunk 1** (statements 0–10): the 8 scalar offsets + the 3 index
 vectors. Steps to a state with all the register readbacks the pointer/load/init
@@ -1409,7 +1410,7 @@ theorem preLoop (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
         (by simp))),
     stepStmts.nil]
   refine ⟨_, rfl, ?_⟩
-  refine ⟨by simp [hpids], by simp, by simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨by simp [hpids], by simp, by simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- m_i = mP … 0 = ⊥
     simp only [Nat.zero_div, mP]
     simp
@@ -1464,6 +1465,10 @@ theorem preLoop (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
       not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
     refine congrArg some ?_
     ext idx <;> simp [baseOffset, hqvk_def, Nat.zero_div, mul_one]
+  · -- undef = 0
+    intro rg o; simp [huf, hundef]
+  · -- mem = s0.mem
+    exact hmem
 
 /-- The 19-statement loop body (`for start_n …`), transcribed. Independent of the
 region names (all loads/stores go through register pointers). -/
