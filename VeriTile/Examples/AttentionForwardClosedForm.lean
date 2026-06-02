@@ -1040,6 +1040,40 @@ theorem dot_qk_eq (s : BlockState) (Q K : RegionName)
   congr 2
   ring
 
+/-- **`qk = kscore`**: the loop's `qk = (dot q k)·q_scale·k_scale` tile equals the
+per-key score `kscore` at `(r, c, jL)`. Combines `dot_qk_eq` with the scale
+algebra `keyScale(gkey) = q_scale · k_scale` (using `gkey/BLOCK_N = c`). The
+`castFloat .real .real` and the scalar broadcasts are identities. -/
+theorem qk_eq (s : BlockState) (Q K Q_scale K_scale : RegionName)
+    (H sqz sqh HD BM BN BD HA nB c : Nat)
+    (hHA : HA ≤ BD) (hc : c < nB) (hBN : 0 < BN)
+    (r : Fin BM) (jL : Fin BN)
+    (q : Tile .real [BM, BD]) (k : Tile .real [BD, BN])
+    (hq : ∀ (i : Fin BM) (e : Fin BD), q.data (i, e, PUnit.unit)
+        = some (if (mIndex s BM i < BN * nB ∧ e.val < HA)
+            then s.readMem Q (baseOffset s H sqz sqh + mIndex s BM i * HD + e.val) else 0))
+    (hk : ∀ (e : Fin BD) (j : Fin BN), k.data (e, j, PUnit.unit)
+        = some (if (j.val < BN * nB - c * BN ∧ e.val < HA)
+            then s.readMem K (baseOffset s H sqz sqh + e.val + j.val * HD + c * BN * HD) else 0)) :
+    (Tile.bop NumericDType.real.mul Broadcast.scalarR
+       (Tile.bop NumericDType.real.mul Broadcast.scalarR
+         (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] q k).data i)⟩ : Tile .real [BM,BN])
+         (Tile.scalar (some (s.readMem Q_scale (s.pids 1 * cdiv (BN * nB) BM + s.pids 0)) : WithBot ℝ)))
+       (Tile.scalar (some (s.readMem K_scale (s.pids 1 * cdiv (BN * nB) BN + c)) : WithBot ℝ))).data (r, jL, PUnit.unit)
+      = some (kscore BN nB (qTileMasked s Q H sqz sqh HD BM HA (BN * nB))
+          (kTile s K H sqz sqh HD (BN * nB) HA)
+          (keyScale s Q_scale K_scale (BN * nB) BM BN (BN * nB)) r c hc jL) := by
+  have hdot := dot_qk_eq s Q K H sqz sqh HD BM BN BD HA nB c hHA hc r jL q k hq hk
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    FloatDType.cast, FloatDType.real_ofWithBot, FloatDType.real_toWithBot, hdot,
+    NumericDType.mul, WithBot.realMul, Tile.scalar_data, Option.map₂]
+  refine congrArg some ?_
+  have hgkeydiv : (c * BN + jL.val) / BN = c := by
+    rw [Nat.mul_comm, Nat.add_comm, Nat.add_mul_div_left _ _ hBN, Nat.div_eq_of_lt jL.isLt, Nat.zero_add]
+  unfold kscore keyScale gkey
+  simp only [hgkeydiv]
+  ring
+
 /-- **Loop invariant for the exec proof** (counter `i = block c · BLOCK_N`).
 
 Captures the full register state after the `c`-th key block: program ids and the
