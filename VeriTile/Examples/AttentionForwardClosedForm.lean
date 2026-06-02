@@ -434,6 +434,29 @@ theorem qk_op_eval (s : BlockState) (BM BN BD : Nat)
       = some (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile ktile).data i)⟩ : Tile .real [BM,BN]) := hcast
   rw [evalOp_mul, evalOp_mul, hcast2]; simp [hqs, hks]
 
+/-- **`m_ij` statement eval** (`tl.maximum(m_i, tl.max(qk, 1))`): the `where`/`gt`
+over `m_i` and the `tl.max(qk,1)` row reduction. `reduceMax` has the same
+shape-discrimination issue as `castFloat` (its result shape `eraseAxis` blocks
+`simp`/`rw` matching), so the reduced row is proven naturally then defeq-coerced
+to `[BLOCK_M]`. -/
+theorem mij_op_eval (s : BlockState) (BM BN : Nat)
+    (mtile : Tile .real [BM]) (qktile : Tile .real [BM, BN]) (rmaxT : Tile .real [BM])
+    (hmi : s.regs .real [BM] "m_i" = some mtile)
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length) qktile = some rmaxT) :
+    evalOp (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BM] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk")))
+        (Op.ref .real [BM] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk"))) s
+      = some (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT) := by
+  have hrmaxN : evalOp (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk")) s = some rmaxT := by
+    rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]; exact hrm
+  have hrmax : @evalOp TileDType.real [BM]
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk")) s = some rmaxT := hrmaxN
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hmi, hrmax, Option.bind_eq_bind, Option.bind_some]
+
 def attention_forward_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk

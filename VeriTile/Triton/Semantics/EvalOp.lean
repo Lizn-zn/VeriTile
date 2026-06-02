@@ -347,6 +347,15 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       some (Tile.cop h.lt bc vx vy)) := by
   simp [evalOp]
 
+@[simp] theorem evalOp_gt
+    (h : ComparableDType dtype) (bc : Broadcast a b shape)
+    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.gt h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.cop h.gt bc vx vy)) := by
+  simp [evalOp]
+
 @[simp] theorem evalOp_where
     (c : Op .bool shape) (x y : Op dtype shape) (s : BlockState) :
     evalOp (.where c x y) s = (do
