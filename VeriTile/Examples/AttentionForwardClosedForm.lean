@@ -2006,6 +2006,127 @@ theorem attn_step (Q K V Q_scale K_scale Out : RegionName) (s0 : BlockState)
   · exact hundefF
   · rw [hmemF]; exact hmem
 
+set_option maxHeartbeats 4000000 in
+/-- **Post-loop**: after the streaming loop (invariant at `numKVBlocks`), the
+`acc /= l_i[:, None]` rescale + masked store writes the normalized accumulator
+`oP / lP = attentionRealBase2PerKeyScale` to `Out` at every active lane. The store
+is a masked scatter (`scatter_readback_prop_masked_nd_of_true`) over an injective
+offset map (active columns `< HEAD_ACTIVE ≤ HEAD_DIM`, so `row·HEAD_DIM + col` is
+injective); the `qTileMasked → qTile` swap on the active row is `qTileMasked_active`. -/
+theorem attn_postLoop (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE : Nat)
+    (hBN : 0 < BLOCK_N) (hnB : 1 ≤ numKVBlocks) (hAD : HEAD_ACTIVE ≤ HEAD_DIM)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL])
+    (hActive : mIndex s BLOCK_M idx.1 < BLOCK_N * numKVBlocks ∧ idx.2.1.val < HEAD_ACTIVE)
+    (st : BlockState)
+    (hinv : attnInvariant Q K V Q_scale K_scale Out s stride_qz stride_qh H BLOCK_M BLOCK_N
+        numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE (BLOCK_N * numKVBlocks) st) :
+    ∃ sfin, stepStmts (attnAccAssign BLOCK_M BLOCK_DMODEL
+        :: attnStoreStmt BLOCK_M BLOCK_DMODEL BLOCK_N numKVBlocks HEAD_ACTIVE :: []) st = some sfin
+      ∧ sfin.readMem Out (outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M BLOCK_DMODEL idx)
+        = attentionRealBase2PerKeyScale
+            (qTile s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE)
+            (kTile s K H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (vTile s V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (keyScale s Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N (BLOCK_N * numKVBlocks))
+            (idx.1, ⟨idx.2.1.val, hActive.2⟩, PUnit.unit) := by
+  have hax : 1 < [BLOCK_M].length.succ := by simp
+  have hcnB : (BLOCK_N * numKVBlocks) / BLOCK_N = numKVBlocks := by
+    rw [Nat.mul_comm, Nat.mul_div_cancel _ hBN]
+  simp only [attnInvariant, hcnB] at hinv
+  obtain ⟨hpids, hi, hcle, hmi, hli, hacc, hq, hqs, hn, hm, hk, hO, hKp, hKs, hVp, hundef, hmem⟩ := hinv
+  set qT := qTileMasked s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE (BLOCK_N * numKVBlocks) with hqTdef
+  set kT := kTile s K H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE with hkTdef
+  set vT := vTile s V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE with hvTdef
+  set kS := keyScale s Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N (BLOCK_N * numKVBlocks) with hkSdef
+  -- div result tile (acc / l_i[:, None])
+  set ltile : Tile .real [BLOCK_M] := ⟨fun r => ((lP qT kT kS r.1 numKVBlocks : ℝ) : WithBot ℝ)⟩ with hltile
+  set acctile : Tile .real [BLOCK_M, BLOCK_DMODEL] :=
+    ⟨fun i => if h : i.2.1.val < HEAD_ACTIVE then ((oP qT kT vT kS i.1 ⟨i.2.1.val, h⟩ numKVBlocks : ℝ) : WithBot ℝ) else some 0⟩ with hacctile
+  set acc' : Tile .real [BLOCK_M, BLOCK_DMODEL] :=
+    Tile.bop NumericDType.real.div (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      acctile (Tile.expandDim ⟨1, by simp⟩ ltile) with hacc'def
+  -- div step
+  have hAccEval : evalOp (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_i"))) st
+        = some acc' := by
+    have hexpN : evalOp (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_i")) st
+        = some (Tile.expandDim ⟨1, by simp⟩ ltile) := by
+      rw [evalOp_expandDim]; simp [hli, hltile]
+    have hexp2 : @evalOp TileDType.real [BLOCK_M, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_i")) st
+        = some (Tile.expandDim ⟨1, by simp⟩ ltile) := hexpN
+    rw [evalOp_div]; simp only [evalOp_ref, hacc, hexp2, Option.bind_eq_bind, Option.bind_some]; rfl
+  set st1 := st.setReg "acc" .real [BLOCK_M, BLOCK_DMODEL] acc' with hst1
+  -- store readback ingredients
+  set offsetFn : TileIndex [BLOCK_M, BLOCK_DMODEL] → Nat :=
+    fun i => baseOffset s H stride_qz stride_qh + mIndex s BLOCK_M i.1 * HEAD_DIM + i.2.1.val with hoff
+  have hOpt : evalOp (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr") st1
+      = some (⟨fun i => (Out.cast, offsetFn i)⟩ : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) := by
+    rw [evalOp_ref]; simp [hst1, hO, hoff]
+  set maskTile : Tile .bool [BLOCK_M, BLOCK_DMODEL] :=
+    ⟨fun i => decide (mIndex s BLOCK_M i.1 < BLOCK_N * numKVBlocks) && decide (i.2.1.val < HEAD_ACTIVE)⟩ with hmaskTile
+  have hmaskEval : evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+      (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+        (Op.constNat (BLOCK_N * numKVBlocks)))
+      (Op.expandDim ⟨0, by simp⟩ (Op.lt .nat Broadcast.scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))) st1
+      = some maskTile :=
+    qmask_eval st1 BLOCK_M BLOCK_DMODEL (BLOCK_N * numKVBlocks) HEAD_ACTIVE (fun r => mIndex s BLOCK_M r) (by simp [hst1, hm])
+  have haccEval2 : evalOp (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc") st1 = some acc' := by
+    rw [evalOp_ref]; simp [hst1]
+  -- offset injectivity on active cells
+  have hcolinj : ∀ a b c d : Nat, b < HEAD_DIM → d < HEAD_DIM →
+      a * HEAD_DIM + b = c * HEAD_DIM + d → a = c ∧ b = d := by
+    intro a b c d hb hd h
+    have hHD : 0 < HEAD_DIM := lt_of_le_of_lt (Nat.zero_le _) hb
+    have hbd : b = d := by
+      have h1 : (a * HEAD_DIM + b) % HEAD_DIM = (c * HEAD_DIM + d) % HEAD_DIM := by rw [h]
+      rw [Nat.mul_comm a HEAD_DIM, Nat.mul_comm c HEAD_DIM] at h1
+      rwa [Nat.mul_add_mod, Nat.mul_add_mod, Nat.mod_eq_of_lt hb, Nat.mod_eq_of_lt hd] at h1
+    subst hbd
+    have hac : a * HEAD_DIM = c * HEAD_DIM := by omega
+    exact ⟨Nat.eq_of_mul_eq_mul_right hHD hac, rfl⟩
+  have hinj : ∀ k, (mIndex s BLOCK_M k.1 < BLOCK_N * numKVBlocks ∧ k.2.1.val < HEAD_ACTIVE) →
+      offsetFn k = offsetFn idx → k = idx := by
+    rintro ⟨kr, kc, ku⟩ ⟨_, hkc⟩ heq
+    obtain ⟨ir, ic, iu⟩ := idx
+    simp only [hoff, mIndex] at heq
+    simp only [mIndex] at hActive
+    have hkcHD : kc.val < HEAD_DIM := lt_of_lt_of_le hkc hAD
+    have hicHD : ic.val < HEAD_DIM := lt_of_lt_of_le hActive.2 hAD
+    have hkey := hcolinj (s.pids 0 * BLOCK_M + kr.val) kc.val (s.pids 0 * BLOCK_M + ir.val) ic.val
+      hkcHD hicHD (by omega)
+    obtain ⟨hr, hcc⟩ := hkey
+    have hkrir : kr = ir := Fin.ext (by omega)
+    have hkcic : kc = ic := Fin.ext hcc
+    subst hkrir; subst hkcic; rfl
+  unfold attnAccAssign
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some hAccEval), stepStmts.cons_some
+      (show stepStmt (attnStoreStmt BLOCK_M BLOCK_DMODEL BLOCK_N numKVBlocks HEAD_ACTIVE) st1 = some _ from by
+        simp only [attnStoreStmt, stepStmt, haccEval2, hmaskEval, hOpt]; rfl),
+      stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  -- readback on the store result
+  · rw [show outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M BLOCK_DMODEL idx = offsetFn idx from by
+      simp [outOffset, hoff, mul_one]]
+    simp only [BlockState.writeMemTyped_real, Region.cast_id]
+    rw [BlockState.scatter_readback_prop_masked_nd_of_true (region := Out) st1 offsetFn
+      (fun i => FloatDType.real.storeValue (acc'.data i))
+      (fun i => maskTile.data i)
+      idx (by simp [hmaskTile, hActive.1, hActive.2]) (fun k hk heq => hinj k (by simpa [hmaskTile] using hk) heq)]
+    -- value at idx = oP/lP = closed form
+    simp only [hacc'def, hacctile, hltile, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.expandDim_data, TileShape.dropInsertedIndex, dif_pos hActive.2, NumericDType.div,
+      WithBot.realDiv, Option.map₂, Option.bind, Option.map, FloatDType.storeValue,
+      FloatDType.real_toWithBot, WithBot.unbotD_coe]
+    rw [closed_form_eq qT kT vT kS hBN hnB idx.1 ⟨idx.2.1.val, hActive.2⟩]
+    have hQrow : ∀ e : Fin HEAD_ACTIVE,
+        qTileMasked s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE (BLOCK_N * numKVBlocks) (idx.1, e, PUnit.unit)
+          = qTile s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE (idx.1, e, PUnit.unit) :=
+      fun e => qTileMasked_active s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE
+        (BLOCK_N * numKVBlocks) (idx.1, e, PUnit.unit) hActive.1
+    simp only [WithBot.unbotD_some, hqTdef, hkTdef, hvTdef, hkSdef,
+      attentionRealBase2PerKeyScale, hQrow]
+
 /-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
 For arbitrary batch/head strides, head count, block sizes, KV-block count,
