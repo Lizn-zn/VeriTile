@@ -473,6 +473,28 @@ noncomputable def qTile (s : BlockState) (Q : RegionName)
   fun (i, e, _) =>
     s.readMem Q (baseOffset s H stride_qz stride_qh + mIndex s BLOCK_M i * HEAD_DIM + e.val)
 
+/-- Row-masked query tile: rows whose global index `mIndex ≥ N_CTX` load as `0`
+(the kernel's `q` row-mask `offs_m < N_CTX`). The loop invariant tracks
+`mP`/`lP`/`oP` over THIS tile, so the partials match the kernel on every row —
+active rows (`mIndex < N_CTX`) coincide with `qTile`, masked rows degrade to the
+all-`0`-score values the kernel actually computes. -/
+noncomputable def qTileMasked (s : BlockState) (Q : RegionName)
+    (H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE N_CTX : Nat) :
+    TileIndex [BLOCK_M, HEAD_ACTIVE] → ℝ :=
+  fun (i, e, _) =>
+    if mIndex s BLOCK_M i < N_CTX then
+      s.readMem Q (baseOffset s H stride_qz stride_qh + mIndex s BLOCK_M i * HEAD_DIM + e.val)
+    else 0
+
+/-- On active rows the row-mask is vacuous, so `qTileMasked = qTile` pointwise. -/
+theorem qTileMasked_active (s : BlockState) (Q : RegionName)
+    (H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE N_CTX : Nat)
+    (idx : TileIndex [BLOCK_M, HEAD_ACTIVE]) (h : mIndex s BLOCK_M idx.1 < N_CTX) :
+    qTileMasked s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE N_CTX idx
+      = qTile s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE idx := by
+  obtain ⟨i, e, u⟩ := idx
+  simp only [qTileMasked, qTile, if_pos h]
+
 noncomputable def kTile (s : BlockState) (K : RegionName)
     (H stride_qz stride_qh HEAD_DIM S HEAD_ACTIVE : Nat) :
     TileIndex [S, HEAD_ACTIVE] → ℝ :=
@@ -997,7 +1019,7 @@ noncomputable def attnInvariant
     (i : Nat) (s : BlockState) : Prop :=
   let nB := numKVBlocks; let c := i / BLOCK_N; let N_CTX := BLOCK_N * nB
   let base := baseOffset s0 H stride_qz stride_qh
-  let qT := qTile s0 Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE
+  let qT := qTileMasked s0 Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE N_CTX
   let kT := kTile s0 K H stride_qz stride_qh HEAD_DIM N_CTX HEAD_ACTIVE
   let vT := vTile s0 V H stride_qz stride_qh HEAD_DIM N_CTX HEAD_ACTIVE
   let kS := keyScale s0 Q_scale K_scale N_CTX BLOCK_M BLOCK_N N_CTX
