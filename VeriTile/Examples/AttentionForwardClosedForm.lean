@@ -1104,6 +1104,70 @@ theorem mij_eq (BM BN nB c : Nat) (hc : c < nB)
   · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
   · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
 
+/-- `WithBot.realExp2` is total: it never returns `⊥` (`exp2(-inf) = 0`). -/
+theorem realExp2_eq_some_unbotD (z : WithBot ℝ) :
+    WithBot.realExp2 z = some ((WithBot.realExp2 z).unbotD 0) := by
+  cases z <;> rfl
+
+/-- **`alpha = some(alphaP c)`**: the loop's `alpha = exp2(m_i − m_ij)` register
+equals the online-softmax rescale `alphaP` at block `c` (`realExp2` total, so the
+`unbotD 0` in `alphaP` is exact). -/
+theorem alpha_eq (BM BN nB c : Nat)
+    (qT : TileIndex [BM,1]→ℝ) (kT : TileIndex [BN*nB,1]→ℝ) (kS : Fin (BN*nB)→ℝ)
+    (m_i m_ij : Tile .real [BM]) (r : Fin BM)
+    (hmi : m_i.data (r, PUnit.unit) = mP BN nB qT kT kS r c)
+    (hmij : m_ij.data (r, PUnit.unit) = mP BN nB qT kT kS r (c+1)) :
+    (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) m_i m_ij)).data (r, PUnit.unit)
+      = some (alphaP qT kT kS r c) := by
+  show WithBot.realExp2 _ = _
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmi, hmij, NumericDType.sub]
+  rw [alphaP]
+  exact realExp2_eq_some_unbotD _
+
+/-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
+theorem withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) := by
+  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
+  exact (WithBot.coe_sum Finset.univ g).symm
+
+set_option maxHeartbeats 1000000 in
+/-- **`l_i = lP(c+1)`**: the loop's `l_i = l_i·alpha + tl.sum(exp2(qk − m_ij), 1)`
+register equals the online denominator `lP` at `c+1` (the `lP`-succ recurrence):
+`alpha = alphaP c`, the summed `p`-row = `Σ pow2(kscore − mR(c+1))`. -/
+theorem li_eq (BM BN nB c : Nat) (hBN : 0 < BN) (hc : c < nB)
+    (qT : TileIndex [BM,1]→ℝ) (kT : TileIndex [BN*nB,1]→ℝ) (kS : Fin (BN*nB)→ℝ)
+    (m_i m_ij l_i : Tile .real [BM]) (qk : Tile .real [BM, BN]) (r : Fin BM)
+    (hmi : m_i.data (r, PUnit.unit) = mP BN nB qT kT kS r c)
+    (hmij : m_ij.data (r, PUnit.unit) = mP BN nB qT kT kS r (c+1))
+    (hli : l_i.data (r, PUnit.unit) = some (lP qT kT kS r c))
+    (hqk : ∀ jL : Fin BN, qk.data (r, jL, PUnit.unit) = some (kscore BN nB qT kT kS r c hc jL)) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+       (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) l_i
+         (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) m_i m_ij)))
+       (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length)
+         (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qk
+           (Tile.expandDim (⟨1, by simp⟩ : Fin [BM].length.succ) m_ij))))).data (r, PUnit.unit)
+      = some (lP qT kT kS r (c+1)) := by
+  have hmijReal : m_ij.data (r, PUnit.unit) = some (mR qT kT kS r (c+1)) := by
+    rw [hmij, mP_eq_coe qT kT kS hBN r (c+1) (by omega) (by omega)]; rfl
+  have halpha := alpha_eq BM BN nB c qT kT kS m_i m_ij r hmi hmij
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+  rw [halpha, hli]
+  -- reduce the l_ij reduceSum row on the goal's OWN term (variable-axis @[simp] lemmas)
+  simp only [Tile.reduceSumDrop_data, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, Tile.expandDim_data, TileShape.dropInsertedIndex,
+    TileShape.insertAxisIndex, hqk, hmijReal, NumericDType.sub, WithBot.realSub,
+    Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
+  simp only [withBot_sum_some]
+  rw [lP, dif_pos (by omega : c + 1 ≤ nB)]
+  simp only [NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul,
+    Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  rw [mul_comm (lP qT kT kS r c)]
+  congr 1
+  exact Finset.sum_congr rfl (fun k _ => by rw [pow2, mul_comm])
+
 /-- **Loop invariant for the exec proof** (counter `i = block c · BLOCK_N`).
 
 Captures the full register state after the `c`-th key block: program ids and the
