@@ -274,6 +274,28 @@ theorem kmask_eval (s : BlockState) (BD BN NC SN HA : Nat)
   ext idx
   simp [Tile.bop, Tile.cop, Tile.expandDim, Tile.vec, ComparableDType.lt, NumericDType.sub]
 
+/-- **`v`-load mask eval** (`(offs_n[:,None] < N_CTX − start_n) ∧ (arange < HEAD_ACTIVE)[None,:]`,
+shape `[BLOCK_N, BLOCK_DMODEL]`): `v_mask[j,d] = (j < N_CTX − start_n) ∧ (d < HEAD_ACTIVE)`.
+The `v` analogue of `kmask_eval` (axes swapped: boundary on `offs_n` rows, head on cols). -/
+theorem vmask_eval (s : BlockState) (BN BD NC SN HA : Nat)
+    (hoffs : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n"))
+          (Op.sub .nat Broadcast.nil (Op.constNat NC) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨0, by simp⟩ (Op.lt .nat Broadcast.scalarR (Op.arange BD) (Op.constNat HA)))) s
+      = some ⟨fun idx : TileIndex [BN, BD] =>
+          (decide (idx.1.val < NC - SN) && decide (idx.2.1.val < HA))⟩ := by
+  rw [evalOp_boolAnd]
+  conv_lhs => rw [evalOp_lt]; arg 1; rw [evalOp_expandDim_one_nat, hoffs]
+  simp only [Option.bind_eq_bind, Option.bind_some, evalOp_sub, evalOp_constNat, evalOp_ref, hsn]
+  conv_lhs => arg 1; unfold evalOp
+  simp only [Option.bind_eq_bind, Option.bind_some, Option.pure_def, evalOp_lt, evalOp_arange,
+    evalOp_constNat]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.bop, Tile.cop, Tile.expandDim, Tile.vec, ComparableDType.lt, NumericDType.sub]
+
 /-- **Head-masked dot reduction** (the crux tile-op of the step lemma). When the
 contraction-axis lanes `e ≥ HEAD_ACTIVE` of both operands are masked to `some 0`
 (which is what the kernel's `q`/`k` masked loads produce on a clean state,
