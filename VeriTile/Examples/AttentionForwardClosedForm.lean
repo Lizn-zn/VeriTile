@@ -1229,6 +1229,100 @@ theorem preLoop (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
     refine congrArg some ?_
     ext idx <;> simp [baseOffset, hqvk_def, Nat.zero_div, mul_one]
 
+/-- The 19-statement loop body (`for start_n …`), transcribed. Independent of the
+region names (all loads/stores go through register pointers). -/
+def attnLoopBody (BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE HEAD_DIM numKVBlocks : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    Stmt.assign .bool [BLOCK_DMODEL, BLOCK_N] "k_mask"
+      (Op.boolAnd (.consL (.consR .nil))
+        (Op.lt .nat .scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+          (Op.sub .nat .nil (Op.constNat (BLOCK_N * numKVBlocks)) (Op.ref .nat [] "start_n")))
+        (Op.expandDim ⟨1, by simp⟩ (Op.lt .nat .scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))),
+    Stmt.assign .real [BLOCK_DMODEL, BLOCK_N] "k"
+      (Op.load .real (.ptr (Op.ref .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs"))
+        (.mask (Op.ref .bool [BLOCK_DMODEL, BLOCK_N] "k_mask"))),
+    Stmt.assign .real [] "k_scale"
+      (Op.load .real (.ptr (Op.ref .ptr [] "K_scale_ptr")) .none),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.mul .real .scalarR
+        (Op.mul .real .scalarR
+          (Op.castFloat .real .real (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "q") (Op.ref .real [BLOCK_DMODEL, BLOCK_N] "k")))
+          (Op.ref .real [] "q_scale"))
+        (Op.ref .real [] "k_scale")),
+    Stmt.assign .real [BLOCK_M] "m_ij"
+      (Op.where
+        (Op.gt .real (.consSame .nil) (Op.ref .real [BLOCK_M] "m_i")
+          (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "qk")))
+        (Op.ref .real [BLOCK_M] "m_i")
+        (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "qk"))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "qk"
+      (Op.sub .real (.consSame (.consR .nil)) (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "m_ij"))),
+    Stmt.assign .real [BLOCK_M, BLOCK_N] "p" (Op.exp2 (Op.ref .real [BLOCK_M, BLOCK_N] "qk")),
+    Stmt.assign .real [BLOCK_M] "l_ij" (Op.reduceSum ⟨1, by simp⟩ Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "p")),
+    Stmt.assign .real [BLOCK_M] "alpha"
+      (Op.exp2 (Op.sub .real (.consSame .nil) (Op.ref .real [BLOCK_M] "m_i") (Op.ref .real [BLOCK_M] "m_ij"))),
+    Stmt.assign .real [BLOCK_M] "l_i"
+      (Op.add .real (.consSame .nil)
+        (Op.mul .real (.consSame .nil) (Op.ref .real [BLOCK_M] "l_i") (Op.ref .real [BLOCK_M] "alpha"))
+        (Op.ref .real [BLOCK_M] "l_ij")),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.mul .real (.consSame (.consR .nil)) (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "alpha"))),
+    Stmt.assign .real [BLOCK_N, BLOCK_DMODEL] "v"
+      (Op.load .real (.ptr (Op.ref .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"))
+        (.mask (Op.boolAnd (.consR (.consL .nil))
+          (Op.lt .nat .scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n"))
+            (Op.sub .nat .nil (Op.constNat (BLOCK_N * numKVBlocks)) (Op.ref .nat [] "start_n")))
+          (Op.expandDim ⟨0, by simp⟩ (Op.lt .nat .scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))),
+    Stmt.assign .fp16 [BLOCK_M, BLOCK_N] "p" (Op.castFloat .real .fp16 (Op.ref .real [BLOCK_M, BLOCK_N] "p")),
+    Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+      (Op.add .real (.consSame (.consSame .nil)) (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BLOCK_M, BLOCK_N] "p")) (Op.ref .real [BLOCK_N, BLOCK_DMODEL] "v"))),
+    Stmt.assign .real [BLOCK_M] "m_i" (Op.ref .real [BLOCK_M] "m_ij"),
+    Stmt.assign .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs"
+      (Op.ptrAdd .scalarR (Op.ref .ptr [BLOCK_DMODEL, BLOCK_N] "K_ptrs")
+        (Op.mul .nat .nil (Op.constNat BLOCK_N) (Op.constNat HEAD_DIM))),
+    Stmt.assign .ptr [] "K_scale_ptr"
+      (Op.ptrAdd .nil (Op.ref .ptr [] "K_scale_ptr") (Op.constNat 1)),
+    Stmt.assign .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs"
+      (Op.ptrAdd .scalarR (Op.ref .ptr [BLOCK_N, BLOCK_DMODEL] "V_ptrs")
+        (Op.mul .nat .nil (Op.constNat BLOCK_N) (Op.constNat HEAD_DIM))) ]
+
+/-- Post-loop `acc /= l_i[:, None]`. -/
+def attnAccAssign (BLOCK_M BLOCK_DMODEL : Nat) : Stmt :=
+  Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc"
+    (Op.div .real (.consSame (.consR .nil)) (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_i")))
+
+/-- Post-loop masked store of `acc` to `O_block_ptr`. -/
+def attnStoreStmt (BLOCK_M BLOCK_DMODEL BLOCK_N numKVBlocks HEAD_ACTIVE : Nat) : Stmt :=
+  Stmt.store .real [BLOCK_M, BLOCK_DMODEL] (.ptr (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "O_block_ptr"))
+    (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+    (.mask (Op.boolAnd (.consR (.consL .nil))
+      (Op.lt .nat .scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+        (Op.constNat (BLOCK_N * numKVBlocks)))
+      (Op.expandDim ⟨0, by simp⟩ (Op.lt .nat .scalarR (Op.arange BLOCK_DMODEL) (Op.constNat HEAD_ACTIVE)))))
+
+/-- Body decomposition: prologue (22) ++ [for-loop, acc/=l_i, store]. By `rfl`. -/
+theorem attn_body_split (Q K V Q_scale K_scale Out : RegionName)
+    (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat) :
+    (attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE).toAlgKernel.body
+      = (attention_forward_triton_surface Q K V Q_scale K_scale Out
+          stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+          stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+          Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+          HEAD_ACTIVE STAGE).toAlgKernel.body.take 22
+        ++ (Stmt.forRange "start_n" 0 (BLOCK_N * numKVBlocks) BLOCK_N
+              (attnLoopBody BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE HEAD_DIM numKVBlocks)
+            :: attnAccAssign BLOCK_M BLOCK_DMODEL
+            :: attnStoreStmt BLOCK_M BLOCK_DMODEL BLOCK_N numKVBlocks HEAD_ACTIVE :: []) := by
+  rfl
+
 /-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
 For arbitrary batch/head strides, head count, block sizes, KV-block count,
