@@ -1131,6 +1131,20 @@ theorem withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
   show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
   exact (WithBot.coe_sum Finset.univ g).symm
 
+/-- The `p · v` dot row (no head mask — contraction over all `BLOCK_N` keys):
+`(dot p v)[r,d] = Σ_jL p[r,jL]·v[jL,d]` when both are all-`some`. -/
+theorem dot_pv (BM BN BD : Nat) (p : Tile .real [BM,BN]) (v : Tile .real [BN,BD])
+    (r : Fin BM) (d : Fin BD) (fp fv : Fin BN → ℝ)
+    (hp : ∀ jL : Fin BN, p.data (r, jL, PUnit.unit) = some (fp jL))
+    (hv : ∀ jL : Fin BN, v.data (jL, d, PUnit.unit) = some (fv jL)) :
+    (Tile.dot [] p v).data (r, d, PUnit.unit) = some (Finset.univ.sum fun jL : Fin BN => fp jL * fv jL) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin BN) (WithBot ℝ) _ Finset.univ
+        (fun k => Option.map₂ (· * ·) (p.data (r, k, PUnit.unit)) (v.data (k, d, PUnit.unit))))
+      = @Finset.sum (Fin BN) (WithBot ℝ) _ Finset.univ (fun k => (some (fp k * fv k) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun k _ => by rw [hp k, hv k]; rfl)]
+  exact withBot_sum_some _
+
 set_option maxHeartbeats 1000000 in
 /-- **`l_i = lP(c+1)`**: the loop's `l_i = l_i·alpha + tl.sum(exp2(qk − m_ij), 1)`
 register equals the online denominator `lP` at `c+1` (the `lP`-succ recurrence):
@@ -1167,6 +1181,41 @@ theorem li_eq (BM BN nB c : Nat) (hBN : 0 < BN) (hc : c < nB)
   rw [mul_comm (lP qT kT kS r c)]
   congr 1
   exact Finset.sum_congr rfl (fun k _ => by rw [pow2, mul_comm])
+
+set_option maxHeartbeats 1000000 in
+/-- **`acc = oP(c+1)`**: the loop's `acc = acc·alpha + tl.dot(p, v)` register equals
+the online numerator `oP` at `c+1` (the `oP`-succ recurrence). Head-active lanes
+(`d < HEAD_ACTIVE`) get the real recurrence; inactive lanes stay `0` (the `v`
+head-mask zeroes the column). The `p` fp16 round-trip is identity in the model. -/
+theorem acc_eq (BM BN BD nB c HA : Nat) (hc : c < nB)
+    (qT : TileIndex [BM,HA]→ℝ) (kT vT : TileIndex [BN*nB,HA]→ℝ) (kS : Fin (BN*nB)→ℝ)
+    (acc : Tile .real [BM,BD]) (alpha : Tile .real [BM]) (p : Tile .real [BM,BN]) (v : Tile .real [BN,BD])
+    (r : Fin BM) (d : Fin BD)
+    (hacc : acc.data (r, d, PUnit.unit) = if h : d.val < HA then some (oP qT kT vT kS r ⟨d.val,h⟩ c) else some 0)
+    (halpha : alpha.data (r, PUnit.unit) = some (alphaP qT kT kS r c))
+    (hp : ∀ jL : Fin BN, p.data (r, jL, PUnit.unit) = some (pow2 (kscore BN nB qT kT kS r c hc jL - mR qT kT kS r (c+1))))
+    (hv : ∀ jL : Fin BN, v.data (jL, d, PUnit.unit)
+        = some (if h : d.val < HA then vT (gkey BN nB c hc jL, ⟨d.val,h⟩, PUnit.unit) else 0)) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+       (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acc
+         (Tile.expandDim (⟨1, by simp⟩ : Fin [BM].length.succ) alpha))
+       (Tile.dot [] p v)).data (r, d, PUnit.unit)
+      = if h : d.val < HA then some (oP qT kT vT kS r ⟨d.val,h⟩ (c+1)) else some 0 := by
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, halpha]
+  by_cases h : d.val < HA
+  · rw [dot_pv BM BN BD p v r d (fun jL => pow2 (kscore BN nB qT kT kS r c hc jL - mR qT kT kS r (c+1)))
+        (fun jL => vT (gkey BN nB c hc jL, ⟨d.val,h⟩, PUnit.unit)) hp (fun jL => by rw [hv jL, dif_pos h])]
+    rw [hacc, dif_pos h, dif_pos h]
+    rw [oP, dif_pos (by omega : c + 1 ≤ nB)]
+    simp only [NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul,
+      Option.map₂, Option.bind, Option.map]
+    refine congrArg some ?_
+    rw [mul_comm (oP qT kT vT kS r ⟨d.val,h⟩ c)]
+  · rw [dot_pv BM BN BD p v r d (fun jL => pow2 (kscore BN nB qT kT kS r c hc jL - mR qT kT kS r (c+1)))
+        (fun _ => 0) hp (fun jL => by rw [hv jL, dif_neg h])]
+    rw [hacc, dif_neg h, dif_neg h]
+    simp [NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul]
 
 /-- **Loop invariant for the exec proof** (counter `i = block c · BLOCK_N`).
 
