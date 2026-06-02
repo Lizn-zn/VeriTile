@@ -485,6 +485,32 @@ theorem li_op_eval (s : BlockState) (BM : Nat) (li alpha lij : Tile .real [BM])
           (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) li alpha) lij) := by
   rw [evalOp_add]; simp [evalOp_mul, hli, ha, hlij]
 
+/-- **`qk2` statement eval** (`qk − m_ij[:, None]`). `expandDim` has the same
+shape-discrimination issue (its result `insertAxis` shape gets normalized to
+`[BM,1]` by the `sub`); the operand eval is proven naturally then defeq-coerced.
+The axis proof `hax` is a parameter so the recipe unifies with the loop body. -/
+theorem qk2_op_eval (s : BlockState) (BM BN : Nat) (hax : 1 < [BM].length.succ)
+    (qktile : Tile .real [BM,BN]) (mij : Tile .real [BM])
+    (hqk : s.regs .real [BM,BN] "qk" = some qktile) (hmij : s.regs .real [BM] "m_ij" = some mij) :
+    evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil)) (Op.ref .real [BM,BN] "qk")
+        (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_ij"))) s
+      = some (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qktile
+          (Tile.expandDim ⟨1, hax⟩ mij)) := by
+  have hexpN : evalOp (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_ij")) s = some (Tile.expandDim ⟨1, hax⟩ mij) := by
+    rw [evalOp_expandDim]; simp [hmij]
+  have hexp2 : @evalOp TileDType.real [BM, 1] (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "m_ij")) s
+      = some (Tile.expandDim ⟨1, hax⟩ mij) := hexpN
+  rw [evalOp_sub]
+  simp only [evalOp_ref, hqk, hexp2, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- **`l_ij` statement eval** (`tl.sum(p, 1)`): the `reduceSum` row reduction. -/
+theorem lij_op_eval (s : BlockState) (BM BN : Nat) (ptile : Tile .real [BM,BN])
+    (hp : s.regs .real [BM,BN] "p" = some ptile) :
+    evalOp (Op.reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM,BN] "p")) s
+      = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) ptile) := by
+  rw [evalOp_reduceSum]; simp only [evalOp_ref, hp, Option.bind_some]; rfl
+
 def attention_forward_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
