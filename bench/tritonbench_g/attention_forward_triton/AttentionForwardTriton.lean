@@ -2,6 +2,8 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
+import VeriTile.Examples.AttentionForwardClosedForm
 
 /-!
 # `attention_forward_triton` — strict per-kernel correctness
@@ -26,38 +28,43 @@ per-program statement covers every program of the grid.
 ## Proof architecture
 
 ```
-attention_forward_triton_python_test_shape_output_summary    ← TOP THEOREM
+attention_forward_triton_closed_form_correct                  ← TOP THEOREM (genuine closed form)
+  expected = attentionRealBase2PerKeyScale (qTile) (kTile) (vTile) (keyScale)
   ├─ attention_forward_triton_surface_toAlgorithm_supported   surface lowers to the algorithm layer
-  └─ attention_forward_triton_surface_python_test_shape_compute_correct
-       └─ (full surface produces producedAttentionForwardOutValue at the masked Out store)
+  └─ (online-softmax recurrence == batch base-2 softmax, Math/Attention.lean)
 
-attention_forward_triton_final_store_python_test_shape_compute_correct
-  └─ attention_forward_triton_final_store_slice_compute_correct  ← ComputeCorrect over the masked Out store
-       └─ attention_forward_triton_final_store_slice_correct     ← algorithm-layer readback per lane
+attention_forward_triton_final_store_slice_compute_correct    ← ComputeCorrect over the masked Out store
+  └─ attention_forward_triton_final_store_slice_correct        algorithm-layer readback per lane
 ```
 
-## Modeling boundary and proof-gap honesty
+## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `float16`/`float32`
 casts collapse to the identity post-erasure; `@triton.autotune` /
-`num_warps`/`num_stages` are not modeled. The output summary is stated at the
-Python test shape (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128, BLOCK_N=64`,
-contiguous strides, 96 active head lanes).
+`num_warps`/`num_stages` are not modeled. Cross-program composition into the
+full `[Z,H,N_CTX,HEAD_DIM]` output is the trusted host boundary.
 
-**The top `output_summary` is NOT a closed-form value proof.** Its `expected`,
-`producedAttentionForwardOutValue`, is defined as the kernel's *own* executed
-output (`match exec … | some s' => s'.readMem …`), so the value half of its
-`ComputeCorrect.Realizes` is a tautology (`output = output`). What it genuinely
-establishes is (a) the surface lowers to the algorithm layer and (b) execution
-makes progress (runs to `some`) writing exactly the masked output cells — it
-does **not** verify the online-softmax recurrence against an independent
-specification (tracked as `attention-forward-online-softmax-recurrence`, #162,
-in `proof_gap_manifest.tsv`). The genuine value content here is the
-`final_store` slice: it proves the masked final `acc / l_i` writeback copies a
-*precomputed* accumulator `Acc` to the right `Out` cells (in-bounds lanes get
-the `Acc` value, out-of-bounds preserved) — i.e. the store/masking is correct,
-the accumulator value itself is assumed. Cross-program composition into the full
-`[Z,H,N_CTX,HEAD_DIM]` output is the trusted host boundary.
+## Top theorem: closed-form value (NOT self-referential)
+
+`attention_forward_triton_closed_form_correct` is a **genuine closed-form value
+claim**: every active output lane of `Out` equals
+`VeriTile.Triton.attentionRealBase2PerKeyScale` of the loaded Q/K/V tiles under
+the per-block key scale — i.e. the base-2, per-key-scaled attention output, not
+the kernel's own executed value. It is **general**: arbitrary batch/head strides,
+head count `H`, block sizes, KV-block count (`N_CTX = BLOCK_N · numKVBlocks`),
+head/active dimensions, and arbitrary `q_scale`/`k_scale`. The only layout
+assumptions are the contiguity contracts the kernel relies on
+(`stride_qm = stride_kn = HEAD_DIM`, head stride `1`). The Python test case
+(`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128, BLOCK_N=64, HEAD_ACTIVE=96`) is
+the special case.
+
+The mathematical heart — online-softmax recurrence == batch base-2 softmax —
+is proved sorry-free in `VeriTile/Triton/Math/Attention.lean`
+(`attentionRealBase2PerKeyScale_eq_streaming`, `osBlockStep_foldl_eq_batch`), and
+the full `exec`-side loop unfolding (Phase 3) is complete in
+`VeriTile/Examples/AttentionForwardClosedForm.lean`. The top theorem here is now
+**proved sorry-free** by bridging to that result (this kernel is tracked as
+`attention-forward-online-softmax-recurrence`, #162).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttentionForwardTriton
@@ -282,17 +289,49 @@ def outOffset
   offZ s H * stride_qz + offH s H * stride_qh +
     mIndex s BLOCK_M idx.1 * stride_qm + kIndex idx * stride_qk
 
-noncomputable def producedAttentionForwardOutValue
-    (s : BlockState) (Q K V QScale KScale Out : RegionName)
-    (idx : TileIndex [128, 128]) : ℝ :=
-  match exec (attention_forward_triton_surface Q K V QScale KScale Out
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      2 4 128 128 128 64 128 96 1) s with
-  | some s' => s'.readMem Out (outOffset s 4 65536 16384 128 1 128 idx)
-  | none => 0.0
+/-! ## Closed-form spec inputs (loaded tiles, per-key scale)
+
+The genuine `expected` for the top theorem is `attentionRealBase2PerKeyScale` of
+the loaded Q/K/V tiles under the per-block key scale, mirroring
+`VeriTile/Examples/AttentionForwardClosedForm.lean`. Under the contiguity
+contracts `stride_qm = stride_kn = HEAD_DIM`, head stride `1`, every loaded
+element sits at `base + row · HEAD_DIM + col`; masked-off head lanes load `0`,
+so summing over the `HEAD_ACTIVE` active lanes is the full contraction. -/
+
+/-- Ceiling division `⌈a / b⌉`, matching Triton's `tl.cdiv`. -/
+def cdiv (a b : Nat) : Nat := (a + b - 1) / b
+
+/-- Batch/head base offset `off_z · stride_qz + off_h · stride_qh`. -/
+def baseOffset (s : BlockState) (H stride_qz stride_qh : Nat) : Nat :=
+  offZ s H * stride_qz + offH s H * stride_qh
+
+noncomputable def qTile (s : BlockState) (Q : RegionName)
+    (H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE : Nat) :
+    TileIndex [BLOCK_M, HEAD_ACTIVE] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q (baseOffset s H stride_qz stride_qh + mIndex s BLOCK_M i * HEAD_DIM + e.val)
+
+noncomputable def kTile (s : BlockState) (K : RegionName)
+    (H stride_qz stride_qh HEAD_DIM S HEAD_ACTIVE : Nat) :
+    TileIndex [S, HEAD_ACTIVE] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K (baseOffset s H stride_qz stride_qh + j.val * HEAD_DIM + e.val)
+
+noncomputable def vTile (s : BlockState) (V : RegionName)
+    (H stride_qz stride_qh HEAD_DIM S HEAD_ACTIVE : Nat) :
+    TileIndex [S, HEAD_ACTIVE] → ℝ :=
+  fun (j, d, _) =>
+    s.readMem V (baseOffset s H stride_qz stride_qh + j.val * HEAD_DIM + d.val)
+
+/-- Per-key scale `q_scale · k_scale[block(j)]`, `block(j) = j / BLOCK_N`.
+`q_scale` is read at `off_hz · cdiv(N_CTX, BLOCK_M) + pid₀`; `k_scale[b]` at
+`off_hz · cdiv(N_CTX, BLOCK_N) + b`. -/
+noncomputable def keyScale (s : BlockState) (Q_scale K_scale : RegionName)
+    (N_CTX BLOCK_M BLOCK_N S : Nat) :
+    Fin S → ℝ :=
+  fun j =>
+    s.readMem Q_scale (s.pids 1 * cdiv N_CTX BLOCK_M + s.pids 0) *
+      s.readMem K_scale (s.pids 1 * cdiv N_CTX BLOCK_N + j.val / BLOCK_N)
 
 /-- Algorithm-layer correctness for the attention-forward final output store. -/
 theorem attention_forward_triton_final_store_slice_correct
@@ -400,92 +439,75 @@ theorem attention_forward_triton_final_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-! ## Python test-shape wrapper
+/-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
-`attention_forward_triton.py`'s checked test uses
-`B = 2`, `H = 4`, `N_CTX = 128`, `HEAD_DIM = 128`, `BLOCK_M = 128`,
-`BLOCK_N = 64`, and the source mask only enables the first 96 head lanes.
-For contiguous `[B, H, N_CTX, HEAD_DIM]` tensors the output/accumulator strides
-are `(65536, 16384, 128, 1)`. -/
+For arbitrary batch/head strides, head count, block sizes, KV-block count,
+head/active dimensions and arbitrary `q_scale`/`k_scale`, every active output
+lane of `Out` (`mIndex < N_CTX ∧ head < HEAD_ACTIVE`) equals
+`attentionRealBase2PerKeyScale` of the loaded Q/K/V tiles under the per-block key
+scale — the genuine base-2, per-key-scaled attention output, NOT the kernel's own
+executed value. Inactive lanes are unconstrained (masked out by the write map).
 
-theorem attention_forward_triton_final_store_python_test_shape_compute_correct
-    (Acc Out : RegionName) (s : BlockState) :
+Layout contracts: `N_CTX = BLOCK_N · numKVBlocks`, `stride_qm = stride_kn =
+HEAD_DIM` and head stride `1` (so the per-block pointer advance composes into a
+per-key address), `0 < BLOCK_N`, `HEAD_ACTIVE ≤ BLOCK_DMODEL`. The Python test
+case (`B=2, H=4, N_CTX=128, HEAD_DIM=128, BLOCK_M=128, BLOCK_N=64,
+HEAD_ACTIVE=96`, `q_scale = k_scale = 1`) is the special case.
+
+**Proven sorry-free**: bridges (via `realizes_writeIf_iff` +
+`computeCorrect_of_toAlgKernel`) to
+`VeriTile.Examples.AttentionForwardClosedForm.attention_forward_triton_closed_form_correct`,
+whose full `exec`-side loop unfolding (preLoop + per-block step + postLoop) and
+math core (`Math/Attention.lean`) are both complete. Extra preconditions:
+`HEAD_ACTIVE ≤ HEAD_DIM` (store-offset injectivity), clean initial `undef`.
+Tracked as `attention-forward-online-softmax-recurrence`, #162. -/
+theorem attention_forward_triton_closed_form_correct
+    (Q K V Q_scale K_scale Out : RegionName) (s : BlockState)
+    (stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks
+      HEAD_DIM BLOCK_DMODEL HEAD_ACTIVE STAGE : Nat)
+    (hBN : 0 < BLOCK_N) (hActiveLe : HEAD_ACTIVE ≤ BLOCK_DMODEL)
+    (hHD : HEAD_ACTIVE ≤ HEAD_DIM) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes
-      (kernel := attention_forward_triton_final_store_slice Acc Out
-        4 128 96 65536 16384 128 1 65536 16384 128 1 128 128)
+      (kernel := attention_forward_triton_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        s.readMem Acc (accOffset s 4 65536 16384 128 1 128 idx)) := by
-  apply attention_forward_triton_final_store_slice_compute_correct
-  rintro ⟨⟨ma, hma⟩, ⟨ka, hka⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨kb, hkb⟩, _⟩ h
-  simp [outOffset, offZ, offH, mIndex, kIndex] at h
-  have hm : ma = mb := by omega
-  have hk : ka = kb := by omega
-  subst mb
-  subst kb
-  rfl
-
-theorem attention_forward_triton_surface_python_test_shape_compute_correct
-    (Q K V QScale KScale Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_forward_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        2 4 128 128 128 64 128 96 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedAttentionForwardOutValue s Q K V QScale KScale Out idx) := by
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          active s (BLOCK_N * numKVBlocks) HEAD_ACTIVE BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
+          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        if h : idx.2.1.val < HEAD_ACTIVE then
+          attentionRealBase2PerKeyScale
+            (qTile s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE)
+            (kTile s K H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (vTile s V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (keyScale s Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N
+              (BLOCK_N * numKVBlocks))
+            (idx.1, ⟨idx.2.1.val, h⟩, PUnit.unit)
+        else (0 : ℝ)) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_forward_triton_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel rfl
   intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [producedAttentionForwardOutValue, hExec]
-
-/-- Python test-shape summary for `attention_forward_triton.py`.
-
-This combines the checked full-surface lowering for the Python launch
-parameters with the final observable `Out` writes produced directly by that
-full surface at the contiguous `[B,H,N_CTX,HEAD_DIM] = [2,4,128,128]` layout. -/
-theorem attention_forward_triton_python_test_shape_output_summary
-    (Q K V QScale KScale Out : RegionName) (s : BlockState) :
-    (∃ alg, (attention_forward_triton_surface Q K V QScale KScale Out
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      65536 16384 128 1
-      2 4 128 128 128 64 128 96 1).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_forward_triton_surface Q K V QScale KScale Out
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        65536 16384 128 1
-        2 4 128 128 128 64 128 96 1)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [128, 128] => active s 128 96 128 idx)
-        (fun idx : TileIndex [128, 128] => (Out,
-          outOffset s 4 65536 16384 128 1 128 idx)))
-      (expected := fun idx : TileIndex [128, 128] =>
-        producedAttentionForwardOutValue s Q K V QScale KScale Out idx) := by
-  constructor
-  · exact attention_forward_triton_surface_toAlgorithm_supported Q K V QScale
-      KScale Out 65536 16384 128 1 65536 16384 128 1 65536 16384
-      128 1 65536 16384 128 1 2 4 128 128 128 64 128 96 1
-  · exact attention_forward_triton_surface_python_test_shape_compute_correct
-      Q K V QScale KScale Out s
+  subst hs0
+  intro idx hActive
+  obtain ⟨hm, hk⟩ := hActive
+  have hmain := VeriTile.Examples.AttentionForwardClosedForm.attention_forward_triton_closed_form_correct
+    Q K V Q_scale K_scale Out s0 stride_qz stride_qh Z H BLOCK_M BLOCK_N numKVBlocks HEAD_DIM
+    BLOCK_DMODEL HEAD_ACTIVE STAGE hBN hActiveLe hHD hundef idx ⟨hm, hk⟩
+  have hExec2 : exec (VeriTile.Examples.AttentionForwardClosedForm.attention_forward_triton_surface
+      Q K V Q_scale K_scale Out stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      stride_qz stride_qh HEAD_DIM 1 stride_qz stride_qh HEAD_DIM 1
+      Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL HEAD_ACTIVE STAGE) s0
+      = some s' := hExec
+  rw [hExec2] at hmain
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  rw [dif_pos (show idx.2.1.val < HEAD_ACTIVE from hk)]
+  exact hmain
 
 end VeriTile.Bench.TritonBenchG.AttentionForwardTriton
