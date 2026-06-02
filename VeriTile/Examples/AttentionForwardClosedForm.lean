@@ -406,6 +406,34 @@ theorem evalOp_castFloat_real {shape : TileShape} (src dst : FloatDType)
     evalOp (.castFloat src dst a) s = some ⟨fun i => src.cast dst (t.data i)⟩ := by
   simp only [evalOp, h]; rfl
 
+/-- **`qk` statement eval** (`(tl.dot q k).to(fp32) · q_scale · k_scale`): given
+the `q`/`k` tiles and the scalar `q_scale`/`k_scale`, the `qk` register evaluates
+to the scaled (cast-wrapped) dot. The `castFloat .real .real` reduces via a
+natural sub-proof then a defeq dtype-coercion (`FloatDType.real.toTileDType`
+vs `TileDType.real`) so it matches the `mul`-normalized goal. -/
+theorem qk_op_eval (s : BlockState) (BM BN BD : Nat)
+    (qtile : Tile .real [BM, BD]) (ktile : Tile .real [BD, BN]) (qsv ksv : ℝ)
+    (hq : s.regs .real [BM, BD] "q" = some qtile) (hk : s.regs .real [BD, BN] "k" = some ktile)
+    (hqs : s.regs .real [] "q_scale" = some (Tile.scalar (some qsv)))
+    (hks : s.regs .real [] "k_scale" = some (Tile.scalar (some ksv))) :
+    evalOp (Op.mul .real Broadcast.scalarR
+        (Op.mul .real Broadcast.scalarR
+          (Op.castFloat .real .real (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k")))
+          (Op.ref .real [] "q_scale")) (Op.ref .real [] "k_scale")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR
+         (Tile.bop NumericDType.real.mul Broadcast.scalarR
+           (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile ktile).data i)⟩ : Tile .real [BM,BN])
+           (Tile.scalar (some qsv : WithBot ℝ))) (Tile.scalar (some ksv : WithBot ℝ))) := by
+  have hdot : evalOp (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k")) s
+      = some (Tile.dot [] qtile ktile) := by rw [evalOp_dot]; simp [hq, hk]
+  have hcast : evalOp (Op.castFloat .real .real (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k"))) s
+      = some (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile ktile).data i)⟩ : Tile .real [BM,BN]) := by
+    rw [evalOp_castFloat]; simp only [FloatDType.toTileDType_real]; rw [hdot]; rfl
+  have hcast2 : @evalOp TileDType.real [BM, BN]
+        (Op.castFloat .real .real (Op.dot (batch := []) (Op.ref .real [BM, BD] "q") (Op.ref .real [BD, BN] "k"))) s
+      = some (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile ktile).data i)⟩ : Tile .real [BM,BN]) := hcast
+  rw [evalOp_mul, evalOp_mul, hcast2]; simp [hqs, hks]
+
 def attention_forward_triton_surface
     (Q K V Q_scale K_scale Out : RegionName)
     (stride_qz stride_qh stride_qm stride_qk
