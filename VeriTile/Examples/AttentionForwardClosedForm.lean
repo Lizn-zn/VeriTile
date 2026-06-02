@@ -1760,7 +1760,7 @@ theorem attn_body_split (Q K V Q_scale K_scale Out : RegionName)
             :: attnStoreStmt BLOCK_M BLOCK_DMODEL BLOCK_N numKVBlocks HEAD_ACTIVE :: []) := by
   rfl
 
-set_option maxHeartbeats 4000000 in
+set_option maxHeartbeats 8000000 in
 /-- **Loop-body execution chain (validated).** Given the register readbacks the
 loop invariant supplies on the iteration-entry state `sin` (with `start_n` already
 set to the block offset `SN`), the full 19-statement `attnLoopBody` executes to
@@ -1785,7 +1785,17 @@ theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
     (hqs : sin.regs .real [] "q_scale" = some (Tile.scalar (some qsv))) (hmi : sin.regs .real [BM] "m_i" = some mtile)
     (hli : sin.regs .real [BM] "l_i" = some ltile) (hacc : sin.regs .real [BM, BD] "acc" = some acctile)
     (hundef : ∀ rg o, sin.undef rg o = 0) :
-    ∃ sF, stepStmts (attnLoopBody BM BN BD HA HD NC) (sin) = some sF := by
+    ∃ sF, stepStmts (attnLoopBody BM BN BD HA HD NC) (sin) = some sF
+      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
+      ∧ sF.regs .ptr [BD, BN] "K_ptrs" = some (Tile.ptrAdd Broadcast.scalarR Kptr (Tile.scalar (BN * HD)))
+      ∧ sF.regs .ptr [] "K_scale_ptr" = some (Tile.ptrAdd Broadcast.nil Ksptr (Tile.scalar 1))
+      ∧ sF.regs .ptr [BN, BD] "V_ptrs" = some (Tile.ptrAdd Broadcast.scalarR Vptr (Tile.scalar (BN * HD)))
+      ∧ sF.regs .real [BM, BD] "q" = some qtile
+      ∧ sF.regs .real [] "q_scale" = some (Tile.scalar (some qsv))
+      ∧ sF.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))
+      ∧ sF.regs .nat [BM] "offs_m" = sin.regs .nat [BM] "offs_m"
+      ∧ sF.regs .nat [BD] "offs_k" = sin.regs .nat [BD] "offs_k"
+      ∧ sF.regs .ptr [BM, BD] "O_block_ptr" = sin.regs .ptr [BM, BD] "O_block_ptr" := by
   set kmaskT : Tile .bool [BD, BN] := ⟨fun idx => (decide (idx.2.1.val < BN * NC - SN) && decide (idx.1.val < HA))⟩ with hkm
   set kloadT : Tile .real [BD, BN] := ⟨fun i => some (if kmaskT.data i then sin.readMem (Kptr.data i).1 (Kptr.data i).2 else 0)⟩ with hkl
   set ksv : ℝ := sin.readMem (Ksptr.data PUnit.unit).1 (Ksptr.data PUnit.unit).2 with hksv
@@ -1823,7 +1833,20 @@ theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (kptr_adv_eval _ BD BN BN HD Kptr "K_ptrs" (by simp [hKp])))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (ksptr_adv_eval _ Ksptr "K_scale_ptr" (by simp [hKs])))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (kptr_adv_eval _ BN BD BN HD Vptr "V_ptrs" (by simp [hVp])))]
-  rw [stepStmts.nil]; exact ⟨_, rfl⟩
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp
+  · funext region offset; simp
+  · intro rg o; simp [hundef]
+  · simp
+  · simp
+  · simp
+  · simp [hq]
+  · simp [hqs]
+  · simp [hoffs]
+  · simp
+  · simp
+  · simp
 
 /-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
