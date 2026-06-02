@@ -1795,7 +1795,34 @@ theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
       ∧ sF.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))
       ∧ sF.regs .nat [BM] "offs_m" = sin.regs .nat [BM] "offs_m"
       ∧ sF.regs .nat [BD] "offs_k" = sin.regs .nat [BD] "offs_k"
-      ∧ sF.regs .ptr [BM, BD] "O_block_ptr" = sin.regs .ptr [BM, BD] "O_block_ptr" := by
+      ∧ sF.regs .ptr [BM, BD] "O_block_ptr" = sin.regs .ptr [BM, BD] "O_block_ptr"
+      ∧ ∃ (rmaxT mijT alphaT : Tile .real [BM]) (pT : Tile .real [BM, BN]) (lijT : Tile .real [BM])
+            (acc1T : Tile .real [BM, BD]) (vloadT : Tile .real [BN, BD]),
+          Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length)
+              (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                  (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile
+                      (⟨fun i => some (if (⟨fun idx => (decide (idx.2.1.val < BN * NC - SN) && decide (idx.1.val < HA))⟩ : Tile .bool [BD, BN]).data i then sin.readMem (Kptr.data i).1 (Kptr.data i).2 else 0)⟩ : Tile .real [BD, BN])).data i)⟩ : Tile .real [BM,BN])
+                  (Tile.scalar (some qsv : WithBot ℝ)))
+                (Tile.scalar (some (sin.readMem (Ksptr.data PUnit.unit).1 (Ksptr.data PUnit.unit).2) : WithBot ℝ))) = some rmaxT
+          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
+          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                  (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile
+                      (⟨fun i => some (if (⟨fun idx => (decide (idx.2.1.val < BN * NC - SN) && decide (idx.1.val < HA))⟩ : Tile .bool [BD, BN]).data i then sin.readMem (Kptr.data i).1 (Kptr.data i).2 else 0)⟩ : Tile .real [BD, BN])).data i)⟩ : Tile .real [BM,BN])
+                  (Tile.scalar (some qsv : WithBot ℝ)))
+                (Tile.scalar (some (sin.readMem (Ksptr.data PUnit.unit).1 (Ksptr.data PUnit.unit).2) : WithBot ℝ)))
+              (Tile.expandDim ⟨1, hax⟩ mijT))
+          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) pT
+          ∧ acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, hax⟩ alphaT)
+          ∧ vloadT = (⟨fun i => some (if (⟨fun idx => (decide (idx.1.val < BN * NC - SN) && decide (idx.2.1.val < HA))⟩ : Tile .bool [BN, BD]).data i then sin.readMem (Vptr.data i).1 (Vptr.data i).2 else 0)⟩ : Tile .real [BN, BD])
+          ∧ sF.regs .real [BM] "m_i" = some mijT
+          ∧ sF.regs .real [BM] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT) lijT)
+          ∧ sF.regs .real [BM, BD] "acc" = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              acc1T (Tile.dot [] pT vloadT)) := by
   set kmaskT : Tile .bool [BD, BN] := ⟨fun idx => (decide (idx.2.1.val < BN * NC - SN) && decide (idx.1.val < HA))⟩ with hkm
   set kloadT : Tile .real [BD, BN] := ⟨fun i => some (if kmaskT.data i then sin.readMem (Kptr.data i).1 (Kptr.data i).2 else 0)⟩ with hkl
   set ksv : ℝ := sin.readMem (Ksptr.data PUnit.unit).1 (Ksptr.data PUnit.unit).2 with hksv
@@ -1834,7 +1861,7 @@ theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (ksptr_adv_eval _ Ksptr "K_scale_ptr" (by simp [hKs])))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (kptr_adv_eval _ BN BD BN HD Vptr "V_ptrs" (by simp [hVp])))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp
   · funext region offset; simp
   · intro rg o; simp [hundef]
@@ -1847,6 +1874,8 @@ theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
   · simp
   · simp
   · simp
+  · exact ⟨rmaxT, mijT, alphaT, pT, lijT, acc1T, vloadT, hrm, rfl, rfl, rfl, rfl, rfl, rfl,
+      by simp, by simp, by simp⟩
 
 /-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
