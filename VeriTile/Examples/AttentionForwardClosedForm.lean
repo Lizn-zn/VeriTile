@@ -1760,6 +1760,71 @@ theorem attn_body_split (Q K V Q_scale K_scale Out : RegionName)
             :: attnStoreStmt BLOCK_M BLOCK_DMODEL BLOCK_N numKVBlocks HEAD_ACTIVE :: []) := by
   rfl
 
+set_option maxHeartbeats 4000000 in
+/-- **Loop-body execution chain (validated).** Given the register readbacks the
+loop invariant supplies on the iteration-entry state `sin` (with `start_n` already
+set to the block offset `SN`), the full 19-statement `attnLoopBody` executes to
+some final state. This is the mechanical core of the step lemma: every statement's
+`evalOp` is discharged by its dedicated recipe (`kmask_eval`/`load_ptr_*`/
+`qk_op_eval`/`mij_op_eval`/`qk2_op_eval`/`p_op_eval`/`lij_op_eval`/`alpha_op_eval`/
+`li_op_eval`/`acc1_op_eval`/`vmask_eval`/`pfp16_op_eval`/`acc2_op_eval`/
+`kptr_adv_eval`/`ksptr_adv_eval`), threaded through `stepStmts.cons_some`. The
+`reduceSum`→`[BM]` and `castFloat`→`fp16` statements need an explicit
+`@stepStmt_assign_eq_some` shape/dtype instantiation (their `Op` type indices are
+`reduceShape`/`toTileDType`, defeq-but-not-syntactic to the body's literal forms);
+`rmaxT` is obtained from `0 < BN` (`reduceMaxDrop` is total on a positive axis). -/
+theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
+    (hax : 1 < [BM].length.succ) (sin : BlockState)
+    (SN : TileCarrier .nat) (qsv : ℝ)
+    (Kptr : Tile .ptr [BD, BN]) (Ksptr : Tile .ptr []) (Vptr : Tile .ptr [BN, BD])
+    (qtile : Tile .real [BM, BD]) (mtile ltile : Tile .real [BM]) (acctile : Tile .real [BM, BD])
+    (hoffs : sin.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hKp : sin.regs .ptr [BD, BN] "K_ptrs" = some Kptr) (hKs : sin.regs .ptr [] "K_scale_ptr" = some Ksptr)
+    (hVp : sin.regs .ptr [BN, BD] "V_ptrs" = some Vptr) (hq : sin.regs .real [BM, BD] "q" = some qtile)
+    (hqs : sin.regs .real [] "q_scale" = some (Tile.scalar (some qsv))) (hmi : sin.regs .real [BM] "m_i" = some mtile)
+    (hli : sin.regs .real [BM] "l_i" = some ltile) (hacc : sin.regs .real [BM, BD] "acc" = some acctile)
+    (hundef : ∀ rg o, sin.undef rg o = 0) :
+    ∃ sF, stepStmts (attnLoopBody BM BN BD HA HD NC) (sin) = some sF := by
+  set kmaskT : Tile .bool [BD, BN] := ⟨fun idx => (decide (idx.2.1.val < BN * NC - SN) && decide (idx.1.val < HA))⟩ with hkm
+  set kloadT : Tile .real [BD, BN] := ⟨fun i => some (if kmaskT.data i then sin.readMem (Kptr.data i).1 (Kptr.data i).2 else 0)⟩ with hkl
+  set ksv : ℝ := sin.readMem (Ksptr.data PUnit.unit).1 (Ksptr.data PUnit.unit).2 with hksv
+  set qkT : Tile .real [BM, BN] := Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR
+        (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile kloadT).data i)⟩ : Tile .real [BM,BN])
+        (Tile.scalar (some qsv : WithBot ℝ))) (Tile.scalar (some ksv : WithBot ℝ)) with hqk
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length) qkT = some t :=
+    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [BM,BN] (⟨1, by simp⟩ : Fin [BM,BN].length) from hBN)]⟩
+  set mijT : Tile .real [BM] := Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT with hmij
+  set qk2T : Tile .real [BM, BN] := Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, hax⟩ mijT) with hqk2
+  set pT : Tile .real [BM, BN] := Tile.uop WithBot.realExp2 qk2T with hpT
+  set lijT : Tile .real [BM] := Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) pT with hlij
+  set alphaT : Tile .real [BM] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT) with hal
+  set acc1T : Tile .real [BM, BD] := Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, hax⟩ alphaT) with hacc1
+  set vmaskT : Tile .bool [BN, BD] := ⟨fun idx => (decide (idx.1.val < BN * NC - SN) && decide (idx.2.1.val < HA))⟩ with hvm
+  set vloadT : Tile .real [BN, BD] := ⟨fun i => some (if vmaskT.data i then sin.readMem (Vptr.data i).1 (Vptr.data i).2 else 0)⟩ with hvl
+  unfold attnLoopBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (show evalOp (Op.ref .nat [] "start_n") sin = some (Tile.scalar SN) from by rw [evalOp_ref]; exact hsn))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (kmask_eval _ BD BN (BN * NC) SN HA (by simp [hoffs]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (load_ptr_mask_real (Op.ref .ptr [BD, BN] "K_ptrs") _ _ Kptr kmaskT (by rw [evalOp_ref]; simp [hKp]) (by rw [evalOp_ref]; simp [hkm]) (by intro rg o; simp [hundef])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (load_ptr_none_real (Op.ref .ptr [] "K_scale_ptr") _ Ksptr (by rw [evalOp_ref]; simp [hKs])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (qk_op_eval _ BM BN BD qtile kloadT qsv ksv (by simp [hq]) (by simp [hkl]) (by simp [hqs]) (by simp [hksv]; ext z; rfl)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (mij_op_eval _ BM BN mtile qkT rmaxT (by simp [hmi]) (by simp [hqk]) hrm))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (qk2_op_eval _ BM BN hax qkT mijT (by simp [hqk]) (by simp [hmij])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (p_op_eval _ BM BN qk2T (by simp [hqk2])))]
+  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [BM] "l_ij" (Op.reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM,BN] "p")) _ lijT (lij_op_eval _ BM BN pT (by simp [hpT])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (alpha_op_eval _ BM mtile mijT (by simp [hmi]) (by simp [hmij])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (li_op_eval _ BM ltile alphaT lijT (by simp [hli]) (by simp [hal]) (by simp [hlij])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (acc1_op_eval _ BM BD hax acctile alphaT (by simp [hacc]) (by simp [hal])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (load_ptr_mask_real (Op.ref .ptr [BN, BD] "V_ptrs") _ _ Vptr vmaskT (by rw [evalOp_ref]; simp [hVp]) (vmask_eval _ BN BD (BN * NC) SN HA (by simp [hoffs]) (by simp)) (by intro rg o; simp [hundef])))]
+  rw [stepStmts.cons_some (@stepStmt_assign_eq_some TileDType.fp16 [BM,BN] "p" (Op.castFloat .real .fp16 (Op.ref .real [BM,BN] "p")) _ (⟨fun i => FloatDType.real.cast FloatDType.fp16 (pT.data i)⟩ : Tile .fp16 [BM,BN]) (pfp16_op_eval _ BM BN pT (by simp [hpT])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (acc2_op_eval _ BM BN BD acc1T pT vloadT (by simp [hacc1]) (by simp [hpT]) (by simp [hvl])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (show evalOp (Op.ref .real [BM] "m_ij") _ = some mijT from by rw [evalOp_ref]; simp [hmij]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (kptr_adv_eval _ BD BN BN HD Kptr "K_ptrs" (by simp [hKp])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (ksptr_adv_eval _ Ksptr "K_scale_ptr" (by simp [hKs])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (kptr_adv_eval _ BN BD BN HD Vptr "V_ptrs" (by simp [hVp])))]
+  rw [stepStmts.nil]; exact ⟨_, rfl⟩
+
 /-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
 For arbitrary batch/head strides, head count, block sizes, KV-block count,
