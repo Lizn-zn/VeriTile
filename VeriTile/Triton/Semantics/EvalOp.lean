@@ -277,6 +277,13 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       some (Tile.expandDim axis v) := by
   simp [evalOp, h]
 
+@[simp] theorem evalOp_castFloat (src dst : FloatDType) {shape : TileShape}
+    (a : Op src.toTileDType shape) (s : BlockState) :
+    evalOp (.castFloat src dst a) s = (do
+      let va ← evalOp a s
+      some (⟨fun i => src.cast dst (va.data i)⟩ : Tile dst.toTileDType shape)) := by
+  simp [evalOp]
+
 @[simp] theorem evalOp_add (h : NumericDType dtype)
     (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b)
     (s : BlockState) :
