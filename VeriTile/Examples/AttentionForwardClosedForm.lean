@@ -1074,6 +1074,36 @@ theorem qk_eq (s : BlockState) (Q K Q_scale K_scale : RegionName)
   simp only [hgkeydiv]
   ring
 
+/-- `reduceMaxDrop` of a row whose cells are `g jL` = `Finset.sup` of the `g` —
+the `tl.max(qk, 1)` row reduction as a `WithBot` `sup`. -/
+theorem reduceMaxDrop_data_row (BM BN : Nat) (hBN : 0 < BN) (qk : Tile .real [BM, BN])
+    (rmaxT : Tile .real [BM]) (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length) qk = some rmaxT)
+    (r : Fin BM) (g : Fin BN → WithBot ℝ) (hqk : ∀ jL : Fin BN, qk.data (r, jL, PUnit.unit) = g jL) :
+    rmaxT.data (r, PUnit.unit) = Finset.univ.sup g := by
+  unfold Tile.reduceMaxDrop at hrm
+  rw [dif_pos (show 0 < TileShape.axisDim [BM,BN] (⟨1, by simp⟩ : Fin [BM,BN].length) from hBN)] at hrm
+  rw [← Option.some.inj hrm]
+  simp only [Finset.sup'_eq_sup]
+  exact Finset.sup_congr rfl (fun jL _ => hqk jL)
+
+/-- **`m_ij = mP(c+1)`**: the `tl.maximum(m_i, tl.max(qk,1))` register, given
+`m_i = mP c` and the reduced row = `Finset.sup` of the block's `kscore`s, equals
+`mP` at `c+1` (the `mP`-succ recurrence; `where`/`gt` collapse to WithBot `max`). -/
+theorem mij_eq (BM BN nB c : Nat) (hc : c < nB)
+    (qT : TileIndex [BM,1]→ℝ) (kT : TileIndex [BN*nB,1]→ℝ) (kS : Fin (BN*nB)→ℝ)
+    (m_i rmaxT : Tile .real [BM]) (r : Fin BM)
+    (hmi : m_i.data (r, PUnit.unit) = mP BN nB qT kT kS r c)
+    (hrmax : rmaxT.data (r, PUnit.unit)
+        = Finset.univ.sup (fun jL : Fin BN => ((kscore BN nB qT kT kS r c hc jL : ℝ) : WithBot ℝ))) :
+    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) m_i rmaxT) m_i rmaxT).data (r, PUnit.unit)
+      = mP BN nB qT kT kS r (c+1) := by
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmi, hrmax]
+  rw [mP, dif_pos (by omega : c + 1 ≤ nB)]
+  by_cases h : mP BN nB qT kT kS r c ≤ Finset.univ.sup (fun jL : Fin BN => ((kscore BN nB qT kT kS r c hc jL : ℝ) : WithBot ℝ))
+  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
+
 /-- **Loop invariant for the exec proof** (counter `i = block c · BLOCK_N`).
 
 Captures the full register state after the `c`-th key block: program ids and the
