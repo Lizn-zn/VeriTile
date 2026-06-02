@@ -1286,7 +1286,7 @@ theorem reduceMaxDrop_data_row (BM BN : Nat) (hBN : 0 < BN) (qk : Tile .real [BM
 `m_i = mP c` and the reduced row = `Finset.sup` of the block's `kscore`s, equals
 `mP` at `c+1` (the `mP`-succ recurrence; `where`/`gt` collapse to WithBot `max`). -/
 theorem mij_eq (BM BN nB c : Nat) (hc : c < nB)
-    (qT : TileIndex [BM,1]→ℝ) (kT : TileIndex [BN*nB,1]→ℝ) (kS : Fin (BN*nB)→ℝ)
+    {Dh : Nat} (qT : TileIndex [BM,Dh]→ℝ) (kT : TileIndex [BN*nB,Dh]→ℝ) (kS : Fin (BN*nB)→ℝ)
     (m_i rmaxT : Tile .real [BM]) (r : Fin BM)
     (hmi : m_i.data (r, PUnit.unit) = mP BN nB qT kT kS r c)
     (hrmax : rmaxT.data (r, PUnit.unit)
@@ -1309,7 +1309,7 @@ theorem realExp2_eq_some_unbotD (z : WithBot ℝ) :
 equals the online-softmax rescale `alphaP` at block `c` (`realExp2` total, so the
 `unbotD 0` in `alphaP` is exact). -/
 theorem alpha_eq (BM BN nB c : Nat)
-    (qT : TileIndex [BM,1]→ℝ) (kT : TileIndex [BN*nB,1]→ℝ) (kS : Fin (BN*nB)→ℝ)
+    {Dh : Nat} (qT : TileIndex [BM,Dh]→ℝ) (kT : TileIndex [BN*nB,Dh]→ℝ) (kS : Fin (BN*nB)→ℝ)
     (m_i m_ij : Tile .real [BM]) (r : Fin BM)
     (hmi : m_i.data (r, PUnit.unit) = mP BN nB qT kT kS r c)
     (hmij : m_ij.data (r, PUnit.unit) = mP BN nB qT kT kS r (c+1)) :
@@ -1346,7 +1346,7 @@ set_option maxHeartbeats 1000000 in
 register equals the online denominator `lP` at `c+1` (the `lP`-succ recurrence):
 `alpha = alphaP c`, the summed `p`-row = `Σ pow2(kscore − mR(c+1))`. -/
 theorem li_eq (BM BN nB c : Nat) (hBN : 0 < BN) (hc : c < nB)
-    (qT : TileIndex [BM,1]→ℝ) (kT : TileIndex [BN*nB,1]→ℝ) (kS : Fin (BN*nB)→ℝ)
+    {Dh : Nat} (qT : TileIndex [BM,Dh]→ℝ) (kT : TileIndex [BN*nB,Dh]→ℝ) (kS : Fin (BN*nB)→ℝ)
     (m_i m_ij l_i : Tile .real [BM]) (qk : Tile .real [BM, BN]) (r : Fin BM)
     (hmi : m_i.data (r, PUnit.unit) = mP BN nB qT kT kS r c)
     (hmij : m_ij.data (r, PUnit.unit) = mP BN nB qT kT kS r (c+1))
@@ -1796,25 +1796,19 @@ theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
       ∧ sF.regs .nat [BM] "offs_m" = sin.regs .nat [BM] "offs_m"
       ∧ sF.regs .nat [BD] "offs_k" = sin.regs .nat [BD] "offs_k"
       ∧ sF.regs .ptr [BM, BD] "O_block_ptr" = sin.regs .ptr [BM, BD] "O_block_ptr"
-      ∧ ∃ (rmaxT mijT alphaT : Tile .real [BM]) (pT : Tile .real [BM, BN]) (lijT : Tile .real [BM])
+      ∧ ∃ (rmaxT mijT alphaT : Tile .real [BM]) (qkT pT : Tile .real [BM, BN]) (lijT : Tile .real [BM])
             (acc1T : Tile .real [BM, BD]) (vloadT : Tile .real [BN, BD]),
-          Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length)
-              (Tile.bop NumericDType.real.mul Broadcast.scalarR
-                (Tile.bop NumericDType.real.mul Broadcast.scalarR
-                  (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile
-                      (⟨fun i => some (if (⟨fun idx => (decide (idx.2.1.val < BN * NC - SN) && decide (idx.1.val < HA))⟩ : Tile .bool [BD, BN]).data i then sin.readMem (Kptr.data i).1 (Kptr.data i).2 else 0)⟩ : Tile .real [BD, BN])).data i)⟩ : Tile .real [BM,BN])
-                  (Tile.scalar (some qsv : WithBot ℝ)))
-                (Tile.scalar (some (sin.readMem (Ksptr.data PUnit.unit).1 (Ksptr.data PUnit.unit).2) : WithBot ℝ))) = some rmaxT
-          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
-          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
-          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
-              (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          qkT = (Tile.bop NumericDType.real.mul Broadcast.scalarR
                 (Tile.bop NumericDType.real.mul Broadcast.scalarR
                   (⟨fun i => FloatDType.real.cast FloatDType.real ((Tile.dot [] qtile
                       (⟨fun i => some (if (⟨fun idx => (decide (idx.2.1.val < BN * NC - SN) && decide (idx.1.val < HA))⟩ : Tile .bool [BD, BN]).data i then sin.readMem (Kptr.data i).1 (Kptr.data i).2 else 0)⟩ : Tile .real [BD, BN])).data i)⟩ : Tile .real [BM,BN])
                   (Tile.scalar (some qsv : WithBot ℝ)))
                 (Tile.scalar (some (sin.readMem (Ksptr.data PUnit.unit).1 (Ksptr.data PUnit.unit).2) : WithBot ℝ)))
-              (Tile.expandDim ⟨1, hax⟩ mijT))
+          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length) qkT = some rmaxT
+          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
+          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              qkT (Tile.expandDim ⟨1, hax⟩ mijT))
           ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) pT
           ∧ acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, hax⟩ alphaT)
           ∧ vloadT = (⟨fun i => some (if (⟨fun idx => (decide (idx.1.val < BN * NC - SN) && decide (idx.2.1.val < HA))⟩ : Tile .bool [BN, BD]).data i then sin.readMem (Vptr.data i).1 (Vptr.data i).2 else 0)⟩ : Tile .real [BN, BD])
@@ -1874,7 +1868,7 @@ theorem attn_loopBody_steps (BM BN BD NC HA HD : Nat) (hBN : 0 < BN)
   · simp
   · simp
   · simp
-  · exact ⟨rmaxT, mijT, alphaT, pT, lijT, acc1T, vloadT, hrm, rfl, rfl, rfl, rfl, rfl, rfl,
+  · exact ⟨rmaxT, mijT, alphaT, qkT, pT, lijT, acc1T, vloadT, rfl, hrm, rfl, rfl, rfl, rfl, rfl, rfl,
       by simp, by simp, by simp⟩
 
 set_option maxHeartbeats 8000000 in
@@ -1905,7 +1899,7 @@ theorem attn_step (Q K V Q_scale K_scale Out : RegionName) (s0 : BlockState)
   set vT := vTile s0 V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE with hvTdef
   set kS := keyScale s0 Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N (BLOCK_N * numKVBlocks) with hkSdef
   obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hKpF, hKsF, hVpF, hqF, hqsF, hnF, hmF, hkF, hOF,
-      rmaxT, mijT, alphaT, pT, lijT, acc1T, vloadT, hrm, hmijd, halphad, hpTd, hlijd, hacc1d, hvloadd,
+      rmaxT, mijT, alphaT, qkT, pT, lijT, acc1T, vloadT, hqkTd, hrm, hmijd, halphad, hpTd, hlijd, hacc1d, hvloadd,
       hm_iF, hl_iF, haccF⟩ :=
     attn_loopBody_steps BLOCK_M BLOCK_N BLOCK_DMODEL numKVBlocks HEAD_ACTIVE HEAD_DIM hBN hax
       (s.setReg "start_n" .nat [] (Tile.scalar i)) i
@@ -1920,7 +1914,67 @@ theorem attn_step (Q K V Q_scale K_scale Out : RegionName) (s0 : BlockState)
       (by simp [hn]) (by simp) (by simp [hKp]) (by simp [hKs]) (by simp [hVp]) (by simp [hq])
       (by simp [hqs]) (by simp [hmi]) (by simp [hli]) (by simp [hacc]) (by intro rg o; simp [hundef])
   refine ⟨sF, hchain, ?_⟩
-  sorry
+  -- the loop body reads the (unchanged) memory of `s0`
+  have hrmem : ∀ (R : RegionName) (o : Nat),
+      (s.setReg "start_n" .nat [] (Tile.scalar i)).readMem R o = s0.readMem R o := by
+    intro R o; simp only [BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  simp only [hrmem] at hqkTd hvloadd
+  -- per-cell `qk = kscore` bridge (feeds m_ij / l_i)
+  have hqk : ∀ (r : Fin BLOCK_M) (jL : Fin BLOCK_N),
+      qkT.data (r, jL, PUnit.unit) = some (kscore BLOCK_N numKVBlocks qT kT kS r (i / BLOCK_N) hc jL) := by
+    intro r jL
+    rw [hqkTd]
+    refine qk_eq s0 Q K Q_scale K_scale H stride_qz stride_qh HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+      HEAD_ACTIVE numKVBlocks (i / BLOCK_N) hHA hc hBN r jL _ _ (fun a e => rfl) ?_
+    intro e j
+    simp only [← hi]
+    by_cases hcond : (j.val < BLOCK_N * numKVBlocks - i ∧ e.val < HEAD_ACTIVE)
+    · simp only [if_pos hcond, Region.cast_id]
+      refine congrArg some ?_
+      rw [if_pos (by simp only [Bool.and_eq_true, decide_eq_true_eq]; exact hcond)]
+    · simp only [if_neg hcond]
+      refine congrArg some ?_
+      rw [if_neg (by simp only [Bool.and_eq_true, decide_eq_true_eq]; exact hcond)]
+  have hmij_eq : ∀ idx : TileIndex [BLOCK_M], mijT.data idx
+      = mP BLOCK_N numKVBlocks qT kT kS idx.1 (i / BLOCK_N + 1) := by
+    intro idx
+    rw [hmijd]
+    refine mij_eq BLOCK_M BLOCK_N numKVBlocks (i / BLOCK_N) hc qT kT kS _ rmaxT idx.1 ?_ ?_
+    · rfl
+    · exact reduceMaxDrop_data_row BLOCK_M BLOCK_N hBN _ rmaxT hrm idx.1 _ (fun jL => hqk idx.1 jL)
+  simp only [attnInvariant]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF]; exact hpids
+  · rw [hc1, Nat.add_one_mul, ← hi]
+  · rw [hc1]; omega
+  · -- m_i = mP (c+1)
+    rw [hm_iF, hc1]; refine congrArg some ?_; ext idx; exact hmij_eq idx
+  · -- l_i = lP (c+1)
+    rw [hl_iF, hc1]; refine congrArg some ?_; ext idx
+    rw [halphad, hlijd, hpTd]
+    exact li_eq BLOCK_M BLOCK_N numKVBlocks (i / BLOCK_N) hBN hc qT kT kS _ mijT _ _ idx.1
+      rfl (hmij_eq idx) rfl (fun jL => hqk idx.1 jL)
+  · -- acc = oP (c+1)
+    rw [haccF, hc1]; refine congrArg some ?_; ext idx
+    rw [hacc1d, halphad, hpTd, hvloadd]
+    sorry
+  · rw [hqF]
+  · rw [hqsF]
+  · rw [hnF]
+  · rw [hmF]; exact hm
+  · rw [hkF]; exact hk
+  · rw [hOF]; exact hO
+  · -- K_ptrs advances c → c+1
+    rw [hKpF, hc1]; refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar] <;> ring
+  · -- K_scale_ptr advances
+    rw [hKsF, hc1]; refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar] <;> ring
+  · -- V_ptrs advances
+    rw [hVpF, hc1]; refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar] <;> ring
+  · exact hundefF
+  · rw [hmemF]; exact hmem
 
 /-- **Closed-form correctness for `attention_forward_triton` (general statement).**
 
