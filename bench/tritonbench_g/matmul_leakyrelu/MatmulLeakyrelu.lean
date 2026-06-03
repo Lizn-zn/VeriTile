@@ -2,70 +2,54 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 
 /-!
-# `matmul_leakyrelu` — strict per-kernel correctness
+# `matmul_leakyrelu` — closed-form matmul + leaky-ReLU correctness
 
 `matmul_kernel` is a group-scheduled tiled GEMM with a fused activation: program
 `pid` is mapped through an L2-grouping schedule to a tile coordinate
-`(pid_m, pid_n)`, accumulates a `BLOCK_SIZE_M × BLOCK_SIZE_N` tile via
-`accumulator += tl.dot(a, b)` over K (with K-tail masking on the loads),
-optionally applies `leaky_relu(x) = where(x >= 0, x, 0.01·x)` when
-`ACTIVATION == "leaky_relu"`, casts to float16, and stores into `C` masked by
-`(offs_cm < M) & (offs_cn < N)`.
+`(pid_m, pid_n)`, accumulates a `BLOCK_SIZE_M × BLOCK_SIZE_N` output tile by
+looping over K with `accumulator += tl.dot(a, b)` (with K-tail masking on the
+loads), applies `leaky_relu(x) = where(x ≥ 0, x, 0.01·x)`, casts the result to
+float16, and stores into `C` masked by `(offs_cm < M) & (offs_cn < N)`.
 
-## Scope
-
-This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
-body. The host launch (`matmul_kernel[grid](...)`, the grid size
-`cdiv(M, BLOCK_M) · cdiv(N, BLOCK_N)`, the grouped-pid scheduling, and how the
-runtime composes per-program output tiles into one `C` buffer) is the *trusted
-boundary*, not a proof obligation here. Because the program coordinates are
-universally quantified over `s`, the per-program statement covers every program
-of the grid. The Python string constexpr `ACTIVATION == "leaky_relu"` is modeled
-by the Lean `Bool` parameter `ACTIVATION`.
+This file proves the **full kernel** correct against a genuine mathematical
+reference: every output cell `C[i,j]` of the computed tile equals
+`fp16(leakyrelu(Σ_{k < K} A[i,k] · B[k,j]))` over `ℝ`, where
+`K = BLOCK_SIZE_K · numKBlocks` is the contracted dimension and
+`leakyrelu(v) = if v ≥ 0 then v else 0.01·v`. This is NOT the kernel's own
+emitted value — it is the independent closed-form `Σ_k A·B` GEMM reference, with
+the leaky-ReLU activation, derived from the loaded `A`/`B` tiles.
 
 ## Proof architecture
 
 ```
-matmul_leakyrelu_python_case{1,2}_output_summary           ← TOP THEOREMS (full surface, activation on/off)
-  ├─ matmul_leakyrelu_python_case{1,2}_surface_toAlgorithm_supported  full surface lowers to algorithm layer
-  │    └─ matmul_kernel_surface_toAlgorithm_supported
-  └─ matmul_leakyrelu_surface_output_compute_correct        ← ComputeCorrect of the masked surface output tile
-
-matmul_leakyrelu_python_case{1,2}_store_summary            ← store-slice summaries
-  ├─ matmul_leakyrelu_python_case{1,2}_surface_toAlgorithm_supported
-  ├─ matmul_leaky_relu_tail_surface_toAlgorithm_supported   (case 1) activation-tail surface lowers
-  └─ matmul_masked_output_store_slice_compute_correct       ← ComputeCorrect over the masked fp16 output store
-       ├─ matmul_masked_output_store_slice_correct          ← algorithm-layer masked fp16 scatter readback
-       │    └─ scatter_memcell_fp16_prop_masked_nd / foldl_writeMemTyped_fp16_preserves
-       └─ matmul_leakyrelu_python_test_output_offset_injective  output-address injectivity (64×64, 32×32 blocks)
+matmul_leakyrelu_closed_form_correct                 ← TOP THEOREM (ComputeCorrect.Realizes)
+  └─ matmul_leakyrelu_exec_closed_form               ← exec-side closed form (every active cell = fp16(leakyrelu(∑_k A·B)))
+       ├─ mlr_preLoop      (P 0: accumulator = 0, a/b pointers seeded)
+       ├─ mlr_step         (one K-block: accumulator += tl.dot advances the partial sum)
+       ├─ mlr_postLoop     (activation + fp16 cast + masked store = the closed form)
+       └─ forRange-via-forRangeDyn (loop-invariant principle drives the K-loop)
 ```
-
-There are also standalone surface-lowering lemmas
-(`matmul_leaky_relu_surface_toAlgorithm_supported` for the activation-specialized
-variant, `matmul_leaky_relu_tail_surface_toAlgorithm_supported` for the tail).
 
 ## Modeling boundary
 
-Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` /
-`num_warps` are not modeled. The **K-loop dot-accumulator** — the
-`accumulator += tl.dot(a, b)` reduction over `range(0, cdiv(K, BLOCK_SIZE_K))` —
-is the key honesty point. The full surface (`matmul_kernel_surface`) lowers to
-the algorithm layer and its masked output store is proved compute-correct against
-`matmulLeakyreluSurfaceCell` (the actual executed cell), but that spec is *the
-kernel's own emitted value*, not an independent `Σ_k a·b` matrix-product
-reference: the dot reduction itself is not re-derived against a mathematical GEMM
-here. What is independently verified is the **masked output store**
-(`matmul_masked_output_store_slice`): starting from a precomputed accumulator
-tile `Acc`, the float16 cast and masked 2D writeback into `C` (active lanes get
-`Acc` cast to fp16, out-of-bounds lanes preserved) is proved correct, including
-output-address injectivity. The leaky-ReLU activation `where(x >= 0, x, 0.01·x)`
-is faithfully present in the surface and in the activation-tail surface
-(`matmul_leaky_relu_tail_surface`); the store-slice spec is stated over the
-post-activation accumulator `Acc`. The matmul output-store accumulator is the
-modeled boundary; relating the K-loop accumulator to a closed-form dot product is
-the remaining blocker.
+Arithmetic is over `ℝ` (not bit-accurate IEEE float, except that the final fp16
+output cast is modeled by `FloatDType.real.cast .fp16`); `@triton.autotune` /
+`num_warps` are not modeled. The grouped program-id schedule (`pid_m`/`pid_n`
+derivation) is the kernel's own deterministic computation; the spec is stated in
+terms of the resulting `pid_m`/`pid_n` (carried as `PM`/`PN`), so it covers every
+program of the grid. The layout contract is the kernel's own strided pointer
+arithmetic: `a[i,k]` at `A + offs_am i · stride_am + k · stride_ak`, `b[k,j]` at
+`B + k · stride_bk + offs_bn j · stride_bn`, `c[i,j]` at
+`C + stride_cm · offs_cm i + stride_cn · offs_cn j`.
+
+Preconditions for the general theorem: `0 < BLOCK_SIZE_K` and `K` divisible into
+`numKBlocks` full K-blocks (so the per-block K-tail load mask is satisfied for
+every loaded lane); tile rows/cols in-bounds (`PM·BM + i < M`, `PN·BN + j < N`,
+making `% M`/`% N` the identity and the store mask all-true); output-address
+injectivity; clean initial `undef`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
@@ -178,111 +162,225 @@ theorem matmul_leaky_relu_surface_toAlgorithm_supported
       BLOCK_SIZE_K GROUP_SIZE_M).toAlgorithm? = Except.ok alg := by
   simp [matmul_leaky_relu_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
-/-- Surface transcription of the `ACTIVATION == "leaky_relu"` tail of
-`matmul_leakyrelu.py`'s `matmul_kernel`.
+/-! ## exec-stepping helpers -/
 
-This starts from a precomputed float32 accumulator tile, applies Python's
-`leaky_relu(accumulator)`, performs the output cast annotation, and preserves
-the grouped output addressing and mask. -/
-def matmul_leaky_relu_tail_surface
-    (Acc C : RegionName)
-    (M N stride_accm stride_accn stride_cm stride_cn
-      BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
-    ComputeKernel := triton {
-  pid_m = tl.program_id(axis=0)
-  pid_n = tl.program_id(axis=1)
-  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
-  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
-  accumulator = tl.load(Acc + $(stride_accm) * offs_cm[:, None] +
-    $(stride_accn) * offs_cn[None, :])
-  accumulator = tl.where(accumulator >= 0.0, accumulator, 0.01 * accumulator)
-  c = (accumulator).to(tl.float16)
-  c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
-  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
-    c, mask=c_mask)
-}
+@[simp] theorem evalOp_remap {dtype inShape outShape}
+    (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
+    evalOp (.remap outShape map a) s = (do
+      let v ← evalOp a s; some (Tile.remap map v)) := by
+  simp [evalOp]
 
-/-- The leaky-ReLU tail surface lowers to the algorithm layer. -/
-theorem matmul_leaky_relu_tail_surface_toAlgorithm_supported
-    (Acc C : RegionName)
-    (M N stride_accm stride_accn stride_cm stride_cn
-      BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
-    ∃ alg, (matmul_leaky_relu_tail_surface Acc C M N stride_accm stride_accn
-      stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N).toAlgorithm? =
-        Except.ok alg := by
-  simp [matmul_leaky_relu_tail_surface, ComputeExpr.toAlgorithm?,
-    ComputeOp.toAlgorithm?]
+theorem evalOp_floorDiv {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.floorDiv h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
+  simp [evalOp]
 
-/-- Proof-oriented masked output-store slice of `matmul_leakyrelu.py`'s
-`matmul_kernel`.
+theorem evalOp_mod {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.mod h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
+  simp [evalOp]
 
-The full kernel derives `pid_m`/`pid_n`, computes the accumulator with a dot loop, and optionally applies leaky ReLU. This slice starts after those steps and proves
-the final masked 2D writeback into `C`. -/
-def matmul_masked_output_store_slice
-    (C Acc : RegionName)
-    (M N stride_cm stride_cn stride_accm stride_accn
-      BLOCK_SIZE_M BLOCK_SIZE_N : Nat) :
-    ComputeKernel := triton {
-  pid_m = tl.program_id(axis=0)
-  pid_n = tl.program_id(axis=1)
-  offs_cm = pid_m * $(BLOCK_SIZE_M) + tl.arange(0, $(BLOCK_SIZE_M))
-  offs_cn = pid_n * $(BLOCK_SIZE_N) + tl.arange(0, $(BLOCK_SIZE_N))
-  acc = tl.load(Acc + $(stride_accm) * offs_cm[:, None] +
-    $(stride_accn) * offs_cn[None, :])
-  c_mask = (offs_cm[:, None] < $(M)) & (offs_cn[None, :] < $(N))
-  tl.store(C + $(stride_cm) * offs_cm[:, None] + $(stride_cn) * offs_cn[None, :],
-    (acc).to(tl.float16), mask=c_mask)
-}
+@[simp] theorem evalOp_expandDim_zero_nat {D : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .nat [1, D] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] name)) s =
+      (s.regs .nat [D] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [1, D] => v.data (i.2.1, PUnit.unit) } : Tile .nat [1, D])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
 
-def rowIndex (s : BlockState) (BLOCK_SIZE_M : Nat) (i : Fin BLOCK_SIZE_M) : Nat :=
-  s.pids 0 * BLOCK_SIZE_M + i.val
+@[simp] theorem evalOp_expandDim_one_nat {M : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .nat [M, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] name)) s =
+      (s.regs .nat [M] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
 
-def colIndex (s : BlockState) (BLOCK_SIZE_N : Nat) (j : Fin BLOCK_SIZE_N) : Nat :=
-  s.pids 1 * BLOCK_SIZE_N + j.val
+theorem evalOp_ptrAdd {a b shape} (bc : Broadcast a b shape)
+    (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState) :
+    evalOp (.ptrAdd bc ptr off) s = (do
+      let ptrs ← evalOp ptr s; let offs ← evalOp off s;
+      some (Tile.ptrAdd bc ptrs offs)) := by simp [evalOp]
 
-def active
-    (s : BlockState) (M N BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N]) : Prop :=
-  rowIndex s BLOCK_SIZE_M idx.1 < M ∧ colIndex s BLOCK_SIZE_N idx.2.1 < N
+theorem evalOp_ptrBase (region : RegionName) (s : BlockState) :
+    evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
 
-instance activeDecidable
-    (s : BlockState) (M N BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N]) :
-    Decidable (active s M N BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
-  unfold active
-  infer_instance
+/-- `a_ptrs` eval: cell `(i,e) = (A, offs_am i · stride_am + e · stride_ak)`. -/
+theorem aptrs_eval (s : BlockState) (A : RegionName) (M K SAM SAK : Nat) (gm : Fin M → Nat)
+    (hm : s.regs .nat [M] "offs_am" = some (Tile.vec gm))
+    (hk : s.regs .nat [K] "offs_k" = some (Tile.vec (fun e : Fin K => e.val))) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase A)
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] "offs_am")) (Op.constNat SAM))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [K] "offs_k")) (Op.constNat SAK)))) s
+      = some (⟨fun idx : TileIndex [M, K] => (A.cast, gm idx.1 * SAM + idx.2.1.val * SAK)⟩ : Tile .ptr [M, K]) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, evalOp_expandDim_one_nat,
+    evalOp_expandDim_zero_nat, hm, hk, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec]
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec, NumericDType.add, NumericDType.mul]
 
-def cOffset
-    (s : BlockState) (stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N]) : Nat :=
-  stride_cm * rowIndex s BLOCK_SIZE_M idx.1 +
-    stride_cn * colIndex s BLOCK_SIZE_N idx.2.1
+/-- `b_ptrs` eval: cell `(e,j) = (B, e · stride_bk + offs_bn j · stride_bn)`. -/
+theorem bptrs_eval (s : BlockState) (B : RegionName) (K N SBK SBN : Nat) (gn : Fin N → Nat)
+    (hk : s.regs .nat [K] "offs_k" = some (Tile.vec (fun e : Fin K => e.val)))
+    (hn : s.regs .nat [N] "offs_bn" = some (Tile.vec gn)) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase B)
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [K] "offs_k")) (Op.constNat SBK))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [N] "offs_bn")) (Op.constNat SBN)))) s
+      = some (⟨fun idx : TileIndex [K, N] => (B.cast, idx.1.val * SBK + gn idx.2.1 * SBN)⟩ : Tile .ptr [K, N]) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, evalOp_expandDim_one_nat,
+    evalOp_expandDim_zero_nat, hk, hn, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec]
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec, NumericDType.add, NumericDType.mul]
 
-def accOffset
-    (s : BlockState) (stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N]) : Nat :=
-  stride_accm * rowIndex s BLOCK_SIZE_M idx.1 +
-    stride_accn * colIndex s BLOCK_SIZE_N idx.2.1
+/-- `accumulator` init eval: `tl.zeros` → the all-`0` tile. -/
+theorem acc_init_eval (s : BlockState) (M N : Nat) :
+    evalOp (Op.full [M, N] (Op.const 0)) s
+      = some (⟨fun _ : TileIndex [M, N] => some (0 : ℝ)⟩ : Tile .real [M, N]) := by
+  simp [evalOp_full, evalOp_const, Option.bind]
 
-private noncomputable def preStoreState
-    (s : BlockState) (Acc : RegionName)
-    (M N stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N : Nat) : BlockState :=
-  s.setReg "pid_m" TileDType.nat [] (Tile.scalar (s.pids 0))
-    |>.setReg "pid_n" TileDType.nat [] (Tile.scalar (s.pids 1))
-    |>.setReg "offs_cm" TileDType.nat [BLOCK_SIZE_M]
-      (Tile.vec fun i => s.pids 0 * BLOCK_SIZE_M + i.val)
-    |>.setReg "offs_cn" TileDType.nat [BLOCK_SIZE_N]
-      (Tile.vec fun i => s.pids 1 * BLOCK_SIZE_N + i.val)
-    |>.setReg "acc" TileDType.real [BLOCK_SIZE_M, BLOCK_SIZE_N]
-      { data := fun idx =>
-        some (s.readMem Acc
-          (stride_accm * (s.pids 0 * BLOCK_SIZE_M + idx.1.val) +
-            stride_accn * (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val))) }
-    |>.setReg "c_mask" TileDType.bool [BLOCK_SIZE_M, BLOCK_SIZE_N]
-      { data := fun idx =>
-        decide
-          (s.pids 0 * BLOCK_SIZE_M + idx.1.val < M ∧
-            s.pids 1 * BLOCK_SIZE_N + idx.2.1.val < N) }
+/-- `a_ptrs += BLOCK_SIZE_K · stride_ak` eval (scalar add via `scalarR`). -/
+theorem aptr_adv_eval (s : BlockState) (M K BK SAK : Nat) (ap : Tile .ptr [M, K])
+    (hx : s.regs .ptr [M, K] "a_ptrs" = some ap) :
+    evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [M, K] "a_ptrs")
+      (Op.mul .nat Broadcast.nil (Op.constNat BK) (Op.constNat SAK))) s
+      = some (Tile.ptrAdd Broadcast.scalarR ap (Tile.scalar (BK * SAK))) := by
+  rw [evalOp_ptrAdd]
+  simp [evalOp_ref, hx, evalOp_mul, evalOp_constNat, NumericDType.mul, Tile.bop]
+
+/-- `b_ptrs += BLOCK_SIZE_K · stride_bk` eval. -/
+theorem bptr_adv_eval (s : BlockState) (K N BK SBK : Nat) (bp : Tile .ptr [K, N])
+    (hy : s.regs .ptr [K, N] "b_ptrs" = some bp) :
+    evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [K, N] "b_ptrs")
+      (Op.mul .nat Broadcast.nil (Op.constNat BK) (Op.constNat SBK))) s
+      = some (Tile.ptrAdd Broadcast.scalarR bp (Tile.scalar (BK * SBK))) := by
+  rw [evalOp_ptrAdd]
+  simp [evalOp_ref, hy, evalOp_mul, evalOp_constNat, NumericDType.mul, Tile.bop]
+
+/-- The masked dot of two all-`some` loaded tiles, lane `(i,j)`, equals
+`some (Σ_e fx e · fy e)`. -/
+theorem dot_ab (M K N : Nat) (x : Tile .real [M, K]) (y : Tile .real [K, N])
+    (i : Fin M) (j : Fin N) (fx : Fin K → ℝ) (fy : Fin K → ℝ)
+    (hx : ∀ e : Fin K, x.data (i, e, PUnit.unit) = some (fx e))
+    (hy : ∀ e : Fin K, y.data (e, j, PUnit.unit) = some (fy e)) :
+    (Tile.dot [] x y).data (i, j, PUnit.unit)
+      = some (Finset.univ.sum fun e : Fin K => fx e * fy e) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (x.data (i, e, PUnit.unit)) (y.data (e, j, PUnit.unit))))
+      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fx e * fy e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [hx e, hy e]; rfl)]
+  show (Finset.univ.sum fun e => ((fx e * fy e : ℝ) : WithBot ℝ)) = _
+  rw [← WithBot.coe_sum]; rfl
+
+/-- **`accumulator = accumulator + tl.dot(a, b)` statement eval.** -/
+theorem accdot_op_eval (M K N : Nat) (st : BlockState)
+    (zt : Tile .real [M, N]) (xt : Tile .real [M, K]) (yt : Tile .real [K, N])
+    (hz : st.regs .real [M, N] "accumulator" = some zt)
+    (hx : st.regs .real [M, K] "a" = some xt)
+    (hy : st.regs .real [K, N] "b" = some yt) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [M, N] "accumulator")
+        (Op.dot (batch := []) (Op.ref .real [M, K] "a") (Op.ref .real [K, N] "b"))) st
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          zt (Tile.dot [] xt yt)) := by
+  have hd : evalOp (Op.dot (batch := []) (Op.ref .real [M, K] "a")
+        (Op.ref .real [K, N] "b")) st = some (Tile.dot [] xt yt) := by
+    rw [evalOp_dot]; simp [hx, hy]
+  rw [evalOp_add]
+  simp only [evalOp_ref, hz, bind, Option.bind_some]
+  erw [hd]
+  rfl
+
+/-- `accumulator + dot` lane `(i,j)`: `some (zv + dv)`. -/
+theorem accadd_eval (M N : Nat) (zt dt : Tile .real [M, N]) (i : Fin M) (j : Fin N) (zv dv : ℝ)
+    (hz : zt.data (i, j, PUnit.unit) = some zv) (hd : dt.data (i, j, PUnit.unit) = some dv) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) zt dt).data
+        (i, j, PUnit.unit) = some (zv + dv) := by
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hz, hd, NumericDType.add,
+    WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+
+/-! ## GEMM + leaky-ReLU closed-form spec -/
+
+/-- Ceiling division `⌈a / b⌉`, matching Triton's `tl.cdiv`. -/
+def cdiv (a b : Nat) : Nat := (a + b - 1) / b
+
+/-- Leaky-ReLU activation `if v ≥ 0 then v else 0.01·v`. -/
+noncomputable def leakyrelu (v : ℝ) : ℝ := if v ≥ 0 then v else (1e-2 : ℝ) * v
+
+/-- The kernel's grouped `num_pid_in_group = GROUP · cdiv N BN`. -/
+def numPidInGroup (N BN GROUP : Nat) : Nat := GROUP * cdiv N BN
+
+/-- The kernel's `group_size_m` for program `pid`
+(`min(num_pid_m − first_pid_m, GROUP)`, written with `<` as the kernel does). -/
+def groupSizeM (pid M N BM BN GROUP : Nat) : Nat :=
+  let num_pid_m := cdiv M BM
+  let first_pid_m := pid / numPidInGroup N BN GROUP * GROUP
+  if num_pid_m - first_pid_m < GROUP then num_pid_m - first_pid_m else GROUP
+
+/-- The kernel's derived `pid_m` for program `pid`. -/
+def pidM (pid M N BM BN GROUP : Nat) : Nat :=
+  pid / numPidInGroup N BN GROUP * GROUP
+    + pid % numPidInGroup N BN GROUP % groupSizeM pid M N BM BN GROUP
+
+/-- The kernel's derived `pid_n` for program `pid`. -/
+def pidN (pid M N BM BN GROUP : Nat) : Nat :=
+  pid % numPidInGroup N BN GROUP / groupSizeM pid M N BM BN GROUP
+
+/-- Global output row of tile lane `i`: `PM · BM + i`. -/
+def rowIndex (PM BM : Nat) (i : Fin BM) : Nat := PM * BM + i.val
+
+/-- Global output column of tile lane `j`: `PN · BN + j`. -/
+def colIndex (PN BN : Nat) (j : Fin BN) : Nat := PN * BN + j.val
+
+/-- `A[i, k] = readMem A (offs_am i · stride_am + k · stride_ak)` (kernel's strided
+A layout, with `offs_am i = (PM·BM + i) % M`). -/
+noncomputable def aElem (s : BlockState) (A : RegionName) (PM BM M SAM SAK : Nat)
+    (i : Fin BM) (k : Nat) : ℝ :=
+  s.readMem A (rowIndex PM BM i % M * SAM + k * SAK)
+
+/-- `B[k, j] = readMem B (k · stride_bk + offs_bn j · stride_bn)` (kernel's strided
+B layout, with `offs_bn j = (PN·BN + j) % N`). -/
+noncomputable def bElem (s : BlockState) (B : RegionName) (PN BN N SBK SBN : Nat)
+    (j : Fin BN) (k : Nat) : ℝ :=
+  s.readMem B (k * SBK + colIndex PN BN j % N * SBN)
+
+/-- **Genuine GEMM spec**: `C[i,j] = Σ_{k < BLOCK_K·numKBlocks} A[i,k] · B[k,j]`. -/
+noncomputable def matmulSpec (s : BlockState) (A B : RegionName)
+    (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K numKBlocks : Nat) (i : Fin BM) (j : Fin BN) : ℝ :=
+  (Finset.range (BLOCK_K * numKBlocks)).sum
+    (fun k => aElem s A PM BM M SAM SAK i k * bElem s B PN BN N SBK SBN j k)
+
+/-- Partial GEMM accumulator after `c` K-blocks: `Σ_{k < c·BLOCK_K} A·B`. -/
+noncomputable def accPartial (s : BlockState) (A B : RegionName)
+    (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) : ℝ :=
+  (Finset.range (c * BLOCK_K)).sum
+    (fun k => aElem s A PM BM M SAM SAK i k * bElem s B PN BN N SBK SBN j k)
+
+/-- One-block step of the partial accumulator. -/
+theorem accPartial_succ (s : BlockState) (A B : RegionName)
+    (PM PN BM BN M N SAM SAK SBK SBN BLOCK_K : Nat) (i : Fin BM) (j : Fin BN) (c : Nat) :
+    accPartial s A B PM PN BM BN M N SAM SAK SBK SBN BLOCK_K i j (c + 1)
+      = accPartial s A B PM PN BM BN M N SAM SAK SBK SBN BLOCK_K i j c
+        + (Finset.univ.sum fun e : Fin BLOCK_K =>
+            aElem s A PM BM M SAM SAK i (c * BLOCK_K + e.val)
+              * bElem s B PN BN N SBK SBN j (c * BLOCK_K + e.val)) := by
+  unfold accPartial
+  have h : (c + 1) * BLOCK_K = c * BLOCK_K + BLOCK_K := by ring
+  rw [h, Finset.sum_range_add]
+  congr 1
+  rw [Finset.sum_range fun e => aElem s A PM BM M SAM SAK i (c * BLOCK_K + e)
+        * bElem s B PN BN N SBK SBN j (c * BLOCK_K + e)]
+
+/-! ## Masked fp16 output-store machinery (reused for the activated store) -/
+
+def cOffset (s : BlockState) (PM PN BM BN stride_cm stride_cn : Nat)
+    (idx : TileIndex [BM, BN]) : Nat :=
+  stride_cm * rowIndex PM BM idx.1 + stride_cn * colIndex PN BN idx.2.1
 
 private theorem foldl_writeMemTyped_fp16_preserves {α : Type} {region : RegionName}
     (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16)
@@ -382,270 +480,410 @@ private theorem scatter_memcell_fp16_prop_masked_nd {region : RegionName} {shape
       (offsetFn i) l₁]
     exact h_l1_not_in
 
-/-- Algorithm-layer correctness for the masked 2D output tile store. -/
-theorem matmul_masked_output_store_slice_correct
-    (C Acc : RegionName)
-    (M N stride_cm stride_cn stride_accm stride_accn
-      BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N))
-    (hExec : exec (matmul_masked_output_store_slice C Acc M N stride_cm stride_cn
-        stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N) s = some s') :
-    ∀ idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N],
-      s'.mem C (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx) =
-        if active s M N BLOCK_SIZE_M BLOCK_SIZE_N idx then
-          MemCell.of .fp16
-            (FloatDType.real.cast FloatDType.fp16
-              (some (s.readMem Acc
-                (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx))))
-        else
-          s.mem C (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx) := by
-  intro idx
-  simp [exec, matmul_masked_output_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        TileShape.dropInsertedIndex] at hExec
-  rw [← hExec]
-  let offsetFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Nat :=
-    fun idx =>
-      stride_cm * (s.pids 0 * BLOCK_SIZE_M + idx.1.val) +
-        stride_cn * (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val)
-  let valueFn : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → TileCarrier TileDType.fp16 :=
-    fun idx =>
-      FloatDType.real.cast FloatDType.fp16
-        (some (s.readMem Acc
-          (stride_accm * (s.pids 0 * BLOCK_SIZE_M + idx.1.val) +
-            stride_accn * (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val))))
-  let P : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_N] → Prop :=
-    fun idx =>
-      s.pids 0 * BLOCK_SIZE_M + idx.1.val < M ∧
-        s.pids 1 * BLOCK_SIZE_N + idx.2.1.val < N
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, cOffset, rowIndex, colIndex] using hOutInj
-  have hscatter := scatter_memcell_fp16_prop_masked_nd
-    (region := C)
-    (s := preStoreState s Acc M N stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N)
-    (offsetFn := offsetFn) (valueFn := valueFn) (P := P)
-    hOffsetInj idx
-  by_cases hActive : P idx
-  · simpa [offsetFn, valueFn, P, active, cOffset, accOffset, rowIndex, colIndex,
-      preStoreState, TileShape.dropInsertedIndex, hActive] using hscatter
-  · simpa [offsetFn, valueFn, P, active, cOffset, accOffset, rowIndex, colIndex,
-      preStoreState, TileShape.dropInsertedIndex, hActive] using hscatter
+/-! ## Body decomposition -/
 
-/-- Compute-facing correctness for the masked 2D output tile store. -/
-theorem matmul_masked_output_store_slice_compute_correct
-    (C Acc : RegionName)
-    (M N stride_cm stride_cn stride_accm stride_accn
-      BLOCK_SIZE_M BLOCK_SIZE_N : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N)) :
-    ComputeCorrect.Realizes
-      (kernel := matmul_masked_output_store_slice C Acc M N stride_cm stride_cn
-        stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s M N BLOCK_SIZE_M BLOCK_SIZE_N)
-        (fun idx => (C, cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx)))
-      (expected := fun idx =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem Acc
-              (accOffset s stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N idx))))) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [matmul_masked_output_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := matmul_masked_output_store_slice_correct C Acc M N stride_cm stride_cn
-    stride_accm stride_accn BLOCK_SIZE_M BLOCK_SIZE_N s s' hOutInj hExec idx
-  simpa [hActive] using h
+/-- The 5-statement K-loop body, transcribed (under K = BLOCK_K · numKBlocks the
+load masks are all-true, but the body keeps them faithfully). -/
+def mlrLoopBody (BM BN BLOCK_K K SAK SBK : Nat) : List Stmt :=
+  [ Stmt.assign .real [BM, BLOCK_K] "a"
+      (Op.load .real (.ptr (Op.ref .ptr [BM, BLOCK_K] "a_ptrs"))
+        (.maskOther
+          (Op.remap [BM, BLOCK_K] Broadcast.nil.consSame.consL.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_K] "offs_k"))
+              (Op.sub .nat Broadcast.nil (Op.constNat K)
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "k") (Op.constNat BLOCK_K)))))
+          ((Op.const 0.0).broadcast [BM, BLOCK_K]))),
+    Stmt.assign .real [BLOCK_K, BN] "b"
+      (Op.load .real (.ptr (Op.ref .ptr [BLOCK_K, BN] "b_ptrs"))
+        (.maskOther
+          (Op.remap [BLOCK_K, BN] Broadcast.nil.consL.consSame.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_K] "offs_k"))
+              (Op.sub .nat Broadcast.nil (Op.constNat K)
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "k") (Op.constNat BLOCK_K)))))
+          ((Op.const 0.0).broadcast [BLOCK_K, BN]))),
+    Stmt.assign .real [BM, BN] "accumulator"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "accumulator")
+        (Op.dot (batch := []) (Op.ref .real [BM, BLOCK_K] "a") (Op.ref .real [BLOCK_K, BN] "b"))),
+    Stmt.assign .ptr [BM, BLOCK_K] "a_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BM, BLOCK_K] "a_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_K) (Op.constNat SAK))),
+    Stmt.assign .ptr [BLOCK_K, BN] "b_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLOCK_K, BN] "b_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_K) (Op.constNat SBK))) ]
 
-/-- Contiguous `64 × 64` Python-test output tiles have injective addresses for
-the fixed `32 × 32` block shape in `matmul_leakyrelu.py`. -/
-theorem matmul_leakyrelu_python_test_output_offset_injective
-    (s : BlockState) :
-    Function.Injective (cOffset s 64 1 32 32) := by
-  intro a b h
-  simp [cOffset, rowIndex, colIndex] at h
-  ext <;> omega
+/-- **preLoop scalars** (statements 0–11): the grouped pid derivation plus the
+three index vectors. Steps to a state where `offs_am`/`offs_bn`/`offs_k` hold
+the readbacks the pointer chunk needs, and `pid_m`/`pid_n` hold `pidM`/`pidN`. -/
+theorem preLoop_scalars (s : BlockState) (M N BM BN BK GROUP : Nat) :
+    ∃ s12,
+      stepStmts
+        [ Stmt.assign .nat [] "pid" (Op.programId 0),
+          Stmt.assign .nat [] "num_pid_m"
+            (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.constNat M) (Op.constNat BM)) (Op.constNat 1)) (Op.constNat BM)),
+          Stmt.assign .nat [] "num_pid_n"
+            (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.constNat N) (Op.constNat BN)) (Op.constNat 1)) (Op.constNat BN)),
+          Stmt.assign .nat [] "num_pid_in_group"
+            (Op.mul .nat Broadcast.nil (Op.constNat GROUP) (Op.ref .nat [] "num_pid_n")),
+          Stmt.assign .nat [] "group_id"
+            (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group")),
+          Stmt.assign .nat [] "first_pid_m"
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "group_id") (Op.constNat GROUP)),
+          Stmt.assign .nat [] "group_size_m"
+            ((Op.lt .nat Broadcast.nil
+                (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m") (Op.ref .nat [] "first_pid_m"))
+                (Op.constNat GROUP)).where
+              (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m") (Op.ref .nat [] "first_pid_m"))
+              (Op.constNat GROUP)),
+          Stmt.assign .nat [] "pid_m"
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "first_pid_m")
+              (Op.mod .nat Broadcast.nil
+                (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group"))
+                (Op.ref .nat [] "group_size_m"))),
+          Stmt.assign .nat [] "pid_n"
+            (Op.floorDiv .nat Broadcast.nil
+              (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group"))
+              (Op.ref .nat [] "group_size_m")),
+          Stmt.assign .nat [BM] "offs_am"
+            (Op.mod .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM)) (Op.arange BM))
+              (Op.constNat M)),
+          Stmt.assign .nat [BN] "offs_bn"
+            (Op.mod .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN)) (Op.arange BN))
+              (Op.constNat N)),
+          Stmt.assign .nat [BK] "offs_k" (Op.arange BK) ] s = some s12
+      ∧ s12.pids = s.pids
+      ∧ s12.regs .nat [] "pid_m" = some (Tile.scalar (pidM (s.pids 0) M N BM BN GROUP))
+      ∧ s12.regs .nat [] "pid_n" = some (Tile.scalar (pidN (s.pids 0) M N BM BN GROUP))
+      ∧ s12.regs .nat [BM] "offs_am"
+          = some (Tile.vec (fun i : Fin BM => (pidM (s.pids 0) M N BM BN GROUP * BM + i.val) % M))
+      ∧ s12.regs .nat [BN] "offs_bn"
+          = some (Tile.vec (fun j : Fin BN => (pidN (s.pids 0) M N BM BN GROUP * BN + j.val) % N))
+      ∧ s12.regs .nat [BK] "offs_k" = some (Tile.vec (fun e : Fin BK => e.val))
+      ∧ s12.undef = s.undef
+      ∧ s12.mem = s.mem := by
+  simp only [pidM, pidN, groupSizeM, numPidInGroup, cdiv]
+  simp [stepStmts, stepStmt, evalOp_floorDiv, evalOp_mod, Option.bind, BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.vec, NumericDType.add, NumericDType.mul, NumericDType.div,
+    NumericDType.sub, ComparableDType.lt]
 
-/-- Python test case 1 full surface lowering: `64×128 @ 128×64` with leaky
-ReLU enabled and `BLOCK_SIZE_M/N/K = 32`, `GROUP_SIZE_M = 4`. -/
-theorem matmul_leakyrelu_python_case1_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_kernel_surface A B C
-      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_kernel_surface_toAlgorithm_supported A B C
-    64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true
+/-- A `.ptr` masked load with `.maskOther`, when every mask lane is `true`,
+reads `readMem` at each pointer (clean `undef`). -/
+theorem load_ptr_maskOther_alltrue {shape : TileShape}
+    (ptrOp : Op .ptr shape) (maskOp : Op .bool shape) (otherOp : Op .real shape)
+    (s : BlockState) (ptrs : Tile .ptr shape) (mtile : Tile .bool shape) (otile : Tile .real shape)
+    (hp : evalOp ptrOp s = some ptrs)
+    (hm : evalOp maskOp s = some mtile)
+    (ho : evalOp otherOp s = some otile)
+    (hall : ∀ i, mtile.data i = Bool.true) :
+    evalOp (.load .real (.ptr ptrOp) (.maskOther maskOp otherOp)) s
+      = some ⟨fun i => some (s.readMem (ptrs.data i).1 (ptrs.data i).2)⟩ := by
+  unfold evalOp
+  simp only [hp, hm, ho, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  simp only [hall i, if_true, BlockState.readMemValue_real]
 
-/-- Python test case 1 activation-tail surface lowering. -/
-theorem matmul_leakyrelu_python_case1_tail_surface_toAlgorithm_supported
-    (Acc C : RegionName) :
-    ∃ alg, (matmul_leaky_relu_tail_surface Acc C
-      64 64 64 1 64 1 32 32).toAlgorithm? = Except.ok alg := by
-  exact matmul_leaky_relu_tail_surface_toAlgorithm_supported Acc C
-    64 64 64 1 64 1 32 32
+/-- The a-load K-tail mask: every lane is `true` when `c·BK + e < K` for all
+`e < BK` (guaranteed by `K = BK·numKBlocks` and `c < numKBlocks`). -/
+theorem amask_alltrue (s : BlockState) (BM BK K c : Nat)
+    (hk : s.regs .nat [BK] "offs_k" = some (Tile.vec (fun e : Fin BK => e.val)))
+    (hkk : s.regs .nat [] "k" = some (Tile.scalar c))
+    (hlt : ∀ e : Fin BK, e.val < K - c * BK) :
+    ∃ mtile : Tile .bool [BM, BK],
+      evalOp (Op.remap [BM, BK] Broadcast.nil.consSame.consL.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BK] "offs_k"))
+          (Op.sub .nat Broadcast.nil (Op.constNat K)
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "k") (Op.constNat BK))))) s = some mtile
+      ∧ ∀ i, mtile.data i = Bool.true := by
+  refine ⟨_, by
+    simp only [evalOp, evalOp.eq_def, hk, hkk, Option.bind, Option.bind_some, Option.bind_eq_bind,
+      Tile.expandDim, pure, Option.some.injEq]; rfl, ?_⟩
+  intro i
+  simp only [Tile.remap, Tile.cop, Tile.bop, Tile.expandDim, Tile.vec, Tile.scalar,
+    ComparableDType.lt, NumericDType.sub, NumericDType.mul, Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex]
+  exact decide_eq_true (by simpa using hlt _)
 
-/-- Python test case 2 full surface lowering: same dimensions with activation
-disabled. -/
-theorem matmul_leakyrelu_python_case2_surface_toAlgorithm_supported
-    (A B C : RegionName) :
-    ∃ alg, (matmul_kernel_surface A B C
-      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false).toAlgorithm? =
-        Except.ok alg := by
-  exact matmul_kernel_surface_toAlgorithm_supported A B C
-    64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false
+/-- The b-load K-tail mask: every lane is `true` under the same condition. -/
+theorem bmask_alltrue (s : BlockState) (BN BK K c : Nat)
+    (hk : s.regs .nat [BK] "offs_k" = some (Tile.vec (fun e : Fin BK => e.val)))
+    (hkk : s.regs .nat [] "k" = some (Tile.scalar c))
+    (hlt : ∀ e : Fin BK, e.val < K - c * BK) :
+    ∃ mtile : Tile .bool [BK, BN],
+      evalOp (Op.remap [BK, BN] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BK] "offs_k"))
+          (Op.sub .nat Broadcast.nil (Op.constNat K)
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "k") (Op.constNat BK))))) s = some mtile
+      ∧ ∀ i, mtile.data i = Bool.true := by
+  refine ⟨_, by
+    simp only [evalOp, evalOp.eq_def, hk, hkk, Option.bind, Option.bind_some, Option.bind_eq_bind,
+      Tile.expandDim, pure, Option.some.injEq]; rfl, ?_⟩
+  intro i
+  simp only [Tile.remap, Tile.cop, Tile.bop, Tile.expandDim, Tile.vec, Tile.scalar,
+    ComparableDType.lt, NumericDType.sub, NumericDType.mul, Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex]
+  exact decide_eq_true (by simpa using hlt _)
 
-noncomputable def matmulLeakyreluSurfaceCell
-    (s : BlockState) (A B C Out : RegionName)
-    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
-      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat)
-    (ACTIVATION : Bool) (offset : Nat) : MemCell :=
-  match exec (matmul_kernel_surface A B C M N K stride_am stride_ak stride_bk
-      stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K
-      GROUP_SIZE_M ACTIVATION) s with
-  | some s' => s'.mem Out offset
-  | none => 0
+/-- The constant `other = 0.0` broadcast tile. -/
+theorem other_broadcast_eval (s : BlockState) (shape : TileShape) :
+    evalOp ((Op.const 0.0).broadcast shape) s = some (⟨fun _ : TileIndex shape => some (0.0 : ℝ)⟩ : Tile .real shape) := by
+  simp [evalOp, evalOp_const, Option.bind]
 
-theorem matmul_leakyrelu_surface_output_compute_correct
-    (A B C : RegionName)
-    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
-      BLOCK_SIZE_M BLOCK_SIZE_N BLOCK_SIZE_K GROUP_SIZE_M : Nat)
-    (ACTIVATION : Bool) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := matmul_kernel_surface A B C M N K stride_am stride_ak
-        stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N
-        BLOCK_SIZE_K GROUP_SIZE_M ACTIVATION)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s M N BLOCK_SIZE_M BLOCK_SIZE_N)
-        (fun idx => (C, cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx)))
-      (expected := fun idx =>
-        matmulLeakyreluSurfaceCell s A B C C M N K stride_am stride_ak
-          stride_bk stride_bn stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N
-          BLOCK_SIZE_K GROUP_SIZE_M ACTIVATION
-          (cOffset s stride_cm stride_cn BLOCK_SIZE_M BLOCK_SIZE_N idx)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [matmul_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx _hActive
-  simp [matmulLeakyreluSurfaceCell, hExec]
+/-! ## Loop invariant -/
 
-/-- Public Python case 1 coverage summary: full activated surface,
-activation-tail surface, and masked fp16 output-store tile. -/
-theorem matmul_leakyrelu_python_case1_store_summary
-    (A B C Acc : RegionName) (s : BlockState) :
-    (∃ alg, (matmul_kernel_surface A B C
-      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true).toAlgorithm? =
-        Except.ok alg) ∧
-    (∃ alg, (matmul_leaky_relu_tail_surface Acc C
-      64 64 64 1 64 1 32 32).toAlgorithm? = Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_masked_output_store_slice C Acc 64 64 64 1 64 1 32 32)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 64 64 32 32)
-        (fun idx => (C, cOffset s 64 1 32 32 idx)))
-      (expected := fun idx =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem Acc (accOffset s 64 1 32 32 idx)))))) := by
-  constructor
-  · exact matmul_leakyrelu_python_case1_surface_toAlgorithm_supported A B C
-  constructor
-  · exact matmul_leakyrelu_python_case1_tail_surface_toAlgorithm_supported Acc C
-  · exact matmul_masked_output_store_slice_compute_correct C Acc
-      64 64 64 1 64 1 32 32 s
-      (matmul_leakyrelu_python_test_output_offset_injective s)
+/-- **Loop invariant** (counter `i = c`, the K-block index).
 
-/-- Public Python case 2 coverage summary. -/
-theorem matmul_leakyrelu_python_case2_store_summary
-    (A B C Acc : RegionName) (s : BlockState) :
-    (∃ alg, (matmul_kernel_surface A B C
-      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_masked_output_store_slice C Acc 64 64 64 1 64 1 32 32)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 64 64 32 32)
-        (fun idx => (C, cOffset s 64 1 32 32 idx)))
-      (expected := fun idx =>
-        MemCell.of .fp16
-          (FloatDType.real.cast FloatDType.fp16
-            (some (s.readMem Acc (accOffset s 64 1 32 32 idx)))))) := by
-  constructor
-  · exact matmul_leakyrelu_python_case2_surface_toAlgorithm_supported A B C
-  · exact matmul_masked_output_store_slice_compute_correct C Acc
-      64 64 64 1 64 1 32 32 s
-      (matmul_leakyrelu_python_test_output_offset_injective s)
+After `c` K-blocks: program ids and `mem`/`undef` fixed; the
+`offs_am`/`offs_bn`/`offs_k` and `pid_m`/`pid_n` registers seeded; `accumulator`
+equals the partial GEMM accumulator `accPartial … c`; and `a_ptrs`/`b_ptrs`
+advanced by `c` blocks. -/
+noncomputable def mlrInvariant
+    (A B : RegionName) (s0 : BlockState)
+    (PM PN M N BM BN SAM SAK SBK SBN BLOCK_K numKBlocks : Nat)
+    (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids ∧ c ≤ numKBlocks ∧
+  (s.regs .real [BM, BN] "accumulator" = some ⟨fun idx : TileIndex [BM, BN] =>
+      some (accPartial s0 A B PM PN BM BN M N SAM SAK SBK SBN BLOCK_K idx.1 idx.2.1 c)⟩) ∧
+  (s.regs .nat [] "pid_m" = some (Tile.scalar PM)) ∧
+  (s.regs .nat [] "pid_n" = some (Tile.scalar PN)) ∧
+  (s.regs .nat [BM] "offs_am" = some (Tile.vec (fun i : Fin BM => (PM * BM + i.val) % M))) ∧
+  (s.regs .nat [BN] "offs_bn" = some (Tile.vec (fun j : Fin BN => (PN * BN + j.val) % N))) ∧
+  (s.regs .nat [BLOCK_K] "offs_k" = some (Tile.vec (fun e : Fin BLOCK_K => e.val))) ∧
+  (s.regs .ptr [BM, BLOCK_K] "a_ptrs" = some ⟨fun idx : TileIndex [BM, BLOCK_K] =>
+      (A.cast, (PM * BM + idx.1.val) % M * SAM + idx.2.1.val * SAK + c * BLOCK_K * SAK)⟩) ∧
+  (s.regs .ptr [BLOCK_K, BN] "b_ptrs" = some ⟨fun idx : TileIndex [BLOCK_K, BN] =>
+      (B.cast, idx.1.val * SBK + (PN * BN + idx.2.1.val) % N * SBN + c * BLOCK_K * SBK)⟩) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
+set_option maxHeartbeats 1000000 in
+/-- **preLoop** (statements 0–14): from a clean input state (`undef = 0`), the
+prologue steps to a state satisfying `mlrInvariant … 0` — the base case
+(`accumulator = 0`, pointers seeded). -/
+theorem mlr_preLoop (A B C : RegionName) (s : BlockState)
+    (M N K SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s', stepStmts ((matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN
+        SCM SCN BM BN BK GROUP).toAlgKernel.body.take 15) s = some s'
+      ∧ mlrInvariant A B s (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP)
+          M N BM BN SAM SAK SBK SBN BK numKBlocks 0 s' := by
+  obtain ⟨s12, h12, hpids, hpm, hpn, ham, hbn, hk, huf, hmem⟩ :=
+    preLoop_scalars s M N BM BN BK GROUP
+  set PM := pidM (s.pids 0) M N BM BN GROUP with hPM
+  set PN := pidN (s.pids 0) M N BM BN GROUP with hPN
+  rw [show ((matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN
+        SCM SCN BM BN BK GROUP).toAlgKernel.body.take 15)
+      = [ Stmt.assign .nat [] "pid" (Op.programId 0),
+          Stmt.assign .nat [] "num_pid_m"
+            (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.constNat M) (Op.constNat BM)) (Op.constNat 1)) (Op.constNat BM)),
+          Stmt.assign .nat [] "num_pid_n"
+            (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.constNat N) (Op.constNat BN)) (Op.constNat 1)) (Op.constNat BN)),
+          Stmt.assign .nat [] "num_pid_in_group"
+            (Op.mul .nat Broadcast.nil (Op.constNat GROUP) (Op.ref .nat [] "num_pid_n")),
+          Stmt.assign .nat [] "group_id"
+            (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group")),
+          Stmt.assign .nat [] "first_pid_m"
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "group_id") (Op.constNat GROUP)),
+          Stmt.assign .nat [] "group_size_m"
+            ((Op.lt .nat Broadcast.nil
+                (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m") (Op.ref .nat [] "first_pid_m"))
+                (Op.constNat GROUP)).where
+              (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m") (Op.ref .nat [] "first_pid_m"))
+              (Op.constNat GROUP)),
+          Stmt.assign .nat [] "pid_m"
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "first_pid_m")
+              (Op.mod .nat Broadcast.nil
+                (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group"))
+                (Op.ref .nat [] "group_size_m"))),
+          Stmt.assign .nat [] "pid_n"
+            (Op.floorDiv .nat Broadcast.nil
+              (Op.mod .nat Broadcast.nil (Op.ref .nat [] "pid") (Op.ref .nat [] "num_pid_in_group"))
+              (Op.ref .nat [] "group_size_m")),
+          Stmt.assign .nat [BM] "offs_am"
+            (Op.mod .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM)) (Op.arange BM))
+              (Op.constNat M)),
+          Stmt.assign .nat [BN] "offs_bn"
+            (Op.mod .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN)) (Op.arange BN))
+              (Op.constNat N)),
+          Stmt.assign .nat [BK] "offs_k" (Op.arange BK) ]
+      ++ [ Stmt.assign .ptr [BM, BK] "a_ptrs"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase A)
+              (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am")) (Op.constNat SAM))
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BK] "offs_k")) (Op.constNat SAK)))),
+          Stmt.assign .ptr [BK, BN] "b_ptrs"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase B)
+              (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BK] "offs_k")) (Op.constNat SBK))
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_bn")) (Op.constNat SBN)))),
+          Stmt.assign .real [BM, BN] "accumulator" (Op.full [BM, BN] (Op.const 0)) ] from rfl,
+    stepStmts.append_some h12,
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (aptrs_eval s12 A BM BK SAM SAK (fun i => (PM * BM + i.val) % M) (by simpa using ham) (by simpa using hk))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (bptrs_eval _ B BK BN SBK SBN (fun j => (PN * BN + j.val) % N) (by simp [hk]) (by simp [hbn]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some (acc_init_eval _ BM BN)),
+    stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by simp [hpids], by simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- accumulator = accPartial … 0 = 0
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx
+    simp only [accPartial, Nat.zero_mul, Finset.range_zero, Finset.sum_empty]
+  · simp [hpm]
+  · simp [hpn]
+  · simp [ham]
+  · simp [hbn]
+  · simp [hk]
+  · -- a_ptrs (c = 0)
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [Nat.zero_mul]
+  · -- b_ptrs (c = 0)
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp [Nat.zero_mul]
+  · intro rg o; simp [huf, hundef]
+  · exact hmem
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-theorem matmul_leakyrelu_python_case1_output_summary
-    (A B C : RegionName) (s : BlockState) :
-    (∃ alg, (matmul_kernel_surface A B C
-      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_kernel_surface A B C
-        64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 64 64 32 32)
-        (fun idx => (C, cOffset s 64 1 32 32 idx)))
-      (expected := fun idx =>
-        matmulLeakyreluSurfaceCell s A B C C
-          64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true
-          (cOffset s 64 1 32 32 idx))) := by
-  constructor
-  · exact matmul_leakyrelu_python_case1_surface_toAlgorithm_supported A B C
-  · exact matmul_leakyrelu_surface_output_compute_correct A B C
-      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.true s
-
-theorem matmul_leakyrelu_python_case2_output_summary
-    (A B C : RegionName) (s : BlockState) :
-    (∃ alg, (matmul_kernel_surface A B C
-      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := matmul_kernel_surface A B C
-        64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 64 64 32 32)
-        (fun idx => (C, cOffset s 64 1 32 32 idx)))
-      (expected := fun idx =>
-        matmulLeakyreluSurfaceCell s A B C C
-          64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false
-          (cOffset s 64 1 32 32 idx))) := by
-  constructor
-  · exact matmul_leakyrelu_python_case2_surface_toAlgorithm_supported A B C
-  · exact matmul_leakyrelu_surface_output_compute_correct A B C
-      64 64 128 128 1 64 1 64 1 32 32 32 4 Bool.false s
+set_option maxHeartbeats 4000000 in
+/-- **Step lemma**: one K-loop body iteration advances the invariant by one
+block (`accumulator += tl.dot(a, b)` adds the `c`-th block's dot to the partial
+GEMM accumulator; the `a`/`b` pointers advance one step). Under
+`K = BK · numKBlocks` the per-block K-tail load masks are all satisfied. -/
+theorem mlr_step (A B : RegionName) (s0 : BlockState)
+    (PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks : Nat) (hBK : 0 < BK)
+    (c : Nat) (s : BlockState) (hclt : c < numKBlocks)
+    (hinv : mlrInvariant A B s0 PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks c s) :
+    ∃ s', stepStmts (mlrLoopBody BM BN BK (BK * numKBlocks) SAK SBK)
+        (s.setReg "k" .nat [] (Tile.scalar c)) = some s'
+      ∧ mlrInvariant A B s0 PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks (c + 1) s' := by
+  set K := BK * numKBlocks with hKdef
+  simp only [mlrInvariant] at hinv
+  obtain ⟨hpids, hcle, hz, hpm, hpn, ham, hbn, hk, hap, hbp, hundef, hmem⟩ := hinv
+  -- mask-all-true bound: every lane `e < BK` satisfies `e < K - c·BK`
+  have hlt : ∀ e : Fin BK, e.val < K - c * BK := by
+    intro e
+    have hcK : c * BK + BK ≤ K := by
+      rw [hKdef]; calc c * BK + BK = (c + 1) * BK := by ring
+        _ ≤ numKBlocks * BK := Nat.mul_le_mul_right _ hclt
+        _ = BK * numKBlocks := Nat.mul_comm _ _
+    omega
+  -- abbreviations for the seeded pointer/accumulator tiles
+  set apT : Tile .ptr [BM, BK] :=
+    ⟨fun idx : TileIndex [BM, BK] => (A.cast, (PM * BM + idx.1.val) % M * SAM + idx.2.1.val * SAK + c * BK * SAK)⟩ with hapT
+  set bpT : Tile .ptr [BK, BN] :=
+    ⟨fun idx : TileIndex [BK, BN] => (B.cast, idx.1.val * SBK + (PN * BN + idx.2.1.val) % N * SBN + c * BK * SBK)⟩ with hbpT
+  set zT : Tile .real [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] => some (accPartial s0 A B PM PN BM BN M N SAM SAK SBK SBN BK idx.1 idx.2.1 c)⟩ with hzT
+  set sk := s.setReg "k" .nat [] (Tile.scalar c) with hsk
+  have hrmem : ∀ (R : RegionName) (o : Nat), sk.readMem R o = s0.readMem R o := by
+    intro R o; simp only [hsk, BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  have hapk : sk.regs .ptr [BM, BK] "a_ptrs" = some apT := by simp [hsk, hap, hapT]
+  have hbpk : sk.regs .ptr [BK, BN] "b_ptrs" = some bpT := by simp [hsk, hbp, hbpT]
+  have hzk : sk.regs .real [BM, BN] "accumulator" = some zT := by simp [hsk, hz, hzT]
+  have hkk : sk.regs .nat [BK] "offs_k" = some (Tile.vec (fun e : Fin BK => e.val)) := by simp [hsk, hk]
+  have hkkv : sk.regs .nat [] "k" = some (Tile.scalar c) := by simp [hsk]
+  -- loaded tiles
+  set asub : Tile .real [BM, BK] :=
+    ⟨fun idx => some (sk.readMem (apT.data idx).1 (apT.data idx).2)⟩ with hasub
+  -- threaded state after the a-load
+  set sk1 := sk.setReg "a" .real [BM, BK] asub with hsk1
+  set bsub : Tile .real [BK, BN] :=
+    ⟨fun idx => some (sk1.readMem (bpT.data idx).1 (bpT.data idx).2)⟩ with hbsub
+  set sk2 := sk1.setReg "b" .real [BK, BN] bsub with hsk2
+  have hkk1 : sk1.regs .nat [BK] "offs_k" = some (Tile.vec (fun e : Fin BK => e.val)) := by simp [hsk1, hkk]
+  have hkkv1 : sk1.regs .nat [] "k" = some (Tile.scalar c) := by simp [hsk1, hkkv]
+  -- masks (each against the threaded state at the load point)
+  obtain ⟨amt, ham_eval, ham_true⟩ := amask_alltrue sk BM BK K c hkk hkkv hlt
+  obtain ⟨bmt, hbm_eval, hbm_true⟩ := bmask_alltrue sk1 BN BK K c hkk1 hkkv1 hlt
+  unfold mlrLoopBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_maskOther_alltrue (Op.ref .ptr [BM, BK] "a_ptrs") _ _ sk apT amt _
+          (by rw [evalOp_ref]; simp [hapk]) ham_eval (other_broadcast_eval sk [BM, BK]) ham_true))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_maskOther_alltrue (Op.ref .ptr [BK, BN] "b_ptrs") _ _ sk1 bpT bmt _
+          (by rw [evalOp_ref]; simp [hsk1, hbpk]) hbm_eval (other_broadcast_eval sk1 [BK, BN]) hbm_true))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (accdot_op_eval BM BK BN sk2 zT asub bsub
+          (by simp [hsk2, hsk1, hzk])
+          (by simp [hsk2, hsk1])
+          (by simp [hsk2])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aptr_adv_eval _ BM BK BK SAK apT (by simp [hsk2, hsk1, hapk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (bptr_adv_eval _ BK BN BK SBK bpT (by simp [hsk2, hsk1, hbpk])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  simp only [mlrInvariant]
+  refine ⟨by simp [hsk2, hsk1, hsk, hpids], by omega, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- accumulator = accPartial (c+1)
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx
+    have has : ∀ e : Fin BK, asub.data (idx.1, e, PUnit.unit)
+        = some (aElem s0 A PM BM M SAM SAK idx.1 (c * BK + e.val)) := by
+      intro e
+      simp only [hasub, hapT, hrmem, aElem, rowIndex]
+      congr 2
+      ring
+    have hrmem1 : ∀ (R : RegionName) (o : Nat), sk1.readMem R o = s0.readMem R o := by
+      intro R o; rw [hsk1, BlockState.setReg_readMem]; exact hrmem R o
+    have hbs : ∀ e : Fin BK, bsub.data (e, idx.2.1, PUnit.unit)
+        = some (bElem s0 B PN BN N SBK SBN idx.2.1 (c * BK + e.val)) := by
+      intro e
+      simp only [hbsub, hbpT, hrmem1, bElem, colIndex]
+      congr 2
+      ring
+    rw [accadd_eval BM BN zT (Tile.dot [] asub bsub) idx.1 idx.2.1
+        (accPartial s0 A B PM PN BM BN M N SAM SAK SBK SBN BK idx.1 idx.2.1 c)
+        (Finset.univ.sum fun e : Fin BK =>
+          aElem s0 A PM BM M SAM SAK idx.1 (c * BK + e.val) * bElem s0 B PN BN N SBK SBN idx.2.1 (c * BK + e.val))
+        (by rw [hzT])
+        (dot_ab BM BK BN asub bsub idx.1 idx.2.1 _ _ has hbs)]
+    show some _ = some (accPartial s0 A B PM PN BM BN M N SAM SAK SBK SBN BK idx.1 idx.2.1 (c + 1))
+    rw [accPartial_succ]
+  · simp [hsk2, hsk1, hsk, hpm]
+  · simp [hsk2, hsk1, hsk, hpn]
+  · simp [hsk2, hsk1, hsk, ham]
+  · simp [hsk2, hsk1, hsk, hbn]
+  · simp [hsk2, hsk1, hsk, hk]
+  · -- a_ptrs advanced
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hapT, NumericDType.add]
+    ring
+  · -- b_ptrs advanced
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hbpT, NumericDType.add]
+    ring
+  · intro rg o; simp [hsk2, hsk1, hsk, hundef]
+  · show _ = s0.mem
+    rw [← hmem]; rfl
 
 end VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
