@@ -2,6 +2,9 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Semantics.BlockPtrEval
 
 /-!
 # `attention_kernel` — strict per-kernel correctness
@@ -436,5 +439,173 @@ theorem attention_kernel_python_test_shape_output_summary
       FloatDType.fp16
   · exact attention_kernel_fwd_kernel_aligned_python_test_shape_compute_correct
       Q K V B0 Out s
+
+/-! ## Genuine closed-form correctness — reusable foundation
+
+The theorems above state correctness against `producedOutputValue`, which is the
+kernel's *own executed* `Out` readback (a self-referential summary). The section
+below builds the foundation for replacing that with a **genuine** closed-form
+claim: the kernel computes the base-2 streaming softmax `attnGenScore fscore V`
+of the loaded Q/K/V tiles, with the kernel's actual per-key score `fscore`
+(scaled dot plus the additive relative-position bias `(b0 + b1)·log2 e`).
+
+The pure-math heart (`VeriTile.Triton.attnGenScore`, `closed_form_g`,
+`attnGenScore_eq_streaming` in `Math/Attention.lean`) and the block-pointer
+`evalOp` reduction lemmas (`Semantics/BlockPtrEval.lean`) are complete and
+sorry-free; this section supplies the kernel-specific `evalOp` reductions
+(`makeBlockPtrDyn`/`makeBlockPtr`-with-dynamic-row-offset and the K/V/Q
+block-pointer loads at their resolved contiguous addresses) plus the genuine
+score/tile specification `fscore`/`qRaw`/`kFlat`/`vFlat`/`b0Val`/`b1Val`. The
+remaining `exec`-side assembly (preLoop base case, the 15-statement loop-body
+invariant step over `forRangeDyn`, the `acc /= l_i` + block-pointer-store
+epilogue, and the `ComputeCorrect.Realizes` bench bridge) mirrors
+`VeriTile.Examples.AttentionForwardClosedForm`, swapping in the generalized
+`mPg`/`lPg`/`oPg` invariant, the `forRangeDyn` loop driver, and these block-ptr
+lemmas. -/
+
+namespace ClosedForm
+
+open VeriTile.Triton
+
+/-- **`makeBlockPtrDyn` eval** (the `K`/`V` block pointers — static offsets,
+dynamic base): evaluates the base-offset op and packages the constant
+`BlockPtr` tile. -/
+theorem makeBlockPtrDyn_eval (region : RegionName) (baseOffset : Op .nat [])
+    (parentShape : List Nat) (blockShape : TileShape)
+    (strides offsets : List Nat) (s : BlockState) (base : Nat)
+    (hb : evalOp baseOffset s = some (Tile.scalar base)) :
+    evalOp (.makeBlockPtrDyn region baseOffset parentShape blockShape strides offsets) s
+      = some (⟨fun _ : TileIndex blockShape =>
+          { region := region, baseOffset := base, parentShape := parentShape,
+            blockShape := blockShape, strides := strides, offsets := offsets }⟩) := by
+  simp only [evalOp, hb, Option.bind]
+  rfl
+
+/-- **`makeBlockPtrDynOffsets` (dynamic row offset, literal `0` column) eval**
+(the `Q`/`O` block pointers): packages the constant `BlockPtr` tile with the
+resolved row offset. -/
+theorem makeBlockPtr_rowcol_eval (region : RegionName) (baseOffset : Op .nat [])
+    (parentShape : List Nat) (blockShape : TileShape) (strides : List Nat)
+    (rowOp : Op .nat []) (s : BlockState) (base rowOff : Nat)
+    (hb : evalOp baseOffset s = some (Tile.scalar base))
+    (hr : evalOp rowOp s = some (Tile.scalar rowOff)) :
+    evalOp (.makeBlockPtrDynOffsets region baseOffset parentShape blockShape strides
+        [rowOp, Op.constNat 0]) s
+      = some (⟨fun _ : TileIndex blockShape =>
+          { region := region, baseOffset := base, parentShape := parentShape,
+            blockShape := blockShape, strides := strides, offsets := [rowOff, 0] }⟩) := by
+  rw [makeBlockPtr2_eval]
+  simp only [hb, hr, evalOp, Option.bind, List.mapM, List.mapM.loop, Tile.scalar]
+  rfl
+
+/-- **`tl.advance [0, d]` of a `[rowOff=0, colOff]` block pointer** (the `K`
+pointer step): advances the column offset by `d`. -/
+theorem advance_col_eval (s : BlockState) (region : RegionName)
+    (base rows cols BT BS strideT strideS colOff d : Nat) (name : RegName)
+    (hkp : s.regs .blockPtr [BT, BS] name = some
+      (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff] }⟩)) :
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [0, d]) s
+      = some (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff + d] }⟩) := by
+  rw [advanceBlockPtr_eval]
+  simp only [evalOp, hkp, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp [BlockPtr.advance_2d_offsets]
+
+/-- **`tl.advance [d, 0]` of a `[rowOff, colOff=0]` block pointer** (the `V`
+pointer step): advances the row offset by `d`. -/
+theorem advance_row_eval (s : BlockState) (region : RegionName)
+    (base rows cols BT BS strideT strideS rowOff d : Nat) (name : RegName)
+    (hkp : s.regs .blockPtr [BT, BS] name = some
+      (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff, 0] }⟩)) :
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+      = some (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff + d, 0] }⟩) := by
+  rw [advanceBlockPtr_eval]
+  simp only [evalOp, hkp, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp [BlockPtr.advance_2d_offsets]
+
+/-! ### Genuine kernel specification
+
+The loaded Q/K/V/B0 tiles read from the *input* state `s0`, and the kernel's
+genuine per-key score `fscore` (used as the `score` argument of the generalized
+streaming-softmax spec `VeriTile.Triton.attnGenScore`). -/
+
+/-- Loaded (pre-scale) Q tile: row `r`, head lane `e`. -/
+noncomputable def qRaw (s0 : BlockState) (Q : RegionName)
+    (q_offset BLOCK_M HEAD_DIM : Nat) (start_m : Nat) :
+    TileIndex [BLOCK_M, HEAD_DIM] → ℝ :=
+  fun (r, e, _) => s0.readMem Q (q_offset + (start_m * BLOCK_M + r.val) * HEAD_DIM + e.val)
+
+/-- Loaded K tile as a flat per-key function over `[HEAD_DIM, N_CTX]`. -/
+noncomputable def kFlat (s0 : BlockState) (K : RegionName)
+    (kv_offset HEAD_DIM N_CTX : Nat) :
+    Fin HEAD_DIM → Fin N_CTX → ℝ :=
+  fun e j => s0.readMem K (kv_offset + e.val + j.val * HEAD_DIM)
+
+/-- Loaded V tile, flat per-key over `[N_CTX, HEAD_DIM]`. -/
+noncomputable def vFlat (s0 : BlockState) (V : RegionName)
+    (kv_offset HEAD_DIM N_CTX : Nat) :
+    TileIndex [N_CTX, HEAD_DIM] → ℝ :=
+  fun (j, d, _) => s0.readMem V (kv_offset + j.val * HEAD_DIM + d.val)
+
+/-- Per-row, per-block-column bias `b0` read (`c = j / BLOCK_N`). -/
+noncomputable def b0Val (s0 : BlockState) (B0 : RegionName)
+    (b_offset BLOCK_M stride_b0m : Nat) (start_m : Nat)
+    (r : Fin BLOCK_M) (c : Nat) : ℝ :=
+  s0.readMem B0 (b_offset + (start_m * BLOCK_M + r.val) * stride_b0m + c)
+
+/-- Per-row, per-lane bias `b1` read at lane `jL` (`jL = j % BLOCK_N`). -/
+noncomputable def b1Val (s0 : BlockState) (B0 : RegionName)
+    (b_offset BLOCK_M stride_b0m BIAS_LAST_SIZE : Nat) (start_m : Nat)
+    (r : Fin BLOCK_M) (jL : Nat) : ℝ :=
+  s0.readMem B0
+    (b_offset + (start_m * BLOCK_M + r.val) * stride_b0m + (jL % BIAS_LAST_SIZE + BIAS_LAST_SIZE))
+
+/-- **Genuine per-key score** `fscore r j` of `_fwd_kernel_aligned`:
+`qk_scale·(Σ_e Q[r,e]·K[e,j]) + (b0[r, j/BN] + b1[r, j%BN])·log2 e`,
+with `qk_scale = sm_scale · log2 e` already folded into the pre-scaled `q`. This
+is the `score` argument of `VeriTile.Triton.attnGenScore`, whose batch base-2
+softmax `(Σ 2^fscore · V) / (Σ 2^fscore)` is the kernel's closed form (see
+`closed_form_g`). -/
+noncomputable def fscore (s0 : BlockState) (Q K B0 : RegionName)
+    (sm_scale : ℝ) (q_offset kv_offset b_offset
+      BLOCK_M BLOCK_N HEAD_DIM N_CTX BIAS_LAST_SIZE stride_b0m : Nat)
+    (start_m : Nat)
+    (r : Fin BLOCK_M) (j : Fin N_CTX) : ℝ :=
+  (sm_scale * 1.44269504) *
+      Finset.univ.sum (fun e : Fin HEAD_DIM =>
+        qRaw s0 Q q_offset BLOCK_M HEAD_DIM start_m (r, e, PUnit.unit)
+          * kFlat s0 K kv_offset HEAD_DIM N_CTX e j)
+    + (b0Val s0 B0 b_offset BLOCK_M stride_b0m start_m r (j.val / BLOCK_N)
+        + b1Val s0 B0 b_offset BLOCK_M stride_b0m BIAS_LAST_SIZE start_m r (j.val % BLOCK_N))
+      * 1.44269504
+
+/-- **Closed-form target.** The kernel's genuine specification is
+`attnGenScore (fscore …) (vFlat …)`: the base-2 streaming softmax over the
+genuine per-key score `fscore` (scaled dot + additive bias). The generalized
+math lemma `closed_form_g` establishes that the running `oPg / lPg` recurrence
+the kernel's loop maintains converges to exactly this value after all
+`numKVBlocks` key blocks — which is what the remaining `exec`-side assembly
+discharges. -/
+noncomputable def attentionKernelSpec (s0 : BlockState) (Q K V B0 : RegionName)
+    (sm_scale : ℝ) (q_offset kv_offset b_offset
+      BLOCK_M BLOCK_N HEAD_DIM N_CTX BIAS_LAST_SIZE stride_b0m : Nat)
+    (start_m : Nat) : TileIndex [BLOCK_M, HEAD_DIM] → ℝ :=
+  attnGenScore
+    (fscore s0 Q K B0 sm_scale q_offset kv_offset b_offset
+      BLOCK_M BLOCK_N HEAD_DIM N_CTX BIAS_LAST_SIZE stride_b0m start_m)
+    (vFlat s0 V kv_offset HEAD_DIM N_CTX)
+
+end ClosedForm
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
