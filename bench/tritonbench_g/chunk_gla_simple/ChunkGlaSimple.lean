@@ -121,6 +121,66 @@ theorem load_bp_1d (rg : RegionName) (s : BlockState)
   · simp only [h, decide_false, if_false, BlockState.defaultCarrier, if_neg]
     rfl
 
+/-- No-mask 2D block-pointer load through a *bound register* `name` holding the
+block-pointer tile produced by `makeBlockPtrDynOffsets`. Lane `(i,j)` reads the
+genuine memory cell when in-bounds, else `0`. -/
+theorem load_bp_2d_ref (rg : RegionName) (s : BlockState) (name : RegName)
+    (base rows cols BT BS strideT strideS rowOff colOff : Nat)
+    (hreg : s.regs TileDType.blockPtr [BT, BS] name = some
+      ⟨fun _ => BlockPtr.mk rg base [rows, cols] [BT, BS] [strideT, strideS]
+        [rowOff, colOff]⟩) :
+    evalOp (Op.load TileDType.real
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BT, BS] name) [0, 1]) MaskOpt.none) s
+    = some ⟨fun idx : TileIndex [BT, BS] =>
+        if (rowOff + idx.1.val < rows ∧ colOff + idx.2.1.val < cols) then
+          some (s.readMem rg (base + (rowOff + idx.1.val) * strideT
+            + (colOff + idx.2.1.val) * strideS))
+        else some 0⟩ := by
+  simp only [evalOp, evalOp_ref, hreg, List.mapM, List.mapM.loop, bind, Option.bind, Tile.scalar,
+    List.reverse_cons, List.reverse_nil, List.append_nil, List.nil_append, List.cons_append]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, j, rest⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
+    BlockState.readMemValue_real]
+  by_cases h : rowOff + i.val < rows ∧ colOff + j.val < cols
+  · simp only [h, and_self, decide_true, if_true, and_true, true_and]
+  · simp only [h, decide_false, if_false, BlockState.defaultCarrier, if_neg]
+    rfl
+
+/-- No-mask 1D block-pointer load through a bound register. -/
+theorem load_bp_1d_ref (rg : RegionName) (s : BlockState) (name : RegName)
+    (base len BT stride off : Nat)
+    (hreg : s.regs TileDType.blockPtr [BT] name = some
+      ⟨fun _ => BlockPtr.mk rg base [len] [BT] [stride] [off]⟩) :
+    evalOp (Op.load TileDType.real
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BT] name) [0]) MaskOpt.none) s
+    = some ⟨fun idx : TileIndex [BT] =>
+        if (off + idx.1.val < len) then
+          some (s.readMem rg (base + (off + idx.1.val) * stride))
+        else some 0⟩ := by
+  simp only [evalOp, evalOp_ref, hreg, List.mapM, List.mapM.loop, bind, Option.bind, Tile.scalar,
+    List.reverse_cons, List.reverse_nil, List.append_nil, List.nil_append, List.cons_append]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, rest⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.address_1d_offset, BlockPtr.inBounds_1d_offset,
+    BlockState.readMemValue_real]
+  by_cases h : off + i.val < len
+  · simp only [h, decide_true, if_true]
+  · simp only [h, decide_false, if_false, BlockState.defaultCarrier, if_neg]
+    rfl
+
+/-- Evaluation unfolding for the `≥` comparison op. -/
+theorem evalOp_ge_def {dtype : TileDType} {a b shape : TileShape}
+    (h : ComparableDType dtype) (bc : Broadcast a b shape)
+    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
 /-! ## Matmul (dot) element primitives -/
 
 /-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
