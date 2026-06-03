@@ -650,6 +650,120 @@ theorem lPgK_eq_lPg {Mq : Nat} {BN nB : Nat}
     have ihc := ih (by omega)
     simp only [lPgK, lPg, dif_pos hc, ihc]
 
+/-! ### preLoop prefix (deterministic prologue → invariant base seeds)
+
+The first ten prologue statements are deterministic (no loads): the four scalar
+offsets, the three block pointers, and the `m_i`/`l_i`/`acc` initializers. They
+step with the validated recipe (`stepStmts.cons_some (stepStmt_assign_eq_some
+…)` per statement, threading register reads through the accumulated `setReg`
+chain) using the block-pointer eval lemmas above. The result is the base-case
+register seeding for the loop invariant: `m_i = ⊥` (= `mPg … 0`),
+`l_i = 0` (the kernel's seed; `lPgK … 0`), `acc = 0` (= `oPg … 0`), and the
+`K`/`V` block pointers at their initial `[0,0]` offsets. -/
+
+/-- Scalar `ref · constNat` eval (the `q_offset` / `kv_offset` / `start_m·BLOCK_M`
+offsets). -/
+theorem evalOp_mul_ref_const (s : BlockState) (name : RegName) (a c : Nat)
+    (hr : s.regs .nat [] name = some (Tile.scalar a)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat c)) s
+      = some (Tile.scalar (a * c)) := by
+  rw [evalOp_mul, evalOp_ref, hr, evalOp_constNat]
+  refine congrArg some ?_
+  ext i
+  simp only [Tile.bop_data, NumericDType.mul]
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- **preLoop prefix** (prologue statements 0–9): steps the deterministic
+offset/pointer/init prologue to a state carrying the invariant base seeds. -/
+theorem preLoop_prefix (Q K V B0 Out : RegionName) (sm_scale : ℝ)
+    (stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk
+      stride_vh stride_vk stride_vn stride_oh stride_om stride_on
+      stride_b0h stride_b0m Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
+      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (out_dtype : FloatDType) (s : BlockState) :
+    ∃ s10, stepStmts ((attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out sm_scale
+        stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk stride_vh
+        stride_vk stride_vn stride_oh stride_om stride_on stride_b0h stride_b0m
+        Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL BLOCK_M BLOCK_N
+        out_dtype).toAlgKernel.body.take 10) s = some s10
+      ∧ s10.pids = s.pids
+      ∧ s10.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
+      ∧ s10.regs .nat [] "off_hz" = some (Tile.scalar (s.pids 1))
+      ∧ s10.regs .nat [] "q_offset" = some (Tile.scalar (s.pids 1 * stride_qh))
+      ∧ s10.regs .nat [] "kv_offset" = some (Tile.scalar (s.pids 1 * stride_kh))
+      ∧ s10.regs .blockPtr [BLOCK_DMODEL, BLOCK_N] "K_block_ptr" = some
+          (⟨fun _ : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+            { region := K, baseOffset := s.pids 1 * stride_kh,
+              parentShape := [BLOCK_DMODEL, N_CTX + P_SEQ], blockShape := [BLOCK_DMODEL, BLOCK_N],
+              strides := [stride_kk, stride_kn], offsets := [0, 0] }⟩)
+      ∧ s10.regs .blockPtr [BLOCK_N, BLOCK_DMODEL] "V_block_ptr" = some
+          (⟨fun _ : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+            { region := V, baseOffset := s.pids 1 * stride_kh,
+              parentShape := [N_CTX + P_SEQ, BLOCK_DMODEL], blockShape := [BLOCK_N, BLOCK_DMODEL],
+              strides := [stride_vk, stride_vn], offsets := [0, 0] }⟩)
+      ∧ s10.regs .real [BLOCK_M] "m_i" = some (⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩)
+      ∧ s10.regs .real [BLOCK_M] "l_i" = some (⟨fun _ : TileIndex [BLOCK_M] => some (0:ℝ)⟩)
+      ∧ s10.regs .real [BLOCK_M, BLOCK_DMODEL] "acc"
+          = some (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (0:ℝ)⟩)
+      ∧ s10.undef = s.undef
+      ∧ s10.mem = s.mem := by
+  rw [show ((attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out sm_scale
+        stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk stride_vh
+        stride_vk stride_vn stride_oh stride_om stride_on stride_b0h stride_b0m
+        Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL BLOCK_M BLOCK_N
+        out_dtype).toAlgKernel.body.take 10)
+      = [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+          Stmt.assign .nat [] "off_hz" (Op.programId 1),
+          Stmt.assign .nat [] "q_offset" (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat stride_qh)),
+          Stmt.assign .nat [] "kv_offset" (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat stride_kh)),
+          Stmt.assign .blockPtr [BLOCK_M, BLOCK_DMODEL] "Q_block_ptr"
+            (Op.makeBlockPtrDynOffsets Q (Op.ref .nat [] "q_offset") [N_CTX, BLOCK_DMODEL] [BLOCK_M, BLOCK_DMODEL]
+              [stride_qm, stride_qk] [Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M), Op.constNat 0]),
+          Stmt.assign .blockPtr [BLOCK_DMODEL, BLOCK_N] "K_block_ptr"
+            (Op.makeBlockPtrDyn K (Op.ref .nat [] "kv_offset") [BLOCK_DMODEL, N_CTX + P_SEQ] [BLOCK_DMODEL, BLOCK_N]
+              [stride_kk, stride_kn] [0, 0]),
+          Stmt.assign .blockPtr [BLOCK_N, BLOCK_DMODEL] "V_block_ptr"
+            (Op.makeBlockPtrDyn V (Op.ref .nat [] "kv_offset") [N_CTX + P_SEQ, BLOCK_DMODEL] [BLOCK_N, BLOCK_DMODEL]
+              [stride_vk, stride_vn] [0, 0]),
+          Stmt.assign .real [BLOCK_M] "m_i" (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf),
+          Stmt.assign .real [BLOCK_M] "l_i" (Op.full [BLOCK_M] (Op.const 0)),
+          Stmt.assign .real [BLOCK_M, BLOCK_DMODEL] "acc" (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)) ] from rfl]
+  have hmi : ∀ s' : BlockState, evalOp (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf) s'
+      = some (⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩ : Tile .real [BLOCK_M]) := by
+    intro s'
+    simp only [evalOp_add, evalOp_full, evalOp_negInf, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_
+    ext r; simp only [Tile.bop_data, NumericDType.add]; rfl
+  have hli : ∀ s' : BlockState, evalOp (Op.full [BLOCK_M] (Op.const 0)) s'
+      = some (⟨fun _ : TileIndex [BLOCK_M] => some (0:ℝ)⟩ : Tile .real [BLOCK_M]) := by
+    intro s'; simp [evalOp_full, evalOp_const, Option.bind]
+  have hacc : ∀ s' : BlockState, evalOp (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)) s'
+      = some (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (0:ℝ)⟩ : Tile .real [BLOCK_M, BLOCK_DMODEL]) := by
+    intro s'; simp [evalOp_full, evalOp_const, Option.bind]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (s := s) (by rw [evalOp_programId])),
+    stepStmts.cons_some (stepStmt_assign_eq_some (by rw [evalOp_programId])),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (evalOp_mul_ref_const _ "off_hz" (s.pids 1) stride_qh (by simp [BlockState.setReg]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (evalOp_mul_ref_const _ "off_hz" (s.pids 1) stride_kh (by simp [BlockState.setReg]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (makeBlockPtr_rowcol_eval Q _ [N_CTX, BLOCK_DMODEL] [BLOCK_M, BLOCK_DMODEL] [stride_qm, stride_qk] _ _
+        (s.pids 1 * stride_qh) (s.pids 0 * BLOCK_M)
+        (by simp [BlockState.setReg]) (evalOp_mul_ref_const _ "start_m" (s.pids 0) BLOCK_M (by simp [BlockState.setReg])))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (makeBlockPtrDyn_eval K _ [BLOCK_DMODEL, N_CTX + P_SEQ] [BLOCK_DMODEL, BLOCK_N] [stride_kk, stride_kn] [0,0] _
+        (s.pids 1 * stride_kh) (by simp [BlockState.setReg]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some
+      (makeBlockPtrDyn_eval V _ [N_CTX + P_SEQ, BLOCK_DMODEL] [BLOCK_N, BLOCK_DMODEL] [stride_vk, stride_vn] [0,0] _
+        (s.pids 1 * stride_kh) (by simp [BlockState.setReg]))),
+    stepStmts.cons_some (stepStmt_assign_eq_some (hmi _)),
+    stepStmts.cons_some (stepStmt_assign_eq_some (hli _)),
+    stepStmts.cons_some (stepStmt_assign_eq_some (hacc _)),
+    stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
+    simp [BlockState.setReg, BlockState.setReg_same, BlockState.setReg_ne_name]
+
 end ClosedForm
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
