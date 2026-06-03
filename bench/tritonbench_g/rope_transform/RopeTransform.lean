@@ -158,6 +158,76 @@ theorem ptr_plus_offsets_eval (s : BlockState) (Q : RegionName) (PN PH : Nat)
   · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex]
   · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex]
 
+/-- Prologue base-pointer recipe: `base_ptr + pid·stride`. -/
+theorem ptrbase_mul_eval (s : BlockState) (Q : RegionName) (pidv stride : Nat)
+    (hpid : s.regs .nat [] "pid" = some (Tile.scalar pidv)) :
+    evalOp (Op.ptrAdd Broadcast.nil (Op.ptrBase Q)
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid") (Op.constNat stride))) s
+      = some (Tile.scalar (Q.cast, pidv * stride)) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase, evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hpid, Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  · simp only [Tile.ptrAdd_data, Tile.scalar, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      NumericDType.mul]
+  · simp only [Tile.ptrAdd_data, Tile.scalar, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      NumericDType.mul, Nat.zero_add]
+
+/-- Cos/sin base-pointer recipe: `base_ptr + cos_row_idx·stride`. -/
+theorem ptrbase_mul_ref_eval (s : BlockState) (Q : RegionName) (idxv stride : Nat)
+    (name : RegName) (hidx : s.regs .nat [] name = some (Tile.scalar idxv)) :
+    evalOp (Op.ptrAdd Broadcast.nil (Op.ptrBase Q)
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat stride))) s
+      = some (Tile.scalar (Q.cast, idxv * stride)) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase, evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hidx, Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  · simp only [Tile.ptrAdd_data, Tile.scalar, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      NumericDType.mul]
+  · simp only [Tile.ptrAdd_data, Tile.scalar, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      NumericDType.mul, Nat.zero_add]
+
+/-- `cos_row_idx = pid % sl` recipe. -/
+theorem mod_eval (s : BlockState) (pidv sl : Nat)
+    (hpid : s.regs .nat [] "pid" = some (Tile.scalar pidv)) :
+    evalOp (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "pid") (Op.constNat sl)) s
+      = some (Tile.scalar (pidv % sl)) := by
+  rw [evalOp_mod]
+  simp only [evalOp_ref, evalOp_constNat, hpid, Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  simp only [Tile.scalar, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex, IntegralDType.mod]
+
+/-- 1D `cos/sin + cos_offsets` recipe: scalar base broadcast-added to a 1D
+offset tile. -/
+theorem ptr_plus_offsets1d_eval (s : BlockState) (Q : RegionName) (PH : Nat)
+    (base : Nat) (offs : Tile .nat [PH]) (pname oname : RegName)
+    (hp : s.regs .ptr [] pname = some (Tile.scalar (Q.cast, base)))
+    (ho : s.regs .nat [PH] oname = some offs) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] pname) (Op.ref .nat [PH] oname)) s
+      = some (⟨fun i => (Q.cast, base + offs.data i)⟩ : Tile .ptr [PH]) := by
+  rw [evalOp_ptrAdd]
+  simp only [evalOp_ref, hp, ho, Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex]
+  · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex]
+
+/-- 1D cos/sin mask recipe: `cos_offsets < hd//2`. -/
+theorem cosMask_eval (s : BlockState) (PH hd : Nat) (offs : Tile .nat [PH]) (oname : RegName)
+    (ho : s.regs .nat [PH] oname = some offs) :
+    evalOp (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [PH] oname)
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat hd) (Op.constNat 2))) s
+      = some (⟨fun i => decide (offs.data i < hd / 2)⟩ : Tile .bool [PH]) := by
+  rw [evalOp_lt, evalOp_floorDiv]
+  simp only [evalOp_ref, evalOp_constNat, ho, Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  simp only [Tile.cop, Tile.bop, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    ComparableDType.lt, IntegralDType.floorDiv]
+  rfl
+
 /-- Masked-other `.ptr` load recipe (the `tl.load(..., other=0)` form used for
 all six rope loads): per lane, reads memory where the mask holds, else `0`. -/
 theorem load_ptr_maskOther_real {shape : TileShape}
@@ -172,6 +242,81 @@ theorem load_ptr_maskOther_real {shape : TileShape}
   ext i
   simp only [BlockState.readMemValue_real]
   cases hmi : masks.data i <;> simp [hmi]
+
+/-- `if not BACKWARD_PASS` with `BACKWARD_PASS = false` takes the then-branch. -/
+theorem ifThenElse_notFalse_step (thenB elseB : List Stmt) (st : BlockState) :
+    stepStmt (Stmt.ifThenElse (Op.constBool Bool.false).boolNot thenB elseB) st
+      = stepStmts thenB st := by
+  unfold stepStmt
+  simp only [evalOp, Tile.uop, Tile.scalar]
+  norm_num
+
+/-- `new_*_tile_1 = t1·cos − t2·sin` value recipe (first-half forward store). -/
+theorem newSub_value_eval (s : BlockState) (PN PH : Nat)
+    (t1 t2 : Tile .real [PN, PH]) (cosrow sinrow : Tile .real [PH])
+    (n1 n2 cn sn : RegName)
+    (h1 : s.regs .real [PN, PH] n1 = some t1)
+    (h2 : s.regs .real [PN, PH] n2 = some t2)
+    (hc : s.regs .real [PH] cn = some cosrow)
+    (hsr : s.regs .real [PH] sn = some sinrow) :
+    evalOp (Op.sub NumericDType.real Broadcast.nil.consSame.consSame
+      (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+        (Op.ref .real [PN, PH] n1) (Op.ref .real [PH] cn))
+      (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+        (Op.ref .real [PN, PH] n2) (Op.ref .real [PH] sn))) s
+      = some (⟨fun idx : TileIndex [PN, PH] =>
+          NumericDType.real.sub
+            (NumericDType.real.mul (t1.data idx) (cosrow.data (idx.2.1, idx.2.2)))
+            (NumericDType.real.mul (t2.data idx) (sinrow.data (idx.2.1, idx.2.2)))⟩
+            : Tile .real [PN, PH]) := by
+  rw [evalOp_sub, evalOp_mul, evalOp_mul]
+  simp only [evalOp_ref, h1, h2, hc, hsr, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+    Broadcast.leftIndex_leadR, Broadcast.rightIndex_leadR]
+
+/-- `new_*_tile_2 = t2·cos + t1·sin` value recipe (second-half forward store). -/
+theorem newAdd_value_eval (s : BlockState) (PN PH : Nat)
+    (t1 t2 : Tile .real [PN, PH]) (cosrow sinrow : Tile .real [PH])
+    (n1 n2 cn sn : RegName)
+    (h1 : s.regs .real [PN, PH] n1 = some t1)
+    (h2 : s.regs .real [PN, PH] n2 = some t2)
+    (hc : s.regs .real [PH] cn = some cosrow)
+    (hsr : s.regs .real [PH] sn = some sinrow) :
+    evalOp (Op.add NumericDType.real Broadcast.nil.consSame.consSame
+      (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+        (Op.ref .real [PN, PH] n1) (Op.ref .real [PH] cn))
+      (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+        (Op.ref .real [PN, PH] n2) (Op.ref .real [PH] sn))) s
+      = some (⟨fun idx : TileIndex [PN, PH] =>
+          NumericDType.real.add
+            (NumericDType.real.mul (t1.data idx) (cosrow.data (idx.2.1, idx.2.2)))
+            (NumericDType.real.mul (t2.data idx) (sinrow.data (idx.2.1, idx.2.2)))⟩
+            : Tile .real [PN, PH]) := by
+  rw [evalOp_add, evalOp_mul, evalOp_mul]
+  simp only [evalOp_ref, h1, h2, hc, hsr, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Broadcast.leftIndex_consSame, Broadcast.rightIndex_consSame,
+    Broadcast.leftIndex_leadR, Broadcast.rightIndex_leadR]
+
+/-- Masked `.ptr` store step: produces the masked `writeMemTyped` foldl. -/
+theorem stepStmt_store_ptr_mask_eq {shape : TileShape}
+    (ptrOp : Op .ptr shape) (valOp : Op .real shape) (maskOp : Op .bool shape)
+    (s : BlockState) (ptrs : Tile .ptr shape) (vals : Tile .real shape) (masks : Tile .bool shape)
+    (hv : evalOp valOp s = some vals)
+    (hp : evalOp ptrOp s = some ptrs)
+    (hm : evalOp maskOp s = some masks) :
+    stepStmt (Stmt.store .real shape (MemAccess.ptr ptrOp) valOp (MaskOpt.mask maskOp)) s
+      = some ((TileShape.allIndices shape).foldl
+          (fun acc i =>
+            if masks.data i then
+              acc.writeMemTyped .real (ptrs.data i).1 (ptrs.data i).2 (vals.data i)
+            else acc) s) := by
+  unfold stepStmt
+  simp only [hv, hp, hm, Option.map_some]
+  rfl
 
 /-- Faithful transcription of `rope_transform.py`'s `_triton_rope`. -/
 def triton_rope_surface
@@ -1019,6 +1164,198 @@ noncomputable def ropeForwardKernelK1Spec
     s.readMem cos (cosFullFirstOffset s sl cos_row_stride (idx.2.1, idx.2.2)) +
   s.readMem k_ptr (kFullFirstOffset s k_row_stride hd idx) *
     s.readMem sin (sinFullFirstOffset s sl sin_row_stride (idx.2.1, idx.2.2))
+
+/-! ## Full-kernel forward body stepping
+
+The four forward stores of `triton_rope_surface` are read back by stepping the
+whole lowered 30-statement body (22 prologue assigns + the taken branch of the
+`if not BACKWARD_PASS` with its four `(assign, store)` pairs), feeding each
+statement an explicit value via the standalone recipes above. -/
+
+/-- The explicit lowered `[Stmt]` body of the forward (`BACKWARD_PASS = false`)
+`triton_rope_surface`. The 22 prologue assigns followed by the single
+`ifThenElse` whose taken branch holds the four `(assign, store)` pairs. -/
+def ropeForwardBody
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl n_qh n_kh hd pad_n_qh pad_n_kh pad_hd : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "pid" (Op.programId 0),
+    Stmt.assign .ptr [] "q_ptr" (Op.ptrAdd Broadcast.nil (Op.ptrBase q_ptr)
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid") (Op.constNat q_row_stride))),
+    Stmt.assign .ptr [] "k_ptr" (Op.ptrAdd Broadcast.nil (Op.ptrBase k_ptr)
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid") (Op.constNat k_row_stride))),
+    Stmt.assign .nat [] "cos_row_idx"
+      (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "pid") (Op.constNat sl)),
+    Stmt.assign .ptr [] "cos" (Op.ptrAdd Broadcast.nil (Op.ptrBase cos)
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "cos_row_idx") (Op.constNat cos_row_stride))),
+    Stmt.assign .ptr [] "sin" (Op.ptrAdd Broadcast.nil (Op.ptrBase sin)
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "cos_row_idx") (Op.constNat sin_row_stride))),
+    Stmt.assign .nat [pad_hd / 2] "cos_offsets" (Op.arange (pad_hd / 2)),
+    Stmt.assign .bool [pad_hd / 2] "cos_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [pad_hd / 2] "cos_offsets")
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat hd) (Op.constNat 2))),
+    Stmt.assign .real [pad_hd / 2] "cos_row"
+      (Op.load .real (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "cos")
+          (Op.ref .nat [pad_hd / 2] "cos_offsets")))
+        (MaskOpt.maskOther (Op.ref .bool [pad_hd / 2] "cos_mask") ((Op.const 0).broadcast [pad_hd / 2]))),
+    Stmt.assign .real [pad_hd / 2] "sin_row"
+      (Op.load .real (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "sin")
+          (Op.ref .nat [pad_hd / 2] "cos_offsets")))
+        (MaskOpt.maskOther (Op.ref .bool [pad_hd / 2] "cos_mask") ((Op.const 0).broadcast [pad_hd / 2]))),
+    Stmt.assign .nat [pad_n_qh, pad_hd / 2] "first_half_q_offsets"
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.mul NumericDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.arange pad_n_qh))
+          (Op.constNat hd))
+        (Op.expandDim ⟨0, by simp⟩ (Op.arange (pad_hd / 2)))),
+    Stmt.assign .nat [pad_n_kh, pad_hd / 2] "first_half_k_offsets"
+      (Op.add NumericDType.nat Broadcast.nil.consL.consR
+        (Op.mul NumericDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.arange pad_n_kh))
+          (Op.constNat hd))
+        (Op.expandDim ⟨0, by simp⟩ (Op.arange (pad_hd / 2)))),
+    Stmt.assign .bool [pad_n_qh, pad_hd / 2] "first_q_mask"
+      (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.arange pad_n_qh))
+          (Op.constNat n_qh))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.arange (pad_hd / 2)))
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat hd) (Op.constNat 2)))),
+    Stmt.assign .bool [pad_n_kh, pad_hd / 2] "first_k_mask"
+      (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.arange pad_n_kh))
+          (Op.constNat n_kh))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.arange (pad_hd / 2)))
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat hd) (Op.constNat 2)))),
+    Stmt.assign .real [pad_n_qh, pad_hd / 2] "q_tile_1"
+      (Op.load .real (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "q_ptr")
+          (Op.ref .nat [pad_n_qh, pad_hd / 2] "first_half_q_offsets")))
+        (MaskOpt.maskOther (Op.ref .bool [pad_n_qh, pad_hd / 2] "first_q_mask")
+          ((Op.const 0).broadcast [pad_n_qh, pad_hd / 2]))),
+    Stmt.assign .real [pad_n_kh, pad_hd / 2] "k_tile_1"
+      (Op.load .real (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "k_ptr")
+          (Op.ref .nat [pad_n_kh, pad_hd / 2] "first_half_k_offsets")))
+        (MaskOpt.maskOther (Op.ref .bool [pad_n_kh, pad_hd / 2] "first_k_mask")
+          ((Op.const 0).broadcast [pad_n_kh, pad_hd / 2]))),
+    Stmt.assign .nat [pad_n_qh, pad_hd / 2] "second_half_q_offsets"
+      (Op.add NumericDType.nat Broadcast.scalarR
+        (Op.ref .nat [pad_n_qh, pad_hd / 2] "first_half_q_offsets")
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat hd) (Op.constNat 2))),
+    Stmt.assign .nat [pad_n_kh, pad_hd / 2] "second_half_k_offsets"
+      (Op.add NumericDType.nat Broadcast.scalarR
+        (Op.ref .nat [pad_n_kh, pad_hd / 2] "first_half_k_offsets")
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat hd) (Op.constNat 2))),
+    Stmt.assign .bool [pad_n_qh, pad_hd / 2] "second_q_mask"
+      (Op.ref .bool [pad_n_qh, pad_hd / 2] "first_q_mask"),
+    Stmt.assign .bool [pad_n_kh, pad_hd / 2] "second_k_mask"
+      (Op.ref .bool [pad_n_kh, pad_hd / 2] "first_k_mask"),
+    Stmt.assign .real [pad_n_qh, pad_hd / 2] "q_tile_2"
+      (Op.load .real (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "q_ptr")
+          (Op.ref .nat [pad_n_qh, pad_hd / 2] "second_half_q_offsets")))
+        (MaskOpt.maskOther (Op.ref .bool [pad_n_qh, pad_hd / 2] "second_q_mask")
+          ((Op.const 0).broadcast [pad_n_qh, pad_hd / 2]))),
+    Stmt.assign .real [pad_n_kh, pad_hd / 2] "k_tile_2"
+      (Op.load .real (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "k_ptr")
+          (Op.ref .nat [pad_n_kh, pad_hd / 2] "second_half_k_offsets")))
+        (MaskOpt.maskOther (Op.ref .bool [pad_n_kh, pad_hd / 2] "second_k_mask")
+          ((Op.const 0).broadcast [pad_n_kh, pad_hd / 2]))),
+    Stmt.ifThenElse (Op.constBool Bool.false).boolNot
+      [ Stmt.assign .real [pad_n_qh, pad_hd / 2] "new_q_tile_1"
+          (Op.sub NumericDType.real Broadcast.nil.consSame.consSame
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_qh, pad_hd / 2] "q_tile_1") (Op.ref .real [pad_hd / 2] "cos_row"))
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_qh, pad_hd / 2] "q_tile_2") (Op.ref .real [pad_hd / 2] "sin_row"))),
+        Stmt.store .real [pad_n_qh, pad_hd / 2]
+          (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "q_ptr")
+            (Op.ref .nat [pad_n_qh, pad_hd / 2] "first_half_q_offsets")))
+          (Op.ref .real [pad_n_qh, pad_hd / 2] "new_q_tile_1")
+          (MaskOpt.mask (Op.ref .bool [pad_n_qh, pad_hd / 2] "first_q_mask")),
+        Stmt.assign .real [pad_n_qh, pad_hd / 2] "new_q_tile_2"
+          (Op.add NumericDType.real Broadcast.nil.consSame.consSame
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_qh, pad_hd / 2] "q_tile_2") (Op.ref .real [pad_hd / 2] "cos_row"))
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_qh, pad_hd / 2] "q_tile_1") (Op.ref .real [pad_hd / 2] "sin_row"))),
+        Stmt.store .real [pad_n_qh, pad_hd / 2]
+          (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "q_ptr")
+            (Op.ref .nat [pad_n_qh, pad_hd / 2] "second_half_q_offsets")))
+          (Op.ref .real [pad_n_qh, pad_hd / 2] "new_q_tile_2")
+          (MaskOpt.mask (Op.ref .bool [pad_n_qh, pad_hd / 2] "second_q_mask")),
+        Stmt.assign .real [pad_n_kh, pad_hd / 2] "new_k_tile_1"
+          (Op.sub NumericDType.real Broadcast.nil.consSame.consSame
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_kh, pad_hd / 2] "k_tile_1") (Op.ref .real [pad_hd / 2] "cos_row"))
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_kh, pad_hd / 2] "k_tile_2") (Op.ref .real [pad_hd / 2] "sin_row"))),
+        Stmt.store .real [pad_n_kh, pad_hd / 2]
+          (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "k_ptr")
+            (Op.ref .nat [pad_n_kh, pad_hd / 2] "first_half_k_offsets")))
+          (Op.ref .real [pad_n_kh, pad_hd / 2] "new_k_tile_1")
+          (MaskOpt.mask (Op.ref .bool [pad_n_kh, pad_hd / 2] "first_k_mask")),
+        Stmt.assign .real [pad_n_kh, pad_hd / 2] "new_k_tile_2"
+          (Op.add NumericDType.real Broadcast.nil.consSame.consSame
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_kh, pad_hd / 2] "k_tile_2") (Op.ref .real [pad_hd / 2] "cos_row"))
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_kh, pad_hd / 2] "k_tile_1") (Op.ref .real [pad_hd / 2] "sin_row"))),
+        Stmt.store .real [pad_n_kh, pad_hd / 2]
+          (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "k_ptr")
+            (Op.ref .nat [pad_n_kh, pad_hd / 2] "second_half_k_offsets")))
+          (Op.ref .real [pad_n_kh, pad_hd / 2] "new_k_tile_2")
+          (MaskOpt.mask (Op.ref .bool [pad_n_kh, pad_hd / 2] "second_k_mask")) ]
+      [ Stmt.assign .real [pad_n_qh, pad_hd / 2] "new_q_tile_1"
+          (Op.add NumericDType.real Broadcast.nil.consSame.consSame
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_qh, pad_hd / 2] "q_tile_1") (Op.ref .real [pad_hd / 2] "cos_row"))
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_qh, pad_hd / 2] "q_tile_2") (Op.ref .real [pad_hd / 2] "sin_row"))),
+        Stmt.store .real [pad_n_qh, pad_hd / 2]
+          (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "q_ptr")
+            (Op.ref .nat [pad_n_qh, pad_hd / 2] "first_half_q_offsets")))
+          (Op.ref .real [pad_n_qh, pad_hd / 2] "new_q_tile_1")
+          (MaskOpt.mask (Op.ref .bool [pad_n_qh, pad_hd / 2] "first_q_mask")),
+        Stmt.assign .real [pad_n_qh, pad_hd / 2] "new_q_tile_2"
+          (Op.sub NumericDType.real Broadcast.nil.consSame.consSame
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_qh, pad_hd / 2] "q_tile_2") (Op.ref .real [pad_hd / 2] "cos_row"))
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_qh, pad_hd / 2] "q_tile_1") (Op.ref .real [pad_hd / 2] "sin_row"))),
+        Stmt.store .real [pad_n_qh, pad_hd / 2]
+          (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "q_ptr")
+            (Op.ref .nat [pad_n_qh, pad_hd / 2] "second_half_q_offsets")))
+          (Op.ref .real [pad_n_qh, pad_hd / 2] "new_q_tile_2")
+          (MaskOpt.mask (Op.ref .bool [pad_n_qh, pad_hd / 2] "second_q_mask")),
+        Stmt.assign .real [pad_n_kh, pad_hd / 2] "new_k_tile_1"
+          (Op.add NumericDType.real Broadcast.nil.consSame.consSame
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_kh, pad_hd / 2] "k_tile_1") (Op.ref .real [pad_hd / 2] "cos_row"))
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_kh, pad_hd / 2] "k_tile_2") (Op.ref .real [pad_hd / 2] "sin_row"))),
+        Stmt.store .real [pad_n_kh, pad_hd / 2]
+          (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "k_ptr")
+            (Op.ref .nat [pad_n_kh, pad_hd / 2] "first_half_k_offsets")))
+          (Op.ref .real [pad_n_kh, pad_hd / 2] "new_k_tile_1")
+          (MaskOpt.mask (Op.ref .bool [pad_n_kh, pad_hd / 2] "first_k_mask")),
+        Stmt.assign .real [pad_n_kh, pad_hd / 2] "new_k_tile_2"
+          (Op.sub NumericDType.real Broadcast.nil.consSame.consSame
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_kh, pad_hd / 2] "k_tile_2") (Op.ref .real [pad_hd / 2] "cos_row"))
+            (Op.mul NumericDType.real Broadcast.nil.consSame.leadR
+              (Op.ref .real [pad_n_kh, pad_hd / 2] "k_tile_1") (Op.ref .real [pad_hd / 2] "sin_row"))),
+        Stmt.store .real [pad_n_kh, pad_hd / 2]
+          (MemAccess.ptr (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "k_ptr")
+            (Op.ref .nat [pad_n_kh, pad_hd / 2] "second_half_k_offsets")))
+          (Op.ref .real [pad_n_kh, pad_hd / 2] "new_k_tile_2")
+          (MaskOpt.mask (Op.ref .bool [pad_n_kh, pad_hd / 2] "second_k_mask")) ] ]
+
+/-- The forward `triton_rope_surface` lowers to `ropeForwardBody`. -/
+theorem triton_rope_surface_forward_body
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat) :
+    (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+      cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+      pad_hd BLOCK_SIZE Bool.false).body
+      = ropeForwardBody q_ptr k_ptr cos sin q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl n_qh n_kh hd pad_n_qh pad_n_kh pad_hd := rfl
 
 /-! ## Combined one-row `o0` + `o1` rotary-style RoPE slice
 
