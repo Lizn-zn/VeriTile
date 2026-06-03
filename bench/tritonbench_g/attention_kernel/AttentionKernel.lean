@@ -606,6 +606,50 @@ noncomputable def attentionKernelSpec (s0 : BlockState) (Q K V B0 : RegionName)
       BLOCK_M BLOCK_N HEAD_DIM N_CTX BIAS_LAST_SIZE stride_b0m start_m)
     (vFlat s0 V kv_offset HEAD_DIM N_CTX)
 
+/-- **Closed-form readout.** After all `numKVBlocks` key blocks the kernel's
+running `oPg / lPg` ratio (which the loop invariant maintains) is exactly the
+genuine spec `attentionKernelSpec` (= `attnGenScore fscore vFlat`). Direct
+corollary of the generalized math lemma `closed_form_g`. -/
+theorem attentionKernelSpec_eq_ratio (s0 : BlockState) (Q K V B0 : RegionName)
+    (sm_scale : ℝ) (q_offset kv_offset b_offset
+      BLOCK_M BLOCK_N HEAD_DIM BIAS_LAST_SIZE stride_b0m nB : Nat)
+    (start_m : Nat) (hBN : 0 < BLOCK_N) (hnB : 1 ≤ nB)
+    (i : Fin BLOCK_M) (d : Fin HEAD_DIM) :
+    let score := fscore s0 Q K B0 sm_scale q_offset kv_offset b_offset
+      BLOCK_M BLOCK_N HEAD_DIM (BLOCK_N * nB) BIAS_LAST_SIZE stride_b0m start_m
+    let V' := vFlat s0 V kv_offset HEAD_DIM (BLOCK_N * nB)
+    oPg score V' i d nB / lPg score i nB
+      = attentionKernelSpec s0 Q K V B0 sm_scale q_offset kv_offset b_offset
+          BLOCK_M BLOCK_N HEAD_DIM (BLOCK_N * nB) BIAS_LAST_SIZE stride_b0m start_m (i, d, PUnit.unit) :=
+  closed_form_g _ _ hBN hnB i d
+
+/-- **Kernel-faithful running denominator.** Same recurrence as the math `lPg`
+but seeded `0` (the kernel inits `l_i = 0`, whereas the generalized `lPg` seeds
+`1`). This is the value the loop invariant must carry in the `l_i` register. -/
+noncomputable def lPgK {Mq : Nat} {BN nB : Nat}
+    (score : Fin Mq → Fin (BN * nB) → ℝ) (i : Fin Mq) : Nat → ℝ
+  | 0 => 0
+  | c + 1 =>
+      if h : c + 1 ≤ nB then
+        alphaPg score i c * lPgK score i c +
+          Finset.univ.sum (fun a : Fin BN =>
+            pow2 (score i (gkey BN nB c (by omega) a) - mRg score i (c + 1)))
+      else lPgK score i c
+
+/-- The seed difference is killed by `alphaPg 0 = 0`: for `1 ≤ c ≤ nB` the
+kernel's seed-`0` denominator agrees with the math `lPg` (seed `1`). So the
+final `c = nB ≥ 1` readout is unaffected by the kernel's `l_i = 0` initialization,
+and `closed_form_g` / `attentionKernelSpec_eq_ratio` apply unchanged. -/
+theorem lPgK_eq_lPg {Mq : Nat} {BN nB : Nat}
+    (score : Fin Mq → Fin (BN * nB) → ℝ) (i : Fin Mq) :
+    ∀ c, 1 ≤ c → c ≤ nB → lPgK score i c = lPg score i c := by
+  intro c hc1 hc
+  induction c, hc1 using Nat.le_induction with
+  | base => simp only [lPgK, lPg, dif_pos hc, alphaPg_zero score i, zero_mul]
+  | succ c hc1 ih =>
+    have ihc := ih (by omega)
+    simp only [lPgK, lPg, dif_pos hc, ihc]
+
 end ClosedForm
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
