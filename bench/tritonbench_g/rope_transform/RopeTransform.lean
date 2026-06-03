@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Examples.AttentionForwardClosedForm
 
 /-!
 # `rope_transform` — strict per-kernel correctness
@@ -65,9 +66,112 @@ yet lifted** from a single head slice to the full head tile — the
 namespace VeriTile.Bench.TritonBenchG.RopeTransform
 
 open VeriTile.Triton
+open VeriTile.Examples.AttentionForwardClosedForm
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
+
+/-! ## Standalone eval recipes for the full-kernel forward proof
+
+The full `triton_rope_surface` kernel builds its tile offsets/masks from the 2D
+`tl.arange[:, None]`/`tl.arange[None, :]` (`expandDim`) composition. The generic
+`evalOp_expandDim` simp lemma does not fire on `Op.expandDim _ (Op.arange _)`
+inside a nested `Option.bind` (the "expandDim wall"), so we fix the concrete
+output shapes up front in these standalone recipes and chain them by `simp only`
+when stepping the body. -/
+
+/-- `expandDim` axis-1 of an `arange` (the `tl.arange(0, PN)[:, None]` column
+broadcast), output shape pinned to `[PN, 1]`. -/
+@[simp] theorem evalOp_expandDim_one_arange {PN : Nat} (s : BlockState) :
+    @evalOp .nat [PN, 1] (Op.expandDim ⟨1, by simp⟩ (Op.arange PN)) s =
+      some ({ data := fun i : TileIndex [PN, 1] => i.1.val } : Tile .nat [PN, 1]) := by
+  unfold evalOp; simp [Tile.expandDim, Tile.vec, TileShape.dropInsertedIndex]; rfl
+
+/-- `expandDim` axis-0 of an `arange` (the `tl.arange(0, PH)[None, :]` row
+broadcast), output shape pinned to `[1, PH]`. -/
+@[simp] theorem evalOp_expandDim_zero_arange {PH : Nat} (s : BlockState) :
+    @evalOp .nat [1, PH] (Op.expandDim ⟨0, by simp⟩ (Op.arange PH)) s =
+      some ({ data := fun i : TileIndex [1, PH] => i.2.1.val } : Tile .nat [1, PH]) := by
+  unfold evalOp; simp [Tile.expandDim, Tile.vec, TileShape.dropInsertedIndex]; rfl
+
+/-- First-half offsets recipe: `arange(PN)[:,None]·hd + arange(PH)[None,:]`
+evaluates, lane `idx`, to `idx.row·hd + idx.col`. -/
+theorem firstHalf_offsets_eval (s : BlockState) (PN PH hd : Nat) :
+    evalOp (Op.add NumericDType.nat Broadcast.nil.consL.consR
+      (Op.mul NumericDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.arange PN))
+        (Op.constNat hd))
+      (Op.expandDim ⟨0, by simp⟩ (Op.arange PH))) s
+      = some (⟨fun idx : TileIndex [PN, PH] => idx.1.val * hd + idx.2.1.val⟩ : Tile .nat [PN, PH]) := by
+  rw [evalOp_add, evalOp_mul]
+  simp only [evalOp_expandDim_one_arange, evalOp_expandDim_zero_arange, evalOp_constNat,
+    Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop, NumericDType.add, NumericDType.mul, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex]
+
+/-- Second-half offsets recipe: `first_half_offsets + hd//2`. -/
+theorem secondHalf_offsets_eval (s : BlockState) (PN PH hd : Nat) (name : RegName)
+    (first : Tile .nat [PN, PH])
+    (hfirst : s.regs .nat [PN, PH] name = some first) :
+    evalOp (Op.add NumericDType.nat Broadcast.scalarR
+      (Op.ref .nat [PN, PH] name)
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat hd) (Op.constNat 2))) s
+      = some (⟨fun idx : TileIndex [PN, PH] => (first.data idx) + hd / 2⟩ : Tile .nat [PN, PH]) := by
+  rw [evalOp_add, evalOp_floorDiv]
+  simp only [evalOp_ref, evalOp_constNat, hfirst, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop, Broadcast.rightIndex, Broadcast.leftIndex, NumericDType.add,
+    IntegralDType.floorDiv, Tile.scalar]
+
+/-- First-half mask recipe: `(arange(PN)[:,None] < n) & (arange(PH)[None,:] < hd//2)`. -/
+theorem firstMask_eval (s : BlockState) (PN PH n hd : Nat) :
+    evalOp (Op.boolAnd Broadcast.nil.consL.consR
+      (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.arange PN))
+        (Op.constNat n))
+      (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.arange PH))
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat hd) (Op.constNat 2)))) s
+      = some (⟨fun idx : TileIndex [PN, PH] =>
+          decide (idx.1.val < n) && decide (idx.2.1.val < hd / 2)⟩ : Tile .bool [PN, PH]) := by
+  rw [evalOp_boolAnd, evalOp_lt, evalOp_lt, evalOp_floorDiv]
+  simp only [evalOp_expandDim_one_arange, evalOp_expandDim_zero_arange, evalOp_constNat,
+    Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop, Tile.cop, Broadcast.rightIndex, Broadcast.leftIndex, Tile.scalar,
+    ComparableDType.lt, IntegralDType.floorDiv]
+  rfl
+
+/-- `q_ptr + offsets` recipe: a scalar base pointer broadcast-added to a 2D
+offset tile yields the per-lane address tile `(region, base + offset)`. -/
+theorem ptr_plus_offsets_eval (s : BlockState) (Q : RegionName) (PN PH : Nat)
+    (base : Nat) (offs : Tile .nat [PN, PH]) (pname oname : RegName)
+    (hp : s.regs .ptr [] pname = some (Tile.scalar (Q.cast, base)))
+    (ho : s.regs .nat [PN, PH] oname = some offs) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] pname) (Op.ref .nat [PN, PH] oname)) s
+      = some (⟨fun i => (Q.cast, base + offs.data i)⟩ : Tile .ptr [PN, PH]) := by
+  rw [evalOp_ptrAdd]
+  simp only [evalOp_ref, hp, ho, Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex]
+  · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex]
+
+/-- Masked-other `.ptr` load recipe (the `tl.load(..., other=0)` form used for
+all six rope loads): per lane, reads memory where the mask holds, else `0`. -/
+theorem load_ptr_maskOther_real {shape : TileShape}
+    (ptrOp : Op .ptr shape) (maskOp : Op .bool shape) (s : BlockState)
+    (ptrs : Tile .ptr shape) (masks : Tile .bool shape)
+    (hp : evalOp ptrOp s = some ptrs) (hm : evalOp maskOp s = some masks) :
+    evalOp (.load .real (.ptr ptrOp) (.maskOther maskOp ((Op.const 0).broadcast shape))) s
+      = some ⟨fun i => if masks.data i then
+          some (s.readMem (ptrs.data i).1 (ptrs.data i).2) else some 0⟩ := by
+  simp only [evalOp, hp, hm]
+  refine congrArg some ?_
+  ext i
+  simp only [BlockState.readMemValue_real]
+  cases hmi : masks.data i <;> simp [hmi]
 
 /-- Faithful transcription of `rope_transform.py`'s `_triton_rope`. -/
 def triton_rope_surface
