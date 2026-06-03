@@ -131,6 +131,24 @@ def address (ptr : BlockPtr) (idx : List Nat) : Nat :=
       (nthD ptr.offsets axis + nthD idx axis) * nthD ptr.strides axis
   ptr.baseOffset + axisOffsets.sum
 
+@[simp] theorem address_1d
+    (region : RegionName) (base len BT stride off : Nat) (i : Nat) :
+    BlockPtr.address
+      { region := region, baseOffset := base, parentShape := [len],
+        blockShape := [BT], strides := [stride], offsets := [off] }
+      [i] =
+        base + (off + i) * stride := by
+  simp [BlockPtr.address, nthD, List.range, List.range.loop]
+
+@[simp] theorem inBounds_1d
+    (region : RegionName) (base len BT stride off : Nat) (i : Nat) :
+    BlockPtr.inBounds
+      { region := region, baseOffset := base, parentShape := [len],
+        blockShape := [BT], strides := [stride], offsets := [off] }
+      [i] [0] =
+        decide (off + i < len) := by
+  simp [BlockPtr.inBounds, checkedInBounds, nthD]
+
 @[simp] theorem address_2d_zero_offsets
     (region : RegionName) (base rows cols BT BS strideT strideS : Nat)
     (i j : Nat) :
