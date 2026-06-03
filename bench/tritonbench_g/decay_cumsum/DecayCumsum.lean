@@ -1034,12 +1034,6 @@ theorem bwd_decay_global_cumsum_python_test_surface_toAlgorithm_supported
   exact bwd_decay_global_cumsum_surface_toAlgorithm_supported DQInner DQInter
     DKInner DKInter Q K G DG 64 8 2 4
 
-noncomputable def decayPrepareSurfaceValue
-    (s : BlockState) (Q K G QG KG Out : RegionName) (offset : Nat) : ℝ :=
-  match exec (prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0) s with
-  | some s' => s'.readMem Out offset
-  | none => 0.0
-
 noncomputable def decayBackwardSurfaceValue
     (s : BlockState)
     (DQInner DQInter DKInner DKInter Q K G DG Out : RegionName)
@@ -1048,26 +1042,6 @@ noncomputable def decayBackwardSurfaceValue
       Q K G DG 64 8 2 4) s with
   | some s' => s'.readMem Out offset
   | none => 0.0
-
-theorem prepare_qg_kg_surface_output_compute_correct
-    (Q K G QG KG Out : RegionName) (t_rel : Fin 2) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (Out, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayPrepareSurfaceValue s Q K G QG KG Out
-          (offset s 64 8 t_rel.val 2 4 i)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [prepare_qg_kg_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i _hActive
-  simp [decayPrepareSurfaceValue, hExec]
 
 theorem bwd_decay_global_cumsum_surface_output_compute_correct
     (DQInner DQInter DKInner DKInter Q K G DG Out : RegionName)
@@ -1090,32 +1064,6 @@ theorem bwd_decay_global_cumsum_surface_output_compute_correct
   subst s0
   intro i _hActive
   simp [decayBackwardSurfaceValue, hExec]
-
-theorem decay_cumsum_prepare_python_test_shape_surface_outputs_compute_correct
-    (Q K G QG KG : RegionName) (t_rel : Fin 2) (s : BlockState) :
-    (ComputeCorrect.Realizes
-      (kernel := prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (QG, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayPrepareSurfaceValue s Q K G QG KG QG
-          (offset s 64 8 t_rel.val 2 4 i))) ∧
-    (ComputeCorrect.Realizes
-      (kernel := prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (KG, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayPrepareSurfaceValue s Q K G QG KG KG
-          (offset s 64 8 t_rel.val 2 4 i))) := by
-  constructor
-  · exact prepare_qg_kg_surface_output_compute_correct Q K G QG KG QG
-      t_rel s
-  · exact prepare_qg_kg_surface_output_compute_correct Q K G QG KG KG
-      t_rel s
 
 theorem decay_cumsum_backward_python_test_shape_surface_outputs_compute_correct
     (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
@@ -1429,12 +1377,6 @@ theorem decay_cumsum_python_test_shape_complete_summary
 
 
 
-/-- `output_summary` for the Python q/k decay preparation surface. -/
-abbrev decay_cumsum_prepare_python_test_shape_output_summary
-    (Q K G QG KG : RegionName) (t_rel : Fin 2) (s : BlockState) :=
-  decay_cumsum_prepare_python_test_shape_surface_outputs_compute_correct
-    Q K G QG KG t_rel s
-
 /-- `output_summary` for the Python backward decay-cumsum surface. -/
 abbrev decay_cumsum_backward_python_test_shape_output_summary
     (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
@@ -1601,5 +1543,175 @@ gap for the forward kernel. -/
 abbrev decay_cumsum_forward_python_test_shape_output_summary
     (G GO : RegionName) (t_rel : Fin 2) (s : BlockState) (hne : G ≠ GO) :=
   decay_cumsum_forward_python_test_shape_closed_output_summary G GO t_rel s hne
+
+/-! ## Genuine `prepare_qg_kg` closed form (`qg` output)
+
+The `prepare_qg_kg` kernel is a single-pass, per-row pointwise elementwise map:
+each `qg` lane is `q * exp2(g) * scale` (no cross-step fold). We certify the
+full `prepare_qg_kg` surface's `QG` writeback against this honest closed form
+`prepareQgClosed = q[idx] * exp2(g[idx]) * scale`, *not* the executed kernel
+readback. -/
+
+/-- **Genuine `qg` closed form.** At chunk row `t_rel` and lane `i`, the
+`prepare_qg_kg` kernel writes `q[idx] * exp2(g[idx]) * scale` into `QG`, with
+`exp2(x) = Real.exp (x * Real.log 2)`. This is the honest pointwise
+specification of the `q *= exp2(g) * scale` map (here `scale = 1`). -/
+noncomputable def prepareQgClosed
+    (s : BlockState) (Q G : RegionName)
+    (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) (i : Fin BK) (scale : ℝ) : ℝ :=
+  s.readMem Q (offset s s_qk_h DK t_rel.val BT BK i) *
+    Real.exp (s.readMem G (offset s s_qk_h DK t_rel.val BT BK i) * Real.log 2) *
+    scale
+
+set_option maxHeartbeats 2000000 in
+/-- **Row 0 active `qg` closed form.** On an active lane the full `prepare_qg_kg`
+surface writes `q[idx] * exp2(g[idx]) * 1` into `QG` at the row-0 offset. -/
+theorem prepare_qg_kg_full_surface_qg_row0_closed
+    (Q K G QG KG : RegionName) (s : BlockState) (i : Fin 4)
+    (hQG_KG : QG ≠ KG) (hact : active s 8 4 i) :
+    (exec (prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0) s).map
+      (·.readMem QG (offset s 64 8 0 2 4 i))
+      = some (prepareQgClosed s Q G 64 8 2 4 0 i 1.0) := by
+  have hInj : Function.Injective
+      (fun idx : TileIndex [4] =>
+        s.pids 2 * 64 + s.pids 1 * 2 * 8 + s.pids 0 * 4 + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  have hc : s.pids 0 * 4 + (i : ℕ) < 8 := by
+    simpa [active, elemIndex] using hact
+  simp only [offset, baseOffset, elemIndex, prepareQgClosed, Fin.val_zero]
+  simp [exec, prepare_qg_kg_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+        WithBot.realExp2, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepForRangeAux.forRange_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge,
+        BlockState.foldl_writeMem_const_region_prop_masked_readMem_other]
+  -- Peel QG row-1 (other offset), then KG row-1 (other region); readback QG row-0.
+  rw [BlockState.scatter_prop_masked_preserves_other_offset]
+  · rw [BlockState.scatter_prop_masked_preserves_other_region
+          (P := fun k : TileIndex [4] => s.pids 0 * 4 + k.1.val < 8) (h_ne := hQG_KG)]
+    simp only [BlockState.setReg_readMem]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj (i, PUnit.unit)]
+    simp only [hc, if_true, Option.map₂_some_some]
+    show s.readMem Q _ * (Real.exp (s.readMem G _ * Real.log 2) * 1.0) = _
+    ring
+  · rintro ⟨k, _⟩ _
+    simp only
+    omega
+
+set_option maxHeartbeats 2000000 in
+/-- **Row 1 active `qg` closed form.** On an active lane the full `prepare_qg_kg`
+surface writes `q[idx] * exp2(g[idx]) * 1` into `QG` at the row-1 offset. -/
+theorem prepare_qg_kg_full_surface_qg_row1_closed
+    (Q K G QG KG : RegionName) (s : BlockState) (i : Fin 4)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hG_QG : G ≠ QG) (hG_KG : G ≠ KG)
+    (hact : active s 8 4 i) :
+    (exec (prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0) s).map
+      (·.readMem QG (offset s 64 8 1 2 4 i))
+      = some (prepareQgClosed s Q G 64 8 2 4 1 i 1.0) := by
+  have hInj : Function.Injective
+      (fun idx : TileIndex [4] =>
+        s.pids 2 * 64 + s.pids 1 * 2 * 8 + s.pids 0 * 4 + idx.1.val + 8) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel (Nat.add_right_cancel hab))
+    rfl
+  have hc : s.pids 0 * 4 + (i : ℕ) < 8 := by
+    simpa [active, elemIndex] using hact
+  simp only [offset, baseOffset, elemIndex, prepareQgClosed, Fin.val_one]
+  simp [exec, prepare_qg_kg_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+        WithBot.realExp2, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepForRangeAux.forRange_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge,
+        BlockState.foldl_writeMem_const_region_prop_masked_readMem_other,
+        hQ_QG, hQ_KG, hG_QG, hG_KG]
+  rw [show s.pids 2 * 64 + (s.pids 1 * 2 + 1) * 8 + s.pids 0 * 4 + (i : ℕ)
+        = s.pids 2 * 64 + s.pids 1 * 2 * 8 + s.pids 0 * 4 + (i : ℕ) + 8 from by ring]
+  -- The row-1 QG store is outermost; read it back directly.
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInj (i, PUnit.unit)]
+  simp only [hc, if_true, Option.map₂_some_some]
+  show s.readMem Q _ * (Real.exp (s.readMem G _ * Real.log 2) * 1.0) = _
+  ring
+
+/-- **Unified active `qg` closed form (both chunk rows).** -/
+theorem prepare_qg_kg_full_surface_qg_closed
+    (Q K G QG KG : RegionName) (s : BlockState) (t_rel : Fin 2) (i : Fin 4)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hG_QG : G ≠ QG) (hG_KG : G ≠ KG)
+    (hQG_KG : QG ≠ KG) (hact : active s 8 4 i) :
+    (exec (prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0) s).map
+      (·.readMem QG (offset s 64 8 t_rel.val 2 4 i))
+      = some (prepareQgClosed s Q G 64 8 2 4 t_rel i 1.0) := by
+  match t_rel with
+  | ⟨0, _⟩ =>
+    exact prepare_qg_kg_full_surface_qg_row0_closed Q K G QG KG s i hQG_KG hact
+  | ⟨1, _⟩ =>
+    exact prepare_qg_kg_full_surface_qg_row1_closed Q K G QG KG s i
+      hQ_QG hQ_KG hG_QG hG_KG hact
+
+/-- **Genuine `prepare_qg_kg` compute-correctness.** The full `prepare_qg_kg`
+surface realizes the honest pointwise closed form `prepareQgClosed`
+(`q * exp2(g) * scale`) at every active `QG` lane of loop row `t_rel`. The
+`expected` here is independent of the kernel's own output (no self-reference). -/
+theorem prepare_qg_kg_surface_qg_closed_compute_correct
+    (Q K G QG KG : RegionName) (t_rel : Fin 2) (s : BlockState)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hG_QG : G ≠ QG) (hG_KG : G ≠ KG)
+    (hQG_KG : QG ≠ KG) :
+    ComputeCorrect.Realizes
+      (kernel := prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (QG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 =>
+        prepareQgClosed s Q G 64 8 2 4 t_rel i 1.0) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [prepare_qg_kg_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := prepare_qg_kg_full_surface_qg_closed Q K G QG KG s t_rel i
+    hQ_QG hQ_KG hG_QG hG_KG hQG_KG hActive
+  rw [hExec] at h
+  simp only [Option.map_some] at h
+  rw [Option.some.injEq] at h
+  show s'.readMem QG (offset s 64 8 t_rel.val 2 4 i) = _
+  rw [h]
+
+/-- `output_summary` for the Python q/k decay preparation surface (`qg` output),
+certified against the **genuine** pointwise closed form `prepareQgClosed`. This
+is the non self-referential replacement closing the `decay-cumsum-scan-fold`
+proof gap for the `prepare_qg_kg` kernel. -/
+theorem decay_cumsum_prepare_python_test_shape_closed_output_summary
+    (Q K G QG KG : RegionName) (t_rel : Fin 2) (s : BlockState)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hG_QG : G ≠ QG) (hG_KG : G ≠ KG)
+    (hQG_KG : QG ≠ KG) :
+    ComputeCorrect.Realizes
+      (kernel := prepare_qg_kg_surface Q K G QG KG 64 8 2 4 1.0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (QG, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 =>
+        prepareQgClosed s Q G 64 8 2 4 t_rel i 1.0) :=
+  prepare_qg_kg_surface_qg_closed_compute_correct Q K G QG KG t_rel s
+    hQ_QG hQ_KG hG_QG hG_KG hQG_KG
+
+/-- `output_summary` for the Python q/k decay preparation surface, certified
+against the **genuine** pointwise closed form `prepareQgClosed`
+(`qg = q * exp2(g) * scale`). Non self-referential replacement closing the
+`decay-cumsum-scan-fold` proof gap for the `prepare_qg_kg` kernel. -/
+abbrev decay_cumsum_prepare_python_test_shape_output_summary
+    (Q K G QG KG : RegionName) (t_rel : Fin 2) (s : BlockState)
+    (hQ_QG : Q ≠ QG) (hQ_KG : Q ≠ KG) (hG_QG : G ≠ QG) (hG_KG : G ≠ KG)
+    (hQG_KG : QG ≠ KG) :=
+  decay_cumsum_prepare_python_test_shape_closed_output_summary
+    Q K G QG KG t_rel s hQ_QG hQ_KG hG_QG hG_KG hQG_KG
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum
