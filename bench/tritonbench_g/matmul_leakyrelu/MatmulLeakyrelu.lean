@@ -909,7 +909,7 @@ def mlrPostBody (C : RegionName) (M N SCM SCN BM BN : Nat) : List Stmt :=
             (Op.const 0.0)).where
         (Op.ref .real [BM, BN] "accumulator")
         (Op.mul .real Broadcast.scalarL (Op.const 1e-2) (Op.ref .real [BM, BN] "accumulator"))),
-    Stmt.assign .fp16 [BM, BN] "c"
+    Stmt.assign FloatDType.fp16.toTileDType [BM, BN] "c"
       (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BM, BN] "accumulator")),
     Stmt.assign .nat [BM] "offs_cm"
       (Op.add .nat Broadcast.scalarL
@@ -1036,5 +1036,121 @@ theorem cmask_alltrue (s : BlockState) (M N BM BN : Nat) (gm : Fin BM → Nat) (
     Broadcast.rightIndex, ComparableDType.lt, TileShape.dropInsertedIndex, Bool.and_eq_true,
     decide_eq_true_eq]
   exact ⟨by simpa using hmlt _, by simpa using hnlt _⟩
+
+/-- The masked fp16 store statement reduces to the masked scatter foldl. -/
+theorem mlrStore_eval (C : RegionName) (BM BN : Nat) (st : BlockState)
+    (cT : Tile .fp16 [BM, BN]) (cpT : Tile .ptr [BM, BN]) (mT : Tile .bool [BM, BN])
+    (hc : st.regs .fp16 [BM, BN] "c" = some cT)
+    (hcp : st.regs .ptr [BM, BN] "c_ptrs" = some cpT)
+    (hm : st.regs .bool [BM, BN] "c_mask" = some mT) :
+    stepStmt (Stmt.store .fp16 [BM, BN] (.ptr (Op.ref .ptr [BM, BN] "c_ptrs")) (Op.ref .fp16 [BM, BN] "c")
+        (.mask (Op.ref .bool [BM, BN] "c_mask"))) st
+      = some ((TileShape.allIndices [BM, BN]).foldl
+          (fun acc idx =>
+            if mT.data idx then acc.writeMemTyped .fp16 (cpT.data idx).1 (cpT.data idx).2 (cT.data idx) else acc) st) := by
+  simp only [stepStmt, evalOp_ref, hc, hcp, hm, bind, Option.bind_some]
+  refine congrArg some (List.foldl_ext _ _ st (fun acc idx _ => ?_))
+  by_cases hb : mT.data idx
+  · simp only [hb, if_true]
+  · simp only [hb, if_false, Bool.false_eq_true]
+
+/-- The genuine output cell: `fp16(leakyrelu(Σ_k A·B))` as a `MemCell`. -/
+noncomputable def outputCell (s0 : BlockState) (A B : RegionName)
+    (PM PN BM BN M N SAM SAK SBK SBN BK numKBlocks : Nat) (idx : TileIndex [BM, BN]) : MemCell :=
+  MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue
+    (FloatDType.real.cast FloatDType.fp16
+      (some (leakyrelu (matmulSpec s0 A B PM PN BM BN M N SAM SAK SBK SBN BK numKBlocks idx.1 idx.2.1))))))
+
+set_option maxHeartbeats 2000000 in
+/-- **postLoop**: from the invariant at `numKBlocks` blocks, the activation +
+fp16 cast + masked store writes the genuine value
+`fp16(leakyrelu(Σ_k A·B))` at every in-bounds output lane. -/
+theorem mlr_postLoop (A B C : RegionName) (s0 : BlockState)
+    (PM PN M N BM BN SAM SAK SBK SBN SCM SCN BK numKBlocks : Nat)
+    (hInj : Function.Injective (cOffset s0 PM PN BM BN SCM SCN))
+    (hmlt : ∀ i : Fin BM, rowIndex PM BM i < M)
+    (hnlt : ∀ j : Fin BN, colIndex PN BN j < N)
+    (st : BlockState)
+    (hinv : mlrInvariant A B s0 PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks numKBlocks st) :
+    ∃ sfin, stepStmts (mlrPostBody C M N SCM SCN BM BN) st = some sfin
+      ∧ ∀ idx : TileIndex [BM, BN],
+          sfin.mem C (cOffset s0 PM PN BM BN SCM SCN idx)
+            = outputCell s0 A B PM PN BM BN M N SAM SAK SBK SBN BK numKBlocks idx := by
+  simp only [mlrInvariant] at hinv
+  obtain ⟨hpids, hcle, hz, hpm, hpn, ham, hbn, hk, hap, hbp, hundef, hmem⟩ := hinv
+  -- abbreviation for the full GEMM accumulator (matmulSpec)
+  set g : TileIndex [BM, BN] → ℝ :=
+    fun idx => matmulSpec s0 A B PM PN BM BN M N SAM SAK SBK SBN BK numKBlocks idx.1 idx.2.1 with hg
+  have hzspec : st.regs .real [BM, BN] "accumulator" = some ⟨fun idx => some (g idx)⟩ := by
+    rw [hz]; refine congrArg some ?_; ext idx; simp only [hg, matmulSpec, accPartial, Nat.mul_comm numKBlocks BK]
+  unfold mlrPostBody
+  -- step 1: activation
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (activation_eval BM BN st g hzspec))]
+  set s1 := st.setReg "accumulator" .real [BM, BN] ⟨fun idx => some (leakyrelu (g idx))⟩ with hs1
+  -- step 2: fp16 cast
+  have hcast : evalOp (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BM, BN] "accumulator")) s1
+      = some (⟨fun idx => FloatDType.real.cast FloatDType.fp16 (some (leakyrelu (g idx)))⟩ : Tile .fp16 [BM, BN]) := by
+    rw [hs1, evalOp_castFloat]
+    simp [BlockState.setReg_same]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some hcast)]
+  set s2 := s1.setReg "c" FloatDType.fp16.toTileDType [BM, BN] (⟨fun idx => FloatDType.real.cast FloatDType.fp16 (some (leakyrelu (g idx)))⟩ : Tile .fp16 [BM, BN]) with hs2
+  -- step 3: offs_cm
+  have hpm2 : s2.regs .nat [] "pid_m" = some (Tile.scalar PM) := by rw [hs2, hs1]; simp [hpm]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (offs_cm_eval s2 PM BM hpm2))]
+  set s3 := s2.setReg "offs_cm" .nat [BM] (Tile.vec (fun i : Fin BM => rowIndex PM BM i)) with hs3
+  -- step 4: offs_cn
+  have hpn3 : s3.regs .nat [] "pid_n" = some (Tile.scalar PN) := by simp [hs3, hs2, hs1, hpn]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (offs_cn_eval s3 PN BN hpn3))]
+  set s4 := s3.setReg "offs_cn" .nat [BN] (Tile.vec (fun j : Fin BN => colIndex PN BN j)) with hs4
+  -- step 5: c_ptrs
+  have hcm4 : s4.regs .nat [BM] "offs_cm" = some (Tile.vec (fun i : Fin BM => rowIndex PM BM i)) := by simp [hs4, hs3]
+  have hcn4 : s4.regs .nat [BN] "offs_cn" = some (Tile.vec (fun j : Fin BN => colIndex PN BN j)) := by simp [hs4]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (cptrs_eval s4 C BM BN SCM SCN (fun i => rowIndex PM BM i) (fun j => colIndex PN BN j) hcm4 hcn4))]
+  set cpT : Tile .ptr [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] => (C.cast, SCM * rowIndex PM BM idx.1 + SCN * colIndex PN BN idx.2.1)⟩ with hcpT
+  set s5 := s4.setReg "c_ptrs" .ptr [BM, BN] cpT with hs5
+  -- step 6: c_mask
+  have hcm5 : s5.regs .nat [BM] "offs_cm" = some (Tile.vec (fun i : Fin BM => rowIndex PM BM i)) := by simp [hs5, hcm4]
+  have hcn5 : s5.regs .nat [BN] "offs_cn" = some (Tile.vec (fun j : Fin BN => colIndex PN BN j)) := by simp [hs5, hcn4]
+  obtain ⟨mT, hmask_eval, hmask_true⟩ :=
+    cmask_alltrue s5 M N BM BN (fun i => rowIndex PM BM i) (fun j => colIndex PN BN j) hcm5 hcn5 hmlt hnlt
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some hmask_eval)]
+  set s6 := s5.setReg "c_mask" .bool [BM, BN] mT with hs6
+  -- step 7: masked fp16 store
+  set cT : Tile .fp16 [BM, BN] :=
+    ⟨fun idx => FloatDType.real.cast FloatDType.fp16 (some (leakyrelu (g idx)))⟩ with hcT
+  have hcc : s6.regs .fp16 [BM, BN] "c" = some cT := by simp [hs6, hs5, hs4, hs3, hs2, hcT]
+  have hcpp : s6.regs .ptr [BM, BN] "c_ptrs" = some cpT := by simp [hs6, hs5]
+  have hmm : s6.regs .bool [BM, BN] "c_mask" = some mT := by simp [hs6]
+  rw [stepStmts.cons_some (mlrStore_eval C BM BN s6 cT cpT mT hcc hcpp hmm), stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  -- mask is all-true, so the store is unconditional; readback via the scatter lemma
+  have hstep_eq :
+      (fun (acc : BlockState) k =>
+        if mT.data k then acc.writeMemTyped .fp16 (cpT.data k).1 (cpT.data k).2 (cT.data k) else acc)
+        =
+      (fun (acc : BlockState) k =>
+        if (fun _ : TileIndex [BM, BN] => True) k then acc.writeMemTyped .fp16 (cpT.data k).1 (cpT.data k).2 (cT.data k) else acc) := by
+    funext acc k; rw [hmask_true k]; simp
+  rw [hstep_eq]
+  have hCregion : ∀ k : TileIndex [BM, BN], (cpT.data k).1 = C := by intro k; simp [hcpT]
+  -- rewrite the foldl region from `(cpT.data k).1` to the literal `C`
+  rw [show
+      ((TileShape.allIndices [BM, BN]).foldl
+        (fun acc k => if (fun _ : TileIndex [BM, BN] => True) k then acc.writeMemTyped .fp16 (cpT.data k).1 (cpT.data k).2 (cT.data k) else acc) s6)
+      = ((TileShape.allIndices [BM, BN]).foldl
+        (fun acc k => if (fun _ : TileIndex [BM, BN] => True) k then acc.writeMemTyped .fp16 C ((cpT.data k).2) (cT.data k) else acc) s6)
+      from List.foldl_ext _ _ s6 (fun acc k _ => by rw [hCregion k])]
+  have hcoff : (cpT.data idx).2 = cOffset s0 PM PN BM BN SCM SCN idx := by simp [hcpT, cOffset]
+  have hoffInj : Function.Injective (fun idx : TileIndex [BM, BN] => (cpT.data idx).2) := by
+    intro a b hab; apply hInj; simpa [cOffset, hcpT] using hab
+  rw [← hcoff]
+  rw [scatter_memcell_fp16_prop_masked_nd (region := C) (s := s6)
+    (offsetFn := fun idx : TileIndex [BM, BN] => (cpT.data idx).2)
+    (valueFn := fun idx => cT.data idx)
+    (P := fun _ => True) hoffInj idx]
+  simp only [if_pos trivial, outputCell, hcT, hg]
 
 end VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
