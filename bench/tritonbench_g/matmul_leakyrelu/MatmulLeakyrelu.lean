@@ -391,7 +391,7 @@ theorem accPartial_succ (s : BlockState) (A B : RegionName)
 
 /-! ## Masked fp16 output-store machinery (reused for the activated store) -/
 
-def cOffset (s : BlockState) (PM PN BM BN stride_cm stride_cn : Nat)
+def cOffset (_s : BlockState) (PM PN BM BN stride_cm stride_cn : Nat)
     (idx : TileIndex [BM, BN]) : Nat :=
   stride_cm * rowIndex PM BM idx.1 + stride_cn * colIndex PN BN idx.2.1
 
@@ -683,7 +683,7 @@ set_option maxHeartbeats 1000000 in
 prologue steps to a state satisfying `mlrInvariant … 0` — the base case
 (`accumulator = 0`, pointers seeded). -/
 theorem mlr_preLoop (A B C : RegionName) (s : BlockState)
-    (M N K SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat)
+    (M N _K SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat)
     (hundef : ∀ rg o, s.undef rg o = 0) :
     ∃ s', stepStmts ((matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN
         SCM SCN BM BN BK GROUP).toAlgKernel.body.take 15) s = some s'
@@ -1038,7 +1038,7 @@ theorem cmask_alltrue (s : BlockState) (M N BM BN : Nat) (gm : Fin BM → Nat) (
   exact ⟨by simpa using hmlt _, by simpa using hnlt _⟩
 
 /-- The masked fp16 store statement reduces to the masked scatter foldl. -/
-theorem mlrStore_eval (C : RegionName) (BM BN : Nat) (st : BlockState)
+theorem mlrStore_eval (_C : RegionName) (BM BN : Nat) (st : BlockState)
     (cT : Tile .fp16 [BM, BN]) (cpT : Tile .ptr [BM, BN]) (mT : Tile .bool [BM, BN])
     (hc : st.regs .fp16 [BM, BN] "c" = some cT)
     (hcp : st.regs .ptr [BM, BN] "c_ptrs" = some cpT)
@@ -1152,5 +1152,139 @@ theorem mlr_postLoop (A B C : RegionName) (s0 : BlockState)
     (valueFn := fun idx => cT.data idx)
     (P := fun _ => True) hoffInj idx]
   simp only [if_pos trivial, outputCell, hcT, hg]
+
+/-- The dynamic K-loop bound resolves: `evalOp (cdiv K BK) = numKBlocks` and the
+loop runs `numKBlocks` iterations, advancing `mlrInvariant` from `0` to
+`numKBlocks`. -/
+theorem mlr_loop (A B : RegionName) (s0 : BlockState)
+    (PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks : Nat) (hBK : 0 < BK)
+    (s : BlockState)
+    (hP0 : mlrInvariant A B s0 PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks 0 s) :
+    ∃ sLoop, stepStmt (Stmt.forRangeDyn "k" (Op.constNat 0)
+        (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat (BK * numKBlocks)) (Op.constNat BK)) (Op.constNat 1)) (Op.constNat BK))
+        (Op.constNat 1) (mlrLoopBody BM BN BK (BK * numKBlocks) SAK SBK)) s = some sLoop
+      ∧ mlrInvariant A B s0 PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks numKBlocks sLoop := by
+  have hcdiv : (BK * numKBlocks + BK - 1) / BK = numKBlocks := by
+    have he : BK * numKBlocks + BK - 1 = (BK - 1) + BK * numKBlocks := by omega
+    rw [he, Nat.add_mul_div_left _ _ hBK, Nat.div_eq_of_lt (by omega), Nat.zero_add]
+  -- resolve the dynamic bounds: `stepStmt (forRangeDyn ...) s = stepForRangeAux "k" 0 numKBlocks 1 body s`
+  have hresolve : stepStmt (Stmt.forRangeDyn "k" (Op.constNat 0)
+      (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.constNat (BK * numKBlocks)) (Op.constNat BK)) (Op.constNat 1)) (Op.constNat BK))
+      (Op.constNat 1) (mlrLoopBody BM BN BK (BK * numKBlocks) SAK SBK)) s
+      = stepForRangeAux "k" 0 numKBlocks 1 (mlrLoopBody BM BN BK (BK * numKBlocks) SAK SBK) s := by
+    rw [stepForRangeAux.forRangeDyn_unfold]
+    simp only [evalOp_constNat, evalOp_div, evalOp_sub, evalOp_add, Tile.scalar, Tile.bop,
+      Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, NumericDType.sub,
+      NumericDType.add, Tile.data, Option.bind_some, bind]
+    rw [hcdiv]
+  rw [hresolve]
+  obtain ⟨final, sLoop, haux, hfinal, hPfinal⟩ :=
+    forRangeAux_inv (idx := "k") (stop := numKBlocks) (step := 1)
+      (P := mlrInvariant A B s0 PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks)
+      (by norm_num)
+      (fun i st hlt hinv => mlr_step A B s0 PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks hBK i st hlt hinv)
+      0 s hP0
+  have hfinalEq : final = numKBlocks := by
+    simp only [mlrInvariant] at hPfinal
+    omega
+  subst hfinalEq
+  exact ⟨sLoop, haux, hPfinal⟩
+
+/-! ## Composition: full exec closed form -/
+
+set_option maxHeartbeats 2000000 in
+/-- **Top exec reduction**: `preLoop` + K-loop (`mlr_loop`) + `postLoop`
+compose into the full `exec`. Every in-bounds output lane equals the genuine
+value `fp16(leakyrelu(Σ_k A·B))`. -/
+theorem mlr_exec_closed_form (A B C : RegionName) (s : BlockState)
+    (M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat) (hBK : 0 < BK)
+    (hInj : Function.Injective (cOffset s (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP) BM BN SCM SCN))
+    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) M N BM BN GROUP) BM i < M)
+    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) M N BM BN GROUP) BN j < N)
+    (hundef : ∀ rg o, s.undef rg o = 0)
+    (idx : TileIndex [BM, BN]) :
+    (match exec (matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK GROUP) s with
+      | some s' => s'.mem C (cOffset s (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP) BM BN SCM SCN idx)
+      | none => (0 : MemCell)) =
+      outputCell s A B (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP)
+        BM BN M N SAM SAK SBK SBN BK numKBlocks idx := by
+  set PM := pidM (s.pids 0) M N BM BN GROUP with hPM
+  set PN := pidN (s.pids 0) M N BM BN GROUP with hPN
+  obtain ⟨s0, hpre_eq, hP0⟩ := mlr_preLoop A B C s M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks hundef
+  obtain ⟨sLoop, hLoopStmt, hPLoop⟩ :=
+    mlr_loop A B s PM PN M N BM BN SAM SAK SBK SBN BK numKBlocks hBK s0 hP0
+  obtain ⟨sfin, hTail, hpost⟩ :=
+    mlr_postLoop A B C s PM PN M N BM BN SAM SAK SBK SBN SCM SCN BK numKBlocks hInj hmlt hnlt sLoop hPLoop
+  have hexec : exec (matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK GROUP) s
+      = some sfin := by
+    rw [exec, mlr_body_split A B C M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks,
+      stepStmts.append_some hpre_eq, stepStmts.cons_some hLoopStmt, hTail]
+  rw [hexec]
+  exact hpost idx
+
+/-- **Closed-form correctness for `matmul_leakyrelu` (general statement).**
+
+For arbitrary `M`/`N`, tile dims `BM`/`BN`, strides, group size, K-block size
+`BK`, and K-block count `numKBlocks` (so `K = BK · numKBlocks`), every in-bounds
+output cell of the computed `BM × BN` tile equals the genuine fused value
+`fp16(leakyrelu(Σ_{k < BK·numKBlocks} A[i,k] · B[k,j]))` (over ℝ, with a final
+fp16 output cast) of the loaded `A`/`B` tiles — NOT the kernel's own executed
+value.
+
+`PM`/`PN` are the kernel's own grouped `pid_m`/`pid_n`. Preconditions: `0 < BK`;
+all tile rows/cols in-bounds (`PM·BM + i < M`, `PN·BN + j < N`), making the
+modular addressing the identity and the store mask all-true; output-address
+injectivity; clean initial `undef`. -/
+theorem matmul_leakyrelu_closed_form_correct
+    (A B C : RegionName) (s : BlockState)
+    (M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat) (hBK : 0 < BK)
+    (hInj : Function.Injective (cOffset s (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP) BM BN SCM SCN))
+    (hmlt : ∀ i : Fin BM, rowIndex (pidM (s.pids 0) M N BM BN GROUP) BM i < M)
+    (hnlt : ∀ j : Fin BN, colIndex (pidN (s.pids 0) M N BM BN GROUP) BN j < N)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK GROUP)
+      (initialState := s)
+      (write := fun idx : TileIndex [BM, BN] =>
+        some (C, cOffset s (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP) BM BN SCM SCN idx))
+      (expected := fun idx : TileIndex [BM, BN] =>
+        outputCell s A B (pidM (s.pids 0) M N BM BN GROUP) (pidN (s.pids 0) M N BM BN GROUP)
+          BM BN M N SAM SAK SBK SBN BK numKBlocks idx) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [matmul_leaky_relu_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst hs0
+  intro idx
+  have hmain := mlr_exec_closed_form A B C s0 M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks hBK hInj hmlt hnlt hundef idx
+  rw [hExec] at hmain
+  exact hmain
+
+/-- **Public Python test-shape summary** (`64×128 @ 128×64`, leaky-ReLU enabled,
+`BLOCK_M = BLOCK_N = BLOCK_K = 32`, `GROUP_SIZE_M = 4`, so `numKBlocks = 4`,
+strides `a=(128,1)`, `b=(64,1)`, `c=(64,1)`): the full `matmul_leakyrelu` surface
+lowers to the algorithm layer and realizes the genuine fused matrix product
+`fp16(leakyrelu(Σ_{k<128} A[i,k]·B[k,j]))` on every in-bounds output lane. The
+in-bounds / output-injectivity hypotheses are kept because they depend on the
+runtime grouped `pid`. -/
+theorem matmul_leakyrelu_python_test_shape_summary
+    (A B C : RegionName) (s : BlockState)
+    (hInj : Function.Injective (cOffset s (pidM (s.pids 0) 64 64 32 32 4) (pidN (s.pids 0) 64 64 32 32 4) 32 32 64 1))
+    (hmlt : ∀ i : Fin 32, rowIndex (pidM (s.pids 0) 64 64 32 32 4) 32 i < 64)
+    (hnlt : ∀ j : Fin 32, colIndex (pidN (s.pids 0) 64 64 32 32 4) 32 j < 64)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (matmul_leaky_relu_surface A B C 64 64 128 128 1 64 1 64 1 32 32 32 4).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := matmul_leaky_relu_surface A B C 64 64 128 128 1 64 1 64 1 32 32 32 4)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 32] =>
+        some (C, cOffset s (pidM (s.pids 0) 64 64 32 32 4) (pidN (s.pids 0) 64 64 32 32 4) 32 32 64 1 idx))
+      (expected := fun idx : TileIndex [32, 32] =>
+        outputCell s A B (pidM (s.pids 0) 64 64 32 32 4) (pidN (s.pids 0) 64 64 32 32 4)
+          32 32 64 64 128 1 64 1 32 4 idx) := by
+  refine ⟨matmul_leaky_relu_surface_toAlgorithm_supported A B C 64 64 128 128 1 64 1 64 1 32 32 32 4, ?_⟩
+  exact matmul_leakyrelu_closed_form_correct A B C s 64 64 128 1 64 1 64 1 32 32 32 4 4
+    (by norm_num) hInj hmlt hnlt hundef
 
 end VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
