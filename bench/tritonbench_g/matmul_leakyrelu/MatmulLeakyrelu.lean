@@ -170,6 +170,13 @@ theorem matmul_leaky_relu_surface_toAlgorithm_supported
       let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
   simp [evalOp]
 
+theorem evalOp_boolAnd {a b shape} (bc : Broadcast a b shape)
+    (x : Op .bool a) (y : Op .bool b) (s : BlockState) :
+    evalOp (.boolAnd bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s;
+      some (Tile.bop (fun p q : Bool => p && q) bc vx vy)) := by
+  simp [evalOp]
+
 @[simp] theorem evalOp_remap {dtype inShape outShape}
     (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
     evalOp (.remap outShape map a) s = (do
@@ -965,5 +972,69 @@ theorem activation_eval (BM BN : Nat) (s : BlockState) (g : TileIndex [BM, BN] �
     simp only [leakyrelu, ge_iff_le, if_neg h, Tile.bop_data, Broadcast.leftIndex,
       Broadcast.rightIndex, Tile.scalar, Tile.data, NumericDType.mul, WithBot.realMul, Option.map₂,
       Option.bind, Option.map]
+
+/-- `offs_cm` eval: `pid_m · BM + arange` (non-modular output rows). -/
+theorem offs_cm_eval (s : BlockState) (PM BM : Nat)
+    (hpm : s.regs .nat [] "pid_m" = some (Tile.scalar PM)) :
+    evalOp (Op.add .nat Broadcast.scalarL
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM)) (Op.arange BM)) s
+      = some (Tile.vec (fun i : Fin BM => rowIndex PM BM i)) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_ref, hpm, evalOp_constNat, evalOp_arange, Option.bind,
+    Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  simp only [Tile.bop, Tile.vec, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.add, NumericDType.mul, rowIndex]
+
+/-- `offs_cn` eval: `pid_n · BN + arange` (non-modular output cols). -/
+theorem offs_cn_eval (s : BlockState) (PN BN : Nat)
+    (hpn : s.regs .nat [] "pid_n" = some (Tile.scalar PN)) :
+    evalOp (Op.add .nat Broadcast.scalarL
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN)) (Op.arange BN)) s
+      = some (Tile.vec (fun j : Fin BN => colIndex PN BN j)) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_ref, hpn, evalOp_constNat, evalOp_arange, Option.bind,
+    Option.bind_some]
+  refine congrArg some ?_
+  ext j
+  simp only [Tile.bop, Tile.vec, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.add, NumericDType.mul, colIndex]
+
+/-- `c_ptrs` eval: cell `(i,j) = (C, stride_cm·offs_cm i + stride_cn·offs_cn j)`. -/
+theorem cptrs_eval (s : BlockState) (C : RegionName) (BM BN SCM SCN : Nat) (gm : Fin BM → Nat) (gn : Fin BN → Nat)
+    (hm : s.regs .nat [BM] "offs_cm" = some (Tile.vec gm))
+    (hn : s.regs .nat [BN] "offs_cn" = some (Tile.vec gn)) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase C)
+      (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.mul .nat Broadcast.scalarL (Op.constNat SCM) (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")))
+        (Op.mul .nat Broadcast.scalarL (Op.constNat SCN) (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn"))))) s
+      = some (⟨fun idx : TileIndex [BM, BN] => (C.cast, SCM * gm idx.1 + SCN * gn idx.2.1)⟩ : Tile .ptr [BM, BN]) := by
+  rw [evalOp_ptrAdd, evalOp_ptrBase]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, evalOp_expandDim_one_nat,
+    evalOp_expandDim_zero_nat, hm, hn, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec]
+  · simp [Tile.ptrAdd, Tile.bop, Tile.vec, NumericDType.add, NumericDType.mul]
+
+/-- `c_mask` eval: `(offs_cm < M) & (offs_cn < N)` is all-`true` when every output
+row/col is in-bounds. -/
+theorem cmask_alltrue (s : BlockState) (M N BM BN : Nat) (gm : Fin BM → Nat) (gn : Fin BN → Nat)
+    (hm : s.regs .nat [BM] "offs_cm" = some (Tile.vec gm))
+    (hn : s.regs .nat [BN] "offs_cn" = some (Tile.vec gn))
+    (hmlt : ∀ i, gm i < M) (hnlt : ∀ j, gn j < N) :
+    ∃ mtile : Tile .bool [BM, BN],
+      evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")) (Op.constNat M))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn")) (Op.constNat N))) s
+        = some mtile
+      ∧ ∀ idx : TileIndex [BM, BN], mtile.data idx = Bool.true := by
+  refine ⟨_, by
+    simp only [evalOp, evalOp.eq_def, hm, hn, Option.bind, Option.bind_some, Option.bind_eq_bind,
+      Tile.expandDim, pure, Option.some.injEq]; rfl, ?_⟩
+  intro idx
+  simp only [Tile.bop, Tile.cop, Tile.expandDim, Tile.vec, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, ComparableDType.lt, TileShape.dropInsertedIndex, Bool.and_eq_true,
+    decide_eq_true_eq]
+  exact ⟨by simpa using hmlt _, by simpa using hnlt _⟩
 
 end VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
