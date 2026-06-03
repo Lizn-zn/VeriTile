@@ -764,6 +764,85 @@ theorem preLoop_prefix (Q K V B0 Out : RegionName) (sm_scale : ℝ)
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
     simp [BlockState.setReg, BlockState.setReg_same, BlockState.setReg_ne_name]
 
+/-! ### preLoop tail loads (statements 10–18 eval helpers)
+
+The prologue's final block (statements 10–18: `qk_scale`, the Q block-pointer
+load + scale + `OUT_DTYPE` cast, the `lo`/`hi` constants, the bias arange/offset
+prep, and the `b1` region load) needs three eval reductions beyond the
+deterministic-prologue recipe used by `preLoop_prefix`:
+
+* the two generalized canonical-axis `expandDim` reductions over an arbitrary
+  `nat` operand (`evalOp_expandDim_one_nat'`/`evalOp_expandDim_zero_nat'`) — the
+  generic `evalOp_expandDim` cannot `rw`/`simp`-match the `triton{}`-elaborated
+  surface because its result shape `TileShape.insertAxis [M] 1 1` is only
+  defeq-not-syntactic to `[M, 1]`; these state the concrete-shape form (the
+  `b1`/`b0` offset uses `expandDim` of a *computed* `mul`/`add`, not a bare
+  register, so the existing register-only specializations don't apply);
+* the `b1` (and identically-shaped `b0`) relative-position-bias region load
+  (`load_b1_eval`): reads `B0` at the resolved contiguous per-lane address
+  `b_offset + (start_m·BLOCK_M + r)·stride_b0m + (jL % BIAS_LAST_SIZE +
+  BIAS_LAST_SIZE)` — i.e. exactly `b1Val`'s address (the `b0` block-column read
+  `… + start_n // BLOCK_N` is the `floorDiv` variant). -/
+
+/-- Generalized canonical axis-1 `expandDim` eval over an arbitrary `nat`
+operand (explicit `[M, 1]` result shape). -/
+@[simp] theorem evalOp_expandDim_one_nat' {M : Nat} (e : Op .nat [M]) (s : BlockState) :
+    @evalOp .nat [M, 1] (Op.expandDim ⟨1, by simp⟩ e) s =
+      (evalOp e s).bind (fun v =>
+        some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
+  conv_lhs => unfold evalOp
+  cases evalOp e s with
+  | none => rfl
+  | some v =>
+      simp only [Option.bind_some, Option.bind_eq_bind]
+      refine congrArg some ?_; ext i; simp [Tile.expandDim]
+
+/-- Generalized canonical axis-0 `expandDim` eval over an arbitrary `nat`
+operand (explicit `[1, D]` result shape). -/
+@[simp] theorem evalOp_expandDim_zero_nat' {D : Nat} (e : Op .nat [D]) (s : BlockState) :
+    @evalOp .nat [1, D] (Op.expandDim ⟨0, by simp⟩ e) s =
+      (evalOp e s).bind (fun v =>
+        some ({ data := fun i : TileIndex [1, D] => v.data (i.2.1, PUnit.unit) } : Tile .nat [1, D])) := by
+  conv_lhs => unfold evalOp
+  cases evalOp e s with
+  | none => rfl
+  | some v =>
+      simp only [Option.bind_some, Option.bind_eq_bind]
+      refine congrArg some ?_; ext i; simp [Tile.expandDim]
+
+/-- **`b1` relative-position-bias region load** (statement 18; the `b0` per-block
+read is the `floorDiv` analogue). Resolves the `B0 + b_offset + (start_m·BLOCK_M
++ b_ptr_offsets_m)·stride_b0m[:,None] + b_ptr_offsets_n_1[None,:]` pointer
+arithmetic to the per-lane `readMem` at `b_offset + (start_m·BLOCK_M + r)·
+stride_b0m + (jL % BIAS_LAST_SIZE + BIAS_LAST_SIZE)` (= `b1Val`'s address). -/
+theorem load_b1_eval (s : BlockState) (B0 : RegionName)
+    (BLOCK_M BLOCK_N stride_b0m BIAS_LAST_SIZE smbm boff : Nat)
+    (hbo : s.regs .nat [] "b_offset" = some (Tile.scalar boff))
+    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar smbm))
+    (hm : s.regs .nat [BLOCK_M] "b_ptr_offsets_m" = some (Tile.vec (fun r : Fin BLOCK_M => r.val)))
+    (hn1 : s.regs .nat [BLOCK_N] "b_ptr_offsets_n_1"
+      = some (Tile.vec (fun jL : Fin BLOCK_N => jL.val % BIAS_LAST_SIZE + BIAS_LAST_SIZE))) :
+    evalOp (Op.load .real (.region B0
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M))
+                (Op.ref .nat [BLOCK_M] "b_ptr_offsets_m")) (Op.constNat stride_b0m))))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "b_ptr_offsets_n_1"))))
+        .none) s
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+          some (s.readMem B0
+            (boff + (smbm * BLOCK_M + idx.1.val) * stride_b0m
+              + (idx.2.1.val % BIAS_LAST_SIZE + BIAS_LAST_SIZE)))⟩) := by
+  rw [evalOp_load_region_none]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, evalOp_expandDim_one_nat',
+    evalOp_expandDim_zero_nat', hbo, hsm, hm, hn1, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar, Tile.vec,
+    NumericDType.add, NumericDType.mul, BlockState.readMemValue_real, Region.cast_id]
+
 end ClosedForm
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
