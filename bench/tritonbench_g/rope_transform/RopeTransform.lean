@@ -251,6 +251,15 @@ theorem ifThenElse_notFalse_step (thenB elseB : List Stmt) (st : BlockState) :
   simp only [evalOp, Tile.uop, Tile.scalar]
   norm_num
 
+/-- Singleton-list form: the trailing `if`-statement of the body takes its
+then-branch. -/
+theorem stepStmts_singleton_ifThenElse_notFalse (thenB elseB : List Stmt) (st : BlockState) :
+    stepStmts [Stmt.ifThenElse (Op.constBool Bool.false).boolNot thenB elseB] st
+      = stepStmts thenB st := by
+  conv_lhs => unfold stepStmts
+  rw [ifThenElse_notFalse_step]
+  cases stepStmts thenB st <;> simp
+
 /-- `new_*_tile_1 = t1·cos − t2·sin` value recipe (first-half forward store). -/
 theorem newSub_value_eval (s : BlockState) (PN PH : Nat)
     (t1 t2 : Tile .real [PN, PH]) (cosrow sinrow : Tile .real [PH])
@@ -317,6 +326,32 @@ theorem stepStmt_store_ptr_mask_eq {shape : TileShape}
   unfold stepStmt
   simp only [hv, hp, hm, Option.map_some]
   rfl
+
+/-- Bool-predicate intra-region offset-disjointness readback (the rope-style Q
+first-half read commuting past the Q second-half masked store-foldl). -/
+theorem foldl_writeMem_same_region_disjoint_offsets_readMem_bool {α : Type}
+    (region : RegionName) (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Bool) (l : List α) (s : BlockState)
+    (off : Nat) (hOff : ∀ k, k ∈ l → P k → off ≠ offsetFn k) :
+    BlockState.readMem ((l.foldl
+        (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s))
+      region off
+      = s.readMem region off := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      have htl : ∀ k, k ∈ tl → P k → off ≠ offsetFn k :=
+        fun k hk hPk => hOff k (List.mem_cons_of_mem hd hk) hPk
+      by_cases hhd : P hd = Bool.true
+      · simp only [hhd, ite_true]
+        rw [ih _ htl, BlockState.writeMem_readMem, if_neg]
+        rintro ⟨_, hOffEq⟩
+        exact (hOff hd List.mem_cons_self hhd) hOffEq
+      · rw [Bool.not_eq_true] at hhd
+        simp only [hhd, Bool.false_eq_true]
+        exact ih _ htl
 
 /-- Faithful transcription of `rope_transform.py`'s `_triton_rope`. -/
 def triton_rope_surface
@@ -1356,6 +1391,521 @@ theorem triton_rope_surface_forward_body
       pad_hd BLOCK_SIZE Bool.false).body
       = ropeForwardBody q_ptr k_ptr cos sin q_row_stride k_row_stride
           cos_row_stride sin_row_stride sl n_qh n_kh hd pad_n_qh pad_n_kh pad_hd := rfl
+
+theorem rope_forward_body_steps
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl n_qh n_kh hd pad_n_qh pad_n_kh pad_hd : Nat)
+    (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sfin, stepStmts (ropeForwardBody q_ptr k_ptr cos sin q_row_stride k_row_stride
+      cos_row_stride sin_row_stride sl n_qh n_kh hd pad_n_qh pad_n_kh pad_hd) s = some sfin
+      ∧ (q_ptr ≠ k_ptr →
+          ∀ idx : TileIndex [pad_n_qh, pad_hd/2], idx.1.val < n_qh → idx.2.1.val < hd/2 →
+            sfin.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val)) =
+              s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val)) *
+                s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val) -
+              s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) *
+                s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val))
+      ∧ (q_ptr ≠ k_ptr →
+          ∀ idx : TileIndex [pad_n_qh, pad_hd/2], idx.1.val < n_qh → idx.2.1.val < hd/2 →
+            sfin.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) =
+              s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) *
+                s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val) +
+              s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val)) *
+                s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val))
+      ∧ (∀ idx : TileIndex [pad_n_kh, pad_hd/2], idx.1.val < n_kh → idx.2.1.val < hd/2 →
+            sfin.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val)) =
+              s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val)) *
+                s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val) -
+              s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) *
+                s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val))
+      ∧ (∀ idx : TileIndex [pad_n_kh, pad_hd/2], idx.1.val < n_kh → idx.2.1.val < hd/2 →
+            sfin.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) =
+              s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) *
+                s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val) +
+              s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val)) *
+                s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val)) := by
+  unfold ropeForwardBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (by rw [evalOp_programId]
+        : evalOp (Op.programId 0) s = some (Tile.scalar (s.pids 0))))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (ptrbase_mul_eval _ q_ptr (s.pids 0) q_row_stride (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (ptrbase_mul_eval _ k_ptr (s.pids 0) k_row_stride (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (mod_eval _ (s.pids 0) sl (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (ptrbase_mul_ref_eval _ cos (s.pids 0 % sl) cos_row_stride "cos_row_idx" (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (ptrbase_mul_ref_eval _ sin (s.pids 0 % sl) sin_row_stride "cos_row_idx" (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (by rw [evalOp_arange]
+        : evalOp (Op.arange (pad_hd/2)) _ = some (Tile.vec (fun i : Fin (pad_hd/2) => i.val))))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (cosMask_eval _ (pad_hd/2) hd (Tile.vec (fun i : Fin (pad_hd/2) => i.val)) "cos_offsets" (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_maskOther_real _ (Op.ref .bool [pad_hd/2] "cos_mask") _ _ _
+          (ptr_plus_offsets1d_eval _ cos (pad_hd/2) (s.pids 0 % sl * cos_row_stride)
+            (Tile.vec (fun i : Fin (pad_hd/2) => i.val)) "cos" "cos_offsets" (by simp) (by simp))
+          (show evalOp (Op.ref .bool [pad_hd/2] "cos_mask") _
+              = some (⟨fun i => decide (i.1.val < hd/2)⟩ : Tile .bool [pad_hd/2]) from by
+            rw [evalOp_ref]; simp; rfl)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_maskOther_real _ (Op.ref .bool [pad_hd/2] "cos_mask") _ _ _
+          (ptr_plus_offsets1d_eval _ sin (pad_hd/2) (s.pids 0 % sl * sin_row_stride)
+            (Tile.vec (fun i : Fin (pad_hd/2) => i.val)) "sin" "cos_offsets" (by simp) (by simp))
+          (show evalOp (Op.ref .bool [pad_hd/2] "cos_mask") _
+              = some (⟨fun i => decide (i.1.val < hd/2)⟩ : Tile .bool [pad_hd/2]) from by
+            rw [evalOp_ref]; simp; rfl)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (firstHalf_offsets_eval _ pad_n_qh (pad_hd/2) hd))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (firstHalf_offsets_eval _ pad_n_kh (pad_hd/2) hd))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (firstMask_eval _ pad_n_qh (pad_hd/2) n_qh hd))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (firstMask_eval _ pad_n_kh (pad_hd/2) n_kh hd))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_maskOther_real _ (Op.ref .bool [pad_n_qh, pad_hd/2] "first_q_mask") _ _ _
+          (ptr_plus_offsets_eval _ q_ptr pad_n_qh (pad_hd/2) (s.pids 0 * q_row_stride)
+            (⟨fun idx => idx.1.val * hd + idx.2.1.val⟩ : Tile .nat [pad_n_qh, pad_hd/2])
+            "q_ptr" "first_half_q_offsets" (by simp) (by simp))
+          (show evalOp (Op.ref .bool [pad_n_qh, pad_hd/2] "first_q_mask") _
+              = some (⟨fun idx => decide (idx.1.val < n_qh) && decide (idx.2.1.val < hd/2)⟩
+                : Tile .bool [pad_n_qh, pad_hd/2]) from by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_maskOther_real _ (Op.ref .bool [pad_n_kh, pad_hd/2] "first_k_mask") _ _ _
+          (ptr_plus_offsets_eval _ k_ptr pad_n_kh (pad_hd/2) (s.pids 0 * k_row_stride)
+            (⟨fun idx => idx.1.val * hd + idx.2.1.val⟩ : Tile .nat [pad_n_kh, pad_hd/2])
+            "k_ptr" "first_half_k_offsets" (by simp) (by simp))
+          (show evalOp (Op.ref .bool [pad_n_kh, pad_hd/2] "first_k_mask") _
+              = some (⟨fun idx => decide (idx.1.val < n_kh) && decide (idx.2.1.val < hd/2)⟩
+                : Tile .bool [pad_n_kh, pad_hd/2]) from by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (secondHalf_offsets_eval _ pad_n_qh (pad_hd/2) hd "first_half_q_offsets" (⟨fun idx => idx.1.val * hd + idx.2.1.val⟩ : Tile .nat [pad_n_qh, pad_hd/2]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (secondHalf_offsets_eval _ pad_n_kh (pad_hd/2) hd "first_half_k_offsets" (⟨fun idx => idx.1.val * hd + idx.2.1.val⟩ : Tile .nat [pad_n_kh, pad_hd/2]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.ref .bool [pad_n_qh, pad_hd/2] "first_q_mask") _
+            = some (⟨fun idx => decide (idx.1.val < n_qh) && decide (idx.2.1.val < hd/2)⟩
+              : Tile .bool [pad_n_qh, pad_hd/2]) from by rw [evalOp_ref]; simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.ref .bool [pad_n_kh, pad_hd/2] "first_k_mask") _
+            = some (⟨fun idx => decide (idx.1.val < n_kh) && decide (idx.2.1.val < hd/2)⟩
+              : Tile .bool [pad_n_kh, pad_hd/2]) from by rw [evalOp_ref]; simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_maskOther_real _ (Op.ref .bool [pad_n_qh, pad_hd/2] "second_q_mask") _ _ _
+          (ptr_plus_offsets_eval _ q_ptr pad_n_qh (pad_hd/2) (s.pids 0 * q_row_stride)
+            (⟨fun idx => idx.1.val * hd + idx.2.1.val + hd/2⟩ : Tile .nat [pad_n_qh, pad_hd/2])
+            "q_ptr" "second_half_q_offsets" (by simp) (by simp))
+          (show evalOp (Op.ref .bool [pad_n_qh, pad_hd/2] "second_q_mask") _
+              = some (⟨fun idx => decide (idx.1.val < n_qh) && decide (idx.2.1.val < hd/2)⟩
+                : Tile .bool [pad_n_qh, pad_hd/2]) from by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (load_ptr_maskOther_real _ (Op.ref .bool [pad_n_kh, pad_hd/2] "second_k_mask") _ _ _
+          (ptr_plus_offsets_eval _ k_ptr pad_n_kh (pad_hd/2) (s.pids 0 * k_row_stride)
+            (⟨fun idx => idx.1.val * hd + idx.2.1.val + hd/2⟩ : Tile .nat [pad_n_kh, pad_hd/2])
+            "k_ptr" "second_half_k_offsets" (by simp) (by simp))
+          (show evalOp (Op.ref .bool [pad_n_kh, pad_hd/2] "second_k_mask") _
+              = some (⟨fun idx => decide (idx.1.val < n_kh) && decide (idx.2.1.val < hd/2)⟩
+                : Tile .bool [pad_n_kh, pad_hd/2]) from by rw [evalOp_ref]; simp)))]
+  rw [stepStmts_singleton_ifThenElse_notFalse]
+  -- thenBody: 4 (assign, store) pairs
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (newSub_value_eval _ pad_n_qh (pad_hd/2) (⟨fun i => if (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) then some (s.readMem q_ptr (s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val))) else some 0⟩ : Tile .real [pad_n_qh, pad_hd/2]) (⟨fun i => if (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) then some (s.readMem q_ptr (s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val + hd/2))) else some 0⟩ : Tile .real [pad_n_qh, pad_hd/2]) (⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem cos (s.pids 0 % sl * cos_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2]) (⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem sin (s.pids 0 % sl * sin_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2]) "q_tile_1" "q_tile_2" "cos_row" "sin_row" (by simp) (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_store_ptr_mask_eq _ (Op.ref .real [pad_n_qh, pad_hd/2] "new_q_tile_1") _ _ _ (⟨fun idx => NumericDType.real.sub (NumericDType.real.mul (((⟨fun i => if (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) then some (s.readMem q_ptr (s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val))) else some 0⟩ : Tile .real [pad_n_qh, pad_hd/2])).data idx) (((⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem cos (s.pids 0 % sl * cos_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2])).data (idx.2.1, idx.2.2))) (NumericDType.real.mul (((⟨fun i => if (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) then some (s.readMem q_ptr (s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val + hd/2))) else some 0⟩ : Tile .real [pad_n_qh, pad_hd/2])).data idx) (((⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem sin (s.pids 0 % sl * sin_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2])).data (idx.2.1, idx.2.2)))⟩ : Tile .real [pad_n_qh, pad_hd/2]) _ (by rw [evalOp_ref]; simp)
+        (ptr_plus_offsets_eval _ q_ptr pad_n_qh (pad_hd/2) (s.pids 0 * q_row_stride)
+          (⟨fun idx => idx.1.val * hd + idx.2.1.val⟩ : Tile .nat [pad_n_qh, pad_hd/2])
+          "q_ptr" "first_half_q_offsets" (by simp) (by simp))
+        (show evalOp (Op.ref .bool [pad_n_qh, pad_hd/2] "first_q_mask") _
+            = some (⟨fun idx => decide (idx.1.val < n_qh) && decide (idx.2.1.val < hd/2)⟩
+              : Tile .bool [pad_n_qh, pad_hd/2]) from by rw [evalOp_ref]; simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (newAdd_value_eval _ pad_n_qh (pad_hd/2) (⟨fun i => if (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) then some (s.readMem q_ptr (s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val + hd/2))) else some 0⟩ : Tile .real [pad_n_qh, pad_hd/2]) (⟨fun i => if (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) then some (s.readMem q_ptr (s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val))) else some 0⟩ : Tile .real [pad_n_qh, pad_hd/2]) (⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem cos (s.pids 0 % sl * cos_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2]) (⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem sin (s.pids 0 % sl * sin_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2]) "q_tile_2" "q_tile_1" "cos_row" "sin_row" (by simp) (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_store_ptr_mask_eq _ (Op.ref .real [pad_n_qh, pad_hd/2] "new_q_tile_2") _ _ _ (⟨fun idx => NumericDType.real.add (NumericDType.real.mul (((⟨fun i => if (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) then some (s.readMem q_ptr (s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val + hd/2))) else some 0⟩ : Tile .real [pad_n_qh, pad_hd/2])).data idx) (((⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem cos (s.pids 0 % sl * cos_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2])).data (idx.2.1, idx.2.2))) (NumericDType.real.mul (((⟨fun i => if (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) then some (s.readMem q_ptr (s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val))) else some 0⟩ : Tile .real [pad_n_qh, pad_hd/2])).data idx) (((⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem sin (s.pids 0 % sl * sin_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2])).data (idx.2.1, idx.2.2)))⟩ : Tile .real [pad_n_qh, pad_hd/2]) _ (by rw [evalOp_ref]; simp)
+        (ptr_plus_offsets_eval _ q_ptr pad_n_qh (pad_hd/2) (s.pids 0 * q_row_stride)
+          (⟨fun idx => idx.1.val * hd + idx.2.1.val + hd/2⟩ : Tile .nat [pad_n_qh, pad_hd/2])
+          "q_ptr" "second_half_q_offsets" (by simp) (by simp))
+        (show evalOp (Op.ref .bool [pad_n_qh, pad_hd/2] "second_q_mask") _
+            = some (⟨fun idx => decide (idx.1.val < n_qh) && decide (idx.2.1.val < hd/2)⟩
+              : Tile .bool [pad_n_qh, pad_hd/2]) from by rw [evalOp_ref]; simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (newSub_value_eval _ pad_n_kh (pad_hd/2) (⟨fun i => if (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) then some (s.readMem k_ptr (s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val))) else some 0⟩ : Tile .real [pad_n_kh, pad_hd/2]) (⟨fun i => if (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) then some (s.readMem k_ptr (s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val + hd/2))) else some 0⟩ : Tile .real [pad_n_kh, pad_hd/2]) (⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem cos (s.pids 0 % sl * cos_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2]) (⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem sin (s.pids 0 % sl * sin_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2]) "k_tile_1" "k_tile_2" "cos_row" "sin_row" (by simp) (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_store_ptr_mask_eq _ (Op.ref .real [pad_n_kh, pad_hd/2] "new_k_tile_1") _ _ _ (⟨fun idx => NumericDType.real.sub (NumericDType.real.mul (((⟨fun i => if (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) then some (s.readMem k_ptr (s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val))) else some 0⟩ : Tile .real [pad_n_kh, pad_hd/2])).data idx) (((⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem cos (s.pids 0 % sl * cos_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2])).data (idx.2.1, idx.2.2))) (NumericDType.real.mul (((⟨fun i => if (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) then some (s.readMem k_ptr (s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val + hd/2))) else some 0⟩ : Tile .real [pad_n_kh, pad_hd/2])).data idx) (((⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem sin (s.pids 0 % sl * sin_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2])).data (idx.2.1, idx.2.2)))⟩ : Tile .real [pad_n_kh, pad_hd/2]) _ (by rw [evalOp_ref]; simp)
+        (ptr_plus_offsets_eval _ k_ptr pad_n_kh (pad_hd/2) (s.pids 0 * k_row_stride)
+          (⟨fun idx => idx.1.val * hd + idx.2.1.val⟩ : Tile .nat [pad_n_kh, pad_hd/2])
+          "k_ptr" "first_half_k_offsets" (by simp) (by simp))
+        (show evalOp (Op.ref .bool [pad_n_kh, pad_hd/2] "first_k_mask") _
+            = some (⟨fun idx => decide (idx.1.val < n_kh) && decide (idx.2.1.val < hd/2)⟩
+              : Tile .bool [pad_n_kh, pad_hd/2]) from by rw [evalOp_ref]; simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (newAdd_value_eval _ pad_n_kh (pad_hd/2) (⟨fun i => if (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) then some (s.readMem k_ptr (s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val + hd/2))) else some 0⟩ : Tile .real [pad_n_kh, pad_hd/2]) (⟨fun i => if (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) then some (s.readMem k_ptr (s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val))) else some 0⟩ : Tile .real [pad_n_kh, pad_hd/2]) (⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem cos (s.pids 0 % sl * cos_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2]) (⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem sin (s.pids 0 % sl * sin_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2]) "k_tile_2" "k_tile_1" "cos_row" "sin_row" (by simp) (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_store_ptr_mask_eq _ (Op.ref .real [pad_n_kh, pad_hd/2] "new_k_tile_2") _ _ _ (⟨fun idx => NumericDType.real.add (NumericDType.real.mul (((⟨fun i => if (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) then some (s.readMem k_ptr (s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val + hd/2))) else some 0⟩ : Tile .real [pad_n_kh, pad_hd/2])).data idx) (((⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem cos (s.pids 0 % sl * cos_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2])).data (idx.2.1, idx.2.2))) (NumericDType.real.mul (((⟨fun i => if (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) then some (s.readMem k_ptr (s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val))) else some 0⟩ : Tile .real [pad_n_kh, pad_hd/2])).data idx) (((⟨fun i => if decide (i.1.val < hd/2) then some (s.readMem sin (s.pids 0 % sl * sin_row_stride + i.1.val)) else some 0⟩ : Tile .real [pad_hd/2])).data (idx.2.1, idx.2.2)))⟩ : Tile .real [pad_n_kh, pad_hd/2]) _ (by rw [evalOp_ref]; simp)
+        (ptr_plus_offsets_eval _ k_ptr pad_n_kh (pad_hd/2) (s.pids 0 * k_row_stride)
+          (⟨fun idx => idx.1.val * hd + idx.2.1.val + hd/2⟩ : Tile .nat [pad_n_kh, pad_hd/2])
+          "k_ptr" "second_half_k_offsets" (by simp) (by simp))
+        (show evalOp (Op.ref .bool [pad_n_kh, pad_hd/2] "second_k_mask") _
+            = some (⟨fun idx => decide (idx.1.val < n_kh) && decide (idx.2.1.val < hd/2)⟩
+              : Tile .bool [pad_n_kh, pad_hd/2]) from by rw [evalOp_ref]; simp))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_⟩
+  · intro hqk idx hrow hcol
+    simp only [BlockState.writeMemTyped_real, Region.cast_id, BlockState.setReg_readMem]
+    -- peel K1, K0 (cross-region) interleaved with setReg stripping
+    rw [BlockState.foldl_writeMem_const_region_bool_masked_readMem_other (region := k_ptr) (R := q_ptr) (hRR := hqk)]
+    simp only [BlockState.setReg_readMem]
+    rw [BlockState.foldl_writeMem_const_region_bool_masked_readMem_other (region := k_ptr) (R := q_ptr) (hRR := hqk)]
+    simp only [BlockState.setReg_readMem]
+    -- peel Q1 (same region q_ptr, disjoint offsets second-half vs first-half)
+    rw [foldl_writeMem_same_region_disjoint_offsets_readMem_bool (region := q_ptr)
+          (off := s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val))]
+    · simp only [BlockState.setReg_readMem]
+      rw [BlockState.scatter_readback_prop_masked_nd_of_true (region := q_ptr)
+            (offsetFn := fun i : TileIndex [pad_n_qh, pad_hd/2] => s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val))
+            (P := fun i : TileIndex [pad_n_qh, pad_hd/2] => (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) = Bool.true)
+            (i := idx)
+            (hPi := by simp [hrow, hcol])
+            (h_no_collision := by
+              intro kk hPk heq
+              simp only [Bool.and_eq_true, decide_eq_true_eq] at hPk
+              have hcancel : kk.1.val * hd + kk.2.1.val = idx.1.val * hd + idx.2.1.val :=
+                Nat.add_left_cancel heq
+              have hkc := hPk.2
+              rcases lt_trichotomy kk.1.val idx.1.val with hlt | heqn | hgt
+              · exfalso
+                have hb : kk.1.val * hd + hd ≤ idx.1.val * hd := by
+                  have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hlt); simpa [Nat.succ_mul] using this
+                omega
+              · have hrr : kk.1 = idx.1 := Fin.ext heqn
+                have hcc0 : kk.2.1.val = idx.2.1.val := by
+                  have : kk.1.val * hd = idx.1.val * hd := by rw [heqn]
+                  omega
+                have hcc : kk.2.1 = idx.2.1 := Fin.ext hcc0
+                obtain ⟨k1,k2,k3⟩ := kk; obtain ⟨i1,i2,i3⟩ := idx
+                simp_all
+              · exfalso
+                have hb : idx.1.val * hd + hd ≤ kk.1.val * hd := by
+                  have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hgt); simpa [Nat.succ_mul] using this
+                omega)]
+      have h1 : decide (idx.1.val < n_qh) = Bool.true := by simp [hrow]
+      have h2 : decide (idx.2.1.val < hd/2) = Bool.true := by simp [hcol]
+      simp only [h1, h2, Bool.and_self, Bool.true_and, if_true, FloatDType.real_storeValue,
+        NumericDType.sub, NumericDType.mul]
+      rw [show (some (s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val))) : WithBot ℝ)
+            = ((s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val)) : ℝ) : WithBot ℝ) from rfl,
+          show (some (s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val)) : WithBot ℝ)
+            = ((s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val) : ℝ) : WithBot ℝ) from rfl,
+          show (some (s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2))) : WithBot ℝ)
+            = ((s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) : ℝ) : WithBot ℝ) from rfl,
+          show (some (s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val)) : WithBot ℝ)
+            = ((s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val) : ℝ) : WithBot ℝ) from rfl]
+      rw [WithBot.realMul_coe_coe, WithBot.realMul_coe_coe, WithBot.realSub_coe_coe, WithBot.unbotD_coe]
+
+    · -- disjointness: q first-half (read) ≠ q second-half (write) when both active
+      intro kk _ hp
+      have hkc : kk.2.1.val < hd/2 := by
+        by_contra h
+        simp only [decide_eq_true_eq, Bool.and_eq_true, decide_eq_true_eq] at hp
+        omega
+      have hhalf : hd/2 + hd/2 ≤ hd := by omega
+      intro heq
+      have hc : idx.1.val * hd + idx.2.1.val = kk.1.val * hd + kk.2.1.val + hd/2 := by omega
+      rcases lt_trichotomy idx.1.val kk.1.val with hlt | heqn | hgt
+      · have : idx.1.val * hd + hd ≤ kk.1.val * hd := by
+          have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hlt)
+          simpa [Nat.succ_mul] using this
+        omega
+      · rw [heqn] at hc; omega
+      · have : kk.1.val * hd + hd ≤ idx.1.val * hd := by
+          have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hgt)
+          simpa [Nat.succ_mul] using this
+        omega
+
+  · -- Q1 readback: read q second-half = q2*cos + q1*sin
+    intro hqk idx hrow hcol
+    simp only [BlockState.writeMemTyped_real, Region.cast_id, BlockState.setReg_readMem]
+    rw [BlockState.foldl_writeMem_const_region_bool_masked_readMem_other (region := k_ptr) (R := q_ptr) (hRR := hqk)]
+    simp only [BlockState.setReg_readMem]
+    rw [BlockState.foldl_writeMem_const_region_bool_masked_readMem_other (region := k_ptr) (R := q_ptr) (hRR := hqk)]
+    simp only [BlockState.setReg_readMem]
+    rw [BlockState.scatter_readback_prop_masked_nd_of_true (region := q_ptr)
+          (offsetFn := fun i : TileIndex [pad_n_qh, pad_hd/2] => s.pids 0 * q_row_stride + (i.1.val * hd + i.2.1.val + hd/2))
+          (P := fun i : TileIndex [pad_n_qh, pad_hd/2] => (decide (i.1.val < n_qh) && decide (i.2.1.val < hd/2)) = Bool.true)
+          (i := idx)
+          (hPi := by simp [hrow, hcol])
+          (h_no_collision := by
+            intro kk hPk heq
+            simp only [Bool.and_eq_true, decide_eq_true_eq] at hPk
+            have hcancel : kk.1.val * hd + kk.2.1.val = idx.1.val * hd + idx.2.1.val := by
+              have := Nat.add_left_cancel heq; omega
+            have hkc := hPk.2
+            rcases lt_trichotomy kk.1.val idx.1.val with hlt | heqn | hgt
+            · exfalso
+              have hb : kk.1.val * hd + hd ≤ idx.1.val * hd := by
+                have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hlt); simpa [Nat.succ_mul] using this
+              omega
+            · have hrr : kk.1 = idx.1 := Fin.ext heqn
+              have hcc0 : kk.2.1.val = idx.2.1.val := by
+                have : kk.1.val * hd = idx.1.val * hd := by rw [heqn]
+                omega
+              have hcc : kk.2.1 = idx.2.1 := Fin.ext hcc0
+              obtain ⟨k1,k2,k3⟩ := kk; obtain ⟨i1,i2,i3⟩ := idx
+              simp_all
+            · exfalso
+              have hb : idx.1.val * hd + hd ≤ kk.1.val * hd := by
+                have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hgt); simpa [Nat.succ_mul] using this
+              omega)]
+    have h1 : decide (idx.1.val < n_qh) = Bool.true := by simp [hrow]
+    have h2 : decide (idx.2.1.val < hd/2) = Bool.true := by simp [hcol]
+    simp only [h1, h2, Bool.and_self, Bool.true_and, if_true, FloatDType.real_storeValue,
+      NumericDType.add, NumericDType.mul]
+    rw [show (some (s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2))) : WithBot ℝ)
+          = ((s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) : ℝ) : WithBot ℝ) from rfl,
+        show (some (s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val)) : WithBot ℝ)
+          = ((s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val) : ℝ) : WithBot ℝ) from rfl,
+        show (some (s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val))) : WithBot ℝ)
+          = ((s.readMem q_ptr (s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val)) : ℝ) : WithBot ℝ) from rfl,
+        show (some (s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val)) : WithBot ℝ)
+          = ((s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val) : ℝ) : WithBot ℝ) from rfl]
+    rw [WithBot.realMul_coe_coe, WithBot.realMul_coe_coe, WithBot.realAdd_coe_coe, WithBot.unbotD_coe]
+  · -- K0 readback: read k first-half = k1*cos - k2*sin
+    intro idx hrow hcol
+    simp only [BlockState.writeMemTyped_real, Region.cast_id, BlockState.setReg_readMem]
+    rw [foldl_writeMem_same_region_disjoint_offsets_readMem_bool (region := k_ptr)
+          (off := s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val))]
+    · simp only [BlockState.setReg_readMem]
+      rw [BlockState.scatter_readback_prop_masked_nd_of_true (region := k_ptr)
+            (offsetFn := fun i : TileIndex [pad_n_kh, pad_hd/2] => s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val))
+            (P := fun i : TileIndex [pad_n_kh, pad_hd/2] => (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) = Bool.true)
+            (i := idx)
+            (hPi := by simp [hrow, hcol])
+            (h_no_collision := by
+              intro kk hPk heq
+              simp only [Bool.and_eq_true, decide_eq_true_eq] at hPk
+              have hcancel : kk.1.val * hd + kk.2.1.val = idx.1.val * hd + idx.2.1.val :=
+                Nat.add_left_cancel heq
+              have hkc := hPk.2
+              rcases lt_trichotomy kk.1.val idx.1.val with hlt | heqn | hgt
+              · exfalso
+                have hb : kk.1.val * hd + hd ≤ idx.1.val * hd := by
+                  have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hlt); simpa [Nat.succ_mul] using this
+                omega
+              · have hrr : kk.1 = idx.1 := Fin.ext heqn
+                have hcc0 : kk.2.1.val = idx.2.1.val := by
+                  have : kk.1.val * hd = idx.1.val * hd := by rw [heqn]
+                  omega
+                have hcc : kk.2.1 = idx.2.1 := Fin.ext hcc0
+                obtain ⟨k1,k2,k3⟩ := kk; obtain ⟨i1,i2,i3⟩ := idx
+                simp_all
+              · exfalso
+                have hb : idx.1.val * hd + hd ≤ kk.1.val * hd := by
+                  have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hgt); simpa [Nat.succ_mul] using this
+                omega)]
+      have h1 : decide (idx.1.val < n_kh) = Bool.true := by simp [hrow]
+      have h2 : decide (idx.2.1.val < hd/2) = Bool.true := by simp [hcol]
+      simp only [h1, h2, Bool.and_self, Bool.true_and, if_true, FloatDType.real_storeValue,
+        NumericDType.sub, NumericDType.mul]
+      rw [show (some (s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val))) : WithBot ℝ)
+            = ((s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val)) : ℝ) : WithBot ℝ) from rfl,
+          show (some (s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val)) : WithBot ℝ)
+            = ((s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val) : ℝ) : WithBot ℝ) from rfl,
+          show (some (s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2))) : WithBot ℝ)
+            = ((s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) : ℝ) : WithBot ℝ) from rfl,
+          show (some (s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val)) : WithBot ℝ)
+            = ((s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val) : ℝ) : WithBot ℝ) from rfl]
+      rw [WithBot.realMul_coe_coe, WithBot.realMul_coe_coe, WithBot.realSub_coe_coe, WithBot.unbotD_coe]
+    · -- disjointness: k first-half (read) ≠ k second-half (write)
+      intro kk _ hp
+      have hkc : kk.2.1.val < hd/2 := by
+        by_contra h
+        simp only [decide_eq_true_eq, Bool.and_eq_true, decide_eq_true_eq] at hp
+        omega
+      have hhalf : hd/2 + hd/2 ≤ hd := by omega
+      intro heq
+      have hc : idx.1.val * hd + idx.2.1.val = kk.1.val * hd + kk.2.1.val + hd/2 := by omega
+      rcases lt_trichotomy idx.1.val kk.1.val with hlt | heqn | hgt
+      · have : idx.1.val * hd + hd ≤ kk.1.val * hd := by
+          have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hlt); simpa [Nat.succ_mul] using this
+        omega
+      · rw [heqn] at hc; omega
+      · have : kk.1.val * hd + hd ≤ idx.1.val * hd := by
+          have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hgt); simpa [Nat.succ_mul] using this
+        omega
+  · -- K1 readback: read k second-half = k2*cos + k1*sin (K1 outermost)
+    intro idx hrow hcol
+    simp only [BlockState.writeMemTyped_real, Region.cast_id, BlockState.setReg_readMem]
+    rw [BlockState.scatter_readback_prop_masked_nd_of_true (region := k_ptr)
+          (offsetFn := fun i : TileIndex [pad_n_kh, pad_hd/2] => s.pids 0 * k_row_stride + (i.1.val * hd + i.2.1.val + hd/2))
+          (P := fun i : TileIndex [pad_n_kh, pad_hd/2] => (decide (i.1.val < n_kh) && decide (i.2.1.val < hd/2)) = Bool.true)
+          (i := idx)
+          (hPi := by simp [hrow, hcol])
+          (h_no_collision := by
+            intro kk hPk heq
+            simp only [Bool.and_eq_true, decide_eq_true_eq] at hPk
+            have hcancel : kk.1.val * hd + kk.2.1.val = idx.1.val * hd + idx.2.1.val := by
+              have := Nat.add_left_cancel heq; omega
+            have hkc := hPk.2
+            rcases lt_trichotomy kk.1.val idx.1.val with hlt | heqn | hgt
+            · exfalso
+              have hb : kk.1.val * hd + hd ≤ idx.1.val * hd := by
+                have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hlt); simpa [Nat.succ_mul] using this
+              omega
+            · have hrr : kk.1 = idx.1 := Fin.ext heqn
+              have hcc0 : kk.2.1.val = idx.2.1.val := by
+                have : kk.1.val * hd = idx.1.val * hd := by rw [heqn]
+                omega
+              have hcc : kk.2.1 = idx.2.1 := Fin.ext hcc0
+              obtain ⟨k1,k2,k3⟩ := kk; obtain ⟨i1,i2,i3⟩ := idx
+              simp_all
+            · exfalso
+              have hb : idx.1.val * hd + hd ≤ kk.1.val * hd := by
+                have := Nat.mul_le_mul_right hd (Nat.succ_le_of_lt hgt); simpa [Nat.succ_mul] using this
+              omega)]
+    have h1 : decide (idx.1.val < n_kh) = Bool.true := by simp [hrow]
+    have h2 : decide (idx.2.1.val < hd/2) = Bool.true := by simp [hcol]
+    simp only [h1, h2, Bool.and_self, Bool.true_and, if_true, FloatDType.real_storeValue,
+      NumericDType.add, NumericDType.mul]
+    rw [show (some (s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2))) : WithBot ℝ)
+          = ((s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd/2)) : ℝ) : WithBot ℝ) from rfl,
+        show (some (s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val)) : WithBot ℝ)
+          = ((s.readMem cos (s.pids 0 % sl * cos_row_stride + idx.2.1.val) : ℝ) : WithBot ℝ) from rfl,
+        show (some (s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val))) : WithBot ℝ)
+          = ((s.readMem k_ptr (s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val)) : ℝ) : WithBot ℝ) from rfl,
+        show (some (s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val)) : WithBot ℝ)
+          = ((s.readMem sin (s.pids 0 % sl * sin_row_stride + idx.2.1.val) : ℝ) : WithBot ℝ) from rfl]
+    rw [WithBot.realMul_coe_coe, WithBot.realMul_coe_coe, WithBot.realAdd_coe_coe, WithBot.unbotD_coe]
+
+/-! ## Genuine per-store forward correctness against `triton_rope_surface`
+
+Each theorem reads back one of the four Python-observable forward stores from the
+real `triton_rope_surface` kernel (`BACKWARD_PASS = false`) and shows the active
+lanes equal the genuine rotary closed form (`ropeForwardKernel{Q0,Q1,K0,K1}Spec`),
+NOT the kernel's own executed value. The host launch / padding choices remain the
+trusted boundary. -/
+
+private theorem rope_exec_eq (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (s sfin : BlockState)
+    (h : stepStmts (ropeForwardBody q_ptr k_ptr cos sin q_row_stride k_row_stride
+      cos_row_stride sin_row_stride sl n_qh n_kh hd pad_n_qh pad_n_kh pad_hd) s = some sfin) :
+    exec (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+      cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+      pad_hd BLOCK_SIZE Bool.false) s = some sfin := by
+  rw [exec]
+  rw [show (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+      cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+      pad_hd BLOCK_SIZE Bool.false).toAlgKernel.body
+      = ropeForwardBody q_ptr k_ptr cos sin q_row_stride k_row_stride
+          cos_row_stride sin_row_stride sl n_qh n_kh hd pad_n_qh pad_n_kh pad_hd
+      from triton_rope_surface_forward_body q_ptr k_ptr cos sin q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE]
+  exact h
+
+/-- Q first-half forward store correctness: `new_q_tile_1 = q1·cos − q2·sin`. -/
+theorem rope_transform_q0_forward_correct
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : q_ptr ≠ k_ptr)
+    (idx : TileIndex [pad_n_qh, pad_hd/2])
+    (hActive : activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx) :
+    (match exec (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+        pad_hd BLOCK_SIZE Bool.false) s with
+      | some s' => s'.readMem q_ptr (qFullFirstOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)
+      | none => (0.0 : ℝ)) =
+      ropeForwardKernelQ0Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2)
+        s q_ptr cos sin q_row_stride sl cos_row_stride sin_row_stride hd idx := by
+  obtain ⟨sfin, hstep, hq0, _, _, _⟩ := rope_forward_body_steps q_ptr k_ptr cos sin
+    q_row_stride k_row_stride cos_row_stride sin_row_stride sl n_qh n_kh hd
+    pad_n_qh pad_n_kh pad_hd s hundef
+  rw [rope_exec_eq (s := s) (sfin := sfin) (h := hstep)]
+  simp only [qFullFirstOffset, qFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
+    ropeForwardKernelQ0Spec]
+  rw [Nat.add_assoc (s.pids 0 * q_row_stride) (idx.1.val * hd) (idx.2.1.val),
+      show s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val) + hd / 2
+        = s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd / 2) by ring]
+  exact hq0 hqk idx hActive.1 hActive.2
+
+/-- Q second-half forward store correctness: `new_q_tile_2 = q2·cos + q1·sin`. -/
+theorem rope_transform_q1_forward_correct
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : q_ptr ≠ k_ptr)
+    (idx : TileIndex [pad_n_qh, pad_hd/2])
+    (hActive : activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx) :
+    (match exec (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+        pad_hd BLOCK_SIZE Bool.false) s with
+      | some s' => s'.readMem q_ptr (qFullSecondOffset (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) s q_row_stride hd idx)
+      | none => (0.0 : ℝ)) =
+      ropeForwardKernelQ1Spec (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2)
+        s q_ptr cos sin q_row_stride sl cos_row_stride sin_row_stride hd idx := by
+  obtain ⟨sfin, hstep, _, hq1, _, _⟩ := rope_forward_body_steps q_ptr k_ptr cos sin
+    q_row_stride k_row_stride cos_row_stride sin_row_stride sl n_qh n_kh hd
+    pad_n_qh pad_n_kh pad_hd s hundef
+  rw [rope_exec_eq (s := s) (sfin := sfin) (h := hstep)]
+  simp only [qFullFirstOffset, qFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
+    ropeForwardKernelQ1Spec]
+  rw [Nat.add_assoc (s.pids 0 * q_row_stride) (idx.1.val * hd) (idx.2.1.val),
+      show s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val) + hd / 2
+        = s.pids 0 * q_row_stride + (idx.1.val * hd + idx.2.1.val + hd / 2) by ring]
+  exact hq1 hqk idx hActive.1 hActive.2
+
+/-- K first-half forward store correctness: `new_k_tile_1 = k1·cos − k2·sin`. -/
+theorem rope_transform_k0_forward_correct
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (idx : TileIndex [pad_n_kh, pad_hd/2])
+    (hActive : activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx) :
+    (match exec (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+        pad_hd BLOCK_SIZE Bool.false) s with
+      | some s' => s'.readMem k_ptr (kFullFirstOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)
+      | none => (0.0 : ℝ)) =
+      ropeForwardKernelK0Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2)
+        s k_ptr cos sin k_row_stride sl cos_row_stride sin_row_stride hd idx := by
+  obtain ⟨sfin, hstep, _, _, hk0, _⟩ := rope_forward_body_steps q_ptr k_ptr cos sin
+    q_row_stride k_row_stride cos_row_stride sin_row_stride sl n_qh n_kh hd
+    pad_n_qh pad_n_kh pad_hd s hundef
+  rw [rope_exec_eq (s := s) (sfin := sfin) (h := hstep)]
+  simp only [kFullFirstOffset, kFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
+    ropeForwardKernelK0Spec]
+  rw [Nat.add_assoc (s.pids 0 * k_row_stride) (idx.1.val * hd) (idx.2.1.val),
+      show s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val) + hd / 2
+        = s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd / 2) by ring]
+  exact hk0 idx hActive.1 hActive.2
+
+/-- K second-half forward store correctness: `new_k_tile_2 = k2·cos + k1·sin`. -/
+theorem rope_transform_k1_forward_correct
+    (q_ptr k_ptr cos sin : RegionName)
+    (q_row_stride k_row_stride cos_row_stride sin_row_stride
+      sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (idx : TileIndex [pad_n_kh, pad_hd/2])
+    (hActive : activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx) :
+    (match exec (triton_rope_surface q_ptr k_ptr cos sin q_row_stride k_row_stride
+        cos_row_stride sin_row_stride sl bs n_qh n_kh hd pad_n_qh pad_n_kh
+        pad_hd BLOCK_SIZE Bool.false) s with
+      | some s' => s'.readMem k_ptr (kFullSecondOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)
+      | none => (0.0 : ℝ)) =
+      ropeForwardKernelK1Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2)
+        s k_ptr cos sin k_row_stride sl cos_row_stride sin_row_stride hd idx := by
+  obtain ⟨sfin, hstep, _, _, _, hk1⟩ := rope_forward_body_steps q_ptr k_ptr cos sin
+    q_row_stride k_row_stride cos_row_stride sin_row_stride sl n_qh n_kh hd
+    pad_n_qh pad_n_kh pad_hd s hundef
+  rw [rope_exec_eq (s := s) (sfin := sfin) (h := hstep)]
+  simp only [kFullFirstOffset, kFullSecondOffset, cosFullFirstOffset, sinFullFirstOffset,
+    ropeForwardKernelK1Spec]
+  rw [Nat.add_assoc (s.pids 0 * k_row_stride) (idx.1.val * hd) (idx.2.1.val),
+      show s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val) + hd / 2
+        = s.pids 0 * k_row_stride + (idx.1.val * hd + idx.2.1.val + hd / 2) by ring]
+  exact hk1 idx hActive.1 hActive.2
+
 
 /-! ## Combined one-row `o0` + `o1` rotary-style RoPE slice
 
