@@ -121,6 +121,31 @@ theorem load_bp_1d (rg : RegionName) (s : BlockState)
   · simp only [h, decide_false, if_false, BlockState.defaultCarrier, if_neg]
     rfl
 
+/-! ## Matmul (dot) element primitives -/
+
+/-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
+theorem withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) := by
+  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
+  exact (WithBot.coe_sum Finset.univ g).symm
+
+/-- **2D dot element lemma.** For all-`some` operand tiles `a : [M,K]`, `b : [K,N]`,
+the `(m, n)` cell of `dot a b` is `Σ_e a[m,e]·b[e,n]`. The generic matmul-readout
+primitive used for `b_o += q·h`, `b_s += q·k`, and `b_o += b_s·v`. -/
+theorem dot2d_elem {M K N : Nat} (a : Tile .real [M, K]) (b : Tile .real [K, N])
+    (m : Fin M) (n : Fin N) (fa fb : Fin K → ℝ)
+    (ha : ∀ e : Fin K, a.data (m, e, PUnit.unit) = some (fa e))
+    (hb : ∀ e : Fin K, b.data (e, n, PUnit.unit) = some (fb e)) :
+    (Tile.dot [] a b).data (m, n, PUnit.unit)
+      = some (Finset.univ.sum fun e : Fin K => fa e * fb e) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (a.data (m, e, PUnit.unit)) (b.data (e, n, PUnit.unit))))
+      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fa e * fb e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [ha e, hb e]; rfl)]
+  exact withBot_sum_some _
+
 /-! ## Kernel surface (faithful transcription) -/
 
 /-- Faithful transcription of `chunk_gla_simple.py`'s
