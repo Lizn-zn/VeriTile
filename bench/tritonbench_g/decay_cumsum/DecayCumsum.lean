@@ -1040,12 +1040,6 @@ noncomputable def decayPrepareSurfaceValue
   | some s' => s'.readMem Out offset
   | none => 0.0
 
-noncomputable def decayForwardSurfaceValue
-    (s : BlockState) (G GO Out : RegionName) (offset : Nat) : ℝ :=
-  match exec (fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0 2 4 8) s with
-  | some s' => s'.readMem Out offset
-  | none => 0.0
-
 noncomputable def decayBackwardSurfaceValue
     (s : BlockState)
     (DQInner DQInter DKInner DKInter Q K G DG Out : RegionName)
@@ -1074,26 +1068,6 @@ theorem prepare_qg_kg_surface_output_compute_correct
   subst s0
   intro i _hActive
   simp [decayPrepareSurfaceValue, hExec]
-
-theorem fwd_decay_cumsum_surface_output_compute_correct
-    (G GO Out : RegionName) (t_rel : Fin 2) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0 2 4 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (Out, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayForwardSurfaceValue s G GO Out
-          (offset s 64 8 t_rel.val 2 4 i)) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [fwd_decay_cumsum_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i _hActive
-  simp [decayForwardSurfaceValue, hExec]
 
 theorem bwd_decay_global_cumsum_surface_output_compute_correct
     (DQInner DQInter DKInner DKInter Q K G DG Out : RegionName)
@@ -1142,19 +1116,6 @@ theorem decay_cumsum_prepare_python_test_shape_surface_outputs_compute_correct
       t_rel s
   · exact prepare_qg_kg_surface_output_compute_correct Q K G QG KG KG
       t_rel s
-
-theorem decay_cumsum_forward_python_test_shape_surface_outputs_compute_correct
-    (G GO : RegionName) (t_rel : Fin 2) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0 2 4 8)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s 8 4)
-        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
-      (expected := fun i : Fin 4 =>
-        decayForwardSurfaceValue s G GO GO
-          (offset s 64 8 t_rel.val 2 4 i)) := by
-  exact fwd_decay_cumsum_surface_output_compute_correct G GO GO t_rel s
 
 theorem decay_cumsum_backward_python_test_shape_surface_outputs_compute_correct
     (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
@@ -1474,17 +1435,171 @@ abbrev decay_cumsum_prepare_python_test_shape_output_summary
   decay_cumsum_prepare_python_test_shape_surface_outputs_compute_correct
     Q K G QG KG t_rel s
 
-/-- `output_summary` for the Python forward decay-cumsum surface. -/
-abbrev decay_cumsum_forward_python_test_shape_output_summary
-    (G GO : RegionName) (t_rel : Fin 2) (s : BlockState) :=
-  decay_cumsum_forward_python_test_shape_surface_outputs_compute_correct
-    G GO t_rel s
-
 /-- `output_summary` for the Python backward decay-cumsum surface. -/
 abbrev decay_cumsum_backward_python_test_shape_output_summary
     (DQInner DQInter DKInner DKInter Q K G DG : RegionName)
     (t_rel : Fin 2) (s : BlockState) :=
   decay_cumsum_backward_python_test_shape_surface_outputs_compute_correct
     DQInner DQInter DKInner DKInter Q K G DG t_rel s
+
+/-- **Genuine forward closed form.** At chunk row `t_rel` and lane `i`, the
+forward decay-cumsum kernel writes the scaled prefix sum
+`1.44269504 * Σ_{k=0}^{t_rel} g[row k, lane i]` into `GO`. This is the honest
+`out[i] = decay-weighted cumulative sum` specification for the within-chunk
+axis-0 prefix scan (with the constant `inv_ln2 = 1.44269504` decay factor),
+*not* the executed kernel readback. -/
+noncomputable def fwdDecayClosed
+    (s : BlockState) (G : RegionName)
+    (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) (i : Fin BK) : ℝ :=
+  1.44269504 *
+    ∑ k : Fin (t_rel.val + 1),
+      s.readMem G (offset s s_qk_h DK k.val BT BK i)
+
+/-- **Row 0 forward closed form.** The full `fwd_decay_cumsum` surface writes
+`1.44269504 * g[row 0, lane i]` into `GO` at the row-0 offset — the genuine
+prefix-sum value for the first chunk row. -/
+theorem fwd_decay_cumsum_full_surface_row0_closed
+    (G GO : RegionName) (s : BlockState) (i : Fin 4) :
+    (exec (fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0 2 4 8) s).map
+      (·.readMem GO (offset s 64 8 0 2 4 i))
+      = some (if active s 8 4 i then fwdDecayClosed s G 64 8 2 4 0 i
+              else s.readMem GO (offset s 64 8 0 2 4 i)) := by
+  have hInjGO : Function.Injective
+      (fun idx : TileIndex [4] =>
+        s.pids 2 * 64 + s.pids 1 * 2 * 8 + s.pids 0 * 4 + idx.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp only [offset, baseOffset, elemIndex, active, fwdDecayClosed, Fin.val_zero,
+    Fin.sum_univ_one]
+  simp [exec, fwd_decay_cumsum_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
+        NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepForRangeAux.forRange_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge]
+  rw [BlockState.scatter_prop_masked_preserves_other_offset]
+  · simp only [BlockState.setReg_readMem]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInjGO (i, PUnit.unit)]
+    by_cases hc : s.pids 0 * 4 + (i : ℕ) < 8
+    · simp only [hc, if_true]
+      rw [mul_comm]
+      rfl
+    · simp only [hc, if_false, BlockState.setReg_readMem]
+  · rintro ⟨k, _⟩ _
+    simp only
+    omega
+
+/-- **Row 1 forward closed form.** The full `fwd_decay_cumsum` surface writes
+`1.44269504 * (g[row 0, lane i] + g[row 1, lane i])` into `GO` at the row-1
+offset — the genuine 2-term cumulative decay sum. (`G ≠ GO` lets the row-1
+`g` load read through the row-0 `GO` writeback.) -/
+theorem fwd_decay_cumsum_full_surface_row1_closed
+    (G GO : RegionName) (s : BlockState) (i : Fin 4) (hne : G ≠ GO) :
+    (exec (fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0 2 4 8) s).map
+      (·.readMem GO (offset s 64 8 1 2 4 i))
+      = some (if active s 8 4 i then fwdDecayClosed s G 64 8 2 4 1 i
+              else s.readMem GO (offset s 64 8 1 2 4 i)) := by
+  have hInjGO : Function.Injective
+      (fun idx : TileIndex [4] =>
+        s.pids 2 * 64 + s.pids 1 * 2 * 8 + s.pids 0 * 4 + idx.1.val + 8) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel (Nat.add_right_cancel hab))
+    rfl
+  simp only [offset, baseOffset, elemIndex, active, fwdDecayClosed, Fin.sum_univ_succ,
+    Fin.sum_univ_one, Fin.val_zero, Fin.val_succ]
+  simp [exec, fwd_decay_cumsum_surface, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, Tile.ptrAdd, NumericDType.add,
+        NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        stepForRangeAux.forRange_unfold, stepForRangeAux.step_lt,
+        stepForRangeAux.step_ge]
+  rw [show s.pids 2 * 64 + (s.pids 1 * 2 + 1) * 8 + s.pids 0 * 4 + (i : ℕ)
+        = s.pids 2 * 64 + s.pids 1 * 2 * 8 + s.pids 0 * 4 + (i : ℕ) + 8 from by ring]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hInjGO (i, PUnit.unit)]
+  by_cases hc : s.pids 0 * 4 + (i : ℕ) < 8
+  · simp only [hc, if_true]
+    rw [BlockState.scatter_prop_masked_preserves_other_region
+          (P := fun k : TileIndex [4] => s.pids 0 * 4 + k.1.val < 8) (h_ne := hne)]
+    simp only [BlockState.setReg_readMem, Option.map₂_some_some]
+    show (s.readMem G _ * 1.44269504) + (s.readMem G _ * 1.44269504) = _
+    ring
+  · simp only [hc, if_false, BlockState.setReg_readMem]
+    rw [BlockState.scatter_prop_masked_preserves_other_offset]
+    · simp only [BlockState.setReg_readMem]
+    · rintro ⟨k, _⟩ _
+      simp only
+      omega
+
+/-- **Unified forward closed form (both chunk rows).** For either loop row
+`t_rel : Fin 2`, the executed `fwd_decay_cumsum` surface readback at the row's
+`GO` offset equals the genuine decay-cumsum closed form
+`fwdDecayClosed = 1.44269504 * Σ_{k ≤ t_rel} g[row k, lane i]` on active lanes.
+This certifies the cross-step cumulative fold of the `range(BT)` loop against a
+real (non self-referential) prefix-sum specification. -/
+theorem fwd_decay_cumsum_full_surface_closed
+    (G GO : RegionName) (s : BlockState) (t_rel : Fin 2) (i : Fin 4)
+    (hne : G ≠ GO) :
+    (exec (fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0 2 4 8) s).map
+      (·.readMem GO (offset s 64 8 t_rel.val 2 4 i))
+      = some (if active s 8 4 i then fwdDecayClosed s G 64 8 2 4 t_rel i
+              else s.readMem GO (offset s 64 8 t_rel.val 2 4 i)) := by
+  match t_rel with
+  | ⟨0, _⟩ => exact fwd_decay_cumsum_full_surface_row0_closed G GO s i
+  | ⟨1, _⟩ => exact fwd_decay_cumsum_full_surface_row1_closed G GO s i hne
+
+/-- **Genuine forward compute-correctness.** The full `fwd_decay_cumsum` surface
+realizes the honest decay-cumsum closed form `fwdDecayClosed` (the scaled
+within-chunk prefix sum) at every active `GO` lane of loop row `t_rel`. The
+`expected` here is a specification independent of the kernel's own output
+(no self-reference to the executed readback). -/
+theorem fwd_decay_cumsum_surface_closed_compute_correct
+    (G GO : RegionName) (t_rel : Fin 2) (s : BlockState) (hne : G ≠ GO) :
+    ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0 2 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 =>
+        fwdDecayClosed s G 64 8 2 4 t_rel i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fwd_decay_cumsum_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := fwd_decay_cumsum_full_surface_closed G GO s t_rel i hne
+  rw [hExec] at h
+  simp only [Option.map_some] at h
+  rw [Option.some.injEq] at h
+  show s'.readMem GO (offset s 64 8 t_rel.val 2 4 i) = _
+  rw [h, if_pos hActive]
+
+/-- `output_summary` for the Python forward decay-cumsum surface, against the
+**genuine closed form**. This is the non self-referential replacement for the
+proof-gap `decay_cumsum_forward_python_test_shape_output_summary`. -/
+theorem decay_cumsum_forward_python_test_shape_closed_output_summary
+    (G GO : RegionName) (t_rel : Fin 2) (s : BlockState) (hne : G ≠ GO) :
+    ComputeCorrect.Realizes
+      (kernel := fwd_decay_cumsum_surface G GO 64 32 8 2 2 4 1.0 2 4 8)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s 8 4)
+        (fun i => (GO, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 =>
+        fwdDecayClosed s G 64 8 2 4 t_rel i) :=
+  fwd_decay_cumsum_surface_closed_compute_correct G GO t_rel s hne
+
+/-- `output_summary` for the Python forward decay-cumsum surface, certified
+against the **genuine** decay-cumsum closed form `fwdDecayClosed`. This is the
+non self-referential replacement closing the `decay-cumsum-scan-fold` proof
+gap for the forward kernel. -/
+abbrev decay_cumsum_forward_python_test_shape_output_summary
+    (G GO : RegionName) (t_rel : Fin 2) (s : BlockState) (hne : G ≠ GO) :=
+  decay_cumsum_forward_python_test_shape_closed_output_summary G GO t_rel s hne
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum
