@@ -164,6 +164,12 @@ theorem matmul_leaky_relu_surface_toAlgorithm_supported
 
 /-! ## exec-stepping helpers -/
 
+@[simp] theorem evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
 @[simp] theorem evalOp_remap {dtype inShape outShape}
     (map : TileIndex outShape → TileIndex inShape) (a : Op dtype inShape) (s : BlockState) :
     evalOp (.remap outShape map a) s = (do
@@ -885,5 +891,79 @@ theorem mlr_step (A B : RegionName) (s0 : BlockState)
   · intro rg o; simp [hsk2, hsk1, hsk, hundef]
   · show _ = s0.mem
     rw [← hmem]; rfl
+
+/-! ## Post-loop: activation + fp16 cast + masked store -/
+
+/-- The 7 post-loop statements: leaky-ReLU activation, fp16 cast, output index
+vectors, output pointers, output mask, masked fp16 store. -/
+def mlrPostBody (C : RegionName) (M N SCM SCN BM BN : Nat) : List Stmt :=
+  [ Stmt.assign .real [BM, BN] "accumulator"
+      ((Op.ge ComparableDType.real Broadcast.scalarR (Op.ref .real [BM, BN] "accumulator")
+            (Op.const 0.0)).where
+        (Op.ref .real [BM, BN] "accumulator")
+        (Op.mul .real Broadcast.scalarL (Op.const 1e-2) (Op.ref .real [BM, BN] "accumulator"))),
+    Stmt.assign .fp16 [BM, BN] "c"
+      (Op.castFloat FloatDType.real FloatDType.fp16 (Op.ref .real [BM, BN] "accumulator")),
+    Stmt.assign .nat [BM] "offs_cm"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM)) (Op.arange BM)),
+    Stmt.assign .nat [BN] "offs_cn"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN)) (Op.arange BN)),
+    Stmt.assign .ptr [BM, BN] "c_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase C)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat SCM) (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat SCN) (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn"))))),
+    Stmt.assign .bool [BM, BN] "c_mask"
+      (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")) (Op.constNat M))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn")) (Op.constNat N))),
+    Stmt.store .fp16 [BM, BN] (.ptr (Op.ref .ptr [BM, BN] "c_ptrs")) (Op.ref .fp16 [BM, BN] "c")
+      (.mask (Op.ref .bool [BM, BN] "c_mask")) ]
+
+/-- The kernel body decomposes as prefix (15) ++ [K-loop, post-statements]. The
+K-loop is a `forRangeDyn` whose stop op is `cdiv K BK`. By `rfl`. -/
+theorem mlr_body_split (A B C : RegionName)
+    (M N SAM SAK SBK SBN SCM SCN BM BN BK GROUP numKBlocks : Nat) :
+    (matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK GROUP).toAlgKernel.body
+      = (matmul_leaky_relu_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN BM BN BK GROUP).toAlgKernel.body.take 15
+        ++ (Stmt.forRangeDyn "k" (Op.constNat 0)
+              (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.constNat (BK * numKBlocks)) (Op.constNat BK)) (Op.constNat 1)) (Op.constNat BK))
+              (Op.constNat 1) (mlrLoopBody BM BN BK (BK * numKBlocks) SAK SBK)
+            :: mlrPostBody C M N SCM SCN BM BN) := by
+  rfl
+
+/-- **Activation eval**: `where(acc ≥ 0, acc, 0.01·acc)` applied to an
+all-`some` real tile is the cell-wise leaky-ReLU. -/
+theorem activation_eval (BM BN : Nat) (s : BlockState) (g : TileIndex [BM, BN] → ℝ)
+    (hacc : s.regs .real [BM, BN] "accumulator" = some ⟨fun idx => some (g idx)⟩) :
+    evalOp ((Op.ge ComparableDType.real Broadcast.scalarR (Op.ref .real [BM, BN] "accumulator")
+            (Op.const 0.0)).where
+        (Op.ref .real [BM, BN] "accumulator")
+        (Op.mul .real Broadcast.scalarL (Op.const 1e-2) (Op.ref .real [BM, BN] "accumulator"))) s
+      = some (⟨fun idx : TileIndex [BM, BN] => some (leakyrelu (g idx))⟩ : Tile .real [BM, BN]) := by
+  simp only [evalOp_where, evalOp_ge, evalOp_mul, evalOp_const, evalOp_ref, hacc, Option.bind,
+    Option.bind_some, Option.bind_eq_bind]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.scalar, Tile.data, Broadcast.leftIndex,
+    Broadcast.rightIndex]
+  have hge := ComparableDType.real_ge_eq_true (some (g idx)) (some (0.0:ℝ))
+  have hbridge : ((((g idx:ℝ)) : WithBot ℝ) ≥ (((0.0:ℝ)) : WithBot ℝ)) ↔ (0:ℝ) ≤ g idx := by
+    rw [ge_iff_le, WithBot.coe_le_coe]; norm_num
+  by_cases h : (0:ℝ) ≤ g idx
+  · have hb : ComparableDType.real.ge (some (g idx)) (some 0.0) = Bool.true := hge.mpr (hbridge.mpr h)
+    rw [if_pos hb]
+    simp only [leakyrelu, ge_iff_le, if_pos h]
+  · have hb : ComparableDType.real.ge (some (g idx)) (some 0.0) = Bool.false := by
+      cases hbb : ComparableDType.real.ge (some (g idx)) (some 0.0)
+      · rfl
+      · exact absurd (h (hbridge.mp (hge.mp hbb))) (by simp)
+    rw [if_neg (by rw [hb]; simp)]
+    simp only [leakyrelu, ge_iff_le, if_neg h, Tile.bop_data, Broadcast.leftIndex,
+      Broadcast.rightIndex, Tile.scalar, Tile.data, NumericDType.mul, WithBot.realMul, Option.map₂,
+      Option.bind, Option.map]
 
 end VeriTile.Bench.TritonBenchG.MatmulLeakyrelu
