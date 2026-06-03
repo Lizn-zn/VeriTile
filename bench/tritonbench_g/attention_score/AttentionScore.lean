@@ -36,7 +36,7 @@ is the masked-`exp2` query-row column sum
 `o[j] = Σ_{c<2} Σ_{i<64} mask(i,j,c)·exp2(sm_scale·log2e·⟨Q_{c·64+i},K_{·,start_n·64+j}⟩ − M[c·64+i])`,
 defined directly over the input buffers `Q`/`K`/`M` with no reference to the
 kernel's own `exec`. It is derived lane-by-lane from the elaborated `@triton.jit`
-body (the real-valued `dist`/`mask`, the `exp2`/`where`/`reduceSum` recipe).
+body (the nat-truncated `dist`/`mask`, the `exp2`/`where`/`reduceSum` recipe).
 The control-flow stepping lemmas (`stepStmt_ifThenElse_true` etc.) that discharge
 the lowered `IS_EVEN_M`/`SLIDING_WINDOW`/`IS_EVEN_N` guards are proved
 sorry-free.  Connecting `producedAttentionScoreCase1OutValue` to
@@ -507,11 +507,13 @@ case-1 kernel produces — a closed form over the input buffers `Q`, `K`, `M`, w
 **no reference to the kernel's own execution**. They mirror, lane-by-lane, the
 `@triton.jit` body extracted via `#print` of the elaborated surface:
 
-* `dist` is real-valued: the inner key/query offset difference
-  `arange[:,None] − arange[None,:]` is the *nat-truncated* `(i − j : ℕ)` cast to
-  `ℝ` (`Op.sub .nat … |>.natToReal`), then `+ start_m − start_n·BLOCK_N + 0` in
-  `ℝ` (so it may be negative).  For query block `c ∈ {0,1}`, `start_m = c·64`.
-* `mask(i,j,c) = (0 ≤ dist) ∧ (dist < 64)` (both `ℝ` comparisons).
+* `dist` is **nat-valued** (matching the elaborated body, whose `dist` op chain is
+  entirely `Op.sub .nat`/`Op.add .nat`): the difference `arange[:,None] −
+  arange[None,:]` is `(i − j : ℕ)`, then `+ start_m − start_n·BLOCK_N + 0` all in
+  `ℕ` (nat-truncated, so never negative). For query block `c ∈ {0,1}`,
+  `start_m = c·64`.
+* `mask(i,j,c) = (0 ≤ dist) ∧ (dist < 64)` (both `ℕ` comparisons; the `0 ≤ dist`
+  conjunct is vacuous, so effectively `dist < 64`).
 * `qk[i,j] = exp2( sm_scale · log2e · rawScore(c·64+i, start_n·64+j) − M[c·64+i] )`
   with `exp2 x = Real.exp (x · log 2) = pow2 x` and
   `log2e = 1.4426950408889634`.
@@ -535,16 +537,27 @@ def case1QKOffset (s : BlockState) : Nat :=
 /-- The `M` (precomputed max) offset for query row `r`: `off_hz·128 + r`. -/
 def case1MOffset (s : BlockState) (r : Nat) : Nat := s.pids 1 * 128 + r
 
-/-- Real-valued sliding-window distance for in-block query row `i`, key column
-`j`, query block `c`: `((i − j : ℕ) : ℝ) + c·64 − start_n·64`. -/
-noncomputable def case1Dist (s : BlockState) (c i j : Nat) : ℝ :=
-  ((i - j : ℕ) : ℝ) + (c * 64 : ℝ) - (s.pids 0 * 64 : ℝ)
+/-- Sliding-window distance for in-block query row `i`, key column `j`, query
+block `c`, matching the **elaborated kernel** which computes `dist` in `ℕ` (the
+`tl.arange[:,None] − tl.arange[None,:] + start_m − start_n·64 + 0` chain lowers to
+`Op.sub .nat`/`Op.add .nat`, i.e. *nat-truncated* subtraction): with
+`start_m = c·64`,
+`dist = ((((i − j) + c·64) − start_n·64) + 0)` over `ℕ`.
 
-/-- Sliding-window mask (case 1, non-complement): `0 ≤ dist ∧ dist < 64`. -/
-noncomputable def case1Mask (s : BlockState) (c i j : Nat) : Prop :=
+Note: this is genuinely nat-truncated, *not* the real-valued form — for
+`start_n ≥ 1` the two differ (e.g. `i = j = 0, c = 0, start_n = 1` gives nat
+`dist = 0` but real `dist = −64`). The kernel masks-in this cell, so the nat form
+is the faithful spec. -/
+def case1Dist (s : BlockState) (c i j : Nat) : Nat :=
+  (((i - j) + c * 64) - s.pids 0 * 64) + 0
+
+/-- Sliding-window mask (case 1, non-complement): `dist ≥ 0 ∧ dist < 64` over `ℕ`
+(matching the elaborated `boolAnd (ge dist 0) (lt dist 64)`; the `ge … 0` conjunct
+is vacuously true in `ℕ`, so this is `dist < 64`). -/
+def case1Mask (s : BlockState) (c i j : Nat) : Prop :=
   0 ≤ case1Dist s c i j ∧ case1Dist s c i j < 64
 
-noncomputable instance (s : BlockState) (c i j : Nat) :
+instance (s : BlockState) (c i j : Nat) :
     Decidable (case1Mask s c i j) := by unfold case1Mask; infer_instance
 
 /-- Per-cell masked softmax weight `qk[i,j]` for query block `c`:
