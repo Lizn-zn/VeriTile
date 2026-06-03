@@ -12,3 +12,4 @@ import VeriTile.Triton.Semantics.TiledIndexing
 import VeriTile.Triton.Semantics.MaskedReduction
 import VeriTile.Triton.Semantics.BroadcastReshape
 import VeriTile.Triton.Semantics.AtomicReduction
+import VeriTile.Triton.Semantics.BlockPtrEval
