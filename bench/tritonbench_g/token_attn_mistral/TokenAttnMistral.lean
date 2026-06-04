@@ -642,6 +642,52 @@ theorem mistral_voffs_eval (s : BlockState) (BD kvh stride_vh stride_vd : Nat)
   ext idx
   simp [Tile.bop, Tile.vec, NumericDType.mul, NumericDType.add]
 
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **`v_loc_off` recipe** (the `Req_to_tokens` gather base
+`v_loc_off = cur_batch_req_idx·stride_b + (cur_batch_start_index + offs_n)·stride_s`,
+shape `[BLOCK_N]`). Lane `j` holds `reqIdx·stride_b + (startIdx + j)·stride_s`. -/
+theorem mistral_vloc_off_eval (s : BlockState) (BN reqIdx startIdx stride_b stride_s : Nat)
+    (hreq : s.regs .nat [] "cur_batch_req_idx" = some (Tile.scalar reqIdx))
+    (hsi : s.regs .nat [] "cur_batch_start_index" = some (Tile.scalar startIdx))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
+    evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch_req_idx") (Op.constNat stride_b))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_start_index")
+            (Op.ref .nat [BN] "offs_n"))
+          (Op.constNat stride_s))) s
+      = some (⟨fun idx : TileIndex [BN] =>
+          reqIdx * stride_b + (startIdx + idx.1.val) * stride_s⟩ : Tile .nat [BN]) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, hreq, hsi, hn,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.bop, Tile.vec, NumericDType.mul, NumericDType.add]
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **`p_offs` recipe** (the `Prob` load base
+`p_offs = cur_head·stride_ph + (cur_batch_in_all_start_index + offs_n)·stride_pbs`,
+shape `[BLOCK_N]`). Lane `j` holds `head·stride_ph + (attStart + j)·stride_pbs`. -/
+theorem mistral_poffs_eval (s : BlockState) (BN head attStart stride_ph stride_pbs : Nat)
+    (hhead : s.regs .nat [] "cur_head" = some (Tile.scalar head))
+    (has : s.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar attStart))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
+    evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_ph))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+            (Op.ref .nat [BN] "offs_n"))
+          (Op.constNat stride_pbs))) s
+      = some (⟨fun idx : TileIndex [BN] =>
+          head * stride_ph + (attStart + idx.1.val) * stride_pbs⟩ : Tile .nat [BN]) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, hhead, has, hn,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.bop, Tile.vec, NumericDType.mul, NumericDType.add]
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
