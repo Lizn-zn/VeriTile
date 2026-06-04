@@ -449,6 +449,40 @@ noncomputable def tokenAttnLlama2SurfaceValue
   | some s' => s'.readMem Att_Out offset
   | none => 0.0
 
+/-! ### Remaining bridge (banked)
+
+`tokenAttnLlama2ClosedForm` is the genuine, self-reference-free score spec.  The
+remaining step is the surface readback bridge
+
+```
+exec (token_attn_llama2_surface …) s = some s' →
+  s'.readMem Att_Out (outOffset … i) =
+    tokenAttnLlama2ClosedForm … i
+```
+
+Routing/decode notes for that bridge:
+
+* The kernel is the **plain QK score / reduce** route (no online softmax): the
+  genuine spec is the direct `Σ_d q·k` dot, reusing the `reduceSum_some`
+  (`Tile.reduceSum`) machinery as in `batched_vecmat_one_row_block_correct`,
+  followed by `sm_scale` scaling and the masked store readback
+  (`BlockState.scatter_readback_prop_masked_nd`).
+* Exec assembly: `exec` reduces to `stepStmts (…).toAlgKernel.body s` by `rfl`
+  (the `ComputeStmt → Stmt` lowering of every `ComputeExpr.alg` body statement
+  is definitional).  Decode the 13 prelude assigns and the
+  `forRangeDyn "start_mark" 0 block_mask 1 …` loop via
+  `stepStmts.cons_some (stepStmt_assign_eq_some (…_op_eval …))`,
+  `stepForRangeAux.forRangeDyn_unfold`, and a `by_cases` on
+  `blockActive` feeding `stepForRangeAux.step_one_iter` (block_mask = 1, one
+  iteration) versus `stepForRangeAux.step_ge` (block_mask = 0, empty loop →
+  `Att_Out` preserved).
+* The loop body needs per-statement `*_op_eval` recipes for the `B_Loc` gather
+  (`evalOp_load_region` masked, giving `kLoc`), the 2D `off_k`/`k` masked gather
+  (`kOffset`), the `tl.sum(q[None,:]·k, 1)` dot reduction (`reduceSum_some`
+  giving `tokenAttnLlama2DotScore`), the `sm_scale` mul, and the masked store
+  (`scatter_readback_prop_masked_nd` with `hOutInj`).
+-/
+
 theorem token_attn_llama2_surface_output_compute_correct
     (Q K : RegionName) (sm_scale : ℝ)
     (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
