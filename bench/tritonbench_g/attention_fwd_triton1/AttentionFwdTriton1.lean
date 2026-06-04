@@ -1706,4 +1706,33 @@ theorem aft1_load_bv_eq (s sin' : BlockState) (V : RegionName) (c : Nat)
   ext idx; obtain ⟨tk, d, u⟩ := idx
   simp only [aft1BvTile, aft1VCell, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one]
 
+/-- **Recurrent-state step.** `aft1RecState (c+1) = aft1RecState c + Σ_tk Kᵀ·V`. -/
+theorem aft1RecState_succ (s : BlockState) (K V : RegionName) (c : Nat) (d' d : Fin 128) :
+    aft1RecState s K V (c + 1) d' d
+      = aft1RecState s K V c d' d
+        + ∑ tk : Fin 32, aft1KCell s K c d'.val tk.val * aft1VCell s V c tk.val d.val := by
+  simp [aft1RecState, Finset.sum_range_succ]
+
+/-- Eval of `b_s = dot(b_q, b_k)` at the literal `[32,32]` shape = `aft1BsTile`. -/
+theorem aft1_bs_eq (s sin' : BlockState) (Q K : RegionName) (c : Nat)
+    (hq : sin'.regs .real [32, 128] "b_q" = some (aft1BqTile s Q c))
+    (hk : sin'.regs .real [128, 32] "b_k" = some (aft1BkTile s K c)) :
+    @evalOp .real [32, 32]
+        (@Op.dot [] 32 128 32 (Op.ref .real [32, 128] "b_q") (Op.ref .real [128, 32] "b_k")) sin'
+      = some (aft1BsTile s Q K c) := by
+  exact aft1_dot_op_eval sin' "b_q" "b_k" (aft1BqTile s Q c) (aft1BkTile s K c)
+    (fun t e => aft1QCell s Q c t.val e.val) (fun e tk => aft1KCell s K c e.val tk.val)
+    hq hk (fun t e => rfl) (fun e tk => rfl)
+
+/-- Eval of `b_o = dot(b_s, b_v)` at the literal `[32,128]` shape = `aft1BoLocalTile`. -/
+theorem aft1_bo_local_eq (s sin' : BlockState) (Q K V : RegionName) (c : Nat)
+    (hs : sin'.regs .real [32, 32] "b_s" = some (aft1BsTile s Q K c))
+    (hv : sin'.regs .real [32, 128] "b_v" = some (aft1BvTile s V c)) :
+    @evalOp .real [32, 128]
+        (@Op.dot [] 32 32 128 (Op.ref .real [32, 32] "b_s") (Op.ref .real [32, 128] "b_v")) sin'
+      = some (aft1BoLocalTile s Q K V c) := by
+  exact aft1_dot_op_eval sin' "b_s" "b_v" (aft1BsTile s Q K c) (aft1BvTile s V c)
+    (fun t tk => ∑ e : Fin 128, aft1QCell s Q c t.val e.val * aft1KCell s K c e.val tk.val)
+    (fun tk d => aft1VCell s V c tk.val d.val) hs hv (fun t tk => rfl) (fun tk d => rfl)
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
