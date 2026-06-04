@@ -2240,6 +2240,36 @@ theorem ctx_dot_score_cell
         = (fun e : Fin 128 => ((qf i e * kf j e : ℝ) : WithBot ℝ)) from rfl,
     ← WithBot.coe_sum]; rfl
 
+/-- **The kernel's `qkT` cell is `some (ctxQkCell …)`.** The `tl.where(mask, qk·sm,
+-1e8)` register, with the loaded `q`/`k` reading `qf`/`kf`, has cell `(i,j)`
+equal to the masked `ctxQkCell`. -/
+theorem ctx_qkT_cell (sm : ℝ) (SN plen : Nat) (gOM : Fin 128 → Nat)
+    (qtile kloadT : Tile .real [128, 128]) (qf kf : Fin 128 → Fin 128 → ℝ)
+    (hq : ∀ i e : Fin 128, qtile.data (i, e, PUnit.unit) = some (qf i e))
+    (hk : ∀ j e : Fin 128, kloadT.data (e, j, PUnit.unit) = some (kf j e))
+    (i j : Fin 128) :
+    (Tile.select
+        (⟨fun idx : TileIndex [128, 128] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [128, 128])
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR (Tile.dot [] qtile kloadT)
+          (Tile.scalar (some sm)))
+        (⟨fun _ : TileIndex [128, 128] => some (0.0 - 10e7 : ℝ)⟩ : Tile .real [128, 128])).data
+      (i, j, PUnit.unit)
+      = some (ctxQkCell sm SN plen gOM qf kf i j) := by
+  rw [Tile.select_data, ctxQkCell]
+  have hsel : (⟨fun idx : TileIndex [128, 128] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [128, 128]).data (i, j, PUnit.unit)
+      = decide (SN + j.val ≤ gOM i + plen) := rfl
+  by_cases h : SN + j.val ≤ gOM i + plen
+  · rw [hsel, if_pos h]
+    simp only [decide_eq_true_eq.mpr h, if_true]
+    rw [Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul]
+    rw [ctx_dot_score_cell qtile kloadT i j qf kf (hq i) (hk j)]
+    show Option.map₂ (· * ·) _ _ = _
+    simp only [Tile.scalar_data, Option.map₂]
+    refine congrArg some ?_; ring
+  · rw [hsel, if_neg h]
+    simp only [decide_eq_false_iff_not.mpr h, Bool.false_eq_true, if_false]
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
