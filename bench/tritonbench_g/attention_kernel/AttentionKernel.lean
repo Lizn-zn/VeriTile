@@ -650,6 +650,45 @@ theorem lPgK_eq_lPg {Mq : Nat} {BN nB : Nat}
     have ihc := ih (by omega)
     simp only [lPgK, lPg, dif_pos hc, ihc]
 
+/-! ### Loop invariant skeleton
+
+The `forRangeDyn` loop-invariant `Prop` carried across key blocks. The counter `i`
+ranges over `0, BLOCK_N, 2·BLOCK_N, …` (`c = i / BLOCK_N` blocks consumed); the
+streaming registers `m_i`/`l_i`/`acc` equal the generalized partials
+`mPg`/`lPgK`/`oPg` of the genuine score `fscore` and value tile `vFlat` over the
+first `c` blocks (kernel seed `l_i = 0`, hence `lPgK` not `lPg`), and the K/V
+block pointers have advanced `c` column/row steps of `BLOCK_N`. The loop-invariant
+registers (`q` pre-scaled+loaded, `b1`, `b_offset`, `start_m`/`off_hz`) are fixed.
+`preLoop` establishes `attnKernelInvariant … 0`, `attn_step` advances it by one
+block, and `attn_postLoop` reads the closed form off `… numKVBlocks` via
+`attentionKernelSpec_eq_ratio`. -/
+noncomputable def attnKernelInvariant
+    (s0 : BlockState) (Q K V B0 Out : RegionName) (sm_scale : ℝ)
+    (q_offset kv_offset b_offset
+      BLOCK_M BLOCK_N HEAD_DIM P_SEQ BIAS_LAST_SIZE stride_b0m stride_kk stride_kn
+      stride_vk stride_vn numKVBlocks : Nat)
+    (start_m : Nat) (i : Nat) (s : BlockState) : Prop :=
+  let nB := numKVBlocks; let c := i / BLOCK_N; let N_CTX := BLOCK_N * numKVBlocks
+  let score := fscore s0 Q K B0 sm_scale q_offset kv_offset b_offset
+    BLOCK_M BLOCK_N HEAD_DIM N_CTX BIAS_LAST_SIZE stride_b0m start_m
+  let V' := vFlat s0 V kv_offset HEAD_DIM N_CTX
+  s.pids = s0.pids ∧ i = c * BLOCK_N ∧ c ≤ nB ∧
+  (s.regs .real [BLOCK_M] "m_i" = some ⟨fun r : TileIndex [BLOCK_M] => mPg BLOCK_N nB score r.1 c⟩) ∧
+  (s.regs .real [BLOCK_M] "l_i" = some ⟨fun r : TileIndex [BLOCK_M] => ((lPgK score r.1 c : ℝ) : WithBot ℝ)⟩) ∧
+  (s.regs .real [BLOCK_M, HEAD_DIM] "acc" = some ⟨fun idx : TileIndex [BLOCK_M, HEAD_DIM] =>
+        ((oPg score V' idx.1 idx.2.1 c : ℝ) : WithBot ℝ)⟩) ∧
+  (s.regs .blockPtr [HEAD_DIM, BLOCK_N] "K_block_ptr" = some
+      (⟨fun _ : TileIndex [HEAD_DIM, BLOCK_N] =>
+        { region := K, baseOffset := kv_offset,
+          parentShape := [HEAD_DIM, N_CTX + P_SEQ], blockShape := [HEAD_DIM, BLOCK_N],
+          strides := [stride_kk, stride_kn], offsets := [0, c * BLOCK_N] }⟩)) ∧
+  (s.regs .blockPtr [BLOCK_N, HEAD_DIM] "V_block_ptr" = some
+      (⟨fun _ : TileIndex [BLOCK_N, HEAD_DIM] =>
+        { region := V, baseOffset := kv_offset,
+          parentShape := [N_CTX + P_SEQ, HEAD_DIM], blockShape := [BLOCK_N, HEAD_DIM],
+          strides := [stride_vk, stride_vn], offsets := [c * BLOCK_N, 0] }⟩)) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
 /-! ### preLoop prefix (deterministic prologue → invariant base seeds)
 
 The first ten prologue statements are deterministic (no loads): the four scalar
