@@ -454,6 +454,44 @@ noncomputable def partialAcc
         stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num
         sliding_window n d
 
+/-- Once the window loop has run past `cur_att_seq_len` (the loop's existential
+final counter `final ≥ attSeqLen`, here `K ≥ attSeqLen`), the partial PV
+accumulator over `range K` coincides with the genuine closed form
+`tokenAttnMistralPVValue`: tokens `n ≥ attSeqLen` are masked to `p = 0`, so they
+contribute nothing, and the range can be cut back to `attSeqLen`. -/
+theorem partialAcc_eq_PVValue
+    (s : BlockState) (Prob V : RegionName)
+    (Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd kv_group_num sliding_window : Nat)
+    (K d : Nat) (hK : attSeqLen s B_Att_Seqlen ≤ K) :
+    partialAcc s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+        B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+        stride_pbs stride_vbs stride_vh stride_vd kv_group_num sliding_window K d
+      = tokenAttnMistralPVValue s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
+          B_Seqlen B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+          stride_ph stride_pbs stride_vbs stride_vh stride_vd kv_group_num
+          sliding_window d := by
+  unfold partialAcc tokenAttnMistralPVValue
+  -- Split range K = range attSeqLen ∪ [attSeqLen, K); the tail is all zero.
+  rw [← Finset.sum_range_add_sum_Ico _ hK]
+  have htail : ∑ n ∈ Finset.Ico (attSeqLen s B_Att_Seqlen) K,
+      pMasked s Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs n *
+        vMasked s V Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+          stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num
+          sliding_window n d = 0 := by
+    apply Finset.sum_eq_zero
+    intro n hn
+    rw [Finset.mem_Ico] at hn
+    have : ¬ n < attSeqLen s B_Att_Seqlen := by omega
+    simp only [pMasked, this, if_false]
+    norm_num
+  rw [htail, add_zero]
+  apply Finset.sum_congr rfl
+  intro n hn
+  rw [Finset.mem_range] at hn
+  simp only [pMasked, vMasked, if_pos hn]
+
 /-! ### Remaining bridge (banked)
 
 `tokenAttnMistralClosedForm` is the genuine, self-reference-free PV spec.  The
