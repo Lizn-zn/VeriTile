@@ -1901,6 +1901,22 @@ theorem aft1_foldl_store_pids {α : Type} (l : List α)
   | nil => rfl
   | cons hd tl ih => simp only [List.foldl_cons]; rw [ih, BlockState.writeMemTyped_pids]
 
+/-- A `foldl` of `writeMem` stores into region `wr` preserves `readMem wr off`
+at any offset `off` distinct from every written offset. -/
+theorem aft1_foldl_writeMem_readMem_other {α : Type} (l : List α)
+    (wr : RegionName) (offFn : α → Nat) (valFn : α → ℝ)
+    (s0 : BlockState) (off : Nat) (hoff : ∀ i ∈ l, offFn i ≠ off) :
+    (l.foldl (fun acc i => acc.writeMem wr (offFn i) (valFn i)) s0).readMem wr off
+      = s0.readMem wr off := by
+  induction l generalizing s0 with
+  | nil => rfl
+  | cons hd tl ih =>
+      simp only [List.foldl_cons]
+      rw [ih _ (fun i hi => hoff i (List.mem_cons_of_mem hd hi))]
+      rw [BlockState.writeMem_readMem, if_neg]
+      rintro ⟨_, heq⟩
+      exact hoff hd List.mem_cons_self heq.symm
+
 set_option maxHeartbeats 2000000 in
 set_option maxRecDepth 8000 in
 /-- **Full single-chunk iteration (STORE=false, IFCOND=false).** Stepping the
@@ -1923,7 +1939,15 @@ theorem aft1_loopBody_iter_ff
       ∧ (∀ off, s'.readMem Q off = s.readMem Q off)
       ∧ (∀ off, s'.readMem K off = s.readMem K off)
       ∧ (∀ off, s'.readMem V off = s.readMem V off)
-      ∧ (∀ off, s'.readMem H off = s.readMem H off) := by
+      ∧ (∀ off, s'.readMem H off = s.readMem H off)
+      -- chunk `c`'s output block now holds the genuine chunk output
+      ∧ (∀ (t : Fin 32) (d : Fin 128),
+          s'.readMem O (s.pids 0 * 131072 + (c * 32 + t.val) * 128 + d.val)
+            = aft1Out s Q K V c t d)
+      -- O reads at addresses outside chunk `c`'s block are unchanged
+      ∧ (∀ off, (∀ (t : Fin 32) (d : Fin 128),
+            off ≠ s.pids 0 * 131072 + (c * 32 + t.val) * 128 + d.val)
+          → s'.readMem O off = sin.readMem O off) := by
   obtain ⟨s2, hstep, hmem2, hpids2, hibh2, hpo, hbo, hbh2⟩ :=
     aft1_loopBody_regs_ff Q K V H O s sin c hmem hibh hi hbh
   -- the body = (take 13) ++ (drop 13), and drop 13 = [store]
@@ -1956,8 +1980,25 @@ theorem aft1_loopBody_iter_ff
     obtain ⟨t, d, u⟩ := i
     simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds,
       List.all_nil, Bool.and_true, if_true]
+  set offFn : TileIndex [32, 128] → Nat :=
+    fun i => s.pids 0 * 131072 + (c * 32 + i.1.val) * 128 + (0 + i.2.1.val) * 1 with hoffFn
+  have hinj : Function.Injective offFn := by
+    rintro ⟨⟨ta, hta⟩, ⟨da, hda⟩, _⟩ ⟨⟨tb, htb⟩, ⟨db, hdb⟩, _⟩ h
+    simp only [hoffFn] at h
+    have ht : ta = tb := by omega
+    have hd : da = db := by omega
+    subst tb; subst db; rfl
+  -- the store foldl, written as a plain `writeMem` foldl with value `aft1Out`
+  have hstoreW : (TileShape.allIndices [32, 128]).foldl
+        (fun acc i => acc.writeMemTyped .real O (offFn i) ((aft1BoTile s Q K V c).data i)) s2
+      = (TileShape.allIndices [32, 128]).foldl
+        (fun acc i => acc.writeMem O (offFn i) (aft1Out s Q K V c i.1 i.2.1)) s2 := by
+    apply congrArg (fun f => List.foldl f s2 (TileShape.allIndices [32, 128]))
+    funext acc i
+    simp only [BlockState.writeMemTyped_real, aft1BoTile, FloatDType.real_storeValue]
+    rfl
   rw [stepStmts.cons_some hstore, stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [aft1_foldl_store_pids]; exact hpids2
   · rw [BlockState.foldl_writeMemTyped_regs]; exact hibh2
   · rw [BlockState.foldl_writeMemTyped_regs]; exact hbh2
@@ -1965,6 +2006,22 @@ theorem aft1_loopBody_iter_ff
   · intro off; rw [aft1_foldl_store_readMem_ne _ O K _ _ s2 off hOK.symm]; exact hmem2 K off
   · intro off; rw [aft1_foldl_store_readMem_ne _ O V _ _ s2 off hOV.symm]; exact hmem2 V off
   · intro off; rw [aft1_foldl_store_readMem_ne _ O H _ _ s2 off hOH.symm]; exact hmem2 H off
+  · -- chunk c block readback = aft1Out
+    intro t d
+    rw [hstoreW]
+    have hoff : s.pids 0 * 131072 + (c * 32 + t.val) * 128 + d.val = offFn (t, d, PUnit.unit) := by
+      simp [hoffFn]
+    rw [hoff, BlockState.scatter_readback_nd s2 offFn
+      (fun i => aft1Out s Q K V c i.1 i.2.1) hinj (t, d, PUnit.unit)]
+  · -- off-block O preservation
+    intro off hoff
+    rw [hstoreW]
+    rw [aft1_foldl_writeMem_readMem_other _ O offFn _ s2 off (by
+      intro i _
+      obtain ⟨t, d, u⟩ := i
+      simp only [hoffFn, Nat.add_zero, Nat.zero_add, Nat.mul_one]
+      exact (hoff t d).symm)]
+    rw [hmem2 O off, ← hmem O off]
 
 /-- The carry-invariant: after `n` chunks the loop state has the advanced
 recurrent state in `b_h`, with `pids`/`i_bh` and the `Q`/`K`/`V`/`H` reads fixed
@@ -1977,6 +2034,10 @@ def aft1Inv (Q K V H O : RegionName) (s : BlockState) (n : Nat) (st : BlockState
   ∧ (∀ off, st.readMem K off = s.readMem K off)
   ∧ (∀ off, st.readMem V off = s.readMem V off)
   ∧ (∀ off, st.readMem H off = s.readMem H off)
+  -- every completed chunk `j < n` holds its genuine output in `O`
+  ∧ (∀ j, j < n → ∀ (t : Fin 32) (d : Fin 128),
+      st.readMem O (s.pids 0 * 131072 + (j * 32 + t.val) * 128 + d.val)
+        = aft1Out s Q K V j t d)
 
 /-- `aft1BhTile` depends only on `K`/`V` reads and `pids 0`: equal bases give
 equal carry tiles. -/
@@ -1990,6 +2051,16 @@ theorem aft1BhTile_congr (s s' : BlockState) (K V : RegionName) (n : Nat)
   funext idx
   simp only [aft1RecState, aft1KCell, aft1VCell, hp, hK, hV]
 
+/-- `aft1Out` depends only on `Q`/`K`/`V` reads and `pids 0`. -/
+theorem aft1Out_congr (s s' : BlockState) (Q K V : RegionName) (c : Nat) (t : Fin 32) (d : Fin 128)
+    (hp : s'.pids 0 = s.pids 0)
+    (hQ : ∀ off, s'.readMem Q off = s.readMem Q off)
+    (hK : ∀ off, s'.readMem K off = s.readMem K off)
+    (hV : ∀ off, s'.readMem V off = s.readMem V off) :
+    aft1Out s' Q K V c t d = aft1Out s Q K V c t d := by
+  simp only [aft1Out, aft1LocalOut, aft1RecOut, aft1RecState, aft1QCell, aft1KCell, aft1VCell,
+    hp, hQ, hK, hV]
+
 set_option maxHeartbeats 2000000 in
 /-- **Carry-invariant step.** One `forRangeDyn` iteration preserves `aft1Inv`,
 advancing the chunk counter by one. The iteration runs relative to the running
@@ -2001,7 +2072,7 @@ theorem aft1Inv_step (Q K V H O : RegionName) (s : BlockState)
     ∃ st', stepStmts (aft1LoopBody Q K V H O Bool.false Bool.false)
         (st.setReg "i" .nat [] (Tile.scalar n)) = some st'
       ∧ aft1Inv Q K V H O s (n + 1) st' := by
-  obtain ⟨hpids, hibh, hbh, hQ, hK, hV, hHh⟩ := hP
+  obtain ⟨hpids, hibh, hbh, hQ, hK, hV, hHh, hOprev⟩ := hP
   set sin := st.setReg "i" .nat [] (Tile.scalar n) with hsin
   have hmemSin : ∀ rg off, sin.readMem rg off = st.readMem rg off := by
     intro rg off; rw [hsin]; simp [BlockState.setReg_readMem]
@@ -2015,9 +2086,9 @@ theorem aft1Inv_step (Q K V H O : RegionName) (s : BlockState)
     rw [hsin, hpids]; simpa [hpids] using hibh
   have hiSin : sin.regs .nat [] "i" = some (Tile.scalar n) := by rw [hsin]; simp
   -- step one iteration relative to base `st`
-  obtain ⟨st', hstep, hpids', hibh', hbh', hQ', hK', hV', hH'⟩ :=
+  obtain ⟨st', hstep, hpids', hibh', hbh', hQ', hK', hV', hH', hOcur, hOother⟩ :=
     aft1_loopBody_iter_ff Q K V H O st sin n hOQ hOK hOV hOH hmemSin hibhSin hiSin hbhSin
-  refine ⟨st', hstep, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨st', hstep, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hpids', hsin]; simpa using hpids
   · rw [hibh', hpids]
   · -- b_h' = aft1BhTile st K V (n+1) = aft1BhTile s K V (n+1)
@@ -2026,6 +2097,29 @@ theorem aft1Inv_step (Q K V H O : RegionName) (s : BlockState)
   · intro off; rw [hK' off]; exact hK off
   · intro off; rw [hV' off]; exact hV off
   · intro off; rw [hH' off]; exact hHh off
+  · -- O output for completed chunks j < n+1
+    intro j hj t d
+    rcases Nat.lt_succ_iff_lt_or_eq.mp hj with hjlt | hjeq
+    · -- j < n : preserved (chunk n's store is disjoint from chunk j's block)
+      have haddr : s.pids 0 * 131072 + (j * 32 + t.val) * 128 + d.val
+          = st.pids 0 * 131072 + (j * 32 + t.val) * 128 + d.val := by rw [hpidsSt0]
+      rw [haddr, hOother _ (by
+        intro t' d' heq
+        have hcore : (j * 32 + t.val) * 128 + d.val = (n * 32 + t'.val) * 128 + d'.val := by omega
+        have ht := t.isLt; have hd := d.isLt; have ht' := t'.isLt; have hd' := d'.isLt
+        have hbj : (j * 32 + t.val) * 128 + d.val < (j + 1) * 4096 := by nlinarith
+        have hbn : n * 4096 ≤ (n * 32 + t'.val) * 128 + d'.val := by nlinarith
+        have hle : (j + 1) * 4096 ≤ n * 4096 := by
+          have : j + 1 ≤ n := hjlt; nlinarith
+        omega)]
+      rw [hsin]; simp only [BlockState.setReg_readMem]
+      rw [← haddr]; exact hOprev j hjlt t d
+    · -- j = n : chunk n's genuine output
+      subst hjeq
+      have haddr : s.pids 0 * 131072 + (j * 32 + t.val) * 128 + d.val
+          = st.pids 0 * 131072 + (j * 32 + t.val) * 128 + d.val := by rw [hpidsSt0]
+      rw [haddr, hOcur t d]
+      exact aft1Out_congr s st Q K V j t d hpidsSt0 hQ hK hV
 
 /-- `aft1BhTile s K V 0` is the all-zero `[128,128]` tile (empty recurrent sum). -/
 theorem aft1BhTile_zero (s : BlockState) (K V : RegionName) :
@@ -2048,7 +2142,7 @@ theorem aft1_prologue_inv (Q K V H O : RegionName) (s : BlockState) :
         = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [128, 128]) from by
       simp [evalOp_full, evalOp_const]))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp
   · simp [BlockState.setReg_ne_name]
   · rw [BlockState.setReg_same, aft1BhTile_zero]
@@ -2056,6 +2150,7 @@ theorem aft1_prologue_inv (Q K V H O : RegionName) (s : BlockState) :
   · intro off; simp [BlockState.setReg_readMem]
   · intro off; simp [BlockState.setReg_readMem]
   · intro off; simp [BlockState.setReg_readMem]
+  · intro j hj; exact absurd hj (Nat.not_lt_zero j)
 
 set_option maxHeartbeats 2000000 in
 /-- **Full-exec carry result (STORE=false, IFCOND=false).** Executing the entire
