@@ -1608,4 +1608,41 @@ theorem aft1_dot_op_eval {M Kd N : Nat} (s' : BlockState) (aName bName : RegName
   exact aft1_dot2d_elem atile btile m n (fa m) (fun e => fb e n)
     (fun e => haf m e) (fun e => hbf e n)
 
+/-- Evaluation recipe for an accumulating `acc + dot(ref a, ref b)` assign. -/
+theorem aft1_accDot_op_eval {M Kd N : Nat} (s' : BlockState)
+    (accName aName bName : RegName)
+    (acctile : Tile .real [M, N]) (atile : Tile .real [M, Kd]) (btile : Tile .real [Kd, N])
+    (facc : Fin M → Fin N → ℝ) (fa : Fin M → Fin Kd → ℝ) (fb : Fin Kd → Fin N → ℝ)
+    (hacc : s'.regs .real [M, N] accName = some acctile)
+    (ha : s'.regs .real [M, Kd] aName = some atile)
+    (hb : s'.regs .real [Kd, N] bName = some btile)
+    (haccf : ∀ m n, acctile.data (m, n, PUnit.unit) = some (facc m n))
+    (haf : ∀ m e, atile.data (m, e, PUnit.unit) = some (fa m e))
+    (hbf : ∀ e n, btile.data (e, n, PUnit.unit) = some (fb e n)) :
+    evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [M, N] accName)
+        (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName) (Op.ref .real [Kd, N] bName))) s'
+      = some (⟨fun idx : TileIndex [M, N] =>
+          some (facc idx.1 idx.2.1
+            + Finset.univ.sum fun e : Fin Kd => fa idx.1 e * fb e idx.2.1)⟩
+          : Tile .real [M, N]) := by
+  have hdotev := aft1_dot_op_eval s' aName bName atile btile fa fb ha hb haf hbf
+  set dottile : Tile .real [M, N] :=
+    ⟨fun idx => some (Finset.univ.sum fun e : Fin Kd => fa idx.1 e * fb e idx.2.1)⟩ with hdt
+  have hfull : evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [M, N] accName)
+      (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName) (Op.ref .real [Kd, N] bName))) s'
+      = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame acctile dottile) := by
+    rw [evalOp_add]
+    rw [show evalOp (Op.ref .real [M, N] accName) s' = some acctile from by rw [evalOp_ref]; exact hacc]
+    show (evalOp (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName)
+        (Op.ref .real [Kd, N] bName)) s').bind
+        (fun vy => some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame acctile vy))
+      = _
+    rw [hdotev]
+    rfl
+  rw [hfull]
+  refine congrArg some ?_
+  ext idx; obtain ⟨m, n, u⟩ := idx
+  simp only [hdt, Tile.bop, Broadcast.consSame, Broadcast.leftIndex, Broadcast.rightIndex,
+    haccf m n, NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
