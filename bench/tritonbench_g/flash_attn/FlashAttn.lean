@@ -2917,4 +2917,116 @@ theorem flashLoopBody_steps (IS_CAUSAL : Bool) (sin : BlockState) (SN : Nat)
   · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
   · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
 
+/-- The `WithBot ⊔`-fold of a block's coerced scores equals `↑(block max)` over the
+running max `m`, OR `m` if the block is empty — phrased as: the kernel's
+`mnewT = m ⊔ blockSup` equals the running max after folding `osStepBot` over the
+block (the `.1` channel of `flashStateBot_succ`). -/
+theorem osStepBot_block_fst (m : WithBot ℝ) (l acc : ℝ) (block : List (ℝ × ℝ)) :
+    (block.foldl osStepBot (m, l, acc)).1
+      = m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  rw [flashStateBot_fst]
+  induction block generalizing m with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.map_cons, List.foldl_cons, List.foldr_cons]
+    rw [ih]
+    rw [show (m ⊔ ((a.1 : ℝ) : WithBot ℝ)) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) t))
+          = m ⊔ (((a.1 : ℝ) : WithBot ℝ) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) t))) from by
+      rw [sup_assoc]]
+
+/-- **The block-at-once update equals the key-by-key `osStepBot` fold** (the C.2
+heart). For a block with max `M' = m ⊔ blockSup` and a state `(m, l, acc)` anchored
+to the true denominator/accumulator via `l = κ(m)·L`, `acc = κ(m)·T`, the kernel's
+one-shot rescale-and-add (`l·α + Σ exp2(s−M')`, `acc·α + Σ exp2(s−M')·v`, with
+`α = realExp2(m ⊖ M')`) lands on `block.foldl osStepBot (m, l, acc)`. Both sides are
+`(M', κ(M')·(L+Σpow2 s), κ(M')·(T+Σpow2 s·v))` by `osStepBot_foldl_consistent`. -/
+theorem osStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List (ℝ × ℝ))
+    (hl : l = (m.elim 0 (fun r => pow2 (-r))) * L)
+    (hacc : acc = (m.elim 0 (fun r => pow2 (-r))) * T)
+    (hmL : m = ⊥ → L = 0) (hmT : m = ⊥ → T = 0) :
+    let M' := m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+    (M',
+     l * (WithBot.realExp2 (WithBot.realSub m M')).unbotD 0
+       + (block.map (fun p => pow2 (p.1 - M'.unbotD 0))).sum,
+     acc * (WithBot.realExp2 (WithBot.realSub m M')).unbotD 0
+       + (block.map (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)).sum)
+      = block.foldl osStepBot (m, l, acc) := by
+  intro M'
+  -- the fold's three channels via consistency
+  have hfst : (block.foldl osStepBot (m, l, acc)).1 = M' := by
+    rw [osStepBot_block_fst]
+  obtain ⟨hfold_l, hfold_acc⟩ := osStepBot_foldl_consistent block m l acc T L hl hacc hmL hmT
+  rw [hfst] at hfold_l hfold_acc
+  -- the sums over the (coerced) block vanish when M' = ⊥ (block is empty)
+  have hM'eq : M' = m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := rfl
+  cases hM' : M' with
+  | bot =>
+    -- M' = ⊥ forces block = [] (any block element would push the sup above ⊥)
+    have hempty : block = [] := by
+      rcases block with _ | ⟨a, t⟩
+      · rfl
+      · exfalso
+        have : ((a.1 : ℝ) : WithBot ℝ) ≤ M' := by
+          rw [hM'eq]
+          exact le_sup_of_le_right (by simp only [List.map_cons, List.foldr_cons]; exact le_sup_left)
+        rw [hM'] at this
+        exact absurd (le_bot_iff.mp this) (WithBot.coe_ne_bot)
+    have hm0 : m = ⊥ := by
+      rw [hM'eq, hempty] at hM'
+      simpa only [List.map_nil, List.foldr_nil, sup_bot_eq] using hM'
+    have hl0 : l = 0 := by rw [hl, hm0]; simp [hmL hm0]
+    have hacc0 : acc = 0 := by rw [hacc, hm0]; simp [hmT hm0]
+    subst hempty
+    rw [hl0, hacc0]
+    simp only [List.foldl_nil, List.map_nil, List.sum_nil, add_zero, mul_zero, zero_mul]
+    rw [hm0]
+  | coe Mr =>
+    rw [hM'] at hfst hfold_l hfold_acc
+    -- M' finite: l·α = pow2(-Mr)·L, acc·α = pow2(-Mr)·T (covering m = ⊥ via L = T = 0)
+    have hlα : l * (WithBot.realExp2 (WithBot.realSub m (↑Mr : WithBot ℝ))).unbotD 0 = pow2 (-Mr) * L := by
+      cases hm : m with
+      | bot =>
+        rw [hl, hm, show ((⊥ : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = 0 from rfl,
+          zero_mul, hmL hm]; ring
+      | coe a =>
+        rw [hl, hm, show ((↑a : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-a) from rfl]
+        rw [WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe,
+          show Real.exp ((a - Mr) * Real.log 2) = pow2 (a - Mr) from by simp [pow2, mul_comm]]
+        rw [mul_right_comm, ← pow2_add]; ring_nf
+    have haccα : acc * (WithBot.realExp2 (WithBot.realSub m (↑Mr : WithBot ℝ))).unbotD 0 = pow2 (-Mr) * T := by
+      cases hm : m with
+      | bot =>
+        rw [hacc, hm, show ((⊥ : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = 0 from rfl,
+          zero_mul, hmT hm]; ring
+      | coe a =>
+        rw [hacc, hm, show ((↑a : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-a) from rfl]
+        rw [WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe,
+          show Real.exp ((a - Mr) * Real.log 2) = pow2 (a - Mr) from by simp [pow2, mul_comm]]
+        rw [mul_right_comm, ← pow2_add]; ring_nf
+    have hsumL : (block.map (fun p => pow2 (p.1 - (↑Mr : WithBot ℝ).unbotD 0))).sum
+        = pow2 (-Mr) * (block.map (fun p => pow2 p.1)).sum := by
+      have := sum_map_pow2_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun _ => 1)
+      simp only [mul_one] at this
+      rw [this, WithBot.unbotD_coe]
+    have hsumT : (block.map (fun p => pow2 (p.1 - (↑Mr : WithBot ℝ).unbotD 0) * p.2)).sum
+        = pow2 (-Mr) * (block.map (fun p => pow2 p.1 * p.2)).sum := by
+      rw [sum_map_pow2_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun p => p.2), WithBot.unbotD_coe]
+    refine Prod.ext hfst.symm (Prod.ext ?_ ?_)
+    · rw [hfold_l, hlα, hsumL, show ((↑Mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-Mr) from rfl]; ring
+    · rw [hfold_acc, haccα, hsumT, show ((↑Mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-Mr) from rfl]; ring
+
+/-- **Reduce-max row bridge.** `tl.max(qk, 1)` at row `r`: the `reduceMaxDrop`
+of a tile whose row-`r` cells equal `g jL` reads off `Finset.univ.sup g`. -/
+theorem flash_reduceMaxDrop_row (qk : Tile .real [128, 64])
+    (rmaxT : Tile .real [128])
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128, 64].length) qk = some rmaxT)
+    (r : Fin 128) (g : Fin 64 → WithBot ℝ)
+    (hqk : ∀ jL : Fin 64, qk.data (r, jL, PUnit.unit) = g jL) :
+    rmaxT.data (r, PUnit.unit) = Finset.univ.sup g := by
+  unfold Tile.reduceMaxDrop at hrm
+  rw [dif_pos (show 0 < TileShape.axisDim [128, 64] (⟨1, by simp⟩ : Fin [128, 64].length) from by decide)] at hrm
+  rw [← Option.some.inj hrm]
+  simp only [Finset.sup'_eq_sup]
+  exact Finset.sup_congr rfl (fun jL _ => hqk jL)
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
