@@ -908,6 +908,11 @@ theorem preLoop_prefix (Q K V B0 Out : RegionName) (sm_scale : ℝ)
       ∧ s10.regs .nat [] "off_hz" = some (Tile.scalar (s.pids 1))
       ∧ s10.regs .nat [] "q_offset" = some (Tile.scalar (s.pids 1 * stride_qh))
       ∧ s10.regs .nat [] "kv_offset" = some (Tile.scalar (s.pids 1 * stride_kh))
+      ∧ s10.regs .blockPtr [BLOCK_M, BLOCK_DMODEL] "Q_block_ptr" = some
+          (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+            { region := Q, baseOffset := s.pids 1 * stride_qh,
+              parentShape := [N_CTX, BLOCK_DMODEL], blockShape := [BLOCK_M, BLOCK_DMODEL],
+              strides := [stride_qm, stride_qk], offsets := [s.pids 0 * BLOCK_M, 0] }⟩)
       ∧ s10.regs .blockPtr [BLOCK_DMODEL, BLOCK_N] "K_block_ptr" = some
           (⟨fun _ : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
             { region := K, baseOffset := s.pids 1 * stride_kh,
@@ -978,7 +983,7 @@ theorem preLoop_prefix (Q K V B0 Out : RegionName) (sm_scale : ℝ)
     stepStmts.cons_some (stepStmt_assign_eq_some (hacc _)),
     stepStmts.nil]
   refine ⟨_, rfl, ?_⟩
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;>
     simp [BlockState.setReg, BlockState.setReg_same, BlockState.setReg_ne_name]
 
 /-! ### preLoop tail loads (statements 10–18 eval helpers)
@@ -1631,6 +1636,184 @@ theorem attnPreLoopTail_check (Q K V B0 Out : RegionName) :
         16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
         FloatDType.fp16).toAlgKernel.body.take 19).drop 10 = attnPreLoopTail B0 := by
   rfl
+
+/-- **`q = (q * qk_scale).to fp16`** op-eval recipe (the pre-scale + fp16 cast). -/
+theorem ak_qscale_op_eval (s : BlockState) (qtile : Tile .real [64, 128]) (sc : ℝ)
+    (hq : s.regs .real [64, 128] "q" = some qtile)
+    (hqs : s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) :
+    evalOp (Op.castFloat .real .fp16
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale"))) s
+      = some (⟨fun idx : TileIndex [64, 128] =>
+          FloatDType.real.cast FloatDType.fp16 ((qtile.data idx).bind (fun x => some (x * sc)))⟩ : Tile .fp16 [64, 128]) := by
+  have hmul0 : evalOp
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qtile (Tile.scalar (some sc))) := by
+    rw [evalOp_mul]; simp only [evalOp_ref, hq, hqs, Option.bind_eq_bind, Option.bind_some]
+  have hmul : @evalOp FloatDType.real.toTileDType [64, 128]
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qtile (Tile.scalar (some sc))) := hmul0
+  rw [evalOp_castFloat, hmul]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+
+/-- `evalOp` helper for `Op.mod` (no dedicated `@[simp]` form). -/
+theorem evalOp_mod' {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.mod h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
+  simp [evalOp]
+
+/-- **`b_ptr_offsets_n_1 = (arange % BIAS) + BIAS`** op-eval recipe. -/
+theorem ak_bn1_op_eval (s : BlockState) :
+    evalOp (Op.add .nat Broadcast.scalarR
+        (Op.mod .nat Broadcast.scalarR (Op.arange 64) (Op.constNat 64)) (Op.constNat 64)) s
+      = some (Tile.vec (fun jL : Fin 64 => jL.val % 64 + 64)) := by
+  rw [evalOp_add, evalOp_mod']
+  simp only [evalOp_arange, evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, IntegralDType.nat_mod]
+
+/-! ### preLoop — full 19-statement prologue → `attnKernelInvariant … 0` -/
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+theorem preLoop (Q K V B0 Out : RegionName) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts ((attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16).toAlgKernel.body.take 19) s = some s0
+      ∧ s0.regs .nat [] "lo" = some (Tile.scalar 0)
+      ∧ s0.regs .nat [] "hi" = some (Tile.scalar 128)
+      ∧ attnKernelInvariant s Q K V B0 Out 0.1
+          (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
+          64 64 128 0 64 128 1 128 128 1 2 (s.pids 0) 0 s0 := by
+  -- decompose body.take 19 = take 10 ++ attnPreLoopTail
+  rw [show (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16).toAlgKernel.body.take 19
+      = (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+          16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+          FloatDType.fp16).toAlgKernel.body.take 10 ++ attnPreLoopTail B0 from by
+    conv_lhs => rw [← List.take_append_drop 10
+      ((attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+          16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+          FloatDType.fp16).toAlgKernel.body.take 19)]
+    rw [List.take_take, attnPreLoopTail_check Q K V B0 Out]
+    norm_num]
+  -- step the prefix (0-9)
+  obtain ⟨s10, hpre, hpids, hstartm, hoffhz, hqoff, hkvoff, hQp, hKp, hVp, hmi, hli, hacc, hundef10, hmem10⟩ :=
+    preLoop_prefix Q K V B0 Out 0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64 FloatDType.fp16 s
+  rw [stepStmts.append_some hpre]
+  unfold attnPreLoopTail
+  -- T0: qk_scale = 0.1 * 1.44269504
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .real Broadcast.nil (Op.const 0.1) (Op.const 1.44269504)) s10
+        = some (Tile.scalar (some (0.1 * 1.44269504))) from by
+      rw [evalOp_mul]; simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  -- T1: q = load Q_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 128] "Q_block_ptr") []) .none)
+          (s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504))))
+        = some (⟨fun idx : TileIndex [64, 128] =>
+            some ((s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504)))).readMem Q
+              (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1))⟩
+            : Tile .real [64, 128]) from
+      load_blockPtr_Q_eval Q (s.pids 1 * 16384) 128 128 64 128 128 1 (s.pids 0 * 64)
+        (Op.ref .blockPtr [64, 128] "Q_block_ptr") _
+        (by rw [evalOp_ref]; rw [show (s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504)))).regs .blockPtr [64, 128] "Q_block_ptr" = s10.regs .blockPtr [64, 128] "Q_block_ptr" from by simp [BlockState.setReg_ne_name]]; exact hQp)))]
+  -- T2: q = (q * qk_scale).to fp16
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.castFloat .real .fp16 (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale"))) _
+        = some (⟨fun idx : TileIndex [64, 128] =>
+            FloatDType.real.cast FloatDType.fp16
+              (some (0.1 * 1.44269504 * qRaw s Q (s.pids 1 * 16384) 64 128 (s.pids 0) idx))⟩ : Tile .fp16 [64, 128]) from by
+      rw [ak_qscale_op_eval _
+        (⟨fun idx : TileIndex [64, 128] =>
+          some ((s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504)))).readMem Q
+            (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1))⟩ : Tile .real [64, 128])
+        (0.1 * 1.44269504)
+        (by rw [BlockState.setReg_same])
+        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])]
+      refine congrArg some ?_; ext idx
+      simp only [Option.bind, Option.map, qRaw]
+      have hrm : (s10.setReg "qk_scale" .real [] (Tile.scalar (some (0.1 * 1.44269504)))).readMem Q
+            (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1)
+          = s.readMem Q (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val) := by
+        rw [BlockState.setReg_readMem]
+        unfold BlockState.readMem; rw [hmem10]; congr 1; ring
+      rw [hrm]; ring_nf))]
+  -- T3: lo = 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 0 _))]
+  -- T4: hi = 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 128 _))]
+  -- T5: b_ptr_offsets_m = arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_arange 64 _))]
+  -- T6: b_offset = off_hz * 16384
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (evalOp_mul_ref_const _ "off_hz" (s.pids 1) 16384
+      (by simp [BlockState.setReg_ne_name, hoffhz])))]
+  -- T7: b_ptr_offsets_n_1 = (arange % 64) + 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (ak_bn1_op_eval _))]
+  -- T8: b1 = load B0[..]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (load_b1_eval _ B0 64 64 128 64 (s.pids 0) (s.pids 1 * 16384)
+      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+      (by simp [BlockState.setReg_ne_name, hstartm])
+      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+      (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_⟩
+  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+  -- the invariant at i = 0
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    simp only [BlockState.setReg_pids]; exact hpids
+  · -- i = c * BLOCK_N
+    rfl
+  · -- c ≤ nB
+    norm_num
+  · -- m_i = mPg 0 = ⊥
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
+    rw [hmi]; rfl
+  · -- l_i = lPgK 0 = 0
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
+    rw [hli]; rfl
+  · -- acc = oPg 0 = 0
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
+    rw [hacc]; rfl
+  · -- K block ptr offset [0, 0]
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, hKp]
+  · -- V block ptr offset [0, 0]
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, hVp]
+  · -- q = scaled fp16 cast
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, and_self, and_true, true_and, FloatDType.toTileDType_fp16]
+  · -- b1 = b1Val
+    rw [BlockState.setReg_same]
+    refine congrArg some ?_; ext idx
+    simp only [b1Val, BlockState.setReg_readMem]
+    unfold BlockState.readMem; rw [hmem10]
+  · -- b_offset
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
+  · -- start_m
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]; exact hstartm
+  · -- q_offset
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]; exact hqoff
+  · -- b_ptr_offsets_m
+    simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, and_self, and_true, true_and]
+  · -- undef = 0
+    intro rg o
+    show s10.undef rg o = 0
+    rw [hundef10]; exact hundef rg o
+  · -- mem = s.mem
+    show s10.mem = s.mem
+    exact hmem10
 
 end ClosedForm
 
