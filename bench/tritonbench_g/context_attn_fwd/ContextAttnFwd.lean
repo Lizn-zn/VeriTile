@@ -2418,6 +2418,17 @@ theorem ctxg_realExp2_eq_some_unbotD (z : WithBot ℝ) :
     WithBot.realExp2 z = some ((WithBot.realExp2 z).unbotD 0) := by
   cases z <;> rfl
 
+/-- `m_ij = select(m_i > rmax) m_i rmax` collapses to `max` in `WithBot ℝ`. -/
+theorem ctxg_mij_max (m_i rmaxT : Tile .real [128]) (r : Fin 128)
+    (a b : WithBot ℝ) (hmi : m_i.data (r, PUnit.unit) = a) (hrm : rmaxT.data (r, PUnit.unit) = b) :
+    (Tile.select (Tile.cop ComparableDType.real.gt Broadcast.nil.consSame m_i rmaxT) m_i rmaxT).data
+        (r, PUnit.unit) = max a b := by
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmi, hrm]
+  by_cases h : a ≤ b
+  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
+
 /-- A `dot` row over all 128 keys when both factors are all-`some`. -/
 theorem ctxg_dot_row (p : Tile .real [128, 128]) (v : Tile .real [128, 128])
     (r d : Fin 128) (fp fv : Fin 128 → ℝ)
@@ -2430,6 +2441,171 @@ theorem ctxg_dot_row (p : Tile .real [128, 128]) (v : Tile .real [128, 128])
       = @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ (fun k => (some (fp k * fv k) : WithBot ℝ))
       from Finset.sum_congr rfl (fun k _ => by rw [hp k, hv k]; rfl)]
   exact ctxg_withBot_sum_some _
+
+/-- **Generic ⊥-seeded consistency**: the running `(l, acc)` of `gStateBot` are
+`κ(runningMax)` times the max-free reference sums. -/
+theorem gStateBot_consistent (S hi : Nat) (g : Fin S → ℝ × ℝ) :
+    (gStateBot S hi g).2.1
+        = ((gStateBot S hi g).1.elim 0 (fun r => pow2 (-r)))
+          * ((gKeysUpto S hi g).map (fun p => pow2 p.1)).sum ∧
+    (gStateBot S hi g).2.2
+        = ((gStateBot S hi g).1.elim 0 (fun r => pow2 (-r)))
+          * ((gKeysUpto S hi g).map (fun p => pow2 p.1 * p.2)).sum := by
+  obtain ⟨hL, hT⟩ := osStepBot_foldl_consistent (gKeysUpto S hi g) ⊥ 0 0 0 0
+    (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)
+  refine ⟨?_, ?_⟩
+  · rw [gStateBot]; rw [show (List.foldl osStepBot (⊥, 0, 0) (gKeysUpto S hi g)).2.1 = _ from hL,
+      zero_add]
+  · rw [gStateBot]; rw [show (List.foldl osStepBot (⊥, 0, 0) (gKeysUpto S hi g)).2.2 = _ from hT,
+      zero_add]
+
+/-- The running max of `gStateBot` is `⊥` iff its window streams no keys; so when
+the max is `⊥` the max-free reference sums vanish. -/
+theorem gKeysUpto_map_sum_eq_zero_of_bot (S hi : Nat) (g : Fin S → ℝ × ℝ)
+    (hbot : (gStateBot S hi g).1 = ⊥) (f : ℝ × ℝ → ℝ) :
+    ((gKeysUpto S hi g).map f).sum = 0 := by
+  rw [gStateBot_fst_eq_runningMax, gRunningMax] at hbot
+  have hnil : gKeysUpto S hi g = [] := by
+    rcases hk : gKeysUpto S hi g with _ | ⟨a, t⟩
+    · rfl
+    · exfalso
+      have : ((a.1 : ℝ) : WithBot ℝ) ≤ ((gKeysUpto S hi g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ :=
+        mem_le_foldr_sup _ _ (by rw [hk]; exact List.mem_cons_self ..)
+      rw [hbot] at this
+      exact absurd (le_bot_iff.mp this) WithBot.coe_ne_bot
+  rw [hnil]; simp
+
+/-- After `c+1` blocks (`(c+1)·BN ≤ S`, `0 < BN`) the ⊥-seeded running max is
+finite: the block-`c` window streams at least key `c·BN < S`. -/
+theorem gRunningMax_succ_ne_bot (S BN c : Nat) (g : Fin S → ℝ × ℝ)
+    (hBN : 0 < BN) (hwin : (c + 1) * BN ≤ S) :
+    gRunningMax S ((c + 1) * BN) g ≠ ⊥ := by
+  rw [gRunningMax_succ S BN c g hwin]
+  intro h
+  rw [max_eq_bot] at h
+  have hle := Finset.le_sup (f := fun jL : Fin BN =>
+      ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 : WithBot ℝ))
+      (Finset.mem_univ (⟨0, hBN⟩ : Fin BN))
+  rw [h.2] at hle
+  exact absurd (le_bot_iff.mp hle) WithBot.coe_ne_bot
+
+/-- The running max / denominator of `gStateBot` depend only on the per-key
+*scores* (`.1`), not the values (`.2`). -/
+theorem gStateBot_score_congr (S hi : Nat) (g1 g2 : Fin S → ℝ × ℝ)
+    (h : ∀ j : Fin S, (g1 j).1 = (g2 j).1) :
+    (gStateBot S hi g1).1 = (gStateBot S hi g2).1
+      ∧ (gStateBot S hi g1).2.1 = (gStateBot S hi g2).2.1 := by
+  have hkeys : (gKeysUpto S hi g1).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+      = (gKeysUpto S hi g2).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) := by
+    unfold gKeysUpto
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr; intro j _
+    by_cases hj : j.val < hi <;> simp [hj, h j]
+  have hkeys2 : (gKeysUpto S hi g1).map (fun p => pow2 p.1)
+      = (gKeysUpto S hi g2).map (fun p => pow2 p.1) := by
+    unfold gKeysUpto
+    rw [List.map_filterMap, List.map_filterMap]
+    apply List.filterMap_congr; intro j _
+    by_cases hj : j.val < hi <;> simp [hj, h j]
+  have hfst : (gStateBot S hi g1).1 = (gStateBot S hi g2).1 := by
+    rw [gStateBot_fst_eq_runningMax, gStateBot_fst_eq_runningMax, gRunningMax, gRunningMax, hkeys]
+  refine ⟨hfst, ?_⟩
+  rw [(gStateBot_consistent S hi g1).1, (gStateBot_consistent S hi g2).1, hfst, hkeys2]
+
+/-- **Block-step in explicit `Fin 128` form** (`BN = 128`). The ⊥-seeded state
+after `c+1` blocks equals the kernel's one-shot rescale-and-add over block `c`'s
+reindexed `Fin 128` lanes, anchored to the state after `c` blocks. This is the
+exact tuple `(m_ij, l_i', acc')` the loop body computes. -/
+theorem gStateBot_succ_explicit (S c : Nat) (g : Fin S → ℝ × ℝ) (hwin : (c + 1) * 128 ≤ S) :
+    let st := gStateBot S (c * 128) g
+    let M' := st.1 ⊔ Finset.univ.sup (fun jL : Fin 128 =>
+        ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ))
+    gStateBot S ((c + 1) * 128) g
+      = (M',
+         st.2.1 * (WithBot.realExp2 (WithBot.realSub st.1 M')).unbotD 0
+           + Finset.univ.sum (fun jL : Fin 128 =>
+               pow2 ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - M'.unbotD 0)),
+         st.2.2 * (WithBot.realExp2 (WithBot.realSub st.1 M')).unbotD 0
+           + Finset.univ.sum (fun jL : Fin 128 =>
+               pow2 ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - M'.unbotD 0)
+                 * (g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)) := by
+  intro st M'
+  obtain ⟨hLc, hTc⟩ := gStateBot_consistent S (c * 128) g
+  -- M' is the running-max after c+1 blocks
+  have hMblock : M' = st.1 ⊔ ((gBlock S 128 c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    have hsup : ((gBlock S 128 c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+        = Finset.univ.sup (fun jL : Fin 128 =>
+            ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ)) := by
+      rw [show (gBlock S 128 c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+            = ((List.finRange S).filterMap (fun j : Fin S =>
+                if c * 128 ≤ j.val ∧ j.val < (c + 1) * 128
+                then some ((g j).1) else none)).map (fun x : ℝ => ((x : ℝ) : WithBot ℝ)) from by
+        unfold gBlock
+        rw [List.map_filterMap, List.map_filterMap]
+        apply List.filterMap_congr
+        intro j _
+        by_cases hj : c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 <;> simp [hj]]
+      rw [ctx_filterMap_foldr_sup S (fun j => c * 128 ≤ j.val ∧ j.val < (c + 1) * 128) (fun j => (g j).1)]
+      classical
+      rw [show (Finset.univ.sup (fun j : Fin S =>
+            if c * 128 ≤ j.val ∧ j.val < (c + 1) * 128 then (((g j).1 : ℝ) : WithBot ℝ) else ⊥))
+          = Finset.univ.sup (fun j : Fin S =>
+              if c * 128 ≤ j.val ∧ j.val < (c + 1) * 128
+              then (fun jg => if h : jg < S then (((g ⟨jg, h⟩).1 : ℝ) : WithBot ℝ) else ⊥) j.val else ⊥)
+          from by
+        apply Finset.sup_congr rfl
+        intro j _
+        by_cases hw : c * 128 ≤ j.val ∧ j.val < (c + 1) * 128
+        · rw [if_pos hw, if_pos hw]; simp only [dif_pos j.isLt]
+        · rw [if_neg hw, if_neg hw]]
+      rw [ctx_window_sup_reindex 128 c S hwin
+        (fun jg => if h : jg < S then (((g ⟨jg, h⟩).1 : ℝ) : WithBot ℝ) else ⊥)]
+      apply Finset.sup_congr rfl
+      intro jL _
+      simp only [dif_pos (gBlock_idx_lt S 128 c hwin jL)]
+    show _ = _
+    rw [hsup]
+  -- now invoke osStepBot_block_eq with L,T from consistency
+  have hstep := osStepBot_block_eq st.1 st.2.1 st.2.2
+    (((gKeysUpto S (c * 128) g).map (fun p => pow2 p.1 * p.2)).sum)
+    (((gKeysUpto S (c * 128) g).map (fun p => pow2 p.1)).sum)
+    (gBlock S 128 c g) hLc hTc
+    (fun hb => gKeysUpto_map_sum_eq_zero_of_bot S (c * 128) g hb _)
+    (fun hb => gKeysUpto_map_sum_eq_zero_of_bot S (c * 128) g hb _)
+  -- the block-fold equals gStateBot((c+1)*128)
+  have hfold : (gBlock S 128 c g).foldl osStepBot st = gStateBot S ((c + 1) * 128) g :=
+    (gStateBot_succ S 128 c g).symm
+  rw [hfold] at hstep
+  simp only [] at hstep
+  rw [← hMblock] at hstep
+  rw [show ((gBlock S 128 c g).map (fun p => pow2 (p.1 - M'.unbotD 0))).sum
+        = Finset.univ.sum (fun jL : Fin 128 =>
+            pow2 ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - M'.unbotD 0))
+      from gBlock_map_sum S 128 c g hwin (fun p => pow2 (p.1 - M'.unbotD 0))] at hstep
+  rw [show ((gBlock S 128 c g).map (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)).sum
+        = Finset.univ.sum (fun jL : Fin 128 =>
+            pow2 ((g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - M'.unbotD 0)
+              * (g ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)
+      from gBlock_map_sum S 128 c g hwin (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)] at hstep
+  exact hstep.symm
+
+/-- The block-`c` score sup over `Fin 128` (local lane `jL` ↦ global key
+`c·128 + jL`) coerced into `WithBot ℝ`, matching `gRunningMax_succ`'s block term. -/
+private theorem ctxg_block_sup_eq (s0 : BlockState)
+    (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (S bel c : Nat) (hwin : (c + 1) * 128 ≤ S) (i d : Fin 128)
+    (qkT : Tile .real [128, 128])
+    (hqk : ∀ jL : Fin 128, qkT.data (i, jL, PUnit.unit)
+        = some ((ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale S bel i d
+            ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1))
+    (rmaxT : Tile .real [128])
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128,128].length) qkT = some rmaxT) :
+    rmaxT.data (i, PUnit.unit)
+      = Finset.univ.sup (fun jL : Fin 128 =>
+          (((ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale S bel i d
+              ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : ℝ) : WithBot ℝ)) := by
+  refine ctxg_reduceMaxDrop_data_row qkT rmaxT hrm i _ ?_
+  intro jL; rw [hqk jL]; rfl
 
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
@@ -2755,3 +2931,4 @@ theorem context_attn_fwd_python_test_shape_output_summary
       B_Start_Loc B_Seqlen B_Prompt_Cache_Len s
 
 end VeriTile.Bench.TritonBenchG.ContextAttnFwd
+
