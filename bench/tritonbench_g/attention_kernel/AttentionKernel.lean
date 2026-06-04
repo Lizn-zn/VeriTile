@@ -650,6 +650,174 @@ theorem lPgK_eq_lPg {Mq : Nat} {BN nB : Nat}
     have ihc := ih (by omega)
     simp only [lPgK, lPg, dif_pos hc, ihc]
 
+/-! ### Generic streaming-softmax register bridges
+
+The per-cell facts that the loop body's tile arithmetic (over the generic per-key
+`score`) realizes the `mPg`/`lPgK`/`oPg` `_succ` recurrence. Mirrors the
+`mij_eq`/`alpha_eq`/`li_eq`/`acc_eq` bridges of
+`VeriTile.Examples.AttentionForwardClosedForm`, generic over `score` (the kernel's
+`fscore`), so they apply unchanged to the banked invariant. -/
+
+/-- `WithBot.realExp2` is total: never `⊥`. -/
+theorem realExp2_eq_some_unbotD (z : WithBot ℝ) :
+    WithBot.realExp2 z = some ((WithBot.realExp2 z).unbotD 0) := by
+  cases z <;> rfl
+
+theorem realExp2_unbotD_coe (r : ℝ) :
+    (WithBot.realExp2 ((r : ℝ) : WithBot ℝ)).unbotD 0 = pow2 r := by
+  simp [pow2, mul_comm]
+
+/-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
+theorem withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) := by
+  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
+  exact (WithBot.coe_sum Finset.univ g).symm
+
+/-- The `p · v` dot row (contraction over all `BLOCK_N` keys). -/
+theorem dot_pv (BM BN BD : Nat) (p : Tile .real [BM,BN]) (v : Tile .real [BN,BD])
+    (r : Fin BM) (d : Fin BD) (fp fv : Fin BN → ℝ)
+    (hp : ∀ jL : Fin BN, p.data (r, jL, PUnit.unit) = some (fp jL))
+    (hv : ∀ jL : Fin BN, v.data (jL, d, PUnit.unit) = some (fv jL)) :
+    (Tile.dot [] p v).data (r, d, PUnit.unit) = some (Finset.univ.sum fun jL : Fin BN => fp jL * fv jL) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin BN) (WithBot ℝ) _ Finset.univ
+        (fun k => Option.map₂ (· * ·) (p.data (r, k, PUnit.unit)) (v.data (k, d, PUnit.unit))))
+      = @Finset.sum (Fin BN) (WithBot ℝ) _ Finset.univ (fun k => (some (fp k * fv k) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun k _ => by rw [hp k, hv k]; rfl)]
+  exact withBot_sum_some _
+
+/-- A `some`-valued exp2 reduction at one cell. -/
+theorem exp2_some {M N : Nat} (h : Fin M → Fin N → ℝ) (x : Tile .real [M, N])
+    (i : Fin M) (j : Fin N) (hx : x.data (i, j, PUnit.unit) = some (h i j)) :
+    (Tile.uop WithBot.realExp2 x).data (i, j, PUnit.unit) = some (pow2 (h i j)) := by
+  show WithBot.realExp2 _ = _
+  rw [hx, WithBot.realExp2_some]
+  refine congrArg some ?_
+  rw [show pow2 (h i j) = Real.exp (Real.log 2 * (h i j)) from rfl, mul_comm]
+
+/-- `reduceMaxDrop` of a row whose cells are `g jL` = `Finset.sup` of the `g`. -/
+theorem reduceMaxDrop_data_row (BM BN : Nat) (hBN : 0 < BN) (qk : Tile .real [BM, BN])
+    (rmaxT : Tile .real [BM]) (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length) qk = some rmaxT)
+    (r : Fin BM) (g : Fin BN → WithBot ℝ) (hqk : ∀ jL : Fin BN, qk.data (r, jL, PUnit.unit) = g jL) :
+    rmaxT.data (r, PUnit.unit) = Finset.univ.sup g := by
+  unfold Tile.reduceMaxDrop at hrm
+  rw [dif_pos (show 0 < TileShape.axisDim [BM,BN] (⟨1, by simp⟩ : Fin [BM,BN].length) from hBN)] at hrm
+  rw [← Option.some.inj hrm]
+  simp only [Finset.sup'_eq_sup]
+  exact Finset.sup_congr rfl (fun jL _ => hqk jL)
+
+/-- **`m_ij = mPg(c+1)`** (generic). -/
+theorem mijg_eq {Mq : Nat} (BN nB c : Nat) (hc : c < nB)
+    (score : Fin Mq → Fin (BN*nB) → ℝ)
+    (m_i rmaxT : Tile .real [Mq]) (r : Fin Mq)
+    (hmi : m_i.data (r, PUnit.unit) = mPg BN nB score r c)
+    (hrmax : rmaxT.data (r, PUnit.unit)
+        = Finset.univ.sup (fun a : Fin BN => ((score r (gkey BN nB c hc a) : ℝ) : WithBot ℝ))) :
+    (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) m_i rmaxT) m_i rmaxT).data (r, PUnit.unit)
+      = mPg BN nB score r (c+1) := by
+  rw [Tile.select_data, Tile.cop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, hmi, hrmax]
+  rw [mPg, dif_pos (by omega : c + 1 ≤ nB)]
+  by_cases h : mPg BN nB score r c ≤ Finset.univ.sup (fun a : Fin BN => ((score r (gkey BN nB c hc a) : ℝ) : WithBot ℝ))
+  · rw [if_neg (by simp [not_lt.mpr h]), max_eq_right h]
+  · rw [if_pos (by simpa using not_le.mp h), max_eq_left (le_of_lt (not_le.mp h))]
+
+/-- `mPg (c+1) ≠ ⊥` whenever `mPg c ≠ ⊥` (running max is monotone). -/
+theorem mPg_succ_ne_bot {Mq : Nat} {BN nB : Nat}
+    (score : Fin Mq → Fin (BN*nB) → ℝ) (r : Fin Mq) (c : Nat)
+    (hc : mPg BN nB score r c ≠ ⊥) : mPg BN nB score r (c+1) ≠ ⊥ := by
+  rw [mPg]
+  by_cases h : c + 1 ≤ nB
+  · rw [dif_pos h]
+    intro hbot; rw [max_eq_bot] at hbot; exact hc hbot.1
+  · rw [dif_neg h]; exact hc
+
+/-- **`alpha = some(alphaPg c)`** (generic). -/
+theorem alphag_eq {Mq : Nat} (BN nB c : Nat)
+    (score : Fin Mq → Fin (BN*nB) → ℝ)
+    (m_i m_ij : Tile .real [Mq]) (r : Fin Mq)
+    (hmi : m_i.data (r, PUnit.unit) = mPg BN nB score r c)
+    (hmij : m_ij.data (r, PUnit.unit) = mPg BN nB score r (c+1)) :
+    (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) m_i m_ij)).data (r, PUnit.unit)
+      = some (alphaPg score r c) := by
+  show WithBot.realExp2 _ = _
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmi, hmij, NumericDType.sub]
+  unfold alphaPg
+  cases hm : mPg BN nB score r c with
+  | bot => rw [WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+  | coe a =>
+    show WithBot.realExp2 (WithBot.realSub (↑a) (mPg BN nB score r (c+1))) = some (pow2 (a - mRg score r (c+1)))
+    rw [show mRg score r (c+1) = (mPg BN nB score r (c+1)).unbotD 0 from rfl]
+    have hne : mPg BN nB score r (c+1) ≠ ⊥ := mPg_succ_ne_bot score r c (by rw [hm]; exact WithBot.coe_ne_bot)
+    cases hm1 : mPg BN nB score r (c+1) with
+    | bot => exact absurd hm1 hne
+    | coe b =>
+      rw [WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe]
+      refine congrArg some ?_
+      rw [show pow2 (a - b) = Real.exp (Real.log 2 * (a - b)) from rfl, mul_comm]
+
+set_option maxHeartbeats 1000000 in
+/-- **`l_i = lPgK(c+1)`** (generic). -/
+theorem lig_eq {Mq : Nat} (BN nB c : Nat) (hBN : 0 < BN) (hc : c < nB)
+    (score : Fin Mq → Fin (BN*nB) → ℝ)
+    (m_i m_ij l_i : Tile .real [Mq]) (qk : Tile .real [Mq, BN]) (r : Fin Mq)
+    (hmi : m_i.data (r, PUnit.unit) = mPg BN nB score r c)
+    (hmij : m_ij.data (r, PUnit.unit) = mPg BN nB score r (c+1))
+    (hli : l_i.data (r, PUnit.unit) = some (lPgK score r c))
+    (hqk : ∀ a : Fin BN, qk.data (r, a, PUnit.unit) = some (score r (gkey BN nB c hc a))) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+       (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) l_i
+         (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) m_i m_ij)))
+       (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [Mq,BN].length)
+         (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qk
+           (Tile.expandDim (⟨1, by simp⟩ : Fin [Mq].length.succ) m_ij))))).data (r, PUnit.unit)
+      = some (lPgK score r (c+1)) := by
+  have hmijReal : m_ij.data (r, PUnit.unit) = some (mRg score r (c+1)) := by
+    rw [hmij]
+    rw [mPg_eq_coe score hBN r (c+1) (by omega) (by omega)]; rfl
+  have halpha := alphag_eq BN nB c score m_i m_ij r hmi hmij
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+  rw [halpha, hli]
+  simp only [Tile.reduceSumDrop_data, Tile.uop_data, Tile.bop_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, Tile.expandDim_data, TileShape.dropInsertedIndex,
+    TileShape.insertAxisIndex, hqk, hmijReal, NumericDType.sub, WithBot.realSub,
+    Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
+  simp only [withBot_sum_some]
+  rw [lPgK, dif_pos (by omega : c + 1 ≤ nB)]
+  simp only [NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul,
+    Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  rw [mul_comm (lPgK score r c)]
+  congr 1
+  exact Finset.sum_congr rfl (fun k _ => by rw [pow2, mul_comm])
+
+set_option maxHeartbeats 1000000 in
+/-- **`acc = oPg(c+1)`** (generic). -/
+theorem accg_eq {Mq Dh : Nat} (BN nB c : Nat) (hc : c < nB)
+    (score : Fin Mq → Fin (BN*nB) → ℝ) (V : TileIndex [BN*nB, Dh] → ℝ)
+    (acc : Tile .real [Mq,Dh]) (alpha : Tile .real [Mq]) (p : Tile .real [Mq,BN]) (v : Tile .real [BN,Dh])
+    (r : Fin Mq) (d : Fin Dh)
+    (hacc : acc.data (r, d, PUnit.unit) = some (oPg score V r d c))
+    (halpha : alpha.data (r, PUnit.unit) = some (alphaPg score r c))
+    (hp : ∀ a : Fin BN, p.data (r, a, PUnit.unit) = some (pow2 (score r (gkey BN nB c hc a) - mRg score r (c+1))))
+    (hv : ∀ a : Fin BN, v.data (a, d, PUnit.unit) = some (V (gkey BN nB c hc a, d, PUnit.unit))) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+       (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acc
+         (Tile.expandDim (⟨1, by simp⟩ : Fin [Mq].length.succ) alpha))
+       (Tile.dot [] p v)).data (r, d, PUnit.unit)
+      = some (oPg score V r d (c+1)) := by
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, halpha]
+  rw [dot_pv Mq BN Dh p v r d (fun a => pow2 (score r (gkey BN nB c hc a) - mRg score r (c+1)))
+      (fun a => V (gkey BN nB c hc a, d, PUnit.unit)) hp hv]
+  rw [hacc]
+  rw [oPg, dif_pos (by omega : c + 1 ≤ nB)]
+  simp only [NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul,
+    Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  rw [mul_comm (oPg score V r d c)]
+
 /-! ### Loop invariant skeleton
 
 The `forRangeDyn` loop-invariant `Prop` carried across key blocks. The counter `i`
