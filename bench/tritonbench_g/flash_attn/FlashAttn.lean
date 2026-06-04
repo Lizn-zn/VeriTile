@@ -1500,4 +1500,264 @@ theorem flash_prefix_scalars_eq (Q K V L O : RegionName) (sm_scale : ℝ)
             (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat sqh)) ] :=
   rfl
 
+/-! ## Block-reduction bridges (flashBlock ↔ Fin BLOCK_N masked reductions)
+
+The kernel's loop body reduces a `BLOCK_N`-lane masked score row over `Fin BLOCK_N`
+(lane `jL` ↦ global key `c·BLOCK_N + jL`); the `osBlockStep` math uses the
+`flashBlock` list (a `Fin SEQLEN` causal filterMap of the window
+`[c·BLOCK_N, (c+1)·BLOCK_N)`). These bridges equate the two by reindexing the
+window onto `Fin BLOCK_N`. -/
+
+open VeriTile.Triton (osBlockStep blockMax pow2 osStep)
+
+/-- Sum over `Fin BLOCK_N` reindexes the window `[c·BLOCK_N, (c+1)·BLOCK_N) ⊆
+Fin SEQLEN`: lane `jL` ↦ global key `c·BLOCK_N + jL`. -/
+theorem flash_window_sum_reindex (BLOCK_N c SEQLEN : Nat)
+    (hwin : (c + 1) * BLOCK_N ≤ SEQLEN) (g : Nat → ℝ) :
+    (∑ jL : Fin BLOCK_N, g (c * BLOCK_N + jL.val))
+      = ∑ j : Fin SEQLEN, (if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N then g j.val else 0) := by
+  have hmul : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+  rw [← Finset.sum_filter]
+  refine Finset.sum_bij
+    (i := fun jL _ => (⟨c * BLOCK_N + jL.val, by
+      have h1 := jL.isLt
+      have h2 : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+      omega⟩ : Fin SEQLEN)) ?_ ?_ ?_ ?_
+  · intro jL _
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    have := jL.isLt; omega
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * BLOCK_N + a.val = c * BLOCK_N + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N := (Finset.mem_filter.mp hj).2
+    exact ⟨⟨j.val - c * BLOCK_N, by omega⟩, Finset.mem_univ _, by apply Fin.ext; simp only; omega⟩
+  · intro jL _; rfl
+
+/-- filterMap-sum over `Fin n` with a guard collapses into the masked `Finset.sum`. -/
+theorem flash_filterMap_finRange_sum {α : Type*} (n : Nat)
+    (p : Fin n → Prop) [DecidablePred p] (g : Fin n → α) (h : α → ℝ) :
+    (((List.finRange n).filterMap (fun j => if p j then some (g j) else none)).map h).sum
+      = ∑ j : Fin n, if p j then h (g j) else 0 := by
+  rw [List.map_filterMap]
+  rw [show (fun j : Fin n => Option.map h (if p j then some (g j) else none))
+        = (fun j : Fin n => if p j then some (h (g j)) else none) from by
+    funext j; by_cases hj : p j <;> simp [hj]]
+  rw [show (((List.finRange n).filterMap (fun j => if p j then some (h (g j)) else none))).sum
+        = ((List.finRange n).map (fun j => if p j then h (g j) else 0)).sum from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : p a <;> simp [ha, ih]]
+  rw [← List.sum_ofFn]; congr 1; rw [List.ofFn_eq_map]
+
+/-- The map-and-sum of `flashBlock` equals a `Fin BLOCK_N`-masked `Finset.sum`,
+reindexing the window onto lanes `jL : Fin BLOCK_N` (key `c·BLOCK_N + jL`). -/
+theorem flashBlock_map_sum
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (hwin : (c + 1) * BLOCK_N ≤ SEQLEN) (h : ℝ × ℝ → ℝ) :
+    ((flashBlock qT kT vT scale causal qStart BLOCK_N c i d).map h).sum
+      = ∑ jL : Fin BLOCK_N,
+          (if (causal → c * BLOCK_N + jL.val ≤ qStart + i.val) then
+            h ((scale * Finset.univ.sum (fun e : Fin DIM =>
+                  qT (i, e, PUnit.unit) * kT (⟨c * BLOCK_N + jL.val, by
+                    have := jL.isLt; have : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+                    omega⟩, e, PUnit.unit)),
+                vT (⟨c * BLOCK_N + jL.val, by
+                  have := jL.isLt; have : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+                  omega⟩, d, PUnit.unit)))
+           else 0) := by
+  rw [flashBlock, flash_filterMap_finRange_sum SEQLEN
+    (fun j => c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val))
+    (fun j => flashKV qT kT vT scale i d j) h]
+  -- pull the window guard out of the conjunction into a filter on Fin SEQLEN
+  have hmul : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+  rw [show (∑ j : Fin SEQLEN, if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+            then h (flashKV qT kT vT scale i d j) else 0)
+        = ∑ j ∈ Finset.univ.filter (fun j : Fin SEQLEN => c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N),
+            (if (causal → j.val ≤ qStart + i.val) then h (flashKV qT kT vT scale i d j) else 0) from by
+    rw [Finset.sum_filter]
+    refine Finset.sum_congr rfl (fun j _ => ?_)
+    by_cases hwj : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N
+    · by_cases hcj : (causal → j.val ≤ qStart + i.val)
+      · rw [if_pos ⟨hwj.1, hwj.2, hcj⟩, if_pos hwj, if_pos hcj]
+      · rw [if_neg (fun hh => hcj hh.2.2), if_pos hwj, if_neg hcj]
+    · rw [if_neg (fun hh => hwj ⟨hh.1, hh.2.1⟩), if_neg hwj]]
+  -- bijection: jL : Fin BLOCK_N ↦ c·BLOCK_N + jL into the filtered window
+  symm
+  refine Finset.sum_bij
+    (i := fun jL _ => (⟨c * BLOCK_N + jL.val, by
+      have h1 := jL.isLt
+      have h2 : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+      omega⟩ : Fin SEQLEN)) ?_ ?_ ?_ ?_
+  · intro jL _
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    have := jL.isLt; omega
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * BLOCK_N + a.val = c * BLOCK_N + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N := (Finset.mem_filter.mp hj).2
+    exact ⟨⟨j.val - c * BLOCK_N, by omega⟩, Finset.mem_univ _, by apply Fin.ext; simp only; omega⟩
+  · intro jL _
+    simp only [flashKV]
+
+/-- A real `foldl max` over a list, coerced to `WithBot`, is `max` of the seed
+with the `WithBot` `foldr` of the coerced list (associativity/commutativity of
+`max`). The bridge between `blockMax` (a real foldl) and the kernel's `WithBot`
+running max. -/
+theorem flash_foldl_max_coe (m0 : ℝ) (L : List ℝ) :
+    ((L.foldl (fun a x => max a x) m0 : ℝ) : WithBot ℝ)
+      = max ((m0 : ℝ) : WithBot ℝ) ((L.map (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥) := by
+  induction L generalizing m0 with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.foldl_cons, List.map_cons, List.foldr_cons]
+    rw [ih (max m0 a), WithBot.coe_max]
+    rw [show (((a : ℝ) : WithBot ℝ) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun x => ((x : ℝ) : WithBot ℝ)) t)))
+          = max ((a : ℝ) : WithBot ℝ) ((List.map (fun x => ((x : ℝ) : WithBot ℝ)) t).foldr (· ⊔ ·) ⊥) from rfl]
+    rw [← max_assoc]
+
+/-- The `WithBot` `foldr` of a causally-filtered score list (coerced) equals the
+`Finset.sup` over `Fin n` of the lane terms (`⊥` on filtered-out lanes). -/
+theorem flash_filterMap_foldr_sup (n : Nat) (P : Fin n → Prop) [DecidablePred P]
+    (sc : Fin n → ℝ) :
+    (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) := by
+  rw [show (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = (List.finRange n).foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : P a <;> simp [ha, ih]]
+  -- finRange foldr = Finset.sup
+  apply le_antisymm
+  · induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih =>
+      simp only [List.foldr_cons]
+      exact sup_le (Finset.le_sup (f := fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+        (Finset.mem_univ a)) ih
+  · apply Finset.sup_le
+    intro j _
+    have key : ∀ (l : List (Fin n)), j ∈ l →
+        (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+          ≤ l.foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ := by
+      intro l hl
+      induction l with
+      | nil => simp at hl
+      | cons a t ih =>
+        simp only [List.foldr_cons]
+        rcases List.mem_cons.mp hl with h | h
+        · subst h; exact le_sup_left
+        · exact le_trans (ih h) le_sup_right
+    exact key _ (List.mem_finRange j)
+
+/-- Reindex a windowed `Finset.sup` over `Fin SEQLEN` (lanes `c·BLOCK_N ≤ j <
+(c+1)·BLOCK_N` with a value-level guard `Qc`) onto `Fin BLOCK_N` (lane `jL` ↦
+key `c·BLOCK_N + jL`); out-of-window lanes contribute `⊥`. -/
+theorem flash_window_sup_reindex (BLOCK_N c SEQLEN : Nat) (hwin : (c + 1) * BLOCK_N ≤ SEQLEN)
+    (F : Nat → WithBot ℝ) (Qc : Nat → Prop) [DecidablePred Qc] :
+    Finset.univ.sup (fun j : Fin SEQLEN =>
+        if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ Qc j.val then F j.val else ⊥)
+      = Finset.univ.sup (fun jL : Fin BLOCK_N =>
+          if Qc (c * BLOCK_N + jL.val) then F (c * BLOCK_N + jL.val) else ⊥) := by
+  have hmul : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+  apply le_antisymm
+  · apply Finset.sup_le
+    intro j _
+    by_cases hj : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ Qc j.val
+    · rw [if_pos hj]
+      have hjL : j.val - c * BLOCK_N < BLOCK_N := by omega
+      refine le_trans ?_ (Finset.le_sup
+        (f := fun jL : Fin BLOCK_N => if Qc (c * BLOCK_N + jL.val) then F (c * BLOCK_N + jL.val) else ⊥)
+        (Finset.mem_univ (⟨j.val - c * BLOCK_N, hjL⟩ : Fin BLOCK_N)))
+      simp only
+      rw [show c * BLOCK_N + (j.val - c * BLOCK_N) = j.val from by omega, if_pos hj.2.2]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le
+    intro jL _
+    by_cases hq : Qc (c * BLOCK_N + jL.val)
+    · rw [if_pos hq]
+      have hb : c * BLOCK_N + jL.val < SEQLEN := by have := jL.isLt; omega
+      refine le_trans ?_ (Finset.le_sup
+        (f := fun j : Fin SEQLEN =>
+          if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ Qc j.val then F j.val else ⊥)
+        (Finset.mem_univ (⟨c * BLOCK_N + jL.val, hb⟩ : Fin SEQLEN)))
+      simp only
+      rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega, hq⟩)]
+    · rw [if_neg hq]; exact bot_le
+
+/-- **Block running-max bridge.** `↑(blockMax m₀ block)` for `block` the
+causally-filtered `flashBlock` window equals `max (some m₀)` of the kernel's
+`WithBot` `Finset.sup` over `Fin BLOCK_N` of the masked score row. Combines the
+foldl→coe-foldr bridge, the filterMap-foldr→sup bridge, and the window reindex —
+the math bridge for the kernel's `max_new = tl.maximum(max, tl.max(qk,1))`. -/
+theorem flashBlock_blockMax
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (m₀ : ℝ) (hwin : (c + 1) * BLOCK_N ≤ SEQLEN) :
+    ((blockMax m₀ (flashBlock qT kT vT scale causal qStart BLOCK_N c i d) : ℝ) : WithBot ℝ)
+      = max ((m₀ : ℝ) : WithBot ℝ)
+          (Finset.univ.sup (fun jL : Fin BLOCK_N =>
+            if (causal → c * BLOCK_N + jL.val ≤ qStart + i.val) then
+              ((scale * Finset.univ.sum (fun e : Fin DIM =>
+                  qT (i, e, PUnit.unit) * kT (⟨c * BLOCK_N + jL.val, by
+                    have := jL.isLt; have : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+                    omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+            else ⊥)) := by
+  classical
+  set F : Nat → WithBot ℝ := fun jg =>
+    if h : jg < SEQLEN then
+      ((scale * Finset.univ.sum (fun e : Fin DIM =>
+          qT (i, e, PUnit.unit) * kT (⟨jg, h⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+    else ⊥ with hF
+  rw [show blockMax m₀ (flashBlock qT kT vT scale causal qStart BLOCK_N c i d)
+        = ((flashBlock qT kT vT scale causal qStart BLOCK_N c i d).map (fun p => p.1)).foldl
+            (fun a x => max a x) m₀ from by unfold blockMax; rw [List.foldl_map]]
+  rw [flash_foldl_max_coe]
+  congr 1
+  rw [show (flashBlock qT kT vT scale causal qStart BLOCK_N c i d).map (fun p => p.1)
+        = (List.finRange SEQLEN).filterMap (fun j : Fin SEQLEN =>
+            if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+            then some (scale * Finset.univ.sum (fun e : Fin DIM =>
+                  qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit))) else none) from by
+    unfold flashBlock flashKV
+    rw [List.map_filterMap]
+    apply List.filterMap_congr
+    intro j _
+    by_cases hj : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val) <;>
+      simp [hj]]
+  rw [flash_filterMap_foldr_sup SEQLEN
+    (fun j => c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val))
+    (fun j => scale * Finset.univ.sum (fun e : Fin DIM => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)))]
+  -- rewrite the Fin SEQLEN windowed sup body as `if window∧Qc then F j.val else ⊥`
+  rw [show (Finset.univ.sup (fun j : Fin SEQLEN =>
+        if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+        then ((scale * Finset.univ.sum (fun e : Fin DIM => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+        else ⊥))
+      = Finset.univ.sup (fun j : Fin SEQLEN =>
+          if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+          then F j.val else ⊥) from by
+    apply Finset.sup_congr rfl
+    intro j _
+    by_cases hw : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+    · rw [if_pos hw, if_pos hw, hF]; simp only [dif_pos j.isLt]
+    · rw [if_neg hw, if_neg hw]]
+  rw [flash_window_sup_reindex BLOCK_N c SEQLEN hwin F
+    (fun jg => causal → jg ≤ qStart + i.val)]
+  -- the BLOCK_N sup bodies agree (F at c·BN+jL = the explicit score)
+  apply Finset.sup_congr rfl
+  intro jL _
+  have hb : c * BLOCK_N + jL.val < SEQLEN := by
+    have h1 := jL.isLt
+    have h2 : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+    omega
+  by_cases hq : (causal → c * BLOCK_N + jL.val ≤ qStart + i.val)
+  · rw [if_pos hq, if_pos hq, hF]; simp only [dif_pos hb]
+  · rw [if_neg hq, if_neg hq]
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
