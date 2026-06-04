@@ -962,6 +962,215 @@ theorem mistral_store_eval (s : BlockState) (Out : RegionName) (BD : Nat)
   rw [← hrw]
   rfl
 
+/-! ## Operational `exec` decode: prelude + loop-invariant + store readback
+
+The genuine closed-form bridge. We thread the banked recipes through the prelude
+decode, the `forRangeDyn` window loop (carrying `acc = partialAcc (counter)`), and
+the final unmasked store readback, landing on `tokenAttnMistralClosedForm`.
+
+`stride_pbs = 1 ∧ stride_req_to_tokens_s = 1` (true for all four checked Python
+shapes) are carried as hypotheses for the per-lane address arithmetic. -/
+
+/-- The loop invariant carried across the `range(0, cur_att_seq_len, BLOCK_N)`
+window loop: the accumulator holds `partialAcc k`, and every loop-invariant
+register holds its prelude-seeded value. -/
+def mistralInvariant
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen : RegionName)
+    (s0 : BlockState)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N : Nat)
+    (k : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids
+  ∧ s.mem = s0.mem
+  ∧ (∀ rg o, s.undef rg o = 0)
+  ∧ s.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 0))
+  ∧ s.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1))
+  ∧ s.regs .nat [] "cur_kv_head" = some (Tile.scalar (s0.pids 1 / kv_group_num))
+  ∧ s.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+  ∧ s.regs .nat [BLOCK_DMODEL] "offs_d" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))
+  ∧ s.regs .nat [] "cur_att_seq_len" = some (Tile.scalar (attSeqLen s0 B_Att_Seqlen))
+  ∧ s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (batchSeqLen s0 B_Seqlen))
+  ∧ s.regs .nat [] "cur_batch_start_index" =
+      some (Tile.scalar (startIndex s0 B_Seqlen sliding_window))
+  ∧ s.regs .nat [BLOCK_N] "v_loc_off" =
+      some (Tile.vec (fun j : Fin BLOCK_N =>
+        reqIdx s0 B_req_idx * stride_req_to_tokens_b +
+          (startIndex s0 B_Seqlen sliding_window + j.val) * stride_req_to_tokens_s))
+  ∧ s.regs .nat [BLOCK_N] "p_offs" =
+      some (Tile.vec (fun j : Fin BLOCK_N =>
+        pOffset s0 B_Att_Start_Loc stride_ph stride_pbs j.val))
+  ∧ s.regs .nat [1, BLOCK_DMODEL] "v_offs" =
+      some (⟨fun idx : TileIndex [1, BLOCK_DMODEL] =>
+        (s0.pids 1 / kv_group_num) * stride_vh + idx.2.1.val * stride_vd⟩ : Tile .nat [1, BLOCK_DMODEL])
+  ∧ s.regs .real [BLOCK_DMODEL] "acc" =
+      some (⟨fun idx : TileIndex [BLOCK_DMODEL] =>
+        some (partialAcc s0 Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+          B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+          stride_vbs stride_vh stride_vd kv_group_num sliding_window k idx.1.val)⟩
+        : Tile .real [BLOCK_DMODEL])
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **preLoop** (14 prelude assigns): from a clean input state (`undef = 0`), the
+prologue steps to a state satisfying `mistralInvariant … 0` — the loop-entry base
+case (`acc = partialAcc 0 = 0`, all loop-invariant registers seeded). -/
+theorem mistral_preLoop
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N : Nat)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s', stepStmts ((token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
+        B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen stride_req_to_tokens_b
+        stride_req_to_tokens_s stride_ph stride_pbs stride_vbs stride_vh stride_vd
+        stride_obs stride_oh stride_od kv_group_num sliding_window BLOCK_DMODEL
+        BLOCK_N).toAlgKernel.body.take 14) s = some s'
+      ∧ mistralInvariant Prob V Out Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+          B_Att_Seqlen s stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+          stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+          kv_group_num sliding_window BLOCK_DMODEL BLOCK_N 0 s' := by
+  rw [show ((token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx
+        B_Start_Loc B_Seqlen B_Att_Start_Loc B_Att_Seqlen stride_req_to_tokens_b
+        stride_req_to_tokens_s stride_ph stride_pbs stride_vbs stride_vh stride_vd
+        stride_obs stride_oh stride_od kv_group_num sliding_window BLOCK_DMODEL
+        BLOCK_N).toAlgKernel.body.take 14)
+      = [ Stmt.assign .nat [] "cur_batch" (Op.programId 0),
+          Stmt.assign .nat [] "cur_head" (Op.programId 1),
+          Stmt.assign .nat [] "cur_kv_head"
+            (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat kv_group_num)),
+          Stmt.assign .nat [BLOCK_N] "offs_n" (Op.arange BLOCK_N),
+          Stmt.assign .nat [BLOCK_DMODEL] "offs_d" (Op.arange BLOCK_DMODEL),
+          Stmt.assign .nat [] "cur_batch_seq_len"
+            (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+          Stmt.assign .nat [] "cur_batch_start_index"
+            (Op.where (Op.gt .nat Broadcast.nil
+                (Op.sub .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len") (Op.constNat sliding_window))
+                (Op.constNat 0))
+              (Op.sub .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len") (Op.constNat sliding_window))
+              (Op.constNat 0)),
+          Stmt.assign .nat [] "cur_batch_in_all_start_index"
+            (Op.load .nat (MemAccess.region B_Att_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+          Stmt.assign .nat [] "cur_batch_req_idx"
+            (Op.load .nat (MemAccess.region B_req_idx (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+          Stmt.assign .nat [] "cur_att_seq_len"
+            (Op.load .nat (MemAccess.region B_Att_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+          Stmt.assign .nat [BLOCK_N] "v_loc_off"
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch_req_idx") (Op.constNat stride_req_to_tokens_b))
+              (Op.mul .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_start_index") (Op.ref .nat [BLOCK_N] "offs_n"))
+                (Op.constNat stride_req_to_tokens_s))),
+          Stmt.assign .nat [BLOCK_N] "p_offs"
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_ph))
+              (Op.mul .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index") (Op.ref .nat [BLOCK_N] "offs_n"))
+                (Op.constNat stride_pbs))),
+          Stmt.assign .nat [1, BLOCK_DMODEL] "v_offs"
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat stride_vh))
+              (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d")) (Op.constNat stride_vd))),
+          Stmt.assign .real [BLOCK_DMODEL] "acc" (Op.full [BLOCK_DMODEL] (Op.const 0)) ] from rfl]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat kv_group_num)) _
+        = some (Tile.scalar (s.pids 1 / kv_group_num)) from by
+      simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+        BlockState.setReg_ne_name, BlockState.setReg_pids, Option.bind]
+      refine congrArg some ?_
+      ext idx
+      simp only [Tile.bop, Tile.scalar, BlockState.setReg_pids, IntegralDType.nat_floorDiv]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange BLOCK_N) _ = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) from by
+      rw [evalOp_arange]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange BLOCK_DMODEL) _ = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val)) from by
+      rw [evalOp_arange]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+        = some (Tile.scalar (batchSeqLen s B_Seqlen)) from by
+      simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, Option.bind, Option.pure_def]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.where (Op.gt .nat Broadcast.nil
+            (Op.sub .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len") (Op.constNat sliding_window))
+            (Op.constNat 0))
+          (Op.sub .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len") (Op.constNat sliding_window))
+          (Op.constNat 0)) _
+        = some (Tile.scalar (startIndex s B_Seqlen sliding_window)) from by
+      simp only [evalOp_where, evalOp_gt, evalOp_sub, evalOp_constNat, evalOp_ref,
+        BlockState.setReg_same, BlockState.setReg_ne_name, Option.bind]
+      refine congrArg some ?_
+      ext idx
+      simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Tile.scalar,
+        Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.gt, NumericDType.sub,
+        startIndex, batchSeqLen]
+      by_cases h : 0 < s.readMemValue .nat B_Seqlen (s.pids 0) - sliding_window
+      · rw [if_pos (by simpa using h)]
+      · simp only [Nat.not_lt, Nat.le_zero] at h
+        rw [if_neg (by simp [h]), h]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region B_Att_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+        = some (Tile.scalar (attStartLoc s B_Att_Start_Loc)) from by
+      simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, Option.bind, Option.pure_def]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region B_req_idx (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+        = some (Tile.scalar (reqIdx s B_req_idx)) from by
+      simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, Option.bind, Option.pure_def]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .nat (MemAccess.region B_Att_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+        = some (Tile.scalar (attSeqLen s B_Att_Seqlen)) from by
+      simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+        BlockState.setReg_ne_name, Option.bind, Option.pure_def]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mistral_vloc_off_eval _ BLOCK_N (reqIdx s B_req_idx) (startIndex s B_Seqlen sliding_window)
+      stride_req_to_tokens_b stride_req_to_tokens_s (by simp) (by simp) (by simp [Tile.vec])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_ph))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index") (Op.ref .nat [BLOCK_N] "offs_n"))
+              (Op.constNat stride_pbs))) _
+        = some (Tile.vec (fun j : Fin BLOCK_N =>
+            pOffset s B_Att_Start_Loc stride_ph stride_pbs j.val)) from by
+      rw [mistral_poffs_eval _ BLOCK_N (s.pids 1) (attStartLoc s B_Att_Start_Loc)
+        stride_ph stride_pbs (by simp) (by simp) (by simp [Tile.vec])]
+      refine congrArg some ?_
+      ext idx
+      simp [Tile.vec, pOffset, attStartLoc]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mistral_voffs_eval _ BLOCK_DMODEL (s.pids 1 / kv_group_num) stride_vh stride_vd
+      (by simp) (by simp [Tile.vec])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BLOCK_DMODEL] (Op.const 0)) _
+        = some (⟨fun idx : TileIndex [BLOCK_DMODEL] => some (0 : ℝ)⟩ : Tile .real [BLOCK_DMODEL]) from by
+      simp only [evalOp_full, evalOp, Option.bind]
+      refine congrArg some ?_
+      ext idx
+      rfl))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by simp, ?_, ?_, by simp, by simp, by simp, by simp [Tile.vec], by simp [Tile.vec],
+    by simp, by simp, by simp, by simp [Tile.vec], by simp [Tile.vec], by simp, ?_⟩
+  · funext rg o; simp
+  · intro rg o; simp [hundef]
+  · -- acc = partialAcc 0 = 0
+    simp only [BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    simp [partialAcc]
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
