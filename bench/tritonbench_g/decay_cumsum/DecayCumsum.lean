@@ -1714,4 +1714,97 @@ abbrev decay_cumsum_prepare_python_test_shape_output_summary
   decay_cumsum_prepare_python_test_shape_closed_output_summary
     Q K G QG KG t_rel s hQ_QG hQ_KG hG_QG hG_KG hQG_KG
 
+/-! ## Genuine `bwd_decay_global_cumsum` closed forms
+
+The backward kernel traverses the chunk in reverse (`range(BT-1,-1,-1)`) and at
+each row `j` performs three honest computations:
+
+* `dq_inter[j] = dq_inner[j] + dq_inter_in[j] * exp2(g[j])`
+* `dk_inter[j] = dk_inner[j] + dk_inter_in[j] * exp2(g[BT-1] - g[j])`
+* `dg[j] = Σ_{j' = j}^{BT-1} (dq_inter[j'] * q[j'] - dk_inter[j'] * k[j'])`
+  (the reverse cumulative sum `cum_grad_dg`).
+
+`dq_inter`/`dk_inter` are pointwise per-row maps; `dg` is a reverse prefix scan.
+All three are certified below against genuine closed forms — *not* the executed
+kernel readback (`decayBackwardSurfaceValue`). -/
+
+/-- **Genuine `dq_inter` closed form.** At chunk row `t_rel` and lane `i`, the
+backward kernel writes `dq_inner[idx] + dq_inter_in[idx] * exp2(g[idx])` into
+`dq_inter`, with `exp2(x) = Real.exp (x * Real.log 2)`. -/
+noncomputable def bwdDQInterClosed
+    (s : BlockState) (DQInner DQInter G : RegionName)
+    (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) (i : Fin BK) : ℝ :=
+  s.readMem DQInner (offset s s_qk_h DK t_rel.val BT BK i) +
+    s.readMem DQInter (offset s s_qk_h DK t_rel.val BT BK i) *
+      Real.exp (s.readMem G (offset s s_qk_h DK t_rel.val BT BK i) * Real.log 2)
+
+/-- **Genuine `dk_inter` closed form.** At chunk row `t_rel` and lane `i`, the
+backward kernel writes
+`dk_inner[idx] + dk_inter_in[idx] * exp2(g[row BT-1] - g[idx])` into `dk_inter`,
+where `g[row BT-1]` is the captured `last_g`. -/
+noncomputable def bwdDKInterClosed
+    (s : BlockState) (DKInner DKInter G : RegionName)
+    (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) (i : Fin BK) : ℝ :=
+  s.readMem DKInner (offset s s_qk_h DK t_rel.val BT BK i) +
+    s.readMem DKInter (offset s s_qk_h DK t_rel.val BT BK i) *
+      Real.exp ((s.readMem G (offset s s_qk_h DK (BT - 1) BT BK i) -
+        s.readMem G (offset s s_qk_h DK t_rel.val BT BK i)) * Real.log 2)
+
+/-- The per-row `dg` summand `dq_inter[j] * q[j] - dk_inter[j] * k[j]`, written
+in terms of the genuine `dq_inter`/`dk_inter` closed forms above. -/
+noncomputable def bwdDGSummand
+    (s : BlockState) (DQInner DQInter DKInner DKInter Q K G : RegionName)
+    (s_qk_h DK BT BK : Nat) (j : Fin BT) (i : Fin BK) : ℝ :=
+  bwdDQInterClosed s DQInner DQInter G s_qk_h DK BT BK j i *
+      s.readMem Q (offset s s_qk_h DK j.val BT BK i) -
+    bwdDKInterClosed s DKInner DKInter G s_qk_h DK BT BK j i *
+      s.readMem K (offset s s_qk_h DK j.val BT BK i)
+
+/-- **Genuine `dg` closed form.** At chunk row `t_rel` and lane `i`, the backward
+kernel writes the reverse cumulative sum
+`Σ_{j = t_rel}^{BT-1} (dq_inter[j]*q[j] - dk_inter[j]*k[j])` into `dg`. This is
+the honest reverse-prefix-scan specification of the carried `cum_grad_dg`
+accumulator (the `range(BT-1,-1,-1)` loop threads `cum_grad_dg += dq*q - dk*k`).
+This is *not* the executed kernel readback. -/
+noncomputable def bwdDGClosed
+    (s : BlockState) (DQInner DQInter DKInner DKInter Q K G : RegionName)
+    (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) (i : Fin BK) : ℝ :=
+  ∑ d : Fin (BT - t_rel.val),
+    bwdDGSummand s DQInner DQInter DKInner DKInter Q K G s_qk_h DK BT BK
+      ⟨t_rel.val + d.val, by omega⟩ i
+
+/-! ### Proof recipe (backward closed forms)
+
+The three genuine closed forms above (`bwdDQInterClosed`, `bwdDKInterClosed`,
+`bwdDGClosed`) are the honest, non self-referential specifications that should
+replace `decayBackwardSurfaceValue`. Connecting them to the executed
+`bwd_decay_global_cumsum_surface` follows the **forward** closed-form recipe in
+this file (`fwd_decay_cumsum_full_surface_row{0,1}_closed`), but the backward
+loop body is ~25 statements with a conditional `last_g` capture and three masked
+stores per iteration, traversed over two `range(BT-1,-1,-1)` rows (lowered to a
+forward `forRangeDyn "__rev_t" 0 2 1` with `t := 1 - __rev_t`). A single
+`simp [exec, …, evalOp.eq_def, stepForRangeAux.*]` blast does *not* scale to this
+body (it does not terminate within ~9 min even at 8M heartbeats), so the
+mandated per-statement architecture is required:
+
+1. `exec → stepStmts toAlgKernel.body` via
+   `bwd_decay_global_cumsum_surface_toAlgorithm_supported`.
+2. Drive the `forRangeDyn` loop with `forRangeAux_inv` /
+   `VeriTile.Triton.forRangeDyn_inv` (carry invariant on `cum_grad_dg` =
+   partial reverse prefix sum), *not* a `simp` over the whole loop.
+3. Per body statement: `stepStmts.cons_some` + `simp only` over the named
+   `evalOp_*` lemmas (`evalOp_add/mul/sub/ref/…`, `evalOp_ref_setReg*`) — never
+   `evalOp.eq_def` whnf over the nested `setReg` literal state.
+4. Read back each output with the masked-scatter lemmas
+   (`scatter_readback_prop_masked_nd`,
+   `scatter_prop_masked_preserves_other_{offset,region}`), peeling the later
+   stores in reverse, exactly as the forward row-1 proof does.
+5. Bridge to `ComputeCorrect.Realizes` via `realizes_writeIf_iff` +
+   `computeCorrect_of_toAlgKernel`, then delete `decayBackwardSurfaceValue`.
+
+The `dq_inter`/`dk_inter` faces are pointwise (no carry); only `dg` needs the
+reverse-scan invariant. Region-distinctness side hypotheses (`DQInter ≠ DKInter`
+etc.) are needed so a later store does not clobber an earlier readback, mirroring
+the forward `G ≠ GO` and `prepare` `Q ≠ QG …` hypotheses. -/
+
 end VeriTile.Bench.TritonBenchG.DecayCumsum
