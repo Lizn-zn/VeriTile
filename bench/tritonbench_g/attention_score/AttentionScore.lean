@@ -1651,4 +1651,127 @@ theorem score_loop_eval
       = some (case1OutClosedForm s Q K M sm_scale idx.1)
     rw [case1OutClosedForm_eq_colSum]
 
+/-- The **genuine** case-1 store offset for output column `i` (the address the
+kernel writes): `off_z·512 + off_h·128 + start_n·64 + i`. -/
+def case1OutStoreOffset (s : BlockState) (i : Fin 64) : Nat :=
+  (s.pids 1 / 4) * 512 + (s.pids 1 % 4) * 128 + (s.pids 0 * 64 + i.val)
+
+/-- The store mask: the o_range `< NKV_CTX = 128`. -/
+def case1OutActive (s : BlockState) (i : Fin 64) : Prop := s.pids 0 * 64 + i.val < 128
+
+instance (s : BlockState) (i : Fin 64) : Decidable (case1OutActive s i) := by
+  unfold case1OutActive; infer_instance
+
+set_option maxHeartbeats 2000000 in
+/-- **Post-loop store readback.** From the post-loop state `sL` (with `o` =
+`case1OutClosedForm`, plus `off_z`/`off_h`/`start_n` readbacks), the 4 post
+statements (`o_offset`, `o_range`, `o_ptrs`, masked store) write
+`case1OutClosedForm` to `Out` at every active column. -/
+theorem score_post_eval
+    (s sL : BlockState) (Q K M Out : RegionName) (sm_scale : ℝ) (i : Fin 64)
+    (hmem : sL.mem = s.mem)
+    (hoz : sL.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / 4)))
+    (hoh : sL.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % 4)))
+    (hsn : sL.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0)))
+    (ho : sL.regs .real [64] "o" = some ⟨fun idx : TileIndex [64] =>
+        some (case1OutClosedForm s Q K M sm_scale idx.1)⟩) :
+    ∃ sF, stepStmts (attentionScoreCase1Post Out) sL = some sF
+      ∧ sF.readMem Out (case1OutStoreOffset s i)
+        = (if case1OutActive s i then case1OutClosedForm s Q K M sm_scale i
+            else s.readMem Out (case1OutStoreOffset s i)) := by
+  unfold attentionScoreCase1Post
+  -- o_offset = off_z*512 + off_h*128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat 512))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat 128))) _
+        = some (Tile.scalar ((s.pids 1 / 4) * 512 + (s.pids 1 % 4) * 128)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_constNat, evalOp_ref, hoz, hoh, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- o_range = arange 64 + start_n*64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.scalarR (Op.arange 64)
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 64))) _
+        = some (⟨fun idx : TileIndex [64] => idx.1.val + s.pids 0 * 64⟩ : Tile .nat [64]) from by
+      rw [evalOp_add, evalOp_mul]
+      simp only [evalOp_arange, evalOp_constNat, evalOp_ref, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, hsn, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul, Tile.vec_data]))]
+  -- o_ptrs = Out + o_offset + o_range
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add NumericDType.nat Broadcast.scalarL (Op.ref .nat [] "o_offset")
+          (Op.ref .nat [64] "o_range"))) _
+        = some (⟨fun idx : TileIndex [64] =>
+            (Out.cast, case1OutStoreOffset s idx.1)⟩ : Tile .ptr [64]) from by
+      rw [evalOp_ptrAdd', evalOp_add]
+      simp only [evalOp_ptrBase', evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add, case1OutStoreOffset]
+        omega))]
+  -- masked store: resolve to an explicit masked scatter foldl
+  set sP := (((sL.setReg "o_offset" .nat [] (Tile.scalar ((s.pids 1 / 4) * 512 + (s.pids 1 % 4) * 128))).setReg
+      "o_range" .nat [64] (⟨fun idx : TileIndex [64] => idx.1.val + s.pids 0 * 64⟩ : Tile .nat [64])).setReg
+      "o_ptrs" .ptr [64] (⟨fun idx : TileIndex [64] => (Out.cast, case1OutStoreOffset s idx.1)⟩ : Tile .ptr [64]))
+    with hsPdef
+  set offFn : TileIndex [64] → Nat := fun idx => case1OutStoreOffset s idx.1 with hoffFn
+  set valFn : TileIndex [64] → ℝ := fun idx => case1OutClosedForm s Q K M sm_scale idx.1 with hvalFn
+  set mskFn : TileIndex [64] → Bool := fun idx => decide (idx.1.val + s.pids 0 * 64 < 128) with hmskFn
+  have hStore : stepStmt (Stmt.store .real [64] (MemAccess.ptr (Op.ref .ptr [64] "o_ptrs"))
+      (Op.ref .real [64] "o")
+      (MaskOpt.mask (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [64] "o_range")
+        (Op.constNat 128)))) sP
+      = some ((TileShape.allIndices [64]).foldl
+          (fun acc idx => if mskFn idx then acc.writeMem Out (offFn idx) (valFn idx) else acc) sP) := by
+    have hoP : sP.regs .real [64] "o" = some ⟨fun idx : TileIndex [64] =>
+        some (case1OutClosedForm s Q K M sm_scale idx.1)⟩ := by
+      rw [hsPdef, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+      exact ho
+    have hrangeP : sP.regs .nat [64] "o_range"
+        = some (⟨fun idx : TileIndex [64] => idx.1.val + s.pids 0 * 64⟩ : Tile .nat [64]) := by
+      rw [hsPdef, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_same]
+    have hptrsP : sP.regs .ptr [64] "o_ptrs"
+        = some (⟨fun idx : TileIndex [64] => (Out.cast, case1OutStoreOffset s idx.1)⟩ : Tile .ptr [64]) := by
+      rw [hsPdef, BlockState.setReg_same]
+    simp only [stepStmt, evalOp_ref, hoP, hrangeP, hptrsP, evalOp_lt, evalOp_constNat,
+      Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    refine congrArg some ?_
+    refine congrArg (fun f => List.foldl f sP (TileShape.allIndices [64])) ?_
+    funext acc idx
+    by_cases hm : idx.1.val + s.pids 0 * 64 < 128
+    · simp only [Tile.cop, Tile.scalar, Broadcast.rightIndex, Broadcast.leftIndex,
+        ComparableDType.lt, hmskFn, hm, decide_true, if_true, hoffFn, hvalFn, case1OutStoreOffset,
+        Region.cast_id, BlockState.writeMemTyped_real, FloatDType.storeValue,
+        FloatDType.real_toWithBot, WithBot.unbotD_coe, WithBot.unbotD_some]
+    · simp only [Tile.cop, Tile.scalar, Broadcast.rightIndex, Broadcast.leftIndex,
+        ComparableDType.lt, hmskFn, hm, decide_false, Bool.false_eq_true, if_false,
+        decide_eq_true_eq]
+  rw [stepStmts.cons_some hStore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  -- readback at column i
+  have hinj : Function.Injective offFn := by
+    intro a b hab
+    simp only [hoffFn, case1OutStoreOffset] at hab
+    exact Prod.ext (Fin.ext (by omega)) (by cases a.2; cases b.2; rfl)
+  have hread := BlockState.scatter_readback_masked_nd (region := Out) sP offFn valFn mskFn
+    hinj (i, PUnit.unit)
+  rw [show case1OutStoreOffset s i = offFn (i, PUnit.unit) from rfl, hread]
+  have hmsk_iff : (mskFn (i, PUnit.unit) = Bool.true) ↔ case1OutActive s i := by
+    simp only [hmskFn, decide_eq_true_eq, case1OutActive]; omega
+  by_cases hi : case1OutActive s i
+  · rw [if_pos (hmsk_iff.mpr hi), if_pos hi]
+  · rw [if_neg (fun h => hi (hmsk_iff.mp h)), if_neg hi]
+    rw [show offFn (i, PUnit.unit) = case1OutStoreOffset s i from rfl]
+    simp only [hsPdef, BlockState.setReg_readMem]
+    unfold BlockState.readMem; rw [hmem]
+
 end VeriTile.Bench.TritonBenchG.AttentionScore
