@@ -1166,6 +1166,32 @@ noncomputable def flashState
     ℝ × ℝ × ℝ :=
   (flashKeysUpto qT kT vT scale causal qStart hi i d).foldl osStep (0, 0, 0)
 
+/-- **⊥-seeded running max** of the streamed key prefix `[0, hi)`, exactly the
+value the kernel carries in its `max` register: `max = tl.zeros([BM]) − inf`
+seeds at `⊥` (NOT real `0` like `flashState.1`, which is the `blockMax 0` fold).
+The `WithBot` `⊔`-fold (`foldr ⊔ ⊥`) of the coerced per-key scores; `⊥` on the
+empty / `hi = 0` window (matching the kernel's preLoop init). -/
+noncomputable def flashRunningMax
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    WithBot ℝ :=
+  ((flashKeysUpto qT kT vT scale causal qStart hi i d).map
+    (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+
+/-- The `⊥`-seeded running max at the empty / `hi = 0` window is `⊥` — the kernel's
+preLoop `max` init (`tl.zeros − inf`). The base case making `attnInvariant … 0`
+satisfiable (`some 0 ≠ ⊥` was the prior bug). -/
+theorem flashRunningMax_zero
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashRunningMax qT kT vT scale causal qStart 0 i d = ⊥ := by
+  unfold flashRunningMax flashKeysUpto
+  rw [show (List.finRange SEQLEN).filterMap
+        (fun j : Fin SEQLEN => if j.val < 0 ∧ (causal → j.val ≤ qStart + i.val)
+          then some (flashKV qT kT vT scale i d j) else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
 /-- At the full window `hi = SEQLEN`, the non-causal key list is the full
 `attnKeyList`. -/
 theorem flashKeysUpto_full
@@ -1390,7 +1416,7 @@ noncomputable def attnInvariant
   let scale := sm_scale * log2e
   s.pids = s0.pids ∧ i % BLOCK_N = 0 ∧ i ≤ hiTotal ∧
   (s.regs .real [BLOCK_M] "max" = some ⟨fun r : TileIndex [BLOCK_M] =>
-      ((flashState qT kT vT scale causal qStart i r.1 ⟨0, hDIM⟩).1 : ℝ)⟩) ∧
+      flashRunningMax qT kT vT scale causal qStart i r.1 ⟨0, hDIM⟩⟩) ∧
   (s.regs .real [BLOCK_M] "denom" = some ⟨fun r : TileIndex [BLOCK_M] =>
       ((flashState qT kT vT scale causal qStart i r.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩) ∧
   (s.regs .real [BLOCK_M, DIM] "out_buffer" = some ⟨fun idx : TileIndex [BLOCK_M, DIM] =>
@@ -1759,5 +1785,108 @@ theorem flashBlock_blockMax
   by_cases hq : (causal → c * BLOCK_N + jL.val ≤ qStart + i.val)
   · rw [if_pos hq, if_pos hq, hF]; simp only [dif_pos hb]
   · rw [if_neg hq, if_neg hq]
+
+/-! ## ⊥-seeded running-max advance (binds the kernel's `max` register)
+
+The kernel's `max` register seeds at `⊥` (`tl.zeros − inf`), not real `0`, so the
+loop invariant binds it to `flashRunningMax` (the `WithBot ⊔`-fold), not
+`flashState.1` (the `blockMax 0` real fold). These reuse the banked block-reduction
+bridges (`flash_filterMap_foldr_sup` / `flash_window_sup_reindex`) in their `⊥`-seed
+form. -/
+
+/-- `flashRunningMax` is channel-independent (depends only on the score
+projections, like `flashState_fst_eq`). -/
+theorem flashRunningMax_eq
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
+    flashRunningMax qT kT vT scale causal qStart hi i d
+      = flashRunningMax qT kT vT scale causal qStart hi i d' := by
+  unfold flashRunningMax
+  rw [show (fun p : ℝ × ℝ => ((p.1 : ℝ) : WithBot ℝ))
+        = (fun x : ℝ => ((x : ℝ) : WithBot ℝ)) ∘ (fun p => p.1) from rfl,
+    ← List.map_map, ← List.map_map,
+    flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
+
+/-- **One-block advance** of the `⊥`-seeded running max: streaming block `c`
+(`[c·BLOCK_N, (c+1)·BLOCK_N)`) advances `flashRunningMax` by `⊔` with that block's
+masked score `Finset.sup` over the `BLOCK_N` lanes — exactly the kernel's
+`max_new = tl.maximum(max, tl.max(qk, 1))`. Reuses the banked `flash_filterMap_foldr_sup`
++ `flash_window_sup_reindex` bridges, `⊥`-seed variant. -/
+theorem flashRunningMax_succ
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (hwin : (c + 1) * BLOCK_N ≤ SEQLEN) :
+    flashRunningMax qT kT vT scale causal qStart ((c + 1) * BLOCK_N) i d
+      = flashRunningMax qT kT vT scale causal qStart (c * BLOCK_N) i d
+        ⊔ Finset.univ.sup (fun jL : Fin BLOCK_N =>
+            if (causal → c * BLOCK_N + jL.val ≤ qStart + i.val) then
+              ((scale * Finset.univ.sum (fun e : Fin DIM =>
+                  qT (i, e, PUnit.unit) * kT (⟨c * BLOCK_N + jL.val, by
+                    have := jL.isLt; have : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+                    omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+            else ⊥) := by
+  unfold flashRunningMax
+  rw [flashKeysUpto_succ, List.map_append, List.foldr_append]
+  have hblock : ((flashBlock qT kT vT scale causal qStart BLOCK_N c i d).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun jL : Fin BLOCK_N =>
+          if (causal → c * BLOCK_N + jL.val ≤ qStart + i.val) then
+            ((scale * Finset.univ.sum (fun e : Fin DIM =>
+                qT (i, e, PUnit.unit) * kT (⟨c * BLOCK_N + jL.val, by
+                  have := jL.isLt; have : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+                  omega⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+          else ⊥) := by
+    rw [show (flashBlock qT kT vT scale causal qStart BLOCK_N c i d).map
+          (fun p => ((p.1 : ℝ) : WithBot ℝ))
+        = ((List.finRange SEQLEN).filterMap (fun j : Fin SEQLEN =>
+            if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+            then some ((scale * Finset.univ.sum (fun e : Fin DIM =>
+                  qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)) : ℝ)) else none)).map
+            (fun x => ((x : ℝ) : WithBot ℝ)) from by
+      unfold flashBlock flashKV
+      rw [List.map_filterMap, List.map_filterMap]
+      apply List.filterMap_congr
+      intro j _
+      by_cases hj : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val) <;>
+        simp [hj]]
+    rw [flash_filterMap_foldr_sup SEQLEN
+      (fun j => c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val))
+      (fun j => scale * Finset.univ.sum (fun e : Fin DIM => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)))]
+    classical
+    set F : Nat → WithBot ℝ := fun jg =>
+      if h : jg < SEQLEN then
+        ((scale * Finset.univ.sum (fun e : Fin DIM =>
+            qT (i, e, PUnit.unit) * kT (⟨jg, h⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+      else ⊥ with hF
+    rw [show (Finset.univ.sup (fun j : Fin SEQLEN =>
+          if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+          then ((scale * Finset.univ.sum (fun e : Fin DIM => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+          else ⊥))
+        = Finset.univ.sup (fun j : Fin SEQLEN =>
+            if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+            then F j.val else ⊥) from by
+      apply Finset.sup_congr rfl
+      intro j _
+      by_cases hw : c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+      · rw [if_pos hw, if_pos hw, hF]; simp only [dif_pos j.isLt]
+      · rw [if_neg hw, if_neg hw]]
+    rw [flash_window_sup_reindex BLOCK_N c SEQLEN hwin F
+      (fun jg => causal → jg ≤ qStart + i.val)]
+    apply Finset.sup_congr rfl
+    intro jL _
+    have hb : c * BLOCK_N + jL.val < SEQLEN := by
+      have h1 := jL.isLt
+      have h2 : (c + 1) * BLOCK_N = c * BLOCK_N + BLOCK_N := by ring
+      omega
+    by_cases hq : (causal → c * BLOCK_N + jL.val ≤ qStart + i.val)
+    · rw [if_pos hq, if_pos hq, hF]; simp only [dif_pos hb]
+    · rw [if_neg hq, if_neg hq]
+  rw [hblock]
+  generalize hpre : (flashKeysUpto qT kT vT scale causal qStart (c * BLOCK_N) i d).map
+    (fun p => ((p.1 : ℝ) : WithBot ℝ)) = preL
+  clear hblock hpre
+  induction preL with
+  | nil => simp
+  | cons a t ih => simp only [List.foldr_cons, ih]; rw [sup_assoc]
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
