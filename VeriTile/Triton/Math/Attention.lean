@@ -170,6 +170,62 @@ theorem attentionRealBase2PerKeyScale_eq_streaming {M S D : Nat}
     Function.comp]
   rfl
 
+/-! ### Base-2 attention with a scalar score scale and an additive bias
+
+Matches relative-position-bias flash kernels (`attention_kernel_aligned`) that
+(a) use `exp2` for the softmax, (b) fold a *scalar* score scale `qk_scale =
+sm_scale · log2(e)` into `q` (so every key shares the same scale), and (c) add a
+per-`(query, key)` bias `bias i j` to the score *after* scaling — here
+`bias i j = b0 + b1` of the fused `rel_h + rel_w` position table. For query `i`,
+output channel `d`:
+
+`out[i,d] = (Σ_j 2^(scale · raw i j + bias i j) · V[j,d])
+              / (Σ_j 2^(scale · raw i j + bias i j))`,
+
+where `raw i j = Σ_e Q[i,e] · K[j,e]`. Using `2^x = exp(log 2 · x)`, this is the
+base-`e` softmax of `log 2 · (scale · raw + bias)`. With `bias ≡ 0` it
+specialises to `attentionRealBase2PerKeyScale` with the constant key scale
+`scale`. -/
+noncomputable def attentionRealBase2ScalarScaleBias {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (bias : Fin M → Fin S → ℝ) : TileIndex [M, D] → ℝ :=
+  fun (i, d, _) =>
+    let raw := fun j : Fin S =>
+      Finset.univ.sum (fun e : Fin D => Q (i, e, PUnit.unit) * K (j, e, PUnit.unit))
+    let weight := fun j : Fin S => Real.exp (Real.log 2 * (scale * raw j + bias i j))
+    let denom := Finset.univ.sum (fun j : Fin S => weight j)
+    let numer := Finset.univ.sum (fun j : Fin S => weight j * V (j, d, PUnit.unit))
+    numer / denom
+
+/-- The streamed `(score, value)` list the aligned kernel folds over: score
+`scale · raw i j + bias i j` (the `qk` register after the dot, scale-folded into
+`q`, and the `b0 + b1` bias add), value `V[j,d]`. -/
+noncomputable def attnKeyListBias {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (bias : Fin M → Fin S → ℝ) (i : Fin M) (d : Fin D) :
+    List (ℝ × ℝ) :=
+  List.ofFn (fun j : Fin S =>
+    (scale * Finset.univ.sum (fun e : Fin D =>
+        Q (i, e, PUnit.unit) * K (j, e, PUnit.unit)) + bias i j,
+      V (j, d, PUnit.unit)))
+
+/-- **Bridge: the base-2 scalar-scale + additive-bias attention spec IS the
+online-softmax fold.** Mirrors `attentionRealBase2PerKeyScale_eq_streaming`: the
+closed form equals the `acc / l` ratio produced by streaming `osStep` over
+`attnKeyListBias` from the neutral start. The remaining `exec` proof only has to
+show the kernel's loop realizes this fold; this lemma then delivers the closed
+form. -/
+theorem attentionRealBase2ScalarScaleBias_eq_streaming {M S D : Nat}
+    (Q : TileIndex [M, D] → ℝ) (K V : TileIndex [S, D] → ℝ)
+    (scale : ℝ) (bias : Fin M → Fin S → ℝ) (i : Fin M) (d : Fin D) :
+    attentionRealBase2ScalarScaleBias Q K V scale bias (i, d, PUnit.unit)
+      = (let st := (attnKeyListBias Q K V scale bias i d).foldl osStep (0, 0, 0)
+         st.2.2 / st.2.1) := by
+  rw [osStep_foldl_eq_batch]
+  simp only [attentionRealBase2ScalarScaleBias, attnKeyListBias, List.map_ofFn,
+    List.sum_ofFn, Function.comp]
+  rfl
+
 /-! ### Block-level online softmax (matching the kernel's loop)
 
 The kernel does not stream one key at a time; each loop iteration absorbs a whole
