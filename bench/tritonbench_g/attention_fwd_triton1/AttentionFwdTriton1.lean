@@ -1645,4 +1645,65 @@ theorem aft1_accDot_op_eval {M Kd N : Nat} (s' : BlockState)
   simp only [hdt, Tile.bop, Broadcast.consSame, Broadcast.leftIndex, Broadcast.rightIndex,
     haccf m n, NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
 
+/-- The `b_o` output tile of chunk `c` (data `(t,d) ↦ aft1Out`). -/
+noncomputable def aft1BoTile (s : BlockState) (Q K V : RegionName) (c : Nat) :
+    Tile .real [32, 128] :=
+  ⟨fun idx => some (aft1Out s Q K V c idx.1 idx.2.1)⟩
+
+/-- The local-only `b_o` tile of chunk `c` before the recurrent add (= aft1LocalOut). -/
+noncomputable def aft1BoLocalTile (s : BlockState) (Q K V : RegionName) (c : Nat) :
+    Tile .real [32, 128] :=
+  ⟨fun idx => some (aft1LocalOut s Q K V c idx.1 idx.2.1)⟩
+
+/-- The intra-chunk score tile `b_s[t,tk] = Σ_e b_q[t,e]·b_k[e,tk]`. -/
+noncomputable def aft1BsTile (s : BlockState) (Q K : RegionName) (c : Nat) :
+    Tile .real [32, 32] :=
+  ⟨fun idx => some (∑ e : Fin 128, aft1QCell s Q c idx.1.val e.val
+      * aft1KCell s K c e.val idx.2.1.val)⟩
+
+/-- `b_q` (post-scale) load equals `aft1BqTile` when the `p_q` register points at
+chunk `c`'s Q block and memory matches `s`. -/
+theorem aft1_load_bq_eq (s sin' : BlockState) (Q : RegionName) (c : Nat)
+    (hmem : ∀ rg off, sin'.readMem rg off = s.readMem rg off)
+    (hpq : sin'.regs .blockPtr [32, 128] "p_q" = some
+      ⟨fun _ => BlockPtr.mk Q (s.pids 0 * 131072) [1024, 128] [32, 128] [128, 1] [c * 32, 0]⟩) :
+    evalOp (Op.mul .real Broadcast.scalarR
+        (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [32, 128] "p_q") []) MaskOpt.none)
+        (Op.const (√128)⁻¹)) sin'
+      = some (aft1BqTile s Q c) := by
+  rw [evalOp_mul, aft1_load_bp_2d_ref Q sin' "p_q" (s.pids 0 * 131072) 1024 128 32 128 128 1
+    (c * 32) 0 hpq]
+  simp only [evalOp_const, Option.bind_some]
+  refine congrArg some ?_
+  ext idx; obtain ⟨t, e, u⟩ := idx
+  simp only [Tile.bop, Broadcast.scalarR, Broadcast.leftIndex, Broadcast.rightIndex,
+    Tile.scalar, aft1BqTile, aft1QCell, NumericDType.mul, WithBot.realMul,
+    Option.map₂, Option.bind, Option.map, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one]
+
+/-- `b_k` load equals `aft1BkTile`. -/
+theorem aft1_load_bk_eq (s sin' : BlockState) (K : RegionName) (c : Nat)
+    (hmem : ∀ rg off, sin'.readMem rg off = s.readMem rg off)
+    (hpk : sin'.regs .blockPtr [128, 32] "p_k" = some
+      ⟨fun _ => BlockPtr.mk K (s.pids 0 * 131072) [128, 1024] [128, 32] [1, 128] [0, c * 32]⟩) :
+    evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [128, 32] "p_k") []) MaskOpt.none)
+        sin'
+      = some (aft1BkTile s K c) := by
+  rw [aft1_load_bp_2d_ref K sin' "p_k" (s.pids 0 * 131072) 128 1024 128 32 1 128 0 (c * 32) hpk]
+  refine congrArg some ?_
+  ext idx; obtain ⟨e, tk, u⟩ := idx
+  simp only [aft1BkTile, aft1KCell, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one]
+
+/-- `b_v` load equals `aft1BvTile`. -/
+theorem aft1_load_bv_eq (s sin' : BlockState) (V : RegionName) (c : Nat)
+    (hmem : ∀ rg off, sin'.readMem rg off = s.readMem rg off)
+    (hpv : sin'.regs .blockPtr [32, 128] "p_v" = some
+      ⟨fun _ => BlockPtr.mk V (s.pids 0 * 131072) [1024, 128] [32, 128] [128, 1] [c * 32, 0]⟩) :
+    evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [32, 128] "p_v") []) MaskOpt.none)
+        sin'
+      = some (aft1BvTile s V c) := by
+  rw [aft1_load_bp_2d_ref V sin' "p_v" (s.pids 0 * 131072) 1024 128 32 128 128 1 (c * 32) 0 hpv]
+  refine congrArg some ?_
+  ext idx; obtain ⟨tk, d, u⟩ := idx
+  simp only [aft1BvTile, aft1VCell, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
