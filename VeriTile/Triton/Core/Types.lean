@@ -175,6 +175,49 @@ def address (ptr : BlockPtr) (idx : List Nat) : Nat :=
         decide (i < rows ∧ colOff + j < cols) := by
   simp [BlockPtr.inBounds, checkedInBounds, nthD]
 
+/-- 2D block-pointer address with arbitrary offsets on both axes. -/
+@[simp] theorem address_2d_offsets
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff colOff : Nat)
+    (i j : Nat) :
+    BlockPtr.address
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS],
+        offsets := [rowOff, colOff] }
+      [i, j] =
+        base + (rowOff + i) * strideT + (colOff + j) * strideS := by
+  simp [BlockPtr.address, nthD, List.range, List.range.loop]; omega
+
+/-- 2D block-pointer in-bounds with arbitrary offsets on both axes,
+checked axes `[0, 1]`. -/
+@[simp] theorem inBounds_2d_offsets
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff colOff : Nat)
+    (i j : Nat) :
+    BlockPtr.inBounds
+      { region := region, baseOffset := base, parentShape := [rows, cols],
+        blockShape := [BT, BS], strides := [strideT, strideS],
+        offsets := [rowOff, colOff] }
+      [i, j] [0, 1] =
+        decide (rowOff + i < rows ∧ colOff + j < cols) := by
+  simp [BlockPtr.inBounds, checkedInBounds, nthD]
+
+/-- 1D block-pointer address with arbitrary offset. -/
+@[simp] theorem address_1d_offset
+    (region : RegionName) (base len BT stride off : Nat) (i : Nat) :
+    BlockPtr.address
+      { region := region, baseOffset := base, parentShape := [len],
+        blockShape := [BT], strides := [stride], offsets := [off] }
+      [i] = base + (off + i) * stride := by
+  simp [BlockPtr.address, nthD, List.range, List.range.loop]
+
+/-- 1D block-pointer in-bounds with arbitrary offset, checked axis `[0]`. -/
+@[simp] theorem inBounds_1d_offset
+    (region : RegionName) (base len BT stride off : Nat) (i : Nat) :
+    BlockPtr.inBounds
+      { region := region, baseOffset := base, parentShape := [len],
+        blockShape := [BT], strides := [stride], offsets := [off] }
+      [i] [0] = decide (off + i < len) := by
+  simp [BlockPtr.inBounds, checkedInBounds, nthD]
+
 def advance (ptr : BlockPtr) (deltas : List Nat) : BlockPtr :=
   let offsets :=
     (List.range (max ptr.offsets.length deltas.length)).map

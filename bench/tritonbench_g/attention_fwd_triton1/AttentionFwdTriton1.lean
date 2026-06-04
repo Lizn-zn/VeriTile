@@ -1349,4 +1349,77 @@ theorem attention_fwd_triton1_body_split
               (aft1LoopBody Q K V H O STORE IFCOND)] := by
   rfl
 
+/-! ### Per-statement eval recipes (block-ptr loads + matmuls)
+
+Ported, self-contained versions of the generic block-pointer-load / matmul
+readout recipes used to step the chunk loop body. -/
+
+theorem aft1_withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) := by
+  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
+  exact (WithBot.coe_sum Finset.univ g).symm
+
+/-- **2D dot element lemma.** For all-`some` operand tiles `a : [M,K]`, `b : [K,N]`,
+the `(m, n)` cell of `dot a b` is `Σ_e a[m,e]·b[e,n]`. -/
+theorem aft1_dot2d_elem {M K N : Nat} (a : Tile .real [M, K]) (b : Tile .real [K, N])
+    (m : Fin M) (n : Fin N) (fa fb : Fin K → ℝ)
+    (ha : ∀ e : Fin K, a.data (m, e, PUnit.unit) = some (fa e))
+    (hb : ∀ e : Fin K, b.data (e, n, PUnit.unit) = some (fb e)) :
+    (Tile.dot [] a b).data (m, n, PUnit.unit)
+      = some (Finset.univ.sum fun e : Fin K => fa e * fb e) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (a.data (m, e, PUnit.unit)) (b.data (e, n, PUnit.unit))))
+      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fa e * fb e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [ha e, hb e]; rfl)]
+  exact aft1_withBot_sum_some _
+
+/-- Scalar offset op `name * c` evaluates to `scalar (val * c)` given `name = val`. -/
+theorem aft1_mulConst_eval (s : BlockState) (name : RegName) (val c : Nat)
+    (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat c)) s
+      = some (Tile.scalar (val * c)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hr, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- **2D `makeBlockPtrDynOffsets` eval recipe.** -/
+theorem aft1_makeBlockPtr_2d_eval (rg : RegionName) (s : BlockState)
+    (baseOp : Op .nat []) (rowOffOp colOffOp : Op .nat [])
+    (parentShape blockShape strides : List Nat)
+    (base rowOff colOff : Nat)
+    (hbase : evalOp baseOp s = some (Tile.scalar base))
+    (hrow : evalOp rowOffOp s = some (Tile.scalar rowOff))
+    (hcol : evalOp colOffOp s = some (Tile.scalar colOff)) :
+    evalOp (Op.makeBlockPtrDynOffsets rg baseOp parentShape blockShape strides
+        [rowOffOp, colOffOp]) s
+      = some (⟨fun _ => BlockPtr.mk rg base parentShape blockShape strides
+          [rowOff, colOff]⟩ : Tile .blockPtr blockShape) := by
+  simp only [evalOp, hbase, hrow, hcol, List.mapM, List.mapM.loop, bind, Option.bind,
+    Tile.scalar, List.reverse_cons, List.reverse_nil, List.append_nil, List.nil_append,
+    List.cons_append]
+
+/-- **No-mask, no-boundary-check 2D block-pointer load through a bound register
+`name`.** With empty `boundaryCheck` the in-bounds gate is vacuously true, so every
+lane `(i,j)` reads the genuine memory cell `base + (rowOff+i)·strideT + (colOff+j)·strideS`.
+This matches `attention_fwd_kernel`'s `tl.load(p_x)` (no boundary check). -/
+theorem aft1_load_bp_2d_ref (rg : RegionName) (s : BlockState) (name : RegName)
+    (base rows cols BT BS strideT strideS rowOff colOff : Nat)
+    (hreg : s.regs TileDType.blockPtr [BT, BS] name = some
+      ⟨fun _ => BlockPtr.mk rg base [rows, cols] [BT, BS] [strideT, strideS]
+        [rowOff, colOff]⟩) :
+    evalOp (Op.load TileDType.real
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BT, BS] name) []) MaskOpt.none) s
+    = some ⟨fun idx : TileIndex [BT, BS] =>
+        some (s.readMem rg (base + (rowOff + idx.1.val) * strideT
+            + (colOff + idx.2.1.val) * strideS))⟩ := by
+  simp only [evalOp, evalOp_ref, hreg, List.mapM, List.mapM.loop, bind, Option.bind, Tile.scalar,
+    List.reverse_cons, List.reverse_nil, List.append_nil, List.nil_append, List.cons_append]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, j, rest⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds,
+    List.all_nil, BlockState.readMemValue_real, if_true]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
