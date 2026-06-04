@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `token_attn_mistral` — strict per-kernel correctness
@@ -415,6 +416,43 @@ noncomputable def tokenAttnMistralClosedForm
     B_Seqlen B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
     stride_ph stride_pbs stride_vbs stride_vh stride_vd kv_group_num
     sliding_window (dIndex s i)
+
+/-- Masked per-token probability: `p[n]` if the token is in the
+`cur_att_seq_len` window, else `0` (the `tl.load(Prob …, mask=(start_n+offs_n) <
+cur_att_seq_len, other=0)` masked load). -/
+noncomputable def pMasked
+    (s : BlockState) (Prob B_Att_Start_Loc B_Att_Seqlen : RegionName)
+    (stride_ph stride_pbs : Nat) (n : Nat) : ℝ :=
+  if n < attSeqLen s B_Att_Seqlen then
+    s.readMem Prob (pOffset s B_Att_Start_Loc stride_ph stride_pbs n)
+  else 0.0
+
+/-- Masked value row: `v[v_loc[n], d]` if the gather is in range (`vActive`),
+else `0` (the `tl.load(V …, mask=start_index+n < cur_batch_seq_len, other=0)`
+masked load). -/
+noncomputable def vMasked
+    (s : BlockState) (V Req_to_tokens B_req_idx B_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_vbs stride_vh stride_vd
+      kv_group_num sliding_window : Nat) (n d : Nat) : ℝ :=
+  if vActive s B_Seqlen sliding_window n then
+    s.readMem V (vOffset s Req_to_tokens B_req_idx B_Seqlen
+      stride_req_to_tokens_b stride_req_to_tokens_s stride_vbs stride_vh
+      stride_vd kv_group_num sliding_window n d)
+  else 0.0
+
+/-- Partial PV accumulator after the window tokens `n < k` have been folded in,
+for output head-dim `d`. The loop carries `partialAcc (c·BLOCK_N)`. -/
+noncomputable def partialAcc
+    (s : BlockState) (Prob V : RegionName)
+    (Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd kv_group_num sliding_window : Nat)
+    (k d : Nat) : ℝ :=
+  ∑ n ∈ Finset.range k,
+    pMasked s Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs n *
+      vMasked s V Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+        stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num
+        sliding_window n d
 
 /-! ### Remaining bridge (banked)
 
