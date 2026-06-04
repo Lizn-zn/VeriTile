@@ -1807,4 +1807,179 @@ reverse-scan invariant. Region-distinctness side hypotheses (`DQInter ≠ DKInte
 etc.) are needed so a later store does not clobber an earlier readback, mirroring
 the forward `G ≠ GO` and `prepare` `Q ≠ QG …` hypotheses. -/
 
+/-! ## Per-statement op-eval recipes (backward kernel, recipe layer)
+
+These are the standalone, register-readback-abstracted `stepStmt`/`evalOp`
+reduction lemmas for *each statement kind* appearing in the
+`bwd_decay_global_cumsum_surface` body (15-stmt prologue + 25-stmt reverse loop
+body). They are the mandated per-statement architecture building blocks: every
+lemma takes a *symbolic* `BlockState` plus abstract hypotheses giving the
+evaluation of its sub-operands (`evalOp _ s = some _`), and proves the single
+statement's reduction by `simp [stepStmt, evalOp, …]` only — never a whole-body
+`evalOp.eq_def` blast, never `rfl`/`whnf` over a nested `setReg` literal state.
+
+The next stage (full assembly) chains these via `stepStmts.cons_some` /
+`forRangeAux` invariants, exactly as `LayerNormKernels` chains its per-stmt
+`have h_k : stepStmt … = some (… .setReg …)` facts. The backing surface
+definitions and the genuine closed forms (`bwdDQInterClosed`, `bwdDKInterClosed`,
+`bwdDGSummand`, `bwdDGClosed`) are already banked above; only the assembly that
+threads the reverse `cum_grad_dg` scan + `last_g` capture through these recipes
+remains.
+
+`s_qk_h`, `DK`, `BK`, etc. are kept symbolic so each recipe is reusable at any
+loop row / pointer position; the assembly instantiates the test shape
+(`s_qk_h = 64`, `DK = 8`, `BT = 2`, `BK = 4`). -/
+
+section BwdRecipes
+
+variable {BK : Nat} (s : BlockState)
+
+/-- **Prologue / loop pointer-arithmetic recipe (add).** A nat-scalar `add`
+assign — `p_x = base + offs`, `p_x += DK`, or the loop-body offset folds —
+reduces to a `setReg` of the summed scalar, given the two operand evaluations. -/
+theorem bwdEval_assign_addNat (name : RegName) (a b : Op .nat []) (va vb : Nat)
+    (ha : evalOp a s = some (Tile.scalar va))
+    (hb : evalOp b s = some (Tile.scalar vb)) :
+    stepStmt (.assign .nat [] name (.add NumericDType.nat Broadcast.nil a b)) s
+      = some (s.setReg name .nat [] (Tile.scalar (va + vb))) := by
+  simp [stepStmt, evalOp, ha, hb]
+  rfl
+
+/-- **Loop index recipe (`t := 1 - __rev_t`, nat sub).** The first body
+statement of the lowered forward `forRangeDyn "__rev_t" 0 2 1` re-derives the
+reverse time index `t`. A nat-scalar `sub` assign reduces to a `setReg` of the
+truncated difference, given the operand evaluations. -/
+theorem bwdEval_assign_subNat (name : RegName) (a b : Op .nat []) (va vb : Nat)
+    (ha : evalOp a s = some (Tile.scalar va))
+    (hb : evalOp b s = some (Tile.scalar vb)) :
+    stepStmt (.assign .nat [] name (.sub NumericDType.nat Broadcast.nil a b)) s
+      = some (s.setReg name .nat [] (Tile.scalar (va - vb))) := by
+  simp [stepStmt, evalOp, ha, hb]
+  rfl
+
+/-- **`cum_grad_dg = tl.zeros([BK])` init recipe.** The reverse-scan accumulator
+(and `last_g`) initializer assigns the all-zero `[BK]` real tile. -/
+theorem bwdEval_assign_zeros (name : RegName) :
+    stepStmt (.assign .real [BK] name (.full [BK] (.const 0))) s
+      = some (s.setReg name .real [BK] ⟨fun _ => some 0⟩) := by
+  simp [stepStmt, evalOp]
+
+/-- **Masked-region load recipe (`tl.load(p_x, mask=mask, other=0)`).** Every
+prologue/body input load (`g`, `q`, `k`, `dq_inner`, `dk_inner`, `dq_inter_in`,
+`dk_inter_in`) is a `MaskOpt.maskOther` region load over `[BK]`. Given the
+offset/mask/other evaluations, it reduces to the per-lane masked readback:
+active lanes read memory, inactive lanes take the `other` fill. -/
+theorem bwdEval_load_maskOther (region : Region .real)
+    (offs : Op .nat [BK]) (mask : Op .bool [BK]) (other : Op .real [BK])
+    (offsT : Tile .nat [BK]) (maskT : Tile .bool [BK]) (otherT : Tile .real [BK])
+    (hoff : evalOp offs s = some offsT)
+    (hmask : evalOp mask s = some maskT)
+    (hother : evalOp other s = some otherT) :
+    evalOp (.load .real (MemAccess.region region offs) (MaskOpt.maskOther mask other)) s
+      = some ⟨fun i => if maskT.data i then
+                some (s.readMem region (offsT.data i))
+              else otherT.data i⟩ := by
+  simp [evalOp, hoff, hmask, hother]
+
+/-- **Masked-region load assign recipe.** The load wrapped in its `assign`
+target register (`g_val = …`, `dq1 = …`, etc.), reducing to a single `setReg`. -/
+theorem bwdEval_assign_load_maskOther (name : RegName) (region : Region .real)
+    (offs : Op .nat [BK]) (mask : Op .bool [BK]) (other : Op .real [BK])
+    (offsT : Tile .nat [BK]) (maskT : Tile .bool [BK]) (otherT : Tile .real [BK])
+    (hoff : evalOp offs s = some offsT)
+    (hmask : evalOp mask s = some maskT)
+    (hother : evalOp other s = some otherT) :
+    stepStmt (.assign .real [BK] name
+        (.load .real (MemAccess.region region offs) (MaskOpt.maskOther mask other))) s
+      = some (s.setReg name .real [BK]
+          ⟨fun i => if maskT.data i then
+                some (s.readMem region (offsT.data i))
+              else otherT.data i⟩) := by
+  simp [stepStmt, evalOp, hoff, hmask, hother]
+
+/-- **`last_g` conditional-capture condition recipe (`t == BT-1`).** The
+`ifThen (Op.eq t (BT-1))` guard's nat-eq condition reduces to the `Tile.cop`
+comparison cell, given the two operand evaluations. -/
+theorem bwdEval_eqNat (a b : Op .nat []) (av bv : Tile .nat [])
+    (ha : evalOp a s = some av) (hb : evalOp b s = some bv) :
+    evalOp (.eq ComparableDType.nat Broadcast.nil a b) s
+      = some (Tile.cop ComparableDType.nat.eq Broadcast.nil av bv) := by
+  simp [evalOp, ha, hb]
+
+/-- **`last_g` capture, taken branch (`__rev_t = 0 ⇒ t = BT-1`).** When the
+guard evaluates `true`, `ifThen` runs its body (`last_g = g_val`). -/
+theorem bwdEval_ifThen_true (cond : Op .bool []) (body : List Stmt)
+    (hc : evalOp cond s = some (Tile.scalar Bool.true)) :
+    stepStmt (.ifThen cond body) s = stepStmts body s := by
+  simp [stepStmt, hc]
+
+/-- **`last_g` capture, skipped branch (`__rev_t = 1 ⇒ t = 0 ≠ BT-1`).** When
+the guard evaluates `false`, `ifThen` leaves the state unchanged. -/
+theorem bwdEval_ifThen_false (cond : Op .bool []) (body : List Stmt)
+    (hc : evalOp cond s = some (Tile.scalar Bool.false)) :
+    stepStmt (.ifThen cond body) s = some s := by
+  simp [stepStmt, hc]
+
+end BwdRecipes
+
+section BwdComputeRecipes
+
+variable {BK : Nat} (s : BlockState)
+
+/-- **Pointwise mul recipe.** `dq2 *= exp2(g_val)` and `dk2 *= exp2(last_g-g)`
+and the `dq*q` / `dk*k` products of the `dg` summand are real `[BK]` muls. -/
+theorem bwdEval_mul (a b : Op .real [BK]) (aT bT : Tile .real [BK])
+    (ha : evalOp a s = some aT) (hb : evalOp b s = some bT) :
+    evalOp (.mul NumericDType.real (Broadcast.consSame Broadcast.nil) a b) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) aT bT) := by
+  simp [evalOp, ha, hb]
+
+/-- **Pointwise add recipe.** `dq = dq1 + dq2`, `dk = dk1 + dk2`, and the
+reverse-scan accumulate `cum_grad_dg += dg_val` are real `[BK]` adds. -/
+theorem bwdEval_add (a b : Op .real [BK]) (aT bT : Tile .real [BK])
+    (ha : evalOp a s = some aT) (hb : evalOp b s = some bT) :
+    evalOp (.add NumericDType.real (Broadcast.consSame Broadcast.nil) a b) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) aT bT) := by
+  simp [evalOp, ha, hb]
+
+/-- **Pointwise sub recipe.** `dg_val = dq*q - dk*k` and the `last_g - g_val`
+exp2 argument are real `[BK]` subs. -/
+theorem bwdEval_sub (a b : Op .real [BK]) (aT bT : Tile .real [BK])
+    (ha : evalOp a s = some aT) (hb : evalOp b s = some bT) :
+    evalOp (.sub NumericDType.real (Broadcast.consSame Broadcast.nil) a b) s
+      = some (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) aT bT) := by
+  simp [evalOp, ha, hb]
+
+/-- **`exp2` recipe** (mirrors the `AttentionForwardClosedForm` `exp2` pattern).
+`exp2(g_val)` and `exp2(last_g - g_val)` reduce to `Tile.uop WithBot.realExp2`
+over the operand tile (each cell `r ↦ Real.exp (r * Real.log 2)`). -/
+theorem bwdEval_exp2 (x : Op .real [BK]) (xT : Tile .real [BK])
+    (hx : evalOp x s = some xT) :
+    evalOp (.exp2 x) s = some (Tile.uop WithBot.realExp2 xT) := by
+  simp [evalOp, hx]
+
+/-- **Masked-region store recipe (`tl.store(p_out, val, mask=mask)`).** Each of
+the three per-iteration stores (`DQInter`, `DKInter`, `DG`) reduces to the
+`writeMemTyped` masked scatter fold over the `[BK]` lanes. Region distinctness
+(`DQInter ≠ DKInter ≠ DG`) is *not* needed here — it is needed only at the
+readback stage (`scatter_readback_prop_masked_nd` /
+`scatter_prop_masked_preserves_other_{offset,region}`, already in this file) so
+a later store does not clobber an earlier readback. -/
+theorem bwdEval_store_masked (region : RegionName)
+    (off : Op .nat [BK]) (val : Op .real [BK]) (mask : Op .bool [BK])
+    (offsT : Tile .nat [BK]) (valT : Tile .real [BK]) (maskT : Tile .bool [BK])
+    (hoff : evalOp off s = some offsT)
+    (hval : evalOp val s = some valT)
+    (hmask : evalOp mask s = some maskT) :
+    stepStmt (.store .real [BK] (MemAccess.region region off)
+        val (MaskOpt.mask mask)) s
+      = some ((TileShape.allIndices [BK]).foldl
+          (fun acc i =>
+            if maskT.data i then
+              acc.writeMemTyped .real (Region.cast region) (offsT.data i) (valT.data i)
+            else acc) s) := by
+  simp [stepStmt, evalOp, hoff, hval, hmask]
+
+end BwdComputeRecipes
+
 end VeriTile.Bench.TritonBenchG.DecayCumsum
