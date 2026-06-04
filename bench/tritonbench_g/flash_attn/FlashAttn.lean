@@ -76,16 +76,27 @@ dynamic-loop driver `forRangeDyn_inv` lives in
 `flash_advance_{col,row}_eval` / `flash_load_{K,Q}_eval` (below) specialize them
 to this kernel's exact `make_block_ptr` AST.
 
-The **remaining stage** (not yet closed) is the per-statement loop-body op-eval
-recipes (including threading the per-element causal `tl.where(off_m ≥ start_n+off_n,
-qk, -inf)` mask into the `osBlockStep`/`attnKeyListCausal` fold) and the
-`attnInvariant`/`preLoop`/`attn_step`/`attn_postLoop` invariant skeleton over the
-14-register `out_buffer` kernel with BOTH the `O` and `L` stores, composed via
-`forRangeDyn_inv` — i.e. proving `out_buffer / denom` at the final store equals
-`flashAttnOValueSpec{,Causal}`. That mirrors
-`VeriTile/Examples/AttentionForwardClosedForm.lean`'s preLoop/step/postLoop
-skeleton, now retargeted onto the block-pointer foundation above. No
-self-referential / tautological summary is asserted in its place.
+Additionally banked sorry-free toward the invariant skeleton (this run): the
+per-row online-softmax **running-state recurrence** `flashKV`/`flashKeysUpto`/
+`flashState` (the `osStep` fold over the causally-filtered streamed key prefix),
+its one-block advance `flashState_succ` (= the kernel's per-block update
+`osBlockStep`, via the new `Math/Attention.lean` lemma `osBlockStep_eq_foldl_osStep`
++ the sorted-window split `flashKeysUpto_succ`), the full-window bridges
+`flashState_full_eq_spec{,_causal}` (final state reads off `flashAttnOValueSpec{,
+Causal}`), the `max`/`denom` channel-independence lemmas
+`flashState_{fst,snd_fst}_eq`, and the `attnInvariant` definition binding the
+kernel's 14 live registers to `flashState` after `c` blocks.
+
+The **remaining stage** (not yet closed) is the exec-side `preLoop`/`attn_step`/
+`attn_postLoop` proofs over this `attnInvariant` (threading the loop-body op-eval
+recipes — including the causal `tl.where(off_m ≥ start_n+off_n, qk, -inf)` mask —
+and the WithBot `reduceMaxDrop`/`realExp2 ⊥ = 0`/masked-dot bridges into one
+`flashState_succ` step), plus the dual `O`/`L` stores composed via
+`forRangeDyn_inv` and read off through `flashState_full_eq_spec{,_causal}`. That
+mirrors `VeriTile/Examples/AttentionForwardClosedForm.lean`'s preLoop/step/postLoop
+skeleton, now retargeted onto the block-pointer foundation and the `flashState`
+recurrence above. No self-referential / tautological summary is asserted in its
+place.
 
 ## Modeling boundary
 
