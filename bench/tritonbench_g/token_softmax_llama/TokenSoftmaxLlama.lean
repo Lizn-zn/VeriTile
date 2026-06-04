@@ -656,4 +656,64 @@ theorem row_op_eval
   · rw [if_neg hj, if_neg hj]
     rfl
 
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- Algorithm-layer cellwise correctness for the full token-softmax surface. -/
+theorem token_softmax_surface_correct
+    (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName)
+    (stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hExec : exec (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+          stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE) s
+        = some s')
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => probOffset s B_Start_Loc stride_prob_h stride_prob_bs i)) :
+    ∀ i : Fin BLOCK_SIZE,
+      let outAddr := probOffset s B_Start_Loc stride_prob_h stride_prob_bs i
+      s'.readMem Prob_Out outAddr =
+        if active s B_Seqlen i then
+          tokenSoftmaxSpec s Logics B_Start_Loc B_Seqlen stride_logic_h
+            stride_logic_bs BLOCK_SIZE i
+        else s.readMem Prob_Out outAddr := by
+  intro i
+  by_cases hB : 0 < BLOCK_SIZE
+  · simp [exec, token_softmax_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+          ComputeKernel.toAlgKernel,
+          stepStmts, stepStmt, evalOp, evalOp.eq_def,
+          Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+          Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+          TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+          NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+          ComparableDType.lt, BlockState.readMemValue, hB] at hExec
+    subst s'
+    -- The decoded store is a masked scatter over `TileShape.allIndices`.
+    -- Read back through the injective offset map.
+    have hOffsetInj : Function.Injective
+        (fun idx : TileIndex [BLOCK_SIZE] =>
+          s.pids 1 * stride_prob_h +
+            ((match s.readMemTyped TileDType.nat B_Start_Loc (s.pids 0) with
+              | some value => value
+              | none => BlockState.defaultCarrier TileDType.nat) + idx.1.val) *
+              stride_prob_bs) := by
+      rintro ⟨a, _⟩ ⟨b, _⟩ hab
+      have habFin : probOffset s B_Start_Loc stride_prob_h stride_prob_bs a =
+          probOffset s B_Start_Loc stride_prob_h stride_prob_bs b := by
+        simpa [probOffset, tokenIndex, startLoc, BlockState.readMemValue] using hab
+      obtain rfl : a = b := hOutInj habFin
+      rfl
+    simp only [probOffset, tokenIndex, startLoc, BlockState.readMemValue]
+    erw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
+    simp only [active, seqLen, BlockState.readMemValue, probOffset, tokenIndex, startLoc]
+    -- Both sides are guarded by the same `↑i < seqLen` test; the else-branches are
+    -- syntactically equal and the then-branches (computed softmax value vs spec)
+    -- agree lane-wise.  Reduce to the then-branch equality.
+    refine if_congr Iff.rfl ?_ rfl
+    simp [tokenSoftmaxSpec, tokenSoftmaxInputTile, seqLen,
+      BlockState.readMemValue, logicOffset, tokenIndex, startLoc,
+      Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+      Tile.bop, Tile.uop, NumericDType.sub, NumericDType.div, hB]
+    congr
+  · exact False.elim (hB (Nat.lt_of_le_of_lt (Nat.zero_le _) i.isLt))
+
 end VeriTile.Bench.TritonBenchG.TokenSoftmaxLlama
