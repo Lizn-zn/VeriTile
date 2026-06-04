@@ -417,7 +417,7 @@ noncomputable def ctxExactKeyList
           Finset.univ.sum (fun e : Fin 128 =>
             ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
               * ctxKTile s K S (j, e, PUnit.unit))
-      else (Real.log 2)⁻¹ * (-1.0e8 : ℝ),
+      else (0.0 - 10e7 : ℝ),
       ctxVTile s V S (j, d, PUnit.unit)))
 
 /-- Exact streaming-loop output value for lane `(i,d)`: `acc/l` of folding the
@@ -447,26 +447,25 @@ theorem contextAttnExactFold_eq
                * ctxKTile s K S (j, e, PUnit.unit))
          let weight := fun j : Fin S =>
            if j.val ≤ gi + plen then Real.exp (contextEffScale sm_scale * raw j)
-           else Real.exp (-1.0e8)
+           else pow2 (0.0 - 10e7)
          (Finset.univ.sum (fun j : Fin S => weight j * ctxVTile s V S (j, d, PUnit.unit)))
            / (Finset.univ.sum (fun j : Fin S => weight j))) := by
   obtain ⟨i, d, u⟩ := idx
   rw [contextAttnExactFold, ctxExactKeyList, osStep_foldl_eq_batch]
   simp only [List.map_ofFn, List.sum_ofFn, Function.comp, contextEffScale]
-  have hlog2 : Real.log 2 ≠ 0 := by positivity
   have hw : ∀ j : Fin S,
       pow2 (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
           sm_scale * Finset.univ.sum (fun e : Fin 128 =>
             ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit))
-        else (Real.log 2)⁻¹ * (-1.0e8 : ℝ))
+        else (0.0 - 10e7 : ℝ))
       = if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
           Real.exp (Real.log 2 * sm_scale * Finset.univ.sum (fun e : Fin 128 =>
             ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit)))
-        else Real.exp (-1.0e8) := by
+        else pow2 (0.0 - 10e7) := by
     intro j
     by_cases h : j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len
     · simp only [h, if_true, pow2]; ring_nf
-    · simp only [h, if_false, pow2, ← mul_assoc, mul_inv_cancel₀ hlog2, one_mul]
+    · simp only [h, if_false]
   congr 1
   · apply Finset.sum_congr rfl; intro j _; rw [hw j]
   · apply Finset.sum_congr rfl; intro j _; rw [hw j]
@@ -492,7 +491,7 @@ noncomputable def ctxKV
   (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
       sm_scale * Finset.univ.sum (fun e : Fin 128 =>
         ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit))
-    else (Real.log 2)⁻¹ * (-1.0e8 : ℝ),
+    else (0.0 - 10e7 : ℝ),
     ctxVTile s V S (j, d, PUnit.unit))
 
 /-- Per-row key list over the streamed window `[0, hi)`: keys `j < hi`, index order. -/
