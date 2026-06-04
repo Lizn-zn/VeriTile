@@ -48,6 +48,21 @@ read off at each `outOffset`, established compute-correct for the universally
 quantified program ids over a one-block output footprint. The streaming
 gather/accumulate loop body feeds that value; the side conditions are the
 offset-injectivity of the `Out` slice at the test shapes.
+
+## Genuine closed-form spec (this file also provides)
+
+`tokenAttnReduceVClosedForm` / `tokenAttnReduceVPVValue` are a *genuine*,
+self-reference-free PV-reduction closed form
+`acc[d] = Σ_{n < cur_batch_seq_len} p[n]·v[v_loc[n], d]` (with the
+`Req_to_tokens` page-table gather and the `cur_kv_head` / `in_all_start_index`
+offsets decoded as `pOffset`/`vLoc`/`vOffset`). These never execute the kernel.
+The surface→closed-form bridge — driving `forRangeDyn_inv` with the partial-sum
+accumulator invariant and per-block `reduceSum_some` — is documented as a banked
+recipe next to the definitions; the published top theorems still pin the
+self-referential `tokenAttnReduceVSurfaceValue` while that bridge is completed.
+The blocker is the data-dependent `V` gather (statement 4 of the loop body loads
+`V` at an address containing the *loaded* `v_loc` tile), which needs a
+region-load-with-tile-offset evaluation lemma not yet in the core.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.TokenAttnReduceV
@@ -265,6 +280,148 @@ theorem token_attn_reducev_python_case3_surface_toAlgorithm_supported
   exact token_attn_reducev_surface_toAlgorithm_supported Prob V Out
     Req_to_tokens B_req_idx B_Start_Loc B_Seqlen 128 1 128 1 8192 64 1
     256 64 1 1 64 128
+
+/-! ## Genuine closed-form PV-reduction spec
+
+The Triton `_fwd_kernel_token_att2` accumulates, per output head-dim `d`, the
+probability-weighted value sum
+
+```
+acc[d] = Σ_{n < cur_batch_seq_len}  p[n] · v[v_loc[n], d]
+```
+
+where, with `cur_batch_start_index = 0` (this kernel has **no sliding window**,
+unlike the Mistral sibling) and `cur_kv_head = cur_head / kv_group_num`:
+
+* the per-token probability
+  `p[n] = Prob[cur_head·stride_ph + (in_all_start_index + n)·stride_pbs]`,
+  masked by `n < cur_batch_seq_len` (`other = 0`);
+* the gathered KV page index
+  `v_loc[n] = Req_to_tokens[req_idx·stride_req_to_tokens_b +
+    n·stride_req_to_tokens_s]`, masked by `n < cur_batch_seq_len`;
+* the value row
+  `v[v_loc[n], d] = V[cur_kv_head·stride_vh + d·stride_vd +
+    v_loc[n]·stride_vbs]`, masked by `n < cur_batch_seq_len` (`other = 0`).
+
+The outer loop `range(0, cur_batch_seq_len, BLOCK_N)` ranges over exactly the
+masked region, so every `n` in the sum is active (the per-block `BLOCK_N`
+padding lanes whose `n ≥ cur_batch_seq_len` read `0` and drop out). The final
+store of the whole `[BLOCK_DMODEL]` accumulator is **unmasked**, with a
+`.to(Out.dtype)` cast that is the identity at the algorithm (ℝ) layer.
+
+These definitions are a *genuine closed form* — they never execute the kernel —
+and are intended to replace the self-referential `tokenAttnReduceVSurfaceValue`.
+
+`batchSeqLen`/`reqIdx`/`inAllStartLoc` are the metadata loads of the prelude. -/
+
+/-- `cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)`: the loop bound and the
+mask threshold for every per-token load. -/
+def batchSeqLen (s : BlockState) (B_Seqlen : RegionName) : Nat :=
+  s.readMemValue .nat B_Seqlen (s.pids 0)
+
+/-- `cur_batch_req_idx = tl.load(B_req_idx + cur_batch)`: the request row used to
+index `Req_to_tokens`. -/
+def reqIdx (s : BlockState) (B_req_idx : RegionName) : Nat :=
+  s.readMemValue .nat B_req_idx (s.pids 0)
+
+/-- `cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)`: the
+flattened start offset folded into the `Prob` load address. -/
+def inAllStartLoc (s : BlockState) (B_Start_Loc : RegionName) : Nat :=
+  s.readMemValue .nat B_Start_Loc (s.pids 0)
+
+/-- Per-token probability load offset:
+`cur_head·stride_ph + (in_all_start_index + n)·stride_pbs`. -/
+def pOffset
+    (s : BlockState) (B_Start_Loc : RegionName)
+    (stride_ph stride_pbs : Nat) (n : Nat) : Nat :=
+  s.pids 1 * stride_ph + (inAllStartLoc s B_Start_Loc + n) * stride_pbs
+
+/-- Gathered KV page index for token `n` (`cur_batch_start_index = 0`):
+`Req_to_tokens[req_idx·stride_req_to_tokens_b + n·stride_req_to_tokens_s]`. -/
+def vLoc
+    (s : BlockState) (Req_to_tokens B_req_idx : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s : Nat)
+    (n : Nat) : Nat :=
+  s.readMemValue .nat Req_to_tokens
+    (reqIdx s B_req_idx * stride_req_to_tokens_b +
+      n * stride_req_to_tokens_s)
+
+/-- Value-row load offset for token `n`, head-dim `d`:
+`v_loc[n]·stride_vbs + cur_kv_head·stride_vh + d·stride_vd`, with
+`cur_kv_head = cur_head / kv_group_num`. -/
+def vOffset
+    (s : BlockState) (Req_to_tokens B_req_idx : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_vbs stride_vh stride_vd
+      kv_group_num : Nat) (n d : Nat) : Nat :=
+  vLoc s Req_to_tokens B_req_idx stride_req_to_tokens_b
+      stride_req_to_tokens_s n * stride_vbs +
+    (s.pids 1 / kv_group_num) * stride_vh + d * stride_vd
+
+/-- The genuine closed-form accumulator for output head-dim `d`:
+`Σ_{n < cur_batch_seq_len} p[n] · v[v_loc[n], d]`. The sum range is exactly the
+masked token window, so no `if`-guard is needed — every padding lane
+(`n ≥ cur_batch_seq_len`) is excluded from `Finset.range` and contributes `0`,
+mirroring the `other = 0` masked loads. -/
+noncomputable def tokenAttnReduceVPVValue
+    (s : BlockState) (Prob V : RegionName)
+    (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd kv_group_num : Nat)
+    (d : Nat) : ℝ :=
+  ∑ n ∈ Finset.range (batchSeqLen s B_Seqlen),
+    s.readMem Prob (pOffset s B_Start_Loc stride_ph stride_pbs n) *
+      s.readMem V (vOffset s Req_to_tokens B_req_idx
+        stride_req_to_tokens_b stride_req_to_tokens_s stride_vbs stride_vh
+        stride_vd kv_group_num n d)
+
+/-- Genuine closed-form value written to `Out[outOffset d]`. The store is
+unmasked over the full `[BLOCK_DMODEL]` vector, so every lane holds the
+PV-accumulator `tokenAttnReduceVPVValue` for its head-dim `d = dIndex s i`. -/
+noncomputable def tokenAttnReduceVClosedForm
+    (s : BlockState) (Prob V : RegionName)
+    (Req_to_tokens B_req_idx B_Start_Loc B_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd kv_group_num BLOCK_DMODEL : Nat)
+    (i : Fin BLOCK_DMODEL) : ℝ :=
+  tokenAttnReduceVPVValue s Prob V Req_to_tokens B_req_idx B_Start_Loc
+    B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+    stride_vbs stride_vh stride_vd kv_group_num (dIndex s i)
+
+/-! ### Remaining surface→closed-form bridge (banked)
+
+`tokenAttnReduceVClosedForm` is the genuine, self-reference-free PV spec. The
+remaining step is the surface readback bridge
+
+```
+exec (token_attn_reducev_surface …) s = some s' →
+  s'.readMem Out (outOffset … i) =
+    tokenAttnReduceVClosedForm … i
+```
+
+Routing/decode recipe for that bridge (this kernel is the **PV reduce /
+accumulate** route — there is no online softmax):
+
+* Exec assembly: `exec` reduces to `stepStmts (…).toAlgKernel.body s` by `rfl`
+  (the `ComputeStmt → Stmt` lowering of every `ComputeExpr.alg` body statement
+  is definitional). Decode the prelude assigns and the
+  `forRangeDyn "start_n" 0 cur_batch_seq_len BLOCK_N …` loop via
+  `stepStmts.cons_some (stepStmt_assign_eq_some (…_op_eval …))` and
+  `forRangeDyn_inv` (added to `VeriTile/Triton/LoopInvariant.lean`).
+* Outer loop: drive `forRangeDyn_inv` with the accumulator invariant
+  `acc_k = Σ_{n < min (k, cur_batch_seq_len)} p[n]·v[v_loc[n], d]`; the loop runs
+  `⌈cur_batch_seq_len / BLOCK_N⌉` blocks. The final counter `final ≥
+  cur_batch_seq_len` collapses `min` to `cur_batch_seq_len`, yielding
+  `tokenAttnReduceVPVValue`.
+* Per loop body, supply `*_op_eval` recipes for: the `Prob` masked load
+  (`pOffset`, mask `n < cur_batch_seq_len`); the `Req_to_tokens` gather (`vLoc`);
+  the 2D `v_offs`/`v_value` masked gather (`vOffset`, same mask, `other = 0`);
+  the `tl.sum(p_value[:,None]·v_value, 0)` block reduction along axis 0
+  (`reduceSum_some` + `Finset.sum_congr`, as in `batched_vecmat`); and the
+  `acc += …` accumulation.
+* Final unmasked store readback: `scatter_readback_nd` (as in
+  `token_attn_reducev_final_store_slice_correct`), reusing
+  `token_attn_reducev_python_test_shape_offset_injective`.
+-/
 
 noncomputable def tokenAttnReduceVSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
