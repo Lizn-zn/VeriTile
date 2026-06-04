@@ -2555,4 +2555,366 @@ expanding both sides onto the banked closed forms
 window-split / block bridges (`flashKeysUpto_succ`, `flashRunningMax_succ`,
 `flashBlock_blockMax`, `flashBlock_map_sum`). -/
 
+/-- Overwriting a register slot shadows the inner write (BlockState ext). -/
+theorem flash_setReg_shadow (s : BlockState) (name : RegName)
+    (dtype : TileDType) (shape : TileShape) (a b : Tile dtype shape) :
+    (s.setReg name dtype shape a).setReg name dtype shape b = s.setReg name dtype shape b := by
+  have hregs : ∀ (dt : TileDType) (sh : TileShape) (nm : RegName),
+      ((s.setReg name dtype shape a).setReg name dtype shape b).regs dt sh nm
+        = (s.setReg name dtype shape b).regs dt sh nm := by
+    intro dt sh nm
+    by_cases hnm : nm = name
+    · subst hnm
+      by_cases hdt : dt = dtype
+      · subst hdt
+        by_cases hsh : sh = shape
+        · subst hsh; simp only [BlockState.setReg_same]
+        · simp only [BlockState.setReg_ne_shape _ _ _ _ _ _ _ _ rfl rfl hsh]
+      · simp only [BlockState.setReg_ne_dtype _ _ _ _ _ _ _ _ rfl hdt]
+    · simp only [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hnm]
+  exact BlockState.ext (fun _ _ => by simp only [BlockState.setReg_mem]) hregs
+    (fun _ => by simp only [BlockState.setReg_pids])
+    (fun _ _ => by simp only [BlockState.setReg_undef])
+
+set_option maxHeartbeats 1000000 in
+/-- **L10 (out_buffer accumulate, inline double cast)**: `out_buffer += dot(
+(nume.to fp16).to real, v)`. The real→fp16→real round-trip of `nume` is identity
+in the model, so the dot accumulates `dot(nume, v)` onto the running buffer. -/
+theorem flash_outbuf_acc2_op_eval (s : BlockState)
+    (ob1tile : Tile .real [128, 64]) (ntile : Tile .real [128, 64]) (vtile : Tile .real [64, 64])
+    (hob : s.regs .real [128, 64] "out_buffer" = some ob1tile)
+    (hn : s.regs .real [128, 64] "nume" = some ntile)
+    (hv : s.regs .real [64, 64] "v" = some vtile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) (Op.ref .real [128, 64] "out_buffer")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real
+          (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "nume"))) (Op.ref .real [64, 64] "v"))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) ob1tile
+          (Tile.dot [] ntile vtile)) := by
+  have hcastInner : evalOp (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "nume")) s
+      = some (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ntile.data i)⟩ : Tile .fp16 [128, 64]) := by
+    rw [evalOp_castFloat]; simp [evalOp_ref, hn]
+  have hcast2 : evalOp (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "nume"))) s
+      = some ntile := by
+    rw [evalOp_castFloat, hcastInner]
+    refine congrArg some ?_; ext i; simp [FloatDType.cast]
+  have hcast2ann : @evalOp TileDType.real [128, 64]
+      (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "nume"))) s
+      = some ntile := hcast2
+  have hdotN : evalOp (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "nume"))) (Op.ref .real [64, 64] "v")) s
+      = some (Tile.dot [] ntile vtile) := by
+    rw [evalOp_dot]; simp [hcast2ann, hv]
+  have hdotN2 : @evalOp TileDType.real [128, 64]
+      (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "nume"))) (Op.ref .real [64, 64] "v")) s
+      = some (Tile.dot [] ntile vtile) := hdotN
+  rw [evalOp_add]; simp only [evalOp_ref, hob, hdotN2, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- The L2–L3 qk-seed + causal-mask prefix of `flashLoopBody`. -/
+def flashQkSeedStmts (IS_CAUSAL : Bool) : List Stmt :=
+  [ Stmt.assign .real [128, 64] "qk" (Op.full [128, 64] (Op.const 0)),
+    Stmt.ifThen (Op.constBool IS_CAUSAL)
+      [ Stmt.assign .real [128, 64] "qk"
+          (Op.where
+            (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "off_m"))
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "off_n"))))
+            (Op.ref .real [128, 64] "qk") (Op.broadcast Op.negInf [128, 64])) ] ]
+
+/-- The L4–L14 tail of `flashLoopBody` (after the L0–L3 loads + qk seed/mask):
+`qk += dot q k`, the running-state update (`max_new`/`alpha`/`nume`/`out_scale`/
+`out_buffer`/`denom`/`max`), and the two block-pointer advances. -/
+def flashLoopBodyTail (IS_CAUSAL : Bool) : List Stmt :=
+  [ Stmt.assign .real [128, 64] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [128, 64] "qk")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [128, 64] "q"))
+          (Op.ref .real [64, 64] "k"))),
+    Stmt.assign .real [128] "max_new"
+      (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "max")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "qk")))
+        (Op.ref .real [128] "max")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "qk"))),
+    Stmt.assign .real [128] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "max")
+        (Op.ref .real [128] "max_new"))),
+    Stmt.assign .real [128, 64] "nume"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "max_new")))),
+    Stmt.assign .real [128] "out_scale"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [128] "denom") (Op.const 0))
+        (Op.ref .real [128] "alpha")),
+    Stmt.assign .real [128, 64] "out_buffer"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 64] "out_buffer")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "out_scale"))),
+    Stmt.assign .real [128, 64] "out_buffer"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [128, 64] "out_buffer")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real
+          (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "nume"))) (Op.ref .real [64, 64] "v"))),
+    Stmt.assign .real [128] "denom"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "denom")
+          (Op.ref .real [128] "alpha"))
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "nume"))),
+    Stmt.assign .real [128] "max" (Op.ref .real [128] "max_new"),
+    Stmt.assign .blockPtr [64, 64] "K_block_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") [0, 64]),
+    Stmt.assign .blockPtr [64, 64] "V_block_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") [64, 0]) ]
+
+/-- `flashLoopBody` is the 2 loads, then the qk seed/mask prefix, then the tail. -/
+theorem flashLoopBody_eq_tail (IS_CAUSAL : Bool) :
+    flashLoopBody IS_CAUSAL
+      = (Stmt.assign .real [64, 64] "k"
+          (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") []) MaskOpt.none))
+        :: (Stmt.assign .real [64, 64] "v"
+          (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none))
+        :: (flashQkSeedStmts IS_CAUSAL ++ flashLoopBodyTail IS_CAUSAL) := by
+  cases IS_CAUSAL <;> rfl
+
+/-- The masked seed tile after L2 (`qk = full 0`) and L3 (causal `where`):
+cell `(i,j)` is `some 0` when `(IS_CAUSAL → SN+j ≤ gm i)`, else `⊥` (`-inf`). -/
+noncomputable def flashMaskedSeed (IS_CAUSAL : Bool) (SN : Nat) (gm : Fin 128 → Nat) :
+    Tile .real [128, 64] :=
+  ⟨fun idx : TileIndex [128, 64] =>
+    if (IS_CAUSAL → SN + idx.2.1.val ≤ gm idx.1) then some (0 : ℝ) else (⊥ : WithBot ℝ)⟩
+
+set_option maxHeartbeats 1000000 in
+/-- **L2–L3 (qk seed + causal mask).** Stepping `[qk = full 0, ifThen IS_CAUSAL {…}]`
+from a state with `off_m`/`off_n`/`start_n` set yields `s.setReg "qk" flashMaskedSeed`.
+The all-`0` seed of L2 makes the `qk` slots clean, so the no-op (non-causal) and
+the `where`-rewrite (causal) both land on the single `setReg "qk" flashMaskedSeed`. -/
+theorem flash_qk_seed_steps (IS_CAUSAL : Bool) (s : BlockState) (SN : Nat)
+    (gm : Fin 128 → Nat)
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hom : s.regs .nat [128] "off_m" = some (Tile.vec gm))
+    (hon : s.regs .nat [64] "off_n" = some (Tile.vec (fun j : Fin 64 => j.val))) :
+    stepStmts (flashQkSeedStmts IS_CAUSAL) s
+      = some (s.setReg "qk" .real [128, 64] (flashMaskedSeed IS_CAUSAL SN gm)) := by
+  unfold flashQkSeedStmts
+  set zeroQk : Tile .real [128, 64] := ⟨fun _ : TileIndex [128, 64] => some (0 : ℝ)⟩ with hzeroQk
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128, 64] (Op.const 0)) s = some zeroQk from by
+      simp [evalOp_full, evalOp_const, hzeroQk]))]
+  match IS_CAUSAL with
+  | Bool.false =>
+    rw [stepStmts.cons_some (show stepStmt (Stmt.ifThen (Op.constBool Bool.false) _) _ = some _
+        from flash_stepStmt_ifThen_false _ _), stepStmts.nil]
+    refine congrArg some ?_
+    refine congrArg (s.setReg "qk" .real [128, 64]) ?_
+    ext idx; simp only [hzeroQk, flashMaskedSeed, Bool.false_eq_true, false_implies, if_true]
+  | Bool.true =>
+    rw [stepStmts.cons_some (show stepStmt (Stmt.ifThen (Op.constBool Bool.true) _) _ = some _
+        from by rw [flash_stepStmt_ifThen_true]
+                rw [stepStmts.cons_some (stepStmt_assign_eq_some
+                  (flash_where_op_eval _ 128 64 SN gm zeroQk
+                    (by simp [BlockState.setReg_ne_name, hom])
+                    (by simp [BlockState.setReg_ne_name, hon])
+                    (by simp [BlockState.setReg_ne_name, hsn])
+                    (by rw [BlockState.setReg_same])))]
+                rw [stepStmts.nil]), stepStmts.nil]
+    refine congrArg some ?_
+    rw [flash_setReg_shadow]
+    refine congrArg (s.setReg "qk" .real [128, 64]) ?_
+    ext idx
+    simp only [hzeroQk, flashMaskedSeed, true_implies, Tile.mk.injEq]
+
+/-- The per-cell `qk` value the kernel's L2–L4 produce for global key `SN + j`,
+output row `i`: `if (causal → SN+j ≤ gm i) then some(dot) else ⊥`. The masked
+score: `⊥` (`-inf`) on future causal keys, else the real `q·k` dot. -/
+noncomputable def flashQkCell (IS_CAUSAL : Bool) (SN : Nat) (gm : Fin 128 → Nat)
+    (qtile : Tile .fp16 [128, 64]) (ktile : Tile .real [64, 64])
+    (i : Fin 128) (j : Fin 64) : WithBot ℝ :=
+  if (IS_CAUSAL → SN + j.val ≤ gm i) then
+    (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [128, 64]) ktile).data (i, j, PUnit.unit)
+  else (⊥ : WithBot ℝ)
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Loop-body execution chain.** The 15 lowered `flashLoopBody` statements step
+the iteration-entry state `sin` (with `start_n = SN`, and the invariant's register
+readbacks `max`/`denom`/`out_buffer`/`q`/`off_m`/`off_n`/`K_block_ptr`/
+`V_block_ptr`) to a final state `sF`, exposing the symbolic `max`/`denom`/
+`out_buffer` register values (the kernel's per-block tile arithmetic over the
+masked `qk` cell `flashQkCell`) plus the advanced block pointers. Threaded through
+`stepStmts.cons_some` via the banked op-eval recipes; the causal `ifThen` mask
+folds into `flashQkCell`. -/
+theorem flashLoopBody_steps (IS_CAUSAL : Bool) (sin : BlockState) (SN : Nat)
+    (gm : Fin 128 → Nat)
+    (Kreg Vreg : RegionName) (kbase vbase kcol vrow : Nat)
+    (qtile : Tile .fp16 [128, 64]) (mtile dtile : Tile .real [128])
+    (obtile : Tile .real [128, 64]) (ktile vtile : Tile .real [64, 64])
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hom : sin.regs .nat [128] "off_m" = some (Tile.vec gm))
+    (hon : sin.regs .nat [64] "off_n" = some (Tile.vec (fun j : Fin 64 => j.val)))
+    (hmax : sin.regs .real [128] "max" = some mtile)
+    (hden : sin.regs .real [128] "denom" = some dtile)
+    (hob : sin.regs .real [128, 64] "out_buffer" = some obtile)
+    (hq : sin.regs .fp16 [128, 64] "q" = some qtile)
+    (hKp : sin.regs .blockPtr [64, 64] "K_block_ptr" = some
+      (⟨fun _ : TileIndex [64, 64] =>
+        { region := Kreg, baseOffset := kbase, parentShape := [64, 128],
+          blockShape := [64, 64], strides := [1, 64], offsets := [0, kcol] }⟩))
+    (hVp : sin.regs .blockPtr [64, 64] "V_block_ptr" = some
+      (⟨fun _ : TileIndex [64, 64] =>
+        { region := Vreg, baseOffset := vbase, parentShape := [128, 64],
+          blockShape := [64, 64], strides := [64, 1], offsets := [vrow, 0] }⟩))
+    (hkload : ∀ idx : TileIndex [64, 64],
+      ktile.data idx = some (sin.readMem Kreg (kbase + idx.1.val * 1 + (kcol + idx.2.1.val) * 64)))
+    (hvload : ∀ idx : TileIndex [64, 64],
+      vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * 64 + idx.2.1.val * 1)))
+    (hundef : ∀ rg o, sin.undef rg o = 0) :
+    ∃ sF, stepStmts (flashLoopBody IS_CAUSAL) sin = some sF
+      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
+      ∧ sF.regs .fp16 [128, 64] "q" = some qtile
+      ∧ sF.regs .nat [128] "off_m" = some (Tile.vec gm)
+      ∧ sF.regs .nat [64] "off_n" = some (Tile.vec (fun j : Fin 64 => j.val))
+      ∧ sF.regs .blockPtr [64, 64] "K_block_ptr" = some
+          (⟨fun _ : TileIndex [64, 64] =>
+            { region := Kreg, baseOffset := kbase, parentShape := [64, 128],
+              blockShape := [64, 64], strides := [1, 64], offsets := [0, kcol + 64] }⟩)
+      ∧ sF.regs .blockPtr [64, 64] "V_block_ptr" = some
+          (⟨fun _ : TileIndex [64, 64] =>
+            { region := Vreg, baseOffset := vbase, parentShape := [128, 64],
+              blockShape := [64, 64], strides := [64, 1], offsets := [vrow + 64, 0] }⟩)
+      ∧ ∃ (qkT : Tile .real [128, 64]) (rmaxT mnewT alphaT : Tile .real [128])
+            (numeT : Tile .real [128, 64]) (ostileT : Tile .real [128]),
+          (∀ i : Fin 128, ∀ j : Fin 64,
+            qkT.data (i, j, PUnit.unit) = flashQkCell IS_CAUSAL SN gm qtile ktile i j)
+          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128, 64].length) qkT = some rmaxT
+          ∧ mnewT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
+          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mnewT)
+          ∧ numeT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mnewT))
+          ∧ ostileT = Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+              (Tile.bop NumericDType.real.mul Broadcast.scalarR dtile (Tile.scalar (some 0))) alphaT
+          ∧ sF.regs .real [128] "max" = some mnewT
+          ∧ sF.regs .real [128] "denom" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) dtile alphaT)
+              (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [128, 64].length) numeT))
+          ∧ sF.regs .real [128, 64] "out_buffer" = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) obtile (Tile.expandDim ⟨1, by simp⟩ ostileT))
+              (Tile.dot [] numeT vtile)) := by
+  -- the q·k dot tile (cast of fp16 q against the loaded k)
+  set qrealT : Tile .real [128, 64] :=
+    ⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ with hqreal
+  set dotT : Tile .real [128, 64] := Tile.dot [] qrealT ktile with hdotT
+  -- the qk tile after L2–L4: full-0 (+ causal mask) + dot
+  set qkT : Tile .real [128, 64] :=
+    ⟨fun idx => flashQkCell IS_CAUSAL SN gm qtile ktile idx.1 idx.2.1⟩ with hqkT
+  have hqkData : ∀ i : Fin 128, ∀ j : Fin 64,
+      qkT.data (i, j, PUnit.unit) = flashQkCell IS_CAUSAL SN gm qtile ktile i j := fun _ _ => rfl
+  -- reduceMax exists
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128, 64].length) qkT = some t :=
+    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [128, 64] (⟨1, by simp⟩ : Fin [128, 64].length) from by decide)]⟩
+  set mnewT : Tile .real [128] := Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT with hmnew
+  set alphaT : Tile .real [128] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mnewT) with halpha
+  set numeT : Tile .real [128, 64] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mnewT)) with hnume
+  set ostileT : Tile .real [128] := Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR dtile (Tile.scalar (some 0))) alphaT with hostile
+  rw [flashLoopBody_eq_tail]
+  -- L0: k = load K_block_ptr  (rewrite directly to ktile)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") []) MaskOpt.none) sin
+        = some ktile from by
+      rw [flash_load_K_eval Kreg kbase 64 128 64 64 1 64 kcol
+        (Op.ref .blockPtr [64, 64] "K_block_ptr") sin (by rw [evalOp_ref]; simp [hKp])]
+      refine congrArg some ?_; ext idx; rw [hkload idx]))]
+  -- L1: v = load V_block_ptr  (rewrite directly to vtile)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none) _
+        = some vtile from by
+      rw [flash_load_Q_eval Vreg vbase 128 64 64 64 64 1 vrow
+        (Op.ref .blockPtr [64, 64] "V_block_ptr") _ (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, hVp])]
+      refine congrArg some ?_; ext idx
+      simp only [BlockState.setReg_readMem]
+      rw [hvload idx]))]
+  -- L2–L3: qk seed + causal mask  →  flashMaskedSeed (via the 2-statement prefix)
+  rw [stepStmts.append_some (l2 := flashLoopBodyTail IS_CAUSAL)
+    (flash_qk_seed_steps IS_CAUSAL _ SN gm
+      (by simp [BlockState.setReg_ne_name, hsn])
+      (by simp [BlockState.setReg_ne_name, hom])
+      (by simp [BlockState.setReg_ne_name, hon]))]
+  unfold flashLoopBodyTail
+  -- L4: qk += dot q k   →  qkT (= flashQkCell tile)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Op.ref .real [128, 64] "qk")
+          (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [128, 64] "q"))
+            (Op.ref .real [64, 64] "k"))) _ = some qkT from by
+      rw [flash_qkdot_op_eval _ 128 64 64 (flashMaskedSeed IS_CAUSAL SN gm) qtile ktile
+        (by rw [BlockState.setReg_same]) (by simp [BlockState.setReg_ne_name, hq])
+        (by simp [BlockState.setReg_ne_name])]
+      refine congrArg some ?_; ext idx
+      simp only [hqkT, flashQkCell, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        flashMaskedSeed, NumericDType.add]
+      by_cases h : (IS_CAUSAL → SN + idx.2.1.val ≤ gm idx.1)
+      · rw [if_pos h, if_pos h]
+        cases hd : (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [128, 64]) ktile).data idx with
+        | none => simp [WithBot.realAdd, Option.map₂, Option.bind]
+        | some r => simp [WithBot.realAdd, Option.map₂, Option.bind]
+      · rw [if_neg h, if_neg h]
+        simp only [WithBot.realAdd, Option.map₂, Option.bind]
+        rfl))]
+  -- L5: max_new = maximum(max, reduceMax qk 1)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_maxnew_op_eval _ 128 64 mtile qkT rmaxT
+      (by simp [BlockState.setReg_ne_name, hmax]) (by rw [BlockState.setReg_same]) hrm))]
+  -- L6: alpha = exp2(max - max_new)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_alpha_op_eval _ 128 mtile mnewT
+      (by simp [BlockState.setReg_ne_name, hmax]) (by simp [BlockState.setReg_same, hmnew])))]
+  -- L7: nume = exp2(qk - max_new[:,None])
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_nume_op_eval _ 128 64 (by simp) qkT mnewT
+      (by simp [BlockState.setReg_ne_name]) (by simp [BlockState.setReg_ne_name, hmnew])))]
+  -- L8: out_scale = denom * 0 + alpha
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_outscale_op_eval _ 128 dtile alphaT
+      (by simp [BlockState.setReg_ne_name, hden]) (by simp [BlockState.setReg_ne_name, halpha])))]
+  -- L9: out_buffer *= out_scale[:,None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_outbuf_rescale_op_eval _ 128 64 (by simp) obtile ostileT
+      (by simp [BlockState.setReg_ne_name, hob]) (by simp [BlockState.setReg_same, hostile])))]
+  -- L10: out_buffer += dot((nume.to fp16).to real, v)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_outbuf_acc2_op_eval _
+      (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) obtile (Tile.expandDim ⟨1, by simp⟩ ostileT))
+      numeT vtile
+      (by rw [BlockState.setReg_same]) (by simp [BlockState.setReg_ne_name, hnume])
+      (by simp [BlockState.setReg_ne_name])))]
+  -- L11: denom = denom * alpha + sum nume 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_denom_op_eval _ 128 64 dtile alphaT numeT
+      (by simp [BlockState.setReg_ne_name, hden]) (by simp [BlockState.setReg_ne_name, halpha])
+      (by simp [BlockState.setReg_ne_name, hnume])))]
+  -- L12: max = max_new
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [128] "max_new") _ = some mnewT from by
+      rw [evalOp_ref]; simp [BlockState.setReg_ne_name, hmnew]))]
+  -- L13: K_block_ptr = advance(K_block_ptr, [0, 64])
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_advance_col_eval _ Kreg kbase 64 128 64 64 1 64 kcol 64 "K_block_ptr"
+      (by simp [BlockState.setReg_ne_name, hKp])))]
+  -- L14: V_block_ptr = advance(V_block_ptr, [64, 0])
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_advance_row_eval _ Vreg vbase 128 64 64 64 64 1 vrow 64 "V_block_ptr"
+      (by simp [BlockState.setReg_ne_name, hVp])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mnewT, alphaT, numeT, ostileT,
+    hqkData, hrm, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
+  · simp [BlockState.setReg_pids]
+  · funext rg o; simp [BlockState.setReg_mem]
+  · intro rg o; simp [BlockState.setReg_undef, hundef]
+  · simp [BlockState.setReg_ne_name, hq]
+  · simp [BlockState.setReg_ne_name, hom]
+  · simp [BlockState.setReg_ne_name, hon]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_same]
+  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+  · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
