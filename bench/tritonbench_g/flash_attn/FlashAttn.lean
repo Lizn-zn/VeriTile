@@ -3226,4 +3226,66 @@ theorem flash_nume_row_sum (s0 : BlockState) (Q K V : RegionName) (scale : ℝ) 
   refine Finset.sum_congr rfl (fun jL _ => ?_)
   by_cases hcond : (causal → c * 64 + jL.val ≤ s0.pids 0 * 128 + r.val) <;> simp [hcond]
 
+/-- The kernel's `Σ_jL nume[r,jL]·v[jL,d]` over the `Fin 64` masked block equals the
+`flashBlock` list sum of `pow2(score − M')·v`. The `nume.to fp16 → real` round-trip
+is identity in the model, and the masked (`⊥`) cells contribute `0`. -/
+theorem flash_acc_dot_block (s0 : BlockState) (Q K V : RegionName) (scale : ℝ) (causal : Bool)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (r : Fin 128) (d : Fin 64)
+    (qtile : Tile .fp16 [128, 64]) (ktile vtile : Tile .real [64, 64])
+    (mnewT : Tile .real [128]) (numeT : Tile .real [128, 64])
+    (hq : qtile = ⟨fun idx : TileIndex [128, 64] =>
+        FloatDType.real.cast FloatDType.fp16 (some (scale * qTile s0 Q 8192 64 128 idx))⟩)
+    (hk : ∀ idx : TileIndex [64, 64],
+        ktile.data idx = some (s0.readMem K (s0.pids 1 * 8192 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
+    (hv : ∀ idx : TileIndex [64, 64],
+        vtile.data idx = some (s0.readMem V (s0.pids 1 * 8192 + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1)))
+    (Mr : ℝ)
+    (hmnew : mnewT.data (r, PUnit.unit) = (Mr : WithBot ℝ))
+    (hnume : ∀ jL : Fin 64, numeT.data (r, jL, PUnit.unit)
+        = WithBot.realExp2 (WithBot.realSub
+            (flashQkCell causal (c * 64) (fun rr : Fin 128 => s0.pids 0 * 128 + rr.val) qtile ktile r jL)
+            (mnewT.data (r, PUnit.unit)))) :
+    (Tile.dot [] numeT vtile).data (r, d, PUnit.unit)
+      = some ((flashBlock (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128) (vTile s0 V 8192 64 128)
+          scale causal (s0.pids 0 * 128) 64 c r d).map (fun p => pow2 (p.1 - Mr) * p.2)).sum := by
+  rw [Tile.dot_nil_data]
+  -- per-lane: nume[r,jL]·v[jL,d] = some(masked pow2(score-Mr)·v)
+  have hcell : ∀ jL : Fin 64,
+      Option.map₂ (· * ·) (numeT.data (r, jL, PUnit.unit)) (vtile.data (jL, d, PUnit.unit))
+        = some (if (causal → c * 64 + jL.val ≤ s0.pids 0 * 128 + r.val)
+            then pow2 ((scale * Finset.univ.sum (fun e : Fin 64 =>
+                  qTile s0 Q 8192 64 128 (r, e, PUnit.unit) *
+                    kTile s0 K 8192 64 128 (⟨c * 64 + jL.val, by
+                      have := jL.isLt; omega⟩, e, PUnit.unit))) - Mr)
+                * vTile s0 V 8192 64 128 (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)
+            else 0) := by
+    intro jL
+    rw [hnume jL, hmnew, hv (jL, d, PUnit.unit)]
+    unfold flashQkCell
+    have hvval : s0.readMem V (s0.pids 1 * 8192 + (c * 64 + jL.val) * 64 + d.val * 1)
+        = vTile s0 V 8192 64 128 (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit) := by
+      simp only [vTile, flashBaseOffset]; ring_nf
+    by_cases hcond : (causal → c * 64 + jL.val ≤ s0.pids 0 * 128 + r.val)
+    · rw [if_pos hcond, if_pos hcond,
+        flash_dot_score_cell s0 Q K scale c r jL (by have := jL.isLt; omega) qtile ktile hq hk]
+      simp only [WithBot.realSub, Option.map₂, Option.bind, Option.map, WithBot.realExp2_some]
+      rw [hvval]; refine congrArg some ?_; simp only [pow2]; ring_nf
+    · rw [if_neg hcond, if_neg hcond]
+      simp only [WithBot.realSub_bot_left, WithBot.realExp2_bot, Option.map₂, Option.bind, Option.map,
+        zero_mul]
+  rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+        (fun k => Option.map₂ (· * ·) (numeT.data (r, k, PUnit.unit)) (vtile.data (k, d, PUnit.unit))))
+      = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ (fun jL =>
+          (some (if (causal → c * 64 + jL.val ≤ s0.pids 0 * 128 + r.val)
+            then pow2 ((scale * Finset.univ.sum (fun e : Fin 64 =>
+                  qTile s0 Q 8192 64 128 (r, e, PUnit.unit) *
+                    kTile s0 K 8192 64 128 (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, e, PUnit.unit))) - Mr)
+                * vTile s0 V 8192 64 128 (⟨c * 64 + jL.val, by have := jL.isLt; omega⟩, d, PUnit.unit)
+            else 0) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun jL _ => hcell jL)]
+  rw [WithBot.sum_someTerm_eq_some]
+  refine congrArg some ?_
+  rw [flashBlock_map_sum (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128) (vTile s0 V 8192 64 128)
+      scale causal (s0.pids 0 * 128) 64 c r d hc1 (fun p => pow2 (p.1 - Mr) * p.2)]
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
