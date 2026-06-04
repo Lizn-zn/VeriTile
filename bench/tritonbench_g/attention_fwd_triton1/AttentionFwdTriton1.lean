@@ -1735,4 +1735,43 @@ theorem aft1_bo_local_eq (s sin' : BlockState) (Q K V : RegionName) (c : Nat)
     (fun t tk => ∑ e : Fin 128, aft1QCell s Q c t.val e.val * aft1KCell s K c e.val tk.val)
     (fun tk d => aft1VCell s V c tk.val d.val) hs hv (fun t tk => rfl) (fun tk d => rfl)
 
+/-- Eval of `b_o += dot(b_q, b_h)` (recurrent add) = `aft1BoTile` (full output). -/
+theorem aft1_bo_full_eq (s sin' : BlockState) (Q K V : RegionName) (c : Nat)
+    (hbo : sin'.regs .real [32, 128] "b_o" = some (aft1BoLocalTile s Q K V c))
+    (hq : sin'.regs .real [32, 128] "b_q" = some (aft1BqTile s Q c))
+    (hbh : sin'.regs .real [128, 128] "b_h" = some (aft1BhTile s K V c)) :
+    @evalOp .real [32, 128]
+        (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [32, 128] "b_o")
+          (@Op.dot [] 32 128 128 (Op.ref .real [32, 128] "b_q") (Op.ref .real [128, 128] "b_h"))) sin'
+      = some (aft1BoTile s Q K V c) := by
+  rw [aft1_accDot_op_eval sin' "b_o" "b_q" "b_h"
+    (aft1BoLocalTile s Q K V c) (aft1BqTile s Q c) (aft1BhTile s K V c)
+    (fun t d => aft1LocalOut s Q K V c t d)
+    (fun t d' => aft1QCell s Q c t.val d'.val)
+    (fun d' d => aft1RecState s K V c d' d)
+    hbo hq hbh (fun t d => rfl) (fun t d' => rfl) (fun d' d => rfl)]
+  refine congrArg some ?_
+  ext idx; obtain ⟨t, d, u⟩ := idx
+  simp only [aft1BoTile, aft1Out, aft1RecOut]
+
+/-- Eval of `b_h += dot(b_k, b_v)` (carry update) = `aft1BhTile (c+1)`. -/
+theorem aft1_bh_succ_eq (s sin' : BlockState) (K V : RegionName) (c : Nat)
+    (hbh : sin'.regs .real [128, 128] "b_h" = some (aft1BhTile s K V c))
+    (hk : sin'.regs .real [128, 32] "b_k" = some (aft1BkTile s K c))
+    (hv : sin'.regs .real [32, 128] "b_v" = some (aft1BvTile s V c)) :
+    @evalOp .real [128, 128]
+        (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [128, 128] "b_h")
+          (@Op.dot [] 128 32 128 (Op.ref .real [128, 32] "b_k") (Op.ref .real [32, 128] "b_v"))) sin'
+      = some (aft1BhTile s K V (c + 1)) := by
+  rw [aft1_accDot_op_eval sin' "b_h" "b_k" "b_v"
+    (aft1BhTile s K V c) (aft1BkTile s K c) (aft1BvTile s V c)
+    (fun d' d => aft1RecState s K V c d' d)
+    (fun d' tk => aft1KCell s K c d'.val tk.val)
+    (fun tk d => aft1VCell s V c tk.val d.val)
+    hbh hk hv (fun d' d => rfl) (fun d' tk => rfl) (fun tk d => rfl)]
+  refine congrArg some ?_
+  ext idx; obtain ⟨d', d, u⟩ := idx
+  simp only [aft1BhTile]
+  rw [aft1RecState_succ]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
