@@ -892,6 +892,11 @@ standalone `evalOp` reduction with abstract register-readback hypotheses, so the
 step lemma threads them through `stepStmts.cons_some` without ever reducing a
 nested `setReg` literal state. -/
 
+/-- `evalOp` helper for `tl.math.exp2` (`Op.exp2`): `Tile.uop realExp2`. -/
+theorem evalOp_exp2 {shape : TileShape} (a : Op .real shape) (s : BlockState) :
+    evalOp (.exp2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realExp2 va)) := by
+  simp [evalOp]
+
 /-- `evalOp` helper for the `>=` causal predicate (`Op.ge`), which has no
 dedicated `@[simp]` form (like `floorDiv`/`mod`). -/
 theorem evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
@@ -961,6 +966,153 @@ theorem flash_where_op_eval (s : BlockState) (BM BN SN : Nat)
   by_cases h : SN + idx.2.1.val ≤ gm idx.1
   · rw [if_pos (by simpa using h)]; simp [h]
   · rw [if_neg (by simpa using h)]; simp [h]
+
+/-- **`qk += tl.dot(q, k)` statement eval** (loop body L4): adds the `q·k` dot to
+the (possibly causally-masked) `qk` tile. `q` is fp16 (the scaled/cast query). -/
+theorem flash_qkdot_op_eval (s : BlockState) (BM BN DIM : Nat)
+    (qktile : Tile .real [BM, BN]) (qtile : Tile .fp16 [BM, DIM]) (ktile : Tile .real [DIM, BN])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hq : s.regs .fp16 [BM, DIM] "q" = some qtile)
+    (hk : s.regs .real [DIM, BN] "k" = some ktile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "qk")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, DIM] "q"))
+          (Op.ref .real [DIM, BN] "k"))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          qktile (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [BM, DIM]) ktile)) := by
+  have hcb : evalOp (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, DIM] "q")) s
+      = some (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [BM, DIM]) := by
+    rw [evalOp_castFloat]; simp [hq]
+  have hcb2 : @evalOp TileDType.real [BM, DIM] (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, DIM] "q")) s
+      = some (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [BM, DIM]) := hcb
+  have hdotN : evalOp (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, DIM] "q")) (Op.ref .real [DIM, BN] "k")) s
+      = some (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [BM, DIM]) ktile) := by
+    rw [evalOp_dot]; simp [hcb2, hk]
+  have hdotN2 : @evalOp TileDType.real [BM, BN]
+      (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, DIM] "q")) (Op.ref .real [DIM, BN] "k")) s
+      = some (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [BM, DIM]) ktile) := hdotN
+  rw [evalOp_add]; simp only [evalOp_ref, hqk, hdotN2, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- **`max_new = tl.maximum(max, tl.max(qk, 1))` statement eval** (loop body L5).
+Same `where`/`gt`/`reduceMax` shape as the template's `mij_op_eval`. -/
+theorem flash_maxnew_op_eval (s : BlockState) (BM BN : Nat)
+    (mtile : Tile .real [BM]) (qktile : Tile .real [BM, BN]) (rmaxT : Tile .real [BM])
+    (hmax : s.regs .real [BM] "max" = some mtile)
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile)
+    (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM,BN].length) qktile = some rmaxT) :
+    evalOp (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BM] "max")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk")))
+        (Op.ref .real [BM] "max")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk"))) s
+      = some (Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT) := by
+  have hrmaxN : evalOp (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk")) s = some rmaxT := by
+    rw [evalOp_reduceMax]; simp only [evalOp_ref, hqk]; exact hrm
+  have hrmax : @evalOp TileDType.real [BM]
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "qk")) s = some rmaxT := hrmaxN
+  rw [evalOp_where]
+  simp only [evalOp_gt, evalOp_ref, hmax, hrmax, Option.bind_eq_bind, Option.bind_some]
+
+/-- **`alpha = tl.math.exp2(max - max_new)` statement eval** (loop body L6). -/
+theorem flash_alpha_op_eval (s : BlockState) (BM : Nat) (mtile mnewtile : Tile .real [BM])
+    (hmax : s.regs .real [BM] "max" = some mtile) (hmnew : s.regs .real [BM] "max_new" = some mnewtile) :
+    evalOp (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BM] "max") (Op.ref .real [BM] "max_new"))) s
+      = some (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mnewtile)) := by
+  rw [evalOp_exp2]; simp [evalOp_sub, hmax, hmnew]
+
+/-- **`nume = tl.math.exp2(qk - max_new[:, None])` statement eval** (loop body L7).
+Composes the `qk - max_new[:,None]` shift (template `qk2_op_eval` shape) with `exp2`. -/
+theorem flash_nume_op_eval (s : BlockState) (BM BN : Nat) (hax : 1 < [BM].length.succ)
+    (qktile : Tile .real [BM, BN]) (mnewtile : Tile .real [BM])
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) (hmnew : s.regs .real [BM] "max_new" = some mnewtile) :
+    evalOp (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil)) (Op.ref .real [BM, BN] "qk")
+        (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "max_new")))) s
+      = some (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qktile
+          (Tile.expandDim ⟨1, hax⟩ mnewtile))) := by
+  have hexp2 : @evalOp TileDType.real [BM, 1] (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "max_new")) s
+      = some (Tile.expandDim ⟨1, hax⟩ mnewtile) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hmnew
+  rw [evalOp_exp2, evalOp_sub]
+  simp only [evalOp_ref, hqk, hexp2, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- **`out_scale = denom * 0 + alpha` statement eval** (loop body L8): the `denom*0`
+zeroes out, leaving `alpha` (a `0·denom + alpha` form the kernel uses to keep
+`out_scale` the right shape). -/
+theorem flash_outscale_op_eval (s : BlockState) (BM : Nat) (dtile atile : Tile .real [BM])
+    (hd : s.regs .real [BM] "denom" = some dtile) (ha : s.regs .real [BM] "alpha" = some atile) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [BM] "denom") (Op.const 0))
+        (Op.ref .real [BM] "alpha")) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR dtile (Tile.scalar (some 0))) atile) := by
+  rw [evalOp_add]; simp [evalOp_mul, evalOp_ref, evalOp_const, hd, ha]
+
+/-- **`out_buffer *= out_scale[:, None]` statement eval** (loop body L9). Mirrors
+the template's `acc1_op_eval` (rescale by the row factor). -/
+theorem flash_outbuf_rescale_op_eval (s : BlockState) (BM DIM : Nat) (hax : 1 < [BM].length.succ)
+    (obtile : Tile .real [BM, DIM]) (ostile : Tile .real [BM])
+    (hob : s.regs .real [BM, DIM] "out_buffer" = some obtile) (hos : s.regs .real [BM] "out_scale" = some ostile) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil)) (Op.ref .real [BM, DIM] "out_buffer")
+        (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "out_scale"))) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) obtile
+          (Tile.expandDim ⟨1, hax⟩ ostile)) := by
+  have hexp2 : @evalOp TileDType.real [BM, 1] (Op.expandDim ⟨1, hax⟩ (Op.ref .real [BM] "out_scale")) s
+      = some (Tile.expandDim ⟨1, hax⟩ ostile) := evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hos
+  rw [evalOp_mul]; simp only [evalOp_ref, hob, hexp2, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- **`nume = (nume).to(tl.float16)` statement eval** (loop body, `nume` fp16
+round-trip before the value dot). Template `pfp16_op_eval` analogue. -/
+theorem flash_numefp16_op_eval (s : BlockState) (BM BN : Nat) (ntile : Tile .real [BM, BN])
+    (hn : s.regs .real [BM, BN] "nume" = some ntile) :
+    evalOp (Op.castFloat .real .fp16 (Op.ref .real [BM, BN] "nume")) s
+      = some (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ntile.data i)⟩ : Tile .fp16 [BM, BN]) := by
+  rw [evalOp_castFloat]; simp [hn]
+
+/-- **`out_buffer += tl.dot((nume).to(fp16), v)` statement eval** (loop body L10).
+Template `acc2_op_eval` analogue: the `nume` fp16 round-trip is identity in the
+model, the dot accumulates the value contribution. -/
+theorem flash_outbuf_acc_op_eval (s : BlockState) (BM BN DIM : Nat)
+    (ob1tile : Tile .real [BM, DIM]) (ntile : Tile .real [BM, BN]) (vtile : Tile .real [BN, DIM])
+    (hob : s.regs .real [BM, DIM] "out_buffer" = some ob1tile)
+    (hnf16 : s.regs .fp16 [BM, BN] "nume" = some (⟨fun i => FloatDType.real.cast FloatDType.fp16 (ntile.data i)⟩ : Tile .fp16 [BM, BN]))
+    (hv : s.regs .real [BN, DIM] "v" = some vtile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) (Op.ref .real [BM, DIM] "out_buffer")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) (Op.ref .real [BN, DIM] "v"))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) ob1tile
+          (Tile.dot [] ntile vtile)) := by
+  have hcb : evalOp (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) s = some ntile := by
+    rw [evalOp_castFloat]; simp [hnf16]; ext i; simp [FloatDType.cast]
+  have hcb2 : @evalOp TileDType.real [BM, BN] (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) s = some ntile := hcb
+  have hdotN : evalOp (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) (Op.ref .real [BN, DIM] "v")) s
+      = some (Tile.dot [] ntile vtile) := by rw [evalOp_dot]; simp [hcb2, hv]
+  have hdotN2 : @evalOp TileDType.real [BM, DIM]
+      (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [BM, BN] "nume")) (Op.ref .real [BN, DIM] "v")) s
+      = some (Tile.dot [] ntile vtile) := hdotN
+  rw [evalOp_add]; simp only [evalOp_ref, hob, hdotN2, Option.bind_eq_bind, Option.bind_some]; rfl
+
+/-- **`denom = denom * alpha + tl.sum(nume, 1)` statement eval** (loop body L11).
+Template `li_op_eval`/`lij_op_eval` shapes composed: the running denominator
+rescales by `alpha` and adds the new block's row-sum of `nume`. -/
+theorem flash_denom_op_eval (s : BlockState) (BM BN : Nat)
+    (dtile atile : Tile .real [BM]) (ntile : Tile .real [BM, BN])
+    (hd : s.regs .real [BM] "denom" = some dtile) (ha : s.regs .real [BM] "alpha" = some atile)
+    (hn : s.regs .real [BM, BN] "nume" = some ntile) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BM] "denom") (Op.ref .real [BM] "alpha"))
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "nume"))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+          (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) dtile atile)
+          (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) ntile)) := by
+  have hsumN : @evalOp TileDType.real [BM]
+      (Op.reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "nume")) s
+      = some (Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM,BN].length) ntile) := by
+    have : @evalOp TileDType.real [BM]
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false (Op.ref .real [BM, BN] "nume")) s
+        = (do let vx ← evalOp (Op.ref .real [BM, BN] "nume") s;
+              some (Tile.reduceSum (⟨1, by simp⟩ : Fin [BM,BN].length) Bool.false vx)) :=
+      evalOp_reduceSum _ _ _ _
+    rw [this]; simp only [evalOp_ref, hn, Option.bind_some, Option.bind_eq_bind]; rfl
+  rw [evalOp_add]
+  simp only [evalOp_mul, evalOp_ref, hd, ha, hsumN, Option.bind_eq_bind, Option.bind_some]; rfl
 
 /-! ## exec-side loop-invariant skeleton (in progress)
 
