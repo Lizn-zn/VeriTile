@@ -254,6 +254,41 @@ theorem forRange_single_step
       hBody]
   simp [Option.bind, stepForRangeAux.step_ge hstep hle]
 
+/-- **Master invariant principle for dynamic `forRangeDyn`.** The dynamic
+start/stop/step ops are resolved to their `Nat` values via the supplied evalOp
+evidence (evaluated in the loop-entry state `s_init`), then the same induction as
+`forRange_inv` is run. Use for kernels whose loop bound is a runtime expression
+(e.g. `tl.cdiv(T, BT)`) but which still need a genuine multi-iteration carry
+invariant `P`.
+
+The conclusion exposes the final counter existentially (the loop counter
+advances by `step`, so `stop ≤ final`, with `final = stop` whenever `step` divides
+`stop - start` aligned, which the caller pins via an upper bound on `P`). -/
+theorem forRangeDyn_inv
+    {idx : RegName} {startOp stopOp stepOp : Op .nat []}
+    {start stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    (hStart : evalOp startOp s_init = some (Tile.scalar start))
+    (hStop : evalOp stopOp s_init = some (Tile.scalar stop))
+    (hStepOp : evalOp stepOp s_init = some (Tile.scalar step))
+    (hstep : step ≠ 0)
+    (h_init : P start s_init)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s') :
+    ∃ final s_final,
+      stepStmt (.forRangeDyn idx startOp stopOp stepOp body) s_init = some s_final ∧
+      stop ≤ final ∧ P final s_final := by
+  obtain ⟨final, s_final, h_aux, hfinal, hP⟩ :=
+    forRangeAux_inv hstep h_step start s_init h_init
+  refine ⟨final, s_final, ?_, hfinal, hP⟩
+  rw [stepForRangeAux.forRangeDyn_unfold, hStart, hStop, hStepOp]
+  simp only [Option.bind]
+  show stepForRangeAux idx start stop step body s_init = some s_final
+  exact h_aux
+
 /-- Single-iteration variant for `forRangeDyn` after the dynamic bounds have
 been resolved. Use when start/stop/step come from runtime register values
 (e.g. `length` loaded from a metadata buffer). The caller must supply the
