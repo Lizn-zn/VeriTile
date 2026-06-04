@@ -293,6 +293,168 @@ theorem token_attn_mistral_python_case4_surface_toAlgorithm_supported
     Req_to_tokens B_req_idx B_Start_Loc B_Seqlen B_Att_Start_Loc
     B_Att_Seqlen 128 1 128 1 8192 64 1 256 64 1 1 32 64 128
 
+/-! ## Genuine closed-form PV-reduction spec
+
+The Triton `_fwd_kernel_token_att2` accumulates, per output head-dim `d`, the
+sliding-window probability-weighted value sum
+
+```
+acc[d] = Σ_{n < cur_att_seq_len}  p[n] · v[v_loc[n], d]
+```
+
+where, with `start_index = max(cur_batch_seq_len - sliding_window, 0)` and
+`cur_kv_head = cur_head / kv_group_num`:
+
+* the per-token probability
+  `p[n] = Prob[cur_head·stride_ph + (att_start_loc + n)·stride_pbs]`, masked by
+  `n < cur_att_seq_len` (`other = 0`);
+* the gathered KV page index
+  `v_loc[n] = Req_to_tokens[req_idx·stride_req_to_tokens_b +
+    (start_index + n)·stride_req_to_tokens_s]`, masked by
+  `start_index + n < cur_batch_seq_len`;
+* the value row
+  `v[v_loc[n], d] = V[cur_kv_head·stride_vh + d·stride_vd +
+    v_loc[n]·stride_vbs]`, masked by `start_index + n < cur_batch_seq_len`
+  (`other = 0`), so an out-of-window token contributes `0` to every `d`.
+
+The final store of the whole `[BLOCK_DMODEL]` accumulator is **unmasked**, with a
+`.to(Out.dtype)` cast that is the identity at the algorithm (ℝ) layer.
+
+These definitions are a *genuine closed form* — they never execute the kernel —
+and are intended to replace the self-referential `tokenAttnMistralSurfaceValue`.
+
+`attSeqLen`/`batchSeqLen`/`reqIdx`/`attStartLoc` are the metadata loads of the
+prelude; `startIndex` is the sliding-window left edge. -/
+
+def attSeqLen (s : BlockState) (B_Att_Seqlen : RegionName) : Nat :=
+  s.readMemValue .nat B_Att_Seqlen (s.pids 0)
+
+def batchSeqLen (s : BlockState) (B_Seqlen : RegionName) : Nat :=
+  s.readMemValue .nat B_Seqlen (s.pids 0)
+
+def reqIdx (s : BlockState) (B_req_idx : RegionName) : Nat :=
+  s.readMemValue .nat B_req_idx (s.pids 0)
+
+def attStartLoc (s : BlockState) (B_Att_Start_Loc : RegionName) : Nat :=
+  s.readMemValue .nat B_Att_Start_Loc (s.pids 0)
+
+/-- Sliding-window left edge `cur_batch_start_index = max(cur_batch_seq_len -
+sliding_window, 0)`. The Nat subtraction already truncates at `0`, so the
+`tl.maximum(·, 0)` is the identity. -/
+def startIndex (s : BlockState) (B_Seqlen : RegionName) (sliding_window : Nat) : Nat :=
+  batchSeqLen s B_Seqlen - sliding_window
+
+/-- A window token `n` whose V-gather is in range: `start_index + n <
+cur_batch_seq_len`. Out-of-range tokens read `0` from both the `Req_to_tokens`
+gather and the masked `V` load, hence contribute `0`. -/
+def vActive
+    (s : BlockState) (B_Seqlen : RegionName) (sliding_window : Nat) (n : Nat) : Prop :=
+  startIndex s B_Seqlen sliding_window + n < batchSeqLen s B_Seqlen
+
+instance vActiveDecidable
+    (s : BlockState) (B_Seqlen : RegionName) (sliding_window n : Nat) :
+    Decidable (vActive s B_Seqlen sliding_window n) := by
+  unfold vActive; infer_instance
+
+/-- Per-token probability load offset:
+`cur_head·stride_ph + (att_start_loc + n)·stride_pbs`. -/
+def pOffset
+    (s : BlockState) (B_Att_Start_Loc : RegionName)
+    (stride_ph stride_pbs : Nat) (n : Nat) : Nat :=
+  s.pids 1 * stride_ph + (attStartLoc s B_Att_Start_Loc + n) * stride_pbs
+
+/-- Gathered KV page index for window token `n`:
+`Req_to_tokens[req_idx·stride_req_to_tokens_b +
+  (start_index + n)·stride_req_to_tokens_s]`. -/
+def vLoc
+    (s : BlockState) (Req_to_tokens B_req_idx B_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s sliding_window : Nat)
+    (n : Nat) : Nat :=
+  s.readMemValue .nat Req_to_tokens
+    (reqIdx s B_req_idx * stride_req_to_tokens_b +
+      (startIndex s B_Seqlen sliding_window + n) * stride_req_to_tokens_s)
+
+/-- Value-row load offset for window token `n`, head-dim `d`:
+`v_loc[n]·stride_vbs + cur_kv_head·stride_vh + d·stride_vd`, with
+`cur_kv_head = cur_head / kv_group_num`. -/
+def vOffset
+    (s : BlockState) (Req_to_tokens B_req_idx B_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_vbs stride_vh stride_vd
+      kv_group_num sliding_window : Nat) (n d : Nat) : Nat :=
+  vLoc s Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+      stride_req_to_tokens_s sliding_window n * stride_vbs +
+    (s.pids 1 / kv_group_num) * stride_vh + d * stride_vd
+
+/-- The genuine closed-form accumulator for output head-dim `d`:
+`Σ_{n < cur_att_seq_len} p[n] · v[v_loc[n], d]`, where an out-of-window token
+(`¬ vActive`) contributes `0` because its masked `V` load reads `0`. -/
+noncomputable def tokenAttnMistralPVValue
+    (s : BlockState) (Prob V : RegionName)
+    (Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd kv_group_num sliding_window : Nat)
+    (d : Nat) : ℝ :=
+  ∑ n ∈ Finset.range (attSeqLen s B_Att_Seqlen),
+    s.readMem Prob (pOffset s B_Att_Start_Loc stride_ph stride_pbs n) *
+      (if vActive s B_Seqlen sliding_window n then
+        s.readMem V (vOffset s Req_to_tokens B_req_idx B_Seqlen
+          stride_req_to_tokens_b stride_req_to_tokens_s stride_vbs stride_vh
+          stride_vd kv_group_num sliding_window n d)
+      else 0.0)
+
+/-- Genuine closed-form value written to `Out[outOffset d]`. The store is
+unmasked over the full `[BLOCK_DMODEL]` vector, so every lane holds the
+PV-accumulator `tokenAttnMistralPVValue` for its head-dim `d = dIndex s i`. -/
+noncomputable def tokenAttnMistralClosedForm
+    (s : BlockState) (Prob V : RegionName)
+    (Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd kv_group_num sliding_window BLOCK_DMODEL : Nat)
+    (i : Fin BLOCK_DMODEL) : ℝ :=
+  tokenAttnMistralPVValue s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
+    B_Seqlen B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+    stride_ph stride_pbs stride_vbs stride_vh stride_vd kv_group_num
+    sliding_window (dIndex s i)
+
+/-! ### Remaining bridge (banked)
+
+`tokenAttnMistralClosedForm` is the genuine, self-reference-free PV spec.  The
+remaining step is the surface readback bridge
+
+```
+exec (token_attn_mistral_surface …) s = some s' →
+  s'.readMem Out (outOffset … i) =
+    tokenAttnMistralClosedForm … i
+```
+
+Routing/decode notes for that bridge:
+
+* The kernel is the **PV reduce / accumulate** route (no online softmax): the
+  genuine spec is the direct probability-weighted value sum
+  `Σ_n p[n]·v[v_loc[n], d]`, reusing the `reduceSum_some` (`Tile.reduceSum`)
+  machinery as in `batched_vecmat_one_row_block_correct` for the per-block
+  `tl.sum(p_value[:,None]·v_value, 0)`, with the cross-block accumulator carried
+  by the outer `range(0, cur_att_seq_len, BLOCK_N)` loop, followed by the
+  unmasked `[BLOCK_DMODEL]` store readback (`scatter_readback_nd`, as in
+  `token_attn_mistral_final_store_slice_correct`).
+* Exec assembly: `exec` reduces to `stepStmts (…).toAlgKernel.body s` by `rfl`
+  (the `ComputeStmt → Stmt` lowering of every `ComputeExpr.alg` body statement
+  is definitional).  Decode the prelude assigns and the
+  `forRangeDyn "start_n" 0 cur_att_seq_len BLOCK_N …` loop via
+  `stepStmts.cons_some (stepStmt_assign_eq_some (…_op_eval …))` and
+  `stepForRangeAux.forRangeDyn_unfold`.  Unlike the llama2 sibling's single
+  `block_mask`-guarded iteration, this loop runs `⌈cur_att_seq_len / BLOCK_N⌉`
+  times, so the bridge needs a loop-invariant induction (`LoopInvariant`) on the
+  partial accumulator `acc_k = Σ_{n < k·BLOCK_N} p[n]·v[…]` rather than a single
+  `step_one_iter`/`step_ge` split.
+* Each loop body needs per-statement `*_op_eval` recipes for the `Prob` masked
+  load (`pOffset`, mask `n < cur_att_seq_len`), the `Req_to_tokens` gather
+  (`vLoc`), the 2D `v_offs`/`v_value` masked gather (`vOffset`, mask
+  `start_index + n < cur_batch_seq_len` ⇒ `vActive`), the
+  `tl.sum(p_value[:,None]·v_value, 0)` block reduction (`reduceSum_some`), and the
+  `acc += …` accumulation; then the final unmasked store readback.
+-/
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
