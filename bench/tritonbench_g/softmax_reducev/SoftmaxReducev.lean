@@ -51,6 +51,22 @@ read off at each `outOffset`, over a one-block output footprint with the program
 ids universally quantified. The streaming online-softmax loop (running max,
 rescale-and-accumulate, paged-V gather) feeds those `Acc`/`ESum` values; the side
 condition is the offset-injectivity of the `Out` slice at the test shape.
+
+## Genuine closed form (input-side, non-self-referential)
+
+`softmaxReducevWeightedSum` states the mathematical result over the *input*
+logits and gathered value rows:
+`out[d] = Σ_n softmax(qk)[n] · V[v_index[n], d]`
+`= (Σ_n exp(qk[n] - M)·V[v_index[n], d]) / (Σ_n exp(qk[n] - M))`.
+`softmaxReducevWeightedSum_shift_invariant` proves this is the genuine softmax
+(independent of the running max `M`). `softmaxReducevFinalSpec_eq_weightedSum`
+bridges the verified `acc / e_sum` store spec to this closed form, and
+`softmax_reducev_final_store_slice_weighted_sum_correct` proves the verified
+final-store slice *realizes* it under the loop-output contract (`Acc` / `ESum`
+hold the closed-form numerator / denominator — exact over `ℝ`). What remains to
+fully discharge the full-surface top theorem's self-reference is the `exec`-side
+unfold of the dynamic (`forRangeDyn`) online-softmax loop with the paged-V gather
+— the multi-thousand-line FA-1/attention-forward analogue.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.SoftmaxReducev
@@ -175,6 +191,108 @@ noncomputable def softmaxReducevFinalSpec
   s.readMem Acc (accOffset s stride_acc_bs stride_acc_h stride_acc_d i) /
     s.readMem ESum (eSumOffset s stride_es_bs stride_es_h)
 
+/-! ## Genuine closed form: softmax-weighted reduction over V
+
+`softmax_reducev.py` computes, for each output lane `d`, the softmax-weighted sum
+of the gathered V rows:
+
+```
+out[d] = ( Σ_n exp(qk[n] - M) · V[v_index[n], d] ) / ( Σ_n exp(qk[n] - M) )
+       = Σ_n softmax(qk)[n] · V[v_index[n], d]
+```
+
+where `n` ranges over the `cur_batch_seq_len` valid tokens, `qk[n]` are the
+attention logits, `M = maxₙ qk[n]` is the running max maintained by the online
+softmax, and `v_index[n]` is the paged-KV gather index from `B_Loc`. Because the
+online-softmax recurrence (running max, rescale-and-accumulate) is numerically
+exact over `ℝ`, the streamed `acc` / `e_sum` equal the batched numerator /
+denominator above, independent of the block schedule. This is a *genuine*
+input-side closed form: it names only the logits `qk` and the gathered value rows
+`v`, never the kernel's own executed output.
+
+These definitions are the mathematical content that the proof-region values `Acc`
+and `ESum` (consumed by the verified final-store slice) are contracted to hold. -/
+
+/-- Unnormalized softmax weight `exp(qk[n] - M)` for token `n`, with running max
+`M = mMax`. -/
+noncomputable def softmaxWeight {S : Nat} (qk : Fin S → ℝ) (mMax : ℝ) (n : Fin S) : ℝ :=
+  Real.exp (qk n - mMax)
+
+/-- The softmax normalizer `e_sum = Σ_n exp(qk[n] - M)` — the genuine closed form
+of the streamed `ESum` value. -/
+noncomputable def softmaxReducevDenom {S : Nat} (qk : Fin S → ℝ) (mMax : ℝ) : ℝ :=
+  ∑ n : Fin S, softmaxWeight qk mMax n
+
+/-- The unnormalized weighted V reduction
+`acc[d] = Σ_n exp(qk[n] - M)·V[v_index[n], d]` — the genuine closed form of the
+streamed `Acc[d]` value: the gathered value rows weighted by the unnormalized
+softmax probabilities. -/
+noncomputable def softmaxReducevAcc {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (mMax : ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ)
+    (d : Fin BLOCK_DMODEL) : ℝ :=
+  ∑ n : Fin S, softmaxWeight qk mMax n * v n d
+
+/-- **Shift-invariance of the closed form.** The normalized weighted sum does
+not depend on the running max `mMax`: subtracting any constant from every logit
+cancels between numerator and denominator. This certifies that
+`softmaxReducevWeightedSum` is the *genuine* softmax-weighted V reduction — the
+streaming max `M = maxₙ qk[n]` is only a numerical-stability device, not part of
+the mathematical result. Requires the denominator nonzero (always true here,
+`exp > 0`, when `S > 0`). -/
+theorem softmaxReducevWeightedSum_shift_invariant {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (m₁ m₂ : ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ)
+    (d : Fin BLOCK_DMODEL) :
+    softmaxReducevAcc qk m₁ v d / softmaxReducevDenom qk m₁
+      = softmaxReducevAcc qk m₂ v d / softmaxReducevDenom qk m₂ := by
+  have hnum : softmaxReducevAcc qk m₁ v d
+      = Real.exp (m₂ - m₁) * softmaxReducevAcc qk m₂ v d := by
+    unfold softmaxReducevAcc softmaxWeight
+    rw [Finset.mul_sum]
+    apply Finset.sum_congr rfl
+    intro n _
+    rw [← mul_assoc, ← Real.exp_add]
+    ring_nf
+  have hden : softmaxReducevDenom qk m₁
+      = Real.exp (m₂ - m₁) * softmaxReducevDenom qk m₂ := by
+    unfold softmaxReducevDenom softmaxWeight
+    rw [Finset.mul_sum]
+    apply Finset.sum_congr rfl
+    intro n _
+    rw [← Real.exp_add]
+    ring_nf
+  rw [hnum, hden, mul_div_mul_left _ _ (Real.exp_ne_zero _)]
+
+/-- The full normalized closed form
+`out[d] = acc[d] / e_sum = Σ_n softmax(qk)[n] · V[v_index[n], d]`. This is what
+`softmax_reducev.py` stores to `Out[cur_batch, cur_head, d]`, stated purely over
+the input logits `qk` and gathered value rows `v` — no reference to the executed
+kernel. -/
+noncomputable def softmaxReducevWeightedSum {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (mMax : ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ)
+    (d : Fin BLOCK_DMODEL) : ℝ :=
+  softmaxReducevAcc qk mMax v d / softmaxReducevDenom qk mMax
+
+/-- **The normalized weighted sum is `acc / e_sum`.** Bridges the genuine
+input-side closed form `softmaxReducevWeightedSum` to the verified final-store
+spec `softmaxReducevFinalSpec`: whenever the proof regions `Acc` / `ESum` hold the
+closed-form numerator / denominator at lane `d` (the contract the streaming
+online-softmax loop establishes, exact over `ℝ`), the stored value equals the
+softmax-weighted V reduction over the input. -/
+theorem softmaxReducevFinalSpec_eq_weightedSum {S BLOCK_DMODEL : Nat}
+    (s : BlockState) (Acc ESum : RegionName)
+    (stride_acc_bs stride_acc_h stride_acc_d stride_es_bs stride_es_h : Nat)
+    (qk : Fin S → ℝ) (mMax : ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ)
+    (i : Fin BLOCK_DMODEL)
+    (hAcc : s.readMem Acc (accOffset s stride_acc_bs stride_acc_h stride_acc_d i)
+      = softmaxReducevAcc qk mMax v i)
+    (hESum : s.readMem ESum (eSumOffset s stride_es_bs stride_es_h)
+      = softmaxReducevDenom qk mMax) :
+    softmaxReducevFinalSpec s Acc ESum stride_acc_bs stride_acc_h stride_acc_d
+        stride_es_bs stride_es_h i
+      = softmaxReducevWeightedSum qk mMax v i := by
+  unfold softmaxReducevFinalSpec softmaxReducevWeightedSum
+  rw [hAcc, hESum]
+
 /-- Algorithm-layer correctness for the final softmax-reduce-v store slice. -/
 theorem softmax_reducev_final_store_slice_correct
     (Acc ESum Out : RegionName)
@@ -241,6 +359,50 @@ theorem softmax_reducev_final_store_slice_compute_correct
     stride_obs stride_oh stride_od BLOCK_DMODEL s hOutInj i
   rw [hExec] at h
   exact Option.some.inj h
+
+/-- **Genuine closed-form compute correctness for the final softmax-reduce-v
+store.** The expected output is the input-side softmax-weighted V reduction
+`softmaxReducevWeightedSum` — `Σ_n softmax(qk)[n] · V[v_index[n], d]` — NOT the
+self-referential executed value. The hypotheses `hAcc` / `hESum` are the contract
+the streaming online-softmax loop establishes: that the proof regions `Acc` /
+`ESum` hold the closed-form numerator / denominator (exact over `ℝ`). Composes the
+verified store slice with `softmaxReducevFinalSpec_eq_weightedSum`. -/
+theorem softmax_reducev_final_store_slice_weighted_sum_correct {S : Nat}
+    (Acc ESum Out : RegionName)
+    (stride_acc_bs stride_acc_h stride_acc_d
+      stride_es_bs stride_es_h
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat)
+    (s : BlockState)
+    (qk : Fin S → ℝ) (mMax : ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i))
+    (hAcc : ∀ i : Fin BLOCK_DMODEL,
+      s.readMem Acc (accOffset s stride_acc_bs stride_acc_h stride_acc_d i)
+        = softmaxReducevAcc qk mMax v i)
+    (hESum : s.readMem ESum (eSumOffset s stride_es_bs stride_es_h)
+      = softmaxReducevDenom qk mMax) :
+    ComputeCorrect.Realizes
+      (kernel := softmax_reducev_final_store_slice Acc ESum Out
+        stride_acc_bs stride_acc_h stride_acc_d stride_es_bs stride_es_h
+        stride_obs stride_oh stride_od BLOCK_DMODEL)
+      (initialState := s)
+      (write := fun i : Fin BLOCK_DMODEL =>
+        some (Out, outOffset s stride_obs stride_oh stride_od i))
+      (expected := fun i => softmaxReducevWeightedSum qk mMax v i) := by
+  have hbase := softmax_reducev_final_store_slice_compute_correct Acc ESum Out
+    stride_acc_bs stride_acc_h stride_acc_d stride_es_bs stride_es_h
+    stride_obs stride_oh stride_od BLOCK_DMODEL s hOutInj
+  have hExpEq : (fun i : Fin BLOCK_DMODEL =>
+        softmaxReducevFinalSpec s Acc ESum stride_acc_bs stride_acc_h
+          stride_acc_d stride_es_bs stride_es_h i)
+      = fun i => softmaxReducevWeightedSum qk mMax v i := by
+    funext i
+    exact softmaxReducevFinalSpec_eq_weightedSum s Acc ESum stride_acc_bs
+      stride_acc_h stride_acc_d stride_es_bs stride_es_h qk mMax v i
+      (hAcc i) hESum
+  rw [hExpEq] at hbase
+  exact hbase
 
 /-! ## Python test-shape wrappers
 
