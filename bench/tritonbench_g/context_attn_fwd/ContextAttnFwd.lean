@@ -831,6 +831,24 @@ theorem ctxWhere_eval (s : BlockState) (BM BN : Nat) (sm : ℝ)
   rw [hbroad]
   rfl
 
+/-- **Masked pointer-arith region load eval** (`tl.load(R + offs, mask=m, other=o)`):
+lane `i` reads `R[offs i]` when `mask i` holds, else takes the `other` value `o i`.
+This is the context kernel's `q`/`k`/`v` load shape (`MemAccess.region` with a
+`MaskOpt.maskOther` mask), the pointer-arith analogue of flash's block-ptr
+`flash_load_{K,Q}_eval`. -/
+theorem ctx_evalOp_load_region_maskOther {dtype : TileDType} {shape : TileShape}
+    (region : Region dtype) (offsets : Op .nat shape)
+    (mask : Op .bool shape) (other : Op dtype shape) (s : BlockState)
+    (offsTile : Tile .nat shape) (maskTile : Tile .bool shape) (otherTile : Tile dtype shape)
+    (hoff : evalOp offsets s = some offsTile)
+    (hmask : evalOp mask s = some maskTile)
+    (hother : evalOp other s = some otherTile) :
+    evalOp (.load dtype (MemAccess.region region offsets) (MaskOpt.maskOther mask other)) s
+      = some ⟨fun i => if maskTile.data i then
+          s.readMemValue dtype (Region.cast region) (offsTile.data i) else otherTile.data i⟩ := by
+  simp only [evalOp, hoff, hmask, hother, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
