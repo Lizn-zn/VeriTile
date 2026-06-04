@@ -55,6 +55,24 @@ that opaque carrier and the trusted host boundary. Side conditions: the
 test-shape summaries fix the concrete layout `(B,H,M,D) = (2,4,16,32)` with
 `NUM_D_BLOCKS = 2`; case 1 uses `EVEN_M = EVEN_N = true`, case 2 uses
 `EVEN_M = EVEN_N = false`.
+
+## Genuine closed-form spec (banked)
+
+`blockSparseAttnClosedForm` is a **genuine, non-self-referential** closed form
+for one program's output: the causal natural-exp softmax attention
+(`tl.exp`, not `exp2`) of the program's query tile against the key/value rows the
+CSR layout selects (`selKeyGlobal`), under grouped-query head mapping
+(`offHkv`). The store recipes `block_sparse_attn_{first,second}_output_closed_form`
+prove **sorry-free** that the two masked `out` stores write this closed form to
+`Out` — *given* the loop-fill contract `hFill` (the accumulator regions hold the
+closed form at each active lane). The remaining proof gap is exactly `hFill`:
+the online-softmax recurrence over the CSR-selected, causally-masked key blocks
+equals the batch causal softmax. That `exec`-side loop unfolding (data-dependent
+CSR bounds + per-step rescale + two D-blocks) is far larger than the existing
+non-sparse `AttentionForwardClosedForm` assembly and is **not** discharged here;
+the self-referential `produced…Value` summaries are retained as the surface
+record until it is. This is tracked alongside the other sparse-attention loop
+gaps (cf. `mixed_sparse_attention`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.BlockSparseAttn
@@ -299,6 +317,132 @@ noncomputable def accStoreValue
         (accOffset s num_heads stride_acc_b stride_acc_h stride_acc_m
           stride_acc_d BLOCK_M idx))
     else some (0.0 : ℝ))
+
+/-! ## Genuine closed-form attention spec (NOT self-referential)
+
+The block-sparse kernel's per-program output is, over `ℝ`, an honest
+**causal natural-exp softmax attention** of the program's query tile against the
+key/value rows the CSR layout selects — *not* the kernel's own executed value.
+This section provides that genuine closed form as a tile-as-function, so the
+final-store recipes can be stated and (where the loop fill is provided) bridged
+against it.
+
+For a program `(start_m, off_bh)`, with `qStart = start_m · BLOCK_M`:
+
+* The query head `off_h = off_bh % num_heads`, batch `off_b = off_bh //
+  num_heads`, and, for grouped-query attention, KV head
+  `off_h_kv = off_h // (num_heads // num_kv_heads)`.
+* The CSR loop visits `col_idx_idx ∈ [start_l, end_l)`, loading
+  `col_idx = layout_csr_col_indices[layout_h · stride_col + col_idx_idx]` and
+  attending the `BLOCK_N` keys at global positions `col_idx · BLOCK_N + t`,
+  `t ∈ [0, BLOCK_N)`. The flattened selected-key index space therefore has size
+  `numSelBlocks · BLOCK_N`, and the `r`-th selected key sits at global position
+  `selKeyGlobal r`.
+* The score is `softmax_scale · Σ_e Q[qStart+i, e] · K[selKeyGlobal r, e]`,
+  causally masked: key `r` contributes iff `selKeyGlobal r ≤ qStart + i` (the
+  Python `tl.where(offs_m ≥ start_n + offs_n, 0, -inf)`), and softmaxed with the
+  natural exponential (`tl.exp`).
+* The two output D-blocks read disjoint head channels: block 0 reads V channels
+  `d ∈ [0, BLOCK_D)`, block 1 reads V channels `BLOCK_D + d` (`acc2` is stored at
+  `out_ptrs + BLOCK_D`).
+
+This is exactly `VeriTile.Triton.attentionRealCausal` evaluated on the gathered
+selected-key tiles, except the causal predicate is on the *global* key position
+`selKeyGlobal r` rather than on the gathered index `r`; we therefore inline the
+softmax here with that global predicate. -/
+
+/-- Grouped-query head map `num_heads // num_kv_heads`. -/
+def headGroups (num_heads num_kv_heads : Nat) : Nat := num_heads / num_kv_heads
+
+/-- KV head index `off_h // headGroups` for grouped-query attention. -/
+def offHkv (s : BlockState) (num_heads num_kv_heads : Nat) : Nat :=
+  offH s num_heads / headGroups num_heads num_kv_heads
+
+/-- Q tile base offset `off_b · stride_qb + off_h · stride_qh`. -/
+def qBase (s : BlockState) (num_heads stride_qb stride_qh : Nat) : Nat :=
+  offB s num_heads * stride_qb + offH s num_heads * stride_qh
+
+/-- K/V tile base offset `off_b · stride_kb + off_h_kv · stride_kh`
+(grouped-query: the KV head is `off_h // headGroups`). -/
+def kvBase (s : BlockState) (num_heads num_kv_heads stride_kb stride_kh : Nat) :
+    Nat :=
+  offB s num_heads * stride_kb + offHkv s num_heads num_kv_heads * stride_kh
+
+/-- Global key position of the `r`-th flattened selected key:
+`col_idx(r / BLOCK_N) · BLOCK_N + (r % BLOCK_N)`, where `col_idx(b)` is the
+`b`-th CSR column index visited by the program, read from
+`layout_csr_col_indices` at `layout_h · stride_col + start_l + b`. -/
+def selKeyGlobal
+    (s : BlockState) (layoutCols : Region .nat)
+    (layout_h stride_col start_l BLOCK_N : Nat) (r : Nat) : Nat :=
+  s.readMemValue .nat (Region.cast layoutCols)
+      (layout_h * stride_col + start_l + r / BLOCK_N) * BLOCK_N +
+    r % BLOCK_N
+
+/-- Q row `qStart + i`, head channel `e`, read at
+`qBase + (qStart+i) · stride_qm + e`. -/
+noncomputable def qTileBSA (s : BlockState) (Q : RegionName)
+    (num_heads stride_qb stride_qh stride_qm BLOCK_M : Nat)
+    (i : Fin BLOCK_M) (e : Nat) : ℝ :=
+  s.readMem Q (qBase s num_heads stride_qb stride_qh +
+    mIndex s BLOCK_M i * stride_qm + e)
+
+/-- K row at global key position `n`, head channel `e`, read at
+`kvBase + n · stride_kn + e`. -/
+noncomputable def kRowBSA (s : BlockState) (K : RegionName)
+    (num_heads num_kv_heads stride_kb stride_kh stride_kn : Nat)
+    (n e : Nat) : ℝ :=
+  s.readMem K (kvBase s num_heads num_kv_heads stride_kb stride_kh +
+    n * stride_kn + e)
+
+/-- V row at global key position `n`, head channel `d`, read at
+`vbase + n · stride_vn + d`. The second D-block reads channel `BLOCK_D + d`. -/
+noncomputable def vRowBSA (s : BlockState) (V : RegionName)
+    (num_heads num_kv_heads stride_vb stride_vh stride_vn : Nat)
+    (n d : Nat) : ℝ :=
+  s.readMem V (kvBase s num_heads num_kv_heads stride_vb stride_vh +
+    n * stride_vn + d)
+
+/-- Unscaled raw score `Σ_{e<HEAD_DIM} Q[qStart+i,e] · K[n,e]` at global key `n`. -/
+noncomputable def rawScoreBSA (s : BlockState) (Q K : RegionName)
+    (num_heads num_kv_heads stride_qb stride_qh stride_qm
+      stride_kb stride_kh stride_kn HEAD_DIM BLOCK_M : Nat)
+    (i : Fin BLOCK_M) (n : Nat) : ℝ :=
+  Finset.univ.sum (fun e : Fin HEAD_DIM =>
+    qTileBSA s Q num_heads stride_qb stride_qh stride_qm BLOCK_M i e.val *
+      kRowBSA s K num_heads num_kv_heads stride_kb stride_kh stride_kn n e.val)
+
+/-- **Genuine closed-form block-sparse attention output** for one program.
+
+`out[i, d] = (Σ_r w(i,r) · V[selKeyGlobal r, dChan d]) / (Σ_r w(i,r))`, where the
+sum ranges over the `numSelBlocks · BLOCK_N` flattened selected keys, and
+`w(i,r) = exp(softmax_scale · rawScore i (selKeyGlobal r))` when key
+`selKeyGlobal r ≤ qStart + i` (causal), else `0`. `dChan d = dBlockBase + d`
+selects the head channel for the chosen output D-block (`dBlockBase = 0` for the
+first store, `BLOCK_D` for the second). This is `attentionRealCausal` with the
+causal predicate evaluated on the global key position. -/
+noncomputable def blockSparseAttnClosedForm
+    (s : BlockState) (Q K V : RegionName) (layoutCols : Region .nat)
+    (num_heads num_kv_heads
+      stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+      stride_vb stride_vh stride_vn
+      layout_h stride_col start_l numSelBlocks
+      HEAD_DIM BLOCK_M BLOCK_N dBlockBase : Nat)
+    (softmax_scale : ℝ)
+    (i : Fin BLOCK_M) (d : Nat) : ℝ :=
+  let n := fun r : Fin (numSelBlocks * BLOCK_N) =>
+    selKeyGlobal s layoutCols layout_h stride_col start_l BLOCK_N r.val
+  let w := fun r : Fin (numSelBlocks * BLOCK_N) =>
+    if n r ≤ mIndex s BLOCK_M i then
+      Real.exp (softmax_scale *
+        rawScoreBSA s Q K num_heads num_kv_heads stride_qb stride_qh stride_qm
+          stride_kb stride_kh stride_kn HEAD_DIM BLOCK_M i (n r))
+    else 0
+  let denom := Finset.univ.sum (fun r => w r)
+  let numer := Finset.univ.sum (fun r =>
+    w r * vRowBSA s V num_heads num_kv_heads stride_vb stride_vh stride_vn
+      (n r) (dBlockBase + d))
+  numer / denom
 
 /-- Algorithm-layer correctness for the first block-sparse output store. -/
 theorem block_sparse_attn_output_store_slice_correct
@@ -556,6 +700,120 @@ theorem block_sparse_attn_python_second_output_compute_correct
   exact block_sparse_attn_output_store_second_slice_compute_correct Acc2 Out
     4 16 2048 512 16 1 2048 512 32 16 16 s
     (block_sparse_attn_python_second_output_offset_injective s)
+
+/-! ## Genuine closed-form store recipes (sorry-free)
+
+These bridge the final masked `out` stores to the **genuine closed-form**
+attention value `blockSparseAttnClosedForm` (NOT the kernel's executed value):
+*given* that the accumulator region holds the closed form at each active lane
+(the loop-fill contract, which the trusted online-softmax recurrence
+establishes), the store-slice surface writes the closed-form attention output to
+`Out`. The remaining proof gap is exactly the loop-fill contract `hFill`; the
+store-side composition is closed here.
+
+`hFill` is the per-lane statement that the first/second D-block accumulator
+equals the causal natural-exp softmax attention over the CSR-selected keys, with
+`dBlockBase = 0` for `acc` and `dBlockBase = BLOCK_D` for `acc2`. -/
+
+/-- First D-block store writes the genuine closed-form attention output to `Out`,
+given the accumulator `Acc` holds it (loop-fill contract `hFill`). -/
+theorem block_sparse_attn_first_output_closed_form
+    (Acc Out Q K V : RegionName) (layoutCols : Region .nat)
+    (num_heads num_kv_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+      stride_vb stride_vh stride_vn
+      layout_h stride_col start_l numSelBlocks
+      HEAD_DIM BLOCK_M BLOCK_D : Nat)
+    (softmax_scale : ℝ)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        outOffset s num_heads stride_ob stride_oh stride_om BLOCK_M idx))
+    (hFill : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      s.readMem Acc (accOffset s num_heads stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d BLOCK_M idx)
+        = blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
+            stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+            stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
+            HEAD_DIM BLOCK_M (stride_kn) 0 softmax_scale idx.1 (dIndex idx)) :
+    ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_slice Acc Out num_heads
+        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        stride_ob stride_oh stride_om BLOCK_M BLOCK_D)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+          active s total_seq_len BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out,
+          outOffset s num_heads stride_ob stride_oh stride_om BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
+          stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+          stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
+          HEAD_DIM BLOCK_M (stride_kn) 0 softmax_scale idx.1 (dIndex idx)) := by
+  have hbase := block_sparse_attn_output_store_slice_compute_correct Acc Out
+    num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+    stride_ob stride_oh stride_om BLOCK_M BLOCK_D s hOutInj
+  rw [ComputeCorrect.realizes_writeIf_iff] at hbase ⊢
+  refine ⟨hbase.1, ?_⟩
+  intro s0 s' hExec hs0 idx hActive
+  have h := hbase.2 s0 s' hExec hs0 idx hActive
+  rw [h]
+  rw [accStoreValue, if_pos hActive]
+  simpa using hFill idx hActive
+
+/-- Second D-block store writes the genuine closed-form attention output to
+`Out` at the `+BLOCK_D` channels, given `Acc2` holds it (loop-fill contract). -/
+theorem block_sparse_attn_second_output_closed_form
+    (Acc2 Out Q K V : RegionName) (layoutCols : Region .nat)
+    (num_heads num_kv_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+      stride_vb stride_vh stride_vn
+      layout_h stride_col start_l numSelBlocks
+      HEAD_DIM BLOCK_M BLOCK_D : Nat)
+    (softmax_scale : ℝ)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx))
+    (hFill : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      s.readMem Acc2 (accOffset s num_heads stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d BLOCK_M idx)
+        = blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
+            stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+            stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
+            HEAD_DIM BLOCK_M (stride_kn) BLOCK_D softmax_scale idx.1 (dIndex idx)) :
+    ComputeCorrect.Realizes
+      (kernel := block_sparse_attn_output_store_second_slice Acc2 Out num_heads
+        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        stride_ob stride_oh stride_om BLOCK_M BLOCK_D)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+          active s total_seq_len BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out,
+          out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        blockSparseAttnClosedForm s Q K V layoutCols num_heads num_kv_heads
+          stride_qb stride_qh stride_qm stride_kb stride_kh stride_kn
+          stride_vb stride_vh stride_vn layout_h stride_col start_l numSelBlocks
+          HEAD_DIM BLOCK_M (stride_kn) BLOCK_D softmax_scale idx.1 (dIndex idx)) := by
+  have hbase := block_sparse_attn_output_store_second_slice_compute_correct Acc2
+    Out num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m
+    stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D s hOutInj
+  rw [ComputeCorrect.realizes_writeIf_iff] at hbase ⊢
+  refine ⟨hbase.1, ?_⟩
+  intro s0 s' hExec hs0 idx hActive
+  have h := hbase.2 s0 s' hExec hs0 idx hActive
+  rw [h]
+  rw [accStoreValue, if_pos hActive]
+  simpa using hFill idx hActive
 
 noncomputable def producedBlockSparseAttnCase1OutValue
     (s : BlockState) (Out Q K V : RegionName)
