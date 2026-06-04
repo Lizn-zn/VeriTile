@@ -882,4 +882,72 @@ theorem flash_load_Q_eval
             (base + (rowOff + idx.1.val) * strideT + idx.2.1.val * strideS))⟩ :=
   load_blockPtr_Q_eval region base rows cols BT BS strideT strideS rowOff ptrOp s hp
 
+/-! ## exec-side loop-invariant skeleton (in progress)
+
+The compiled body of `flash_attn_fwd_kernel_surface` (verified by direct
+inspection of `(surface …).toAlgKernel.body`) is a 22-statement list:
+
+```
+preLoop (16 stmts, 0–15):
+  0  start_m         = program_id 0
+  1  off_bs_head     = program_id 1
+  2  qkv_base_offset = off_bs_head * stride_q_head
+  3  Q_block_ptr     = make_block_ptr(Q + base, offsets=(start_m*BLOCK_M, 0))
+  4  K_block_ptr     = make_block_ptr(K + base, offsets=(0, 0))
+  5  V_block_ptr     = make_block_ptr(V + base, offsets=(0, 0))
+  6  off_m           = start_m*BLOCK_M + arange BLOCK_M
+  7  off_n           = arange BLOCK_N
+  8  max             = full 0 + (-inf)
+  9  denom           = full 0
+  10 out_buffer      = full 0
+  11 qk_scale        = sm_scale * 1.44269504
+  12 q               = load Q_block_ptr            (no mask)
+  13 q               = (q * qk_scale).to fp16
+  14 lo              = 0
+  15 hi              = (start_m+1)*BLOCK_M  [causal]  /  SEQLEN  [non-causal]
+loop (16):
+  forRangeDyn start_n lo hi BLOCK_N loopBody   (loopBody = 15 stmts)
+postLoop (5 stmts, 17–21):
+  17 out_buffer      = out_buffer / denom[:, None]
+  18 l_ptr           = L + off_bs_head*SEQLEN + off_m
+  19 store L         l_ptr (max + log2 denom)
+  20 O_block_ptr     = make_block_ptr(O + base, offsets=(start_m*BLOCK_M, 0))
+  21 store O         O_block_ptr (out_buffer.to fp16)
+loopBody (15):
+  L0 k = load K_block_ptr ; L1 v = load V_block_ptr ; L2 qk = full 0 ;
+  L3 ifThen IS_CAUSAL { qk = where(off_m[:,None] >= start_n+off_n[None,:], qk, -inf) } ;
+  L4 qk = qk + dot q k ; L5 max_new = maximum(max, reduceMax qk 1) ;
+  L6 alpha = exp2(max - max_new) ; L7 nume = exp2(qk - max_new[:,None]) ;
+  L8 out_scale = denom*0 + alpha ; L9 out_buffer = out_buffer * out_scale[:,None] ;
+  L10 out_buffer = out_buffer + dot (nume.to fp16) v ; L11 denom = denom*alpha + sum nume 1 ;
+  L12 max = max_new ; L13 K_block_ptr = advance(K_block_ptr, [0, BLOCK_N]) ;
+  L14 V_block_ptr = advance(V_block_ptr, [BLOCK_N, 0]).
+```
+
+The body decomposes by `rfl` into `take 16 ++ (forRangeDyn … :: postLoop)`, so the
+loop driver `forRangeDyn_inv` applies with the abstract `loopBody`/postLoop supplied
+at the call site. The genuine remaining work — the per-statement op-eval recipes
+for the 15-stmt loop body (threading the causal `ifThen`/`where` `-inf` mask into
+the `osBlockStep`/`attnKeyListCausal` fold) and the `attnInvariant`/`preLoop`/
+`attn_step`/`attn_postLoop` skeleton composed via `forRangeDyn_inv` and bridged
+through `flashAttnOValueSpec{,Causal}_eq_streaming` — is tracked here. -/
+
+/-- The compiled body splits as `take 16 ++ drop 16`, with `drop 16` a `forRangeDyn`
+followed by the 5 post-loop statements. Pure `List` identity (`take_append_drop`),
+independent of any transcription. -/
+theorem flash_body_split
+    (Q K V L O : RegionName) (sm_scale : ℝ)
+    (s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 s10 s11 s12 s13 s14 s15 s16 s17 s18 s19
+      BS HEAD SEQLEN BLOCK_M DIM BLOCK_N : Nat) (IS_CAUSAL : Bool) :
+    (flash_attn_fwd_kernel_surface Q K V L O sm_scale s0 s1 s2 s3 s4 s5 s6 s7
+        s8 s9 s10 s11 s12 s13 s14 s15 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N
+        IS_CAUSAL).toAlgKernel.body
+      = (flash_attn_fwd_kernel_surface Q K V L O sm_scale s0 s1 s2 s3 s4 s5 s6 s7
+          s8 s9 s10 s11 s12 s13 s14 s15 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N
+          IS_CAUSAL).toAlgKernel.body.take 16
+        ++ (flash_attn_fwd_kernel_surface Q K V L O sm_scale s0 s1 s2 s3 s4 s5 s6 s7
+              s8 s9 s10 s11 s12 s13 s14 s15 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N
+              IS_CAUSAL).toAlgKernel.body.drop 16 :=
+  (List.take_append_drop 16 _).symm
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
