@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
 
 /-!
 # `attention_kernel_aligned` — strict per-kernel correctness
@@ -29,15 +30,15 @@ per-program statement covers every program of the grid.
 ## Proof architecture
 
 ```
-attention_kernel_aligned_python_test_shape_output_summary    ← TOP THEOREM
+attention_kernel_aligned_python_test_shape_output_summary    ← TOP THEOREM (NON-self-referential)
   ├─ attention_kernel_aligned_fwd_kernel_aligned_surface_toAlgorithm_supported   surface lowers to algorithm layer
-  └─ attention_kernel_aligned_fwd_kernel_aligned_python_test_shape_compute_correct
-       └─ attention_kernel_aligned_fwd_kernel_aligned_surface_compute_correct
-            └─ (full surface produces producedOutputValue at the Out store)
+  └─ attention_kernel_aligned_final_store_python_test_shape_compute_correct
+       └─ attention_kernel_aligned_final_store_slice_compute_correct   ← ComputeCorrect over the final Out store
+            └─ attention_kernel_aligned_final_store_slice_correct      ← algorithm-layer readback (normalizedAccValue = Acc / L)
 
-attention_kernel_aligned_final_store_python_test_shape_compute_correct
-  └─ attention_kernel_aligned_final_store_slice_compute_correct   ← ComputeCorrect over the final Out store
-       └─ attention_kernel_aligned_final_store_slice_correct      ← algorithm-layer readback (normalizedAccValue)
+genuine producer closed form (banked, sorry-free; exec assembly is the remaining gap):
+  alignedClosedForm  := attentionRealBase2ScalarScaleBias (loaded Q/K/V) (sm_scale·log2e) (rel_h+rel_w bias)
+  alignedClosedForm_eq_streaming  → Math/Attention.lean (osStep fold == batch base-2 softmax)
 ```
 
 ## Modeling boundary
@@ -47,12 +48,19 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `OUT_DTYPE`
 / `num_warps`/`num_stages` are not modeled. The output summary is stated at the
 Python test shape (`B=2, H=4, N_CTX=128, D_MODEL=64, BLOCK_M=32, BLOCK_N=64`,
 `sm_scale=1.0`, `P_SEQ=0`, `fp16`, contiguous per-head strides `(8192,64,1)`).
-The surface theorem captures the full single-program bias-augmented
-online-softmax body via `producedOutputValue`; the `final_store` lemmas isolate
-the final `acc / l_i` store (`normalizedAccValue`). This is a single-program
-scope (the store is unmasked at this shape since `N_CTX` is a multiple of
-`BLOCK_M`); cross-program composition into the full output is the trusted host
-boundary.
+The public summary asserts the genuine non-self-referential facts: the surface
+lowers to the algorithm layer, and the final `acc / l_i` store realizes the
+genuine quotient `normalizedAccValue = Acc / L`. The `producedOutputValue`
+definition and `*_surface_compute_correct` lemmas below are kept only as internal
+*execution observations* (the kernel's own `Out` value); they are deliberately
+**not** part of the public summary's `expected`. The genuine end-to-end producer
+closed form is `alignedClosedForm` (base-2 softmax of the loaded tiles with the
+scalar score scale and the `rel_h + rel_w` bias), with the streaming bridge
+`alignedClosedForm_eq_streaming` proved sorry-free; closing the `exec`-side
+online-softmax loop to that fold is the remaining tracked obligation. This is a
+single-program scope (the store is unmasked at this shape since `N_CTX` is a
+multiple of `BLOCK_M`); cross-program composition into the full output is the
+trusted host boundary.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.AttentionKernelAligned
@@ -231,6 +239,11 @@ def surfaceOutOffset
   s.pids 1 * stride_qh +
     mIndex s BLOCK_M idx.1 * stride_om + kIndex idx * stride_on
 
+/-- **Execution observation (NOT a specification).** The kernel's own executed
+`Out` value at lane `idx` — i.e. `exec(surface) |> readMem Out`. This is
+self-referential (`Out = whatever the kernel writes`) and is therefore used only
+as an internal observation, never as the public summary's `expected`. The genuine
+closed-form specification is `alignedClosedForm`. -/
 noncomputable def producedOutputValue
     (s : BlockState) (Q K V B0 Out : RegionName) (sm_scale : ℝ)
     (stride_qh stride_qm stride_qk
@@ -249,6 +262,107 @@ noncomputable def producedOutputValue
       BLOCK_M BLOCK_N out_dtype) s with
   | some s' => s'.readMem Out (surfaceOutOffset s stride_qh stride_om stride_on BLOCK_M idx)
   | none => 0.0
+
+/-! ## Genuine closed-form output spec (NOT self-referential)
+
+`producedOutputValue` above is the kernel's own executed `Out` value; it is the
+*observation*, not a specification. The definitions below give the **genuine
+closed form** the aligned online-softmax recurrence computes — the base-2
+softmax over the loaded `Q`/`K`/`V` tiles with the scalar score scale
+`qk_scale = sm_scale · log2(e)` folded into `q` and the fused `rel_h + rel_w`
+position bias `b0 + b1` added to the score — expressed over the loaded memory
+tiles, independent of the kernel's execution. The streaming-softmax math heart
+that justifies it (`osStep` fold == batch base-2 softmax) is proved sorry-free in
+`VeriTile/Triton/Math/Attention.lean`
+(`attentionRealBase2ScalarScaleBias_eq_streaming`).
+
+Under the Python launch layout (contiguous per-head `Q`/`K`/`V` with
+`stride_qm = stride_kn = stride_vk = BLOCK_DMODEL`, head stride `1`, and
+`P_SEQ = 0` so `S = N_CTX`), key `j`, head lane `e` of the per-`(batch,head)`
+tile sits at `pid₁ · stride_qh + j · BLOCK_DMODEL + e`. -/
+
+open VeriTile.Triton (attentionRealBase2ScalarScaleBias)
+
+/-- Base-2 logarithm of `e` (`log2(e) = 1 / log 2`); the constant `qk_scale =
+sm_scale · 1.44269504` the kernel folds into `q` (`q = (q · qk_scale).to(...)`).
+-/
+noncomputable def log2e : ℝ := 1 / Real.log 2
+
+/-- Loaded `Q` tile: block row `i`, head lane `e` at
+`pid₁ · stride_qh + (pid₀ · BLOCK_M + i) · BLOCK_DMODEL + e`. -/
+noncomputable def alignedQTile (s : BlockState) (Q : RegionName)
+    (stride_qh BLOCK_DMODEL BLOCK_M : Nat) :
+    TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q (s.pids 1 * stride_qh + mIndex s BLOCK_M i * BLOCK_DMODEL + e.val)
+
+/-- Loaded `K` tile: key `j`, head lane `e` at
+`pid₁ · stride_qh + j · BLOCK_DMODEL + e`. -/
+noncomputable def alignedKTile (s : BlockState) (K : RegionName)
+    (stride_qh BLOCK_DMODEL S : Nat) :
+    TileIndex [S, BLOCK_DMODEL] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K (s.pids 1 * stride_qh + j.val * BLOCK_DMODEL + e.val)
+
+/-- Loaded `V` tile: key `j`, channel `d` at
+`pid₁ · stride_qh + j · BLOCK_DMODEL + d`. -/
+noncomputable def alignedVTile (s : BlockState) (V : RegionName)
+    (stride_qh BLOCK_DMODEL S : Nat) :
+    TileIndex [S, BLOCK_DMODEL] → ℝ :=
+  fun (j, d, _) =>
+    s.readMem V (s.pids 1 * stride_qh + j.val * BLOCK_DMODEL + d.val)
+
+/-- Fused relative-position bias `bias i j = b0 + b1` added to the `(i, j)`
+score. Mirrors the kernel: `b0` indexes the block column `j / BLOCK_N`, `b1`
+indexes the per-lane column `(j % BLOCK_N) % BIAS_LAST_SIZE + BIAS_LAST_SIZE`,
+both at row `pid₀ · BLOCK_M + i` of the `B0` table
+(`b_offset = pid₁ · stride_b0h`, row stride `stride_b0m`). -/
+noncomputable def alignedBias (s : BlockState) (B0 : RegionName)
+    (stride_b0h stride_b0m BIAS_LAST_SIZE BLOCK_M BLOCK_N S : Nat) :
+    Fin BLOCK_M → Fin S → ℝ :=
+  fun i j =>
+    let row := s.pids 1 * stride_b0h + mIndex s BLOCK_M i * stride_b0m
+    s.readMem B0 (row + j.val / BLOCK_N) +
+      s.readMem B0 (row + (j.val % BLOCK_N) % BIAS_LAST_SIZE + BIAS_LAST_SIZE)
+
+/-- **Genuine closed-form `Out`-store value** for `attention_kernel_aligned`: the
+base-2 attention of the loaded `Q`/`K`/`V` tiles, with the constant scalar score
+scale `sm_scale · log2(e)` and the fused `rel_h + rel_w` bias `b0 + b1`. This is
+the value the streaming softmax `acc / l_i` computes — defined over the loaded
+tiles, NOT the kernel's own executed output (`producedOutputValue`). -/
+noncomputable def alignedClosedForm
+    (s : BlockState) (Q K V B0 : RegionName) (sm_scale : ℝ)
+    (stride_qh stride_b0h stride_b0m
+      N_CTX BIAS_LAST_SIZE BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
+  attentionRealBase2ScalarScaleBias
+    (alignedQTile s Q stride_qh BLOCK_DMODEL BLOCK_M)
+    (alignedKTile s K stride_qh BLOCK_DMODEL N_CTX)
+    (alignedVTile s V stride_qh BLOCK_DMODEL N_CTX)
+    (sm_scale * log2e)
+    (alignedBias s B0 stride_b0h stride_b0m BIAS_LAST_SIZE BLOCK_M BLOCK_N N_CTX)
+    idx
+
+/-- The genuine `Out`-value closed form unfolds to the streaming online-softmax
+`acc / l` fold over every key (the form the `exec`-side loop produces). Sorry-free
+bridge to `Math/Attention.lean`; the remaining `exec` obligation has to identify
+the kernel's running `acc / l_i` with this fold. -/
+theorem alignedClosedForm_eq_streaming
+    (s : BlockState) (Q K V B0 : RegionName) (sm_scale : ℝ)
+    (stride_qh stride_b0h stride_b0m
+      N_CTX BIAS_LAST_SIZE BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (i : Fin BLOCK_M) (d : Fin BLOCK_DMODEL) :
+    alignedClosedForm s Q K V B0 sm_scale stride_qh stride_b0h stride_b0m
+        N_CTX BIAS_LAST_SIZE BLOCK_DMODEL BLOCK_M BLOCK_N (i, d, PUnit.unit)
+      = (let st := (VeriTile.Triton.attnKeyListBias
+            (alignedQTile s Q stride_qh BLOCK_DMODEL BLOCK_M)
+            (alignedKTile s K stride_qh BLOCK_DMODEL N_CTX)
+            (alignedVTile s V stride_qh BLOCK_DMODEL N_CTX)
+            (sm_scale * log2e)
+            (alignedBias s B0 stride_b0h stride_b0m BIAS_LAST_SIZE BLOCK_M BLOCK_N N_CTX)
+            i d).foldl VeriTile.Triton.osStep (0, 0, 0)
+         st.2.2 / st.2.1) :=
+  VeriTile.Triton.attentionRealBase2ScalarScaleBias_eq_streaming _ _ _ _ _ i d
 
 /-- Algorithm-layer correctness for the final output store. -/
 theorem attention_kernel_aligned_final_store_slice_correct
@@ -409,35 +523,47 @@ theorem attention_kernel_aligned_fwd_kernel_aligned_python_test_shape_compute_co
     8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
     FloatDType.fp16 s
 
-/-- Public Python test-shape summary for `attention_kernel_aligned.py`.
+/-- **Public Python test-shape summary for `attention_kernel_aligned.py`
+(NON-self-referential).**
 
-This end-to-end summary records the faithful aligned attention surface for the
-checked relative-position-bias launch and ties the Q/K/V streaming-softmax
-producer path directly to the observable final `Out` writeback. -/
+This summary records only genuine facts about the checked relative-position-bias
+launch, with **no self-referential `expected`**:
+
+1. the faithful aligned attention surface lowers to the algorithm layer
+   (`toAlgorithm? = Except.ok alg`); and
+2. the final `acc / l_i[:, None]` writeback realizes the genuine quotient
+   `normalizedAccValue = Acc / L` — a closed form read off the streaming-softmax
+   `Acc` accumulator and `L` denominator regions, **not** the kernel's own
+   executed `Out` value.
+
+The genuine end-to-end producer specification — that the streaming `Acc`/`L`
+themselves equal the base-2 softmax of the loaded `Q`/`K`/`V` tiles under the
+scalar score scale `sm_scale · log2(e)` plus the fused `rel_h + rel_w` bias — is
+`alignedClosedForm` above, justified by the sorry-free streaming bridge
+`alignedClosedForm_eq_streaming` (→ `Math/Attention.lean`). Closing the kernel's
+`exec`-side online-softmax loop to identify the running `Acc`/`L` with that fold
+(preLoop + per-block `osBlockStep` + postLoop, the `attention_forward_triton`
+analogue, #162-style) is the remaining tracked obligation. -/
 theorem attention_kernel_aligned_python_test_shape_output_summary
-    (Q K V B0 Out : RegionName) (s : BlockState) :
+    (Q K V B0 Out Acc L : RegionName) (s : BlockState) :
     (∃ alg, (attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out
       1.0 8192 64 1 8192 64 1 8192 64 1 8192 64 1
       8192 128 2 4 128 0 64 128 64 32 64
       FloatDType.fp16).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes
-      (kernel := attention_kernel_aligned_fwd_kernel_aligned_surface Q K V B0 Out
-        1.0 8192 64 1 8192 64 1 8192 64 1 8192 64 1
-        8192 128 2 4 128 0 64 128 64 32 64
-        FloatDType.fp16)
+      (kernel := attention_kernel_aligned_final_store_slice Acc L Out
+        8192 64 1 128 1 8192 64 1 32 64)
       (initialState := s)
       (write := fun idx : TileIndex [32, 64] =>
-        some (Out, surfaceOutOffset s 8192 64 1 32 idx))
+        some (Out, outOffset s 8192 64 1 32 idx))
       (expected := fun idx : TileIndex [32, 64] =>
-        producedOutputValue s Q K V B0 Out 1.0 8192 64 1 8192 64 1
-          8192 64 1 8192 64 1 8192 128 2 4 128 0 64 128 64 32
-          64 FloatDType.fp16 idx) := by
+        normalizedAccValue s Acc L 8192 64 1 128 1 32 idx) := by
   constructor
   · exact attention_kernel_aligned_fwd_kernel_aligned_surface_toAlgorithm_supported
       Q K V B0 Out 1.0 8192 64 1 8192 64 1 8192 64 1
       8192 64 1 8192 128 2 4 128 0 64 128 64 32 64
       FloatDType.fp16
-  · exact attention_kernel_aligned_fwd_kernel_aligned_python_test_shape_compute_correct
-      Q K V B0 Out s
+  · exact attention_kernel_aligned_final_store_python_test_shape_compute_correct
+      Acc L Out s
 
 end VeriTile.Bench.TritonBenchG.AttentionKernelAligned
