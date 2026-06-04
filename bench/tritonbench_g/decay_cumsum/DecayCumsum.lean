@@ -1982,4 +1982,186 @@ theorem bwdEval_store_masked (region : RegionName)
 
 end BwdComputeRecipes
 
+section BwdAssembly
+
+set_option maxHeartbeats 1000000 in
+/-- The backward surface body at the test shape, as an explicit `Stmt` list whose
+prologue (first 15 statements) is exposed for `stepStmts.cons_some` chaining. We
+characterize the post-prologue state's relevant register values. -/
+theorem bwd_prologue_eval
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (s : BlockState) :
+    ∃ s0,
+      stepStmts ((bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+        Q K G DG 64 8 2 4).toAlgKernel.body.take 15) s = some s0
+      ∧ s0.pids = s.pids
+      ∧ s0.mem = s.mem
+      ∧ s0.undef = s.undef
+      ∧ s0.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .nat [] "i_c" = some (Tile.scalar (s.pids 1))
+      ∧ s0.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ s0.regs .nat [4] "offs" = some (Tile.vec (fun e : Fin 4 => e.val))
+      ∧ s0.regs .bool [4] "mask" = some
+          (Tile.vec (fun e : Fin 4 => decide (s.pids 0 * 4 + e.val < 8)))
+      ∧ s0.regs .real [4] "cum_grad_dg" = some ⟨fun _ => some 0⟩
+      ∧ s0.regs .real [4] "last_g" = some ⟨fun _ => some 0⟩
+      ∧ s0.regs .ptr [4] "p_q" = some
+          (Tile.vec (fun e : Fin 4 =>
+            (Q.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (s.pids 1 * 2 + 2 - 1) * 8)))
+      ∧ s0.regs .ptr [4] "p_k" = some
+          (Tile.vec (fun e : Fin 4 =>
+            (K.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (s.pids 1 * 2 + 2 - 1) * 8)))
+      ∧ s0.regs .ptr [4] "p_g" = some
+          (Tile.vec (fun e : Fin 4 =>
+            (G.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (s.pids 1 * 2 + 2 - 1) * 8)))
+      ∧ s0.regs .ptr [4] "p_dg" = some
+          (Tile.vec (fun e : Fin 4 =>
+            (DG.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (s.pids 1 * 2 + 2 - 1) * 8)))
+      ∧ s0.regs .ptr [4] "p_dq_inner" = some
+          (Tile.vec (fun e : Fin 4 =>
+            (DQInner.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (s.pids 1 * 2 + 2 - 1) * 8)))
+      ∧ s0.regs .ptr [4] "p_dk_inner" = some
+          (Tile.vec (fun e : Fin 4 =>
+            (DKInner.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (s.pids 1 * 2 + 2 - 1) * 8)))
+      ∧ s0.regs .ptr [4] "p_dq_inter" = some
+          (Tile.vec (fun e : Fin 4 =>
+            (DQInter.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (s.pids 1 * 2 + 2 - 1) * 8)))
+      ∧ s0.regs .ptr [4] "p_dk_inter" = some
+          (Tile.vec (fun e : Fin 4 =>
+            (DKInter.cast, s.pids 2 * 64 + s.pids 0 * 4 + e.val + (s.pids 1 * 2 + 2 - 1) * 8))) := by
+  rw [show ((bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+        Q K G DG 64 8 2 4).toAlgKernel.body.take 15)
+      = [ Stmt.assign .nat [] "i_k" (Op.programId 0),
+          Stmt.assign .nat [] "i_c" (Op.programId 1),
+          Stmt.assign .nat [] "i_bh" (Op.programId 2),
+          Stmt.assign .nat [4] "offs" (Op.arange 4),
+          Stmt.assign .ptr [4] "p_q"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Q)
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL
+                  (Op.add .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4)))
+                  (Op.ref .nat [4] "offs"))
+                (Op.mul .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil
+                      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat 2)) (Op.constNat 2))
+                    (Op.constNat 1))
+                  (Op.constNat 8)))),
+          Stmt.assign .ptr [4] "p_k"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase K)
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL
+                  (Op.add .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4)))
+                  (Op.ref .nat [4] "offs"))
+                (Op.mul .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil
+                      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat 2)) (Op.constNat 2))
+                    (Op.constNat 1))
+                  (Op.constNat 8)))),
+          Stmt.assign .ptr [4] "p_g"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase G)
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL
+                  (Op.add .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4)))
+                  (Op.ref .nat [4] "offs"))
+                (Op.mul .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil
+                      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat 2)) (Op.constNat 2))
+                    (Op.constNat 1))
+                  (Op.constNat 8)))),
+          Stmt.assign .ptr [4] "p_dg"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase DG)
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL
+                  (Op.add .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4)))
+                  (Op.ref .nat [4] "offs"))
+                (Op.mul .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil
+                      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat 2)) (Op.constNat 2))
+                    (Op.constNat 1))
+                  (Op.constNat 8)))),
+          Stmt.assign .ptr [4] "p_dq_inner"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase DQInner)
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL
+                  (Op.add .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4)))
+                  (Op.ref .nat [4] "offs"))
+                (Op.mul .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil
+                      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat 2)) (Op.constNat 2))
+                    (Op.constNat 1))
+                  (Op.constNat 8)))),
+          Stmt.assign .ptr [4] "p_dk_inner"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase DKInner)
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL
+                  (Op.add .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4)))
+                  (Op.ref .nat [4] "offs"))
+                (Op.mul .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil
+                      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat 2)) (Op.constNat 2))
+                    (Op.constNat 1))
+                  (Op.constNat 8)))),
+          Stmt.assign .ptr [4] "p_dq_inter"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase DQInter)
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL
+                  (Op.add .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4)))
+                  (Op.ref .nat [4] "offs"))
+                (Op.mul .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil
+                      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat 2)) (Op.constNat 2))
+                    (Op.constNat 1))
+                  (Op.constNat 8)))),
+          Stmt.assign .ptr [4] "p_dk_inter"
+            (Op.ptrAdd Broadcast.scalarL (Op.ptrBase DKInter)
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL
+                  (Op.add .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4)))
+                  (Op.ref .nat [4] "offs"))
+                (Op.mul .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil
+                      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat 2)) (Op.constNat 2))
+                    (Op.constNat 1))
+                  (Op.constNat 8)))),
+          Stmt.assign .real [4] "cum_grad_dg" (Op.full [4] (Op.const 0)),
+          Stmt.assign .bool [4] "mask"
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 4))
+                (Op.ref .nat [4] "offs"))
+              (Op.constNat 8)),
+          Stmt.assign .real [4] "last_g" (Op.full [4] (Op.const 0)) ] from rfl]
+  simp [stepStmts, stepStmt, evalOp, Option.bind, BlockState.setReg,
+    Tile.bop, Tile.vec, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+    NumericDType.sub, ComparableDType.lt]
+  ext i
+  simp only [Tile.cop_data, Tile.vec, Tile.scalar, Broadcast.leftIndex_scalarR,
+    Broadcast.rightIndex_scalarR, ComparableDType.lt]
+  rfl
+
+end BwdAssembly
+
 end VeriTile.Bench.TritonBenchG.DecayCumsum
