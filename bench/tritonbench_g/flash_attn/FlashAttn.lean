@@ -882,6 +882,86 @@ theorem flash_load_Q_eval
             (base + (rowOff + idx.1.val) * strideT + idx.2.1.val * strideS))⟩ :=
   load_blockPtr_Q_eval region base rows cols BT BS strideT strideS rowOff ptrOp s hp
 
+/-! ## Loop-body per-statement op-eval recipes
+
+The 15-statement `forRangeDyn` body of `flash_attn`'s `_fwd_kernel` evaluates,
+statement by statement, via these recipes (the flash-attn analogues of the
+`AttentionForwardClosedForm` template's `*_op_eval` family, retargeted onto the
+block-pointer foundation and the causal `ifThen`/`where` `-inf` mask). Each is a
+standalone `evalOp` reduction with abstract register-readback hypotheses, so the
+step lemma threads them through `stepStmts.cons_some` without ever reducing a
+nested `setReg` literal state. -/
+
+/-- `evalOp` helper for the `>=` causal predicate (`Op.ge`), which has no
+dedicated `@[simp]` form (like `floorDiv`/`mod`). -/
+theorem evalOp_ge {dtype a b shape} (h : ComparableDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
+/-- `evalOp` helper for `tl.math.log2` (`Op.log2`): `Tile.uop realLog2`. -/
+theorem evalOp_log2 {shape : TileShape} (a : Op .real shape) (s : BlockState) :
+    evalOp (.log2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realLog2 va)) := by
+  simp [evalOp]
+
+/-- **`qk = tl.zeros([BLOCK_M, BLOCK_N])` statement eval** (loop body L2): the
+all-`0` tile, matching the neutral pre-mask scores. -/
+theorem flash_qkzeros_op_eval (s : BlockState) (BM BN : Nat) :
+    evalOp (Op.full [BM, BN] (Op.const 0)) s
+      = some (⟨fun _ : TileIndex [BM, BN] => some (0 : ℝ)⟩ : Tile .real [BM, BN]) := by
+  simp [evalOp_full, evalOp_const, Option.bind]
+
+/-- **Causal `where` statement eval** (loop body L3, inside `ifThen IS_CAUSAL`):
+`qk = tl.where(off_m[:,None] >= start_n + off_n[None,:], qk, -inf)`. Given the
+`off_m`/`off_n` index vectors, `start_n = SN`, and the running `qk` tile, the
+masked tile selects `qk` where `off_m_i ≥ SN + j` and `⊥` (`-inf`) otherwise. -/
+theorem flash_where_op_eval (s : BlockState) (BM BN SN : Nat)
+    (gm : Fin BM → Nat) (qktile : Tile .real [BM, BN])
+    (hom : s.regs .nat [BM] "off_m" = some (Tile.vec gm))
+    (hon : s.regs .nat [BN] "off_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.where
+        (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "off_m"))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "off_n"))))
+        (Op.ref .real [BM, BN] "qk") (Op.broadcast Op.negInf [BM, BN])) s
+      = some ⟨fun idx : TileIndex [BM, BN] =>
+          if SN + idx.2.1.val ≤ gm idx.1 then qktile.data idx else (⊥ : WithBot ℝ)⟩ := by
+  have hexpM : @evalOp TileDType.nat [BM, 1]
+      (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "off_m")) s
+        = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec gm)) :=
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hom
+  have hexpN : @evalOp TileDType.nat [1, BN]
+      (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "off_n")) s
+        = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun j : Fin BN => j.val))) :=
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hon
+  have haddN : @evalOp TileDType.nat [1, BN]
+      (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "off_n"))) s
+        = some (Tile.bop NumericDType.nat.add Broadcast.scalarL (Tile.scalar SN)
+            (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun j : Fin BN => j.val)))) := by
+    rw [evalOp_add]
+    rw [show evalOp (Op.ref .nat [] "start_n") s = some (Tile.scalar SN) from by rw [evalOp_ref, hsn]]
+    rw [hexpN]
+    rfl
+  have hbcast : @evalOp TileDType.real [BM, BN] (Op.broadcast Op.negInf [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => (⊥ : WithBot ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]; rfl
+  rw [evalOp_where, evalOp_ge]
+  simp only [evalOp_ref, hexpM, haddN, hqk, hbcast,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, Tile.expandDim_data, Tile.scalar, Tile.vec,
+    ComparableDType.nat, NumericDType.add]
+  by_cases h : SN + idx.2.1.val ≤ gm idx.1
+  · rw [if_pos (by simpa using h)]; simp [h]
+  · rw [if_neg (by simpa using h)]; simp [h]
+
 /-! ## exec-side loop-invariant skeleton (in progress)
 
 The compiled body of `flash_attn_fwd_kernel_surface` (verified by direct
