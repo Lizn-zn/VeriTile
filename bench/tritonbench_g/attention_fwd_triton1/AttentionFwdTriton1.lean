@@ -1795,6 +1795,8 @@ theorem aft1_loopBody_regs_ff
     (hbh : sin.regs .real [128, 128] "b_h" = some (aft1BhTile s K V c)) :
     ∃ s2, stepStmts ((aft1LoopBody Q K V H O Bool.false Bool.false).take 13) sin = some s2
       ∧ (∀ rg off, s2.readMem rg off = s.readMem rg off)
+      ∧ s2.pids = sin.pids
+      ∧ s2.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0))
       ∧ s2.regs .blockPtr [32, 128] "p_o" = some
           (⟨fun _ => BlockPtr.mk O (s.pids 0 * 131072) [1024, 128] [32, 128] [128, 1]
             [c * 32, 0]⟩ : Tile .blockPtr [32, 128])
@@ -1867,10 +1869,100 @@ theorem aft1_loopBody_regs_ff
         (aft1_bh_succ_eq s _ K V c (by simp [hbh]) (by simp) (by simp)))]
       exact stepStmts.nil)]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro rg off; simp [hmem]
+  · simp
+  · simp [hibh]
   · simp [BlockState.setReg_ne_name]
   · simp [BlockState.setReg_ne_name]
   · simp [BlockState.setReg_same]
+
+/-- A `foldl` of `writeMemTyped .real` stores into region `wr` preserves `readMem`
+on any other region `rr ≠ wr`, regardless of the per-index offsets/values. -/
+theorem aft1_foldl_store_readMem_ne {α : Type} (l : List α)
+    (wr rr : RegionName) (offFn : α → Nat) (valFn : α → TileCarrier .real)
+    (s0 : BlockState) (off : Nat) (hne : rr ≠ wr) :
+    (l.foldl (fun acc i => acc.writeMemTyped .real wr (offFn i) (valFn i)) s0).readMem rr off
+      = s0.readMem rr off := by
+  induction l generalizing s0 with
+  | nil => rfl
+  | cons hd tl ih =>
+      simp only [List.foldl_cons]
+      rw [ih]
+      simp only [BlockState.writeMemTyped_real, BlockState.writeMem_readMem_of_ne_region _ _ _ _ _ _ hne]
+
+/-- A `foldl` of `writeMemTyped .real` stores preserves `pids`. -/
+theorem aft1_foldl_store_pids {α : Type} (l : List α)
+    (wr : RegionName) (offFn : α → Nat) (valFn : α → TileCarrier .real)
+    (s0 : BlockState) :
+    (l.foldl (fun acc i => acc.writeMemTyped .real wr (offFn i) (valFn i)) s0).pids = s0.pids := by
+  induction l generalizing s0 with
+  | nil => rfl
+  | cons hd tl ih => simp only [List.foldl_cons]; rw [ih, BlockState.writeMemTyped_pids]
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8000 in
+/-- **Full single-chunk iteration (STORE=false, IFCOND=false).** Stepping the
+*entire* loop body (block-ptr makes, loads, dots, IFCOND-false carry update, and
+the `p_o` output store) from a carry state `sin` advances the `b_h` register from
+`aft1BhTile c` to `aft1BhTile (c+1)`, preserves `pids`/`i_bh`, and preserves all
+`readMem` on the non-`O` regions `Q`/`K`/`V`/`H` (so the next chunk's loads and the
+recurrent-state source are intact). The `O` output block of chunk `c` is written. -/
+theorem aft1_loopBody_iter_ff
+    (Q K V H O : RegionName) (s sin : BlockState) (c : Nat)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H)
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0)))
+    (hi : sin.regs .nat [] "i" = some (Tile.scalar c))
+    (hbh : sin.regs .real [128, 128] "b_h" = some (aft1BhTile s K V c)) :
+    ∃ s', stepStmts (aft1LoopBody Q K V H O Bool.false Bool.false) sin = some s'
+      ∧ s'.pids = sin.pids
+      ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0))
+      ∧ s'.regs .real [128, 128] "b_h" = some (aft1BhTile s K V (c + 1))
+      ∧ (∀ off, s'.readMem Q off = s.readMem Q off)
+      ∧ (∀ off, s'.readMem K off = s.readMem K off)
+      ∧ (∀ off, s'.readMem V off = s.readMem V off)
+      ∧ (∀ off, s'.readMem H off = s.readMem H off) := by
+  obtain ⟨s2, hstep, hmem2, hpids2, hibh2, hpo, hbo, hbh2⟩ :=
+    aft1_loopBody_regs_ff Q K V H O s sin c hmem hibh hi hbh
+  -- the body = (take 13) ++ (drop 13), and drop 13 = [store]
+  have hdrop : (aft1LoopBody Q K V H O Bool.false Bool.false).drop 13
+      = [Stmt.store .real [32, 128]
+          (MemAccess.blockPtr (Op.ref .blockPtr [32, 128] "p_o") [])
+          (Op.ref .real [32, 128] "b_o") MaskOpt.none] := by
+    unfold aft1LoopBody
+    simp only [List.drop_succ_cons, List.drop_zero]
+  have hsplit : aft1LoopBody Q K V H O Bool.false Bool.false
+      = (aft1LoopBody Q K V H O Bool.false Bool.false).take 13
+        ++ [Stmt.store .real [32, 128]
+              (MemAccess.blockPtr (Op.ref .blockPtr [32, 128] "p_o") [])
+              (Op.ref .real [32, 128] "b_o") MaskOpt.none] := by
+    conv_lhs => rw [← List.take_append_drop 13 (aft1LoopBody Q K V H O Bool.false Bool.false)]
+    rw [hdrop]
+  rw [hsplit, stepStmts.append_some hstep]
+  -- step the store
+  have hstore : stepStmt (Stmt.store .real [32, 128]
+        (MemAccess.blockPtr (Op.ref .blockPtr [32, 128] "p_o") [])
+        (Op.ref .real [32, 128] "b_o") MaskOpt.none) s2
+      = some ((TileShape.allIndices [32, 128]).foldl
+          (fun acc i => acc.writeMemTyped .real O
+            (s.pids 0 * 131072 + (c * 32 + i.1.val) * 128 + (0 + i.2.1.val) * 1)
+            ((aft1BoTile s Q K V c).data i)) s2) := by
+    unfold stepStmt
+    simp only [evalOp_ref, hbo, hpo, Option.bind, Option.map]
+    refine congrArg some (congrArg (fun f => List.foldl f s2 (TileShape.allIndices [32, 128])) ?_)
+    funext acc i
+    obtain ⟨t, d, u⟩ := i
+    simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds,
+      List.all_nil, Bool.and_true, if_true]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [aft1_foldl_store_pids]; exact hpids2
+  · rw [BlockState.foldl_writeMemTyped_regs]; exact hibh2
+  · rw [BlockState.foldl_writeMemTyped_regs]; exact hbh2
+  · intro off; rw [aft1_foldl_store_readMem_ne _ O Q _ _ s2 off hOQ.symm]; exact hmem2 Q off
+  · intro off; rw [aft1_foldl_store_readMem_ne _ O K _ _ s2 off hOK.symm]; exact hmem2 K off
+  · intro off; rw [aft1_foldl_store_readMem_ne _ O V _ _ s2 off hOV.symm]; exact hmem2 V off
+  · intro off; rw [aft1_foldl_store_readMem_ne _ O H _ _ s2 off hOH.symm]; exact hmem2 H off
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
