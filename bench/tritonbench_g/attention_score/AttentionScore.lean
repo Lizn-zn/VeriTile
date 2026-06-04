@@ -39,8 +39,15 @@ kernel's own `exec`. It is derived lane-by-lane from the elaborated `@triton.jit
 body (the nat-truncated `dist`/`mask`, the `exp2`/`where`/`reduceSum` recipe).
 The control-flow stepping lemmas (`stepStmt_ifThenElse_true` etc.) that discharge
 the lowered `IS_EVEN_M`/`SLIDING_WINDOW`/`IS_EVEN_N` guards are proved
-sorry-free.  Connecting `producedAttentionScoreCase1OutValue` to
-`case1OutClosedForm` (the full `exec`-side loop unfolding) remains the open step.
+sorry-free.  The full `exec`-side connection is now **complete and sorry-free**:
+`attention_score_case1_exec_eq_closedForm` unfolds the elaborated body
+(preLoop `score_preLoop_eval` → the 2-iteration `forRangeDyn` loop
+`score_loop_eval`, built on the one-block step `score_loopBody_eval` →
+post-loop masked store `score_post_eval`) and proves the kernel writes exactly
+`case1OutClosedForm` to `Out` at every active column. The public
+`attention_score_python_case1_output_summary` now states this genuine closed
+form — the former self-referential `producedAttentionScoreCase1OutValue` is
+removed.
 
 ## Proof architecture
 
@@ -51,9 +58,10 @@ window; case4: smaller sliding-window size). `case1` is a standalone theorem;
 `*_output_surface_summary` theorems.
 
 ```
-attention_score_python_case1_output_summary                  ← TOP THEOREM
+attention_score_python_case1_output_summary                  ← TOP THEOREM (genuine closed form)
   ├─ attention_score_python_case1_surface_toAlgorithm_supported   surface lowers to algorithm layer
-  └─ attention_score_case1_surface_compute_correct                masked Out store (producedAttentionScoreCase1OutValue)
+  └─ attention_score_case1_genuine_compute_correct                masked Out store = case1OutClosedForm
+       └─ attention_score_case1_exec_eq_closedForm               full exec unfold (preLoop+loop+post)
 
 attention_score_python_case{2,3,4}_output_summary            ← abbrev = *_output_surface_summary
   └─ attention_score_python_case{2,3,4}_output_surface_summary
@@ -73,9 +81,10 @@ Python test shape (`B=2, H=4, N_CTX=NKV_CTX=128, D_MODEL=64,
 BLOCK_M=BLOCK_N=64`, contiguous strides) with the case-specific
 `SLIDING_WINDOW`/`COMPLEMENT_SLIDING_WINDOW` flags and window sizes baked into
 the launch arguments; `sm_scale` is kept universally quantified. The `Out`
-writeback is stated against `producedAttentionScoreCase1OutValue` (the
-single-program surface value at each offset), capturing the full query-block
-accumulation loop. This is a single-program (single key-block) scope;
+writeback is stated against the genuine `case1OutClosedForm` (the masked-`exp2`
+query-row column sum over the input buffers `Q`/`K`/`M`), written at the actual
+kernel store offset `case1OutStoreOffset` under the `o_range < NKV_CTX` mask
+`case1OutActive`. This is a single-program (single key-block) scope;
 cross-program composition into the full score buffer is the trusted host
 boundary.
 -/
@@ -846,60 +855,6 @@ def attentionScoreCase1LoopBody : List Stmt :=
       (Op.advanceBlockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") [64, 0]),
     Stmt.assign TileDType.ptr [64] "m_ptrs"
       (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [64] "m_ptrs") (Op.constNat 64))]
-
-noncomputable def producedAttentionScoreCase1OutValue
-    (s : BlockState) (Q K M Out : RegionName) (sm_scale : ℝ)
-    (i : Fin 64) : ℝ :=
-  match exec (attention_score_kernel Q K M Out
-      32768 8192 64 1 32768 8192 64 1 512 128 1
-      2 4 4 128 128 128 0 64 64 64 64 sm_scale
-      Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel s with
-  | some s' => s'.readMem Out (outOffset s 512 128 64 i)
-  | none => 0.0
-
-theorem attention_score_case1_surface_compute_correct
-    (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_score_kernel Q K M Out
-        32768 8192 64 1 32768 8192 64 1 512 128 1
-        2 4 4 128 128 128 0 64 64 64 64 sm_scale
-        Bool.true Bool.false Bool.true Bool.true rfl)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 64 => active s 128 64 i)
-        (fun i => (Out, outOffset s 512 128 64 i)))
-      (expected := fun i : Fin 64 =>
-        producedAttentionScoreCase1OutValue s Q K M Out sm_scale i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_score_kernel, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i _hActive
-  simp [producedAttentionScoreCase1OutValue, hExec]
-
-theorem attention_score_python_case1_output_summary
-    (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState) :
-    (∃ alg, (attention_score_kernel Q K M Out
-      32768 8192 64 1 32768 8192 64 1 512 128 1
-      2 4 4 128 128 128 0 64 64 64 64 sm_scale
-      Bool.true Bool.false Bool.true Bool.true rfl).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_score_kernel Q K M Out
-        32768 8192 64 1 32768 8192 64 1 512 128 1
-        2 4 4 128 128 128 0 64 64 64 64 sm_scale
-        Bool.true Bool.false Bool.true Bool.true rfl)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin 64 => active s 128 64 i)
-        (fun i => (Out, outOffset s 512 128 64 i)))
-      (expected := fun i : Fin 64 =>
-        producedAttentionScoreCase1OutValue s Q K M Out sm_scale i) := by
-  constructor
-  · exact attention_score_python_case1_surface_toAlgorithm_supported
-      Q K M Out sm_scale
-  · exact attention_score_case1_surface_compute_correct Q K M Out sm_scale s
 
 /-- `output_summary` alias for Python attention-score case 2. -/
 abbrev attention_score_python_case2_output_summary
@@ -1773,5 +1728,97 @@ theorem score_post_eval
     rw [show offFn (i, PUnit.unit) = case1OutStoreOffset s i from rfl]
     simp only [hsPdef, BlockState.setReg_readMem]
     unfold BlockState.readMem; rw [hmem]
+
+set_option maxHeartbeats 2000000 in
+/-- **Genuine case-1 exec correctness.** Executing the full case-1 kernel from a
+clean state writes the genuine closed-form attention score
+`case1OutClosedForm s Q K M sm_scale i` to `Out` at every active output column
+(`case1OutStoreOffset s i`, mask `case1OutActive s i`) — with **no reference to
+the kernel's own output**. -/
+theorem attention_score_case1_exec_eq_closedForm
+    (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState) (i : Fin 64)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (exec (attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel s).map
+      (·.readMem Out (case1OutStoreOffset s i))
+      = some (if case1OutActive s i then case1OutClosedForm s Q K M sm_scale i
+          else s.readMem Out (case1OutStoreOffset s i)) := by
+  -- body = preLoop ++ (forRangeDyn loopBody :: post)
+  rw [exec, attention_score_case1_body_split Q K M Out sm_scale,
+    attentionScoreCase1PreLoop_check Q K M Out sm_scale,
+    attention_score_case1_loopBody_check Q K M Out sm_scale,
+    attentionScoreCase1Post_check Q K M Out sm_scale]
+  -- preLoop
+  obtain ⟨s0, hpre, hpids0, hmem0, hundef0, hsn0, hoz0, hoh0, hqks0, ho0, hk0, hQbp0, hmp0, hlo0, hhi0⟩ :=
+    score_preLoop_eval s Q K M sm_scale hundef
+  rw [stepStmts.append_some hpre]
+  -- loop (2 iterations)
+  obtain ⟨sL, hloop, hpidsL, hmemL, hozL, hohL, hsnL, hoL⟩ :=
+    score_loop_eval s s0 Q K M sm_scale hpids0 hmem0 hundef0 hsn0 hoz0 hoh0 hqks0 ho0 hk0 hQbp0 hmp0
+      hlo0 hhi0
+  rw [stepStmts.cons_some hloop]
+  -- post (masked store)
+  obtain ⟨sF, hpost, hread⟩ :=
+    score_post_eval s sL Q K M Out sm_scale i hmemL hozL hohL hsnL hoL
+  rw [hpost, Option.map_some]
+  exact congrArg some hread
+
+/-- **Genuine compute-facing correctness (case 1).** The case-1 kernel realizes
+the genuine closed-form attention score `case1OutClosedForm` at every active
+output column — stated with **no reference to the kernel's own execution**. -/
+theorem attention_score_case1_genuine_compute_correct
+    (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => case1OutActive s i)
+        (fun i => (Out, case1OutStoreOffset s i)))
+      (expected := fun i : Fin 64 =>
+        case1OutClosedForm s Q K M sm_scale i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_score_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := attention_score_case1_exec_eq_closedForm Q K M Out sm_scale s i hundef
+  rw [hExec, Option.map_some] at h
+  have h2 := Option.some.inj h
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  rw [h2, if_pos hActive]
+
+/-- **Public Python case-1 output summary (genuine closed form).** The full
+attention-score surface lowers to the algorithm layer, and the kernel writes the
+genuine closed-form score `case1OutClosedForm` (the masked-`exp2` query-row column
+sum over the input buffers `Q`/`K`/`M`) to every active output column. This
+replaces the former self-referential summary: `expected` is now an honest closed
+form, NOT the kernel's own executed value. -/
+theorem attention_score_python_case1_output_summary
+    (Q K M Out : RegionName) (sm_scale : ℝ) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attention_score_kernel Q K M Out
+      32768 8192 64 1 32768 8192 64 1 512 128 1
+      2 4 4 128 128 128 0 64 64 64 64 sm_scale
+      Bool.true Bool.false Bool.true Bool.true rfl).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin 64 => case1OutActive s i)
+        (fun i => (Out, case1OutStoreOffset s i)))
+      (expected := fun i : Fin 64 =>
+        case1OutClosedForm s Q K M sm_scale i) := by
+  refine ⟨attention_score_python_case1_surface_toAlgorithm_supported Q K M Out sm_scale, ?_⟩
+  exact attention_score_case1_genuine_compute_correct Q K M Out sm_scale s hundef
 
 end VeriTile.Bench.TritonBenchG.AttentionScore
