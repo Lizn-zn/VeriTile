@@ -1114,6 +1114,97 @@ theorem flash_denom_op_eval (s : BlockState) (BM BN : Nat)
   rw [evalOp_add]
   simp only [evalOp_mul, evalOp_ref, hd, ha, hsumN, Option.bind_eq_bind, Option.bind_some]; rfl
 
+/-! ## Per-row online-softmax running state (the loop invariant's register math)
+
+The loop carries, per output row `i`, the running `osStep` state over all keys
+streamed so far (`global index < c · BLOCK_N`) that pass the causal filter
+(`j ≤ qStart + i`). The invariant binds the kernel's `max`/`denom`/`out_buffer`
+registers to the three components of this fold. `osStep` is the banked per-key
+recurrence from `Math/Attention.lean`; here we specialize its `(score, value)`
+inputs to the flash kernel's per-key score `(sm_scale·log2e)·(q row i · k row j)`
+and value `V[j, d]`, with future keys (`> qStart + i`) or out-of-window keys
+(`≥ hi`) simply not emitted. -/
+
+open VeriTile.Triton (osStep pow2 attnKeyListCausal attnKeyList)
+
+/-- The `(score, value)` pair the kernel streams for output `(i, d)` at *global*
+key `j`: score `scale · Σ_e q[i,e]·k[j,e]`, value `V[j, d]`. (`scale` already
+folds `qk_scale = sm_scale · log2e`.) -/
+noncomputable def flashKV
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (i : Fin BLOCK_M) (d : Fin DIM) (j : Fin SEQLEN) : ℝ × ℝ :=
+  (scale * Finset.univ.sum (fun e : Fin DIM => qT (i, e, PUnit.unit) * kT (j, e, PUnit.unit)),
+   vT (j, d, PUnit.unit))
+
+/-- Causal per-row key list over the *window* `[0, hi)`: keys `j < hi` with
+`j ≤ qStart + i`, in index order. After `c` blocks `hi = c · BLOCK_N`, this is
+the prefix the kernel has streamed. -/
+noncomputable def flashKeysUpto
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    List (ℝ × ℝ) :=
+  (List.finRange SEQLEN).filterMap (fun j : Fin SEQLEN =>
+    if j.val < hi ∧ (causal → j.val ≤ qStart + i.val) then
+      some (flashKV qT kT vT scale i d j)
+    else none)
+
+/-- Running per-row online-softmax state after streaming the window `[0, hi)`. -/
+noncomputable def flashState
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    ℝ × ℝ × ℝ :=
+  (flashKeysUpto qT kT vT scale causal qStart hi i d).foldl osStep (0, 0, 0)
+
+/-- At the full window `hi = SEQLEN`, the non-causal key list is the full
+`attnKeyList`. -/
+theorem flashKeysUpto_full
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (qS : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashKeysUpto qT kT vT scale Bool.false qS SEQLEN i d
+      = attnKeyList qT kT vT (fun _ : Fin SEQLEN => scale) i d := by
+  unfold flashKeysUpto attnKeyList flashKV
+  rw [List.ofFn_eq_map]
+  exact List.filterMap_eq_map_iff_forall_eq_some.mpr (fun j _ => by simp [j.isLt])
+
+/-- At the full window `hi = SEQLEN`, the causal key list is `attnKeyListCausal`. -/
+theorem flashKeysUpto_full_causal
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (qS : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashKeysUpto qT kT vT scale Bool.true qS SEQLEN i d
+      = attnKeyListCausal qT kT vT (fun _ : Fin SEQLEN => scale) qS i d := by
+  unfold flashKeysUpto attnKeyListCausal flashKV
+  apply List.filterMap_congr
+  intro j _
+  simp [j.isLt]
+
+/-- The full-window non-causal final state reads off `flashAttnOValueSpec`. -/
+theorem flashState_full_eq_spec
+    (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ)
+    (stride_q_head : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    (let st := flashState (qTile s Q stride_q_head DIM BLOCK_M)
+        (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
+        (sm_scale * log2e) Bool.false 0 SEQLEN i d
+     st.2.2 / st.2.1)
+      = flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
+          (i, d, PUnit.unit) := by
+  rw [flashAttnOValueSpec_eq_streaming]
+  simp only [flashState]
+  rw [flashKeysUpto_full]
+
+/-- The full-window causal final state reads off `flashAttnOValueSpecCausal`. -/
+theorem flashState_full_eq_spec_causal
+    (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ)
+    (stride_q_head : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    (let st := flashState (qTile s Q stride_q_head DIM BLOCK_M)
+        (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
+        (sm_scale * log2e) Bool.true (s.pids 0 * BLOCK_M) SEQLEN i d
+     st.2.2 / st.2.1)
+      = flashAttnOValueSpecCausal s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
+          (i, d, PUnit.unit) := by
+  rw [flashAttnOValueSpecCausal_eq_streaming]
+  simp only [flashState]
+  rw [flashKeysUpto_full_causal]
+
 /-! ## exec-side loop-invariant skeleton (in progress)
 
 The compiled body of `flash_attn_fwd_kernel_surface` (verified by direct
