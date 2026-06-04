@@ -2163,7 +2163,10 @@ theorem aft1_exec_carry (Q K V H O : RegionName) (s : BlockState)
     ∃ sF, exec (attention_fwd_kernel_surface Q K V H O
         131072 128 1 524288 128 1024 ((Real.sqrt (128:ℝ))⁻¹)
         32 128 32 Bool.false Bool.false).toAlgKernel s = some sF
-      ∧ sF.regs .real [128, 128] "b_h" = some (aft1BhTile s K V 32) := by
+      ∧ sF.regs .real [128, 128] "b_h" = some (aft1BhTile s K V 32)
+      ∧ (∀ (c : Nat), c < 32 → ∀ (t : Fin 32) (d : Fin 128),
+          sF.readMem O (s.pids 0 * 131072 + (c * 32 + t.val) * 128 + d.val)
+            = aft1Out s Q K V c t d) := by
   rw [exec, attention_fwd_triton1_body_split]
   obtain ⟨s0, hpre, hP0⟩ := aft1_prologue_inv Q K V H O s
   rw [stepStmts.append_some hpre]
@@ -2190,8 +2193,8 @@ theorem aft1_exec_carry (Q K V H O : RegionName) (s : BlockState)
   obtain ⟨hInvF, hleF⟩ := hPfinal
   have hfinalEq : final = 32 := le_antisymm hleF hfinal
   subst hfinalEq
-  obtain ⟨_, _, hbhF, _⟩ := hInvF
+  obtain ⟨_, _, hbhF, _, _, _, _, hOF⟩ := hInvF
   rw [stepStmts.cons_some hloop, stepStmts.nil]
-  exact ⟨sLoop, rfl, hbhF⟩
+  exact ⟨sLoop, rfl, hbhF, hOF⟩
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
