@@ -1307,4 +1307,249 @@ theorem attention_score_case1_loopBody_check
             Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.drop 17 := by
   rfl
 
+/-- The 16 preLoop statements of the case-1 elaborated body. -/
+def attentionScoreCase1PreLoop (Q K M : RegionName) (sm_scale : ℝ) : List Stmt :=
+  [Stmt.assign TileDType.nat [] "start_n" (Op.programId 0),
+    Stmt.assign TileDType.nat [] "off_hz" (Op.programId 1),
+    Stmt.assign TileDType.nat [] "off_z"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 4)),
+    Stmt.assign TileDType.nat [] "off_h"
+      (Op.mod IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 4)),
+    Stmt.assign TileDType.nat [] "off_hkv"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h")
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat 4) (Op.constNat 4))),
+    Stmt.assign TileDType.nat [] "q_offset"
+      (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat 8192))),
+    Stmt.assign TileDType.nat [] "k_offset"
+      (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 32768))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hkv") (Op.constNat 8192))),
+    Stmt.assign TileDType.ptr [64] "m_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat 128))
+          (Op.arange 64))),
+    Stmt.assign TileDType.real [64] "o" (Op.full [64] (Op.const 0)),
+    Stmt.assign TileDType.blockPtr [64, 64] "Q_block_ptr"
+      (Op.makeBlockPtrDyn Q (Op.ref TileDType.nat [] "q_offset") [128, 64] [64, 64] [64, 1] [0, 0]),
+    Stmt.assign TileDType.blockPtr [64, 64] "K_block_ptr"
+      (Op.makeBlockPtrDynOffsets K (Op.ref TileDType.nat [] "k_offset") [64, 128] [64, 64] [1, 64]
+        [Op.constNat 0,
+          Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_n") (Op.constNat 64)]),
+    Stmt.ifThenElse (Op.constBool Bool.true)
+      [Stmt.assign TileDType.real [64, 64] "k"
+          (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") [])
+            MaskOpt.none)]
+      [Stmt.assign TileDType.real [64, 64] "k"
+          (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "K_block_ptr") [0, 1])
+            MaskOpt.none)],
+    Stmt.assign TileDType.nat [] "lo" (Op.constNat 0),
+    Stmt.assign TileDType.nat [] "hi" (Op.constNat 128),
+    Stmt.assign TileDType.real [] "qk_scale" (Op.const sm_scale),
+    Stmt.assign TileDType.real [] "qk_scale"
+      (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale")
+        (Op.const 1.4426950408889634))]
+
+theorem attentionScoreCase1PreLoop_check (Q K M Out : RegionName) (sm_scale : ℝ) :
+    (attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.take 16
+      = attentionScoreCase1PreLoop Q K M sm_scale := by
+  rfl
+
+/-- The 4 post-loop statements (`o_offset`, `o_range`, `o_ptrs`, masked store). -/
+def attentionScoreCase1Post (Out : RegionName) : List Stmt :=
+  [Stmt.assign TileDType.nat [] "o_offset"
+      (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat 512))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat 128))),
+    Stmt.assign TileDType.nat [64] "o_range"
+      (Op.add NumericDType.nat Broadcast.scalarR (Op.arange 64)
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_n") (Op.constNat 64))),
+    Stmt.assign TileDType.ptr [64] "o_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add NumericDType.nat Broadcast.scalarL (Op.ref TileDType.nat [] "o_offset")
+          (Op.ref TileDType.nat [64] "o_range"))),
+    Stmt.store TileDType.real [64] (MemAccess.ptr (Op.ref TileDType.ptr [64] "o_ptrs"))
+      (Op.ref TileDType.real [64] "o")
+      (MaskOpt.mask
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64] "o_range")
+          (Op.constNat 128)))]
+
+theorem attentionScoreCase1Post_check (Q K M Out : RegionName) (sm_scale : ℝ) :
+    (attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.drop 17
+      = attentionScoreCase1Post Out := by
+  rfl
+
+theorem scalarBop {dtype : TileDType}
+    (f : TileCarrier dtype → TileCarrier dtype → TileCarrier dtype)
+    (a b : TileCarrier dtype) :
+    Tile.bop f Broadcast.nil (Tile.scalar a) (Tile.scalar b) = Tile.scalar (f a b) := rfl
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop execution.** The 16 deterministic preLoop statements step a clean
+state to the loop-entry state with all register readbacks `score_loopBody_eval`
+needs (for the first iteration `c = 0`: `start_m` is set by the loop itself). -/
+theorem score_preLoop_eval
+    (s : BlockState) (Q K M : RegionName) (sm_scale : ℝ)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (attentionScoreCase1PreLoop Q K M sm_scale) s = some s0
+      ∧ s0.pids = s.pids ∧ s0.mem = s.mem ∧ (∀ rg o, s0.undef rg o = 0)
+      ∧ s0.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / 4))
+      ∧ s0.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % 4))
+      ∧ s0.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.4426950408889634)))
+      ∧ s0.regs .real [64] "o" = some ⟨fun _ : TileIndex [64] => some (0 : ℝ)⟩
+      ∧ s0.regs .real [64, 64] "k" = some ⟨fun idx : TileIndex [64, 64] =>
+          some (s.readMem K (case1QKOffset s + idx.1.val + (s.pids 0 * 64 + idx.2.1.val) * 64))⟩
+      ∧ s0.regs .blockPtr [64, 64] "Q_block_ptr" = some ⟨fun _ : TileIndex [64, 64] =>
+          { region := Q, baseOffset := case1QKOffset s, parentShape := [128, 64],
+            blockShape := [64, 64], strides := [64, 1], offsets := [0, 0] }⟩
+      ∧ s0.regs .ptr [64] "m_ptrs" = some ⟨fun idx : TileIndex [64] =>
+          (M.cast, s.pids 1 * 128 + idx.1.val)⟩
+      ∧ s0.regs .nat [] "lo" = some (Tile.scalar 0)
+      ∧ s0.regs .nat [] "hi" = some (Tile.scalar 128) := by
+  unfold attentionScoreCase1PreLoop
+  -- start_n = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- off_hz = programId 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- off_z = off_hz / 4
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)) _
+        = some (Tile.scalar (s.pids 1 / 4)) from by
+      rw [evalOp_floorDiv']
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- off_h = off_hz % 4
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 4)) _
+        = some (Tile.scalar (s.pids 1 % 4)) from by
+      rw [evalOp_mod']
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- off_hkv = off_h / (4/4) = off_h
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_h")
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat 4) (Op.constNat 4))) _
+        = some (Tile.scalar (s.pids 1 % 4)) from by
+      rw [evalOp_floorDiv', evalOp_floorDiv']
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rw [scalarBop, scalarBop]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      show s.pids 1 % 4 / (4 / 4) = s.pids 1 % 4
+      norm_num))]
+  -- q_offset = off_z*32768 + off_h*8192 = case1QKOffset
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat 32768))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat 8192))) _
+        = some (Tile.scalar (case1QKOffset s)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_constNat, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- k_offset = off_z*32768 + off_hkv*8192 = case1QKOffset
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat 32768))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_hkv") (Op.constNat 8192))) _
+        = some (Tile.scalar (case1QKOffset s)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_constNat, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- m_ptrs = M + off_hz*128 + arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 128))
+          (Op.arange 64))) _
+        = some (⟨fun idx : TileIndex [64] => (M.cast, s.pids 1 * 128 + idx.1.val)⟩ : Tile .ptr [64]) from by
+      rw [evalOp_ptrAdd', evalOp_add, evalOp_mul]
+      simp only [evalOp_ptrBase', evalOp_constNat, evalOp_ref, evalOp_arange,
+        BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add, NumericDType.mul, BlockState.setReg_pids]
+        omega))]
+  -- o = full [64] 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [64] => some (0 : ℝ)⟩ : Tile .real [64]) from by
+      simp [evalOp_full]))]
+  -- Q_block_ptr = makeBlockPtrDyn Q q_offset [128,64] [64,64] [64,1] [0,0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (makeBlockPtrDyn_eval Q (Op.ref .nat [] "q_offset") [128, 64] [64, 64] [64, 1] [0, 0] _
+      (case1QKOffset s) (by rw [evalOp_ref]; simp)))]
+  -- K_block_ptr = makeBlockPtrDynOffsets ...
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.makeBlockPtrDynOffsets K (Op.ref .nat [] "k_offset") [64, 128] [64, 64] [1, 64]
+        [Op.constNat 0, Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 64)]) _
+        = some (⟨fun _ : TileIndex [64, 64] =>
+            { region := K, baseOffset := case1QKOffset s, parentShape := [64, 128],
+              blockShape := [64, 64], strides := [1, 64], offsets := [0, s.pids 0 * 64] }⟩
+            : Tile .blockPtr [64, 64]) from by
+      rw [makeBlockPtr2_eval]
+      simp only [evalOp_ref, evalOp_constNat, evalOp_mul, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind,
+        Option.bind_some, List.mapM_cons, List.mapM_nil, scalarBop]
+      refine congrArg some ?_; ext idx <;> rfl))]
+  -- ifThenElse true [k = load K_block_ptr] _
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.ifThenElse (Op.constBool Bool.true) _ _) _ = some _ from by
+      rw [stepStmt_ifThenElse_true, stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [64,64] "K_block_ptr") []) MaskOpt.none) _
+            = some (⟨fun idx : TileIndex [64, 64] =>
+                some (s.readMem K (case1QKOffset s + idx.1.val + (s.pids 0 * 64 + idx.2.1.val) * 64))⟩
+                : Tile .real [64, 64]) from by
+          rw [load_blockPtr_K_eval K (case1QKOffset s) 64 128 64 64 1 64 (s.pids 0 * 64)
+            (Op.ref .blockPtr [64, 64] "K_block_ptr") _ (by rw [evalOp_ref]; simp)]
+          refine congrArg some ?_; ext idx
+          simp [BlockState.readMem, BlockState.setReg_mem]))]
+      exact stepStmts.nil)]
+  -- lo = 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (show evalOp (Op.constNat 0) _ = _ from evalOp_constNat 0 _))]
+  -- hi = 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (show evalOp (Op.constNat 128) _ = _ from evalOp_constNat 128 _))]
+  -- qk_scale = sm_scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (show evalOp (Op.const sm_scale) _ = _ from evalOp_const sm_scale _))]
+  -- qk_scale = qk_scale * log2e
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.ref .real [] "qk_scale")
+        (Op.const 1.4426950408889634)) _
+        = some (Tile.scalar (some (sm_scale * 1.4426950408889634))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, evalOp_const, BlockState.setReg_same, Option.bind_eq_bind,
+        Option.bind_some, scalarBop]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp
+  · funext rg o; simp [BlockState.setReg_mem]
+  · intro rg o; simp [hundef]
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+
 end VeriTile.Bench.TritonBenchG.AttentionScore
