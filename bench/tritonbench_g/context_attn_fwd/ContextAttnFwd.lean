@@ -385,6 +385,92 @@ noncomputable def ctxMaskedKeyList
       else (Real.log 2)⁻¹ * (-1.0e8 : ℝ),       -- kernel's `-1e8` sentinel score (pre-`m` shift)
       ctxVTile s V S (j, d, PUnit.unit)))
 
+/-! ### Exact (sentinel-faithful) streaming closed form
+
+`contextAttnClosedForm` *idealizes* future keys to softmax weight `0`. The kernel's
+`tl.where(mask, qk·sm_scale, -1e8)` instead assigns future keys the *finite*
+sentinel score `-1e8`, so over exact ℝ they carry weight `exp(-1e8)` — negligible,
+but nonzero. The value the streaming loop computes *exactly* is therefore the
+fold below (`acc/l` of the online-softmax step `osStep` over the genuinely-masked
+key stream with the `-1e8` sentinel kept); it coincides with
+`contextAttnClosedForm` only in the `exp(-1e8) → 0` limit.
+
+Crucially `contextAttnExactFold` is a pure function of `Q`/`K`/`V` memory (no
+`exec` self-reference): the FA-1 exec-assembly obligation is to show the kernel's
+`m_i`/`l_i`/`acc` loop realizes this fold (see roadmap in
+`ctxExactKeyList`). The score `sm_scale·raw` (not `effScale·raw`) is the value the
+kernel feeds to `exp2`, so `exp2(sm_scale·raw) = exp(effScale·raw)` is the genuine
+softmax weight (`pow2_smScale_eq_exp_effScale`). -/
+
+/-- Per-key `(score, value)` stream the loop folds, with the kernel's genuine
+`-1e8` sentinel kept. Active key `j ≤ gi+plen`: score `sm_scale·rawᵢⱼ`; future
+key: sentinel `(log 2)⁻¹·(-1e8)` (so `exp2` → `exp(-1e8)`). -/
+noncomputable def ctxExactKeyList
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    List (ℝ × ℝ) :=
+  let plen := promptLen s 16 B_Prompt_Cache_Len
+  let gi := s.pids 0 * BLOCK_M + i.val
+  List.ofFn (fun j : Fin S =>
+    (if j.val ≤ gi + plen then
+        sm_scale *
+          Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+              * ctxKTile s K S (j, e, PUnit.unit))
+      else (Real.log 2)⁻¹ * (-1.0e8 : ℝ),
+      ctxVTile s V S (j, d, PUnit.unit)))
+
+/-- Exact streaming-loop output value for lane `(i,d)`: `acc/l` of folding the
+online-softmax step `osStep` over `ctxExactKeyList`. A pure function of
+`Q`/`K`/`V` memory; exactly what the kernel's `m_i`/`l_i`/`acc` loop produces. -/
+noncomputable def contextAttnExactFold
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S : Nat) (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
+  let st := (ctxExactKeyList s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale
+      BLOCK_M S idx.1 idx.2.1).foldl osStep (0, 0, 0)
+  st.2.2 / st.2.1
+
+/-- **Closed form of the exact fold.** The `osStep` fold over `ctxExactKeyList`
+collapses to the genuine causal softmax with `exp(effScale·raw)` weights on active
+keys and `exp(-1e8)` on future keys — explicitly, no self-reference, no `exec`.
+Proven via the banked `osStep_foldl_eq_batch` and `pow2_smScale_eq_exp_effScale`. -/
+theorem contextAttnExactFold_eq
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S : Nat) (idx : TileIndex [BLOCK_M, 128]) :
+    contextAttnExactFold s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S idx
+      = (let i := idx.1; let d := idx.2.1
+         let plen := promptLen s 16 B_Prompt_Cache_Len
+         let gi := s.pids 0 * BLOCK_M + i.val
+         let raw := fun j : Fin S =>
+           Finset.univ.sum (fun e : Fin 128 =>
+             ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+               * ctxKTile s K S (j, e, PUnit.unit))
+         let weight := fun j : Fin S =>
+           if j.val ≤ gi + plen then Real.exp (contextEffScale sm_scale * raw j)
+           else Real.exp (-1.0e8)
+         (Finset.univ.sum (fun j : Fin S => weight j * ctxVTile s V S (j, d, PUnit.unit)))
+           / (Finset.univ.sum (fun j : Fin S => weight j))) := by
+  obtain ⟨i, d, u⟩ := idx
+  rw [contextAttnExactFold, ctxExactKeyList, osStep_foldl_eq_batch]
+  simp only [List.map_ofFn, List.sum_ofFn, Function.comp, contextEffScale]
+  have hlog2 : Real.log 2 ≠ 0 := by positivity
+  have hw : ∀ j : Fin S,
+      pow2 (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
+          sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit))
+        else (Real.log 2)⁻¹ * (-1.0e8 : ℝ))
+      = if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
+          Real.exp (Real.log 2 * sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit)))
+        else Real.exp (-1.0e8) := by
+    intro j
+    by_cases h : j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len
+    · simp only [h, if_true, pow2]; ring_nf
+    · simp only [h, if_false, pow2, ← mul_assoc, mul_inv_cancel₀ hlog2, one_mul]
+  congr 1
+  · apply Finset.sum_congr rfl; intro j _; rw [hw j]
+  · apply Finset.sum_congr rfl; intro j _; rw [hw j]
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
