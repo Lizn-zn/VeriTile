@@ -1088,6 +1088,8 @@ theorem score_loopBody_eval
     (hundef : ∀ rg o, sin.undef rg o = 0)
     (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar (c * 64)))
     (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0)))
+    (hoz : sin.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / 4)))
+    (hoh : sin.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % 4)))
     (hqks : sin.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.4426950408889634))))
     (ho : sin.regs .real [64] "o" = some ⟨fun idx : TileIndex [64] => some (oF idx.1)⟩)
     (hk : sin.regs .real [64, 64] "k" = some ⟨fun idx : TileIndex [64, 64] =>
@@ -1100,6 +1102,10 @@ theorem score_loopBody_eval
     ∃ sF, stepStmts attentionScoreCase1LoopBody sin = some sF
       ∧ sF.pids = s.pids ∧ sF.mem = s.mem ∧ (∀ rg o, sF.undef rg o = 0)
       ∧ sF.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0))
+      ∧ sF.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / 4))
+      ∧ sF.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % 4))
+      ∧ sF.regs .real [64, 64] "k" = some ⟨fun idx : TileIndex [64, 64] =>
+          some (s.readMem K (case1QKOffset s + idx.1.val + (s.pids 0 * 64 + idx.2.1.val) * 64))⟩
       ∧ sF.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.4426950408889634)))
       ∧ sF.regs .real [64] "o" = some ⟨fun idx : TileIndex [64] =>
           some (oF idx.1 + case1ColSum s Q K M sm_scale c idx.1)⟩
@@ -1234,11 +1240,14 @@ theorem score_loopBody_eval
       · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.rightIndex, Broadcast.leftIndex]
         omega))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp [hpids]
   · funext rg o; simp only [BlockState.setReg_mem]; rw [hmem]
   · intro rg o; simp [hundef]
   · simp [hsn]
+  · simp [hoz]
+  · simp [hoh]
+  · simp [hk]
   · simp [hqks]
   · -- o register = oF + column sum
     refine congrArg some ?_
@@ -1551,5 +1560,95 @@ theorem score_preLoop_eval
   · simp
   · simp
   · simp
+
+set_option maxHeartbeats 2000000 in
+/-- **Loop execution (2 iterations).** From the loop-entry state `s0` (with the
+preLoop readbacks), the `forRangeDyn` over `[0,128)` step `64` runs exactly two
+iterations, leaving `o[j] = case1OutClosedForm s Q K M sm_scale j` and preserving
+`pids`/`mem`, `off_z`/`off_h`/`start_n`. -/
+theorem score_loop_eval
+    (s s0 : BlockState) (Q K M : RegionName) (sm_scale : ℝ)
+    (hpids : s0.pids = s.pids) (hmem : s0.mem = s.mem) (hundef : ∀ rg o, s0.undef rg o = 0)
+    (hsn : s0.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0)))
+    (hoz : s0.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / 4)))
+    (hoh : s0.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % 4)))
+    (hqks : s0.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.4426950408889634))))
+    (ho : s0.regs .real [64] "o" = some ⟨fun _ : TileIndex [64] => some (0 : ℝ)⟩)
+    (hk : s0.regs .real [64, 64] "k" = some ⟨fun idx : TileIndex [64, 64] =>
+        some (s.readMem K (case1QKOffset s + idx.1.val + (s.pids 0 * 64 + idx.2.1.val) * 64))⟩)
+    (hQbp : s0.regs .blockPtr [64, 64] "Q_block_ptr" = some ⟨fun _ : TileIndex [64, 64] =>
+        { region := Q, baseOffset := case1QKOffset s, parentShape := [128, 64],
+          blockShape := [64, 64], strides := [64, 1], offsets := [0, 0] }⟩)
+    (hmp : s0.regs .ptr [64] "m_ptrs" = some ⟨fun idx : TileIndex [64] =>
+        (M.cast, s.pids 1 * 128 + idx.1.val)⟩)
+    (hlo : s0.regs .nat [] "lo" = some (Tile.scalar 0))
+    (hhi : s0.regs .nat [] "hi" = some (Tile.scalar 128)) :
+    ∃ sL, stepStmt (Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+        (Op.constNat 64) attentionScoreCase1LoopBody) s0 = some sL
+      ∧ sL.pids = s.pids ∧ sL.mem = s.mem
+      ∧ sL.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / 4))
+      ∧ sL.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % 4))
+      ∧ sL.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0))
+      ∧ sL.regs .real [64] "o" = some ⟨fun idx : TileIndex [64] =>
+          some (case1OutClosedForm s Q K M sm_scale idx.1)⟩ := by
+  -- unfold the dynamic for-loop: lo = 0, hi = 128, step = 64
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  rw [show evalOp (Op.ref .nat [] "lo") s0 = some (Tile.scalar 0) from by rw [evalOp_ref]; exact hlo]
+  rw [show evalOp (Op.ref .nat [] "hi") s0 = some (Tile.scalar 128) from by rw [evalOp_ref]; exact hhi]
+  rw [show evalOp (Op.constNat 64) s0 = some (Tile.scalar 64) from evalOp_constNat 64 s0]
+  simp only [Option.bind_eq_bind, Option.bind_some, Tile.scalar_data]
+  -- iteration c = 0 (cur = 0)
+  rw [stepForRangeAux.step_lt (by norm_num) (by norm_num : (0 : Nat) < 128)]
+  obtain ⟨s1, hstep1, hpids1, hmem1, hundef1, hsn1, hoz1, hoh1, hk1, hqks1, ho1, hQbp1, hmp1⟩ :=
+    score_loopBody_eval s (s0.setReg "start_m" .nat [] (Tile.scalar 0)) Q K M sm_scale 0
+      (fun _ => 0)
+      (by simp only [BlockState.setReg_pids]; exact hpids)
+      (by funext rg o; simp only [BlockState.setReg_mem]; rw [hmem])
+      (by intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o)
+      (by rw [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsn)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoz)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoh)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqks)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact ho)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hk)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hQbp)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmp)
+  rw [hstep1]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  -- iteration c = 1 (cur = 64)
+  rw [stepForRangeAux.step_lt (by norm_num) (by norm_num : (64 : Nat) < 128)]
+  obtain ⟨s2, hstep2, hpids2, hmem2, hundef2, hsn2, hoz2, hoh2, hk2, hqks2, ho2, hQbp2, hmp2⟩ :=
+    score_loopBody_eval s (s1.setReg "start_m" .nat [] (Tile.scalar 64)) Q K M sm_scale 1
+      (fun j => case1ColSum s Q K M sm_scale 0 j)
+      (by simp only [BlockState.setReg_pids]; exact hpids1)
+      (by funext rg o; simp only [BlockState.setReg_mem]; rw [hmem1])
+      (by intro rg o; simp only [BlockState.setReg_undef]; exact hundef1 rg o)
+      (by rw [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsn1)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoz1)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoh1)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqks1)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+          rw [ho1]; refine congrArg some ?_; ext idx; simp)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hk1)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+          rw [hQbp1])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+          rw [hmp1])
+  rw [hstep2]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  -- cur = 128 ≥ stop ⇒ terminate
+  rw [stepForRangeAux.step_ge (by norm_num) (by norm_num : (128 : Nat) ≤ 64 + 64)]
+  refine ⟨s2, rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact hpids2
+  · exact hmem2
+  · exact hoz2
+  · exact hoh2
+  · exact hsn2
+  · rw [ho2]; refine congrArg some ?_; ext idx
+    show some (case1ColSum s Q K M sm_scale 0 idx.1 + case1ColSum s Q K M sm_scale 1 idx.1)
+      = some (case1OutClosedForm s Q K M sm_scale idx.1)
+    rw [case1OutClosedForm_eq_colSum]
 
 end VeriTile.Bench.TritonBenchG.AttentionScore
