@@ -2162,6 +2162,99 @@ theorem bwd_prologue_eval
     Broadcast.rightIndex_scalarR, ComparableDType.lt]
   rfl
 
+/-- The reverse loop's single iteration body (25 statements), as the explicit
+`Stmt` list, with `__rev_t` left as a parameter via the surrounding `forRangeDyn`.
+This is the `drop 15` tail's `forRangeDyn` body. -/
+def bwdIterBody : List Stmt :=
+  [ Stmt.assign .nat [] "t"
+      (Op.sub .nat Broadcast.nil (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "__rev_t") (Op.constNat 1))),
+    Stmt.assign .real [4] "g_val"
+      (Op.load ComputeDType.fp32.eraseDType (MemAccess.ptr (Op.ref .ptr [4] "p_g"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4]))),
+    Stmt.ifThen
+      (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "t")
+        (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)))
+      [Stmt.assign .real [4] "last_g" (Op.ref .real [4] "g_val")],
+    Stmt.assign .real [4] "dq1"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dq_inner"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4]))),
+    Stmt.assign .real [4] "dq2"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dq_inter"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4]))),
+    Stmt.assign .real [4] "dq2"
+      (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dq2")
+        (Op.ref .real [4] "g_val").exp2),
+    Stmt.assign .real [4] "dq"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [4] "dq1")
+        (Op.ref .real [4] "dq2")),
+    Stmt.store .real [4] (MemAccess.ptr (Op.ref .ptr [4] "p_dq_inter"))
+      (Op.ref .real [4] "dq") (MaskOpt.mask (Op.ref .bool [4] "mask")),
+    Stmt.assign .real [4] "dk1"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dk_inner"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4]))),
+    Stmt.assign .real [4] "dk2"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_dk_inter"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4]))),
+    Stmt.assign .real [4] "dk2"
+      (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dk2")
+        (Op.sub .real Broadcast.nil.consSame (Op.ref .real [4] "last_g")
+            (Op.ref .real [4] "g_val")).exp2),
+    Stmt.assign .real [4] "dk"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [4] "dk1")
+        (Op.ref .real [4] "dk2")),
+    Stmt.store .real [4] (MemAccess.ptr (Op.ref .ptr [4] "p_dk_inter"))
+      (Op.ref .real [4] "dk") (MaskOpt.mask (Op.ref .bool [4] "mask")),
+    Stmt.assign .real [4] "q_val"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_q"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4]))),
+    Stmt.assign .real [4] "k_val"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [4] "p_k"))
+        (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4]))),
+    Stmt.assign .real [4] "dg_val"
+      (Op.sub .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dq")
+          (Op.ref .real [4] "q_val"))
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [4] "dk")
+          (Op.ref .real [4] "k_val"))),
+    Stmt.assign .real [4] "cum_grad_dg"
+      (Op.add .real Broadcast.nil.consSame (Op.ref .real [4] "cum_grad_dg")
+        (Op.ref .real [4] "dg_val")),
+    Stmt.store .real [4] (MemAccess.ptr (Op.ref .ptr [4] "p_dg"))
+      (Op.ref .real [4] "cum_grad_dg") (MaskOpt.mask (Op.ref .bool [4] "mask")),
+    Stmt.assign .ptr [4] "p_g"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_g") (Op.constNat 8)),
+    Stmt.assign .ptr [4] "p_k"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_k") (Op.constNat 8)),
+    Stmt.assign .ptr [4] "p_q"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_q") (Op.constNat 8)),
+    Stmt.assign .ptr [4] "p_dq_inner"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dq_inner") (Op.constNat 8)),
+    Stmt.assign .ptr [4] "p_dk_inner"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dk_inner") (Op.constNat 8)),
+    Stmt.assign .ptr [4] "p_dq_inter"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dq_inter") (Op.constNat 8)),
+    Stmt.assign .ptr [4] "p_dk_inter"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dk_inter") (Op.constNat 8)),
+    Stmt.assign .ptr [4] "p_dg"
+      (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [4] "p_dg") (Op.constNat 8)) ]
+
+/-- The backward surface body decomposes as the 15-stmt prologue followed by the
+single `forRangeDyn "__rev_t" 0 2 1 bwdIterBody` reverse loop statement. -/
+theorem bwd_body_decomp
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) :
+    (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
+        64 8 2 4).toAlgKernel.body
+      = (bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter Q K G DG
+          64 8 2 4).toAlgKernel.body.take 15
+        ++ [Stmt.forRangeDyn "__rev_t" (Op.constNat 0)
+              (Op.add .nat Broadcast.nil
+                (Op.div .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1)) (Op.constNat 1))
+                (Op.constNat 1))
+              (Op.constNat 1) bwdIterBody] := by
+  rfl
+
 end BwdAssembly
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum
