@@ -2244,4 +2244,24 @@ theorem aft1Out_eq_outputClosedForm (s : BlockState) (Q K V : RegionName) (c : N
     refine congrArg₂ (· * ·) (congrArg _ ?_) (congrArg _ (by ring))
     rw [hKaddr j d'.val tk.val tk.isLt]
 
+set_option maxHeartbeats 2000000 in
+/-- **Genuine closed-form output (STORE=false, IFCOND=false).** Executing the full
+`attention_fwd_kernel_surface` writes, at every chunk `c < 32` and lane `(t, d)`,
+exactly the genuine linear-attention closed form `outputClosedForm` — the local
+`(scale·Q·K·V)` term plus the recurrent `(scale·Q·b_h_c)` term, stated purely over
+input memory with **no self-reference** to the executed kernel. -/
+theorem attention_fwd_triton1_exec_outputClosedForm
+    (Q K V H O : RegionName) (s : BlockState)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :
+    ∃ sF, exec (attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128:ℝ))⁻¹)
+        32 128 32 Bool.false Bool.false).toAlgKernel s = some sF
+      ∧ ∀ (c : Nat), c < 32 → ∀ (t : Fin 32) (d : Fin 128),
+          sF.readMem O (s.pids 0 * 131072 + (c * 32 + t.val) * 128 + d.val)
+            = outputClosedForm s Q K V ((Real.sqrt (128:ℝ))⁻¹) 32 128
+                (aft1QAddr s) (aft1KAddr s) (aft1QAddr s) c t d := by
+  obtain ⟨sF, hexec, _, hOF⟩ := aft1_exec_carry Q K V H O s hOQ hOK hOV hOH
+  refine ⟨sF, hexec, fun c hc t d => ?_⟩
+  rw [hOF c hc t d, aft1Out_eq_outputClosedForm]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
