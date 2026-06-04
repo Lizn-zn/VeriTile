@@ -1465,6 +1465,9 @@ noncomputable def attnInvariant
     (⟨fun _ : TileIndex [BLOCK_M, DIM] =>
       { region := Q, baseOffset := base, parentShape := [SEQLEN, DIM],
         blockShape := [BLOCK_M, DIM], strides := [DIM, 1], offsets := [qStart, 0] }⟩)) ∧
+  (s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "off_bs_head" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s0.pids 1 * stride_q_head))) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 /-! ## exec-side loop-invariant skeleton (in progress)
@@ -2767,11 +2770,18 @@ theorem flashLoopBody_steps (IS_CAUSAL : Bool) (sin : BlockState) (SN : Nat)
     (hvload : ∀ idx : TileIndex [64, 64],
       vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * 64 + idx.2.1.val * 1)))
     (Qptr : Tile .blockPtr [128, 64]) (hQp : sin.regs .blockPtr [128, 64] "Q_block_ptr" = some Qptr)
+    (startmV bsheadV qkvbaseV : Nat)
+    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar startmV))
+    (hbsh : sin.regs .nat [] "off_bs_head" = some (Tile.scalar bsheadV))
+    (hqkv : sin.regs .nat [] "qkv_base_offset" = some (Tile.scalar qkvbaseV))
     (hundef : ∀ rg o, sin.undef rg o = 0) :
     ∃ sF, stepStmts (flashLoopBody IS_CAUSAL) sin = some sF
       ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
       ∧ sF.regs .fp16 [128, 64] "q" = some qtile
       ∧ sF.regs .blockPtr [128, 64] "Q_block_ptr" = some Qptr
+      ∧ sF.regs .nat [] "start_m" = some (Tile.scalar startmV)
+      ∧ sF.regs .nat [] "off_bs_head" = some (Tile.scalar bsheadV)
+      ∧ sF.regs .nat [] "qkv_base_offset" = some (Tile.scalar qkvbaseV)
       ∧ sF.regs .nat [128] "off_m" = some (Tile.vec gm)
       ∧ sF.regs .nat [64] "off_n" = some (Tile.vec (fun j : Fin 64 => j.val))
       ∧ sF.regs .blockPtr [64, 64] "K_block_ptr" = some
@@ -2905,13 +2915,16 @@ theorem flashLoopBody_steps (IS_CAUSAL : Bool) (sin : BlockState) (SN : Nat)
     (flash_advance_row_eval _ Vreg vbase 128 64 64 64 64 1 vrow 64 "V_block_ptr"
       (by simp [BlockState.setReg_ne_name, hVp])))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mnewT, alphaT, numeT, ostileT,
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mnewT, alphaT, numeT, ostileT,
     hqkData, hrm, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
   · simp [BlockState.setReg_pids]
   · funext rg o; simp [BlockState.setReg_mem]
   · intro rg o; simp [BlockState.setReg_undef, hundef]
   · simp [BlockState.setReg_ne_name, hq]
   · simp [BlockState.setReg_ne_name, hQp]
+  · simp [BlockState.setReg_ne_name, hsm]
+  · simp [BlockState.setReg_ne_name, hbsh]
+  · simp [BlockState.setReg_ne_name, hqkv]
   · simp [BlockState.setReg_ne_name, hom]
   · simp [BlockState.setReg_ne_name, hon]
   · simp [BlockState.setReg_ne_name]
@@ -3569,7 +3582,7 @@ theorem flash_attn_step (Q K V : RegionName) (s0 : BlockState) (sm_scale : ℝ) 
     ∃ s', stepStmts (flashLoopBody IS_CAUSAL) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
       ∧ attnInvariant Q K V s0 sm_scale 8192 128 128 64 64 hiTotal IS_CAUSAL hDIM (i + 64) s' := by
   simp only [attnInvariant, log2e] at hinv
-  obtain ⟨hpids, hmod, hile, hmax, hden, hob, hq, hom, hon, hKp, hVp, hQp, hundef, hmem⟩ := hinv
+  obtain ⟨hpids, hmod, hile, hmax, hden, hob, hq, hom, hon, hKp, hVp, hQp, hsm, hbsh, hqkv, hundef, hmem⟩ := hinv
   set c := i / 64 with hc_def
   have hi : i = c * 64 := by omega
   have hc1 : (c + 1) * 64 ≤ 128 := by omega
@@ -3582,7 +3595,7 @@ theorem flash_attn_step (Q K V : RegionName) (s0 : BlockState) (sm_scale : ℝ) 
   -- base offset is `pids 1 * 8192`
   have hbaseEq : base = s0.pids 1 * 8192 := by simp [hbase, flashBaseOffset]
   -- run the execution chain
-  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hQpF, homF, honF, hKpF, hVpF,
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hQpF, hsmF, hbshF, hqkvF, homF, honF, hKpF, hVpF,
       qkT, rmaxT, mnewT, alphaT, numeT, ostileT,
       hqkData, hrm, hmnewd, halphad, hnumed, hostiled, hmaxF, hdenF, hobF⟩ :=
     flashLoopBody_steps IS_CAUSAL (s.setReg "start_n" .nat [] (Tile.scalar i)) i
@@ -3607,6 +3620,10 @@ theorem flash_attn_step (Q K V : RegionName) (s0 : BlockState) (sm_scale : ℝ) 
       (fun idx => rfl)
       _
       (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hQp)
+      _ _ _
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hbsh)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqkv)
       (by intro rg o; rw [BlockState.setReg_undef]; exact hundef rg o)
   refine ⟨sF, hchain, ?_⟩
   -- the chain's k/v load tiles read s0's memory (sin.mem = s.mem = s0.mem)
@@ -3654,7 +3671,7 @@ theorem flash_attn_step (Q K V : RegionName) (s0 : BlockState) (sm_scale : ℝ) 
     show WithBot.realExp2 _ = _
     simp only [Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
       Tile.expandDim_data, TileShape.dropInsertedIndex, NumericDType.sub, hqkData r jL, hi]
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [hpidsF, BlockState.setReg_pids, hpids]
   · omega
   · omega
@@ -3695,6 +3712,9 @@ theorem flash_attn_step (Q K V : RegionName) (s0 : BlockState) (sm_scale : ℝ) 
     rw [hVpF]
   · -- Q_block_ptr preserved (not touched by the loop body)
     rw [hQpF]
+  · exact hsmF
+  · exact hbshF
+  · exact hqkvF
   · exact hundefF
   · rw [hmemF]; funext region offset
     rw [BlockState.setReg_mem]
