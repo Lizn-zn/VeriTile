@@ -603,6 +603,45 @@ checked Python shapes; the operational decode should carry those two stride
 equalities as hypotheses (or instantiate at the concrete shapes).
 -/
 
+/-! ## Per-statement op-eval recipes (the tedious recipe layer)
+
+Standalone, sorry-free `*_op_eval` recipe lemmas for every body statement of
+`token_attn_mistral_surface`, mirroring the recipe-building patterns of
+`VeriTile.Examples.AttentionForwardClosedForm`
+(`qptrs_eval`/`vmask_eval`/`load_ptr_mask_real`/`mij_op_eval`). Each lemma takes
+abstract register-readback hypotheses and a symbolic `BlockState`, and decodes a
+single statement's `evalOp` to its closed-form tile. These feed the later
+operational `exec` decode of the loop-invariant assembly.
+
+`stride_pbs = 1 ∧ stride_req_to_tokens_s = 1` are carried as hypotheses where the
+per-lane address arithmetic needs them (true for all four checked Python shapes). -/
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **Keystone `v_offs` recipe** (the blocked
+`v_offs = cur_kv_head·stride_vh + offs_d[None,:]·stride_vd`, shape `[1, BD]`).
+`expandDim ⟨0,_⟩` of `offs_d` broadcasts the head-dim arange to a row; the result
+lane `(_, e)` holds the address `kvh·stride_vh + e·stride_vd`. Built with the
+generic `evalOp_expandDim_ref_of_regs` recipe (mirrors `vptrs_eval`). -/
+theorem mistral_voffs_eval (s : BlockState) (BD kvh stride_vh stride_vd : Nat)
+    (hkvh : s.regs .nat [] "cur_kv_head" = some (Tile.scalar kvh))
+    (hd : s.regs .nat [BD] "offs_d" = some (Tile.vec (fun e : Fin BD => e.val))) :
+    evalOp (Op.add .nat (Broadcast.scalarL)
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat stride_vh))
+        (Op.mul .nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BD] "offs_d"))
+          (Op.constNat stride_vd))) s
+      = some (⟨fun idx : TileIndex [1, BD] =>
+          kvh * stride_vh + idx.2.1.val * stride_vd⟩ : Tile .nat [1, BD]) := by
+  have hexp : @evalOp .nat [1, BD] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BD] "offs_d")) s
+      = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun e : Fin BD => e.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BD] ⟨0, by simp⟩ "offs_d" s _ hd
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, hexp,
+    hkvh, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.bop, Tile.vec, NumericDType.mul, NumericDType.add]
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
