@@ -855,6 +855,16 @@ noncomputable def attnKernelInvariant
         { region := V, baseOffset := kv_offset,
           parentShape := [N_CTX + P_SEQ, HEAD_DIM], blockShape := [BLOCK_N, HEAD_DIM],
           strides := [stride_vk, stride_vn], offsets := [c * BLOCK_N, 0] }⟩)) ∧
+  -- loop-invariant (fixed) registers the body reads
+  (s.regs .fp16 [BLOCK_M, HEAD_DIM] "q" = some ⟨fun idx : TileIndex [BLOCK_M, HEAD_DIM] =>
+      FloatDType.real.cast FloatDType.fp16
+        (some (sm_scale * 1.44269504 * qRaw s0 Q q_offset BLOCK_M HEAD_DIM start_m idx))⟩) ∧
+  (s.regs .real [BLOCK_M, BLOCK_N] "b1" = some ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+      some (b1Val s0 B0 b_offset BLOCK_M stride_b0m BIAS_LAST_SIZE start_m idx.1 idx.2.1.val)⟩) ∧
+  (s.regs .nat [] "b_offset" = some (Tile.scalar b_offset)) ∧
+  (s.regs .nat [] "start_m" = some (Tile.scalar start_m)) ∧
+  (s.regs .nat [] "q_offset" = some (Tile.scalar q_offset)) ∧
+  (s.regs .nat [BLOCK_M] "b_ptr_offsets_m" = some (Tile.vec (fun r : Fin BLOCK_M => r.val))) ∧
   (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
 
 /-! ### preLoop prefix (deterministic prologue → invariant base seeds)
@@ -1134,6 +1144,79 @@ theorem attnLoopBody_check (Q K V B0 Out : RegionName) :
             16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
             FloatDType.fp16).toAlgKernel.body.drop 20 := by
   rfl
+
+/-- The lowered 3-statement post-loop (`acc /= l_i[:, None]`, `O_block_ptr`,
+masked-free block store to `Out`). -/
+def attnPostLoop (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .real [64, 128] "acc"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i"))),
+    Stmt.assign .blockPtr [64, 128] "O_block_ptr"
+      (Op.makeBlockPtrDynOffsets Out (Op.ref .nat [] "q_offset") [128, 128] [64, 128]
+        [128, 1] [Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64), Op.constNat 0]),
+    Stmt.store .fp16 [64, 128] (.blockPtr (Op.ref .blockPtr [64, 128] "O_block_ptr") [])
+      (Op.castFloat .real .fp16 (Op.ref .real [64, 128] "acc")) .none ]
+
+/-- The Python-shape lowered body `drop 20` is exactly `attnPostLoop`. By `rfl`. -/
+theorem attnPostLoop_check (Q K V B0 Out : RegionName) :
+    (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16).toAlgKernel.body.drop 20 = attnPostLoop Out := by
+  rfl
+
+/-! ### Loop-body op-eval recipes (Python shape) -/
+
+/-- **`qk = fp16-zeros + dot(q, k)`** (L2-L3 collapsed): the fp16 `tl.zeros` is
+`0`, so after the dot-add `qk` is `castFloat(0) + dot(castFloat q, k)`. -/
+theorem qk_dot_op_eval (s : BlockState) (qtile : Tile .fp16 [64, 128]) (ktile : Tile .real [128, 64])
+    (hqk : s.regs .fp16 [64, 64] "qk" = some ⟨fun _ : TileIndex [64, 64] =>
+        FloatDType.real.cast FloatDType.fp16 (some 0)⟩)
+    (hq : s.regs .fp16 [64, 128] "q" = some qtile)
+    (hk : s.regs .real [128, 64] "k" = some ktile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk"))
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q"))
+          (Op.ref .real [128, 64] "k"))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩)
+          (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) ktile)) := by
+  have hczA : evalOp (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk")) s
+      = some (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩ : Tile .real [64, 64]) := by
+    rw [evalOp_castFloat]; simp [hqk]
+  have hcz : @evalOp TileDType.real [64, 64] (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk")) s
+      = some (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩ : Tile .real [64, 64]) := hczA
+  have hcbA : evalOp (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q")) s
+      = some (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) := by
+    rw [evalOp_castFloat]; simp [hq]
+  have hcb2 : @evalOp TileDType.real [64, 128] (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q")) s
+      = some (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) := hcbA
+  have hdotN : evalOp (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q")) (Op.ref .real [128, 64] "k")) s
+      = some (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) ktile) := by
+    rw [evalOp_dot]; simp [hcb2, hk]
+  have hdotN2 : @evalOp TileDType.real [64, 64]
+      (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q")) (Op.ref .real [128, 64] "k")) s
+      = some (Tile.dot [] (⟨fun i => FloatDType.fp16.cast FloatDType.real (qtile.data i)⟩ : Tile .real [64, 128]) ktile) := hdotN
+  rw [evalOp_add, hcz, hdotN2]; rfl
+
+/-- **`qk += (b0 + b1)·log2e`** (L5): adds the additive relative-position bias. -/
+theorem qk_bias_op_eval (s : BlockState) (qktile : Tile .real [64, 64])
+    (b0tile : Tile .real [64, 1]) (b1tile : Tile .real [64, 64])
+    (hqk : s.regs .real [64, 64] "qk" = some qktile)
+    (hb0 : s.regs .real [64, 1] "b0" = some b0tile)
+    (hb1 : s.regs .real [64, 64] "b1" = some b1tile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "qk")
+        (Op.mul .real Broadcast.scalarR
+          (Op.add .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+            (Op.ref .real [64, 1] "b0") (Op.ref .real [64, 64] "b1")) (Op.const 1.44269504))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) qktile
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR
+            (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consL Broadcast.nil)) b0tile b1tile)
+            (Tile.scalar (some 1.44269504)))) := by
+  rw [evalOp_add]
+  simp only [evalOp_mul, evalOp_add, evalOp_const, evalOp_ref, hqk, hb0, hb1,
+    Option.bind_eq_bind, Option.bind_some]
 
 end ClosedForm
 
