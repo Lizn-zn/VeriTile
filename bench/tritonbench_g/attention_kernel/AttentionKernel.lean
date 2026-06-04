@@ -1050,6 +1050,91 @@ theorem load_b1_eval (s : BlockState) (B0 : RegionName)
   simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar, Tile.vec,
     NumericDType.add, NumericDType.mul, BlockState.readMemValue_real, Region.cast_id]
 
+/-! ## exec-side loop-body assembly (Python shape `BLOCK_M=BLOCK_N=64`, `HEAD_DIM=128`)
+
+The 15-statement `forRangeDyn` body, stepped one block at a time. Mirrors the
+`AttentionForwardClosedForm`/`flash_attn` assembly: block-ptr K/V loads, the
+bias-augmented `qk = fscore` cell, the online-softmax `m_i`/`alpha`/`p`/`acc`/`l_i`
+updates, and the K/V block-pointer advances — non-causal (no masks). -/
+
+/-- `evalOp` of `tl.math.exp2`. -/
+theorem evalOp_exp2' {shape : TileShape} (a : Op .real shape) (s : BlockState) :
+    evalOp (.exp2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realExp2 va)) := by
+  simp [evalOp]
+
+/-- The lowered 15-statement `forRangeDyn` body of the Python-shape kernel. -/
+def attnLoopBody (B0 : RegionName) : List Stmt :=
+  [ Stmt.assign .real [128, 64] "k"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [128, 64] "K_block_ptr") []) .none),
+    Stmt.assign .real [64, 128] "v"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 128] "V_block_ptr") []) .none),
+    Stmt.assign .fp16 [64, 64] "qk" (Op.full [64, 64] (Op.castFloat .real .fp16 (Op.const 0))),
+    Stmt.assign .real [64, 64] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 64] "qk"))
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [64, 128] "q"))
+          (Op.ref .real [128, 64] "k"))),
+    Stmt.assign .real [64, 1] "b0"
+      (Op.load .real (.region B0
+        (Op.add .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64))
+                (Op.ref .nat [64] "b_ptr_offsets_m")) (Op.constNat 128))))
+          (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 64))))
+        .none),
+    Stmt.assign .real [64, 64] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 64] "qk")
+        (Op.mul .real Broadcast.scalarR
+          (Op.add .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+            (Op.ref .real [64, 1] "b0") (Op.ref .real [64, 64] "b1")) (Op.const 1.44269504))),
+    Stmt.assign .real [64] "m_i_new"
+      (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [64] "m_i")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "qk")))
+        (Op.ref .real [64] "m_i")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "qk"))),
+    Stmt.assign .real [64] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [64] "m_i")
+        (Op.ref .real [64] "m_i_new"))),
+    Stmt.assign .real [64, 64] "p"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "m_i_new")))),
+    Stmt.assign .real [64, 128] "acc"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "alpha"))),
+    Stmt.assign .real [64, 128] "acc"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64, 128] "acc")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real
+          (Op.castFloat .real .fp16 (Op.ref .real [64, 64] "p"))) (Op.ref .real [64, 128] "v"))),
+    Stmt.assign .real [64] "l_i"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [64] "l_i")
+          (Op.ref .real [64] "alpha"))
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 64].length) Bool.false (Op.ref .real [64, 64] "p"))),
+    Stmt.assign .real [64] "m_i" (Op.ref .real [64] "m_i_new"),
+    Stmt.assign .blockPtr [128, 64] "K_block_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [128, 64] "K_block_ptr") [0, 64]),
+    Stmt.assign .blockPtr [64, 128] "V_block_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 128] "V_block_ptr") [64, 0]) ]
+
+/-- The Python-shape lowered body `drop 19` is the `forRangeDyn` loop over
+`attnLoopBody`, then the 3 post-loop statements. By `rfl`. -/
+theorem attnLoopBody_check (Q K V B0 Out : RegionName) :
+    (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16).toAlgKernel.body.drop 19
+      = Stmt.forRangeDyn "start_n" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+          (Op.constNat 64) (attnLoopBody B0)
+        :: (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+            16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+            FloatDType.fp16).toAlgKernel.body.drop 20 := by
+  rfl
+
 end ClosedForm
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
