@@ -454,6 +454,32 @@ noncomputable def partialAcc
         stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num
         sliding_window n d
 
+/-- One block of `BLOCK_N` window tokens advances the partial accumulator.
+`partialAcc (c·BLOCK_N + BLOCK_N) = partialAcc (c·BLOCK_N) + Σ_{j<BLOCK_N} …`.
+This is the algebraic content of the loop body's `acc += tl.sum(p·v, 0)`. -/
+theorem partialAcc_block_succ
+    (s : BlockState) (Prob V : RegionName)
+    (Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen : RegionName)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd kv_group_num sliding_window : Nat)
+    (start_n BLOCK_N d : Nat) :
+    partialAcc s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+        B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+        stride_pbs stride_vbs stride_vh stride_vd kv_group_num sliding_window
+        (start_n + BLOCK_N) d
+      = partialAcc s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+          B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+          stride_pbs stride_vbs stride_vh stride_vd kv_group_num sliding_window
+          start_n d
+        + ∑ j ∈ Finset.range BLOCK_N,
+            pMasked s Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs
+                (start_n + j) *
+              vMasked s V Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+                stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num
+                sliding_window (start_n + j) d := by
+  unfold partialAcc
+  rw [Finset.sum_range_add]
+
 /-- Once the window loop has run past `cur_att_seq_len` (the loop's existential
 final counter `final ≥ attSeqLen`, here `K ≥ attSeqLen`), the partial PV
 accumulator over `range K` coincides with the genuine closed form
