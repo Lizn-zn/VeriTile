@@ -1218,6 +1218,65 @@ theorem qk_bias_op_eval (s : BlockState) (qktile : Tile .real [64, 64])
   simp only [evalOp_mul, evalOp_add, evalOp_const, evalOp_ref, hqk, hb0, hb1,
     Option.bind_eq_bind, Option.bind_some]
 
+/-- `evalOp` helper for `Op.floorDiv` (no dedicated `@[simp]` form). -/
+theorem evalOp_floorDiv' {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.floorDiv h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
+  simp [evalOp]
+
+/-- **`b0` per-block bias load** (L4): resolves the `B0 + b_offset + (...)[:, None]
++ start_n // BLOCK_N` pointer to the per-row read at `b_offset + (start_m·BLOCK_M
++ r)·stride_b0m + start_n // BLOCK_N` (= `b0Val`'s address at `c = start_n /
+BLOCK_N`). -/
+theorem load_b0_eval (s : BlockState) (B0 : RegionName)
+    (BLOCK_M stride_b0m smbm boff snv : Nat)
+    (hbo : s.regs .nat [] "b_offset" = some (Tile.scalar boff))
+    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar smbm))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar snv))
+    (hm : s.regs .nat [BLOCK_M] "b_ptr_offsets_m" = some (Tile.vec (fun r : Fin BLOCK_M => r.val))) :
+    evalOp (Op.load .real (.region B0
+        (Op.add .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M))
+                (Op.ref .nat [BLOCK_M] "b_ptr_offsets_m")) (Op.constNat stride_b0m))))
+          (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 64))))
+        .none) s
+      = some (⟨fun idx : TileIndex [BLOCK_M, 1] =>
+          some (s.readMem B0
+            (boff + (smbm * BLOCK_M + idx.1.val) * stride_b0m + snv / 64))⟩ : Tile .real [BLOCK_M, 1]) := by
+  rw [evalOp_load_region_none]
+  have hoff : evalOp (Op.add .nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
+          (Op.expandDim ⟨1, by simp⟩ (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M))
+              (Op.ref .nat [BLOCK_M] "b_ptr_offsets_m")) (Op.constNat stride_b0m))))
+        (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat 64))) s
+      = some (⟨fun idx : TileIndex [BLOCK_M, 1] =>
+          boff + (smbm * BLOCK_M + idx.1.val) * stride_b0m + snv / 64⟩ : Tile .nat [BLOCK_M, 1]) := by
+    conv_lhs => unfold evalOp
+    -- outer add scalarR: arg1 = add scalarL, arg2 = floorDiv
+    conv_lhs => unfold evalOp  -- arg1 add scalarL
+    conv_lhs => unfold evalOp  -- expandDim
+    conv_lhs => unfold evalOp  -- inner mul scalarR
+    conv_lhs => unfold evalOp  -- inner add scalarL
+    conv_lhs => unfold evalOp  -- inner mul nil
+    rw [evalOp_ref, hsm]
+    simp only [evalOp_ref, evalOp_constNat, hbo, hsn, hm, Option.bind, Option.map]
+    refine congrArg some ?_
+    ext idx
+    simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex, Broadcast.leftIndex,
+      Broadcast.rightIndex, Tile.scalar, Tile.vec, NumericDType.add, NumericDType.mul,
+      IntegralDType.floorDiv]
+  rw [hoff]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [BlockState.readMemValue_real, Region.cast_id]
+
 end ClosedForm
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
