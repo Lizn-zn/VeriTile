@@ -2307,6 +2307,78 @@ theorem bwd_body_decomp
               (Op.constNat 1) bwdIterBody] := by
   rfl
 
+/-! ### Full reverse-loop assembly
+
+We chain the 25-statement `bwdIterBody` per the validated per-statement template
+(`stepStmts.cons_some` + explicit `set`-bound state threading), twice (for
+`__rev_t = 0` and `__rev_t = 1`), then read back the three output regions
+(`DQInter`, `DKInter`, `DG`) against the genuine closed forms. -/
+
+/-- Per-lane masked load value from `region` at the iteration's row offset `R`.
+The mask is the active-lane decision; inactive lanes read `0`. -/
+private noncomputable def ldVal (s : BlockState) (region : RegionName) (R : Nat)
+    (i : TileIndex [4]) : WithBot ℝ :=
+  if decide (s.pids 0 * 4 + i.1.val < 8) then
+    some (s.readMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R))
+  else (0 : WithBot ℝ)
+
+/-- The post-`t`-assign, post-`g_val`-load state after the first two body
+statements of `bwdIterBody`, given the iteration's input pointer/register
+readbacks. The `t` index is `1 - rt` and `g_val` holds the masked load of `G`
+at the iteration's pointer row offset `R`. -/
+private noncomputable def bwdIterHeadState
+    (G : RegionName) (sin : BlockState) (rt R : Nat) : BlockState :=
+  (sin.setReg "t" .nat [] (Tile.scalar (2 - 1 - rt * 1))).setReg
+    "g_val" .real [4] ⟨fun i => ldVal sin G R i⟩
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **Validated per-statement chaining (head of `bwdIterBody`).** The first two
+statements (`t = 1 - __rev_t`; `g_val = masked load p_g`) reduce, via the banked
+`bwdEval_assign_subNat` / `bwdEval_assign_load_ptr_maskOther` recipes threaded
+through `stepStmts.cons_some`, to running the remaining 23 statements from the
+explicit head state. This certifies the assembly template (explicit `set`-bound
+state threading + per-statement recipe evidence) on the genuine
+`MemAccess.ptr`/`eraseDType` loads of the backward loop body. -/
+theorem bwdIterBody_head_eval
+    (G : RegionName) (sin : BlockState) (rt R : Nat)
+    (hrt : sin.regs .nat [] "__rev_t" = some (Tile.scalar rt))
+    (hmask : sin.regs .bool [4] "mask" = some
+        (Tile.vec (fun e : Fin 4 => decide (sin.pids 0 * 4 + e.val < 8))))
+    (hpg : sin.regs .ptr [4] "p_g" = some
+        (Tile.vec (fun e : Fin 4 => (G.cast, sin.pids 2 * 64 + sin.pids 0 * 4 + e.val + R)))) :
+    stepStmts bwdIterBody sin
+      = stepStmts (bwdIterBody.drop 2) (bwdIterHeadState G sin rt R) := by
+  rw [bwdIterBody]
+  set e0 := sin.setReg "t" .nat [] (Tile.scalar (2 - 1 - rt * 1)) with he0
+  have h0 : stepStmt (Stmt.assign .nat [] "t"
+      (Op.sub .nat Broadcast.nil (Op.sub .nat Broadcast.nil (Op.constNat 2) (Op.constNat 1))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "__rev_t") (Op.constNat 1)))) sin = some e0 := by
+    rw [bwdEval_assign_subNat sin "t" _ _ (2-1) (rt*1)
+        (by simp [evalOp, Tile.bop, NumericDType.sub])
+        (by simp [evalOp, hrt, Tile.bop, NumericDType.mul])]
+  rw [stepStmts.cons_some h0]
+  have hmask0 : e0.regs .bool [4] "mask" = some
+      (Tile.vec (fun e : Fin 4 => decide (sin.pids 0 * 4 + e.val < 8))) := by
+    rw [he0]; rw [BlockState.setReg_ne_name (h := by decide)]; exact hmask
+  have hpg0 : e0.regs .ptr [4] "p_g" = some
+      (Tile.vec (fun e : Fin 4 => (G.cast, sin.pids 2 * 64 + sin.pids 0 * 4 + e.val + R))) := by
+    rw [he0]; rw [BlockState.setReg_ne_name (h := by decide)]; exact hpg
+  set e1 := e0.setReg "g_val" .real [4] ⟨fun i => ldVal sin G R i⟩ with he1
+  have h1 : stepStmt (Stmt.assign .real [4] "g_val"
+        (Op.load ComputeDType.fp32.eraseDType (MemAccess.ptr (Op.ref .ptr [4] "p_g"))
+          (MaskOpt.maskOther (Op.ref .bool [4] "mask") ((Op.const 0).broadcast [4])))) e0 = some e1 := by
+    simp only [ComputeDType.eraseDType]
+    rw [bwdEval_assign_load_ptr_maskOther e0 "g_val" "p_g" _ _
+        (Tile.vec (fun e : Fin 4 => (G.cast, sin.pids 2 * 64 + sin.pids 0 * 4 + e.val + R)))
+        (Tile.vec (fun e : Fin 4 => decide (sin.pids 0 * 4 + e.val < 8)))
+        ⟨fun _ => some 0⟩
+        hpg0 (by rw [evalOp_ref]; exact hmask0) (by simp [evalOp])]
+    rw [he1]
+    congr 1
+  rw [stepStmts.cons_some h1]
+  rfl
+
 end BwdAssembly
 
 end VeriTile.Bench.TritonBenchG.DecayCumsum
