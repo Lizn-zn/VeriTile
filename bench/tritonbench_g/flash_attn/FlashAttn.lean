@@ -64,14 +64,28 @@ This file currently delivers, **sorry-free**: (1) the faithful DSL surface and i
 algorithm lowering; (2) the genuine closed-form spec definitions above plus their
 streaming-softmax bridge in `Math/Attention.lean`; (3) the genuine final-store
 readback `Realizes` theorems for both the `O` (`out_buffer / denom`) and `L`
-(`max + log2 denom`) stores at the correct, injective offsets. The **remaining
-stage** (not yet closed) is the `exec`-side loop-invariant proof that the kernel's
-`make_block_ptr` streaming loop realizes the streaming fold — i.e. that
-`out_buffer / denom` at the final store equals `flashAttnOValueSpec{,Causal}`.
-That mirrors `VeriTile/Examples/AttentionForwardClosedForm.lean`'s
-preLoop/step/postLoop skeleton, retargeted to block-pointer loads and the
-per-element causal `tl.where` mask. No self-referential / tautological summary is
-asserted in its place.
+(`max + log2 denom`) stores at the correct, injective offsets; (4) the
+`exec`-side **block-pointer evaluation foundation** for the loop-invariant proof:
+the general block-ptr construction/advance/load `evalOp` reductions now live
+sorry-free in `VeriTile/Triton/Semantics/BlockPtrEval.lean` +
+`VeriTile/Triton/Core/{Types,Shape}.lean` (`address_2d_offsets`,
+`advance_2d_offsets`, the `blockPtr_*_index` forms, `inBounds_nil_*`), the
+dynamic-loop driver `forRangeDyn_inv` lives in
+`VeriTile/Triton/LoopInvariant.lean`, and the flash-attn-specific recipes
+`flash_makeBlockPtrDyn_eval` / `flash_makeBlockPtr_rowcol_eval` /
+`flash_advance_{col,row}_eval` / `flash_load_{K,Q}_eval` (below) specialize them
+to this kernel's exact `make_block_ptr` AST.
+
+The **remaining stage** (not yet closed) is the per-statement loop-body op-eval
+recipes (including threading the per-element causal `tl.where(off_m ≥ start_n+off_n,
+qk, -inf)` mask into the `osBlockStep`/`attnKeyListCausal` fold) and the
+`attnInvariant`/`preLoop`/`attn_step`/`attn_postLoop` invariant skeleton over the
+14-register `out_buffer` kernel with BOTH the `O` and `L` stores, composed via
+`forRangeDyn_inv` — i.e. proving `out_buffer / denom` at the final store equals
+`flashAttnOValueSpec{,Causal}`. That mirrors
+`VeriTile/Examples/AttentionForwardClosedForm.lean`'s preLoop/step/postLoop
+skeleton, now retargeted onto the block-pointer foundation above. No
+self-referential / tautological summary is asserted in its place.
 
 ## Modeling boundary
 
@@ -743,5 +757,129 @@ theorem flashAttnOValueSpecCausal_eq_streaming
           VeriTile.Triton.osStep (0, 0, 0)
          st.2.2 / st.2.1) :=
   VeriTile.Triton.attentionRealBase2PerKeyScaleCausal_eq_streaming _ _ _ _ _ i d
+
+/-! ## exec-side block-pointer eval recipes (toward the loop-invariant proof)
+
+The remaining gap is the `exec`-side proof that the `make_block_ptr` streaming
+loop realizes `flashAttnOValueSpec{,Causal}`. The reusable foundation for that
+proof — the block-pointer construction/advance/load `evalOp` reductions — now
+lives sorry-free in `VeriTile/Triton/Semantics/BlockPtrEval.lean` and
+`VeriTile/Triton/Core/{Types,Shape}.lean`. These local wrappers specialize them
+to `flash_attn`'s exact AST: `Q`/`O` use `makeBlockPtrDynOffsets`
+(`offsets=(start_m·BLOCK_M, 0)`), `K`/`V` use `makeBlockPtrDyn`
+(`offsets=(0,0)`), and the per-block step is `tl.advance`. They are the
+flash-attn analogues of the `attention_kernel` branch's
+`makeBlockPtrDyn_eval`/`makeBlockPtr_rowcol_eval`/`advance_col_eval`/
+`advance_row_eval`, retargeted here. -/
+
+set_option maxHeartbeats 1000000 in
+/-- **`K`/`V` block-ptr construction** (`offsets=(0,0)`, dynamic base):
+`tl.make_block_ptr(base=K+qkv_base_offset, …)` evaluates to the constant
+`BlockPtr` tile with `baseOffset = base`. -/
+theorem flash_makeBlockPtrDyn_eval (region : RegionName) (baseOffset : Op .nat [])
+    (parentShape : List Nat) (blockShape : TileShape)
+    (strides offsets : List Nat) (s : BlockState) (base : Nat)
+    (hb : evalOp baseOffset s = some (Tile.scalar base)) :
+    evalOp (.makeBlockPtrDyn region baseOffset parentShape blockShape strides offsets) s
+      = some (⟨fun _ : TileIndex blockShape =>
+          { region := region, baseOffset := base, parentShape := parentShape,
+            blockShape := blockShape, strides := strides, offsets := offsets }⟩) := by
+  simp only [evalOp, hb, Option.bind]
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- **`Q`/`O` block-ptr construction** (`offsets=(start_m·BLOCK_M, 0)`, dynamic
+row offset, literal `0` column): packages the constant `BlockPtr` tile with the
+resolved row offset. -/
+theorem flash_makeBlockPtr_rowcol_eval (region : RegionName) (baseOffset : Op .nat [])
+    (parentShape : List Nat) (blockShape : TileShape) (strides : List Nat)
+    (rowOp : Op .nat []) (s : BlockState) (base rowOff : Nat)
+    (hb : evalOp baseOffset s = some (Tile.scalar base))
+    (hr : evalOp rowOp s = some (Tile.scalar rowOff)) :
+    evalOp (.makeBlockPtrDynOffsets region baseOffset parentShape blockShape strides
+        [rowOp, Op.constNat 0]) s
+      = some (⟨fun _ : TileIndex blockShape =>
+          { region := region, baseOffset := base, parentShape := parentShape,
+            blockShape := blockShape, strides := strides, offsets := [rowOff, 0] }⟩) := by
+  rw [makeBlockPtr2_eval]
+  simp only [hb, hr, evalOp, Option.bind, List.mapM, List.mapM.loop, Tile.scalar]
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- **`tl.advance(K_block_ptr, [0, BLOCK_N])`**: advances the column offset of a
+`[rowOff=0, colOff]` block pointer by `BLOCK_N`. -/
+theorem flash_advance_col_eval (s : BlockState) (region : RegionName)
+    (base rows cols BT BS strideT strideS colOff d : Nat) (name : RegName)
+    (hkp : s.regs .blockPtr [BT, BS] name = some
+      (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff] }⟩)) :
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [0, d]) s
+      = some (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS], offsets := [0, colOff + d] }⟩) := by
+  rw [advanceBlockPtr_eval]
+  simp only [evalOp, hkp, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp [BlockPtr.advance_2d_offsets]
+
+set_option maxHeartbeats 1000000 in
+/-- **`tl.advance(V_block_ptr, [BLOCK_N, 0])`**: advances the row offset of a
+`[rowOff, colOff=0]` block pointer by `BLOCK_N`. -/
+theorem flash_advance_row_eval (s : BlockState) (region : RegionName)
+    (base rows cols BT BS strideT strideS rowOff d : Nat) (name : RegName)
+    (hkp : s.regs .blockPtr [BT, BS] name = some
+      (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff, 0] }⟩)) :
+    evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BT, BS] name) [d, 0]) s
+      = some (⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS], offsets := [rowOff + d, 0] }⟩) := by
+  rw [advanceBlockPtr_eval]
+  simp only [evalOp, hkp, Option.bind]
+  refine congrArg some ?_
+  ext i
+  simp [BlockPtr.advance_2d_offsets]
+
+set_option maxHeartbeats 1000000 in
+/-- **`k = tl.load(K_block_ptr)`** (no boundary check): a `[0, colOff]`-offset
+block-ptr load reads `readMem` at the contiguous per-lane address
+`base + i·strideT + (colOff + j)·strideS`. With `K`'s `strides=(1, DIM)` this is
+key `colOff + j`, head-lane `i` — exactly a `kTile` read after `colOff` advances.
+Directly specializes the library lemma `load_blockPtr_K_eval`. -/
+theorem flash_load_K_eval
+    (region : RegionName) (base rows cols BT BS strideT strideS colOff : Nat)
+    (ptrOp : Op .blockPtr [BT, BS]) (s : BlockState)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [0, colOff] }⟩) :
+    evalOp (.load .real (.blockPtr ptrOp []) .none) s
+      = some ⟨fun idx : TileIndex [BT, BS] =>
+          some (s.readMem region
+            (base + idx.1.val * strideT + (colOff + idx.2.1.val) * strideS))⟩ :=
+  load_blockPtr_K_eval region base rows cols BT BS strideT strideS colOff ptrOp s hp
+
+set_option maxHeartbeats 1000000 in
+/-- **`q = tl.load(Q_block_ptr)`** / `v = tl.load(V_block_ptr)` (no boundary
+check): a `[rowOff, 0]`-offset block-ptr load reads `readMem` at
+`base + (rowOff + i)·strideT + j·strideS`. With `Q`/`V`'s `strides=(DIM, 1)` this
+is row `rowOff + i`, channel `j`. Directly specializes `load_blockPtr_Q_eval`. -/
+theorem flash_load_Q_eval
+    (region : RegionName) (base rows cols BT BS strideT strideS rowOff : Nat)
+    (ptrOp : Op .blockPtr [BT, BS]) (s : BlockState)
+    (hp : evalOp ptrOp s = some
+      ⟨fun _ : TileIndex [BT, BS] =>
+        { region := region, baseOffset := base, parentShape := [rows, cols],
+          blockShape := [BT, BS], strides := [strideT, strideS],
+          offsets := [rowOff, 0] }⟩) :
+    evalOp (.load .real (.blockPtr ptrOp []) .none) s
+      = some ⟨fun idx : TileIndex [BT, BS] =>
+          some (s.readMem region
+            (base + (rowOff + idx.1.val) * strideT + idx.2.1.val * strideS))⟩ :=
+  load_blockPtr_Q_eval region base rows cols BT BS strideT strideS rowOff ptrOp s hp
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
