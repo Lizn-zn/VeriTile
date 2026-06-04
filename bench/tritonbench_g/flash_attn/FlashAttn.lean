@@ -1205,6 +1205,106 @@ theorem flashState_full_eq_spec_causal
   simp only [flashState]
   rw [flashKeysUpto_full_causal]
 
+/-- Block-`c` per-row key list: keys with `c·BLOCK_N ≤ j < (c+1)·BLOCK_N` passing
+the causal filter, the keys the loop's `c`-th iteration streams. -/
+noncomputable def flashBlock
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    List (ℝ × ℝ) :=
+  (List.finRange SEQLEN).filterMap (fun j : Fin SEQLEN =>
+    if c * BLOCK_N ≤ j.val ∧ j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val) then
+      some (flashKV qT kT vT scale i d j)
+    else none)
+
+/-- Generic threshold-split for a `.val`-ascending list: the `j.val < hi₂` window
+filterMap splits into the `j.val < t` prefix and the `t ≤ j.val < hi₂` block,
+provided `t ≤ hi₂`. By induction using the ascending (`Pairwise <`) order — once an
+element clears `t`, the whole tail does too. -/
+private theorem filterMap_window_split {n : Nat} (l : List (Fin n))
+    (hsorted : l.Pairwise (fun a b => a.val < b.val))
+    (t hi₂ : Nat) (Q : Fin n → Prop) [DecidablePred Q]
+    (g : Fin n → ℝ × ℝ) (hle : t ≤ hi₂) :
+    l.filterMap (fun j => if Q j ∧ j.val < hi₂ then some (g j) else none)
+      = l.filterMap (fun j => if Q j ∧ j.val < t then some (g j) else none)
+        ++ l.filterMap (fun j => if t ≤ j.val ∧ j.val < hi₂ ∧ Q j then some (g j) else none) := by
+  induction l with
+  | nil => simp
+  | cons a tl ih =>
+    have htl : tl.Pairwise (fun x y => x.val < y.val) := (List.pairwise_cons.mp hsorted).2
+    have hahead : ∀ b ∈ tl, a.val < b.val := (List.pairwise_cons.mp hsorted).1
+    rw [List.filterMap_cons, List.filterMap_cons, List.filterMap_cons]
+    by_cases hlt : a.val < t
+    · -- head goes to the prefix
+      rw [ih htl]
+      have hnb : ¬ (t ≤ a.val ∧ a.val < hi₂ ∧ Q a) := fun h => (Nat.not_le.mpr hlt) h.1
+      rw [if_neg hnb]
+      by_cases hQ : Q a
+      · have h2 : a.val < hi₂ := lt_of_lt_of_le hlt hle
+        rw [if_pos (And.intro hQ h2 : Q a ∧ a.val < hi₂),
+          if_pos (And.intro hQ hlt : Q a ∧ a.val < t)]
+        rfl
+      · rw [if_neg (fun h : Q a ∧ a.val < hi₂ => hQ h.1),
+          if_neg (fun h : Q a ∧ a.val < t => hQ h.1)]
+    · -- head clears `t`; so does the whole tail, making the prefix empty
+      have hge : t ≤ a.val := Nat.not_lt.mp hlt
+      have htail_prefix : tl.filterMap (fun j => if Q j ∧ j.val < t then some (g j) else none) = [] := by
+        apply List.filterMap_eq_nil_iff.mpr
+        intro b hb
+        have hab : a.val < b.val := hahead b hb
+        have hbt : ¬ (b.val < t) := by omega
+        simp [hbt]
+      rw [ih htl, htail_prefix]
+      have hnp : ¬ (Q a ∧ a.val < t) := fun h => hlt h.2
+      rw [if_neg hnp]
+      by_cases hQ : Q a
+      · by_cases h2 : a.val < hi₂
+        · rw [if_pos (And.intro hQ h2 : Q a ∧ a.val < hi₂),
+            if_pos (And.intro hge (And.intro h2 hQ) : t ≤ a.val ∧ a.val < hi₂ ∧ Q a)]
+          rfl
+        · rw [if_neg (fun h : Q a ∧ a.val < hi₂ => h2 h.2),
+            if_neg (fun h : t ≤ a.val ∧ a.val < hi₂ ∧ Q a => h2 h.2.1)]
+      · rw [if_neg (fun h : Q a ∧ a.val < hi₂ => hQ h.1),
+          if_neg (fun h : t ≤ a.val ∧ a.val < hi₂ ∧ Q a => hQ h.2.2)]
+
+/-- **Window split** (`hi = c·BLOCK_N`): the keys streamed through `c+1` blocks are
+those through `c` blocks followed by block `c`. -/
+theorem flashKeysUpto_succ
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashKeysUpto qT kT vT scale causal qStart ((c + 1) * BLOCK_N) i d
+      = flashKeysUpto qT kT vT scale causal qStart (c * BLOCK_N) i d
+        ++ flashBlock qT kT vT scale causal qStart BLOCK_N c i d := by
+  unfold flashKeysUpto flashBlock
+  rw [show (List.finRange SEQLEN).filterMap
+        (fun j : Fin SEQLEN => if j.val < (c + 1) * BLOCK_N ∧ (causal → j.val ≤ qStart + i.val)
+          then some (flashKV qT kT vT scale i d j) else none)
+      = (List.finRange SEQLEN).filterMap
+        (fun j : Fin SEQLEN => if (causal → j.val ≤ qStart + i.val) ∧ j.val < (c + 1) * BLOCK_N
+          then some (flashKV qT kT vT scale i d j) else none)
+      from List.filterMap_congr (fun j _ => by simp only [and_comm])]
+  rw [filterMap_window_split (List.finRange SEQLEN) (List.pairwise_lt_finRange SEQLEN)
+    (c * BLOCK_N) ((c + 1) * BLOCK_N) (fun j => causal → j.val ≤ qStart + i.val)
+    (fun j => flashKV qT kT vT scale i d j) (by nlinarith [Nat.zero_le BLOCK_N])]
+  refine congrArg₂ (· ++ ·) ?_ ?_
+  · apply List.filterMap_congr; intro j _; simp only [and_comm]
+  · apply List.filterMap_congr; intro j _
+    by_cases h1 : c * BLOCK_N ≤ j.val <;> by_cases h2 : j.val < (c + 1) * BLOCK_N <;>
+      by_cases h3 : (causal → j.val ≤ qStart + i.val) <;> simp [h1, h2, h3, and_assoc]
+
+/-- **One-block invariant advance** (pure math): `flashState` after `c+1` blocks
+is `osBlockStep` (= the kernel's per-block update) applied to `flashState` after
+`c` blocks with block `c`'s keys. -/
+theorem flashState_succ
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashState qT kT vT scale causal qStart ((c + 1) * BLOCK_N) i d
+      = VeriTile.Triton.osBlockStep
+          (flashState qT kT vT scale causal qStart (c * BLOCK_N) i d)
+          (flashBlock qT kT vT scale causal qStart BLOCK_N c i d) := by
+  unfold flashState
+  rw [flashKeysUpto_succ, List.foldl_append,
+    VeriTile.Triton.osBlockStep_eq_foldl_osStep]
+
 /-! ## exec-side loop-invariant skeleton (in progress)
 
 The compiled body of `flash_attn_fwd_kernel_surface` (verified by direct
