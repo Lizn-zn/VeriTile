@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `flash_attn` — strict per-kernel correctness
@@ -2326,6 +2327,7 @@ theorem flash_preLoop_eval
             (some (sm_scale * log2e * qTile s Q 8192 64 128 idx))⟩
       ∧ s0.regs .nat [128] "off_m" = some (Tile.vec (fun r : Fin 128 => s.pids 0 * 128 + r.val))
       ∧ s0.regs .nat [64] "off_n" = some (Tile.vec (fun j : Fin 64 => j.val))
+      ∧ s0.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
       ∧ s0.regs .blockPtr [64, 64] "K_block_ptr" = some
           (⟨fun _ : TileIndex [64, 64] =>
             { region := K, baseOffset := s.pids 1 * 8192, parentShape := [64, 128],
@@ -2467,7 +2469,7 @@ theorem flash_preLoop_eval
           Option.bind_eq_bind, Option.bind_some, flash_scalarBop]
         rfl))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp only [BlockState.setReg_pids]
   · funext rg o; simp only [BlockState.setReg_mem]
   · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
@@ -4064,5 +4066,340 @@ theorem flash_attn_postLoop
     rw [WithBot.realLog2_some]
     simp only [WithBot.realAdd, Option.map₂, Option.bind, Option.map, WithBot.unbotD_coe]
     rfl
+
+/-- `qTile`/`kTile`/`vTile` depend only on `mem` and `pids`, so they agree between
+two states with equal `mem`/`pids`. -/
+theorem flash_tiles_eq_of_mem_pids (s s' : BlockState) (R : RegionName)
+    (hmem : s'.mem = s.mem) (hpids : s'.pids = s.pids) (stride DIM BM : Nat) :
+    qTile s' R stride DIM BM = qTile s R stride DIM BM := by
+  funext idx; obtain ⟨i, e, _⟩ := idx
+  simp only [qTile, flashBaseOffset, mIndex, BlockState.readMem, hmem, hpids]
+
+theorem flash_ktiles_eq_of_mem_pids (s s' : BlockState) (R : RegionName)
+    (hmem : s'.mem = s.mem) (hpids : s'.pids = s.pids) (stride DIM SQ : Nat) :
+    kTile s' R stride DIM SQ = kTile s R stride DIM SQ := by
+  funext idx; obtain ⟨j, e, _⟩ := idx
+  simp only [kTile, flashBaseOffset, BlockState.readMem, hmem, hpids]
+
+theorem flash_vtiles_eq_of_mem_pids (s s' : BlockState) (R : RegionName)
+    (hmem : s'.mem = s.mem) (hpids : s'.pids = s.pids) (stride DIM SQ : Nat) :
+    vTile s' R stride DIM SQ = vTile s R stride DIM SQ := by
+  funext idx; obtain ⟨j, d, _⟩ := idx
+  simp only [vTile, flashBaseOffset, BlockState.readMem, hmem, hpids]
+
+set_option maxHeartbeats 1000000 in
+/-- **Invariant base case at the loop-entry state.** The preLoop output state
+`sp` (program-id grid `start_m = 0`, mem/undef preserved) satisfies
+`attnInvariant … 0 sp` with `sp` as its own anchor `s0`: the `⊥`/`0`/`0`
+running-state inits read off `flashRunningMax/flashStateBot` at the empty window,
+the index vectors / block pointers / scalars are set, all by the `*_zero` lemmas. -/
+theorem flash_attn_invariant_zero
+    (Q K V : RegionName) (s sp : BlockState) (sm_scale : ℝ) (IS_CAUSAL : Bool)
+    (hDIM : 0 < 64) (hiTotal : Nat) (hhimod : hiTotal % 64 = 0)
+    (hpid0 : sp.pids 0 = 0)
+    (hpids : sp.pids = s.pids) (hmem : sp.mem = s.mem) (hundef : ∀ rg o, sp.undef rg o = 0)
+    (hbsh : sp.regs .nat [] "off_bs_head" = some (Tile.scalar (s.pids 1)))
+    (hqkv : sp.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s.pids 1 * 8192)))
+    (hmax : sp.regs .real [128] "max" = some ⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩)
+    (hden : sp.regs .real [128] "denom" = some ⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩)
+    (hob : sp.regs .real [128, 64] "out_buffer" = some ⟨fun _ : TileIndex [128, 64] => some (0 : ℝ)⟩)
+    (hq : sp.regs .fp16 [128, 64] "q" = some ⟨fun idx : TileIndex [128, 64] =>
+        FloatDType.real.cast FloatDType.fp16 (some (sm_scale * log2e * qTile s Q 8192 64 128 idx))⟩)
+    (hom : sp.regs .nat [128] "off_m" = some (Tile.vec (fun r : Fin 128 => s.pids 0 * 128 + r.val)))
+    (hon : sp.regs .nat [64] "off_n" = some (Tile.vec (fun j : Fin 64 => j.val)))
+    (hKp : sp.regs .blockPtr [64, 64] "K_block_ptr" = some
+        (⟨fun _ : TileIndex [64, 64] =>
+          { region := K, baseOffset := s.pids 1 * 8192, parentShape := [64, 128],
+            blockShape := [64, 64], strides := [1, 64], offsets := [0, 0] }⟩))
+    (hVp : sp.regs .blockPtr [64, 64] "V_block_ptr" = some
+        (⟨fun _ : TileIndex [64, 64] =>
+          { region := V, baseOffset := s.pids 1 * 8192, parentShape := [128, 64],
+            blockShape := [64, 64], strides := [64, 1], offsets := [0, 0] }⟩))
+    (hQp : sp.regs .blockPtr [128, 64] "Q_block_ptr" = some
+        (⟨fun _ : TileIndex [128, 64] =>
+          { region := Q, baseOffset := s.pids 1 * 8192, parentShape := [128, 64],
+            blockShape := [128, 64], strides := [64, 1], offsets := [s.pids 0 * 128, 0] }⟩))
+    (hsm : sp.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))) :
+    attnInvariant Q K V sp sm_scale 8192 128 128 64 64 hiTotal IS_CAUSAL hDIM 0 sp := by
+  have hpid0' : s.pids 0 = 0 := by rw [← hpids]; exact hpid0
+  have hbaseEq : flashBaseOffset sp 8192 = sp.pids 1 * 8192 := by simp [flashBaseOffset]
+  have hpids1 : sp.pids 1 = s.pids 1 := by rw [hpids]
+  unfold attnInvariant
+  refine ⟨rfl, by omega, by omega, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hmax]; refine congrArg some ?_; ext r
+    show (⊥ : WithBot ℝ) = flashRunningMax _ _ _ _ _ _ 0 _ _
+    rw [flashRunningMax_zero]
+  · rw [hden]; refine congrArg some ?_; ext r
+    show (some (0:ℝ)) = ((flashStateBot _ _ _ _ _ _ 0 _ _).2.1 : ℝ)
+    rw [flashStateBot_zero]
+  · rw [hob]; refine congrArg some ?_; ext idx
+    show (some (0:ℝ)) = ((flashStateBot _ _ _ _ _ _ 0 _ _).2.2 : ℝ)
+    rw [flashStateBot_zero]
+  · rw [hq]; refine congrArg some ?_; ext idx
+    rw [flash_tiles_eq_of_mem_pids s sp Q hmem hpids 8192 64 128]
+  · rw [hom]; refine congrArg some ?_; ext r
+    show (s.pids 0 * 128 + r.1.val : Nat) = (sp.pids 0 * 128 + r.1.val : Nat)
+    rw [hpids]
+  · rw [hon]
+  · rw [hKp, hbaseEq, hpids1]
+  · rw [hVp, hbaseEq, hpids1]
+  · rw [hQp, hbaseEq, hpids1]; rw [show sp.pids 0 = 0 from hpid0, hpid0']
+  · rw [hsm, hpids]
+  · rw [hbsh, hpids1]
+  · rw [hqkv, hpids1]
+  · exact hundef
+  · rw [hmem]
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **Full-kernel execution chain.** Running the lowered flash-attn body
+(preLoop 16 + `forRangeDyn` loop + postLoop 5) from a clean state `s` with grid
+`start_m = 0` reaches a final state `sF` whose `O` store holds the genuine
+closed-form attention ratio (`flashAttnOValueSpec{,Causal}`) at every output lane
+and whose `L` store holds the genuine log-sum-exp at every row lane. -/
+theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
+    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, stepStmts (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body s = some sF
+      ∧ (∀ idx : TileIndex [128, 64],
+          sF.mem O (s.pids 1 * 8192 + (s.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1)
+            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+                (some (if IS_CAUSAL then
+                  flashAttnOValueSpecCausal s Q K V (1.0 : ℝ) 8192 64 128 128 idx
+                else
+                  flashAttnOValueSpec s Q K V (1.0 : ℝ) 8192 64 128 128 idx))))
+      ∧ (∀ i : Fin 128,
+          sF.readMem L (s.pids 1 * 128 + (s.pids 0 * 128 + i.val))
+            = Real.log
+                (((flashKeysUpto (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+                    (vTile s V 8192 64 128) (1.0 * log2e) IS_CAUSAL (s.pids 0 * 128) 128 i
+                    ⟨0, by norm_num⟩).map (fun p => pow2 p.1)).sum) / Real.log 2) := by
+  -- decompose the body: take 16 ++ drop 16, with take 16 = flashPreLoop
+  rw [← List.take_append_drop 16 (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body]
+  rw [flashPreLoop_check]
+  -- preLoop
+  obtain ⟨sp, hpre, hsppids, hspmem, hspundef, hbsh, hqkv, hmax, hden, hob, hq, hom, hon,
+      hsm, hKp, hVp, hQp, hqks, hlo, hhi⟩ :=
+    flash_preLoop_eval s Q K V (1.0 : ℝ) IS_CAUSAL hundef
+  rw [stepStmts.append_some hpre]
+  -- the drop 16 is `forRangeDyn :: drop 17`, and drop 17 = flashPostLoop
+  rw [show (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body.drop 16
+        = Stmt.forRangeDyn "start_n" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+            (Op.constNat 64) (flashLoopBody IS_CAUSAL) :: flashPostLoop L O from by
+    rw [flashLoopBody_check, flashPostLoop_check]]
+  -- the loop-entry invariant at counter 0
+  have hflashHi : flashHi s IS_CAUSAL = 128 := by
+    simp only [flashHi, hpid0]; cases IS_CAUSAL <;> simp
+  have hinv0 : attnInvariant Q K V sp (1.0 : ℝ) 8192 128 128 64 64 128 IS_CAUSAL
+      (by norm_num) 0 sp :=
+    flash_attn_invariant_zero Q K V s sp (1.0 : ℝ) IS_CAUSAL (by norm_num) 128
+      (by norm_num) (by rw [hsppids, hpid0]) hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
+      hom hon hKp hVp hQp hsm
+  -- run the forRangeDyn loop via forRangeDyn_inv with P = attnInvariant
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.ref .nat [] "lo") (stopOp := Op.ref .nat [] "hi")
+      (stepOp := Op.constNat 64)
+      (P := fun i st => attnInvariant Q K V sp (1.0 : ℝ) 8192 128 128 64 64 128 IS_CAUSAL
+        (by norm_num) i st)
+      (s_init := sp)
+      (by rw [evalOp_ref, hlo])
+      (by rw [evalOp_ref, hhi, hflashHi])
+      (by rw [evalOp_constNat])
+      (by norm_num)
+      hinv0
+      (fun i st hi hP => flash_attn_step Q K V sp (1.0 : ℝ) IS_CAUSAL (by norm_num) i st 128
+        hi (by norm_num) (by norm_num) hP)
+  rw [stepStmts.cons_some hloop]
+  -- at loop exit, counter `final` is the first multiple of 64 ≥ 128, i.e. 128
+  have hfinal : final = 128 := by
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    omega
+  subst hfinal
+  -- postLoop
+  obtain ⟨sF, hpostStep, hO, hLrb⟩ :=
+    flash_attn_postLoop Q K V L O sp (1.0 : ℝ) IS_CAUSAL (by norm_num) sL hOL hinvL
+  refine ⟨sF, hpostStep, ?_, ?_⟩
+  · -- O readback: bridge sp tiles → s tiles, flashStateBot ratio → spec
+    intro idx
+    have hOidx := hO idx
+    rw [hsppids] at hOidx
+    rw [hOidx]
+    refine congrArg (MemCell.of .fp16) ?_
+    refine congrArg (FloatDType.real.cast FloatDType.fp16) ?_
+    refine congrArg some ?_
+    rw [flash_tiles_eq_of_mem_pids s sp Q hspmem hsppids,
+        flash_ktiles_eq_of_mem_pids s sp K hspmem hsppids,
+        flash_vtiles_eq_of_mem_pids s sp V hspmem hsppids]
+    cases IS_CAUSAL
+    · -- non-causal: qStart irrelevant, window = SEQLEN
+      simp only [Bool.false_eq_true, if_false]
+      rw [show s.pids 0 * 128 = 0 from by rw [hpid0]]
+      have hne : flashRunningMax (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+          (vTile s V 8192 64 128) (1.0 * log2e) Bool.false 0 128 idx.1 idx.2.1 ≠ ⊥ :=
+        flashRunningMax_ne_bot (SEQLEN := 128) _ _ _ _ _ _ _ _ _ (by norm_num) (by norm_num)
+      exact flashStateBot_full_eq_spec s Q K V (1.0 : ℝ) 8192 idx.1 idx.2.1 hne
+    · simp only [if_true]
+      have hne : flashRunningMax (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+          (vTile s V 8192 64 128) (1.0 * log2e) Bool.true (s.pids 0 * 128) 128 idx.1 idx.2.1 ≠ ⊥ :=
+        flashRunningMax_ne_bot (SEQLEN := 128) _ _ _ _ _ _ _ _ _ (by norm_num) (by norm_num)
+      exact flashStateBot_full_eq_spec_causal s Q K V (1.0 : ℝ) 8192 idx.1 idx.2.1 hne
+  · -- L readback: bridge sp tiles → s tiles, max+log2 denom → log-sum-exp
+    intro i
+    have hLi := hLrb i
+    rw [hsppids] at hLi
+    rw [hLi]
+    -- bridge sp tiles → s tiles and sp.pids → s.pids
+    rw [flash_tiles_eq_of_mem_pids s sp Q hspmem hsppids,
+        flash_ktiles_eq_of_mem_pids s sp K hspmem hsppids,
+        flash_vtiles_eq_of_mem_pids s sp V hspmem hsppids]
+    -- max + log2 denom = log-sum-exp (running max ≠ ⊥ for the nonempty window)
+    set mr := (flashRunningMax (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+        (vTile s V 8192 64 128) (1.0 * log2e) IS_CAUSAL (s.pids 0 * 128) 128 i ⟨0, by norm_num⟩).unbotD 0
+      with hmrdef
+    have hM : flashRunningMax (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+        (vTile s V 8192 64 128) (1.0 * log2e) IS_CAUSAL (s.pids 0 * 128) 128 i ⟨0, by norm_num⟩
+          = (mr : WithBot ℝ) := by
+      obtain ⟨q, hq⟩ := WithBot.ne_bot_iff_exists.mp
+        (flashRunningMax_ne_bot (SEQLEN := 128) (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+          (vTile s V 8192 64 128) (1.0 * log2e) IS_CAUSAL (s.pids 0 * 128) 128 i ⟨0, by norm_num⟩
+          (by norm_num) (by norm_num))
+      rw [hmrdef, ← hq]; rfl
+    exact flashStateBot_logsumexp (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+      (vTile s V 8192 64 128) (1.0 * log2e) IS_CAUSAL (s.pids 0 * 128) 128 i ⟨0, by norm_num⟩ mr hM
+
+/-! ## Genuine closed-form `Realizes` top theorems
+
+The whole-kernel `O` store realizes the genuine base-2 attention closed form
+(`flashAttnOValueSpec{,Causal}` — the streaming-softmax output of the loaded
+Q/K/V tiles, NOT the kernel's own executed output) and the `L` store realizes the
+genuine log-sum-exp. For the checked Python grid `start_m = 0`, both causal cases. -/
+
+set_option maxHeartbeats 1000000 in
+/-- **Genuine `O`-store correctness** (both causal cases). Every output lane of
+the FlashAttention kernel holds the closed-form base-2 attention ratio of the
+loaded tiles. -/
+theorem flash_attn_genuine_output_compute_correct
+    (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
+    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 IS_CAUSAL)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] =>
+        some (O, outOffset s 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+          (some (if IS_CAUSAL then
+            flashAttnOValueSpecCausal s Q K V (1.0 : ℝ) 8192 64 128 128 idx
+          else
+            flashAttnOValueSpec s Q K V (1.0 : ℝ) 8192 64 128 128 idx)))) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  obtain ⟨sF, hstep, hO, _⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hpid0 hOL hundef
+  rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_memcell]
+  rw [show outOffset s 8192 64 1 128 idx
+        = s.pids 1 * 8192 + (s.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1 from rfl]
+  exact hO idx
+
+set_option maxHeartbeats 1000000 in
+/-- **Genuine `L`-store correctness** (both causal cases). Every row lane of the
+FlashAttention kernel holds the closed-form log-sum-exp
+`log2 (Σ_j pow2 (scoreⱼ))` of the (causally filtered) per-key base-2 scores. -/
+theorem flash_attn_genuine_l_compute_correct
+    (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
+    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 IS_CAUSAL)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
+      (expected := fun i : Fin 128 =>
+        Real.log
+          (((flashKeysUpto (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+              (vTile s V 8192 64 128) (1.0 * log2e) IS_CAUSAL (s.pids 0 * 128) 128 i
+              ⟨0, by norm_num⟩).map (fun p => pow2 p.1)).sum) / Real.log 2) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i
+  obtain ⟨sF, hstep, _, hLrb⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hpid0 hOL hundef
+  rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  rw [show lOffset s 128 128 i = s.pids 1 * 128 + (s.pids 0 * 128 + i.val) from rfl]
+  exact hLrb i
+
+/-- **Python case 1 (causal) genuine closed-form correctness.** The full
+FlashAttention kernel's `O` store realizes the causal base-2 attention
+(`flashAttnOValueSpecCausal`) and its `L` store realizes the causal log-sum-exp,
+at the checked Python grid (`start_m = 0`). -/
+theorem flash_attn_python_case1_genuine_compute_correct
+    (Q K V L O : RegionName) (s : BlockState)
+    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 Bool.true)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] => some (O, outOffset s 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+          (some (flashAttnOValueSpecCausal s Q K V (1.0 : ℝ) 8192 64 128 128 idx))))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 Bool.true)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
+      (expected := fun i : Fin 128 =>
+        Real.log
+          (((flashKeysUpto (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+              (vTile s V 8192 64 128) (1.0 * log2e) Bool.true (s.pids 0 * 128) 128 i
+              ⟨0, by norm_num⟩).map (fun p => pow2 p.1)).sum) / Real.log 2)) :=
+  ⟨flash_attn_genuine_output_compute_correct Q K V L O s Bool.true hpid0 hOL hundef,
+   flash_attn_genuine_l_compute_correct Q K V L O s Bool.true hpid0 hOL hundef⟩
+
+/-- **Python case 2 (non-causal) genuine closed-form correctness.** The `O` store
+realizes the full base-2 attention (`flashAttnOValueSpec`, every key contributes)
+and the `L` store realizes the full log-sum-exp. -/
+theorem flash_attn_python_case2_genuine_compute_correct
+    (Q K V L O : RegionName) (s : BlockState)
+    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 Bool.false)
+      (initialState := s)
+      (write := fun idx : TileIndex [128, 64] => some (O, outOffset s 8192 64 1 128 idx))
+      (expected := fun idx : TileIndex [128, 64] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+          (some (flashAttnOValueSpec s Q K V (1.0 : ℝ) 8192 64 128 128 idx))))) ∧
+    (ComputeCorrect.Realizes
+      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 Bool.false)
+      (initialState := s)
+      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
+      (expected := fun i : Fin 128 =>
+        Real.log
+          (((flashKeysUpto (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
+              (vTile s V 8192 64 128) (1.0 * log2e) Bool.false (s.pids 0 * 128) 128 i
+              ⟨0, by norm_num⟩).map (fun p => pow2 p.1)).sum) / Real.log 2)) :=
+  ⟨flash_attn_genuine_output_compute_correct Q K V L O s Bool.false hpid0 hOL hundef,
+   flash_attn_genuine_l_compute_correct Q K V L O s Bool.false hpid0 hOL hundef⟩
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
