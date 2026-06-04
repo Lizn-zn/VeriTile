@@ -1216,6 +1216,149 @@ theorem ctxPreLoop_eval
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
       BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
 
+/-! ## exec-assembly: body decomposition (loop body + postLoop)
+
+Scaffolding for the streaming-loop assembly: the 18-statement loop body
+(`ctxLoopBody`) and the 4-statement post-loop (`ctxPostLoop`), transcribed from
+the lowered surface body and validated as pure `List` identities. The full body
+is `ctxPreLoop ++ (forRangeDyn 0 (block_mask·block_end_loc) 128 ctxLoopBody ::
+ctxPostLoop)`, exposed via `List.take_append_drop` so the dynamic-loop driver
+`forRangeDyn_inv` applies with `ctxLoopBody`/`ctxPostLoop` supplied at the call
+site. -/
+
+/-- The kernel's chosen `sm_scale` constant at the Python test shape:
+`(√128)⁻¹ · 1.4426950408889634` (`= (1/√D)·log₂ e`). -/
+noncomputable def sm_scale_python : ℝ := ((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634
+
+/-- The 18 lowered loop-body statements of the Python-shape context surface body
+(`start_n=multiple_of`, `off_k`/`k` masked load, `qk=dot`, causal `mask`/`where`
+with the `-1e8` sentinel, online-softmax `m_ij`/`p`/`l_ij`/`alpha`/`l_i`/`acc`
+update, `off_v`/`v` masked load, `p` cast (noop), `acc=dot(p,v)+acc`,
+`m_i=m_ij`). Transcribed; checked by `rfl` in `ctxBody_split`. -/
+noncomputable def ctxLoopBody (Q K V : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    Stmt.assign .nat [128, 128] "off_k"
+      (Op.add .nat Broadcast.nil.consR.consL
+        (Op.add .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat 8388608))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.constNat 128)))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat 262144)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [128, 128] "k"
+      (Op.load .real (MemAccess.region K (Op.ref .nat [128, 128] "off_k"))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "block_end_loc")))
+          ((Op.const (0.0 : ℝ)).broadcast [128, 128]))),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.dot (batch := []) (Op.ref .real [128, 128] "q") (Op.ref .real [128, 128] "k")),
+    Stmt.assign .bool [128, 128] "mask"
+      (Op.ge .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+          (Op.ref .nat [] "prompt_cache_len"))
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))),
+    Stmt.assign .real [128, 128] "qk"
+      ((Op.ref .bool [128, 128] "mask").where
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 128] "qk") (Op.const (sm_scale_python : ℝ)))
+        ((Op.sub .real Broadcast.nil (Op.const (0.0 : ℝ)) (Op.const (10e7 : ℝ))).broadcast [128, 128])),
+    Stmt.assign .real [128] "m_ij"
+      ((Op.gt .real Broadcast.nil.consSame (Op.ref .real [128] "m_i")
+            (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "qk"))).where
+        (Op.ref .real [128] "m_i") (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "qk"))),
+    Stmt.assign .real [128, 128] "qk"
+      (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "m_ij"))),
+    Stmt.assign .real [128, 128] "p" (Op.ref .real [128, 128] "qk").exp2,
+    Stmt.assign .real [128] "l_ij" (Op.reduceSum ⟨1, by simp⟩ Bool.false (Op.ref .real [128, 128] "p")),
+    Stmt.assign .real [128] "alpha"
+      (Op.sub .real Broadcast.nil.consSame (Op.ref .real [128] "m_i") (Op.ref .real [128] "m_ij")).exp2,
+    Stmt.assign .real [128] "l_i"
+      (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [128] "l_i") (Op.ref .real [128] "alpha"))
+        (Op.ref .real [128] "l_ij")),
+    Stmt.assign .real [128, 128] "acc"
+      (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "alpha"))),
+    Stmt.assign .nat [128, 128] "off_v"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat 8388608))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.constNat 128)))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat 262144)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [128, 128] "v"
+      (Op.load .real (MemAccess.region V (Op.ref .nat [128, 128] "off_v"))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "block_end_loc")))
+          ((Op.const (0.0 : ℝ)).broadcast [128, 128]))),
+    Stmt.assign .real [128, 128] "p" (Op.ref .real [128, 128] "p"),
+    Stmt.assign .real [128, 128] "acc"
+      (Op.add .real Broadcast.nil.consSame.consSame
+        (Op.dot (batch := []) (Op.ref .real [128, 128] "p") (Op.ref .real [128, 128] "v"))
+        (Op.ref .real [128, 128] "acc")),
+    Stmt.assign .real [128] "m_i" (Op.ref .real [128] "m_ij") ]
+
+/-- The 4 lowered post-loop statements (`acc /= l_i[:, None]`, `off_o`,
+`out_ptrs = Out + off_o`, masked `store`). Transcribed; checked by `rfl`. -/
+def ctxPostLoop (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .real [128, 128] "acc"
+      (Op.div .real Broadcast.nil.consR.consSame (Op.ref .real [128, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "l_i"))),
+    Stmt.assign .nat [128, 128] "off_o"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")))
+            (Op.constNat 2048))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .ptr [128, 128] "out_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [128, 128] "off_o")),
+    Stmt.store .real [128, 128] (MemAccess.ptr (Op.ref .ptr [128, 128] "out_ptrs"))
+      (Op.ref .real [128, 128] "acc")
+      (MaskOpt.mask
+        (Op.remap [128, 128] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len")))) ]
+
+/-- **Body decomposition.** The compiled Python-shape context body splits as
+`ctxPreLoop ++ (forRangeDyn start_n 0 (block_mask·block_end_loc) 128 ctxLoopBody
+:: ctxPostLoop)`. Pure `List` identity (`rfl`), independent of any transcription:
+the loop driver `forRangeDyn_inv` applies with `ctxLoopBody`/`ctxPostLoop` supplied
+at the call site. -/
+theorem ctxBody_split (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen b_prompt_cache_len : Region .nat) :
+    (context_attn_fwd_kernel_int8kv_surface Q K V (sm_scale_python : ℝ) Out
+        B_Start_Loc B_Seqlen b_prompt_cache_len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 128 128).toAlgKernel.body
+      = ctxPreLoop Q B_Start_Loc B_Seqlen b_prompt_cache_len
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask") (Op.ref .nat [] "block_end_loc"))
+              (Op.constNat 128) (ctxLoopBody Q K V)
+            :: ctxPostLoop Out) := by
+  rfl
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
