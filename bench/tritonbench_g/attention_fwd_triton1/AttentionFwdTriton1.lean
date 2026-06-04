@@ -1774,4 +1774,103 @@ theorem aft1_bh_succ_eq (s sin' : BlockState) (K V : RegionName) (c : Nat)
   simp only [aft1BhTile]
   rw [aft1RecState_succ]
 
+/-- An `ifThenElse` with a `false` constexpr cond runs the else-branch. -/
+theorem aft1_ifThenElse_false_else (thenB elseB : List Stmt) (X : BlockState) :
+    stepStmt (Stmt.ifThenElse (Op.constBool Bool.false) thenB elseB) X
+      = stepStmts elseB X := by
+  simp [stepStmt, evalOp]
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8000 in
+/-- **Full loop-body register step (STORE=false, IFCOND=false).** From a carry
+state `sin` (i_bh=pids0, i=c, b_h = aft1BhTile c) the body up to (excluding) the
+final `p_o` store reaches `s2` whose `b_o` register is the genuine chunk output
+`aft1BoTile`, `b_h` is the advanced carry `aft1BhTile (c+1)`, memory is preserved,
+and `p_o` points at chunk `c`'s output block. -/
+theorem aft1_loopBody_regs_ff
+    (Q K V H O : RegionName) (s sin : BlockState) (c : Nat)
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0)))
+    (hi : sin.regs .nat [] "i" = some (Tile.scalar c))
+    (hbh : sin.regs .real [128, 128] "b_h" = some (aft1BhTile s K V c)) :
+    ∃ s2, stepStmts ((aft1LoopBody Q K V H O Bool.false Bool.false).take 13) sin = some s2
+      ∧ (∀ rg off, s2.readMem rg off = s.readMem rg off)
+      ∧ s2.regs .blockPtr [32, 128] "p_o" = some
+          (⟨fun _ => BlockPtr.mk O (s.pids 0 * 131072) [1024, 128] [32, 128] [128, 1]
+            [c * 32, 0]⟩ : Tile .blockPtr [32, 128])
+      ∧ s2.regs .real [32, 128] "b_o" = some (aft1BoTile s Q K V c)
+      ∧ s2.regs .real [128, 128] "b_h" = some (aft1BhTile s K V (c + 1)) := by
+  unfold aft1LoopBody
+  simp only [List.take_succ_cons, List.take_zero]
+  -- p_q, p_k, p_v, p_h, p_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval Q sin _ _ _ [1024, 128] [32, 128] [128, 1]
+      (s.pids 0 * 131072) (c * 32) 0
+      (aft1_mulConst_eval sin "i_bh" (s.pids 0) 131072 hibh)
+      (aft1_mulConst_eval sin "i" c 32 hi) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval K _ _ _ _ [128, 1024] [128, 32] [1, 128]
+      (s.pids 0 * 131072) 0 (c * 32)
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) 131072 (by simp [hibh])) (by simp)
+      (aft1_mulConst_eval _ "i" c 32 (by simp [hi]))))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval V _ _ _ _ [1024, 128] [32, 128] [128, 1]
+      (s.pids 0 * 131072) (c * 32) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) 131072 (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c 32 (by simp [hi])) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval H _ _ _ _ [32 * 128, 128] [128, 128] [128, 1]
+      (s.pids 0 * 524288) (c * 128) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) 524288 (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c 128 (by simp [hi])) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval O _ _ _ _ [1024, 128] [32, 128] [128, 1]
+      (s.pids 0 * 131072) (c * 32) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) 131072 (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c 32 (by simp [hi])) (by simp)))]
+  rw [stepStmts.cons_some (aft1_ifThen_false_noop _ _)]
+  -- b_q raw load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bp_2d_ref Q _ "p_q" (s.pids 0 * 131072) 1024 128 32 128 128 1
+      (c * 32) 0 (by simp)))]
+  -- b_q *= scale → aft1BqTile
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [32, 128] "b_q")
+        (Op.const (√128)⁻¹)) _ = some (aft1BqTile s Q c) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, BlockState.setReg_same, evalOp_const, Option.bind_eq_bind,
+        Option.bind_some]
+      refine congrArg some ?_
+      ext idx; obtain ⟨t, e, u⟩ := idx
+      simp only [Tile.bop, Broadcast.scalarR, Broadcast.leftIndex, Broadcast.rightIndex,
+        Tile.scalar, aft1BqTile, aft1QCell, NumericDType.mul, WithBot.realMul,
+        Option.map₂, Option.bind, Option.map, BlockState.setReg_readMem, hmem,
+        Nat.add_zero, Nat.zero_add, Nat.mul_one]))]
+  -- b_k, b_v loads
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bk_eq s _ K c (by intro rg off; simp [hmem]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bv_eq s _ V c (by intro rg off; simp [hmem]) (by simp)))]
+  -- b_s = dot(b_q, b_k)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_bs_eq s _ Q K c (by simp) (by simp)))]
+  -- b_o = dot(b_s, b_v)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_bo_local_eq s _ Q K V c (by simp) (by simp)))]
+  -- IFCOND gate (false): elseBody [b_o += dot(b_q,b_h); b_h += dot(b_k,b_v)]
+  rw [stepStmts.cons_some (st := Stmt.ifThenElse (Op.constBool Bool.false) _ _)
+    (show stepStmt (Stmt.ifThenElse (Op.constBool Bool.false) _ _) _ = some _ from by
+      rw [aft1_ifThenElse_false_else]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft1_bo_full_eq s _ Q K V c (by simp) (by simp) (by simp [hbh])))]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft1_bh_succ_eq s _ K V c (by simp [hbh]) (by simp) (by simp)))]
+      exact stepStmts.nil)]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_⟩
+  · intro rg off; simp [hmem]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_ne_name]
+  · simp [BlockState.setReg_same]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
