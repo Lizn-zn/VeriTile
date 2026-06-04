@@ -2473,4 +2473,86 @@ theorem flash_preLoop_eval
       BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq,
       and_self, and_true, true_and]
 
+/-- The 15 lowered loop-body statements of the Python-shape flash-attn body
+(`IS_CAUSAL` parameter only affects the `ifThen` mask, stmt L3). -/
+def flashLoopBody (IS_CAUSAL : Bool) : List Stmt :=
+  [ Stmt.assign .real [64, 64] "k"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") []) MaskOpt.none),
+    Stmt.assign .real [64, 64] "v"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") []) MaskOpt.none),
+    Stmt.assign .real [128, 64] "qk" (Op.full [128, 64] (Op.const 0)),
+    Stmt.ifThen (Op.constBool IS_CAUSAL)
+      [ Stmt.assign .real [128, 64] "qk"
+          (Op.where
+            (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "off_m"))
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "off_n"))))
+            (Op.ref .real [128, 64] "qk") (Op.broadcast Op.negInf [128, 64])) ],
+    Stmt.assign .real [128, 64] "qk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [128, 64] "qk")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real (Op.ref .fp16 [128, 64] "q"))
+          (Op.ref .real [64, 64] "k"))),
+    Stmt.assign .real [128] "max_new"
+      (Op.where
+        (Op.gt .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "max")
+          (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "qk")))
+        (Op.ref .real [128] "max")
+        (Op.reduceMax (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "qk"))),
+    Stmt.assign .real [128] "alpha"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "max")
+        (Op.ref .real [128] "max_new"))),
+    Stmt.assign .real [128, 64] "nume"
+      (Op.exp2 (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "max_new")))),
+    Stmt.assign .real [128] "out_scale"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [128] "denom") (Op.const 0))
+        (Op.ref .real [128] "alpha")),
+    Stmt.assign .real [128, 64] "out_buffer"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 64] "out_buffer")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "out_scale"))),
+    Stmt.assign .real [128, 64] "out_buffer"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [128, 64] "out_buffer")
+        (Op.dot (batch := []) (Op.castFloat .fp16 .real
+          (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "nume"))) (Op.ref .real [64, 64] "v"))),
+    Stmt.assign .real [128] "denom"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.mul .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "denom")
+          (Op.ref .real [128] "alpha"))
+        (Op.reduceSum (⟨1, by simp⟩ : Fin [128, 64].length) Bool.false (Op.ref .real [128, 64] "nume"))),
+    Stmt.assign .real [128] "max" (Op.ref .real [128] "max_new"),
+    Stmt.assign .blockPtr [64, 64] "K_block_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "K_block_ptr") [0, 64]),
+    Stmt.assign .blockPtr [64, 64] "V_block_ptr"
+      (Op.advanceBlockPtr (Op.ref .blockPtr [64, 64] "V_block_ptr") [64, 0]) ]
+
+/-- The lowered body `drop 16` is `forRangeDyn … flashLoopBody :: postLoop`. -/
+theorem flashLoopBody_check (Q K V L O : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool) :
+    (flash_attn_fwd_kernel_surface Q K V L O sm_scale
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body.drop 16
+      = Stmt.forRangeDyn "start_n" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+          (Op.constNat 64) (flashLoopBody IS_CAUSAL)
+        :: (flash_attn_fwd_kernel_surface Q K V L O sm_scale
+            16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+            2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body.drop 17 := by
+  cases IS_CAUSAL <;> rfl
+
+/-! ### attn_step — one loop iteration advances the invariant
+
+The loop body, entered with `start_n = i` (= block `c·BLOCK_N`, `i = c·64`),
+streams block `c`'s keys and advances the ⊥-seeded `flashStateBot`/`flashRunningMax`
+running state by one block. The kernel's explicit per-block tile arithmetic
+(`max_new = max(max, blockMax)`, `denom' = denom·α + Σnume`,
+`out_buffer' = out_buffer·α + dot(nume, v)`, with `α = exp2(max − max_new)`,
+`nume = exp2(qk − max_new)`) realizes exactly the ⊥-aware block update — proved by
+expanding both sides onto the banked closed forms
+`flashStateBot_{snd_fst,snd_snd}` (`= κ(M)·Σ pow2 score [· v]`) and the
+window-split / block bridges (`flashKeysUpto_succ`, `flashRunningMax_succ`,
+`flashBlock_blockMax`, `flashBlock_map_sum`). -/
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
