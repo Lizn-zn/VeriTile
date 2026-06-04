@@ -32,9 +32,9 @@ per-program statement covers every program of the grid.
 ```
 attention_kernel_python_test_shape_output_summary            ← TOP THEOREM
   ├─ attention_kernel_fwd_kernel_aligned_surface_toAlgorithm_supported   surface lowers to algorithm layer
-  └─ attention_kernel_fwd_kernel_aligned_python_test_shape_compute_correct
-       └─ attention_kernel_fwd_kernel_aligned_surface_compute_correct
-            └─ (full surface produces producedOutputValue at the Out store)
+  └─ ClosedForm.attention_kernel_genuine_output_compute_correct
+       └─ ClosedForm.attention_kernel_exec    ← whole-kernel exec assembly (preLoop + forRangeDyn + postLoop)
+            └─ (every Out lane = genuine closed form `attentionKernelSpec`)
 
 attention_kernel_final_store_python_test_shape_compute_correct
   └─ attention_kernel_final_store_slice_compute_correct       ← ComputeCorrect over the final Out store
@@ -48,9 +48,12 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); the `OUT_DTYPE`
 / `num_warps`/`num_stages` are not modeled. The output summary is stated at the
 Python test shape (`B=2, H=4, N_CTX=128, D_MODEL=128, BLOCK_M=BLOCK_N=64`,
 `sm_scale=0.1`, `P_SEQ=0`, `fp16`, contiguous per-head strides `(16384,128,1)`).
-The surface theorem captures the full single-program bias-augmented
-online-softmax body via `producedOutputValue`; the `final_store` lemmas isolate
-the final `acc / l_i` store (`normalizedAccValue`). This is a single-program
+The top summary asserts the **genuine** closed form: every observable `Out` lane
+equals the base-2 streaming-softmax `attentionKernelSpec` (= `attnGenScore fscore
+vFlat`) of the loaded Q/K/V tiles under the kernel's actual bias-augmented per-key
+score `fscore` — discharged whole-kernel by `ClosedForm.attention_kernel_exec`,
+NOT a self-referential readback. The `final_store` lemmas isolate the final
+`acc / l_i` store (`normalizedAccValue`). This is a single-program
 scope (the store is unmasked at this shape since `N_CTX` is a multiple of
 `BLOCK_M`); cross-program composition into the full output is the trusted host
 boundary.
@@ -231,25 +234,6 @@ def surfaceOutOffset
   s.pids 1 * stride_qh +
     mIndex s BLOCK_M idx.1 * stride_om + kIndex idx * stride_on
 
-noncomputable def producedOutputValue
-    (s : BlockState) (Q K V B0 Out : RegionName) (sm_scale : ℝ)
-    (stride_qh stride_qm stride_qk
-      stride_kh stride_kn stride_kk
-      stride_vh stride_vk stride_vn
-      stride_oh stride_om stride_on
-      stride_b0h stride_b0m
-      Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
-      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
-    (out_dtype : FloatDType)
-    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : ℝ :=
-  match exec (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
-      sm_scale stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk
-      stride_vh stride_vk stride_vn stride_oh stride_om stride_on stride_b0h
-      stride_b0m Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL
-      BLOCK_M BLOCK_N out_dtype) s with
-  | some s' => s'.readMem Out (surfaceOutOffset s stride_qh stride_om stride_on BLOCK_M idx)
-  | none => 0.0
-
 /-- Algorithm-layer correctness for the final output store. -/
 theorem attention_kernel_final_store_slice_correct
     (Acc L Out : RegionName)
@@ -331,39 +315,6 @@ theorem attention_kernel_final_store_slice_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
-theorem attention_kernel_fwd_kernel_aligned_surface_compute_correct
-    (Q K V B0 Out : RegionName) (sm_scale : ℝ)
-    (stride_qh stride_qm stride_qk
-      stride_kh stride_kn stride_kk
-      stride_vh stride_vk stride_vn
-      stride_oh stride_om stride_on
-      stride_b0h stride_b0m
-      Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
-      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
-    (out_dtype : FloatDType) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
-        sm_scale stride_qh stride_qm stride_qk stride_kh stride_kn stride_kk
-        stride_vh stride_vk stride_vn stride_oh stride_om stride_on
-        stride_b0h stride_b0m Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL
-        BLOCK_DMODEL BLOCK_M BLOCK_N out_dtype)
-      (initialState := s)
-      (write := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        some (Out, surfaceOutOffset s stride_qh stride_om stride_on BLOCK_M idx))
-      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        producedOutputValue s Q K V B0 Out sm_scale stride_qh stride_qm
-          stride_qk stride_kh stride_kn stride_kk stride_vh stride_vk
-          stride_vn stride_oh stride_om stride_on stride_b0h stride_b0m
-          Z H N_CTX P_SEQ BIAS_LAST_SIZE B0_NUMEL BLOCK_DMODEL BLOCK_M
-          BLOCK_N out_dtype idx) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [attention_kernel_fwd_kernel_aligned_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  simp [producedOutputValue, hExec]
-
 /-! ## Python test-shape wrapper
 
 `attention_kernel.py`'s checked test uses `B = 2`, `H = 4`, `N_CTX = 128`,
@@ -390,64 +341,13 @@ theorem attention_kernel_final_store_python_test_shape_compute_correct
   subst kb
   rfl
 
-theorem attention_kernel_fwd_kernel_aligned_python_test_shape_compute_correct
-    (Q K V B0 Out : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
-        0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
-        16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16)
-      (initialState := s)
-      (write := fun idx : TileIndex [64, 128] =>
-        some (Out, surfaceOutOffset s 16384 128 1 64 idx))
-      (expected := fun idx : TileIndex [64, 128] =>
-        producedOutputValue s Q K V B0 Out 0.1 16384 128 1 16384 128 1
-          16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64
-          64 FloatDType.fp16 idx) := by
-  exact attention_kernel_fwd_kernel_aligned_surface_compute_correct
-    Q K V B0 Out 0.1 16384 128 1 16384 128 1 16384 128 1
-    16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-    FloatDType.fp16 s
-
-/-- Public Python test-shape summary for `attention_kernel.py`.
-
-This end-to-end summary records the faithful aligned attention surface for the
-checked relative-position-bias launch and ties the Q/K/V streaming-softmax
-producer path directly to the observable final `Out` writeback. -/
-theorem attention_kernel_python_test_shape_output_summary
-    (Q K V B0 Out : RegionName) (s : BlockState) :
-    (∃ alg, (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
-      0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
-      16384 128 2 4 128 0 64 128 128 64 64
-      FloatDType.fp16).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes
-      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
-        0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
-        16384 128 2 4 128 0 64 128 128 64 64
-        FloatDType.fp16)
-      (initialState := s)
-      (write := fun idx : TileIndex [64, 128] =>
-        some (Out, surfaceOutOffset s 16384 128 1 64 idx))
-      (expected := fun idx : TileIndex [64, 128] =>
-        producedOutputValue s Q K V B0 Out 0.1 16384 128 1 16384 128 1
-          16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64
-          64 FloatDType.fp16 idx) := by
-  constructor
-  · exact attention_kernel_fwd_kernel_aligned_surface_toAlgorithm_supported
-      Q K V B0 Out 0.1 16384 128 1 16384 128 1 16384 128 1
-      16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
-      FloatDType.fp16
-  · exact attention_kernel_fwd_kernel_aligned_python_test_shape_compute_correct
-      Q K V B0 Out s
-
 /-! ## Genuine closed-form correctness — reusable foundation
 
-The theorems above state correctness against `producedOutputValue`, which is the
-kernel's *own executed* `Out` readback (a self-referential summary). The section
-below builds the foundation for replacing that with a **genuine** closed-form
-claim: the kernel computes the base-2 streaming softmax `attnGenScore fscore V`
-of the loaded Q/K/V tiles, with the kernel's actual per-key score `fscore`
-(scaled dot plus the additive relative-position bias `(b0 + b1)·log2 e`).
+The section below builds the **genuine** closed-form claim that the public
+summary asserts: the kernel computes the base-2 streaming softmax
+`attnGenScore fscore V` of the loaded Q/K/V tiles, with the kernel's actual
+per-key score `fscore` (scaled dot plus the additive relative-position bias
+`(b0 + b1)·log2 e`) — not the kernel's own executed `Out` readback.
 
 The pure-math heart (`VeriTile.Triton.attnGenScore`, `closed_form_g`,
 `attnGenScore_eq_streaming` in `Math/Attention.lean`) and the block-pointer
@@ -2317,6 +2217,42 @@ theorem attention_kernel_genuine_output_compute_correct
   exact hO idx
 
 end ClosedForm
+
+/-- Public Python test-shape summary for `attention_kernel.py`.
+
+This end-to-end summary records the faithful aligned attention surface for the
+checked relative-position-bias launch and asserts that every observable `Out`
+lane holds the **genuine** closed-form base-2 streaming-softmax attention
+`attentionKernelSpec` (= `attnGenScore fscore vFlat` of the loaded Q/K/V tiles
+under the kernel's actual bias-augmented per-key score `fscore`) — NOT the
+kernel's own executed readback. Proven directly from the sorry-free genuine
+closed-form theorem `ClosedForm.attention_kernel_genuine_output_compute_correct`. -/
+theorem attention_kernel_python_test_shape_output_summary
+    (Q K V B0 Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (∃ alg, (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
+      0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
+      16384 128 2 4 128 0 64 128 128 64 64
+      FloatDType.fp16).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes
+      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
+        0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
+        16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 128] =>
+        some (Out, surfaceOutOffset s 16384 128 1 64 idx))
+      (expected := fun idx : TileIndex [64, 128] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+          (some (ClosedForm.attentionKernelSpec s Q K V B0 0.1
+            (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
+            64 64 128 (64 * 2) 64 128 (s.pids 0) idx)))) := by
+  refine ⟨?_, ?_⟩
+  · exact attention_kernel_fwd_kernel_aligned_surface_toAlgorithm_supported
+      Q K V B0 Out 0.1 16384 128 1 16384 128 1 16384 128 1
+      16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+      FloatDType.fp16
+  · exact ClosedForm.attention_kernel_genuine_output_compute_correct
+      Q K V B0 Out s hundef
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
 
