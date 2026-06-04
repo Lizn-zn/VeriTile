@@ -1965,4 +1965,65 @@ theorem aft1_loopBody_iter_ff
   · intro off; rw [aft1_foldl_store_readMem_ne _ O V _ _ s2 off hOV.symm]; exact hmem2 V off
   · intro off; rw [aft1_foldl_store_readMem_ne _ O H _ _ s2 off hOH.symm]; exact hmem2 H off
 
+/-- The carry-invariant: after `n` chunks the loop state has the advanced
+recurrent state in `b_h`, with `pids`/`i_bh` and the `Q`/`K`/`V`/`H` reads fixed
+to the loop-entry state `s`. -/
+def aft1Inv (Q K V H O : RegionName) (s : BlockState) (n : Nat) (st : BlockState) : Prop :=
+  st.pids = s.pids
+  ∧ st.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0))
+  ∧ st.regs .real [128, 128] "b_h" = some (aft1BhTile s K V n)
+  ∧ (∀ off, st.readMem Q off = s.readMem Q off)
+  ∧ (∀ off, st.readMem K off = s.readMem K off)
+  ∧ (∀ off, st.readMem V off = s.readMem V off)
+  ∧ (∀ off, st.readMem H off = s.readMem H off)
+
+/-- `aft1BhTile` depends only on `K`/`V` reads and `pids 0`: equal bases give
+equal carry tiles. -/
+theorem aft1BhTile_congr (s s' : BlockState) (K V : RegionName) (n : Nat)
+    (hp : s'.pids 0 = s.pids 0)
+    (hK : ∀ off, s'.readMem K off = s.readMem K off)
+    (hV : ∀ off, s'.readMem V off = s.readMem V off) :
+    aft1BhTile s' K V n = aft1BhTile s K V n := by
+  unfold aft1BhTile
+  refine congrArg _ ?_
+  funext idx
+  simp only [aft1RecState, aft1KCell, aft1VCell, hp, hK, hV]
+
+set_option maxHeartbeats 2000000 in
+/-- **Carry-invariant step.** One `forRangeDyn` iteration preserves `aft1Inv`,
+advancing the chunk counter by one. The iteration runs relative to the running
+state `st` itself; the carry/output bridge back to the loop-entry base `s` uses
+that `st` preserves the `K`/`V` reads and `pids`. -/
+theorem aft1Inv_step (Q K V H O : RegionName) (s : BlockState)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H)
+    (n : Nat) (st : BlockState) (hP : aft1Inv Q K V H O s n st) :
+    ∃ st', stepStmts (aft1LoopBody Q K V H O Bool.false Bool.false)
+        (st.setReg "i" .nat [] (Tile.scalar n)) = some st'
+      ∧ aft1Inv Q K V H O s (n + 1) st' := by
+  obtain ⟨hpids, hibh, hbh, hQ, hK, hV, hHh⟩ := hP
+  set sin := st.setReg "i" .nat [] (Tile.scalar n) with hsin
+  have hmemSin : ∀ rg off, sin.readMem rg off = st.readMem rg off := by
+    intro rg off; rw [hsin]; simp [BlockState.setReg_readMem]
+  have hpidsSt0 : st.pids 0 = s.pids 0 := by rw [hpids]
+  -- carry of `st` over `s` = carry over `st`
+  have hbhSt : aft1BhTile s K V n = aft1BhTile st K V n :=
+    aft1BhTile_congr st s K V n hpidsSt0.symm (fun off => (hK off).symm) (fun off => (hV off).symm)
+  have hbhSin : sin.regs .real [128, 128] "b_h" = some (aft1BhTile st K V n) := by
+    rw [hsin]; rw [← hbhSt]; simpa using hbh
+  have hibhSin : sin.regs .nat [] "i_bh" = some (Tile.scalar (st.pids 0)) := by
+    rw [hsin, hpids]; simpa [hpids] using hibh
+  have hiSin : sin.regs .nat [] "i" = some (Tile.scalar n) := by rw [hsin]; simp
+  -- step one iteration relative to base `st`
+  obtain ⟨st', hstep, hpids', hibh', hbh', hQ', hK', hV', hH'⟩ :=
+    aft1_loopBody_iter_ff Q K V H O st sin n hOQ hOK hOV hOH hmemSin hibhSin hiSin hbhSin
+  refine ⟨st', hstep, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpids', hsin]; simpa using hpids
+  · rw [hibh', hpids]
+  · -- b_h' = aft1BhTile st K V (n+1) = aft1BhTile s K V (n+1)
+    rw [hbh', aft1BhTile_congr s st K V (n + 1) hpidsSt0 (fun off => hK off) (fun off => hV off)]
+  · intro off; rw [hQ' off]; exact hQ off
+  · intro off; rw [hK' off]; exact hK off
+  · intro off; rw [hV' off]; exact hV off
+  · intro off; rw [hH' off]; exact hHh off
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
