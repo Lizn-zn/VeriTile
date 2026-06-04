@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `decay_cumsum` — strict per-kernel correctness
@@ -1896,6 +1897,57 @@ theorem bwdEval_assign_load_maskOther (name : RegName) (region : Region .real)
                 some (s.readMem region (offsT.data i))
               else otherT.data i⟩) := by
   simp [stepStmt, evalOp, hoff, hmask, hother]
+
+/-- **Pointer masked-load assign recipe (`tl.load(p_x, mask=mask, other=0)`).**
+The backward body uses *pointer*-based loads (`MemAccess.ptr (Op.ref .ptr [BK]
+"p_x")`), not region loads: each lane reads memory at the per-lane pointer
+`(ptrT.data i)` = `(region, address)`. Given the pointer-tile / mask / other
+evaluations, the masked real load reduces to a single `setReg`. -/
+theorem bwdEval_assign_load_ptr_maskOther (name pname : RegName)
+    (mask : Op .bool [BK]) (other : Op .real [BK])
+    (ptrT : Tile .ptr [BK]) (maskT : Tile .bool [BK]) (otherT : Tile .real [BK])
+    (hptr : s.regs .ptr [BK] pname = some ptrT)
+    (hmask : evalOp mask s = some maskT)
+    (hother : evalOp other s = some otherT) :
+    stepStmt (.assign .real [BK] name
+        (.load .real (MemAccess.ptr (Op.ref .ptr [BK] pname))
+          (MaskOpt.maskOther mask other))) s
+      = some (s.setReg name .real [BK]
+          ⟨fun i => if maskT.data i then
+                some (s.readMem (ptrT.data i).1 (ptrT.data i).2)
+              else otherT.data i⟩) := by
+  simp [stepStmt, evalOp, hptr, hmask, hother]
+
+/-- **Pointer masked-store recipe (`tl.store(p_out, val, mask=mask)`).** Each of
+the three per-iteration stores (`p_dq_inter`, `p_dk_inter`, `p_dg`) is a
+pointer-based masked store over `[BK]` lanes, reducing to the `writeMemTyped`
+masked scatter fold along the per-lane pointers. -/
+theorem bwdEval_store_ptr_masked (pname : RegName)
+    (val : Op .real [BK]) (mask : Op .bool [BK])
+    (ptrT : Tile .ptr [BK]) (valT : Tile .real [BK]) (maskT : Tile .bool [BK])
+    (hptr : s.regs .ptr [BK] pname = some ptrT)
+    (hval : evalOp val s = some valT)
+    (hmask : evalOp mask s = some maskT) :
+    stepStmt (.store .real [BK] (MemAccess.ptr (Op.ref .ptr [BK] pname))
+        val (MaskOpt.mask mask)) s
+      = some ((TileShape.allIndices [BK]).foldl
+          (fun acc i =>
+            if maskT.data i then
+              acc.writeMemTyped .real (ptrT.data i).1 (ptrT.data i).2 (valT.data i)
+            else acc) s) := by
+  simp [stepStmt, evalOp, hptr, hval, hmask]
+
+/-- **Pointer-decrement recipe (`p_x -= DK`).** The per-iteration pointer
+decrements (`Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] pname) (Op.constNat
+d)`) reduce to a `setReg` of the per-lane address-decremented pointer tile. -/
+theorem bwdEval_assign_ptrSub (name pname : RegName) (d : Nat)
+    (ptrT : Tile .ptr [BK])
+    (hptr : s.regs .ptr [BK] pname = some ptrT) :
+    stepStmt (.assign .ptr [BK] name
+        (Op.ptrSub Broadcast.scalarR (Op.ref .ptr [BK] pname) (Op.constNat d))) s
+      = some (s.setReg name .ptr [BK]
+          ⟨fun i => ((ptrT.data i).1, (ptrT.data i).2 - d)⟩) := by
+  simp [stepStmt, evalOp, hptr, Tile.ptrSub]
 
 /-- **`last_g` conditional-capture condition recipe (`t == BT-1`).** The
 `ifThen (Op.eq t (BT-1))` guard's nat-eq condition reduces to the `Tile.cop`
