@@ -1568,6 +1568,137 @@ theorem mistral_loop_step
           stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num sliding_window
           (k + j) idx.1.val) BLOCK_N]
 
+/-- The 4-statement postlude of `token_attn_mistral_surface`: the `.to(Out.dtype)`
+cast (identity), `off_o`, `out_ptrs`, and the unmasked `[BLOCK_DMODEL]` store. -/
+def mistralPostlude (Out : RegionName) (stride_obs stride_oh stride_od BLOCK_DMODEL : Nat) :
+    List Stmt :=
+  [ Stmt.assign .real [BLOCK_DMODEL] "acc" (Op.ref .real [BLOCK_DMODEL] "acc"),
+    Stmt.assign .nat [BLOCK_DMODEL] "off_o"
+      (Op.add .nat Broadcast.scalarL
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat stride_obs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_oh)))
+        (Op.mul .nat Broadcast.scalarR (Op.ref .nat [BLOCK_DMODEL] "offs_d") (Op.constNat stride_od))),
+    Stmt.assign .ptr [BLOCK_DMODEL] "out_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLOCK_DMODEL] "off_o")),
+    Stmt.store .real [BLOCK_DMODEL] (MemAccess.ptr (Op.ref .ptr [BLOCK_DMODEL] "out_ptrs"))
+      (Op.ref .real [BLOCK_DMODEL] "acc") MaskOpt.none ]
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **Post-loop + store bridge**: after the window loop (invariant at `final ≥
+attSeqLen`, so `acc = partialAcc final`), the cast (identity), `off_o`/`out_ptrs`
+seeding, and the unmasked store write back `tokenAttnMistralClosedForm` to every
+`Out[outOffset … i]` (via `mistral_store_eval` + `partialAcc_eq_PVValue`). -/
+theorem mistral_postLoop
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen : RegionName)
+    (s0 : BlockState)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N : Nat)
+    (final : Nat) (hfinal : attSeqLen s0 B_Att_Seqlen ≤ final)
+    (st : BlockState)
+    (hinv : mistralInvariant Prob V Out Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+        B_Att_Seqlen s0 stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+        sliding_window BLOCK_DMODEL BLOCK_N final st)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s0 stride_obs stride_oh stride_od i)) :
+    ∃ sfin, stepStmts (mistralPostlude Out stride_obs stride_oh stride_od BLOCK_DMODEL) st = some sfin
+      ∧ ∀ i : Fin BLOCK_DMODEL,
+          sfin.readMem Out (outOffset s0 stride_obs stride_oh stride_od i)
+            = tokenAttnMistralClosedForm s0 Prob V Req_to_tokens B_req_idx B_Att_Start_Loc
+                B_Seqlen B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+                stride_pbs stride_vbs stride_vh stride_vd kv_group_num sliding_window
+                BLOCK_DMODEL i := by
+  simp only [mistralInvariant] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hckv, hn, hd, hsl, hbsl, hsi, hvoff, hpoff, hvoffs, hacc⟩ := hinv
+  set accFn : Fin BLOCK_DMODEL → ℝ := fun e =>
+    partialAcc s0 Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen
+      stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs stride_vbs stride_vh
+      stride_vd kv_group_num sliding_window final e.val with haccFn
+  set offFn : TileIndex [BLOCK_DMODEL] → Nat :=
+    fun i => outOffset s0 stride_obs stride_oh stride_od i.1 with hoffFn
+  unfold mistralPostlude
+  -- statement 1: acc = (acc).to(...) — identity ref, re-sets acc to itself
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [BLOCK_DMODEL] "acc") st =
+        some (⟨fun idx : TileIndex [BLOCK_DMODEL] => some (accFn idx.1)⟩ : Tile .real [BLOCK_DMODEL])
+      from by rw [evalOp_ref]; exact hacc))]
+  -- statement 2: off_o = cur_batch*obs + cur_head*oh + offs_d*od = outOffset
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat stride_obs))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_oh)))
+          (Op.mul .nat Broadcast.scalarR (Op.ref .nat [BLOCK_DMODEL] "offs_d") (Op.constNat stride_od))) _
+        = some (Tile.vec (fun e : Fin BLOCK_DMODEL => offFn (e, PUnit.unit))) from by
+      simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, BlockState.setReg_ne_name,
+        ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq, hcb, hch, hd,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_
+      ext idx
+      simp only [Tile.bop, Tile.vec, Tile.scalar, NumericDType.add, NumericDType.mul,
+        Broadcast.leftIndex, Broadcast.rightIndex, hoffFn, outOffset, dIndex]
+      try ring))]
+  -- statement 3: out_ptrs = Out + off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLOCK_DMODEL] "off_o")) _
+        = some (⟨fun i : TileIndex [BLOCK_DMODEL] => ((Out : RegionName), offFn i)⟩ : Tile .ptr [BLOCK_DMODEL])
+      from by
+      simp only [evalOp, evalOp_ref_setReg_same, Option.bind]
+      refine congrArg some ?_
+      ext idx
+      · simp only [Tile.ptrAdd, Tile.bop, Tile.vec, Tile.scalar, Broadcast.leftIndex,
+          Broadcast.rightIndex, Region.cast_id]
+      · simp only [Tile.ptrAdd, Tile.bop, Tile.vec, Tile.scalar, Broadcast.leftIndex,
+          Broadcast.rightIndex, Nat.zero_add]))]
+  -- statement 4: unmasked store readback = accFn = partialAcc final = closed form
+  -- the store executes to some sfin (mistral_store_eval gives the readback);
+  -- obtain the post-store state explicitly.
+  set stStore : BlockState :=
+    ((((st.setReg "acc" .real [BLOCK_DMODEL]
+        (⟨fun idx : TileIndex [BLOCK_DMODEL] => some (accFn idx.1)⟩ : Tile .real [BLOCK_DMODEL])).setReg
+          "off_o" .nat [BLOCK_DMODEL] (Tile.vec (fun e : Fin BLOCK_DMODEL => offFn (e, PUnit.unit)))).setReg
+        "out_ptrs" .ptr [BLOCK_DMODEL]
+          (⟨fun i : TileIndex [BLOCK_DMODEL] => ((Out : RegionName), offFn i)⟩ : Tile .ptr [BLOCK_DMODEL])))
+    with hstStore
+  have hinj' : Function.Injective offFn := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have : outOffset s0 stride_obs stride_oh stride_od a = outOffset s0 stride_obs stride_oh stride_od b := by
+      simpa [hoffFn] using hab
+    obtain rfl := hOutInj this; rfl
+  have hout : stStore.regs .ptr [BLOCK_DMODEL] "out_ptrs" =
+      some (⟨fun i : TileIndex [BLOCK_DMODEL] => ((Out : RegionName), offFn i)⟩ : Tile .ptr [BLOCK_DMODEL]) := by
+    rw [hstStore]; simp
+  have haccStore : stStore.regs .real [BLOCK_DMODEL] "acc" =
+      some (⟨fun idx : TileIndex [BLOCK_DMODEL] => some (accFn idx.1)⟩ : Tile .real [BLOCK_DMODEL]) := by
+    rw [hstStore]
+    simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq,
+      BlockState.setReg_same]
+  -- the unmasked store leaves a definite final state
+  obtain ⟨sfin, hstep⟩ : ∃ sfin, stepStmt (Stmt.store .real [BLOCK_DMODEL]
+      (MemAccess.ptr (Op.ref .ptr [BLOCK_DMODEL] "out_ptrs"))
+      (Op.ref .real [BLOCK_DMODEL] "acc") MaskOpt.none) stStore = some sfin := by
+    simp only [stepStmt, evalOp_ref, hout, haccStore, Option.bind, Option.map]
+    exact ⟨_, rfl⟩
+  refine ⟨sfin, by rw [stepStmts.cons_some hstep, stepStmts.nil], ?_⟩
+  intro i
+  have hrb := mistral_store_eval stStore Out BLOCK_DMODEL offFn (fun i => accFn i.1) hout haccStore hinj'
+    (i, PUnit.unit)
+  rw [hstep] at hrb
+  simp only [Option.map_some] at hrb
+  have hval : sfin.readMem Out (offFn (i, PUnit.unit)) = accFn i := Option.some.inj hrb
+  rw [show outOffset s0 stride_obs stride_oh stride_od i = offFn (i, PUnit.unit) from rfl, hval]
+  -- accFn = partialAcc final = tokenAttnMistralClosedForm
+  rw [haccFn]
+  simp only
+  rw [partialAcc_eq_PVValue s0 Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+    B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs stride_vbs
+    stride_vh stride_vd kv_group_num sliding_window final i.val hfinal]
+  rfl
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
