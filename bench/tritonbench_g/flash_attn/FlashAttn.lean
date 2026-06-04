@@ -3029,4 +3029,46 @@ theorem flash_reduceMaxDrop_row (qk : Tile .real [128, 64])
   simp only [Finset.sup'_eq_sup]
   exact Finset.sup_congr rfl (fun jL _ => hqk jL)
 
+/-- **The `q·k` dot cell is the `flashKV` score.** With `q = cast_fp16(scale·qT)`
+loaded and the K block reading `kT` at global key `c·64 + jL`, the dot of the
+cast-back-to-real `q` against the loaded `k` at cell `(r, jL)` is
+`some (scale · Σ_e qT(r,e)·kT(c·64+jL, e))` — the `flashKV` score `.1`. -/
+theorem flash_dot_score_cell (s0 : BlockState) (Q K : RegionName) (scale : ℝ) (c : Nat)
+    (r : Fin 128) (jL : Fin 64) (hjL : c * 64 + jL.val < 128)
+    (qtile : Tile .fp16 [128, 64]) (ktile : Tile .real [64, 64])
+    (hq : qtile = ⟨fun idx : TileIndex [128, 64] =>
+        FloatDType.real.cast FloatDType.fp16 (some (scale * qTile s0 Q 8192 64 128 idx))⟩)
+    (hk : ∀ idx : TileIndex [64, 64],
+        ktile.data idx = some (s0.readMem K (s0.pids 1 * 8192 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64))) :
+    (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [128, 64]) ktile).data (r, jL, PUnit.unit)
+      = some (scale * Finset.univ.sum (fun e : Fin 64 =>
+          qTile s0 Q 8192 64 128 (r, e, PUnit.unit) * kTile s0 K 8192 64 128 (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit))) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·)
+          ((⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [128, 64]).data (r, e, PUnit.unit))
+          (ktile.data (e, jL, PUnit.unit))))
+      = @Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+        (fun e => (some (scale * qTile s0 Q 8192 64 128 (r, e, PUnit.unit)
+            * kTile s0 K 8192 64 128 (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by
+        simp only [hq, hk (e, jL, PUnit.unit), FloatDType.cast, FloatDType.real_ofWithBot,
+          FloatDType.toWithBot, FloatDType.real_toWithBot, Option.map₂]
+        rw [show kTile s0 K 8192 64 128 (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)
+              = s0.readMem K (s0.pids 1 * 8192 + (c * 64 + jL.val) * 64 + e.val) from by
+          simp only [kTile, flashBaseOffset]]
+        simp only [Option.bind, Option.map]
+        refine congrArg some ?_
+        rw [show e.val * 1 = e.val from by ring]
+        ring_nf)]
+  rw [show (@Finset.sum (Fin 64) (WithBot ℝ) _ Finset.univ
+        (fun e => (some (scale * qTile s0 Q 8192 64 128 (r, e, PUnit.unit)
+            * kTile s0 K 8192 64 128 (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)) : WithBot ℝ)))
+      = ((Finset.univ.sum (fun e : Fin 64 => scale * qTile s0 Q 8192 64 128 (r, e, PUnit.unit)
+          * kTile s0 K 8192 64 128 (⟨c * 64 + jL.val, hjL⟩, e, PUnit.unit)) : ℝ) : WithBot ℝ)
+      from (WithBot.coe_sum Finset.univ _).symm]
+  rw [Finset.mul_sum]
+  refine congrArg some ?_
+  exact Finset.sum_congr rfl (fun e _ => by ring)
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
