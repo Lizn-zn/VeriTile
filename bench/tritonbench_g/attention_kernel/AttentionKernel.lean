@@ -1599,6 +1599,40 @@ theorem attnLoopBody_steps (B0 : RegionName) (sin : BlockState) (SN : Nat)
   · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
   · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
 
+/-- The lowered statements 10–18 of the Python-shape prologue (after the
+deterministic `preLoop_prefix`): qk_scale, the Q load + scale + fp16 cast, the
+`lo`/`hi` constants, the bias arange/offset prep, and the `b1` region load. -/
+def attnPreLoopTail (B0 : RegionName) : List Stmt :=
+  [ Stmt.assign .real [] "qk_scale" (Op.mul .real Broadcast.nil (Op.const 0.1) (Op.const 1.44269504)),
+    Stmt.assign .real [64, 128] "q"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 128] "Q_block_ptr") []) .none),
+    Stmt.assign .fp16 [64, 128] "q"
+      (Op.castFloat .real .fp16 (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "q") (Op.ref .real [] "qk_scale"))),
+    Stmt.assign .nat [] "lo" (Op.constNat 0),
+    Stmt.assign .nat [] "hi" (Op.constNat 128),
+    Stmt.assign .nat [64] "b_ptr_offsets_m" (Op.arange 64),
+    Stmt.assign .nat [] "b_offset" (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat 16384)),
+    Stmt.assign .nat [64] "b_ptr_offsets_n_1"
+      (Op.add .nat Broadcast.scalarR
+        (Op.mod .nat Broadcast.scalarR (Op.arange 64) (Op.constNat 64)) (Op.constNat 64)),
+    Stmt.assign .real [64, 64] "b1"
+      (Op.load .real (.region B0
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "b_offset")
+            (Op.expandDim ⟨1, by simp⟩ (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64))
+                (Op.ref .nat [64] "b_ptr_offsets_m")) (Op.constNat 128))))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [64] "b_ptr_offsets_n_1"))))
+        .none) ]
+
+theorem attnPreLoopTail_check (Q K V B0 Out : RegionName) :
+    ((attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16).toAlgKernel.body.take 19).drop 10 = attnPreLoopTail B0 := by
+  rfl
+
 end ClosedForm
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
+
