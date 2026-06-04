@@ -1357,6 +1357,52 @@ theorem flashState_snd_fst_eq
     ← List.map_map, ← List.map_map,
     flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
 
+/-- **Loop invariant** for the flash-attn streaming loop (counter
+`i = block c · BLOCK_N`, window `hi_c = i`). Binds the kernel's 14 live registers
+after `c` blocks: program ids, the loaded+scaled `q`, the index vectors
+`off_m`/`off_n`, `qk_scale`, `lo`/`hi`, the three block pointers (`K`/`V` advanced
+by `c·BLOCK_N`, `Q` fixed), and — the heart — `max`/`denom`/`out_buffer` equal the
+three components of `flashState` over the first `i` keys (per row for `max`/`denom`,
+per `(row, channel)` for `out_buffer`). Memory/undef preserved. Strides specialized
+to the Python layout (`stride_q_seqlen = DIM`, `stride_q_dim = 1`); the per-key
+score scale is `qk_scale = sm_scale · log2e`. -/
+noncomputable def attnInvariant
+    (Q K V : RegionName) (s0 : BlockState) (sm_scale : ℝ)
+    (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N hiTotal : Nat) (causal : Bool)
+    (hDIM : 0 < DIM)
+    (i : Nat) (s : BlockState) : Prop :=
+  let base := flashBaseOffset s0 stride_q_head
+  let qStart := s0.pids 0 * BLOCK_M
+  let qT := qTile s0 Q stride_q_head DIM BLOCK_M
+  let kT := kTile s0 K stride_q_head DIM SEQLEN
+  let vT := vTile s0 V stride_q_head DIM SEQLEN
+  let scale := sm_scale * log2e
+  s.pids = s0.pids ∧ i % BLOCK_N = 0 ∧ i ≤ hiTotal ∧
+  (s.regs .real [BLOCK_M] "max" = some ⟨fun r : TileIndex [BLOCK_M] =>
+      ((flashState qT kT vT scale causal qStart i r.1 ⟨0, hDIM⟩).1 : ℝ)⟩) ∧
+  (s.regs .real [BLOCK_M] "denom" = some ⟨fun r : TileIndex [BLOCK_M] =>
+      ((flashState qT kT vT scale causal qStart i r.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩) ∧
+  (s.regs .real [BLOCK_M, DIM] "out_buffer" = some ⟨fun idx : TileIndex [BLOCK_M, DIM] =>
+      ((flashState qT kT vT scale causal qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+  (s.regs .fp16 [BLOCK_M, DIM] "q" = some ⟨fun idx : TileIndex [BLOCK_M, DIM] =>
+      FloatDType.real.cast FloatDType.fp16
+        (some (scale * qT idx))⟩) ∧
+  (s.regs .nat [BLOCK_M] "off_m" = some (Tile.vec (fun r : Fin BLOCK_M => qStart + r.val))) ∧
+  (s.regs .nat [BLOCK_N] "off_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))) ∧
+  (s.regs .blockPtr [DIM, BLOCK_N] "K_block_ptr" = some
+    (⟨fun _ : TileIndex [DIM, BLOCK_N] =>
+      { region := K, baseOffset := base, parentShape := [DIM, SEQLEN],
+        blockShape := [DIM, BLOCK_N], strides := [1, DIM], offsets := [0, i] }⟩)) ∧
+  (s.regs .blockPtr [BLOCK_N, DIM] "V_block_ptr" = some
+    (⟨fun _ : TileIndex [BLOCK_N, DIM] =>
+      { region := V, baseOffset := base, parentShape := [SEQLEN, DIM],
+        blockShape := [BLOCK_N, DIM], strides := [DIM, 1], offsets := [i, 0] }⟩)) ∧
+  (s.regs .blockPtr [BLOCK_M, DIM] "Q_block_ptr" = some
+    (⟨fun _ : TileIndex [BLOCK_M, DIM] =>
+      { region := Q, baseOffset := base, parentShape := [SEQLEN, DIM],
+        blockShape := [BLOCK_M, DIM], strides := [DIM, 1], offsets := [qStart, 0] }⟩)) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
 /-! ## exec-side loop-invariant skeleton (in progress)
 
 The compiled body of `flash_attn_fwd_kernel_surface` (verified by direct
