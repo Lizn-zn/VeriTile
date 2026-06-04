@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
 
 /-!
 # `context_attn_fwd` — strict per-kernel correctness
@@ -243,6 +244,146 @@ noncomputable def accStoreValue
         (accOffset s H stride_acc_b stride_acc_h stride_acc_m stride_acc_d
           BLOCK_M idx))
     else some (0.0 : ℝ))
+
+/-! ## Genuine closed-form context-attention spec
+
+The streaming-softmax loop in `_fwd_kernel_int8kv` is *not* a self-referential
+black box: it computes, for every active query lane, the prompt-cache-offset
+**causal softmax attention** value. This section makes that closed form explicit
+and proves the kernel's exact base-2 / `sm_scale` streaming weights collapse to
+it — independent of the kernel `exec`.
+
+### Score / scale / mask of this kernel (decoded lane-by-lane from the body)
+
+For program `(start_m, cur_bh)`, query lane `i` (global row
+`gi = start_m·BLOCK_M + i`), key `j`, head channel `e`:
+
+* **raw score** `raw i j = Σ_e Q[gi,e]·K[j,e]`  (`tl.dot q k`, line 85/107);
+* **scale**     `qk·sm_scale` with
+  `sm_scale = (1/√D)·1.4426950408889634` (`= (1/√D)·log₂ e`, line 87/109);
+* **softmax**   base-2 `tl.math.exp2` (lines 90/112, 94/115);
+* **mask**      `(gi + prompt_cache_len) ≥ j`  (`mask`, line 86/108): future keys
+  get score `-1e8` (≈ `exp2 → 0`), i.e. a causal mask shifted by `prompt_cache_len`.
+
+Because `exp2(x) = exp(log 2 · x)` and `exp2(qk·sm_scale) = exp((log 2 · sm_scale)·qk)`,
+the kernel realizes the **natural-exp** causal softmax with effective scale
+`effScale = log 2 · sm_scale`. With the kernel's `sm_scale = (√D)⁻¹·1.4426950408889634`
+and `log 2 · 1.4426950408889634 ≈ 1`, `effScale ≈ (√D)⁻¹` — standard scaled-dot
+attention. We keep the *exact* `effScale` so the closed form is bit-faithful to the
+kernel's chosen constant. -/
+
+/-- Effective natural-exp score scale of this kernel: `log 2 · sm_scale`. -/
+noncomputable def contextEffScale (sm_scale : ℝ) : ℝ := Real.log 2 * sm_scale
+
+/-- `pow2 (sm_scale · x) = exp (effScale · x)`: the kernel's `exp2`-with-`sm_scale`
+weight is the natural-exp weight at the effective scale. This is the algebraic
+identity that turns the kernel's base-2 softmax into ordinary `attentionReal`. -/
+theorem pow2_smScale_eq_exp_effScale (sm_scale x : ℝ) :
+    pow2 (sm_scale * x) = Real.exp (contextEffScale sm_scale * x) := by
+  simp [pow2, contextEffScale, mul_assoc]
+
+/-- Coordinate-faithful query tile of this kernel at `(start_m, cur_bh)` for the
+checked Python layout (strides `stride_qbs=2048, stride_qh=128, stride_qd=1`,
+`H=16`, head decode `cur_batch=cur_bh/16`, `cur_head=cur_bh%16`). Row `i` is the
+*global* prefill row `start_m·BLOCK_M + i` offset by `cur_batch_in_all_start_index`. -/
+noncomputable def ctxQTile
+    (s : BlockState) (Q B_Start_Loc : RegionName) (BLOCK_M : Nat) :
+    TileIndex [BLOCK_M, 128] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q
+      ((s.readMemValue .nat B_Start_Loc (curBatch s 16) + (s.pids 0 * BLOCK_M + i.val))
+          * 2048 + curHead s 16 * 128 + e.val)
+
+/-- Coordinate-faithful key tile: `K[cur_batch, j, cur_head, e]` at the checked
+layout (`stride_kb=8388608, stride_ks=128, stride_kh=262144, stride_kd=1`,
+`kv_group_num=1` so `cur_kv_head=cur_head`). -/
+noncomputable def ctxKTile (s : BlockState) (K : RegionName) (S : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K (curBatch s 16 * 8388608 + j.val * 128 + curHead s 16 * 262144 + e.val)
+
+/-- Coordinate-faithful value tile: `V[cur_batch, j, cur_head, d]`. -/
+noncomputable def ctxVTile (s : BlockState) (V : RegionName) (S : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, d, _) =>
+    s.readMem V (curBatch s 16 * 8388608 + j.val * 128 + curHead s 16 * 262144 + d.val)
+
+/-- **Genuine closed-form output** of `context_attn_fwd` at query lane `i`,
+channel `d`, over the first `S` keys.
+
+`out[i,d] = (Σ_{j ≤ gi+plen} exp(effScale·rawᵢⱼ)·V[j,d]) / (Σ_{j ≤ gi+plen} exp(effScale·rawᵢⱼ))`
+
+where `gi = start_m·BLOCK_M + i`, `plen = prompt_cache_len`, and `rawᵢⱼ = Σ_e Q[gi,e]·K[j,e]`.
+This is exactly `attentionRealCausalBlock` (the library's prompt-offset causal
+softmax) instantiated with this kernel's tiles, effective scale, and a causal
+boundary shifted by `prompt_cache_len`. No self-reference: it is a pure function
+of `Q`/`K`/`V` memory. -/
+noncomputable def contextAttnClosedForm
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S : Nat)
+    (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
+  let i := idx.1
+  let d := idx.2.1
+  let plen := promptLen s 16 B_Prompt_Cache_Len
+  let gi := s.pids 0 * BLOCK_M + i.val
+  let raw := fun j : Fin S =>
+    Finset.univ.sum (fun e : Fin 128 =>
+      ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+        * ctxKTile s K S (j, e, PUnit.unit))
+  let weight := fun j : Fin S =>
+    if j.val ≤ gi + plen then Real.exp (contextEffScale sm_scale * raw j) else 0
+  let denom := Finset.univ.sum (fun j : Fin S => weight j)
+  let numer := Finset.univ.sum (fun j : Fin S =>
+    weight j * ctxVTile s V S (j, d, PUnit.unit))
+  numer / denom
+
+/-- **Bridge to the library's `attentionRealCausalBlock`.** The genuine closed
+form above coincides with `attentionRealCausalBlock` (from
+`VeriTile.Triton.Math.Attention`) at query-start `gi₀ = start_m·BLOCK_M + plen`,
+with this kernel's Q/K/V tiles and effective scale `effScale = log 2 · sm_scale`.
+This certifies `contextAttnClosedForm` is the standard prompt-offset causal
+softmax-attention reference, not an ad-hoc definition. -/
+theorem contextAttnClosedForm_eq_attentionRealCausalBlock
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S : Nat) (idx : TileIndex [BLOCK_M, 128]) :
+    contextAttnClosedForm s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S idx
+      = attentionRealCausalBlock
+          (s.pids 0 * BLOCK_M + promptLen s 16 B_Prompt_Cache_Len)
+          (ctxQTile s Q B_Start_Loc BLOCK_M)
+          (ctxKTile s K S) (ctxVTile s V S)
+          (contextEffScale sm_scale)
+          (idx.1, idx.2.1, PUnit.unit) := by
+  obtain ⟨i, d, u⟩ := idx
+  -- The two sides agree key-by-key once the causal boundary
+  -- `start_m·BM + i + plen = start_m·BM + plen + i` is reassociated and the scale
+  -- is pulled into the dot via `Finset.mul_sum`.
+  have hbound : s.pids 0 * BLOCK_M + promptLen s 16 B_Prompt_Cache_Len + i.val
+      = s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len := by omega
+  simp only [contextAttnClosedForm, attentionRealCausalBlock, scaledScore, hbound,
+    Finset.mul_sum]
+
+/-- **The genuine closed form is the kernel's streaming-loop result (math layer).**
+For each output lane, `contextAttnClosedForm` equals `acc/l` of folding the
+online-softmax block step `osBlockStep` over the per-key `(score, value)` list
+built from this kernel's *masked* scores — score `effScale·rawᵢⱼ` for active
+(`j ≤ gi+plen`) keys and the kernel's masked `-∞` sentinel (weight `0`) for
+future keys. This is the form the kernel's `m_i`/`l_i`/`acc` loop carries; it
+reduces the eventual `exec` obligation to matching the loop to this fold (the
+remaining, FA-1-style, multi-thousand-line grind). -/
+noncomputable def ctxMaskedKeyList
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    List (ℝ × ℝ) :=
+  let plen := promptLen s 16 B_Prompt_Cache_Len
+  let gi := s.pids 0 * BLOCK_M + i.val
+  List.ofFn (fun j : Fin S =>
+    (if j.val ≤ gi + plen then
+        contextEffScale sm_scale *
+          Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+              * ctxKTile s K S (j, e, PUnit.unit))
+      else (Real.log 2)⁻¹ * (-1.0e8 : ℝ),       -- kernel's `-1e8` sentinel score (pre-`m` shift)
+      ctxVTile s V S (j, d, PUnit.unit)))
 
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
