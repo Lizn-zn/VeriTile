@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `attention_fwd_triton1` — strict per-kernel correctness
@@ -2025,5 +2026,77 @@ theorem aft1Inv_step (Q K V H O : RegionName) (s : BlockState)
   · intro off; rw [hK' off]; exact hK off
   · intro off; rw [hV' off]; exact hV off
   · intro off; rw [hH' off]; exact hHh off
+
+/-- `aft1BhTile s K V 0` is the all-zero `[128,128]` tile (empty recurrent sum). -/
+theorem aft1BhTile_zero (s : BlockState) (K V : RegionName) :
+    aft1BhTile s K V 0 = (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [128, 128]) := by
+  unfold aft1BhTile
+  refine congrArg _ ?_
+  funext idx
+  simp [aft1RecState]
+
+set_option maxHeartbeats 2000000 in
+/-- **Prologue reaches `aft1Inv 0`.** Stepping `i_bh = program_id(0)` and the
+`b_h = tl.zeros(...)` initializer establishes the carry invariant at chunk 0. -/
+theorem aft1_prologue_inv (Q K V H O : RegionName) (s : BlockState) :
+    ∃ s0, stepStmts aft1Prologue s = some s0 ∧ aft1Inv Q K V H O s 0 s0 := by
+  unfold aft1Prologue
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.programId 0) s = some (Tile.scalar (s.pids 0)) from by simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128, 128] (Op.const 0)) _
+        = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [128, 128]) from by
+      simp [evalOp_full, evalOp_const]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp
+  · simp [BlockState.setReg_ne_name]
+  · rw [BlockState.setReg_same, aft1BhTile_zero]
+  · intro off; simp [BlockState.setReg_readMem]
+  · intro off; simp [BlockState.setReg_readMem]
+  · intro off; simp [BlockState.setReg_readMem]
+  · intro off; simp [BlockState.setReg_readMem]
+
+set_option maxHeartbeats 2000000 in
+/-- **Full-exec carry result (STORE=false, IFCOND=false).** Executing the entire
+`attention_fwd_kernel_surface` (prologue + 32-chunk `forRangeDyn` loop) reaches a
+state whose `b_h` register holds `aft1BhTile s K V 32` — the genuine fully-folded
+recurrent state `Σ_{j<32} Kⱼᵀ·Vⱼ`. This is the exec-side carry-fold theorem:
+the loop realizes the linear-attention state recurrence end to end. -/
+theorem aft1_exec_carry (Q K V H O : RegionName) (s : BlockState)
+    (hOQ : O ≠ Q) (hOK : O ≠ K) (hOV : O ≠ V) (hOH : O ≠ H) :
+    ∃ sF, exec (attention_fwd_kernel_surface Q K V H O
+        131072 128 1 524288 128 1024 ((Real.sqrt (128:ℝ))⁻¹)
+        32 128 32 Bool.false Bool.false).toAlgKernel s = some sF
+      ∧ sF.regs .real [128, 128] "b_h" = some (aft1BhTile s K V 32) := by
+  rw [exec, attention_fwd_triton1_body_split]
+  obtain ⟨s0, hpre, hP0⟩ := aft1_prologue_inv Q K V H O s
+  rw [stepStmts.append_some hpre]
+  -- the single forRangeDyn loop, via forRangeDyn_inv with bounded counter
+  obtain ⟨final, sLoop, hloop, hfinal, hPfinal⟩ :=
+    forRangeDyn_inv (idx := "i") (start := 0) (stop := 32) (step := 1)
+      (startOp := Op.constNat 0) (stopOp := aft1StopOp) (stepOp := Op.constNat 1)
+      (P := fun n st => aft1Inv Q K V H O s n st ∧ n ≤ 32)
+      (by simp [evalOp])
+      (by
+        simp only [aft1StopOp, evalOp_div, evalOp_sub, evalOp_add, evalOp_constNat,
+          Option.bind_some, Option.bind_eq_bind]
+        refine congrArg some ?_
+        apply Tile.ext
+        intro z
+        simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+          NumericDType.div, NumericDType.sub, NumericDType.add])
+      (by simp [evalOp])
+      (by norm_num) ⟨hP0, by norm_num⟩
+      (fun i st hlt hPi => by
+        obtain ⟨hInv, _⟩ := hPi
+        obtain ⟨st', hstep', hInv'⟩ := aft1Inv_step Q K V H O s hOQ hOK hOV hOH i st hInv
+        exact ⟨st', hstep', hInv', by omega⟩)
+  obtain ⟨hInvF, hleF⟩ := hPfinal
+  have hfinalEq : final = 32 := le_antisymm hleF hfinal
+  subst hfinalEq
+  obtain ⟨_, _, hbhF, _⟩ := hInvF
+  rw [stepStmts.cons_some hloop, stepStmts.nil]
+  exact ⟨sLoop, rfl, hbhF⟩
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
