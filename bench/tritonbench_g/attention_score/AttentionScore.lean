@@ -604,6 +604,81 @@ theorem stepStmt_ifThen_false (body : List Stmt) (s : BlockState) :
     stepStmt (.ifThen (Op.constBool Bool.false) body) s = some s := by
   unfold stepStmt; rw [evalOp_constBool']; rfl
 
+/-! ### Verified elaborated-body decomposition (case 1)
+
+The case-1 elaborated `@triton.jit` body (`(attention_score_kernel …).toAlgKernel.body`,
+extracted by `simp [attention_score_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]`
+and cross-checked structurally) is a **21-statement** list:
+
+* **preLoop (16):** `start_n` (`programId 0`), `off_hz` (`programId 1`), `off_z`
+  (`off_hz // 4`), `off_h` (`off_hz % 4`), `off_hkv` (`off_h // (4 // 4)`),
+  `q_offset` (`off_z·32768 + off_h·8192`), `k_offset` (`off_z·32768 + off_hkv·8192`),
+  `m_ptrs` (`M + off_hz·128 + arange 64`), `o` (`full [64] 0`), `Q_block_ptr`
+  (`makeBlockPtrDyn Q q_offset [128,64] [64,64] [64,1] [0,0]`), `K_block_ptr`
+  (`makeBlockPtrDynOffsets K k_offset [64,128] [64,64] [1,64] [0, start_n·64]`),
+  `ifThenElse (constBool true)` (`IS_EVEN_N`) ⇒ `k = load(K_block_ptr)`,
+  `lo` (`0`), `hi` (`128`), `qk_scale` (`sm_scale`), `qk_scale` (`qk_scale·log2e`).
+* **loop (#16):** `forRangeDyn "start_m" (ref lo) (ref hi) (constNat 64) loopBody`,
+  start=0, stop=128, step=64 — **exactly 2 iterations** (`start_m ∈ {0, 64}`).
+  `loopBody` (per iteration): `start_m` (`multiple_of` ⇒ identity ref), `ifThenElse
+  (constBool true)` ⇒ `q = load(Q_block_ptr)`, `m = load(m_ptrs)`, `qk` (`full 0`),
+  `qk += dot q k`, `qk *= qk_scale`, `ifThen (constBool true)` (`SLIDING_WINDOW`) ⇒
+  [`dist` (`(((arange[:,None] − arange[None,:]) + start_m) − start_n·64) + 0`, all
+  `Op.sub/.add .nat`), `ifThenElse (constBool false)` (`COMPLEMENT`) ⇒ else-branch
+  `mask = boolAnd (ge dist 0) (lt dist 64)`], `qk -= m[:,None]`, `p = exp2 qk`,
+  `ifThen (constBool true)` ⇒ `p = where mask p 0`, `ifThen (constBool true).boolNot`
+  (`not IS_EVEN_N` = `false`) ⇒ **skipped**, `o += reduceSum axis-0 p`,
+  `Q_block_ptr = advance [64,0]`, `m_ptrs += 64`.
+* **post (#17–20):** `o_offset` (`off_z·512 + off_h·128`), `o_range`
+  (`arange 64 + start_n·64`), `o_ptrs` (`Out + o_offset + o_range`),
+  `store o_ptrs o (mask: o_range < 128)`.
+
+`attention_score_case1_body_split` exposes this as `take 16 ++ forRangeDyn-loop ::
+post` so an exec proof threads the prefix with `stepStmts.append_some`, unfolds the
+`forRangeDyn` (resolving `lo=0`/`hi=128`/`step=64`) with `stepForRangeAux.step_lt`
+×2 + `step_ge`, and finishes on the masked store. -/
+theorem attention_score_case1_body_split
+    (Q K M Out : RegionName) (sm_scale : ℝ) :
+    (attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body
+      = (attention_score_kernel Q K M Out
+          32768 8192 64 1 32768 8192 64 1 512 128 1
+          2 4 4 128 128 128 0 64 64 64 64 sm_scale
+          Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.take 16
+        ++ (attention_score_kernel Q K M Out
+            32768 8192 64 1 32768 8192 64 1 512 128 1
+            2 4 4 128 128 128 0 64 64 64 64 sm_scale
+            Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.drop 16 := by
+  rw [List.take_append_drop]
+
+/-- The case-1 elaborated body has exactly 21 statements (16 preLoop, 1
+`forRangeDyn` loop, 4 post). Verified by `rfl` on the elaborated/lowered body. -/
+theorem attention_score_case1_body_length
+    (Q K M Out : RegionName) (sm_scale : ℝ) :
+    (attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.length = 21 := by
+  rfl
+
+/-- The case-1 loop sits at body index 16 and is a `forRangeDyn` over `start_m`
+with the static `[0, 128)` step-`64` range (the `lo`/`hi` register bounds), i.e.
+exactly two iterations. The `drop 16` tail (loop + 4 post statements) has length 5,
+and the loop body itself (`headLoopBody`) has length 14. Verified by `rfl` on the
+lowered body. -/
+theorem attention_score_case1_loop_at_16
+    (Q K M Out : RegionName) (sm_scale : ℝ) :
+    ∃ loopBody post,
+      (attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.drop 16
+        = Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+            (Op.constNat 64) loopBody :: post := by
+  exact ⟨_, _, rfl⟩
+
 noncomputable def producedAttentionScoreCase1OutValue
     (s : BlockState) (Q K M Out : RegionName) (sm_scale : ℝ)
     (i : Fin 64) : ℝ :=
