@@ -471,6 +471,83 @@ theorem contextAttnExactFold_eq
   · apply Finset.sum_congr rfl; intro j _; rw [hw j]
   · apply Finset.sum_congr rfl; intro j _; rw [hw j]
 
+/-! ### exec-stepping infrastructure for the FA-1 assembly (WIP)
+
+Per-statement `evalOp` recipes specific to this kernel — the causal `≥` mask and
+the `-1e8` sentinel `where`, which the non-causal template does not have. Reusable
+building blocks for the step lemma of the streaming loop (the remaining
+multi-thousand-line FA-1 grind matching the loop to `contextAttnExactFold`). -/
+
+/-- Axis-0 `expandDim` over a `nat` register (the `offs_n[None, :]` row broadcast). -/
+@[simp] theorem ctx_evalOp_expandDim_zero_nat {D : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .nat [1, D] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] name)) s =
+      (s.regs .nat [D] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [1, D] => v.data (i.2.1, PUnit.unit) } : Tile .nat [1, D])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
+
+/-- Axis-1 `expandDim` over a `nat` register (the `offs_m[:, None]` column broadcast). -/
+@[simp] theorem ctx_evalOp_expandDim_one_nat {M : Nat} (name : RegName) (s : BlockState) :
+    @evalOp .nat [M, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [M] name)) s =
+      (s.regs .nat [M] name).bind (fun v =>
+        some ({ data := fun i : TileIndex [M, 1] => v.data (i.1, PUnit.unit) } : Tile .nat [M, 1])) := by
+  unfold evalOp; simp [Tile.expandDim]; rfl
+
+/-- Eval helper for `ge` (the causal mask comparison): no `@[simp]` form exists. -/
+theorem ctx_evalOp_ge {dtype a b shape} (h : ComparableDType dtype) (bc : Broadcast a b shape)
+    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
+/-- **Causal-mask eval** (`(offs_m[:,None] + prompt_cache_len) ≥ (start_n + offs_n[None,:])`,
+shape `[BLOCK_M, BLOCK_N]`): `mask[i,j] = (start_n + j ≤ offs_m_i + prompt_cache_len)`.
+The prompt-cache-offset causal boundary, decoded lane-by-lane. -/
+theorem ctxMask_eval (s : BlockState) (BM BN plen SN : Nat) (gOM : Fin BM → Nat)
+    (hm : s.regs .nat [BM] "offs_m" = some (Tile.vec gOM))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hp : s.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOp (Op.ge ComparableDType.nat Broadcast.nil.consL.consR
+        (Op.add NumericDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+          (Op.ref .nat [] "prompt_cache_len"))
+        (Op.add NumericDType.nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))) s
+      = some (⟨fun idx : TileIndex [BM, BN] =>
+          decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [BM, BN]) := by
+  rw [ctx_evalOp_ge]
+  simp only [evalOp_add, evalOp_ref, ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+    hm, hn, hp, hsn, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.cop, Tile.bop, Tile.expandDim, Tile.vec, ComparableDType.ge, NumericDType.add]
+
+/-- **`-1e8` sentinel `where` eval** (`tl.where(mask, qk·sm_scale, -1e8)`): the
+causal masking statement. Active lanes get the scaled score `qk·sm_scale`; future
+lanes get the finite sentinel `0 - 10e7 = -1e8` (whence `exp2(-1e8)`, not `0`). -/
+theorem ctxWhere_eval (s : BlockState) (BM BN : Nat) (sm : ℝ)
+    (masktile : Tile .bool [BM, BN]) (qktile : Tile .real [BM, BN])
+    (hmask : s.regs .bool [BM, BN] "mask" = some masktile)
+    (hqk : s.regs .real [BM, BN] "qk" = some qktile) :
+    evalOp (Op.where (Op.ref .bool [BM, BN] "mask")
+        (Op.mul NumericDType.real Broadcast.scalarR (Op.ref .real [BM, BN] "qk") (Op.const sm))
+        ((Op.sub NumericDType.real Broadcast.nil (Op.const 0.0) (Op.const 10e7)).broadcast
+          [BM, BN])) s
+      = some (Tile.select masktile
+          (Tile.bop NumericDType.real.mul Broadcast.scalarR qktile (Tile.scalar (some sm)))
+          (⟨fun _ : TileIndex [BM, BN] => some (0.0 - 10e7 : ℝ)⟩ : Tile .real [BM, BN])) := by
+  rw [evalOp_where]
+  simp only [evalOp_mul, evalOp_ref, evalOp_const, hmask, hqk, Option.bind_eq_bind, Option.bind_some]
+  have hbroad : @evalOp .real [BM, BN]
+      ((Op.sub NumericDType.real Broadcast.nil (Op.const 0.0) (Op.const 10e7)).broadcast [BM, BN]) s
+      = some (⟨fun _ : TileIndex [BM, BN] => some (0.0 - 10e7 : ℝ)⟩ : Tile .real [BM, BN]) := by
+    simp only [evalOp]
+    refine congrArg some ?_
+    ext idx
+    simp [Tile.bop, NumericDType.sub]
+  rw [hbroad]
+  rfl
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
