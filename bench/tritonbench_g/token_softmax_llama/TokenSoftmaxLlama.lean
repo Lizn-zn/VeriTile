@@ -52,6 +52,21 @@ write-mask `active s B_Seqlen i` (`col_offsets < cur_batch_seq_len`). The
 max/exp/sum reduction body feeds that value; the side condition is the
 offset-injectivity of the `Prob_Out` slice at the test shapes. Out-of-range lanes
 are preserved (mask=false ⇒ no store).
+
+## Genuine closed-form spec (banked recipes)
+
+`tokenSoftmaxSpec` is the genuine, self-contained stable-softmax value at a lane
+(reduceMax-shift, `exp`, `/ reduceSum`) over the masked input row
+`tokenSoftmaxInputTile` (inactive lanes `⊥`, matching `other=-inf`). The recipes
+`evalOp_load_region_maskOther_negInf` / `…_bind` (the `-inf`-masked region load
+lowers to the `⊥`-padded tile) and `row_op_eval` (the `castFloat(load …)` `row`
+register equals `tokenSoftmaxInputTile`, modulo the model-identity real cast) are
+proven sorry-free and decode the data-dependent part of the body to the closed
+form. Threading them through the per-statement decode of the remaining
+sub/exp/sum/div statements and the masked store readback (the path to a fully
+self-contained `… = tokenSoftmaxSpec` top theorem) is in progress; the residual
+friction is purely `rw`/`simp` matching across the differing `Fin` reduce-axis
+proofs of the macro-lowered `tl.max`/`tl.sum` vs the recipe statements.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.TokenSoftmaxLlama
