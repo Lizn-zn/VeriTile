@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
 
 /-!
 # `flash_attn` — strict per-kernel correctness
@@ -24,38 +25,61 @@ obligation here. Because the program ids `start_m`/`off_bs_head` are
 universally quantified (via `s`), the per-program statements cover every
 program of the grid.
 
+## Genuine closed-form spec (NOT self-referential)
+
+The online-softmax recurrence this kernel runs (`qk = where(off_m ≥ start_n+off_n,
+q·kᵀ·qk_scale, -inf)`, running `max`/`denom`/`out_buffer`, final `out_buffer /
+denom`) computes a genuine base-2 attention closed form, with `qk_scale =
+sm_scale · log2(e)` folded into `q`:
+
+* **case 2 (`IS_CAUSAL = false`)** — every key contributes:
+  `flashAttnOValueSpec` ≡ `attentionRealBase2PerKeyScale (qTile) (kTile) (vTile)
+  (fun _ => qk_scale)` of the loaded Q/K/V tiles (constant per-key scale).
+* **case 1 (`IS_CAUSAL = true`)** — key `j` contributes only when
+  `j ≤ qStart + i` (the `-inf` mask zeroes future keys):
+  `flashAttnOValueSpecCausal` ≡ `attentionRealBase2PerKeyScaleCausal …`.
+
+These are the genuine `expected` values, defined over the loaded tiles, **not**
+the kernel's own executed output. The mathematical heart (online-softmax fold ==
+batch base-2 softmax, causal and non-causal) is proved sorry-free in
+`VeriTile/Triton/Math/Attention.lean`
+(`attentionRealBase2PerKeyScale_eq_streaming`,
+`attentionRealBase2PerKeyScaleCausal_eq_streaming`, `osBlockStep_foldl_eq_batch`).
+
 ## Proof architecture
 
 ```
-flash_attn_python_case1_output_summary / _case2_output_summary    ← TOP THEOREMS (IS_CAUSAL = true / false)
-  ├─ flash_attn_python_case{i}_surface_toAlgorithm_supported        surface lowers to the algorithm layer
-  ├─ flash_attn_python_case{i}_surface_o_compute_correct            O store (out_buffer / denom)
-  │    └─ flash_attn_python_output_store_compute_correct
-  │         └─ flash_attn_output_store_slice_compute_correct
-  │              └─ flash_attn_output_store_slice_correct            algorithm-layer readback per lane
-  └─ flash_attn_python_case{i}_surface_l_compute_correct            L store (max + log2 denom)
-       └─ flash_attn_python_l_store_compute_correct
-            └─ flash_attn_l_store_slice_compute_correct
-                 └─ flash_attn_l_store_slice_correct
+flash_attn_output_store_slice_compute_correct      ← O store (out_buffer / denom), genuine readback
+  └─ flash_attn_output_store_slice_correct           algorithm-layer readback per lane
+flash_attn_l_store_slice_compute_correct           ← L store (max + log2 denom), genuine readback
+  └─ flash_attn_l_store_slice_correct
+flash_attn_python_case{i}_surface_toAlgorithm_supported   surface lowers to the algorithm layer
+flash_attn_python_case{i}_store_summary                   package the genuine store-only facts
 ```
-(Offset injectivity discharged by `flash_attn_python_{output,l}_offset_injective`;
-`flash_attn_python_case{i}_store_summary` package the store-only facts.)
+(Offset injectivity discharged by `flash_attn_python_{output,l}_offset_injective`.)
+
+## Scope status
+
+This file currently delivers, **sorry-free**: (1) the faithful DSL surface and its
+algorithm lowering; (2) the genuine closed-form spec definitions above plus their
+streaming-softmax bridge in `Math/Attention.lean`; (3) the genuine final-store
+readback `Realizes` theorems for both the `O` (`out_buffer / denom`) and `L`
+(`max + log2 denom`) stores at the correct, injective offsets. The **remaining
+stage** (not yet closed) is the `exec`-side loop-invariant proof that the kernel's
+`make_block_ptr` streaming loop realizes the streaming fold — i.e. that
+`out_buffer / denom` at the final store equals `flashAttnOValueSpec{,Causal}`.
+That mirrors `VeriTile/Examples/AttentionForwardClosedForm.lean`'s
+preLoop/step/postLoop skeleton, retargeted to block-pointer loads and the
+per-element causal `tl.where` mask. No self-referential / tautological summary is
+asserted in its place.
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float; `exp2`, `log2`, `tl.dot`,
 and the `sm_scale · log2(e)` scaling are not modeled at the bit level);
-`@triton.autotune`/`num_warps`/`num_stages` are not modeled. The verified
-result is **final-store scoped**: the proof establishes that the two stores
-write the accumulator slices to `O` and `L` at the correct, injective offsets —
-the written values are `flashAttnCase{i}Surface{O,L}Value`, opaque carriers for
-the online-softmax recurrence (running `max`, `denom`, `out_buffer`, the final
-`out_buffer / denom` normalization and `max + log2 denom` log-sum-exp), which
-are **not** re-derived as a closed-form attention formula here. Both `O` and
-`L` stores are unmasked (full tile). The causal mask schedule (the per-program
-`hi` bound) lives in that opaque carrier. Side conditions: layout
-`(BS,HEAD,SEQLEN,DIM) = (2,2,128,64)`, `BLOCK_M = 128`, `BLOCK_N = 64`, strides
-`(16384, 8192, 64, 1)`; case 1 is `IS_CAUSAL = true`, case 2 is `false`.
+`@triton.autotune`/`num_warps`/`num_stages` are not modeled. Side conditions:
+layout `(BS,HEAD,SEQLEN,DIM) = (2,2,128,64)`, `BLOCK_M = 128`, `BLOCK_N = 64`,
+strides `(16384, 8192, 64, 1)`; case 1 is `IS_CAUSAL = true`, case 2 is `false`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FlashAttn
@@ -613,214 +637,111 @@ theorem flash_attn_python_case2_store_summary
   · exact flash_attn_python_output_store_compute_correct OutBuffer O s
   · exact flash_attn_python_l_store_compute_correct Max Denom L s
 
-noncomputable def flashAttnCase2SurfaceOValue
-    (s : BlockState) (Q K V L O : RegionName)
-    (idx : TileIndex [128, 64]) : ℝ :=
-  match exec (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.false) s with
-  | some s' => s'.readMem O (outOffset s 8192 64 1 128 idx)
-  | none => 0.0
+/-! ## Genuine closed-form output spec (replaces the self-referential summary)
 
-noncomputable def flashAttnCase2SurfaceLValue
-    (s : BlockState) (Q K V L O : RegionName) (i : Fin 128) : ℝ :=
-  match exec (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.false) s with
-  | some s' => s'.readMem L (lOffset s 128 128 i)
-  | none => 0.0
+The kernel's online-softmax recurrence computes a base-2 attention closed form
+over the loaded Q/K/V tiles, with the scale `qk_scale = sm_scale · log2(e)`
+folded into `q`. These definitions give the genuine `expected` `O`-store value —
+defined over the loaded tiles, **not** the kernel's own executed output — for the
+two Python cases. The streaming-softmax math heart that justifies them
+(online-softmax fold == batch base-2 softmax, causal and non-causal) is proved
+sorry-free in `VeriTile/Triton/Math/Attention.lean`. -/
 
-theorem flash_attn_python_case2_surface_o_compute_correct
-    (Q K V L O : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        2 2 128 128 64 64 Bool.false)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        flashAttnCase2SurfaceOValue s Q K V L O idx) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  simp [flashAttnCase2SurfaceOValue, hExec]
+open VeriTile.Triton (attentionRealBase2PerKeyScale attentionRealBase2PerKeyScaleCausal)
 
-theorem flash_attn_python_case2_surface_l_compute_correct
-    (Q K V L O : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        2 2 128 128 64 64 Bool.false)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i : Fin 128 =>
-        flashAttnCase2SurfaceLValue s Q K V L O i) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  simp [flashAttnCase2SurfaceLValue, hExec]
+/-- Base-2 logarithm of `e` (`log2(e) = 1 / log 2`), the constant `qk_scale` folds
+in (`q = (q · sm_scale · 1.44269504).to(fp16)`). -/
+noncomputable def log2e : ℝ := 1 / Real.log 2
 
-/-- Public Python case 2 coverage summary for the full non-causal surface. -/
-theorem flash_attn_python_case2_output_summary
-    (Q K V L O : RegionName) (s : BlockState) :
-    (∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.false).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        2 2 128 128 64 64 Bool.false)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        flashAttnCase2SurfaceOValue s Q K V L O idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        2 2 128 128 64 64 Bool.false)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i : Fin 128 =>
-        flashAttnCase2SurfaceLValue s Q K V L O i)) := by
-  constructor
-  · exact flash_attn_python_case2_surface_toAlgorithm_supported Q K V L O
-  constructor
-  · exact flash_attn_python_case2_surface_o_compute_correct Q K V L O s
-  · exact flash_attn_python_case2_surface_l_compute_correct Q K V L O s
+/-- Per-(batch,head) base offset `off_bs_head · stride_q_head = pid₁ · 8192` for
+the Python layout. -/
+def flashBaseOffset (s : BlockState) (stride_q_head : Nat) : Nat :=
+  s.pids 1 * stride_q_head
 
-noncomputable def flashAttnCase1SurfaceOValue
-    (s : BlockState) (Q K V L O : RegionName)
-    (idx : TileIndex [128, 64]) : ℝ :=
-  match exec (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.true) s with
-  | some s' => s'.readMem O (outOffset s 8192 64 1 128 idx)
-  | none => 0.0
+/-- Loaded `Q` tile as a function of memory. Under the Python layout
+(`stride_q_seqlen = DIM`, `stride_q_dim = 1`) row `i`, head lane `e` of the block
+sits at `base + (pid₀·BLOCK_M + i)·DIM + e`. -/
+noncomputable def qTile (s : BlockState) (Q : RegionName)
+    (stride_q_head DIM BLOCK_M : Nat) : TileIndex [BLOCK_M, DIM] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q (flashBaseOffset s stride_q_head + mIndex s BLOCK_M i * DIM + e.val)
 
-noncomputable def flashAttnCase1SurfaceLValue
-    (s : BlockState) (Q K V L O : RegionName) (i : Fin 128) : ℝ :=
-  match exec (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.true) s with
-  | some s' => s'.readMem L (lOffset s 128 128 i)
-  | none => 0.0
+/-- Loaded `K` tile (key `j`, head lane `e`) at `base + j·DIM + e`. -/
+noncomputable def kTile (s : BlockState) (K : RegionName)
+    (stride_q_head DIM SEQLEN : Nat) : TileIndex [SEQLEN, DIM] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K (flashBaseOffset s stride_q_head + j.val * DIM + e.val)
 
-theorem flash_attn_python_case1_surface_o_compute_correct
-    (Q K V L O : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        2 2 128 128 64 64 Bool.true)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        flashAttnCase1SurfaceOValue s Q K V L O idx) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  simp [flashAttnCase1SurfaceOValue, hExec]
+/-- Loaded `V` tile (key `j`, channel `d`) at `base + j·DIM + d`. -/
+noncomputable def vTile (s : BlockState) (V : RegionName)
+    (stride_q_head DIM SEQLEN : Nat) : TileIndex [SEQLEN, DIM] → ℝ :=
+  fun (j, d, _) =>
+    s.readMem V (flashBaseOffset s stride_q_head + j.val * DIM + d.val)
 
-theorem flash_attn_python_case1_surface_l_compute_correct
-    (Q K V L O : RegionName) (s : BlockState) :
-    ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        2 2 128 128 64 64 Bool.true)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i : Fin 128 =>
-        flashAttnCase1SurfaceLValue s Q K V L O i) := by
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [flash_attn_fwd_kernel_surface, ComputeExpr.toAlgorithm?,
-      ComputeOp.toAlgorithm?]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i
-  simp [flashAttnCase1SurfaceLValue, hExec]
+/-- Genuine non-causal (`IS_CAUSAL = false`, Python case 2) closed-form `O`-store
+value: the base-2 attention of the loaded Q/K/V tiles with the constant per-key
+scale `qk_scale = sm_scale · log2(e)`. Every key contributes. -/
+noncomputable def flashAttnOValueSpec
+    (s : BlockState) (Q K V : RegionName)
+    (sm_scale : ℝ) (stride_q_head DIM SEQLEN BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, DIM]) : ℝ :=
+  attentionRealBase2PerKeyScale
+    (qTile s Q stride_q_head DIM BLOCK_M)
+    (kTile s K stride_q_head DIM SEQLEN)
+    (vTile s V stride_q_head DIM SEQLEN)
+    (fun _ : Fin SEQLEN => sm_scale * log2e)
+    idx
 
-/-- Public Python case 1 coverage summary for the full causal surface. -/
-theorem flash_attn_python_case1_output_summary
-    (Q K V L O : RegionName) (s : BlockState) :
-    (∃ alg, (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      16384 8192 64 1
-      2 2 128 128 64 64 Bool.true).toAlgorithm? =
-        Except.ok alg) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        2 2 128 128 64 64 Bool.true)
-      (initialState := s)
-      (write := fun idx : TileIndex [128, 64] =>
-        some (O, outOffset s 8192 64 1 128 idx))
-      (expected := fun idx : TileIndex [128, 64] =>
-        flashAttnCase1SurfaceOValue s Q K V L O idx)) ∧
-    (ComputeCorrect.Realizes
-      (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        16384 8192 64 1
-        2 2 128 128 64 64 Bool.true)
-      (initialState := s)
-      (write := fun i : Fin 128 => some (L, lOffset s 128 128 i))
-      (expected := fun i : Fin 128 =>
-        flashAttnCase1SurfaceLValue s Q K V L O i)) := by
-  constructor
-  · exact flash_attn_python_case1_surface_toAlgorithm_supported Q K V L O
-  constructor
-  · exact flash_attn_python_case1_surface_o_compute_correct Q K V L O s
-  · exact flash_attn_python_case1_surface_l_compute_correct Q K V L O s
+/-- Genuine causal (`IS_CAUSAL = true`, Python case 1) closed-form `O`-store value:
+the base-2 attention restricted to keys `j ≤ pid₀·BLOCK_M + i` — the per-element
+`tl.where(off_m ≥ start_n + off_n, qk, -inf)` mask zeroes future keys. -/
+noncomputable def flashAttnOValueSpecCausal
+    (s : BlockState) (Q K V : RegionName)
+    (sm_scale : ℝ) (stride_q_head DIM SEQLEN BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, DIM]) : ℝ :=
+  attentionRealBase2PerKeyScaleCausal
+    (qTile s Q stride_q_head DIM BLOCK_M)
+    (kTile s K stride_q_head DIM SEQLEN)
+    (vTile s V stride_q_head DIM SEQLEN)
+    (fun _ : Fin SEQLEN => sm_scale * log2e)
+    (s.pids 0 * BLOCK_M)
+    idx
+
+/-- The genuine non-causal `O`-value spec unfolds to the streaming online-softmax
+fold over every key (the form the `exec`-side loop produces). Sorry-free bridge to
+`Math/Attention.lean`; the remaining `exec` proof has to identify the kernel's
+`out_buffer/denom` with this fold. -/
+theorem flashAttnOValueSpec_eq_streaming
+    (s : BlockState) (Q K V : RegionName)
+    (sm_scale : ℝ) (stride_q_head DIM SEQLEN BLOCK_M : Nat)
+    (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
+        (i, d, PUnit.unit)
+      = (let st := (VeriTile.Triton.attnKeyList
+            (qTile s Q stride_q_head DIM BLOCK_M)
+            (kTile s K stride_q_head DIM SEQLEN)
+            (vTile s V stride_q_head DIM SEQLEN)
+            (fun _ : Fin SEQLEN => sm_scale * log2e) i d).foldl
+          VeriTile.Triton.osStep (0, 0, 0)
+         st.2.2 / st.2.1) :=
+  VeriTile.Triton.attentionRealBase2PerKeyScale_eq_streaming _ _ _ _ i d
+
+/-- The genuine causal `O`-value spec unfolds to the streaming fold over the
+causally filtered key list. Sorry-free bridge to `Math/Attention.lean`. -/
+theorem flashAttnOValueSpecCausal_eq_streaming
+    (s : BlockState) (Q K V : RegionName)
+    (sm_scale : ℝ) (stride_q_head DIM SEQLEN BLOCK_M : Nat)
+    (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashAttnOValueSpecCausal s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
+        (i, d, PUnit.unit)
+      = (let st := (VeriTile.Triton.attnKeyListCausal
+            (qTile s Q stride_q_head DIM BLOCK_M)
+            (kTile s K stride_q_head DIM SEQLEN)
+            (vTile s V stride_q_head DIM SEQLEN)
+            (fun _ : Fin SEQLEN => sm_scale * log2e)
+            (s.pids 0 * BLOCK_M) i d).foldl
+          VeriTile.Triton.osStep (0, 0, 0)
+         st.2.2 / st.2.1) :=
+  VeriTile.Triton.attentionRealBase2PerKeyScaleCausal_eq_streaming _ _ _ _ _ i d
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
