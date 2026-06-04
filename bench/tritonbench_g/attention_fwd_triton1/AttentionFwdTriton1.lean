@@ -2197,4 +2197,51 @@ theorem aft1_exec_carry (Q K V H O : RegionName) (s : BlockState)
   rw [stepStmts.cons_some hloop, stepStmts.nil]
   exact ⟨sLoop, rfl, hbhF, hOF⟩
 
+/-! ### Bridge: kernel-native output = the genuine `outputClosedForm`
+
+The kernel-native `aft1Out` equals the file's genuine `outputClosedForm` at the
+`make_block_ptr` layout accessors. `outputClosedForm = localTerm + recurrentTerm`
+is the linear-attention closed form stated purely over input memory (no
+self-reference). -/
+
+/-- `Q`/`V`/`O` per-chunk accessor: chunk `c` offset `off ↦ base + c·4096 + off`. -/
+def aft1QAddr (s : BlockState) (c off : Nat) : Nat := s.pids 0 * 131072 + c * 4096 + off
+
+/-- `K` per-chunk accessor: `off = 32·d' + tk ↦ base + d' + (c·32 + tk)·128`. -/
+def aft1KAddr (s : BlockState) (c off : Nat) : Nat :=
+  s.pids 0 * 131072 + off / 32 + (c * 32 + off % 32) * 128
+
+set_option maxRecDepth 8000 in
+theorem aft1Out_eq_outputClosedForm (s : BlockState) (Q K V : RegionName) (c : Nat)
+    (t : Fin 32) (d : Fin 128) :
+    aft1Out s Q K V c t d
+      = outputClosedForm s Q K V ((Real.sqrt (128:ℝ))⁻¹) 32 128
+          (aft1QAddr s) (aft1KAddr s) (aft1QAddr s) c t d := by
+  -- K address lemma: off = 32·a + tk with tk < 32 recovers (a, tk), any chunk `ch`
+  have hKaddr : ∀ (ch a tk : Nat), tk < 32 →
+      aft1KAddr s ch (32 * a + tk) = s.pids 0 * 131072 + a + (ch * 32 + tk) * 128 := by
+    intro ch a tk htk
+    simp only [aft1KAddr]
+    have hdiv : (32 * a + tk) / 32 = a := by omega
+    have hmod : (32 * a + tk) % 32 = tk := by omega
+    rw [hdiv, hmod]
+  simp only [aft1Out, aft1LocalOut, aft1RecOut, aft1RecState, aft1QCell, aft1KCell, aft1VCell,
+    outputClosedForm, localTerm, recurrentTerm, recurrentState, aft1QAddr]
+  refine congrArg₂ (· + ·) ?_ ?_
+  · -- local term
+    refine Finset.sum_congr rfl (fun tk _ => ?_)
+    have hVeq : s.pids 0 * 131072 + (c * 32 + tk.val) * 128 + d.val
+        = s.pids 0 * 131072 + c * 4096 + (128 * tk.val + d.val) := by ring
+    rw [hVeq]
+    refine congrArg₂ (· * ·) (Finset.sum_congr rfl (fun dd _ => ?_)) rfl
+    have hQeq : s.pids 0 * 131072 + (c * 32 + t.val) * 128 + dd.val
+        = s.pids 0 * 131072 + c * 4096 + (128 * t.val + dd.val) := by ring
+    rw [hQeq, hKaddr c dd.val tk.val tk.isLt]
+  · -- recurrent term
+    refine Finset.sum_congr rfl (fun d' _ => ?_)
+    refine congrArg₂ (· * ·) (congrArg₂ (· * ·) (congrArg _ (by ring)) rfl)
+      (Finset.sum_congr rfl (fun j _ => Finset.sum_congr rfl (fun tk _ => ?_)))
+    refine congrArg₂ (· * ·) (congrArg _ ?_) (congrArg _ (by ring))
+    rw [hKaddr j d'.val tk.val tk.isLt]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
