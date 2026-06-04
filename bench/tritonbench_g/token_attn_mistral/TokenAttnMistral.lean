@@ -555,6 +555,52 @@ Routing/decode notes for that bridge:
   `start_index + n < cur_batch_seq_len` ⇒ `vActive`), the
   `tl.sum(p_value[:,None]·v_value, 0)` block reduction (`reduceSum_some`), and the
   `acc += …` accumulation; then the final unmasked store readback.
+
+### Banked progress toward the bridge
+
+The two *algebraic* halves of the loop-invariant induction are now proven
+sorry-free, together with the generic dynamic-loop principle:
+
+* `VeriTile.Triton.forRangeDyn_inv` — master invariant principle for
+  `forRangeDyn` (mirror of `forRange_inv`), the induction engine for the
+  `range(0, cur_att_seq_len, BLOCK_N)` window loop.
+* `pMasked` / `vMasked` — the algorithm-layer values produced by the masked
+  `Prob` / `V` loads (`other = 0` for the out-of-window lanes).
+* `partialAcc s … k d = Σ_{n < k} pMasked n · vMasked n d` — the accumulator the
+  loop carries (`acc_k = partialAcc (counter)`).
+* `partialAcc_block_succ` — one `BLOCK_N` block advances the carry:
+  `partialAcc (start_n + BLOCK_N) = partialAcc start_n + Σ_{j<BLOCK_N} …`.
+  This is exactly the algebraic content of `acc += tl.sum(p·v, 0)`.
+* `partialAcc_eq_PVValue` — at the loop's existential final counter
+  `K ≥ attSeqLen`, the carry equals the genuine closed form
+  `tokenAttnMistralPVValue` (tail tokens `n ≥ attSeqLen` are `p`-masked to `0`).
+
+### Remaining (the operational `exec` decode)
+
+What is left is the purely mechanical state-stepping that connects the kernel's
+`stepStmts` to these algebraic facts (no further mathematical content):
+
+1. Prelude decode (14 assigns): thread `cur_batch`/`cur_head`/`cur_kv_head`,
+   `offs_n = arange 128`, `offs_d = arange 64`, the four metadata loads, the
+   `tl.maximum(... , 0)` `startIndex`, the `v_loc_off`/`p_offs`/`v_offs` vectors,
+   and `acc = full [BLOCK_DMODEL] 0` into a symbolic post-prelude state, mirroring
+   `chunk_cumsum_kernel`'s prelude reduction.
+2. Loop step lemma: the 5-statement body (`start_n = multiple_of …` no-op,
+   `p_value`/`v_loc`/`v_value` masked region loads, `acc += reduceSum (p[:,None]·v)`)
+   advances `acc = partialAcc i` to `acc = partialAcc (i + BLOCK_N)` via
+   `partialAcc_block_succ` + the per-lane load/`reduceSum` recipes, fed to
+   `forRangeDyn_inv`.
+3. Final unmasked `[BLOCK_DMODEL]` store readback (`scatter_readback_nd`), then
+   `partialAcc_eq_PVValue` to land on `tokenAttnMistralClosedForm`.
+
+NOTE: the closed form folds the per-lane offset arithmetic
+`pOffset n = … + (att_start_loc + n)·stride_pbs` and the `Req_to_tokens` gather
+`(start_index + n)·stride_req_to_tokens_s`, whereas the kernel computes
+`p_offs[j] + start_n` (resp. `v_loc_off[j] + start_n·stride_req_to_tokens_s`).
+These coincide for the lane index `n = start_n + j` exactly when
+`stride_pbs = 1` and `stride_req_to_tokens_s = 1`, which holds for all four
+checked Python shapes; the operational decode should carry those two stride
+equalities as hypotheses (or instantiate at the concrete shapes).
 -/
 
 noncomputable def tokenAttnMistralSurfaceValue
