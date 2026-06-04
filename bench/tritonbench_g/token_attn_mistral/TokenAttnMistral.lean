@@ -1171,6 +1171,403 @@ theorem mistral_preLoop
     ext idx
     simp [partialAcc]
 
+/-- The 5-statement window-loop body of `token_attn_mistral_surface`, transcribed
+(`start_n` no-op + `p_value`/`v_loc`/`v_value` masked loads + `acc += reduceSum`).
+Independent of region names except `Prob`/`Req_to_tokens`/`V`. -/
+def mistralLoopBody
+    (Prob V Req_to_tokens : RegionName)
+    (stride_req_to_tokens_s stride_vbs BLOCK_DMODEL BLOCK_N : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    Stmt.assign .real [BLOCK_N] "p_value"
+      (Op.load .real
+        (MemAccess.region Prob
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [BLOCK_N] "p_offs") (Op.ref .nat [] "start_n")))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BLOCK_N] "offs_n"))
+            (Op.ref .nat [] "cur_att_seq_len"))
+          (Op.broadcast (Op.const 0.0) [BLOCK_N]))),
+    Stmt.assign .nat [BLOCK_N] "v_loc"
+      (Op.load .nat
+        (MemAccess.region Req_to_tokens
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [BLOCK_N] "v_loc_off")
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat stride_req_to_tokens_s))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BLOCK_N] "offs_n"))
+              (Op.ref .nat [] "cur_batch_start_index"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.broadcast (Op.constNat 0) [BLOCK_N]))),
+    Stmt.assign .real [BLOCK_N, BLOCK_DMODEL] "v_value"
+      (Op.load .real
+        (MemAccess.region V
+          (Op.add .nat (Broadcast.consL (Broadcast.consR Broadcast.nil))
+            (Op.ref .nat [1, BLOCK_DMODEL] "v_offs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "v_loc"))
+              (Op.constNat stride_vbs))))
+        (MaskOpt.maskOther
+          (Op.remap [BLOCK_N, BLOCK_DMODEL] (Broadcast.leftIndex (Broadcast.consSame (Broadcast.consL Broadcast.nil)))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                  (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))
+                (Op.ref .nat [] "cur_batch_start_index"))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          (Op.broadcast (Op.const 0.0) [BLOCK_N, BLOCK_DMODEL]))),
+    Stmt.assign .real [BLOCK_DMODEL] "acc"
+      (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BLOCK_DMODEL] "acc")
+        (Op.reduceSum ⟨0, by simp⟩ Bool.false
+          (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_N] "p_value"))
+            (Op.ref .real [BLOCK_N, BLOCK_DMODEL] "v_value")))) ]
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **Loop step**: the 5-statement body advances `acc = partialAcc k` to
+`acc = partialAcc (k + BLOCK_N)` (via `partialAcc_block_succ`), preserving every
+other loop-invariant register. The masked loads decode to `pMasked`/`vMasked` and
+the `acc += reduceSum(p[:,None]·v)` is the `partialAcc_block_succ` recurrence. -/
+theorem mistral_loop_step
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen B_Att_Seqlen : RegionName)
+    (s0 : BlockState)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N : Nat)
+    (hpbs : stride_pbs = 1) (hrts : stride_req_to_tokens_s = 1)
+    (k : Nat) (st : BlockState)
+    (hinv : mistralInvariant Prob V Out Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+        B_Att_Seqlen s0 stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+        sliding_window BLOCK_DMODEL BLOCK_N k st) :
+    ∃ st', stepStmts (mistralLoopBody Prob V Req_to_tokens stride_req_to_tokens_s stride_vbs
+        BLOCK_DMODEL BLOCK_N) (st.setReg "start_n" .nat [] (Tile.scalar k)) = some st'
+      ∧ mistralInvariant Prob V Out Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+          B_Att_Seqlen s0 stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+          stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+          sliding_window BLOCK_DMODEL BLOCK_N (k + BLOCK_N) st' := by
+  simp only [mistralInvariant] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hckv, hn, hd, hsl, hbsl, hsi, hvoff, hpoff, hvoffs, hacc⟩ := hinv
+  -- abbreviations for the loaded register memory (s0 = st memory)
+  set sin := st.setReg "start_n" .nat [] (Tile.scalar k) with hsin
+  have hmem' : sin.readMem = s0.readMem := by
+    funext rg o; simp only [hsin, BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  have hreadval : ∀ (dt : TileDType) (rg : RegionName) (o : Nat),
+      sin.readMemValue dt rg o = st.readMemValue dt rg o := by
+    intro dt rg o; simp [hsin]
+  -- register readbacks on sin (start_n now set, everything else carried)
+  have hsn : sin.regs .nat [] "start_n" = some (Tile.scalar k) := by simp [hsin]
+  have hpoffSin : sin.regs .nat [BLOCK_N] "p_offs" =
+      some (Tile.vec (fun j : Fin BLOCK_N => pOffset s0 B_Att_Start_Loc stride_ph stride_pbs j.val)) := by
+    rw [hsin]; simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+      String.reduceEq]; exact hpoff
+  have hnSin : sin.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) := by
+    rw [hsin]; simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+      String.reduceEq]; exact hn
+  have hslSin : sin.regs .nat [] "cur_att_seq_len" = some (Tile.scalar (attSeqLen s0 B_Att_Seqlen)) := by
+    rw [hsin]; simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+      String.reduceEq]; exact hsl
+  have hvoffSin : sin.regs .nat [BLOCK_N] "v_loc_off" =
+      some (Tile.vec (fun j : Fin BLOCK_N =>
+        reqIdx s0 B_req_idx * stride_req_to_tokens_b +
+          (startIndex s0 B_Seqlen sliding_window + j.val) * stride_req_to_tokens_s)) := by
+    rw [hsin]; simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+      String.reduceEq]; exact hvoff
+  have hsiSin : sin.regs .nat [] "cur_batch_start_index" =
+      some (Tile.scalar (startIndex s0 B_Seqlen sliding_window)) := by
+    rw [hsin]; simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+      String.reduceEq]; exact hsi
+  have hbslSin : sin.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (batchSeqLen s0 B_Seqlen)) := by
+    rw [hsin]; simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+      String.reduceEq]; exact hbsl
+  have hvoffsSin : sin.regs .nat [1, BLOCK_DMODEL] "v_offs" =
+      some (⟨fun idx : TileIndex [1, BLOCK_DMODEL] =>
+        (s0.pids 1 / kv_group_num) * stride_vh + idx.2.1.val * stride_vd⟩ : Tile .nat [1, BLOCK_DMODEL]) := by
+    rw [hsin]; simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+      String.reduceEq]; exact hvoffs
+  have haccSin : sin.regs .real [BLOCK_DMODEL] "acc" =
+      some (⟨fun idx : TileIndex [BLOCK_DMODEL] =>
+        some (partialAcc s0 Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+          B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+          stride_vbs stride_vh stride_vd kv_group_num sliding_window k idx.1.val)⟩
+        : Tile .real [BLOCK_DMODEL]) := by
+    rw [hsin]; simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+      String.reduceEq]; exact hacc
+  -- sin agrees with s0 on pids and on all memory reads, so every memory-derived
+  -- quantity (pOffset/attSeqLen/startIndex/batchSeqLen/reqIdx/vLoc/vOffset/pMasked/vMasked)
+  -- evaluated at sin equals the s0 form carried by the invariant.
+  have hpidsSin : sin.pids = s0.pids := by simp [hsin, hpids]
+  have hrmvSin : ∀ (dt : TileDType) (rg : RegionName) (o : Nat),
+      sin.readMemValue dt rg o = s0.readMemValue dt rg o := by
+    intro dt rg o; rw [hreadval]
+    cases dt <;>
+      simp only [BlockState.readMemValue, BlockState.readMemAs, BlockState.readMemTyped,
+        BlockState.readMem, hmem]
+  -- state-congruence (general over any state sharing s0's memory and pids)
+  have hpMaskedG : ∀ (sx : BlockState), sx.mem = s0.mem → sx.pids = s0.pids →
+      ∀ nn, pMasked sx Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs nn
+        = pMasked s0 Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs nn := by
+    intro sx hmx hp nn
+    have hrm : sx.readMem = s0.readMem := by
+      funext rg o; simp only [BlockState.readMem, hmx]
+    have hrv : ∀ (rg : RegionName) (o : Nat), sx.readMemValue .nat rg o = s0.readMemValue .nat rg o := by
+      intro rg o; simp only [BlockState.readMemValue, BlockState.readMemTyped, hmx]
+    simp only [pMasked, attSeqLen, pOffset, attStartLoc, hrv, hp]
+    by_cases h : nn < s0.readMemValue .nat B_Att_Seqlen (s0.pids 0)
+    · rw [if_pos h, if_pos h]; exact congrFun (congrFun hrm Prob) _
+    · rw [if_neg h, if_neg h]
+  have hvMaskedG : ∀ (sx : BlockState), sx.mem = s0.mem → sx.pids = s0.pids →
+      ∀ nn dd, vMasked sx V Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+          stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num sliding_window nn dd
+        = vMasked s0 V Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+          stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num sliding_window nn dd := by
+    intro sx hmx hp nn dd
+    have hrm : sx.readMem = s0.readMem := by
+      funext rg o; simp only [BlockState.readMem, hmx]
+    have hrv : ∀ (rg : RegionName) (o : Nat), sx.readMemValue .nat rg o = s0.readMemValue .nat rg o := by
+      intro rg o; simp only [BlockState.readMemValue, BlockState.readMemTyped, hmx]
+    simp only [vMasked, vActive, startIndex, batchSeqLen, vOffset, vLoc, reqIdx, hrv, hp]
+    by_cases h : s0.readMemValue .nat B_Seqlen (s0.pids 0) - sliding_window + nn <
+        s0.readMemValue .nat B_Seqlen (s0.pids 0)
+    · rw [if_pos h, if_pos h]; exact congrFun (congrFun hrm V) _
+    · rw [if_neg h, if_neg h]
+  have hvLocActiveG : ∀ (sx : BlockState), sx.mem = s0.mem → sx.pids = s0.pids →
+      ∀ nn, (if vActive sx B_Seqlen sliding_window nn then
+              vLoc sx Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+                sliding_window nn else 0)
+        = (if vActive s0 B_Seqlen sliding_window nn then
+              vLoc s0 Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+                sliding_window nn else 0) := by
+    intro sx hmx hp nn
+    have hrv : ∀ (rg : RegionName) (o : Nat), sx.readMemValue .nat rg o = s0.readMemValue .nat rg o := by
+      intro rg o; simp only [BlockState.readMemValue, BlockState.readMemTyped, hmx]
+    simp only [vActive, startIndex, batchSeqLen, vLoc, reqIdx, hrv, hp]
+  have hmetaG : ∀ (sx : BlockState), sx.mem = s0.mem → sx.pids = s0.pids →
+      reqIdx sx B_req_idx = reqIdx s0 B_req_idx
+      ∧ startIndex sx B_Seqlen sliding_window = startIndex s0 B_Seqlen sliding_window
+      ∧ batchSeqLen sx B_Seqlen = batchSeqLen s0 B_Seqlen := by
+    intro sx hmx hp
+    have hrv : ∀ (rg : RegionName) (o : Nat), sx.readMemValue .nat rg o = s0.readMemValue .nat rg o := by
+      intro rg o; simp only [BlockState.readMemValue, BlockState.readMemTyped, hmx]
+    refine ⟨?_, ?_, ?_⟩
+    · simp only [reqIdx, hrv, hp]
+    · simp only [startIndex, batchSeqLen, hrv, hp]
+    · simp only [batchSeqLen, hrv, hp]
+  have hsinmem : sin.mem = s0.mem := by rw [hsin]; exact hmem
+  have hpMasked := hpMaskedG sin hsinmem hpidsSin
+  have hvMasked := hvMaskedG sin hsinmem hpidsSin
+  have hattSeqLen : attSeqLen sin B_Att_Seqlen = attSeqLen s0 B_Att_Seqlen := by
+    simp only [attSeqLen, hrmvSin, hpidsSin]
+  have hbatchSeqLen : batchSeqLen sin B_Seqlen = batchSeqLen s0 B_Seqlen := by
+    simp only [batchSeqLen, hrmvSin, hpidsSin]
+  have hreqIdx : reqIdx sin B_req_idx = reqIdx s0 B_req_idx := by
+    simp only [reqIdx, hrmvSin, hpidsSin]
+  have hstartIndex : startIndex sin B_Seqlen sliding_window = startIndex s0 B_Seqlen sliding_window := by
+    simp only [startIndex, hbatchSeqLen]
+  have hpOffset : ∀ nn, pOffset sin B_Att_Start_Loc stride_ph stride_pbs nn
+      = pOffset s0 B_Att_Start_Loc stride_ph stride_pbs nn := by
+    intro nn; simp only [pOffset, attStartLoc, hrmvSin, hpidsSin]
+  -- rewrite the sin-readbacks into recipe (sin) form
+  have hpoffSin' : sin.regs .nat [BLOCK_N] "p_offs" =
+      some (Tile.vec (fun j : Fin BLOCK_N => pOffset sin B_Att_Start_Loc stride_ph stride_pbs j.val)) := by
+    rw [hpoffSin]; refine congrArg some ?_; ext idx; simp [Tile.vec, hpOffset]
+  have hslSin' : sin.regs .nat [] "cur_att_seq_len" = some (Tile.scalar (attSeqLen sin B_Att_Seqlen)) := by
+    rw [hslSin, hattSeqLen]
+  have hvoffSin' : sin.regs .nat [BLOCK_N] "v_loc_off" =
+      some (Tile.vec (fun j : Fin BLOCK_N =>
+        reqIdx sin B_req_idx * stride_req_to_tokens_b +
+          (startIndex sin B_Seqlen sliding_window + j.val) * stride_req_to_tokens_s)) := by
+    rw [hvoffSin]; refine congrArg some ?_; ext idx; simp [Tile.vec, hreqIdx, hstartIndex]
+  have hsiSin' : sin.regs .nat [] "cur_batch_start_index" =
+      some (Tile.scalar (startIndex sin B_Seqlen sliding_window)) := by rw [hsiSin, hstartIndex]
+  have hbslSin' : sin.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (batchSeqLen sin B_Seqlen)) := by
+    rw [hbslSin, hbatchSeqLen]
+  have hvoffsSin' : sin.regs .nat [1, BLOCK_DMODEL] "v_offs" =
+      some (⟨fun idx : TileIndex [1, BLOCK_DMODEL] =>
+        (sin.pids 1 / kv_group_num) * stride_vh + idx.2.1.val * stride_vd⟩ : Tile .nat [1, BLOCK_DMODEL]) := by
+    rw [hvoffsSin]; refine congrArg some ?_; ext idx; simp [hpidsSin]
+  -- the start_n no-op re-sets start_n to k, leaving the state unchanged
+  have hidem : sin.setReg "start_n" .nat [] (Tile.scalar k) = sin := by
+    refine BlockState.ext (fun r o => rfl) (fun dtype shape name => ?_)
+      (fun a => ?_) (fun r o => rfl)
+    · conv_rhs => rw [hsin]
+      by_cases hname : name = "start_n"
+      · subst hname
+        by_cases hdt : dtype = .nat
+        · subst hdt
+          by_cases hsh : shape = ([] : TileShape)
+          · subst hsh; simp
+          · rw [BlockState.setReg_ne_shape (h := hsh) (hName := rfl) (hDType := rfl),
+              BlockState.setReg_ne_shape (h := hsh) (hName := rfl) (hDType := rfl)]
+        · rw [BlockState.setReg_ne_dtype (h := hdt) (hName := rfl),
+            BlockState.setReg_ne_dtype (h := hdt) (hName := rfl)]
+      · rw [BlockState.setReg_ne_name (h := hname)]
+    · rw [BlockState.setReg_pids]
+  -- helper: peel a non-"start_n"/"p_value"/"v_loc"/"v_value"/"acc" register from any setReg
+  -- of these names; expressed via the chained states named below.
+  set pvalT : Tile .real [BLOCK_N] :=
+    ⟨fun idx : TileIndex [BLOCK_N] =>
+      some (pMasked sin Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs (k + idx.1.val))⟩
+    with hpvalT
+  set s2 : BlockState := sin.setReg "p_value" .real [BLOCK_N] pvalT with hs2
+  set vlocT : Tile .nat [BLOCK_N] :=
+    ⟨fun idx : TileIndex [BLOCK_N] =>
+      if vActive s2 B_Seqlen sliding_window (k + idx.1.val) then
+        vLoc s2 Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+          sliding_window (k + idx.1.val)
+      else 0⟩ with hvlocT
+  set s3 : BlockState := s2.setReg "v_loc" .nat [BLOCK_N] vlocT with hs3
+  set vvalT : Tile .real [BLOCK_N, BLOCK_DMODEL] :=
+    ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+      some (vMasked s3 V Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+        stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num sliding_window
+        (k + idx.1.val) idx.2.1.val)⟩ with hvvalT
+  set s4 : BlockState := s3.setReg "v_value" .real [BLOCK_N, BLOCK_DMODEL] vvalT with hs4
+  have hs2mem : s2.mem = s0.mem := by rw [hs2]; exact hsinmem
+  have hs2pids : s2.pids = s0.pids := by rw [hs2, BlockState.setReg_pids]; exact hpidsSin
+  have hs3mem : s3.mem = s0.mem := by rw [hs3]; exact hs2mem
+  have hs3pids : s3.pids = s0.pids := by rw [hs3, BlockState.setReg_pids]; exact hs2pids
+  unfold mistralLoopBody
+  -- statement 1: start_n = start_n (no-op)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_n") sin = some (Tile.scalar k) from by rw [evalOp_ref]; exact hsn))]
+  rw [hidem]
+  -- statement 2: p_value masked load = pMasked (state is sin after hidem)
+  rw [stepStmts.cons_some
+    (show stepStmt _ sin = some s2 from stepStmt_assign_eq_some
+      (mistral_prob_load_eval sin Prob B_Att_Start_Loc B_Att_Seqlen BLOCK_N stride_ph stride_pbs k hpbs
+        (by simpa using hpoffSin') (by simp [hsn]) (by simpa using hnSin) hslSin'))]
+  -- statement 3: v_loc masked gather (on s2)
+  rw [stepStmts.cons_some
+    (show stepStmt _ s2 = some s3 from stepStmt_assign_eq_some
+      (mistral_reqloc_gather_eval s2 Req_to_tokens B_req_idx B_Seqlen BLOCK_N
+        stride_req_to_tokens_b stride_req_to_tokens_s sliding_window k hrts
+        (by
+          rw [hs2]
+          simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq]
+          rw [hvoffSin]
+          refine congrArg some ?_
+          ext idx
+          simp only [Tile.vec]
+          rw [(hmetaG s2 hs2mem hs2pids).1, (hmetaG s2 hs2mem hs2pids).2.1])
+        (by rw [hs2]; simp [hsn]) (by rw [hs2]; simpa using hnSin)
+        (by
+          rw [hs2]
+          simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq]
+          rw [hsiSin, (hmetaG s2 hs2mem hs2pids).2.1])
+        (by
+          rw [hs2]
+          simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq]
+          rw [hbslSin, (hmetaG s2 hs2mem hs2pids).2.2])))]
+  -- statement 4: v_value 2D masked gather = vMasked (on s3)
+  rw [stepStmts.cons_some
+    (show stepStmt _ s3 = some s4 from stepStmt_assign_eq_some
+      (mistral_v_gather_eval s3 V Req_to_tokens B_req_idx B_Seqlen BLOCK_N BLOCK_DMODEL
+        stride_req_to_tokens_b stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num
+        sliding_window k
+        (by
+          rw [hs3, hs2]
+          simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq]
+          rw [hvoffsSin]
+          refine congrArg some ?_
+          ext idx
+          rw [hs3pids])
+        (by
+          rw [hs3]
+          simp only [BlockState.setReg_same, hvlocT]
+          refine congrArg some ?_
+          ext idx
+          simp only [Tile.vec]
+          rw [hvLocActiveG s2 hs2mem hs2pids, hvLocActiveG s3 hs3mem hs3pids])
+        (by rw [hs3, hs2]; simp [hsn]) (by rw [hs3, hs2]; simpa using hnSin)
+        (by
+          rw [hs3, hs2]
+          simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq]
+          rw [hsiSin, (hmetaG s3 hs3mem hs3pids).2.1])
+        (by
+          rw [hs3, hs2]
+          simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq]
+          rw [hbslSin, (hmetaG s3 hs3mem hs3pids).2.2])))]
+  -- statement 5: acc += reduceSum(p[:,None]·v) = partialAcc (k + BLOCK_N)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mistral_acc_step_eval s4 BLOCK_N BLOCK_DMODEL
+      (fun e => partialAcc s0 Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+        B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+        stride_vbs stride_vh stride_vd kv_group_num sliding_window k e.val)
+      (fun j => pMasked s0 Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs (k + j.val))
+      (fun j e => vMasked s0 V Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+        stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num sliding_window
+        (k + j.val) e.val)
+      (by rw [hs4, hs3, hs2]
+          simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+            String.reduceEq]
+          exact haccSin)
+      (by rw [hs4, hs3, hs2]
+          simp only [BlockState.setReg_ne_name, ne_eq, reduceCtorEq, not_false_eq_true,
+            String.reduceEq, BlockState.setReg_same, hpvalT]
+          refine congrArg some ?_
+          ext idx
+          exact congrArg some (hpMaskedG sin hsinmem hpidsSin _))
+      (by rw [hs4]
+          simp only [BlockState.setReg_same, hvvalT]
+          refine congrArg some ?_
+          ext idx
+          obtain ⟨j, d, u⟩ := idx
+          exact congrArg some (hvMaskedG s3 hs3mem hs3pids _ _))))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  -- the body only changed acc, p_value, v_loc, v_value, start_n; the rest carry
+  -- final state = s4.setReg "acc" ...; peel acc/v_value/v_loc/p_value/start_n for carried regs
+  have hpeel : ∀ {dt : TileDType} {sh : TileShape} (nm : RegName),
+      nm ≠ "acc" → nm ≠ "v_value" → nm ≠ "v_loc" → nm ≠ "p_value" → nm ≠ "start_n" →
+      ∀ (acctile : Tile .real [BLOCK_DMODEL]),
+        (s4.setReg "acc" .real [BLOCK_DMODEL] acctile).regs dt sh nm = st.regs dt sh nm := by
+    intro dt sh nm h1 h2 h3 h4 h5 acctile
+    rw [BlockState.setReg_ne_name (h := h1), hs4,
+      BlockState.setReg_ne_name (h := h2), hs3,
+      BlockState.setReg_ne_name (h := h3), hs2,
+      BlockState.setReg_ne_name (h := h4), hsin,
+      BlockState.setReg_ne_name (h := h5)]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · funext a
+    rw [BlockState.setReg_pids, hs4, BlockState.setReg_pids, hs3, BlockState.setReg_pids, hs2,
+      BlockState.setReg_pids, hsin, BlockState.setReg_pids]
+    exact congrFun hpids a
+  · funext rg o
+    rw [BlockState.setReg_mem, hs4, BlockState.setReg_mem, hs3, BlockState.setReg_mem, hs2,
+      BlockState.setReg_mem, hsin, BlockState.setReg_mem]
+    exact congrFun (congrFun hmem rg) o
+  · intro rg o
+    rw [BlockState.setReg_undef, hs4, BlockState.setReg_undef, hs3, BlockState.setReg_undef, hs2,
+      BlockState.setReg_undef, hsin, BlockState.setReg_undef]
+    exact hundef rg o
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hcb
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hch
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hckv
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hn
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hd
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hsl
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hbsl
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hsi
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hvoff
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hpoff
+  · rw [hpeel _ (by decide) (by decide) (by decide) (by decide) (by decide)]; exact hvoffs
+  · -- acc = partialAcc (k + BLOCK_N)
+    simp only [BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx
+    simp only
+    rw [partialAcc_block_succ]
+    congr 1
+    rw [Fin.sum_univ_eq_sum_range
+      (fun j => pMasked s0 Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs (k + j) *
+        vMasked s0 V Req_to_tokens B_req_idx B_Seqlen stride_req_to_tokens_b
+          stride_req_to_tokens_s stride_vbs stride_vh stride_vd kv_group_num sliding_window
+          (k + j) idx.1.val) BLOCK_N]
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
