@@ -604,6 +604,20 @@ theorem stepStmt_ifThen_false (body : List Stmt) (s : BlockState) :
     stepStmt (.ifThen (Op.constBool Bool.false) body) s = some s := by
   unfold stepStmt; rw [evalOp_constBool']; rfl
 
+theorem stepStmt_ifThenElse_false (thenB elseB : List Stmt) (s : BlockState) :
+    stepStmt (.ifThenElse (Op.constBool Bool.false) thenB elseB) s
+      = stepStmts elseB s := by
+  unfold stepStmt; rw [evalOp_constBool']; rfl
+
+theorem stepStmt_ifThen_boolNot_true (body : List Stmt) (s : BlockState) :
+    stepStmt (.ifThen (Op.boolNot (Op.constBool Bool.true)) body) s = some s := by
+  unfold stepStmt
+  have hb : evalOp (Op.boolNot (Op.constBool Bool.true)) s
+      = some (Tile.uop (fun x : Bool => !x) (Tile.scalar Bool.true)) := by
+    conv_lhs => unfold evalOp
+    rw [evalOp_constBool']; rfl
+  rw [hb]; rfl
+
 /-! ### Verified elaborated-body decomposition (case 1)
 
 The case-1 elaborated `@triton.jit` body (`(attention_score_kernel …).toAlgKernel.body`,
@@ -679,6 +693,160 @@ theorem attention_score_case1_loop_at_16
             (Op.constNat 64) loopBody :: post := by
   exact ⟨_, _, rfl⟩
 
+/-! ### Local `evalOp` reduction helpers (case-1 closed-form exec proof)
+
+The block-pointer / `floorDiv`/`mod`/`boolAnd`/`exp2`/`ge`/`ptrAdd` ops appearing
+in the elaborated case-1 body have no `@[simp]` `evalOp_*` form; these mirror the
+companions in `Examples.AttentionForwardClosedForm` so the prefix / loop body step
+under `simp`. -/
+
+theorem evalOp_floorDiv' {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.floorDiv h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.floorDiv bc vx vy)) := by
+  simp [evalOp]
+
+theorem evalOp_mod' {dtype a b shape} (h : IntegralDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.mod h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.bop h.mod bc vx vy)) := by
+  simp [evalOp]
+
+theorem evalOp_boolAnd' {a b shape} (bc : Broadcast a b shape)
+    (x y : Op .bool _) (s : BlockState) :
+    evalOp (.boolAnd bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s;
+      some (Tile.bop (fun p q : Bool => p && q) bc vx vy)) := by
+  simp [evalOp]
+
+theorem evalOp_ge' {dtype a b shape} (h : ComparableDType dtype)
+    (bc : Broadcast a b shape) (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s; let vy ← evalOp y s; some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
+theorem evalOp_exp2' {shape : TileShape} (a : Op .real shape) (s : BlockState) :
+    evalOp (.exp2 a) s = (do let va ← evalOp a s; some (Tile.uop WithBot.realExp2 va)) := by
+  simp [evalOp]
+
+theorem evalOp_ptrAdd' {a b shape} (bc : Broadcast a b shape)
+    (ptr : Op .ptr a) (off : Op .nat b) (s : BlockState) :
+    evalOp (.ptrAdd bc ptr off) s = (do
+      let ptrs ← evalOp ptr s; let offs ← evalOp off s;
+      some (Tile.ptrAdd bc ptrs offs)) := by simp [evalOp]
+
+theorem evalOp_ptrBase' (region : RegionName) (s : BlockState) :
+    evalOp (.ptrBase region) s = some (Tile.scalar (region.cast, 0)) := by simp [evalOp]
+
+/-- **`makeBlockPtrDyn` eval** (the `Q_block_ptr` with static `[0,0]` offsets). -/
+theorem makeBlockPtrDyn_eval (region : RegionName) (baseOffset : Op .nat [])
+    (parentShape : List Nat) (blockShape : TileShape)
+    (strides : List Nat) (offsets : List Nat) (s : BlockState) (base : Nat)
+    (hb : evalOp baseOffset s = some (Tile.scalar base)) :
+    evalOp (.makeBlockPtrDyn region baseOffset parentShape blockShape strides offsets) s
+      = some (⟨fun _ =>
+          { region := region, baseOffset := base, parentShape := parentShape,
+            blockShape := blockShape, strides := strides, offsets := offsets }⟩
+          : Tile .blockPtr blockShape) := by
+  simp [evalOp, hb]
+
+/-- **No-mask `.ptr` real load** (the `m = tl.load(m_ptrs)` non-block load):
+reads `readMem` at each pointer lane. -/
+theorem load_ptr_none_real_score {shape : TileShape}
+    (ptrOp : Op .ptr shape) (s : BlockState) (ptrs : Tile .ptr shape)
+    (hp : evalOp ptrOp s = some ptrs) :
+    evalOp (.load .real (.ptr ptrOp) .none) s
+      = some ⟨fun i => some (s.readMem (ptrs.data i).1 (ptrs.data i).2)⟩ := by
+  simp only [evalOp, hp]
+  refine congrArg some ?_
+  ext i
+  simp [BlockState.readMemValue_real]
+
+/-! ### Column-sum value of one query block
+
+`case1ColSum s Q K M sm_scale c j` is the inner per-query-block column sum
+`Σ_{i<64} (if mask(c,i,j) then weight(c,i,j) else 0)` — exactly one summand of
+`case1OutClosedForm`. -/
+noncomputable def case1ColSum
+    (s : BlockState) (Q K M : RegionName) (sm_scale : ℝ) (c : Nat) (j : Fin 64) : ℝ :=
+  Finset.univ.sum (fun i : Fin 64 =>
+    if case1Mask s c i.val j.val
+      then case1Weight s Q K M sm_scale c i.val j.val
+      else 0)
+
+theorem case1OutClosedForm_eq_colSum
+    (s : BlockState) (Q K M : RegionName) (sm_scale : ℝ) (j : Fin 64) :
+    case1OutClosedForm s Q K M sm_scale j
+      = case1ColSum s Q K M sm_scale 0 j + case1ColSum s Q K M sm_scale 1 j := by
+  simp only [case1OutClosedForm, case1ColSum, Fin.sum_univ_two, Fin.val_zero, Fin.val_one]
+
+/-- The 14-statement case-1 loop body (`start_m = c·64` already set on entry).
+Extracted by `rfl` from `body.drop 16 = forRangeDyn … loopBody :: post`. -/
+def attentionScoreCase1LoopBody : List Stmt :=
+  [Stmt.assign TileDType.nat [] "start_m" (Op.ref TileDType.nat [] "start_m"),
+    Stmt.ifThenElse (Op.constBool Bool.true)
+      [Stmt.assign TileDType.real [64, 64] "q"
+          (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") [])
+            MaskOpt.none)]
+      [Stmt.assign TileDType.real [64, 64] "q"
+          (Op.load TileDType.real
+            (MemAccess.blockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") [0, 1]) MaskOpt.none)],
+    Stmt.assign TileDType.real [64] "m"
+      (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [64] "m_ptrs")) MaskOpt.none),
+    Stmt.assign TileDType.real [64, 64] "qk" (Op.full [64, 64] (Op.const 0)),
+    Stmt.assign TileDType.real [64, 64] "qk"
+      (Op.add NumericDType.real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref TileDType.real [64, 64] "qk")
+        (Op.dot (batch := []) (Op.ref TileDType.real [64, 64] "q") (Op.ref TileDType.real [64, 64] "k"))),
+    Stmt.assign TileDType.real [64, 64] "qk"
+      (Op.mul NumericDType.real Broadcast.scalarR (Op.ref TileDType.real [64, 64] "qk")
+        (Op.ref TileDType.real [] "qk_scale")),
+    Stmt.ifThen (Op.constBool Bool.true)
+      [Stmt.assign TileDType.nat [64, 64] "dist"
+          (Op.add NumericDType.nat Broadcast.scalarR
+            (Op.sub NumericDType.nat Broadcast.scalarR
+              (Op.add NumericDType.nat Broadcast.scalarR
+                (Op.sub NumericDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+                  (Op.expandDim ⟨1, by simp⟩ (Op.arange 64)) (Op.expandDim ⟨0, by simp⟩ (Op.arange 64)))
+                (Op.ref TileDType.nat [] "start_m"))
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_n") (Op.constNat 64)))
+            (Op.constNat 0)),
+        Stmt.ifThenElse (Op.constBool Bool.false)
+          [Stmt.assign TileDType.bool [64, 64] "mask"
+              (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist")
+                (Op.constNat 64))]
+          [Stmt.assign TileDType.bool [64, 64] "mask"
+              (Op.boolAnd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist")
+                  (Op.constNat 0))
+                (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist")
+                  (Op.constNat 64)))]],
+    Stmt.assign TileDType.real [64, 64] "qk"
+      (Op.sub NumericDType.real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref TileDType.real [64, 64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref TileDType.real [64] "m"))),
+    Stmt.assign TileDType.real [64, 64] "p" (Op.exp2 (Op.ref TileDType.real [64, 64] "qk")),
+    Stmt.ifThen (Op.constBool Bool.true)
+      [Stmt.assign TileDType.real [64, 64] "p"
+          (Op.where (Op.ref TileDType.bool [64, 64] "mask") (Op.ref TileDType.real [64, 64] "p")
+            (Op.broadcast (Op.const 0) [64, 64]))],
+    Stmt.ifThen (Op.boolNot (Op.constBool Bool.true))
+      [Stmt.assign TileDType.real [64, 64] "p"
+          (Op.where
+            (Op.remap [64, 64] (Broadcast.leftIndex (Broadcast.consSame (Broadcast.consL Broadcast.nil)))
+              (Op.expandDim ⟨1, by simp⟩
+                (Op.lt ComparableDType.nat Broadcast.scalarR
+                  (Op.add NumericDType.nat Broadcast.scalarR (Op.arange 64)
+                    (Op.ref TileDType.nat [] "start_m"))
+                  (Op.constNat 128))))
+            (Op.ref TileDType.real [64, 64] "p") (Op.broadcast (Op.const 0) [64, 64]))],
+    Stmt.assign TileDType.real [64] "o"
+      (Op.add NumericDType.real (Broadcast.consSame Broadcast.nil) (Op.ref TileDType.real [64] "o")
+        (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref TileDType.real [64, 64] "p"))),
+    Stmt.assign TileDType.blockPtr [64, 64] "Q_block_ptr"
+      (Op.advanceBlockPtr (Op.ref TileDType.blockPtr [64, 64] "Q_block_ptr") [64, 0]),
+    Stmt.assign TileDType.ptr [64] "m_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref TileDType.ptr [64] "m_ptrs") (Op.constNat 64))]
+
 noncomputable def producedAttentionScoreCase1OutValue
     (s : BlockState) (Q K M Out : RegionName) (sm_scale : ℝ)
     (i : Fin 64) : ℝ :=
@@ -747,5 +915,396 @@ abbrev attention_score_python_case3_output_summary
 abbrev attention_score_python_case4_output_summary
     (Q K M Score Out : RegionName) (sm_scale : ℝ) (s : BlockState) :=
   attention_score_python_case4_output_surface_summary Q K M Score Out sm_scale s
+
+/-- **`qk += dot q k` statement eval** (the raw-score accumulation onto the
+zero-initialized `qk`). -/
+theorem score_qkRaw_eval (st : BlockState) (qk0 : Tile .real [64,64])
+    (qtile ktile : Tile .real [64,64])
+    (hqk : st.regs .real [64,64] "qk" = some qk0)
+    (hq : st.regs .real [64,64] "q" = some qtile)
+    (hk : st.regs .real [64,64] "k" = some ktile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [64,64] "qk")
+        (Op.dot (batch := []) (Op.ref .real [64,64] "q") (Op.ref .real [64,64] "k"))) st
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          qk0 (Tile.dot [] qtile ktile)) := by
+  have hdot : @evalOp TileDType.real [64,64]
+      (Op.dot (batch := []) (Op.ref .real [64,64] "q") (Op.ref .real [64,64] "k")) st
+      = some (Tile.dot [] qtile ktile) := by
+    conv_lhs => unfold evalOp
+    simp [hq, hk]
+  rw [evalOp_add]
+  simp only [evalOp_ref, hqk, Option.bind_eq_bind, Option.bind_some]
+  rw [hdot]; rfl
+
+/-- **`qk *= qk_scale` statement eval** (scalar broadcast). -/
+theorem score_qkScale_eval (st : BlockState) (qk1 : Tile .real [64,64]) (sc : ℝ)
+    (hqk : st.regs .real [64,64] "qk" = some qk1)
+    (hsc : st.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) :
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [64,64] "qk") (Op.ref .real [] "qk_scale")) st
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qk1 (Tile.scalar (some sc))) := by
+  rw [evalOp_mul]; simp only [evalOp_ref, hqk, hsc, Option.bind_eq_bind, Option.bind_some]
+
+set_option maxRecDepth 8000 in
+/-- **`dist` statement eval** (the nat-truncated sliding-window distance). -/
+theorem score_dist_eval (st : BlockState) (c sn : Nat)
+    (hsm : st.regs .nat [] "start_m" = some (Tile.scalar (c * 64)))
+    (hsn : st.regs .nat [] "start_n" = some (Tile.scalar sn)) :
+    evalOp (Op.add NumericDType.nat Broadcast.scalarR
+        (Op.sub NumericDType.nat Broadcast.scalarR
+          (Op.add NumericDType.nat Broadcast.scalarR
+            (Op.sub NumericDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+              (Op.expandDim ⟨1, by simp⟩ (Op.arange 64)) (Op.expandDim ⟨0, by simp⟩ (Op.arange 64)))
+            (Op.ref TileDType.nat [] "start_m"))
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_n") (Op.constNat 64)))
+        (Op.constNat 0)) st
+      = some (⟨fun idx : TileIndex [64, 64] =>
+          (((idx.1.val - idx.2.1.val) + c * 64) - sn * 64) + 0⟩ : Tile .nat [64, 64]) := by
+  have hexp1 : @evalOp TileDType.nat [64,1] (Op.expandDim ⟨1, by simp⟩ (Op.arange 64)) st
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun i : Fin 64 => i.val))) := by
+    conv_lhs => unfold evalOp
+    simp [evalOp_arange]
+  have hexp0 : @evalOp TileDType.nat [1,64] (Op.expandDim ⟨0, by simp⟩ (Op.arange 64)) st
+      = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun i : Fin 64 => i.val))) := by
+    conv_lhs => unfold evalOp
+    simp [evalOp_arange]
+  simp only [evalOp_add, evalOp_sub, evalOp_mul, evalOp_constNat, evalOp_ref, hexp1, hexp0,
+    hsm, hsn, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.expandDim_data, Tile.vec, Broadcast.leftIndex, Broadcast.rightIndex,
+    Tile.scalar, NumericDType.add, NumericDType.sub, NumericDType.mul, TileShape.dropInsertedIndex,
+    TileShape.insertAxis, Fin.isValue]
+
+/-- **`mask` statement eval** (the non-complement `(dist ≥ 0) ∧ (dist < 64)`). -/
+theorem score_mask_eval (st : BlockState) (disttile : Tile .nat [64,64])
+    (hd : st.regs .nat [64,64] "dist" = some disttile) :
+    evalOp (Op.boolAnd (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist")
+          (Op.constNat 0))
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [64, 64] "dist")
+          (Op.constNat 64))) st
+      = some (⟨fun idx : TileIndex [64, 64] =>
+          (decide (0 ≤ disttile.data idx) && decide (disttile.data idx < 64))⟩ : Tile .bool [64, 64]) := by
+  rw [evalOp_boolAnd', evalOp_ge', evalOp_lt]
+  simp only [evalOp_ref, evalOp_constNat, hd, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp [Tile.bop, Tile.cop, ComparableDType.ge, ComparableDType.lt]
+
+/-- **`qk -= m[:, None]` statement eval.** -/
+theorem score_qk2_eval (st : BlockState) (qk2 : Tile .real [64,64]) (mt : Tile .real [64])
+    (hqk : st.regs .real [64,64] "qk" = some qk2)
+    (hm : st.regs .real [64] "m" = some mt) :
+    evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64,64] "qk") (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "m"))) st
+      = some (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          qk2 (Tile.expandDim ⟨1, by simp⟩ mt)) := by
+  have hexp : @evalOp TileDType.real [64,1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "m")) st
+      = some (Tile.expandDim ⟨1, by simp⟩ mt) := by
+    conv_lhs => unfold evalOp
+    simp [hm]
+  rw [evalOp_sub]; simp only [evalOp_ref, hqk, Option.bind_eq_bind, Option.bind_some]
+  rw [hexp]; rfl
+
+/-- **`p = exp2 qk` statement eval.** -/
+theorem score_p_eval (st : BlockState) (qkt : Tile .real [64,64])
+    (hqk : st.regs .real [64,64] "qk" = some qkt) :
+    evalOp (Op.exp2 (Op.ref .real [64,64] "qk")) st = some (Tile.uop WithBot.realExp2 qkt) := by
+  rw [evalOp_exp2']; simp [hqk]
+
+/-- **`p = where mask p 0` statement eval.** -/
+theorem score_pwhere_eval (st : BlockState) (mkt : Tile .bool [64,64]) (pt : Tile .real [64,64])
+    (hmask : st.regs .bool [64,64] "mask" = some mkt)
+    (hp : st.regs .real [64,64] "p" = some pt) :
+    evalOp (Op.where (Op.ref .bool [64,64] "mask") (Op.ref .real [64,64] "p")
+        (Op.broadcast (Op.const 0) [64,64])) st
+      = some (Tile.select mkt pt (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64])) := by
+  have hbr : evalOp (Op.broadcast (Op.const 0) [64,64]) st
+      = some (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64]) := by
+    simp [evalOp]
+  rw [evalOp_where]; simp only [evalOp_ref, hmask, hp, hbr, Option.bind_eq_bind, Option.bind_some]
+
+/-- **`o += reduceSum(p, axis 0)` statement eval** (column sum). -/
+theorem score_oAcc_eval (st : BlockState) (ot : Tile .real [64]) (pt : Tile .real [64,64])
+    (ho : st.regs .real [64] "o" = some ot)
+    (hp : st.regs .real [64,64] "p" = some pt) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [64] "o")
+        (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref .real [64,64] "p"))) st
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) ot
+          (Tile.reduceSumDrop (⟨0, by simp⟩ : Fin [64,64].length) pt)) := by
+  have hrs : @evalOp TileDType.real [64]
+      (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref .real [64,64] "p")) st
+      = some (Tile.reduceSumDrop (⟨0, by simp⟩ : Fin [64,64].length) pt) := by
+    conv_lhs => unfold evalOp
+    simp [hp]
+  rw [evalOp_add]; simp only [evalOp_ref, ho, Option.bind_eq_bind, Option.bind_some]
+  rw [hrs]; rfl
+
+/-- **Per-cell weight value.** The `exp2(scaled-dot − m)` tile cell at `(i, j)`
+equals the closed-form `case1Weight`, given the loaded `q`/`k`/`m` tiles. -/
+theorem score_wReg_cell (s : BlockState) (Q K M : RegionName) (sm_scale : ℝ) (c : Nat)
+    (i j : Fin 64)
+    (qtile ktile : Tile .real [64,64]) (mtile : Tile .real [64])
+    (hq : qtile.data (i, j, PUnit.unit) = some (s.readMem Q (case1QKOffset s + (c * 64 + i.val) * 64 + j.val * 1)))
+    (hqd : ∀ d : Fin 64, qtile.data (i, d, PUnit.unit) = some (s.readMem Q (case1QKOffset s + (c * 64 + i.val) * 64 + d.val * 1)))
+    (hkd : ∀ d : Fin 64, ktile.data (d, j, PUnit.unit) = some (s.readMem K (case1QKOffset s + d.val + (s.pids 0 * 64 + j.val) * 64)))
+    (hm : mtile.data (i, PUnit.unit) = some (s.readMem M (case1MOffset s (c * 64 + i.val)))) :
+    (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64]) (Tile.dot [] qtile ktile))
+          (Tile.scalar (some (sm_scale * 1.4426950408889634))))
+        (Tile.expandDim ⟨1, by simp⟩ mtile))).data (i, j, PUnit.unit)
+      = some (case1Weight s Q K M sm_scale c i.val j.val) := by
+  have hdot : (Tile.dot [] qtile ktile).data (i, j, PUnit.unit)
+      = some (case1RawScore s Q K (case1QKOffset s) (case1QKOffset s) (c * 64 + i.val) (s.pids 0 * 64 + j.val)) := by
+    rw [Tile.dot_nil_data, case1RawScore]
+    have hterm : (fun d : Fin 64 => Option.map₂ (· * ·) (qtile.data (i, d, PUnit.unit)) (ktile.data (d, j, PUnit.unit)))
+        = (fun d : Fin 64 => ((s.readMem Q (case1QKOffset s + (c * 64 + i.val) * 64 + d.val) *
+              s.readMem K (case1QKOffset s + d.val + (s.pids 0 * 64 + j.val) * 64) : ℝ) : WithBot ℝ)) := by
+      funext d; rw [hqd d, hkd d]; simp only [mul_one, Option.map₂]; norm_cast
+    rw [hterm, ← WithBot.coe_sum]
+    refine congrArg some (Finset.sum_congr rfl (fun d _ => by ring_nf))
+  show WithBot.realExp2 _ = _
+  simp only [Tile.uop_data, Tile.bop_data, Tile.expandDim_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex, hdot, hm, Tile.scalar, NumericDType.add, NumericDType.mul, NumericDType.sub,
+    WithBot.realAdd, WithBot.realMul, WithBot.realSub, Option.map₂, Option.bind, Option.map]
+  rw [case1Weight, WithBot.realExp2]
+  refine congrArg some ?_
+  rw [pow2]
+  congr 1
+  ring
+
+set_option maxHeartbeats 2000000 in
+/-- **Loop-body execution + column-sum accumulation.** One iteration of the
+case-1 loop body (with `start_m = c·64` already set), given the invariant register
+readbacks, advances `o` by the per-query-block column sum `case1ColSum`, advances
+`Q_block_ptr` by one row block, and `m_ptrs` by 64. -/
+theorem score_loopBody_eval
+    (s sin : BlockState) (Q K M : RegionName) (sm_scale : ℝ) (c : Nat)
+    (oF : Fin 64 → ℝ)
+    (hpids : sin.pids = s.pids) (hmem : sin.mem = s.mem)
+    (hundef : ∀ rg o, sin.undef rg o = 0)
+    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar (c * 64)))
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0)))
+    (hqks : sin.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.4426950408889634))))
+    (ho : sin.regs .real [64] "o" = some ⟨fun idx : TileIndex [64] => some (oF idx.1)⟩)
+    (hk : sin.regs .real [64, 64] "k" = some ⟨fun idx : TileIndex [64, 64] =>
+        some (s.readMem K (case1QKOffset s + idx.1.val + (s.pids 0 * 64 + idx.2.1.val) * 64))⟩)
+    (hQbp : sin.regs .blockPtr [64, 64] "Q_block_ptr" = some ⟨fun _ : TileIndex [64, 64] =>
+        { region := Q, baseOffset := case1QKOffset s, parentShape := [128, 64],
+          blockShape := [64, 64], strides := [64, 1], offsets := [c * 64, 0] }⟩)
+    (hmp : sin.regs .ptr [64] "m_ptrs" = some ⟨fun idx : TileIndex [64] =>
+        (M.cast, s.pids 1 * 128 + c * 64 + idx.1.val)⟩) :
+    ∃ sF, stepStmts attentionScoreCase1LoopBody sin = some sF
+      ∧ sF.pids = s.pids ∧ sF.mem = s.mem ∧ (∀ rg o, sF.undef rg o = 0)
+      ∧ sF.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0))
+      ∧ sF.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.4426950408889634)))
+      ∧ sF.regs .real [64] "o" = some ⟨fun idx : TileIndex [64] =>
+          some (oF idx.1 + case1ColSum s Q K M sm_scale c idx.1)⟩
+      ∧ sF.regs .blockPtr [64, 64] "Q_block_ptr" = some ⟨fun _ : TileIndex [64, 64] =>
+          { region := Q, baseOffset := case1QKOffset s, parentShape := [128, 64],
+            blockShape := [64, 64], strides := [64, 1], offsets := [c * 64 + 64, 0] }⟩
+      ∧ sF.regs .ptr [64] "m_ptrs" = some ⟨fun idx : TileIndex [64] =>
+          (M.cast, s.pids 1 * 128 + (c * 64 + 64) + idx.1.val)⟩ := by
+  -- The loaded q tile (Q_block_ptr offsets [c·64,0], strides [64,1]).
+  set qtile : Tile .real [64, 64] := ⟨fun idx : TileIndex [64, 64] =>
+      some (s.readMem Q (case1QKOffset s + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1))⟩ with hqt
+  set ktile : Tile .real [64, 64] := ⟨fun idx : TileIndex [64, 64] =>
+      some (s.readMem K (case1QKOffset s + idx.1.val + (s.pids 0 * 64 + idx.2.1.val) * 64))⟩ with hkt
+  set mtile : Tile .real [64] := ⟨fun idx : TileIndex [64] =>
+      some (s.readMem M (s.pids 1 * 128 + c * 64 + idx.1.val))⟩ with hmt
+  -- the dist tile and the mask register value produced by score_mask_eval
+  set disttile : Tile .nat [64, 64] := ⟨fun idx : TileIndex [64, 64] =>
+      (((idx.1.val - idx.2.1.val) + c * 64) - s.pids 0 * 64) + 0⟩ with hdistt
+  set masktile : Tile .bool [64, 64] := ⟨fun idx : TileIndex [64, 64] =>
+      decide (case1Mask s c idx.1.val idx.2.1.val)⟩ with hmask
+  have hdistt_eq : ∀ idx : TileIndex [64, 64], disttile.data idx = case1Dist s c idx.1.val idx.2.1.val := by
+    intro idx; simp [hdistt, case1Dist]
+  have hmask_eq : ⟨fun idx : TileIndex [64, 64] =>
+      (decide (0 ≤ disttile.data idx) && decide (disttile.data idx < 64))⟩ = masktile := by
+    rw [hmask]; refine congrArg _ ?_; ext idx
+    simp [hdistt_eq, case1Mask, decide_eq_decide]
+  have hrm : sin.readMem = s.readMem := by funext rg o; simp [BlockState.readMem, hmem]
+  -- q-load eval (parameterized over any state st whose Q_block_ptr / mem agree with sin)
+  have hqEval : ∀ st : BlockState,
+      st.regs .blockPtr [64,64] "Q_block_ptr" = some ⟨fun _ : TileIndex [64, 64] =>
+        { region := Q, baseOffset := case1QKOffset s, parentShape := [128, 64],
+          blockShape := [64, 64], strides := [64, 1], offsets := [c * 64, 0] }⟩ →
+      st.readMem = s.readMem →
+      evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [64,64] "Q_block_ptr") []) MaskOpt.none) st
+        = some qtile := by
+    intro st hq hrm'
+    rw [load_blockPtr_Q_eval Q (case1QKOffset s) 128 64 64 64 64 1 (c * 64)
+      (Op.ref .blockPtr [64, 64] "Q_block_ptr") _ (by rw [evalOp_ref]; exact hq)]
+    rw [hqt]; refine congrArg some ?_; ext idx; simp [hrm']
+  unfold attentionScoreCase1LoopBody
+  -- stmt 0: start_m = ref start_m
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_m") sin = some (Tile.scalar (c * 64)) from by
+      rw [evalOp_ref]; exact hsm))]
+  -- stmt 1: ifThenElse true [q = load] _
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.ifThenElse (Op.constBool Bool.true) _ _) _ = some _ from by
+      rw [stepStmt_ifThenElse_true, stepStmts.cons_some (stepStmt_assign_eq_some
+        (hqEval _ (by simp [hQbp]) (by funext rg o; simp [BlockState.readMem, hmem]))), stepStmts.nil])]
+  -- stmt 2: m = load(m_ptrs)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (MemAccess.ptr (Op.ref .ptr [64] "m_ptrs")) MaskOpt.none) _ = some mtile from by
+      rw [load_ptr_none_real_score (Op.ref .ptr [64] "m_ptrs") _
+        (⟨fun idx : TileIndex [64] => (M.cast, s.pids 1 * 128 + c * 64 + idx.1.val)⟩ : Tile .ptr [64])
+        (by rw [evalOp_ref]; simp [hmp])]
+      rw [hmt]; refine congrArg some ?_; ext idx; simp [BlockState.readMem, hmem]))]
+  -- stmt 3: qk = full [64,64] 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64,64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64]) from by
+      simp [evalOp_full]))]
+  -- stmt 4: qk = qk + dot q k  (the raw score)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_qkRaw_eval _ (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64]) qtile ktile
+      (by simp) (by simp) (by simp [hk])))]
+  -- stmt 5: qk = qk * qk_scale  (scaled raw score)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_qkScale_eval _
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64]) (Tile.dot [] qtile ktile))
+      (sm_scale * 1.4426950408889634) (by simp) (by simp [hqks])))]
+  -- stmt 6: ifThen true [dist; ifThenElse false [_] [mask]]
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.ifThen (Op.constBool Bool.true) _) _ = some _ from by
+      rw [stepStmt_ifThen_true, stepStmts.cons_some (stepStmt_assign_eq_some
+        (score_dist_eval _ c (s.pids 0) (by simp [hsm]) (by simp [hsn])))]
+      rw [stepStmts.cons_some
+        (show stepStmt (Stmt.ifThenElse (Op.constBool Bool.false) _ _) _ = some _ from by
+          rw [stepStmt_ifThenElse_false, stepStmts.cons_some (stepStmt_assign_eq_some
+            ((score_mask_eval _ disttile (by simp [hdistt])).trans (congrArg some hmask_eq)))]
+          exact stepStmts.nil)]
+      exact stepStmts.nil)]
+  -- the scaled raw-score tile (qk after stmt 5)
+  set scaledqk : Tile .real [64, 64] := Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64]) (Tile.dot [] qtile ktile))
+      (Tile.scalar (some (sm_scale * 1.4426950408889634))) with hsq
+  -- stmt 7: qk -= m[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_qk2_eval _ scaledqk mtile (by simp [hsq]) (by simp)))]
+  -- stmt 8: p = exp2 qk
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_p_eval _ (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        scaledqk (Tile.expandDim ⟨1, by simp⟩ mtile)) (by simp)))]
+  -- stmt 9: ifThen true [p = where mask p 0]
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.ifThen (Op.constBool Bool.true) _) _ = some _ from by
+      rw [stepStmt_ifThen_true, stepStmts.cons_some (stepStmt_assign_eq_some
+        (score_pwhere_eval _ masktile
+          (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+            (Broadcast.consSame (Broadcast.consR Broadcast.nil)) scaledqk (Tile.expandDim ⟨1, by simp⟩ mtile)))
+          (by simp) (by simp)))]
+      exact stepStmts.nil)]
+  -- stmt 10: ifThen (boolNot (constBool true)) [...] → skipped
+  rw [stepStmts.cons_some (stepStmt_ifThen_boolNot_true _ _)]
+  -- stmt 11: o += reduceSum(p, axis 0)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_oAcc_eval _ (⟨fun idx : TileIndex [64] => some (oF idx.1)⟩ : Tile .real [64])
+      (Tile.select masktile
+        (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil)) scaledqk (Tile.expandDim ⟨1, by simp⟩ mtile)))
+        (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64]))
+      (by simp [ho]) (by simp)))]
+  -- stmt 12: Q_block_ptr = advance [64, 0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [64,64] "Q_block_ptr") [64, 0]) _
+        = some (⟨fun _ : TileIndex [64, 64] =>
+            { region := Q, baseOffset := case1QKOffset s, parentShape := [128, 64],
+              blockShape := [64, 64], strides := [64, 1], offsets := [c * 64 + 64, 0] }⟩
+            : Tile .blockPtr [64,64]) from by
+      rw [advanceBlockPtr_eval]; simp [hQbp]))]
+  -- stmt 13: m_ptrs += 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [64] "m_ptrs") (Op.constNat 64)) _
+        = some (⟨fun idx : TileIndex [64] =>
+            (M.cast, s.pids 1 * 128 + (c * 64 + 64) + idx.1.val)⟩ : Tile .ptr [64]) from by
+      rw [evalOp_ptrAdd']; simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff, hmp,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.rightIndex, Broadcast.leftIndex]
+        omega))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp [hpids]
+  · funext rg o; simp only [BlockState.setReg_mem]; rw [hmem]
+  · intro rg o; simp [hundef]
+  · simp [hsn]
+  · simp [hqks]
+  · -- o register = oF + column sum
+    refine congrArg some ?_
+    ext idx
+    -- the masked-weight tile cell, lane-wise
+    have hcell : ∀ ii : Fin 64,
+        (Tile.select masktile
+          (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+            (Broadcast.consSame (Broadcast.consR Broadcast.nil)) scaledqk (Tile.expandDim ⟨1, by simp⟩ mtile)))
+          (⟨fun _ : TileIndex [64,64] => some (0:ℝ)⟩ : Tile .real [64,64])).data (ii, idx.1, PUnit.unit)
+        = some (if case1Mask s c ii.val idx.1.val
+            then case1Weight s Q K M sm_scale c ii.val idx.1.val else 0) := by
+      intro ii
+      rw [Tile.select_data]
+      have hmaskcell : masktile.data (ii, idx.1, PUnit.unit) = decide (case1Mask s c ii.val idx.1.val) := by
+        rw [hmask]
+      rw [hmaskcell, hsq]
+      by_cases hmk : case1Mask s c ii.val idx.1.val
+      · simp only [hmk, decide_true, if_true]
+        refine score_wReg_cell s Q K M sm_scale c ii idx.1 qtile ktile mtile
+          (by simp [hqt]) (fun d => by simp [hqt]) (fun d => by simp [hkt]) ?_
+        rw [hmt]; simp only [Tile.mk.injEq]; congr 2; simp [case1MOffset]; ring
+      · simp only [hmk, decide_false, Bool.false_eq_true, if_false]
+    obtain ⟨ix, ⟨⟩⟩ := idx
+    show (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (⟨fun idx : TileIndex [64] => some (oF idx.1)⟩ : Tile .real [64])
+        (Tile.reduceSumDrop (⟨0, by simp⟩ : Fin [64,64].length) _)).data (ix, PUnit.unit) = _
+    rw [Tile.bop_data, Tile.reduceSumDrop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+    have hsumGoal : ∀ T : Tile .real [64, 64],
+        (∀ ii : Fin 64, T.data (ii, ix, PUnit.unit)
+          = some (if case1Mask s c ii.val ix.val
+              then case1Weight s Q K M sm_scale c ii.val ix.val else 0)) →
+        (∑ x : Fin 64, T.data
+            (TileShape.insertAxisIndex [64,64] (⟨0, by simp⟩ : Fin [64,64].length) (ix, PUnit.unit) x))
+          = some (case1ColSum s Q K M sm_scale c ix) := by
+      intro T hT
+      rw [case1ColSum]
+      rw [show (fun k : Fin 64 => T.data
+            (TileShape.insertAxisIndex [64,64] (⟨0, by simp⟩ : Fin [64,64].length) (ix, PUnit.unit) k))
+          = (fun k : Fin 64 => ((if case1Mask s c k.val ix.val
+              then case1Weight s Q K M sm_scale c k.val ix.val else 0 : ℝ) : WithBot ℝ))
+        from funext (fun k => by
+          rw [show TileShape.insertAxisIndex [64,64] (⟨0, by simp⟩ : Fin [64,64].length) (ix, PUnit.unit) k
+                = (k, ix, PUnit.unit) from rfl, hT k]; rfl)]
+      rw [← WithBot.coe_sum]; rfl
+    rw [show some (oF ix + case1ColSum s Q K M sm_scale c ix)
+          = NumericDType.real.add (some (oF ix)) (some (case1ColSum s Q K M sm_scale c ix)) from by
+        simp only [NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]]
+    refine congrArg _ ?_
+    exact hsumGoal _ hcell
+  · simp
+  · simp
+
+theorem attention_score_case1_loopBody_check
+    (Q K M Out : RegionName) (sm_scale : ℝ) :
+    (attention_score_kernel Q K M Out
+        32768 8192 64 1 32768 8192 64 1 512 128 1
+        2 4 4 128 128 128 0 64 64 64 64 sm_scale
+        Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.drop 16
+      = Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+          (Op.constNat 64) attentionScoreCase1LoopBody
+        :: (attention_score_kernel Q K M Out
+            32768 8192 64 1 32768 8192 64 1 512 128 1
+            2 4 4 128 128 128 0 64 64 64 64 sm_scale
+            Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body.drop 17 := by
+  rfl
 
 end VeriTile.Bench.TritonBenchG.AttentionScore
