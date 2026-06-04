@@ -933,6 +933,35 @@ theorem mistral_acc_step_eval (s : BlockState) (BN BD : Nat)
   rw [Finset.sum_congr rfl (fun k _ => hcoe k), ← WithBot.coe_sum]
   rfl
 
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **Unmasked `[BLOCK_DMODEL]` store readback recipe** (`tl.store(out_ptrs, acc)`).
+The store is unmasked over the whole head-dim vector through the `out_ptrs`
+pointer tile. Given `out_ptrs` reads back as the pointer tile
+`(fun i => (Out, outAddr i))` with injective `outAddr`, and `acc` reads back as
+the value tile lane `accVal`, every lane reads back its stored accumulator value:
+`(stepStmt (store …) s).map (·.readMem Out (outAddr i)) = some (accVal i)`. The
+per-lane readback is the `scatter_readback_nd` scatter/gather principle, the same
+one used by `token_attn_mistral_final_store_slice_correct`. -/
+theorem mistral_store_eval (s : BlockState) (Out : RegionName) (BD : Nat)
+    (outAddr : TileIndex [BD] → Nat) (accVal : TileIndex [BD] → ℝ)
+    (hout : s.regs .ptr [BD] "out_ptrs" =
+      some (⟨fun i : TileIndex [BD] => ((Out : RegionName), outAddr i)⟩ : Tile .ptr [BD]))
+    (hacc : s.regs .real [BD] "acc" =
+      some (⟨fun i : TileIndex [BD] => some (accVal i)⟩ : Tile .real [BD]))
+    (hinj : Function.Injective outAddr) (i : TileIndex [BD]) :
+    (stepStmt (Stmt.store .real [BD]
+        (MemAccess.ptr (Op.ref .ptr [BD] "out_ptrs"))
+        (Op.ref .real [BD] "acc")
+        (MaskOpt.none)) s).map (·.readMem Out (outAddr i))
+      = some (accVal i) := by
+  simp only [stepStmt, evalOp_ref, hout, hacc, Option.bind, Option.map]
+  have hrw : ((TileShape.allIndices [BD]).foldl
+      (fun acc k => acc.writeMem Out (outAddr k) (accVal k)) s).readMem Out (outAddr i)
+      = accVal i := BlockState.scatter_readback_nd s outAddr accVal hinj i
+  rw [← hrw]
+  rfl
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
