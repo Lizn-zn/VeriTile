@@ -347,6 +347,52 @@ theorem osBlockStep_foldl_eq_batch (blocks : List (List (ℝ × ℝ))) :
   · exact absurd hm (ne_of_gt (pow2_pos _))
   · rw [zero_add, zero_add, mul_div_mul_left _ _ hm]
 
+/-- The running max after folding `osStep` over a list is `blockMax`. -/
+theorem osStep_foldl_fst (xs : List (ℝ × ℝ)) (m l acc : ℝ) :
+    (xs.foldl osStep (m, l, acc)).1 = blockMax m xs := by
+  induction xs generalizing m l acc with
+  | nil => simp [blockMax]
+  | cons x xs ih =>
+    obtain ⟨s, v⟩ := x
+    simp only [List.foldl_cons, osStep, blockMax, List.foldl_cons]
+    exact ih (max m s) _ _
+
+/-- **One block step = the per-key `osStep` fold over that block.** The kernel
+takes the block max and rescales once per block; this equals streaming the block's
+keys one at a time. Both keep `l = 2^(-m)·Σ2^s`, `acc = 2^(-m)·Σ2^s·v` and end at
+the same running max `blockMax`. -/
+theorem osBlockStep_eq_foldl_osStep (st : ℝ × ℝ × ℝ) (block : List (ℝ × ℝ)) :
+    osBlockStep st block = block.foldl osStep st := by
+  obtain ⟨m, l, acc⟩ := st
+  set m' := blockMax m block with hm'
+  have hfst : (block.foldl osStep (m, l, acc)).1 = m' := osStep_foldl_fst block m l acc
+  -- both consistency facts at the same anchor L = 2^m·l, T = 2^m·acc
+  have hlL : l = pow2 (-m) * (pow2 m * l) := by
+    rw [← mul_assoc, ← pow2_add]; ring_nf; simp
+  have haccT : acc = pow2 (-m) * (pow2 m * acc) := by
+    rw [← mul_assoc, ← pow2_add]; ring_nf; simp
+  obtain ⟨hl1, ha1⟩ := osStep_foldl_consistent block m l acc (pow2 m * acc) (pow2 m * l) hlL haccT
+  obtain ⟨hl2, ha2⟩ := osBlockStep_foldl_consistent [block] m l acc (pow2 m * acc) (pow2 m * l) hlL haccT
+  simp only [List.foldl_cons, List.foldl_nil, List.flatten_cons, List.flatten_nil,
+    List.append_nil] at hl2 ha2
+  apply Prod.ext
+  · -- max components
+    show (osBlockStep (m, l, acc) block).1 = (block.foldl osStep (m, l, acc)).1
+    rw [hfst]; rfl
+  apply Prod.ext
+  · -- l components
+    show (osBlockStep (m, l, acc) block).2.1 = (block.foldl osStep (m, l, acc)).2.1
+    rw [hl1, hl2]
+    congr 1
+    show pow2 (-(osBlockStep (m, l, acc) block).1) = pow2 (-(block.foldl osStep (m, l, acc)).1)
+    rw [hfst]; rfl
+  · -- acc components
+    show (osBlockStep (m, l, acc) block).2.2 = (block.foldl osStep (m, l, acc)).2.2
+    rw [ha1, ha2]
+    congr 1
+    show pow2 (-(osBlockStep (m, l, acc) block).1) = pow2 (-(block.foldl osStep (m, l, acc)).1)
+    rw [hfst]; rfl
+
 /-- Summing `h` over the flattened block grid `[[g 0 0, g 0 1, …], [g 1 0, …], …]`
 equals the double sum. Bridges the kernel's block-indexed loop (a list of blocks)
 to the spec's flat per-key `Finset.sum`. -/
