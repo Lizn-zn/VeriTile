@@ -2607,6 +2607,316 @@ private theorem ctxg_block_sup_eq (s0 : BlockState)
   refine ctxg_reduceMaxDrop_data_row qkT rmaxT hrm i _ ?_
   intro jL; rw [hqk jL]; rfl
 
+/-- **acc-wall fix: alpha/p expandDim-subtraction readback as a TOP-LEVEL lemma.**
+The `qk -= m_ij[:, None]` cell `(qkT − expandDim m_ij).data (i, jL)` equals
+`some (score i jL − mij i)`, computed once here so the kernel elaborates the
+`dropInsertedIndex [128] ⟨1,_⟩ 1 (...)` axis term a single time (avoiding the
+in-proof deep recursion of forcing `Tile.expandDim_data`+`dropInsertedIndex`
+inline in the `acc` conjunct). -/
+theorem ctx_qk_sub_mij_cell (qkT : Tile .real [128, 128]) (mijT : Tile .real [128])
+    (i jL : Fin 128) (sc mij : ℝ)
+    (hqk : qkT.data (i, jL, PUnit.unit) = some sc)
+    (hmij : mijT.data (i, PUnit.unit) = some mij) :
+    (Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame qkT
+        (Tile.expandDim ⟨1, by simp⟩ mijT)).data (i, jL, PUnit.unit)
+      = some (sc - mij) := by
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, TileShape.insertAxisIndex, hqk, hmij,
+    NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **M3 — `ctx_attn_step`: the streaming loop body advances `ctxInvariant` by one
+block.** From the invariant at block `c` (`i = c·128`, `(c+1)·128 ≤ S`), the 18
+lowered loop-body statements step to the invariant at block `c+1`. The running
+`m_i`/`l_i`/`acc` registers advance by one `osStepBot` block over `ctxG` — proved
+via `gStateBot_succ_explicit` (the explicit one-block rescale-and-add) matched
+cell-by-cell to the kernel's `m_ij`/`l_i`/`acc` tiles (`ctxg_mij_max`/
+`ctxg_dot_row` + `ctx_qk_sub_mij_cell` for the `p` cell). -/
+theorem ctx_attn_step
+    (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (S bel : Nat) (c : Nat) (i : Nat) (s : BlockState)
+    (hwin : (c + 1) * 128 ≤ S) (hieq : i = c * 128)
+    (hinv : ctxInvariant Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len s0
+        sm_scale_python S bel c s) :
+    ∃ s', stepStmts (ctxLoopBody Q K V) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ ctxInvariant Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len s0
+          sm_scale_python S bel (c + 1) s' := by
+  subst hieq
+  -- abbreviations matching the invariant
+  set plen := s0.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s0.pids 1 / 16) with hplend
+  set sl := s0.readMemValue .nat (Region.cast B_Seqlen) (s0.pids 1 / 16) - plen with hsld
+  set g := fun (i d : Fin 128) =>
+    ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python S bel i d with hgd
+  simp only [ctxInvariant] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hom, hon, hod,
+      hq, hmi, hli, hacc⟩ := hinv
+  -- the loaded q tile of the invariant (row-masked) equals ctxQTileM at every cell
+  set qtile : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
+      if decide (128 * s0.pids 0 + idx.1.val < sl) then
+        s0.readMemValue .real (Region.cast Q)
+          ((s0.readMemValue .nat (Region.cast B_Start_Loc) (s0.pids 1 / 16) + (128 * s0.pids 0 + idx.1.val))
+              * 2048 + s0.pids 1 % 16 * 128 + idx.2.1.val * 1)
+      else some (0.0 : ℝ)⟩ with hqtile
+  set mtile : Tile .real [128] := ⟨fun r : TileIndex [128] =>
+      (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).1⟩ with hmtile
+  set ltile : Tile .real [128] := ⟨fun r : TileIndex [128] =>
+      some (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).2.1⟩ with hltile
+  set acctile : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
+      some (gStateBot S (c * 128) (g idx.1 idx.2.1)).2.2⟩ with hacctile
+  -- run the body via the banked steps lemma
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hsnF, hcbF, hckvhF, hchF, hplenF, hslF, hbelF,
+      homF, honF, hodF, hqF,
+      kloadT, vloadT, qkT, rmaxT, mijT, alphaT, lijT, pT, acc1T,
+      hkleq, hvleq, hqkeq, hrm, hmijeq, haleq, hpeq, hlijeq, hacc1eq,
+      hm_iF, hl_iF, haccF⟩ :=
+    ctxLoopBody_steps Q K V (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))) (c * 128)
+      (fun r : Fin 128 => 128 * s0.pids 0 + r.val)
+      (s0.pids 1 / 16) (s0.pids 1 % 16 / 1) (s0.pids 1 % 16) plen sl bel
+      qtile mtile ltile acctile
+      (by rw [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hcb)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hckvh)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hch)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hplen)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsl)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hbel)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hom)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hon)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hod)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc)
+      (by intro rg o; simp [BlockState.setReg_undef, hundef])
+  refine ⟨sF, hchain, ?_⟩
+  -- key memory facts: cur_kv_head = cur_head (kv_group_num = 1)
+  have hckvhd : s0.pids 1 % 16 / 1 = s0.pids 1 % 16 := Nat.div_one _
+  have hrmem : ∀ (R : RegionName) (o : Nat),
+      (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))).readMem R o = s0.readMem R o := by
+    intro R o; rw [BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  -- per-cell q readback: qtile = ctxQTileM
+  have hqf : ∀ (a e : Fin 128),
+      qtile.data (a, e, PUnit.unit) = some (ctxQTileM s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len 128 a e) := by
+    intro a e
+    simp only [hqtile, ctxQTileM, ctxQTile, curBatch, curHead, seqLen, promptLen,
+      BlockState.readMemValue_real, hsld, hplend, Region.cast_id,
+      show s0.pids 0 * 128 + a.val = 128 * s0.pids 0 + a.val from by ring,
+      Nat.mul_one, decide_eq_true_eq]
+    split
+    · rfl
+    · norm_num
+  -- per-cell k readback: kloadT = ctxKTileM (at global key c*128+jL)
+  have hkf : ∀ (jL e : Fin 128),
+      kloadT.data (e, jL, PUnit.unit)
+        = some (ctxKTileM s0 K S bel (⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩, e, PUnit.unit)) := by
+    intro jL e
+    rw [hkleq]
+    show (if decide (c * 128 + jL.val < bel) then
+        (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))).readMemValue .real (Region.cast K)
+          (s0.pids 1 / 16 * 8388608 + (c * 128 + jL.val) * 128 + (s0.pids 1 % 16 / 1) * 262144 + e.val * 1)
+        else some (0.0 : ℝ)) = _
+    simp only [ctxKTileM, ctxKTile, curBatch, curHead, BlockState.readMemValue_real,
+      Region.cast_id, hrmem, hckvhd, Nat.mul_one, decide_eq_true_eq]
+    by_cases h : c * 128 + jL.val < bel
+    · rw [if_pos h, if_pos h]
+    · rw [if_neg h, if_neg h]; norm_num
+  -- per-cell v readback: vloadT = ctxVTileM
+  have hvf : ∀ (jL d : Fin 128),
+      vloadT.data (jL, d, PUnit.unit)
+        = some (ctxVTileM s0 V S bel (⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩, d, PUnit.unit)) := by
+    intro jL d
+    rw [hvleq]
+    show (if decide (c * 128 + jL.val < bel) then
+        (s.setReg "start_n" .nat [] (Tile.scalar (c * 128))).readMemValue .real (Region.cast V)
+          (s0.pids 1 / 16 * 8388608 + (c * 128 + jL.val) * 128 + (s0.pids 1 % 16 / 1) * 262144 + d.val * 1)
+        else some (0.0 : ℝ)) = _
+    simp only [ctxVTileM, ctxVTile, curBatch, curHead, BlockState.readMemValue_real,
+      Region.cast_id, hrmem, hckvhd, Nat.mul_one, decide_eq_true_eq]
+    by_cases h : c * 128 + jL.val < bel
+    · rw [if_pos h, if_pos h]
+    · rw [if_neg h, if_neg h]; norm_num
+  -- the score cell: ctxQkCell = (g i d ⟨c*128+jL⟩).1, for any d (score is d-independent)
+  have hscore : ∀ (a : Fin 128) (jL : Fin 128) (dd : Fin 128),
+      ctxQkCell sm_scale_python (c * 128) plen (fun r : Fin 128 => 128 * s0.pids 0 + r.val)
+          (fun a e => ctxQTileM s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len 128 a e)
+          (fun jK e => ctxKTileM s0 K S bel (⟨c * 128 + jK.val, gBlock_idx_lt S 128 c hwin jK⟩, e, PUnit.unit))
+          a jL
+        = (g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 := by
+    intro a jL dd
+    simp only [hgd, ctxG, ctxKVM, ctxQkCell]
+    have hpeq2 : promptLen s0 16 B_Prompt_Cache_Len = plen := by
+      rw [hplend]; rfl
+    by_cases h : c * 128 + jL.val ≤ 128 * s0.pids 0 + a.val + plen
+    · rw [if_pos h, if_pos (by rw [hpeq2]; omega)]
+    · rw [if_neg h, if_neg (by rw [hpeq2]; omega)]
+  -- qkT cell = some score
+  have hqk : ∀ (a jL : Fin 128) (dd : Fin 128),
+      qkT.data (a, jL, PUnit.unit) = some (g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 := by
+    intro a jL dd
+    rw [hqkeq]
+    rw [ctx_qkT_cell sm_scale_python (c * 128) plen (fun r : Fin 128 => 128 * s0.pids 0 + r.val)
+      qtile kloadT
+      (fun aa ee => ctxQTileM s0 Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len 128 aa ee)
+      (fun jK ee => ctxKTileM s0 K S bel (⟨c * 128 + jK.val, gBlock_idx_lt S 128 c hwin jK⟩, ee, PUnit.unit))
+      hqf hkf a jL]
+    rw [hscore a jL dd]
+  -- abbreviate the explicit succ state
+  set st := gStateBot S (c * 128) with hstdef
+  -- M' a dd := running max after (c+1) blocks
+  set M' := fun (a dd : Fin 128) => (gStateBot S ((c + 1) * 128) (g a dd)).1 with hM'def
+  -- the explicit gStateBot at (c+1) (via gStateBot_succ_explicit)
+  have hsucc : ∀ a dd : Fin 128,
+      gStateBot S ((c + 1) * 128) (g a dd)
+        = (M' a dd,
+           (st (g a dd)).2.1 * (WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0
+             + Finset.univ.sum (fun jL : Fin 128 =>
+                 pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' a dd).unbotD 0)),
+           (st (g a dd)).2.2 * (WithBot.realExp2 (WithBot.realSub (st (g a dd)).1 (M' a dd))).unbotD 0
+             + Finset.univ.sum (fun jL : Fin 128 =>
+                 pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' a dd).unbotD 0)
+                   * (g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)) := by
+    intro a dd
+    have he := gStateBot_succ_explicit S c (g a dd) hwin
+    simp only [] at he
+    -- M' a dd = the internal sup (take .1 of he)
+    have hM'eq : M' a dd = (gStateBot S (c * 128) (g a dd)).1 ⊔ Finset.univ.sup (fun jL : Fin 128 =>
+        ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 : WithBot ℝ)) := by
+      rw [hM'def]; simp only []; rw [he]
+    rw [hM'eq]
+    exact he
+  -- M' a dd ≠ ⊥
+  have hM'ne : ∀ a dd : Fin 128, M' a dd ≠ ⊥ := by
+    intro a dd
+    rw [hM'def]
+    simp only []
+    rw [gStateBot_fst_eq_runningMax]
+    exact gRunningMax_succ_ne_bot S 128 c (g a dd) (by norm_num) hwin
+  -- the running-max (score) component is dd-independent
+  have hMdd : ∀ a dd : Fin 128, M' a ⟨0, by decide⟩ = M' a dd := by
+    intro a dd
+    rw [hM'def]
+    simp only []
+    exact (gStateBot_score_congr S ((c + 1) * 128) _ _
+      (fun j => by simp only [hgd, ctxG, ctxKVM])).1
+  -- m_ij cell = M' a 0
+  have hmijc : ∀ a : Fin 128, mijT.data (a, PUnit.unit) = M' a ⟨0, by decide⟩ := by
+    intro a
+    rw [hmijeq]
+    rw [ctxg_mij_max mtile rmaxT a _ _ (by rw [hmtile]) (by rfl)]
+    rw [hM'def]
+    simp only []
+    rw [congrArg Prod.fst (gStateBot_succ_explicit S c (g a ⟨0, by decide⟩) hwin)]
+    simp only []
+    refine congrArg (fun z => (gStateBot S (c * 128) (g a ⟨0, by decide⟩)).1 ⊔ z) ?_
+    exact ctxg_block_sup_eq s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python
+      S bel c hwin a ⟨0, by decide⟩ qkT (fun jL => hqk a jL ⟨0, by decide⟩) rmaxT hrm
+  -- p cell = pow2(score - M'.unbotD)
+  have hpc : ∀ (a jL : Fin 128) (dd : Fin 128),
+      pT.data (a, jL, PUnit.unit)
+        = some (pow2 ((g a dd ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1 - (M' a dd).unbotD 0)) := by
+    intro a jL dd
+    rw [hpeq]
+    refine ctxg_exp2_some
+      (fun aa bb => (g aa dd ⟨c * 128 + bb.val, gBlock_idx_lt S 128 c hwin bb⟩).1 - (M' aa dd).unbotD 0)
+      _ a jL ?_
+    refine ctx_qk_sub_mij_cell qkT mijT a jL _ _ (hqk a jL dd) ?_
+    rw [hmijc a, hMdd a dd]
+    cases hMc : M' a dd with
+    | bot => exact absurd hMc (hM'ne a dd)
+    | coe r => rfl
+  -- now build the invariant at (c+1)
+  have hgapp : ∀ a d : Fin 128,
+      ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale_python S bel a d = g a d :=
+    fun a d => rfl
+  simp only [ctxInvariant, hgapp]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, BlockState.setReg_pids]; exact hpids
+  · rw [hmemF]; exact hmem
+  · exact hundefF
+  · rw [hcbF]
+  · rw [hckvhF]
+  · rw [hchF]
+  · rw [hplenF]
+  · rw [hslF]
+  · rw [hbelF]
+  · rw [homF]
+  · rw [honF]
+  · rw [hodF]
+  · rw [hqF]
+  · -- m_i = (gStateBot (c+1)).1
+    rw [hm_iF]; refine congrArg some ?_; ext a
+    show mijT.data a = (gStateBot S ((c + 1) * 128) (g a.1 ⟨0, by decide⟩)).1
+    rw [hmijc a.1, hM'def]
+  · -- l_i = (gStateBot (c+1)).2.1
+    rw [hl_iF]; refine congrArg some ?_; ext a
+    show _ = some (gStateBot S ((c + 1) * 128) (g a.1 ⟨0, by decide⟩)).2.1
+    rw [hsucc a.1 ⟨0, by decide⟩]
+    simp only []
+    -- l_i tile cell = ltile · alpha + lij
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+    have halc : alphaT.data (a.1, PUnit.unit)
+        = some ((WithBot.realExp2 (WithBot.realSub (st (g a.1 ⟨0, by decide⟩)).1 (M' a.1 ⟨0, by decide⟩))).unbotD 0) := by
+      rw [haleq]
+      show WithBot.realExp2 ((Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile mijT).data (a.1, PUnit.unit)) = _
+      have hinner : (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile mijT).data (a.1, PUnit.unit)
+          = WithBot.realSub (st (g a.1 ⟨0, by decide⟩)).1 (M' a.1 ⟨0, by decide⟩) := by
+        simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub]
+        rw [hmijc a.1]
+      rw [hinner]; exact ctxg_realExp2_eq_some_unbotD _
+    have hlijc : lijT.data (a.1, PUnit.unit)
+        = some (Finset.univ.sum (fun jL : Fin 128 =>
+            pow2 ((g a.1 ⟨0, by decide⟩ ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1
+              - (M' a.1 ⟨0, by decide⟩).unbotD 0))) := by
+      rw [hlijeq, Tile.reduceSumDrop_data]
+      simp only [TileShape.insertAxisIndex]
+      refine Eq.trans (Finset.sum_congr rfl (fun (jL : Fin 128) _ => hpc a.1 jL ⟨0, by decide⟩)) ?_
+      exact ctxg_withBot_sum_some
+        (fun jL : Fin 128 => pow2 ((g a.1 ⟨0, by decide⟩ ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1
+          - (M' a.1 ⟨0, by decide⟩).unbotD 0))
+    rw [hltile, halc, hlijc]
+    show WithBot.realAdd (WithBot.realMul (some _) (some _)) (some _) = _
+    simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  · -- acc = (gStateBot (c+1)).2.2  (the acc conjunct, via accg-style)
+    rw [haccF]; refine congrArg some ?_; ext idx
+    show _ = some (gStateBot S ((c + 1) * 128) (g idx.1 idx.2.1)).2.2
+    rw [hsucc idx.1 idx.2.1]
+    simp only []
+    -- acc tile cell = dot(p, v) + acc1, acc1 = acc · alpha[:,None]
+    simp only [hacc1eq, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.expandDim_data, TileShape.dropInsertedIndex, TileShape.insertAxisIndex]
+    -- m_i cell (d=0) score-independence: (st (g idx.1 0)).1 = (st (g idx.1 idx.2.1)).1
+    have hst1 : (st (g idx.1 ⟨0, by decide⟩)).1 = (st (g idx.1 idx.2.1)).1 := by
+      rw [hstdef]
+      exact (gStateBot_score_congr S (c * 128) _ _
+        (fun j => by simp only [hgd, ctxG, ctxKVM])).1
+    have halc : alphaT.data (idx.1, PUnit.unit)
+        = some ((WithBot.realExp2 (WithBot.realSub (st (g idx.1 idx.2.1)).1 (M' idx.1 idx.2.1))).unbotD 0) := by
+      rw [haleq]
+      show WithBot.realExp2 ((Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile mijT).data (idx.1, PUnit.unit)) = _
+      have hinner : (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile mijT).data (idx.1, PUnit.unit)
+          = WithBot.realSub (st (g idx.1 idx.2.1)).1 (M' idx.1 idx.2.1) := by
+        simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub]
+        rw [hmijc idx.1, hMdd idx.1 idx.2.1]
+        show WithBot.realSub (st (g idx.1 ⟨0, by decide⟩)).1 _ = _
+        rw [hst1]
+      rw [hinner]; exact ctxg_realExp2_eq_some_unbotD _
+    -- alpha factor: st.2.2 uses g idx.1 idx.2.1 directly (value carries d)
+    have hdot : (Tile.dot [] pT vloadT).data (idx.1, idx.2.1, PUnit.unit)
+        = some (Finset.univ.sum (fun jL : Fin 128 =>
+            pow2 ((g idx.1 idx.2.1 ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).1
+                - (M' idx.1 idx.2.1).unbotD 0)
+              * (g idx.1 idx.2.1 ⟨c * 128 + jL.val, gBlock_idx_lt S 128 c hwin jL⟩).2)) := by
+      refine ctxg_dot_row pT vloadT idx.1 idx.2.1 _ _ (fun jL => hpc idx.1 jL idx.2.1) ?_
+      intro jL
+      rw [hvf jL idx.2.1]
+      refine congrArg some ?_
+      simp only [hgd, ctxG, ctxKVM]
+    rw [hacctile, halc, hdot]
+    show WithBot.realAdd (some _) (WithBot.realMul (some _) (some _)) = _
+    simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+    rw [add_comm, mul_comm ((st (g idx.1 idx.2.1)).2.2)]
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
