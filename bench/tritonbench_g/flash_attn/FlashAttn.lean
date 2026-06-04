@@ -1305,6 +1305,58 @@ theorem flashState_succ
   rw [flashKeysUpto_succ, List.foldl_append,
     VeriTile.Triton.osBlockStep_eq_foldl_osStep]
 
+/-- The score-projection (`.1`) of the per-row key list is channel-independent. -/
+theorem flashKeysUpto_map_fst_eq
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
+    (flashKeysUpto qT kT vT scale causal qStart hi i d).map (fun p => p.1)
+      = (flashKeysUpto qT kT vT scale causal qStart hi i d').map (fun p => p.1) := by
+  unfold flashKeysUpto flashKV
+  rw [List.map_filterMap, List.map_filterMap]
+  apply List.filterMap_congr
+  intro j _
+  by_cases h : j.val < hi ∧ (causal → j.val ≤ qStart + i.val) <;> simp [h]
+
+/-- `blockMax` depends only on the score projections. -/
+private theorem blockMax_eq_foldl_map (m₀ : ℝ) (block : List (ℝ × ℝ)) :
+    VeriTile.Triton.blockMax m₀ block = (block.map (fun p => p.1)).foldl max m₀ := by
+  unfold VeriTile.Triton.blockMax
+  induction block generalizing m₀ with
+  | nil => rfl
+  | cons a t ih => simp only [List.foldl_cons, List.map_cons]; exact ih (max m₀ a.1)
+
+/-- The running `max` component of `flashState` is channel-independent. -/
+theorem flashState_fst_eq
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
+    (flashState qT kT vT scale causal qStart hi i d).1
+      = (flashState qT kT vT scale causal qStart hi i d').1 := by
+  unfold flashState
+  rw [VeriTile.Triton.osStep_foldl_fst, VeriTile.Triton.osStep_foldl_fst,
+    blockMax_eq_foldl_map, blockMax_eq_foldl_map,
+    flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
+
+/-- The running denominator component (`.2.1`) of `flashState` is
+channel-independent. -/
+theorem flashState_snd_fst_eq
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
+    (flashState qT kT vT scale causal qStart hi i d).2.1
+      = (flashState qT kT vT scale causal qStart hi i d').2.1 := by
+  have hcons : ∀ dd : Fin DIM,
+      (flashState qT kT vT scale causal qStart hi i dd).2.1
+        = pow2 (-(flashState qT kT vT scale causal qStart hi i dd).1)
+          * (0 + ((flashKeysUpto qT kT vT scale causal qStart hi i dd).map
+              (fun p => pow2 p.1)).sum) := by
+    intro dd
+    exact (VeriTile.Triton.osStep_foldl_consistent
+      (flashKeysUpto qT kT vT scale causal qStart hi i dd) 0 0 0 0 0 (by simp) (by simp)).1
+  rw [hcons d, hcons d', flashState_fst_eq qT kT vT scale causal qStart hi i d d']
+  congr 2
+  rw [show (fun p : ℝ × ℝ => pow2 p.1) = pow2 ∘ (fun p => p.1) from rfl,
+    ← List.map_map, ← List.map_map,
+    flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
+
 /-! ## exec-side loop-invariant skeleton (in progress)
 
 The compiled body of `flash_attn_fwd_kernel_surface` (verified by direct
