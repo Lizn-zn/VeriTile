@@ -874,6 +874,65 @@ theorem mistral_v_gather_eval (s : BlockState)
       simp only [vActive]; omega
     simp only [hlt, decide_false, if_neg hv, if_false, Bool.false_eq_true]
 
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **`acc += tl.sum(p_value[:,None]·v_value, 0)` block-accumulation recipe**
+(shape `[BLOCK_DMODEL]`). The `expandDim ⟨1,_⟩` lifts `p_value` to a `[BN,1]`
+column, the elementwise `·v_value` broadcasts it across the head-dim, and the
+`reduceSum` over axis 0 contracts the `BLOCK_N` window-token rows.
+
+Given the accumulator carry `acc` lane `d = accVal d`, `p_value` lane `j =
+pMasked (SN+j)`, and `v_value` lane `(j,d) = vMasked (SN+j) d`, the result lane
+`d` is `accVal d + Σ_{j<BN} pMasked(SN+j)·vMasked(SN+j) d` — the `acc`-side of the
+`partialAcc_block_succ` recurrence. Uses the `reduceSum`/`Finset.sum_congr`
+machinery (the axis-0 analogue of `reduceSum_some`). -/
+theorem mistral_acc_step_eval (s : BlockState) (BN BD : Nat)
+    (accVal : Fin BD → ℝ) (pVal : Fin BN → ℝ) (vVal : Fin BN → Fin BD → ℝ)
+    (hacc : s.regs .real [BD] "acc" =
+      some (⟨fun idx : TileIndex [BD] => some (accVal idx.1)⟩ : Tile .real [BD]))
+    (hp : s.regs .real [BN] "p_value" =
+      some (⟨fun idx : TileIndex [BN] => some (pVal idx.1)⟩ : Tile .real [BN]))
+    (hv : s.regs .real [BN, BD] "v_value" =
+      some (⟨fun idx : TileIndex [BN, BD] => some (vVal idx.1 idx.2.1)⟩ : Tile .real [BN, BD])) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil)
+        (Op.ref .real [BD] "acc")
+        (Op.reduceSum ⟨0, by simp⟩ Bool.false
+          (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BN] "p_value"))
+            (Op.ref .real [BN, BD] "v_value")))) s
+      = some (⟨fun idx : TileIndex [BD] =>
+          some (accVal idx.1 +
+            ∑ j : Fin BN, pVal j * vVal j idx.1)⟩ : Tile .real [BD]) := by
+  have hexp : @evalOp .real [BN, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BN] "p_value")) s
+      = some (Tile.expandDim ⟨1, by simp⟩
+          (⟨fun idx : TileIndex [BN] => some (pVal idx.1)⟩ : Tile .real [BN])) :=
+    evalOp_expandDim_ref_of_regs .real [BN] ⟨1, by simp⟩ "p_value" s _ hp
+  have hmul : evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BN] "p_value"))
+        (Op.ref .real [BN, BD] "v_value")) s
+      = some (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+          (Tile.expandDim ⟨1, by simp⟩ (⟨fun idx : TileIndex [BN] => some (pVal idx.1)⟩ : Tile .real [BN]))
+          (⟨fun idx : TileIndex [BN, BD] => some (vVal idx.1 idx.2.1)⟩ : Tile .real [BN, BD])) := by
+    rw [evalOp_mul, hexp, evalOp_ref, hv]; rfl
+  rw [evalOp_add, evalOp_ref, hacc]
+  show (evalOp (Op.reduceSum ⟨0, by simp⟩ Bool.false
+      (Op.mul .real (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BN] "p_value"))
+        (Op.ref .real [BN, BD] "v_value"))) s).bind _ = _
+  rw [evalOp_reduceSum, hmul]
+  simp only [Option.bind_eq_bind, Option.bind_some, Tile.reduceSum_false]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨d, u⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.reduceSumDrop_data, Tile.expandDim_data,
+    TileShape.dropInsertedIndex_succ, TileShape.dropInsertedIndex_nil,
+    TileShape.dropInsertedIndex_zero_cons, TileShape.insertAxisIndex, TileShape.axisDim,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+  have hcoe : ∀ k : Fin BN, WithBot.realMul (some (pVal k)) (some (vVal k d))
+      = ((pVal k * vVal k d : ℝ) : WithBot ℝ) := fun k => rfl
+  rw [Finset.sum_congr rfl (fun k _ => hcoe k), ← WithBot.coe_sum]
+  rfl
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
