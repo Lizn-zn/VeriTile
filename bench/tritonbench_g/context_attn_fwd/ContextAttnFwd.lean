@@ -1958,6 +1958,251 @@ theorem ctxLoopBody_steps (Q K V : RegionName) (sin : BlockState) (SN : Nat)
   · -- acc readback (peel m_i)
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
 
+/-! ## STEP C — exec-side bridge suite (context analogues of flash's bridges)
+
+Generic ⊥-seeded online-softmax machinery over an abstract per-key
+`(score, value)` function `g : Fin S → ℝ × ℝ`. Both the spec form (`g = ctxKV`,
+score `ctxQTile`) and the kernel-loaded form (`g` over the actual loaded `q`
+tile) instantiate it, so the per-block advance bridges are proved once. The
+context kernel keeps **all** keys (the causal mask becomes the `-1e8` sentinel
+score, not a `⊥` list drop), so the block sums/sups range over the full `Fin BN`
+window with no `⊥` lanes — simpler than the flash (causal `⊥`-list) bridges. -/
+
+/-- Generic windowed key list `[0, hi)` over an abstract per-key `g`. -/
+noncomputable def gKeysUpto (S hi : Nat) (g : Fin S → ℝ × ℝ) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun j : Fin S => if j.val < hi then some (g j) else none)
+
+/-- Generic block-`c` key list (keys `c·BN ≤ j < (c+1)·BN`). -/
+noncomputable def gBlock (S BN c : Nat) (g : Fin S → ℝ × ℝ) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if c * BN ≤ j.val ∧ j.val < (c + 1) * BN then some (g j) else none)
+
+/-- Generic ⊥-seeded running `(max, l, acc)` after streaming `[0, hi)`. -/
+noncomputable def gStateBot (S hi : Nat) (g : Fin S → ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
+  (gKeysUpto S hi g).foldl osStepBot (⊥, 0, 0)
+
+/-- Generic ⊥-seeded running max after streaming `[0, hi)`. -/
+noncomputable def gRunningMax (S hi : Nat) (g : Fin S → ℝ × ℝ) : WithBot ℝ :=
+  ((gKeysUpto S hi g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+
+theorem ctxKeysUpto_eq_g
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d
+      = gKeysUpto S hi (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d) := rfl
+
+theorem ctxBlock_eq_g
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S BN c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxBlock s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S BN c i d
+      = gBlock S BN c (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d) := rfl
+
+theorem ctxStateBot_eq_g
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d
+      = gStateBot S hi (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d) := rfl
+
+theorem ctxRunningMax_eq_g
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d
+      = gRunningMax S hi (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d) := rfl
+
+/-- The running max component of `gStateBot` is the `WithBot ⊔`-fold `gRunningMax`. -/
+theorem gStateBot_fst_eq_runningMax (S hi : Nat) (g : Fin S → ℝ × ℝ) :
+    (gStateBot S hi g).1 = gRunningMax S hi g := by
+  rw [gStateBot, osStepBot_foldl_fst, gRunningMax, foldl_sup_bot_eq_foldr]
+
+/-- **Window split** (`hi = c·BN`) for the generic key list. -/
+theorem gKeysUpto_succ (S BN c : Nat) (g : Fin S → ℝ × ℝ) :
+    gKeysUpto S ((c + 1) * BN) g = gKeysUpto S (c * BN) g ++ gBlock S BN c g := by
+  unfold gKeysUpto gBlock
+  rw [ctx_filterMap_window_split (List.finRange S) (List.pairwise_lt_finRange S)
+    (c * BN) ((c + 1) * BN) g (by nlinarith [Nat.zero_le BN])]
+
+/-- **One-block advance** of the generic ⊥-seeded state. -/
+theorem gStateBot_succ (S BN c : Nat) (g : Fin S → ℝ × ℝ) :
+    gStateBot S ((c + 1) * BN) g
+      = (gBlock S BN c g).foldl osStepBot (gStateBot S (c * BN) g) := by
+  unfold gStateBot; rw [gKeysUpto_succ, List.foldl_append]
+
+/-- filterMap-sum over `Fin n` with a guard collapses into the masked `Finset.sum`. -/
+theorem ctx_filterMap_finRange_sum {α : Type*} (n : Nat)
+    (p : Fin n → Prop) [DecidablePred p] (g : Fin n → α) (h : α → ℝ) :
+    (((List.finRange n).filterMap (fun j => if p j then some (g j) else none)).map h).sum
+      = ∑ j : Fin n, if p j then h (g j) else 0 := by
+  rw [List.map_filterMap]
+  rw [show (fun j : Fin n => Option.map h (if p j then some (g j) else none))
+        = (fun j : Fin n => if p j then some (h (g j)) else none) from by
+    funext j; by_cases hj : p j <;> simp [hj]]
+  rw [show (((List.finRange n).filterMap (fun j => if p j then some (h (g j)) else none))).sum
+        = ((List.finRange n).map (fun j => if p j then h (g j) else 0)).sum from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : p a <;> simp [ha, ih]]
+  rw [← List.sum_ofFn]; congr 1; rw [List.ofFn_eq_map]
+
+/-- The `WithBot` `foldr` of a filtered score list (coerced) equals the `Finset.sup`
+over `Fin n` of the lane terms (`⊥` on filtered-out lanes). -/
+theorem ctx_filterMap_foldr_sup (n : Nat) (P : Fin n → Prop) [DecidablePred P]
+    (sc : Fin n → ℝ) :
+    (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) := by
+  rw [show (((List.finRange n).filterMap (fun j => if P j then some (sc j) else none)).map
+        (fun x => ((x : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = (List.finRange n).foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ from by
+    induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih => by_cases ha : P a <;> simp [ha, ih]]
+  apply le_antisymm
+  · induction (List.finRange n) with
+    | nil => simp
+    | cons a t ih =>
+      simp only [List.foldr_cons]
+      exact sup_le (Finset.le_sup (f := fun j : Fin n => if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+        (Finset.mem_univ a)) ih
+  · apply Finset.sup_le
+    intro j _
+    have key : ∀ (l : List (Fin n)), j ∈ l →
+        (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥)
+          ≤ l.foldr (fun j a => (if P j then ((sc j : ℝ) : WithBot ℝ) else ⊥) ⊔ a) ⊥ := by
+      intro l hl
+      induction l with
+      | nil => simp at hl
+      | cons a t ih =>
+        simp only [List.foldr_cons]
+        rcases List.mem_cons.mp hl with h | h
+        · subst h; exact le_sup_left
+        · exact le_trans (ih h) le_sup_right
+    exact key _ (List.mem_finRange j)
+
+/-- Reindex a windowed `Finset.sup` over `Fin S` (window `c·BN ≤ j < (c+1)·BN`)
+onto `Fin BN` (lane `jL` ↦ key `c·BN + jL`); out-of-window lanes contribute `⊥`. -/
+theorem ctx_window_sup_reindex (BN c S : Nat) (hwin : (c + 1) * BN ≤ S)
+    (F : Nat → WithBot ℝ) :
+    Finset.univ.sup (fun j : Fin S =>
+        if c * BN ≤ j.val ∧ j.val < (c + 1) * BN then F j.val else ⊥)
+      = Finset.univ.sup (fun jL : Fin BN => F (c * BN + jL.val)) := by
+  have hmul : (c + 1) * BN = c * BN + BN := by ring
+  apply le_antisymm
+  · apply Finset.sup_le
+    intro j _
+    by_cases hj : c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+    · rw [if_pos hj]
+      have hjL : j.val - c * BN < BN := by omega
+      refine le_trans ?_ (Finset.le_sup (f := fun jL : Fin BN => F (c * BN + jL.val))
+        (Finset.mem_univ (⟨j.val - c * BN, hjL⟩ : Fin BN)))
+      simp only
+      rw [show c * BN + (j.val - c * BN) = j.val from by omega]
+    · rw [if_neg hj]; exact bot_le
+  · apply Finset.sup_le
+    intro jL _
+    have hb : c * BN + jL.val < S := by have := jL.isLt; omega
+    refine le_trans ?_ (Finset.le_sup
+      (f := fun j : Fin S => if c * BN ≤ j.val ∧ j.val < (c + 1) * BN then F j.val else ⊥)
+      (Finset.mem_univ (⟨c * BN + jL.val, hb⟩ : Fin S)))
+    simp only
+    rw [if_pos (by have := jL.isLt; exact ⟨by omega, by omega⟩)]
+
+/-- Block-local lane `jL : Fin BN` maps to a global key `c·BN + jL < S`. -/
+theorem gBlock_idx_lt (S BN c : Nat) (hwin : (c + 1) * BN ≤ S) (jL : Fin BN) :
+    c * BN + jL.val < S := by
+  have hjlt := jL.isLt
+  have heq : (c + 1) * BN = c * BN + BN := by ring
+  omega
+
+/-- Reindex a masked `Fin S`-window sum onto `Fin BN` (lane `jL` ↦ key `c·BN + jL`). -/
+theorem ctx_window_sum_reindex (BN c S : Nat) (hwin : (c + 1) * BN ≤ S) (g : Nat → ℝ) :
+    (∑ j : Fin S, if c * BN ≤ j.val ∧ j.val < (c + 1) * BN then g j.val else 0)
+      = ∑ jL : Fin BN, g (c * BN + jL.val) := by
+  have hmul : (c + 1) * BN = c * BN + BN := by ring
+  rw [← Finset.sum_filter]
+  symm
+  refine Finset.sum_bij (i := fun jL _ => (⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩ : Fin S))
+    ?_ ?_ ?_ ?_
+  · intro jL _; simp only [Finset.mem_filter, Finset.mem_univ, true_and]; have := jL.isLt; omega
+  · intro a _ b _ hab
+    apply Fin.ext
+    have : c * BN + a.val = c * BN + b.val := by simpa using congrArg Fin.val hab
+    omega
+  · intro j hj
+    have hj2 : c * BN ≤ j.val ∧ j.val < (c + 1) * BN := (Finset.mem_filter.mp hj).2
+    exact ⟨⟨j.val - c * BN, by omega⟩, Finset.mem_univ _, by apply Fin.ext; simp only; omega⟩
+  · intro jL _; rfl
+
+/-- The generic block list reindexes onto `Fin BN` (key `c·BN + jL`). -/
+theorem gBlock_map_sum (S BN c : Nat) (g : Fin S → ℝ × ℝ)
+    (hwin : (c + 1) * BN ≤ S) (h : ℝ × ℝ → ℝ) :
+    ((gBlock S BN c g).map h).sum
+      = ∑ jL : Fin BN, h (g ⟨c * BN + jL.val,
+          gBlock_idx_lt S BN c hwin jL⟩) := by
+  rw [gBlock, ctx_filterMap_finRange_sum S
+    (fun j => c * BN ≤ j.val ∧ j.val < (c + 1) * BN) g h]
+  rw [show (∑ j : Fin S, if c * BN ≤ j.val ∧ j.val < (c + 1) * BN then h (g j) else 0)
+        = ∑ j : Fin S, if c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+            then (fun jg => if h' : jg < S then h (g ⟨jg, h'⟩) else 0) j.val else 0 from by
+    apply Finset.sum_congr rfl; intro j _
+    by_cases hw : c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+    · rw [if_pos hw, if_pos hw]; simp only [dif_pos j.isLt]
+    · rw [if_neg hw, if_neg hw]]
+  rw [ctx_window_sum_reindex BN c S hwin
+    (fun jg => if h' : jg < S then h (g ⟨jg, h'⟩) else 0)]
+  apply Finset.sum_congr rfl
+  intro jL _
+  simp only [dif_pos (gBlock_idx_lt S BN c hwin jL)]
+
+/-- **One-block advance** of the generic ⊥-seeded running max (block sup over the
+full `Fin BN` window, no `⊥` lanes). -/
+theorem gRunningMax_succ (S BN c : Nat) (g : Fin S → ℝ × ℝ) (hwin : (c + 1) * BN ≤ S) :
+    gRunningMax S ((c + 1) * BN) g
+      = gRunningMax S (c * BN) g
+        ⊔ Finset.univ.sup (fun jL : Fin BN =>
+            ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 : WithBot ℝ)) := by
+  unfold gRunningMax
+  rw [gKeysUpto_succ, List.map_append, List.foldr_append]
+  have hblock : ((gBlock S BN c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+      = Finset.univ.sup (fun jL : Fin BN =>
+          ((g ⟨c * BN + jL.val, gBlock_idx_lt S BN c hwin jL⟩).1 : WithBot ℝ)) := by
+    rw [show (gBlock S BN c g).map (fun p => ((p.1 : ℝ) : WithBot ℝ))
+          = ((List.finRange S).filterMap (fun j : Fin S =>
+              if c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+              then some ((g j).1) else none)).map (fun x : ℝ => ((x : ℝ) : WithBot ℝ)) from by
+      unfold gBlock
+      rw [List.map_filterMap, List.map_filterMap]
+      apply List.filterMap_congr
+      intro j _
+      by_cases hj : c * BN ≤ j.val ∧ j.val < (c + 1) * BN <;> simp [hj]]
+    rw [ctx_filterMap_foldr_sup S
+      (fun j => c * BN ≤ j.val ∧ j.val < (c + 1) * BN) (fun j => (g j).1)]
+    classical
+    rw [show (Finset.univ.sup (fun j : Fin S =>
+          if c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+          then (((g j).1 : ℝ) : WithBot ℝ) else ⊥))
+        = Finset.univ.sup (fun j : Fin S =>
+            if c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+            then (fun jg => if h : jg < S then (((g ⟨jg, h⟩).1 : ℝ) : WithBot ℝ) else ⊥) j.val else ⊥)
+        from by
+      apply Finset.sup_congr rfl
+      intro j _
+      by_cases hw : c * BN ≤ j.val ∧ j.val < (c + 1) * BN
+      · rw [if_pos hw, if_pos hw]; simp only [dif_pos j.isLt]
+      · rw [if_neg hw, if_neg hw]]
+    rw [ctx_window_sup_reindex BN c S hwin
+      (fun jg => if h : jg < S then (((g ⟨jg, h⟩).1 : ℝ) : WithBot ℝ) else ⊥)]
+    apply Finset.sup_congr rfl
+    intro jL _
+    have hb : c * BN + jL.val < S := by
+      have hjlt := jL.isLt; have heq : (c + 1) * BN = c * BN + BN := by ring
+      omega
+    simp only [dif_pos hb]
+  rw [hblock]
+  generalize (gKeysUpto S (c * BN) g).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) = preL
+  induction preL with
+  | nil => simp
+  | cons a t ih => simp only [List.foldr_cons, ih]; rw [sup_assoc]
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
