@@ -3,6 +3,7 @@ import VeriTile.Triton.Semantics
 import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
 
 /-!
 # `triton_attention` — strict per-kernel correctness
@@ -2213,6 +2214,96 @@ theorem triton_attention_bwd_score_ds_formula_python_test_shape_compute_correct
   exact triton_attention_bwd_score_ds_formula_slice_compute_correct QTile KTile
     VTile DOTile MVec DeltaVec PTile DSTile ((Real.sqrt (64 : ℝ))⁻¹)
     128 64 s triton_attention_python_bwd_score_offset_injective hRegions
+
+/-! ## Genuine closed-form forward specs (causal natural-exp FlashAttention-1)
+
+The forward `_fwd_kernel` is a **causal** FlashAttention-1 forward using the
+natural exponential (`tl.exp`), scalar `sm_scale = 1/√64`, the causal mask
+`tl.where(offs_m[:,None] ≥ start_n + offs_n[None,:], qk, -inf)`, and a dynamic
+KV-loop bound `(start_m + 1) * BLOCK_M` so only causal blocks contribute. For
+the Python test shape `(B,H,T,D) = (2,4,128,64)`, `BLOCK_M = BLOCK_N = 128`,
+`BLOCK_DMODEL = 64`, strides `(stride_qz,stride_qh,stride_qm,stride_qk) =
+(32768,8192,64,1)` etc., a single M-block per program (`start_m = pids 0`),
+`off_hz = pids 1`, and `stride_qh_2d = 8192 / 64 / 1 = 128`.
+
+These definitions give the **genuine** closed-form values that `_fwd_kernel`
+computes — the natural-exp causal attention block (`Out`), the per-row
+log-sum-exp denominator (`L`), and the per-row score maximum (`M`) — written
+against `VeriTile.Triton.attentionRealCausalBlock` and the underlying
+`scaledScore`, **not** re-derived from the kernel's own `exec`. They are the
+intended replacements for the self-referential `producedTritonAttentionForward*`
+carriers below; the exec-reduction bridge to these specs (porting the
+FlashAttention-1 causal exec recipe of `VeriTile/Examples/FlashAttention1/` to
+this `make_block_ptr` / `forRangeDyn` kernel surface, plus the two extra L/M
+masked stores) is the remaining proof stage tracked for this kernel. -/
+
+/-- Q tile for the test-shape forward: row `i`, channel `e` of the M-block of
+program `(pids 0, pids 1)` reads memory at
+`(pids 1 · 128 + pids 0 · 128 + i) · 64 + e` (the `make_block_ptr` address with
+`stride_qh_2d = 128`, `stride_qm = 64`, `stride_qk = 1`). -/
+noncomputable def fwdQTile (s : BlockState) (Q : RegionName) :
+    TileIndex [128, 64] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q ((s.pids 1 * 128 + s.pids 0 * 128 + i.val) * 64 + e.val)
+
+/-- K tile for the test-shape forward: key row `j`, channel `e` reads
+`(pids 1 · 128 + j) · 64 + e` (`stride_kn = 64`, base `off_hz · stride_qh_2d`). -/
+noncomputable def fwdKTile (s : BlockState) (K : RegionName) :
+    TileIndex [128, 64] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K ((s.pids 1 * 128 + j.val) * 64 + e.val)
+
+/-- V tile for the test-shape forward: value row `j`, channel `e` reads
+`(pids 1 · 128 + j) · 64 + e`. -/
+noncomputable def fwdVTile (s : BlockState) (V : RegionName) :
+    TileIndex [128, 64] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem V ((s.pids 1 * 128 + j.val) * 64 + e.val)
+
+/-- Genuine closed-form forward `Out` value: the natural-exp causal attention
+block at query start `pids 0 · 128`, scale `1/√64`, key length `128`. This is
+the mathematical output `_fwd_kernel` stores, expressed via
+`attentionRealCausalBlock`, independent of the kernel `exec`. -/
+noncomputable def fwdOutSpec
+    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [128, 64]) : ℝ :=
+  attentionRealCausalBlock (s.pids 0 * 128)
+    (fwdQTile s Q) (fwdKTile s K) (fwdVTile s V)
+    ((Real.sqrt (64 : ℝ))⁻¹) idx
+
+/-- Genuine closed-form forward `L` value for query row `i`: the natural
+log-sum-exp of the causal score row `log (Σ_{j ≤ pids0·128 + i} exp(score i j))`.
+`_fwd_kernel` accumulates `l_prev` as `Σ exp(qk − m)` rescaled by `exp(m − …)`,
+which telescopes to the un-shifted `Σ exp(score)`; its `tl.store(l_ptrs, l_prev)`
+records exactly this denominator. -/
+noncomputable def fwdLSpec
+    (s : BlockState) (Q K : RegionName) (i : Fin 128) : ℝ :=
+  Real.log
+    (Finset.univ.sum (fun j : Fin 128 =>
+      if j.val ≤ s.pids 0 * 128 + i.val then
+        Real.exp (scaledScore (fwdQTile s Q) (fwdKTile s K)
+          ((Real.sqrt (64 : ℝ))⁻¹) i j)
+      else 0))
+
+/-- The causal key set for query row `i`: keys `j ≤ pids0·128 + i`. Nonempty
+because `j = 0` always satisfies `0 ≤ pids0·128 + i`. -/
+def fwdCausalSet (s : BlockState) (i : Fin 128) : Finset (Fin 128) :=
+  Finset.univ.filter (fun j : Fin 128 => j.val ≤ s.pids 0 * 128 + i.val)
+
+theorem fwdCausalSet_nonempty (s : BlockState) (i : Fin 128) :
+    (fwdCausalSet s i).Nonempty := by
+  refine ⟨⟨0, by norm_num⟩, ?_⟩
+  simp [fwdCausalSet]
+
+/-- Genuine closed-form forward `M` value for query row `i`: the per-row maximum
+causal score `max_{j ≤ pids0·128 + i} score i j`, taken over the (nonempty)
+causal key set only. `_fwd_kernel` accumulates
+`m_prev = tl.maximum(tl.max(qk,1), m_prev)` over the causal blocks (future keys
+masked to `-inf`) and stores it via `tl.store(m_ptrs, m_prev)`. -/
+noncomputable def fwdMSpec
+    (s : BlockState) (Q K : RegionName) (i : Fin 128) : ℝ :=
+  (fwdCausalSet s i).sup' (fwdCausalSet_nonempty s i)
+    (fun j : Fin 128 =>
+      scaledScore (fwdQTile s Q) (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) i j)
 
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
