@@ -795,6 +795,85 @@ theorem mistral_reqloc_gather_eval (s : BlockState)
       simp only [vActive]; omega
     simp only [hlt, decide_false, if_neg hv, if_false, Bool.false_eq_true]
 
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **`v_value` 2D masked-gather recipe** (`tl.load(V + v_offs + v_loc[:,None]·stride_vbs,
+mask=(start_n+offs_n[:,None]+cur_batch_start_index) < cur_batch_seq_len, other=0)`,
+shape `[BLOCK_N, BLOCK_DMODEL]`). The mask is an `Op.remap` of a `[BN,1]` boundary
+test broadcast across the head-dim columns.
+
+`v_offs` lane `(_,d)` is `kvh·stride_vh + d·stride_vd` (the `mistral_voffs_eval`
+form), `v_loc` lane `j` is the `mistral_reqloc_gather_eval` output
+`if vActive(SN+j) then vLoc(SN+j) else 0`, and `kvh = pids 1 / kv_group_num`. On
+an active lane `(j,d)` the loaded address is
+`vLoc(SN+j)·stride_vbs + kvh·stride_vh + d·stride_vd = vOffset (SN+j) d`, and the
+mask `SN+j+startIdx < batchSeqLen` is `vActive (SN+j)`; on an inactive lane the
+`other = 0` fires. The result lane `(j,d)` is therefore `vMasked … (SN+j) d`. -/
+theorem mistral_v_gather_eval (s : BlockState)
+    (V : RegionName) (Req_to_tokens B_req_idx B_Seqlen : RegionName)
+    (BN BD stride_b stride_s stride_vbs stride_vh stride_vd kv_group_num sliding_window SN : Nat)
+    (hvoffs : s.regs .nat [1, BD] "v_offs" =
+      some (⟨fun idx : TileIndex [1, BD] =>
+          (s.pids 1 / kv_group_num) * stride_vh + idx.2.1.val * stride_vd⟩
+        : Tile .nat [1, BD]))
+    (hvloc : s.regs .nat [BN] "v_loc" =
+      some (Tile.vec (fun j : Fin BN =>
+        if vActive s B_Seqlen sliding_window (SN + j.val) then
+          vLoc s Req_to_tokens B_req_idx B_Seqlen stride_b stride_s sliding_window (SN + j.val)
+        else 0)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsi : s.regs .nat [] "cur_batch_start_index" =
+      some (Tile.scalar (startIndex s B_Seqlen sliding_window)))
+    (hsl : s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (batchSeqLen s B_Seqlen))) :
+    evalOp (Op.load .real
+        (MemAccess.region V
+          (Op.add .nat (Broadcast.consL (Broadcast.consR Broadcast.nil))
+            (Op.ref .nat [1, BD] "v_offs")
+            (Op.mul .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "v_loc"))
+              (Op.constNat stride_vbs))))
+        (MaskOpt.maskOther
+          (Op.remap [BN, BD] (Broadcast.leftIndex (Broadcast.consSame (Broadcast.consL Broadcast.nil)))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                  (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+                (Op.ref .nat [] "cur_batch_start_index"))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          (Op.broadcast (Op.const 0.0) [BN, BD]))) s
+      = some (⟨fun idx : TileIndex [BN, BD] =>
+          some (vMasked s V Req_to_tokens B_req_idx B_Seqlen stride_b stride_s stride_vbs
+            stride_vh stride_vd kv_group_num sliding_window (SN + idx.1.val) idx.2.1.val)⟩
+          : Tile .real [BN, BD]) := by
+  have hexp : @evalOp .nat [BN, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "v_loc")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun j : Fin BN =>
+          if vActive s B_Seqlen sliding_window (SN + j.val) then
+            vLoc s Req_to_tokens B_req_idx B_Seqlen stride_b stride_s sliding_window (SN + j.val)
+          else 0))) :=
+    evalOp_expandDim_ref_of_regs .nat [BN] ⟨1, by simp⟩ "v_loc" s _ hvloc
+  have hexpn : @evalOp .nat [BN, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")) s
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun j : Fin BN => j.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BN] ⟨1, by simp⟩ "offs_n" s _ hn
+  simp only [evalOp, hvoffs, hexp, hexpn, hsn, hsi, hsl, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨j, d, u⟩ := idx
+  simp only [Tile.remap, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar,
+    Tile.expandDim_data, TileShape.dropInsertedIndex_succ, TileShape.dropInsertedIndex_nil,
+    TileShape.dropInsertedIndex_zero_cons, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex, Region.cast_cast,
+    Region.cast_id, vMasked, vOffset]
+  by_cases hlt : SN + j.val + startIndex s B_Seqlen sliding_window < batchSeqLen s B_Seqlen
+  · have hv : vActive s B_Seqlen sliding_window (SN + j.val) := by
+      simp only [vActive]; omega
+    simp only [hlt, decide_true, if_true, if_pos hv, BlockState.readMemValue_real]
+    congr 2
+    ring
+  · have hv : ¬ vActive s B_Seqlen sliding_window (SN + j.val) := by
+      simp only [vActive]; omega
+    simp only [hlt, decide_false, if_neg hv, if_false, Bool.false_eq_true]
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
