@@ -1889,4 +1889,291 @@ theorem flashRunningMax_succ
   | nil => simp
   | cons a t ih => simp only [List.foldr_cons, ih]; rw [sup_assoc]
 
+/-! ## ⊥-seeded online-softmax state (binds the kernel's `denom`/`out_buffer`)
+
+The kernel seeds its running max at `⊥` (`tl.zeros − inf`), and its `denom`/`acc`
+registers at real `0`. Each block it rescales by `α = exp2(max ⊖ max_new)` —
+with `max = ⊥` on block 0 the rescale is `realExp2 ⊥ = 0`, killing the seed. The
+`flashState` recurrence (the *real-0-seeded* `osStep` fold) carries the **wrong**
+max shift (`blockMax 0`, not `flashRunningMax`), so its `denom`/`acc` do not equal
+the kernel's. `flashStateBot` is the faithful ⊥-seeded recurrence; its final
+`acc/denom` ratio and `max + log2 denom` log-sum-exp agree with `flashState`'s
+(the `pow2(−M)` common factor cancels in the ratio / telescopes in the L value),
+which is what reconnects it to the closed-form spec. -/
+
+open VeriTile.Triton (pow2)
+
+/-- One ⊥-seeded online-softmax step: like `osStep`, but the running max lives in
+`WithBot ℝ` (seeded `⊥`), so `α = realExp2(m ⊖ m')` is `0` on the first block. -/
+noncomputable def osStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
+  let m := st.1; let l := st.2.1; let acc := st.2.2
+  let s := sv.1; let v := sv.2
+  let m' := m ⊔ ((s : ℝ) : WithBot ℝ)
+  let α := (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
+  let p := pow2 (s - m'.unbotD 0)
+  (m', l * α + p, acc * α + p * v)
+
+/-- `flashStateBot` — the ⊥-seeded running `(max, denom, acc)` after streaming the
+window `[0, hi)`. Faithful to the kernel's register recurrence (`max` seeded `⊥`,
+`denom`/`acc` seeded `0`). -/
+noncomputable def flashStateBot
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    WithBot ℝ × ℝ × ℝ :=
+  (flashKeysUpto qT kT vT scale causal qStart hi i d).foldl osStepBot (⊥, 0, 0)
+
+/-- The running `max` component of `flashStateBot` is exactly `flashRunningMax`
+(the `⊥`-seeded `⊔`-fold). -/
+theorem flashStateBot_fst
+    (xs : List (ℝ × ℝ)) (m₀ : WithBot ℝ) (l₀ acc₀ : ℝ) :
+    (xs.foldl osStepBot (m₀, l₀, acc₀)).1
+      = (xs.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldl (· ⊔ ·) m₀ := by
+  induction xs generalizing m₀ l₀ acc₀ with
+  | nil => rfl
+  | cons x xs ih => simp only [List.foldl_cons, List.map_cons]; rw [ih]; rfl
+
+/-- **⊥-seeded consistency.** Folding `osStepBot` from a start `(m, l, acc)` whose
+`l`/`acc` are anchored to the true (max-free) batch denominator `L` / accumulator
+`T` via the `⊥`-aware factor keeps that invariant: `l = κ(m)·L`, `acc = κ(m)·T`
+with `κ ⊥ = 0`, `κ (some r) = pow2(−r)`. (`κ` is `(realExp2 (realSub ⊥ m ... ))`,
+spelled directly.) -/
+theorem osStepBot_foldl_consistent (xs : List (ℝ × ℝ)) (m : WithBot ℝ) (l acc T L : ℝ)
+    (hl : l = (m.elim 0 (fun r => pow2 (-r))) * L)
+    (hacc : acc = (m.elim 0 (fun r => pow2 (-r))) * T)
+    (hmL : m = ⊥ → L = 0) (hmT : m = ⊥ → T = 0) :
+    let st := xs.foldl osStepBot (m, l, acc)
+    st.2.1 = (st.1.elim 0 (fun r => pow2 (-r))) * (L + (xs.map (fun p => pow2 p.1)).sum) ∧
+    st.2.2 = (st.1.elim 0 (fun r => pow2 (-r))) * (T + (xs.map (fun p => pow2 p.1 * p.2)).sum) := by
+  induction xs generalizing m l acc T L with
+  | nil => simp [hl, hacc]
+  | cons x xs ih =>
+    obtain ⟨s, v⟩ := x
+    set m' : WithBot ℝ := m ⊔ ((s : ℝ) : WithBot ℝ) with hm'
+    -- m' is finite (it is at least `some s`)
+    have hm'r : ∃ r : ℝ, m' = (r : WithBot ℝ) := by
+      cases m with
+      | bot => exact ⟨s, by rw [hm']; rfl⟩
+      | coe a => exact ⟨max a s, by rw [hm']; rw [← WithBot.coe_max]⟩
+    obtain ⟨mr, hmr⟩ := hm'r
+    have hκm' : m'.elim 0 (fun r => pow2 (-r)) = pow2 (-mr) := by rw [hmr]; rfl
+    have hunbot : m'.unbotD 0 = mr := by rw [hmr]; rfl
+    have hp : pow2 (s - m'.unbotD 0) = pow2 (-mr) * pow2 s := by
+      rw [hunbot, ← pow2_add]; ring_nf
+    -- the two updated values land on `pow2(-mr)·(L+pow2 s)` and `pow2(-mr)·(T+pow2 s·v)`
+    have hl' : l * (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
+        + pow2 (s - m'.unbotD 0) = pow2 (-mr) * (L + pow2 s) := by
+      cases m with
+      | bot =>
+        rw [hmL rfl]
+        have hz : (WithBot.realExp2 (WithBot.realSub (⊥ : WithBot ℝ) m')).unbotD 0 = 0 := by
+          rw [WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+        rw [hz, mul_zero, zero_add, hp]; ring
+      | coe a =>
+        have hm'a : m' = ((max a s : ℝ) : WithBot ℝ) := by rw [hm']; rw [← WithBot.coe_max]
+        have hmra : mr = max a s := by rw [hm'a] at hmr; exact (WithBot.coe_inj.mp hmr.symm)
+        have hαa : (pow2 (-a)) * (WithBot.realExp2 (WithBot.realSub (↑a) m')).unbotD 0
+            = pow2 (-mr) := by
+          rw [hm'a, WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe]
+          rw [show Real.exp ((a - max a s) * Real.log 2) = pow2 (a - max a s) from by
+            simp [pow2, mul_comm], ← pow2_add, hmra]; ring_nf
+        rw [hl, show ((↑a : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-a) from rfl]
+        rw [mul_right_comm, hαa, hp]; ring
+    have hacc' : acc * (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
+        + pow2 (s - m'.unbotD 0) * v = pow2 (-mr) * (T + pow2 s * v) := by
+      cases m with
+      | bot =>
+        rw [hmT rfl]
+        have hz : (WithBot.realExp2 (WithBot.realSub (⊥ : WithBot ℝ) m')).unbotD 0 = 0 := by
+          rw [WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+        rw [hz, mul_zero, zero_add, hp]; ring
+      | coe a =>
+        have hm'a : m' = ((max a s : ℝ) : WithBot ℝ) := by rw [hm']; rw [← WithBot.coe_max]
+        have hmra : mr = max a s := by rw [hm'a] at hmr; exact (WithBot.coe_inj.mp hmr.symm)
+        have hαa : (pow2 (-a)) * (WithBot.realExp2 (WithBot.realSub (↑a) m')).unbotD 0
+            = pow2 (-mr) := by
+          rw [hm'a, WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe]
+          rw [show Real.exp ((a - max a s) * Real.log 2) = pow2 (a - max a s) from by
+            simp [pow2, mul_comm], ← pow2_add, hmra]; ring_nf
+        rw [hacc, show ((↑a : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-a) from rfl]
+        rw [mul_right_comm, hαa, hp]; ring
+    have step := ih m'
+      (l * (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0 + pow2 (s - m'.unbotD 0))
+      (acc * (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0 + pow2 (s - m'.unbotD 0) * v)
+      (T + pow2 s * v) (L + pow2 s) (by rw [hl', hκm']) (by rw [hacc', hκm'])
+      (by rw [hmr]; simp) (by rw [hmr]; simp)
+    simpa [List.foldl_cons, osStepBot, hm', List.map_cons, add_assoc] using step
+
+/-- The `WithBot ⊔`-fold is seed/direction-agnostic: `foldl (⊔)` from `⊥` equals
+`foldr (⊔)` from `⊥`. -/
+theorem foldl_sup_bot_eq_foldr (L : List (WithBot ℝ)) :
+    L.foldl (· ⊔ ·) (⊥ : WithBot ℝ) = L.foldr (· ⊔ ·) (⊥ : WithBot ℝ) := by
+  have gen : ∀ (m : WithBot ℝ), L.foldl (· ⊔ ·) m = m ⊔ L.foldr (· ⊔ ·) ⊥ := by
+    induction L with
+    | nil => intro m; simp
+    | cons a t ih =>
+      intro m
+      simp only [List.foldl_cons, List.foldr_cons, ih]
+      rw [max_assoc]
+  rw [gen ⊥, bot_sup_eq]
+
+/-- The ⊥-seeded running `max` of `flashStateBot` is exactly `flashRunningMax`. -/
+theorem flashStateBot_fst_eq_runningMax
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    (flashStateBot qT kT vT scale causal qStart hi i d).1
+      = flashRunningMax qT kT vT scale causal qStart hi i d := by
+  rw [flashStateBot, flashStateBot_fst, flashRunningMax, foldl_sup_bot_eq_foldr]
+
+/-- The ⊥-seeded denominator equals `κ(flashRunningMax)·Σpow2 score`. -/
+theorem flashStateBot_snd_fst
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    (flashStateBot qT kT vT scale causal qStart hi i d).2.1
+      = ((flashRunningMax qT kT vT scale causal qStart hi i d).elim 0 (fun r => pow2 (-r)))
+        * ((flashKeysUpto qT kT vT scale causal qStart hi i d).map (fun p => pow2 p.1)).sum := by
+  have h := (osStepBot_foldl_consistent (flashKeysUpto qT kT vT scale causal qStart hi i d)
+    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).1
+  rw [flashStateBot]
+  rw [show (List.foldl osStepBot (⊥, 0, 0) (flashKeysUpto qT kT vT scale causal qStart hi i d)).2.1
+        = _ from h]
+  rw [show (List.foldl osStepBot (⊥, 0, 0) (flashKeysUpto qT kT vT scale causal qStart hi i d)).1
+        = flashRunningMax qT kT vT scale causal qStart hi i d from by
+    rw [flashStateBot_fst, flashRunningMax, foldl_sup_bot_eq_foldr]]
+  rw [zero_add]
+
+/-- The ⊥-seeded accumulator equals `κ(flashRunningMax)·Σpow2 score·v`. -/
+theorem flashStateBot_snd_snd
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    (flashStateBot qT kT vT scale causal qStart hi i d).2.2
+      = ((flashRunningMax qT kT vT scale causal qStart hi i d).elim 0 (fun r => pow2 (-r)))
+        * ((flashKeysUpto qT kT vT scale causal qStart hi i d).map (fun p => pow2 p.1 * p.2)).sum := by
+  have h := (osStepBot_foldl_consistent (flashKeysUpto qT kT vT scale causal qStart hi i d)
+    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).2
+  rw [flashStateBot]
+  rw [show (List.foldl osStepBot (⊥, 0, 0) (flashKeysUpto qT kT vT scale causal qStart hi i d)).2.2
+        = _ from h]
+  rw [show (List.foldl osStepBot (⊥, 0, 0) (flashKeysUpto qT kT vT scale causal qStart hi i d)).1
+        = flashRunningMax qT kT vT scale causal qStart hi i d from by
+    rw [flashStateBot_fst, flashRunningMax, foldl_sup_bot_eq_foldr]]
+  rw [zero_add]
+
+/-- The ratio `acc/denom` of the ⊥-seeded state equals that of the real-0-seeded
+`flashState` — the seed cancels (`pow2` never zero). Valid whenever the window is
+nonempty (`flashRunningMax ≠ ⊥`). -/
+theorem flashStateBot_ratio_eq
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (hne : flashRunningMax qT kT vT scale causal qStart hi i d ≠ ⊥) :
+    (flashStateBot qT kT vT scale causal qStart hi i d).2.2
+        / (flashStateBot qT kT vT scale causal qStart hi i d).2.1
+      = (flashState qT kT vT scale causal qStart hi i d).2.2
+        / (flashState qT kT vT scale causal qStart hi i d).2.1 := by
+  rw [flashStateBot_snd_fst, flashStateBot_snd_snd]
+  have hcL := (VeriTile.Triton.osStep_foldl_consistent
+    (flashKeysUpto qT kT vT scale causal qStart hi i d) 0 0 0 0 0 (by simp) (by simp)).1
+  have hcT := (VeriTile.Triton.osStep_foldl_consistent
+    (flashKeysUpto qT kT vT scale causal qStart hi i d) 0 0 0 0 0 (by simp) (by simp)).2
+  rw [flashState]
+  rw [show (List.foldl osStep (0, 0, 0) (flashKeysUpto qT kT vT scale causal qStart hi i d)).2.1
+        = _ from hcL,
+      show (List.foldl osStep (0, 0, 0) (flashKeysUpto qT kT vT scale causal qStart hi i d)).2.2
+        = _ from hcT]
+  cases hM : flashRunningMax qT kT vT scale causal qStart hi i d with
+  | bot => exact absurd hM hne
+  | coe r =>
+    rw [show ((↑r : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-r) from rfl]
+    simp only [zero_add]
+    rw [mul_div_mul_left _ _ (ne_of_gt (pow2_pos _)),
+        mul_div_mul_left _ _ (ne_of_gt (pow2_pos _))]
+
+/-- **The full-window non-causal ⊥-seeded final state reads off the closed-form
+spec.** `flashStateBot.acc / flashStateBot.denom = flashAttnOValueSpec`. -/
+theorem flashStateBot_full_eq_spec
+    (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ)
+    (stride_q_head : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (hne : flashRunningMax (qTile s Q stride_q_head DIM BLOCK_M)
+        (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
+        (sm_scale * log2e) Bool.false 0 SEQLEN i d ≠ ⊥) :
+    (let st := flashStateBot (qTile s Q stride_q_head DIM BLOCK_M)
+        (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
+        (sm_scale * log2e) Bool.false 0 SEQLEN i d
+     st.2.2 / st.2.1)
+      = flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
+          (i, d, PUnit.unit) := by
+  simp only
+  rw [flashStateBot_ratio_eq _ _ _ _ _ _ _ _ _ hne]
+  exact flashState_full_eq_spec s Q K V sm_scale stride_q_head i d
+
+/-- **The full-window causal ⊥-seeded final state reads off the causal spec.** -/
+theorem flashStateBot_full_eq_spec_causal
+    (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ)
+    (stride_q_head : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (hne : flashRunningMax (qTile s Q stride_q_head DIM BLOCK_M)
+        (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
+        (sm_scale * log2e) Bool.true (s.pids 0 * BLOCK_M) SEQLEN i d ≠ ⊥) :
+    (let st := flashStateBot (qTile s Q stride_q_head DIM BLOCK_M)
+        (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
+        (sm_scale * log2e) Bool.true (s.pids 0 * BLOCK_M) SEQLEN i d
+     st.2.2 / st.2.1)
+      = flashAttnOValueSpecCausal s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
+          (i, d, PUnit.unit) := by
+  simp only
+  rw [flashStateBot_ratio_eq _ _ _ _ _ _ _ _ _ hne]
+  exact flashState_full_eq_spec_causal s Q K V sm_scale stride_q_head i d
+
+/-- **L-store value (log-sum-exp) is seed-independent.** The kernel stores
+`max + log2 denom`; for the ⊥-seeded state this is `M_bot + log2(κ(M_bot)·Σ) =
+log2 Σpow2 score` (the `−M_bot` shift cancels), the genuine log-sum-exp, whenever
+the window is nonempty and `Σpow2 score > 0`. -/
+theorem flashStateBot_logsumexp
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (mr : ℝ) (hM : flashRunningMax qT kT vT scale causal qStart hi i d = (mr : WithBot ℝ)) :
+    mr + Real.log ((flashStateBot qT kT vT scale causal qStart hi i d).2.1) / Real.log 2
+      = Real.log (((flashKeysUpto qT kT vT scale causal qStart hi i d).map
+          (fun p => pow2 p.1)).sum) / Real.log 2 := by
+  rw [flashStateBot_snd_fst, hM]
+  rw [show ((↑mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-mr) from rfl]
+  -- the sum is > 0 only when the list is nonempty; factor
+  -- log(pow2(-mr)*S) = log(pow2(-mr)) + log S when both positive.
+  by_cases hS : ((flashKeysUpto qT kT vT scale causal qStart hi i d).map (fun p => pow2 p.1)).sum = 0
+  · -- sum of strictly-positive terms is 0 ⟹ the key list is empty ⟹ running max ⊥,
+    -- contradicting `hM : … = ↑mr`.
+    exfalso
+    have hempty : flashKeysUpto qT kT vT scale causal qStart hi i d = [] := by
+      by_contra hne
+      obtain ⟨p, hp⟩ := List.exists_mem_of_ne_nil _ hne
+      have hpos : 0 < pow2 p.1 := pow2_pos _
+      have hmem : pow2 p.1 ∈ (flashKeysUpto qT kT vT scale causal qStart hi i d).map (fun p => pow2 p.1) :=
+        List.mem_map_of_mem hp
+      have hnn : ∀ x ∈ (flashKeysUpto qT kT vT scale causal qStart hi i d).map (fun p => pow2 p.1), (0:ℝ) ≤ x := by
+        intro x hx; simp only [List.mem_map] at hx; obtain ⟨q, _, rfl⟩ := hx; exact le_of_lt (pow2_pos _)
+      have := List.single_le_sum hnn _ hmem
+      rw [hS] at this
+      exact absurd (le_antisymm this (le_of_lt hpos)) (ne_of_gt hpos)
+    rw [flashRunningMax, hempty] at hM
+    simp only [List.map_nil, List.foldr_nil] at hM
+    exact absurd hM (WithBot.bot_ne_coe)
+  · have hSpos : 0 < ((flashKeysUpto qT kT vT scale causal qStart hi i d).map (fun p => pow2 p.1)).sum := by
+      have hnn : 0 ≤ ((flashKeysUpto qT kT vT scale causal qStart hi i d).map (fun p => pow2 p.1)).sum :=
+        List.sum_nonneg (by intro x hx; simp only [List.mem_map] at hx; obtain ⟨p, _, rfl⟩ := hx; exact le_of_lt (pow2_pos _))
+      exact lt_of_le_of_ne hnn (Ne.symm hS)
+    rw [Real.log_mul (ne_of_gt (pow2_pos _)) (ne_of_gt hSpos)]
+    rw [show pow2 (-mr) = Real.exp (Real.log 2 * (-mr)) from rfl, Real.log_exp]
+    field_simp
+    ring
+
+/-- **One-block advance** of the ⊥-seeded state: streaming block `c` folds that
+block's keys (via `osStepBot`) onto the state after `c` blocks. (`foldl_append` over
+the `flashKeysUpto_succ` window split — the ⊥-seed analogue of `flashState_succ`.) -/
+theorem flashStateBot_succ
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart BLOCK_N c : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashStateBot qT kT vT scale causal qStart ((c + 1) * BLOCK_N) i d
+      = (flashBlock qT kT vT scale causal qStart BLOCK_N c i d).foldl osStepBot
+          (flashStateBot qT kT vT scale causal qStart (c * BLOCK_N) i d) := by
+  unfold flashStateBot
+  rw [flashKeysUpto_succ, List.foldl_append]
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
