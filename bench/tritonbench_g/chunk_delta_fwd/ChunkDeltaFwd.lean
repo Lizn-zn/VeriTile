@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `chunk_delta_fwd` — closed-form correctness
@@ -81,6 +82,176 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
+/-! ## Reusable execution primitives (recipe architecture)
+
+Ported / specialized from the `chunk_gla_simple` recipe set: block-pointer load
+recipes through bound registers, `makeBlockPtrDynOffsets` eval recipes, the
+matmul element lemma, and a dynamic-range carry-invariant driver. These keep the
+`BlockState` symbolic — readbacks peel through `setReg` chains by name-inequality
+`simp` — so the cross-chunk fold never `whnf`-es a deeply nested literal state. -/
+
+/-- No-mask 2D block-pointer load through a *bound register* `name` holding the
+block-pointer tile produced by `makeBlockPtrDynOffsets`. -/
+theorem load_bp_2d_ref (rg : RegionName) (s : BlockState) (name : RegName)
+    (base rows cols BT BS strideT strideS rowOff colOff : Nat)
+    (hreg : s.regs TileDType.blockPtr [BT, BS] name = some
+      ⟨fun _ => BlockPtr.mk rg base [rows, cols] [BT, BS] [strideT, strideS]
+        [rowOff, colOff]⟩) :
+    evalOp (Op.load TileDType.real
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BT, BS] name) [0, 1]) MaskOpt.none) s
+    = some ⟨fun idx : TileIndex [BT, BS] =>
+        if (rowOff + idx.1.val < rows ∧ colOff + idx.2.1.val < cols) then
+          some (s.readMem rg (base + (rowOff + idx.1.val) * strideT
+            + (colOff + idx.2.1.val) * strideS))
+        else some 0⟩ := by
+  simp only [evalOp, evalOp_ref, hreg, List.mapM, List.mapM.loop, bind, Option.bind, Tile.scalar,
+    List.reverse_cons, List.reverse_nil, List.append_nil, List.nil_append, List.cons_append]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, j, rest⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
+    BlockState.readMemValue_real]
+  by_cases h : rowOff + i.val < rows ∧ colOff + j.val < cols
+  · simp only [h, and_self, decide_true, if_true, and_true, true_and]
+  · simp only [h, decide_false, if_false, BlockState.defaultCarrier, if_neg]
+    rfl
+
+/-- **2D `makeBlockPtrDynOffsets` eval recipe.** -/
+theorem makeBlockPtr_2d_eval (rg : RegionName) (s : BlockState)
+    (baseOp : Op .nat []) (rowOffOp colOffOp : Op .nat [])
+    (parentShape blockShape strides : List Nat)
+    (base rowOff colOff : Nat)
+    (hbase : evalOp baseOp s = some (Tile.scalar base))
+    (hrow : evalOp rowOffOp s = some (Tile.scalar rowOff))
+    (hcol : evalOp colOffOp s = some (Tile.scalar colOff)) :
+    evalOp (Op.makeBlockPtrDynOffsets rg baseOp parentShape blockShape strides
+        [rowOffOp, colOffOp]) s
+      = some (⟨fun _ => BlockPtr.mk rg base parentShape blockShape strides
+          [rowOff, colOff]⟩ : Tile .blockPtr blockShape) := by
+  simp only [evalOp, hbase, hrow, hcol, List.mapM, List.mapM.loop, bind, Option.bind,
+    Tile.scalar, List.reverse_cons, List.reverse_nil, List.append_nil, List.nil_append,
+    List.cons_append]
+
+/-- Evaluation unfolding for the `≥` comparison op. -/
+theorem evalOp_ge_def {dtype : TileDType} {a b shape : TileShape}
+    (h : ComparableDType dtype) (bc : Broadcast a b shape)
+    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
+/-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
+theorem withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) := by
+  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ)) = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
+  exact (WithBot.coe_sum Finset.univ g).symm
+
+/-- **2D dot element lemma.** For all-`some` operand tiles `a : [M,K]`, `b : [K,N]`,
+the `(m, n)` cell of `dot a b` is `Σ_e a[m,e]·b[e,n]`. -/
+theorem dot2d_elem {M K N : Nat} (a : Tile .real [M, K]) (b : Tile .real [K, N])
+    (m : Fin M) (n : Fin N) (fa fb : Fin K → ℝ)
+    (ha : ∀ e : Fin K, a.data (m, e, PUnit.unit) = some (fa e))
+    (hb : ∀ e : Fin K, b.data (e, n, PUnit.unit) = some (fb e)) :
+    (Tile.dot [] a b).data (m, n, PUnit.unit)
+      = some (Finset.univ.sum fun e : Fin K => fa e * fb e) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (a.data (m, e, PUnit.unit)) (b.data (e, n, PUnit.unit))))
+      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ (fun e => (some (fa e * fb e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [ha e, hb e]; rfl)]
+  exact withBot_sum_some _
+
+/-- **`acc + dot(a, b)` recipe** (matmul accumulation, e.g. `b_h_cumsum += dot`). -/
+theorem accDot_op_eval (s : BlockState) (M K N : Nat) (accName aName bName : RegName)
+    (acctile : Tile .real [M, N]) (atile : Tile .real [M, K]) (btile : Tile .real [K, N])
+    (hacc : s.regs .real [M, N] accName = some acctile)
+    (ha : s.regs .real [M, K] aName = some atile)
+    (hb : s.regs .real [K, N] bName = some btile) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [M, N] accName)
+        (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName))) s
+      = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          acctile (Tile.dot [] atile btile)) := by
+  have hdot : evalOp (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName)) s
+      = some (Tile.dot [] atile btile) := by rw [evalOp_dot]; simp [ha, hb]
+  have hdot2 : @evalOp TileDType.real [M, N]
+      (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName)) s
+      = some (Tile.dot [] atile btile) := hdot
+  rw [evalOp_add]
+  simp only [evalOp_ref, hacc, hdot2, Option.bind_eq_bind, Option.bind_some, Option.bind]
+
+/-- **`acc − dot(a, b)` recipe** (the `b_v ← b_v − dot(b_d, b_h)` correction). -/
+theorem subDot_op_eval (s : BlockState) (M K N : Nat) (accName aName bName : RegName)
+    (acctile : Tile .real [M, N]) (atile : Tile .real [M, K]) (btile : Tile .real [K, N])
+    (hacc : s.regs .real [M, N] accName = some acctile)
+    (ha : s.regs .real [M, K] aName = some atile)
+    (hb : s.regs .real [K, N] bName = some btile) :
+    evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [M, N] accName)
+        (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName))) s
+      = some (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          acctile (Tile.dot [] atile btile)) := by
+  have hdot : evalOp (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName)) s
+      = some (Tile.dot [] atile btile) := by rw [evalOp_dot]; simp [ha, hb]
+  have hdot2 : @evalOp TileDType.real [M, N]
+      (Op.dot (batch := []) (Op.ref .real [M, K] aName) (Op.ref .real [K, N] bName)) s
+      = some (Tile.dot [] atile btile) := hdot
+  rw [evalOp_sub]
+  simp only [evalOp_ref, hacc, hdot2, Option.bind_eq_bind, Option.bind_some, Option.bind]
+
+/-- Scalar offset op `name * c` evaluates to `scalar (val * c)` given `name = val`. -/
+theorem mulConst_eval (s : BlockState) (name : RegName) (val c : Nat)
+    (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat c)) s
+      = some (Tile.scalar (val * c)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hr, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- Offset op `nameA * cA + nameB * cB` evaluates to `scalar (valA*cA + valB*cB)`. -/
+theorem addMulMul_eval (s : BlockState) (nameA nameB : RegName) (valA cA valB cB : Nat)
+    (hA : s.regs .nat [] nameA = some (Tile.scalar valA))
+    (hB : s.regs .nat [] nameB = some (Tile.scalar valB)) :
+    evalOp (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] nameA) (Op.constNat cA))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] nameB) (Op.constNat cB))) s
+      = some (Tile.scalar (valA * cA + valB * cB)) := by
+  rw [evalOp_add, mulConst_eval s nameA valA cA hA, mulConst_eval s nameB valB cB hB]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- **Dynamic-range carry-invariant driver.** When the start/stop/step ops of a
+`forRangeDyn` evaluate to fixed `Nat`s `start`/`stop`/`step` (`step ≠ 0`), an
+entry invariant `P start s_init` together with a single-iteration step obligation
+yields the final state satisfying `P final` for some `stop ≤ final`. This is the
+`forRangeAux_inv` master principle specialized through `forRangeDyn_unfold`. -/
+theorem forRangeDyn_inv
+    {idx : RegName} {startOp stopOp stepOp : Op .nat []}
+    {start stop step : Nat} {body : List Stmt}
+    {P : Nat → BlockState → Prop} {s_init : BlockState}
+    (hStart : evalOp startOp s_init = some (Tile.scalar start))
+    (hStop : evalOp stopOp s_init = some (Tile.scalar stop))
+    (hStepOp : evalOp stepOp s_init = some (Tile.scalar step))
+    (hstep : step ≠ 0)
+    (h_init : P start s_init)
+    (h_step :
+      ∀ i s, i < stop → P i s →
+        ∃ s',
+          stepStmts body (s.setReg idx .nat [] (Tile.scalar i)) = some s' ∧
+          P (i + step) s') :
+    ∃ final s_final,
+      stepStmt (.forRangeDyn idx startOp stopOp stepOp body) s_init = some s_final ∧
+      stop ≤ final ∧ P final s_final := by
+  obtain ⟨final, s_final, h_aux, hfinal, hP⟩ :=
+    forRangeAux_inv hstep h_step start s_init h_init
+  refine ⟨final, s_final, ?_, hfinal, hP⟩
+  rw [stepForRangeAux.forRangeDyn_unfold, hStart, hStop, hStepOp]
+  simp only [Option.bind_some]
+  exact h_aux
+
 /-- Faithful transcription of `chunk_delta_fwd.py`'s
 `chunk_delta_rule_fwd_kernel_h`.
 
@@ -158,6 +329,88 @@ theorem chunk_delta_rule_fwd_h_surface_toAlgorithm_supported
         = Except.ok alg := by
   simp [chunk_delta_rule_fwd_h_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
+
+/-! ## Compiled inner-loop body (single inner chunk, `BC = BT`)
+
+The algorithm-lowered inner `i_c` loop body: four block-pointer constructions
+(`p_k`, `p_d`, `p_v`, `p_v_new`), three loads, the `b_v ← b_v − dot(b_d, b_h)`
+correction, the masked `v_new` store, and the `b_h_cumsum += dot(b_k, b_v)`
+accumulation. The dynamic dtype casts erase to the algorithm layer. -/
+def chunkDeltaInnerBody (k v d v_new : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat) : List Stmt :=
+  [ Stmt.assign .blockPtr [BK, BC] "p_k"
+      (Op.makeBlockPtrDynOffsets k
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qk_h)) [K, T]
+        [BK, BC] [s_qk_d, s_qk_t]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK),
+          Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat BC))]),
+    Stmt.assign .blockPtr [BC, BK] "p_d"
+      (Op.makeBlockPtrDynOffsets d
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_qk_h)) [T, K]
+        [BC, BK] [s_qk_t, s_qk_d]
+        [Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat BC)),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK)]),
+    Stmt.assign .blockPtr [BC, BV] "p_v"
+      (Op.makeBlockPtrDynOffsets v
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_vo_h)) [T, V]
+        [BC, BV] [s_vo_t, s_vo_d]
+        [Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat BC)),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV)]),
+    Stmt.assign .blockPtr [BC, BV] "p_v_new"
+      (Op.makeBlockPtrDynOffsets v_new
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_vo_h)) [T, V]
+        [BC, BV] [s_vo_t, s_vo_d]
+        [Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_c") (Op.constNat BC)),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV)]),
+    Stmt.assign .real [BK, BC] "b_k"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BK, BC] "p_k") [0, 1]) .none),
+    Stmt.assign .real [BC, BK] "b_d"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BC, BK] "p_d") [0, 1]) .none),
+    Stmt.assign .real [BC, BV] "b_v"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BC, BV] "p_v") [0, 1]) .none),
+    Stmt.assign .real [BC, BV] "b_v"
+      (Op.sub .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BC, BV] "b_v")
+        (Op.dot (batch := []) (Op.ref .real [BC, BK] "b_d") (Op.ref .real [BK, BV] "b_h"))),
+    Stmt.store .real [BC, BV]
+      (.blockPtr (Op.ref .blockPtr [BC, BV] "p_v_new") [0, 1])
+      (Op.ref .real [BC, BV] "b_v") .none,
+    Stmt.assign .real [BK, BV] "b_h_cumsum"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BK, BV] "b_h_cumsum")
+        (Op.dot (batch := []) (Op.ref .real [BK, BC] "b_k") (Op.ref .real [BC, BV] "b_v"))) ]
+
+/-- Loaded `b_k` tile (block ptr `(K,T)` strides `(s_qk_d,s_qk_t)`, offsets
+`(0, i_t·BT)`), as `load_bp_2d_ref` emits it. -/
+noncomputable def bkTile (s : BlockState) (k : RegionName)
+    (s_qk_h s_qk_t s_qk_d T K BT BK BC : Nat) (i_t : Nat) : Tile .real [BK, BC] :=
+  ⟨fun idx => if (0 * BK + idx.1.val < K ∧ i_t * BT + idx.2.1.val < T) then
+      some (s.readMem k (s.pids 2 * s_qk_h + (0 * BK + idx.1.val) * s_qk_d
+        + (i_t * BT + idx.2.1.val) * s_qk_t)) else some 0⟩
+
+/-- Loaded `b_d` tile (block ptr `(T,K)` strides `(s_qk_t,s_qk_d)`, offsets
+`(i_t·BT, 0)`). -/
+noncomputable def bdTile (s : BlockState) (d : RegionName)
+    (s_qk_h s_qk_t s_qk_d T K BT BC BK : Nat) (i_t : Nat) : Tile .real [BC, BK] :=
+  ⟨fun idx => if (i_t * BT + idx.1.val < T ∧ 0 * BK + idx.2.1.val < K) then
+      some (s.readMem d (s.pids 2 * s_qk_h + (i_t * BT + idx.1.val) * s_qk_t
+        + (0 * BK + idx.2.1.val) * s_qk_d)) else some 0⟩
+
+/-- Loaded `b_v` tile (block ptr `(T,V)` strides `(s_vo_t,s_vo_d)`, offsets
+`(i_t·BT, i_v·BV)`). -/
+noncomputable def bvTile (s : BlockState) (v : RegionName)
+    (s_vo_h s_vo_t s_vo_d T V BT BC BV : Nat) (i_t : Nat) : Tile .real [BC, BV] :=
+  ⟨fun idx => if (i_t * BT + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) then
+      some (s.readMem v (s.pids 2 * s_vo_h + (i_t * BT + idx.1.val) * s_vo_t
+        + (s.pids 1 * BV + idx.2.1.val) * s_vo_d)) else some 0⟩
 
 /-! ## Tile-lane index helpers and active region -/
 
