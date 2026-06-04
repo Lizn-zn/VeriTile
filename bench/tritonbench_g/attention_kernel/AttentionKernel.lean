@@ -1815,6 +1815,507 @@ theorem preLoop (Q K V B0 Out : RegionName) (s : BlockState)
     show s10.mem = s.mem
     exact hmem10
 
+/-! ### M3 — `attn_qk_cell`: the body's `qk` cell = `fscore` at the global key
+
+The crux. The loop body's symbolic `qk` tile (from `attnLoopBody_steps`:
+`fp16-zeros + dot(q, k) + (b0 + b1)·log2e`) evaluated at row `i`, lane `jL`, equals
+the genuine per-key score `fscore` at the global key `gkey 64 nB c jL`
+(`= c·64 + jL`). The Fin plumbing keeps `jL : Fin 64` (never coerced to ℕ in the
+key) so the `b0`/`b1` block/lane reindex (`j/64 = c`, `j%64 = jL`) lines up; all
+casts collapse to identity (modeling boundary). -/
+set_option maxHeartbeats 1000000 in
+theorem attn_qk_cell (s0 : BlockState) (Q K B0 : RegionName) (sm_scale : ℝ)
+    (q_offset kv_offset b_offset : Nat) (nB c bcol : Nat) (hc : c < nB)
+    (qtile : Tile .fp16 [64, 128]) (ktile : Tile .real [128, 64])
+    (b1tile : Tile .real [64, 64])
+    (hbcol : bcol = c)
+    (hq : qtile = ⟨fun idx : TileIndex [64, 128] =>
+        FloatDType.real.cast FloatDType.fp16
+          (some (sm_scale * 1.44269504 * qRaw s0 Q q_offset 64 128 (s0.pids 0) idx))⟩)
+    (hk : ∀ idx : TileIndex [128, 64],
+        ktile.data idx = some (s0.readMem K (kv_offset + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 128)))
+    (hb1 : b1tile = ⟨fun idx : TileIndex [64, 64] =>
+        some (b1Val s0 B0 b_offset 64 128 64 (s0.pids 0) idx.1 idx.2.1.val)⟩)
+    (i : Fin 64) (jL : Fin 64) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (⟨fun _ : TileIndex [64, 64] => FloatDType.fp16.cast FloatDType.real (FloatDType.real.cast FloatDType.fp16 (some 0))⟩)
+          (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [64, 128]) ktile))
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR
+          (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consL Broadcast.nil))
+            (⟨fun idx : TileIndex [64, 1] =>
+              some (s0.readMem B0 (b_offset + (s0.pids 0 * 64 + idx.1.val) * 128 + bcol))⟩)
+            b1tile)
+          (Tile.scalar (some 1.44269504)))).data (i, jL, PUnit.unit)
+      = some (fscore s0 Q K B0 sm_scale q_offset kv_offset b_offset
+          64 64 128 (64 * nB) 64 128 (s0.pids 0) i (gkey 64 nB c hc jL)) := by
+  -- the dot row = scale · Σ_e qRaw · kFlat
+  have hdot : (Tile.dot [] (⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [64, 128]) ktile).data (i, jL, PUnit.unit)
+      = some (sm_scale * 1.44269504 * Finset.univ.sum (fun e : Fin 128 =>
+          qRaw s0 Q q_offset 64 128 (s0.pids 0) (i, e, PUnit.unit)
+            * kFlat s0 K kv_offset 128 (64 * nB) e (gkey 64 nB c hc jL))) := by
+    rw [Tile.dot_nil_data]
+    rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+          (fun e => Option.map₂ (· * ·)
+            ((⟨fun a => FloatDType.fp16.cast FloatDType.real (qtile.data a)⟩ : Tile .real [64, 128]).data (i, e, PUnit.unit))
+            (ktile.data (e, jL, PUnit.unit))))
+        = @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (sm_scale * 1.44269504 * (qRaw s0 Q q_offset 64 128 (s0.pids 0) (i, e, PUnit.unit)
+              * kFlat s0 K kv_offset 128 (64 * nB) e (gkey 64 nB c hc jL))) : WithBot ℝ))
+        from Finset.sum_congr rfl (fun e _ => by
+          simp only [hq, FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+            FloatDType.real_toWithBot, Option.map₂]
+          rw [hk (e, jL, PUnit.unit)]
+          simp only [Option.bind, Option.map]
+          refine congrArg some ?_
+          simp only [qRaw, kFlat, gkey]
+          rw [show kv_offset + e.val * 1 + (c * 64 + jL.val) * 128
+                = kv_offset + e.val + (c * 64 + jL.val) * 128 from by ring]
+          ring)]
+    rw [withBot_sum_some]
+    refine congrArg some ?_
+    rw [Finset.mul_sum]
+  -- assemble: cells
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.scalar,
+    NumericDType.add, NumericDType.mul, hb1, hdot, b1Val, b0Val]
+  -- fp16-zeros cell = some 0
+  simp only [FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+    WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  simp only [fscore, qRaw, kFlat, b0Val, b1Val, gkey, hbcol]
+  have hjLlt := jL.isLt
+  rw [show (c * 64 + jL.val) / 64 = c from by
+    rw [Nat.mul_comm c 64, Nat.mul_add_div (by norm_num : (0:Nat) < 64), Nat.div_eq_of_lt jL.isLt]
+    omega]
+  rw [show (c * 64 + jL.val) % 64 = jL.val from by
+    rw [Nat.mul_comm c 64, Nat.mul_add_mod, Nat.mod_eq_of_lt jL.isLt]]
+  ring
+
+/-! ### M3 — `attn_step`: the loop body advances the invariant by one block -/
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+theorem attn_step (Q K V B0 Out : RegionName) (s0 : BlockState)
+    (nB : Nat) (i : Nat) (s : BlockState) (hilt : i < 64 * nB)
+    (hinv : attnKernelInvariant s0 Q K V B0 Out 0.1
+        (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
+        64 64 128 0 64 128 1 128 128 1 nB (s0.pids 0) i s) :
+    ∃ s', stepStmts (attnLoopBody B0) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ attnKernelInvariant s0 Q K V B0 Out 0.1
+          (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
+          64 64 128 0 64 128 1 128 128 1 nB (s0.pids 0) (i + 64) s' := by
+  have hBN : (0:Nat) < 64 := by norm_num
+  have hc : i / 64 < nB := (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [Nat.mul_comm]; exact hilt)
+  have hc1 : (i + 64) / 64 = i / 64 + 1 := Nat.add_div_right i hBN
+  simp only [attnKernelInvariant] at hinv
+  obtain ⟨hpids, hieq, hcle, hmi, hli, hacc, hKp, hVp, hq, hb1, hbo, hsm, hqo, hm, hundef, hmem⟩ := hinv
+  set sc := fscore s0 Q K B0 0.1 (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
+    64 64 128 (64 * nB) 64 128 (s0.pids 0) with hscdef
+  set V' := vFlat s0 V (s0.pids 1 * 16384) 128 (64 * nB) with hVpdef
+  -- memory of the body-input state = s0
+  have hrmem : ∀ (R : RegionName) (o : Nat),
+      (s.setReg "start_n" .nat [] (Tile.scalar i)).readMem R o = s0.readMem R o := by
+    intro R o; simp only [BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  -- the running registers carried into the body (named to avoid simp recursion)
+  have hmi' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .real [64] "m_i"
+      = some (⟨fun r : TileIndex [64] => mPg 64 nB sc r.1 (i / 64)⟩) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmi
+  have hli' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .real [64] "l_i"
+      = some (⟨fun r : TileIndex [64] => ((lPgK sc r.1 (i / 64) : ℝ) : WithBot ℝ)⟩) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hli
+  have hacc' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .real [64, 128] "acc"
+      = some (⟨fun idx : TileIndex [64, 128] => ((oPg sc V' idx.1 idx.2.1 (i / 64) : ℝ) : WithBot ℝ)⟩) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hacc
+  have hKp' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .blockPtr [128, 64] "K_block_ptr"
+      = some (⟨fun _ : TileIndex [128, 64] =>
+        { region := K, baseOffset := s0.pids 1 * 16384, parentShape := [128, 64 * nB + 0],
+          blockShape := [128, 64], strides := [1, 128], offsets := [0, i / 64 * 64] }⟩) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hKp]
+  have hVp' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .blockPtr [64, 128] "V_block_ptr"
+      = some (⟨fun _ : TileIndex [64, 128] =>
+        { region := V, baseOffset := s0.pids 1 * 16384, parentShape := [64 * nB + 0, 128],
+          blockShape := [64, 128], strides := [128, 1], offsets := [i / 64 * 64, 0] }⟩) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hVp]
+  have hq' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .fp16 [64, 128] "q"
+      = some (⟨fun idx : TileIndex [64, 128] =>
+        FloatDType.real.cast FloatDType.fp16
+          (some (0.1 * 1.44269504 * qRaw s0 Q (s0.pids 1 * 16384) 64 128 (s0.pids 0) idx))⟩) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq
+  have hb1' : (s.setReg "start_n" .nat [] (Tile.scalar i)).regs .real [64, 64] "b1"
+      = some (⟨fun idx : TileIndex [64, 64] =>
+        some (b1Val s0 B0 (s0.pids 1 * 16384) 64 128 64 (s0.pids 0) idx.1 idx.2.1.val)⟩) := by
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hb1
+  -- run the body chain
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hb1F, hboF, hsmF, hqoF, hmF, hKpF, hVpF,
+      qkT, rmaxT, mnewT, alphaT, pT, hqkData, hrm, hmnewd, halphad, hpTd, hm_iF, haccF, hl_iF⟩ :=
+    attnLoopBody_steps B0 (s.setReg "start_n" .nat [] (Tile.scalar i)) i
+      (fun r : Fin 64 => r.val)
+      K V (s0.pids 1 * 16384) (s0.pids 1 * 16384) (i / 64 * 64) (i / 64 * 64) (64 * nB + 0) (64 * nB + 0)
+      (s0.pids 1 * 16384) (s0.pids 0)
+      (⟨fun idx : TileIndex [64, 128] =>
+        FloatDType.real.cast FloatDType.fp16
+          (some (0.1 * 1.44269504 * qRaw s0 Q (s0.pids 1 * 16384) 64 128 (s0.pids 0) idx))⟩)
+      (⟨fun r : TileIndex [64] => mPg 64 nB sc r.1 (i / 64)⟩)
+      (⟨fun r : TileIndex [64] => ((lPgK sc r.1 (i / 64) : ℝ) : WithBot ℝ)⟩)
+      (⟨fun idx : TileIndex [64, 128] => ((oPg sc V' idx.1 idx.2.1 (i / 64) : ℝ) : WithBot ℝ)⟩)
+      (⟨fun idx : TileIndex [128, 64] =>
+        some (s0.readMem K (s0.pids 1 * 16384 + idx.1.val * 1 + (i / 64 * 64 + idx.2.1.val) * 128))⟩)
+      (⟨fun idx : TileIndex [64, 128] =>
+        some (s0.readMem V (s0.pids 1 * 16384 + (i / 64 * 64 + idx.1.val) * 128 + idx.2.1.val * 1))⟩)
+      (⟨fun idx : TileIndex [64, 64] =>
+        some (b1Val s0 B0 (s0.pids 1 * 16384) 64 128 64 (s0.pids 0) idx.1 idx.2.1.val)⟩)
+      (by rw [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hbo)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hm)
+      hmi' hli' hacc' hq' hb1' hKp' hVp'
+      (fun idx => congrArg some (hrmem K _).symm) (fun idx => congrArg some (hrmem V _).symm)
+      (s0.pids 1 * 16384) (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqo)
+      (by intro rg o; simp [BlockState.setReg_undef, hundef])
+  refine ⟨sF, hchain, ?_⟩
+  -- the per-cell qk bridge
+  have hqk : ∀ (r : Fin 64) (jL : Fin 64),
+      qkT.data (r, jL, PUnit.unit) = some (sc r (gkey 64 nB (i / 64) hc jL)) := by
+    intro r jL
+    rw [hqkData r jL]
+    have := attn_qk_cell s0 Q K B0 0.1 (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
+      nB (i / 64) (i / 64) hc
+      (⟨fun idx : TileIndex [64, 128] =>
+        FloatDType.real.cast FloatDType.fp16
+          (some (0.1 * 1.44269504 * qRaw s0 Q (s0.pids 1 * 16384) 64 128 (s0.pids 0) idx))⟩)
+      (⟨fun idx : TileIndex [128, 64] =>
+        some (s0.readMem K (s0.pids 1 * 16384 + idx.1.val * 1 + (i / 64 * 64 + idx.2.1.val) * 128))⟩)
+      (⟨fun idx : TileIndex [64, 64] =>
+        some (b1Val s0 B0 (s0.pids 1 * 16384) 64 128 64 (s0.pids 0) idx.1 idx.2.1.val)⟩)
+      rfl rfl (fun idx => rfl) rfl r jL
+    simp only [hscdef]
+    simp only [hrmem] at this ⊢
+    exact this
+  -- m_ij bridge
+  have hmij_eq : ∀ idx : TileIndex [64], mnewT.data idx
+      = mPg 64 nB sc idx.1 (i / 64 + 1) := by
+    intro idx
+    rw [hmnewd]
+    refine mijg_eq 64 nB (i / 64) hc sc _ rmaxT idx.1 ?_ ?_
+    · rfl
+    · exact reduceMaxDrop_data_row 64 64 hBN _ rmaxT hrm idx.1 _ (fun jL => hqk idx.1 jL)
+  simp only [attnKernelInvariant]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF]; exact hpids
+  · rw [hc1, Nat.add_one_mul, ← hieq]
+  · rw [hc1]; omega
+  · -- m_i = mPg (c+1)
+    rw [hm_iF, hc1]; refine congrArg some ?_; ext idx; exact hmij_eq idx
+  · -- l_i = lPgK (c+1)
+    rw [hl_iF, hc1]; refine congrArg some ?_; ext idx
+    rw [halphad, hpTd]
+    exact lig_eq 64 nB (i / 64) hBN hc sc _ mnewT _ qkT idx.1 rfl (hmij_eq idx) rfl (fun jL => hqk idx.1 jL)
+  · -- acc = oPg (c+1)
+    rw [haccF, hc1]; refine congrArg some ?_
+    ext idx
+    have hv : ∀ jL : Fin 64,
+        (⟨fun idx : TileIndex [64, 128] =>
+          some (s0.readMem V (s0.pids 1 * 16384 + (i / 64 * 64 + idx.1.val) * 128 + idx.2.1.val * 1))⟩
+          : Tile .real [64, 128]).data (jL, idx.2.1, PUnit.unit)
+          = some (V' (gkey 64 nB (i / 64) hc jL, idx.2.1, PUnit.unit)) := by
+      intro jL
+      refine congrArg some ?_
+      simp only [hVpdef, vFlat, gkey]
+      rw [show s0.pids 1 * 16384 + (i / 64 * 64 + jL.val) * 128 + idx.2.1.val * 1
+            = s0.pids 1 * 16384 + (i / 64 * 64 + jL.val) * 128 + idx.2.1.val from by ring]
+    refine accg_eq 64 nB (i / 64) hc sc V' _ alphaT pT _ idx.1 idx.2.1 rfl ?_ ?_ hv
+    · rw [halphad]
+      exact alphag_eq 64 nB (i / 64) sc _ mnewT idx.1 rfl (hmij_eq (idx.1, PUnit.unit))
+    · intro jL
+      rw [hpTd]
+      refine exp2_some (fun a b => sc a (gkey 64 nB (i / 64) hc b) - mRg sc a (i / 64 + 1)) _ idx.1 jL ?_
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+        TileShape.dropInsertedIndex, TileShape.insertAxisIndex, hqk idx.1 jL,
+        hmij_eq (idx.1, PUnit.unit),
+        mPg_eq_coe sc hBN idx.1 (i / 64 + 1) (Nat.le_add_left 1 (i / 64)) hc,
+        NumericDType.sub, WithBot.realSub, Option.map₂, Option.bind, Option.map]
+  · -- K block ptr advances
+    rw [hKpF, hc1, show i / 64 * 64 + 64 = (i / 64 + 1) * 64 from by ring]
+  · -- V block ptr advances
+    rw [hVpF, hc1, show i / 64 * 64 + 64 = (i / 64 + 1) * 64 from by ring]
+  · rw [hqF]
+  · rw [hb1F]
+  · rw [hboF]
+  · rw [hsmF]
+  · rw [hqoF]
+  · rw [hmF]
+  · exact hundefF
+  · rw [hmemF]; exact hmem
+
+/-! ### M3 — `attn_postLoop`: `acc /= l_i` + block store = `attentionKernelSpec`
+
+After the streaming loop (invariant at `c = nB`), the `acc /= l_i[:, None]` rescale
+and the (unmasked) block-pointer store write the normalized accumulator
+`oPg / lPgK = oPg / lPg = attentionKernelSpec` to `Out` at every lane. The store is a
+scatter over an injective block-pointer offset map (`row·128 + col` injective since
+`col < 128`); `lPgK_eq_lPg` kills the kernel's `l_i = 0` seed (`1 ≤ nB`), and
+`attentionKernelSpec_eq_ratio` reads off the closed form. -/
+
+/-- A fp16 `writeMemTyped` foldl over offsets all `≠ o` preserves `mem … o`. -/
+theorem foldl_writeMemTyped_fp16_preserves' {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16) (o : Nat) (l : List α) :
+    ∀ (s : BlockState), (∀ k ∈ l, offsetFn k ≠ o) →
+      ((l.foldl (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k)) s).mem region o)
+      = s.mem region o := by
+  induction l with
+  | nil => intros; rfl
+  | cons hd tl ih =>
+    intro s h
+    have hhd : offsetFn hd ≠ o := h hd (List.mem_cons_self)
+    have htl : ∀ k ∈ tl, offsetFn k ≠ o := fun k hk => h k (List.mem_cons_of_mem hd hk)
+    rw [List.foldl_cons, ih _ htl]
+    unfold BlockState.writeMemTyped BlockState.writeMemAs
+    change (if region = region ∧ o = offsetFn hd then _ else s.mem region o) = s.mem region o
+    rw [if_neg]; rintro ⟨_, h_eq⟩; exact hhd h_eq.symm
+
+/-- Fp16 block-store readback: an injective fp16 scatter reads back its stored
+cell as the fp16 `MemCell`. (Local mirror of the flash O-store readback.) -/
+theorem scatter_memcell_fp16_nd' {region : RegionName} {shape : TileShape}
+    (s : BlockState) (offsetFn : TileIndex shape → Nat)
+    (valueFn : TileIndex shape → TileCarrier TileDType.fp16)
+    (h_inj : Function.Injective offsetFn) (i : TileIndex shape) :
+    ((TileShape.allIndices shape).foldl
+       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
+       s).mem region (offsetFn i)
+    = MemCell.of .fp16
+        (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i))) := by
+  let l := TileShape.allIndices shape
+  obtain ⟨l₁, l₂, hl⟩ := List.append_of_mem (TileShape.mem_allIndices shape i)
+  have h_nodup := TileShape.allIndices_nodup shape
+  change ((l.foldl
+       (fun acc k => acc.writeMemTyped .fp16 region (offsetFn k) (valueFn k))
+       s).mem region (offsetFn i))
+    = MemCell.of .fp16
+        (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+  rw [hl] at h_nodup
+  rw [List.nodup_append, List.nodup_cons] at h_nodup
+  obtain ⟨_, ⟨hi_notin_l2, _⟩, _⟩ := h_nodup
+  have hl' : l = l₁ ++ i :: l₂ := by simpa [l] using hl
+  rw [hl', List.foldl_append, List.foldl_cons]
+  have h_l2_not_in : ∀ k ∈ l₂, offsetFn k ≠ offsetFn i := by
+    intro k hk heq; have hki : k = i := h_inj heq; subst hki; exact hi_notin_l2 hk
+  rw [foldl_writeMemTyped_fp16_preserves' offsetFn valueFn (offsetFn i) l₂ _ h_l2_not_in]
+  unfold BlockState.writeMemTyped BlockState.writeMemAs
+  change
+    (if region = region ∧ offsetFn i = offsetFn i then
+      MemCell.of .fp16 (FloatDType.fp16.ofReal (FloatDType.fp16.storeValue (valueFn i)))
+    else _) = _
+  rw [if_pos ⟨rfl, rfl⟩]
+
+set_option maxHeartbeats 1000000 in
+theorem attn_postLoop (Q K V B0 Out : RegionName) (s0 : BlockState)
+    (nB : Nat) (hnB : 1 ≤ nB) (st : BlockState)
+    (hinv : attnKernelInvariant s0 Q K V B0 Out 0.1
+        (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
+        64 64 128 0 64 128 1 128 128 1 nB (s0.pids 0) (64 * nB) st) :
+    ∃ sfin, stepStmts (attnPostLoop Out) st = some sfin
+      ∧ ∀ idx : TileIndex [64, 128],
+          sfin.mem Out (s0.pids 1 * 16384 + (s0.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1)
+            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+                (some (attentionKernelSpec s0 Q K V B0 0.1
+                  (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
+                  64 64 128 (64 * nB) 64 128 (s0.pids 0) idx))) := by
+  have hBN : (0:Nat) < 64 := by norm_num
+  have hcnB : (64 * nB) / 64 = nB := by rw [Nat.mul_comm, Nat.mul_div_cancel _ hBN]
+  simp only [attnKernelInvariant, hcnB] at hinv
+  obtain ⟨hpids, hieq, hcle, hmi, hli, hacc, hKp, hVp, hq, hb1, hbo, hsm, hqo, hm, hundef, hmem⟩ := hinv
+  set sc := fscore s0 Q K B0 0.1 (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
+    64 64 128 (64 * nB) 64 128 (s0.pids 0) with hscdef
+  set V' := vFlat s0 V (s0.pids 1 * 16384) 128 (64 * nB) with hVpdef
+  -- div result tile (acc / l_i[:, None]) = oPg / lPgK
+  set acc' : Tile .real [64, 128] :=
+    ⟨fun idx : TileIndex [64, 128] => ((oPg sc V' idx.1 idx.2.1 nB / lPgK sc idx.1 nB : ℝ) : WithBot ℝ)⟩
+    with hacc'def
+  unfold attnPostLoop
+  -- L0: acc = acc / l_i[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [64, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i"))) st = some acc' from by
+      have hexp : @evalOp TileDType.real [64, 1]
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i")) st
+          = some (Tile.expandDim ⟨1, by simp⟩
+              (⟨fun r : TileIndex [64] => ((lPgK sc r.1 nB : ℝ) : WithBot ℝ)⟩ : Tile .real [64])) :=
+        evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hli
+      rw [evalOp_div]
+      simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
+        Option.map₂, Option.bind, Option.map, hacc'def]
+      rfl))]
+  set st1 := st.setReg "acc" .real [64, 128] acc' with hst1
+  -- L1: O_block_ptr = makeBlockPtr(Out + q_offset, offsets=(start_m*64, 0))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (makeBlockPtr_rowcol_eval Out (Op.ref .nat [] "q_offset") [128, 128] [64, 128] [128, 1]
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 64)) st1
+      (s0.pids 1 * 16384) (s0.pids 0 * 64)
+      (by rw [evalOp_ref]; simp only [hst1, BlockState.setReg_ne_name]; exact hqo)
+      (evalOp_mul_ref_const st1 "start_m" (s0.pids 0) 64
+        (by simp only [hst1, BlockState.setReg_ne_name]; exact hsm))))]
+  set st2 := st1.setReg "O_block_ptr" .blockPtr [64, 128]
+      ⟨fun _ : TileIndex [64, 128] =>
+        { region := Out, baseOffset := s0.pids 1 * 16384, parentShape := [128, 128],
+          blockShape := [64, 128], strides := [128, 1], offsets := [s0.pids 0 * 64, 0] }⟩
+    with hst2
+  -- store value / offset functions
+  set oValFn : TileIndex [64, 128] → TileCarrier TileDType.fp16 :=
+    fun idx => FloatDType.real.cast FloatDType.fp16
+      (some (oPg sc V' idx.1 idx.2.1 nB / lPgK sc idx.1 nB)) with hoValFn
+  set oOffFn : TileIndex [64, 128] → Nat :=
+    fun idx => s0.pids 1 * 16384 + (s0.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1 with hoOffFn
+  have hOpref : @evalOp TileDType.blockPtr [64, 128] (Op.ref .blockPtr [64, 128] "O_block_ptr") st2
+      = some (⟨fun _ : TileIndex [64, 128] =>
+          { region := Out, baseOffset := s0.pids 1 * 16384, parentShape := [128, 128],
+            blockShape := [64, 128], strides := [128, 1], offsets := [s0.pids 0 * 64, 0] }⟩
+          : Tile .blockPtr [64, 128]) := by rw [evalOp_ref, hst2, BlockState.setReg_same]
+  have haccref : @evalOp TileDType.real [64, 128] (Op.ref .real [64, 128] "acc") st2 = some acc' := by
+    rw [evalOp_ref, hst2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hst1,
+      BlockState.setReg_same]
+  have hval : evalOp (Op.castFloat .real .fp16 (Op.ref .real [64, 128] "acc")) st2
+        = some (⟨oValFn⟩ : Tile .fp16 [64, 128]) := by
+    rw [evalOp_castFloat]; erw [haccref]; rfl
+  -- L2: store O via O_block_ptr (acc.to fp16)
+  have hstore : stepStmt (Stmt.store .fp16 [64, 128]
+      (MemAccess.blockPtr (Op.ref .blockPtr [64, 128] "O_block_ptr") [])
+      (Op.castFloat .real .fp16 (Op.ref .real [64, 128] "acc")) MaskOpt.none) st2
+      = some ((TileShape.allIndices [64, 128]).foldl
+          (fun acc idx => acc.writeMemTyped .fp16 Out (oOffFn idx) (oValFn idx)) st2) := by
+    unfold stepStmt
+    erw [hval]
+    simp only [Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    erw [hOpref]
+    simp only [Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ st2 ?_
+    intro acc idx _
+    simp only [TileShape.blockPtr_inBounds_nil_index, Bool.and_true, Bool.true_and,
+      TileShape.blockPtr_address_2d_row_offset_index, hoOffFn, if_true]
+  rw [stepStmts.cons_some hstore, stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx
+  have hinjO : Function.Injective oOffFn := by
+    rintro ⟨⟨a, ha⟩, ⟨b, hb⟩, _⟩ ⟨⟨c, hc⟩, ⟨d, hd⟩, _⟩ heq
+    simp only [hoOffFn] at heq
+    have hac : a = c ∧ b = d := by
+      set P := s0.pids 0 * 64 with hP
+      omega
+    obtain ⟨rfl, rfl⟩ := hac
+    rfl
+  rw [show s0.pids 1 * 16384 + (s0.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1 = oOffFn idx from rfl]
+  rw [scatter_memcell_fp16_nd' (region := Out) st2 oOffFn oValFn hinjO idx]
+  refine congrArg (MemCell.of .fp16) ?_
+  rw [hoValFn]
+  simp only [FloatDType.cast, FloatDType.ofReal, FloatDType.storeValue, FloatDType.ofWithBot,
+    FloatDType.toWithBot, WithBot.unbotD_coe]
+  refine congrArg (FloatDType.real.cast FloatDType.fp16) ?_
+  refine congrArg some ?_
+  rw [lPgK_eq_lPg sc idx.1 nB hnB le_rfl]
+  exact attentionKernelSpec_eq_ratio s0 Q K V B0 0.1
+    (s0.pids 1 * 16384) (s0.pids 1 * 16384) (s0.pids 1 * 16384)
+    64 64 128 64 128 nB (s0.pids 0) hBN hnB idx.1 idx.2.1
+
+/-! ## M4 — top theorem: genuine streaming-softmax closed-form correctness
+
+The whole-kernel `Out` store realizes the genuine base-2 streaming-softmax closed
+form `attentionKernelSpec` (= `attnGenScore fscore vFlat` of the loaded Q/K/V/B0
+tiles, with the kernel's actual per-key score `fscore` — scaled dot + additive
+relative-position bias), NOT the kernel's own executed value. Composed from
+`preLoop` (`P 0`) + `forRangeDyn_inv` over `attn_step` + `attn_postLoop`. -/
+
+set_option maxHeartbeats 1000000 in
+/-- **`attention_kernel.py` whole-kernel exec assembly.** Steps the entire faithful
+surface (prologue + `forRangeDyn` loop + epilogue) and reads off the genuine
+closed form at every `Out` lane. The loop runs exactly `nB = 2` blocks at the
+Python test shape (`N_CTX = 128 = 64·2`). -/
+theorem attention_kernel_exec (Q K V B0 Out : RegionName) (s : BlockState)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, stepStmts (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16).toAlgKernel.body s = some sF
+      ∧ ∀ idx : TileIndex [64, 128],
+          sF.mem Out (s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1)
+            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+                (some (attentionKernelSpec s Q K V B0 0.1
+                  (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
+                  64 64 128 (64 * 2) 64 128 (s.pids 0) idx))) := by
+  -- decompose body = take 19 ++ drop 19, with take 19 = preLoop prologue
+  rw [← List.take_append_drop 19 (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16).toAlgKernel.body]
+  -- preLoop
+  obtain ⟨s0, hpre, hlo, hhi, hinv0⟩ := preLoop Q K V B0 Out s hundef
+  rw [stepStmts.append_some hpre]
+  -- drop 19 = forRangeDyn :: drop 20 (= attnPostLoop)
+  rw [attnLoopBody_check Q K V B0 Out, show (attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out 0.1
+        16384 128 1 16384 128 1 16384 128 1 16384 128 1 16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16).toAlgKernel.body.drop 20 = attnPostLoop Out from attnPostLoop_check Q K V B0 Out]
+  -- run the forRangeDyn loop via forRangeDyn_inv with P = attnKernelInvariant
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.ref .nat [] "lo") (stopOp := Op.ref .nat [] "hi")
+      (stepOp := Op.constNat 64)
+      (P := fun i st => attnKernelInvariant s Q K V B0 Out 0.1
+        (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
+        64 64 128 0 64 128 1 128 128 1 2 (s.pids 0) i st)
+      (s_init := s0)
+      (by rw [evalOp_ref, hlo])
+      (by rw [evalOp_ref, hhi])
+      (by rw [evalOp_constNat])
+      (by norm_num)
+      hinv0
+      (fun i st hi hP => attn_step Q K V B0 Out s 2 i st (by omega) hP)
+  rw [stepStmts.cons_some hloop]
+  -- at loop exit, counter `final` is the first multiple of 64 ≥ 128, i.e. 128 = 64*2
+  have hfinal : final = 64 * 2 := by
+    obtain ⟨_, hmod, hle, _⟩ := hinvL
+    omega
+  subst hfinal
+  -- postLoop
+  obtain ⟨sF, hpostStep, hO⟩ := attn_postLoop Q K V B0 Out s 2 (by norm_num) sL hinvL
+  exact ⟨sF, hpostStep, hO⟩
+
+set_option maxHeartbeats 1000000 in
+/-- **Genuine closed-form `Out`-store correctness for `attention_kernel.py`.**
+Every output lane of `_fwd_kernel_aligned` holds the closed-form base-2
+streaming-softmax attention `attentionKernelSpec` (= `attnGenScore fscore vFlat`)
+of the loaded Q/K/V tiles under the kernel's genuine bias-augmented per-key score
+`fscore` — NOT the kernel's own executed output. At the checked Python test shape. -/
+theorem attention_kernel_genuine_output_compute_correct
+    (Q K V B0 Out : RegionName) (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ComputeCorrect.Realizes
+      (kernel := attention_kernel_fwd_kernel_aligned_surface Q K V B0 Out
+        0.1 16384 128 1 16384 128 1 16384 128 1 16384 128 1
+        16384 128 2 4 128 0 64 128 128 64 64
+        FloatDType.fp16)
+      (initialState := s)
+      (write := fun idx : TileIndex [64, 128] =>
+        some (Out, surfaceOutOffset s 16384 128 1 64 idx))
+      (expected := fun idx : TileIndex [64, 128] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+          (some (attentionKernelSpec s Q K V B0 0.1
+            (s.pids 1 * 16384) (s.pids 1 * 16384) (s.pids 1 * 16384)
+            64 64 128 (64 * 2) 64 128 (s.pids 0) idx)))) := by
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_kernel_fwd_kernel_aligned_surface, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  obtain ⟨sF, hstep, hO⟩ := attention_kernel_exec Q K V B0 Out s hundef
+  rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
+  obtain rfl : sF = s' := Option.some.inj hExec
+  simp only [ComputeCorrect.OutputReadable.read_memcell]
+  rw [show surfaceOutOffset s 16384 128 1 64 idx
+        = s.pids 1 * 16384 + (s.pids 0 * 64 + idx.1.val) * 128 + idx.2.1.val * 1 from by
+    simp [surfaceOutOffset, mIndex, kIndex]]
+  exact hO idx
+
 end ClosedForm
 
 end VeriTile.Bench.TritonBenchG.AttentionKernel
