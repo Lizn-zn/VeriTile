@@ -2766,10 +2766,12 @@ theorem flashLoopBody_steps (IS_CAUSAL : Bool) (sin : BlockState) (SN : Nat)
       ktile.data idx = some (sin.readMem Kreg (kbase + idx.1.val * 1 + (kcol + idx.2.1.val) * 64)))
     (hvload : ∀ idx : TileIndex [64, 64],
       vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * 64 + idx.2.1.val * 1)))
+    (Qptr : Tile .blockPtr [128, 64]) (hQp : sin.regs .blockPtr [128, 64] "Q_block_ptr" = some Qptr)
     (hundef : ∀ rg o, sin.undef rg o = 0) :
     ∃ sF, stepStmts (flashLoopBody IS_CAUSAL) sin = some sF
       ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
       ∧ sF.regs .fp16 [128, 64] "q" = some qtile
+      ∧ sF.regs .blockPtr [128, 64] "Q_block_ptr" = some Qptr
       ∧ sF.regs .nat [128] "off_m" = some (Tile.vec gm)
       ∧ sF.regs .nat [64] "off_n" = some (Tile.vec (fun j : Fin 64 => j.val))
       ∧ sF.regs .blockPtr [64, 64] "K_block_ptr" = some
@@ -2903,12 +2905,13 @@ theorem flashLoopBody_steps (IS_CAUSAL : Bool) (sin : BlockState) (SN : Nat)
     (flash_advance_row_eval _ Vreg vbase 128 64 64 64 64 1 vrow 64 "V_block_ptr"
       (by simp [BlockState.setReg_ne_name, hVp])))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mnewT, alphaT, numeT, ostileT,
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mnewT, alphaT, numeT, ostileT,
     hqkData, hrm, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
   · simp [BlockState.setReg_pids]
   · funext rg o; simp [BlockState.setReg_mem]
   · intro rg o; simp [BlockState.setReg_undef, hundef]
   · simp [BlockState.setReg_ne_name, hq]
+  · simp [BlockState.setReg_ne_name, hQp]
   · simp [BlockState.setReg_ne_name, hom]
   · simp [BlockState.setReg_ne_name, hon]
   · simp [BlockState.setReg_ne_name]
@@ -3550,5 +3553,152 @@ theorem flash_acc_reg_eq (s0 : BlockState) (Q K V : RegionName) (scale : ℝ) (c
   simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
   refine congrArg some ?_
   rw [hMr, WithBot.unbotD_coe]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Step lemma**: the loop body advances `attnInvariant` by one key block.
+Combines the validated execution chain `flashLoopBody_steps` (exposing the symbolic
+`max`/`denom`/`out_buffer` registers) with the channel bridges `flash_mnewT_eq`
+(running max), `flash_denom_reg_eq` (denom), `flash_acc_reg_eq` (out_buffer), all
+reading off `flashStateBot((c+1)·64)`/`flashRunningMax((c+1)·64)`. Block pointers
+advance `i → i + 64`; the off_m/off_n/q registers are preserved. -/
+theorem flash_attn_step (Q K V : RegionName) (s0 : BlockState) (sm_scale : ℝ) (IS_CAUSAL : Bool)
+    (hDIM : 0 < 64) (i : Nat) (s : BlockState) (hiTotal : Nat)
+    (hilt : i < hiTotal) (hhi : hiTotal ≤ 128) (hhimod : hiTotal % 64 = 0)
+    (hinv : attnInvariant Q K V s0 sm_scale 8192 128 128 64 64 hiTotal IS_CAUSAL hDIM i s) :
+    ∃ s', stepStmts (flashLoopBody IS_CAUSAL) (s.setReg "start_n" .nat [] (Tile.scalar i)) = some s'
+      ∧ attnInvariant Q K V s0 sm_scale 8192 128 128 64 64 hiTotal IS_CAUSAL hDIM (i + 64) s' := by
+  simp only [attnInvariant, log2e] at hinv
+  obtain ⟨hpids, hmod, hile, hmax, hden, hob, hq, hom, hon, hKp, hVp, hQp, hundef, hmem⟩ := hinv
+  set c := i / 64 with hc_def
+  have hi : i = c * 64 := by omega
+  have hc1 : (c + 1) * 64 ≤ 128 := by omega
+  set base := flashBaseOffset s0 8192 with hbase
+  set qS := s0.pids 0 * 128 with hqS
+  set scale := sm_scale * log2e with hscale
+  set qT := qTile s0 Q 8192 64 128 with hqT
+  set kT := kTile s0 K 8192 64 128 with hkT
+  set vT := vTile s0 V 8192 64 128 with hvT
+  -- base offset is `pids 1 * 8192`
+  have hbaseEq : base = s0.pids 1 * 8192 := by simp [hbase, flashBaseOffset]
+  -- run the execution chain
+  obtain ⟨sF, hchain, hpidsF, hmemF, hundefF, hqF, hQpF, homF, honF, hKpF, hVpF,
+      qkT, rmaxT, mnewT, alphaT, numeT, ostileT,
+      hqkData, hrm, hmnewd, halphad, hnumed, hostiled, hmaxF, hdenF, hobF⟩ :=
+    flashLoopBody_steps IS_CAUSAL (s.setReg "start_n" .nat [] (Tile.scalar i)) i
+      (fun r : Fin 128 => qS + r.val) K V base base i i
+      (⟨fun idx : TileIndex [128, 64] =>
+          FloatDType.real.cast FloatDType.fp16 (some (scale * qT idx))⟩)
+      (⟨fun r : TileIndex [128] => flashRunningMax qT kT vT (sm_scale * log2e) IS_CAUSAL qS i r.1 ⟨0, hDIM⟩⟩)
+      (⟨fun r : TileIndex [128] => ((flashStateBot qT kT vT (sm_scale * log2e) IS_CAUSAL qS i r.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩)
+      (⟨fun idx : TileIndex [128, 64] => ((flashStateBot qT kT vT (sm_scale * log2e) IS_CAUSAL qS i idx.1 idx.2.1).2.2 : ℝ)⟩)
+      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩)
+      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩)
+      (by simp [BlockState.setReg_same])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hom)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hon)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmax)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hden)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hob)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hq)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; rw [hKp])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; rw [hVp])
+      (fun idx => rfl)
+      (fun idx => rfl)
+      _
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hQp)
+      (by intro rg o; rw [BlockState.setReg_undef]; exact hundef rg o)
+  refine ⟨sF, hchain, ?_⟩
+  -- the chain's k/v load tiles read s0's memory (sin.mem = s.mem = s0.mem)
+  have hrmemK : ∀ idx : TileIndex [64, 64],
+      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩ : Tile .real [64, 64]).data idx
+        = some (s0.readMem K (s0.pids 1 * 8192 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)) := by
+    intro idx
+    simp only [BlockState.setReg_readMem]
+    rw [show (s.readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))
+          = s0.readMem K (s0.pids 1 * 8192 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64) from by
+      unfold BlockState.readMem; rw [hmem, hbaseEq, hi]]
+  have hrmemV : ∀ idx : TileIndex [64, 64],
+      (⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩ : Tile .real [64, 64]).data idx
+        = some (s0.readMem V (s0.pids 1 * 8192 + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1)) := by
+    intro idx
+    simp only [BlockState.setReg_readMem]
+    rw [show (s.readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))
+          = s0.readMem V (s0.pids 1 * 8192 + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1) from by
+      unfold BlockState.readMem; rw [hmem, hbaseEq, hi]]
+  -- q tile readback fact (cast fp16 of scale·qT)
+  set qtileF : Tile .fp16 [128, 64] :=
+    ⟨fun idx : TileIndex [128, 64] => FloatDType.real.cast FloatDType.fp16 (some (scale * qT idx))⟩ with hqtileF
+  set ktileF : Tile .real [64, 64] :=
+    ⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem K (base + idx.1.val * 1 + (i + idx.2.1.val) * 64))⟩ with hktileF
+  set vtileF : Tile .real [64, 64] :=
+    ⟨fun idx : TileIndex [64, 64] => some ((s.setReg "start_n" .nat [] (Tile.scalar i)).readMem V (base + (i + idx.1.val) * 64 + idx.2.1.val * 1))⟩ with hvtileF
+  -- mnewT cell value = flashRunningMax((c+1)·64)
+  have hmnewcell : ∀ r : Fin 128, mnewT.data (r, PUnit.unit)
+      = flashRunningMax qT kT vT scale IS_CAUSAL qS ((c + 1) * 64) r ⟨0, hDIM⟩ := by
+    intro r
+    rw [hmnewd]
+    refine flash_mnewT_eq s0 Q K scale IS_CAUSAL vT c hc1 r qtileF ktileF _ rmaxT hqtileF hrmemK ?_ ?_
+    · rw [hi]
+    · refine flash_reduceMaxDrop_row qkT rmaxT hrm r
+        (fun jL => flashQkCell IS_CAUSAL (c * 64) (fun rr : Fin 128 => qS + rr.val) qtileF ktileF r jL) ?_
+      intro jL
+      rw [hqkData r jL, hi]
+  -- nume cell readback
+  have hnumecell : ∀ r : Fin 128, ∀ jL : Fin 64, numeT.data (r, jL, PUnit.unit)
+      = WithBot.realExp2 (WithBot.realSub
+          (flashQkCell IS_CAUSAL (c * 64) (fun rr : Fin 128 => qS + rr.val) qtileF ktileF r jL)
+          (mnewT.data (r, PUnit.unit))) := by
+    intro r jL
+    rw [hnumed]
+    show WithBot.realExp2 _ = _
+    simp only [Tile.uop_data, Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.expandDim_data, TileShape.dropInsertedIndex, NumericDType.sub, hqkData r jL, hi]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · rw [hpidsF, BlockState.setReg_pids, hpids]
+  · omega
+  · omega
+  · -- max = flashRunningMax((i+64))
+    rw [hmaxF]; refine congrArg some ?_; ext r
+    rw [hmnewcell r.1]; congr 1; omega
+  · -- denom = flashStateBot((i+64)).2.1
+    rw [hdenF]; refine congrArg some ?_; ext r
+    rw [show ((i + 64) : Nat) = (c + 1) * 64 from by omega]
+    refine flash_denom_reg_eq s0 Q K V scale IS_CAUSAL c hc1 r.1 qtileF ktileF
+      (⟨fun rr : TileIndex [128] => ((flashStateBot qT kT vT scale IS_CAUSAL qS i rr.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩)
+      (⟨fun rr : TileIndex [128] => flashRunningMax qT kT vT scale IS_CAUSAL qS i rr.1 ⟨0, hDIM⟩⟩)
+      mnewT alphaT numeT hqtileF hrmemK ?_ ?_ ?_ halphad ?_
+    · show some _ = some _; rw [hi]
+    · show flashRunningMax _ _ _ _ _ _ _ _ _ = _; rw [hi]
+    · rw [hmnewcell r.1]
+    · intro jL; rw [hnumecell r.1 jL]
+  · -- out_buffer = flashStateBot((i+64)).2.2
+    rw [hobF]; refine congrArg some ?_; ext idx
+    rw [show ((i + 64) : Nat) = (c + 1) * 64 from by omega]
+    refine flash_acc_reg_eq s0 Q K V scale IS_CAUSAL c hc1 idx.1 idx.2.1 qtileF ktileF vtileF
+      (⟨fun ii : TileIndex [128, 64] => ((flashStateBot qT kT vT scale IS_CAUSAL qS i ii.1 ii.2.1).2.2 : ℝ)⟩)
+      (⟨fun rr : TileIndex [128] => ((flashStateBot qT kT vT scale IS_CAUSAL qS i rr.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩)
+      (⟨fun rr : TileIndex [128] => flashRunningMax qT kT vT scale IS_CAUSAL qS i rr.1 ⟨0, hDIM⟩⟩)
+      mnewT alphaT ostileT numeT hqtileF hrmemK hrmemV ?_
+      ((flashStateBot qT kT vT scale IS_CAUSAL qS i idx.1 ⟨0, hDIM⟩).2.1) ?_ ?_ ?_ halphad hostiled ?_
+    · show some _ = some _; rw [hi]
+    · show some _ = some _; rw [hi]
+    · show flashRunningMax _ _ _ _ _ _ _ _ _ = _; rw [hi]
+    · rw [hmnewcell idx.1]
+    · intro jL; rw [hnumecell idx.1 jL]
+  · rw [hqF]
+  · rw [homF]
+  · rw [honF]
+  · -- K_block_ptr advanced (kcol = i, so kcol + 64 = i + 64)
+    rw [hKpF]
+  · -- V_block_ptr advanced
+    rw [hVpF]
+  · -- Q_block_ptr preserved (not touched by the loop body)
+    rw [hQpF]
+  · exact hundefF
+  · rw [hmemF]; funext region offset
+    rw [BlockState.setReg_mem]
+    have : s.mem = s0.mem := hmem
+    rw [this]
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
