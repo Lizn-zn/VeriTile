@@ -2270,6 +2270,59 @@ theorem ctx_qkT_cell (sm : ℝ) (SN plen : Nat) (gOM : Fin 128 → Nat)
   · rw [hsel, if_neg h]
     simp only [decide_eq_false_iff_not.mpr h, Bool.false_eq_true, if_false]
 
+/-! ## STEP D — the faithful masked closed form + streaming-loop assembly
+
+The streaming loop's bound `block_mask · block_end_loc` is stepped by `128`, but
+`block_end_loc` (`= min(block_start_loc + 128 + plen, seq_len + plen)`) is **not**
+128-aligned. `forRangeDyn_inv` therefore runs the loop to `final = ceil₁₂₈(bel) ≥
+bel`, streaming *phantom* keys `j ∈ [bel, final)`. The kernel's `k`/`v` loads are
+masked by `< block_end_loc` (so phantom `k`/`v` are **0**), but the causal
+`tl.where` still feeds each phantom lane a finite score (`sm·dot(q,0) = 0` when the
+causal mask passes, the `-1e8` sentinel otherwise) into `exp2`, so phantom keys
+contribute `exp2(score)·0 = 0` to the numerator (zeroed `v`) yet `exp2(score)` to
+the denominator.
+
+To stay faithful we capture **exactly** that: the per-key data the loop folds uses
+`block_end_loc`-masked tiles. `ctxKVM` is `ctxKV` with `k`/`v` read through the
+`< bel` load mask (`ctxKTileM`/`ctxVTileM`), so the closed form
+`contextAttnExactFoldM` over `final` keys equals what the kernel's `m_i`/`l_i`/`acc`
+loop produces — phantom-key denominator contribution included. -/
+
+/-- `block_end_loc`-masked key tile: `ctxKTile` for `j < bel`, else `0` (the
+kernel's `k` load mask `(start_n+offs_n) < block_end_loc, other=0`). -/
+noncomputable def ctxKTileM (s : BlockState) (K : RegionName) (S bel : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, e, u) => if j.val < bel then ctxKTile s K S (j, e, u) else 0
+
+/-- `block_end_loc`-masked value tile: `ctxVTile` for `j < bel`, else `0`. -/
+noncomputable def ctxVTileM (s : BlockState) (V : RegionName) (S bel : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, d, u) => if j.val < bel then ctxVTile s V S (j, d, u) else 0
+
+/-- **Faithful per-key `(score, value)` the loop folds**: `ctxKV` with the
+`block_end_loc` load mask applied to `k`/`v`. Active causal lane (`j ≤ gi+plen`)
+gets `sm·Σ_e qf(i,e)·ctxKTileM(j,e)` (so phantom `j ≥ bel` get `sm·0 = 0`); future
+lane gets the `-1e8` sentinel; value is the masked `ctxVTileM` (`0` for `j ≥ bel`). -/
+noncomputable def ctxKVM
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) (j : Fin S) : ℝ × ℝ :=
+  (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
+      sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+        ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTileM s K S bel (j, e, PUnit.unit))
+    else (0.0 - 10e7 : ℝ),
+    ctxVTileM s V S bel (j, d, PUnit.unit))
+
+/-- **The faithful kernel value** at output lane `(i, d)`: `acc/l` of the
+⊥-seeded online-softmax fold over `ctxKVM` for the full streamed window `[0, S)`
+(`S = final`). A pure function of `Q`/`K`/`V` memory — exactly what the loop's
+`m_i`/`l_i`/`acc` realize, phantom keys included. -/
+noncomputable def contextAttnExactFoldM
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ) (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
+  let st := gStateBot S S (ctxKVM s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale
+      BLOCK_M S bel idx.1 idx.2.1)
+  st.2.2 / st.2.1
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
