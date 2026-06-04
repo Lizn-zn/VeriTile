@@ -471,6 +471,289 @@ theorem contextAttnExactFold_eq
   · apply Finset.sum_congr rfl; intro j _; rw [hw j]
   · apply Finset.sum_congr rfl; intro j _; rw [hw j]
 
+/-! ## ⊥-seeded online-softmax running-state recurrence (the loop invariant's math)
+
+The kernel seeds its running max `m_i = tl.zeros − inf` at `⊥` and `l_i`/`acc` at
+real `0`; each block it rescales by `α = exp2(m_i − m_ij)` (with `m_i = ⊥` on block 0
+the rescale is `realExp2 ⊥ = 0`, killing the seed). This section is the
+context-kernel analogue of `flash_attn`'s `osStepBot`/`flashStateBot`/`flashRunningMax`
+family: the ⊥-seeded recurrence the streaming loop carries, with this kernel's
+per-key score (`sm_scale·raw` on active keys `j ≤ gi+plen`, the genuine `-1e8`
+sentinel `(log 2)⁻¹·(−1e8)` on future keys) and value `ctxVTile`. Its final
+`acc/l` ratio over the full window reads off the banked `contextAttnExactFold`. -/
+
+open VeriTile.Triton (osStep pow2)
+
+/-- The kernel's per-key `(score, value)` pair for output `(i, d)` at global key `j`
+over `S` keys, with the genuine `-1e8` sentinel kept (matching `ctxExactKeyList`). -/
+noncomputable def ctxKV
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) (j : Fin S) : ℝ × ℝ :=
+  (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
+      sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+        ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTile s K S (j, e, PUnit.unit))
+    else (Real.log 2)⁻¹ * (-1.0e8 : ℝ),
+    ctxVTile s V S (j, d, PUnit.unit))
+
+/-- Per-row key list over the streamed window `[0, hi)`: keys `j < hi`, index order. -/
+noncomputable def ctxKeysUpto
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if j.val < hi then some (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d j)
+    else none)
+
+/-- One ⊥-seeded online-softmax step: running max in `WithBot ℝ` (seeded `⊥`), so
+`α = realExp2(m ⊖ m')` is `0` on the first block — faithful to the kernel's
+`m_i = tl.zeros − inf` and `l_i`/`acc = 0`. -/
+noncomputable def osStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
+  let m := st.1; let l := st.2.1; let acc := st.2.2
+  let sc := sv.1; let v := sv.2
+  let m' := m ⊔ ((sc : ℝ) : WithBot ℝ)
+  let α := (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
+  let p := pow2 (sc - m'.unbotD 0)
+  (m', l * α + p, acc * α + p * v)
+
+/-- ⊥-seeded running max of the streamed window `[0, hi)` — the value the kernel
+carries in `m_i` (seeded `⊥`, the `WithBot ⊔`-fold of the per-key scores). -/
+noncomputable def ctxRunningMax
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) : WithBot ℝ :=
+  ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).map
+    (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+
+/-- The ⊥-seeded running `(max, l, acc)` after streaming the window `[0, hi)`. -/
+noncomputable def ctxStateBot
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) : WithBot ℝ × ℝ × ℝ :=
+  (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).foldl
+    osStepBot (⊥, 0, 0)
+
+/-- The running `max` component of an `osStepBot` fold is the `WithBot ⊔`-fold. -/
+theorem osStepBot_foldl_fst
+    (xs : List (ℝ × ℝ)) (m₀ : WithBot ℝ) (l₀ acc₀ : ℝ) :
+    (xs.foldl osStepBot (m₀, l₀, acc₀)).1
+      = (xs.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldl (· ⊔ ·) m₀ := by
+  induction xs generalizing m₀ l₀ acc₀ with
+  | nil => rfl
+  | cons x xs ih => simp only [List.foldl_cons, List.map_cons]; rw [ih]; rfl
+
+/-- **⊥-seeded consistency.** Folding `osStepBot` from `(m, l, acc)` anchored to the
+true (max-free) denominator `L` / accumulator `T` via the ⊥-aware factor keeps that
+invariant (`l = κ(m)·L`, `acc = κ(m)·T`, `κ ⊥ = 0`, `κ (some r) = pow2(−r)`). -/
+theorem osStepBot_foldl_consistent (xs : List (ℝ × ℝ)) (m : WithBot ℝ) (l acc T L : ℝ)
+    (hl : l = (m.elim 0 (fun r => pow2 (-r))) * L)
+    (hacc : acc = (m.elim 0 (fun r => pow2 (-r))) * T)
+    (hmL : m = ⊥ → L = 0) (hmT : m = ⊥ → T = 0) :
+    let st := xs.foldl osStepBot (m, l, acc)
+    st.2.1 = (st.1.elim 0 (fun r => pow2 (-r))) * (L + (xs.map (fun p => pow2 p.1)).sum) ∧
+    st.2.2 = (st.1.elim 0 (fun r => pow2 (-r))) * (T + (xs.map (fun p => pow2 p.1 * p.2)).sum) := by
+  induction xs generalizing m l acc T L with
+  | nil => simp [hl, hacc]
+  | cons x xs ih =>
+    obtain ⟨sc, v⟩ := x
+    set m' : WithBot ℝ := m ⊔ ((sc : ℝ) : WithBot ℝ) with hm'
+    have hm'r : ∃ r : ℝ, m' = (r : WithBot ℝ) := by
+      cases m with
+      | bot => exact ⟨sc, by rw [hm']; rfl⟩
+      | coe a => exact ⟨max a sc, by rw [hm']; rw [← WithBot.coe_max]⟩
+    obtain ⟨mr, hmr⟩ := hm'r
+    have hκm' : m'.elim 0 (fun r => pow2 (-r)) = pow2 (-mr) := by rw [hmr]; rfl
+    have hunbot : m'.unbotD 0 = mr := by rw [hmr]; rfl
+    have hp : pow2 (sc - m'.unbotD 0) = pow2 (-mr) * pow2 sc := by
+      rw [hunbot, ← pow2_add]; ring_nf
+    have hl' : l * (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
+        + pow2 (sc - m'.unbotD 0) = pow2 (-mr) * (L + pow2 sc) := by
+      cases m with
+      | bot =>
+        rw [hmL rfl]
+        have hz : (WithBot.realExp2 (WithBot.realSub (⊥ : WithBot ℝ) m')).unbotD 0 = 0 := by
+          rw [WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+        rw [hz, mul_zero, zero_add, hp]; ring
+      | coe a =>
+        have hm'a : m' = ((max a sc : ℝ) : WithBot ℝ) := by rw [hm']; rw [← WithBot.coe_max]
+        have hmra : mr = max a sc := by rw [hm'a] at hmr; exact (WithBot.coe_inj.mp hmr.symm)
+        have hαa : (pow2 (-a)) * (WithBot.realExp2 (WithBot.realSub (↑a) m')).unbotD 0
+            = pow2 (-mr) := by
+          rw [hm'a, WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe]
+          rw [show Real.exp ((a - max a sc) * Real.log 2) = pow2 (a - max a sc) from by
+            simp [pow2, mul_comm], ← pow2_add, hmra]; ring_nf
+        rw [hl, show ((↑a : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-a) from rfl]
+        rw [mul_right_comm, hαa, hp]; ring
+    have hacc' : acc * (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
+        + pow2 (sc - m'.unbotD 0) * v = pow2 (-mr) * (T + pow2 sc * v) := by
+      cases m with
+      | bot =>
+        rw [hmT rfl]
+        have hz : (WithBot.realExp2 (WithBot.realSub (⊥ : WithBot ℝ) m')).unbotD 0 = 0 := by
+          rw [WithBot.realSub_bot_left, WithBot.realExp2_bot]; rfl
+        rw [hz, mul_zero, zero_add, hp]; ring
+      | coe a =>
+        have hm'a : m' = ((max a sc : ℝ) : WithBot ℝ) := by rw [hm']; rw [← WithBot.coe_max]
+        have hmra : mr = max a sc := by rw [hm'a] at hmr; exact (WithBot.coe_inj.mp hmr.symm)
+        have hαa : (pow2 (-a)) * (WithBot.realExp2 (WithBot.realSub (↑a) m')).unbotD 0
+            = pow2 (-mr) := by
+          rw [hm'a, WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe]
+          rw [show Real.exp ((a - max a sc) * Real.log 2) = pow2 (a - max a sc) from by
+            simp [pow2, mul_comm], ← pow2_add, hmra]; ring_nf
+        rw [hacc, show ((↑a : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-a) from rfl]
+        rw [mul_right_comm, hαa, hp]; ring
+    have step := ih m'
+      (l * (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0 + pow2 (sc - m'.unbotD 0))
+      (acc * (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0 + pow2 (sc - m'.unbotD 0) * v)
+      (T + pow2 sc * v) (L + pow2 sc) (by rw [hl', hκm']) (by rw [hacc', hκm'])
+      (by rw [hmr]; simp) (by rw [hmr]; simp)
+    simpa [List.foldl_cons, osStepBot, hm', List.map_cons, add_assoc] using step
+
+/-- The `WithBot ⊔`-fold is seed/direction-agnostic. -/
+theorem foldl_sup_bot_eq_foldr (L : List (WithBot ℝ)) :
+    L.foldl (· ⊔ ·) (⊥ : WithBot ℝ) = L.foldr (· ⊔ ·) (⊥ : WithBot ℝ) := by
+  have gen : ∀ (m : WithBot ℝ), L.foldl (· ⊔ ·) m = m ⊔ L.foldr (· ⊔ ·) ⊥ := by
+    induction L with
+    | nil => intro m; simp
+    | cons a t ih =>
+      intro m
+      simp only [List.foldl_cons, List.foldr_cons, ih]
+      rw [max_assoc]
+  rw [gen ⊥, bot_sup_eq]
+
+/-- The ⊥-seeded denominator equals `κ(ctxRunningMax)·Σpow2 score`. -/
+theorem ctxStateBot_snd_fst
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).2.1
+      = ((ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).elim 0
+            (fun r => pow2 (-r)))
+        * ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).map
+            (fun p => pow2 p.1)).sum := by
+  have h := (osStepBot_foldl_consistent
+    (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)
+    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).1
+  rw [ctxStateBot]
+  rw [show (List.foldl osStepBot (⊥, 0, 0)
+        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).2.1 = _ from h]
+  rw [show (List.foldl osStepBot (⊥, 0, 0)
+        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).1
+        = ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d from by
+    rw [ctxRunningMax, osStepBot_foldl_fst, foldl_sup_bot_eq_foldr]]
+  rw [zero_add]
+
+/-- The ⊥-seeded accumulator equals `κ(ctxRunningMax)·Σpow2 score·v`. -/
+theorem ctxStateBot_snd_snd
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).2.2
+      = ((ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).elim 0
+            (fun r => pow2 (-r)))
+        * ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).map
+            (fun p => pow2 p.1 * p.2)).sum := by
+  have h := (osStepBot_foldl_consistent
+    (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)
+    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).2
+  rw [ctxStateBot]
+  rw [show (List.foldl osStepBot (⊥, 0, 0)
+        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).2.2 = _ from h]
+  rw [show (List.foldl osStepBot (⊥, 0, 0)
+        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).1
+        = ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d from by
+    rw [ctxRunningMax, osStepBot_foldl_fst, foldl_sup_bot_eq_foldr]]
+  rw [zero_add]
+
+/-- Any list member is `≤` the `foldr ⊔ ⊥`. -/
+theorem mem_le_foldr_sup (a : WithBot ℝ) :
+    ∀ (L : List (WithBot ℝ)), a ∈ L → a ≤ L.foldr (· ⊔ ·) ⊥ := by
+  intro L
+  induction L with
+  | nil => intro h; simp at h
+  | cons x t ih =>
+    intro h
+    simp only [List.foldr_cons]
+    rcases List.mem_cons.mp h with h | h
+    · rw [h]; exact le_sup_left
+    · exact le_trans (ih h) le_sup_right
+
+/-- The ⊥-seeded running max over a nonempty window (`0 < hi`, `0 < S`) is `≠ ⊥`:
+key `0` is always streamed, so the coerced score list is nonempty. -/
+theorem ctxRunningMax_ne_bot
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128) (hhi : 0 < hi) (hS : 0 < S) :
+    ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d ≠ ⊥ := by
+  unfold ctxRunningMax ctxKeysUpto
+  have hmem : (⟨0, hS⟩ : Fin S) ∈ List.finRange S := List.mem_finRange _
+  set L := ((List.finRange S).filterMap (fun j : Fin S =>
+      if j.val < hi then some (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d j)
+      else none)).map (fun p => ((p.1 : ℝ) : WithBot ℝ)) with hL
+  have hmemL : ((ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d ⟨0, hS⟩).1
+      : WithBot ℝ) ∈ L := by
+    rw [hL, List.mem_map]
+    refine ⟨ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d ⟨0, hS⟩, ?_, rfl⟩
+    rw [List.mem_filterMap]
+    exact ⟨⟨0, hS⟩, hmem, by rw [if_pos (show (⟨0, hS⟩ : Fin S).val < hi from hhi)]⟩
+  have hle : ((ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d ⟨0, hS⟩).1
+      : WithBot ℝ) ≤ L.foldr (· ⊔ ·) ⊥ := mem_le_foldr_sup _ L hmemL
+  intro hbot
+  exact absurd (le_bot_iff.mp (hbot ▸ hle)) (WithBot.coe_ne_bot)
+
+/-- **Full window = the banked `ctxExactKeyList`.** At `hi = S` every key is
+streamed, so the windowed key list coincides with the exact-fold key list. -/
+theorem ctxKeysUpto_full
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S S i d
+      = ctxExactKeyList s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d := by
+  unfold ctxKeysUpto ctxExactKeyList ctxKV
+  rw [List.ofFn_eq_map]
+  refine List.filterMap_eq_map_iff_forall_eq_some.mpr (fun j _ => ?_)
+  simp only [j.isLt, if_true, Nat.add_assoc]
+
+/-- ⊥-seeded ratio = 0-seeded `osStep` ratio whenever the running max `≠ ⊥`
+(the `pow2(−m)` common factor cancels). -/
+theorem ctxStateBot_ratio_eq
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S hi : Nat) (i : Fin BLOCK_M) (d : Fin 128)
+    (hne : ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d ≠ ⊥) :
+    (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).2.2
+        / (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).2.1
+      = ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).foldl
+            osStep (0, 0, 0)).2.2
+        / ((ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d).foldl
+            osStep (0, 0, 0)).2.1 := by
+  rw [ctxStateBot_snd_fst, ctxStateBot_snd_snd]
+  have hcL := (VeriTile.Triton.osStep_foldl_consistent
+    (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)
+    0 0 0 0 0 (by simp) (by simp)).1
+  have hcT := (VeriTile.Triton.osStep_foldl_consistent
+    (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)
+    0 0 0 0 0 (by simp) (by simp)).2
+  rw [show (List.foldl osStep (0, 0, 0)
+        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).2.1
+        = _ from hcL,
+      show (List.foldl osStep (0, 0, 0)
+        (ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d)).2.2
+        = _ from hcT]
+  cases hM : ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S hi i d with
+  | bot => exact absurd hM hne
+  | coe r =>
+    rw [show ((↑r : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-r) from rfl]
+    simp only [zero_add]
+    rw [mul_div_mul_left _ _ (ne_of_gt (pow2_pos _)),
+        mul_div_mul_left _ _ (ne_of_gt (pow2_pos _))]
+
+/-- **The full-window ⊥-seeded final state reads off `contextAttnExactFold`.**
+`ctxStateBot.acc / ctxStateBot.l` over the full window (`hi = S`) equals the
+banked genuine closed form — the value the kernel's `m_i`/`l_i`/`acc` loop
+produces. Requires the window nonempty (`ctxRunningMax ≠ ⊥`). -/
+theorem ctxStateBot_full_eq_exactFold
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S : Nat) (i : Fin BLOCK_M) (d : Fin 128)
+    (hne : ctxRunningMax s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S S i d ≠ ⊥) :
+    (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S S i d).2.2
+        / (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S S i d).2.1
+      = contextAttnExactFold s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S
+          (i, d, PUnit.unit) := by
+  rw [ctxStateBot_ratio_eq _ _ _ _ _ _ _ _ _ _ _ _ hne, ctxKeysUpto_full]
+  rfl
+
 /-! ### exec-stepping infrastructure for the FA-1 assembly (WIP)
 
 Per-statement `evalOp` recipes specific to this kernel — the causal `≥` mask and
