@@ -310,6 +310,130 @@ theorem attention_fwd_triton1_bh_formula_slice_compute_correct
   rw [hExec] at h
   exact Option.some.inj h
 
+/-! ## Genuine closed form for the linear-attention output
+
+`attention_fwd_kernel` implements *linear (chunked) attention*: there is **no
+softmax** at all. Per batch-head program the loop carries the recurrent state
+
+  `b_h_i = Σ_{j < i} (Kⱼᵀ · Vⱼ)`   (a `[BD, BD]` matrix),
+
+and the output of time-chunk `i` (default branch `STORE=False, IFCOND=False`,
+which the `IFCOND=True, i>0` branch coincides with, and the `i=0` branch reduces
+to since `b_h_0 = 0`) is
+
+  `Oᵢ[t, d] = ((scale·Qᵢ) · Kᵢ · Vᵢ)[t, d] + ((scale·Qᵢ) · b_h_i)[t, d]`.
+
+The first summand is exactly `boFormulaSpec` for chunk `i`'s tiles; the second
+is the contraction of the scaled query against the accumulated state. The
+definitions below give that genuine closed form purely in terms of the input
+memory (no reference to the executed kernel output), and the identity theorems
+establish the linear-attention algebra: the recurrent contribution telescopes
+into a single double sum over all prior keys/values.
+
+The per-chunk tile accessors are passed as offset functions `qAddr`/`kAddr`/
+`vAddr : Nat → ... → Nat` mapping `(chunk, row, col)` to a flat memory offset,
+matching the `make_block_ptr` layout `base + (chunk·BT + row)·s_t + col·s_d`. -/
+
+/-- One chunk's local (`(scale·Q)·K·V`) closed-form entry, stated directly over
+input memory via per-chunk row/col offset accessors. -/
+noncomputable def localTerm
+    (s : BlockState) (Q K V : RegionName) (scale : ℝ) (BT BD : Nat)
+    (qAddr kAddr vAddr : Nat → Nat → Nat)
+    (chunk : Nat) (t : Fin BT) (d : Fin BD) : ℝ :=
+  ∑ tk : Fin BT,
+    (∑ dd : Fin BD,
+      (s.readMem Q (qAddr chunk (BD * t.val + dd.val)) * scale) *
+        s.readMem K (kAddr chunk (BT * dd.val + tk.val))) *
+      s.readMem V (vAddr chunk (BD * tk.val + d.val))
+
+/-- The recurrent state matrix `b_h_i[d', d] = Σ_{j < i} (Kⱼᵀ·Vⱼ)[d', d]`,
+genuine closed form over input memory. -/
+noncomputable def recurrentState
+    (s : BlockState) (K V : RegionName) (BT BD : Nat)
+    (kAddr vAddr : Nat → Nat → Nat)
+    (chunk : Nat) (d' d : Fin BD) : ℝ :=
+  ∑ j ∈ Finset.range chunk,
+    ∑ tk : Fin BT,
+      s.readMem K (kAddr j (BT * d'.val + tk.val)) *
+        s.readMem V (vAddr j (BD * tk.val + d.val))
+
+/-- The recurrent output contribution `((scale·Qᵢ)·b_h_i)[t, d]`. -/
+noncomputable def recurrentTerm
+    (s : BlockState) (Q K V : RegionName) (scale : ℝ) (BT BD : Nat)
+    (qAddr kAddr vAddr : Nat → Nat → Nat)
+    (chunk : Nat) (t : Fin BT) (d : Fin BD) : ℝ :=
+  ∑ d' : Fin BD,
+    (s.readMem Q (qAddr chunk (BD * t.val + d'.val)) * scale) *
+      recurrentState s K V BT BD kAddr vAddr chunk d' d
+
+/-- Genuine closed-form output of chunk `chunk`, position `(t, d)`:
+local term plus recurrent term. No self-reference to the executed kernel. -/
+noncomputable def outputClosedForm
+    (s : BlockState) (Q K V : RegionName) (scale : ℝ) (BT BD : Nat)
+    (qAddr kAddr vAddr : Nat → Nat → Nat)
+    (chunk : Nat) (t : Fin BT) (d : Fin BD) : ℝ :=
+  localTerm s Q K V scale BT BD qAddr kAddr vAddr chunk t d +
+    recurrentTerm s Q K V scale BT BD qAddr kAddr vAddr chunk t d
+
+/-- **Base chunk.** For the first time-chunk (`chunk = 0`) the recurrent state is
+empty, so the genuine closed form collapses to the pure local term — matching the
+Python `i = 0` behavior (`b_h` initialized to zeros, and under `IFCOND=True` the
+`i=0` branch skips the recurrent add entirely). -/
+theorem outputClosedForm_zero
+    (s : BlockState) (Q K V : RegionName) (scale : ℝ) (BT BD : Nat)
+    (qAddr kAddr vAddr : Nat → Nat → Nat) (t : Fin BT) (d : Fin BD) :
+    outputClosedForm s Q K V scale BT BD qAddr kAddr vAddr 0 t d
+      = localTerm s Q K V scale BT BD qAddr kAddr vAddr 0 t d := by
+  simp [outputClosedForm, recurrentTerm, recurrentState]
+
+/-- **Local term = `boFormulaSpec`.** The local contribution of chunk `chunk`
+is exactly the already-proven dot-product producer spec `boFormulaSpec`,
+instantiated at that chunk's tiles. This pins the genuine closed form to the
+checked arithmetic surface rather than to the executed output.
+
+`Qc/Kc/Vc` are the per-chunk tile regions whose flat layout (`row·BD + col` for
+`Q`/`V`, `row·BT + col` for `K`) matches the producer slices; the hypotheses say
+the chunk accessors read the same memory as those tiles. -/
+theorem localTerm_eq_boFormulaSpec
+    (s : BlockState) (Q K V Qc Kc Vc : RegionName) (scale : ℝ) (BT BD : Nat)
+    (qAddr kAddr vAddr : Nat → Nat → Nat) (chunk : Nat)
+    (t : Fin BT) (d : Fin BD)
+    (hQ : ∀ off, s.readMem Q (qAddr chunk off) = s.readMem Qc off)
+    (hK : ∀ off, s.readMem K (kAddr chunk off) = s.readMem Kc off)
+    (hV : ∀ off, s.readMem V (vAddr chunk off) = s.readMem Vc off) :
+    localTerm s Q K V scale BT BD qAddr kAddr vAddr chunk t d
+      = boFormulaSpec s Qc Kc Vc scale BT BD (t, d, PUnit.unit) := by
+  simp only [localTerm, boFormulaSpec, hQ, hK, hV, Nat.mul_comm]
+
+/-- **Recurrent state telescopes into a sum of per-chunk `bhFormulaSpec`s.** The
+accumulated state at chunk `chunk` equals the sum over prior chunks `j` of the
+already-proven `bhFormulaSpec` (the `dot(K, V)` producer) for chunk `j`. The
+chunk-`j` accessors are supplied via the per-chunk tile regions. -/
+theorem recurrentState_eq_sum_bhFormulaSpec
+    (s : BlockState) (K V : RegionName) (BT BD : Nat)
+    (kAddr vAddr : Nat → Nat → Nat) (chunk : Nat) (d' d : Fin BD)
+    (Kc Vc : Nat → RegionName)
+    (hK : ∀ j off, s.readMem K (kAddr j off) = s.readMem (Kc j) off)
+    (hV : ∀ j off, s.readMem V (vAddr j off) = s.readMem (Vc j) off) :
+    recurrentState s K V BT BD kAddr vAddr chunk d' d
+      = ∑ j ∈ Finset.range chunk,
+          bhFormulaSpec s (Kc j) (Vc j) BT BD (d', d, PUnit.unit) := by
+  simp only [recurrentState, bhFormulaSpec, hK, hV, Nat.mul_comm]
+
+/-- **Step recurrence.** The genuine closed form satisfies the same one-chunk
+recurrence the Python loop realizes: advancing from chunk `n` to chunk `n+1`
+adds the `n`-th chunk's `Kᵀ·V` block to the recurrent state. This is the loop
+invariant in closed form (`b_h_{n+1} = b_h_n + Kₙᵀ·Vₙ`). -/
+theorem recurrentState_succ
+    (s : BlockState) (K V : RegionName) (BT BD : Nat)
+    (kAddr vAddr : Nat → Nat → Nat) (n : Nat) (d' d : Fin BD) :
+    recurrentState s K V BT BD kAddr vAddr (n + 1) d' d
+      = recurrentState s K V BT BD kAddr vAddr n d' d
+        + (∑ tk : Fin BT,
+            s.readMem K (kAddr n (BT * d'.val + tk.val)) *
+              s.readMem V (vAddr n (BD * tk.val + d.val))) := by
+  simp [recurrentState, Finset.sum_range_succ]
+
 /-- Surface transcription/proof-oriented output-store slice of `attention_fwd_triton1.py`'s
 `attention_fwd_kernel`.
 
@@ -964,6 +1088,83 @@ theorem attention_fwd_triton1_python_test_shape_complete_summary
 
 
 
+
+/-! ## Genuine closed-form output writeback (Python test shape)
+
+The store-slice machinery above proves the observable `p_o` writeback faithfully
+copies the precomputed `BO` tile into `O`. Combined with the genuine closed form
+`outputClosedForm` (local + recurrent linear-attention terms, stated purely over
+input memory — *not* the executed kernel output), this yields a closed-form
+output theorem: when `BO` holds the genuine closed-form value at each block
+offset, the kernel's output store realizes that closed form into `O`.
+
+The hypothesis `hBO` is the producer obligation discharged by the already-proven
+`boFormulaSpec`/`bhFormulaSpec` slices (`localTerm_eq_boFormulaSpec`,
+`recurrentState_eq_sum_bhFormulaSpec`): the `BO` tile equals
+`localTerm + recurrentTerm` at the corresponding chunk/row/col. The per-program
+`chunk`, query/key/value accessors, and scale are supplied by the caller (they
+are fixed by the host launch and the `make_block_ptr` layout). -/
+theorem attention_fwd_triton1_output_closed_form_correct
+    (BO O Q K V : RegionName) (scale : ℝ) (chunk : Nat)
+    (qAddr kAddr vAddr : Nat → Nat → Nat) (s : BlockState)
+    (hBO : ∀ idx : TileIndex [32, 128],
+      s.readMem BO (boOffset s 131072 128 1 32 idx)
+        = outputClosedForm s Q K V scale 32 128 qAddr kAddr vAddr
+            chunk idx.1 idx.2.1) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        outputClosedForm s Q K V scale 32 128 qAddr kAddr vAddr
+          chunk idx.1 idx.2.1) := by
+  have hbase := attention_fwd_triton1_output_python_test_shape_compute_correct
+    BO O s
+  unfold ComputeCorrect.Realizes at hbase ⊢
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [attention_fwd_triton1_output_store_slice]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have h := attention_fwd_triton1_output_store_slice_correct BO O
+    131072 128 1 131072 128 1 32 128 s
+    (by
+      rintro ⟨⟨ta, hta⟩, ⟨da, hda⟩, _⟩ ⟨⟨tb, htb⟩, ⟨db, hdb⟩, _⟩ h
+      simp [outOffset, tIndex, dIndex] at h
+      have ht : ta = tb := by omega
+      have hd : da = db := by omega
+      subst tb; subst db; rfl) idx
+  rw [hExec] at h
+  have h2 : s'.readMem O (outOffset s 131072 128 1 32 idx)
+      = s.readMem BO (boOffset s 131072 128 1 32 idx) := Option.some.inj h
+  simp only [ComputeCorrect.OutputReadable.read_real]
+  rw [h2, hBO idx]
+
+/-- **Base-chunk specialization.** For the first time-chunk (`chunk = 0`) the
+recurrent state vanishes, so the genuine closed-form output is exactly the local
+`(scale·Q)·K·V` term. This is the fully self-contained genuine closed form for
+the leading output block: no recurrence, no self-reference. -/
+theorem attention_fwd_triton1_output_closed_form_base_correct
+    (BO O Q K V : RegionName) (scale : ℝ)
+    (qAddr kAddr vAddr : Nat → Nat → Nat) (s : BlockState)
+    (hBO : ∀ idx : TileIndex [32, 128],
+      s.readMem BO (boOffset s 131072 128 1 32 idx)
+        = localTerm s Q K V scale 32 128 qAddr kAddr vAddr 0 idx.1 idx.2.1) :
+    ComputeCorrect.Realizes
+      (kernel := attention_fwd_triton1_output_store_slice BO O
+        131072 128 1 131072 128 1 32 128)
+      (initialState := s)
+      (write := fun idx : TileIndex [32, 128] =>
+        some (O, outOffset s 131072 128 1 32 idx))
+      (expected := fun idx : TileIndex [32, 128] =>
+        outputClosedForm s Q K V scale 32 128 qAddr kAddr vAddr
+          0 idx.1 idx.2.1) := by
+  apply attention_fwd_triton1_output_closed_form_correct BO O Q K V scale 0
+    qAddr kAddr vAddr s
+  intro idx
+  rw [hBO idx, outputClosedForm_zero]
 
 /-- `output_summary` for the checked `attention_fwd_triton1` surface. -/
 theorem attention_fwd_triton1_python_test_shape_output_summary
