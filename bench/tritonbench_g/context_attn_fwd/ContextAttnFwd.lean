@@ -2203,6 +2203,43 @@ theorem gRunningMax_succ (S BN c : Nat) (g : Fin S → ℝ × ℝ) (hwin : (c + 
   | nil => simp
   | cons a t ih => simp only [List.foldr_cons, ih]; rw [sup_assoc]
 
+/-! ### score-cell / nume / acc bridges (kernel tile arithmetic → block list sums)
+
+The loop body's symbolic `qk`/`p`/`acc` registers (after `ctxLoopBody_steps`)
+carry the kernel's per-block tile arithmetic over the masked cell
+`ctxQkCell` (active lane `SN+j ≤ gOM i + plen`: scaled dot; future lane: the
+`-1e8` sentinel — all finite, no `⊥`). These bridges read them off
+`gStateBot((c+1)·128)`/`gRunningMax((c+1)·128)` via `osStepBot_block_eq`. -/
+
+/-- The kernel's masked `qk` cell at lane `(i, j)`: active lane gets the scaled
+dot `sm·Σ_e qf(i,e)·kf(j,e)`; future lane gets the `-1e8` sentinel. Finite (no
+`⊥`), matching `ctxLoopBody_steps`'s `qkT`. -/
+noncomputable def ctxQkCell (sm : ℝ) (SN plen : Nat) (gOM : Fin 128 → Nat)
+    (qf : Fin 128 → Fin 128 → ℝ) (kf : Fin 128 → Fin 128 → ℝ) (i j : Fin 128) : ℝ :=
+  if SN + j.val ≤ gOM i + plen then
+    sm * Finset.univ.sum (fun e : Fin 128 => qf i e * kf j e)
+  else (0.0 - 10e7 : ℝ)
+
+/-- **The `q·k` dot cell is the scaled score.** With `qtile`/`ktile` reading
+`qf`/`kf` (as `some`), the dot of `qtile` against `ktile` at cell `(i, j)` is
+`some (Σ_e qf(i,e)·kf(j,e))`. -/
+theorem ctx_dot_score_cell
+    (qtile ktile : Tile .real [128, 128]) (i j : Fin 128)
+    (qf kf : Fin 128 → Fin 128 → ℝ)
+    (hq : ∀ e : Fin 128, qtile.data (i, e, PUnit.unit) = some (qf i e))
+    (hk : ∀ e : Fin 128, ktile.data (e, j, PUnit.unit) = some (kf j e)) :
+    (Tile.dot [] qtile ktile).data (i, j, PUnit.unit)
+      = some (Finset.univ.sum (fun e : Fin 128 => qf i e * kf j e)) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (qtile.data (i, e, PUnit.unit)) (ktile.data (e, j, PUnit.unit))))
+      = @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (qf i e * kf j e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [hq e, hk e]; rfl)]
+  rw [show (fun e : Fin 128 => (some (qf i e * kf j e) : WithBot ℝ))
+        = (fun e : Fin 128 => ((qf i e * kf j e : ℝ) : WithBot ℝ)) from rfl,
+    ← WithBot.coe_sum]; rfl
+
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
