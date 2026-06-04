@@ -3701,4 +3701,34 @@ theorem flash_attn_step (Q K V : RegionName) (s0 : BlockState) (sm_scale : ℝ) 
     have : s.mem = s0.mem := hmem
     rw [this]
 
+/-- The 5 lowered post-loop statements (17–21): `out_buffer /= denom[:, None]`,
+the `l_ptr`/`L`-store of `max + log2 denom`, and the `O_block_ptr`/`O`-store of
+`out_buffer.to fp16`. -/
+def flashPostLoop (L O : RegionName) : List Stmt :=
+  [ Stmt.assign .real [128, 64] "out_buffer"
+      (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 64] "out_buffer")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "denom"))),
+    Stmt.assign .ptr [128] "l_ptr"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat 128))
+          (Op.ref .nat [128] "off_m"))),
+    Stmt.store .real [128] (MemAccess.ptr (Op.ref .ptr [128] "l_ptr"))
+      (Op.add .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "max")
+        (Op.log2 (Op.ref .real [128] "denom"))) MaskOpt.none,
+    Stmt.assign .blockPtr [128, 64] "O_block_ptr"
+      (Op.makeBlockPtrDynOffsets O (Op.ref .nat [] "qkv_base_offset") [128, 64] [128, 64] [64, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128), Op.constNat 0]),
+    Stmt.store .fp16 [128, 64] (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "O_block_ptr") [])
+      (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "out_buffer")) MaskOpt.none ]
+
+/-- The lowered body `drop 17` is exactly `flashPostLoop`. -/
+theorem flashPostLoop_check (Q K V L O : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool) :
+    (flash_attn_fwd_kernel_surface Q K V L O sm_scale
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body.drop 17
+      = flashPostLoop L O := by
+  cases IS_CAUSAL <;> rfl
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
