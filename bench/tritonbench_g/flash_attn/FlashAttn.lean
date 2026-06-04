@@ -3751,4 +3751,318 @@ theorem flashPostLoop_check (Q K V L O : RegionName) (sm_scale : ℝ) (IS_CAUSAL
       = flashPostLoop L O := by
   cases IS_CAUSAL <;> rfl
 
+/-- A foldl of `fp16` typed writes into region `O` leaves `mem` at any other
+region `L ≠ O` unchanged (so a later `readMem L` reads the pre-store value). -/
+private theorem foldl_writeMemTyped_fp16_mem_other_region {α : Type} {O L : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier TileDType.fp16) (o : Nat)
+    (hOL : L ≠ O) (l : List α) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k => acc.writeMemTyped .fp16 O (offsetFn k) (valueFn k)) s).mem L o)
+        = s.mem L o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons, ih]
+      unfold BlockState.writeMemTyped BlockState.writeMemAs
+      change (if L = O ∧ o = offsetFn hd then _ else s.mem L o) = s.mem L o
+      rw [if_neg (by rintro ⟨hL, _⟩; exact hOL hL)]
+
+/-- `flashStateBot.2.1` (denom) is independent of the channel index `d`. -/
+theorem flashStateBot_snd_fst_eq
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d d' : Fin DIM) :
+    (flashStateBot qT kT vT scale causal qStart hi i d).2.1
+      = (flashStateBot qT kT vT scale causal qStart hi i d').2.1 := by
+  rw [flashStateBot_snd_fst, flashStateBot_snd_fst,
+      flashRunningMax_eq qT kT vT scale causal qStart hi i d d']
+  congr 1
+  rw [show (fun p : ℝ × ℝ => pow2 p.1) = (fun x : ℝ => pow2 x) ∘ (fun p => p.1) from rfl,
+      ← List.map_map, ← List.map_map,
+      flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
+
+/-- Injectivity of the `O` block-pointer store addresses (Python shape). -/
+theorem flash_O_blockptr_offset_injective (base p0 : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [128, 64] => base + (p0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1) := by
+  rintro ⟨⟨ma, hma⟩, ⟨da, hda⟩, _⟩ ⟨⟨mb, hmb⟩, ⟨db, hdb⟩, _⟩ h
+  simp only at h
+  have hm : ma = mb := by omega
+  have hd : da = db := by omega
+  subst mb; subst db; rfl
+
+/-- Injectivity of the `L` row store addresses (Python shape). -/
+theorem flash_L_ptr_offset_injective (p0 p1 : Nat) :
+    Function.Injective
+      (fun idx : TileIndex [128] => p1 * 128 + (p0 * 128 + idx.1.val)) := by
+  rintro ⟨⟨a, ha⟩, _⟩ ⟨⟨b, hb⟩, _⟩ h
+  simp only at h
+  have : a = b := by omega
+  subst b; rfl
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop execution + genuine readbacks.** Stepping the 5 post-loop statements
+(17–21) from a loop-end state satisfying `attnInvariant … 128 … 128` (full window),
+the kernel's `O` store holds the genuine closed-form attention ratio
+(`flashAttnOValueSpec{,Causal}`) at every injective output lane, and the `L` store
+holds the genuine log-sum-exp (`= log2 Σ pow2 score`) at every injective row lane. -/
+theorem flash_attn_postLoop
+    (Q K V L O : RegionName) (s0 : BlockState) (sm_scale : ℝ) (IS_CAUSAL : Bool)
+    (hDIM : 0 < 64) (s : BlockState) (hOL : O ≠ L)
+    (hinv : attnInvariant Q K V s0 sm_scale 8192 128 128 64 64 128 IS_CAUSAL hDIM 128 s) :
+    ∃ sP, stepStmts (flashPostLoop L O) s = some sP
+      ∧ (∀ idx : TileIndex [128, 64],
+          sP.mem O (s0.pids 1 * 8192 + (s0.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1)
+            = MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+                (some ((flashStateBot (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128)
+                    (vTile s0 V 8192 64 128) (sm_scale * log2e) IS_CAUSAL (s0.pids 0 * 128) 128
+                    idx.1 idx.2.1).2.2
+                  / (flashStateBot (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128)
+                    (vTile s0 V 8192 64 128) (sm_scale * log2e) IS_CAUSAL (s0.pids 0 * 128) 128
+                    idx.1 idx.2.1).2.1))))
+      ∧ (∀ i : Fin 128,
+          sP.readMem L (s0.pids 1 * 128 + (s0.pids 0 * 128 + i.val))
+            = (flashRunningMax (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128)
+                  (vTile s0 V 8192 64 128) (sm_scale * log2e) IS_CAUSAL (s0.pids 0 * 128) 128 i
+                  ⟨0, hDIM⟩).unbotD 0
+              + Real.log
+                ((flashStateBot (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128)
+                    (vTile s0 V 8192 64 128) (sm_scale * log2e) IS_CAUSAL (s0.pids 0 * 128) 128 i
+                    ⟨0, hDIM⟩).2.1) / Real.log 2) := by
+  simp only [attnInvariant] at hinv
+  obtain ⟨hpids, _, _, hmax, hden, hob, hq, hom, hon, hKp, hVp, hQp, hsm, hbsh, hqkv, hundef, hmem⟩ :=
+    hinv
+  set qT := qTile s0 Q 8192 64 128 with hqT
+  set kT := kTile s0 K 8192 64 128 with hkT
+  set vT := vTile s0 V 8192 64 128 with hvT
+  set scale := sm_scale * log2e with hscale
+  set qS := s0.pids 0 * 128 with hqS
+  -- abbreviations for the running-state tiles in the registers
+  set maxTile : Tile .real [128] :=
+    ⟨fun r : TileIndex [128] => flashRunningMax qT kT vT scale IS_CAUSAL qS 128 r.1 ⟨0, hDIM⟩⟩
+    with hmaxTile
+  set denTile : Tile .real [128] :=
+    ⟨fun r : TileIndex [128] => ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 r.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩
+    with hdenTile
+  set obTile : Tile .real [128, 64] :=
+    ⟨fun idx : TileIndex [128, 64] => ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 idx.2.1).2.2 : ℝ)⟩
+    with hobTile
+  unfold flashPostLoop
+  -- stmt 17: out_buffer = out_buffer / denom[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.div .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [128, 64] "out_buffer")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "denom"))) s
+        = some (⟨fun idx : TileIndex [128, 64] =>
+            ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 idx.2.1).2.2 : ℝ)
+              / ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩
+            : Tile .real [128, 64]) from by
+      have hexp : @evalOp TileDType.real [128, 1]
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [128] "denom")) s
+          = some (Tile.expandDim ⟨1, by simp⟩ denTile) :=
+        evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hden
+      rw [evalOp_div]
+      simp only [evalOp_ref, hob, hexp, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
+        Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, WithBot.realDiv,
+        Option.map₂, Option.bind, Option.map, hobTile, hdenTile]
+      rfl))]
+  -- stmt 18: l_ptr = L + off_bs_head*128 + off_m
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat 128))
+          (Op.ref .nat [128] "off_m"))) _
+        = some (⟨fun r : TileIndex [128] =>
+            (Region.cast L, s0.pids 1 * 128 + (qS + r.1.val))⟩ : Tile .ptr [128]) from by
+      simp only [evalOp, evalOp.eq_def, evalOp_ref, evalOp_constNat,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same, hbsh, hom, Option.bind_eq_bind, Option.bind_some,
+        Option.map_some]
+      refine congrArg some ?_; ext r
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+          Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+          Broadcast.rightIndex_nil, NumericDType.add, NumericDType.mul, Nat.zero_add]))]
+  -- name the post-stmt-18 state
+  set s18 := (BlockState.setReg
+      (BlockState.setReg s "out_buffer" .real [128, 64]
+        ⟨fun idx : TileIndex [128, 64] =>
+          ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 idx.2.1).2.2 : ℝ)
+            / ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩)
+      "l_ptr" .ptr [128] ⟨fun r : TileIndex [128] => (Region.cast L, s0.pids 1 * 128 + (qS + r.1.val))⟩)
+    with hs18
+  -- L store value tile: max + log2 denom
+  set lValTile : Tile .real [128] :=
+    ⟨fun r : TileIndex [128] =>
+      WithBot.realAdd (flashRunningMax qT kT vT scale IS_CAUSAL qS 128 r.1 ⟨0, hDIM⟩)
+        (WithBot.realLog2 ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 r.1 ⟨0, hDIM⟩).2.1 : ℝ))⟩
+    with hlValTile
+  have hlval : evalOp (Op.add .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "max")
+      (Op.log2 (Op.ref .real [128] "denom"))) s18 = some lValTile := by
+    rw [evalOp_add, evalOp_log2]
+    have hmax18 : s18.regs .real [128] "max" = some maxTile := by
+      rw [hs18, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hmax
+    have hden18 : s18.regs .real [128] "denom" = some denTile := by
+      rw [hs18, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hden
+    simp only [evalOp_ref, hmax18, hden18, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_; ext r
+    simp only [Tile.bop_data, Tile.uop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      hlValTile, hmaxTile, hdenTile, NumericDType.add]
+  have hlptr : evalOp (Op.ref .ptr [128] "l_ptr") s18
+      = some (⟨fun r : TileIndex [128] => (Region.cast L, s0.pids 1 * 128 + (qS + r.1.val))⟩
+          : Tile .ptr [128]) := by
+    rw [evalOp_ref, hs18, BlockState.setReg_same]
+  -- stmt 19: store L via l_ptr (max + log2 denom)
+  have hstore19 : stepStmt (Stmt.store .real [128] (MemAccess.ptr (Op.ref .ptr [128] "l_ptr"))
+      (Op.add .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [128] "max")
+        (Op.log2 (Op.ref .real [128] "denom"))) MaskOpt.none) s18
+      = some ((TileShape.allIndices [128]).foldl
+          (fun acc r => acc.writeMemTyped .real (Region.cast L) (s0.pids 1 * 128 + (qS + r.1.val))
+            (lValTile.data r)) s18) := by
+    unfold stepStmt
+    simp only [hlval, hlptr, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    rfl
+  rw [stepStmts.cons_some hstore19]
+  set s19 := (TileShape.allIndices [128]).foldl
+      (fun acc r => acc.writeMemTyped .real (Region.cast L) (s0.pids 1 * 128 + (qS + r.1.val))
+        (lValTile.data r)) s18 with hs19
+  -- regs of s19 = regs of s18 (stores only touch memory)
+  have hqkv19 : s19.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s0.pids 1 * 8192)) := by
+    rw [hs19]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs18, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqkv
+  have hsm19 : s19.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0)) := by
+    rw [hs19]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs18, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsm
+  have hob19 : s19.regs .real [128, 64] "out_buffer"
+      = some (⟨fun idx : TileIndex [128, 64] =>
+          ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 idx.2.1).2.2 : ℝ)
+            / ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩
+          : Tile .real [128, 64]) := by
+    rw [hs19]
+    simp only [BlockState.foldl_writeMemTyped_regs]
+    rw [hs18, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  -- stmt 20: O_block_ptr = makeBlockPtr(O + qkv, offsets=(start_m*128, 0))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_makeBlockPtr_rowcol_eval O (Op.ref .nat [] "qkv_base_offset") [128, 64] [128, 64] [64, 1]
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) s19
+      (s0.pids 1 * 8192) (s0.pids 0 * 128)
+      (by rw [evalOp_ref, hqkv19])
+      (by rw [evalOp_mul]; simp only [evalOp_ref, evalOp_constNat, hsm19, Option.bind_eq_bind,
+            Option.bind_some, flash_scalarBop]; rfl)))]
+  set s20 := s19.setReg "O_block_ptr" .blockPtr [128, 64]
+      ⟨fun _ : TileIndex [128, 64] =>
+        { region := O, baseOffset := s0.pids 1 * 8192, parentShape := [128, 64],
+          blockShape := [128, 64], strides := [64, 1], offsets := [s0.pids 0 * 128, 0] }⟩
+    with hs20
+  -- O store value tile: cast fp16 of the divided out_buffer
+  set oValFn : TileIndex [128, 64] → TileCarrier TileDType.fp16 :=
+    fun idx => FloatDType.real.cast FloatDType.fp16
+      (some ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 idx.2.1).2.2
+        / (flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 ⟨0, hDIM⟩).2.1)) with hoValFn
+  set oOffFn : TileIndex [128, 64] → Nat :=
+    fun idx => s0.pids 1 * 8192 + (s0.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1 with hoOffFn
+  -- O_block_ptr readback in s20
+  have hOp20 : s20.regs .blockPtr [128, 64] "O_block_ptr"
+      = some (⟨fun _ : TileIndex [128, 64] =>
+          { region := O, baseOffset := s0.pids 1 * 8192, parentShape := [128, 64],
+            blockShape := [128, 64], strides := [64, 1], offsets := [s0.pids 0 * 128, 0] }⟩
+          : Tile .blockPtr [128, 64]) := by
+    rw [hs20, BlockState.setReg_same]
+  -- out_buffer readback in s20 (preserved from s19)
+  have hob20 : s20.regs .real [128, 64] "out_buffer"
+      = some (⟨fun idx : TileIndex [128, 64] =>
+          ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 idx.2.1).2.2 : ℝ)
+            / ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩
+          : Tile .real [128, 64]) := by
+    rw [hs20, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hob19
+  -- stmt 21: store O via O_block_ptr (out_buffer.to fp16)
+  have hobref : @evalOp TileDType.real [128, 64] (Op.ref .real [128, 64] "out_buffer") s20
+      = some (⟨fun idx : TileIndex [128, 64] =>
+          ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 idx.2.1).2.2 : ℝ)
+            / ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 idx.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩
+          : Tile .real [128, 64]) := by
+    rw [evalOp_ref]; exact hob20
+  have hval : evalOp (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "out_buffer")) s20
+        = some (⟨oValFn⟩ : Tile .fp16 [128, 64]) := by
+    rw [evalOp_castFloat]; erw [hobref]; rfl
+  have hstore21 : stepStmt (Stmt.store .fp16 [128, 64]
+      (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "O_block_ptr") [])
+      (Op.castFloat .real .fp16 (Op.ref .real [128, 64] "out_buffer")) MaskOpt.none) s20
+      = some ((TileShape.allIndices [128, 64]).foldl
+          (fun acc idx => acc.writeMemTyped .fp16 O (oOffFn idx) (oValFn idx)) s20) := by
+    have hOpref : @evalOp TileDType.blockPtr [128, 64] (Op.ref .blockPtr [128, 64] "O_block_ptr") s20
+        = some (⟨fun _ : TileIndex [128, 64] =>
+            { region := O, baseOffset := s0.pids 1 * 8192, parentShape := [128, 64],
+              blockShape := [128, 64], strides := [64, 1], offsets := [s0.pids 0 * 128, 0] }⟩
+            : Tile .blockPtr [128, 64]) := by rw [evalOp_ref]; exact hOp20
+    unfold stepStmt
+    erw [hval]
+    simp only [Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    erw [hOpref]
+    simp only [Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s20 ?_
+    intro acc idx _
+    simp only [TileShape.blockPtr_inBounds_nil_index, Bool.and_true, Bool.true_and,
+      TileShape.blockPtr_address_2d_row_offset_index, hoOffFn, if_true]
+  rw [stepStmts.cons_some hstore21, stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · -- O readback: scatter over injective block-ptr addresses
+    intro idx
+    have hinjO : Function.Injective oOffFn := by
+      rw [hoOffFn]; exact flash_O_blockptr_offset_injective (s0.pids 1 * 8192) (s0.pids 0)
+    have := scatter_memcell_fp16_nd (region := O) s20 oOffFn oValFn hinjO idx
+    rw [show s0.pids 1 * 8192 + (s0.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1
+          = oOffFn idx from rfl, this]
+    rw [hoValFn]
+    simp only [FloatDType.cast, FloatDType.ofReal, FloatDType.storeValue, FloatDType.ofWithBot,
+      FloatDType.toWithBot]
+    rw [flashStateBot_snd_fst_eq qT kT vT scale IS_CAUSAL qS 128 idx.1 ⟨0, hDIM⟩ idx.2.1]
+    rfl
+  · -- L readback: scatter over injective row addresses; O store on region O preserves L
+    intro i
+    -- the O store (region O) and the O_block_ptr setReg preserve readMem L
+    rw [show ((TileShape.allIndices [128, 64]).foldl
+            (fun acc idx => acc.writeMemTyped .fp16 O (oOffFn idx) (oValFn idx)) s20).readMem L
+              (s0.pids 1 * 128 + (qS + i.val))
+          = s19.readMem L (s0.pids 1 * 128 + (qS + i.val)) from by
+      unfold BlockState.readMem
+      rw [foldl_writeMemTyped_fp16_mem_other_region oOffFn oValFn _ (Ne.symm hOL)]
+      rw [hs20]; simp only [BlockState.setReg_mem]]
+    -- s19 is the L scatter (real writeMemTyped → writeMem); read it back
+    rw [hs19]
+    simp only [BlockState.writeMemTyped_real]
+    have hRawInj : Function.Injective
+        (fun idx : TileIndex [128] => s0.pids 1 * 128 + (qS + idx.1.val)) := by
+      rintro ⟨a, _⟩ ⟨b, _⟩ hab; simp only at hab
+      obtain rfl : a = b := Fin.ext (by omega); rfl
+    have hrb := BlockState.scatter_readback_nd (region := Region.cast L) s18
+      (fun idx : TileIndex [128] => s0.pids 1 * 128 + (qS + idx.1.val))
+      (fun idx : TileIndex [128] => FloatDType.real.storeValue (lValTile.data idx)) hRawInj
+      (i, PUnit.unit)
+    simp only at hrb
+    rw [show (L : RegionName) = Region.cast L from rfl]
+    refine Eq.trans hrb ?_
+    -- decode: storeValue (running max + log2 denom) = unbotD + log denom / log 2
+    have hMne : flashRunningMax qT kT vT scale IS_CAUSAL qS 128 i ⟨0, hDIM⟩ ≠ ⊥ :=
+      flashRunningMax_ne_bot qT kT vT scale IS_CAUSAL qS 128 i ⟨0, hDIM⟩ (by norm_num) (by norm_num)
+    obtain ⟨mr, hmr⟩ := WithBot.ne_bot_iff_exists.mp hMne
+    simp only [hlValTile, FloatDType.real_storeValue]
+    rw [← hmr]
+    rw [show ((flashStateBot qT kT vT scale IS_CAUSAL qS 128 i ⟨0, hDIM⟩).2.1 : WithBot ℝ)
+          = some (flashStateBot qT kT vT scale IS_CAUSAL qS 128 i ⟨0, hDIM⟩).2.1 from rfl]
+    rw [WithBot.realLog2_some]
+    simp only [WithBot.realAdd, Option.map₂, Option.bind, Option.map, WithBot.unbotD_coe]
+    rfl
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
