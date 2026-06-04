@@ -1186,7 +1186,15 @@ theorem ctxPreLoop_eval
               - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16) then 1 else 0))
       ∧ s0.regs .nat [128, 128] "off_q" = some ⟨fun idx : TileIndex [128, 128] =>
           (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / 16) + (128 * s.pids 0 + idx.1.val))
-              * 2048 + s.pids 1 % 16 * 128 + idx.2.1.val * 1⟩ := by
+              * 2048 + s.pids 1 % 16 * 128 + idx.2.1.val * 1⟩
+      ∧ s0.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
+          if decide (128 * s.pids 0 + idx.1.val
+              < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
+                - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)) then
+            s.readMemValue .real (Region.cast Q)
+              ((s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / 16) + (128 * s.pids 0 + idx.1.val))
+                  * 2048 + s.pids 1 % 16 * 128 + idx.2.1.val * 1)
+          else some (0.0 : ℝ)⟩ := by
   unfold ctxPreLoop
   -- stmt 0: start_m = programId 0
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
@@ -1369,7 +1377,7 @@ theorem ctxPreLoop_eval
       · simp [h]
       · simp [h]))]
   rw [stepStmts.nil]
-  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp only [BlockState.setReg_pids]
   · funext rg o; simp only [BlockState.setReg_mem]
   · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
@@ -2299,16 +2307,29 @@ noncomputable def ctxVTileM (s : BlockState) (V : RegionName) (S bel : Nat) :
     TileIndex [S, 128] → ℝ :=
   fun (j, d, u) => if j.val < bel then ctxVTile s V S (j, d, u) else 0
 
+/-- Row-masked query tile: `ctxQTile` for active rows (`128·pids0 + i < seq_len`),
+else `0` (the kernel's `q` load mask `offs_m < cur_batch_seq_len, other=0`). On
+active rows it is the genuine `ctxQTile`, so the closed form is the true causal
+softmax there; inactive rows are masked off at the final store. -/
+noncomputable def ctxQTileM
+    (s : BlockState) (Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (BLOCK_M : Nat) (i : Fin BLOCK_M) (e : Fin 128) : ℝ :=
+  if s.pids 0 * BLOCK_M + i.val < seqLen s 16 B_Seqlen B_Prompt_Cache_Len then
+    ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+  else 0
+
 /-- **Faithful per-key `(score, value)` the loop folds**: `ctxKV` with the
-`block_end_loc` load mask applied to `k`/`v`. Active causal lane (`j ≤ gi+plen`)
-gets `sm·Σ_e qf(i,e)·ctxKTileM(j,e)` (so phantom `j ≥ bel` get `sm·0 = 0`); future
-lane gets the `-1e8` sentinel; value is the masked `ctxVTileM` (`0` for `j ≥ bel`). -/
+`block_end_loc` load mask applied to `k`/`v` and the row mask applied to `q`.
+Active causal lane (`j ≤ gi+plen`) gets `sm·Σ_e ctxQTileM(i,e)·ctxKTileM(j,e)` (so
+phantom `j ≥ bel` get `sm·0 = 0`); future lane gets the `-1e8` sentinel; value is
+the masked `ctxVTileM` (`0` for `j ≥ bel`). -/
 noncomputable def ctxKVM
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
     (BLOCK_M S bel : Nat) (i : Fin BLOCK_M) (d : Fin 128) (j : Fin S) : ℝ × ℝ :=
   (if j.val ≤ s.pids 0 * BLOCK_M + i.val + promptLen s 16 B_Prompt_Cache_Len then
       sm_scale * Finset.univ.sum (fun e : Fin 128 =>
-        ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit) * ctxKTileM s K S bel (j, e, PUnit.unit))
+        ctxQTileM s Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len BLOCK_M i e
+          * ctxKTileM s K S bel (j, e, PUnit.unit))
     else (0.0 - 10e7 : ℝ),
     ctxVTileM s V S bel (j, d, PUnit.unit))
 
@@ -2317,11 +2338,98 @@ noncomputable def ctxKVM
 (`S = final`). A pure function of `Q`/`K`/`V` memory — exactly what the loop's
 `m_i`/`l_i`/`acc` realize, phantom keys included. -/
 noncomputable def contextAttnExactFoldM
-    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName)
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
     (sm_scale : ℝ) (BLOCK_M S bel : Nat) (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
-  let st := gStateBot S S (ctxKVM s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale
+  let st := gStateBot S S (ctxKVM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale
       BLOCK_M S bel idx.1 idx.2.1)
   st.2.2 / st.2.1
+
+/-- The kernel-loaded per-key `(score, value)` carried by the loop registers at
+output lane `(i, d)`, over `S` keys with `block_end_loc = bel`. This is `ctxKVM`
+specialized to the Python shape (`BLOCK_M = 128`); the invariant tracks the
+⊥-seeded `gStateBot` fold over it. -/
+noncomputable def ctxG
+    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (sm_scale : ℝ) (S bel : Nat) (i d : Fin 128) : Fin S → ℝ × ℝ :=
+  ctxKVM s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale 128 S bel i d
+
+/-- **Streaming-loop invariant** for the Python-shape context kernel. After `c`
+blocks (loop counter `c·128`), the `m_i`/`l_i`/`acc` registers carry the ⊥-seeded
+online-softmax fold `gStateBot (c·128)` over the kernel-loaded per-key data
+`ctxG`, and the auxiliary registers (`q`, the offsets, the scalar metadata) are
+the constant values seeded by `ctxPreLoop`. -/
+noncomputable def ctxInvariant
+    (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (sm_scale : ℝ) (S bel : Nat) (c : Nat) (s : BlockState) : Prop :=
+  let plen := s0.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s0.pids 1 / 16)
+  let sl := s0.readMemValue .nat (Region.cast B_Seqlen) (s0.pids 1 / 16) - plen
+  let g := fun (i d : Fin 128) => ctxG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len sm_scale S bel i d
+  s.pids = s0.pids ∧ s.mem = s0.mem ∧ (∀ rg o, s.undef rg o = 0) ∧
+  (s.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 1 / 16))) ∧
+  (s.regs .nat [] "cur_kv_head" = some (Tile.scalar (s0.pids 1 % 16 / 1))) ∧
+  (s.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1 % 16))) ∧
+  (s.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen)) ∧
+  (s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl)) ∧
+  (s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) ∧
+  (s.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => 128 * s0.pids 0 + r.val))) ∧
+  (s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))) ∧
+  (s.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))) ∧
+  (s.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
+      if decide (128 * s0.pids 0 + idx.1.val < sl) then
+        s0.readMemValue .real (Region.cast Q)
+          ((s0.readMemValue .nat (Region.cast B_Start_Loc) (s0.pids 1 / 16) + (128 * s0.pids 0 + idx.1.val))
+              * 2048 + s0.pids 1 % 16 * 128 + idx.2.1.val * 1)
+      else some (0.0 : ℝ)⟩) ∧
+  (s.regs .real [128] "m_i" = some ⟨fun r : TileIndex [128] =>
+      (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).1⟩) ∧
+  (s.regs .real [128] "l_i" = some ⟨fun r : TileIndex [128] =>
+      some (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).2.1⟩) ∧
+  (s.regs .real [128, 128] "acc" = some ⟨fun idx : TileIndex [128, 128] =>
+      some (gStateBot S (c * 128) (g idx.1 idx.2.1)).2.2⟩)
+
+/-! ### generic tile-arithmetic bridges (kernel-agnostic; reused in `ctx_attn_step`) -/
+
+/-- A `reduceMaxDrop` over axis 1 reads off `Finset.sup` of a row's per-cell values. -/
+theorem ctxg_reduceMaxDrop_data_row (qk : Tile .real [128, 128])
+    (rmaxT : Tile .real [128]) (hrm : Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [128,128].length) qk = some rmaxT)
+    (r : Fin 128) (g : Fin 128 → WithBot ℝ) (hqk : ∀ jL : Fin 128, qk.data (r, jL, PUnit.unit) = g jL) :
+    rmaxT.data (r, PUnit.unit) = Finset.univ.sup g := by
+  unfold Tile.reduceMaxDrop at hrm
+  rw [dif_pos (show 0 < TileShape.axisDim [128,128] (⟨1, by simp⟩ : Fin [128,128].length) from by decide)] at hrm
+  rw [← Option.some.inj hrm]
+  simp only [Finset.sup'_eq_sup]
+  exact Finset.sup_congr rfl (fun jL _ => hqk jL)
+
+/-- `WithBot.realExp2` of a `some`-cell is `some (pow2 …)`. -/
+theorem ctxg_exp2_some (h : Fin 128 → Fin 128 → ℝ) (x : Tile .real [128, 128])
+    (r jL : Fin 128) (hx : x.data (r, jL, PUnit.unit) = some (h r jL)) :
+    (Tile.uop WithBot.realExp2 x).data (r, jL, PUnit.unit) = some (pow2 (h r jL)) := by
+  show WithBot.realExp2 (x.data (r, jL, PUnit.unit)) = _
+  rw [hx]; simp [WithBot.realExp2, pow2, mul_comm]
+
+/-- A `WithBot ℝ` sum of `some`-valued cells is `some` of the real sum. -/
+theorem ctxg_withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) :=
+  (WithBot.coe_sum Finset.univ g).symm
+
+/-- `realExp2` is total (never `⊥`): `realExp2 z = some ((realExp2 z).unbotD 0)`. -/
+theorem ctxg_realExp2_eq_some_unbotD (z : WithBot ℝ) :
+    WithBot.realExp2 z = some ((WithBot.realExp2 z).unbotD 0) := by
+  cases z <;> rfl
+
+/-- A `dot` row over all 128 keys when both factors are all-`some`. -/
+theorem ctxg_dot_row (p : Tile .real [128, 128]) (v : Tile .real [128, 128])
+    (r d : Fin 128) (fp fv : Fin 128 → ℝ)
+    (hp : ∀ jL : Fin 128, p.data (r, jL, PUnit.unit) = some (fp jL))
+    (hv : ∀ jL : Fin 128, v.data (jL, d, PUnit.unit) = some (fv jL)) :
+    (Tile.dot [] p v).data (r, d, PUnit.unit) = some (Finset.univ.sum fun jL : Fin 128 => fp jL * fv jL) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ
+        (fun k => Option.map₂ (· * ·) (p.data (r, k, PUnit.unit)) (v.data (k, d, PUnit.unit))))
+      = @Finset.sum (Fin 128) (WithBot ℝ) _ Finset.univ (fun k => (some (fp k * fv k) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun k _ => by rw [hp k, hv k]; rfl)]
+  exact ctxg_withBot_sum_some _
 
 noncomputable def producedContextFwdBlock128OutValue
     (s : BlockState)
