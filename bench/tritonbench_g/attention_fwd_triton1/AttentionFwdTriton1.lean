@@ -1585,4 +1585,27 @@ theorem aft1_loopBody_to_bv_ff
     simp only [aft1BvTile, aft1VCell, BlockState.setReg_readMem, hmem,
       Nat.add_zero, Nat.zero_add, Nat.mul_one]
 
+/-- Evaluation recipe for a plain `dot(ref a, ref b)` assign, returning the tile
+whose `(m,n)` cell is `Σ_e fa(m,e)·fb(e,n)`, given the operand registers expose
+all-`some` tiles with cell functions `fa`/`fb`. -/
+theorem aft1_dot_op_eval {M Kd N : Nat} (s' : BlockState) (aName bName : RegName)
+    (atile : Tile .real [M, Kd]) (btile : Tile .real [Kd, N])
+    (fa : Fin M → Fin Kd → ℝ) (fb : Fin Kd → Fin N → ℝ)
+    (ha : s'.regs .real [M, Kd] aName = some atile)
+    (hb : s'.regs .real [Kd, N] bName = some btile)
+    (haf : ∀ m e, atile.data (m, e, PUnit.unit) = some (fa m e))
+    (hbf : ∀ e n, btile.data (e, n, PUnit.unit) = some (fb e n)) :
+    evalOp (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName) (Op.ref .real [Kd, N] bName)) s'
+      = some (⟨fun idx : TileIndex [M, N] =>
+          some (Finset.univ.sum fun e : Fin Kd => fa idx.1 e * fb e idx.2.1)⟩
+          : Tile .real [M, N]) := by
+  have hev : evalOp (@Op.dot [] M Kd N (Op.ref .real [M, Kd] aName)
+      (Op.ref .real [Kd, N] bName)) s' = some (Tile.dot [] atile btile) := by
+    rw [evalOp_dot]; simp [ha, hb]
+  rw [hev]
+  refine congrArg some ?_
+  ext idx; obtain ⟨m, n, u⟩ := idx
+  exact aft1_dot2d_elem atile btile m n (fa m) (fun e => fb e n)
+    (fun e => haf m e) (fun e => hbf e n)
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
