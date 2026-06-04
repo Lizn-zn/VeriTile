@@ -1182,4 +1182,22 @@ theorem flash_body_split
               IS_CAUSAL).toAlgKernel.body.drop 16 :=
   (List.take_append_drop 16 _).symm
 
+/-- The deterministic scalar prefix (statements 0–2: `start_m`, `off_bs_head`,
+`qkv_base_offset`) transcribes exactly to the lowered ops, by `rfl`. The base case
+of the preLoop transcription; later prefix statements (the block-pointer
+constructions 3–5, the index vectors 6–7, the `max`/`denom`/`out_buffer` inits
+8–10, `qk_scale` 11, the `q` load+scale 12–13, and `lo`/`hi` 14–15) extend this
+list and step via the recipes above (`flash_makeBlockPtr*_eval`, `flash_load_Q_eval`,
+…). -/
+theorem flash_prefix_scalars_eq (Q K V L O : RegionName) (sm_scale : ℝ)
+    (sqbs sqh sqsl sqd skbs skh sksl skd svbs svh svsl svd sobs soh sosl sod
+      BS HEAD SEQLEN BLOCK_M DIM BLOCK_N : Nat) (IS_CAUSAL : Bool) :
+    (flash_attn_fwd_kernel_surface Q K V L O sm_scale sqbs sqh sqsl sqd skbs skh sksl skd
+        svbs svh svsl svd sobs soh sosl sod BS HEAD SEQLEN BLOCK_M DIM BLOCK_N IS_CAUSAL).toAlgKernel.body.take 3
+      = [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+          Stmt.assign .nat [] "off_bs_head" (Op.programId 1),
+          Stmt.assign .nat [] "qkv_base_offset"
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat sqh)) ] :=
+  rfl
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
