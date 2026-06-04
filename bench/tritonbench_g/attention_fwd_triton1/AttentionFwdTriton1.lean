@@ -1476,4 +1476,113 @@ noncomputable def aft1BhTile (s : BlockState) (K V : RegionName) (c : Nat) :
     Tile .real [128, 128] :=
   ⟨fun idx => some (aft1RecState s K V c idx.1 idx.2.1)⟩
 
+/-- The `b_q` loaded-and-scaled tile of chunk `c` (data `(t,e) ↦ aft1QCell`). -/
+noncomputable def aft1BqTile (s : BlockState) (Q : RegionName) (c : Nat) :
+    Tile .real [32, 128] :=
+  ⟨fun idx => some (aft1QCell s Q c idx.1.val idx.2.1.val)⟩
+
+/-- The `b_k` loaded tile of chunk `c` (data `(e,tk) ↦ aft1KCell`). -/
+noncomputable def aft1BkTile (s : BlockState) (K : RegionName) (c : Nat) :
+    Tile .real [128, 32] :=
+  ⟨fun idx => some (aft1KCell s K c idx.1.val idx.2.1.val)⟩
+
+/-- The `b_v` loaded tile of chunk `c` (data `(tk,d) ↦ aft1VCell`). -/
+noncomputable def aft1BvTile (s : BlockState) (V : RegionName) (c : Nat) :
+    Tile .real [32, 128] :=
+  ⟨fun idx => some (aft1VCell s V c idx.1.val idx.2.1.val)⟩
+
+/-- An `ifThen` with a `false` constexpr condition is a no-op. -/
+theorem aft1_ifThen_false_noop (body : List Stmt) (X : BlockState) :
+    stepStmt (Stmt.ifThen (Op.constBool Bool.false) body) X = some X := by
+  simp [stepStmt, evalOp]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Loads-step (STORE=false, IFCOND=false).** Stepping the five `make_block_ptr`
+assigns, the no-op `STORE` gate, the three loads, and the `b_q *= scale` assign
+yields a state whose `b_q`/`b_k`/`b_v` registers equal the kernel-native cells, with
+`pids` and the loop carry registers preserved. -/
+theorem aft1_loopBody_to_bv_ff
+    (Q K V H O : RegionName) (s sin : BlockState) (c : Nat)
+    (hmem : ∀ rg off, sin.readMem rg off = s.readMem rg off)
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0)))
+    (hi : sin.regs .nat [] "i" = some (Tile.scalar c)) :
+    ∃ s1, stepStmts ((aft1LoopBody Q K V H O Bool.false Bool.false).take 10) sin = some s1
+      ∧ s1.regs .real [32, 128] "b_q" = some (aft1BqTile s Q c)
+      ∧ s1.regs .real [128, 32] "b_k" = some (aft1BkTile s K c)
+      ∧ s1.regs .real [32, 128] "b_v" = some (aft1BvTile s V c) := by
+  show ∃ s1, stepStmts
+      [_, _, _, _, _, _, _, _, _, _] sin = some s1 ∧ _
+  -- p_q ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval Q sin _ _ _ [1024, 128] [32, 128] [128, 1]
+      (s.pids 0 * 131072) (c * 32) 0
+      (aft1_mulConst_eval sin "i_bh" (s.pids 0) 131072 hibh)
+      (aft1_mulConst_eval sin "i" c 32 hi) (by simp)))]
+  -- p_k ptr (offsets [0, c*32])
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval K _ _ _ _ [128, 1024] [128, 32] [1, 128]
+      (s.pids 0 * 131072) 0 (c * 32)
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) 131072 (by simp [hibh])) (by simp)
+      (aft1_mulConst_eval _ "i" c 32 (by simp [hi]))))]
+  -- p_v ptr (offsets [c*32, 0])
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval V _ _ _ _ [1024, 128] [32, 128] [128, 1]
+      (s.pids 0 * 131072) (c * 32) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) 131072 (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c 32 (by simp [hi])) (by simp)))]
+  -- p_h ptr (offsets [c*128, 0], base pids0*524288)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval H _ _ _ _ [32 * 128, 128] [128, 128] [128, 1]
+      (s.pids 0 * 524288) (c * 128) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) 524288 (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c 128 (by simp [hi])) (by simp)))]
+  -- p_o ptr (offsets [c*32, 0])
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_makeBlockPtr_2d_eval O _ _ _ _ [1024, 128] [32, 128] [128, 1]
+      (s.pids 0 * 131072) (c * 32) 0
+      (aft1_mulConst_eval _ "i_bh" (s.pids 0) 131072 (by simp [hibh]))
+      (aft1_mulConst_eval _ "i" c 32 (by simp [hi])) (by simp)))]
+  -- STORE gate (false): ifThen no-op
+  rw [stepStmts.cons_some (aft1_ifThen_false_noop _ _)]
+  -- b_q load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bp_2d_ref Q _ "p_q" (s.pids 0 * 131072) 1024 128 32 128 128 1
+      (c * 32) 0 (by simp)))]
+  -- b_q *= scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [32, 128] "b_q")
+        (Op.const (√128)⁻¹)) _ = some (aft1BqTile s Q c) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, BlockState.setReg_same, evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_
+      ext idx; obtain ⟨t, e, u⟩ := idx
+      simp only [Tile.bop, Broadcast.scalarR, Broadcast.leftIndex, Broadcast.rightIndex,
+        Tile.scalar, aft1BqTile, aft1QCell, NumericDType.mul, WithBot.realMul,
+        Option.map₂, Option.bind, Option.map, BlockState.setReg_readMem, hmem,
+        Nat.add_zero, Nat.zero_add, Nat.mul_one]))]
+  -- b_k load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bp_2d_ref K _ "p_k" (s.pids 0 * 131072) 128 1024 128 32 1 128
+      0 (c * 32) (by simp)))]
+  -- b_v load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft1_load_bp_2d_ref V _ "p_v" (s.pids 0 * 131072) 1024 128 32 128 128 1
+      (c * 32) 0 (by simp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_⟩
+  · simp [BlockState.setReg_ne_name]
+  · -- b_k tile (skip the later b_v setReg)
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx; obtain ⟨e, tk, u⟩ := idx
+    simp only [aft1BkTile, aft1KCell, BlockState.setReg_readMem, hmem,
+      Nat.add_zero, Nat.zero_add, Nat.mul_one]
+  · -- b_v tile
+    rw [BlockState.setReg_same]
+    refine congrArg some ?_
+    ext idx; obtain ⟨tk, d, u⟩ := idx
+    simp only [aft1BvTile, aft1VCell, BlockState.setReg_readMem, hmem,
+      Nat.add_zero, Nat.zero_add, Nat.mul_one]
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
