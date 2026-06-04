@@ -733,6 +733,68 @@ theorem mistral_prob_load_eval (s : BlockState) (Prob : RegionName)
   · simp only [hlt, decide_true, if_true, if_pos hlt]
   · simp only [hlt, decide_false, if_neg hlt, if_false, Bool.false_eq_true]
 
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **`v_loc` masked-gather recipe** (`tl.load(Req_to_tokens + v_loc_off +
+start_n·stride_s, mask=(start_n+offs_n+cur_batch_start_index) < cur_batch_seq_len,
+other=0)`, shape `[BLOCK_N]`, dtype `.nat`).
+
+`v_loc_off` lane `j` is the gather base `reqIdx·stride_b + (startIdx + j)·stride_s`
+(the `mistral_vloc_off_eval` form), `start_n = SN`, and
+`stride_req_to_tokens_s = 1`, so the loaded address at lane `j` equals the
+`vLoc … (SN + j)` address `reqIdx·stride_b + (startIdx + (SN + j))·stride_s`, and
+the boundary mask `SN + j + startIdx < batchSeqLen` is exactly `vActive (SN + j)`.
+The result lane `j` is `if vActive (SN+j) then vLoc … (SN+j) else 0`. -/
+theorem mistral_reqloc_gather_eval (s : BlockState)
+    (Req_to_tokens B_req_idx B_Seqlen : RegionName)
+    (BN stride_b stride_s sliding_window SN : Nat) (hs : stride_s = 1)
+    (hoff : s.regs .nat [BN] "v_loc_off" =
+      some (Tile.vec (fun j : Fin BN =>
+        reqIdx s B_req_idx * stride_b +
+          (startIndex s B_Seqlen sliding_window + j.val) * stride_s)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsi : s.regs .nat [] "cur_batch_start_index" =
+      some (Tile.scalar (startIndex s B_Seqlen sliding_window)))
+    (hsl : s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (batchSeqLen s B_Seqlen))) :
+    evalOp (Op.load .nat
+        (MemAccess.region Req_to_tokens
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [BN] "v_loc_off")
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat stride_s))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n"))
+              (Op.ref .nat [] "cur_batch_start_index"))
+            (Op.ref .nat [] "cur_batch_seq_len"))
+          (Op.broadcast (Op.constNat 0) [BN]))) s
+      = some (⟨fun idx : TileIndex [BN] =>
+          if vActive s B_Seqlen sliding_window (SN + idx.1.val) then
+            vLoc s Req_to_tokens B_req_idx B_Seqlen stride_b stride_s sliding_window
+              (SN + idx.1.val)
+          else 0⟩ : Tile .nat [BN]) := by
+  simp only [evalOp, hoff, hsn, hn, hsi, hsl, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨j, u⟩ := idx
+  have haddr : reqIdx s B_req_idx * stride_b +
+        (startIndex s B_Seqlen sliding_window + j.val) * stride_s + SN * stride_s
+      = reqIdx s B_req_idx * stride_b +
+        (startIndex s B_Seqlen sliding_window + (SN + j.val)) * stride_s := by
+    subst hs; ring
+  simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+    Region.cast_cast, Region.cast_id, vLoc]
+  rw [haddr]
+  simp only [if_true]
+  by_cases hlt : SN + j.val + startIndex s B_Seqlen sliding_window < batchSeqLen s B_Seqlen
+  · have hv : vActive s B_Seqlen sliding_window (SN + j.val) := by
+      simp only [vActive]; omega
+    simp only [hlt, decide_true, if_true, if_pos hv]
+  · have hv : ¬ vActive s B_Seqlen sliding_window (SN + j.val) := by
+      simp only [vActive]; omega
+    simp only [hlt, decide_false, if_neg hv, if_false, Bool.false_eq_true]
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
