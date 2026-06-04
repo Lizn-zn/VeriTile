@@ -2180,4 +2180,18 @@ theorem flashStateBot_succ
   unfold flashStateBot
   rw [flashKeysUpto_succ, List.foldl_append]
 
+/-- The ⊥-seeded state at the empty / `hi = 0` window is `(⊥, 0, 0)` — the kernel's
+preLoop init (`max = tl.zeros − inf`, `denom = 0`, `out_buffer = 0`). The base case
+making `attnInvariant … 0` satisfiable under the ⊥-seed rebind. -/
+theorem flashStateBot_zero
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    flashStateBot qT kT vT scale causal qStart 0 i d = (⊥, 0, 0) := by
+  unfold flashStateBot flashKeysUpto
+  rw [show (List.finRange SEQLEN).filterMap
+        (fun j : Fin SEQLEN => if j.val < 0 ∧ (causal → j.val ≤ qStart + i.val)
+          then some (flashKV qT kT vT scale i d j) else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
+  rfl
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
