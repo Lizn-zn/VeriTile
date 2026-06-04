@@ -3431,4 +3431,124 @@ theorem flash_denom_reg_eq (s0 : BlockState) (Q K V : RegionName) (scale : ℝ) 
   refine congrArg some ?_
   rw [hMr, WithBot.unbotD_coe]
 
+set_option maxHeartbeats 1000000 in
+/-- **`out_buffer = flashStateBot((c+1)·64).2.2`** (per channel `d`). The kernel's
+`out_buffer' = out_buffer·out_scale + dot(nume, v)` register, with `out_buffer =
+flashStateBot(c·64).2.2`, `out_scale = denom·0 + α = α`, and `dot(nume, v)` the
+masked block PV sum, equals the ⊥-seeded accumulator after `c+1` blocks. -/
+theorem flash_acc_reg_eq (s0 : BlockState) (Q K V : RegionName) (scale : ℝ) (causal : Bool)
+    (c : Nat) (hc1 : (c + 1) * 64 ≤ 128) (r : Fin 128) (d : Fin 64)
+    (qtile : Tile .fp16 [128, 64]) (ktile vtile : Tile .real [64, 64])
+    (obtile : Tile .real [128, 64]) (dtile mtile mnewT alphaT ostileT : Tile .real [128])
+    (numeT : Tile .real [128, 64])
+    (hq : qtile = ⟨fun idx : TileIndex [128, 64] =>
+        FloatDType.real.cast FloatDType.fp16 (some (scale * qTile s0 Q 8192 64 128 idx))⟩)
+    (hk : ∀ idx : TileIndex [64, 64],
+        ktile.data idx = some (s0.readMem K (s0.pids 1 * 8192 + idx.1.val * 1 + (c * 64 + idx.2.1.val) * 64)))
+    (hv : ∀ idx : TileIndex [64, 64],
+        vtile.data idx = some (s0.readMem V (s0.pids 1 * 8192 + (c * 64 + idx.1.val) * 64 + idx.2.1.val * 1)))
+    (hobtile : obtile.data (r, d, PUnit.unit) = some
+        ((flashStateBot (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128) (vTile s0 V 8192 64 128)
+            scale causal (s0.pids 0 * 128) (c * 64) r d).2.2))
+    (rdenom : ℝ) (hdtile : dtile.data (r, PUnit.unit) = some rdenom)
+    (hmtile : mtile.data (r, PUnit.unit)
+        = flashRunningMax (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128) (vTile s0 V 8192 64 128)
+            scale causal (s0.pids 0 * 128) (c * 64) r ⟨0, by norm_num⟩)
+    (hmnew : mnewT.data (r, PUnit.unit)
+        = flashRunningMax (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128) (vTile s0 V 8192 64 128)
+            scale causal (s0.pids 0 * 128) ((c + 1) * 64) r ⟨0, by norm_num⟩)
+    (halpha : alphaT = Tile.uop WithBot.realExp2
+        (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mnewT))
+    (hostile : ostileT = Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+        (Tile.bop NumericDType.real.mul Broadcast.scalarR dtile (Tile.scalar (some 0))) alphaT)
+    (hnume : ∀ jL : Fin 64, numeT.data (r, jL, PUnit.unit)
+        = WithBot.realExp2 (WithBot.realSub
+            (flashQkCell causal (c * 64) (fun rr : Fin 128 => s0.pids 0 * 128 + rr.val) qtile ktile r jL)
+            (mnewT.data (r, PUnit.unit)))) :
+    (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) obtile
+          (Tile.expandDim ⟨1, by simp⟩ ostileT))
+        (Tile.dot [] numeT vtile)).data (r, d, PUnit.unit)
+      = some ((flashStateBot (qTile s0 Q 8192 64 128) (kTile s0 K 8192 64 128) (vTile s0 V 8192 64 128)
+          scale causal (s0.pids 0 * 128) ((c + 1) * 64) r d).2.2) := by
+  set qT := qTile s0 Q 8192 64 128
+  set kT := kTile s0 K 8192 64 128
+  set vT := vTile s0 V 8192 64 128
+  set qS := s0.pids 0 * 128
+  set m := flashStateBot qT kT vT scale causal qS (c * 64) r d |>.1 with hm_def
+  set Mc := flashRunningMax qT kT vT scale causal qS (c * 64) r ⟨0, by norm_num⟩ with hMc
+  set Mc1 := flashRunningMax qT kT vT scale causal qS ((c + 1) * 64) r ⟨0, by norm_num⟩ with hMc1
+  -- m (at channel d) = Mc (channel-independent running max)
+  have hmMc : m = Mc := by
+    rw [hm_def, hMc, flashStateBot_fst_eq_runningMax, flashRunningMax_eq qT kT vT scale causal qS (c * 64) r d ⟨0, by norm_num⟩]
+  have hne : Mc1 ≠ ⊥ := flashRunningMax_ne_bot qT kT vT scale causal qS ((c + 1) * 64) r ⟨0, by norm_num⟩
+    (by positivity) (by norm_num)
+  obtain ⟨Mr, hMr⟩ : ∃ Mr : ℝ, Mc1 = (Mr : WithBot ℝ) := by
+    cases hh : Mc1 with
+    | bot => exact absurd hh hne
+    | coe x => exact ⟨x, rfl⟩
+  -- M' = Mc1 (one-block running-max advance, via osStepBot_block_fst + flashStateBot_succ)
+  have hMsucc : Mc1 = m ⊔ ((flashBlock qT kT vT scale causal qS 64 c r d).map
+        (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+    have h1 : Mc1 = (flashStateBot qT kT vT scale causal qS ((c + 1) * 64) r d).1 := by
+      rw [hMc1, flashStateBot_fst_eq_runningMax, flashRunningMax_eq qT kT vT scale causal qS ((c+1)*64) r ⟨0, by norm_num⟩ d]
+    rw [h1, flashStateBot_succ,
+      osStepBot_block_fst m
+        ((flashStateBot qT kT vT scale causal qS (c * 64) r d).2.1)
+        ((flashStateBot qT kT vT scale causal qS (c * 64) r d).2.2)]
+  -- ostile (out_scale) value = α = realExp2(realSub m Mc1)
+  have hαsome' : WithBot.realExp2 (WithBot.realSub m Mc1)
+      = some ((WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0) := by
+    cases WithBot.realSub m Mc1 <;> rfl
+  have halphaVal : alphaT.data (r, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [halpha]
+    show WithBot.realExp2 _ = _
+    simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, hmtile, hmnew,
+      NumericDType.sub, ← hMc, ← hMc1, hmMc]
+  have hostileVal : ostileT.data (r, PUnit.unit) = WithBot.realExp2 (WithBot.realSub m Mc1) := by
+    rw [hostile, Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add]
+    rw [halphaVal, hαsome', Tile.bop_data]
+    simp only [Broadcast.leftIndex, Broadcast.rightIndex, Broadcast.scalarR, Tile.scalar_data,
+      NumericDType.mul, hdtile]
+    simp only [WithBot.realMul, WithBot.realAdd, Option.map₂, Option.bind, Option.map, mul_zero,
+      zero_add]
+  -- the dot = block PV sum
+  have hdot := flash_acc_dot_block s0 Q K V scale causal c hc1 r d qtile ktile vtile mnewT numeT
+    hq hk hv Mr (by rw [hmnew, hMr]) (by intro jL; rw [hnume jL])
+  -- osStepBot_block_eq for the .2.2 channel
+  have hblockEq := osStepBot_block_eq m
+    ((flashStateBot qT kT vT scale causal qS (c * 64) r d).2.1)
+    ((flashStateBot qT kT vT scale causal qS (c * 64) r d).2.2)
+    ((flashKeysUpto qT kT vT scale causal qS (c * 64) r d).map (fun p => pow2 p.1 * p.2)).sum
+    ((flashKeysUpto qT kT vT scale causal qS (c * 64) r d).map (fun p => pow2 p.1)).sum
+    (flashBlock qT kT vT scale causal qS 64 c r d)
+    (by rw [flash_denom_anchor, zero_add, hm_def])
+    (by rw [flash_acc_anchor, zero_add, hm_def])
+    (fun hbot => flashKeysUpto_sum_zero_of_bot qT kT vT scale causal qS (c * 64) r d
+      (by rw [← flashStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+    (fun hbot => flashKeysUpto_sum_zero_of_bot qT kT vT scale causal qS (c * 64) r d
+      (by rw [← flashStateBot_fst_eq_runningMax, ← hm_def]; exact hbot) _)
+  rw [← hMsucc] at hblockEq
+  -- target .2.2 via flashStateBot_succ
+  rw [show (flashStateBot qT kT vT scale causal qS ((c + 1) * 64) r d).2.2
+        = (Mc1, _,
+            (flashStateBot qT kT vT scale causal qS (c * 64) r d).2.2
+              * (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0
+              + ((flashBlock qT kT vT scale causal qS 64 c r d).map (fun p => pow2 (p.1 - Mc1.unbotD 0) * p.2)).sum).2.2
+        from by rw [flashStateBot_succ]; rw [← hblockEq]]
+  -- kernel side
+  set α : ℝ := (WithBot.realExp2 (WithBot.realSub m Mc1)).unbotD 0 with hαdef
+  have hαsome : WithBot.realExp2 (WithBot.realSub m Mc1) = some α := by
+    rw [hαdef]; cases WithBot.realSub m Mc1 <;> rfl
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [hdot]
+  rw [Tile.bop_data]
+  simp only [Broadcast.leftIndex, Broadcast.rightIndex, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.mul, hobtile, hostileVal, hαsome]
+  simp only [WithBot.realAdd, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+  refine congrArg some ?_
+  rw [hMr, WithBot.unbotD_coe]
+
 end VeriTile.Bench.TritonBenchG.FlashAttn
