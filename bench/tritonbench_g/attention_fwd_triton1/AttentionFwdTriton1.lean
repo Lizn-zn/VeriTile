@@ -1422,4 +1422,58 @@ theorem aft1_load_bp_2d_ref (rg : RegionName) (s : BlockState) (name : RegName)
   simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds,
     List.all_nil, BlockState.readMemValue_real, if_true]
 
+/-! ### Kernel-native chunk cells (exact `make_block_ptr` reads)
+
+These mirror the executed kernel's per-chunk memory reads exactly (batch-head
+`i_bh = pids 0`), so the loop-body stepping connects to them definitionally. The
+genuine file-level `recurrentState`/`outputClosedForm` are reconciled with these
+through the accessor hypotheses at the summary, exactly as
+`localTerm_eq_boFormulaSpec` / `recurrentState_eq_sum_bhFormulaSpec` do. -/
+
+/-- Scaled query cell `b_q[t,e] = scale · Q[(c·32+t)·128 + e]`. -/
+noncomputable def aft1QCell (s : BlockState) (Q : RegionName) (c : Nat)
+    (t e : Nat) : ℝ :=
+  s.readMem Q (s.pids 0 * 131072 + (c * 32 + t) * 128 + e) * (√128)⁻¹
+
+/-- Key cell `b_k[e,tk] = K[e·1 + (c·32+tk)·128]`. -/
+noncomputable def aft1KCell (s : BlockState) (K : RegionName) (c : Nat)
+    (e tk : Nat) : ℝ :=
+  s.readMem K (s.pids 0 * 131072 + e + (c * 32 + tk) * 128)
+
+/-- Value cell `b_v[tk,d] = V[(c·32+tk)·128 + d]`. -/
+noncomputable def aft1VCell (s : BlockState) (V : RegionName) (c : Nat)
+    (tk d : Nat) : ℝ :=
+  s.readMem V (s.pids 0 * 131072 + (c * 32 + tk) * 128 + d)
+
+/-- Kernel-native recurrent state after `c` chunks:
+`b_h_c[d',d] = Σ_{j<c} Σ_{tk} K_j[d',tk] · V_j[tk,d]`. -/
+noncomputable def aft1RecState (s : BlockState) (K V : RegionName) (c : Nat)
+    (d' d : Fin 128) : ℝ :=
+  ∑ j ∈ Finset.range c,
+    ∑ tk : Fin 32, aft1KCell s K j d'.val tk.val * aft1VCell s V j tk.val d.val
+
+/-- Kernel-native local output of chunk `c`, position `(t,d)`:
+`((scale·Q)·K·V)[t,d] = Σ_{tk} (Σ_e b_q[t,e]·b_k[e,tk]) · b_v[tk,d]`. -/
+noncomputable def aft1LocalOut (s : BlockState) (Q K V : RegionName) (c : Nat)
+    (t : Fin 32) (d : Fin 128) : ℝ :=
+  ∑ tk : Fin 32,
+    (∑ e : Fin 128, aft1QCell s Q c t.val e.val * aft1KCell s K c e.val tk.val) *
+      aft1VCell s V c tk.val d.val
+
+/-- Kernel-native recurrent output contribution of chunk `c`:
+`((scale·Q)·b_h_c)[t,d] = Σ_{d'} b_q[t,d'] · b_h_c[d',d]`. -/
+noncomputable def aft1RecOut (s : BlockState) (Q K V : RegionName) (c : Nat)
+    (t : Fin 32) (d : Fin 128) : ℝ :=
+  ∑ d' : Fin 128, aft1QCell s Q c t.val d'.val * aft1RecState s K V c d' d
+
+/-- Kernel-native full output of chunk `c`: local + recurrent. -/
+noncomputable def aft1Out (s : BlockState) (Q K V : RegionName) (c : Nat)
+    (t : Fin 32) (d : Fin 128) : ℝ :=
+  aft1LocalOut s Q K V c t d + aft1RecOut s Q K V c t d
+
+/-- The `b_h` carry tile after `c` chunks (data `(d',d) ↦ aft1RecState … c d' d`). -/
+noncomputable def aft1BhTile (s : BlockState) (K V : RegionName) (c : Nat) :
+    Tile .real [128, 128] :=
+  ⟨fun idx => some (aft1RecState s K V c idx.1 idx.2.1)⟩
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
