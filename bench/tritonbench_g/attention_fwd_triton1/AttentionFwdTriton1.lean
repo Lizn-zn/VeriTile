@@ -1247,4 +1247,106 @@ theorem attention_fwd_triton1_python_test_shape_output_summary
   · exact attention_fwd_triton1_surface_h_compute_correct Q K V H O
       Bool.true i_iter s
 
+/-! ## Full-surface exec → genuine closed form (carry-fold derivation)
+
+The block below derives the executed output of the full `attention_fwd_kernel_surface`
+directly, eliminating the self-referential `attentionFwdTriton1SurfaceValue`. The
+loop carries `b_h = recurrentState n` across the 32 chunks via `forRangeDyn_inv`. -/
+
+/-- The erased (algorithm-layer) loop body of `attention_fwd_kernel_surface` at the
+Python test shape, parameterized by the `STORE`/`IFCOND` constexpr gates. This is
+exactly what `(…).toAlgKernel.body`'s `forRangeDyn` carries (checked by `rfl` in
+`attention_fwd_triton1_body_split`). -/
+noncomputable def aft1LoopBody (Q K V H O : RegionName) (STORE IFCOND : Bool) : List Stmt :=
+  [ Stmt.assign .blockPtr [32, 128] "p_q"
+      (Op.makeBlockPtrDynOffsets Q
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 131072))
+        [1024, 128] [32, 128] [128, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat 32), Op.constNat 0]),
+    Stmt.assign .blockPtr [128, 32] "p_k"
+      (Op.makeBlockPtrDynOffsets K
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 131072))
+        [128, 1024] [128, 32] [1, 128]
+        [Op.constNat 0, Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat 32)]),
+    Stmt.assign .blockPtr [32, 128] "p_v"
+      (Op.makeBlockPtrDynOffsets V
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 131072))
+        [1024, 128] [32, 128] [128, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat 32), Op.constNat 0]),
+    Stmt.assign .blockPtr [128, 128] "p_h"
+      (Op.makeBlockPtrDynOffsets H
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 524288))
+        [32 * 128, 128] [128, 128] [128, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat 128), Op.constNat 0]),
+    Stmt.assign .blockPtr [32, 128] "p_o"
+      (Op.makeBlockPtrDynOffsets O
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 131072))
+        [1024, 128] [32, 128] [128, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat 32), Op.constNat 0]),
+    Stmt.ifThen (Op.constBool STORE)
+      [Stmt.store .real [128, 128]
+          (MemAccess.blockPtr (Op.ref .blockPtr [128, 128] "p_h") [])
+          (Op.ref .real [128, 128] "b_h") MaskOpt.none],
+    Stmt.assign .real [32, 128] "b_q"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [32, 128] "p_q") []) MaskOpt.none),
+    Stmt.assign .real [32, 128] "b_q"
+      (Op.mul .real Broadcast.scalarR (Op.ref .real [32, 128] "b_q") (Op.const (√128)⁻¹)),
+    Stmt.assign .real [128, 32] "b_k"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [128, 32] "p_k") []) MaskOpt.none),
+    Stmt.assign .real [32, 128] "b_v"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [32, 128] "p_v") []) MaskOpt.none),
+    Stmt.assign .real [32, 32] "b_s"
+      (@Op.dot [] 32 128 32 (Op.ref .real [32, 128] "b_q") (Op.ref .real [128, 32] "b_k")),
+    Stmt.assign .real [32, 128] "b_o"
+      (@Op.dot [] 32 32 128 (Op.ref .real [32, 32] "b_s") (Op.ref .real [32, 128] "b_v")),
+    Stmt.ifThenElse (Op.constBool IFCOND)
+      [Stmt.ifThenElse
+          (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "i") (Op.constNat 0))
+          [Stmt.assign .real [128, 128] "b_h"
+              (@Op.dot [] 128 32 128 (Op.ref .real [128, 32] "b_k") (Op.ref .real [32, 128] "b_v"))]
+          [Stmt.assign .real [32, 128] "b_o"
+              (Op.add .real Broadcast.nil.consSame.consSame
+                (Op.ref .real [32, 128] "b_o")
+                (@Op.dot [] 32 128 128 (Op.ref .real [32, 128] "b_q") (Op.ref .real [128, 128] "b_h"))),
+            Stmt.assign .real [128, 128] "b_h"
+              (Op.add .real Broadcast.nil.consSame.consSame
+                (Op.ref .real [128, 128] "b_h")
+                (@Op.dot [] 128 32 128 (Op.ref .real [128, 32] "b_k") (Op.ref .real [32, 128] "b_v")))]]
+      [Stmt.assign .real [32, 128] "b_o"
+          (Op.add .real Broadcast.nil.consSame.consSame
+            (Op.ref .real [32, 128] "b_o")
+            (@Op.dot [] 32 128 128 (Op.ref .real [32, 128] "b_q") (Op.ref .real [128, 128] "b_h"))),
+        Stmt.assign .real [128, 128] "b_h"
+          (Op.add .real Broadcast.nil.consSame.consSame
+            (Op.ref .real [128, 128] "b_h")
+            (@Op.dot [] 128 32 128 (Op.ref .real [128, 32] "b_k") (Op.ref .real [32, 128] "b_v")))],
+    Stmt.store .real [32, 128]
+      (MemAccess.blockPtr (Op.ref .blockPtr [32, 128] "p_o") [])
+      (Op.ref .real [32, 128] "b_o") MaskOpt.none]
+
+/-- The erased prologue (program id + zero-init of `b_h`). -/
+def aft1Prologue : List Stmt :=
+  [ Stmt.assign .nat [] "i_bh" (Op.programId 0),
+    Stmt.assign .real [128, 128] "b_h" (Op.full [128, 128] (Op.const 0)) ]
+
+/-- The dynamic loop-bound op `tl.cdiv(1024, 32)`. -/
+def aft1StopOp : Op .nat [] :=
+  Op.div .nat Broadcast.nil
+    (Op.sub .nat Broadcast.nil
+      (Op.add .nat Broadcast.nil (Op.constNat 1024) (Op.constNat 32)) (Op.constNat 1))
+    (Op.constNat 32)
+
+set_option maxRecDepth 8000 in
+/-- **Body split (by `rfl`).** The Python-shape surface lowers to the prologue
+followed by the single `forRangeDyn` chunk loop carrying `aft1LoopBody`. -/
+theorem attention_fwd_triton1_body_split
+    (Q K V H O : RegionName) (STORE IFCOND : Bool) :
+    (attention_fwd_kernel_surface Q K V H O
+      131072 128 1 524288 128 1024 ((Real.sqrt (128:ℝ))⁻¹)
+      32 128 32 STORE IFCOND).toAlgKernel.body
+      = aft1Prologue
+        ++ [Stmt.forRangeDyn "i" (Op.constNat 0) aft1StopOp (Op.constNat 1)
+              (aft1LoopBody Q K V H O STORE IFCOND)] := by
+  rfl
+
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton1
