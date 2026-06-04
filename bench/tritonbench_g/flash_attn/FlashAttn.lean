@@ -674,9 +674,12 @@ sorry-free in `VeriTile/Triton/Math/Attention.lean`. -/
 
 open VeriTile.Triton (attentionRealBase2PerKeyScale attentionRealBase2PerKeyScaleCausal)
 
-/-- Base-2 logarithm of `e` (`log2(e) = 1 / log 2`), the constant `qk_scale` folds
-in (`q = (q · sm_scale · 1.44269504).to(fp16)`). -/
-noncomputable def log2e : ℝ := 1 / Real.log 2
+/-- The base-2 log-of-`e` constant the kernel folds into `qk_scale`
+(`q = (q · sm_scale · 1.44269504).to(fp16)`). This is the *exact decimal literal*
+`1.44269504` the Triton source uses (a truncation of the true `log2(e) = 1/log 2 ≈
+1.4426950408889634`); the spec's per-key scale `sm_scale · log2e` is therefore the
+genuine scale the kernel actually computes, folded into `q`. -/
+def log2e : ℝ := 1.44269504
 
 /-- Per-(batch,head) base offset `off_bs_head · stride_q_head = pid₁ · 8192` for
 the Python layout. -/
@@ -2193,5 +2196,281 @@ theorem flashStateBot_zero
           then some (flashKV qT kT vT scale i d j) else none) = [] from by
     apply List.filterMap_eq_nil_iff.mpr; intro j _; simp]
   rfl
+
+/-! ## STEP C — exec-side stepping (preLoop → attn_step → postLoop → top theorem)
+
+Mirrors the worked `attention_score` exec-assembly (`score_preLoop_eval`,
+`score_loop_eval`, `score_post_eval`, `attention_score_case1_exec_eq_closedForm`,
+`attention_score_case1_genuine_compute_correct`), retargeted onto the
+block-pointer foundation + `flashStateBot`/`flashRunningMax` recurrence and the
+`forRangeDyn_inv` dynamic-loop driver. Specialized to the Python layout
+`(BS,HEAD,SEQLEN,DIM)=(2,2,128,64)`, `BLOCK_M=128`, `BLOCK_N=64`,
+`stride_q_head=8192`; `sm_scale`/`IS_CAUSAL` kept as parameters. -/
+
+open VeriTile.Triton (osStep pow2 attnKeyList attnKeyListCausal osBlockStep)
+
+/-- `evalOp` of a `constBool` literal. -/
+theorem flash_evalOp_constBool (b : Bool) (s : BlockState) :
+    evalOp (Op.constBool b) s = some (Tile.scalar b) := by
+  unfold evalOp; rfl
+
+/-- `ifThen true body` steps the body. -/
+theorem flash_stepStmt_ifThen_true (body : List Stmt) (s : BlockState) :
+    stepStmt (.ifThen (Op.constBool Bool.true) body) s = stepStmts body s := by
+  unfold stepStmt; rw [flash_evalOp_constBool]; rfl
+
+/-- `ifThen false body` is a no-op. -/
+theorem flash_stepStmt_ifThen_false (body : List Stmt) (s : BlockState) :
+    stepStmt (.ifThen (Op.constBool Bool.false) body) s = some s := by
+  unfold stepStmt; rw [flash_evalOp_constBool]; rfl
+
+/-- `scalarBop` helper (nil-broadcast binary op on scalars). -/
+theorem flash_scalarBop {dtype : TileDType}
+    (f : TileCarrier dtype → TileCarrier dtype → TileCarrier dtype)
+    (a b : TileCarrier dtype) :
+    Tile.bop f Broadcast.nil (Tile.scalar a) (Tile.scalar b) = Tile.scalar (f a b) := rfl
+
+/-- **`q = (q * qk_scale).to fp16` statement eval** (preLoop stmt 13): the loaded
+`q` tile is scaled by the scalar `qk_scale` then round-tripped to fp16. -/
+theorem flash_qscale_op_eval (s : BlockState) (qtile : Tile .real [128, 64]) (sc : ℝ)
+    (hq : s.regs .real [128, 64] "q" = some qtile)
+    (hqs : s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) :
+    evalOp (Op.castFloat .real .fp16
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 64] "q") (Op.ref .real [] "qk_scale"))) s
+      = some (⟨fun idx : TileIndex [128, 64] =>
+          FloatDType.real.cast FloatDType.fp16
+            ((qtile.data idx).bind (fun x => some (x * sc)))⟩ : Tile .fp16 [128, 64]) := by
+  have hmul : evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 64] "q")
+        (Op.ref .real [] "qk_scale")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qtile (Tile.scalar (some sc))) := by
+    rw [evalOp_mul]; simp only [evalOp_ref, hq, hqs, Option.bind_eq_bind, Option.bind_some]
+  have hmul2 : @evalOp FloatDType.real.toTileDType [128, 64]
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 64] "q") (Op.ref .real [] "qk_scale")) s
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarR qtile (Tile.scalar (some sc))) := hmul
+  rw [evalOp_castFloat, hmul2]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+
+/-- The 16 lowered preLoop statements of the Python-shape flash-attn body
+(`IS_CAUSAL` left as a parameter; only `hi` (stmt 15) depends on it). -/
+def flashPreLoop (Q K V : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool) : List Stmt :=
+  [ Stmt.assign .nat [] "start_m" (Op.programId 0),
+    Stmt.assign .nat [] "off_bs_head" (Op.programId 1),
+    Stmt.assign .nat [] "qkv_base_offset"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat 8192)),
+    Stmt.assign .blockPtr [128, 64] "Q_block_ptr"
+      (Op.makeBlockPtrDynOffsets Q (Op.ref .nat [] "qkv_base_offset") [128, 64] [128, 64] [64, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128), Op.constNat 0]),
+    Stmt.assign .blockPtr [64, 64] "K_block_ptr"
+      (Op.makeBlockPtrDyn K (Op.ref .nat [] "qkv_base_offset") [64, 128] [64, 64] [1, 64] [0, 0]),
+    Stmt.assign .blockPtr [64, 64] "V_block_ptr"
+      (Op.makeBlockPtrDyn V (Op.ref .nat [] "qkv_base_offset") [128, 64] [64, 64] [64, 1] [0, 0]),
+    Stmt.assign .nat [128] "off_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)),
+    Stmt.assign .nat [64] "off_n" (Op.arange 64),
+    Stmt.assign .real [128] "max"
+      (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [128] "denom" (Op.full [128] (Op.const 0)),
+    Stmt.assign .real [128, 64] "out_buffer" (Op.full [128, 64] (Op.const 0)),
+    Stmt.assign .real [] "qk_scale"
+      (Op.mul .real Broadcast.nil (Op.const sm_scale) (Op.const 1.44269504)),
+    Stmt.assign .real [128, 64] "q"
+      (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "Q_block_ptr") []) MaskOpt.none),
+    Stmt.assign .fp16 [128, 64] "q"
+      (Op.castFloat .real .fp16
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 64] "q") (Op.ref .real [] "qk_scale"))),
+    Stmt.assign .nat [] "lo" (Op.constNat 0),
+    Stmt.assign .nat [] "hi"
+      ((Op.constBool IS_CAUSAL).ite
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat 128))
+        (Op.constNat 128)) ]
+
+/-- The lowered Python-shape flash-attn body `take 16` is exactly `flashPreLoop`. -/
+theorem flashPreLoop_check (Q K V L O : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool) :
+    (flash_attn_fwd_kernel_surface Q K V L O sm_scale
+        16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
+        2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body.take 16
+      = flashPreLoop Q K V sm_scale IS_CAUSAL := by
+  cases IS_CAUSAL <;> rfl
+
+/-- The resolved value of the `hi` register after preLoop. -/
+def flashHi (s : BlockState) (IS_CAUSAL : Bool) : Nat :=
+  if IS_CAUSAL then (s.pids 0 + 1) * 128 else 128
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop execution.** The 16 deterministic preLoop statements step a clean
+state to the loop-entry state, exposing every register readback `attnInvariant …
+0` / the loop body needs: the running `max`/`denom`/`out_buffer` registers carry
+the ⊥-seed init (`full ⊥`, `full 0`, `full 0`), `q` is the scaled fp16 cast, the
+index vectors / three block pointers are set, and `lo`/`hi` resolve. -/
+theorem flash_preLoop_eval
+    (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s0, stepStmts (flashPreLoop Q K V sm_scale IS_CAUSAL) s = some s0
+      ∧ s0.pids = s.pids ∧ s0.mem = s.mem ∧ (∀ rg o, s0.undef rg o = 0)
+      ∧ s0.regs .nat [] "off_bs_head" = some (Tile.scalar (s.pids 1))
+      ∧ s0.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s.pids 1 * 8192))
+      ∧ s0.regs .real [128] "max" = some ⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩
+      ∧ s0.regs .real [128] "denom" = some ⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩
+      ∧ s0.regs .real [128, 64] "out_buffer" = some ⟨fun _ : TileIndex [128, 64] => some (0 : ℝ)⟩
+      ∧ s0.regs .fp16 [128, 64] "q" = some ⟨fun idx : TileIndex [128, 64] =>
+          FloatDType.real.cast FloatDType.fp16
+            (some (sm_scale * log2e * qTile s Q 8192 64 128 idx))⟩
+      ∧ s0.regs .nat [128] "off_m" = some (Tile.vec (fun r : Fin 128 => s.pids 0 * 128 + r.val))
+      ∧ s0.regs .nat [64] "off_n" = some (Tile.vec (fun j : Fin 64 => j.val))
+      ∧ s0.regs .blockPtr [64, 64] "K_block_ptr" = some
+          (⟨fun _ : TileIndex [64, 64] =>
+            { region := K, baseOffset := s.pids 1 * 8192, parentShape := [64, 128],
+              blockShape := [64, 64], strides := [1, 64], offsets := [0, 0] }⟩)
+      ∧ s0.regs .blockPtr [64, 64] "V_block_ptr" = some
+          (⟨fun _ : TileIndex [64, 64] =>
+            { region := V, baseOffset := s.pids 1 * 8192, parentShape := [128, 64],
+              blockShape := [64, 64], strides := [64, 1], offsets := [0, 0] }⟩)
+      ∧ s0.regs .blockPtr [128, 64] "Q_block_ptr" = some
+          (⟨fun _ : TileIndex [128, 64] =>
+            { region := Q, baseOffset := s.pids 1 * 8192, parentShape := [128, 64],
+              blockShape := [128, 64], strides := [64, 1], offsets := [s.pids 0 * 128, 0] }⟩)
+      ∧ s0.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.44269504)))
+      ∧ s0.regs .nat [] "lo" = some (Tile.scalar 0)
+      ∧ s0.regs .nat [] "hi" = some (Tile.scalar (flashHi s IS_CAUSAL)) := by
+  unfold flashPreLoop
+  -- stmt 0: start_m = programId 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  -- stmt 1: off_bs_head = programId 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  -- stmt 2: qkv_base_offset = off_bs_head * 8192
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat 8192)) _
+        = some (Tile.scalar (s.pids 1 * 8192)) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  -- stmt 3: Q_block_ptr = makeBlockPtrDynOffsets Q qkv [start_m*128, 0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.makeBlockPtrDynOffsets Q (Op.ref .nat [] "qkv_base_offset") [128, 64] [128, 64]
+        [64, 1] [Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128), Op.constNat 0]) _
+        = some (⟨fun _ : TileIndex [128, 64] =>
+            { region := Q, baseOffset := s.pids 1 * 8192, parentShape := [128, 64],
+              blockShape := [128, 64], strides := [64, 1], offsets := [s.pids 0 * 128, 0] }⟩
+            : Tile .blockPtr [128, 64]) from by
+      rw [makeBlockPtr2_eval]
+      simp only [evalOp_ref, evalOp_constNat, evalOp_mul, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind,
+        Option.bind_some, List.mapM_cons, List.mapM_nil, BlockState.setReg_pids, flash_scalarBop]
+      refine congrArg some ?_; ext idx; rfl))]
+  -- stmt 4: K_block_ptr = makeBlockPtrDyn K qkv [0,0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_makeBlockPtrDyn_eval K (Op.ref .nat [] "qkv_base_offset") [64, 128] [64, 64] [1, 64] [0, 0] _
+      (s.pids 1 * 8192) (by rw [evalOp_ref]; simp)))]
+  -- stmt 5: V_block_ptr = makeBlockPtrDyn V qkv [0,0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_makeBlockPtrDyn_eval V (Op.ref .nat [] "qkv_base_offset") [128, 64] [64, 64] [64, 1] [0, 0] _
+      (s.pids 1 * 8192) (by rw [evalOp_ref]; simp)))]
+  -- stmt 6: off_m = start_m*128 + arange 128
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)) _
+        = some (Tile.vec (fun r : Fin 128 => s.pids 0 * 128 + r.val)) from by
+      rw [evalOp_add, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, evalOp_arange, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  -- stmt 7: off_n = arange 64
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange 64) _ = some (Tile.vec (fun j : Fin 64 => j.val)) from evalOp_arange 64 _))]
+  -- stmt 8: max = full 0 + (-inf) = full ⊥
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf) _
+        = some (⟨fun _ : TileIndex [128] => (⊥ : WithBot ℝ)⟩ : Tile .real [128]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+      rfl))]
+  -- stmt 9: denom = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [128] => some (0 : ℝ)⟩ : Tile .real [128]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 10: out_buffer = full 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [128, 64] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [128, 64] => some (0 : ℝ)⟩ : Tile .real [128, 64]) from by
+      simp [evalOp_full, evalOp_const]))]
+  -- stmt 11: qk_scale = sm_scale * 1.44269504
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .real Broadcast.nil (Op.const sm_scale) (Op.const 1.44269504)) _
+        = some (Tile.scalar (some (sm_scale * 1.44269504))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some, flash_scalarBop]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  -- stmt 12: q = load Q_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [128, 64] "Q_block_ptr") [])
+        MaskOpt.none) _
+        = some (⟨fun idx : TileIndex [128, 64] =>
+            some (s.readMem Q (s.pids 1 * 8192 + (s.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1))⟩
+            : Tile .real [128, 64]) from by
+      rw [flash_load_Q_eval Q (s.pids 1 * 8192) 128 64 128 64 64 1 (s.pids 0 * 128)
+        (Op.ref .blockPtr [128, 64] "Q_block_ptr") _ (by rw [evalOp_ref]; simp)]
+      refine congrArg some ?_; ext idx
+      simp [BlockState.readMem, BlockState.setReg_mem]))]
+  -- stmt 13: q = (q * qk_scale).to fp16
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.castFloat .real .fp16
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [128, 64] "q") (Op.ref .real [] "qk_scale"))) _
+        = some (⟨fun idx : TileIndex [128, 64] =>
+            FloatDType.real.cast FloatDType.fp16
+              (some (sm_scale * log2e * qTile s Q 8192 64 128 idx))⟩ : Tile .fp16 [128, 64]) from by
+      rw [flash_qscale_op_eval _
+        (⟨fun idx : TileIndex [128, 64] =>
+          some (s.readMem Q (s.pids 1 * 8192 + (s.pids 0 * 128 + idx.1.val) * 64 + idx.2.1.val * 1))⟩
+          : Tile .real [128, 64])
+        (sm_scale * 1.44269504)
+        (by rw [BlockState.setReg_same])
+        (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), BlockState.setReg_same])]
+      refine congrArg some ?_; ext idx
+      simp only [Option.bind, Option.map, qTile, flashBaseOffset, mIndex, log2e]
+      ring_nf))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.constNat 0) _ = _ from evalOp_constNat 0 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp ((Op.constBool IS_CAUSAL).ite
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat 128))
+        (Op.constNat 128)) _
+        = some (Tile.scalar (flashHi s IS_CAUSAL)) from by
+      conv_lhs => unfold evalOp
+      rw [flash_evalOp_constBool]
+      simp only [Tile.scalar_data, Option.bind_eq_bind, Option.bind_some]
+      cases IS_CAUSAL
+      · simp only [Bool.false_eq_true, if_false, flashHi]
+        exact evalOp_constNat 128 _
+      · simp only [if_true, flashHi]
+        rw [evalOp_mul, evalOp_add]
+        simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+          ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+          Option.bind_eq_bind, Option.bind_some, flash_scalarBop]
+        rfl))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
+  all_goals
+    simp only [FloatDType.toTileDType, BlockState.setReg_ne_name, BlockState.setReg_same,
+      BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq,
+      and_self, and_true, true_and]
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
