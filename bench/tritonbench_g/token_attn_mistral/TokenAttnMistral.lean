@@ -1699,6 +1699,95 @@ theorem mistral_postLoop
     stride_vh stride_vd kv_group_num sliding_window final i.val hfinal]
   rfl
 
+/-- Body decomposition: `prelude(14) ++ [forRangeDyn, postlude…]`. By `rfl`. -/
+theorem mistral_body_split
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N : Nat) :
+    (token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+        B_Att_Start_Loc B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+        stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+        sliding_window BLOCK_DMODEL BLOCK_N).toAlgKernel.body
+      = (token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx B_Start_Loc B_Seqlen
+          B_Att_Start_Loc B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+          stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+          sliding_window BLOCK_DMODEL BLOCK_N).toAlgKernel.body.take 14
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0) (Op.ref .nat [] "cur_att_seq_len") (Op.constNat BLOCK_N)
+              (mistralLoopBody Prob V Req_to_tokens stride_req_to_tokens_s stride_vbs BLOCK_DMODEL BLOCK_N)
+            :: mistralPostlude Out stride_obs stride_oh stride_od BLOCK_DMODEL) := by
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- **Genuine closed-form correctness for `token_attn_mistral` (general).** With
+`stride_pbs = 1 ∧ stride_req_to_tokens_s = 1` and `0 < BLOCK_N` (true for all four
+checked Python shapes), every lane of the `[BLOCK_DMODEL]` output store holds the
+genuine PV-reduction closed form `tokenAttnMistralClosedForm` — i.e. the
+probability-weighted, sliding-window value sum `Σ_n p[n]·v[v_loc[n], d]` — NOT the
+kernel's own executed value. Proven sorry-free via `mistral_preLoop` (entry
+invariant), `mistral_loop_step` fed to `forRangeDyn_inv` (one-block carry advance),
+and `mistral_postLoop` (unmasked store readback = closed form). -/
+theorem token_attn_mistral_closed_form_correct
+    (Prob V Out : RegionName)
+    (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
+    (B_Seqlen B_Att_Start_Loc B_Att_Seqlen : Region .nat)
+    (stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      kv_group_num sliding_window BLOCK_DMODEL BLOCK_N : Nat)
+    (hpbs : stride_pbs = 1) (hrts : stride_req_to_tokens_s = 1) (hBN : 0 < BLOCK_N)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i))
+    (i : Fin BLOCK_DMODEL) :
+    (match exec (token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx B_Start_Loc
+        B_Seqlen B_Att_Start_Loc B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s
+        stride_ph stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        kv_group_num sliding_window BLOCK_DMODEL BLOCK_N) s with
+      | some s' => s'.readMem Out (outOffset s stride_obs stride_oh stride_od i)
+      | none => (0.0 : ℝ)) =
+      tokenAttnMistralClosedForm s Prob V Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+        B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+        stride_vbs stride_vh stride_vd kv_group_num sliding_window BLOCK_DMODEL i := by
+  obtain ⟨s', hpre, hinv0⟩ := mistral_preLoop Prob V Out Req_to_tokens B_req_idx B_Start_Loc
+    B_Seqlen B_Att_Start_Loc B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+    stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+    sliding_window BLOCK_DMODEL BLOCK_N s hundef
+  -- the dynamic loop bound `cur_att_seq_len` reads as attSeqLen on the entry state
+  have hslEntry : s'.regs .nat [] "cur_att_seq_len" = some (Tile.scalar (attSeqLen s B_Att_Seqlen)) := by
+    simp only [mistralInvariant] at hinv0
+    exact hinv0.2.2.2.2.2.2.2.2.1
+  have hstop : evalOp (Op.ref .nat [] "cur_att_seq_len") s' = some (Tile.scalar (attSeqLen s B_Att_Seqlen)) := by
+    rw [evalOp_ref]; exact hslEntry
+  -- drive the window loop
+  obtain ⟨final, sLoop, hLoopStmt, hfinal, hinvFinal⟩ :=
+    forRangeDyn_inv (idx := "start_n") (startOp := Op.constNat 0)
+      (stopOp := Op.ref .nat [] "cur_att_seq_len") (stepOp := Op.constNat BLOCK_N)
+      (start := 0) (stop := attSeqLen s B_Att_Seqlen) (step := BLOCK_N)
+      (P := mistralInvariant Prob V Out Req_to_tokens B_req_idx B_Att_Start_Loc B_Seqlen
+        B_Att_Seqlen s stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+        sliding_window BLOCK_DMODEL BLOCK_N)
+      (by simp) hstop (by simp) (by omega) hinv0
+      (fun c st _ hP => mistral_loop_step Prob V Out Req_to_tokens B_req_idx B_Att_Start_Loc
+        B_Seqlen B_Att_Seqlen s stride_req_to_tokens_b stride_req_to_tokens_s stride_ph stride_pbs
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num sliding_window
+        BLOCK_DMODEL BLOCK_N hpbs hrts c st hP)
+  -- post-loop store readback
+  obtain ⟨sfin, hPost, hRead⟩ := mistral_postLoop Prob V Out Req_to_tokens B_req_idx
+    B_Att_Start_Loc B_Seqlen B_Att_Seqlen s stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+    stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+    sliding_window BLOCK_DMODEL BLOCK_N final hfinal sLoop hinvFinal hOutInj
+  -- assemble exec = prelude ++ loop ++ postlude
+  have hexec : exec (token_attn_mistral_surface Prob V Out Req_to_tokens B_req_idx B_Start_Loc
+      B_Seqlen B_Att_Start_Loc B_Att_Seqlen stride_req_to_tokens_b stride_req_to_tokens_s stride_ph
+      stride_pbs stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od kv_group_num
+      sliding_window BLOCK_DMODEL BLOCK_N) s = some sfin := by
+    rw [exec, mistral_body_split, stepStmts.append_some hpre, stepStmts.cons_some hLoopStmt, hPost]
+  rw [hexec]
+  exact hRead i
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
