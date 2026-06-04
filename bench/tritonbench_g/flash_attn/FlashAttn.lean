@@ -1394,13 +1394,37 @@ theorem flashState_snd_fst_eq
     ← List.map_map, ← List.map_map,
     flashKeysUpto_map_fst_eq qT kT vT scale causal qStart hi i d d']
 
+/-- One ⊥-seeded online-softmax step: like `osStep`, but the running max lives in
+`WithBot ℝ` (seeded `⊥`), so `α = realExp2(m ⊖ m')` is `0` on the first block —
+faithful to the kernel's `max` register (`tl.zeros − inf`) and `denom`/`acc`
+(seeded `0`). The real-0-seed `osStep` fold (`flashState`) carries the **wrong**
+max shift (`blockMax 0`, not `flashRunningMax`); `flashStateBot` is the faithful
+recurrence the loop invariant must bind to. -/
+noncomputable def osStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
+  let m := st.1; let l := st.2.1; let acc := st.2.2
+  let s := sv.1; let v := sv.2
+  let m' := m ⊔ ((s : ℝ) : WithBot ℝ)
+  let α := (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
+  let p := pow2 (s - m'.unbotD 0)
+  (m', l * α + p, acc * α + p * v)
+
+/-- `flashStateBot` — the ⊥-seeded running `(max, denom, acc)` after streaming the
+window `[0, hi)`. Faithful to the kernel's register recurrence (`max` seeded `⊥`,
+`denom`/`acc` seeded `0`). -/
+noncomputable def flashStateBot
+    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
+    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    WithBot ℝ × ℝ × ℝ :=
+  (flashKeysUpto qT kT vT scale causal qStart hi i d).foldl osStepBot (⊥, 0, 0)
+
 /-- **Loop invariant** for the flash-attn streaming loop (counter
 `i = block c · BLOCK_N`, window `hi_c = i`). Binds the kernel's 14 live registers
 after `c` blocks: program ids, the loaded+scaled `q`, the index vectors
 `off_m`/`off_n`, `qk_scale`, `lo`/`hi`, the three block pointers (`K`/`V` advanced
 by `c·BLOCK_N`, `Q` fixed), and — the heart — `max`/`denom`/`out_buffer` equal the
-three components of `flashState` over the first `i` keys (per row for `max`/`denom`,
-per `(row, channel)` for `out_buffer`). Memory/undef preserved. Strides specialized
+three components of the ⊥-seeded `flashStateBot` over the first `i` keys (`max` =
+`flashRunningMax`, the `WithBot ⊔`-fold; `denom`/`out_buffer` = the ⊥-seeded
+`denom`/`acc`, per row / per `(row, channel)`). Memory/undef preserved. Strides specialized
 to the Python layout (`stride_q_seqlen = DIM`, `stride_q_dim = 1`); the per-key
 score scale is `qk_scale = sm_scale · log2e`. -/
 noncomputable def attnInvariant
@@ -1418,9 +1442,9 @@ noncomputable def attnInvariant
   (s.regs .real [BLOCK_M] "max" = some ⟨fun r : TileIndex [BLOCK_M] =>
       flashRunningMax qT kT vT scale causal qStart i r.1 ⟨0, hDIM⟩⟩) ∧
   (s.regs .real [BLOCK_M] "denom" = some ⟨fun r : TileIndex [BLOCK_M] =>
-      ((flashState qT kT vT scale causal qStart i r.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩) ∧
+      ((flashStateBot qT kT vT scale causal qStart i r.1 ⟨0, hDIM⟩).2.1 : ℝ)⟩) ∧
   (s.regs .real [BLOCK_M, DIM] "out_buffer" = some ⟨fun idx : TileIndex [BLOCK_M, DIM] =>
-      ((flashState qT kT vT scale causal qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
+      ((flashStateBot qT kT vT scale causal qStart i idx.1 idx.2.1).2.2 : ℝ)⟩) ∧
   (s.regs .fp16 [BLOCK_M, DIM] "q" = some ⟨fun idx : TileIndex [BLOCK_M, DIM] =>
       FloatDType.real.cast FloatDType.fp16
         (some (scale * qT idx))⟩) ∧
@@ -1899,28 +1923,8 @@ max shift (`blockMax 0`, not `flashRunningMax`), so its `denom`/`acc` do not equ
 the kernel's. `flashStateBot` is the faithful ⊥-seeded recurrence; its final
 `acc/denom` ratio and `max + log2 denom` log-sum-exp agree with `flashState`'s
 (the `pow2(−M)` common factor cancels in the ratio / telescopes in the L value),
-which is what reconnects it to the closed-form spec. -/
-
-open VeriTile.Triton (pow2)
-
-/-- One ⊥-seeded online-softmax step: like `osStep`, but the running max lives in
-`WithBot ℝ` (seeded `⊥`), so `α = realExp2(m ⊖ m')` is `0` on the first block. -/
-noncomputable def osStepBot (st : WithBot ℝ × ℝ × ℝ) (sv : ℝ × ℝ) : WithBot ℝ × ℝ × ℝ :=
-  let m := st.1; let l := st.2.1; let acc := st.2.2
-  let s := sv.1; let v := sv.2
-  let m' := m ⊔ ((s : ℝ) : WithBot ℝ)
-  let α := (WithBot.realExp2 (WithBot.realSub m m')).unbotD 0
-  let p := pow2 (s - m'.unbotD 0)
-  (m', l * α + p, acc * α + p * v)
-
-/-- `flashStateBot` — the ⊥-seeded running `(max, denom, acc)` after streaming the
-window `[0, hi)`. Faithful to the kernel's register recurrence (`max` seeded `⊥`,
-`denom`/`acc` seeded `0`). -/
-noncomputable def flashStateBot
-    (qT : TileIndex [BLOCK_M, DIM] → ℝ) (kT vT : TileIndex [SEQLEN, DIM] → ℝ)
-    (scale : ℝ) (causal : Bool) (qStart hi : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
-    WithBot ℝ × ℝ × ℝ :=
-  (flashKeysUpto qT kT vT scale causal qStart hi i d).foldl osStepBot (⊥, 0, 0)
+which is what reconnects it to the closed-form spec. The `osStepBot`/`flashStateBot`
+definitions live above (before `attnInvariant`, which binds to them). -/
 
 /-- The running `max` component of `flashStateBot` is exactly `flashRunningMax`
 (the `⊥`-seeded `⊔`-fold). -/
