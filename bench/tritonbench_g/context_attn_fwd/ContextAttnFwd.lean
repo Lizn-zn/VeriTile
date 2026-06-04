@@ -754,6 +754,168 @@ theorem ctxStateBot_full_eq_exactFold
   rw [ctxStateBot_ratio_eq _ _ _ _ _ _ _ _ _ _ _ _ hne, ctxKeysUpto_full]
   rfl
 
+/-! ### one-block advance of the ⊥-seeded state (the step lemma's math)
+
+Per-block decomposition of the ⊥-seeded recurrence: the loop's `c`-th iteration
+streams block `c` (keys `c·128 ≤ j < (c+1)·128`), advancing `ctxStateBot(c·128)`
+to `ctxStateBot((c+1)·128)` by one `osStepBot` fold over that block. The
+context kernel keeps ALL keys `j < hi` (no causal drop — future keys carry the
+`-1e8` sentinel score in `ctxKV`), so the window split is a pure threshold split. -/
+
+/-- Block-`c` per-row key list: keys `c·BN ≤ j < (c+1)·BN`, the keys the loop's
+`c`-th iteration streams (the `-1e8` sentinel kept on future keys). -/
+noncomputable def ctxBlock
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S BN c : Nat) (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
+  (List.finRange S).filterMap (fun j : Fin S =>
+    if c * BN ≤ j.val ∧ j.val < (c + 1) * BN then
+      some (ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d j)
+    else none)
+
+/-- Threshold-split for a `.val`-ascending `Fin` list: the `j.val < hi₂` filterMap
+splits into the `j.val < t` prefix and the `t ≤ j.val < hi₂` block (`t ≤ hi₂`). -/
+private theorem ctx_filterMap_window_split {n : Nat} (l : List (Fin n))
+    (hsorted : l.Pairwise (fun a b => a.val < b.val))
+    (t hi₂ : Nat) (g : Fin n → ℝ × ℝ) (hle : t ≤ hi₂) :
+    l.filterMap (fun j => if j.val < hi₂ then some (g j) else none)
+      = l.filterMap (fun j => if j.val < t then some (g j) else none)
+        ++ l.filterMap (fun j => if t ≤ j.val ∧ j.val < hi₂ then some (g j) else none) := by
+  induction l with
+  | nil => simp
+  | cons a tl ih =>
+    have htl : tl.Pairwise (fun x y => x.val < y.val) := (List.pairwise_cons.mp hsorted).2
+    have hahead : ∀ b ∈ tl, a.val < b.val := (List.pairwise_cons.mp hsorted).1
+    rw [List.filterMap_cons, List.filterMap_cons, List.filterMap_cons]
+    by_cases hlt : a.val < t
+    · rw [ih htl]
+      have hnb : ¬ (t ≤ a.val ∧ a.val < hi₂) := fun h => (Nat.not_le.mpr hlt) h.1
+      rw [if_neg hnb, if_pos (lt_of_lt_of_le hlt hle), if_pos hlt]; rfl
+    · have hge : t ≤ a.val := Nat.not_lt.mp hlt
+      have htail_prefix : tl.filterMap (fun j => if j.val < t then some (g j) else none) = [] := by
+        apply List.filterMap_eq_nil_iff.mpr
+        intro b hb
+        have hab : a.val < b.val := hahead b hb
+        have hbt : ¬ (b.val < t) := by omega
+        simp [hbt]
+      rw [ih htl, htail_prefix, if_neg hlt]
+      by_cases h2 : a.val < hi₂
+      · rw [if_pos h2, if_pos (And.intro hge h2 : t ≤ a.val ∧ a.val < hi₂)]; rfl
+      · rw [if_neg h2, if_neg (fun h : t ≤ a.val ∧ a.val < hi₂ => h2 h.2)]
+
+/-- **Window split** (`hi = c·BN`): keys streamed through `c+1` blocks are those
+through `c` blocks followed by block `c`. -/
+theorem ctxKeysUpto_succ
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S BN c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S ((c + 1) * BN) i d
+      = ctxKeysUpto s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S (c * BN) i d
+        ++ ctxBlock s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S BN c i d := by
+  unfold ctxKeysUpto ctxBlock
+  rw [ctx_filterMap_window_split (List.finRange S) (List.pairwise_lt_finRange S)
+    (c * BN) ((c + 1) * BN) (fun j => ctxKV s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S i d j)
+    (by nlinarith [Nat.zero_le BN])]
+
+/-- **One-block advance** of the ⊥-seeded state: streaming block `c` folds that
+block's keys (via `osStepBot`) onto the state after `c` blocks. -/
+theorem ctxStateBot_succ
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len : RegionName) (sm_scale : ℝ)
+    (BLOCK_M S BN c : Nat) (i : Fin BLOCK_M) (d : Fin 128) :
+    ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S ((c + 1) * BN) i d
+      = (ctxBlock s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S BN c i d).foldl
+          osStepBot (ctxStateBot s Q K V B_Start_Loc B_Prompt_Cache_Len sm_scale BLOCK_M S (c * BN) i d) := by
+  unfold ctxStateBot
+  rw [ctxKeysUpto_succ, List.foldl_append]
+
+/-- The running max of an `osStepBot` fold over `block` from `(m, l, acc)` is
+`m ⊔ (block max)`. -/
+theorem osStepBot_block_fst (m : WithBot ℝ) (l acc : ℝ) (block : List (ℝ × ℝ)) :
+    (block.foldl osStepBot (m, l, acc)).1
+      = m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := by
+  rw [osStepBot_foldl_fst]
+  induction block generalizing m with
+  | nil => simp
+  | cons a t ih =>
+    simp only [List.map_cons, List.foldl_cons, List.foldr_cons]
+    rw [ih]
+    rw [show (m ⊔ ((a.1 : ℝ) : WithBot ℝ)) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) t))
+          = m ⊔ (((a.1 : ℝ) : WithBot ℝ) ⊔ (List.foldr (· ⊔ ·) ⊥ (List.map (fun p => ((p.1 : ℝ) : WithBot ℝ)) t))) from by
+      rw [sup_assoc]]
+
+/-- **The block-at-once update equals the key-by-key `osStepBot` fold.** For a
+block with max `M' = m ⊔ blockSup` and a state `(m, l, acc)` anchored to the true
+denominator/accumulator via `l = κ(m)·L`, `acc = κ(m)·T`, the kernel's one-shot
+rescale-and-add lands on `block.foldl osStepBot (m, l, acc)`. -/
+theorem osStepBot_block_eq (m : WithBot ℝ) (l acc T L : ℝ) (block : List (ℝ × ℝ))
+    (hl : l = (m.elim 0 (fun r => pow2 (-r))) * L)
+    (hacc : acc = (m.elim 0 (fun r => pow2 (-r))) * T)
+    (hmL : m = ⊥ → L = 0) (hmT : m = ⊥ → T = 0) :
+    let M' := m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥
+    (M',
+     l * (WithBot.realExp2 (WithBot.realSub m M')).unbotD 0
+       + (block.map (fun p => pow2 (p.1 - M'.unbotD 0))).sum,
+     acc * (WithBot.realExp2 (WithBot.realSub m M')).unbotD 0
+       + (block.map (fun p => pow2 (p.1 - M'.unbotD 0) * p.2)).sum)
+      = block.foldl osStepBot (m, l, acc) := by
+  intro M'
+  have hfst : (block.foldl osStepBot (m, l, acc)).1 = M' := by
+    rw [osStepBot_block_fst]
+  obtain ⟨hfold_l, hfold_acc⟩ := osStepBot_foldl_consistent block m l acc T L hl hacc hmL hmT
+  rw [hfst] at hfold_l hfold_acc
+  have hM'eq : M' = m ⊔ (block.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldr (· ⊔ ·) ⊥ := rfl
+  cases hM' : M' with
+  | bot =>
+    have hempty : block = [] := by
+      rcases block with _ | ⟨a, t⟩
+      · rfl
+      · exfalso
+        have : ((a.1 : ℝ) : WithBot ℝ) ≤ M' := by
+          rw [hM'eq]
+          exact le_sup_of_le_right (by simp only [List.map_cons, List.foldr_cons]; exact le_sup_left)
+        rw [hM'] at this
+        exact absurd (le_bot_iff.mp this) (WithBot.coe_ne_bot)
+    have hm0 : m = ⊥ := by
+      rw [hM'eq, hempty] at hM'
+      simpa only [List.map_nil, List.foldr_nil, sup_bot_eq] using hM'
+    have hl0 : l = 0 := by rw [hl, hm0]; simp [hmL hm0]
+    have hacc0 : acc = 0 := by rw [hacc, hm0]; simp [hmT hm0]
+    subst hempty
+    rw [hl0, hacc0]
+    simp only [List.foldl_nil, List.map_nil, List.sum_nil, add_zero, mul_zero, zero_mul]
+    rw [hm0]
+  | coe Mr =>
+    rw [hM'] at hfst hfold_l hfold_acc
+    have hlα : l * (WithBot.realExp2 (WithBot.realSub m (↑Mr : WithBot ℝ))).unbotD 0 = pow2 (-Mr) * L := by
+      cases hm : m with
+      | bot =>
+        rw [hl, hm, show ((⊥ : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = 0 from rfl,
+          zero_mul, hmL hm]; ring
+      | coe a =>
+        rw [hl, hm, show ((↑a : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-a) from rfl]
+        rw [WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe,
+          show Real.exp ((a - Mr) * Real.log 2) = pow2 (a - Mr) from by simp [pow2, mul_comm]]
+        rw [mul_right_comm, ← pow2_add]; ring_nf
+    have haccα : acc * (WithBot.realExp2 (WithBot.realSub m (↑Mr : WithBot ℝ))).unbotD 0 = pow2 (-Mr) * T := by
+      cases hm : m with
+      | bot =>
+        rw [hacc, hm, show ((⊥ : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = 0 from rfl,
+          zero_mul, hmT hm]; ring
+      | coe a =>
+        rw [hacc, hm, show ((↑a : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-a) from rfl]
+        rw [WithBot.realSub_coe_coe, WithBot.realExp2_coe, WithBot.unbotD_coe,
+          show Real.exp ((a - Mr) * Real.log 2) = pow2 (a - Mr) from by simp [pow2, mul_comm]]
+        rw [mul_right_comm, ← pow2_add]; ring_nf
+    have hsumL : (block.map (fun p => pow2 (p.1 - (↑Mr : WithBot ℝ).unbotD 0))).sum
+        = pow2 (-Mr) * (block.map (fun p => pow2 p.1)).sum := by
+      have := sum_map_pow2_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun _ => 1)
+      simp only [mul_one] at this
+      rw [this, WithBot.unbotD_coe]
+    have hsumT : (block.map (fun p => pow2 (p.1 - (↑Mr : WithBot ℝ).unbotD 0) * p.2)).sum
+        = pow2 (-Mr) * (block.map (fun p => pow2 p.1 * p.2)).sum := by
+      rw [sum_map_pow2_sub ((↑Mr : WithBot ℝ).unbotD 0) block (fun p => p.2), WithBot.unbotD_coe]
+    refine Prod.ext hfst.symm (Prod.ext ?_ ?_)
+    · rw [hfold_l, hlα, hsumL, show ((↑Mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-Mr) from rfl]; ring
+    · rw [hfold_acc, haccα, hsumT, show ((↑Mr : WithBot ℝ).elim 0 (fun r => pow2 (-r))) = pow2 (-Mr) from rfl]; ring
+
 /-! ### exec-stepping infrastructure for the FA-1 assembly (WIP)
 
 Per-statement `evalOp` recipes specific to this kernel — the causal `≥` mask and
