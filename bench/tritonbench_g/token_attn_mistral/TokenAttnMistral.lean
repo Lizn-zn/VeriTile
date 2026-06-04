@@ -688,6 +688,51 @@ theorem mistral_poffs_eval (s : BlockState) (BN head attStart stride_ph stride_p
   ext idx
   simp [Tile.bop, Tile.vec, NumericDType.mul, NumericDType.add]
 
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **`p_value` masked-load recipe** (`tl.load(Prob + p_offs + start_n,
+mask=(start_n+offs_n) < cur_att_seq_len, other=0.0)`, shape `[BLOCK_N]`).
+
+The `p_offs` register holds the per-lane `pOffset` (its lane `j` is
+`pOffset … j`), `start_n = SN`, and `stride_pbs = 1`, so the loaded address at
+lane `j` is `pOffset … j + SN = pOffset … (SN + j)` and the boundary mask
+`SN + j < attSeqLen` is exactly `pMasked`'s guard. The result lane `j` is
+therefore `pMasked … (SN + j)`. -/
+theorem mistral_prob_load_eval (s : BlockState) (Prob : RegionName)
+    (B_Att_Start_Loc B_Att_Seqlen : RegionName)
+    (BN stride_ph stride_pbs SN : Nat) (hpbs : stride_pbs = 1)
+    (hpoffs : s.regs .nat [BN] "p_offs" =
+      some (Tile.vec (fun j : Fin BN => pOffset s B_Att_Start_Loc stride_ph stride_pbs j.val)))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hsl : s.regs .nat [] "cur_att_seq_len" = some (Tile.scalar (attSeqLen s B_Att_Seqlen))) :
+    evalOp (Op.load .real
+        (MemAccess.region Prob
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [BN] "p_offs") (Op.ref .nat [] "start_n")))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n") (Op.ref .nat [BN] "offs_n"))
+            (Op.ref .nat [] "cur_att_seq_len"))
+          (Op.broadcast (Op.const 0.0) [BN]))) s
+      = some (⟨fun idx : TileIndex [BN] =>
+          some (pMasked s Prob B_Att_Start_Loc B_Att_Seqlen stride_ph stride_pbs
+            (SN + idx.1.val))⟩ : Tile .real [BN]) := by
+  simp only [evalOp, hpoffs, hsn, hn, hsl, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨j, u⟩ := idx
+  have haddr : pOffset s B_Att_Start_Loc stride_ph stride_pbs j.val + SN
+      = pOffset s B_Att_Start_Loc stride_ph stride_pbs (SN + j.val) := by
+    simp only [pOffset, hpbs]; ring
+  simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar, NumericDType.add,
+    ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+    BlockState.readMemValue_real, pMasked]
+  rw [haddr]
+  simp only [if_true, Region.cast_id]
+  by_cases hlt : SN + j.val < attSeqLen s B_Att_Seqlen
+  · simp only [hlt, decide_true, if_true, if_pos hlt]
+  · simp only [hlt, decide_false, if_neg hlt, if_false, Bool.false_eq_true]
+
 noncomputable def tokenAttnMistralSurfaceValue
     (s : BlockState) (Prob V Out : RegionName)
     (Req_to_tokens B_req_idx : Region .nat) (B_Start_Loc : RegionName)
