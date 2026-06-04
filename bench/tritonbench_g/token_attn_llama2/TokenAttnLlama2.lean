@@ -357,6 +357,85 @@ theorem token_attn_llama2_score_store_python_max32_compute_correct
     B_Start_Loc B_Seqlen Att_Out 32 128 32 128 32 32 s
     (token_attn_llama2_python_max32_offset_injective s B_Start_Loc)
 
+/-! ## Genuine closed-form score spec
+
+The Triton kernel computes, per output lane `i` of the `start_n` block, the
+scalar QK dot score `sm_scale · Σ_d q[d]·k[i,d]`, where the query `q[d]` is
+loaded from `Q` at `cur_batch·stride_qbs + cur_head·stride_qh + d·stride_qd`,
+and the key `k[i,d]` is the *gathered* cache row: the page index
+`k_loc[i] = B_Loc[stride_b_loc_b·cur_batch + stride_b_loc_s·offs_n_new[i]]`
+selects the KV row, and `k[i,d] = K[k_loc[i]·stride_kbs + cur_kv_head·stride_kh +
+d·stride_kd]`.  Both gathers are masked by `offs_n_new[i] < max_input_len`
+(`active`), with masked-off lanes reading `0`.  The whole block is gated by the
+`block_mask = (start_n·BLOCK_N < cur_batch_seq_len)` single-iteration loop: when
+`block_mask = 0` the kernel performs no store and `Att_Out` is preserved.
+
+These definitions are a *genuine closed form* — they never execute the kernel —
+and replace the self-referential `tokenAttnLlama2SurfaceValue`. -/
+
+/-- `block_mask = 1` predicate: the `start_n` block has at least one in-range
+key token (`start_n·BLOCK_N < cur_batch_seq_len`). When false the kernel's
+`range(0, block_mask, 1)` loop is empty and nothing is stored. -/
+def blockActive (s : BlockState) (B_Seqlen : RegionName) (BLOCK_N : Nat) : Prop :=
+  s.pids 2 * BLOCK_N < seqLen s B_Seqlen
+
+instance blockActiveDecidable (s : BlockState) (B_Seqlen : RegionName) (BLOCK_N : Nat) :
+    Decidable (blockActive s B_Seqlen BLOCK_N) := by unfold blockActive; infer_instance
+
+/-- The query-load offset for head dim `d`: `cur_batch·stride_qbs +
+cur_head·stride_qh + d·stride_qd` (the `start_mark = 0` loop index folds away). -/
+def qOffset (s : BlockState) (stride_qbs stride_qh stride_qd : Nat) (d : Nat) : Nat :=
+  s.pids 0 * stride_qbs + s.pids 1 * stride_qh + d * stride_qd
+
+/-- The gathered KV page index for lane `i`:
+`B_Loc[stride_b_loc_b·cur_batch + stride_b_loc_s·offs_n_new[i]]`. -/
+def kLoc
+    (s : BlockState) (B_Loc B_Seqlen : RegionName)
+    (max_input_len stride_b_loc_b stride_b_loc_s BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
+  s.readMemValue .nat B_Loc
+    (stride_b_loc_b * s.pids 0 +
+      stride_b_loc_s * (max_input_len - seqLen s B_Seqlen + blockOffset s BLOCK_N i))
+
+/-- The key-load offset for lane `i`, head dim `d`:
+`k_loc[i]·stride_kbs + cur_kv_head·stride_kh + d·stride_kd`,
+with `cur_kv_head = cur_head / kv_group_num`. -/
+def kOffset
+    (s : BlockState) (B_Loc B_Seqlen : RegionName)
+    (max_input_len stride_b_loc_b stride_b_loc_s stride_kbs stride_kh stride_kd
+      kv_group_num BLOCK_N : Nat) (i : Fin BLOCK_N) (d : Nat) : Nat :=
+  kLoc s B_Loc B_Seqlen max_input_len stride_b_loc_b stride_b_loc_s BLOCK_N i * stride_kbs +
+    (s.pids 1 / kv_group_num) * stride_kh + d * stride_kd
+
+/-- The genuine per-lane closed-form QK score for an *active* lane `i` in an
+*active* block: `sm_scale · Σ_{d < BLOCK_DMODEL} Q[qOffset d] · K[kOffset i d]`. -/
+noncomputable def tokenAttnLlama2DotScore
+    (s : BlockState) (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Seqlen : RegionName)
+    (max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd kv_group_num
+      BLOCK_DMODEL BLOCK_N : Nat) (i : Fin BLOCK_N) : ℝ :=
+  (∑ d : Fin BLOCK_DMODEL,
+      s.readMem Q (qOffset s stride_qbs stride_qh stride_qd d.val) *
+      s.readMem K (kOffset s B_Loc B_Seqlen max_input_len stride_b_loc_b stride_b_loc_s
+        stride_kbs stride_kh stride_kd kv_group_num BLOCK_N i d.val)) * sm_scale
+
+/-- Genuine closed-form value written to `Att_Out` for lane `i`. For an active
+lane in an active block it is the QK score; otherwise (inactive lane, or an
+inactive `block_mask = 0` block in which the kernel stores nothing) the original
+`Att_Out` cell at `offset` is preserved. -/
+noncomputable def tokenAttnLlama2ClosedForm
+    (s : BlockState) (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : RegionName) (Att_Out : RegionName)
+    (max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd att_stride_h att_stride_bs kv_group_num
+      BLOCK_DMODEL BLOCK_N : Nat) (i : Fin BLOCK_N) : ℝ :=
+  if blockActive s B_Seqlen BLOCK_N ∧ active s B_Seqlen max_input_len BLOCK_N i then
+    tokenAttnLlama2DotScore s Q K sm_scale B_Loc B_Seqlen max_input_len
+      stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd kv_group_num BLOCK_DMODEL BLOCK_N i
+  else
+    s.readMem Att_Out (outOffset s B_Start_Loc att_stride_h att_stride_bs BLOCK_N i)
+
 noncomputable def tokenAttnLlama2SurfaceValue
     (s : BlockState) (Q K : RegionName) (sm_scale : ℝ)
     (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
