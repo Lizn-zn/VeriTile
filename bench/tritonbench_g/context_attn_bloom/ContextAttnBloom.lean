@@ -2079,6 +2079,130 @@ noncomputable def contextAttnBloomExactFoldM
       Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S bel idx.1 idx.2.1)
   st.2.2 / st.2.1
 
+/-! ### Bloom preLoop + streaming-loop invariant (Milestone 2) -/
+
+/-- The 19 lowered bloom prologue statements (transcribed from the surface
+lowering; `bloomPreLoop_take` checks by `rfl`). -/
+noncomputable def bloomPreLoop (Q : RegionName)
+    (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat) : List Stmt :=
+  [ Stmt.assign .nat [] "cur_batch" (Op.programId 0),
+    Stmt.assign .nat [] "cur_head" (Op.programId 1),
+    Stmt.assign .nat [] "start_m" (Op.programId 2),
+    Stmt.assign .nat [] "cur_kv_head"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 1)),
+    Stmt.assign .nat [] "cur_batch_in_all_start_index"
+      (Op.load .nat (MemAccess.region B_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "prompt_cache_len"
+      (Op.load .nat (MemAccess.region b_prompt_cache_len (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "cur_batch_seq_len"
+      (Op.sub .nat Broadcast.nil
+        (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none)
+        (Op.ref .nat [] "prompt_cache_len")),
+    Stmt.assign .nat [] "cur_batch_req_idx"
+      (Op.load .nat (MemAccess.region B_req_idx (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "block_start_loc"
+      (Op.mul .nat Broadcast.nil (Op.constNat 128) (Op.ref .nat [] "start_m")),
+    Stmt.assign .nat [128] "offs_n" (Op.arange 128),
+    Stmt.assign .nat [128] "offs_d" (Op.arange 128),
+    Stmt.assign .nat [128] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 128)) (Op.arange 128)),
+    Stmt.assign .nat [128, 128] "off_q"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m")))
+            (Op.constNat 576))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 96)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [128, 128] "q"
+      (Op.load .real (MemAccess.region Q (Op.ref .nat [128, 128] "off_q"))
+        (MaskOpt.maskOther
+          (Op.boolAnd Broadcast.nil.consL.consR
+            (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_m"))
+              (Op.ref .nat [] "cur_batch_seq_len"))
+            (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+              (Op.constNat 96)))
+          ((Op.const (0.0 : ℝ)).broadcast [128, 128]))),
+    Stmt.assign .real [128] "m_i"
+      (Op.add .real Broadcast.scalarR (Op.full [128] (Op.const 0)) Op.negInf),
+    Stmt.assign .real [128] "l_i" (Op.full [128] (Op.const 0)),
+    Stmt.assign .real [128, 128] "acc" (Op.full [128, 128] (Op.const 0)),
+    Stmt.assign .nat [] "block_mask"
+      ((Op.lt .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.ref .nat [] "cur_batch_seq_len")).where
+        (Op.constNat 1) (Op.constNat 0)),
+    Stmt.assign .nat [] "block_end_loc"
+      ((Op.lt .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat 128))
+              (Op.ref .nat [] "prompt_cache_len"))
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+              (Op.ref .nat [] "prompt_cache_len"))).where
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat 128))
+          (Op.ref .nat [] "prompt_cache_len"))
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+          (Op.ref .nat [] "prompt_cache_len"))) ]
+
+/-- The lowered Python-shape bloom body `take 19` is exactly `bloomPreLoop`. -/
+theorem bloomPreLoop_take (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat) :
+    (context_attn_bloom_fwd_kernel_surface Q K V (sm_scale_bloom : ℝ)
+        B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx b_prompt_cache_len
+        576 96 1 576 96 1 576 96 1 576 96 1
+        7500 1 1 96 128 128 128).toAlgKernel.body.take 19
+      = bloomPreLoop Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len := by
+  rfl
+
+/-- Per-key data feeding the bloom invariant: `bloomKVM` at the Python shape. -/
+noncomputable def bloomG
+    (s0 : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx : RegionName)
+    (sm_scale : ℝ) (S bel : Nat) (i d : Fin 128) : Fin S → ℝ × ℝ :=
+  bloomKVM s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale 7500 1 128 S bel i d
+
+/-- **Streaming-loop invariant** for the bloom kernel. After `c` blocks the
+in-loop-normalized registers carry the ⊥-seeded online-softmax fold `gStateBot
+(c·128)` over `bloomG`: `m_i = log2 · (running max)` (so natural `exp(m_i−·)`
+matches the base-2 `pow2`), `l_i = (running denominator)`, and `acc = (running
+numerator)/(running denominator)` — the in-loop `β/lᵢⁿᵉʷ`/`(lᵢ/lᵢⁿᵉʷ)·α`
+normalization. The auxiliary registers are the constants seeded by `bloomPreLoop`. -/
+noncomputable def bloomInvariant
+    (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (sm_scale : ℝ) (S bel : Nat) (c : Nat) (s : BlockState) : Prop :=
+  let plen := promptLen s0 B_Prompt_Cache_Len
+  let sl := seqLen s0 B_Seqlen B_Prompt_Cache_Len
+  let g := fun (i d : Fin 128) => bloomG s0 Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Req_to_tokens B_req_idx sm_scale S bel i d
+  s.pids = s0.pids ∧ s.mem = s0.mem ∧ (∀ rg o, s.undef rg o = 0) ∧
+  (s.regs .nat [] "cur_batch" = some (Tile.scalar (s0.pids 0))) ∧
+  (s.regs .nat [] "cur_kv_head" = some (Tile.scalar (s0.pids 1 / 1))) ∧
+  (s.regs .nat [] "cur_head" = some (Tile.scalar (s0.pids 1))) ∧
+  (s.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen)) ∧
+  (s.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl)) ∧
+  (s.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) ∧
+  (s.regs .nat [] "cur_batch_in_all_start_index"
+      = some (Tile.scalar (startLoc s0 B_Start_Loc))) ∧
+  (s.regs .nat [] "cur_batch_req_idx"
+      = some (Tile.scalar (reqIdx s0 B_req_idx))) ∧
+  (s.regs .nat [128] "offs_m" = some (Tile.vec (fun r : Fin 128 => s0.pids 2 * 128 + r.val))) ∧
+  (s.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))) ∧
+  (s.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))) ∧
+  (s.regs .real [128, 128] "q" = some ⟨fun idx : TileIndex [128, 128] =>
+      if decide (s0.pids 2 * 128 + idx.1.val < sl) && decide (idx.2.1.val < 96) then
+        s0.readMemValue .real (Region.cast Q) ((startLoc s0 B_Start_Loc + (s0.pids 2 * 128 + idx.1.val)) * 576
+            + s0.pids 1 * 96 + idx.2.1.val * 1)
+      else some (0.0 : ℝ)⟩) ∧
+  (s.regs .real [128] "m_i" = some ⟨fun r : TileIndex [128] =>
+      (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).1.map (· * Real.log 2)⟩) ∧
+  (s.regs .real [128] "l_i" = some ⟨fun r : TileIndex [128] =>
+      some (gStateBot S (c * 128) (g r.1 ⟨0, by decide⟩)).2.1⟩) ∧
+  (s.regs .real [128, 128] "acc" = some ⟨fun idx : TileIndex [128, 128] =>
+      some ((gStateBot S (c * 128) (g idx.1 idx.2.1)).2.2 / (gStateBot S (c * 128) (g idx.1 idx.2.1)).2.1)⟩) ∧
+  (c * 128 ≤ S)
+
 noncomputable def producedBloomBlock128OutValue
     (s : BlockState)
     (Q K V B_Start_Loc B_Seqlen Out Req_to_tokens B_req_idx
