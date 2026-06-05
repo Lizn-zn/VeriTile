@@ -2,6 +2,8 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `context_attn_bloom` — strict per-kernel correctness
@@ -258,6 +260,249 @@ noncomputable def accStoreValue
         (accOffset s stride_acc_b stride_acc_h stride_acc_m stride_acc_d
           BLOCK_M idx))
     else some (0.0 : ℝ))
+
+/-! ## Genuine closed-form context-attention spec (no self-reference)
+
+The streaming-softmax loop in `_fwd_kernel` is *not* a self-referential black
+box: it computes, for every active query lane, the prompt-cache-offset **causal
+softmax attention** value over the request-gathered key/value tokens. Unlike the
+`context_attn_fwd` PPL kernel (which uses base-2 `exp2` with a `log₂e`-scaled
+`sm_scale` and a deferred final `acc /= l_i`), BLOOM uses **natural** `exp`
+directly with `sm_scale = (√D)⁻¹` and *in-loop* normalization (`p_scale =
+β/l_iⁿᵉʷ`, `acc_scale = (l_i/l_iⁿᵉʷ)·α`, `acc += dot(p,v)`, no final divide). Both
+variants of online softmax produce the *same* final `acc/l` ratio — the genuine
+scaled-dot causal softmax. This section makes that closed form explicit as a pure
+function of `Q`/`K`/`V` memory and proves it is the library's
+`attentionRealCausalBlock` reference; no `exec`, no self-reference.
+
+### Score / scale / mask of this kernel (decoded lane-by-lane)
+
+For program `(cur_batch, cur_head, start_m)`, query lane `i` (global row
+`gi = start_m·BLOCK_M + i`), gathered key `j`, head channel `e`:
+
+* **raw score** `raw i j = Σ_e Q[gi,e]·K[kvloc j,e]`  (`tl.dot q k`, line 89);
+* **scale**     `qk·sm_scale` with `sm_scale = (√D)⁻¹` (line 90);
+* **softmax**   natural `tl.exp` (lines 95);
+* **mask**      `gi + prompt_cache_len ≥ j`  (line 91): future keys get score
+  `-1e8` (≈ `exp → 0`), a causal mask shifted by `prompt_cache_len`.
+
+So the kernel realizes the **natural-exp** causal softmax with effective scale
+`sm_scale` exactly (no base conversion needed). -/
+
+/-- Head index of this kernel's program (`cur_head = pids 1`, `kv_group_num = 1`
+so `cur_kv_head = cur_head`). -/
+def curHead (s : BlockState) : Nat := s.pids 1
+
+/-- Request index for this batch: `cur_batch_req_idx = B_req_idx[cur_batch]`. -/
+def reqIdx (s : BlockState) (B_req_idx : RegionName) : Nat :=
+  s.readMemValue .nat B_req_idx (s.pids 0)
+
+/-- Gathered KV token location for streamed key `j`:
+`kv_loc = Req_to_tokens[cur_batch_req_idx · stride_b + j · stride_s]`. -/
+def kvLoc (s : BlockState) (Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s j : Nat) : Nat :=
+  s.readMemValue .nat Req_to_tokens
+    (reqIdx s B_req_idx * stride_req_b + stride_req_s * j)
+
+/-- Coordinate-faithful query tile of this kernel at `(cur_batch, cur_head,
+start_m)` for the checked Python layout (`stride_qbs=576, stride_qh=96,
+stride_qd=1`). Row `i` is the global prefill row `start_m·BLOCK_M + i` offset by
+`cur_batch_in_all_start_index`. -/
+noncomputable def ctxQTile
+    (s : BlockState) (Q B_Start_Loc : RegionName) (BLOCK_M : Nat) :
+    TileIndex [BLOCK_M, 128] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q
+      ((startLoc s B_Start_Loc + (s.pids 2 * BLOCK_M + i.val)) * 576
+        + curHead s * 96 + e.val)
+
+/-- Coordinate-faithful key tile: `K[kvloc j, cur_head, e]` at the checked layout
+(`stride_kbs=576, stride_kh=96, stride_kd=1`). -/
+noncomputable def ctxKTile
+    (s : BlockState) (K Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s S : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K
+      (kvLoc s Req_to_tokens B_req_idx stride_req_b stride_req_s j.val * 576
+        + curHead s * 96 + e.val)
+
+/-- Coordinate-faithful value tile: `V[kvloc j, cur_head, d]`. -/
+noncomputable def ctxVTile
+    (s : BlockState) (V Req_to_tokens B_req_idx : RegionName)
+    (stride_req_b stride_req_s S : Nat) :
+    TileIndex [S, 128] → ℝ :=
+  fun (j, d, _) =>
+    s.readMem V
+      (kvLoc s Req_to_tokens B_req_idx stride_req_b stride_req_s j.val * 576
+        + curHead s * 96 + d.val)
+
+/-- **Genuine closed-form output** of `context_attn_bloom` at query lane `i`,
+channel `d`, over the first `S` gathered keys:
+
+`out[i,d] = (Σ_{j ≤ gi+plen} exp(sm·rawᵢⱼ)·V[j,d]) / (Σ_{j ≤ gi+plen} exp(sm·rawᵢⱼ))`
+
+where `gi = start_m·BLOCK_M + i`, `plen = prompt_cache_len`, `sm = sm_scale`, and
+`rawᵢⱼ = Σ_e Q[gi,e]·K[kvloc j,e]`. This is exactly the prompt-offset causal
+softmax with this kernel's tiles and scale. A pure function of `Q`/`K`/`V`
+memory; no self-reference. -/
+noncomputable def contextAttnBloomClosedForm
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx : RegionName)
+    (sm_scale : ℝ) (stride_req_b stride_req_s BLOCK_M S : Nat)
+    (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
+  let i := idx.1
+  let d := idx.2.1
+  let plen := promptLen s B_Prompt_Cache_Len
+  let gi := s.pids 2 * BLOCK_M + i.val
+  let raw := fun j : Fin S =>
+    Finset.univ.sum (fun e : Fin 128 =>
+      ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+        * ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S
+            (j, e, PUnit.unit))
+  let weight := fun j : Fin S =>
+    if j.val ≤ gi + plen then Real.exp (sm_scale * raw j) else 0
+  let denom := Finset.univ.sum (fun j : Fin S => weight j)
+  let numer := Finset.univ.sum (fun j : Fin S =>
+    weight j * ctxVTile s V Req_to_tokens B_req_idx stride_req_b stride_req_s S
+      (j, d, PUnit.unit))
+  numer / denom
+
+/-- **Bridge to the library's `attentionRealCausalBlock`.** The genuine closed
+form above coincides with `attentionRealCausalBlock` (from
+`VeriTile.Triton.Math.Attention`) at query-start `gi₀ = start_m·BLOCK_M + plen`,
+with this kernel's Q/K/V tiles and scale `sm_scale`. This certifies
+`contextAttnBloomClosedForm` is the standard prompt-offset causal scaled-dot
+softmax-attention reference, not an ad-hoc definition. -/
+theorem contextAttnBloomClosedForm_eq_attentionRealCausalBlock
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx : RegionName)
+    (sm_scale : ℝ) (stride_req_b stride_req_s BLOCK_M S : Nat)
+    (idx : TileIndex [BLOCK_M, 128]) :
+    contextAttnBloomClosedForm s Q K V B_Start_Loc B_Prompt_Cache_Len
+        Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S idx
+      = attentionRealCausalBlock
+          (s.pids 2 * BLOCK_M + promptLen s B_Prompt_Cache_Len)
+          (ctxQTile s Q B_Start_Loc BLOCK_M)
+          (ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S)
+          (ctxVTile s V Req_to_tokens B_req_idx stride_req_b stride_req_s S)
+          sm_scale
+          (idx.1, idx.2.1, PUnit.unit) := by
+  obtain ⟨i, d, u⟩ := idx
+  have hbound : s.pids 2 * BLOCK_M + promptLen s B_Prompt_Cache_Len + i.val
+      = s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len := by omega
+  simp only [contextAttnBloomClosedForm, attentionRealCausalBlock, scaledScore,
+    hbound, Finset.mul_sum]
+
+/-! ### Exact (sentinel-faithful) streaming closed form
+
+`contextAttnBloomClosedForm` *idealizes* future keys to softmax weight `0`. The
+kernel's `tl.where(mask, qk, -1e8)` instead assigns future keys the *finite*
+sentinel score `-1e8`, so over exact ℝ they carry weight `exp(-1e8)` —
+negligible, but nonzero. The value the streaming loop computes *exactly* is
+therefore the fold below (`acc/l` of the natural-exp online-softmax step over the
+genuinely-masked key stream with the `-1e8` sentinel kept); it coincides with
+`contextAttnBloomClosedForm` only in the `exp(-1e8) → 0` limit.
+
+`contextAttnBloomExactFold` is a pure function of `Q`/`K`/`V` memory (no `exec`
+self-reference): the exec-assembly obligation is to show the kernel's
+`m_i`/`l_i`/`acc` loop realizes this fold. We bridge to the banked base-2
+`osStep` machinery via `exp x = pow2 (x / log 2)`, feeding scores `score/log 2`
+to the base-2 fold (so `pow2 (score/log 2) = exp score`). -/
+
+/-- The natural-exp score the kernel feeds the softmax at gathered key `j`:
+active key `j ≤ gi+plen` gets `sm·rawᵢⱼ`; future key gets the `-1e8` sentinel. -/
+noncomputable def ctxBloomScore
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx : RegionName)
+    (sm_scale : ℝ) (stride_req_b stride_req_s BLOCK_M S : Nat)
+    (i : Fin BLOCK_M) (j : Fin S) : ℝ :=
+  if j.val ≤ s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len then
+    sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+      ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+        * ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S
+            (j, e, PUnit.unit))
+  else (0.0 - 10e7 : ℝ)
+
+/-- Per-key `(base-2 score, value)` stream the loop folds (with the `-1e8`
+sentinel kept). Score is `ctxBloomScore / log 2`, so `pow2 score = exp (kernel
+score)`: the genuine natural-exp softmax weight. -/
+noncomputable def ctxBloomKeyList
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx : RegionName)
+    (sm_scale : ℝ) (stride_req_b stride_req_s BLOCK_M S : Nat)
+    (i : Fin BLOCK_M) (d : Fin 128) : List (ℝ × ℝ) :=
+  List.ofFn (fun j : Fin S =>
+    (ctxBloomScore s Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens B_req_idx
+        sm_scale stride_req_b stride_req_s BLOCK_M S i j / Real.log 2,
+      ctxVTile s V Req_to_tokens B_req_idx stride_req_b stride_req_s S
+        (j, d, PUnit.unit)))
+
+/-- Exact streaming-loop output value for lane `(i,d)`: `acc/l` of folding the
+base-2 online-softmax step `osStep` over `ctxBloomKeyList`. A pure function of
+`Q`/`K`/`V` memory; exactly what the kernel's `m_i`/`l_i`/`acc` loop produces. -/
+noncomputable def contextAttnBloomExactFold
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx : RegionName)
+    (sm_scale : ℝ) (stride_req_b stride_req_s BLOCK_M S : Nat)
+    (idx : TileIndex [BLOCK_M, 128]) : ℝ :=
+  let st := (ctxBloomKeyList s Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S idx.1 idx.2.1).foldl
+      osStep (0, 0, 0)
+  st.2.2 / st.2.1
+
+/-- **Closed form of the exact fold.** The `osStep` fold over `ctxBloomKeyList`
+collapses to the genuine causal softmax with `exp(sm·raw)` weights on active keys
+and `exp(-1e8)` on future keys — explicitly, no self-reference, no `exec`. Proven
+via the banked `osStep_foldl_eq_batch` and `pow2 (x / log 2) = exp x`. -/
+theorem contextAttnBloomExactFold_eq
+    (s : BlockState) (Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
+      B_req_idx : RegionName)
+    (sm_scale : ℝ) (stride_req_b stride_req_s BLOCK_M S : Nat)
+    (idx : TileIndex [BLOCK_M, 128]) :
+    contextAttnBloomExactFold s Q K V B_Start_Loc B_Prompt_Cache_Len
+        Req_to_tokens B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S idx
+      = (let i := idx.1; let d := idx.2.1
+         let plen := promptLen s B_Prompt_Cache_Len
+         let gi := s.pids 2 * BLOCK_M + i.val
+         let raw := fun j : Fin S =>
+           Finset.univ.sum (fun e : Fin 128 =>
+             ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+               * ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S
+                   (j, e, PUnit.unit))
+         let weight := fun j : Fin S =>
+           if j.val ≤ gi + plen then Real.exp (sm_scale * raw j)
+           else Real.exp (0.0 - 10e7)
+         (Finset.univ.sum (fun j : Fin S =>
+            weight j * ctxVTile s V Req_to_tokens B_req_idx stride_req_b
+              stride_req_s S (j, d, PUnit.unit)))
+           / (Finset.univ.sum (fun j : Fin S => weight j))) := by
+  obtain ⟨i, d, u⟩ := idx
+  rw [contextAttnBloomExactFold, ctxBloomKeyList, osStep_foldl_eq_batch]
+  simp only [List.map_ofFn, List.sum_ofFn, Function.comp]
+  have hlog2 : Real.log 2 ≠ 0 := ne_of_gt (Real.log_pos (by norm_num))
+  have hpow : ∀ x : ℝ, pow2 (x / Real.log 2) = Real.exp x := by
+    intro x
+    rw [pow2, mul_div_cancel₀ x hlog2]
+  have hw : ∀ j : Fin S,
+      pow2 (ctxBloomScore s Q K V B_Start_Loc B_Prompt_Cache_Len Req_to_tokens
+          B_req_idx sm_scale stride_req_b stride_req_s BLOCK_M S i j / Real.log 2)
+      = if j.val ≤ s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len then
+          Real.exp (sm_scale * Finset.univ.sum (fun e : Fin 128 =>
+            ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
+              * ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S
+                  (j, e, PUnit.unit)))
+        else Real.exp (0.0 - 10e7) := by
+    intro j
+    rw [hpow, ctxBloomScore]
+    by_cases h : j.val ≤ s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len
+    · simp only [h, if_true]
+    · simp only [h, if_false]
+  have hbound : s.pids 2 * BLOCK_M + i.val + promptLen s B_Prompt_Cache_Len
+      = s.pids 2 * BLOCK_M + promptLen s B_Prompt_Cache_Len + i.val := by omega
+  congr 1
+  · apply Finset.sum_congr rfl; intro j _; rw [hw j, hbound]
+  · apply Finset.sum_congr rfl; intro j _; rw [hw j, hbound]
 
 noncomputable def producedBloomBlock128OutValue
     (s : BlockState)
