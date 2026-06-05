@@ -2166,27 +2166,33 @@ The streaming loop runs to `S = ceil₁₂₈(block_end_loc)`, streaming phantom
 `[bel, S)` whose masked `k`/`v` are `0`; the boundary-masked tiles
 `bloomKMaskTile`/`bloomVMaskTile` capture exactly that. -/
 
-/-- `block_end_loc`-masked key tile (genuine `ctxKTile` for `j < bel`, else `0`). -/
+/-- `block_end_loc`/channel-masked key tile (genuine `ctxKTile` for `j < bel` and
+channel `e < 96`, else `0`). The channel mask `e < head_dim = 96` matches the
+kernel's `tl.load` mask `offs_d < head_dim`, which zeros padding channels
+`e ∈ [96, 128)`. -/
 noncomputable def bloomKTileM
     (s : BlockState) (K Req_to_tokens B_req_idx : RegionName)
     (stride_req_b stride_req_s S bel : Nat) : TileIndex [S, 128] → ℝ :=
   fun (j, e, u) =>
-    if j.val < bel then ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S (j, e, u)
+    if (j.val < bel) ∧ (e.val < 96) then ctxKTile s K Req_to_tokens B_req_idx stride_req_b stride_req_s S (j, e, u)
     else 0
 
-/-- `block_end_loc`-masked value tile. -/
+/-- `block_end_loc`/channel-masked value tile (channel mask `d < 96` matches the
+kernel's `offs_d < head_dim` load mask). -/
 noncomputable def bloomVTileM
     (s : BlockState) (V Req_to_tokens B_req_idx : RegionName)
     (stride_req_b stride_req_s S bel : Nat) : TileIndex [S, 128] → ℝ :=
   fun (j, d, u) =>
-    if j.val < bel then ctxVTile s V Req_to_tokens B_req_idx stride_req_b stride_req_s S (j, d, u)
+    if (j.val < bel) ∧ (d.val < 96) then ctxVTile s V Req_to_tokens B_req_idx stride_req_b stride_req_s S (j, d, u)
     else 0
 
-/-- Row-masked query tile: genuine `ctxQTile` on active rows, else `0`. -/
+/-- Row- and channel-masked query tile: genuine `ctxQTile` on active rows and
+channel `e < 96`, else `0` (channel mask `offs_d < head_dim = 96` matches the
+kernel). -/
 noncomputable def bloomQTileM
     (s : BlockState) (Q B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
     (BLOCK_M : Nat) (i : Fin BLOCK_M) (e : Fin 128) : ℝ :=
-  if s.pids 2 * BLOCK_M + i.val < seqLen s B_Seqlen B_Prompt_Cache_Len then
+  if (s.pids 2 * BLOCK_M + i.val < seqLen s B_Seqlen B_Prompt_Cache_Len) ∧ (e.val < 96) then
     ctxQTile s Q B_Start_Loc BLOCK_M (i, e, PUnit.unit)
   else 0
 
