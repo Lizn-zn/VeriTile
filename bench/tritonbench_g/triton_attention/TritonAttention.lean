@@ -2273,20 +2273,6 @@ noncomputable def fwdOutSpec
     (fwdQTile s Q) (fwdKTile s K) (fwdVTile s V)
     ((Real.sqrt (64 : ℝ))⁻¹) idx
 
-/-- Genuine closed-form forward `L` value for query row `i`: the natural
-log-sum-exp of the causal score row `log (Σ_{j ≤ pids0·128 + i} exp(score i j))`.
-`_fwd_kernel` accumulates `l_prev` as `Σ exp(qk − m)` rescaled by `exp(m − …)`,
-which telescopes to the un-shifted `Σ exp(score)`; its `tl.store(l_ptrs, l_prev)`
-records exactly this denominator. -/
-noncomputable def fwdLSpec
-    (s : BlockState) (Q K : RegionName) (i : Fin 128) : ℝ :=
-  Real.log
-    (Finset.univ.sum (fun j : Fin 128 =>
-      if j.val ≤ s.pids 0 * 128 + i.val then
-        Real.exp (scaledScore (fwdQTile s Q) (fwdKTile s K)
-          ((Real.sqrt (64 : ℝ))⁻¹) i j)
-      else 0))
-
 /-- The causal key set for query row `i`: keys `j ≤ pids0·128 + i`. Nonempty
 because `j = 0` always satisfies `0 ≤ pids0·128 + i`. -/
 def fwdCausalSet (s : BlockState) (i : Fin 128) : Finset (Fin 128) :=
@@ -2307,6 +2293,26 @@ noncomputable def fwdMSpec
   (fwdCausalSet s i).sup' (fwdCausalSet_nonempty s i)
     (fun j : Fin 128 =>
       scaledScore (fwdQTile s Q) (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) i j)
+
+/-- Genuine closed-form forward `L` value for query row `i`: the **m-shifted**
+causal softmax normalizer `Σ_{j ≤ pids0·128 + i} exp(score i j − M_row)`, where
+`M_row = fwdMSpec s Q K i` is the per-row causal score maximum. This is the
+value the kernel *literally* stores: `_fwd_kernel` keeps `l_prev` as the running
+`Σ exp(qk − m_curr)` (rescaled by `exp(m_prev − m_curr)` across blocks), and the
+final `tl.store(l_ptrs, l_prev)` records exactly this m-shifted sum — **not** the
+un-shifted `Σ exp(score)` nor its log. (Recovering the un-shifted log-sum-exp
+needs the separately stored `M`: `log L + M = log(Σ exp(score))`. See
+`lPartial_eq_exp_fwdLSpec_sub_fwdMSpec`.) The in-loop `l_rcp = 1/l_curr`
+division only rescales the output `p`/`acc`; it never touches the stored
+`l_prev`. -/
+noncomputable def fwdLSpec
+    (s : BlockState) (Q K : RegionName) (i : Fin 128) : ℝ :=
+  Finset.univ.sum (fun j : Fin 128 =>
+    if j.val ≤ s.pids 0 * 128 + i.val then
+      Real.exp (scaledScore (fwdQTile s Q) (fwdKTile s K)
+        ((Real.sqrt (64 : ℝ))⁻¹) i j
+        - fwdMSpec s Q K i)
+    else 0)
 
 /-! ### FlashAttention-1 math bridge to the genuine closed-form specs
 
@@ -2416,34 +2422,56 @@ open VeriTile.Examples.FA1MathCausal in
 /-- **L closed-form bridge (stored value).** The kernel stores `l_prev` literally
 (the final, in-loop-`m`-shifted online-softmax normalizer `l_curr`), which is the
 FA1 `lPartial` over the single 128-key block — **not** the un-shifted
-`Σ exp(score)`. Its honest relation to the genuine log-sum-exp `fwdLSpec` and the
-row-max `fwdMSpec` is `lPartial = exp(fwdLSpec − fwdMSpec)`: the stored `L`
-together with the stored `M` recovers the un-shifted denominator
-`exp(fwdMSpec) · L = exp(fwdLSpec) = Σ exp(score)`, i.e.
-`fwdLSpec = fwdMSpec + log L`. (The `l_rcp` in-loop division only rescales the
-output `p`/`acc`; it does not touch the stored `l_prev`.) -/
-theorem lPartial_eq_exp_fwdLSpec_sub_fwdMSpec
+`Σ exp(score)`. This is exactly the genuine `fwdLSpec`: the m-shifted causal
+normalizer `Σ_{j ≤ …} exp(score i j − fwdMSpec)`. The `l_rcp` in-loop division
+only rescales the output `p`/`acc`; it does not touch the stored `l_prev`. -/
+theorem lPartial_eq_fwdLSpec
     (s : BlockState) (Q K : RegionName) (i : Fin 128) :
     lPartial 128 (s.pids 0 * 128) (fwdQTile s Q) 1
         (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) 1 i
-      = Real.exp (fwdLSpec s Q K i - fwdMSpec s Q K i) := by
-  rw [fwdMSpec_eq_mPartial s Q K i]
+      = fwdLSpec s Q K i := by
   rw [lPartial_eq_mShifted (Bk := 128) (by norm_num) (s.pids 0 * 128)
     (fwdQTile s Q) 1 (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) 1 (le_refl 1) i]
-  have hsum_pos0 := lFree_final_pos (Bk := 128) (N := 1) (by norm_num) (by norm_num)
-    (s.pids 0 * 128) (fwdQTile s Q) (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) i
-  rw [lFree_eq_flat] at hsum_pos0
   rw [lFree_eq_flat]
-  have hLeq : fwdLSpec s Q K i
-        = Real.log (Finset.univ.sum (fun j : Fin 128 =>
-            if j.val ≤ s.pids 0 * 128 + i.val then
-              Real.exp (StreamingAccumulator.scaledScore (fwdQTile s Q)
-                (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) i j)
-            else 0)) := by
-    unfold fwdLSpec
-    rfl
-  rw [hLeq, Real.exp_sub, Real.exp_log hsum_pos0, Real.exp_neg]
-  ring
+  rw [show (mPartial 128 (s.pids 0 * 128) (fwdQTile s Q) 1 (fwdKTile s K)
+        ((Real.sqrt (64 : ℝ))⁻¹) 1 i).unbotD 0 = fwdMSpec s Q K i from
+    (fwdMSpec_eq_mPartial s Q K i).symm]
+  unfold fwdLSpec
+  rw [Finset.mul_sum]
+  apply Finset.sum_congr rfl
+  intro j _
+  simp only [StreamingAccumulator.scaledScore, scaledScore]
+  by_cases hj : j.val ≤ s.pids 0 * 128 + i.val
+  · simp only [hj, if_true]
+    rw [Real.exp_sub, Real.exp_neg]
+    ring
+  · simp only [hj, if_false]
+    ring
+
+set_option maxHeartbeats 1600000 in
+open VeriTile.Examples.FA1MathCausal in
+/-- **Un-shifted denominator recovery (corollary).** The stored `L = fwdLSpec`
+together with the stored `M = fwdMSpec` recovers the un-shifted log-sum-exp
+denominator: `exp(fwdMSpec) · fwdLSpec = Σ_{j ≤ …} exp(score i j)`, i.e.
+`fwdMSpec + log fwdLSpec = log (Σ exp(score))`. -/
+theorem exp_fwdMSpec_mul_fwdLSpec
+    (s : BlockState) (Q K : RegionName) (i : Fin 128) :
+    Real.exp (fwdMSpec s Q K i) * fwdLSpec s Q K i
+      = Finset.univ.sum (fun j : Fin 128 =>
+          if j.val ≤ s.pids 0 * 128 + i.val then
+            Real.exp (scaledScore (fwdQTile s Q) (fwdKTile s K)
+              ((Real.sqrt (64 : ℝ))⁻¹) i j)
+          else 0) := by
+  unfold fwdLSpec
+  rw [Finset.mul_sum]
+  apply Finset.sum_congr rfl
+  intro j _
+  by_cases hj : j.val ≤ s.pids 0 * 128 + i.val
+  · simp only [hj, if_true]
+    rw [Real.exp_sub]
+    field_simp
+  · simp only [hj, if_false]
+    rw [mul_zero]
 
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
