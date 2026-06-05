@@ -2,6 +2,7 @@ import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
+import VeriTile.Triton.LoopInvariant
 
 /-!
 # `softmax_reducev` — strict per-kernel correctness
@@ -2721,5 +2722,150 @@ theorem srPostLoop_eval
       have := srStateBot_full_eq_weightedSum qk vF d mr hMd; simpa using this]
   · -- injectivity for scatter
     exact fun a b hab => hinj hab
+
+/-- `softmaxReducevWeightedSum` transports across an equal-length reindex when the
+logits / value rows agree pointwise (used to bridge two `BlockState`s with equal
+`mem`/`pids` whose `srSeqLen` are propositionally — but not definitionally — equal). -/
+theorem softmaxReducevWeightedSum_reindex {S S' : Nat} (hSS : S = S')
+    (qk : Fin S → ℝ) (qk' : Fin S' → ℝ) (mr : ℝ)
+    (v : Fin S → Fin 64 → ℝ) (v' : Fin S' → Fin 64 → ℝ) (d : Fin 64)
+    (hqk : ∀ n : Fin S, qk n = qk' (Fin.cast hSS n))
+    (hv : ∀ (n : Fin S) (e : Fin 64), v n e = v' (Fin.cast hSS n) e) :
+    softmaxReducevWeightedSum qk mr v d = softmaxReducevWeightedSum qk' mr v' d := by
+  subst hSS
+  have hqk' : qk = qk' := by funext n; rw [hqk n]; rfl
+  have hv' : v = v' := by funext n e; rw [hv n e]; rfl
+  rw [hqk', hv']
+
+/-- `srRunningMax` transports across an equal-length reindex when the logits agree
+pointwise. -/
+theorem srRunningMax_reindex {S S' : Nat} (hSS : S = S')
+    (qk : Fin S → ℝ) (qk' : Fin S' → ℝ) (v : Fin S → Fin 64 → ℝ) (v' : Fin S' → Fin 64 → ℝ)
+    (hi : Nat) (d : Fin 64)
+    (hqk : ∀ n : Fin S, qk n = qk' (Fin.cast hSS n)) :
+    srRunningMax qk v hi d = srRunningMax qk' v' hi d := by
+  subst hSS
+  have hqk' : qk = qk' := by funext n; rw [hqk n]; rfl
+  subst hqk'
+  unfold srRunningMax srKeysUpto
+  congr 1
+  rw [List.map_filterMap, List.map_filterMap]
+  apply List.filterMap_congr; intro n _
+  by_cases hn : n.val < hi <;> simp [hn]
+
+/-- The `c = 0` invariant is independent of the `Logics`/`BLoc` arguments (the
+qk- and V-dependent registers `e_max`/`e_sum`/`acc` read off
+`srRunningMax`/`srStateBot` at the empty window, which are `⊥`/`0`/`0` regardless). -/
+theorem srInvariant_zero_logics_irrel
+    (Logics Logics' V : RegionName) (BLoc BLoc' : Region .int) (BStartLoc BSeqLen : RegionName)
+    (s0 s : BlockState)
+    (h : srInvariant Logics V BLoc BStartLoc BSeqLen s0 0 s) :
+    srInvariant Logics' V BLoc' BStartLoc BSeqLen s0 0 s := by
+  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14⟩ := h
+  refine ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, ?_, ?_, ?_⟩
+  · rw [h12]; simp only [Nat.zero_mul, srRunningMax_zero]
+  · rw [h13]; simp only [Nat.zero_mul, srStateBot_zero]
+  · rw [h14]; simp only [Nat.zero_mul, srStateBot_zero]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Full-kernel execution chain.** Running the lowered Python-shape body
+(preLoop 12 + `forRangeDyn` loop + postLoop 4) from a clean state `s` reaches a
+final state whose `Out` store holds the genuine softmax-weighted V reduction
+`softmaxReducevWeightedSum` at every output lane. -/
+theorem sr_exec
+    (Logics V Out : RegionName) (BLoc : Region .int) (BStartLoc BSeqLen : Region .nat)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (hseqmod : srSeqLen s BSeqLen.cast % 64 = 0) (hseqpos : 0 < srSeqLen s BSeqLen.cast)
+    (mr : ℝ)
+    (hM : srRunningMax (srQkF s Logics BStartLoc.cast BSeqLen.cast) (srVF s V BLoc BSeqLen.cast)
+      (srSeqLen s BSeqLen.cast) (⟨0, by norm_num⟩ : Fin 64) = (mr : WithBot ℝ)) :
+    ∃ sF, stepStmts ((softmax_reducev_surface Logics V Out BLoc BStartLoc BSeqLen
+        128 256 1 8192 64 1 128 64 1 128 1 64 64 (-1)).toAlgKernel.body) s = some sF
+      ∧ ∀ d : Fin 64,
+          sF.readMem Out (outOffset s 128 64 1 d)
+            = softmaxReducevWeightedSum (srQkF s Logics BStartLoc.cast BSeqLen.cast) mr
+                (srVF s V BLoc BSeqLen.cast) d := by
+  rw [srBody_split]
+  -- preLoop
+  obtain ⟨s0, hpre, hinv0'⟩ := srPreLoop_eval s V BLoc BStartLoc BSeqLen hundef
+  have hinv0 : srInvariant Logics V BLoc BStartLoc.cast BSeqLen.cast s 0 s0 :=
+    srInvariant_zero_logics_irrel _ Logics V _ BLoc BStartLoc.cast BSeqLen.cast s s0 hinv0'
+  rw [stepStmts.append_some hpre]
+  -- s0.pids = s.pids, s0.mem = s.mem (from invariant)
+  obtain ⟨hpids0, hmem0, hundef0, hcb0, hch0, hseq0, hsl0, hn0, hd0, hoff0, hvp0, h12, h13, h14⟩ := hinv0
+  set S := srSeqLen s BSeqLen.cast with hSdef
+  -- bound: cur_batch_seq_len = S in s0
+  have hseqS : srSeqLen s0 BSeqLen.cast = S := by
+    rw [hSdef]; exact srSeqLen_eq_of_mem_pids s0 s BSeqLen.cast hmem0 hpids0
+  -- s0 invariant at 0 with anchor s0 itself (anchor-swap: data over s0 = data over s)
+  have hinv0' : srInvariant Logics V BLoc BStartLoc.cast BSeqLen.cast s0 0 s0 := by
+    refine srInvariant_zero_logics_irrel Logics Logics V BLoc BLoc BStartLoc.cast BSeqLen.cast s0 s0 ?_
+    -- rebuild srInvariant ... s0 0 s0: registers identical, anchor-data at 0 irrel
+    refine ⟨rfl, rfl, hundef0, ?_, ?_, ?_, ?_, hn0, hd0, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [hcb0, hpids0]
+    · rw [hch0, hpids0]
+    · rw [hseq0, srSeqLen_eq_of_mem_pids s0 s BSeqLen.cast hmem0 hpids0]
+    · rw [hsl0, srStartLoc_eq_of_mem_pids s0 s BStartLoc.cast hmem0 hpids0]
+    · rw [hoff0]; simp only [srOffBLoc, hpids0,
+        srSeqLen_eq_of_mem_pids s0 s BSeqLen.cast hmem0 hpids0]
+    · rw [hvp0, hpids0]
+    · rw [h12]; simp only [Nat.zero_mul, srRunningMax_zero]
+    · rw [h13]; simp only [Nat.zero_mul, srStateBot_zero]
+    · rw [h14]; simp only [Nat.zero_mul, srStateBot_zero]
+  -- the forRangeDyn loop via forRangeDyn_inv with P = srInvariant ∧ divisibility (anchor s0)
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    VeriTile.Triton.forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.constNat 0) (stopOp := Op.ref .nat [] "cur_batch_seq_len")
+      (stepOp := Op.constNat 64)
+      (P := fun i st => srInvariant Logics V BLoc BStartLoc.cast BSeqLen.cast s0 (i / 64) st
+        ∧ i % 64 = 0 ∧ i ≤ srSeqLen s0 BSeqLen.cast)
+      (s_init := s0)
+      (start := 0) (stop := srSeqLen s0 BSeqLen.cast) (step := 64)
+      (by rw [evalOp_constNat])
+      (by rw [evalOp_ref, hseq0, hseqS])
+      (by rw [evalOp_constNat])
+      (by norm_num)
+      ⟨by rw [Nat.zero_div]; exact hinv0', by norm_num, by omega⟩
+      (fun i st hi hP => by
+        obtain ⟨hPinv, hPmod, hPle⟩ := hP
+        obtain ⟨s', hstep, hinv'⟩ := sr_attn_step Logics V BLoc BStartLoc.cast BSeqLen.cast s0 i st
+          hi (by rw [hseqS]; exact hseqmod) hPinv (by omega)
+        refine ⟨s', hstep, ?_, by omega, by omega⟩
+        rw [show (i + 64) / 64 = i / 64 + 1 from by omega]; exact hinv')
+  rw [stepStmts.cons_some hloop]
+  -- final = srSeqLen s0
+  obtain ⟨hinvLinv, hinvLmod, hinvLle⟩ := hinvL
+  have hfinS : final = srSeqLen s0 BSeqLen.cast := by
+    have : srSeqLen s0 BSeqLen.cast % 64 = 0 := by rw [hseqS]; exact hseqmod
+    omega
+  subst hfinS
+  -- postLoop. final = srSeqLen s0 = (srSeqLen s0 / 64) * 64
+  have hfull : (srSeqLen s0 BSeqLen.cast / 64) * 64 = srSeqLen s0 BSeqLen.cast := by
+    have : srSeqLen s0 BSeqLen.cast % 64 = 0 := by rw [hseqS]; exact hseqmod
+    omega
+  -- the running max hM at the full window, in s0's data
+  have hMs0 : srRunningMax (srQkF s0 Logics BStartLoc.cast BSeqLen.cast) (srVF s0 V BLoc BSeqLen.cast)
+      (srSeqLen s0 BSeqLen.cast) (⟨0, by norm_num⟩ : Fin 64) = (mr : WithBot ℝ) := by
+    rw [srRunningMax_reindex (S := srSeqLen s0 BSeqLen.cast) (S' := srSeqLen s BSeqLen.cast)
+      (by rw [hseqS])
+      (srQkF s0 Logics BStartLoc.cast BSeqLen.cast) (srQkF s Logics BStartLoc.cast BSeqLen.cast)
+      (srVF s0 V BLoc BSeqLen.cast) (srVF s V BLoc BSeqLen.cast) (srSeqLen s0 BSeqLen.cast) ⟨0, by norm_num⟩
+      (fun n => by simp only [srQkF, Fin.val_cast]; rw [srQk_eq_of_mem_pids s0 s Logics BStartLoc.cast hmem0 hpids0])]
+    rw [hseqS]; exact hM
+  obtain ⟨sP, hpost, hOut⟩ := srPostLoop_eval Logics V Out BLoc BStartLoc.cast BSeqLen.cast s0
+    (srSeqLen s0 BSeqLen.cast / 64) sL
+    hfull (by rw [hseqS]; exact hseqpos) hinvLinv mr hMs0
+  rw [hpost]
+  refine ⟨sP, rfl, ?_⟩
+  intro d
+  have hoeq : outOffset s0 128 64 1 d = outOffset s 128 64 1 d := by
+    simp only [outOffset, dIndex, hpids0]
+  rw [← hoeq, hOut d]
+  exact softmaxReducevWeightedSum_reindex (by rw [hseqS])
+    (srQkF s0 Logics BStartLoc.cast BSeqLen.cast) (srQkF s Logics BStartLoc.cast BSeqLen.cast) mr
+    (srVF s0 V BLoc BSeqLen.cast) (srVF s V BLoc BSeqLen.cast) d
+    (fun n => by simp only [srQkF, Fin.val_cast]; rw [srQk_eq_of_mem_pids s0 s Logics BStartLoc.cast hmem0 hpids0])
+    (fun n e => by simp only [srVF, Fin.val_cast]; rw [srV_eq_of_mem_pids s0 s V BLoc BSeqLen.cast hmem0 hpids0])
 
 end VeriTile.Bench.TritonBenchG.SoftmaxReducev
