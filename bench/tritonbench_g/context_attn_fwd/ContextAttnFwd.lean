@@ -3312,18 +3312,43 @@ theorem context_attn_fwd_exec_block128
       -- preserved lane: s0.readMem Out = s.readMem Out
       unfold BlockState.readMem; rw [hmem]
 
-noncomputable def producedContextFwdBlock128OutValue
-    (s : BlockState)
-    (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
-    (idx : TileIndex [128, 128]) : ℝ :=
-  match exec (context_attn_fwd_kernel_int8kv_surface Q K V
-      (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
-      B_Start_Loc B_Seqlen B_Prompt_Cache_Len
-      2048 128 1 8388608 262144 128 1 8388608 262144 128 1
-      2048 128 1 1 16 128 128 128) s with
-  | some s' => s'.readMem Out (outOffset s 16 B_Start_Loc 2048 128 1 128 idx)
-  | none => 0.0
+/-- The kernel-decoded streamed window `S = ceil_BM(block_mask·block_end_loc)` at the
+Python test shape (BLOCK_N = BLOCK_M): the first multiple of `BM` at/above the
+dynamic loop bound. -/
+def ctxFwdWindow (s : BlockState) (B_Seqlen B_Prompt_Cache_Len : RegionName) (BM : Nat) : Nat :=
+  let plen := s.readMemValue .nat B_Prompt_Cache_Len (s.pids 1 / 16)
+  let sl := s.readMemValue .nat B_Seqlen (s.pids 1 / 16) - plen
+  let bel := (let a := BM * s.pids 0 + BM + plen
+              let b := sl + plen
+              if a < b then a else b)
+  let bm := if BM * s.pids 0 < sl then 1 else 0
+  BM * ((bm * bel + (BM - 1)) / BM)
 
+/-- The kernel-decoded `block_end_loc = min(BM·start_m + BM + plen, seq_len + plen)`
+at the Python test shape. -/
+def ctxFwdBel (s : BlockState) (B_Seqlen B_Prompt_Cache_Len : RegionName) (BM : Nat) : Nat :=
+  let plen := s.readMemValue .nat B_Prompt_Cache_Len (s.pids 1 / 16)
+  let sl := s.readMemValue .nat B_Seqlen (s.pids 1 / 16) - plen
+  let a := BM * s.pids 0 + BM + plen
+  let b := sl + plen
+  if a < b then a else b
+
+/-- **Genuine closed-form output value** of `context_attn_fwd.py` at the Python test
+shape, BLOCK_M = 128: the boundary-masked causal-softmax fold `contextAttnExactFoldM`
+of the loaded Q/K/V memory — a pure function of memory, NOT the kernel's executed
+readback. -/
+noncomputable def ctxFwdGenuineOutValue128
+    (s : BlockState) (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
+    (idx : TileIndex [128, 128]) : ℝ :=
+  contextAttnExactFoldM s Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len
+    sm_scale_python 128 (ctxFwdWindow s B_Seqlen B_Prompt_Cache_Len 128)
+    (ctxFwdBel s B_Seqlen B_Prompt_Cache_Len 128) idx
+
+/-- Self-referential executed `Out`-readback for the BLOCK_M = 64 (Tesla) branch.
+The genuine closed form `contextAttnExactFoldM` for this branch requires the full
+streaming-loop suite (`ctxLoopBody_steps`/`ctxInvariant`/`ctx_attn_step`/
+`ctxPostLoop_eval`) re-derived at the `[64,128]` tile shape (`BLOCK_N = 64` key
+blocks); banked only at `[128,128]`. -/
 noncomputable def producedContextFwdBlock64OutValue
     (s : BlockState)
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
@@ -3517,7 +3542,7 @@ theorem context_attn_fwd_final_store_python_block64_compute_correct
 
 theorem context_attn_fwd_surface_python_block128_compute_correct
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
-    (s : BlockState) :
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes
       (kernel := context_attn_fwd_kernel_int8kv_surface Q K V
         (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
@@ -3531,7 +3556,7 @@ theorem context_attn_fwd_surface_python_block128_compute_correct
         (fun idx : TileIndex [128, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        producedContextFwdBlock128OutValue s Q K V Out B_Start_Loc B_Seqlen
+        ctxFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen
           B_Prompt_Cache_Len idx) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
@@ -3539,8 +3564,18 @@ theorem context_attn_fwd_surface_python_block128_compute_correct
       ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
-  intro idx _hActive
-  simp [producedContextFwdBlock128OutValue, hExec]
+  intro idx hActive
+  obtain ⟨sF, hexec, hO⟩ :=
+    context_attn_fwd_exec_block128 Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len s hundef
+  rw [show sm_scale_python = (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) from rfl] at hexec
+  rw [hExec] at hexec
+  obtain rfl : sF = s' := (Option.some.inj hexec).symm
+  have hb := hO idx
+  simp only [ComputeCorrect.OutputReadable.read_real, Region.cast_cast, Region.cast_id]
+    at hb hActive ⊢
+  rw [if_pos hActive] at hb
+  rw [hb, ctxFwdGenuineOutValue128, ctxFwdWindow, ctxFwdBel]
+  norm_num
 
 theorem context_attn_fwd_surface_python_block64_compute_correct
     (Q K V Out B_Start_Loc B_Seqlen B_Prompt_Cache_Len : RegionName)
@@ -3572,11 +3607,18 @@ theorem context_attn_fwd_surface_python_block64_compute_correct
 /-- Public Python test-shape summary for `context_attn_fwd.py`.
 
 This records the faithful full int8-KV `_fwd_kernel` surface for the checked
-layout and both Python launcher block-size branches, with the observable final
-`Out` writes connected directly to the produced full-surface values. -/
+layout and both Python launcher block-size branches. For the regular
+(non-Tesla, BLOCK_M = 128) path — the path exercised on the gold-test hardware —
+every active observable `Out` write holds the **genuine** boundary-masked
+causal-softmax closed form `contextAttnExactFoldM` of the loaded Q/K/V memory
+(`ctxFwdGenuineOutValue128`), NOT the kernel's own executed readback: the
+self-referential proof gap is closed. The Tesla (BLOCK_M = 64) branch is still
+recorded via the executed readback (`producedContextFwdBlock64OutValue`); its
+genuine closed form needs the streaming-loop suite re-derived at the `[64,128]`
+tile shape. -/
 theorem context_attn_fwd_python_test_shape_output_summary
     (Q K V B_Start_Loc B_Seqlen B_Prompt_Cache_Len Out : RegionName)
-    (s : BlockState) :
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
     (∃ alg, (context_attn_fwd_kernel_int8kv_surface Q K V
       (((Real.sqrt (128 : ℝ))⁻¹) * 1.4426950408889634) Out
       B_Start_Loc B_Seqlen B_Prompt_Cache_Len
@@ -3600,7 +3642,7 @@ theorem context_attn_fwd_python_test_shape_output_summary
         (fun idx : TileIndex [128, 128] =>
           (Out, outOffset s 16 B_Start_Loc 2048 128 1 128 idx)))
       (expected := fun idx : TileIndex [128, 128] =>
-        producedContextFwdBlock128OutValue s Q K V Out B_Start_Loc B_Seqlen
+        ctxFwdGenuineOutValue128 s Q K V B_Start_Loc B_Seqlen
           B_Prompt_Cache_Len idx) ∧
     ComputeCorrect.Realizes
       (kernel := context_attn_fwd_kernel_int8kv_surface Q K V
@@ -3631,7 +3673,7 @@ theorem context_attn_fwd_python_test_shape_output_summary
       2048 128 1 1 16 128 64 128
   constructor
   · exact context_attn_fwd_surface_python_block128_compute_correct Q K V Out
-      B_Start_Loc B_Seqlen B_Prompt_Cache_Len s
+      B_Start_Loc B_Seqlen B_Prompt_Cache_Len s hundef
   · exact context_attn_fwd_surface_python_block64_compute_correct Q K V Out
       B_Start_Loc B_Seqlen B_Prompt_Cache_Len s
 
