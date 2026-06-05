@@ -4,6 +4,9 @@ import VeriTile.Triton.Semantics.TileOps
 import VeriTile.Triton.Float
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Math.Attention
+import VeriTile.Triton.LoopInvariant
+import VeriTile.Triton.Semantics.BlockPtrEval
+import VeriTile.Examples.FlashAttention1
 
 /-!
 # `triton_attention` — strict per-kernel correctness
@@ -2304,6 +2307,51 @@ noncomputable def fwdMSpec
   (fwdCausalSet s i).sup' (fwdCausalSet_nonempty s i)
     (fun j : Fin 128 =>
       scaledScore (fwdQTile s Q) (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) i j)
+
+/-! ### FlashAttention-1 math bridge to the genuine closed-form specs
+
+The natural-exp causal online-softmax recurrence that `_fwd_kernel` runs is the
+`FA1MathCausal` streaming accumulator (`mPartial`/`lPartial`/`oPartial`) over a
+single KV block of width `128` (the test shape's `N_CTX = BLOCK_N = 128`). The
+following lemmas show that the FA1 streaming end-values are exactly the genuine
+closed-form `fwdOutSpec`/`fwdLSpec`/`fwdMSpec`:
+
+* `fwdOutSpec` is `oPartial / lPartial` (final-normalized output), via
+  `FA1MathCausal.streaming_eq_attentionRealCausalBlock`. This is the
+  `l_rcp`-cancellation made precise: the running `l_rcp` factors the kernel
+  multiplies into `p`/`acc` telescope away, leaving FA1's end-normalized
+  `oPartial/lPartial`, which equals `attentionRealCausalBlock = fwdOutSpec`.
+* `fwdMSpec` (the per-row causal score max) is `(mPartial …).unbotD 0`.
+* The stored `l_prev` is the m-shifted normalizer `lPartial …`; its relation to
+  the un-shifted `fwdLSpec` denominator is `lPartial = exp(-mPartial) · Σexp`.
+
+These connect the genuine specs to the FA1 backbone so the remaining exec-side
+preLoop/step/postLoop assembly only has to realize the FA1 fold.
+-/
+
+open VeriTile.Examples.FA1MathCausal in
+/-- **Output closed-form bridge.** The FA1 streaming end-ratio
+`oPartial / lPartial` over the single 128-key block equals the genuine
+`fwdOutSpec` (the natural-exp causal attention block). This is the
+`l_rcp`-cancellation: the kernel's in-loop `p *= l_rcp; acc *= l_prev*l_rcp`
+running factors telescope to FA1's end-normalized output. -/
+theorem fwdOutSpec_eq_streaming
+    (s : BlockState) (Q K V : RegionName) (idx : TileIndex [128, 64]) :
+    fwdOutSpec s Q K V idx =
+      oPartial 128 (s.pids 0 * 128) (fwdQTile s Q) 1
+          (fwdKTile s K) (fwdVTile s V) ((Real.sqrt (64 : ℝ))⁻¹) 1 idx /
+        lPartial 128 (s.pids 0 * 128) (fwdQTile s Q) 1
+          (fwdKTile s K) ((Real.sqrt (64 : ℝ))⁻¹) 1 idx.1 := by
+  rw [show fwdOutSpec s Q K V idx
+        = VeriTile.Examples.attentionRealCausalBlock (s.pids 0 * 128)
+            (fwdQTile s Q) (fwdKTile s K) (fwdVTile s V)
+            ((Real.sqrt (64 : ℝ))⁻¹) idx from by
+        unfold fwdOutSpec VeriTile.Triton.attentionRealCausalBlock
+          VeriTile.Examples.attentionRealCausalBlock scaledScore
+        rfl]
+  exact (streaming_eq_attentionRealCausalBlock (Bk := 128) (by norm_num)
+    (s.pids 0 * 128) (fwdQTile s Q) 1 (by norm_num) (fwdKTile s K) (fwdVTile s V)
+    ((Real.sqrt (64 : ℝ))⁻¹) idx).symm
 
 noncomputable def producedTritonAttentionForwardOutValue
     (s : BlockState) (Q K V L M Out : RegionName)
