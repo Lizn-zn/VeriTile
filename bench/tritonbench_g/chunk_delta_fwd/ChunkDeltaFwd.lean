@@ -2373,4 +2373,218 @@ theorem cdfOuterLoop_run
     fun j idx hact => hhF j.val j.isLt idx hact,
     fun j idx hact => hvnF j.val j.isLt idx hact⟩
 
+/-! ### Prologue (`USE_INITIAL_STATE` seed) and epilogue (`STORE_FINAL_STATE` flush) -/
+
+/-- An `ifThen` with a `false` constexpr condition is a no-op. -/
+theorem cdf_ifThen_false_noop (body : List Stmt) (X : BlockState) :
+    stepStmt (Stmt.ifThen (Op.constBool Bool.false) body) X = some X := by
+  simp [stepStmt, evalOp]
+
+/-- An `ifThen` with a `true` constexpr condition runs its body. -/
+theorem cdf_ifThen_true_run (body : List Stmt) (X : BlockState) :
+    stepStmt (Stmt.ifThen (Op.constBool Bool.true) body) X = stepStmts body X := by
+  simp [stepStmt, evalOp]
+
+/-- The all-zero `[64,64]` tile equals `cdfCarryTile 0` when `USE_INITIAL_STATE`
+is `false` (the seed is `0` on every lane). -/
+theorem cdfCarryTile_zero_false (s : BlockState) (k v d initial_state : RegionName) :
+    (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64])
+      = cdfCarryTile s k v d initial_state Bool.false 0 := by
+  refine congrArg _ ?_
+  funext idx; obtain ⟨e, p, u⟩ := idx
+  simp only [cdfCarryTile, cdfCarryCell, cdfSeedCell, Bool.false_eq_true, if_false, ite_self]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Prologue.** Stepping `cdfPrologue` from `s` (`NK = 1` regime, `s.pids 0 = 0`)
+reaches a state `s0` whose program-id registers are set, `b_h` holds the seed
+`cdfCarryTile 0`, memory and pids are preserved. Both the `USE_INITIAL_STATE = true`
+(masked `initial_state` load) and `false` (zero seed) branches are covered. -/
+theorem cdfPrologue_run
+    (k v d v_new h initial_state final_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (s : BlockState) (hpids0 : s.pids 0 = 0) :
+    ∃ s0, stepStmts (cdfPrologue initial_state USE_INITIAL_STATE) s = some s0
+      ∧ s0.pids = s.pids
+      ∧ (∀ rg off, s0.readMem rg off = s.readMem rg off)
+      ∧ s0.regs .nat [] "i_k" = some (Tile.scalar 0)
+      ∧ s0.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+      ∧ s0.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ s0.regs .real [64, 64] "b_h"
+          = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 0) := by
+  unfold cdfPrologue
+  -- i_k = program_id 0 = pids 0 = 0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.programId 0) s = some (Tile.scalar 0) from by simp [hpids0]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.programId 1) _ = some (Tile.scalar (s.pids 1)) from by simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.programId 2) _ = some (Tile.scalar (s.pids 2)) from by simp))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [64, 64] (Op.const 0)) _
+        = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) from by
+      simp [evalOp_full, evalOp_const]))]
+  cases USE_INITIAL_STATE
+  · -- false: ifThen false = no-op
+    rw [stepStmts.cons_some (cdf_ifThen_false_noop _ _)]
+    rw [stepStmts.nil]
+    refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [BlockState.setReg_pids]
+    · intro rg off; simp [BlockState.setReg_readMem]
+    · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+    · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+    · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+    · rw [BlockState.setReg_same, cdfCarryTile_zero_false s k v d initial_state]
+  · -- true: ifThen true: run the seed body (p_h0 make + masked load)
+    rw [stepStmts.cons_some (st := Stmt.ifThen (Op.constBool Bool.true) _)
+      (by
+        rw [cdf_ifThen_true_run]
+        -- p_h0 make
+        rw [stepStmts.cons_some (stepStmt_assign_eq_some
+          (makeBlockPtr_2d_eval initial_state _ _ _ _ [64, 64] [64, 64] [64, 1]
+            (s.pids 2 * 64 * 64) (0 * 64) (s.pids 1 * 64)
+            (mulMulConst_eval _ "i_bh" (s.pids 2) 64 64 (by simp [BlockState.setReg_ne_name]))
+            (mulConst_eval _ "i_k" 0 64 (by simp [BlockState.setReg_ne_name]))
+            (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [BlockState.setReg_ne_name]))))]
+        -- b_h masked load
+        rw [stepStmts.cons_some (stepStmt_assign_eq_some
+          (load_bp_2d_ref initial_state _ "p_h0" (s.pids 2 * 64 * 64) 64 64 64 64 64 1
+            (0 * 64) (s.pids 1 * 64) (by simp)))]
+        rw [stepStmts.nil])]
+    rw [stepStmts.nil]
+    refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · simp [BlockState.setReg_pids]
+    · intro rg off; simp [BlockState.setReg_readMem]
+    · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+    · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+    · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
+    · -- b_h = masked load tile = cdfCarryTile 0 (USE = true)
+      rw [BlockState.setReg_same]
+      refine congrArg some ?_
+      refine congrArg _ ?_
+      funext idx; obtain ⟨e, p, u⟩ := idx
+      simp only [cdfCarryTile, cdfCarryCell, cdfSeedCell, initElem, hpids0,
+        Nat.zero_mul, Nat.zero_add, Nat.mul_one, BlockState.setReg_readMem]
+      by_cases hb : e.val < 64 ∧ s.pids 1 * 64 + p.val < 64
+      · rw [if_pos hb, if_pos hb]; simp
+      · rw [if_neg hb, if_neg hb]
+
+/-- The explicit post-store state of the `final_state` block-ptr store of the
+carry tile `bhT` (cell fn `fbh`) over input state `sin`, value built from `s`. -/
+noncomputable def cdfFinalStoreState (s sin : BlockState) (final_state : RegionName)
+    (fbh : Nat → Nat → ℝ) : BlockState :=
+  (TileShape.allIndices [64, 64]).foldl
+    (fun acc i => if (s.pids 0 * 64 + i.1.val < 64 ∧ s.pids 1 * 64 + i.2.1.val < 64)
+        then acc.writeMem final_state (finalStateOffset s 64 64 64 64 i)
+          (fbh i.1.val i.2.1.val) else acc) sin
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **`final_state` block-ptr store step (eq).** Stepping the masked block-ptr
+store of the carry tile `bhT` (cell fn `fbh`) through `p_ht` yields
+`cdfFinalStoreState`. -/
+theorem cdfStoreFinal_step_eq (s sin : BlockState) (final_state : RegionName)
+    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [64, 64])
+    (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
+    (hbh : sin.regs .real [64, 64] "b_h" = some bhT)
+    (hph : sin.regs .blockPtr [64, 64] "p_ht" = some
+      ⟨fun _ => BlockPtr.mk final_state (s.pids 2 * 64 * 64) [64, 64] [64, 64] [64, 1]
+        [s.pids 0 * 64, s.pids 1 * 64]⟩) :
+    stepStmt (Stmt.store .real [64, 64]
+        (.blockPtr (Op.ref .blockPtr [64, 64] "p_ht") [0, 1])
+        (Op.ref .real [64, 64] "b_h") .none) sin
+      = some (cdfFinalStoreState s sin final_state fbh) := by
+  unfold stepStmt cdfFinalStoreState
+  simp only [evalOp_ref, hbh, hph, Option.bind, Option.map]
+  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [64, 64])) ?_)
+  funext acc i
+  obtain ⟨e, p, u⟩ := i
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
+    Bool.true_and, finalStateOffset, kIndex, vIndex]
+  by_cases hb : s.pids 0 * 64 + e.val < 64 ∧ s.pids 1 * 64 + p.val < 64
+  · simp only [hb, decide_true, if_true, BlockState.writeMemTyped_real, hbhf, Nat.mul_one]
+    rfl
+  · simp only [hb, decide_false, Bool.false_eq_true, if_false, if_neg hb]
+
+set_option maxHeartbeats 4000000 in
+/-- **`final_state` store readback (active lanes).** -/
+theorem cdfStoreFinal_step_active (s sin : BlockState) (final_state : RegionName)
+    (fbh : Nat → Nat → ℝ)
+    (hInj : Function.Injective (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx)) :
+    ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
+      (cdfFinalStoreState s sin final_state fbh).readMem final_state
+          (finalStateOffset s 64 64 64 64 idx)
+        = fbh idx.1.val idx.2.1.val := by
+  classical
+  intro idx hidx
+  unfold cdfFinalStoreState
+  have h := BlockState.scatter_readback_prop_masked_nd (region := final_state) sin
+    (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx)
+    (fun idx => fbh idx.1.val idx.2.1.val)
+    (fun idx => s.pids 0 * 64 + idx.1.val < 64 ∧ s.pids 1 * 64 + idx.2.1.val < 64)
+    hInj idx
+  rw [h, if_pos (show s.pids 0 * 64 + idx.1.val < 64 ∧ s.pids 1 * 64 + idx.2.1.val < 64 from
+    by obtain ⟨ka, va⟩ := hidx; exact ⟨by simpa [kIndex] using ka, by simpa [vIndex] using va⟩)]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Epilogue.** Stepping `cdfEpilogue` from the post-loop state `sF`
+(`b_h = cdfCarryTile 4`, `s.pids 0 = 0`) either leaves memory untouched
+(`STORE_FINAL_STATE = false`) or stores `H_4 = cdfCarryCell 4` into `final_state`
+at every active lane (`STORE_FINAL_STATE = true`). The `k`/`v`/`d`/`h`/`v_new`
+regions and pids are preserved in both cases. -/
+theorem cdfEpilogue_run
+    (k v d v_new h initial_state final_state : RegionName) (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (s sF : BlockState) (hpids0 : s.pids 0 = 0)
+    (hFh : final_state ≠ h) (hFv : final_state ≠ v_new) (hFk : final_state ≠ k)
+    (hFv2 : final_state ≠ v) (hFd : final_state ≠ d)
+    (hInjF : Function.Injective (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx))
+    (hpids : sF.pids = s.pids)
+    (hik : sF.regs .nat [] "i_k" = some (Tile.scalar 0))
+    (hiv : sF.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
+    (hibh : sF.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hbh : sF.regs .real [64, 64] "b_h"
+        = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 4)) :
+    ∃ s', stepStmts (cdfEpilogue final_state STORE_FINAL_STATE) sF = some s'
+      ∧ (∀ rg off, rg ≠ final_state → s'.readMem rg off = sF.readMem rg off)
+      ∧ (STORE_FINAL_STATE = Bool.true →
+          ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
+            s'.readMem final_state (finalStateOffset s 64 64 64 64 idx)
+              = cdfCarryCell s k v d initial_state USE_INITIAL_STATE 4 idx.1.val idx.2.1.val) := by
+  unfold cdfEpilogue
+  cases STORE_FINAL_STATE
+  · -- false: no-op
+    rw [stepStmts.cons_some (cdf_ifThen_false_noop _ _), stepStmts.nil]
+    exact ⟨_, rfl, fun rg off _ => rfl, fun h => absurd h (by simp)⟩
+  · -- true: store H_4 into final_state
+    rw [stepStmts.cons_some (st := Stmt.ifThen (Op.constBool Bool.true) _)
+      (by
+        rw [cdf_ifThen_true_run]
+        rw [stepStmts.cons_some (stepStmt_assign_eq_some
+          (makeBlockPtr_2d_eval final_state _ _ _ _ [64, 64] [64, 64] [64, 1]
+            (s.pids 2 * 64 * 64) (0 * 64) (s.pids 1 * 64)
+            (mulMulConst_eval _ "i_bh" (s.pids 2) 64 64 (by simp [BlockState.setReg_ne_name, hibh]))
+            (mulConst_eval _ "i_k" 0 64 (by simp [BlockState.setReg_ne_name, hik]))
+            (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [BlockState.setReg_ne_name, hiv]))))]
+        rw [stepStmts.cons_some (cdfStoreFinal_step_eq s _ final_state
+          (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE 4 e' p')
+          (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 4)
+          (fun e p => by rw [cdfCarryTile_data])
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same, hbh])
+          (by simp [BlockState.setReg_same, hpids0]))]
+        rw [stepStmts.nil])]
+    rw [stepStmts.nil]
+    -- name the post-store state
+    generalize hsFin : sF.setReg "p_ht" .blockPtr [64, 64]
+      (⟨fun _ => BlockPtr.mk final_state (s.pids 2 * 64 * 64) [64, 64] [64, 64] [64, 1]
+        [0 * 64, s.pids 1 * 64]⟩ : Tile .blockPtr [64, 64]) = sPt
+    refine ⟨_, rfl, ?_, ?_⟩
+    · intro rg off hrg
+      unfold cdfFinalStoreState
+      rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+        final_state _ _ _ _ _ rg off hrg, ← hsFin, BlockState.setReg_readMem]
+    · intro _ idx hidx
+      exact cdfStoreFinal_step_active s sPt final_state
+        (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE 4 e' p')
+        hInjF idx hidx
+
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
