@@ -2654,6 +2654,24 @@ private theorem stMem_readMem_other_offset (s : BlockState) (region region' : Re
   · exact BlockState.scatter_prop_masked_preserves_other_region region _ _ _
       region' hr off _ c
 
+set_option maxHeartbeats 800000 in
+/-- Reading the `stMem` region back at lane `i`'s row-`R` address yields the
+stored value on active lanes, else the underlying read. -/
+private theorem stMem_readback (s : BlockState) (region : RegionName) (R : Nat)
+    (f : TileIndex [4] → ℝ) (c : BlockState) (i : TileIndex [4]) :
+    (stMem s region R f c).readMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R)
+      = if decide (s.pids 0 * 4 + i.1.val < 8) then f i
+        else c.readMem region (s.pids 2 * 64 + s.pids 0 * 4 + i.1.val + R) := by
+  have hinj : Function.Injective
+      (fun k : TileIndex [4] => s.pids 2 * 64 + s.pids 0 * 4 + k.1.val + R) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (by simp only at hab; omega)
+    rfl
+  unfold stMem
+  exact BlockState.scatter_readback_masked_nd (region := region) c
+    (fun k : TileIndex [4] => s.pids 2 * 64 + s.pids 0 * 4 + k.1.val + R) f
+    (fun k : TileIndex [4] => decide (s.pids 0 * 4 + k.1.val < 8)) hinj i
+
 /-- The memory of `stMem` is determined entirely by the input state's memory. -/
 private theorem stMem_mem_congr (s : BlockState) (region : RegionName) (R : Nat)
     (f : TileIndex [4] → ℝ) (c c' : BlockState) (h : c.mem = c'.mem) :
@@ -3785,6 +3803,121 @@ theorem bwd_full_exec
   refine ⟨s0, s1, s2, hpro, ?_, hp_pid, hp_mem, h1mem, h2mem⟩
   rw [exec, bwd_body_decomp, stepStmts.append_some hpro,
     stepStmts.cons_some (bwd_loop_unroll s0 s1 s2 hstep0 hstep1), stepStmts.nil]
+
+/-- `dqOut` at row offset `(s.pids1*2+t_rel)*8` equals the genuine `dq_inter`
+closed form at chunk row `t_rel`. -/
+private theorem dqOut_eq_closed (s : BlockState) (DQInner DQInter G : RegionName)
+    (t_rel : Fin 2) (i : Fin 4) (R : Nat)
+    (hR : R = (s.pids 1 * 2 + t_rel.val) * 8) :
+    dqOut s DQInner DQInter G R (i, PUnit.unit)
+      = bwdDQInterClosed s DQInner DQInter G 64 8 2 4 t_rel i := by
+  have ha : s.pids 2 * 64 + s.pids 0 * 4 + i.val + R
+      = offset s 64 8 t_rel.val 2 4 i := by simp only [offset, baseOffset, hR]; ring
+  simp only [dqOut, ldR, bwdDQInterClosed, ha]
+
+/-- `dkOut` (with captured `last_g = g[row BT-1]`) at row offset `R = (s.pids1*2+
+t_rel)*8` equals the genuine `dk_inter` closed form at row `t_rel`. -/
+private theorem dkOut_eq_closed (s : BlockState) (DKInner DKInter G : RegionName)
+    (t_rel : Fin 2) (i : Fin 4) (R Rlast : Nat)
+    (hR : R = (s.pids 1 * 2 + t_rel.val) * 8) (hRlast : Rlast = (s.pids 1 * 2 + 1) * 8) :
+    dkOut s DKInner DKInter G R (ldR s G Rlast) (i, PUnit.unit)
+      = bwdDKInterClosed s DKInner DKInter G 64 8 2 4 t_rel i := by
+  have ha : s.pids 2 * 64 + s.pids 0 * 4 + i.val + R
+      = offset s 64 8 t_rel.val 2 4 i := by simp only [offset, baseOffset, hR]; ring
+  have hb : s.pids 2 * 64 + s.pids 0 * 4 + i.val + Rlast
+      = offset s 64 8 (2 - 1) 2 4 i := by simp only [offset, baseOffset, hRlast]; ring
+  simp only [dkOut, ldR, bwdDKInterClosed, ha, hb]
+
+/-- Helper: read a region `X` at an address other than the three written rows of
+an `stMem`-triple stacked at row `R`, when `X` differs from the three store
+regions or the address avoids the row range. -/
+private theorem stMem3_read_skip (s : BlockState) (A B C X : RegionName) (R : Nat)
+    (fa fb fc : TileIndex [4] → ℝ) (c : BlockState) (off : Nat)
+    (hskip : ∀ region ∈ [A, B, C], ∀ j : TileIndex [4],
+      region = X → s.pids 2 * 64 + s.pids 0 * 4 + j.1.val + R ≠ off) :
+    (stMem s A R fa (stMem s B R fb (stMem s C R fc c))).readMem X off
+      = c.readMem X off := by
+  have go : ∀ (D : RegionName) (fd : TileIndex [4] → ℝ) (c' : BlockState),
+      (D = X → ∀ j : TileIndex [4], s.pids 2 * 64 + s.pids 0 * 4 + j.1.val + R ≠ off) →
+      (stMem s D R fd c').readMem X off = c'.readMem X off := by
+    intro D fd c' hd
+    by_cases hDX : X = D
+    · subst hDX
+      exact stMem_readMem_other_offset s X X R fd c' off (hd rfl)
+    · exact stMem_readMem_other s D X R fd c' off hDX
+  rw [go A fa _ (fun hAX j => hskip A (by simp) j hAX),
+      go B fb _ (fun hBX j => hskip B (by simp) j hBX),
+      go C fc _ (fun hCX j => hskip C (by simp) j hCX)]
+
+set_option maxHeartbeats 1600000 in
+/-- **Genuine `dq_inter` readback.** The executed backward surface writes the
+honest closed form `bwdDQInterClosed` (= `dq_inner + dq_inter * exp2(g)`) into
+`DQInter` at every active lane of loop row `t_rel`. -/
+theorem bwd_decay_cumsum_dq_inter_closed_compute_correct
+    (DQInner DQInter DKInner DKInter Q K G DG : RegionName) (t_rel : Fin 2) (s : BlockState)
+    (hDQInter_DKInter : DQInter ≠ DKInter) (hDQInter_DG : DQInter ≠ DG)
+    (hDKInner_DQInter : DKInner ≠ DQInter) (hDKInter_DQInter : DKInter ≠ DQInter)
+    (hQ_DQInter : Q ≠ DQInter) (hQ_DKInter : Q ≠ DKInter)
+    (hK_DQInter : K ≠ DQInter) (hK_DKInter : K ≠ DKInter) :
+    ComputeCorrect.Realizes
+      (kernel := bwd_decay_global_cumsum_surface DQInner DQInter DKInner DKInter
+        Q K G DG 64 8 2 4)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf (active s 8 4)
+        (fun i => (DQInter, offset s 64 8 t_rel.val 2 4 i)))
+      (expected := fun i : Fin 4 =>
+        bwdDQInterClosed s DQInner DQInter G 64 8 2 4 t_rel i) := by
+  obtain ⟨s0, s1, s2, _, hexec, _, _, h1mem, h2mem⟩ :=
+    bwd_full_exec DQInner DQInter DKInner DKInter Q K G DG s
+      hDKInner_DQInter hDKInter_DQInter hQ_DQInter hQ_DKInter hK_DQInter hK_DKInter
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [bwd_decay_global_cumsum_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro sa s' hExec hsa
+  subst sa
+  intro i hActive
+  have hs' : s' = s2 := by
+    rw [exec] at hexec; rw [exec] at hExec; rw [hExec] at hexec; exact Option.some.inj hexec
+  subst s'
+  have hacP : s.pids 0 * 4 + i.val < 8 := by simpa [active, elemIndex] using hActive
+  have hac : decide (s.pids 0 * 4 + i.val < 8) = Bool.true := decide_eq_true hacP
+  have hoff : offset s 64 8 t_rel.val 2 4 i
+      = s.pids 2 * 64 + s.pids 0 * 4 + i.val + (s.pids 1 * 2 + t_rel.val) * 8 := by
+    simp only [offset, baseOffset]; ring
+  show s2.readMem DQInter (offset s 64 8 t_rel.val 2 4 i) = _
+  rw [hoff]
+  -- `s2.mem` / `s1.mem` read `DQInter` via memory-only equalities (`readMem` is a
+  -- function of `.mem`).
+  have hmemrd : ∀ (a b : BlockState), a.mem = b.mem →
+      ∀ (r : RegionName) (o : Nat), a.readMem r o = b.readMem r o := by
+    intro a b hab r o; simp only [BlockState.readMem, hab]
+  rw [hmemrd s2 _ h2mem DQInter]
+  match t_rel with
+  | ⟨0, hlt⟩ =>
+    -- Row 0 = R0 - 8: skip DG/DKInter (other region) of the outer triple, read DQInter.
+    rw [stMem_readMem_other s DG DQInter _ _ _ _ hDQInter_DG,
+        stMem_readMem_other s DKInter DQInter _ _ _ _ hDQInter_DKInter]
+    rw [show (s.pids 1 * 2 + 0) * 8 = (s.pids 1 * 2 + 2 - 1) * 8 - 8 from by omega,
+      stMem_readback s DQInter ((s.pids 1 * 2 + 2 - 1) * 8 - 8) _ s1 (i, PUnit.unit)]
+    simp only [hac, if_true]
+    rw [dqOut_eq_closed s DQInner DQInter G ⟨0, hlt⟩ i _
+      (show (s.pids 1 * 2 + 2 - 1) * 8 - 8 = (s.pids 1 * 2 + 0) * 8 by omega)]
+  | ⟨1, hlt⟩ =>
+    -- Row 1 = R0: outer triple (R0-8) skips it by offset; inner triple reads DQInter.
+    have hskip : ∀ region ∈ [DG, DKInter, DQInter], ∀ j : TileIndex [4],
+        region = DQInter → s.pids 2 * 64 + s.pids 0 * 4 + j.1.val
+            + ((s.pids 1 * 2 + 2 - 1) * 8 - 8) ≠
+          s.pids 2 * 64 + s.pids 0 * 4 + i.val + (s.pids 1 * 2 + 1) * 8 := by
+      intro region _ j _; have := j.1.2; have := (i : Fin 4).2; omega
+    rw [stMem3_read_skip s DG DKInter DQInter DQInter ((s.pids 1 * 2 + 2 - 1) * 8 - 8)
+        _ _ _ s1 _ hskip, hmemrd s1 _ h1mem DQInter]
+    rw [stMem_readMem_other s DG DQInter _ _ _ _ hDQInter_DG,
+        stMem_readMem_other s DKInter DQInter _ _ _ _ hDQInter_DKInter]
+    rw [show (s.pids 1 * 2 + 1) * 8 = (s.pids 1 * 2 + 2 - 1) * 8 from by omega,
+      stMem_readback s DQInter ((s.pids 1 * 2 + 2 - 1) * 8) _ s0 (i, PUnit.unit)]
+    simp only [hac, if_true]
+    rw [dqOut_eq_closed s DQInner DQInter G ⟨1, hlt⟩ i _
+      (show (s.pids 1 * 2 + 2 - 1) * 8 = (s.pids 1 * 2 + 1) * 8 by omega)]
 
 end BwdAssembly
 
