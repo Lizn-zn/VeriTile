@@ -2870,6 +2870,14 @@ noncomputable def bsaInvariant
       some (⟨fun idx : TileIndex [16, 16] =>
         (some (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg2 scale c idx) : WithBot ℝ)⟩
           : Tile .real [16, 16])
+  ∧ s.regs .real [16, 16] "q" =
+      some (⟨fun idx : TileIndex [16, 16] =>
+        s0.readMemValue .real Q ((s0.pids 1 / 4 * 2048 + s0.pids 1 % 4 * 512) +
+          ((s0.pids 0 * 16 + idx.1.val) * 32 + idx.2.1.val))⟩ : Tile .real [16, 16])
+  ∧ s.regs .real [16, 16] "q2" =
+      some (⟨fun idx : TileIndex [16, 16] =>
+        s0.readMemValue .real Q ((s0.pids 1 / 4 * 2048 + s0.pids 1 % 4 * 512) +
+          ((s0.pids 0 * 16 + idx.1.val) * 32 + idx.2.1.val) + 16)⟩ : Tile .real [16, 16])
   ∧ s.regs .ptr [16, 16] "k_ptrs" =
       some (⟨fun idx : TileIndex [16, 16] =>
         (K, (s0.pids 1 / 4 * 1024 + s0.pids 1 % 4 / 2 * 512) +
@@ -3171,7 +3179,7 @@ theorem bsaPreLoop_eval
   rw [stepStmts.nil]
   refine ⟨_, rfl, ?_⟩
   unfold bsaInvariant
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp only [BlockState.setReg_pids]
   · funext rg o; simp only [BlockState.setReg_mem]
   · intro rg o; simp [hundef]
