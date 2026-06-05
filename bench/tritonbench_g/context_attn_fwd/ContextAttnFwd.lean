@@ -3378,7 +3378,7 @@ def ctxPreLoop64 (Q : RegionName) (B_Start_Loc B_Seqlen b_prompt_cache_len : Reg
         (Op.ref .nat [] "prompt_cache_len")),
     Stmt.assign .nat [] "block_start_loc"
       (Op.mul .nat Broadcast.nil (Op.constNat 64) (Op.ref .nat [] "start_m")),
-    Stmt.assign .nat [64] "offs_n" (Op.arange 64),
+    Stmt.assign .nat [128] "offs_n" (Op.arange 128),
     Stmt.assign .nat [128] "offs_d" (Op.arange 128),
     Stmt.assign .nat [64] "offs_m"
       (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "block_start_loc") (Op.arange 64)),
@@ -3442,7 +3442,7 @@ theorem ctxPreLoop_eval64
           = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / 16)
               - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / 16)))
       ∧ s0.regs .nat [] "block_start_loc" = some (Tile.scalar (64 * s.pids 0))
-      ∧ s0.regs .nat [64] "offs_n" = some (Tile.vec (fun j : Fin 64 => j.val))
+      ∧ s0.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))
       ∧ s0.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))
       ∧ s0.regs .nat [64] "offs_m" = some (Tile.vec (fun r : Fin 64 => 64 * s.pids 0 + r.val))
       ∧ s0.regs .real [64] "m_i" = some ⟨fun _ : TileIndex [64] => (⊥ : WithBot ℝ)⟩
@@ -3527,9 +3527,9 @@ theorem ctxPreLoop_eval64
         ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
         Option.bind_eq_bind, Option.bind_some]
       rfl))]
-  -- stmt 9: offs_n = arange 64
+  -- stmt 9: offs_n = arange 128
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.arange 64) _ = some (Tile.vec (fun j : Fin 64 => j.val)) from evalOp_arange 64 _))]
+    (show evalOp (Op.arange 128) _ = some (Tile.vec (fun j : Fin 128 => j.val)) from evalOp_arange 128 _))]
   -- stmt 10: offs_d = arange 128
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (show evalOp (Op.arange 128) _ = some (Tile.vec (fun e : Fin 128 => e.val)) from evalOp_arange 128 _))]
@@ -3658,6 +3658,348 @@ theorem ctxPreLoop_eval64
   all_goals
     simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
       BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+
+/-- The 18 lowered loop-body statements of the Tesla-shape context surface body
+(`BLOCK_M = 64`, `BLOCK_N = BLOCK_DMODEL = 128`: only the query/row axis is 64; the
+key tile stays `[128,128]`, qk/p/acc rows are 64). -/
+noncomputable def ctxLoopBody64 (Q K V : RegionName) : List Stmt :=
+  [ Stmt.assign .nat [] "start_n" (Op.ref .nat [] "start_n"),
+    Stmt.assign .nat [128, 128] "off_k"
+      (Op.add .nat Broadcast.nil.consR.consL
+        (Op.add .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat 8388608))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.constNat 128)))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat 262144)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [128, 128] "k"
+      (Op.load .real (MemAccess.region K (Op.ref .nat [128, 128] "off_k"))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "block_end_loc")))
+          ((Op.const (0.0 : ℝ)).broadcast [128, 128]))),
+    Stmt.assign .real [64, 128] "qk"
+      (Op.dot (batch := []) (Op.ref .real [64, 128] "q") (Op.ref .real [128, 128] "k")),
+    Stmt.assign .bool [64, 128] "mask"
+      (Op.ge .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m"))
+          (Op.ref .nat [] "prompt_cache_len"))
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_n")))),
+    Stmt.assign .real [64, 128] "qk"
+      ((Op.ref .bool [64, 128] "mask").where
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [64, 128] "qk") (Op.const (sm_scale_python : ℝ)))
+        ((Op.sub .real Broadcast.nil (Op.const (0.0 : ℝ)) (Op.const (10e7 : ℝ))).broadcast [64, 128])),
+    Stmt.assign .real [64] "m_ij"
+      ((Op.gt .real Broadcast.nil.consSame (Op.ref .real [64] "m_i")
+            (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [64, 128] "qk"))).where
+        (Op.ref .real [64] "m_i") (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [64, 128] "qk"))),
+    Stmt.assign .real [64, 128] "qk"
+      (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [64, 128] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "m_ij"))),
+    Stmt.assign .real [64, 128] "p" (Op.ref .real [64, 128] "qk").exp2,
+    Stmt.assign .real [64] "l_ij" (Op.reduceSum ⟨1, by simp⟩ Bool.false (Op.ref .real [64, 128] "p")),
+    Stmt.assign .real [64] "alpha"
+      (Op.sub .real Broadcast.nil.consSame (Op.ref .real [64] "m_i") (Op.ref .real [64] "m_ij")).exp2,
+    Stmt.assign .real [64] "l_i"
+      (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [64] "l_i") (Op.ref .real [64] "alpha"))
+        (Op.ref .real [64] "l_ij")),
+    Stmt.assign .real [64, 128] "acc"
+      (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [64, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "alpha"))),
+    Stmt.assign .nat [128, 128] "off_v"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat 8388608))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.constNat 128)))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_kv_head") (Op.constNat 262144)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .real [128, 128] "v"
+      (Op.load .real (MemAccess.region V (Op.ref .nat [128, 128] "off_v"))
+        (MaskOpt.maskOther
+          (Op.remap [128, 128] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [128] "offs_n")))
+              (Op.ref .nat [] "block_end_loc")))
+          ((Op.const (0.0 : ℝ)).broadcast [128, 128]))),
+    Stmt.assign .real [64, 128] "p" (Op.ref .real [64, 128] "p"),
+    Stmt.assign .real [64, 128] "acc"
+      (Op.add .real Broadcast.nil.consSame.consSame
+        (Op.dot (batch := []) (Op.ref .real [64, 128] "p") (Op.ref .real [128, 128] "v"))
+        (Op.ref .real [64, 128] "acc")),
+    Stmt.assign .real [64] "m_i" (Op.ref .real [64] "m_ij") ]
+
+/-- The 4 lowered post-loop statements at the Tesla shape (`[64,128]` acc/store). -/
+def ctxPostLoop64 (Out : RegionName) : List Stmt :=
+  [ Stmt.assign .real [64, 128] "acc"
+      (Op.div .real Broadcast.nil.consR.consSame (Op.ref .real [64, 128] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [64] "l_i"))),
+    Stmt.assign .nat [64, 128] "off_o"
+      (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m")))
+            (Op.constNat 2048))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 128)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [128] "offs_d"))
+          (Op.constNat 1))),
+    Stmt.assign .ptr [64, 128] "out_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [64, 128] "off_o")),
+    Stmt.store .real [64, 128] (MemAccess.ptr (Op.ref .ptr [64, 128] "out_ptrs"))
+      (Op.ref .real [64, 128] "acc")
+      (MaskOpt.mask
+        (Op.remap [64, 128] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [64] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len")))) ]
+
+set_option maxRecDepth 8000 in
+/-- **Body decomposition (Tesla).** The compiled `BLOCK_M=64` context body splits as
+`ctxPreLoop64 ++ (forRangeDyn start_n 0 (block_mask·block_end_loc) 128 ctxLoopBody64
+:: ctxPostLoop64)`. The streaming step is `BLOCK_N = 128` (only the query/row axis
+is 64). -/
+theorem ctxBody_split64 (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen b_prompt_cache_len : Region .nat) :
+    (context_attn_fwd_kernel_int8kv_surface Q K V (sm_scale_python : ℝ) Out
+        B_Start_Loc B_Seqlen b_prompt_cache_len
+        2048 128 1 8388608 262144 128 1 8388608 262144 128 1
+        2048 128 1 1 16 128 64 128).toAlgKernel.body
+      = ctxPreLoop64 Q B_Start_Loc B_Seqlen b_prompt_cache_len
+        ++ (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask") (Op.ref .nat [] "block_end_loc"))
+              (Op.constNat 128) (ctxLoopBody64 Q K V)
+            :: ctxPostLoop64 Out) := by
+  rfl
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **LoopBody execution (Tesla, BLOCK_M = 64).** The 18 loop-body statements advance
+the running-softmax registers one block, at the `[64,…]` shapes. -/
+theorem ctxLoopBody_steps64 (Q K V : RegionName) (sin : BlockState) (SN : Nat)
+    (gOM : Fin 64 → Nat) (cb ckvh ch plen sl bel cbsi : Nat)
+    (qtile : Tile .real [64, 128]) (mtile ltile : Tile .real [64])
+    (acctile : Tile .real [64, 128])
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hcb : sin.regs .nat [] "cur_batch" = some (Tile.scalar cb))
+    (hckvh : sin.regs .nat [] "cur_kv_head" = some (Tile.scalar ckvh))
+    (hch : sin.regs .nat [] "cur_head" = some (Tile.scalar ch))
+    (hplen : sin.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen))
+    (hsl : sin.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl))
+    (hbel : sin.regs .nat [] "block_end_loc" = some (Tile.scalar bel))
+    (hcbsi : sin.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar cbsi))
+    (hm : sin.regs .nat [64] "offs_m" = some (Tile.vec gOM))
+    (hn : sin.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val)))
+    (hd : sin.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val)))
+    (hq : sin.regs .real [64, 128] "q" = some qtile)
+    (hmi : sin.regs .real [64] "m_i" = some mtile)
+    (hli : sin.regs .real [64] "l_i" = some ltile)
+    (hacc : sin.regs .real [64, 128] "acc" = some acctile)
+    (hundef : ∀ rg o, sin.undef rg o = 0) :
+    ∃ sF, stepStmts (ctxLoopBody64 Q K V) sin = some sF
+      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem ∧ (∀ rg o, sF.undef rg o = 0)
+      ∧ sF.regs .nat [] "start_n" = some (Tile.scalar SN)
+      ∧ sF.regs .nat [] "cur_batch" = some (Tile.scalar cb)
+      ∧ sF.regs .nat [] "cur_kv_head" = some (Tile.scalar ckvh)
+      ∧ sF.regs .nat [] "cur_head" = some (Tile.scalar ch)
+      ∧ sF.regs .nat [] "prompt_cache_len" = some (Tile.scalar plen)
+      ∧ sF.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl)
+      ∧ sF.regs .nat [] "block_end_loc" = some (Tile.scalar bel)
+      ∧ sF.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar cbsi)
+      ∧ sF.regs .nat [64] "offs_m" = some (Tile.vec gOM)
+      ∧ sF.regs .nat [128] "offs_n" = some (Tile.vec (fun j : Fin 128 => j.val))
+      ∧ sF.regs .nat [128] "offs_d" = some (Tile.vec (fun e : Fin 128 => e.val))
+      ∧ sF.regs .real [64, 128] "q" = some qtile
+      ∧ ∃ (kloadT : Tile .real [128, 128]) (vloadT : Tile .real [128, 128]) (qkT : Tile .real [64, 128])
+            (rmaxT mijT alphaT lijT : Tile .real [64]) (pT : Tile .real [64, 128]) (acc1T : Tile .real [64, 128]),
+          kloadT = (⟨fun idx : TileIndex [128, 128] =>
+              if decide (SN + idx.2.1.val < bel) then
+                sin.readMemValue .real (Region.cast K)
+                  (cb * 8388608 + (SN + idx.2.1.val) * 128 + ckvh * 262144 + idx.1.val * 1)
+              else some (0.0 : ℝ)⟩ : Tile .real [128, 128])
+          ∧ vloadT = (⟨fun idx : TileIndex [128, 128] =>
+              if decide (SN + idx.1.val < bel) then
+                sin.readMemValue .real (Region.cast V)
+                  (cb * 8388608 + (SN + idx.1.val) * 128 + ckvh * 262144 + idx.2.1.val * 1)
+              else some (0.0 : ℝ)⟩ : Tile .real [128, 128])
+          ∧ qkT = Tile.select
+              (⟨fun idx : TileIndex [64, 128] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ : Tile .bool [64, 128])
+              (Tile.bop NumericDType.real.mul Broadcast.scalarR (Tile.dot [] qtile kloadT)
+                (Tile.scalar (some sm_scale_python)))
+              (⟨fun _ : TileIndex [64, 128] => some (0.0 - 10e7 : ℝ)⟩ : Tile .real [64, 128])
+          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 128].length) qkT = some rmaxT
+          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt Broadcast.nil.consSame mtile rmaxT) mtile rmaxT
+          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile mijT)
+          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame
+              qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
+          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [64, 128].length) pT
+          ∧ acc1T = Tile.bop NumericDType.real.mul Broadcast.nil.consR.consSame acctile (Tile.expandDim ⟨1, by simp⟩ alphaT)
+          ∧ sF.regs .real [64] "m_i" = some mijT
+          ∧ sF.regs .real [64] "l_i" = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame
+              (Tile.bop NumericDType.real.mul Broadcast.nil.consSame ltile alphaT) lijT)
+          ∧ sF.regs .real [64, 128] "acc" = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame
+              (Tile.dot [] pT vloadT) acc1T) := by
+  set kloadT : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
+      if decide (SN + idx.2.1.val < bel) then
+        sin.readMemValue .real (Region.cast K)
+          (cb * 8388608 + (SN + idx.2.1.val) * 128 + ckvh * 262144 + idx.1.val * 1)
+      else some (0.0 : ℝ)⟩ with hkl
+  set vloadT : Tile .real [128, 128] := ⟨fun idx : TileIndex [128, 128] =>
+      if decide (SN + idx.1.val < bel) then
+        sin.readMemValue .real (Region.cast V)
+          (cb * 8388608 + (SN + idx.1.val) * 128 + ckvh * 262144 + idx.2.1.val * 1)
+      else some (0.0 : ℝ)⟩ with hvl
+  set masktile : Tile .bool [64, 128] :=
+      ⟨fun idx : TileIndex [64, 128] => decide (SN + idx.2.1.val ≤ gOM idx.1 + plen)⟩ with hmt
+  set qkdotT : Tile .real [64, 128] := Tile.dot [] qtile kloadT with hqkdot
+  set qkT : Tile .real [64, 128] := Tile.select masktile
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR qkdotT (Tile.scalar (some sm_scale_python)))
+      (⟨fun _ : TileIndex [64, 128] => some (0.0 - 10e7 : ℝ)⟩ : Tile .real [64, 128]) with hqk
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [64, 128].length) qkT = some t :=
+    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [64, 128] (⟨1, by simp⟩ : Fin [64, 128].length) from by decide)]⟩
+  set mijT : Tile .real [64] := Tile.select (Tile.cop ComparableDType.real.gt Broadcast.nil.consSame mtile rmaxT) mtile rmaxT with hmij
+  set qk2T : Tile .real [64, 128] := Tile.bop NumericDType.real.sub Broadcast.nil.consR.consSame qkT (Tile.expandDim ⟨1, by simp⟩ mijT) with hqk2
+  set pT : Tile .real [64, 128] := Tile.uop WithBot.realExp2 qk2T with hpT
+  set lijT : Tile .real [64] := Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [64, 128].length) pT with hlij
+  set alphaT : Tile .real [64] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mtile mijT) with hal
+  set acc1T : Tile .real [64, 128] := Tile.bop NumericDType.real.mul Broadcast.nil.consR.consSame acctile (Tile.expandDim ⟨1, by simp⟩ alphaT) with hacc1
+  unfold ctxLoopBody64
+  -- stmt 0: start_n = ref start_n
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_n") sin = some (Tile.scalar SN) from by rw [evalOp_ref]; exact hsn))]
+  -- stmt 1: off_k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_offk_eval _ cb ckvh SN
+      (by simp [BlockState.setReg_ne_name, hcb]) (by simp [BlockState.setReg_ne_name, hckvh])
+      (by simp [BlockState.setReg_same]) (by simp [BlockState.setReg_ne_name, hn])
+      (by simp [BlockState.setReg_ne_name, hd])))]
+  -- stmt 2: k = masked load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_region_maskOther K (Op.ref .nat [128, 128] "off_k") _ _ _
+      (⟨fun idx : TileIndex [128, 128] =>
+          cb * 8388608 + (SN + idx.2.1.val) * 128 + ckvh * 262144 + idx.1.val * 1⟩ : Tile .nat [128, 128])
+      (⟨fun idx : TileIndex [128, 128] => decide (SN + idx.2.1.val < bel)⟩ : Tile .bool [128, 128])
+      (⟨fun _ : TileIndex [128, 128] => some (0.0 : ℝ)⟩ : Tile .real [128, 128])
+      (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+      (ctxKMask_eval _ SN bel (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+        (by simp [BlockState.setReg_ne_name, hn]) (by simp [BlockState.setReg_ne_name, hbel]))
+      (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl)))]
+  -- stmt 3: qk = dot q k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show @evalOp .real [64, 128]
+        (Op.dot (batch := []) (Op.ref .real [64, 128] "q") (Op.ref .real [128, 128] "k")) _
+        = some (Tile.dot [] qtile kloadT) from
+      ctxQk_op_eval _ qtile kloadT
+      (by simp [BlockState.setReg_ne_name, hq])
+      (by rw [BlockState.setReg_same]; rw [hkl];
+          refine congrArg some ?_; ext idx;
+          simp only [BlockState.setReg_readMemValue])))]
+  -- stmt 4: mask = ge(...)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxMask_eval _ 64 128 plen SN gOM
+      (by simp [BlockState.setReg_ne_name, hm]) (by simp [BlockState.setReg_ne_name, hn])
+      (by simp [BlockState.setReg_ne_name, hplen]) (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])))]
+  -- stmt 5: qk = where(mask, qk*sm, -1e8)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxWhere_eval _ 64 128 sm_scale_python masktile qkdotT
+      (by simp [BlockState.setReg_same, hmt]) (by simp [BlockState.setReg_ne_name, BlockState.setReg_same, hqkdot])))]
+  -- stmt 6: m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxMij_op_eval _ mtile rmaxT qkT
+      (by simp [BlockState.setReg_ne_name, hmi]) (by simp [BlockState.setReg_same, hqk]) hrm))]
+  -- stmt 7: qk -= m_ij[:,None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxQk2_op_eval _ qkT mijT
+      (by simp [BlockState.setReg_ne_name, hqk]) (by simp [BlockState.setReg_same, hmij])))]
+  -- stmt 8: p = exp2 qk
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxP_op_eval _ qk2T (by simp [BlockState.setReg_same, hqk2])))]
+  -- stmt 9: l_ij = sum p 1
+  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [64] "l_ij"
+    (Op.reduceSum (⟨1, by simp⟩ : Fin [64, 128].length) Bool.false (Op.ref .real [64, 128] "p")) _ lijT
+    (ctxLij_op_eval _ pT (by simp [BlockState.setReg_same, hpT])))]
+  -- stmt 10: alpha = exp2(m_i - m_ij)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxAlpha_op_eval _ mtile mijT
+      (by simp [BlockState.setReg_ne_name, hmi]) (by simp [BlockState.setReg_ne_name, hmij])))]
+  -- stmt 11: l_i = l_i*alpha + l_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxLi_op_eval _ ltile alphaT lijT
+      (by simp [BlockState.setReg_ne_name, hli]) (by simp [BlockState.setReg_same, hal])
+      (by simp [BlockState.setReg_ne_name, hlij])))]
+  -- stmt 12: acc *= alpha[:,None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxAcc1_op_eval _ acctile alphaT
+      (by simp [BlockState.setReg_ne_name, hacc]) (by simp [BlockState.setReg_ne_name, hal])))]
+  -- stmt 13: off_v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_offv_eval _ cb ckvh SN
+      (by simp [BlockState.setReg_ne_name, hcb]) (by simp [BlockState.setReg_ne_name, hckvh])
+      (by simp [BlockState.setReg_ne_name, hsn]) (by simp [BlockState.setReg_ne_name, hn])
+      (by simp [BlockState.setReg_ne_name, hd])))]
+  -- stmt 14: v = masked load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctx_evalOp_load_region_maskOther V (Op.ref .nat [128, 128] "off_v") _ _ _
+      (⟨fun idx : TileIndex [128, 128] =>
+          cb * 8388608 + (SN + idx.1.val) * 128 + ckvh * 262144 + idx.2.1.val * 1⟩ : Tile .nat [128, 128])
+      (⟨fun idx : TileIndex [128, 128] => decide (SN + idx.1.val < bel)⟩ : Tile .bool [128, 128])
+      (⟨fun _ : TileIndex [128, 128] => some (0.0 : ℝ)⟩ : Tile .real [128, 128])
+      (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+      (ctxVMask_eval _ SN bel (by simp [BlockState.setReg_ne_name, hsn])
+        (by simp [BlockState.setReg_ne_name, hn]) (by simp [BlockState.setReg_ne_name, hbel]))
+      (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl)))]
+  -- stmt 15: p = ref p (noop cast)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [64, 128] "p") _ = some pT from by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, hpT]))]
+  -- stmt 16: acc = dot(p,v) + acc
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ctxAcc2_op_eval _ acc1T pT vloadT
+      (by simp [BlockState.setReg_same, hpT])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), BlockState.setReg_same];
+          rw [hvl]; refine congrArg some ?_; ext idx;
+          simp only [BlockState.setReg_readMemValue])
+      (by simp [BlockState.setReg_ne_name, hacc1])))]
+  -- stmt 17: m_i = ref m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [64] "m_ij") _ = some mijT from by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, hmij]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    kloadT, vloadT, qkT, rmaxT, mijT, alphaT, lijT, pT, acc1T,
+    ?_, ?_, ?_, hrm, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · intro rg o; simp only [BlockState.setReg_undef]; exact hundef rg o
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hcb]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hckvh]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hch]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hplen]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hsl]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hbel]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hcbsi]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hm]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hn]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hd]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, hq]
+  · rw [hkl]
+  · rw [hvl]
+  · rw [hqk, hqkdot]
+  · rw [BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+  · simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
 
 /-- Self-referential executed `Out`-readback for the BLOCK_M = 64 (Tesla) branch.
 The genuine closed form `contextAttnExactFoldM` for this branch requires the full
