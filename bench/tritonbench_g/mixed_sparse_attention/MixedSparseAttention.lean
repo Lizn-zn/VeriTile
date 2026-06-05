@@ -567,6 +567,64 @@ theorem mixed_sparse_attention_python_block32_offset_injective
   subst db
   rfl
 
+/-- Python block64 instantiation of the closed-form store bridge: the final
+store transports `mixedSparseAttnClosedForm` to `Out` at the Python test strides
+`(32768, 8192, 64, 1)`, given the loop-fill contract `hFill`. -/
+theorem mixed_sparse_attention_output_store_python_block64_closed_form
+    (Acc Seqlens Out Q K V : RegionName)
+    (block_offset column_index : Region .nat)
+    (num_blks num_cols : Nat) (sm_scale : ℝ) (s : BlockState)
+    (hFill : ∀ idx : TileIndex [64, 64],
+      active s 4 Seqlens 64 idx →
+      s.readMem Acc (accOffset s 4 32768 8192 64 1 64 idx)
+        = mixedSparseAttnClosedForm s Q K V block_offset column_index 4
+            32768 8192 64 32768 8192 64 32768 8192 64 2 4 8 num_blks num_cols
+            (seqLen s 4 Seqlens) 64 64 64 sm_scale idx.1 (dIndex idx)) :
+    ComputeCorrect.Realizes
+      (kernel := mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
+        32768 8192 64 1 32768 8192 64 1 64 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [64, 64] => active s 4 Seqlens 64 idx)
+        (fun idx : TileIndex [64, 64] =>
+          (Out, outOffset s 4 32768 8192 64 1 64 idx)))
+      (expected := fun idx : TileIndex [64, 64] =>
+        mixedSparseAttnClosedForm s Q K V block_offset column_index 4
+          32768 8192 64 32768 8192 64 32768 8192 64 2 4 8 num_blks num_cols
+          (seqLen s 4 Seqlens) 64 64 64 sm_scale idx.1 (dIndex idx)) :=
+  mixed_sparse_attention_output_store_closed_form Acc Seqlens Out Q K V
+    block_offset column_index 4 32768 8192 64 1 32768 8192 64 1 64 32768 8192 64
+    32768 8192 64 2 4 8 num_blks num_cols 64 64 64 sm_scale s
+    (mixed_sparse_attention_python_block64_offset_injective s) hFill
+
+/-- Python block32 instantiation of the closed-form store bridge. -/
+theorem mixed_sparse_attention_output_store_python_block32_closed_form
+    (Acc Seqlens Out Q K V : RegionName)
+    (block_offset column_index : Region .nat)
+    (num_blks num_cols : Nat) (sm_scale : ℝ) (s : BlockState)
+    (hFill : ∀ idx : TileIndex [32, 64],
+      active s 4 Seqlens 32 idx →
+      s.readMem Acc (accOffset s 4 32768 8192 64 1 32 idx)
+        = mixedSparseAttnClosedForm s Q K V block_offset column_index 4
+            32768 8192 64 32768 8192 64 32768 8192 64 2 4 8 num_blks num_cols
+            (seqLen s 4 Seqlens) 64 32 32 sm_scale idx.1 (dIndex idx)) :
+    ComputeCorrect.Realizes
+      (kernel := mixed_sparse_attention_output_store_slice Acc Seqlens Out 4
+        32768 8192 64 1 32768 8192 64 1 32 64)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [32, 64] => active s 4 Seqlens 32 idx)
+        (fun idx : TileIndex [32, 64] =>
+          (Out, outOffset s 4 32768 8192 64 1 32 idx)))
+      (expected := fun idx : TileIndex [32, 64] =>
+        mixedSparseAttnClosedForm s Q K V block_offset column_index 4
+          32768 8192 64 32768 8192 64 32768 8192 64 2 4 8 num_blks num_cols
+          (seqLen s 4 Seqlens) 64 32 32 sm_scale idx.1 (dIndex idx)) :=
+  mixed_sparse_attention_output_store_closed_form Acc Seqlens Out Q K V
+    block_offset column_index 4 32768 8192 64 1 32768 8192 64 1 64 32768 8192 64
+    32768 8192 64 2 4 8 num_blks num_cols 32 64 32 sm_scale s
+    (mixed_sparse_attention_python_block32_offset_injective s) hFill
+
 theorem mixed_sparse_attention_output_store_python_block64_compute_correct
     (Acc Seqlens Out : RegionName) (s : BlockState) :
     ComputeCorrect.Realizes
