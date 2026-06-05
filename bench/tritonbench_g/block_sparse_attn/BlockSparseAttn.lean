@@ -3183,5 +3183,3 @@ theorem bsaPreLoop_eval
   all_goals rfl
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
--- AXCHECK
-#print axioms VeriTile.Bench.TritonBenchG.BlockSparseAttn.bsaPreLoop_eval
