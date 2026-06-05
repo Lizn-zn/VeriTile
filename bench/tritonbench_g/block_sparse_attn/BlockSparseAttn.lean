@@ -5260,5 +5260,93 @@ theorem bsaPostLoop_eval
         _ s2 (by intro k _hk _hPk; simp only [hoffFn]; omega)]
       simp only [BlockState.readMem, hs2mem, hmem]
 
+/-! ## Full-kernel execution (`bsa_exec`)
+
+Composing `bsaPreLoop_eval` (→ `bsaInvariant 0`, plus the `start_l`/`end_l`
+register values), `bsa_csr_loop` (the `forRangeDyn` driver, instantiated with the
+per-block `bsa_attn_step` advance), and `bsaPostLoop_eval` (reads out `acc`/`acc2`
+= `bsaOPartial / bsaLPartial`) over `bsa_body_split`, from a clean input state the
+whole lowered test-shape `block_sparse_attention_kernel` body runs to a final
+state whose two `out` stores hold the streaming online-softmax accumulators at the
+active lanes and preserve inactive lanes.
+
+The CSR schedule data — `start_l`/`end_l` (the row-pointer window), the
+per-block selection (`hMask`/`hScore`/`hVal`/`hVal2`) and first-key visibility
+(`hVis0`) — are *given* as hypotheses of `bsa_exec`: they are the trusted host
+boundary (which key blocks the layout selects) plus the dot-product = `gScore`
+alignment (discharged by `bsa_fused_hScore` at instantiation). The accumulator
+math itself (`bsa_attn_step`'s advance) is fully proved. The summary then bridges
+the streaming output to `blockSparseAttnClosedForm` via `bsaStreaming_eq_bsaAttn`. -/
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+open BSAMathCausal in
+theorem bsa_exec
+    (Out Q K V : RegionName) (R C : Region .nat)
+    (qStart numKVBlocks : Nat) (gpos : Fin (16 * numKVBlocks) → Nat)
+    (Qg : TileIndex [16, 32] → ℝ)
+    (Kg : TileIndex [16 * numKVBlocks, 32] → ℝ)
+    (Vg Vg2 : TileIndex [16 * numKVBlocks, 16] → ℝ) (scale : ℝ)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0)
+    (start_l end_l : Nat)
+    (hStartL : s.readMemValue .nat R.cast (s.pids 1 % 4 % 1 * 3 + s.pids 0) = start_l)
+    (hEndL : s.readMemValue .nat R.cast (s.pids 1 % 4 % 1 * 3 + s.pids 0 + 1) = end_l)
+    (hbound : end_l - start_l = numKVBlocks) (hsle : start_l ≤ end_l)
+    -- per-block selection bridges (CSR schedule + dot = gScore), for every block c
+    (hstep : ∀ (i : Nat) (st : BlockState), start_l ≤ i → i < end_l →
+      bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s (i - start_l) st →
+      ∃ st', stepStmts (bsaLoopBody C) (st.setReg "col_idx_idx" .nat [] (Tile.scalar i)) = some st'
+        ∧ bsaInvariant Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s
+            (i - start_l + 1) st') :
+    ∃ sF, stepStmts ((block_sparse_attention_kernel Out Q K V R C
+        3 4 1 1.0 2048 512 32 1024 512 32 1024 512 32 2048 512 32
+        4 2 16 16 16 16 2 Bool.true Bool.true).toAlgKernel.body) s = some sF
+      ∧ (∀ idx : TileIndex [16, 16],
+          sF.readMem Out (outOffset s 4 2048 512 32 16 idx)
+            = if s.pids 0 * 16 + idx.1.val < 16 then
+                (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg scale numKVBlocks idx /
+                  bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale numKVBlocks idx.1)
+              else s.readMem Out (outOffset s 4 2048 512 32 16 idx))
+      ∧ (∀ idx : TileIndex [16, 16],
+          sF.readMem Out (out2Offset s 4 2048 512 32 16 16 idx)
+            = if s.pids 0 * 16 + idx.1.val < 16 then
+                (bsaOPartial 16 qStart numKVBlocks gpos Qg Kg Vg2 scale numKVBlocks idx /
+                  bsaLPartial 16 qStart numKVBlocks gpos Qg Kg scale numKVBlocks idx.1)
+              else s.readMem Out (out2Offset s 4 2048 512 32 16 16 idx)) := by
+  rw [bsa_body_split]
+  -- preLoop: clean state → invariant at 0, with start_l/end_l register values exposed
+  obtain ⟨s0, hpre, hinv0, hsl, hel⟩ :=
+    bsaPreLoop_eval s Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale hundef
+  rw [stepStmts.append_some hpre]
+  -- start_l/end_l register values at s0 (the loop-entry state)
+  have hStartOp : evalOp (Op.ref .nat [] "start_l") s0 = some (Tile.scalar start_l) := by
+    rw [evalOp_ref, hsl, hStartL]
+  have hStopOp : evalOp (Op.ref .nat [] "end_l") s0 = some (Tile.scalar end_l) := by
+    rw [evalOp_ref, hel, hEndL]
+  -- the loop driver: forRangeDyn over the CSR window → invariant at numKVBlocks.
+  -- Loop anchor = the clean input `s` (matches the supplied `hstep`); entry = `s0`.
+  obtain ⟨final, sL, hloop, _hfin, hinvL⟩ :=
+    bsa_csr_loop Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s
+      start_l end_l hbound hsle s0 hStartOp hStopOp hinv0 hstep
+  rw [stepStmts.cons_some hloop]
+  -- postLoop: reads out acc/acc2 at the active lanes (anchored at the clean input `s`)
+  obtain ⟨sP, hpost, hOut, hOut2⟩ :=
+    bsaPostLoop_eval Out Q K V R C qStart numKVBlocks gpos Qg Kg Vg Vg2 scale s sL hinvL
+  rw [hpost]
+  -- loop-end memory agrees with the clean input (loop preserves Out memory)
+  obtain ⟨_, hmemL, _⟩ := hinvL
+  refine ⟨sP, rfl, ?_, ?_⟩
+  · intro idx
+    rw [hOut idx]
+    by_cases hlt : s.pids 0 * 16 + idx.1.val < 16
+    · rw [if_pos hlt, if_pos hlt]
+    · rw [if_neg hlt, if_neg hlt]
+      simp only [BlockState.readMem, hmemL]
+  · intro idx
+    rw [hOut2 idx]
+    by_cases hlt : s.pids 0 * 16 + idx.1.val < 16
+    · rw [if_pos hlt, if_pos hlt]
+    · rw [if_neg hlt, if_neg hlt]
+      simp only [BlockState.readMem, hmemL]
+
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
