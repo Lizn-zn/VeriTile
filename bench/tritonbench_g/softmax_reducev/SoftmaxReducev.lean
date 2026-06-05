@@ -682,6 +682,92 @@ theorem srStateBot_full_eq_weightedSum {S BLOCK_DMODEL : Nat}
   rw [srStateBot_full_acc qk v d mr hM, srStateBot_full_denom qk v d mr hM]
   rfl
 
+/-! ### Loop-advance lemmas (base case + one-block window split)
+
+These are the bridges the dynamic-loop invariant uses: the ⊥-seeded state at the
+empty window is the kernel's preLoop init `(⊥, 0, 0)`, and streaming one more
+`BLOCK_N`-block advances the window `[0, c·BLOCK_N)` to `[0, (c+1)·BLOCK_N)` by
+`foldl`-appending that block's keys (the per-iteration `osBlockStep`). -/
+
+/-- The ⊥-seeded running max at the empty window is `⊥` (the kernel's `e_max`
+init, `float("-inf")`). -/
+theorem srRunningMax_zero {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (d : Fin BLOCK_DMODEL) :
+    srRunningMax qk v 0 d = ⊥ := by
+  unfold srRunningMax srKeysUpto
+  rw [show (List.finRange S).filterMap
+        (fun n : Fin S => if n.val < 0 then some (qk n, v n d) else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro n _; simp]
+  rfl
+
+/-- The ⊥-seeded state at the empty window is `(⊥, 0, 0)` — the kernel's preLoop
+init (`e_max = -inf`, `e_sum = 0`, `acc = 0`). -/
+theorem srStateBot_zero {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (d : Fin BLOCK_DMODEL) :
+    srStateBot qk v 0 d = (⊥, 0, 0) := by
+  unfold srStateBot srKeysUpto
+  rw [show (List.finRange S).filterMap
+        (fun n : Fin S => if n.val < 0 then some (qk n, v n d) else none) = [] from by
+    apply List.filterMap_eq_nil_iff.mpr; intro n _; simp]
+  rfl
+
+/-- Threshold-split for a `.val`-ascending `Fin` list: the `n.val < hi₂` window
+filterMap splits into the `n.val < t` prefix and the `t ≤ n.val < hi₂` block,
+provided `t ≤ hi₂`. -/
+private theorem sr_filterMap_window_split {n : Nat} (l : List (Fin n))
+    (hsorted : l.Pairwise (fun a b => a.val < b.val))
+    (t hi₂ : Nat) (g : Fin n → ℝ × ℝ) (hle : t ≤ hi₂) :
+    l.filterMap (fun j => if j.val < hi₂ then some (g j) else none)
+      = l.filterMap (fun j => if j.val < t then some (g j) else none)
+        ++ l.filterMap (fun j => if t ≤ j.val ∧ j.val < hi₂ then some (g j) else none) := by
+  induction l with
+  | nil => simp
+  | cons a tl ih =>
+    have htl : tl.Pairwise (fun x y => x.val < y.val) := (List.pairwise_cons.mp hsorted).2
+    have hahead : ∀ b ∈ tl, a.val < b.val := (List.pairwise_cons.mp hsorted).1
+    rw [List.filterMap_cons, List.filterMap_cons, List.filterMap_cons]
+    by_cases hlt : a.val < t
+    · rw [ih htl]
+      have hnb : ¬ (t ≤ a.val ∧ a.val < hi₂) := fun h => (Nat.not_le.mpr hlt) h.1
+      rw [if_neg hnb]
+      have h2 : a.val < hi₂ := lt_of_lt_of_le hlt hle
+      rw [if_pos h2, if_pos hlt]; rfl
+    · have hge : t ≤ a.val := Nat.not_lt.mp hlt
+      have htail_prefix : tl.filterMap (fun j => if j.val < t then some (g j) else none) = [] := by
+        apply List.filterMap_eq_nil_iff.mpr
+        intro b hb
+        have hab : a.val < b.val := hahead b hb
+        have hbt : ¬ (b.val < t) := by omega
+        simp [hbt]
+      rw [ih htl, htail_prefix]
+      rw [if_neg hlt]
+      by_cases h2 : a.val < hi₂
+      · rw [if_pos h2, if_pos (And.intro hge h2 : t ≤ a.val ∧ a.val < hi₂)]; rfl
+      · rw [if_neg h2, if_neg (fun h : t ≤ a.val ∧ a.val < hi₂ => h2 h.2)]
+
+/-- **Window split** (`hi = c·BLOCK_N`): the keys streamed through `c+1` blocks are
+those through `c` blocks followed by block `c`. -/
+theorem srKeysUpto_succ {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (BLOCK_N c : Nat)
+    (d : Fin BLOCK_DMODEL) :
+    srKeysUpto qk v ((c + 1) * BLOCK_N) d
+      = srKeysUpto qk v (c * BLOCK_N) d ++ srBlock qk v BLOCK_N c d := by
+  unfold srKeysUpto srBlock
+  rw [sr_filterMap_window_split (List.finRange S) (List.pairwise_lt_finRange S)
+    (c * BLOCK_N) ((c + 1) * BLOCK_N) (fun n => (qk n, v n d))
+    (by nlinarith [Nat.zero_le BLOCK_N])]
+
+/-- **One-block invariant advance** (pure math): `srStateBot` after `c+1` blocks
+is the per-block update (`srOsStepBot`-fold of block `c`'s keys) applied to
+`srStateBot` after `c` blocks. -/
+theorem srStateBot_succ {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (BLOCK_N c : Nat)
+    (d : Fin BLOCK_DMODEL) :
+    srStateBot qk v ((c + 1) * BLOCK_N) d
+      = (srBlock qk v BLOCK_N c d).foldl srOsStepBot (srStateBot qk v (c * BLOCK_N) d) := by
+  unfold srStateBot
+  rw [srKeysUpto_succ, List.foldl_append]
+
 /-! ## Python test-shape wrappers
 
 `test_token_softmax_reducev_fwd` fixes `batch = 2`, `head = 2`,
