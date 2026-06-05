@@ -471,6 +471,139 @@ noncomputable def srBlock {S BLOCK_DMODEL : Nat}
   (List.finRange S).filterMap (fun n : Fin S =>
     if c * BLOCK_N ≤ n.val ∧ n.val < (c + 1) * BLOCK_N then some (qk n, v n d) else none)
 
+/-! ### ⊥-seed projection + consistency lemmas (base-`e`)
+
+Mirror of FlashAttention's `flashStateBot_fst` / `osStepBot_foldl_consistent` /
+`flashStateBot_snd_*`, with `exp2`/`pow2` replaced by base-`e` `Real.exp`. The
+rescale factor is `κ(m) = m.elim 0 (fun r => Real.exp (-r))` (`κ ⊥ = 0`,
+`κ (some r) = exp(-r)`); the per-key weight is `Real.exp (qk n)`. -/
+
+/-- The running `max` component of an `srOsStepBot` fold is the `⊔`-fold of the
+coerced logits. -/
+theorem srOsStepBot_fst (xs : List (ℝ × ℝ)) (m₀ : WithBot ℝ) (l₀ acc₀ : ℝ) :
+    (xs.foldl srOsStepBot (m₀, l₀, acc₀)).1
+      = (xs.map (fun p => ((p.1 : ℝ) : WithBot ℝ))).foldl (· ⊔ ·) m₀ := by
+  induction xs generalizing m₀ l₀ acc₀ with
+  | nil => rfl
+  | cons x xs ih => simp only [List.foldl_cons, List.map_cons]; rw [ih]; rfl
+
+/-- The `WithBot ⊔`-fold is seed/direction-agnostic. -/
+theorem sr_foldl_sup_bot_eq_foldr (L : List (WithBot ℝ)) :
+    L.foldl (· ⊔ ·) (⊥ : WithBot ℝ) = L.foldr (· ⊔ ·) (⊥ : WithBot ℝ) := by
+  have gen : ∀ (m : WithBot ℝ), L.foldl (· ⊔ ·) m = m ⊔ L.foldr (· ⊔ ·) ⊥ := by
+    induction L with
+    | nil => intro m; simp
+    | cons a t ih =>
+      intro m; simp only [List.foldl_cons, List.foldr_cons, ih]; rw [max_assoc]
+  rw [gen ⊥, bot_sup_eq]
+
+/-- **⊥-seeded consistency** (base-`e`). Folding `srOsStepBot` from a start
+`(m, l, acc)` anchored to the max-free batch denominator `L` / accumulator `T`
+via `κ(m) = m.elim 0 (fun r => exp(-r))` (with `κ ⊥ = 0`) keeps that invariant:
+the final `l`/`acc` are `κ(final max)·(L + Σ exp(qk))` and
+`κ(final max)·(T + Σ exp(qk)·v)`. -/
+theorem srOsStepBot_foldl_consistent (xs : List (ℝ × ℝ)) (m : WithBot ℝ)
+    (l acc T L : ℝ)
+    (hl : l = (m.elim 0 (fun r => Real.exp (-r))) * L)
+    (hacc : acc = (m.elim 0 (fun r => Real.exp (-r))) * T)
+    (hmL : m = ⊥ → L = 0) (hmT : m = ⊥ → T = 0) :
+    let st := xs.foldl srOsStepBot (m, l, acc)
+    st.2.1 = (st.1.elim 0 (fun r => Real.exp (-r))) * (L + (xs.map (fun p => Real.exp p.1)).sum) ∧
+    st.2.2 = (st.1.elim 0 (fun r => Real.exp (-r))) * (T + (xs.map (fun p => Real.exp p.1 * p.2)).sum) := by
+  induction xs generalizing m l acc T L with
+  | nil => simp [hl, hacc]
+  | cons x xs ih =>
+    obtain ⟨s, v⟩ := x
+    set m' : WithBot ℝ := m ⊔ ((s : ℝ) : WithBot ℝ) with hm'
+    have hm'r : ∃ r : ℝ, m' = (r : WithBot ℝ) := by
+      cases m with
+      | bot => exact ⟨s, by rw [hm']; rfl⟩
+      | coe a => exact ⟨max a s, by rw [hm']; rw [← WithBot.coe_max]⟩
+    obtain ⟨mr, hmr⟩ := hm'r
+    have hκm' : m'.elim 0 (fun r => Real.exp (-r)) = Real.exp (-mr) := by rw [hmr]; rfl
+    have hunbot : m'.unbotD 0 = mr := by rw [hmr]; rfl
+    have hp : Real.exp (s - m'.unbotD 0) = Real.exp (-mr) * Real.exp s := by
+      rw [hunbot, ← Real.exp_add]; ring_nf
+    have hl' : l * (WithBot.realExp (WithBot.realSub m m')).unbotD 0
+        + Real.exp (s - m'.unbotD 0) = Real.exp (-mr) * (L + Real.exp s) := by
+      cases m with
+      | bot =>
+        rw [hmL rfl]
+        have hz : (WithBot.realExp (WithBot.realSub (⊥ : WithBot ℝ) m')).unbotD 0 = 0 := by
+          rw [WithBot.realSub_bot_left, WithBot.realExp_bot]; rfl
+        rw [hz, mul_zero, zero_add, hp]; ring
+      | coe a =>
+        have hm'a : m' = ((max a s : ℝ) : WithBot ℝ) := by rw [hm']; rw [← WithBot.coe_max]
+        have hmra : mr = max a s := by rw [hm'a] at hmr; exact (WithBot.coe_inj.mp hmr.symm)
+        have hαa : (Real.exp (-a)) * (WithBot.realExp (WithBot.realSub (↑a) m')).unbotD 0
+            = Real.exp (-mr) := by
+          rw [hm'a, WithBot.realSub_coe_coe, WithBot.realExp_coe, WithBot.unbotD_coe]
+          rw [← Real.exp_add, hmra]; ring_nf
+        rw [hl, show ((↑a : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-a) from rfl]
+        rw [mul_right_comm, hαa, hp]; ring
+    have hacc' : acc * (WithBot.realExp (WithBot.realSub m m')).unbotD 0
+        + Real.exp (s - m'.unbotD 0) * v = Real.exp (-mr) * (T + Real.exp s * v) := by
+      cases m with
+      | bot =>
+        rw [hmT rfl]
+        have hz : (WithBot.realExp (WithBot.realSub (⊥ : WithBot ℝ) m')).unbotD 0 = 0 := by
+          rw [WithBot.realSub_bot_left, WithBot.realExp_bot]; rfl
+        rw [hz, mul_zero, zero_add, hp]; ring
+      | coe a =>
+        have hm'a : m' = ((max a s : ℝ) : WithBot ℝ) := by rw [hm']; rw [← WithBot.coe_max]
+        have hmra : mr = max a s := by rw [hm'a] at hmr; exact (WithBot.coe_inj.mp hmr.symm)
+        have hαa : (Real.exp (-a)) * (WithBot.realExp (WithBot.realSub (↑a) m')).unbotD 0
+            = Real.exp (-mr) := by
+          rw [hm'a, WithBot.realSub_coe_coe, WithBot.realExp_coe, WithBot.unbotD_coe]
+          rw [← Real.exp_add, hmra]; ring_nf
+        rw [hacc, show ((↑a : WithBot ℝ).elim 0 (fun r => Real.exp (-r))) = Real.exp (-a) from rfl]
+        rw [mul_right_comm, hαa, hp]; ring
+    have step := ih m'
+      (l * (WithBot.realExp (WithBot.realSub m m')).unbotD 0 + Real.exp (s - m'.unbotD 0))
+      (acc * (WithBot.realExp (WithBot.realSub m m')).unbotD 0 + Real.exp (s - m'.unbotD 0) * v)
+      (T + Real.exp s * v) (L + Real.exp s) (by rw [hl', hκm']) (by rw [hacc', hκm'])
+      (by rw [hmr]; simp) (by rw [hmr]; simp)
+    simpa [List.foldl_cons, srOsStepBot, hm', List.map_cons, add_assoc] using step
+
+/-- The ⊥-seeded running `max` of `srStateBot` is exactly `srRunningMax`. -/
+theorem srStateBot_fst_eq_runningMax {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (hi : Nat)
+    (d : Fin BLOCK_DMODEL) :
+    (srStateBot qk v hi d).1 = srRunningMax qk v hi d := by
+  rw [srStateBot, srOsStepBot_fst, srRunningMax, sr_foldl_sup_bot_eq_foldr]
+
+/-- The ⊥-seeded denominator equals `κ(srRunningMax)·Σ exp(qk)`. -/
+theorem srStateBot_snd_fst {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (hi : Nat)
+    (d : Fin BLOCK_DMODEL) :
+    (srStateBot qk v hi d).2.1
+      = ((srRunningMax qk v hi d).elim 0 (fun r => Real.exp (-r)))
+        * ((srKeysUpto qk v hi d).map (fun p => Real.exp p.1)).sum := by
+  have h := (srOsStepBot_foldl_consistent (srKeysUpto qk v hi d)
+    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).1
+  rw [srStateBot]
+  rw [show (List.foldl srOsStepBot (⊥, 0, 0) (srKeysUpto qk v hi d)).2.1 = _ from h]
+  rw [show (List.foldl srOsStepBot (⊥, 0, 0) (srKeysUpto qk v hi d)).1
+        = srRunningMax qk v hi d from by
+    rw [srOsStepBot_fst, srRunningMax, sr_foldl_sup_bot_eq_foldr]]
+  rw [zero_add]
+
+/-- The ⊥-seeded accumulator equals `κ(srRunningMax)·Σ exp(qk)·v`. -/
+theorem srStateBot_snd_snd {S BLOCK_DMODEL : Nat}
+    (qk : Fin S → ℝ) (v : Fin S → Fin BLOCK_DMODEL → ℝ) (hi : Nat)
+    (d : Fin BLOCK_DMODEL) :
+    (srStateBot qk v hi d).2.2
+      = ((srRunningMax qk v hi d).elim 0 (fun r => Real.exp (-r)))
+        * ((srKeysUpto qk v hi d).map (fun p => Real.exp p.1 * p.2)).sum := by
+  have h := (srOsStepBot_foldl_consistent (srKeysUpto qk v hi d)
+    ⊥ 0 0 0 0 (by simp) (by simp) (fun _ => rfl) (fun _ => rfl)).2
+  rw [srStateBot]
+  rw [show (List.foldl srOsStepBot (⊥, 0, 0) (srKeysUpto qk v hi d)).2.2 = _ from h]
+  rw [show (List.foldl srOsStepBot (⊥, 0, 0) (srKeysUpto qk v hi d)).1
+        = srRunningMax qk v hi d from by
+    rw [srOsStepBot_fst, srRunningMax, sr_foldl_sup_bot_eq_foldr]]
+  rw [zero_add]
+
 /-! ## Python test-shape wrappers
 
 `test_token_softmax_reducev_fwd` fixes `batch = 2`, `head = 2`,
